@@ -108,6 +108,26 @@ static inline void interp_cyc_step(CPUState *cpu, uint32_t reg_mask) {
 }
 #endif
 
+/* ===== Minimal exception delivery from the interpreter path =====
+ * Sets COP0 registers (BadVAddr, Cause, EPC, Status) and redirects PC to the
+ * hardware exception vector.  Used for alignment errors caught by the
+ * interpreter.  Returns 1 (control transferred). */
+static int interp_exception(CPUState *cpu, uint32_t exc_code,
+                            uint32_t badvaddr, uint32_t epc_pc) {
+    uint32_t sr = cpu->cop0[12];
+    /* BadVAddr */
+    cpu->cop0[8] = badvaddr;
+    /* Cause: ExcCode, clear BD (not tracking delay-slot exception here) */
+    cpu->cop0[13] = (cpu->cop0[13] & ~0x8000007Cu) | (exc_code << 2);
+    /* Push SR exception stack: shift bits [5:0] left by 2 */
+    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
+    /* EPC */
+    cpu->cop0[14] = epc_pc;
+    /* Vector: BEV selects between KSEG1 (BIOS ROM) and KSEG0 (RAM) */
+    cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    return 1;
+}
+
 #ifdef PSX_COSIM
 static int g_cosim_exec_one_hooked = 0;
 static void cosim_exec_one_begin(void) { g_cosim_exec_one_hooked = 0; }
@@ -1660,6 +1680,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             return 0;
         case 0x08: { /* JR rs */
             uint32_t target = cpu->gpr[rs];
+            if (target & 3) return interp_exception(cpu, 4, target, pc);  /* LoadAddressError */
             exec_delay_slot(cpu, pc + 4);
             cosim_exec_one_transfer_hook(pc + 4);
             /* crossing (if target is compiled) is counted at the block-loop
@@ -1670,6 +1691,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         }
         case 0x09: { /* JALR rd, rs */
             uint32_t target = cpu->gpr[rs];
+            if (target & 3) return interp_exception(cpu, 4, target, pc);  /* LoadAddressError */
             uint32_t return_pc = pc + 8;
             cpu->gpr[rd ? rd : 31] = return_pc;
             cpu->gpr[0] = 0;
@@ -2086,8 +2108,56 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[0] = 0;
             return 0;
         }
+        if (cop_op == 0x02) { /* CFC0 — identical to MFC0 on PSX */
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+            cpu->ld_absorb = 0u;
+            cpu->ld_which_t = (uint8_t)rt;
+#endif
+            cpu->gpr[rt] = cpu->cop0[rd];
+            cpu->gpr[0] = 0;
+            return 0;
+        }
         if (cop_op == 0x04) { /* MTC0 */
-            cpu->cop0[rd] = cpu->gpr[rt];
+            uint32_t val = cpu->gpr[rt];
+            if (rd == 13) {
+                /* Cause register: only the software-interrupt pending bits
+                 * [9:8] are writable; hardware IP [15:10], ExcCode [6:2] and
+                 * BD [31] are read-only from software (psx-spx, matches
+                 * PCSX-Redux/Beetle MTC0). */
+                cpu->cop0[13] = (cpu->cop0[13] & ~0x0300u) | (val & 0x0300u);
+            } else {
+                cpu->cop0[rd] = val;
+            }
+            /* psxTestSWInts: after writing Status or Cause, check if a
+             * software interrupt is now deliverable (Cause & Status & 0x0300
+             * with Status.IEc set).  Matches PCSX-Redux's MTC0 path. */
+            if ((rd == 12 /* Status */ || rd == 13 /* Cause */) &&
+                (cpu->cop0[13] & cpu->cop0[12] & 0x0300u) &&
+                (cpu->cop0[12] & 0x1u)) {
+                g_dirty_safe_resume_pc = pc + 4;
+                cpu->pc = pc + 4;
+                psx_check_interrupts(cpu);
+                g_dirty_safe_resume_pc = 0;
+                return (cpu->pc != pc + 4);  /* transferred if exception taken */
+            }
+            return 0;
+        }
+        if (cop_op == 0x06) { /* CTC0 — identical to MTC0 on PSX */
+            uint32_t val = cpu->gpr[rt];
+            if (rd == 13) {
+                cpu->cop0[13] = (cpu->cop0[13] & ~0x0300u) | (val & 0x0300u);
+            } else {
+                cpu->cop0[rd] = val;
+            }
+            if ((rd == 12 || rd == 13) &&
+                (cpu->cop0[13] & cpu->cop0[12] & 0x0300u) &&
+                (cpu->cop0[12] & 0x1u)) {
+                g_dirty_safe_resume_pc = pc + 4;
+                cpu->pc = pc + 4;
+                psx_check_interrupts(cpu);
+                g_dirty_safe_resume_pc = 0;
+                return (cpu->pc != pc + 4);
+            }
             return 0;
         }
         if (cop_op == 0x10 && fnt == 0x10) { /* RFE */
@@ -2159,6 +2229,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x21: { /* LH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
+        if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
         cpu->gpr[rt] = (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
         cpu->gpr[0] = 0;
         return 0;
@@ -2172,6 +2243,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x23: { /* LW */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
+        if (addr & 3) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
         if (psx_ws_is_cull_plane_nx_site(pc))
             /* Side-plane normal-X: inverse-aspect scale while revealed. */
             cpu->gpr[rt] = (uint32_t)psx_ws_plane_nx(
@@ -2192,6 +2264,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x25: { /* LHU */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
+        if (addr & 1) return interp_exception(cpu, 4, addr, pc);  /* LoadAddressError */
         cpu->gpr[rt] = (uint32_t)psx_cyc_load_half(cpu, addr, rt, 1u << rs);
         cpu->gpr[0] = 0;
         return 0;
@@ -2212,6 +2285,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x29: { /* SH */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
+        if (addr & 1) return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
         uint16_t val  = (uint16_t)cpu->gpr[rt];
         /* Widescreen backdrop screenX squash on the interpreter path: mirrors
          * the recompiler emit at [widescreen.backdrop] x_sites. Overlay code
@@ -2233,6 +2307,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     }
     case 0x2B: { /* SW */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
+        if (addr & 3) return interp_exception(cpu, 5, addr, pc);  /* StoreAddressError */
         g_debug_last_store_pc = pc;
         parappa_rhythm_log_store(cpu, pc, addr, cpu->gpr[rt], 4u);
         cpu->write_word(addr, cpu->gpr[rt]);
