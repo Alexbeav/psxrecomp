@@ -288,14 +288,14 @@ void psx_advance_cycles_slow(uint32_t cycles) {
     }
 #endif
 #if STARVATION_RING_ENABLED
-    s_watchdog_throttle += cycles;
-    if (s_watchdog_throttle >= 65536u) {
-        s_watchdog_throttle = 0;
+    psx_watchdog_throttle += cycles;
+    if (psx_watchdog_throttle >= 65536u) {
+        psx_watchdog_throttle = 0;
         starvation_watchdog_check();
     }
-    s_pc_sample_throttle += cycles;
-    if (s_pc_sample_throttle >= 1048576u) {
-        s_pc_sample_throttle = 0;
+    psx_pc_sample_throttle += cycles;
+    if (psx_pc_sample_throttle >= 1048576u) {
+        psx_pc_sample_throttle = 0;
         psx_cycles_pc_sample_fire();
     }
 #endif
