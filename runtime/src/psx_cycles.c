@@ -18,6 +18,7 @@
 
 uint64_t psx_cycle_count = 0;
 uint32_t g_psx_cyc_batch = 0;
+int      g_psx_cyc_bb_defer = 0;
 static int      s_cycle_replay_active = 0;
 static uint64_t s_cycle_replay_live = 0;
 
@@ -518,6 +519,7 @@ void psx_idle_note_check(CPUState *cpu, uint32_t check_pc) {
  * force a fresh deadline on the next charge. */
 void psx_cycles_resync_after_restore(void) {
     g_psx_cyc_batch        = 0;
+    g_psx_cyc_bb_defer     = 0;
     s_devices_synced_cycle = psx_cycle_count;
     psx_next_service_cycle = 0;   /* recompute on next charge */
     psx_in_device_service  = 0;
@@ -525,6 +527,7 @@ void psx_cycles_resync_after_restore(void) {
 
 void psx_cycles_reset_for_boot(void) {
     g_psx_cyc_batch        = 0;
+    g_psx_cyc_bb_defer     = 0;
     psx_cycle_count        = 0;
     s_devices_synced_cycle = 0;
     s_next_service_cycle   = 0;

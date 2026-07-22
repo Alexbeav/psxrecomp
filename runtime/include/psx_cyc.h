@@ -38,10 +38,29 @@
 extern "C" {
 #endif
 
-/* Load-charge batching (MotK VLC): under the published deadline, accumulate
- * into g_psx_cyc_batch instead of storing psx_cycle_count every insn. Flush
- * at IRQ edges / MMIO (psx_cyc_batch_flush). Absorb/fudge state still updates
- * per insn — only the host counter publish is deferred. */
+/* Load-charge batching (MotK VLC): accumulate into g_psx_cyc_batch instead of
+ * storing psx_cycle_count every insn. Absorb/fudge still update per insn —
+ * only the host counter publish is deferred until:
+ *   - psx_cyc_batch_flush (IRQ / MMIO / savestate), or
+ *   - the deferred batch grows past PSX_CYC_BATCH_SOFT (device deadline check),
+ *   - or emitter BB-defer is active (g_psx_cyc_bb_defer): no mid-BB deadline
+ *     probe at all; compiled branches already flush via psx_check_interrupts.
+ * Guest totals at those barriers are unchanged. */
+enum { PSX_CYC_BATCH_SOFT = 64u };
+
+static inline void psx_cyc_bb_defer_begin(void) { g_psx_cyc_bb_defer++; }
+static inline void psx_cyc_bb_defer_end(void) {
+    if (g_psx_cyc_bb_defer > 0) g_psx_cyc_bb_defer--;
+    if (g_psx_cyc_bb_defer == 0) psx_cyc_batch_flush();
+}
+static inline void psx_cyc_bb_defer_flush(void) { psx_cyc_batch_flush(); }
+/* GCC/Clang cleanup helper: emitter places one guard at function entry so
+ * every return path ends BB-defer (CPS/jr/bail) without per-site codegen. */
+static inline void psx_cyc_bb_defer_cleanup(int *guard) {
+    (void)guard;
+    psx_cyc_bb_defer_end();
+}
+
 static inline void psx_cyc_charge(uint32_t cycles) {
     if (cycles == 0u) return;
 #if defined(__GNUC__) || defined(__clang__)
@@ -56,14 +75,22 @@ static inline void psx_cyc_charge(uint32_t cycles) {
         psx_cycle_count += (uint64_t)cycles;
         return;
     }
-    uint64_t next = psx_cycle_count + (uint64_t)g_psx_cyc_batch + (uint64_t)cycles;
-    if (psx_next_service_cycle != 0u && next < psx_next_service_cycle) {
+#if !defined(PSX_COSIM)
+    {
         uint32_t sum = g_psx_cyc_batch + cycles;
         if (sum >= g_psx_cyc_batch) { /* no uint32 wrap */
             g_psx_cyc_batch = sum;
-            return;
+            /* Compiled BB defer: IRQ edges publish. Otherwise probe deadline
+             * only after a soft quantum so MotK VLC doesn't 64-bit-compare
+             * on every LW. */
+            if (g_psx_cyc_bb_defer > 0) return;
+            if (sum < (uint32_t)PSX_CYC_BATCH_SOFT) return;
+            uint64_t next = psx_cycle_count + (uint64_t)sum;
+            if (psx_next_service_cycle != 0u && next < psx_next_service_cycle)
+                return;
         }
     }
+#endif
     psx_advance_cycles(cycles); /* publishes any pending batch first */
 }
 
