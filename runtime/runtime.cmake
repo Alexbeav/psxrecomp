@@ -553,7 +553,7 @@ function(psxrecomp_add_runtime_target target)
     if(WIN32 OR MINGW)
         # opengl32: GL backend (gpu_gl_renderer.c). GL 1.x is exported directly
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
-        target_link_libraries(${target} PRIVATE ws2_32 dbghelp comdlg32 opengl32)
+        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32)
     else()
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})

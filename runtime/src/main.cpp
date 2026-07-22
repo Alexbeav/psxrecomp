@@ -87,8 +87,16 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 #include <windows.h>
 #include <commdlg.h>
+#else
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #endif
 
 #ifndef PSX_DEFAULT_BIOS_PATH
@@ -4048,6 +4056,67 @@ namespace {
 #endif
     }
 
+    static int ae_np_push_lan_ip(char out_ips[][64], int max_ips, int* count,
+                                const char* ip) {
+        if (!out_ips || !count || !ip || !ip[0] || *count >= max_ips) return 0;
+        if (std::strcmp(ip, "0.0.0.0") == 0 || std::strcmp(ip, "127.0.0.1") == 0)
+            return 0;
+        for (int i = 0; i < *count; ++i) {
+            if (std::strcmp(out_ips[i], ip) == 0) return 0;
+        }
+        std::snprintf(out_ips[*count], 64, "%s", ip);
+        (*count)++;
+        return 1;
+    }
+
+    int ae_np_list_lan_ips(void*, char out_ips[][64], int max_ips, int* out_count) {
+        if (!out_ips || max_ips <= 0 || !out_count) return 0;
+        *out_count = 0;
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                      GAA_FLAG_SKIP_DNS_SERVER;
+        ULONG buf_len = 16 * 1024;
+        std::vector<unsigned char> buf(buf_len);
+        IP_ADAPTER_ADDRESSES* addrs =
+            reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+        ULONG rc = GetAdaptersAddresses(AF_INET, flags, nullptr, addrs, &buf_len);
+        if (rc == ERROR_BUFFER_OVERFLOW) {
+            buf.resize(buf_len);
+            addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
+            rc = GetAdaptersAddresses(AF_INET, flags, nullptr, addrs, &buf_len);
+        }
+        if (rc != NO_ERROR) return 0;
+        for (IP_ADAPTER_ADDRESSES* a = addrs; a; a = a->Next) {
+            if (a->OperStatus != IfOperStatusUp) continue;
+            if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+            for (IP_ADAPTER_UNICAST_ADDRESS* u = a->FirstUnicastAddress; u; u = u->Next) {
+                if (!u->Address.lpSockaddr ||
+                    u->Address.lpSockaddr->sa_family != AF_INET)
+                    continue;
+                auto* sin = reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr);
+                char ip[64] = {};
+                if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) continue;
+                ae_np_push_lan_ip(out_ips, max_ips, out_count, ip);
+            }
+        }
+#else
+        struct ifaddrs* ifa = nullptr;
+        if (getifaddrs(&ifa) != 0 || !ifa) return 0;
+        for (struct ifaddrs* i = ifa; i; i = i->ifa_next) {
+            if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+            if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
+            auto* sin = reinterpret_cast<sockaddr_in*>(i->ifa_addr);
+            char ip[64] = {};
+            if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) continue;
+            ae_np_push_lan_ip(out_ips, max_ips, out_count, ip);
+        }
+        freeifaddrs(ifa);
+#endif
+        return *out_count > 0 ? 1 : 0;
+    }
+
     int ae_np_create(void*, const char* lobby_name, const char* host_port,
                      const char* password,
                      const RecompLauncherCSettings* settings) {
@@ -4237,6 +4306,7 @@ namespace {
         ae_np_launch_pending,
         ae_np_clear_launch_pending,
         ae_np_fill_launch,
+        ae_np_list_lan_ips,
     };
 }  // namespace
 #endif
