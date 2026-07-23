@@ -177,6 +177,24 @@ int main() {
     check(reload.set_enabled("addon.mod", false, &error), error.c_str());
     check(reload.remove_version("base.mod", "1.0.0", &error), error.c_str());
 
+    write_text(root / "packages/conflict.a/1.0.0/manifest.toml",
+               "format_version = 1\n"
+               "id = \"conflict.a\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"conflict.a\"\n"
+               "resolver = \"declarative\"\n"
+               "conflicts = [\"conflict.b\"]\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n");
+    write_text(root / "packages/conflict.b/1.0.0/manifest.toml",
+               manifest("conflict.b", "1.0.0"));
+    check(reload.scan(&error), error.c_str());
+    check(reload.set_enabled("conflict.a", true, &error), error.c_str());
+    check(reload.set_enabled("conflict.b", true, &error), error.c_str());
+    check(!reload.selections().at("conflict.a").enabled &&
+              reload.selections().at("conflict.b").enabled,
+          "enabling a conflicting package must disable the previous package");
+
     ModPackage invalid;
     write_text(root / "bad.toml",
                "format_version=1\nid=\"../bad\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"
