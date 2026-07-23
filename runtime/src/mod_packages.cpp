@@ -605,6 +605,45 @@ std::string effective_option_value(const ModPackage& package,
     return option == package.options.end() ? std::string() : option->default_value;
 }
 
+bool conditions_match(const ModPackage& package, const ModSelection& selection,
+                      const std::map<std::string, std::string>& conditions) {
+    for (const auto& [id, value] : conditions) {
+        if (effective_option_value(package, selection, id) != value)
+            return false;
+    }
+    return true;
+}
+
+void read_conditions(const toml::value& value, const std::vector<ModOption>& options,
+                     std::map<std::string, std::string>& when,
+                     const char* label) {
+    const std::string when_option =
+        value.contains("when_option") ? toml::find<std::string>(value, "when_option") : "";
+    const std::string when_value =
+        value.contains("when_value") ? toml::find<std::string>(value, "when_value") : "";
+    if (when_option.empty() != when_value.empty())
+        throw std::runtime_error(
+            std::string(label) + " condition requires both when_option and when_value");
+    if (!when_option.empty()) when[when_option] = when_value;
+    if (value.contains("when")) {
+        const auto table = toml::find<std::map<std::string, std::string>>(value, "when");
+        for (const auto& [id, condition_value] : table) {
+            if (when.find(id) != when.end() && when[id] != condition_value)
+                throw std::runtime_error(
+                    std::string(label) + " has conflicting conditions for " + id);
+            when[id] = condition_value;
+        }
+    }
+    for (const auto& [id, condition_value] : when) {
+        (void)condition_value;
+        const auto option = std::find_if(
+            options.begin(), options.end(),
+            [&](const ModOption& item) { return item.id == id; });
+        if (option == options.end())
+            throw std::runtime_error(std::string(label) + " references unknown option");
+    }
+}
+
 bool writes_overlap(const ModResolution::Write& a, const ModResolution::Write& b) {
     if (a.target != b.target) return false;
     const uint64_t a_end = a.location + a.replacement.size();
@@ -781,21 +820,12 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     patch.location % sector_size + patch.replacement.size() > sector_size)
                     throw std::runtime_error(
                         "disc patch may not cross a sector boundary");
-                patch.when_option =
-                    v.contains("when_option") ? toml::find<std::string>(v, "when_option") : "";
-                patch.when_value =
-                    v.contains("when_value") ? toml::find<std::string>(v, "when_value") : "";
                 patch.order = toml::find_or<int64_t>(
                     v, "order", (int64_t)declaration_index);
-                if (patch.when_option.empty() != patch.when_value.empty())
-                    throw std::runtime_error(
-                        "patch condition requires both when_option and when_value");
-                if (!patch.when_option.empty()) {
-                    const auto option = std::find_if(
-                        out.options.begin(), out.options.end(),
-                        [&](const ModOption& item) { return item.id == patch.when_option; });
-                    if (option == out.options.end())
-                        throw std::runtime_error("patch references unknown option");
+                read_conditions(v, out.options, patch.when, "patch");
+                if (!patch.when.empty()) {
+                    patch.when_option = patch.when.begin()->first;
+                    patch.when_value = patch.when.begin()->second;
                 }
                 out.patches.push_back(std::move(patch));
                 ++declaration_index;
@@ -809,10 +839,6 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 derived.patch_sha256 = toml::find<std::string>(v, "patch_sha256");
                 const int64_t output_size = toml::find<int64_t>(v, "output_size");
                 derived.output_sha256 = toml::find<std::string>(v, "output_sha256");
-                derived.when_option =
-                    v.contains("when_option") ? toml::find<std::string>(v, "when_option") : "";
-                derived.when_value =
-                    v.contains("when_value") ? toml::find<std::string>(v, "when_value") : "";
                 if (derived.kind != "vcdiff")
                     throw std::runtime_error("derived_disc kind must be vcdiff");
                 if (!safe_archive_name(relative_patch))
@@ -824,16 +850,10 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 if (output_size <= 0)
                     throw std::runtime_error("derived_disc output_size must be positive");
                 derived.output_size = (uint64_t)output_size;
-                if (derived.when_option.empty() != derived.when_value.empty())
-                    throw std::runtime_error(
-                        "derived_disc condition requires both when_option and when_value");
-                if (!derived.when_option.empty()) {
-                    const auto option = std::find_if(
-                        out.options.begin(), out.options.end(),
-                        [&](const ModOption& item) { return item.id == derived.when_option; });
-                    if (option == out.options.end())
-                        throw std::runtime_error(
-                            "derived_disc references unknown option");
+                read_conditions(v, out.options, derived.when, "derived_disc");
+                if (!derived.when.empty()) {
+                    derived.when_option = derived.when.begin()->first;
+                    derived.when_value = derived.when.begin()->second;
                 }
                 derived.patch = out.root / fs::path(relative_patch);
                 if (!fs::is_regular_file(derived.patch))
@@ -1246,9 +1266,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             selected_it == selections_.end() ? blank : selected_it->second;
         if (package->resolver == "declarative") {
             for (const ModDerivedDisc& derived : package->derived_discs) {
-                if (!derived.when_option.empty() &&
-                    effective_option_value(*package, selected, derived.when_option) !=
-                        derived.when_value)
+                if (!conditions_match(*package, selected, derived.when))
                     continue;
                 ModResolution::DerivedDisc resolved;
                 resolved.kind = derived.kind;
@@ -1262,9 +1280,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             std::vector<const ModPatch*> patches;
             patches.reserve(package->patches.size());
             for (const ModPatch& patch : package->patches) {
-                if (!patch.when_option.empty() &&
-                    effective_option_value(*package, selected, patch.when_option) !=
-                        patch.when_value)
+                if (!conditions_match(*package, selected, patch.when))
                     continue;
                 patches.push_back(&patch);
             }

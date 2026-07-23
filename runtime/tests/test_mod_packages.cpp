@@ -195,6 +195,48 @@ int main() {
               reload.selections().at("conflict.b").enabled,
           "enabling a conflicting package must disable the previous package");
 
+    write_text(root / "packages/matrix.mod/1.0.0/manifest.toml",
+               manifest("matrix.mod", "1.0.0",
+                   "\n[[option]]\n"
+                   "id = \"title\"\n"
+                   "label = \"Title\"\n"
+                   "type = \"choice\"\n"
+                   "default = \"mega\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"mega\"\n"
+                   "label = \"Mega\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"rockman\"\n"
+                   "label = \"Rockman\"\n"
+                   "\n[[option]]\n"
+                   "id = \"script\"\n"
+                   "label = \"Script\"\n"
+                   "type = \"choice\"\n"
+                   "default = \"original\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"original\"\n"
+                   "label = \"Original\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"retranslation\"\n"
+                   "label = \"Retranslation\"\n"
+                   "\n[[derived_disc]]\n"
+                   "kind = \"vcdiff\"\n"
+                   "patch = \"assets/matrix.xdelta3\"\n"
+                   "patch_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n"
+                   "output_size = 222222\n"
+                   "output_sha256 = \"3333333333333333333333333333333333333333333333333333333333333333\"\n"
+                   "when = { title = \"rockman\", script = \"retranslation\" }\n"));
+    write_text(root / "packages/matrix.mod/1.0.0/assets/matrix.xdelta3", "test");
+    check(reload.scan(&error), error.c_str());
+    check(reload.set_enabled("conflict.b", false, &error), error.c_str());
+    check(reload.set_enabled("matrix.mod", true, &error), error.c_str());
+    check(reload.set_option("matrix.mod", "title", "rockman", &error), error.c_str());
+    check(reload.set_option("matrix.mod", "script", "retranslation", &error), error.c_str());
+    ModResolution matrix = reload.resolve("SLUS-TEST");
+    check(matrix.ok && matrix.derived_discs.size() == 1 &&
+              matrix.derived_discs[0].output_size == 222222,
+          "multi-option derived-disc condition must match selected values");
+
     ModPackage invalid;
     write_text(root / "bad.toml",
                "format_version=1\nid=\"../bad\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"

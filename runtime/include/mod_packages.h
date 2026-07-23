@@ -57,6 +57,7 @@ struct ModPatch {
     std::vector<uint8_t> replacement;
     std::string when_option;
     std::string when_value;
+    std::map<std::string, std::string> when;
     int64_t order = 0;
 };
 
@@ -68,6 +69,7 @@ struct ModDerivedDisc {
     std::string output_sha256;
     std::string when_option;
     std::string when_value;
+    std::map<std::string, std::string> when;
 };
 
 struct ModPackage {

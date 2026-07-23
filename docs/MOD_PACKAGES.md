@@ -68,10 +68,22 @@ output_size = 600000000
 output_sha256 = "..."
 when_option = "delay"
 when_value = "fast"
+
+# For option matrices, use a condition table. All listed option values must
+# match. `when_option` / `when_value` remain supported for single-option cases.
+[[derived_disc]]
+kind = "vcdiff"
+patch = "assets/fast-rockman.xdelta3"
+patch_sha256 = "..."
+output_size = 600000000
+output_sha256 = "..."
+when = { delay = "fast", title_screen = "rockman_japan" }
 ```
 
 Option types are `boolean`, `choice`, and bounded `integer`. `when_option` /
-`when_value` are optional; an unconditional patch omits both.
+`when_value` are optional; `when = { option = "value", ... }` can be used when a
+patch or derived-disc recipe depends on multiple option values. An unconditional
+patch omits both condition forms.
 
 ## Patch targets
 
@@ -97,7 +109,9 @@ option combinations.
 
 A `derived_disc` is a data-only VCDIFF recipe whose source is the verified stock
 disc from `[[target]].disc_sha256`. It is intended for mods that relocate files,
-grow the ISO, replace large assets, or otherwise change disc geometry.
+grow the ISO, replace large assets, or otherwise change disc geometry. A package
+may contain a matrix of conditional recipes for its own options, but exactly one
+recipe may resolve in the complete mod plan.
 
 The launcher continues to display and persist the user's stock BIN/CUE. Before
 boot, the runtime:
@@ -117,8 +131,9 @@ base package can support many small composable add-ons.
 
 Release builders stage the trusted decoder with
 `-DPSXRECOMP_XDELTA3_EXECUTABLE=/path/to/xdelta3`. More than one active
-derived-disc provider is rejected; packages should use dependencies and
-conflicts to make ownership explicit.
+derived-disc recipe is rejected after option resolution; packages should use a
+single owner package for structural transforms and dependencies/conflicts for
+external ownership.
 
 ## Resolution rules
 
