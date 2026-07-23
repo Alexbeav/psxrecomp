@@ -191,9 +191,11 @@ int main() {
     check(reload.scan(&error), error.c_str());
     check(reload.set_enabled("conflict.a", true, &error), error.c_str());
     check(reload.set_enabled("conflict.b", true, &error), error.c_str());
-    check(!reload.selections().at("conflict.a").enabled &&
+    check(reload.selections().at("conflict.a").enabled &&
               reload.selections().at("conflict.b").enabled,
-          "enabling a conflicting package must disable the previous package");
+          "enabling a package must not silently disable another package");
+    check(!reload.resolve("SLUS-TEST").ok,
+          "declared conflicts must fail resolution");
 
     write_text(root / "packages/matrix.mod/1.0.0/manifest.toml",
                manifest("matrix.mod", "1.0.0",
@@ -228,6 +230,7 @@ int main() {
                    "when = { title = \"rockman\", script = \"retranslation\" }\n"));
     write_text(root / "packages/matrix.mod/1.0.0/assets/matrix.xdelta3", "test");
     check(reload.scan(&error), error.c_str());
+    check(reload.set_enabled("conflict.a", false, &error), error.c_str());
     check(reload.set_enabled("conflict.b", false, &error), error.c_str());
     check(reload.set_enabled("matrix.mod", true, &error), error.c_str());
     check(reload.set_option("matrix.mod", "title", "rockman", &error), error.c_str());

@@ -1088,26 +1088,6 @@ bool ModPackageManager::set_enabled(const std::string& id, bool enabled, std::st
         return false;
     }
     selections_[id].enabled = enabled;
-    if (!enabled) return true;
-
-    const ModPackage* package = find_selected(packages_, id, selections_[id]);
-    if (!package) return true;
-
-    auto conflicts_with_enabled = [&](const std::string& other_id,
-                                      const ModPackage& other) {
-        const auto declared = std::find(package->conflicts.begin(),
-                                        package->conflicts.end(), other_id);
-        if (declared != package->conflicts.end()) return true;
-        const auto reverse = std::find(other.conflicts.begin(), other.conflicts.end(), id);
-        return reverse != other.conflicts.end();
-    };
-
-    for (auto& [other_id, selection] : selections_) {
-        if (other_id == id || !selection.enabled) continue;
-        const ModPackage* other = find_selected(packages_, other_id, selection);
-        if (other && conflicts_with_enabled(other_id, *other))
-            selection.enabled = false;
-    }
     return true;
 }
 

@@ -135,10 +135,18 @@ derived-disc recipe is rejected after option resolution; packages should use a
 single owner package for structural transforms and dependencies/conflicts for
 external ownership.
 
+Do not split one structural option system into many mutually exclusive
+full-disc packages. For example, a game-wide Tweaks system should be one package
+with launcher options and a conditional recipe matrix. Choices that are
+mutually exclusive by design belong inside that package as option values, while
+unrelated mods should remain separate packages and compose normally.
+
 ## Resolution rules
 
 - Installed versions are side-by-side. The launcher can select an older version
   to roll back.
+- Enabling or disabling one package changes only that package. It does not
+  silently toggle other packages.
 - Enabled packages are topologically ordered by dependencies, then by stable
   package/patch order.
 - Missing dependencies, version mismatches, declared conflicts, dependency
