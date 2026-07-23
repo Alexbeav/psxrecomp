@@ -21,7 +21,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 2;
+constexpr uint32_t kMaxFormatVersion = 3;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -79,6 +79,7 @@ bool parse_value_encoding(const std::string& text, ModValueEncoding& out) {
         {"u8", ModValueEncoding::U8},
         {"u16le", ModValueEncoding::U16LE},
         {"u32le", ModValueEncoding::U32LE},
+        {"mips_lui_ori_u32", ModValueEncoding::MipsLuiOriU32},
     };
     for (const auto& [name, encoding] : values) {
         if (text == name) {
@@ -97,6 +98,8 @@ uint32_t value_encoding_size(ModValueEncoding encoding) {
         return 2;
     case ModValueEncoding::U32LE:
         return 4;
+    case ModValueEncoding::MipsLuiOriU32:
+        return 8;
     }
     return 0;
 }
@@ -673,6 +676,11 @@ const ModOption* find_option(const ModPackage& package,
     return option == package.options.end() ? nullptr : &*option;
 }
 
+bool constraint_satisfied(
+    const ModPackage& package, const ModConstraint& constraint,
+    const std::function<std::string(const std::string&)>& value_for,
+    std::string* reason);
+
 const ModFeatureSelection* find_feature_selection(const ModPackage& package,
                                                   const ModSelection& selection,
                                                   const std::string& feature_id) {
@@ -718,6 +726,27 @@ std::string effective_option_value(const ModPackage& package,
     }
     const ModOption* option = find_option(package, feature_id, id);
     return option ? option->default_value : std::string();
+}
+
+bool feature_constraints_satisfied(
+    const ModPackage& package, const ModSelection& selection,
+    const std::string& feature_id, const std::string* override_id,
+    const std::string* override_value, std::string* reason) {
+    for (const ModConstraint& constraint : package.constraints) {
+        if (constraint.feature_id != feature_id) continue;
+        if (!constraint_satisfied(
+                package, constraint,
+                [&](const std::string& id) {
+                    return override_id && override_value &&
+                                   id == *override_id
+                               ? *override_value
+                               : effective_option_value(
+                                     package, selection, feature_id, id);
+                },
+                reason))
+            return false;
+    }
+    return true;
 }
 
 bool conditions_match(const ModPackage& package, const ModSelection& selection,
@@ -887,6 +916,46 @@ bool valid_option_value(const ModOption& option, const std::string& value) {
            integer_step_aligned(parsed, option.min_value, option.step);
 }
 
+bool constraint_satisfied(
+    const ModPackage& package, const ModConstraint& constraint,
+    const std::function<std::string(const std::string&)>& value_for,
+    std::string* reason) {
+    if (constraint.kind != ModConstraintKind::OrderedInteger) return false;
+    for (size_t index = 1; index < constraint.options.size(); ++index) {
+        const std::string& previous_id = constraint.options[index - 1];
+        const std::string& current_id = constraint.options[index];
+        int64_t previous = 0;
+        int64_t current = 0;
+        if (!parse_canonical_int64(value_for(previous_id), previous) ||
+            !parse_canonical_int64(value_for(current_id), current)) {
+            if (reason)
+                *reason = "constraint references a non-integer value";
+            return false;
+        }
+        const bool violated =
+            constraint.direction == ModConstraintDirection::Nondecreasing
+                ? previous > current
+                : previous < current;
+        if (violated) {
+            if (reason) {
+                const ModOption* previous_option = find_option(
+                    package, constraint.feature_id, previous_id);
+                const ModOption* current_option = find_option(
+                    package, constraint.feature_id, current_id);
+                *reason =
+                    (previous_option ? previous_option->label : previous_id) +
+                    (constraint.direction ==
+                             ModConstraintDirection::Nondecreasing
+                         ? " must be less than or equal to "
+                         : " must be greater than or equal to ") +
+                    (current_option ? current_option->label : current_id);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 bool checked_add_int64(int64_t left, int64_t right, int64_t& out) {
     if ((right > 0 && left > std::numeric_limits<int64_t>::max() - right) ||
         (right < 0 && left < std::numeric_limits<int64_t>::min() - right))
@@ -902,6 +971,8 @@ uint64_t value_encoding_max(ModValueEncoding encoding) {
     case ModValueEncoding::U16LE:
         return UINT16_MAX;
     case ModValueEncoding::U32LE:
+        return UINT32_MAX;
+    case ModValueEncoding::MipsLuiOriU32:
         return UINT32_MAX;
     }
     return 0;
@@ -926,6 +997,7 @@ bool encode_unsigned_value(ModValueEncoding encoding, int64_t value,
     const uint32_t size = value_encoding_size(encoding);
     out.resize(size);
     const uint64_t encoded = static_cast<uint64_t>(value);
+    if (encoding == ModValueEncoding::MipsLuiOriU32) return false;
     for (uint32_t i = 0; i < size; ++i)
         out[i] = static_cast<uint8_t>(encoded >> (i * 8));
     return true;
@@ -1100,6 +1172,67 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 out.options.push_back(std::move(option));
             }
         }
+        if (cfg.contains("constraint")) {
+            if (out.format_version < 3)
+                throw std::runtime_error(
+                    "constraints require format_version 3");
+            for (const toml::value& v :
+                 toml::find(cfg, "constraint").as_array()) {
+                ModConstraint constraint;
+                constraint.feature_id =
+                    toml::find<std::string>(v, "feature");
+                const std::string kind =
+                    toml::find<std::string>(v, "kind");
+                const std::string direction =
+                    toml::find<std::string>(v, "direction");
+                constraint.options =
+                    toml::find<std::vector<std::string>>(v, "options");
+                if (!find_feature(out, constraint.feature_id))
+                    throw std::runtime_error(
+                        "constraint references unknown feature");
+                if (kind != "ordered_integer")
+                    throw std::runtime_error(
+                        "constraint kind must be ordered_integer");
+                if (direction == "nondecreasing") {
+                    constraint.direction =
+                        ModConstraintDirection::Nondecreasing;
+                } else if (direction == "nonincreasing") {
+                    constraint.direction =
+                        ModConstraintDirection::Nonincreasing;
+                } else {
+                    throw std::runtime_error(
+                        "ordered_integer direction must be "
+                        "nondecreasing or nonincreasing");
+                }
+                if (constraint.options.size() < 2)
+                    throw std::runtime_error(
+                        "ordered_integer requires at least two options");
+                std::set<std::string> option_ids;
+                for (const std::string& id : constraint.options) {
+                    const ModOption* option =
+                        find_option(out, constraint.feature_id, id);
+                    if (!option || option->type != ModOptionType::Integer)
+                        throw std::runtime_error(
+                            "ordered_integer must reference same-feature "
+                            "integer options");
+                    if (!option_ids.insert(id).second)
+                        throw std::runtime_error(
+                            "ordered_integer contains a duplicate option");
+                }
+                std::string reason;
+                if (!constraint_satisfied(
+                        out, constraint,
+                        [&](const std::string& id) {
+                            return find_option(
+                                out, constraint.feature_id, id)
+                                ->default_value;
+                        },
+                        &reason))
+                    throw std::runtime_error(
+                        "constraint defaults are invalid: " + reason);
+                out.constraints.push_back(std::move(constraint));
+            }
+        }
         if (cfg.contains("patch")) {
             size_t declaration_index = 0;
             for (const toml::value& v : toml::find(cfg, "patch").as_array()) {
@@ -1155,7 +1288,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     for (const auto& [key, unused] : table) {
                         (void)unused;
                         if (key != "option" && key != "encoding" &&
-                            key != "offset" && key != "addend")
+                            key != "offset" && key != "addend" &&
+                            key != "omit_when_default")
                             throw std::runtime_error(
                                 "replace_from has unknown field: " + key);
                     }
@@ -1172,10 +1306,22 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         static_cast<uint64_t>(replace_offset);
                     patch.replace_addend =
                         toml::find_or<int64_t>(replacement, "addend", 0);
+                    patch.replace_omit_when_default =
+                        toml::find_or<bool>(
+                            replacement, "omit_when_default", false);
                     if (!parse_value_encoding(
                             encoding, patch.replace_encoding))
                         throw std::runtime_error(
-                            "replace_from encoding must be u8, u16le, or u32le");
+                            "replace_from encoding is unsupported");
+                    const bool mips_pair_encoding =
+                        patch.replace_encoding ==
+                            ModValueEncoding::MipsLuiOriU32;
+                    if ((mips_pair_encoding ||
+                         patch.replace_omit_when_default) &&
+                        out.format_version < 3)
+                        throw std::runtime_error(
+                            "typed MIPS encodings and omit_when_default "
+                            "require format_version 3");
                     const ModOption* option = find_option(
                         out, patch.feature_id, patch.replace_from_option);
                     if (!option || option->type != ModOptionType::Integer)
@@ -1193,6 +1339,37 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                             patch.replace_addend))
                         throw std::runtime_error(
                             "replace_from option range/addend does not fit encoding");
+                    if (mips_pair_encoding) {
+                        if (patch.target != ModPatchTarget::MainExe ||
+                            patch.expected.size() != 8 ||
+                            patch.replace_offset != 0 ||
+                            patch.replace_addend != 0 ||
+                            patch.location % 4 != 0)
+                            throw std::runtime_error(
+                                "typed MIPS LUI/ORI encoding requires one "
+                                "aligned complete main_exe instruction pair "
+                                "at offset zero without an addend");
+                        const uint32_t lui =
+                            static_cast<uint32_t>(patch.expected[0]) |
+                            (static_cast<uint32_t>(patch.expected[1]) << 8) |
+                            (static_cast<uint32_t>(patch.expected[2]) << 16) |
+                            (static_cast<uint32_t>(patch.expected[3]) << 24);
+                        const uint32_t ori =
+                            static_cast<uint32_t>(patch.expected[4]) |
+                            (static_cast<uint32_t>(patch.expected[5]) << 8) |
+                            (static_cast<uint32_t>(patch.expected[6]) << 16) |
+                            (static_cast<uint32_t>(patch.expected[7]) << 24);
+                        const uint32_t lui_rs = (lui >> 21) & 0x1Fu;
+                        const uint32_t lui_rt = (lui >> 16) & 0x1Fu;
+                        const uint32_t ori_rs = (ori >> 21) & 0x1Fu;
+                        const uint32_t ori_rt = (ori >> 16) & 0x1Fu;
+                        if ((lui >> 26) != 0x0Fu || lui_rs != 0 ||
+                            lui_rt == 0 || (ori >> 26) != 0x0Du ||
+                            ori_rs != lui_rt || ori_rt != lui_rt)
+                            throw std::runtime_error(
+                                "typed MIPS encoding guard is not a linked "
+                                "LUI/ORI register pair");
+                    }
                 }
                 const uint64_t sector_size =
                     patch.target == ModPatchTarget::DiscRaw ? 2352 :
@@ -1691,8 +1868,17 @@ bool ModPackageManager::set_feature_enabled(const std::string& package_id,
         set_error(error, "unknown package feature");
         return false;
     }
-    ModFeatureSelection& selection =
-        selections_[package_id].features[feature_id];
+    ModSelection& package_selection = selections_[package_id];
+    if (enabled) {
+        std::string reason;
+        if (!feature_constraints_satisfied(
+                *package, package_selection, feature_id,
+                nullptr, nullptr, &reason)) {
+            set_error(error, package_id + "/" + feature_id + ": " + reason);
+            return false;
+        }
+    }
+    ModFeatureSelection& selection = package_selection.features[feature_id];
     selection.enabled = enabled;
     selection.has_enabled = true;
     return true;
@@ -1716,7 +1902,17 @@ bool ModPackageManager::set_feature_option(const std::string& package_id,
         set_error(error, "invalid feature option value");
         return false;
     }
-    selections_[package_id].features[feature_id].values[option_id] = value;
+    ModSelection& package_selection = selections_[package_id];
+    if (is_feature_enabled(*package, package_selection, *feature)) {
+        std::string reason;
+        if (!feature_constraints_satisfied(
+                *package, package_selection, feature_id,
+                &option_id, &value, &reason)) {
+            set_error(error, package_id + "/" + feature_id + ": " + reason);
+            return false;
+        }
+    }
+    package_selection.features[feature_id].values[option_id] = value;
     return true;
 }
 
@@ -1796,6 +1992,30 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 result.errors.push_back(id + " conflicts with " + conflict);
 
         const auto selection = selections_.find(id);
+        const ModSelection blank_selection;
+        const ModSelection& effective_selection =
+            selection == selections_.end()
+                ? blank_selection
+                : selection->second;
+        for (const ModConstraint& constraint : package->constraints) {
+            const ModFeature* feature =
+                find_feature(*package, constraint.feature_id);
+            if (!feature ||
+                !is_feature_enabled(
+                    *package, effective_selection, *feature))
+                continue;
+            std::string reason;
+            if (!constraint_satisfied(
+                    *package, constraint,
+                    [&](const std::string& option_id) {
+                        return effective_option_value(
+                            *package, effective_selection,
+                            constraint.feature_id, option_id);
+                    },
+                    &reason))
+                result.errors.push_back(
+                    id + "/" + constraint.feature_id + ": " + reason);
+        }
         if (selection != selections_.end()) {
             for (const ModOption& option : package->options) {
                 const ModFeature* feature =
@@ -1901,15 +2121,19 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                         effective_option_value(
                             *package, selected, patch->feature_id,
                             patch->replace_from_option);
+                    const ModOption* source_option = find_option(
+                        *package, patch->feature_id,
+                        patch->replace_from_option);
+                    if (patch->replace_omit_when_default &&
+                        source_option &&
+                        selected_value == source_option->default_value)
+                        continue;
                     int64_t parsed = 0;
                     int64_t adjusted = 0;
                     std::vector<uint8_t> encoded;
                     if (!parse_canonical_int64(selected_value, parsed) ||
                         !checked_add_int64(
-                            parsed, patch->replace_addend, adjusted) ||
-                        !encode_unsigned_value(
-                            patch->replace_encoding, adjusted,
-                            encoded)) {
+                            parsed, patch->replace_addend, adjusted)) {
                         result.errors.push_back(
                             package->id + "/" + patch->feature_id +
                             ": could not encode replace_from option " +
@@ -1917,11 +2141,44 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                         continue;
                     }
                     write.replacement = write.expected;
-                    std::copy(
-                        encoded.begin(), encoded.end(),
-                        write.replacement.begin() +
-                            static_cast<size_t>(patch->replace_offset));
-                    if (write.replacement == write.expected)
+                    if (patch->replace_encoding ==
+                        ModValueEncoding::MipsLuiOriU32) {
+                        if (adjusted < 0 ||
+                            static_cast<uint64_t>(adjusted) > UINT32_MAX) {
+                            result.errors.push_back(
+                                package->id + "/" + patch->feature_id +
+                                ": could not encode replace_from option " +
+                                patch->replace_from_option);
+                            continue;
+                        }
+                        const uint32_t value =
+                            static_cast<uint32_t>(adjusted);
+                        write.replacement[0] =
+                            static_cast<uint8_t>(value >> 16);
+                        write.replacement[1] =
+                            static_cast<uint8_t>(value >> 24);
+                        write.replacement[4] =
+                            static_cast<uint8_t>(value);
+                        write.replacement[5] =
+                            static_cast<uint8_t>(value >> 8);
+                    } else {
+                        if (!encode_unsigned_value(
+                                patch->replace_encoding, adjusted,
+                                encoded)) {
+                            result.errors.push_back(
+                                package->id + "/" + patch->feature_id +
+                                ": could not encode replace_from option " +
+                                patch->replace_from_option);
+                            continue;
+                        }
+                        std::copy(
+                            encoded.begin(), encoded.end(),
+                            write.replacement.begin() +
+                                static_cast<size_t>(
+                                    patch->replace_offset));
+                    }
+                    if (write.replacement == write.expected &&
+                        !patch->replace_omit_when_default)
                         continue;
                 }
                 write.package_id = package->id;

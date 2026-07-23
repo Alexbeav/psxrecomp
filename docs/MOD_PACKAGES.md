@@ -142,6 +142,51 @@ Integer values use canonical decimal text. Leading plus signs, redundant
 leading zeroes, values outside the bounds, and values not aligned to `step` are
 rejected.
 
+## Ordered values and split MIPS immediates
+
+Package format 3 adds feature-local ordering constraints for related integer
+fields:
+
+```toml
+format_version = 3
+
+[[constraint]]
+feature = "rank-thresholds"
+kind = "ordered_integer"
+direction = "nondecreasing"
+options = ["rank-c", "rank-b", "rank-a"]
+```
+
+All listed options must be integer options on that feature. Defaults must
+satisfy the constraint. While a feature is enabled, an edit that would invert
+the order is rejected with the neighboring option labels. Disabled features
+may retain an incomplete or invalid draft, but cannot be enabled until it is
+valid. `nonincreasing` is also supported.
+
+Format 3 also provides a narrow, typed transform for constants constructed by
+a linked MIPS `LUI`/`ORI` pair:
+
+```toml
+replace_from = {
+  option = "speed",
+  encoding = "mips_lui_ori_u32",
+  omit_when_default = true
+}
+```
+
+The patch must target one aligned, fully guarded eight-byte `main_exe`
+instruction pair. The loader verifies the opcodes and register linkage, then
+places the raw high and low 16-bit halves into the two immediates. It does not
+apply signed-`ADDIU` carry adjustment. `offset` and `addend` are not accepted
+for this encoding.
+
+`omit_when_default` suppresses the entire patch when the selected value equals
+the option default. This models source tools whose declared default means
+"make no writes," including cases where multiple guarded sites contain
+different stock values. For any nondefault selection, every declared site
+retains its collision claim even if one generated replacement happens to equal
+its stock guard.
+
 ## Native operations
 
 `main_exe` writes use PSX guest virtual addresses. Expected bytes are checked

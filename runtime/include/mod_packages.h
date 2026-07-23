@@ -43,6 +43,23 @@ struct ModFeature {
     bool legacy = false;
 };
 
+enum class ModConstraintKind {
+    OrderedInteger,
+};
+
+enum class ModConstraintDirection {
+    Nondecreasing,
+    Nonincreasing,
+};
+
+struct ModConstraint {
+    std::string feature_id;
+    ModConstraintKind kind = ModConstraintKind::OrderedInteger;
+    ModConstraintDirection direction =
+        ModConstraintDirection::Nondecreasing;
+    std::vector<std::string> options;
+};
+
 struct ModRequirement {
     std::string id;
     std::string version;
@@ -64,6 +81,7 @@ enum class ModValueEncoding {
     U8,
     U16LE,
     U32LE,
+    MipsLuiOriU32,
 };
 
 struct ModPatch {
@@ -76,6 +94,7 @@ struct ModPatch {
     ModValueEncoding replace_encoding = ModValueEncoding::U8;
     uint64_t replace_offset = 0;
     int64_t replace_addend = 0;
+    bool replace_omit_when_default = false;
     std::string when_option;
     std::string when_value;
     std::map<std::string, std::string> when;
@@ -121,6 +140,7 @@ struct ModPackage {
     std::vector<std::string> conflicts;
     std::vector<ModFeature> features;
     std::vector<ModOption> options;
+    std::vector<ModConstraint> constraints;
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
     std::vector<ModDerivedDisc> derived_discs;

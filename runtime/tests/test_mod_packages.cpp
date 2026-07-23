@@ -405,7 +405,7 @@ int main() {
           "feature state must resolve deterministically after reload");
 
     write_text(root / "packages/parametric.mod/1.0.0/manifest.toml",
-               "format_version = 2\n"
+               "format_version = 3\n"
                "id = \"parametric.mod\"\n"
                "version = \"1.0.0\"\n"
                "name = \"Parametric\"\n"
@@ -446,6 +446,15 @@ int main() {
                "step = 1\n"
                "default = 305419896\n"
                "[[option]]\n"
+               "feature = \"numeric\"\n"
+               "id = \"split\"\n"
+               "label = \"Split\"\n"
+               "type = \"integer\"\n"
+               "min = 200000\n"
+               "max = 600000\n"
+               "step = 1\n"
+               "default = 425984\n"
+               "[[option]]\n"
                "feature = \"numeric-collision\"\n"
                "id = \"byte\"\n"
                "label = \"Byte\"\n"
@@ -453,6 +462,11 @@ int main() {
                "min = 0\n"
                "max = 255\n"
                "default = 8\n"
+               "[[constraint]]\n"
+               "feature = \"numeric\"\n"
+               "kind = \"ordered_integer\"\n"
+               "direction = \"nondecreasing\"\n"
+               "options = [\"byte\", \"word\", \"dword\"]\n"
                "[[patch]]\n"
                "feature = \"numeric\"\n"
                "target = \"main_exe\"\n"
@@ -483,6 +497,18 @@ int main() {
                "address = 2147500040\n"
                "expected = \"0000aabb\"\n"
                "replace_from = { option = \"word\", encoding = \"u16le\", offset = 0 }\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500048\n"
+               "expected = \"0600013c00802134\"\n"
+               "replace_from = { option = \"split\", encoding = \"mips_lui_ori_u32\", omit_when_default = true }\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500056\n"
+               "expected = \"0400013c00202134\"\n"
+               "replace_from = { option = \"split\", encoding = \"mips_lui_ori_u32\", omit_when_default = true }\n"
                "[[patch]]\n"
                "feature = \"numeric-collision\"\n"
                "target = \"main_exe\"\n"
@@ -531,14 +557,63 @@ int main() {
               guarded_word_write->replacement ==
                   std::vector<uint8_t>({0x34, 0x12, 0xaa, 0xbb}),
           "replace_from must preserve guarded bytes outside its value field");
+    check(!numeric_write(0x80004010ull) &&
+              !numeric_write(0x80004018ull),
+          "omit_when_default must suppress every split-immediate site");
     const std::string parametric_fingerprint = parametric.fingerprint;
     check(feature_reload.set_feature_option(
               "parametric.mod", "numeric", "byte", "9", &error),
           error.c_str());
+    check(!feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "word", "5", &error),
+          "enabled ordered integer features must reject inverted values");
     ModResolution changed_parametric = feature_reload.resolve("SLUS-TEST");
     check(changed_parametric.ok &&
               changed_parametric.fingerprint != parametric_fingerprint,
           "changing a generated integer must change the plan fingerprint");
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "split", "200000", &error),
+          error.c_str());
+    ModResolution split_parametric = feature_reload.resolve("SLUS-TEST");
+    const auto split_write = [&](uint64_t location)
+        -> const ModResolution::Write* {
+        const auto found = std::find_if(
+            split_parametric.writes.begin(), split_parametric.writes.end(),
+            [&](const ModResolution::Write& write) {
+                return write.package_id == "parametric.mod" &&
+                       write.location == location;
+            });
+        return found == split_parametric.writes.end() ? nullptr : &*found;
+    };
+    check(split_write(0x80004010ull) &&
+              split_write(0x80004010ull)->replacement ==
+                  std::vector<uint8_t>({
+                      0x03, 0x00, 0x01, 0x3c,
+                      0x40, 0x0d, 0x21, 0x34}) &&
+              split_write(0x80004018ull) &&
+              split_write(0x80004018ull)->replacement ==
+                  std::vector<uint8_t>({
+                      0x03, 0x00, 0x01, 0x3c,
+                      0x40, 0x0d, 0x21, 0x34}),
+          "typed MIPS split encodings must update every guarded pair");
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "split", "270336", &error),
+          error.c_str());
+    ModResolution partial_stock_split =
+        feature_reload.resolve("SLUS-TEST");
+    check(std::count_if(
+              partial_stock_split.writes.begin(),
+              partial_stock_split.writes.end(),
+              [](const ModResolution::Write& write) {
+                  return write.package_id == "parametric.mod" &&
+                         (write.location == 0x80004010ull ||
+                          write.location == 0x80004018ull);
+              }) == 2,
+          "a nondefault split value must retain ownership of a pair whose "
+          "replacement happens to equal stock");
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "split", "425984", &error),
+          error.c_str());
     check(feature_reload.set_feature_enabled(
               "parametric.mod", "numeric-collision", true, &error),
           error.c_str());
@@ -547,6 +622,19 @@ int main() {
     check(feature_reload.set_feature_enabled(
               "parametric.mod", "numeric-collision", false, &error),
           error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric", false, &error), error.c_str());
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "word", "0", &error),
+          "disabled features may retain an invalid draft");
+    check(!feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric", true, &error),
+          "an invalid ordered integer draft must block feature enablement");
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "word", "4660", &error),
+          error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric", true, &error), error.c_str());
     check(feature_reload.save_state(&error), error.c_str());
     ModPackageManager parametric_reload(root);
     check(parametric_reload.scan(&error), error.c_str());
@@ -605,6 +693,36 @@ int main() {
                   "address=2147487744\nexpected=\"00\"\n"
                   "replace_from={option=\"value\",encoding=\"u8\",shift=1}\n"),
           "replace_from must reject unknown transform fields");
+    check(reject_parametric_manifest(
+              "dynamic-mips-v2",
+              "format_version=2\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"0600013c00802134\"\n"
+                  "replace_from={option=\"value\","
+                  "encoding=\"mips_lui_ori_u32\"}\n"),
+          "typed MIPS pairs must require package format 3");
+    check(reject_parametric_manifest(
+              "dynamic-mips-unlinked",
+              "format_version=3\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"0600013c00802234\"\n"
+                  "replace_from={option=\"value\","
+                  "encoding=\"mips_lui_ori_u32\"}\n"),
+          "typed MIPS pairs must reject unlinked registers");
+    check(reject_parametric_manifest(
+              "constraint-inverted-default",
+              "format_version=3\n"
+              "id=\"bad.dynamic\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"
+              "[[target]]\ngame_id=\"SLUS-TEST\"\n"
+              "[[feature]]\nid=\"bad\"\nname=\"Bad\"\n"
+              "[[option]]\nfeature=\"bad\"\nid=\"low\"\nlabel=\"Low\"\n"
+              "type=\"integer\"\nmin=0\nmax=10\ndefault=8\n"
+              "[[option]]\nfeature=\"bad\"\nid=\"high\"\nlabel=\"High\"\n"
+              "type=\"integer\"\nmin=0\nmax=10\ndefault=2\n"
+              "[[constraint]]\nfeature=\"bad\"\n"
+              "kind=\"ordered_integer\"\ndirection=\"nondecreasing\"\n"
+              "options=[\"low\",\"high\"]\n"),
+          "ordered integer defaults must satisfy their constraint");
     check(reject_parametric_manifest(
               "dynamic-step-default",
               "format_version=2\n"
