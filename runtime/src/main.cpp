@@ -3259,12 +3259,21 @@ static void sdl_vblank_present(void) {
         }
     } netplay_tail(override);
 
+    /* Turbo-active / multitap arming share game-started detection. */
+    extern int fntrace_is_game_started(void);
+
     if (psx_netplay_active()) {
         psx_netplay_finish_frame();
-    } else if (g_headless) {
-        sample_headless_pad_into_sio(override);
     } else {
-        sample_pad_into_sio(override);
+        /* Offline N-pad: enable multitap only once the game EXE is running. */
+        if (g_offline_pad_count >= 3 && fntrace_is_game_started() &&
+            !sio_get_multitap()) {
+            sio_set_multitap(1);
+        }
+        if (g_headless)
+            sample_headless_pad_into_sio(override);
+        else
+            sample_pad_into_sio(override);
     }
 
     /* Latency ring: open this present cycle's slot, stamping when input was
@@ -3273,7 +3282,6 @@ static void sdl_vblank_present(void) {
 
     /* Turbo-active test shared by the pacing/present gate below. */
     int turbo_loads_active = 0;
-    extern int fntrace_is_game_started(void);
     int logical_load_active = fntrace_is_game_started() && cdrom_load_in_progress();
     int load_run_value = 0;
     static int load_run = 0;
@@ -6456,9 +6464,10 @@ session_reboot:
      * ports during early boot. */
     set_player_device(g_players[0], p1_device, p1_mode);
     set_player_device(g_players[1], p2_device, p2_mode);
-    /* Slots 2+ stay kind=0 until assigned; still size SIO for the build ceiling. */
-    if (game_players >= 3)
-        sio_set_multitap(1);
+    /* Multitap stays OFF through BIOS boot: SCPH-1070 on port 1 breaks shell /
+     * LoadExe pad bring-up for titles that expect a lone digital pad. Offline
+     * 3+ player builds arm it after game entry (see vblank path); netplay arms
+     * it from psx_netplay when slot_count >= 3. */
     for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         /* Dev-any-input keeps P1 connected even with no assigned controller so the
          * keyboard / any plugged-in controller can drive port 1 standalone. */
