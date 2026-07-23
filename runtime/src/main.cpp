@@ -5293,7 +5293,7 @@ int main(int argc, char** argv) {
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
-                                     + " \xE2\x80\x94 Launcher";
+                                     + " - Launcher";
 
             RecompLauncherCSettings ls{};
             ls.output_method  = 2;  /* OpenGL */
