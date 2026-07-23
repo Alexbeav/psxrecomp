@@ -31,8 +31,12 @@ int  psx_lobby_create(const char *a, const char *b, const char *c, const char *d
 int  psx_lobby_join(const char *a, const char *b, const char *c)
 { (void)a; (void)b; (void)c; return -1; }
 int  psx_lobby_leave(void) { return -1; }
+int  psx_lobby_kick(int slot) { (void)slot; return -1; }
+int  psx_lobby_move_member(int from_slot, int to_slot)
+{ (void)from_slot; (void)to_slot; return -1; }
 int  psx_lobby_in_lobby(void) { return 0; }
 int  psx_lobby_is_host(void) { return 0; }
+const char *psx_lobby_host_player_id(void) { return ""; }
 const PsxLobbyJoinInfo *psx_lobby_join_info(void)
 {
     static PsxLobbyJoinInfo z;
@@ -89,6 +93,7 @@ typedef struct {
     int list_count;
     int in_lobby;
     int is_host;
+    char host_player_id[PSX_LOBBY_ID_LEN];
     char my_bind[PSX_LOBBY_ENDPOINT_LEN];
     char filter_game_name[PSX_LOBBY_NAME_LEN];
     char filter_game_version[PSX_LOBBY_VERSION_LEN];
@@ -387,6 +392,15 @@ static void flush_pending(void)
     g_lc.pending_n = 0;
 }
 
+static int endpoint_port_is_zero(const char *ep)
+{
+    const char *colon;
+    if (!ep || !ep[0]) return 1;
+    colon = strrchr(ep, ':');
+    if (!colon || !colon[1]) return 1;
+    return (int)strtoul(colon + 1, NULL, 10) == 0;
+}
+
 static void fill_peer_bind_from_join(void)
 {
     PsxLobbyJoinInfo *j = &g_lc.join;
@@ -394,7 +408,12 @@ static void fill_peer_bind_from_join(void)
     memset(j->peer_hostport, 0, sizeof(j->peer_hostport));
     if (g_lc.is_host) {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
-        strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
+        /* Online guests join with 0.0.0.0:0 (ephemeral). The lobby rewrites
+         * that to peer_ip:0, which rnet rejects as a dial target. Leave peer
+         * empty so the host learns the guest from the first HELLO (guest
+         * dials host_endpoint). Fixed guest ports still dial normally. */
+        if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
+            strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
     } else {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
         strncpy(j->peer_hostport, j->host_endpoint, sizeof(j->peer_hostport) - 1);
@@ -458,6 +477,7 @@ static void parse_slots_array(const char *json)
                 if (g_lc.player_id[0] &&
                     strcmp(g_lc.members[n].player_id, g_lc.player_id) == 0) {
                     g_lc.local_ready = g_lc.members[n].ready;
+                    g_lc.join.local_slot = g_lc.members[n].slot;
                 }
                 ++n;
                 p = end;
@@ -465,6 +485,17 @@ static void parse_slots_array(const char *json)
         }
     }
     g_lc.member_count = n;
+}
+
+static void ingest_host_player_id(const char *json)
+{
+    char host_id[PSX_LOBBY_ID_LEN];
+    host_id[0] = '\0';
+    json_get_str(json, "host_player_id", host_id, sizeof(host_id));
+    if (host_id[0]) {
+        strncpy(g_lc.host_player_id, host_id, sizeof(g_lc.host_player_id) - 1);
+        g_lc.host_player_id[sizeof(g_lc.host_player_id) - 1] = '\0';
+    }
 }
 
 static void handle_server_json(const char *json);
@@ -620,6 +651,11 @@ static void handle_server_json(const char *json)
         g_lc.join.player_count = 1;
         g_lc.join.max_slots = 2;
         g_lc.join.last_error[0] = '\0';
+        if (g_lc.player_id[0]) {
+            strncpy(g_lc.host_player_id, g_lc.player_id, sizeof(g_lc.host_player_id) - 1);
+            g_lc.host_player_id[sizeof(g_lc.host_player_id) - 1] = '\0';
+        }
+        ingest_host_player_id(json);
         ingest_match_caps_from_json(json);
         fill_peer_bind_from_join();
         parse_slots_array(json);
@@ -645,20 +681,28 @@ static void handle_server_json(const char *json)
         g_lc.join.local_slot = json_get_int(json, "local_slot", 1);
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
-        g_lc.join.player_count = 2;
-        g_lc.join.max_slots = 2;
+        g_lc.join.player_count = json_get_int(json, "player_count", 2);
+        g_lc.join.max_slots = json_get_int(json, "max_slots", 2);
         g_lc.join.last_error[0] = '\0';
+        ingest_host_player_id(json);
         ingest_match_caps_from_json(json);
         fill_peer_bind_from_join();
+        /* Prefer slots on joined when present; lobby_update usually follows. */
+        parse_slots_array(json);
         return;
     }
     if (strcmp(op, "lobby_update") == 0) {
+        g_lc.in_lobby = 1;
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
         g_lc.join.player_count = json_get_int(json, "player_count", g_lc.join.player_count);
         g_lc.join.max_slots = json_get_int(json, "max_slots", g_lc.join.max_slots);
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", (int)g_lc.join.session_id);
         g_lc.all_ready = json_get_bool(json, "all_ready", 0);
+        ingest_host_player_id(json);
+        if (g_lc.host_player_id[0] && g_lc.player_id[0]) {
+            g_lc.is_host = (strcmp(g_lc.host_player_id, g_lc.player_id) == 0);
+        }
         ingest_match_caps_from_json(json);
         fill_peer_bind_from_join();
         parse_slots_array(json);
@@ -673,9 +717,12 @@ static void handle_server_json(const char *json)
         ingest_match_caps_from_json(json);
         fill_peer_bind_from_join();
         parse_slots_array(json);
-        /* Rematch/join without a peer endpoint would hang forever in HELLO. */
-        if (!g_lc.join.peer_hostport[0] || !g_lc.join.host_endpoint[0] ||
-            (g_lc.is_host && !g_lc.join.guest_endpoint[0])) {
+        /* Guest must know host:port. Host may leave peer empty (accept-first)
+         * when the guest advertised an ephemeral :0 bind. */
+        if (!g_lc.join.host_endpoint[0] ||
+            (g_lc.is_host && !g_lc.join.guest_endpoint[0]) ||
+            (!g_lc.is_host && (!g_lc.join.peer_hostport[0] ||
+                              endpoint_port_is_zero(g_lc.join.peer_hostport)))) {
             strncpy(g_lc.join.last_error, "missing_endpoints",
                     sizeof(g_lc.join.last_error) - 1);
             g_lc.launch_pending = 0;
@@ -686,13 +733,30 @@ static void handle_server_json(const char *json)
         return;
     }
     if (strcmp(op, "error") == 0) {
-        json_get_str(json, "code", g_lc.join.last_error, sizeof(g_lc.join.last_error));
-        g_lc.join.ok = 0;
+        char code[64];
+        json_get_str(json, "code", code, sizeof(code));
+        strncpy(g_lc.join.last_error, code, sizeof(g_lc.join.last_error) - 1);
+        g_lc.join.last_error[sizeof(g_lc.join.last_error) - 1] = '\0';
+        /* Create/join failures are fatal to the seat. In-lobby ops (kick/move
+         * on an older server, not_host, …) must not clear join.ok or the room
+         * looks abandoned after a rejected host action. */
+        if (!g_lc.in_lobby ||
+            strcmp(code, "bad_password") == 0 ||
+            strcmp(code, "full") == 0 ||
+            strcmp(code, "gone") == 0 ||
+            strcmp(code, "already_in_lobby") == 0 ||
+            strcmp(code, "lobby_limit") == 0 ||
+            strcmp(code, "version_mismatch") == 0 ||
+            strcmp(code, "game_mismatch") == 0) {
+            g_lc.join.ok = 0;
+        }
         return;
     }
-    if (strcmp(op, "lobby_closed") == 0 || strcmp(op, "left") == 0) {
+    if (strcmp(op, "lobby_closed") == 0 || strcmp(op, "left") == 0 ||
+        strcmp(op, "kicked") == 0) {
         g_lc.in_lobby = 0;
         g_lc.is_host = 0;
+        g_lc.host_player_id[0] = '\0';
         g_lc.member_count = 0;
         g_lc.local_ready = 0;
         g_lc.all_ready = 0;
@@ -1051,11 +1115,46 @@ int psx_lobby_leave(void)
     flush_pending();
     g_lc.in_lobby = 0;
     g_lc.is_host = 0;
+    g_lc.host_player_id[0] = '\0';
     g_lc.member_count = 0;
     g_lc.local_ready = 0;
     g_lc.all_ready = 0;
     g_lc.launch_pending = 0;
     match_caps_clear(&g_lc.match_caps);
+    return 0;
+}
+
+int psx_lobby_kick(int slot)
+{
+    char msg[64];
+    if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host) {
+        return -1;
+    }
+    if (slot < 0 || slot >= PSX_LOBBY_MAX_MEMBERS) {
+        return -1;
+    }
+    snprintf(msg, sizeof(msg), "{\"op\":\"kick\",\"slot\":%d}", slot);
+    queue_send(msg);
+    flush_pending();
+    return 0;
+}
+
+int psx_lobby_move_member(int from_slot, int to_slot)
+{
+    char msg[96];
+    if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host) {
+        return -1;
+    }
+    if (from_slot < 0 || from_slot >= PSX_LOBBY_MAX_MEMBERS ||
+        to_slot < 0 || to_slot >= PSX_LOBBY_MAX_MEMBERS ||
+        from_slot == to_slot) {
+        return -1;
+    }
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"move\",\"from_slot\":%d,\"to_slot\":%d}",
+             from_slot, to_slot);
+    queue_send(msg);
+    flush_pending();
     return 0;
 }
 
@@ -1067,6 +1166,11 @@ int psx_lobby_in_lobby(void)
 int psx_lobby_is_host(void)
 {
     return g_lc.is_host;
+}
+
+const char *psx_lobby_host_player_id(void)
+{
+    return g_lc.host_player_id;
 }
 
 const PsxLobbyJoinInfo *psx_lobby_join_info(void)

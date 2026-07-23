@@ -877,7 +877,8 @@ int psx_netplay_input_desync(uint32_t *tick, uint32_t *local_hash, uint32_t *rem
 int psx_netplay_peer_disconnected(uint32_t timeout_ms)
 {
     if (!psx_netplay_active()) return 0;
-    if (timeout_ms == 0) timeout_ms = 1500u;
+    /* timeout_ms == 0: BYE / peer_gone only (no silence timeout). Used during
+     * load barriers where INPUT is suppressed for seconds. */
     return rnet_session_peer_disconnected(g_np.session, (rnet_u64)timeout_ms);
 }
 

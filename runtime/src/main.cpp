@@ -92,11 +92,13 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include <commdlg.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 #endif
 
 #ifndef PSX_DEFAULT_BIOS_PATH
@@ -2705,6 +2707,10 @@ static int netplay_timing_on(void) {
  * sample per sim tick; stalls on INPUT_CONFIRM desync. */
 static void netplay_barrier_admit(int override) {
     if (!psx_netplay_active()) return;
+    /* Launcher/game window teardown can leave a queued SDL_QUIT; draining it
+     * prevents an instant soft-return before the first frame. */
+    SDL_PumpEvents();
+    SDL_FlushEvent(SDL_QUIT);
     static int desync_logged = 0;
     const uint64_t admit_t0 =
         netplay_timing_on() ? SDL_GetPerformanceCounter() : 0;
@@ -3805,7 +3811,10 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     bool g_lnch_hosting_lan = false;
     bool g_lnch_joined_lan = false;
+    /* Join Direct / cross-machine: membership via UDP, not the local file. */
+    bool g_lnch_remote_lan = false;
     std::string g_lnch_lan_endpoint;
+    uint32_t g_lnch_lan_session_id = 1;
 
     struct AeLanLobbyState {
         std::string name;
@@ -3816,17 +3825,158 @@ namespace {
         std::string password;
         bool started = false;
         int host_slot = 0;
+        uint32_t session_id = 1;
     };
+    AeLanLobbyState g_lnch_remote_lan_state{};
+
+#ifdef _WIN32
+    using AeLanSock = SOCKET;
+    static constexpr AeLanSock kAeLanSockInvalid = INVALID_SOCKET;
+#else
+    using AeLanSock = int;
+    static constexpr AeLanSock kAeLanSockInvalid = -1;
+#endif
+    AeLanSock g_lnch_lan_udp = kAeLanSockInvalid;
+    sockaddr_in g_lnch_lan_peer{};
+    bool g_lnch_lan_peer_valid = false;
+    uint32_t g_lnch_lan_join_pulse_ms = 0;
 
     std::filesystem::path ae_np_lan_file() {
         return std::filesystem::current_path() / "netplay_lan_lobby.txt";
     }
 
+    static void ae_np_lan_sock_close(AeLanSock* s) {
+        if (!s || *s == kAeLanSockInvalid) return;
+#ifdef _WIN32
+        closesocket(*s);
+#else
+        close(*s);
+#endif
+        *s = kAeLanSockInvalid;
+    }
+
+    static void ae_np_lan_udp_close(void) {
+        ae_np_lan_sock_close(&g_lnch_lan_udp);
+        g_lnch_lan_peer_valid = false;
+    }
+
+    static int ae_np_lan_endpoint_port(const std::string& endpoint) {
+        const size_t colon = endpoint.rfind(':');
+        if (colon == std::string::npos) return 7777;
+        const int p = std::atoi(endpoint.c_str() + colon + 1);
+        return (p > 0 && p <= 65535) ? p : 7777;
+    }
+
+    static bool ae_np_lan_endpoint_host(const std::string& endpoint, char* host,
+                                       size_t host_len) {
+        if (!host || host_len == 0) return false;
+        const size_t colon = endpoint.rfind(':');
+        if (colon == std::string::npos || colon == 0) return false;
+        if (colon >= host_len) return false;
+        std::memcpy(host, endpoint.data(), colon);
+        host[colon] = '\0';
+        return host[0] != '\0';
+    }
+
+    static bool ae_np_lan_set_nonblock(AeLanSock s) {
+#ifdef _WIN32
+        u_long mode = 1;
+        return ioctlsocket(s, FIONBIO, &mode) == 0;
+#else
+        const int fl = fcntl(s, F_GETFL, 0);
+        return fl >= 0 && fcntl(s, F_SETFL, fl | O_NONBLOCK) == 0;
+#endif
+    }
+
+    /* Exclusive bind probe (no SO_REUSEADDR) so a busy port is detected. */
+    static bool ae_np_udp_port_available(int port) {
+        if (port <= 0 || port > 65535) return false;
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        AeLanSock s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s == kAeLanSockInvalid) return false;
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons((uint16_t)port);
+        const bool ok = (bind(s, (sockaddr*)&addr, sizeof(addr)) == 0);
+        ae_np_lan_sock_close(&s);
+        return ok;
+    }
+
+    /* Online create: try preferred, then the next few ports. */
+    static int ae_np_find_free_udp_port(int preferred) {
+        if (preferred <= 0 || preferred > 65535) preferred = 7777;
+        for (int i = 0; i < 32; ++i) {
+            const int p = preferred + i;
+            if (p > 65535) break;
+            if (ae_np_udp_port_available(p)) return p;
+        }
+        return -1;
+    }
+
+    static bool ae_np_endpoint_replace_port(char* endpoint, size_t cap, int port) {
+        if (!endpoint || cap < 4 || port <= 0 || port > 65535) return false;
+        char host[64];
+        if (!ae_np_lan_endpoint_host(endpoint, host, sizeof(host))) {
+            if (endpoint[0] == ':' || !endpoint[0])
+                std::snprintf(host, sizeof(host), "0.0.0.0");
+            else
+                return false;
+        }
+        const int n = std::snprintf(endpoint, cap, "%s:%d", host, port);
+        return n > 0 && (size_t)n < cap;
+    }
+
+    static bool ae_np_lan_udp_ensure(bool bind_port, int port) {
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        if (g_lnch_lan_udp == kAeLanSockInvalid) {
+            g_lnch_lan_udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (g_lnch_lan_udp == kAeLanSockInvalid) return false;
+            if (!ae_np_lan_set_nonblock(g_lnch_lan_udp)) {
+                ae_np_lan_udp_close();
+                return false;
+            }
+            /* Do not SO_REUSEADDR on the host lobby port — a second host on the
+             * same port must fail so we can surface "port in use". */
+            if (bind_port) {
+                sockaddr_in addr{};
+                addr.sin_family = AF_INET;
+                addr.sin_addr.s_addr = htonl(INADDR_ANY);
+                addr.sin_port = htons((uint16_t)port);
+                if (bind(g_lnch_lan_udp, (sockaddr*)&addr, sizeof(addr)) != 0) {
+                    ae_np_lan_udp_close();
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static void ae_np_lan_udp_sendto(const sockaddr_in& to, const char* msg) {
+        if (g_lnch_lan_udp == kAeLanSockInvalid || !msg) return;
+        const int n = (int)std::strlen(msg);
+#ifdef _WIN32
+        sendto(g_lnch_lan_udp, msg, n, 0, (const sockaddr*)&to, sizeof(to));
+#else
+        sendto(g_lnch_lan_udp, msg, (size_t)n, 0, (const sockaddr*)&to, sizeof(to));
+#endif
+    }
+
     bool ae_np_read_lan_state(AeLanLobbyState* state) {
         if (!state) return false;
+        if (g_lnch_remote_lan) {
+            *state = g_lnch_remote_lan_state;
+            return !state->endpoint.empty();
+        }
         std::ifstream f(ae_np_lan_file());
         if (!f) return false;
-        std::string started, host_slot;
+        std::string started, host_slot, session;
         std::getline(f, state->name);
         std::getline(f, state->game);
         std::getline(f, state->endpoint);
@@ -3835,14 +3985,25 @@ namespace {
         std::getline(f, started);
         std::getline(f, host_slot);
         std::getline(f, state->password);
+        std::getline(f, session);
         state->started = started == "1";
         state->host_slot = host_slot == "1" ? 1 : 0;
+        state->session_id = 1;
+        if (!session.empty()) {
+            const unsigned v = (unsigned)std::strtoul(session.c_str(), nullptr, 10);
+            if (v) state->session_id = (uint32_t)v;
+        }
         return !state->endpoint.empty();
     }
 
     bool ae_np_write_lan_state(const AeLanLobbyState& state) {
+        if (g_lnch_remote_lan) {
+            g_lnch_remote_lan_state = state;
+            return true;
+        }
         std::ofstream f(ae_np_lan_file(), std::ios::trunc);
         if (!f) return false;
+        const uint32_t sid = state.session_id ? state.session_id : 1u;
         f << state.name << "\n"
           << state.game << "\n"
           << state.endpoint << "\n"
@@ -3850,12 +4011,36 @@ namespace {
           << state.joiner_name << "\n"
           << (state.started ? "1" : "0") << "\n"
           << state.host_slot << "\n"
-          << state.password << "\n";
+          << state.password << "\n"
+          << sid << "\n";
         return (bool)f;
     }
 
-    void ae_np_write_lan_lobby(const char* name, const char* endpoint,
+    static void ae_np_lan_send_update_to_peer(const AeLanLobbyState& state) {
+        if (!g_lnch_lan_peer_valid) return;
+        char msg[384];
+        std::snprintf(msg, sizeof(msg),
+                      "MOTK1 UPDATE\n%s\n%s\n%d\n%d\n",
+                      state.host_name.c_str(),
+                      state.joiner_name.c_str(),
+                      state.host_slot,
+                      state.started ? 1 : 0);
+        ae_np_lan_udp_sendto(g_lnch_lan_peer, msg);
+    }
+
+    static void ae_np_lan_atexit_cleanup(void) {
+        if (!g_lnch_hosting_lan) return;
+        std::error_code ec;
+        std::filesystem::remove(ae_np_lan_file(), ec);
+        g_lnch_hosting_lan = false;
+    }
+
+    /* Returns false if the lobby UDP port cannot be bound (in use). */
+    bool ae_np_write_lan_lobby(const char* name, const char* endpoint,
                                const char* password) {
+        ae_np_lan_udp_close();
+        g_lnch_remote_lan = false;
+        g_lnch_remote_lan_state = {};
         AeLanLobbyState state;
         state.name = name && name[0] ? name : "LAN Lobby";
         state.game = g_lnch_netplay_game_name.empty() ? "PSX" : g_lnch_netplay_game_name;
@@ -3863,10 +4048,25 @@ namespace {
         state.host_name = psx_lobby_display_name();
         if (state.host_name.empty()) state.host_name = "Host";
         state.password = password ? password : "";
-        ae_np_write_lan_state(state);
+        const int port = ae_np_lan_endpoint_port(state.endpoint);
+        if (!ae_np_udp_port_available(port) ||
+            !ae_np_lan_udp_ensure(true, port)) {
+            ae_np_lan_udp_close();
+            return false;
+        }
+        if (!ae_np_write_lan_state(state)) {
+            ae_np_lan_udp_close();
+            return false;
+        }
         g_lnch_hosting_lan = true;
         g_lnch_joined_lan = false;
         g_lnch_lan_endpoint = state.endpoint;
+        static bool atexit_hooked = false;
+        if (!atexit_hooked) {
+            std::atexit(ae_np_lan_atexit_cleanup);
+            atexit_hooked = true;
+        }
+        return true;
     }
 
     int ae_np_read_lan_lobby(RecompLauncherCNetplayLobby* out) {
@@ -3882,6 +4082,195 @@ namespace {
         out->max_slots = 2;
         out->has_password = state.password.empty() ? 0 : 1;
         return 1;
+    }
+
+    static bool ae_np_remote_has_same_name_as_lan(const char* lan_display_name) {
+        static constexpr const char kLanPrefix[] = "LAN - ";
+        const char* base = lan_display_name;
+        if (base && std::strncmp(base, kLanPrefix, sizeof(kLanPrefix) - 1) == 0)
+            base += sizeof(kLanPrefix) - 1;
+        if (!base || !base[0]) return false;
+        for (int i = 0; i < psx_lobby_list_count(); ++i) {
+            PsxLobbyRow row{};
+            if (!psx_lobby_list_get(i, &row)) continue;
+            if (std::strcmp(row.name, base) == 0) return true;
+        }
+        return false;
+    }
+
+    static bool ae_np_read_lan_file_state(AeLanLobbyState* state) {
+        if (!state) return false;
+        std::ifstream f(ae_np_lan_file());
+        if (!f) return false;
+        std::string started, host_slot, session;
+        std::getline(f, state->name);
+        std::getline(f, state->game);
+        std::getline(f, state->endpoint);
+        std::getline(f, state->host_name);
+        std::getline(f, state->joiner_name);
+        std::getline(f, started);
+        std::getline(f, host_slot);
+        std::getline(f, state->password);
+        std::getline(f, session);
+        state->started = started == "1";
+        state->host_slot = host_slot == "1" ? 1 : 0;
+        state->session_id = 1;
+        if (!session.empty()) {
+            const unsigned v = (unsigned)std::strtoul(session.c_str(), nullptr, 10);
+            if (v) state->session_id = (uint32_t)v;
+        }
+        return !state->endpoint.empty();
+    }
+
+    /* Probe whether a LAN host is still answering on endpoint. */
+    static bool ae_np_lan_probe_host_ms(const std::string& endpoint, uint32_t timeout_ms) {
+        char host[64];
+        if (!ae_np_lan_endpoint_host(endpoint, host, sizeof(host))) return false;
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        AeLanSock s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s == kAeLanSockInvalid) return false;
+        if (!ae_np_lan_set_nonblock(s)) {
+            ae_np_lan_sock_close(&s);
+            return false;
+        }
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_port = htons((uint16_t)ae_np_lan_endpoint_port(endpoint));
+        if (inet_pton(AF_INET, host, &to.sin_addr) != 1) {
+            ae_np_lan_sock_close(&s);
+            return false;
+        }
+        const char ping[] = "MOTK1 PING\n";
+#ifdef _WIN32
+        sendto(s, ping, (int)sizeof(ping) - 1, 0, (const sockaddr*)&to, sizeof(to));
+#else
+        sendto(s, ping, sizeof(ping) - 1, 0, (const sockaddr*)&to, sizeof(to));
+#endif
+        const uint32_t deadline = SDL_GetTicks() + timeout_ms;
+        bool alive = false;
+        while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
+            char buf[64];
+            sockaddr_in from{};
+#ifdef _WIN32
+            int fromlen = (int)sizeof(from);
+            const int n = recvfrom(s, buf, (int)sizeof(buf) - 1, 0,
+                                   (sockaddr*)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            const int n = (int)recvfrom(s, buf, sizeof(buf) - 1, 0,
+                                        (sockaddr*)&from, &fromlen);
+#endif
+            if (n > 0) {
+                buf[n] = '\0';
+                if (std::strncmp(buf, "MOTK1 PONG", 10) == 0) {
+                    alive = true;
+                    break;
+                }
+            }
+            SDL_Delay(5);
+        }
+        ae_np_lan_sock_close(&s);
+        return alive;
+    }
+
+    static bool ae_np_lan_probe_host(const std::string& endpoint) {
+        return ae_np_lan_probe_host_ms(endpoint, 200u);
+    }
+
+    /* Send JOIN and wait for UPDATE / ERR. Returns 0, -1 full, -2 password, -3 timeout. */
+    static int ae_np_lan_wait_join_ack(const std::string& endpoint, const char* password,
+                                       AeLanLobbyState* out) {
+        if (!out) return -1;
+        char host[64];
+        if (!ae_np_lan_endpoint_host(endpoint, host, sizeof(host))) return -3;
+        if (!ae_np_lan_udp_ensure(false, 0)) return -3;
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_port = htons((uint16_t)ae_np_lan_endpoint_port(endpoint));
+        if (inet_pton(AF_INET, host, &to.sin_addr) != 1) return -3;
+
+        std::string me = psx_lobby_display_name();
+        if (me.empty()) me = "Player";
+        char msg[320];
+        std::snprintf(msg, sizeof(msg), "MOTK1 JOIN\n%s\n%s\n", me.c_str(),
+                      password ? password : "");
+        ae_np_lan_udp_sendto(to, msg);
+
+        const uint32_t deadline = SDL_GetTicks() + 1000u;
+        while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
+            char buf[512];
+            sockaddr_in from{};
+#ifdef _WIN32
+            int fromlen = (int)sizeof(from);
+            const int n = recvfrom(g_lnch_lan_udp, buf, (int)sizeof(buf) - 1, 0,
+                                   (sockaddr*)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            const int n = (int)recvfrom(g_lnch_lan_udp, buf, sizeof(buf) - 1, 0,
+                                        (sockaddr*)&from, &fromlen);
+#endif
+            if (n <= 0) {
+                SDL_Delay(5);
+                continue;
+            }
+            buf[n] = '\0';
+            if (std::strncmp(buf, "MOTK1 ERR\n", 10) == 0) {
+                const char* code = buf + 10;
+                if (std::strncmp(code, "bad_password", 12) == 0) return -2;
+                return -1;
+            }
+            if (std::strncmp(buf, "MOTK1 UPDATE\n", 13) == 0) {
+                char* p = buf + 13;
+                char* lines[4] = {};
+                for (int i = 0; i < 4; ++i) {
+                    lines[i] = p;
+                    char* nl = std::strchr(p, '\n');
+                    if (!nl) break;
+                    *nl = '\0';
+                    p = nl + 1;
+                }
+                if (!lines[0] || !lines[1] || !lines[2] || !lines[3]) continue;
+                out->host_name = lines[0];
+                out->joiner_name = lines[1];
+                out->host_slot = (std::atoi(lines[2]) == 1) ? 1 : 0;
+                out->started = std::atoi(lines[3]) != 0;
+                out->endpoint = endpoint;
+                if (out->joiner_name != me) return -1;
+                return 0;
+            }
+            SDL_Delay(5);
+        }
+        return -3;
+    }
+
+    /* Drop orphan LAN registry files (host crashed / unreachable).
+     * Never delete merely because started=1: host closes lobby UDP before
+     * delay-sync bind, so PING fails mid-launch and a delete races the joiner
+     * reading session_id/started from the file. Started lobbies are already
+     * hidden by ae_np_lan_list_visible(). */
+    static void ae_np_lan_rescan(void) {
+        if (g_lnch_hosting_lan) return;
+        if (g_lnch_joined_lan) return;
+        AeLanLobbyState st;
+        if (!ae_np_read_lan_file_state(&st)) return;
+        if (st.started) return;
+        if (!ae_np_lan_probe_host(st.endpoint)) {
+            std::error_code ec;
+            std::filesystem::remove(ae_np_lan_file(), ec);
+        }
+    }
+
+    static bool ae_np_lan_list_visible(void) {
+        if (g_lnch_hosting_lan) {
+            AeLanLobbyState st;
+            return ae_np_read_lan_file_state(&st) && !st.started;
+        }
+        AeLanLobbyState st;
+        if (!ae_np_read_lan_file_state(&st) || st.started) return false;
+        return true;
     }
 
     PsxLobbyMatchCaps ae_netplay_caps_from_settings(const RecompLauncherCSettings* s) {
@@ -3932,8 +4321,161 @@ namespace {
         return psx_lobby_connected();
     }
 
+    static void ae_np_lan_udp_pump(void) {
+        if (!g_lnch_hosting_lan && !(g_lnch_joined_lan && g_lnch_remote_lan))
+            return;
+
+        if (g_lnch_hosting_lan) {
+            AeLanLobbyState st;
+            if (!ae_np_read_lan_state(&st)) return;
+            if (g_lnch_lan_udp == kAeLanSockInvalid)
+                (void)ae_np_lan_udp_ensure(true, ae_np_lan_endpoint_port(st.endpoint));
+        } else if (g_lnch_remote_lan) {
+            if (g_lnch_lan_udp == kAeLanSockInvalid)
+                (void)ae_np_lan_udp_ensure(false, 0);
+            const uint32_t now = SDL_GetTicks();
+            if (g_lnch_lan_udp != kAeLanSockInvalid &&
+                now - g_lnch_lan_join_pulse_ms >= 400u) {
+                g_lnch_lan_join_pulse_ms = now;
+                char host[64];
+                if (ae_np_lan_endpoint_host(g_lnch_lan_endpoint, host, sizeof(host))) {
+                    sockaddr_in to{};
+                    to.sin_family = AF_INET;
+                    to.sin_port = htons((uint16_t)ae_np_lan_endpoint_port(g_lnch_lan_endpoint));
+                    if (inet_pton(AF_INET, host, &to.sin_addr) == 1) {
+                        std::string me = psx_lobby_display_name();
+                        if (me.empty()) me = "Player";
+                        char msg[320];
+                        std::snprintf(msg, sizeof(msg), "MOTK1 JOIN\n%s\n%s\n",
+                                      me.c_str(),
+                                      g_lnch_remote_lan_state.password.c_str());
+                        ae_np_lan_udp_sendto(to, msg);
+                    }
+                }
+            }
+        }
+
+        if (g_lnch_lan_udp == kAeLanSockInvalid) return;
+
+        for (;;) {
+            char buf[512];
+            sockaddr_in from{};
+#ifdef _WIN32
+            int fromlen = (int)sizeof(from);
+            const int n = recvfrom(g_lnch_lan_udp, buf, (int)sizeof(buf) - 1, 0,
+                                   (sockaddr*)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            const int n = (int)recvfrom(g_lnch_lan_udp, buf, sizeof(buf) - 1, 0,
+                                        (sockaddr*)&from, &fromlen);
+#endif
+            if (n <= 0) break;
+            buf[n] = '\0';
+
+            if (std::strncmp(buf, "MOTK1 PING", 10) == 0 && g_lnch_hosting_lan) {
+                ae_np_lan_udp_sendto(from, "MOTK1 PONG\n");
+                continue;
+            }
+
+            if (std::strncmp(buf, "MOTK1 JOIN\n", 11) == 0 && g_lnch_hosting_lan) {
+                char* p = buf + 11;
+                char* nl = std::strchr(p, '\n');
+                if (!nl) continue;
+                *nl = '\0';
+                const char* name = p;
+                p = nl + 1;
+                nl = std::strchr(p, '\n');
+                if (nl) *nl = '\0';
+                const char* pass = p;
+                AeLanLobbyState st;
+                if (!ae_np_read_lan_state(&st)) continue;
+                if (st.password != pass) {
+                    ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
+                    continue;
+                }
+                if (!st.joiner_name.empty() && st.joiner_name != name) {
+                    ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
+                    continue;
+                }
+                st.joiner_name = name;
+                st.started = false;
+                if (!ae_np_write_lan_state(st)) continue;
+                g_lnch_lan_peer = from;
+                g_lnch_lan_peer_valid = true;
+                ae_np_lan_send_update_to_peer(st);
+                continue;
+            }
+
+            if (std::strncmp(buf, "MOTK1 LEAVE\n", 12) == 0 && g_lnch_hosting_lan) {
+                AeLanLobbyState st;
+                if (!ae_np_read_lan_state(&st)) continue;
+                st.joiner_name.clear();
+                st.started = false;
+                ae_np_write_lan_state(st);
+                g_lnch_lan_peer_valid = false;
+                continue;
+            }
+
+            if (!g_lnch_remote_lan) continue;
+
+            if (std::strncmp(buf, "MOTK1 UPDATE\n", 13) == 0) {
+                char* p = buf + 13;
+                char* lines[4] = {};
+                for (int i = 0; i < 4; ++i) {
+                    lines[i] = p;
+                    char* nl = std::strchr(p, '\n');
+                    if (!nl) break;
+                    *nl = '\0';
+                    p = nl + 1;
+                }
+                if (!lines[0] || !lines[1] || !lines[2] || !lines[3]) continue;
+                g_lnch_remote_lan_state.host_name = lines[0];
+                g_lnch_remote_lan_state.joiner_name = lines[1];
+                g_lnch_remote_lan_state.host_slot = (std::atoi(lines[2]) == 1) ? 1 : 0;
+                g_lnch_remote_lan_state.started = std::atoi(lines[3]) != 0;
+                std::string me = psx_lobby_display_name();
+                if (me.empty()) me = "Player";
+                if (g_lnch_remote_lan_state.joiner_name != me) {
+                    g_lnch_joined_lan = false;
+                    g_lnch_remote_lan = false;
+                    g_lnch_lan_endpoint.clear();
+                    ae_np_lan_udp_close();
+                }
+                continue;
+            }
+            if (std::strncmp(buf, "MOTK1 START\n", 12) == 0) {
+                g_lnch_remote_lan_state.started = true;
+                const char* sid = buf + 12;
+                if (*sid) {
+                    const unsigned v = (unsigned)std::strtoul(sid, nullptr, 10);
+                    if (v) {
+                        g_lnch_lan_session_id = (uint32_t)v;
+                        g_lnch_remote_lan_state.session_id = (uint32_t)v;
+                    }
+                }
+                continue;
+            }
+            if (std::strncmp(buf, "MOTK1 KICK\n", 11) == 0 ||
+                std::strncmp(buf, "MOTK1 ERR\n", 10) == 0) {
+                g_lnch_joined_lan = false;
+                g_lnch_remote_lan = false;
+                g_lnch_lan_endpoint.clear();
+                g_lnch_remote_lan_state = {};
+                ae_np_lan_udp_close();
+            }
+        }
+    }
+
     void ae_np_pump(void*) {
         psx_lobby_pump();
+        ae_np_lan_udp_pump();
+        /* Lobby UI has no Ready toggle; production WS still requires every
+         * seated player ready before start. Keep seats ready while in-room
+         * (including after soft-return rematch clears ready). */
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan &&
+            psx_lobby_in_lobby() && !psx_lobby_local_ready()) {
+            (void)psx_lobby_set_ready(1);
+        }
     }
 
     void ae_np_set_player_name(void*, const char* name) {
@@ -3946,19 +4488,19 @@ namespace {
     }
 
     void ae_np_request_list(void*) {
+        ae_np_lan_rescan();
         psx_lobby_request_list();
     }
 
     int ae_np_list_count(void*) {
-        RecompLauncherCNetplayLobby lan{};
-        return psx_lobby_list_count() + (ae_np_read_lan_lobby(&lan) ? 1 : 0);
+        return psx_lobby_list_count() + (ae_np_lan_list_visible() ? 1 : 0);
     }
 
     int ae_np_list_get(void*, int index, RecompLauncherCNetplayLobby* out) {
         if (!out) return 0;
         const int remote_count = psx_lobby_list_count();
         if (index >= remote_count)
-            return ae_np_read_lan_lobby(out);
+            return ae_np_lan_list_visible() ? ae_np_read_lan_lobby(out) : 0;
         PsxLobbyRow row{};
         if (!psx_lobby_list_get(index, &row)) return 0;
         std::snprintf(out->lobby_id, sizeof(out->lobby_id), "%s", row.lobby_id);
@@ -4056,22 +4598,25 @@ namespace {
 #endif
     }
 
-    static int ae_np_push_lan_ip(char out_ips[][64], int max_ips, int* count,
-                                const char* ip) {
-        if (!out_ips || !count || !ip || !ip[0] || *count >= max_ips) return 0;
-        if (std::strcmp(ip, "0.0.0.0") == 0 || std::strcmp(ip, "127.0.0.1") == 0)
-            return 0;
-        for (int i = 0; i < *count; ++i) {
-            if (std::strcmp(out_ips[i], ip) == 0) return 0;
-        }
-        std::snprintf(out_ips[*count], 64, "%s", ip);
-        (*count)++;
-        return 1;
-    }
-
-    int ae_np_list_lan_ips(void*, char out_ips[][64], int max_ips, int* out_count) {
-        if (!out_ips || max_ips <= 0 || !out_count) return 0;
-        *out_count = 0;
+    /* Collect non-loopback IPv4 addresses for local_address_get. */
+    static void ae_np_collect_local_addresses(
+        std::vector<RecompLauncherCNetplayLocalAddress>* out) {
+        if (!out) return;
+        out->clear();
+        auto push = [&](const char* ip, const char* label) {
+            if (!ip || !ip[0]) return;
+            if (std::strcmp(ip, "0.0.0.0") == 0 ||
+                std::strcmp(ip, "127.0.0.1") == 0)
+                return;
+            for (const auto& existing : *out) {
+                if (std::strcmp(existing.address, ip) == 0) return;
+            }
+            RecompLauncherCNetplayLocalAddress entry{};
+            std::snprintf(entry.address, sizeof(entry.address), "%s", ip);
+            if (label && label[0])
+                std::snprintf(entry.label, sizeof(entry.label), "%s", label);
+            out->push_back(entry);
+        };
 #ifdef _WIN32
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -4087,42 +4632,137 @@ namespace {
             addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data());
             rc = GetAdaptersAddresses(AF_INET, flags, nullptr, addrs, &buf_len);
         }
-        if (rc != NO_ERROR) return 0;
+        if (rc != NO_ERROR) return;
         for (IP_ADAPTER_ADDRESSES* a = addrs; a; a = a->Next) {
             if (a->OperStatus != IfOperStatusUp) continue;
             if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
-            for (IP_ADAPTER_UNICAST_ADDRESS* u = a->FirstUnicastAddress; u; u = u->Next) {
+            char label[64] = {};
+            if (a->FriendlyName) {
+                WideCharToMultiByte(CP_UTF8, 0, a->FriendlyName, -1, label,
+                                    (int)sizeof(label), nullptr, nullptr);
+            }
+            for (IP_ADAPTER_UNICAST_ADDRESS* u = a->FirstUnicastAddress; u;
+                 u = u->Next) {
                 if (!u->Address.lpSockaddr ||
                     u->Address.lpSockaddr->sa_family != AF_INET)
                     continue;
                 auto* sin = reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr);
                 char ip[64] = {};
                 if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) continue;
-                ae_np_push_lan_ip(out_ips, max_ips, out_count, ip);
+                push(ip, label);
             }
         }
 #else
         struct ifaddrs* ifa = nullptr;
-        if (getifaddrs(&ifa) != 0 || !ifa) return 0;
+        if (getifaddrs(&ifa) != 0 || !ifa) return;
         for (struct ifaddrs* i = ifa; i; i = i->ifa_next) {
             if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
             if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
             auto* sin = reinterpret_cast<sockaddr_in*>(i->ifa_addr);
             char ip[64] = {};
             if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) continue;
-            ae_np_push_lan_ip(out_ips, max_ips, out_count, ip);
+            push(ip, i->ifa_name ? i->ifa_name : "");
         }
         freeifaddrs(ifa);
 #endif
-        return *out_count > 0 ? 1 : 0;
     }
 
-    int ae_np_create(void*, const char* lobby_name, const char* host_port,
+    int ae_np_local_address_get(void*, int index,
+                                RecompLauncherCNetplayLocalAddress* out) {
+        if (!out || index < 0) return 0;
+        std::memset(out, 0, sizeof(*out));
+        std::vector<RecompLauncherCNetplayLocalAddress> addrs;
+        ae_np_collect_local_addresses(&addrs);
+        if (index >= (int)addrs.size()) return 0;
+        *out = addrs[(size_t)index];
+        return out->address[0] ? 1 : 0;
+    }
+
+    /* Online create uses 0.0.0.0 / * / :: so the lobby server can rewrite the
+     * peer-facing endpoint. Those binds are never a same-machine LAN room. */
+    static bool ae_np_endpoint_is_any_bind(const char* endpoint) {
+        if (!endpoint || !endpoint[0]) return true;
+        const char* colon = std::strrchr(endpoint, ':');
+        std::string host = colon ? std::string(endpoint, colon) : std::string(endpoint);
+        return host.empty() || host == "0.0.0.0" || host == "*" || host == "::" ||
+               host == "[::]";
+    }
+
+    /* LAN/Direct IP rooms own membership via the local file registry. Server
+     * lobbies use WebSocket lobby_update. Never mix: LAN mode wins if set. */
+    static bool ae_np_use_lan_members(void) {
+        return g_lnch_hosting_lan || g_lnch_joined_lan;
+    }
+
+    static bool ae_np_use_ws_members(void) {
+        return !ae_np_use_lan_members() && psx_lobby_in_lobby() != 0;
+    }
+
+    /* Joiner was cleared / file gone → treat as kicked or host left. */
+    static void ae_np_poll_lan_joiner_still_seated(void) {
+        if (!g_lnch_joined_lan) return;
+        if (g_lnch_remote_lan) {
+            /* Remote seat cleared by UDP KICK/ERR/UPDATE in pump. */
+            return;
+        }
+        AeLanLobbyState state;
+        if (!ae_np_read_lan_state(&state) || state.joiner_name.empty()) {
+            g_lnch_joined_lan = false;
+            g_lnch_lan_endpoint.clear();
+            return;
+        }
+        std::string me = psx_lobby_display_name();
+        if (me.empty()) me = "Player";
+        if (state.joiner_name != me) {
+            g_lnch_joined_lan = false;
+            g_lnch_lan_endpoint.clear();
+        }
+    }
+
+    /* host_endpoint is in/out (capacity >= 64). Online may rewrite the UDP
+     * port when the requested one is busy. Returns 0 ok, -4 port unavailable. */
+    int ae_np_create(void*, const char* lobby_name, char* host_endpoint,
                      const char* password,
                      const RecompLauncherCSettings* settings) {
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
-        const char* endpoint = host_port && host_port[0] ? host_port : "0.0.0.0:7777";
-        ae_np_write_lan_lobby(lobby_name, endpoint, password);
+        char endpoint[96];
+        if (host_endpoint && host_endpoint[0])
+            std::snprintf(endpoint, sizeof(endpoint), "%s", host_endpoint);
+        else
+            std::snprintf(endpoint, sizeof(endpoint), "0.0.0.0:7777");
+        const int want_port = ae_np_lan_endpoint_port(endpoint);
+
+        if (!ae_np_endpoint_is_any_bind(endpoint)) {
+            /* LAN/Direct IP: exact port required — fail if busy. */
+            if (psx_lobby_in_lobby())
+                (void)psx_lobby_leave();
+            if (!ae_np_write_lan_lobby(lobby_name, endpoint, password))
+                return -4;
+            if (host_endpoint)
+                std::snprintf(host_endpoint, 96, "%s", endpoint);
+            return 0;
+        }
+
+        /* Online: auto-pick a free UDP port starting at the requested one. */
+        const int free_port = ae_np_find_free_udp_port(want_port);
+        if (free_port < 0) return -4;
+        if (free_port != want_port &&
+            !ae_np_endpoint_replace_port(endpoint, sizeof(endpoint), free_port)) {
+            return -4;
+        }
+        if (host_endpoint)
+            std::snprintf(host_endpoint, 96, "%s", endpoint);
+
+        if (g_lnch_hosting_lan) {
+            std::error_code ec;
+            std::filesystem::remove(ae_np_lan_file(), ec);
+        }
+        ae_np_lan_udp_close();
+        g_lnch_hosting_lan = false;
+        g_lnch_joined_lan = false;
+        g_lnch_remote_lan = false;
+        g_lnch_remote_lan_state = {};
+        g_lnch_lan_endpoint.clear();
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
                                 g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
                                 password ? password : "", endpoint, &caps);
@@ -4130,54 +4770,157 @@ namespace {
 
     int ae_np_join(void*, const char* lobby_id, const char* password) {
         if (lobby_id && strncmp(lobby_id, "lan:", 4) == 0) {
-            AeLanLobbyState state;
-            if (!ae_np_read_lan_state(&state) || !state.joiner_name.empty()) return -1;
-            if (state.password != (password ? password : "")) return -2;
-            state.joiner_name = psx_lobby_display_name();
-            if (state.joiner_name.empty()) state.joiner_name = "Player";
-            state.started = false;
-            if (!ae_np_write_lan_state(state)) return -1;
+            const char* endpoint = lobby_id + 4;
+            if (!endpoint[0]) return -1;
+            if (psx_lobby_in_lobby())
+                (void)psx_lobby_leave();
+
+            /* Must be a live LAN/Direct IP host (UDP PONG). Online-only hosts
+             * never answer — refuse so we don't open a fake local room. */
+            if (!ae_np_lan_probe_host_ms(endpoint, 750u))
+                return -3;
+
+            /* Peek the on-disk registry (ignore any prior remote seat). */
+            const bool prior_remote = g_lnch_remote_lan;
+            g_lnch_remote_lan = false;
+            AeLanLobbyState file{};
+            const bool have_file = ae_np_read_lan_file_state(&file);
+            g_lnch_remote_lan = prior_remote;
+            /* Same-machine / shared cwd: claim the local LAN file when the
+             * endpoint matches. */
+            if (have_file && !g_lnch_hosting_lan && file.endpoint == endpoint) {
+                if (!file.joiner_name.empty()) return -1;
+                if (file.password != (password ? password : "")) return -2;
+                g_lnch_remote_lan = false;
+                g_lnch_remote_lan_state = {};
+                file.joiner_name = psx_lobby_display_name();
+                if (file.joiner_name.empty()) file.joiner_name = "Player";
+                file.started = false;
+                if (!ae_np_write_lan_state(file)) return -1;
+                g_lnch_hosting_lan = false;
+                g_lnch_joined_lan = true;
+                g_lnch_lan_endpoint = file.endpoint;
+                return 0;
+            }
+
+            /* Cross-machine Join Direct: JOIN must be acked before we seat. */
+            ae_np_lan_udp_close();
+            AeLanLobbyState seated{};
+            seated.name = "Direct";
+            seated.game =
+                g_lnch_netplay_game_name.empty() ? "PSX" : g_lnch_netplay_game_name;
+            seated.endpoint = endpoint;
+            seated.password = password ? password : "";
+            const int ack = ae_np_lan_wait_join_ack(endpoint, password, &seated);
+            if (ack != 0) {
+                ae_np_lan_udp_close();
+                g_lnch_joined_lan = false;
+                g_lnch_remote_lan = false;
+                g_lnch_remote_lan_state = {};
+                g_lnch_lan_endpoint.clear();
+                return ack;
+            }
+            g_lnch_remote_lan = true;
+            g_lnch_remote_lan_state = seated;
+            if (g_lnch_remote_lan_state.joiner_name.empty()) {
+                g_lnch_remote_lan_state.joiner_name = psx_lobby_display_name();
+                if (g_lnch_remote_lan_state.joiner_name.empty())
+                    g_lnch_remote_lan_state.joiner_name = "Player";
+            }
             g_lnch_hosting_lan = false;
             g_lnch_joined_lan = true;
-            g_lnch_lan_endpoint = state.endpoint;
+            g_lnch_lan_endpoint = endpoint;
+            g_lnch_lan_join_pulse_ms = SDL_GetTicks();
             return 0;
         }
+        /* Server join: leave any stale LAN-file room mode so membership follows WS. */
+        ae_np_lan_udp_close();
+        g_lnch_hosting_lan = false;
+        g_lnch_joined_lan = false;
+        g_lnch_remote_lan = false;
+        g_lnch_remote_lan_state = {};
+        g_lnch_lan_endpoint.clear();
         return psx_lobby_join(lobby_id, password ? password : "", "0.0.0.0:0");
     }
 
     int ae_np_leave(void*) {
         if (g_lnch_hosting_lan) {
+            if (g_lnch_lan_peer_valid)
+                ae_np_lan_udp_sendto(g_lnch_lan_peer, "MOTK1 KICK\n");
             std::error_code ec;
             std::filesystem::remove(ae_np_lan_file(), ec);
             g_lnch_hosting_lan = false;
         } else if (g_lnch_joined_lan) {
-            AeLanLobbyState state;
-            if (ae_np_read_lan_state(&state)) {
-                state.joiner_name.clear();
-                state.started = false;
-                ae_np_write_lan_state(state);
+            if (g_lnch_remote_lan) {
+                char host[64];
+                if (ae_np_lan_endpoint_host(g_lnch_lan_endpoint, host, sizeof(host)) &&
+                    g_lnch_lan_udp != kAeLanSockInvalid) {
+                    sockaddr_in to{};
+                    to.sin_family = AF_INET;
+                    to.sin_port =
+                        htons((uint16_t)ae_np_lan_endpoint_port(g_lnch_lan_endpoint));
+                    if (inet_pton(AF_INET, host, &to.sin_addr) == 1)
+                        ae_np_lan_udp_sendto(to, "MOTK1 LEAVE\n");
+                }
+            } else {
+                AeLanLobbyState state;
+                if (ae_np_read_lan_state(&state)) {
+                    state.joiner_name.clear();
+                    state.started = false;
+                    ae_np_write_lan_state(state);
+                }
             }
         }
+        ae_np_lan_udp_close();
         g_lnch_joined_lan = false;
+        g_lnch_remote_lan = false;
+        g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
         g_lnch_pending_direct_launch = {};
         return psx_lobby_leave();
     }
     int ae_np_in_lobby(void*) {
-        return g_lnch_hosting_lan || g_lnch_joined_lan || psx_lobby_in_lobby();
+        ae_np_poll_lan_joiner_still_seated();
+        if (g_lnch_hosting_lan) {
+            AeLanLobbyState state;
+            return ae_np_read_lan_state(&state) ? 1 : 0;
+        }
+        if (g_lnch_joined_lan) return 1;
+        return psx_lobby_in_lobby();
     }
     int ae_np_is_host(void*) {
-        if (g_lnch_hosting_lan || g_lnch_joined_lan) return g_lnch_hosting_lan ? 1 : 0;
+        if (ae_np_use_lan_members()) return g_lnch_hosting_lan ? 1 : 0;
+        if (ae_np_use_ws_members()) return psx_lobby_is_host();
         return psx_lobby_is_host();
     }
     int ae_np_member_count(void*) {
-        if (g_lnch_hosting_lan || g_lnch_joined_lan) return 2;
+        if (ae_np_use_ws_members()) {
+            const int n = psx_lobby_member_count();
+            return n > 0 ? n : 1;
+        }
+        if (ae_np_use_lan_members()) return 2;
         return psx_lobby_member_count();
     }
 
     int ae_np_member_get(void*, int index, RecompLauncherCNetplayMember* out) {
         if (!out) return 0;
-        if (g_lnch_hosting_lan || g_lnch_joined_lan) {
+        if (ae_np_use_ws_members()) {
+            PsxLobbyMember mem{};
+            if (!psx_lobby_member_get(index, &mem)) return 0;
+            out->slot = mem.slot;
+            std::snprintf(out->display_name, sizeof(out->display_name), "%s",
+                          mem.display_name);
+            out->ready = mem.ready;
+            const char* host_id = psx_lobby_host_player_id();
+            /* Prefer host_player_id; slot-0 fallback only when unknown (never
+             * mark a guest as host after a seat swap). */
+            if (host_id && host_id[0] && mem.player_id[0])
+                out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
+            else
+                out->is_host = (mem.slot == 0) ? 1 : 0;
+            return 1;
+        }
+        if (ae_np_use_lan_members()) {
             if (index < 0 || index > 1) return 0;
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return 0;
@@ -4194,18 +4937,47 @@ namespace {
         out->slot = mem.slot;
         std::snprintf(out->display_name, sizeof(out->display_name), "%s", mem.display_name);
         out->ready = mem.ready;
-        out->is_host = mem.slot == 0;
+        const char* host_id = psx_lobby_host_player_id();
+        if (host_id && host_id[0] && mem.player_id[0])
+            out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
+        else
+            out->is_host = (mem.slot == 0) ? 1 : 0;
         return 1;
     }
 
     int ae_np_move_member(void*, int from_slot, int to_slot) {
-        if (!g_lnch_hosting_lan || from_slot < 0 || from_slot > 1 ||
-            to_slot < 0 || to_slot > 1 || from_slot == to_slot) return -1;
-        AeLanLobbyState state;
-        if (!ae_np_read_lan_state(&state)) return -1;
-        state.host_slot = 1 - state.host_slot;
-        state.started = false;
-        return ae_np_write_lan_state(state) ? 0 : -1;
+        if (from_slot < 0 || to_slot < 0 || from_slot == to_slot) return -1;
+        if (g_lnch_hosting_lan && from_slot <= 1 && to_slot <= 1) {
+            AeLanLobbyState state;
+            if (!ae_np_read_lan_state(&state)) return -1;
+            /* Swap which physical seat is "host slot" (P1/P2). */
+            state.host_slot = 1 - state.host_slot;
+            state.started = false;
+            if (!ae_np_write_lan_state(state)) return -1;
+            ae_np_lan_send_update_to_peer(state);
+            return 0;
+        }
+        if (ae_np_use_ws_members() && psx_lobby_is_host())
+            return psx_lobby_move_member(from_slot, to_slot);
+        return -1;
+    }
+
+    int ae_np_kick_member(void*, int slot) {
+        if (g_lnch_hosting_lan) {
+            AeLanLobbyState state;
+            if (!ae_np_read_lan_state(&state)) return -1;
+            if (slot < 0 || slot > 1 || slot == state.host_slot) return -1;
+            state.joiner_name.clear();
+            state.started = false;
+            if (!ae_np_write_lan_state(state)) return -1;
+            if (g_lnch_lan_peer_valid)
+                ae_np_lan_udp_sendto(g_lnch_lan_peer, "MOTK1 KICK\n");
+            g_lnch_lan_peer_valid = false;
+            return 0;
+        }
+        if (ae_np_use_ws_members() && psx_lobby_is_host())
+            return psx_lobby_kick(slot);
+        return -1;
     }
 
     int ae_np_local_ready(void*) { return psx_lobby_local_ready(); }
@@ -4217,8 +4989,22 @@ namespace {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state) || state.joiner_name.empty()) return -1;
             state.started = true;
-            return ae_np_write_lan_state(state) ? 0 : -1;
+            state.session_id += 1u;
+            if (state.session_id == 0) state.session_id = 1;
+            g_lnch_lan_session_id = state.session_id;
+            if (!ae_np_write_lan_state(state)) return -1;
+            if (g_lnch_lan_peer_valid) {
+                ae_np_lan_send_update_to_peer(state);
+                char start_msg[64];
+                std::snprintf(start_msg, sizeof(start_msg), "MOTK1 START\n%u\n",
+                              (unsigned)state.session_id);
+                ae_np_lan_udp_sendto(g_lnch_lan_peer, start_msg);
+            }
+            return 0;
         }
+        if (!psx_lobby_is_host()) return -1;
+        /* Ensure host seat is ready even if pump hasn't run since rematch. */
+        (void)psx_lobby_set_ready(1);
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
         return psx_lobby_request_start(&caps);
     }
@@ -4228,12 +5014,15 @@ namespace {
             !g_lnch_pending_direct_launch.enabled) {
             AeLanLobbyState state;
             if (ae_np_read_lan_state(&state) && state.started) {
+                /* Free the lobby UDP port before delay-sync binds it. */
+                ae_np_lan_udp_close();
+                g_lnch_lan_session_id = state.session_id ? state.session_id : 1u;
                 g_lnch_pending_direct_launch = {};
                 g_lnch_pending_direct_launch.enabled = 1;
                 g_lnch_pending_direct_launch.local_slot = g_lnch_hosting_lan
                     ? state.host_slot : 1 - state.host_slot;
                 g_lnch_pending_direct_launch.input_player = 0;
-                g_lnch_pending_direct_launch.session_id = 1;
+                g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = 2;
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
@@ -4256,6 +5045,33 @@ namespace {
     void ae_np_clear_launch_pending(void*) {
         g_lnch_pending_direct_launch = {};
         psx_lobby_clear_launch_pending();
+    }
+
+    /* After a match soft-exit: keep seats, clear started/ready, rebind LAN UDP. */
+    void ae_np_prepare_lobby_rematch(void) {
+        g_lnch_pending_direct_launch = {};
+        psx_lobby_set_ready(0);
+        psx_lobby_clear_launch_pending();
+        if (!(g_lnch_hosting_lan || g_lnch_joined_lan)) return;
+        AeLanLobbyState st;
+        if (ae_np_read_lan_state(&st)) {
+            st.started = false;
+            (void)ae_np_write_lan_state(st);
+        }
+        if (g_lnch_hosting_lan && !g_lnch_lan_endpoint.empty()) {
+            ae_np_lan_udp_close();
+            (void)ae_np_lan_udp_ensure(true, ae_np_lan_endpoint_port(g_lnch_lan_endpoint));
+            if (g_lnch_lan_peer_valid && ae_np_read_lan_state(&st))
+                ae_np_lan_send_update_to_peer(st);
+        } else if (g_lnch_remote_lan) {
+            ae_np_lan_udp_close();
+            (void)ae_np_lan_udp_ensure(false, 0);
+            g_lnch_lan_join_pulse_ms = 0;
+        }
+    }
+
+    const char* ae_np_lan_endpoint_cstr(void) {
+        return g_lnch_lan_endpoint.empty() ? nullptr : g_lnch_lan_endpoint.c_str();
     }
 
     int ae_np_fill_launch(void*, RecompLauncherCNetplayLaunch* out) {
@@ -4306,7 +5122,8 @@ namespace {
         ae_np_launch_pending,
         ae_np_clear_launch_pending,
         ae_np_fill_launch,
-        ae_np_list_lan_ips,
+        ae_np_local_address_get,
+        ae_np_kick_member,
     };
 }  // namespace
 #endif
@@ -6180,6 +6997,8 @@ session_reboot:
     /* Delay-sync: do not free-run boot while HELLO/START is in flight.
      * Park until tick 0 pads are published, then enter the guest. */
     if (psx_netplay_active()) {
+        SDL_PumpEvents();
+        SDL_FlushEvent(SDL_QUIT);
         std::printf("psxrecomp: netplay waiting for peer START + tick-0 admit…\n");
         std::fflush(stdout);
         netplay_barrier_admit(-1);
@@ -6266,9 +7085,113 @@ session_reboot:
     return 0;
 
 soft_return_lobby:
-    /* Netplay soft-exit: tear down the match window. Lobby resume will be
-     * restored through recomp-ui. */
+    /* Netplay soft-exit: tear down the match, keep the lobby seat, and reopen
+     * the launcher on the LOBBY room so every peer can rematch. */
     teardown_game_session_keep_lobby();
+#if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
+    ae_np_prepare_lobby_rematch();
+    {
+        std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
+        std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
+                                 + " \xE2\x80\x94 Launcher";
+        std::string rui_initial_disc = disc_path_str;
+
+        RecompLauncherCSettings ls{};
+        ls.output_method = 2;
+        ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
+        ls.fullscreen = g_fullscreen ? 1 : 0;
+        ls.enable_audio = 1;
+        ls.audio_freq = 44100;
+        ls.volume = 100;
+        ls.window_width = g_video_win_w;
+        ls.renderer = g_video_renderer;
+        ls.supersampling = g_video_scale;
+        ls.antialiasing = g_video_aa ? 1 : 0;
+        ls.texture_filter = g_video_texfilter;
+        ls.screen_kind = g_video_screen;
+        ls.frame_interp = g_frame_interpolation ? 1 : 0;
+        ls.frame_interp_fps = g_frame_interpolation_fps;
+        ls.spu_hq = g_audio_spu_hq ? 1 : 0;
+        ls.auto_skip_fmv = g_auto_skip_fmv ? 1 : 0;
+        ls.turbo_loads = g_turbo_loads_enabled ? 1 : 0;
+        ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
+            : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
+        std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
+                      psx_lobby_display_name());
+        std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s", bios_path_str.c_str());
+
+        RecompLauncherCGameInfo gi{};
+        launcher_profile_apply("psx", &gi);
+        gi.name = game_name.empty() ? nullptr : game_name.c_str();
+        gi.num_players = game_players;
+        gi.netplay_supported = 1;
+        gi.netplay = &g_lnch_netplay_callbacks;
+        gi.resume_netplay_room = 1;
+        gi.resume_netplay_endpoint = ae_np_lan_endpoint_cstr();
+        gi.disc_verify = ae_disc_verify;
+        gi.memcard_inspect = ae_memcard_inspect;
+
+        char rui_out_disc[1024] = {0};
+        const int rui_rc = recomp_launcher_run_window(
+            rui_title.c_str(), &ls, &gi, assets_dir_str.c_str(),
+            rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));
+
+        if (rui_rc == 1) {
+            /* User closed the launcher — leave the lobby and exit. */
+            if (g_lnch_netplay_callbacks.leave)
+                (void)g_lnch_netplay_callbacks.leave(g_lnch_netplay_callbacks.ctx);
+            else
+                (void)psx_lobby_leave();
+            psx_lobby_disconnect();
+            SDL_Quit();
+            return 0;
+        }
+
+        if (rui_rc == 0) {
+            if (rui_out_disc[0]) {
+                resolved_disc = normalize_disc_path_for_launch(rui_out_disc);
+                disc_path_str = resolved_disc.string();
+            }
+            if (ls.netplay_launch.enabled) {
+                net_cfg = {};
+                net_cfg.enabled = 1;
+                net_cfg.local_slot = ls.netplay_launch.local_slot;
+                net_cfg.input_player = ls.netplay_launch.input_player;
+                net_cfg.session_id = ls.netplay_launch.session_id;
+                net_cfg.input_delay = ls.netplay_launch.input_delay;
+                std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
+                              ls.netplay_launch.bind_hostport);
+                std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
+                              ls.netplay_launch.peer_hostport);
+                g_netplay_from_lobby = 1;
+            } else {
+                net_cfg = {};
+                g_netplay_from_lobby = 0;
+            }
+            g_video_renderer = ls.renderer;
+            g_video_scale = ls.supersampling;
+            g_video_aa = ls.antialiasing;
+            g_video_texfilter = ls.texture_filter;
+            g_video_screen = ls.screen_kind;
+            g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
+            g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
+            g_fullscreen = ls.fullscreen != 0;
+            g_frame_interpolation = ls.frame_interp ? 1 : 0;
+            g_frame_interpolation_fps = ls.frame_interp_fps;
+            g_audio_spu_hq = ls.spu_hq != 0;
+            switch (ls.aspect_index) {
+                case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
+                case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;
+                default: g_video_aspect_num = 4;  g_video_aspect_den = 3; break;
+            }
+            g_video_win_w = ls.window_width > 0 ? ls.window_width : g_video_win_w;
+            std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
+                        net_cfg.enabled ? 1 : 0);
+            std::fflush(stdout);
+            goto session_reboot;
+        }
+    }
+#endif
     psx_lobby_disconnect();
     SDL_Quit();
     return 0;

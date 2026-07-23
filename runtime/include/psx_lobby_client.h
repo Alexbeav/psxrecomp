@@ -111,8 +111,16 @@ int  psx_lobby_join(const char *lobby_id, const char *password,
 
 int  psx_lobby_leave(void);
 
+/* Host-only: remove the player in `slot` (not the host / self). */
+int  psx_lobby_kick(int slot);
+
+/* Host-only: swap/move a seated player between slots (server broadcasts update). */
+int  psx_lobby_move_member(int from_slot, int to_slot);
+
 int  psx_lobby_in_lobby(void);
 int  psx_lobby_is_host(void);
+/* Host's player_id from the last create/lobby_update (empty if unknown). */
+const char *psx_lobby_host_player_id(void);
 /* Filled after create/join/lobby_update; peer endpoints for PsxNetplayConfig. */
 const PsxLobbyJoinInfo *psx_lobby_join_info(void);
 
