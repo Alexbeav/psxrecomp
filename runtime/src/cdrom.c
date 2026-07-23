@@ -1755,11 +1755,19 @@ static void exec_command(uint8_t cmd) {
         set_irq(CDIRQ_ACK);
         pending.cmd = 0x0A;
         pending.pending = 1;
-        /* Beetle models the drive-reset busy period as 1136000 cycles
-         * (PS_CDC::Command_Reset, PSRCounter). Same second-response class as
-         * Pause: an authentic multi-frame latency games' drivers rely on —
-         * never scaled by the disc-speed divisor. */
-        pending.delay = 1136000;
+        /* The old 1136000-cycle (34 ms) value was borrowed from Beetle's
+         * Command_RESET — a different command. Init(0x0A) on an already-
+         * spinning drive completes far faster on real hardware, and OpenBIOS
+         * depends on it: its cdromInnerInit spin-waits only ~30000 loop
+         * iterations (single-digit ms) for the INT2 completion, then
+         * re-issues Init — which re-armed our 34 ms clock every retry, a
+         * permanent livelock (Init spam at 2/frame, stalling CD boot).
+         * Sony's driver never noticed: it waits on the completion event with
+         * no short timeout. 131072 cycles (~3.9 ms; an arbitrary power of
+         * two, not a measured constant) sits inside OpenBIOS's window and
+         * within real-hardware quick-init behavior; cross-check against
+         * Beetle's exact PS_CDC::Command_Init figure when refining. */
+        pending.delay = 131072;
         pending.phase = 1;
         break;
 

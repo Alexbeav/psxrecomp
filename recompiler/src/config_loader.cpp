@@ -553,6 +553,17 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
     const uint32_t text_size =
         parse_hex(toml::find<std::string>(prog, "text_size"), "program.text_size");
 
+    // [program.image] — declared identity (optional)
+    std::string image_sha256;
+    bool image_redistributable = false;
+    if (prog.contains("image")) {
+        const toml::value& img = toml::find(prog, "image");
+        if (img.contains("sha256"))
+            image_sha256 = toml::find<std::string>(img, "sha256");
+        if (img.contains("redistributable"))
+            image_redistributable = toml::find<bool>(img, "redistributable");
+    }
+
     // [recompiler]
     if (!cfg.contains("recompiler")) {
         throw std::runtime_error(
@@ -620,6 +631,83 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         }
     }
 
+    // [recompiler.address_model] — the BIOS's boot-time ROM->RAM code copies.
+    // Optional: absent (or an empty copy list) means the BIOS runs entirely
+    // from ROM and normalization degenerates to the KSEG mask. Semantic
+    // invariants (window overlap, bless uniqueness, alignment) are enforced
+    // in BiosAddressModel::from_config, not here.
+    std::vector<BiosAddrCopy> address_copies;
+    if (recomp.contains("address_model")) {
+        const toml::value& am = toml::find(recomp, "address_model");
+        if (am.contains("normalize_mask")) {
+            const uint32_t mask = parse_hex(
+                toml::find<std::string>(am, "normalize_mask"),
+                "address_model.normalize_mask");
+            // Only the KSEG strip is implemented; refuse anything else rather
+            // than silently mis-normalizing (RELOCATION_MANIFEST_FORMAT.md
+            // echo-and-check).
+            if (mask != 0x1FFFFFFFu) {
+                throw std::runtime_error(fmt::format(
+                    "{}: address_model.normalize_mask must be 0x1FFFFFFF",
+                    config_path.string()));
+            }
+        }
+        if (am.contains("copy")) {
+            for (const auto& v : am.at("copy").as_array()) {
+                BiosAddrCopy c;
+                c.name   = toml::find<std::string>(v, "name");
+                c.rom_lo = parse_hex(toml::find<std::string>(v, "rom_lo"),
+                                     "address_model.copy.rom_lo");
+                c.rom_hi = parse_hex(toml::find<std::string>(v, "rom_hi"),
+                                     "address_model.copy.rom_hi");
+                c.ram_lo = parse_hex(toml::find<std::string>(v, "ram_lo"),
+                                     "address_model.copy.ram_lo");
+                c.runtime_base = parse_hex(
+                    toml::find<std::string>(v, "runtime_base"),
+                    "address_model.copy.runtime_base");
+                const std::string key =
+                    toml::find<std::string>(v, "dispatch_key");
+                if (key == "ram")      c.key_is_ram = true;
+                else if (key == "rom") c.key_is_ram = false;
+                else {
+                    throw std::runtime_error(fmt::format(
+                        "{}: address_model.copy '{}': dispatch_key must be "
+                        "\"ram\" or \"rom\", got '{}'",
+                        config_path.string(), c.name, key));
+                }
+                if (v.contains("kernel_bless"))
+                    c.kernel_bless = toml::find<bool>(v, "kernel_bless");
+                address_copies.push_back(std::move(c));
+            }
+        }
+    }
+
+    // [[recompiler.install_slots]] — kernel-RAM PCs the BIOS overwrites with
+    // dispatch stubs at runtime.
+    std::vector<uint32_t> install_slots;
+    if (recomp.contains("install_slots")) {
+        for (const auto& v : recomp.at("install_slots").as_array()) {
+            install_slots.push_back(parse_hex(
+                toml::find<std::string>(v, "ram_addr"),
+                "install_slots.ram_addr"));
+        }
+    }
+
+    // [recompiler.runtime_exports] — per-image HLE anchors couriered into the
+    // generated C. Absent keys stay 0 = structurally unavailable.
+    uint32_t shell_entry_phys = 0, deliver_event_ret = 0;
+    if (recomp.contains("runtime_exports")) {
+        const toml::value& rx = toml::find(recomp, "runtime_exports");
+        if (rx.contains("shell_entry_phys"))
+            shell_entry_phys = parse_hex(
+                toml::find<std::string>(rx, "shell_entry_phys"),
+                "runtime_exports.shell_entry_phys");
+        if (rx.contains("deliver_event_ret"))
+            deliver_event_ret = parse_hex(
+                toml::find<std::string>(rx, "deliver_event_ret"),
+                "runtime_exports.deliver_event_ret");
+    }
+
     return BiosConfig{
         /*config_path*/  config_path,
         /*project_root*/ root,
@@ -629,12 +717,18 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         /*load_address*/ load_address,
         /*entry_pc*/     entry_pc,
         /*text_size*/    text_size,
+        /*image_sha256*/ image_sha256,
+        /*image_redistributable*/ image_redistributable,
         /*seeds_path*/   seeds_path,
         /*out_dir*/      out_dir,
         /*strict*/       strict,
         /*out_stem*/     out_stem,
         /*bios_vectors*/ std::move(bios_vectors),
         /*bios_aliases*/ std::move(bios_aliases),
+        /*address_copies*/ std::move(address_copies),
+        /*install_slots*/  std::move(install_slots),
+        /*shell_entry_phys*/  shell_entry_phys,
+        /*deliver_event_ret*/ deliver_event_ret,
         /*runtime*/      parse_runtime_block(cfg, root),
     };
 }
@@ -794,6 +888,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     if (recomp.contains("bios_thunks")) {
         bios_thunks_path =
             fs::absolute(root / toml::find<std::string>(recomp, "bios_thunks"));
+    }
+
+    // [recompiler] bios_config — the BIOS profile this game is built
+    // against. Optional: main_psx falls back to the SCPH1001 profile
+    // (bios/SCPH1001.toml, in-repo or under the psxrecomp/ submodule).
+    fs::path bios_config_path;
+    if (recomp.contains("bios_config")) {
+        bios_config_path =
+            fs::absolute(root / toml::find<std::string>(recomp, "bios_config"));
     }
 
     const std::string out_dir_field =
@@ -1229,6 +1332,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*disc_sha1*/        disc_sha1,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
+        /*bios_config_path*/ bios_config_path,
         /*out_dir*/          out_dir,
         /*strict*/           strict,
         /*discovery*/        discovery,

@@ -16,6 +16,7 @@
 #include "memcard.h"
 #include "debug_server.h"
 #include "event_ring.h"
+#include <stdlib.h>
 #include <string.h>
 
 /* I_STAT is owned by memory.c */
@@ -1486,7 +1487,29 @@ void sio_write(uint32_t addr, uint32_t value) {
         /* Cycle-paced TX. Pad and card share single bus. */
         {
             uint8_t b = (uint8_t)value;
-            int pad_fast_path =
+            /* FAITHFUL pad RX pacing (fixes dead pads under OpenBIOS). The pad
+             * "fast path" below processes the byte SYNCHRONOUSLY at the TX
+             * write: RX_RDY asserts instantly, while the ACK IRQ is scheduled
+             * BAUD+ACK (1088+170) cycles out. Real hardware asserts RX_RDY only
+             * when the byte has SHIFTED (~1088 cycles); the /ACK pulse lands
+             * ~170 cycles after that. A driver that waits on RXRDY (absorbing
+             * the shift time) and then spins a SHORT bounded loop on I_STAT.7 —
+             * OpenBIOS readPad's 0x50-iteration wait — starts that spin ~1000
+             * cycles early against the synchronous model and TIMES OUT: every
+             * poll aborts with padBuffer[0]=0xFF and the game sees a dead pad
+             * (byte 1 survived only by its extra busyloops; byte 2 aborted —
+             * sio_trace showed exactly 0x01,0x42 then abandon, one ack/poll).
+             * Default: route pads through the same cycle-paced shifter the
+             * memcard uses (RX_RDY at shift-complete, ack +170 after). Total
+             * ack-IRQ latency is UNCHANGED (1088+170), so the SCPH1001
+             * pad-detect phase the constants were tuned for is preserved.
+             * A/B: PSX_SIO_PAD_SYNC_RX=1 restores the legacy synchronous path. */
+            static int s_pad_sync_rx = -1;
+            if (s_pad_sync_rx < 0) {
+                const char *e = getenv("PSX_SIO_PAD_SYNC_RX");
+                s_pad_sync_rx = (e && e[0] == '1') ? 1 : 0;
+            }
+            int pad_fast_path = s_pad_sync_rx &&
                 active_device != DEV_MEMCARD &&
                 (active_device == DEV_PAD ||
                  sio_bus_owner == SIO_OWNER_PAD ||

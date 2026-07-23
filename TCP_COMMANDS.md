@@ -143,6 +143,52 @@ re-dispatches the guest's true target. Counters in
 
 ---
 
+## `bios_info` — linked recompiled-BIOS identity (native only)
+
+Reports which BIOS image this build's recompiled C was generated from
+(`psx_bios_image`, emitted into the generated dispatch from the BIOS profile)
+and whether the loaded ROM matches it: `image_id`, `sha256`, `crc32`, `size`,
+`bundled` (redistributable image shipped with the game), the kernel-bless
+window, the HLE anchors (`shell_entry_phys` / `deliver_event_ret`; 0 =
+structurally unavailable on this BIOS), and `image_wordsum` vs
+`loaded_wordsum` with `match`. With the launch identity gate a running
+process always reports `match:1`.
+
+- `{"cmd":"bios_info"}`
+
+## `s3_smear_watch` — callee-saved-register smear tripwire (native only)
+
+Latches the first interpreted instruction in a PC window whose execution
+changes `$s3` (`runtime/src/dirty_ram_interp.c`). A `jalr`'s exec_one spans
+the entire nested native callee, so the latch names the callee that returned
+with a clobbered callee-saved register; the insn ring is frozen at the latch.
+
+- `{"cmd":"s3_smear_watch","lo":"<hex>","hi":"<hex>"}` — arm (each arming
+  fully re-specifies the watch). Optional `"excl":"<hex insn>"`: exact
+  encoding to ignore, so a watched loop's own `$s3` advance (e.g. an
+  `addi s3,s3,8` list walk) doesn't trip the latch.
+- `{"cmd":"s3_smear_watch"}` — report the latch: `valid`, `pc`, `insn`,
+  `s3_old`/`s3_new`, `call_target` (rs at the call site for jr/jalr),
+  `frame`.
+- `{"cmd":"s3_smear_watch","lo":"0"}` — disarm.
+
+## `callret_watch` — interp JALR call-resolution ring (native only)
+
+64-entry ring (`runtime/src/dirty_ram_interp.c`) recording, for every
+interpreted JALR whose call PC lies in a window, which resolution tier ran
+the callee and the full post-call outcome — the complement of
+`s3_smear_watch`: the tripwire names the callee that came back smeared, this
+ring names the return path that let it come back.
+
+- `{"cmd":"callret_watch","lo":"<hex>","hi":"<hex>"}` — arm (resets the ring).
+- `{"cmd":"callret_watch"}` — dump (newest last): per entry `cyc`, `f`
+  (frame), `pc`, `tgt`, `path` (`CRES_*` tier code, see the enum in
+  dirty_ram_interp.c; `|0x100` = finish() escaped), pre-call
+  `sp_b`/`ra_b`/`s0_b`/`s3_b`, post-call `pc_a`/`ra_a`/`sp_a`/`s0_a`/
+  `s3_a`/`v0_a`, `bail`/`rfe`/`esc`/`in_exc` flags, `dstatic`/`dblocks`/
+  `dexc` engine-attribution deltas across the call, `last_func`.
+- `{"cmd":"callret_watch","lo":"0"}` — disarm.
+
 ## `hle_dump` — BIOS-HLE tier call ring (native only)
 
 Always-on ring (`runtime/src/bios_hle.c`, 16K entries) recording every

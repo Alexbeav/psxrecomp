@@ -41,6 +41,22 @@ struct TranslateResult {
     // every other instruction. The slice walker's emit logic emits this
     // as an EmittedInstr right before the delay slot when non-empty.
     std::string pre_delay_code;
+
+    // MIPS-I load-delay modeling (simple loads only: LB/LBU/LH/LHU/LW with
+    // rt != 0). load_dest is the architectural destination register, and
+    // c_code_deferred is an alternative emission that assigns the loaded
+    // value into the function-scope temp `psx_ldd_<addr>` instead of
+    // cpu->gpr[load_dest]. The emitter uses it when the NEXT instruction
+    // reads load_dest (a dependent pair): on a real R3000A that successor
+    // executes in the load's delay shadow and sees the register's OLD
+    // value — OpenBIOS cardfasttrack.s depends on this deliberately
+    // ("gotta break those bad emulators"). The emitter flushes
+    // cpu->gpr[load_dest] = psx_ldd_<addr> after the successor's register
+    // reads. -1 / empty for everything that is not a simple load.
+    // LWL/LWR are excluded: their rt-merge plus the hardware's special
+    // LWL/LWR chain bypass need different treatment (logged if dependent).
+    int         load_dest = -1;
+    std::string c_code_deferred;
 };
 
 class StrictTranslator {

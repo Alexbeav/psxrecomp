@@ -83,6 +83,10 @@ respective files.
 seeds       = "recompiler/seeds/phase2_ghidra_seeds.json"  # BIOS
 seeds       = "seeds/ghidra_funcs.txt"                     # game (note: game seeds aren't json today)
 bios_thunks = "seeds/tomba_bios_thunks.txt"                # game-only
+bios_config = "psxrecomp/bios/SCPH1001.toml"               # game-only: BIOS profile whose address
+                                                           # model game codegen folds RAM aliases
+                                                           # through (see "BIOS profiles" below);
+                                                           # defaults to the SCPH1001 profile
 out_dir     = "generated"                                  # both
 strict      = true                                         # both — currently always true
 discovery   = "whole-image"                                # game-only: "whole-image" or "reachable"
@@ -240,3 +244,44 @@ These are noted here so future work knows where to slot them:
   Phase A might allow multiple).
 - `[program] type` explicit discriminator (currently inferred from
   `rom` vs `exe` field presence).
+
+## BIOS profiles (`bios/<STEM>.toml`)
+
+One profile per BIOS image; the profile is the single source of truth for the
+image identity, the relocation windows, and the runtime anchors. Two ship:
+`bios/SCPH1001.toml` (retail; user supplies the dump) and `bios/OpenBIOS.toml`
+(MIT, redistributable, shipped with the build). Selected at configure time:
+`-DPSXRECOMP_BIOS_STEM=<stem> -DPSXRECOMP_BIOS_PROFILE=<path>`, and per game
+by `[recompiler] bios_config` in game.toml.
+
+```toml
+[program.image]              # identity; recompiler refuses a mismatched ROM
+sha256          = "..."      # pins the exact image (empty = unchecked)
+redistributable = false      # true: BIOS ships with the game; runtime hides
+                             # the whole BIOS-selection surface
+
+[recompiler.address_model]   # boot-time bulk code copies out of ROM
+normalize_mask = "0x1FFFFFFF"
+[[recompiler.address_model.copy]]
+name         = "Kernel Part 2"   # comment label in the emitted C
+rom_lo       = "0x1FC10000"      # [lo, hi) physical, hi EXCLUSIVE
+rom_hi       = "0x1FC18000"
+ram_lo       = "0x00000500"      # physical RAM destination
+runtime_base = "0x00000500"      # vaddr the CPU executes the copy at
+dispatch_key = "ram"             # "ram": functions keyed by RAM address;
+                                 # "rom": RAM alias folds back to ROM
+kernel_bless = true              # runtime may byte-verify + run native
+
+[[recompiler.install_slots]] # kernel-RAM PCs the BIOS patches at runtime
+ram_addr = "0x00000CF0"
+
+[recompiler.runtime_exports] # per-image HLE anchors (omit = unavailable)
+shell_entry_phys  = "0x00030000"
+deliver_event_ret = "0x80001720"
+```
+
+Every `copy` entry is a claim that the boot copy is byte-verbatim; the
+runtime kernel-bless memcmp enforces it. A BIOS with no copies (runs
+entirely from ROM) is valid: normalization degenerates to the KSEG mask.
+Semantic invariants (disjoint windows, no fold-output/input intersection,
+single bless window) are enforced at load; violations refuse to build.

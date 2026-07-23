@@ -14,6 +14,8 @@
 #include "../src/annotations.hpp"
 #include "../src/config_loader.h"
 
+namespace PSXRecompV4 { class BiosAddressModel; }
+
 namespace PSXRecomp {
 
 // CPU state structure (registers + memory access)
@@ -199,6 +201,13 @@ struct GeneratedFunction {
 class CodeGenerator {
 public:
     explicit CodeGenerator(const PS1Executable& exe, const CodeGenConfig& config = CodeGenConfig());
+
+    // Set the BIOS address model the game codegen folds shell/kernel RAM
+    // aliases through (jump tables inside relocated BIOS code windows).
+    // Resolved from the game's [recompiler] bios_config profile (default:
+    // the SCPH1001 profile) in main_psx.cpp; there is no built-in window.
+    // Must outlive code generation.
+    static void set_bios_address_model(const PSXRecompV4::BiosAddressModel* m);
 
     // Generate C code for a single function.
     // fallthrough_name: if non-empty and the last block has no explicit control

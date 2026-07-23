@@ -301,12 +301,90 @@ uint32_t g_freeze_snap_gpr[32] = {0};
 /* ra-load watch (Confirm-(b)): capture the instruction that sets $ra to this
  * value. 0 = disabled. */
 uint32_t g_ra_load_watch        = 0;
+/* Callee-smear tripwire (see the interp-loop probe): first $s3 change
+ * inside [lo,hi) that isn't the walk's own advance, with the call target. */
+uint32_t g_s3_smear_lo = 0, g_s3_smear_hi = 0;
+/* Optional exact-encoding exclusion so a watched loop's OWN $s3 advance
+ * (e.g. an `addi s3,s3,8` list walk) doesn't trip the latch. 0 = none. */
+uint32_t g_s3_smear_excl = 0;
+uint32_t g_s3_smear_pc = 0, g_s3_smear_insn = 0, g_s3_smear_old = 0,
+         g_s3_smear_new = 0, g_s3_smear_tgt = 0, g_s3_smear_frame = 0;
+int      g_s3_smear_valid = 0;
 int      g_ra_load_snap_valid   = 0;
 uint32_t g_ra_load_snap_pc      = 0;
 uint32_t g_ra_load_snap_insn    = 0;
 uint32_t g_ra_load_snap_before_ra = 0;
 uint32_t g_ra_load_snap_srcaddr = 0;
 uint32_t g_ra_load_snap_gpr[32] = {0};
+
+/* Call-resolution ring (armed via `callret_watch lo=.. hi=..`).
+ * For every interp JALR whose call PC lies in [lo,hi), record which resolution
+ * tier ran the callee and the FULL host-side outcome: post-call guest state,
+ * bail/escape flags, and engine-attribution deltas (static-dispatch hits vs
+ * interp blocks across the call). This is the piece the s3 tripwire lacks:
+ * the tripwire names the callee that came back smeared; this ring names the
+ * RETURN PATH that let it come back. Zero-cost when disarmed. */
+uint32_t g_callret_lo = 0, g_callret_hi = 0;
+/* MUST stay field-for-field identical to the local mirror `E` in
+ * debug_server.c handle_callret_watch() (which dumps this ring through an
+ * opaque extern; a divergence is silent garbage, not a compile error). */
+typedef struct {
+    uint64_t cycle; uint32_t frame;
+    uint32_t pc, target, sp_b, ra_b, s0_b, s3_b;
+    uint32_t path;                  /* CRES_* code, |0x100 if finish() escaped */
+    uint32_t pc_a, ra_a, sp_a, s0_a, s3_a, v0_a;
+    uint32_t bail_a, rfe_a, esc_a, in_exc_a;
+    uint32_t dstatic, dblocks;      /* engine deltas across the call */
+    uint32_t dexc;                  /* exception entries across the call */
+    uint32_t last_func_a;           /* g_debug_current_func_addr after */
+} CallRetEnt;
+#define CALLRET_CAP 64u
+CallRetEnt g_callret_ring[CALLRET_CAP];
+uint64_t   g_callret_seq = 0;
+/* CRES path codes (JALR tiers, in consult order). */
+enum { CRES_PLAIN = 1,
+       CRES_EC_BAIL = 2, CRES_EC_PC = 3, CRES_EC_CONTRACT = 4, CRES_EC_RET = 5,
+       CRES_OVERRIDE = 6,
+       CRES_OV_BAIL = 7, CRES_OV_PC = 8, CRES_OV_CONTRACT = 9, CRES_OV_RET = 10,
+       CRES_NL_BAIL = 11, CRES_NL_PC = 12, CRES_NL_RET = 13,
+       CRES_PCCHAIN = 14 };
+extern uint64_t g_dispatch_static_hits;   /* debug_server.c; bumped by generated dispatch */
+extern uint64_t psx_cycle_count;
+static uint32_t callret_begin(CPUState *cpu, uint32_t pc, uint32_t target) {
+    if (!g_callret_lo || pc < g_callret_lo || pc >= g_callret_hi)
+        return 0xFFFFFFFFu;
+    uint32_t idx = (uint32_t)(g_callret_seq++ & (CALLRET_CAP - 1u));
+    CallRetEnt *e = &g_callret_ring[idx];
+    e->cycle = psx_cycle_count; e->frame = (uint32_t)s_frame_count;
+    e->pc = pc; e->target = target;
+    e->sp_b = cpu->gpr[29]; e->ra_b = cpu->gpr[31];
+    e->s0_b = cpu->gpr[16]; e->s3_b = cpu->gpr[19];
+    e->path = 0;
+    e->dstatic = (uint32_t)g_dispatch_static_hits;
+    e->dblocks = (uint32_t)g_dirty_ram_blocks_run;
+    { extern void psx_get_freeze_diag(uint64_t*,uint32_t*,int*,int*,uint64_t*,uint64_t*);
+      uint64_t exc = 0; psx_get_freeze_diag(NULL, NULL, NULL, NULL, &exc, NULL);
+      e->dexc = (uint32_t)exc; }
+    return idx;
+}
+static void callret_end(uint32_t idx, CPUState *cpu, uint32_t path) {
+    if (idx == 0xFFFFFFFFu) return;
+    CallRetEnt *e = &g_callret_ring[idx];
+    e->path = path;
+    e->pc_a = cpu->pc; e->ra_a = cpu->gpr[31]; e->sp_a = cpu->gpr[29];
+    e->s0_a = cpu->gpr[16]; e->s3_a = cpu->gpr[19]; e->v0_a = cpu->gpr[2];
+    e->bail_a = (uint32_t)g_psx_call_bail;
+    { extern int g_rfe_escape_pending; extern int g_exc_escape_reason;
+      e->rfe_a = (uint32_t)g_rfe_escape_pending;
+      e->esc_a = (uint32_t)g_exc_escape_reason; }
+    e->in_exc_a = (uint32_t)psx_get_in_exception();
+    e->dstatic = (uint32_t)g_dispatch_static_hits - e->dstatic;
+    e->dblocks = (uint32_t)g_dirty_ram_blocks_run - e->dblocks;
+    { extern void psx_get_freeze_diag(uint64_t*,uint32_t*,int*,int*,uint64_t*,uint64_t*);
+      uint64_t exc = 0; psx_get_freeze_diag(NULL, NULL, NULL, NULL, &exc, NULL);
+      e->dexc = (uint32_t)exc - e->dexc; }
+    e->last_func_a = g_debug_current_func_addr;
+}
 
 /* Overlay-region floor (phys) = the loaded game's main-EXE text end. Defaults to
  * the BIOS-only value; main.cpp pins it to (load_address + text_size) at game
@@ -729,6 +807,8 @@ static int dirty_ram_finish_call_return(CPUState *cpu, uint32_t return_pc,
     return 0;
 }
 
+/* Sub-outcome of the last dispatch_nonlocal_call, for the callret ring. */
+static uint32_t g_nl_exit_code = 0;
 static int dispatch_nonlocal_call(CPUState *cpu, uint32_t target,
                                   uint32_t return_pc,
                                   uint32_t *next_pc_out) {
@@ -741,8 +821,9 @@ static int dispatch_nonlocal_call(CPUState *cpu, uint32_t target,
     }
     /* psx_dispatch_call validated the (return_pc, sp) contract; a bail
      * unwind in progress surfaces with cpu->pc = the guest's true target. */
-    if (g_psx_call_bail) return 1;
-    if (cpu->pc != 0) return 1;
+    if (g_psx_call_bail) { g_nl_exit_code = CRES_NL_BAIL; return 1; }
+    if (cpu->pc != 0)    { g_nl_exit_code = CRES_NL_PC;   return 1; }
+    g_nl_exit_code = CRES_NL_RET;
     return dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
 }
 
@@ -1313,16 +1394,19 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
             xprobe_event(pc, XOP_JALR, XSITE_INTERP, target,
                          fetch_word((pc + 4) & 0x1FFFFFFFu), site_sp, cpu->gpr[31], 1);
 #endif
-            if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; return 1; }  /* slice / lockstep-replay: plain transfer, never execute the callee */
+            uint32_t _cr = callret_begin(cpu, pc, target);   /* call-resolution ring */
+#define CRET(code, rv) do { callret_end(_cr, cpu, (code)); return (rv); } while (0)
+            if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */
 #ifdef PSX_HAS_GAME_DISPATCH
             cpu->pc = 0;
             if (interp_enter_compiled(cpu, target)) {
-                if (g_psx_call_bail) return 1;  /* wild unwind: cpu->pc = true target */
-                if (cpu->pc != 0) return 1;
+                if (g_psx_call_bail) CRET(CRES_EC_BAIL, 1);  /* wild unwind: cpu->pc = true target */
+                if (cpu->pc != 0) CRET(CRES_EC_PC, 1);
                 if (rd == 0 || rd == 31) {
-                    if (psx_call_contract(cpu, return_pc, site_sp)) return 1;
+                    if (psx_call_contract(cpu, return_pc, site_sp)) CRET(CRES_EC_CONTRACT, 1);
                 }
-                return dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+                { int _r = dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+                  CRET(CRES_EC_RET | (_r ? 0x100u : 0u), _r); }
             }
 #endif
             /* Native overlay candidates get the SAME call contract as
@@ -1334,19 +1418,22 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
                 extern int overlay_loader_call_native(CPUState *cpu, uint32_t addr);
                 cpu->pc = 0;
                 if (overlay_loader_call_native(cpu, target)) {
-                    if (g_psx_call_bail) return 1;
-                    if (cpu->pc != 0) return 1;
+                    if (g_psx_call_bail) CRET(CRES_OV_BAIL, 1);
+                    if (cpu->pc != 0) CRET(CRES_OV_PC, 1);
                     if (rd == 0 || rd == 31) {
-                        if (psx_call_contract(cpu, return_pc, site_sp)) return 1;
+                        if (psx_call_contract(cpu, return_pc, site_sp)) CRET(CRES_OV_CONTRACT, 1);
                     }
-                    return dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+                    { int _r = dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+                      CRET(CRES_OV_RET | (_r ? 0x100u : 0u), _r); }
                 }
             }
             if (!is_local_dirty_target(target)) {
-                return dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
+                int _r = dispatch_nonlocal_call(cpu, target, return_pc, next_pc_out);
+                CRET(g_nl_exit_code | ((_r && g_nl_exit_code == CRES_NL_RET) ? 0x100u : 0u), _r);
             }
             cpu->pc = target;
-            return 1;
+            CRET(CRES_PCCHAIN, 1);
+#undef CRET
         }
         case 0x0C: /* SYSCALL */
             cpu->pc = pc;
@@ -1866,6 +1953,20 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     extern int g_psx_dispatch_depth;
     extern void psx_fatal_halt(const char *reason);
+#ifndef PSX_NO_DEBUG_TOOLS
+    /* A0/B0/C0 kernel-vector stubs are runtime-written, so calls to them
+     * land HERE, not in the static dispatcher — which meant the bioscall
+     * ring (debug_server_trace_dispatch) never saw a single vector call on
+     * a BIOS whose stubs stay dirty (OpenBIOS bring-up: ring total 0 while
+     * the guest hammered B0). Feed the same observer from this path. */
+    {
+        uint32_t vphys = addr & 0x1FFFFFFFu;
+        if (vphys == 0xA0u || vphys == 0xB0u || vphys == 0xC0u) {
+            extern void debug_server_trace_dispatch(uint32_t func_addr);
+            debug_server_trace_dispatch(vphys);
+        }
+    }
+#endif
     static int  s_rec_guard = 0;
     static int  s_rec_limit = 0;
     if (s_rec_limit == 0) {
@@ -2435,10 +2536,35 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 #ifndef PSX_NO_DEBUG_TOOLS
         uint32_t before_s0 = cpu->gpr[16];
         uint32_t before_ra = cpu->gpr[31];
+        /* Callee-smear tripwire: latch the first instruction in the
+         * watched pc window whose execution changes $s3 (gpr19) — for a jalr
+         * this spans the ENTIRE nested native callee, naming the callee that
+         * returned with a clobbered callee-saved register. Armed via the
+         * s3_smear_watch TCP command; zero-cost when disarmed. */
+        extern uint32_t g_s3_smear_lo, g_s3_smear_hi;
+        extern uint32_t g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old,
+                        g_s3_smear_new, g_s3_smear_tgt, g_s3_smear_frame;
+        extern int g_s3_smear_valid;
+        uint32_t before_s3 = cpu->gpr[19];
 #endif
         cosim_exec_one_begin();
         int transferred = exec_one_fetched(cpu, pc, insn, &next_pc);
 #ifndef PSX_NO_DEBUG_TOOLS
+        if (g_s3_smear_lo && !g_s3_smear_valid &&
+            pc >= g_s3_smear_lo && pc < g_s3_smear_hi &&
+            cpu->gpr[19] != before_s3 &&
+            (g_s3_smear_excl == 0u || insn != g_s3_smear_excl)) {
+            g_s3_smear_valid = 1;
+            g_s3_smear_pc    = pc;
+            g_s3_smear_insn  = insn;
+            g_s3_smear_old   = before_s3;
+            g_s3_smear_new   = cpu->gpr[19];
+            /* for jr/jalr the smearing callee = rs at the call site */
+            g_s3_smear_tgt   = cpu->gpr[(insn >> 21) & 0x1Fu];
+            g_s3_smear_frame = (uint32_t)s_frame_count;
+            extern int g_insn_log_frozen;
+            g_insn_log_frozen = 1;   /* freeze the insn ring at the smear */
+        }
         /* $ra->1 corruption tripwire (confirm-first probe): did THIS overlay
          * instruction clobber $ra to 1? Latches once, cheap after. */
         if (cpu->gpr[31] == 1u && before_ra != 1u) {

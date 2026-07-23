@@ -756,7 +756,16 @@ uint32_t spu_read(uint32_t addr) {
         uint32_t idx = reg_index(addr);
         if (idx < SPU_REG_COUNT) {
             if (addr == 0x1F801DAEu) {
-                return 0x0400; /* SPUSTAT: ready */
+                /* SPUSTAT (psx-spx): bits 5-0 mirror SPUCNT bits 5-0 (the
+                 * current SPU mode), bit 7 follows SPUCNT.5 (DMA r/w
+                 * request), bit 10 is the data-transfer busy flag — 0 here
+                 * because this runtime completes FIFO/DMA transfers
+                 * instantly. The old hardcoded 0x0400 held busy PERMANENTLY
+                 * asserted; Sony code paths never polled it to zero, but
+                 * OpenBIOS's shell MOD player waits for (SPUSTAT & 0x7FF)
+                 * == 0 after clearing SPUCNT and spun forever. */
+                uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
+                return (uint32_t)((cnt & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
             }
             /* ENDX (end-block-reached latch). Real hw sets bit v when voice
              * v decodes a block whose flag byte has bit 0; KEYON[v] clears

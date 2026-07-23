@@ -2066,6 +2066,19 @@ static uint16_t rgb888_to_rgb555(uint32_t color24) {
 
 void gpu_vblank_tick(void) {
     lcf ^= 1;
+    /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
+     * field while GP1(08h) vertical interlace is on, in antiphase with the
+     * even/odd-lines bit 31 during active display. Modeled here at vblank
+     * granularity: field = !LCF while interlaced, pinned to the legacy 0 in
+     * progressive (GP1(08h) clears it) so titles see identical GPUSTAT.
+     * First consumer
+     * is OpenBIOS's shell waitVSync, which polls for the alternating
+     * (bit31,bit13) = (1,0)/(0,1) pattern on real hardware — under
+     * PCSX-Redux it never runs this path (pcsx_present() short-circuits to
+     * the vblank-IRQ wait, and Redux holds bit13 constant at 1), so this
+     * poll first became reachable in this runtime. */
+    if (vertical_interlace)
+        interlace_field = (lcf ^ 1) & 1;
     /* snapshot per-frame draw-offset-Y range for the strobe instrumentation */
     if (g_doff_cnt_this) {
         g_doff_min_last = g_doff_min_this;
@@ -4268,6 +4281,11 @@ static void gp1_display_mode(uint32_t val) {
     video_mode = (val >> 3) & 1;
     display_depth = (val >> 4) & 1;
     vertical_interlace = (val >> 5) & 1;
+    /* GPUSTAT.13 holds the legacy constant 0 in progressive (see the vblank
+     * field flip); clear it on the switch so a title that toggles interlace
+     * on and back off doesn't leave the field bit latched at 1. */
+    if (!vertical_interlace)
+        interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
 }

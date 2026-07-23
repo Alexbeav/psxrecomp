@@ -276,6 +276,21 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
                 return r;
             }
 
+            case 0x18: { // MULT rs, rt -- 32x32 -> 64 signed, HI:LO
+                // No MULT was ever reached from the SCPH1001 seed set, so
+                // this case first became reachable with OpenBIOS (modern GCC
+                // emits MULT freely). Same shape as MULTU below, signed.
+                r.supported = true;
+                r.c_code = fmt::format(
+                    "{{ int64_t psx_p = (int64_t)(int32_t)cpu->gpr[{}] * (int64_t)(int32_t)cpu->gpr[{}]; "
+                    "cpu->lo = (uint32_t)((uint64_t)psx_p & 0xFFFFFFFFu); "
+                    "cpu->hi = (uint32_t)((uint64_t)psx_p >> 32); }}"
+                    "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_muldiv_set(cpu, psx_mult_latency_s(cpu->gpr[{}]));\n#endif",
+                    static_cast<int>(rs), static_cast<int>(rt), static_cast<int>(rs));
+                r.comment = fmt::format("mult {}, {}", gpr_name(rs), gpr_name(rt));
+                return r;
+            }
+
             case 0x19: { // MULTU rs, rt -- 32x32 -> 64 unsigned, HI:LO
                 r.supported = true;
                 r.c_code = fmt::format(
@@ -864,6 +879,10 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
             r.c_code = fmt::format(
                 "cpu->gpr[{}] = (uint32_t)(int32_t)(int8_t)psx_cyc_load_byte(cpu, {}, {}, 0x{:X}u);",
                 static_cast<int>(rt), addr_expr, static_cast<int>(rt), mask);
+            r.load_dest = rt;
+            r.c_code_deferred = fmt::format(
+                "psx_ldd_{:08X} = (uint32_t)(int32_t)(int8_t)psx_cyc_load_byte(cpu, {}, {}, 0x{:X}u);",
+                d.address, addr_expr, static_cast<int>(rt), mask);
         }
         r.comment = fmt::format("lb {}, {}({})", gpr_name(rt), simm, gpr_name(rs));
         return r;
@@ -977,6 +996,14 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
             "if (psx_addr & 1u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
             "{} }}",
             static_cast<int>(rs), simm, d.address, body);
+        if (rt != 0) {
+            r.load_dest = rt;
+            r.c_code_deferred = fmt::format(
+                "{{ uint32_t psx_addr = (uint32_t)((int32_t)cpu->gpr[{}] + ({})); "
+                "if (psx_addr & 1u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
+                "psx_ldd_{:08X} = (uint32_t)(int32_t)(int16_t)psx_cyc_load_half(cpu, psx_addr, {}, 0x{:X}u); }}",
+                static_cast<int>(rs), simm, d.address, d.address, static_cast<int>(rt), mask);
+        }
         r.comment = fmt::format("lh {}, {}({})", gpr_name(rt), simm, gpr_name(rs));
         return r;
     }
@@ -997,6 +1024,14 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
             "if (psx_addr & 3u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
             "{} }}",
             static_cast<int>(rs), simm, d.address, body);
+        if (rt != 0) {
+            r.load_dest = rt;
+            r.c_code_deferred = fmt::format(
+                "{{ uint32_t psx_addr = (uint32_t)((int32_t)cpu->gpr[{}] + ({})); "
+                "if (psx_addr & 3u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
+                "psx_ldd_{:08X} = psx_cyc_load_word(cpu, psx_addr, {}, 0x{:X}u); }}",
+                static_cast<int>(rs), simm, d.address, d.address, static_cast<int>(rt), mask);
+        }
         r.comment = fmt::format("lw {}, {}({})", gpr_name(rt), simm, gpr_name(rs));
         return r;
     }
@@ -1016,6 +1051,10 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
             r.c_code = fmt::format(
                 "cpu->gpr[{}] = (uint32_t)psx_cyc_load_byte(cpu, {}, {}, 0x{:X}u);",
                 static_cast<int>(rt), addr_expr, static_cast<int>(rt), mask);
+            r.load_dest = rt;
+            r.c_code_deferred = fmt::format(
+                "psx_ldd_{:08X} = (uint32_t)psx_cyc_load_byte(cpu, {}, {}, 0x{:X}u);",
+                d.address, addr_expr, static_cast<int>(rt), mask);
         }
         r.comment = fmt::format("lbu {}, {}({})", gpr_name(rt), simm, gpr_name(rs));
         return r;
@@ -1037,6 +1076,14 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
             "if (psx_addr & 1u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
             "{} }}",
             static_cast<int>(rs), simm, d.address, body);
+        if (rt != 0) {
+            r.load_dest = rt;
+            r.c_code_deferred = fmt::format(
+                "{{ uint32_t psx_addr = (uint32_t)((int32_t)cpu->gpr[{}] + ({})); "
+                "if (psx_addr & 1u) {{ psx_unaligned_access(cpu, psx_addr, 0x{:08X}u); return; }} "
+                "psx_ldd_{:08X} = (uint32_t)psx_cyc_load_half(cpu, psx_addr, {}, 0x{:X}u); }}",
+                static_cast<int>(rs), simm, d.address, d.address, static_cast<int>(rt), mask);
+        }
         r.comment = fmt::format("lhu {}, {}({})", gpr_name(rt), simm, gpr_name(rs));
         return r;
     }

@@ -52,10 +52,15 @@ static int s_call_hle_on     = 0;   /* service kernel calls in HLE */
 static int s_boot_skip_on    = 0;   /* one-shot shell intercept */
 static int s_shell_skipped   = 0;   /* boot skip already fired */
 
-/* SCPH1001 physical addresses. The shell is unpacked to RAM 0x30000 by
- * LoadRunShell (ROM 0xBFC06FF0: memcpy(0x80030000, 0xBFC18000, 0x67FF0)) and
- * entered via an indirect call, which always routes through the dispatcher. */
-#define PSX_SHELL_ENTRY_PHYS 0x00030000u
+/* Per-image anchors come from the LINKED recompiled BIOS itself
+ * (psx_bios_image, emitted into <stem>_dispatch.c from the BIOS profile's
+ * [recompiler.runtime_exports]). For SCPH1001 the shell is unpacked to RAM
+ * 0x30000 by LoadRunShell (ROM 0xBFC06FF0: memcpy(0x80030000, 0xBFC18000,
+ * 0x67FF0)) and entered via an indirect call, which always routes through
+ * the dispatcher. A profile that omits an anchor exports 0 = the feature is
+ * STRUCTURALLY UNAVAILABLE on that BIOS (never "address 0"): the boot skip
+ * then simply never fires, and DeliverEvent callbacks stay LLE. */
+#include "psx_bios_image.h"
 
 /* Kernel EvCB table anchors (docs/psx_bios_disasm.txt; kseg1 like the kernel
  * itself uses so reads/writes are plain RAM traffic). */
@@ -76,10 +81,10 @@ static int s_shell_skipped   = 0;   /* boot skip already fired */
 #define EVMD_CALLBACK 0x1000u
 #define EVMD_MARK     0x2000u
 
-/* DeliverEvent's callback return site in kernel RAM (the instruction after
- * the kernel loop's `jalr v0` at 0x1718) — the exact $ra an LLE delivery
- * gives the callback, reused here so the dispatch return contract matches. */
-#define KADDR_DELIVER_RET 0x80001720u
+/* DeliverEvent's callback return site (psx_bios_image.deliver_event_ret):
+ * the instruction after the kernel loop's `jalr v0` — the exact $ra an LLE
+ * delivery gives the callback, reused here so the dispatch return contract
+ * matches. 0 = unknown for this BIOS: callback delivery stays LLE. */
 
 /* ── always-on ring ──────────────────────────────────────────────────────── */
 
@@ -230,17 +235,21 @@ static void hle_deliver_event(CPUState* cpu, uint32_t base, uint32_t n)
             cpu->write_word(ev + EV_STATUS, EVST_READY);
         } else if (mode == EVMD_CALLBACK) {
             uint32_t func = cpu->read_word(ev + EV_FUNC);
-            if (func != 0) {
+            /* deliver_event_ret == 0 never reaches here: main.cpp forces the
+             * whole HLE tier off when the linked BIOS exports no anchor
+             * (dropping a callback silently is NOT an acceptable fallback,
+             * so the gate lives at tier selection, not per-event). */
+            if (func != 0 && psx_bios_image.deliver_event_ret != 0) {
                 /* Nested guest call, same shape as any compiled call site.
                  * $ra is the kernel's real post-jalr address so the callback
                  * returns through the standard dispatch contract; the caller's
                  * $ra is restored before the hook returns. */
                 uint32_t saved_ra = cpu->gpr[31];
-                cpu->gpr[31] = KADDR_DELIVER_RET;
+                cpu->gpr[31] = psx_bios_image.deliver_event_ret;
                 extern int g_exec_phase;   /* wall-time sampler (dirty_ram_interp.c) */
                 int prev_phase = g_exec_phase;
                 g_exec_phase = 3;   /* compiled route; dirty/native callees re-tag inside */
-                psx_dispatch_call(cpu, func, KADDR_DELIVER_RET);
+                psx_dispatch_call(cpu, func, psx_bios_image.deliver_event_ret);
                 g_exec_phase = prev_phase;
                 cpu->gpr[31] = saved_ra;
             }
@@ -287,7 +296,7 @@ static int hle_boot_shell_skip(CPUState* cpu)
      * immediately with no disc-menu interaction. Kernel state at this point
      * was built entirely by the real recompiled kernel init. */
     cpu->gpr[2] = 0u;
-    hle_record(PSX_SHELL_ENTRY_PHYS, 0u, cpu, 0u, PSX_HLE_ROUTE_BOOT);
+    hle_record(psx_bios_image.shell_entry_phys, 0u, cpu, 0u, PSX_HLE_ROUTE_BOOT);
     return 1;
 }
 
@@ -312,7 +321,8 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
         hle_record(phys, cpu->gpr[9], cpu, 0u, PSX_HLE_ROUTE_LLE);
         return 0;
     }
-    if (phys == PSX_SHELL_ENTRY_PHYS)
+    if (psx_bios_image.shell_entry_phys != 0 &&
+        phys == psx_bios_image.shell_entry_phys)
         return hle_boot_shell_skip(cpu);
     return 0;
 }

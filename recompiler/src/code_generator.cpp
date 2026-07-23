@@ -1,6 +1,7 @@
 #include "code_generator.h"
 #include "control_flow.h"
 #include "gte_register_classification.h"
+#include "../src/bios_address_model.h"
 // Shared widescreen backdrop-window detector (single source of truth across the
 // recompiler and the interpreter). Self-contained C header;
 // included via relative path to avoid an include-dir collision (recompiler and
@@ -30,28 +31,38 @@ static bool codegen_cycle_per_insn() {
     return true;
 }
 
+/* The BIOS address model of the profile this game is built against
+ * (main_psx.cpp resolves [recompiler] bios_config, default the SCPH1001
+ * profile, and sets it before generation). A game artifact depends on a
+ * BIOS property here — jump tables inside relocated BIOS code windows —
+ * so the window comes from the profile, never from a constant. */
+static const ::PSXRecompV4::BiosAddressModel* g_game_bios_model = nullptr;
+
+void CodeGenerator::set_bios_address_model(const PSXRecompV4::BiosAddressModel* m) {
+    g_game_bios_model = m;
+}
+
 /*
  * Translate a runtime RAM address to an address that exe_.read_word() can
  * resolve.
  *
- * Game EXEs are read directly at their load address.  The BIOS shell code
- * lives at ROM 0xBFC18000-0xBFC427FF and gets copied to RAM at
- * 0x80030000-0x8005A7FF during BIOS init.  Jump tables within shell
- * functions store RAM-space target addresses (0x80058xxx), but at recompile
- * time we can only read the ROM.  This helper maps:
+ * Game EXEs are read directly at their load address.  The BIOS copies code
+ * into RAM at boot (SCPH1001: the shell to 0x80030000); jump tables within
+ * such code store RAM-space target addresses, but at recompile time we can
+ * only read the ROM.  This helper maps:
  *
- *   active EXE load range              ->  active EXE load range
- *   RAM phys 0x00030000-0x0005AFFF  →  ROM kseg1 0xBFC18000+
+ *   active EXE load range   ->  active EXE load range
+ *   BIOS-copy RAM windows   ->  ROM kseg1 (per the BIOS profile's model)
  *
- * Non-shell addresses pass through unchanged.
+ * Other addresses pass through unchanged.
  */
 static uint32_t ram_to_rom(uint32_t addr, const PS1Executable& exe) {
     uint32_t phys = addr & 0x1FFFFFFFu;
 
     /*
-     * Game EXEs can legitimately occupy physical 0x30000-0x5AFFF.  That
-     * overlaps the BIOS shell copy window below, so prefer the active EXE's
-     * load range before applying any BIOS-specific remap.
+     * Game EXEs can legitimately occupy the BIOS-copy RAM windows (the
+     * shell window especially), so prefer the active EXE's load range
+     * before applying any BIOS remap.
      */
     uint32_t exe_phys = exe.load_address() & 0x1FFFFFFFu;
     uint32_t exe_size = exe.code_size();
@@ -59,10 +70,12 @@ static uint32_t ram_to_rom(uint32_t addr, const PS1Executable& exe) {
         return exe.load_address() + (phys - exe_phys);
     }
 
-    if (phys >= 0x00030000u && phys <= 0x0005AFFFu) {
-        return 0xBFC18000u + (phys - 0x00030000u);
+    if (!g_game_bios_model) {
+        throw std::runtime_error(
+            "CodeGenerator: no BIOS address model set "
+            "(CodeGenerator::set_bios_address_model must run before generation)");
     }
-    return addr;
+    return g_game_bios_model->ram_alias_to_rom(addr);
 }
 
 CodeGenerator::CodeGenerator(const PS1Executable& exe, const CodeGenConfig& config)

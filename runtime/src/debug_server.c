@@ -359,6 +359,15 @@ typedef struct {
     uint32_t a3;
     uint32_t t0;
     uint32_t t1;
+    /* Callee-saved regs: loop cursors/bounds live here (e.g. OpenBIOS
+     * readPad's s2/s0 halfword loop — debugging it needed them and the ring
+     * only had temps). Cheap: +24B/entry on a heap ring. */
+    uint32_t s0;
+    uint32_t s1;
+    uint32_t s2;
+    uint32_t s3;
+    uint32_t s4;
+    uint32_t s5;
     uint32_t frame;      /* VBlank frame number */
     uint8_t  width;      /* 1, 2, or 4 */
     int8_t   dma_ch;     /* DMA channel that produced this write (0-6), or -1 = CPU store.
@@ -2762,6 +2771,7 @@ static void handle_dirty_insn_dump_file(int id, const char *json)
 #include "fntrace.h"
 #include "starvation_ring.h"
 #include "bios_hle.h"
+#include "psx_bios_image.h"
 #include "parity_trace.h"
 #include "device_trace.h"
 
@@ -3065,6 +3075,37 @@ static void handle_bioscall_dump(int id, const char *json)
     }
     pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
     debug_server_send_line(out); free(out);
+}
+
+/* bios_info — which recompiled BIOS this build links, and whether the
+ * loaded ROM matches it. Everything static comes from psx_bios_image (the
+ * generated dispatch's self-description, couriered from the BIOS profile);
+ * `loaded_wordsum` is memory.c's checksum of the ROM actually loaded, and
+ * `match` compares the two — with the launch identity gate in place a
+ * running process should always report match:1.
+ *   {"cmd":"bios_info"} */
+static void handle_bios_info(int id, const char *json)
+{
+    (void)json;
+    extern uint32_t memory_get_bios_checksum(void);
+    char out[1024];   /* image_id + full sha256 + ~15 numeric fields */
+    snprintf(out, sizeof out,
+             "{\"id\":%d,\"ok\":true,\"image_id\":\"%s\",\"sha256\":\"%s\","
+             "\"crc32\":\"%08X\",\"size\":%u,\"bundled\":%d,"
+             "\"kbless_ram_lo\":\"0x%X\",\"kbless_ram_hi\":\"0x%X\","
+             "\"kbless_rom_off\":\"0x%X\",\"shell_entry_phys\":\"0x%X\","
+             "\"deliver_event_ret\":\"0x%X\","
+             "\"image_wordsum\":\"%08X\",\"loaded_wordsum\":\"%08X\","
+             "\"match\":%d}\n",
+             id, psx_bios_image.image_id, psx_bios_image.image_sha256,
+             psx_bios_image.image_crc32, psx_bios_image.image_size,
+             psx_bios_image.image_bundled,
+             psx_bios_image.kbless_ram_lo, psx_bios_image.kbless_ram_hi,
+             psx_bios_image.kbless_rom_off, psx_bios_image.shell_entry_phys,
+             psx_bios_image.deliver_event_ret,
+             psx_bios_image.image_wordsum, memory_get_bios_checksum(),
+             psx_bios_image.image_wordsum == memory_get_bios_checksum());
+    debug_server_send_line(out);
 }
 
 /* hle_dump — query the BIOS-HLE tier's always-on call ring (bios_hle.c).
@@ -8253,6 +8294,12 @@ static void wtrace_fill_entry(WriteTraceEntry *e, uint64_t seq,
     e->a3        = debug_cpu_ptr ? debug_cpu_ptr->gpr[7]  : 0;
     e->t0        = debug_cpu_ptr ? debug_cpu_ptr->gpr[8]  : 0;
     e->t1        = debug_cpu_ptr ? debug_cpu_ptr->gpr[9]  : 0;
+    e->s0        = debug_cpu_ptr ? debug_cpu_ptr->gpr[16] : 0;
+    e->s1        = debug_cpu_ptr ? debug_cpu_ptr->gpr[17] : 0;
+    e->s2        = debug_cpu_ptr ? debug_cpu_ptr->gpr[18] : 0;
+    e->s3        = debug_cpu_ptr ? debug_cpu_ptr->gpr[19] : 0;
+    e->s4        = debug_cpu_ptr ? debug_cpu_ptr->gpr[20] : 0;
+    e->s5        = debug_cpu_ptr ? debug_cpu_ptr->gpr[21] : 0;
     e->frame     = (uint32_t)s_frame_count;
     e->width     = width;
 }
@@ -9795,12 +9842,16 @@ static void handle_wtrace_dump(int id, const char *json)
                         "\"a0\":\"0x%08X\",\"a1\":\"0x%08X\","
                         "\"a2\":\"0x%08X\",\"a3\":\"0x%08X\","
                         "\"t0\":\"0x%08X\",\"t1\":\"0x%08X\","
+                        "\"s0\":\"0x%08X\",\"s1\":\"0x%08X\","
+                        "\"s2\":\"0x%08X\",\"s3\":\"0x%08X\","
+                        "\"s4\":\"0x%08X\",\"s5\":\"0x%08X\","
                         "\"frame\":%u,\"w\":%u,\"dma_ch\":%d}",
                         (emitted == 0) ? "" : ",",
                         (unsigned long long)e->seq,
                         e->addr, e->old_val, e->new_val, e->ra, e->func_addr,
                         e->pc, e->cpu_pc, e->sp,
                         e->v0, e->v1, e->a0, e->a1, e->a2, e->a3, e->t0, e->t1,
+                        e->s0, e->s1, e->s2, e->s3, e->s4, e->s5,
                         e->frame, (unsigned)e->width, (int)e->dma_ch);
         emitted++;
     }
@@ -11095,6 +11146,100 @@ static void handle_insn_freeze_status(int id, const char *json)
  * instruction transfers to (or falls through to) <target>. Used to capture the
  * Tomba2 worker wild-jump to 0x49422E54 with the offending jr's register
  * snapshot as the ring tail. target=0 disarms. */
+/* s3_smear_watch lo=<hex> hi=<hex> [excl=<hex insn>] — arm the callee-smear
+ * tripwire (dirty_ram_interp.c): latches the first interp instruction in
+ * [lo,hi) whose execution changes $s3 (a jalr's exec_one spans the whole
+ * nested callee, so the latch names the callee that clobbered a callee-saved
+ * register). excl is an optional exact instruction encoding to ignore, so a
+ * watched loop's own $s3 advance doesn't trip the latch. Called with no
+ * args, reports the latch. lo=0 disarms. */
+static void handle_s3_smear_watch(int id, const char *json)
+{
+    extern uint32_t g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl;
+    extern uint32_t g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old,
+                    g_s3_smear_new, g_s3_smear_tgt, g_s3_smear_frame;
+    extern int g_s3_smear_valid;
+    char buf[32];
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        g_s3_smear_lo = hex_to_u32(buf);
+        /* each arming fully re-specifies the watch: omitted = cleared */
+        g_s3_smear_hi = json_get_str(json, "hi", buf, sizeof(buf))
+                            ? hex_to_u32(buf) : 0u;
+        g_s3_smear_excl = json_get_str(json, "excl", buf, sizeof(buf))
+                            ? hex_to_u32(buf) : 0u;
+        g_s3_smear_valid = 0;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+             "\"excl\":\"0x%08X\","
+             "\"valid\":%d,\"pc\":\"0x%08X\",\"insn\":\"0x%08X\","
+             "\"s3_old\":\"0x%08X\",\"s3_new\":\"0x%08X\","
+             "\"call_target\":\"0x%08X\",\"frame\":%u}\n",
+             id, g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
+             g_s3_smear_valid,
+             g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old, g_s3_smear_new,
+             g_s3_smear_tgt, g_s3_smear_frame);
+}
+
+/* callret_watch lo=<hex> hi=<hex> — arm the call-resolution ring
+ * (dirty_ram_interp.c): every interp JALR whose call PC lies in [lo,hi)
+ * records its resolution tier + full post-call outcome. No args = dump the
+ * ring (newest last). lo=0 disarms. */
+static void handle_callret_watch(int id, const char *json)
+{
+    /* MUST stay field-for-field identical to CallRetEnt in
+     * dirty_ram_interp.c (a divergence dumps garbage with no compiler
+     * diagnostic — the ring is only visible here as an opaque extern). */
+    typedef struct {
+        uint64_t cycle; uint32_t frame;
+        uint32_t pc, target, sp_b, ra_b, s0_b, s3_b;
+        uint32_t path;
+        uint32_t pc_a, ra_a, sp_a, s0_a, s3_a, v0_a;
+        uint32_t bail_a, rfe_a, esc_a, in_exc_a;
+        uint32_t dstatic, dblocks, dexc;
+        uint32_t last_func_a;
+    } E;
+    extern uint32_t g_callret_lo, g_callret_hi;
+    extern E g_callret_ring[]; extern uint64_t g_callret_seq;
+    const uint32_t cap = 64u;   /* MUST match CALLRET_CAP (dirty_ram_interp.c) */
+    char buf[32];
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        g_callret_lo = hex_to_u32(buf);
+        if (json_get_str(json, "hi", buf, sizeof(buf)))
+            g_callret_hi = hex_to_u32(buf);
+        g_callret_seq = 0;
+        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\"}\n",
+                 id, g_callret_lo, g_callret_hi);
+        return;
+    }
+    uint64_t total = g_callret_seq;
+    uint32_t avail = total < cap ? (uint32_t)total : cap;
+    size_t BUF_SZ = 512u + (size_t)avail * 512u;
+    char *out = (char *)malloc(BUF_SZ); if (!out) { send_err(id, "oom"); return; }
+    size_t pos = (size_t)snprintf(out, BUF_SZ,
+        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+        id, (unsigned long long)total);
+    for (uint32_t i = 0; i < avail && pos < BUF_SZ - 600; i++) {
+        E *e = &g_callret_ring[(total - avail + i) & (cap - 1u)];
+        pos += (size_t)snprintf(out + pos, BUF_SZ - pos,
+            "%s{\"cyc\":%llu,\"f\":%u,\"pc\":\"0x%08X\",\"tgt\":\"0x%08X\","
+            "\"path\":%u,"
+            "\"sp_b\":\"0x%08X\",\"ra_b\":\"0x%08X\",\"s0_b\":\"0x%08X\",\"s3_b\":\"0x%08X\","
+            "\"pc_a\":\"0x%08X\",\"ra_a\":\"0x%08X\",\"sp_a\":\"0x%08X\","
+            "\"s0_a\":\"0x%08X\",\"s3_a\":\"0x%08X\",\"v0_a\":\"0x%08X\","
+            "\"bail\":%u,\"rfe\":%u,\"esc\":%u,\"in_exc\":%u,"
+            "\"dstatic\":%u,\"dblocks\":%u,\"dexc\":%u,\"last_func\":\"0x%08X\"}",
+            i ? "," : "", (unsigned long long)e->cycle, e->frame, e->pc, e->target,
+            e->path,
+            e->sp_b, e->ra_b, e->s0_b, e->s3_b,
+            e->pc_a, e->ra_a, e->sp_a, e->s0_a, e->s3_a, e->v0_a,
+            e->bail_a, e->rfe_a, e->esc_a, e->in_exc_a,
+            e->dstatic, e->dblocks, e->dexc, e->last_func_a);
+    }
+    pos += (size_t)snprintf(out + pos, BUF_SZ - pos, "]}");
+    debug_server_send_line(out);
+    free(out);
+}
+
 static void handle_insn_freeze_target(int id, const char *json)
 {
     extern uint32_t g_insn_freeze_on_target;
@@ -12257,6 +12402,7 @@ static const CmdEntry s_commands[] = {
     { "fntrace_dump",      handle_fntrace_dump },
     { "unknown_dispatch_log", handle_unknown_dispatch_log },
     { "bioscall_dump",     handle_bioscall_dump },
+    { "bios_info",         handle_bios_info },
     { "hle_dump",          handle_hle_dump },
     { "card_trace_dump",   handle_card_trace_dump },
     { "card_txn_dump",     handle_card_txn_dump },
@@ -12400,6 +12546,8 @@ static const CmdEntry s_commands[] = {
     { "insn_freeze",          handle_insn_freeze },
     { "insn_freeze_status",   handle_insn_freeze_status },
     { "insn_freeze_target",   handle_insn_freeze_target },
+    { "s3_smear_watch",       handle_s3_smear_watch },
+    { "callret_watch",        handle_callret_watch },
     { "insn_freeze_snapshot", handle_insn_freeze_snapshot },
     { "ra_load_watch",        handle_ra_load_watch },
     { "overlay_native_on",    handle_overlay_native_on },

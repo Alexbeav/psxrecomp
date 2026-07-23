@@ -71,6 +71,7 @@ set(PSXRECOMP_GAME_SOURCES
     src/control_flow.cpp
     src/function_analysis.cpp
     src/code_generator.cpp
+    src/bios_address_model.cpp
     src/annotations.cpp
     src/config_loader.cpp
     src/recompiler_patch.cpp
@@ -182,6 +183,7 @@ add_executable(psxrecomp-bios
     src/mips_decoder.cpp
     src/strict_translator.cpp
     src/bios_slice_walker.cpp
+    src/bios_address_model.cpp
     src/function_discovery.cpp
     src/full_function_emitter.cpp
     src/config_loader.cpp
@@ -212,6 +214,24 @@ if(PSXRECOMP_STATIC_CLI AND MINGW)
         target_link_options(${_cli_target} PRIVATE -static -static-libgcc -static-libstdc++)
     endforeach()
 endif()
+
+# BIOS address-model equivalence test — sweeps every 4-byte address through
+# the profile-driven BiosAddressModel and compares against verbatim copies of
+# the pre-refactor hardcoded SCPH1001 helpers; also exercises the from_config
+# invariants. Run from the framework root: recompiler/build/bios_address_model_test
+add_executable(bios_address_model_test
+    tests/bios_address_model_test.cpp
+    src/bios_address_model.cpp
+    src/config_loader.cpp
+    src/ps1_exe_parser.cpp
+)
+target_include_directories(bios_address_model_test PRIVATE
+    include
+    src
+    lib/fmt/include
+    lib/toml11
+)
+target_link_libraries(bios_address_model_test PRIVATE fmt)
 
 # L1 decoder conformance test — compares MipsDecoder against Rabbitizer
 # oracle for every instruction in SCPH1001.BIN code regions.
@@ -261,6 +281,7 @@ if(BUILD_TESTING)
         src/function_analysis.cpp
         src/code_generator.cpp
         src/annotations.cpp
+        src/bios_address_model.cpp
         src/config_loader.cpp
         src/recompiler_patch.cpp
     )
@@ -287,18 +308,29 @@ if(BUILD_TESTING)
     add_test(NAME recompiler_patch_cxx17_header_test
              COMMAND recompiler_patch_cxx17_header_test)
 
+    # Needs bios/SCPH1001.toml — run from the framework root.
+    add_test(NAME bios_address_model_test
+             COMMAND bios_address_model_test
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        # These two invoke psxrecomp-game, whose BIOS-profile resolution
+        # probes fixed working-directory-relative paths (bios/<name>.toml,
+        # then psxrecomp/bios/<name>.toml) -- run them from the framework
+        # root so the shipped profiles are found.
         add_test(
             NAME overlay_cross_page_delay_codegen
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_cross_page_delay_codegen.py
-                    --recompiler $<TARGET_FILE:psxrecomp-game>)
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME fmv_cycle_batch_codegen
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmv_cycle_batch_codegen.py
-                    --recompiler $<TARGET_FILE:psxrecomp-game>)
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}

@@ -34,28 +34,39 @@ static bool bios_cycle_per_insn() {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/* The active BIOS address model (profile-derived; bios_address_model.h) —
+ * single source of truth for every relocation window below. No built-in
+ * default: emitting without a model is a caller bug and aborts loudly. */
+static const BiosAddressModel* g_addr_model = nullptr;
+
+void FullFunctionEmitter::set_address_model(const BiosAddressModel* m) {
+    g_addr_model = m;
+}
+
+/* The loaded BIOS profile (identity + runtime_exports) couriered into the
+ * generated psx_bios_image block. Unlike the address model this is optional:
+ * null just means every profile-keyed HLE anchor is emitted as 0. */
+static const BiosConfig* g_bios_profile = nullptr;
+
+void FullFunctionEmitter::set_bios_profile(const BiosConfig* cfg) {
+    g_bios_profile = cfg;
+}
+
+static const BiosAddressModel& addr_model() {
+    if (!g_addr_model) {
+        throw std::runtime_error(
+            "FullFunctionEmitter: no BIOS address model set "
+            "(FullFunctionEmitter::set_address_model must run before emit)");
+    }
+    return *g_addr_model;
+}
+
 uint32_t FullFunctionEmitter::normalize_address(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    /* Kernel Part 2: ROM 0x1FC10000+ → RAM 0x500+ */
-    if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu) {
-        phys = phys - 0x1FC10000u + 0x00000500u;
-    }
-    /* Shell: RAM 0x30000+ → ROM physical 0x1FC18000+ */
-    if (phys >= 0x00030000u && phys <= 0x0005AFFFu) {
-        phys = phys - 0x00030000u + 0x1FC18000u;
-    }
-    return phys;
+    return addr_model().normalize(addr);
 }
 
 static uint32_t ram_alias_to_rom(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys >= 0x00000500u && phys < 0x00008500u) {
-        return 0xBFC10000u + (phys - 0x00000500u);
-    }
-    if (phys >= 0x00030000u && phys <= 0x0005AFFFu) {
-        return 0xBFC18000u + (phys - 0x00030000u);
-    }
-    return addr;
+    return addr_model().ram_alias_to_rom(addr);
 }
 
 /* Map a BIOS ROM PC to the address the PSX CPU actually executes from after the
@@ -63,14 +74,7 @@ static uint32_t ram_alias_to_rom(uint32_t addr) {
  * this runtime address; otherwise psx_check_interrupts rejects ROM-shell EPCs
  * and falls back to the legacy sentinel path. */
 static uint32_t bios_runtime_pc(uint32_t rom_pc) {
-    uint32_t phys = rom_pc & 0x1FFFFFFFu;
-    if (phys >= 0x1FC18000u && phys <= 0x1FC42FFFu) {
-        return 0x80030000u + (phys - 0x1FC18000u);
-    }
-    if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu) {
-        return phys - 0x1FC10000u + 0x00000500u;
-    }
-    return rom_pc;
+    return addr_model().runtime_pc(rom_pc);
 }
 
 uint32_t FullFunctionEmitter::read_u32_le(const std::vector<uint8_t>& rom, uint32_t offset) {
@@ -283,24 +287,11 @@ bool FullFunctionEmitter::emit_function(
     };
     std::map<uint32_t, PendingBranch> pending_at; // keyed by delay slot addr
 
-    // For relocated code (ROM 0xBFC10000+ → RAM 0x500+), J/JAL targets
-    // depend on the upper 4 bits of the PC. The code runs at RAM addresses,
-    // not ROM addresses, so we must fix J/JAL targets in the branch resolution.
+    // For relocated code (ROM copied into RAM at boot), J/JAL targets depend
+    // on the upper 4 bits of the PC. The code runs at RAM addresses, not ROM
+    // addresses, so we must fix J/JAL targets in the branch resolution.
     auto relocate_j_target = [](uint32_t rom_addr, uint32_t target) -> uint32_t {
-        uint32_t phys = rom_addr & 0x1FFFFFFFu;
-        /* Kernel Part 2: ROM runs at RAM 0x500+ */
-        if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu) {
-            uint32_t runtime_addr = phys - 0x1FC10000u + 0x00000500u;
-            uint32_t target26 = target & 0x0FFFFFFFu;
-            return (runtime_addr & 0xF0000000u) | target26;
-        }
-        /* Shell: ROM runs at RAM 0x80030000+ */
-        if (phys >= 0x1FC18000u && phys <= 0x1FC42FFFu) {
-            uint32_t runtime_addr = 0x80030000u + (phys - 0x1FC18000u);
-            uint32_t target26 = target & 0x0FFFFFFFu;
-            return (runtime_addr & 0xF0000000u) | target26;
-        }
-        return target;
+        return addr_model().relocate_j_target(rom_addr, target);
     };
 
     /* Relocate a return address ($ra) from ROM PC to the runtime address.
@@ -375,11 +366,204 @@ bool FullFunctionEmitter::emit_function(
      * Some BIOS blocks use the same address as both a branch delay slot and
      * a normal branch target; the DELETE modal hit BFC21860 that way and
      * reused the prior BFC2185C predicate, causing the BFC21800 loop. */
+    /* jr/jalr target-clobber hazard (hardware latches the jump target BEFORE
+     * the delay slot executes): when the delay-slot instruction WRITES the
+     * jump register (hand-written asm reuses it — OpenBIOS fastMemset does
+     * `jr $t1` with delay `andi $t1,$a2,0xff`), the resolution code below
+     * would read the clobbered value. Snapshot the register at the
+     * terminator into psx_jrt_<addr> and resolve from the snapshot. Gated on
+     * the actual hazard so hazard-free functions emit byte-identical code.
+     * (Conditional branches already snapshot operands via psx_brA_/psx_brB_;
+     * the dirty-RAM interpreter captures the target pre-delay-slot too.) */
+    auto insn_writes_gpr = [](uint32_t w, uint32_t r) -> bool {
+        if (r == 0 || w == 0) return false;
+        uint32_t op = w >> 26, rt = (w >> 16) & 31, rd = (w >> 11) & 31, fn = w & 63;
+        switch (op) {
+        case 0x00:
+            if (fn == 0x08 || fn == 0x0C || fn == 0x0D || fn == 0x0F) return false;
+            if (fn == 0x11 || fn == 0x13 || fn == 0x18 || fn == 0x19 ||
+                fn == 0x1A || fn == 0x1B) return false;   /* mthi/mtlo/mult/div */
+            return rd == r;                                /* incl. jalr rd */
+        case 0x01: return (rt == 0x10 || rt == 0x11) && r == 31; /* bltzal/bgezal */
+        case 0x02: return false;                           /* j */
+        case 0x03: return r == 31;                         /* jal */
+        case 0x04: case 0x05: case 0x06: case 0x07: return false;
+        case 0x10: return ((w >> 21) & 31) == 0 && rt == r;      /* mfc0 */
+        case 0x12: { uint32_t f = (w >> 21) & 31;
+                     return (f == 0x00 || f == 0x02) && rt == r; } /* mfc2/cfc2 */
+        case 0x28: case 0x29: case 0x2A: case 0x2B:
+        case 0x2E: case 0x32: case 0x3A: return false;     /* stores, lwc2, swc2 */
+        default:   return rt == r;                         /* I-type ALU + loads */
+        }
+    };
+    /* MIPS-I load-delay-slot modeling (dependent pairs only). On a real
+     * R3000A the instruction after a load executes in the load's delay
+     * shadow: if it READS the load's destination register it sees the OLD
+     * value (the load writes back one instruction later). Compilers and
+     * assemblers schedule around this, so the recompiler historically
+     * skipped it — but OpenBIOS's cardfasttrack.s exploits it DELIBERATELY
+     * ("move $at, $k0  / * gotta break those bad emulators * /" right after
+     * `lw $k0, ...($k0)`): without modeling, the fasttrack's buffer-pointer
+     * writeback lands at ptr+lo16 (a kernel-heap stomp at OpenBIOS 0x9960)
+     * instead of the pointer cell, every streamed card byte hits buffer[0],
+     * and the game reads a zeroed sector -> "Memory Card is not formatted".
+     *
+     * Model: at a simple load (LB/LBU/LH/LHU/LW, rt!=0) whose IMMEDIATE
+     * successor in the same emission (not across a label, not a delay slot)
+     * reads rt, emit the load into the function-scope temp psx_ldd_<addr>
+     * (memory read stays at the load's position — MMIO order and cycle
+     * interlock unchanged), emit the successor untouched (its reads of
+     * gpr[rt] naturally see the old value), then flush
+     * `cpu->gpr[rt] = psx_ldd_<addr>` after the successor's register reads.
+     * If the successor architecturally writes rt (its writeback is later in
+     * program order, so it wins on hardware), the flush is dropped — unless
+     * the successor is itself a deferred load to rt (chain), whose own
+     * writeback is deferred further and must not be pre-clobbered.
+     * Unmodeled shapes (dependent pair split by a label, load in a branch
+     * delay slot with a dependent successor, LWL/LWR pairs) are logged so
+     * they can't fail silently. Non-dependent loads emit byte-identically
+     * to before. Beetle/mednafen models the same semantics (LDWhich), so
+     * cosim stays aligned. */
+    auto insn_reads_gpr = [](uint32_t w, uint32_t r) -> bool {
+        if (r == 0 || w == 0) return false;   /* $zero / nop */
+        uint32_t op = w >> 26, rs = (w >> 21) & 31, rt = (w >> 16) & 31, fn = w & 63;
+        switch (op) {
+        case 0x00:
+            switch (fn) {
+            case 0x00: case 0x02: case 0x03: return rt == r;             /* sll/srl/sra (shamt) */
+            case 0x04: case 0x06: case 0x07: return rs == r || rt == r;  /* sllv/srlv/srav */
+            case 0x08: case 0x09: return rs == r;                        /* jr/jalr */
+            case 0x0C: case 0x0D: return false;                          /* syscall/break */
+            case 0x10: case 0x12: return false;                          /* mfhi/mflo */
+            case 0x11: case 0x13: return rs == r;                        /* mthi/mtlo */
+            default:   return rs == r || rt == r;                        /* muldiv + 3-op ALU */
+            }
+        case 0x01: return rs == r;                                       /* regimm branches */
+        case 0x02: case 0x03: return false;                              /* j/jal */
+        case 0x04: case 0x05: return rs == r || rt == r;                 /* beq/bne */
+        case 0x06: case 0x07: return rs == r;                            /* blez/bgtz */
+        case 0x08: case 0x09: case 0x0A: case 0x0B:
+        case 0x0C: case 0x0D: case 0x0E: return rs == r;                 /* addi..xori */
+        case 0x0F: return false;                                         /* lui */
+        case 0x10: return ((w >> 21) & 31) == 0x04 && rt == r;           /* mtc0 */
+        case 0x12: { uint32_t f = (w >> 21) & 31;
+                     return (f == 0x04 || f == 0x06) && rt == r; }       /* mtc2/ctc2 */
+        case 0x22: case 0x26: return rs == r || rt == r;                 /* lwl/lwr: base + merge */
+        case 0x20: case 0x21: case 0x23: case 0x24: case 0x25:
+                   return rs == r;                                       /* simple loads: base */
+        case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2E:
+                   return rs == r || rt == r;                            /* sb/sh/swl/sw/swr */
+        case 0x32: case 0x3A: return rs == r;                            /* lwc2/swc2 base */
+        default:   return rs == r || rt == r;                            /* conservative */
+        }
+    };
+    auto simple_load_dest = [](uint32_t w) -> int {
+        uint32_t op = w >> 26;
+        if (op == 0x20 || op == 0x21 || op == 0x23 || op == 0x24 || op == 0x25) {
+            uint32_t rt = (w >> 16) & 31;
+            return rt ? static_cast<int>(rt) : -1;
+        }
+        return -1;
+    };
+    /* load addr -> {dest reg, flush writeback (vs discard)} */
+    std::map<uint32_t, std::pair<int, bool>> ldd_sites;
+    for (const auto& [la, lw_raw] : addr_to_raw) {
+        int dest = simple_load_dest(lw_raw);
+        uint32_t lop = lw_raw >> 26;
+        bool is_lwlr = (lop == 0x22 || lop == 0x26);
+        if (dest < 0 && !is_lwlr) continue;
+        int dep_reg = is_lwlr ? static_cast<int>((lw_raw >> 16) & 31) : dest;
+        if (dep_reg <= 0) continue;
+        if (pending_at.count(la)) {
+            /* Load in a branch delay slot: the shadow instruction is the
+             * dynamic successor (target or fallthrough) — cross-block,
+             * unmodeled. Log if either static successor depends. */
+            const PendingBranch& pb = pending_at[la];
+            bool dep = false;
+            auto f = addr_to_raw.find(pb.terminator_addr + 8);
+            if (f != addr_to_raw.end() && insn_reads_gpr(f->second, dep_reg)) dep = true;
+            auto t = addr_to_raw.find(pb.target);
+            if (pb.target && t != addr_to_raw.end() && insn_reads_gpr(t->second, dep_reg)) dep = true;
+            if (dep)
+                std::fprintf(stderr,
+                    "[load-delay] UNMODELED: load 0x%08X in delay slot with dependent successor (func 0x%08X)\n",
+                    la, func.entry_addr);
+            continue;
+        }
+        auto nx = addr_to_raw.find(la + 4);
+        if (nx == addr_to_raw.end()) {
+            /* Successor belongs to another function/fragment (code_ptr
+             * confetti). Can't model across the boundary — but a dependent
+             * pair here would fail SILENTLY, so peek the ROM and log it. */
+            uint32_t base_phys = base_addr & 0x1FFFFFFFu;
+            uint32_t nx_phys = (la + 4) & 0x1FFFFFFFu;
+            if (nx_phys >= base_phys && nx_phys + 4 <= base_phys + rom.size()) {
+                uint32_t nx_raw = read_u32_le(rom, nx_phys - base_phys);
+                if (insn_reads_gpr(nx_raw, dep_reg))
+                    std::fprintf(stderr,
+                        "[load-delay] UNMODELED: dependent pair crosses fragment boundary after load 0x%08X rt=%d (func 0x%08X)\n",
+                        la, dep_reg, func.entry_addr);
+            }
+            continue;
+        }
+        if (!insn_reads_gpr(nx->second, dep_reg)) continue;
+        if (is_lwlr) {
+            /* LWL immediately followed by LWR to the same rt (or vice versa)
+             * is the documented MIPS-I exception: the hardware forwards the
+             * partial result to the pair's second half. Our immediate
+             * writeback gives exactly that merge — correct, don't log. */
+            uint32_t nop_ = nx->second >> 26, nrt = (nx->second >> 16) & 31;
+            bool complementary = (nrt == (uint32_t)dep_reg) &&
+                                 ((lop == 0x22 && nop_ == 0x26) || (lop == 0x26 && nop_ == 0x22));
+            if (!complementary)
+                std::fprintf(stderr,
+                    "[load-delay] UNMODELED: LWL/LWR 0x%08X with dependent successor (func 0x%08X)\n",
+                    la, func.entry_addr);
+            continue;
+        }
+        if (block_leaders.count(la + 4)) {
+            std::fprintf(stderr,
+                "[load-delay] UNMODELED: dependent pair split by label at 0x%08X (func 0x%08X)\n",
+                la + 4, func.entry_addr);
+            continue;
+        }
+        ldd_sites[la] = {dest, true};
+    }
+    for (auto& [la, s] : ldd_sites) {
+        uint32_t nw = addr_to_raw.at(la + 4);
+        if (insn_writes_gpr(nw, static_cast<uint32_t>(s.first))) {
+            auto nsite = ldd_sites.find(la + 4);
+            bool chain = (nsite != ldd_sites.end() && nsite->second.first == s.first);
+            s.second = chain;   /* successor's write wins unless it is itself deferred */
+        }
+        std::fprintf(stderr,
+            "[load-delay] modeled pair: load 0x%08X rt=%d succ 0x%08X flush=%d (func 0x%08X)\n",
+            la, s.first, la + 4, s.second ? 1 : 0, func.entry_addr);
+    }
+    auto jr_snapshot_needed = [&](uint32_t term_addr, uint32_t term_raw) -> bool {
+        uint32_t rs = (term_raw >> 21) & 0x1F;
+        /* jr/jalr in a load shadow (`lw $rs,..; jr $rs`): hardware reads the
+         * PRE-load value. The psx_jrt_ latch (emitted before the deferred
+         * writeback flush) captures exactly that — force the snapshot. */
+        auto ls = ldd_sites.find(term_addr - 4);
+        if (ls != ldd_sites.end() && static_cast<uint32_t>(ls->second.first) == rs) return true;
+        auto ds = addr_to_raw.find(term_addr + 4);
+        if (ds == addr_to_raw.end()) return false;  /* orphaned ds: resolved pre-delay */
+        return insn_writes_gpr(ds->second, rs);
+    };
+
     for (const auto& [ds_addr, pb] : pending_at) {
         branch_decls += fmt::format("    int psx_delay_{:08X} = 0;\n", pb.terminator_addr);
         if (is_branch_kind(pb.kind.c_str())) {
             branch_decls += fmt::format("    int psx_taken_{:08X} = 0;\n", pb.terminator_addr);
         }
+        if ((pb.kind == "jr" || pb.kind == "jalr") &&
+            jr_snapshot_needed(pb.terminator_addr, pb.raw)) {
+            branch_decls += fmt::format("    uint32_t psx_jrt_{:08X} = 0;\n", pb.terminator_addr);
+        }
+    }
+    for (const auto& [la, s] : ldd_sites) {
+        branch_decls += fmt::format("    uint32_t psx_ldd_{:08X} = 0;  /* load-delay temp */\n", la);
     }
 
     auto should_probe_pc = [](uint32_t pc) -> bool {
@@ -401,6 +585,21 @@ bool FullFunctionEmitter::emit_function(
     };
 
     const bool per_insn_cycles = bios_cycle_per_insn();
+
+    /* Flush a deferred load writeback after its dependent successor's
+     * register reads (successor = instruction at succ_addr; the load sits at
+     * succ_addr - 4). No-op when no site precedes succ_addr. */
+    auto emit_ldd_flush = [&](uint32_t succ_addr) {
+        auto it = ldd_sites.find(succ_addr - 4);
+        if (it == ldd_sites.end()) return;
+        if (it->second.second) {
+            out += fmt::format("    cpu->gpr[{}] = psx_ldd_{:08X};  /* load-delay writeback */\n",
+                               it->second.first, it->first);
+        } else {
+            out += fmt::format("    (void)psx_ldd_{:08X};  /* load-delay: successor overwrites rt */\n",
+                               it->first);
+        }
+    };
 
     // Per-instruction R3000A load-delay interlock (cycle_per_insn mode): §1 base +
     // GPR_DEPRES + DO_LDS for one instruction, emitted BEFORE its body so §1 precedes
@@ -580,7 +779,17 @@ bool FullFunctionEmitter::emit_function(
             }
             if (kind != "rfe" && !orphaned_delay_slots.count(addr)) {
                 out += fmt::format("    psx_delay_{:08X} = 1;\n", addr);
+                /* Latch the jump target BEFORE the delay slot can clobber it
+                 * (hardware semantics; see psx_jrt_ decl comment). */
+                if ((kind == "jr" || kind == "jalr") && jr_snapshot_needed(addr, raw)) {
+                    out += fmt::format("    psx_jrt_{:08X} = cpu->gpr[{}];\n",
+                                       addr, (raw >> 21) & 0x1F);
+                }
             }
+            /* Deferred load writeback for a `load; branch/jump-reading-rt`
+             * pair: the condition / psx_jrt_ latch above read the OLD value
+             * (hardware: shadow read); flush before the delay slot runs. */
+            emit_ldd_flush(addr);
             // For J/JAL/JALR/JR: normally nothing emitted at terminator
             // address — resolution happens after delay slot.  But if the
             // delay slot falls outside this function, resolve NOW (the
@@ -597,26 +806,69 @@ bool FullFunctionEmitter::emit_function(
             if (orphaned_delay_slots.count(addr)) {
                 if (kind == "jr") {
                     uint8_t rs = (raw >> 21) & 0x1F;
+                    /* Latch the jump target BEFORE the orphaned delay slot
+                     * runs — hardware reads rs pre-slot (the in-block
+                     * psx_jrt_ contract). */
+                    out += fmt::format("    {{ uint32_t _t = cpu->gpr[{}];\n",
+                                       static_cast<int>(rs));
+                    /* Inline the orphaned delay slot from rom. A jr NEVER
+                     * falls through to ds_addr, so — unlike a branch's
+                     * not-taken path — no adjacent fragment can make up for
+                     * a skipped slot: without this its side effect is simply
+                     * LOST. Observed: OpenBIOS mcWriteHandler's case-return
+                     * `jr $ra / addiu $sp,$sp,0x18` dropped the sp pop; the
+                     * caller's epilogue then unwound a shifted frame,
+                     * returned through a stale saved-ra slot with the
+                     * callee's callee-saved registers live, and the
+                     * exception handler's IntRP chain walk marched a garbage
+                     * cursor into a wild verifier (FAIL-FAST 0x54000000 at
+                     * the first memcard test write under OpenBIOS). */
+                    {
+                        uint32_t ds_addr = addr + 4;
+                        uint32_t base_phys = base_addr & 0x1FFFFFFFu;
+                        uint32_t ds_phys = ds_addr & 0x1FFFFFFFu;
+                        if (ds_phys >= base_phys && ds_phys + 4 <= base_phys + rom.size()) {
+                            uint32_t ds_offset = ds_phys - base_phys;
+                            uint32_t ds_raw = read_u32_le(rom, ds_offset);
+                            auto ds_d = PSXRecomp::MipsDecoder::decode(ds_raw, ds_addr);
+                            auto ds_tr = StrictTranslator::translate(ds_d);
+                            if (ds_tr.supported && !ds_tr.is_terminator) {
+                                out += fmt::format("    /* DELAY (orphaned) 0x{:08X}: {:08X}  {} */\n",
+                                                   ds_addr, ds_raw, ds_tr.comment);
+                                emit_icache_fetch(ds_addr);
+                                emit_insn_interlock(ds_raw);
+                                out += fmt::format("    {}\n", ds_tr.c_code);
+                            } else if (ds_raw != 0u) {
+                                /* jr never falls through, so a slot we cannot
+                                 * inline is a LOST side effect (the bug class
+                                 * this path exists to fix) — never silent. */
+                                std::fprintf(stderr,
+                                    "[delay-slot] LOST: orphaned jr slot 0x%08X "
+                                    "(%08X) not inlinable (unsupported/terminator)\n",
+                                    ds_addr, ds_raw);
+                            }
+                        }
+                    }
                     if (rs == 31) {
                         if (ra_loaded_from_non_sp)
-                            out += emit_irq_check_expr("cpu->gpr[31]") +
-                                   "    cpu->pc = cpu->gpr[31]; psx_restore_state_escape(); return;  /* longjmp-return */\n";
+                            out += emit_irq_check_expr("_t") +
+                                   "    cpu->pc = _t; psx_restore_state_escape(); return; }  /* longjmp-return */\n";
                         else if (cps)
-                            out += emit_irq_check_expr("cpu->gpr[31]") +
-                                   "    cpu->pc = cpu->gpr[31]; return;  /* CPS: publish $ra */\n";
+                            out += emit_irq_check_expr("_t") +
+                                   "    cpu->pc = _t; return; }  /* CPS: publish $ra */\n";
                         else
-                            out += emit_irq_check_expr("cpu->gpr[31]") +
-                                   "    return;\n";
+                            out += emit_irq_check_expr("_t") +
+                                   "    return; }\n";
                     } else {
-                        out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(rs)));
-                        out += fmt::format("    cpu->pc = cpu->gpr[{}]; return;\n",
-                                           static_cast<int>(rs));
+                        out += emit_irq_check_expr("_t");
+                        out += "    cpu->pc = _t; return; }\n";
                     }
                 } else if (is_branch_kind(kind.c_str())) {
                     // Inline the orphaned delay slot from rom.
                     uint32_t ds_addr = addr + 4;
                     uint32_t base_phys = base_addr & 0x1FFFFFFFu;
                     uint32_t ds_phys = ds_addr & 0x1FFFFFFFu;
+                    bool ds_inlined = false;
                     if (ds_phys >= base_phys && ds_phys + 4 <= base_phys + rom.size()) {
                         uint32_t ds_offset = ds_phys - base_phys;
                         uint32_t ds_raw = read_u32_le(rom, ds_offset);
@@ -631,23 +883,56 @@ bool FullFunctionEmitter::emit_function(
                             emit_icache_fetch(ds_addr);
                             emit_insn_interlock(ds_raw);
                             out += fmt::format("    {}\n", ds_tr.c_code);
+                            ds_inlined = true;
                         }
                     }
                     // Resolve branch.  Target was decoded as absolute virtual addr.
                     uint32_t target = tr.terminator_target;
-                    register_cross_function_target(target);
                     out += fmt::format("    if (psx_taken_{:08X}) {{\n", addr);
-                    out += emit_irq_check(target, "        ");
-                    out += fmt::format("        cpu->pc = 0x{:08X}u; return;\n", target);
+                    if (addr_to_raw.count(target)) {
+                        // In-function target: goto its label (branch targets are
+                        // block leaders), same as the non-orphaned branch path.
+                        // register_cross_function_target early-returns for
+                        // in-function targets, so publishing here left the
+                        // target with NO dispatch key (OpenBIOS exceptionHandler
+                        // priority_loop: the published ROM alias 0xBFC208E8 has
+                        // phys > 2MB, so even the dirty-RAM interp fallback was
+                        // unreachable — FAIL-FAST).
+                        out += emit_irq_check(target, "        ");
+                        out += fmt::format("        goto label_{:08X};\n", target);
+                    } else {
+                        register_cross_function_target(target);
+                        out += emit_irq_check(target, "        ");
+                        // Publish the RUNTIME PC (relocated windows run at their
+                        // RAM address; the ROM-space alias never executes and its
+                        // phys can sit outside guest RAM entirely).
+                        out += fmt::format("        cpu->pc = 0x{:08X}u; return;\n",
+                                           relocate_ra(target));
+                    }
                     out += "    }\n";
-                    // Not-taken: dispatch to delay-slot address (next function's entry).
-                    // The next function's prologue will re-execute the delay slot — that's
-                    // a duplicate side effect we accept for correctness on the not-taken
-                    // path. (For unconditional branches like beq $zero,$zero this path
-                    // is structurally dead.)
-                    register_cross_function_target(ds_addr);
-                    out += emit_irq_check(ds_addr);
-                    out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n", ds_addr);
+                    // Not-taken: the delay slot ALREADY RAN (inlined above), so
+                    // resume at ds_addr+4 — hardware semantics (branch not-taken ->
+                    // ds executes -> continue after it). The old "dispatch to
+                    // ds_addr; the next function's prologue re-executes the delay
+                    // slot — a duplicate side effect we accept" was only survivable
+                    // for idempotent slots: OpenBIOS readPad's `sll $s0,$s0,1`
+                    // (fifoBytes<<1, a read-modify-write) doubled TWICE, the pad
+                    // halfword loop over-iterated, timed out on a phantom ack and
+                    // padAbort'ed EVERY poll — dead pads under OpenBIOS.
+                    // Only when the slot could NOT be inlined (unsupported /
+                    // terminator) do we still dispatch ds_addr and let the next
+                    // function run it.
+                    if (ds_inlined) {
+                        register_cross_function_target(ds_addr + 4);
+                        out += emit_irq_check(ds_addr + 4);
+                        out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n",
+                                           relocate_ra(ds_addr + 4));
+                    } else {
+                        register_cross_function_target(ds_addr);
+                        out += emit_irq_check(ds_addr);
+                        out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n",
+                                           relocate_ra(ds_addr));
+                    }
                 } else if (kind == "j") {
                     // Inline orphaned delay slot, then unconditional jump.
                     uint32_t ds_addr = addr + 4;
@@ -674,7 +959,12 @@ bool FullFunctionEmitter::emit_function(
                     out += emit_irq_check(target);
                     out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n", target);
                 } else if (kind == "jal") {
-                    // Inline orphaned delay slot, set $ra, dispatch to target.
+                    // Set $ra (link happens BEFORE the delay slot on hardware —
+                    // same order as the in-block path above), inline the
+                    // orphaned delay slot, dispatch to target.
+                    uint32_t return_addr = relocate_ra(addr + 8);
+                    out += fmt::format("    cpu->gpr[31] = 0x{:08X}u;  /* jal link before delay slot */\n",
+                                       return_addr);
                     uint32_t ds_addr = addr + 4;
                     uint32_t base_phys = base_addr & 0x1FFFFFFFu;
                     uint32_t ds_phys = ds_addr & 0x1FFFFFFFu;
@@ -695,7 +985,6 @@ bool FullFunctionEmitter::emit_function(
                         }
                     }
                     uint32_t target = relocate_j_target(addr, tr.terminator_target);
-                    uint32_t return_addr = relocate_ra(addr + 8);
                     if (cps) {
                         if (addr_to_raw.count(addr + 8)) {
                             uint32_t cn = normalize_address(addr + 8);
@@ -704,12 +993,12 @@ bool FullFunctionEmitter::emit_function(
                         } else {
                             register_cross_function_target(addr + 8);
                         }
-                        out += fmt::format("    cpu->gpr[31] = 0x{:08X}u;\n", return_addr);
                         out += emit_irq_check(target);
                         out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n", target);
                     } else {
+                        /* _csp captured after the slot (post-slot sp is the
+                         * call contract, matching the interp's site_sp). */
                         out += "    { uint32_t _csp = cpu->gpr[29];\n";
-                        out += fmt::format("    cpu->gpr[31] = 0x{:08X}u;\n", return_addr);
                         out += emit_irq_check(target);
                         out += fmt::format("    psx_dispatch(cpu, 0x{:08X}u);\n", target);
                         out += fmt::format("    if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return; }}\n",
@@ -717,6 +1006,22 @@ bool FullFunctionEmitter::emit_function(
                         out += fmt::format("    cpu->pc = 0x{:08X}u; return;\n", return_addr);
                     }
                 } else if (kind == "jalr") {
+                    uint8_t rs = (raw >> 21) & 0x1F;
+                    uint8_t rd = (raw >> 11) & 0x1F;
+                    /* Latch the jump target BEFORE the orphaned delay slot
+                     * runs — hardware reads rs pre-slot (the in-block
+                     * psx_jrt_ contract; same class as the orphaned-jr fix
+                     * above). The old order inlined the slot first, so a
+                     * slot that writes rs redirected the call. */
+                    out += fmt::format("    {{ uint32_t _t = cpu->gpr[{}];\n",
+                                       static_cast<int>(rs));
+                    uint32_t return_addr = relocate_ra(addr + 8);
+                    if (rd != 0) {
+                        /* Link BEFORE the delay slot (hardware order, same as
+                         * the in-block "jalr link before delay slot"). */
+                        out += fmt::format("    cpu->gpr[{}] = 0x{:08X}u;  /* jalr link before delay slot */\n",
+                                           static_cast<int>(rd), return_addr);
+                    }
                     uint32_t ds_addr = addr + 4;
                     uint32_t base_phys = base_addr & 0x1FFFFFFFu;
                     uint32_t ds_phys = ds_addr & 0x1FFFFFFFu;
@@ -736,9 +1041,6 @@ bool FullFunctionEmitter::emit_function(
                             out += fmt::format("    {}\n", ds_tr.c_code);
                         }
                     }
-                    uint8_t rs = (raw >> 21) & 0x1F;
-                    uint8_t rd = (raw >> 11) & 0x1F;
-                    uint32_t return_addr = relocate_ra(addr + 8);
                     if (cps) {
                         if (addr_to_raw.count(addr + 8)) {
                             uint32_t cn = normalize_address(addr + 8);
@@ -747,23 +1049,15 @@ bool FullFunctionEmitter::emit_function(
                         } else {
                             register_cross_function_target(addr + 8);
                         }
-                        out += fmt::format("    {{ uint32_t _t = cpu->gpr[{}];\n",
-                                           static_cast<int>(rs));
-                        if (rd != 0) {
-                            out += fmt::format("    cpu->gpr[{}] = 0x{:08X}u;\n",
-                                               static_cast<int>(rd), return_addr);
-                        }
                         out += emit_irq_check_expr("_t");
                         out += "    cpu->pc = _t; return; }\n";
                     } else {
-                        out += "    { uint32_t _csp = cpu->gpr[29];\n";
-                        if (rd != 0) {
-                            out += fmt::format("    cpu->gpr[{}] = 0x{:08X}u;\n",
-                                               static_cast<int>(rd), return_addr);
-                        }
-                        out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(rs)));
-                        out += fmt::format("    psx_dispatch(cpu, cpu->gpr[{}]);\n",
-                                           static_cast<int>(rs));
+                        /* _csp is captured AFTER the delay slot on purpose:
+                         * the call contract's sp is the post-slot value (the
+                         * interp captures site_sp after exec_delay_slot). */
+                        out += "    uint32_t _csp = cpu->gpr[29];\n";
+                        out += emit_irq_check_expr("_t");
+                        out += "    psx_dispatch(cpu, _t);\n";
                         if (rd == 31) {
                             out += fmt::format("    if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return; }}\n",
                                                return_addr);
@@ -787,18 +1081,11 @@ bool FullFunctionEmitter::emit_function(
         // dispatch into RAM to run the installed code.  Otherwise fall through
         // to the static NOP.
         //
-        // Add new install slot PCs here as they're discovered.  See
-        // docs/dynamic_handler_install.md for how to find them.
-        auto rom_to_ram = [](uint32_t rom_addr) -> uint32_t {
-            uint32_t phys = rom_addr & 0x1FFFFFFFu;
-            if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu) {
-                return phys - 0x1FC10000u + 0x00000500u;
-            }
-            return phys;
-        };
-        uint32_t ram_pc = rom_to_ram(addr);
-        bool is_install_slot =
-            (ram_pc == 0x00000CF0u);  /* SIO data-byte handler dispatch slot */
+        // Install slots come from the profile's [[recompiler.install_slots]]
+        // (e.g. SCPH1001's SIO data-byte handler slot at RAM 0xCF0). See
+        // docs/dynamic_handler_install.md for how to find new ones.
+        uint32_t ram_pc = addr_model().rom_to_ram_phys(addr);
+        bool is_install_slot = addr_model().is_install_slot(ram_pc);
         if (is_install_slot) {
             /* The installed stub is 4 instructions: lui, addiu, jalr, nop.
              * The jalr captures ra = stub_PC + 8 = install_slot + 0x10.  When
@@ -837,9 +1124,18 @@ bool FullFunctionEmitter::emit_function(
                 addr, ram_pc, ram_pc + 0x10u, ram_pc, ram_pc, ram_pc);
         }
 
-        // Non-terminator: emit normally.
+        // Non-terminator: emit normally — unless this load's successor reads
+        // its destination (MIPS-I load-delay pair): then defer the register
+        // writeback into psx_ldd_<addr>, flushed after the successor.
         out += fmt::format("    /* 0x{:08X}: {:08X}  {} */\n", addr, raw, tr.comment);
-        out += fmt::format("    {}\n", tr.c_code);
+        if (ldd_sites.count(addr) && !tr.c_code_deferred.empty()) {
+            out += fmt::format("    /* load-delay pair: gpr[{}] writeback deferred past 0x{:08X} */\n",
+                               ldd_sites[addr].first, addr + 4);
+            out += fmt::format("    {}\n", tr.c_code_deferred);
+        } else {
+            out += fmt::format("    {}\n", tr.c_code);
+        }
+        emit_ldd_flush(addr);
         out += emit_cosim_instr(addr);
 
         // Check if this instruction is a delay slot with pending resolution.
@@ -864,10 +1160,13 @@ bool FullFunctionEmitter::emit_function(
                     // Register the cross-function target as a continuation so
                     // the dispatch table can route to it (otherwise mid-function
                     // targets miss the table — root cause of card-read failure).
+                    // Publish the RUNTIME PC: relocated-window code runs at its
+                    // RAM address; the ROM-space alias never executes and its
+                    // phys can sit outside guest RAM (no interp fallback).
                     register_cross_function_target(target);
                     out += fmt::format("    if (psx_taken_{:08X}) {{\n", pb.terminator_addr);
                     out += emit_irq_check(target, "        ");
-                    out += fmt::format("        cpu->pc = 0x{:08X}u; return;\n", target);
+                    out += fmt::format("        cpu->pc = 0x{:08X}u; return;\n", relocate_ra(target));
                     out += "    }\n";
                 }
                 out += emit_irq_check(fallthrough);
@@ -946,11 +1245,16 @@ bool FullFunctionEmitter::emit_function(
                 } else if (cps) {
                     register_cross_function_target(pb.terminator_addr + 8);
                 }
+                /* Delay slot may have clobbered the target register — resolve
+                 * from the terminator-latched snapshot then (psx_jrt_). */
+                const bool jalr_snap = jr_snapshot_needed(pb.terminator_addr, pb.raw);
+                const std::string jalr_tgt = jalr_snap
+                    ? fmt::format("psx_jrt_{:08X}", pb.terminator_addr)
+                    : fmt::format("cpu->gpr[{}]", static_cast<int>(rs));
                 if (cps) {
                     // CPS jalr: capture the target register BEFORE writing the
                     // link reg (rd==rs alias-safe), then tail-transfer.
-                    out += fmt::format("    {{ uint32_t _t = cpu->gpr[{}];\n",
-                                       static_cast<int>(rs));
+                    out += fmt::format("    {{ uint32_t _t = {};\n", jalr_tgt);
                     if (rd != 0) {
                         out += fmt::format("    cpu->gpr[{}] = 0x{:08X}u;\n",
                                            static_cast<int>(rd), return_addr);
@@ -963,9 +1267,8 @@ bool FullFunctionEmitter::emit_function(
                         out += fmt::format("    cpu->gpr[{}] = 0x{:08X}u;\n",
                                            static_cast<int>(rd), return_addr);
                     }
-                    out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(rs)));
-                    out += fmt::format("    psx_dispatch(cpu, cpu->gpr[{}]);\n",
-                                       static_cast<int>(rs));
+                    out += emit_irq_check_expr(jalr_tgt);
+                    out += fmt::format("    psx_dispatch(cpu, {});\n", jalr_tgt);
                     if (rd == 31) {
                         out += fmt::format("    if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return; }}\n",
                                            return_addr);
@@ -980,15 +1283,21 @@ bool FullFunctionEmitter::emit_function(
                 }
             } else if (kind == "jr") {
                 uint8_t rs = (pb.raw >> 21) & 0x1F;
+                /* Delay slot may have clobbered the target register — resolve
+                 * from the terminator-latched snapshot then (psx_jrt_). */
+                const bool jr_snap = jr_snapshot_needed(pb.terminator_addr, pb.raw);
+                const std::string jr_tgt = jr_snap
+                    ? fmt::format("psx_jrt_{:08X}", pb.terminator_addr)
+                    : fmt::format("cpu->gpr[{}]", static_cast<int>(rs));
                 if (rs == 31) {
                     if (ra_loaded_from_non_sp)
-                        out += emit_irq_check_expr("cpu->gpr[31]") +
-                               "    cpu->pc = cpu->gpr[31]; psx_restore_state_escape(); return;  /* longjmp-return */\n";
+                        out += emit_irq_check_expr(jr_tgt) +
+                               fmt::format("    cpu->pc = {}; psx_restore_state_escape(); return;  /* longjmp-return */\n", jr_tgt);
                     else if (cps)
-                        out += emit_irq_check_expr("cpu->gpr[31]") +
-                               "    cpu->pc = cpu->gpr[31]; return;  /* CPS: publish $ra for trampoline dispatch */\n";
+                        out += emit_irq_check_expr(jr_tgt) +
+                               fmt::format("    cpu->pc = {}; return;  /* CPS: publish $ra for trampoline dispatch */\n", jr_tgt);
                     else
-                        out += emit_irq_check_expr("cpu->gpr[31]") +
+                        out += emit_irq_check_expr(jr_tgt) +
                                "    return;\n";
                 } else {
                     // Attempt jump table resolution: scan backward from the
@@ -1063,18 +1372,15 @@ bool FullFunctionEmitter::emit_function(
                             if (!targets.empty()) {
                                 out += fmt::format("    /* jump table at 0x{:08X}, {} entries */\n",
                                                    tb, tc);
-                                out += fmt::format("    switch (cpu->gpr[{}]) {{\n",
-                                                   static_cast<int>(jr_rs));
+                                out += fmt::format("    switch ({}) {{\n", jr_tgt);
                                 for (auto& [rt, rom_t] : targets) {
                                     out += fmt::format("        case 0x{:08X}u:\n", rt);
                                     out += emit_irq_check(rom_t, "            ");
                                     out += fmt::format("            goto label_{:08X};\n", rom_t);
                                 }
                                 out += "        default:\n";
-                                out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(jr_rs)),
-                                                           "            ");
-                                out += fmt::format("            cpu->pc = cpu->gpr[{}]; return;\n",
-                                                   static_cast<int>(jr_rs));
+                                out += emit_irq_check_expr(jr_tgt, "            ");
+                                out += fmt::format("            cpu->pc = {}; return;\n", jr_tgt);
                                 out += "    }\n";
                                 emitted_switch = true;
                             }
@@ -1082,9 +1388,8 @@ bool FullFunctionEmitter::emit_function(
                     }
                     if (!emitted_switch) {
                         // Tail call: set cpu->pc and return; dispatch loop re-dispatches.
-                        out += emit_irq_check_expr(fmt::format("cpu->gpr[{}]", static_cast<int>(rs)));
-                        out += fmt::format("    cpu->pc = cpu->gpr[{}]; return;\n",
-                                           static_cast<int>(rs));
+                        out += emit_irq_check_expr(jr_tgt);
+                        out += fmt::format("    cpu->pc = {}; return;\n", jr_tgt);
                     }
                 }
             }
@@ -1420,7 +1725,7 @@ void FullFunctionEmitter::emit_dispatch(
         std::string kb;
         size_t kb_count = 0;
         for (uint32_t norm : emitted_normalized) {
-            if (norm < 0x500u || norm >= 0x8500u) continue;
+            if (!addr_model().in_kbless(norm)) continue;
             uint32_t owner = norm;
             if (continuations.count(norm))
                 owner = continuations.at(norm).parent_func_norm;
@@ -1429,7 +1734,8 @@ void FullFunctionEmitter::emit_dispatch(
             uint32_t lo = it->second.first, hi = it->second.second;
             // Only bodies that live entirely inside the relocated window are
             // verifiable against the ROM source; skip anything straddling it.
-            if (lo < 0x500u || hi > 0x8500u || lo >= hi) continue;
+            if (lo < addr_model().kbless_ram_lo() ||
+                hi > addr_model().kbless_ram_hi() || lo >= hi) continue;
             kb += fmt::format("    {{ 0x{:08X}u, 0x{:08X}u, 0x{:08X}u }},\n",
                               norm, lo, hi);
             kb_count++;
@@ -1445,6 +1751,56 @@ void FullFunctionEmitter::emit_dispatch(
         out += fmt::format("const uint32_t psx_bios_kernel_body_count = {}u;\n\n", kb_count);
     }
 
+    // --- Image self-description (runtime/include/psx_bios_image.h) ---
+    // The runtime reads these instead of hardcoding per-image constants;
+    // emitted next to the code they describe, so they cannot disagree with
+    // the linked BIOS. Layout must match PsxBiosImageInfo in the header.
+    {
+        uint32_t crc = 0xFFFFFFFFu;               /* IEEE CRC-32 (zlib) */
+        for (uint8_t b : rom) {
+            crc ^= b;
+            for (int k = 0; k < 8; ++k)
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+        crc = ~crc;
+        uint32_t wsum = 0;                        /* memory.c savestate checksum */
+        for (size_t i = 0; i + 3 < rom.size(); i += 4)
+            wsum += read_u32_le(rom, static_cast<uint32_t>(i));
+
+        const std::string id  = g_bios_profile ? g_bios_profile->id : "";
+        const uint32_t    sep = g_bios_profile ? g_bios_profile->shell_entry_phys : 0u;
+        const uint32_t    der = g_bios_profile ? g_bios_profile->deliver_event_ret : 0u;
+        const uint32_t    kb_lo  = addr_model().has_kbless() ? addr_model().kbless_ram_lo()  : 0u;
+        const uint32_t    kb_hi  = addr_model().has_kbless() ? addr_model().kbless_ram_hi()  : 0u;
+        const uint32_t    kb_off = addr_model().has_kbless() ? addr_model().kbless_rom_off() : 0u;
+
+        const int bundled = (g_bios_profile && g_bios_profile->image_redistributable) ? 1 : 0;
+        out += "typedef struct {\n";
+        out += "    uint32_t kbless_ram_lo;\n";
+        out += "    uint32_t kbless_ram_hi;\n";
+        out += "    uint32_t kbless_rom_off;\n";
+        out += "    uint32_t shell_entry_phys;\n";
+        out += "    uint32_t deliver_event_ret;\n";
+        out += "    uint32_t image_size;\n";
+        out += "    uint32_t image_crc32;\n";
+        out += "    uint32_t image_wordsum;\n";
+        out += "    const char* image_sha256;\n";
+        out += "    const char* image_id;\n";
+        out += "    int image_bundled;\n";
+        out += "} PsxBiosImageInfo;\n\n";
+        out += fmt::format(
+            "const PsxBiosImageInfo psx_bios_image = {{\n"
+            "    0x{:08X}u, 0x{:08X}u, 0x{:08X}u,  /* kbless lo/hi/rom_off */\n"
+            "    0x{:08X}u,                        /* shell_entry_phys */\n"
+            "    0x{:08X}u,                        /* deliver_event_ret */\n"
+            "    {}u, 0x{:08X}u, 0x{:08X}u,   /* size / crc32 / wordsum */\n"
+            "    \"{}\",\n"
+            "    \"{}\",\n"
+            "    {},                               /* image_bundled */\n"
+            "}};\n\n",
+            kb_lo, kb_hi, kb_off, sep, der,
+            rom.size(), crc, wsum, bios_sha256, id, bundled);
+    }
     // --- Runtime-installed BIOS call-vector stubs ---
     // Every retail PSX BIOS installs the A0/B0/C0 ABI gates as the same
     // four-instruction shape: lui/addiu $t0,target; jr $t0; nop. The target is
@@ -1490,17 +1846,10 @@ void FullFunctionEmitter::emit_dispatch(
     out += "    return 1;\n";
     out += "}\n\n";
 
-    // Dispatch function with binary search.
-    out += "static uint32_t normalize(uint32_t addr) {\n";
-    out += "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
-    out += "    /* Kernel Part 2: ROM 0x1FC10000+ -> RAM 0x500+ */\n";
-    out += "    if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu)\n";
-    out += "        phys = phys - 0x1FC10000u + 0x00000500u;\n";
-    out += "    /* Shell: RAM 0x30000+ -> ROM physical 0x1FC18000+ */\n";
-    out += "    if (phys >= 0x00030000u && phys <= 0x0005AFFFu)\n";
-    out += "        phys = phys - 0x00030000u + 0x1FC18000u;\n";
-    out += "    return phys;\n";
-    out += "}\n\n";
+    // Dispatch function with binary search. normalize() is generated from
+    // the SAME address-model table the C++ helpers above use, so the emitted
+    // C can never drift from the analysis that produced it.
+    out += addr_model().emit_normalize_c();
 
     out += "extern int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);\n";
     out += "extern int dirty_ram_is_dirty(uint32_t phys);\n";
@@ -1576,8 +1925,16 @@ void FullFunctionEmitter::emit_dispatch(
     out += "         * (game not started) still falls through to normalize(). */\n";
     out += "        extern int fntrace_is_game_started(void);\n";
     out += "        extern int dirty_ram_text_native_ok(uint32_t phys);\n";
-    out += "        int game_shell_overlap = fntrace_is_game_started() &&\n";
-    out += "            game_phys >= 0x00030000u && game_phys <= 0x0005AFFFu;\n";
+    if (addr_model().has_rom_keyed_ram_window()) {
+        out += "        int game_shell_overlap = fntrace_is_game_started() &&\n";
+        out += fmt::format(
+            "            game_phys >= 0x{:08X}u && game_phys <= 0x{:08X}u;\n",
+            addr_model().rom_keyed_ram_lo(), addr_model().rom_keyed_ram_hi_incl());
+    } else {
+        /* No ROM-keyed RAM copy window (a BIOS with no shell relocation):
+         * nothing for a game to collide with. */
+        out += "        int game_shell_overlap = 0;\n";
+    }
     out += "        /* Shell-window addresses the loaded game EXE image covers with\n";
     out += "         * matching bytes are GAME code, not the BIOS shell \xE2\x80\x94 route them to\n";
     out += "         * the game path even when the game-start latch (a dispatch to\n";
@@ -1588,9 +1945,15 @@ void FullFunctionEmitter::emit_dispatch(
     out += "         * The native-ok compare is ground truth: pre-game the RAM holds shell\n";
     out += "         * bytes (differ from the game image -> not routed here -> shell\n";
     out += "         * dispatches); post-load it holds the game EXE (matches -> game path). */\n";
-    out += "        int game_text_in_shell_window =\n";
-    out += "            game_phys >= 0x00030000u && game_phys <= 0x0005AFFFu &&\n";
-    out += "            psx_game_address_in_text(addr) && dirty_ram_text_native_ok(game_phys);\n";
+    if (addr_model().has_rom_keyed_ram_window()) {
+        out += "        int game_text_in_shell_window =\n";
+        out += fmt::format(
+            "            game_phys >= 0x{:08X}u && game_phys <= 0x{:08X}u &&\n",
+            addr_model().rom_keyed_ram_lo(), addr_model().rom_keyed_ram_hi_incl());
+        out += "            psx_game_address_in_text(addr) && dirty_ram_text_native_ok(game_phys);\n";
+    } else {
+        out += "        int game_text_in_shell_window = 0;\n";
+    }
     out += "        if (!found && (game_shell_overlap || game_text_in_shell_window ||\n";
     out += "            (psx_game_address_in_text(addr) && dirty_ram_is_dirty(game_phys)))) {\n";
     out += "            found = dirty_ram_dispatch(cpu, addr, stop_addr);\n";
@@ -1601,20 +1964,27 @@ void FullFunctionEmitter::emit_dispatch(
     out += "        while (lo <= hi) {\n";
     out += "            int mid = (lo + hi) / 2;\n";
     out += "            if (dispatch_table[mid].addr == phys) {\n";
-    out += "                /* Kernel-image bless guard (CLAUDE.md Rule 18). The keys in\n";
-    out += "                 * the relocated kernel window [0x500,0x8500) were compiled\n";
-    out += "                 * from the ROM source of the BIOS's boot-time kernel copy —\n";
-    out += "                 * but the BIOS (and games) PATCH kernel RAM at runtime (pad/\n";
-    out += "                 * SIO installs land inside compiled bodies). A static hit\n";
-    out += "                 * here may only run if the live RAM bytes of everything the\n";
-    out += "                 * function can execute still byte-match the ROM image\n";
-    out += "                 * (memory.c psx_kernel_bless_dispatchable, lazily verified,\n";
-    out += "                 * invalidated on writes). Mismatched/unverifiable bodies\n";
-    out += "                 * fall through to the faithful dirty-RAM interpreter below.\n";
-    out += "                 * Non-kernel keys are unaffected. */\n";
-    out += "                if (phys - 0x500u < 0x8000u &&\n";
-    out += "                    !psx_kernel_bless_dispatchable(phys))\n";
-    out += "                    break; /* found stays 0 -> dirty_ram_dispatch */\n";
+    if (addr_model().has_kbless()) {
+        out += fmt::format(
+        "                /* Kernel-image bless guard (CLAUDE.md Rule 18). The keys in\n"
+        "                 * the relocated kernel window [0x{:X},0x{:X}) were compiled\n",
+            addr_model().kbless_ram_lo(), addr_model().kbless_ram_hi());
+        out += "                 * from the ROM source of the BIOS's boot-time kernel copy —\n";
+        out += "                 * but the BIOS (and games) PATCH kernel RAM at runtime (pad/\n";
+        out += "                 * SIO installs land inside compiled bodies). A static hit\n";
+        out += "                 * here may only run if the live RAM bytes of everything the\n";
+        out += "                 * function can execute still byte-match the ROM image\n";
+        out += "                 * (memory.c psx_kernel_bless_dispatchable, lazily verified,\n";
+        out += "                 * invalidated on writes). Mismatched/unverifiable bodies\n";
+        out += "                 * fall through to the faithful dirty-RAM interpreter below.\n";
+        out += "                 * Non-kernel keys are unaffected. */\n";
+        out += fmt::format(
+        "                if (phys - 0x{:X}u < 0x{:X}u &&\n",
+            addr_model().kbless_ram_lo(),
+            addr_model().kbless_ram_hi() - addr_model().kbless_ram_lo());
+        out += "                    !psx_kernel_bless_dispatchable(phys))\n";
+        out += "                    break; /* found stays 0 -> dirty_ram_dispatch */\n";
+    }
     out += "                g_debug_current_func_addr = phys;\n";
     out += "                debug_server_trace_dispatch(phys);\n";
     out += "                dispatch_table[mid].func(cpu);\n";
@@ -1753,6 +2123,7 @@ EmitStats FullFunctionEmitter::emit(
     const DiscoveryResult&            dr,
     const std::string&                bios_sha256,
     const std::string&                out_dir,
+    const std::string&                out_stem,
     const std::vector<BiosVectorTable>& bios_vectors,
     const std::vector<BiosAlias>&       bios_aliases)
 {
@@ -1788,7 +2159,7 @@ EmitStats FullFunctionEmitter::emit(
         }
     }
 
-    // Emit SCPH1001_full.c
+    // Emit <stem>_full.c
     std::string full_c;
     full_c += "/* AUTO-GENERATED by psxrecomp-bios --emit-full. DO NOT EDIT.\n";
     full_c += " *\n";
@@ -1837,6 +2208,16 @@ EmitStats FullFunctionEmitter::emit(
     {
         std::vector<ContinuationLabel> dry_run_continuations;
         std::vector<ContinuationLabel> dry_run_cross;
+        /* Instruction-address -> owning function (normalized). Hard caps
+         * partition the address space, so each walked instruction has exactly
+         * one owner. Used below to route cross-function targets to the
+         * function that actually CONTAINS them: the range-based parent guess
+         * (largest entry <= target) is wrong when seeds split a function into
+         * fragments and the preceding fragment ends before the target —
+         * emit_function's injection then silently dropped the continuation
+         * and the runtime FAIL-FASTed on dispatch (OpenBIOS exceptionHandler
+         * priority_loop 0xBFC208E8, split by the patch-slot code_ptr seeds). */
+        std::map<uint32_t, uint32_t> insn_owner;
         for (const auto& fn : dr.functions) {
             std::string lineage = fn.discovered_by;
             uint32_t cap = hard_caps.count(fn.entry_addr)
@@ -1845,13 +2226,30 @@ EmitStats FullFunctionEmitter::emit(
             FunctionDiscovery::SingleFunctionResult sfr =
                 FunctionDiscovery::walk_function(rom, base_addr, rom_end, fn.entry_addr, cap, lineage);
             if (!sfr.unsupported.empty()) continue;
+            for (const auto& [iaddr, iraw] : sfr.instructions) {
+                insn_owner[iaddr] = fn.normalized_addr;
+            }
             std::string tmp;
             std::set<uint32_t> empty;
             (void)emit_function(tmp, fn, sfr, all_function_entries_norm, rom, base_addr, rom_end,
                                 dry_run_continuations, empty, dry_run_cross);
         }
         for (const auto& cl : dry_run_cross) {
-            cross_targets_by_parent[cl.parent_func_norm].insert(cl.rom_addr);
+            auto ow = insn_owner.find(cl.rom_addr);
+            if (ow != insn_owner.end()) {
+                cross_targets_by_parent[ow->second].insert(cl.rom_addr);
+            } else {
+                /* No emitted function contains this published target: a
+                 * runtime dispatch of it would FAIL-FAST. Discovery's
+                 * branch-target closure covers direct branches; anything
+                 * reaching here is a skipped-function target or a genuinely
+                 * new hole — surface it at build time. */
+                std::fprintf(stderr,
+                    "psxrecomp-bios: WARNING: cross-function target 0x%08X "
+                    "(parent guess 0x%08X) is in no emitted function — "
+                    "dispatching it at runtime will fail\n",
+                    cl.rom_addr, cl.parent_func_norm);
+            }
         }
     }
 
@@ -1934,26 +2332,28 @@ EmitStats FullFunctionEmitter::emit(
         stats.dispatch_entries += stats.continuation_entries;
     }
 
-    // Write SCPH1001_full.c
+    // Write <stem>_full.c
     {
-        std::string path = out_dir + "/SCPH1001_full.c";
+        std::string path = out_dir + "/" + out_stem + "_full.c";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(full_c.data(), static_cast<std::streamsize>(full_c.size()));
     }
 
-    // Emit and write SCPH1001_dispatch.c
+    // Emit and write <stem>_dispatch.c
     {
         std::string dispatch_c;
         emit_dispatch(dispatch_c, dr, emitted_normalized, unique_continuations,
                       bios_sha256, rom, base_addr, bios_vectors, bios_aliases);
-        std::string path = out_dir + "/SCPH1001_dispatch.c";
+        std::string path = out_dir + "/" + out_stem + "_dispatch.c";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(dispatch_c.data(), static_cast<std::streamsize>(dispatch_c.size()));
     }
 
-    // Write skipped_functions.json
+    // Write <stem>_skipped_functions.json. Stemmed like the C outputs: two
+    // BIOS images regenerated into the same out_dir must not clobber each
+    // other's skip report.
     if (!stats.skipped.empty()) {
         std::string json = "[\n";
         for (size_t i = 0; i < stats.skipped.size(); ++i) {
@@ -1963,7 +2363,7 @@ EmitStats FullFunctionEmitter::emit(
             json += "\n";
         }
         json += "]\n";
-        std::string path = out_dir + "/skipped_functions.json";
+        std::string path = out_dir + "/" + out_stem + "_skipped_functions.json";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(json.data(), static_cast<std::streamsize>(json.size()));

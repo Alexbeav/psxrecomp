@@ -1,5 +1,18 @@
 # Relocation Manifest Format
 
+> **STATUS AMENDMENT (2026-07, BIOS profiles).** The bulk boot-time
+> ROM-to-RAM copy case this document originally targeted is now carried by
+> the BIOS profile instead: `[[recompiler.address_model.copy]]` in
+> `bios/<STEM>.toml` (single source of truth for the recompiler, the
+> emitted C, and the runtime via `psx_bios_image`; see
+> `recompiler/src/bios_address_model.h`). The kernel-bless mechanism in
+> `memory.c` remains the runtime enforcement of the "verify live RAM
+> against the ROM source before dispatching AOT code" contract described
+> here. This document stays authoritative ONLY for the oracle-observed
+> case — regions with `src_rom_addr: null` that cannot be seen statically
+> — which remains unimplemented.
+
+
 **Status:** Phase B (design + first iteration), 2026-04-30.
 **File on disk:** `generated/address_aliases.json`.
 **Authority:** `PLAN.md:941-967` ("BIOS Relocation Is a Hard Gate"), `CLAUDE.md:333-365` (Rule 18).

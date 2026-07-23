@@ -1,5 +1,11 @@
 # BIOS ROM (copyrighted, not distributable)
-bios/
+bios/*
+!bios/*.toml
+# OpenBIOS is MIT — the one BIOS image that is legal to track (see
+# THIRD_PARTY_ATTRIBUTION.md; pin recorded in bios/OpenBIOS.toml; notice
+# shipped alongside as bios/OpenBIOS.LICENSE).
+!bios/openbios.bin
+!bios/*.LICENSE
 
 # DuckStation — upstream source is a git submodule pointing at stenzek/duckstation.
 # Our custom changes live in tools/duckstation/psxrecomp_oracle.patch (committed).

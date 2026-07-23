@@ -1125,8 +1125,26 @@ irq_deliver_eval:
     {
         uint32_t real_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
                                                   : s_compiled_interrupt_resume_pc;
+        /* Accept the real resume PC from guest RAM (<2MB) OR the BIOS ROM
+         * window. The old RAM-only guard rejected ROM-space block leaders
+         * (e.g. OpenBIOS mcWaitForStatus spinning at 0xBFC076xx during a
+         * card op), forcing EVERY such delivery onto the legacy sentinel.
+         * A compiled handler escapes the sentinel host-side, so SCPH1001
+         * never noticed — but an INTERPRETED handler (OpenBIOS: the patch
+         * slots unbless the exception handler) saves/restores EPC
+         * architecturally through the TCB, churning the sentinel through
+         * guest state thousands of times per frame until one interleaving
+         * leaves it unrepaired (observed as a torn IntRP walk and a wild
+         * dispatch to 0x54000000 during the first memcard write at boot).
+         * ROM acceptance is gated on psx_is_dispatchable so a non-leader
+         * ROM pc still falls back to the sentinel (pre-fix behavior);
+         * RAM acceptance is unchanged byte-for-byte. */
+        uint32_t real_phys = real_pc & 0x1FFFFFFFu;
+        int resume_in_ram  = real_phys < 0x00200000u;
+        int resume_in_rom  = real_phys >= 0x1FC00000u && real_phys < 0x1FC80000u &&
+                             psx_is_dispatchable(real_pc);
         if (real_pc != 0u && (real_pc & 0x3u) == 0u &&
-            (real_pc & 0x1FFFFFFFu) < 0x00200000u) {
+            (resume_in_ram || resume_in_rom)) {
             cpu->cop0[COP0_EPC]  = real_pc;     /* architectural: the real resume PC */
             g_exception_real_epc = real_pc;
             g_exc_escape_reason  = PSX_EXC_ESCAPE_NONE; /* set at the actual RFE/SYSCALL return */

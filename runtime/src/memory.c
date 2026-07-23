@@ -128,17 +128,16 @@ static inline void dirty_ram_mark_page(uint32_t phys) {
  * the runtime half of the relocation-manifest contract
  * (docs/RELOCATION_MANIFEST_FORMAT.md: "runtime verifies against live RAM
  * before dispatching the AOT function"). */
-#define KBLESS_RAM_LO  0x500u
-#define KBLESS_RAM_HI  0x8500u
-#define KBLESS_ROM_OFF 0x10000u   /* bios_rom[] offset of RAM 0x500 */
+/* The window/offset constants come from the LINKED recompiled BIOS itself
+ * (psx_bios_image, emitted into <stem>_dispatch.c from the BIOS profile) —
+ * they cannot disagree with the code they describe. Snapshotted into
+ * file-statics on the lazy init latch so the two hot paths (dispatch query,
+ * guest-store invalidation) keep a two-load range test instead of reading
+ * through the extern each time. A BIOS with no bless window exports all
+ * zeros: the span-0 range test then rejects every address. */
+#include "psx_bios_image.h"
 
-typedef struct {
-    uint32_t key;
-    uint32_t body_lo;
-    uint32_t body_hi;
-} PsxKernelBody;
-extern const PsxKernelBody psx_bios_kernel_bodies[];
-extern const uint32_t      psx_bios_kernel_body_count;
+static uint32_t s_kb_lo = 0, s_kb_span = 0, s_kb_rom_off = 0;
 
 #define KBLESS_UNKNOWN  0u
 #define KBLESS_CLEAN    1u
@@ -157,6 +156,20 @@ static int kbless_on(void) {
         const char* e = getenv("PSX_KERNEL_BLESS");
         kbless_enabled = (e && e[0] == '0') ? 0 : 1;
         if (psx_bios_kernel_body_count > KBLESS_MAX_ENTRIES) kbless_enabled = 0;
+        s_kb_lo      = psx_bios_image.kbless_ram_lo;
+        s_kb_span    = psx_bios_image.kbless_ram_hi - psx_bios_image.kbless_ram_lo;
+        s_kb_rom_off = psx_bios_image.kbless_rom_off;
+        if (s_kb_span == 0) kbless_enabled = 0;   /* BIOS with no bless window */
+        /* The emitted constants must agree with each other and the ROM
+         * array: a window whose ROM source exceeds the image is a build
+         * defect, not a runtime condition. */
+        if (s_kb_span > 0 &&
+            (uint64_t)s_kb_rom_off + s_kb_span > (uint64_t)BIOS_ROM_SIZE) {
+            fprintf(stderr, "FATAL: psx_bios_image kbless window [0x%X,+0x%X) "
+                    "exceeds the %u-byte ROM\n", s_kb_rom_off, s_kb_span,
+                    (unsigned)BIOS_ROM_SIZE);
+            exit(1);
+        }
     }
     return kbless_enabled;
 }
@@ -176,8 +189,8 @@ static int kbless_find(uint32_t phys) {
 /* Dispatch-time query: may `phys` run its static native function?
  * Verifies lazily; every failure mode falls back to the interpreter. */
 int psx_kernel_bless_dispatchable(uint32_t phys) {
-    if (phys - KBLESS_RAM_LO >= (KBLESS_RAM_HI - KBLESS_RAM_LO)) return 0;
     if (!kbless_on()) return 0;
+    if (phys - s_kb_lo >= s_kb_span) return 0;
     int i = kbless_find(phys);
     if (i < 0) return 0;
     uint8_t st = kbless_state[i];
@@ -186,7 +199,7 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
     const PsxKernelBody* b = &psx_bios_kernel_bodies[i];
     kbless_verifies++;
     if (memcmp(ram + b->body_lo,
-               bios_rom + KBLESS_ROM_OFF + (b->body_lo - KBLESS_RAM_LO),
+               bios_rom + s_kb_rom_off + (b->body_lo - s_kb_lo),
                b->body_hi - b->body_lo) == 0) {
         kbless_state[i] = KBLESS_CLEAN;
         kbless_native_hits++;
@@ -203,8 +216,8 @@ int psx_kernel_bless_dispatchable(uint32_t phys) {
  * body and fall through the loop without invalidating anything; genuine
  * code-window writes (install-time, patches) are rare. */
 static void kbless_note_write(uint32_t phys) {
-    if (phys - KBLESS_RAM_LO >= (KBLESS_RAM_HI - KBLESS_RAM_LO)) return;
-    if (kbless_enabled == 0) return;
+    if (kbless_enabled <= 0) return;   /* also pre-init: nothing verified yet */
+    if (phys - s_kb_lo >= s_kb_span) return;
     uint32_t n = psx_bios_kernel_body_count;
     if (n > KBLESS_MAX_ENTRIES) return;
     for (uint32_t i = 0; i < n; i++) {
@@ -223,10 +236,11 @@ static void kbless_note_write(uint32_t phys) {
 /* Range write (DMA / EXE load / savestate restore) overlapping the window:
  * bulk, rare events — reset every entry rather than per-byte scanning. */
 void psx_kernel_bless_note_range(uint32_t phys, uint32_t len) {
+    if (kbless_enabled <= 0) return;   /* also pre-init: nothing verified yet */
     if (len == 0) return;
     uint32_t end = phys + len;
     if (end < phys) end = 0xFFFFFFFFu;
-    if (end <= KBLESS_RAM_LO || phys >= KBLESS_RAM_HI) return;
+    if (end <= s_kb_lo || phys >= s_kb_lo + s_kb_span) return;
     uint32_t n = psx_bios_kernel_body_count;
     if (n > KBLESS_MAX_ENTRIES) return;
     for (uint32_t i = 0; i < n; i++) {

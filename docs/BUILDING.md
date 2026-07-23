@@ -8,8 +8,11 @@ Silicon & Intel), and **Linux**. There are two things you can build:
 - a **game** — done from that game's own repository, which links this framework
   in as a submodule (see [Linking the framework](#linking-the-framework)).
 
-You always supply your own **`SCPH1001.BIN` BIOS** and, for a game, your own
-legally-obtained **disc image**. This project ships none of those.
+For the retail **`SCPH1001.BIN` BIOS** you supply your own dump; the
+MIT-licensed **OpenBIOS** alternative is bundled (`bios/openbios.bin`, see
+[Selecting the BIOS to recompile](#selecting-the-bios-to-recompile)). For a
+game you always supply your own legally-obtained **disc image** — this
+project ships no game data.
 
 ## Toolchain requirements
 
@@ -75,7 +78,9 @@ cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build recompiler/build
 
 # 2. (Optional) regenerate the BIOS C from your SCPH1001.BIN
-#    Requires bios/SCPH1001.BIN to be present.
+#    Requires bios/SCPH1001.BIN to be present. To target the bundled
+#    OpenBIOS instead: --config bios/OpenBIOS.toml (see "Selecting the
+#    BIOS to recompile" below).
 bash tools/regen_bios.sh
 
 # 3. Runtime → produces psx-runtime (BIOS-only for this repo)
@@ -187,3 +192,29 @@ pack beside the repo at `../sdl2-msvc/SDL2-*`. Use the MSYS2/MinGW toolchain
 **Overlays never compile / stay slow.** In development you need `gcc` on `PATH`
 for the `gcc` tier; otherwise areas stay in the interpreter. See
 [`EXECUTION_MODEL.md`](EXECUTION_MODEL.md).
+
+## Selecting the BIOS to recompile
+
+The runtime links exactly one statically recompiled BIOS (generated symbols
+collide across images), chosen at configure time:
+
+```bash
+# Retail SCPH1001 (default; user supplies the dump at first launch)
+tools/regen_bios.sh                      # == --config bios/SCPH1001.toml
+cmake -B build ...                       # PSXRECOMP_BIOS_STEM defaults to SCPH1001
+
+# OpenBIOS (redistributable; ships with the game, player supplies only a disc)
+tools/regen_bios.sh --config bios/OpenBIOS.toml
+cmake -B build -DPSXRECOMP_BIOS_STEM=OpenBIOS \
+      -DPSXRECOMP_BIOS_PROFILE=$PWD/bios/OpenBIOS.toml ...
+```
+
+Game repos set `DEFAULT_BIOS_PATH` (psxrecomp_add_runtime_target) to the
+image the profile names, and `[recompiler] bios_config` in game.toml so game
+codegen folds BIOS-copy RAM aliases through the same profile. Per-title
+compatibility is NOT implied: verify a title on the target BIOS in a
+reference emulator before switching its build (the identity gate refuses a
+mismatched image at launch either way).
+
+OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
+see the pin + regeneration recipe in `bios/OpenBIOS.toml`.

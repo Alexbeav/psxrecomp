@@ -236,25 +236,39 @@ if(PSXRECOMP_LOBBY_INCLUDE_DIR)
     list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_LOBBY_INCLUDE_DIR})
 endif()
 
+# Which recompiled BIOS the runtime links, selected by profile. One BIOS per
+# binary: generated symbols are address-derived (func_1FC00000, psx_dispatch,
+# psx_bios_kernel_bodies), so two images collide on essentially every symbol —
+# a game repo picks its BIOS at configure time. The stem must match the
+# profile's [recompiler] out_stem; it is a separate cache variable (rather
+# than parsed out of the profile) because CMake cannot read TOML at configure
+# time — a mismatch surfaces immediately as missing generated/<stem>_*.c.
+set(PSXRECOMP_BIOS_STEM "SCPH1001" CACHE STRING
+    "Output stem of the recompiled BIOS to link (matches the profile's out_stem)")
+set(PSXRECOMP_BIOS_PROFILE "${PSXRECOMP_ROOT}/bios/SCPH1001.toml" CACHE FILEPATH
+    "BIOS profile TOML this build regenerates from (staleness stamp input)")
+
 set(PSXRECOMP_BIOS_GENERATED
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_full.c
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_dispatch.c
+    ${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}_full.c
+    ${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}_dispatch.c
 )
 
 # --- BIOS generated/ staleness check (hygiene) -----------------------------------
-# generated/SCPH1001_*.c is gitignored build output produced by a SEPARATE build
+# generated/<stem>_*.c is gitignored build output produced by a SEPARATE build
 # (recompiler/ -> psxrecomp-bios). Editing the BIOS emitter without re-running
 # tools/regen_bios.sh leaves the runtime linking a stale BIOS that no longer matches
 # the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
-# fingerprint in generated/SCPH1001.emitter.sha; recompute it here and WARN on a
-# mismatch so the staleness is impossible to miss. Non-fatal: a stale-but-consistent
+# fingerprint in generated/<stem>.emitter.sha; recompute it here (same profile
+# argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
+# impossible to miss. Non-fatal: a stale-but-consistent
 # BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
     find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/SCPH1001.emitter.sha")
+    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
     if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
         execute_process(
             COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
+                    "${PSXRECOMP_BIOS_PROFILE}"
             WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
             OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
@@ -268,10 +282,10 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
                 message(WARNING
                     "BIOS generated/ is STALE vs the recompiler emitter "
                     "(fingerprint mismatch).\n"
-                    "  Linking generated/SCPH1001_*.c that may not match the current "
-                    "emitter source.\n"
-                    "  Fix:  tools/regen_bios.sh   (rebuilds psxrecomp-bios + "
-                    "regenerates the BIOS)\n"
+                    "  Linking generated/${PSXRECOMP_BIOS_STEM}_*.c that may not "
+                    "match the current emitter source, seeds, ROM or profile.\n"
+                    "  Fix:  tools/regen_bios.sh --config <profile>   (rebuilds "
+                    "psxrecomp-bios + regenerates the BIOS)\n"
                     "  (Suppress: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
             endif()
         endif()
