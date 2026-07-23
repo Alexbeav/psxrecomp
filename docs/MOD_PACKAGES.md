@@ -1,176 +1,170 @@
-# PSXRecomp mod packages
+# PSXRecomp mod packages and features
 
-PSXRecomp games may expose a shared Dear ImGui **Mods** view backed by versioned
-`.psxmod` packages. A package is a ZIP archive with `manifest.toml` at its root.
-Packages are installed under `mods/packages/<id>/<version>/`; the selected
-versions and option values live in `mods/state.toml`.
+A `.psxmod` is a versioned installation, provenance, and trust boundary. A
+package may contribute any number of independently configurable **features**.
+The launcher presents those features as the primary Mods list; package
+installation, version selection, and removal are a secondary management view.
 
-Mods are resolved and fingerprinted before boot. They never rewrite the user's
-disc or the recomp executable.
+Feature identity is always `(package_id, feature_id)`. Enabling one feature
+never enables, disables, or reconfigures another feature.
 
-## Minimal manifest
+The player selects a verified stock BIN/CUE. Resolution produces guarded native
+operations and sparse disc overlays without rewriting or replacing that stock
+image.
+
+## Feature manifest
 
 ```toml
 format_version = 1
-id = "example.faster-charge"
+id = "example.localization"
 version = "1.2.0"
-name = "Faster Charge"
+name = "Example Localization Pack"
 author = "Example Author"
-description = "Shortens the charge delay."
+description = "Independent title and script features."
 license = "MIT"
 resolver = "declarative"
-save_compatibility = "shared" # or "isolated"
-conflicts = ["example.incompatible"]
 
 [[target]]
 game_id = "SLUS-00000"
-# Optional. When present, the selected image must have this digest.
-exe_sha256 = "..."
-disc_sha256 = "..."
+# Required for disc overlays. Use the digest of the supported stock image.
+disc_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-[[dependency]]
-id = "example.core"
-version = "^1.0.0"
+[[feature]]
+id = "title-screen"
+name = "Title Screen"
+description = "Selects the title-screen artwork."
+group = "Localization"
+default_enabled = false
+
+[[feature]]
+id = "retranslation"
+name = "Retranslation"
+description = "Uses the revised English script."
+group = "Localization"
 
 [[option]]
-id = "delay"
-label = "Charge delay"
-description = "Delay in frames."
-group = "Game balance"
+feature = "title-screen"
+id = "variant"
+label = "Title artwork"
 type = "choice"
-default = "normal"
+default = "rockman"
 
 [[option.choice]]
-value = "normal"
-label = "Normal"
+value = "mega-man"
+label = "Mega Man X6 (USA)"
 
 [[option.choice]]
-value = "fast"
-label = "Fast"
+value = "rockman"
+label = "Rockman X6 (Japan)"
 
 [[patch]]
+feature = "title-screen"
 target = "main_exe"
 address = 0x80041234
 expected = "2a 00 02 24"
 replace = "0e 00 02 24"
-when_option = "delay"
-when_value = "fast"
-order = 10
+when = { variant = "rockman" }
 
-# Optional: use this for structural changes that cannot be represented as
-# equal-size sector writes. Multiple entries may select different recipes from
-# one launcher option, but exactly one may resolve in the complete mod plan.
-[[derived_disc]]
-kind = "vcdiff"
-patch = "assets/fast.xdelta3"
-patch_sha256 = "..."
-output_size = 600000000
-output_sha256 = "..."
-when_option = "delay"
-when_value = "fast"
-
-# For option matrices, use a condition table. All listed option values must
-# match. `when_option` / `when_value` remain supported for single-option cases.
-[[derived_disc]]
-kind = "vcdiff"
-patch = "assets/fast-rockman.xdelta3"
-patch_sha256 = "..."
-output_size = 600000000
-output_sha256 = "..."
-when = { delay = "fast", title_screen = "rockman_japan" }
+[[overlay]]
+feature = "retranslation"
+target = "disc_raw"
+offset = 123456
+file = "assets/retranslated-script.bin"
+sha256 = "..."
+# Optional additional guard over the same range in the stock image.
+expected_sha256 = "..."
 ```
 
-Option types are `boolean`, `choice`, and bounded `integer`. `when_option` /
-`when_value` are optional; `when = { option = "value", ... }` can be used when a
-patch or derived-disc recipe depends on multiple option values. An unconditional
-patch omits both condition forms.
+Every `[[option]]`, `[[patch]]`, and `[[overlay]]` in a feature-style manifest
+must name its owning feature. Ambiguous operations are rejected.
 
-## Patch targets
+Option types are `boolean`, `choice`, and bounded `integer`. Conditions are
+feature-local: `when = { option = "value", ... }` requires every listed option
+to match. The legacy `when_option`/`when_value` pair remains accepted for a
+single condition.
 
-- `main_exe`: `address` is a PSX guest virtual address. All expected bytes are
-  checked after the BIOS loads the PS-X EXE. The complete main-EXE plan is then
-  applied before the configured entry point executes.
-- `disc_raw`: `offset` is in the canonical 2352-byte raw-sector stream
-  (`lba * 2352 + byte_in_sector`).
-- `disc_user`: `offset` is in the canonical 2048-byte user-data stream
-  (`lba * 2048 + byte_in_sector`).
+## Native operations
 
-A disc operation may not cross a sector boundary. Use multiple operations.
-Expected and replacement data are equal-length hexadecimal byte strings.
+`main_exe` writes use PSX guest virtual addresses. Expected bytes are checked
+after the BIOS loads the executable, then the complete write plan is applied
+before its entry point. Changed executable ranges use the existing dirty-RAM
+interpreter/native-overlay machinery; untouched functions remain on the static
+native path.
 
-Changed main-EXE code is deliberately not represented by a precompiled
-permutation. PSXRecomp's exact text-image guard sees the changed live RAM and
-routes that code through the existing dirty-RAM interpreter/native overlay
-cache. Untouched functions stay on the static native path. This makes runtime
-cost proportional to the code actually changed, not to the number of possible
-option combinations.
+Small `disc_raw` and `disc_user` patches are equal-length guarded writes and may
+not cross a sector boundary:
 
-## Derived discs
+- `disc_raw` offsets use `lba * 2352 + byte_in_sector`.
+- `disc_user` offsets use `lba * 2048 + byte_in_sector`.
 
-A `derived_disc` is a data-only VCDIFF recipe whose source is the verified stock
-disc from `[[target]].disc_sha256`. It is intended for mods that relocate files,
-grow the ISO, replace large assets, or otherwise change disc geometry. A package
-may contain a matrix of conditional recipes for its own options, but exactly one
-recipe may resolve in the complete mod plan.
+File-backed `[[overlay]]` operations are intended for large assets and may span
+any number of sectors. Their paths must remain inside the archive. Payload
+size and SHA-256 are verified while scanning, but disabled payloads are not
+retained in memory. Enabled payloads are loaded and reverified during
+resolution, then indexed by target and LBA before boot. A CD read performs a
+direct indexed lookup rather than scanning every installed mod.
 
-The launcher continues to display and persist the user's stock BIN/CUE. Before
-boot, the runtime:
+Feature disc overlays require an exact `disc_sha256` on every target entry.
+`expected_sha256` can additionally guard the replaced stock range.
 
-1. fingerprints that stock image and resolves package options;
-2. verifies the package's VCDIFF payload;
-3. invokes the release's trusted `xdelta3` binary (packages cannot provide an
-   executable);
-4. verifies the derived size and SHA-256; and
-5. atomically publishes and mounts
-   `mods/cache/<plan-fingerprint>.bin`.
+## State and migration
 
-Changing package versions or options changes the plan fingerprint and therefore
-the cache key. A cached result is reused on later launches. Ordinary guarded
-sector overlays may be applied on top of the derived image, so a structural
-base package can support many small composable add-ons.
+`mods/state.toml` format 2 stores selected package versions separately from
+per-feature enabled states and values:
 
-Release builders stage the trusted decoder with
-`-DPSXRECOMP_XDELTA3_EXECUTABLE=/path/to/xdelta3`. More than one active
-derived-disc recipe is rejected after option resolution; packages should use a
-single owner package for structural transforms and dependencies/conflicts for
-external ownership.
+```toml
+format_version = 2
 
-Do not split one structural option system into many mutually exclusive
-full-disc packages. For example, a game-wide Tweaks system should be one package
-with launcher options and a conditional recipe matrix. Choices that are
-mutually exclusive by design belong inside that package as option values, while
-unrelated mods should remain separate packages and compose normally.
+[[package]]
+id = "example.localization"
+version = "1.2.0"
 
-## Resolution rules
+[[feature]]
+package_id = "example.localization"
+id = "title-screen"
+enabled = true
 
-- Installed versions are side-by-side. The launcher can select an older version
-  to roll back.
-- Enabling or disabling one package changes only that package. It does not
-  silently toggle other packages.
-- Enabled packages are topologically ordered by dependencies, then by stable
-  package/patch order.
-- Missing dependencies, version mismatches, declared conflicts, dependency
-  cycles, overlapping writes, unavailable trusted resolvers, invalid option
-  values, multiple derived-disc providers, and target mismatches prevent launch.
-- The resolved package versions, option values, writes, and derived-disc recipe
-  produce a canonical SHA-256 plan fingerprint suitable for diagnostics and
-  multiplayer agreement.
-- Package and state changes apply on the next launch. There is no mid-frame
-  mutation.
+[feature.values]
+variant = "rockman"
+```
 
-## Trusted adapters
+State format 1 and package-only manifests remain readable as a migration aid.
+They appear through one synthetic legacy feature. New packages should use
+explicit features.
 
-`resolver = "builtin:<id>"` selects a resolver statically registered by the game
-executable. This is for legacy patch systems whose dependency and composition
-rules cannot be expressed as independent declarative writes. A package cannot
-load native code or choose an arbitrary symbol: unregistered IDs fail closed.
-The adapter emits the same expected-byte-guarded resolved writes as a
-declarative package, so validation, overlap checks, fingerprinting, and runtime
-execution remain shared.
+The old `derived_disc` VCDIFF mechanism is legacy conversion scaffolding only.
+Feature-style manifests reject it. It is not a product mod primitive, fallback,
+or image-selection workflow; patched discs may be used offline as parity
+oracles while converting known mods to native operations.
 
-## Archive safety
+## Resolution and diagnostics
+
+Before boot, the manager:
+
+1. verifies the selected stock game and revision;
+2. expands only enabled features and their selected options;
+3. orders active packages deterministically by dependencies;
+4. verifies enabled payloads and operation bounds;
+5. collision-checks the complete byte-range plan;
+6. coalesces only truly identical target/range/expected/replacement writes or
+   identical overlays; and
+7. produces a canonical SHA-256 plan fingerprint.
+
+Incompatible overlaps fail before launch. Structured diagnostics identify both
+`(package, feature)` owners and the exact contested target range. The launcher
+marks both feature rows and lets the user decide what to disable. It never
+silently chooses a winner.
+
+Package-level dependencies and conflicts are reserved for actual implementation
+relationships. Mutually exclusive choices such as US versus Japanese artwork
+belong inside one feature as option values.
+
+## Trusted adapters and archive safety
+
+`resolver = "builtin:<id>"` selects a resolver statically registered by the
+game. Packages cannot load arbitrary native code or select arbitrary symbols.
 
 The installer accepts stored or DEFLATE-compressed ZIP entries, validates CRCs,
-rejects encrypted entries and unsafe/absolute paths, limits archives to 4096
+rejects encrypted entries and unsafe or absolute paths, limits archives to 4096
 files and 256 MiB expanded size, stages extraction, validates the manifest, and
-publishes the version with an atomic rename.
+publishes the version atomically.

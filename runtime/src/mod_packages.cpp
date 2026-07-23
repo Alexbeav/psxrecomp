@@ -569,6 +569,7 @@ bool target_matches(const ModPackage& package, const std::string& game,
 std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
                                  const std::map<std::string, ModSelection>& selections,
                                  const std::vector<ModResolution::Write>& writes,
+                                 const std::vector<ModResolution::Overlay>& overlays,
                                  const std::vector<ModResolution::DerivedDisc>& derived_discs,
                                  const std::string& source_disc_sha256) {
     std::ostringstream out;
@@ -576,16 +577,49 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
     for (const ModPackage* package : ordered) {
         out << package->id << '@' << package->version << '\n';
         const auto sit = selections.find(package->id);
-        if (sit == selections.end()) continue;
-        for (const auto& [key, value] : sit->second.values)
-            out << key << '=' << value << '\n';
+        for (const ModFeature& feature : package->features) {
+            bool enabled = feature.default_enabled;
+            const std::map<std::string, std::string>* values = nullptr;
+            if (sit != selections.end()) {
+                if (feature.legacy) {
+                    enabled = sit->second.enabled;
+                    values = &sit->second.values;
+                } else {
+                    const auto selected = sit->second.features.find(feature.id);
+                    if (selected != sit->second.features.end()) {
+                        if (selected->second.has_enabled)
+                            enabled = selected->second.enabled;
+                        values = &selected->second.values;
+                    }
+                }
+            }
+            out << "feature:" << feature.id << '='
+                << (enabled ? "enabled" : "disabled") << '\n';
+            for (const ModOption& option : package->options) {
+                if (option.feature_id != feature.id) continue;
+                const auto selected = values ? values->find(option.id) :
+                                               std::map<std::string, std::string>::const_iterator{};
+                const std::string value =
+                    values && selected != values->end()
+                    ? selected->second : option.default_value;
+                out << "feature:" << feature.id << ':' << option.id
+                    << '=' << value << '\n';
+            }
+        }
     }
     for (const ModResolution::Write& write : writes) {
         out << (write.target == ModPatchTarget::MainExe ? "main_exe" :
                 write.target == ModPatchTarget::DiscRaw ? "disc_raw" : "disc_user")
             << '@' << std::hex << write.location << std::dec << ':'
             << hex_bytes(write.expected) << '>' << hex_bytes(write.replacement)
-            << ':' << write.package_id << '\n';
+            << ':' << write.package_id << ':' << write.feature_id << '\n';
+    }
+    for (const ModResolution::Overlay& overlay : overlays) {
+        out << (overlay.target == ModPatchTarget::DiscRaw
+                    ? "disc_raw_overlay" : "disc_user_overlay")
+            << '@' << std::hex << overlay.location << std::dec << ':'
+            << overlay.payload_sha256 << ':' << overlay.expected_sha256 << ':'
+            << overlay.package_id << ':' << overlay.feature_id << '\n';
     }
     for (const ModResolution::DerivedDisc& derived : derived_discs) {
         out << "derived_disc:" << derived.kind << ':'
@@ -595,26 +629,81 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
     return out.str();
 }
 
+const ModFeature* find_feature(const ModPackage& package, const std::string& id) {
+    const auto found = std::find_if(package.features.begin(), package.features.end(),
+        [&](const ModFeature& feature) { return feature.id == id; });
+    return found == package.features.end() ? nullptr : &*found;
+}
+
+const ModOption* find_option(const ModPackage& package,
+                             const std::string& feature_id,
+                             const std::string& id) {
+    const auto option = std::find_if(package.options.begin(), package.options.end(),
+        [&](const ModOption& item) {
+            return item.feature_id == feature_id && item.id == id;
+        });
+    return option == package.options.end() ? nullptr : &*option;
+}
+
+const ModFeatureSelection* find_feature_selection(const ModPackage& package,
+                                                  const ModSelection& selection,
+                                                  const std::string& feature_id) {
+    const ModFeature* feature = find_feature(package, feature_id);
+    if (!feature) return nullptr;
+    if (feature->legacy) return nullptr;
+    const auto found = selection.features.find(feature_id);
+    return found == selection.features.end() ? nullptr : &found->second;
+}
+
+bool is_feature_enabled(const ModPackage& package, const ModSelection& selection,
+                        const ModFeature& feature) {
+    if (feature.legacy) return selection.enabled;
+    const ModFeatureSelection* selected =
+        find_feature_selection(package, selection, feature.id);
+    return selected && selected->has_enabled
+        ? selected->enabled : feature.default_enabled;
+}
+
+bool has_enabled_feature(const ModPackage& package,
+                         const ModSelection& selection) {
+    return std::any_of(package.features.begin(), package.features.end(),
+        [&](const ModFeature& feature) {
+            return is_feature_enabled(package, selection, feature);
+        });
+}
+
 std::string effective_option_value(const ModPackage& package,
                                    const ModSelection& selection,
+                                   const std::string& feature_id,
                                    const std::string& id) {
-    const auto selected = selection.values.find(id);
-    if (selected != selection.values.end()) return selected->second;
-    const auto option = std::find_if(package.options.begin(), package.options.end(),
-        [&](const ModOption& item) { return item.id == id; });
-    return option == package.options.end() ? std::string() : option->default_value;
+    const ModFeature* feature = find_feature(package, feature_id);
+    if (feature && feature->legacy) {
+        const auto selected = selection.values.find(id);
+        if (selected != selection.values.end()) return selected->second;
+    } else {
+        const ModFeatureSelection* selected =
+            find_feature_selection(package, selection, feature_id);
+        if (selected) {
+            const auto value = selected->values.find(id);
+            if (value != selected->values.end()) return value->second;
+        }
+    }
+    const ModOption* option = find_option(package, feature_id, id);
+    return option ? option->default_value : std::string();
 }
 
 bool conditions_match(const ModPackage& package, const ModSelection& selection,
+                      const std::string& feature_id,
                       const std::map<std::string, std::string>& conditions) {
     for (const auto& [id, value] : conditions) {
-        if (effective_option_value(package, selection, id) != value)
+        if (effective_option_value(package, selection, feature_id, id) != value)
             return false;
     }
     return true;
 }
 
 void read_conditions(const toml::value& value, const std::vector<ModOption>& options,
+                     const std::string& feature_id,
                      std::map<std::string, std::string>& when,
                      const char* label) {
     const std::string when_option =
@@ -638,7 +727,9 @@ void read_conditions(const toml::value& value, const std::vector<ModOption>& opt
         (void)condition_value;
         const auto option = std::find_if(
             options.begin(), options.end(),
-            [&](const ModOption& item) { return item.id == id; });
+            [&](const ModOption& item) {
+                return item.feature_id == feature_id && item.id == id;
+            });
         if (option == options.end())
             throw std::runtime_error(std::string(label) + " references unknown option");
     }
@@ -649,6 +740,50 @@ bool writes_overlap(const ModResolution::Write& a, const ModResolution::Write& b
     const uint64_t a_end = a.location + a.replacement.size();
     const uint64_t b_end = b.location + b.replacement.size();
     return a.location < b_end && b.location < a_end;
+}
+
+bool ranges_overlap(ModPatchTarget a_target, uint64_t a_location, size_t a_size,
+                    ModPatchTarget b_target, uint64_t b_location, size_t b_size) {
+    if (a_target != b_target) return false;
+    const uint64_t a_end = a_location + a_size;
+    const uint64_t b_end = b_location + b_size;
+    return a_location < b_end && b_location < a_end;
+}
+
+bool identical_write(const ModResolution::Write& a, const ModResolution::Write& b) {
+    return a.target == b.target && a.location == b.location &&
+           a.expected == b.expected && a.replacement == b.replacement;
+}
+
+std::string overlap_resource(ModPatchTarget target,
+                             uint64_t a_location, size_t a_size,
+                             uint64_t b_location, size_t b_size) {
+    const char* name = target == ModPatchTarget::MainExe ? "main_exe" :
+                       target == ModPatchTarget::DiscRaw ? "disc_raw" :
+                                                          "disc_user";
+    const uint64_t begin = std::max(a_location, b_location);
+    const uint64_t end = std::min(
+        a_location + a_size, b_location + b_size);
+    std::ostringstream out;
+    out << name << ":0x" << std::hex << begin << "-0x" << end;
+    return out.str();
+}
+
+bool valid_option_value(const ModOption& option, const std::string& value) {
+    if (option.type == ModOptionType::Boolean)
+        return value == "true" || value == "false";
+    if (option.type == ModOptionType::Choice)
+        return std::any_of(option.choices.begin(), option.choices.end(),
+            [&](const ModChoice& choice) { return choice.value == value; });
+    try {
+        size_t used = 0;
+        const int64_t parsed = std::stoll(value, &used);
+        return used == value.size() && parsed >= option.min_value &&
+               parsed <= option.max_value &&
+               ((parsed - option.min_value) % option.step) == 0;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::string fingerprint_text(const std::string& text) {
@@ -735,17 +870,53 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
         for (const std::string& id : out.conflicts)
             if (!valid_id(id)) throw std::runtime_error("invalid conflict id");
 
+        const bool feature_style = cfg.contains("feature");
+        if (feature_style) {
+            std::set<std::string> feature_ids;
+            for (const toml::value& v : toml::find(cfg, "feature").as_array()) {
+                ModFeature feature;
+                feature.id = toml::find<std::string>(v, "id");
+                feature.name = toml::find<std::string>(v, "name");
+                feature.description = v.contains("description")
+                    ? toml::find<std::string>(v, "description") : "";
+                feature.group = v.contains("group")
+                    ? toml::find<std::string>(v, "group") : "General";
+                feature.default_enabled =
+                    toml::find_or<bool>(v, "default_enabled", false);
+                if (!valid_id(feature.id) ||
+                    !feature_ids.insert(feature.id).second)
+                    throw std::runtime_error("invalid or duplicate feature id");
+                if (feature.name.empty())
+                    throw std::runtime_error("feature name is empty");
+                out.features.push_back(std::move(feature));
+            }
+            if (out.features.empty())
+                throw std::runtime_error("package has no [[feature]] entries");
+        } else {
+            ModFeature feature;
+            feature.id = "legacy";
+            feature.name = out.name;
+            feature.description = out.description;
+            feature.legacy = true;
+            out.features.push_back(std::move(feature));
+        }
+
         if (cfg.contains("option")) {
-            std::set<std::string> option_ids;
+            std::set<std::pair<std::string, std::string>> option_ids;
             for (const toml::value& v : toml::find(cfg, "option").as_array()) {
                 ModOption option;
+                option.feature_id = feature_style
+                    ? toml::find<std::string>(v, "feature") : "legacy";
                 option.id = toml::find<std::string>(v, "id");
                 option.label = toml::find<std::string>(v, "label");
                 option.description =
                     v.contains("description") ? toml::find<std::string>(v, "description") : "";
                 option.group = v.contains("group") ? toml::find<std::string>(v, "group") : "General";
                 const std::string type = toml::find<std::string>(v, "type");
-                if (!valid_id(option.id) || !option_ids.insert(option.id).second)
+                if (!find_feature(out, option.feature_id))
+                    throw std::runtime_error("option references unknown feature");
+                if (!valid_id(option.id) ||
+                    !option_ids.insert({option.feature_id, option.id}).second)
                     throw std::runtime_error("invalid or duplicate option id");
                 if (type == "boolean") {
                     option.type = ModOptionType::Boolean;
@@ -785,6 +956,10 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
             size_t declaration_index = 0;
             for (const toml::value& v : toml::find(cfg, "patch").as_array()) {
                 ModPatch patch;
+                patch.feature_id = feature_style
+                    ? toml::find<std::string>(v, "feature") : "legacy";
+                if (!find_feature(out, patch.feature_id))
+                    throw std::runtime_error("patch references unknown feature");
                 const std::string target = toml::find<std::string>(v, "target");
                 if (target == "main_exe") {
                     patch.target = ModPatchTarget::MainExe;
@@ -822,7 +997,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         "disc patch may not cross a sector boundary");
                 patch.order = toml::find_or<int64_t>(
                     v, "order", (int64_t)declaration_index);
-                read_conditions(v, out.options, patch.when, "patch");
+                read_conditions(v, out.options, patch.feature_id, patch.when, "patch");
                 if (!patch.when.empty()) {
                     patch.when_option = patch.when.begin()->first;
                     patch.when_value = patch.when.begin()->second;
@@ -831,7 +1006,77 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 ++declaration_index;
             }
         }
+        if (cfg.contains("overlay")) {
+            if (!feature_style)
+                throw std::runtime_error(
+                    "disc overlays require explicit [[feature]] ownership");
+            size_t declaration_index = 0;
+            for (const toml::value& v : toml::find(cfg, "overlay").as_array()) {
+                ModOverlay overlay;
+                overlay.feature_id = toml::find<std::string>(v, "feature");
+                if (!find_feature(out, overlay.feature_id))
+                    throw std::runtime_error("overlay references unknown feature");
+                const std::string target = toml::find<std::string>(v, "target");
+                if (target == "disc_raw")
+                    overlay.target = ModPatchTarget::DiscRaw;
+                else if (target == "disc_user")
+                    overlay.target = ModPatchTarget::DiscUser;
+                else
+                    throw std::runtime_error(
+                        "overlay target must be disc_raw or disc_user");
+                const int64_t offset = toml::find<int64_t>(v, "offset");
+                if (offset < 0)
+                    throw std::runtime_error("overlay offset is negative");
+                overlay.location = (uint64_t)offset;
+                const std::string relative_file =
+                    toml::find<std::string>(v, "file");
+                if (!safe_archive_name(relative_file))
+                    throw std::runtime_error("overlay file path is unsafe");
+                overlay.file = out.root / fs::path(relative_file);
+                overlay.sha256 = toml::find<std::string>(v, "sha256");
+                overlay.expected_sha256 = v.contains("expected_sha256")
+                    ? toml::find<std::string>(v, "expected_sha256") : "";
+                if (!valid_sha256(overlay.sha256) ||
+                    (!overlay.expected_sha256.empty() &&
+                     !valid_sha256(overlay.expected_sha256)))
+                    throw std::runtime_error(
+                        "overlay hashes must be lowercase SHA-256");
+                std::string file_error;
+                std::vector<uint8_t> payload;
+                if (!read_file(overlay.file, payload, &file_error))
+                    throw std::runtime_error(file_error);
+                if (payload.empty())
+                    throw std::runtime_error("overlay payload is empty");
+                const std::string actual = fingerprint_text(std::string(
+                    (const char*)payload.data(), payload.size()));
+                if (actual != overlay.sha256)
+                    throw std::runtime_error("overlay payload checksum failed");
+                overlay.size = payload.size();
+                if (overlay.location >
+                    std::numeric_limits<uint64_t>::max() - overlay.size)
+                    throw std::runtime_error("overlay range overflows");
+                overlay.order = toml::find_or<int64_t>(
+                    v, "order", (int64_t)declaration_index);
+                read_conditions(v, out.options, overlay.feature_id,
+                                overlay.when, "overlay");
+                out.overlays.push_back(std::move(overlay));
+                ++declaration_index;
+            }
+            const bool guarded_stock = std::all_of(
+                out.targets.begin(), out.targets.end(),
+                [](const ModTarget& target) {
+                    return valid_sha256(target.disc_sha256);
+                });
+            if (!out.overlays.empty() && !guarded_stock)
+                throw std::runtime_error(
+                    "feature disc overlays require an exact disc_sha256 "
+                    "on every [[target]]");
+        }
         if (cfg.contains("derived_disc")) {
+            if (feature_style)
+                throw std::runtime_error(
+                    "derived_disc is a legacy conversion artifact and may not "
+                    "be used by feature-style packages");
             for (const toml::value& v : toml::find(cfg, "derived_disc").as_array()) {
                 ModDerivedDisc derived;
                 derived.kind = toml::find_or<std::string>(v, "kind", "vcdiff");
@@ -850,7 +1095,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 if (output_size <= 0)
                     throw std::runtime_error("derived_disc output_size must be positive");
                 derived.output_size = (uint64_t)output_size;
-                read_conditions(v, out.options, derived.when, "derived_disc");
+                read_conditions(v, out.options, "legacy",
+                                derived.when, "derived_disc");
                 if (!derived.when.empty()) {
                     derived.when_option = derived.when.begin()->first;
                     derived.when_value = derived.when.begin()->second;
@@ -911,25 +1157,62 @@ bool ModPackageManager::load_state(std::string* error) {
     try {
         const toml::value cfg = toml::parse(path.string());
         const int64_t version = toml::find<int64_t>(cfg, "format_version");
-        if (version != 1) throw std::runtime_error("unsupported state format_version");
-        if (!cfg.contains("package")) return true;
-        for (const toml::value& v : toml::find(cfg, "package").as_array()) {
-            const std::string id = toml::find<std::string>(v, "id");
-            if (!valid_id(id)) throw std::runtime_error("invalid state package id");
-            ModSelection selection;
-            selection.enabled = toml::find_or<bool>(v, "enabled", false);
-            selection.version = toml::find_or<std::string>(v, "version", "");
-            if (v.contains("values")) {
-                for (const auto& [key, value] : toml::find(v, "values").as_table()) {
-                    if (value.is_string()) selection.values[key] = toml::get<std::string>(value);
-                    else if (value.is_boolean())
-                        selection.values[key] = toml::get<bool>(value) ? "true" : "false";
-                    else if (value.is_integer())
-                        selection.values[key] = std::to_string(toml::get<int64_t>(value));
-                    else throw std::runtime_error("state option values must be scalar");
+        if (version != 1 && version != 2)
+            throw std::runtime_error("unsupported state format_version");
+        if (cfg.contains("package")) {
+            for (const toml::value& v : toml::find(cfg, "package").as_array()) {
+                const std::string id = toml::find<std::string>(v, "id");
+                if (!valid_id(id)) throw std::runtime_error("invalid state package id");
+                ModSelection selection;
+                selection.enabled = toml::find_or<bool>(v, "enabled", false);
+                selection.version = toml::find_or<std::string>(v, "version", "");
+                if (v.contains("values")) {
+                    for (const auto& [key, value] : toml::find(v, "values").as_table()) {
+                        if (value.is_string())
+                            selection.values[key] = toml::get<std::string>(value);
+                        else if (value.is_boolean())
+                            selection.values[key] =
+                                toml::get<bool>(value) ? "true" : "false";
+                        else if (value.is_integer())
+                            selection.values[key] =
+                                std::to_string(toml::get<int64_t>(value));
+                        else
+                            throw std::runtime_error(
+                                "state option values must be scalar");
+                    }
                 }
+                selections_[id] = std::move(selection);
             }
-            selections_[id] = std::move(selection);
+        }
+        if (version == 2 && cfg.contains("feature")) {
+            for (const toml::value& v : toml::find(cfg, "feature").as_array()) {
+                const std::string package_id =
+                    toml::find<std::string>(v, "package_id");
+                const std::string feature_id = toml::find<std::string>(v, "id");
+                if (!valid_id(package_id) || !valid_id(feature_id))
+                    throw std::runtime_error("invalid state feature identity");
+                ModFeatureSelection feature;
+                feature.enabled = toml::find<bool>(v, "enabled");
+                feature.has_enabled = true;
+                if (v.contains("values")) {
+                    for (const auto& [key, value] :
+                         toml::find(v, "values").as_table()) {
+                        if (value.is_string())
+                            feature.values[key] = toml::get<std::string>(value);
+                        else if (value.is_boolean())
+                            feature.values[key] =
+                                toml::get<bool>(value) ? "true" : "false";
+                        else if (value.is_integer())
+                            feature.values[key] =
+                                std::to_string(toml::get<int64_t>(value));
+                        else
+                            throw std::runtime_error(
+                                "state feature option values must be scalar");
+                    }
+                }
+                selections_[package_id].features[feature_id] =
+                    std::move(feature);
+            }
         }
         return true;
     } catch (const std::exception& ex) {
@@ -952,17 +1235,44 @@ bool ModPackageManager::save_state(std::string* error) const {
         set_error(error, "cannot write " + temp.string());
         return false;
     }
-    out << "format_version = 1\n";
+    out << "format_version = 2\n";
     for (const auto& [id, selection] : selections_) {
         out << "\n[[package]]\n";
         out << "id = " << quote_toml(id) << "\n";
-        out << "enabled = " << (selection.enabled ? "true" : "false") << "\n";
         if (!selection.version.empty())
             out << "version = " << quote_toml(selection.version) << "\n";
-        if (!selection.values.empty()) {
+        const ModPackage* package = find_selected(packages_, id, selection);
+        const bool legacy = package && package->features.size() == 1 &&
+                            package->features.front().legacy;
+        if (legacy) {
+            out << "enabled = " << (selection.enabled ? "true" : "false") << "\n";
+        }
+        if (legacy && !selection.values.empty()) {
             out << "[package.values]\n";
             for (const auto& [key, value] : selection.values)
                 out << key << " = " << quote_toml(value) << "\n";
+        }
+    }
+    for (const auto& [package_id, selection] : selections_) {
+        for (const auto& [feature_id, feature] : selection.features) {
+            bool enabled = feature.enabled;
+            if (!feature.has_enabled) {
+                const ModPackage* package =
+                    find_selected(packages_, package_id, selection);
+                const ModFeature* manifest_feature =
+                    package ? find_feature(*package, feature_id) : nullptr;
+                if (manifest_feature)
+                    enabled = manifest_feature->default_enabled;
+            }
+            out << "\n[[feature]]\n";
+            out << "package_id = " << quote_toml(package_id) << "\n";
+            out << "id = " << quote_toml(feature_id) << "\n";
+            out << "enabled = " << (enabled ? "true" : "false") << "\n";
+            if (!feature.values.empty()) {
+                out << "[feature.values]\n";
+                for (const auto& [key, value] : feature.values)
+                    out << key << " = " << quote_toml(value) << "\n";
+            }
         }
     }
     out.close();
@@ -1048,15 +1358,25 @@ bool ModPackageManager::install_archive(const fs::path& archive,
 bool ModPackageManager::remove_version(const std::string& id, const std::string& version,
                                        std::string* error) {
     const auto sit = selections_.find(id);
-    if (sit != selections_.end() && sit->second.enabled &&
-        (sit->second.version.empty() || sit->second.version == version)) {
+    const ModSelection blank;
+    const ModSelection& current =
+        sit == selections_.end() ? blank : sit->second;
+    const ModPackage* selected = find_selected(packages_, id, current);
+    if (selected && selected->version == version &&
+        has_enabled_feature(*selected, current)) {
         set_error(error, "cannot remove an active package version");
         return false;
     }
-    for (const auto& [other_id, selection] : selections_) {
-        if (!selection.enabled || other_id == id) continue;
-        const ModPackage* package = find_selected(packages_, other_id, selection);
-        if (!package) continue;
+    for (const auto& [other_id, versions] : packages_) {
+        (void)versions;
+        const auto other_selection = selections_.find(other_id);
+        const ModSelection& selection =
+            other_selection == selections_.end() ? blank :
+                                                   other_selection->second;
+        const ModPackage* package =
+            find_selected(packages_, other_id, selection);
+        if (!package || other_id == id ||
+            !has_enabled_feature(*package, selection)) continue;
         for (const ModRequirement& dep : package->dependencies) {
             if (dep.id == id && version_satisfies(version, dep.version)) {
                 set_error(error, "cannot remove a version required by " + other_id);
@@ -1087,6 +1407,16 @@ bool ModPackageManager::set_enabled(const std::string& id, bool enabled, std::st
         set_error(error, "package is not installed");
         return false;
     }
+    const ModPackage* package = selected_package(id);
+    if (!package) {
+        set_error(error, "package/version is not installed");
+        return false;
+    }
+    if (package->features.size() != 1 || !package->features.front().legacy) {
+        set_error(error,
+            "feature-style packages must be enabled per feature");
+        return false;
+    }
     selections_[id].enabled = enabled;
     return true;
 }
@@ -1112,34 +1442,64 @@ bool ModPackageManager::set_option(const std::string& id, const std::string& opt
         set_error(error, "package/version is not installed");
         return false;
     }
+    if (package->features.size() != 1 || !package->features.front().legacy) {
+        set_error(error,
+            "feature-style package options must name a feature");
+        return false;
+    }
     const auto oit = std::find_if(package->options.begin(), package->options.end(),
-        [&](const ModOption& option) { return option.id == option_id; });
+        [&](const ModOption& option) {
+            return option.feature_id == "legacy" && option.id == option_id;
+        });
     if (oit == package->options.end()) {
         set_error(error, "unknown package option");
         return false;
     }
-    bool valid = false;
-    if (oit->type == ModOptionType::Boolean) {
-        valid = value == "true" || value == "false";
-    } else if (oit->type == ModOptionType::Choice) {
-        valid = std::any_of(oit->choices.begin(), oit->choices.end(),
-            [&](const ModChoice& choice) { return choice.value == value; });
-    } else {
-        try {
-            size_t used = 0;
-            const int64_t parsed = std::stoll(value, &used);
-            valid = used == value.size() && parsed >= oit->min_value &&
-                    parsed <= oit->max_value &&
-                    ((parsed - oit->min_value) % oit->step) == 0;
-        } catch (...) {
-            valid = false;
-        }
-    }
-    if (!valid) {
+    if (!valid_option_value(*oit, value)) {
         set_error(error, "invalid option value");
         return false;
     }
     selections_[id].values[option_id] = value;
+    return true;
+}
+
+bool ModPackageManager::set_feature_enabled(const std::string& package_id,
+                                            const std::string& feature_id,
+                                            bool enabled,
+                                            std::string* error) {
+    const ModPackage* package = selected_package(package_id);
+    const ModFeature* feature =
+        package ? find_feature(*package, feature_id) : nullptr;
+    if (!feature || feature->legacy) {
+        set_error(error, "unknown package feature");
+        return false;
+    }
+    ModFeatureSelection& selection =
+        selections_[package_id].features[feature_id];
+    selection.enabled = enabled;
+    selection.has_enabled = true;
+    return true;
+}
+
+bool ModPackageManager::set_feature_option(const std::string& package_id,
+                                           const std::string& feature_id,
+                                           const std::string& option_id,
+                                           const std::string& value,
+                                           std::string* error) {
+    const ModPackage* package = selected_package(package_id);
+    const ModFeature* feature =
+        package ? find_feature(*package, feature_id) : nullptr;
+    const ModOption* option =
+        package ? find_option(*package, feature_id, option_id) : nullptr;
+    if (!feature || feature->legacy || !option) {
+        set_error(error, "unknown feature option");
+        return false;
+    }
+    if (!valid_option_value(*option, value)) {
+        set_error(error, "invalid feature option value");
+        return false;
+    }
+    selections_[package_id].features[feature_id].values[option_id] = value;
     return true;
 }
 
@@ -1150,18 +1510,55 @@ const ModPackage* ModPackageManager::selected_package(const std::string& id) con
                          selection == selections_.end() ? blank : selection->second);
 }
 
+const ModFeature* ModPackageManager::selected_feature(
+    const std::string& package_id, const std::string& feature_id) const {
+    const ModPackage* package = selected_package(package_id);
+    return package ? find_feature(*package, feature_id) : nullptr;
+}
+
+bool ModPackageManager::feature_enabled(const std::string& package_id,
+                                        const std::string& feature_id) const {
+    const ModPackage* package = selected_package(package_id);
+    const ModFeature* feature =
+        package ? find_feature(*package, feature_id) : nullptr;
+    if (!package || !feature) return false;
+    const auto found = selections_.find(package_id);
+    const ModSelection blank;
+    return is_feature_enabled(
+        *package, found == selections_.end() ? blank : found->second, *feature);
+}
+
+std::string ModPackageManager::feature_option_value(
+    const std::string& package_id, const std::string& feature_id,
+    const std::string& option_id) const {
+    const ModPackage* package = selected_package(package_id);
+    if (!package) return {};
+    const auto found = selections_.find(package_id);
+    const ModSelection blank;
+    return effective_option_value(
+        *package, found == selections_.end() ? blank : found->second,
+        feature_id, option_id);
+}
+
 ModResolution ModPackageManager::resolve(const std::string& game_id,
                                          const std::string& exe_sha256,
                                          const std::string& disc_sha256) const {
     ModResolution result;
     std::map<std::string, const ModPackage*> active;
-    for (const auto& [id, selection] : selections_) {
-        if (!selection.enabled) continue;
+    for (const auto& [id, versions] : packages_) {
+        (void)versions;
+        const auto selected = selections_.find(id);
+        const ModSelection blank;
+        const ModSelection& selection =
+            selected == selections_.end() ? blank : selected->second;
         const ModPackage* package = find_selected(packages_, id, selection);
         if (!package) {
-            result.errors.push_back("selected package/version is not installed: " + id);
+            if (selected != selections_.end())
+                result.errors.push_back(
+                    "selected package/version is not installed: " + id);
             continue;
         }
+        if (!has_enabled_feature(*package, selection)) continue;
         if (!target_matches(*package, game_id, exe_sha256, disc_sha256)) {
             result.errors.push_back("package does not target this game/image: " + id);
             continue;
@@ -1184,26 +1581,27 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         const auto selection = selections_.find(id);
         if (selection != selections_.end()) {
             for (const ModOption& option : package->options) {
-                const auto value = selection->second.values.find(option.id);
-                if (value == selection->second.values.end()) continue;
-                /* Reuse the public validation path without mutating by checking
-                 * the same domain directly. Defaults require no state entry. */
-                bool valid = false;
-                if (option.type == ModOptionType::Boolean)
-                    valid = value->second == "true" || value->second == "false";
-                else if (option.type == ModOptionType::Choice)
-                    valid = std::any_of(option.choices.begin(), option.choices.end(),
-                        [&](const ModChoice& c) { return c.value == value->second; });
-                else {
-                    try {
-                        size_t used = 0;
-                        const int64_t n = std::stoll(value->second, &used);
-                        valid = used == value->second.size() && n >= option.min_value &&
-                                n <= option.max_value &&
-                                ((n - option.min_value) % option.step) == 0;
-                    } catch (...) {}
+                const ModFeature* feature =
+                    find_feature(*package, option.feature_id);
+                if (!feature ||
+                    !is_feature_enabled(*package, selection->second, *feature))
+                    continue;
+                const std::map<std::string, std::string>* values = nullptr;
+                if (feature->legacy) {
+                    values = &selection->second.values;
+                } else {
+                    const auto feature_selection =
+                        selection->second.features.find(feature->id);
+                    if (feature_selection != selection->second.features.end())
+                        values = &feature_selection->second.values;
                 }
-                if (!valid) result.errors.push_back(id + ": invalid value for " + option.id);
+                if (!values) continue;
+                const auto value = values->find(option.id);
+                if (value != values->end() &&
+                    !valid_option_value(option, value->second))
+                    result.errors.push_back(
+                        id + "/" + feature->id +
+                        ": invalid value for " + option.id);
             }
         }
         if (package->resolver.rfind("builtin:", 0) == 0) {
@@ -1246,7 +1644,10 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             selected_it == selections_.end() ? blank : selected_it->second;
         if (package->resolver == "declarative") {
             for (const ModDerivedDisc& derived : package->derived_discs) {
-                if (!conditions_match(*package, selected, derived.when))
+                const ModFeature& legacy = package->features.front();
+                if (!legacy.legacy ||
+                    !is_feature_enabled(*package, selected, legacy) ||
+                    !conditions_match(*package, selected, "legacy", derived.when))
                     continue;
                 ModResolution::DerivedDisc resolved;
                 resolved.kind = derived.kind;
@@ -1260,7 +1661,12 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             std::vector<const ModPatch*> patches;
             patches.reserve(package->patches.size());
             for (const ModPatch& patch : package->patches) {
-                if (!conditions_match(*package, selected, patch.when))
+                const ModFeature* feature =
+                    find_feature(*package, patch.feature_id);
+                if (!feature ||
+                    !is_feature_enabled(*package, selected, *feature) ||
+                    !conditions_match(*package, selected,
+                                      patch.feature_id, patch.when))
                     continue;
                 patches.push_back(&patch);
             }
@@ -1273,7 +1679,52 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 write.expected = patch->expected;
                 write.replacement = patch->replacement;
                 write.package_id = package->id;
+                write.feature_id = patch->feature_id;
                 result.writes.push_back(std::move(write));
+            }
+            std::vector<const ModOverlay*> overlays;
+            overlays.reserve(package->overlays.size());
+            for (const ModOverlay& overlay : package->overlays) {
+                const ModFeature* feature =
+                    find_feature(*package, overlay.feature_id);
+                if (!feature ||
+                    !is_feature_enabled(*package, selected, *feature) ||
+                    !conditions_match(*package, selected,
+                                      overlay.feature_id, overlay.when))
+                    continue;
+                overlays.push_back(&overlay);
+            }
+            std::stable_sort(overlays.begin(), overlays.end(),
+                [](const ModOverlay* a, const ModOverlay* b) {
+                    return a->order < b->order;
+                });
+            for (const ModOverlay* overlay : overlays) {
+                std::vector<uint8_t> payload;
+                std::string payload_error;
+                if (!read_file(overlay->file, payload, &payload_error)) {
+                    result.errors.push_back(
+                        package->id + "/" + overlay->feature_id + ": " +
+                        payload_error);
+                    continue;
+                }
+                const std::string actual = fingerprint_text(std::string(
+                    (const char*)payload.data(), payload.size()));
+                if (payload.size() != overlay->size ||
+                    actual != overlay->sha256) {
+                    result.errors.push_back(
+                        package->id + "/" + overlay->feature_id +
+                        ": overlay payload changed after installation");
+                    continue;
+                }
+                ModResolution::Overlay resolved;
+                resolved.target = overlay->target;
+                resolved.location = overlay->location;
+                resolved.payload = std::move(payload);
+                resolved.payload_sha256 = overlay->sha256;
+                resolved.expected_sha256 = overlay->expected_sha256;
+                resolved.package_id = package->id;
+                resolved.feature_id = overlay->feature_id;
+                result.overlays.push_back(std::move(resolved));
             }
         } else {
             const std::string resolver_id = package->resolver.substr(8);
@@ -1293,31 +1744,113 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         result.errors.push_back(
             "more than one derived-disc provider is active: " + providers);
     }
-    for (size_t i = 0; i < result.writes.size(); ++i) {
-        const ModResolution::Write& write = result.writes[i];
+    std::vector<ModResolution::Write> coalesced;
+    coalesced.reserve(result.writes.size());
+    for (const ModResolution::Write& write : result.writes) {
         if (write.expected.empty() ||
             write.expected.size() != write.replacement.size()) {
-            result.errors.push_back(write.package_id + ": resolver emitted invalid write");
+            result.errors.push_back(
+                write.package_id + "/" + write.feature_id +
+                ": resolver emitted invalid write");
             continue;
         }
-        for (size_t j = 0; j < i; ++j) {
-            if (writes_overlap(result.writes[j], write)) {
-                result.errors.push_back(
-                    write.package_id + ": patch overlaps a write from " +
-                    result.writes[j].package_id);
+        bool duplicate = false;
+        for (const ModResolution::Write& previous : coalesced) {
+            if (identical_write(previous, write)) {
+                duplicate = true;
                 break;
             }
+            if (!writes_overlap(previous, write)) continue;
+            ModResolution::Diagnostic diagnostic;
+            diagnostic.resource = overlap_resource(
+                write.target, write.location, write.replacement.size(),
+                previous.location, previous.replacement.size());
+            diagnostic.package_id = write.package_id;
+            diagnostic.feature_id = write.feature_id;
+            diagnostic.other_package_id = previous.package_id;
+            diagnostic.other_feature_id = previous.feature_id;
+            diagnostic.message =
+                write.package_id + "/" + write.feature_id +
+                " collides at " + diagnostic.resource + " with " +
+                previous.package_id + "/" + previous.feature_id;
+            result.diagnostics.push_back(diagnostic);
+            result.errors.push_back(diagnostic.message);
+            duplicate = true;
+            break;
         }
+        if (!duplicate) coalesced.push_back(write);
     }
+    result.writes = std::move(coalesced);
+    std::vector<ModResolution::Overlay> coalesced_overlays;
+    coalesced_overlays.reserve(result.overlays.size());
+    for (const ModResolution::Overlay& overlay : result.overlays) {
+        bool claimed = false;
+        for (const ModResolution::Write& write : result.writes) {
+            if (!ranges_overlap(
+                    overlay.target, overlay.location, overlay.payload.size(),
+                    write.target, write.location, write.replacement.size()))
+                continue;
+            ModResolution::Diagnostic diagnostic;
+            diagnostic.resource = overlap_resource(
+                overlay.target, overlay.location, overlay.payload.size(),
+                write.location, write.replacement.size());
+            diagnostic.package_id = overlay.package_id;
+            diagnostic.feature_id = overlay.feature_id;
+            diagnostic.other_package_id = write.package_id;
+            diagnostic.other_feature_id = write.feature_id;
+            diagnostic.message =
+                overlay.package_id + "/" + overlay.feature_id +
+                " collides at " + diagnostic.resource + " with " +
+                write.package_id + "/" + write.feature_id;
+            result.diagnostics.push_back(diagnostic);
+            result.errors.push_back(diagnostic.message);
+            claimed = true;
+            break;
+        }
+        if (claimed) continue;
+        for (const ModResolution::Overlay& previous : coalesced_overlays) {
+            if (!ranges_overlap(
+                    overlay.target, overlay.location, overlay.payload.size(),
+                    previous.target, previous.location, previous.payload.size()))
+                continue;
+            if (overlay.target == previous.target &&
+                overlay.location == previous.location &&
+                overlay.payload == previous.payload &&
+                overlay.expected_sha256 == previous.expected_sha256) {
+                claimed = true;
+                break;
+            }
+            ModResolution::Diagnostic diagnostic;
+            diagnostic.resource = overlap_resource(
+                overlay.target, overlay.location, overlay.payload.size(),
+                previous.location, previous.payload.size());
+            diagnostic.package_id = overlay.package_id;
+            diagnostic.feature_id = overlay.feature_id;
+            diagnostic.other_package_id = previous.package_id;
+            diagnostic.other_feature_id = previous.feature_id;
+            diagnostic.message =
+                overlay.package_id + "/" + overlay.feature_id +
+                " collides at " + diagnostic.resource + " with " +
+                previous.package_id + "/" + previous.feature_id;
+            result.diagnostics.push_back(diagnostic);
+            result.errors.push_back(diagnostic.message);
+            claimed = true;
+            break;
+        }
+        if (!claimed) coalesced_overlays.push_back(overlay);
+    }
+    result.overlays = std::move(coalesced_overlays);
     if (!result.errors.empty()) {
         result.ordered.clear();
         result.writes.clear();
+        result.overlays.clear();
         result.derived_discs.clear();
         return result;
     }
     result.fingerprint = fingerprint_text(
         canonical_resolution(
-            result.ordered, selections_, result.writes, result.derived_discs,
+            result.ordered, selections_, result.writes, result.overlays,
+            result.derived_discs,
             disc_sha256));
     result.ok = true;
     return result;

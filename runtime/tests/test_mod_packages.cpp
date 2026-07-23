@@ -26,6 +26,24 @@ static void write_text(const fs::path& path, const std::string& text) {
     out << text;
 }
 
+static void write_bytes(const fs::path& path, const std::vector<uint8_t>& bytes) {
+    fs::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary);
+    out.write((const char*)bytes.data(), (std::streamsize)bytes.size());
+}
+
+static std::string sha256_hex(const std::vector<uint8_t>& bytes) {
+    uint8_t digest[32];
+    psx_sha256_compute(bytes.data(), bytes.size(), digest);
+    static const char hex[] = "0123456789abcdef";
+    std::string out(64, '0');
+    for (size_t i = 0; i < 32; ++i) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 15];
+    }
+    return out;
+}
+
 static void write_deflated_package(const fs::path& path) {
     static const char* compressed_hex =
         "4bcb2fca4d2c892f4b2d2acecccf53b05530e4ca4c01524a5599057ab9f929"
@@ -239,6 +257,180 @@ int main() {
     check(matrix.ok && matrix.derived_discs.size() == 1 &&
               matrix.derived_discs[0].output_size == 222222,
           "multi-option derived-disc condition must match selected values");
+
+    write_text(root / "packages/features.mod/1.0.0/manifest.toml",
+               manifest("features.mod", "1.0.0",
+                   "\n[[feature]]\n"
+                   "id = \"title-screen\"\n"
+                   "name = \"Title Screen\"\n"
+                   "group = \"Localization\"\n"
+                   "\n[[feature]]\n"
+                   "id = \"retranslation\"\n"
+                   "name = \"Retranslation\"\n"
+                   "group = \"Localization\"\n"
+                   "\n[[feature]]\n"
+                   "id = \"title-collision\"\n"
+                   "name = \"Title Collision\"\n"
+                   "\n[[feature]]\n"
+                   "id = \"title-identical\"\n"
+                   "name = \"Title Identical\"\n"
+                   "\n[[option]]\n"
+                   "feature = \"title-screen\"\n"
+                   "id = \"variant\"\n"
+                   "label = \"Variant\"\n"
+                   "type = \"choice\"\n"
+                   "default = \"usa\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"usa\"\n"
+                   "label = \"Mega Man X6\"\n"
+                   "[[option.choice]]\n"
+                   "value = \"japan\"\n"
+                   "label = \"Rockman X6\"\n"
+                   "\n[[option]]\n"
+                   "feature = \"retranslation\"\n"
+                   "id = \"variant\"\n"
+                   "label = \"Variant\"\n"
+                   "type = \"boolean\"\n"
+                   "default = \"true\"\n"
+                   "\n[[patch]]\n"
+                   "feature = \"title-screen\"\n"
+                   "target = \"main_exe\"\n"
+                   "address = 2147495936\n"
+                   "expected = \"0102\"\n"
+                   "replace = \"a1a2\"\n"
+                   "when = { variant = \"japan\" }\n"
+                   "\n[[patch]]\n"
+                   "feature = \"retranslation\"\n"
+                   "target = \"disc_raw\"\n"
+                   "offset = 23520\n"
+                   "expected = \"03\"\n"
+                   "replace = \"b3\"\n"
+                   "when = { variant = \"true\" }\n"
+                   "\n[[patch]]\n"
+                   "feature = \"title-collision\"\n"
+                   "target = \"main_exe\"\n"
+                   "address = 2147495937\n"
+                   "expected = \"02\"\n"
+                   "replace = \"ff\"\n"
+                   "\n[[patch]]\n"
+                   "feature = \"title-identical\"\n"
+                   "target = \"main_exe\"\n"
+                   "address = 2147495936\n"
+                   "expected = \"0102\"\n"
+                   "replace = \"a1a2\"\n"));
+    check(reload.scan(&error), error.c_str());
+    check(!reload.set_enabled("features.mod", true, &error),
+          "feature-style package must not expose package enablement");
+    check(reload.set_feature_option(
+              "features.mod", "title-screen", "variant", "japan", &error),
+          error.c_str());
+    check(reload.set_feature_enabled(
+              "features.mod", "title-screen", true, &error), error.c_str());
+    check(reload.set_feature_enabled(
+              "features.mod", "retranslation", true, &error), error.c_str());
+    ModResolution features = reload.resolve("SLUS-TEST");
+    check(features.ok && features.writes.size() == 2,
+          "independently enabled features must compose their operations");
+    check(features.ok && features.writes[0].feature_id == "title-screen" &&
+              features.writes[1].feature_id == "retranslation",
+          "resolved writes must retain feature ownership");
+    check(reload.set_feature_enabled(
+              "features.mod", "title-collision", true, &error), error.c_str());
+    ModResolution collision = reload.resolve("SLUS-TEST");
+    check(!collision.ok && collision.diagnostics.size() == 1,
+          "overlapping feature writes must produce a structured diagnostic");
+    check(!collision.diagnostics.empty() &&
+              collision.diagnostics[0].feature_id == "title-collision" &&
+              collision.diagnostics[0].other_feature_id == "title-screen" &&
+              !collision.diagnostics[0].resource.empty(),
+          "collision diagnostic must identify both features and the resource");
+    check(reload.set_feature_enabled(
+              "features.mod", "title-collision", false, &error), error.c_str());
+    check(reload.set_feature_enabled(
+              "features.mod", "title-identical", true, &error), error.c_str());
+    ModResolution identical = reload.resolve("SLUS-TEST");
+    check(identical.ok && identical.writes.size() == 2,
+          "truly identical writes must coalesce deterministically");
+    check(reload.save_state(&error), error.c_str());
+    ModPackageManager feature_reload(root);
+    check(feature_reload.scan(&error), error.c_str());
+    check(feature_reload.load_state(&error), error.c_str());
+    check(feature_reload.feature_enabled("features.mod", "title-screen") &&
+              feature_reload.feature_enabled("features.mod", "retranslation") &&
+              !feature_reload.feature_enabled("features.mod", "title-collision"),
+          "per-feature enabled state must survive save/reload");
+    check(feature_reload.feature_option_value(
+              "features.mod", "title-screen", "variant") == "japan",
+          "feature-scoped option values must survive save/reload");
+    check(feature_reload.resolve("SLUS-TEST").fingerprint ==
+              identical.fingerprint,
+          "feature state must resolve deterministically after reload");
+
+    const std::vector<uint8_t> overlay_a = {1, 2, 3, 4};
+    const std::vector<uint8_t> overlay_b = {8, 9};
+    const std::string overlay_disc_hash(64, '4');
+    write_bytes(root / "packages/overlay.mod/1.0.0/assets/a.bin", overlay_a);
+    write_bytes(root / "packages/overlay.mod/1.0.0/assets/b.bin", overlay_b);
+    write_text(root / "packages/overlay.mod/1.0.0/manifest.toml",
+               manifest("overlay.mod", "1.0.0",
+                   "disc_sha256 = \"" + overlay_disc_hash + "\"\n"
+                   "[[feature]]\n"
+                   "id = \"asset-a\"\n"
+                   "name = \"Asset A\"\n"
+                   "[[feature]]\n"
+                   "id = \"asset-b\"\n"
+                   "name = \"Asset B\"\n"
+                   "[[overlay]]\n"
+                   "feature = \"asset-a\"\n"
+                   "target = \"disc_raw\"\n"
+                   "offset = 100\n"
+                   "file = \"assets/a.bin\"\n"
+                   "sha256 = \"" + sha256_hex(overlay_a) + "\"\n"
+                   "[[overlay]]\n"
+                   "feature = \"asset-b\"\n"
+                   "target = \"disc_raw\"\n"
+                   "offset = 102\n"
+                   "file = \"assets/b.bin\"\n"
+                   "sha256 = \"" + sha256_hex(overlay_b) + "\"\n"));
+    check(feature_reload.scan(&error), error.c_str());
+    const ModPackage* overlay_package =
+        feature_reload.selected_package("overlay.mod");
+    check(overlay_package && overlay_package->overlays.size() == 2 &&
+              overlay_package->overlays[0].size == overlay_a.size(),
+          "manifest scan must verify and retain overlay metadata");
+    check(feature_reload.set_feature_enabled(
+              "overlay.mod", "asset-a", true, &error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "overlay.mod", "asset-b", true, &error), error.c_str());
+    ModResolution overlay_collision =
+        feature_reload.resolve("SLUS-TEST", {}, overlay_disc_hash);
+    check(!overlay_collision.ok &&
+              overlay_collision.diagnostics.size() == 1 &&
+              overlay_collision.diagnostics[0].feature_id == "asset-b" &&
+              overlay_collision.diagnostics[0].other_feature_id == "asset-a",
+          "overlapping file overlays must identify both owning features");
+    check(feature_reload.set_feature_enabled(
+              "overlay.mod", "asset-b", false, &error), error.c_str());
+    ModResolution one_overlay =
+        feature_reload.resolve("SLUS-TEST", {}, overlay_disc_hash);
+    check(one_overlay.ok && one_overlay.overlays.size() == 1 &&
+              one_overlay.overlays[0].payload == overlay_a,
+          "only enabled overlay payloads must enter the resolved plan");
+
+    write_text(root / "feature-derived.toml",
+               manifest("bad.derived", "1.0.0",
+                   "\n[[feature]]\n"
+                   "id = \"bad\"\n"
+                   "name = \"Bad\"\n"
+                   "[[derived_disc]]\n"
+                   "patch = \"bad.xdelta3\"\n"
+                   "patch_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n"
+                   "output_size = 1\n"
+                   "output_sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"));
+    ModPackage feature_derived;
+    check(!ModPackageManager::read_manifest(
+              root / "feature-derived.toml", feature_derived, &error),
+          "feature-style packages must reject derived-disc operations");
 
     ModPackage invalid;
     write_text(root / "bad.toml",

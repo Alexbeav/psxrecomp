@@ -41,6 +41,11 @@ namespace {
 struct RuntimeMods {
     ModPackageManager manager;
     ModResolution plan;
+    ModResolution validation;
+    std::map<uint32_t, std::vector<size_t>> raw_disc_index;
+    std::map<uint32_t, std::vector<size_t>> user_disc_index;
+    std::map<uint32_t, std::vector<size_t>> raw_overlay_index;
+    std::map<uint32_t, std::vector<size_t>> user_overlay_index;
     std::string game_id;
     std::string error;
     std::string exe_sha256;
@@ -63,6 +68,14 @@ const ModPackage* selected_package(const std::string& id) {
     return state().manager.selected_package(id);
 }
 
+bool package_has_enabled_feature(const ModPackage& package) {
+    return std::any_of(
+        package.features.begin(), package.features.end(),
+        [&](const ModFeature& feature) {
+            return state().manager.feature_enabled(package.id, feature.id);
+        });
+}
+
 std::string selected_value(const ModPackage& package, const ModOption& option) {
     const auto selection = state().manager.selections().find(package.id);
     if (selection != state().manager.selections().end()) {
@@ -70,6 +83,32 @@ std::string selected_value(const ModPackage& package, const ModOption& option) {
         if (value != selection->second.values.end()) return value->second;
     }
     return option.default_value;
+}
+
+void build_disc_index(RuntimeMods& s) {
+    s.raw_disc_index.clear();
+    s.user_disc_index.clear();
+    s.raw_overlay_index.clear();
+    s.user_overlay_index.clear();
+    for (size_t i = 0; i < s.plan.writes.size(); ++i) {
+        const ModResolution::Write& write = s.plan.writes[i];
+        if (write.target == ModPatchTarget::DiscRaw)
+            s.raw_disc_index[(uint32_t)(write.location / 2352)].push_back(i);
+        else if (write.target == ModPatchTarget::DiscUser)
+            s.user_disc_index[(uint32_t)(write.location / 2048)].push_back(i);
+    }
+    for (size_t i = 0; i < s.plan.overlays.size(); ++i) {
+        const ModResolution::Overlay& overlay = s.plan.overlays[i];
+        const uint64_t sector_size =
+            overlay.target == ModPatchTarget::DiscRaw ? 2352 : 2048;
+        auto& index = overlay.target == ModPatchTarget::DiscRaw
+            ? s.raw_overlay_index : s.user_overlay_index;
+        const uint64_t first = overlay.location / sector_size;
+        const uint64_t last =
+            (overlay.location + overlay.payload.size() - 1) / sector_size;
+        for (uint64_t lba = first; lba <= last; ++lba)
+            index[(uint32_t)lba].push_back(i);
+    }
 }
 
 void set_error(const std::string& error) {
@@ -158,7 +197,7 @@ std::filesystem::path raw_image_path(const std::filesystem::path& path,
     if (extension != ".cue") return path;
     std::ifstream cue(path);
     if (!cue) {
-        if (error) *error = "cannot open CUE for derived disc: " + path.string();
+        if (error) *error = "cannot open disc CUE: " + path.string();
         return {};
     }
     std::string line;
@@ -182,8 +221,65 @@ std::filesystem::path raw_image_path(const std::filesystem::path& path,
         }
         return (path.parent_path() / name).lexically_normal();
     }
-    if (error) *error = "CUE has no source file for derived disc: " + path.string();
+    if (error) *error = "disc CUE has no source file: " + path.string();
     return {};
+}
+
+bool sha256_disc_range(const std::filesystem::path& image,
+                       ModPatchTarget target, uint64_t location, size_t size,
+                       std::string& out, std::string* error) {
+    const std::filesystem::path source = raw_image_path(image, error);
+    if (source.empty()) return false;
+    std::ifstream file(source, std::ios::binary);
+    if (!file) {
+        if (error) *error = "cannot open stock image range: " + source.string();
+        return false;
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff file_size = file.tellg();
+    if (file_size < 0) {
+        if (error) *error = "cannot size stock image: " + source.string();
+        return false;
+    }
+    psx_sha256_ctx hash;
+    psx_sha256_init(&hash);
+    std::array<uint8_t, 2048> bytes{};
+    size_t remaining = size;
+    uint64_t at = location;
+    const bool raw_source = file_size > 0 &&
+        ((uint64_t)file_size % 2352u) == 0;
+    while (remaining != 0) {
+        uint64_t physical = at;
+        size_t chunk = remaining;
+        if (target == ModPatchTarget::DiscUser && raw_source) {
+            const uint64_t lba = at / 2048u;
+            const size_t within = (size_t)(at % 2048u);
+            physical = lba * 2352u + 24u + within;
+            chunk = std::min(chunk, 2048u - within);
+        }
+        chunk = std::min(chunk, bytes.size());
+        if (physical > (uint64_t)file_size ||
+            chunk > (uint64_t)file_size - physical) {
+            if (error) *error = "overlay expected range exceeds stock image";
+            return false;
+        }
+        file.clear();
+        file.seekg((std::streamoff)physical);
+        if (!file.read((char*)bytes.data(), (std::streamsize)chunk)) {
+            if (error) *error = "cannot read stock image overlay range";
+            return false;
+        }
+        psx_sha256_update(&hash, bytes.data(), chunk);
+        at += chunk;
+        remaining -= chunk;
+    }
+    uint8_t digest[32];
+    psx_sha256_final(&hash, digest);
+    std::ostringstream text;
+    for (uint8_t byte : digest)
+        text << std::hex << std::setw(2) << std::setfill('0') << (unsigned)byte;
+    out = text.str();
+    return true;
 }
 
 #if defined(_WIN32)
@@ -382,9 +478,7 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     copy_text(out->author, sizeof(out->author), package->author);
     copy_text(out->description, sizeof(out->description), package->description);
     copy_text(out->license, sizeof(out->license), package->license);
-    const auto selection = state().manager.selections().find(package->id);
-    out->enabled = selection != state().manager.selections().end() &&
-                   selection->second.enabled;
+    out->enabled = package_has_enabled_feature(*package);
     out->option_count = (int)package->options.size();
     out->removable = !out->enabled;
     return 1;
@@ -427,6 +521,201 @@ int provider_choice_get(void*, const char* package_id, const char* option_id,
     return 1;
 }
 
+template <typename Callback>
+int mutate(Callback callback);
+
+bool provider_feature_at(int index, const ModPackage*& package,
+                         const ModFeature*& feature) {
+    if (index < 0) return false;
+    for (const auto& [package_id, versions] : state().manager.packages()) {
+        (void)versions;
+        const ModPackage* selected = selected_package(package_id);
+        if (!selected) continue;
+        for (const ModFeature& candidate : selected->features) {
+            if (index-- == 0) {
+                package = selected;
+                feature = &candidate;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::vector<const ModOption*> provider_feature_options(
+    const ModPackage& package, const std::string& feature_id) {
+    std::vector<const ModOption*> out;
+    for (const ModOption& option : package.options)
+        if (option.feature_id == feature_id) out.push_back(&option);
+    return out;
+}
+
+bool diagnostic_matches(const ModResolution::Diagnostic& diagnostic,
+                        const std::string& package_id,
+                        const std::string& feature_id) {
+    return (diagnostic.package_id == package_id &&
+            diagnostic.feature_id == feature_id) ||
+           (diagnostic.other_package_id == package_id &&
+            diagnostic.other_feature_id == feature_id);
+}
+
+int provider_feature_count(void*) {
+    int count = 0;
+    for (const auto& [package_id, versions] : state().manager.packages()) {
+        (void)versions;
+        const ModPackage* package = selected_package(package_id);
+        if (package) count += (int)package->features.size();
+    }
+    return count;
+}
+
+int provider_feature_get(void*, int index, RecompLauncherCModFeature* out) {
+    if (!out) return 0;
+    const ModPackage* package = nullptr;
+    const ModFeature* feature = nullptr;
+    if (!provider_feature_at(index, package, feature)) return 0;
+    std::memset(out, 0, sizeof(*out));
+    copy_text(out->id, sizeof(out->id), feature->id);
+    copy_text(out->package_id, sizeof(out->package_id), package->id);
+    copy_text(out->package_version, sizeof(out->package_version), package->version);
+    copy_text(out->package_name, sizeof(out->package_name), package->name);
+    copy_text(out->name, sizeof(out->name), feature->name);
+    copy_text(out->author, sizeof(out->author), package->author);
+    copy_text(out->description, sizeof(out->description), feature->description);
+    copy_text(out->group, sizeof(out->group), feature->group);
+    out->enabled =
+        state().manager.feature_enabled(package->id, feature->id) ? 1 : 0;
+    out->option_count =
+        (int)provider_feature_options(*package, feature->id).size();
+    for (const ModResolution::Diagnostic& diagnostic :
+         state().validation.diagnostics) {
+        if (!diagnostic_matches(diagnostic, package->id, feature->id)) continue;
+        out->has_error = 1;
+        copy_text(out->status, sizeof(out->status), diagnostic.message);
+        break;
+    }
+    return 1;
+}
+
+int provider_feature_option_get(void*, const char* package_id,
+                                const char* feature_id, int index,
+                                RecompLauncherCModOption* out) {
+    if (!package_id || !feature_id || !out || index < 0) return 0;
+    const ModPackage* package = selected_package(package_id);
+    if (!package) return 0;
+    const auto options = provider_feature_options(*package, feature_id);
+    if ((size_t)index >= options.size()) return 0;
+    const ModOption& option = *options[(size_t)index];
+    std::memset(out, 0, sizeof(*out));
+    copy_text(out->id, sizeof(out->id), option.id);
+    copy_text(out->label, sizeof(out->label), option.label);
+    copy_text(out->description, sizeof(out->description), option.description);
+    copy_text(out->group, sizeof(out->group), option.group);
+    copy_text(out->value, sizeof(out->value),
+              state().manager.feature_option_value(
+                  package_id, feature_id, option.id));
+    copy_text(out->default_value, sizeof(out->default_value),
+              option.default_value);
+    out->type = option.type == ModOptionType::Boolean
+        ? RECOMP_MOD_OPTION_BOOLEAN
+        : option.type == ModOptionType::Choice
+            ? RECOMP_MOD_OPTION_CHOICE : RECOMP_MOD_OPTION_INTEGER;
+    out->min_value = option.min_value;
+    out->max_value = option.max_value;
+    out->step = option.step;
+    out->choice_count = (int)option.choices.size();
+    return 1;
+}
+
+int provider_feature_choice_get(void*, const char* package_id,
+                                const char* feature_id,
+                                const char* option_id, int index,
+                                RecompLauncherCModChoice* out) {
+    if (!package_id || !feature_id || !option_id || !out || index < 0)
+        return 0;
+    const ModPackage* package = selected_package(package_id);
+    if (!package) return 0;
+    const auto option = std::find_if(
+        package->options.begin(), package->options.end(),
+        [&](const ModOption& value) {
+            return value.feature_id == feature_id && value.id == option_id;
+        });
+    if (option == package->options.end() ||
+        (size_t)index >= option->choices.size()) return 0;
+    std::memset(out, 0, sizeof(*out));
+    copy_text(out->value, sizeof(out->value),
+              option->choices[(size_t)index].value);
+    copy_text(out->label, sizeof(out->label),
+              option->choices[(size_t)index].label);
+    return 1;
+}
+
+int provider_feature_enable(void*, const char* package_id,
+                            const char* feature_id, int enabled) {
+    if (!package_id || !feature_id) return 0;
+    return mutate([&](std::string& error) {
+        const ModFeature* feature =
+            state().manager.selected_feature(package_id, feature_id);
+        if (feature && feature->legacy)
+            return state().manager.set_enabled(
+                package_id, enabled != 0, &error);
+        return state().manager.set_feature_enabled(
+            package_id, feature_id, enabled != 0, &error);
+    });
+}
+
+int provider_feature_set_option(void*, const char* package_id,
+                                const char* feature_id,
+                                const char* option_id,
+                                const char* value) {
+    if (!package_id || !feature_id || !option_id || !value) return 0;
+    return mutate([&](std::string& error) {
+        const ModFeature* feature =
+            state().manager.selected_feature(package_id, feature_id);
+        if (feature && feature->legacy)
+            return state().manager.set_option(
+                package_id, option_id, value, &error);
+        return state().manager.set_feature_option(
+            package_id, feature_id, option_id, value, &error);
+    });
+}
+
+int provider_diagnostic_count(void*, const char* package_id,
+                              const char* feature_id) {
+    if (!package_id || !feature_id) return 0;
+    return (int)std::count_if(
+        state().validation.diagnostics.begin(),
+        state().validation.diagnostics.end(),
+        [&](const ModResolution::Diagnostic& diagnostic) {
+            return diagnostic_matches(diagnostic, package_id, feature_id);
+        });
+}
+
+int provider_diagnostic_get(void*, const char* package_id,
+                            const char* feature_id, int index,
+                            RecompLauncherCModDiagnostic* out) {
+    if (!package_id || !feature_id || !out || index < 0) return 0;
+    for (const ModResolution::Diagnostic& diagnostic :
+         state().validation.diagnostics) {
+        if (!diagnostic_matches(diagnostic, package_id, feature_id)) continue;
+        if (index-- != 0) continue;
+        std::memset(out, 0, sizeof(*out));
+        out->severity = 2;
+        copy_text(out->resource, sizeof(out->resource), diagnostic.resource);
+        copy_text(out->message, sizeof(out->message), diagnostic.message);
+        const bool primary = diagnostic.package_id == package_id &&
+                             diagnostic.feature_id == feature_id;
+        copy_text(out->related_package_id, sizeof(out->related_package_id),
+                  primary ? diagnostic.other_package_id :
+                            diagnostic.package_id);
+        copy_text(out->related_feature_id, sizeof(out->related_feature_id),
+                  primary ? diagnostic.other_feature_id :
+                            diagnostic.feature_id);
+        return 1;
+    }
+    return 0;
+}
+
 int provider_version_count(void*, const char* package_id) {
     if (!package_id) return 0;
     const auto package = state().manager.packages().find(package_id);
@@ -445,9 +734,8 @@ int provider_version_get(void*, const char* package_id, int index,
     copy_text(out->version, sizeof(out->version), version->first);
     const ModPackage* selected = selected_package(package_id);
     out->selected = selected && selected->version == version->first;
-    const auto selection = state().manager.selections().find(package_id);
-    out->removable = selection == state().manager.selections().end() ||
-                     !selection->second.enabled || !out->selected;
+    out->removable = !out->selected ||
+                     !selected || !package_has_enabled_feature(*selected);
     return 1;
 }
 
@@ -458,6 +746,11 @@ int mutate(Callback callback) {
         set_error(error);
         return 0;
     }
+    if (!state().disc_path.empty())
+        state().validation = state().manager.resolve(
+            state().game_id, state().exe_sha256, state().disc_sha256);
+    else
+        state().validation = {};
     state().error.clear();
     return 1;
 }
@@ -530,6 +823,14 @@ RecompLauncherCModProvider provider = {
     provider_set_option,
     provider_commit,
     provider_error,
+    provider_feature_count,
+    provider_feature_get,
+    provider_feature_option_get,
+    provider_feature_choice_get,
+    provider_feature_enable,
+    provider_feature_set_option,
+    provider_diagnostic_count,
+    provider_diagnostic_get,
 };
 #endif
 
@@ -543,6 +844,11 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     RuntimeMods& s = state();
     s.manager.set_root({});
     s.plan = {};
+    s.validation = {};
+    s.raw_disc_index.clear();
+    s.user_disc_index.clear();
+    s.raw_overlay_index.clear();
+    s.user_overlay_index.clear();
     s.game_id.clear();
     s.error.clear();
     s.exe_sha256.clear();
@@ -583,6 +889,7 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     }
     ModResolution plan =
         s.manager.resolve(s.game_id, s.exe_sha256, s.disc_sha256);
+    s.validation = plan;
     if (!plan.ok) {
         s.error.clear();
         for (const std::string& item : plan.errors) {
@@ -591,6 +898,20 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         }
         if (error) *error = s.error;
         return false;
+    }
+    for (const ModResolution::Overlay& overlay : plan.overlays) {
+        if (overlay.expected_sha256.empty()) continue;
+        std::string actual;
+        if (!sha256_disc_range(
+                s.disc_path, overlay.target, overlay.location,
+                overlay.payload.size(), actual, &s.error) ||
+            actual != overlay.expected_sha256) {
+            if (s.error.empty())
+                s.error = overlay.package_id + "/" + overlay.feature_id +
+                    ": stock overlay range checksum failed";
+            if (error) *error = s.error;
+            return false;
+        }
     }
     std::filesystem::path effective_disc;
     if (!materialize_derived_disc(s, plan, effective_disc, &s.error)) {
@@ -602,6 +923,7 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         return false;
     }
     s.plan = std::move(plan);
+    build_disc_index(s);
     s.effective_disc_path = std::move(effective_disc);
     s.main_applied = false;
     s.error.clear();
@@ -670,29 +992,68 @@ extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
     RuntimeMods& s = state();
     if (!s.initialized || !s.disc_enabled || s.disc_guard_failed ||
         !bytes || size == 0) return;
+    /* Raw Mode2 Form1 reads are also the source of the 2048-byte logical
+     * stream consumed by the emulated CD controller. Apply raw claims to the
+     * complete sector, then user-data claims to its payload window. Form2/XA
+     * and CDDA sectors deliberately do not receive disc_user overlays. */
+    const bool has_mode2_form1_user_data =
+        raw_sector && size >= 2072 && bytes[15] == 2 &&
+        (bytes[18] & 0x20u) == 0;
     const ModPatchTarget target =
         raw_sector ? ModPatchTarget::DiscRaw : ModPatchTarget::DiscUser;
     const uint64_t base = (uint64_t)lba * size;
     const uint64_t end = base + size;
-    for (const ModResolution::Write& write : s.plan.writes) {
-        if (write.target != target || write.location < base ||
-            write.location + write.replacement.size() > end) continue;
-        const size_t offset = (size_t)(write.location - base);
-        if (std::memcmp(bytes + offset, write.expected.data(),
-                        write.expected.size()) != 0) {
-            std::fprintf(stderr,
-                "psxrecomp: disc mod plan %s rejected at LBA %u+%zu "
-                "(expected-byte guard failed; disc overlay disabled)\n",
-                s.plan.fingerprint.c_str(), lba, offset);
-            s.disc_guard_failed = true;
-            return;
+    const auto& index = raw_sector ? s.raw_disc_index : s.user_disc_index;
+    const auto sector = index.find(lba);
+    const auto& overlay_index =
+        raw_sector ? s.raw_overlay_index : s.user_overlay_index;
+    const auto overlay_sector = overlay_index.find(lba);
+    if (sector == index.end() && overlay_sector == overlay_index.end()) {
+        if (has_mode2_form1_user_data)
+            mod_runtime_patch_disc_sector(lba, 0, bytes + 24, 2048);
+        return;
+    }
+    if (sector != index.end()) {
+        for (size_t write_index : sector->second) {
+            const ModResolution::Write& write = s.plan.writes[write_index];
+            if (write.target != target || write.location < base ||
+                write.location + write.replacement.size() > end) continue;
+            const size_t offset = (size_t)(write.location - base);
+            if (std::memcmp(bytes + offset, write.expected.data(),
+                            write.expected.size()) != 0) {
+                std::fprintf(stderr,
+                    "psxrecomp: disc mod plan %s rejected at LBA %u+%zu "
+                    "(expected-byte guard failed; disc overlay disabled)\n",
+                    s.plan.fingerprint.c_str(), lba, offset);
+                s.disc_guard_failed = true;
+                return;
+            }
+        }
+        for (size_t write_index : sector->second) {
+            const ModResolution::Write& write = s.plan.writes[write_index];
+            if (write.target != target || write.location < base ||
+                write.location + write.replacement.size() > end) continue;
+            const size_t offset = (size_t)(write.location - base);
+            std::memcpy(bytes + offset, write.replacement.data(),
+                        write.replacement.size());
         }
     }
-    for (const ModResolution::Write& write : s.plan.writes) {
-        if (write.target != target || write.location < base ||
-            write.location + write.replacement.size() > end) continue;
-        const size_t offset = (size_t)(write.location - base);
-        std::memcpy(bytes + offset, write.replacement.data(),
-                    write.replacement.size());
+    if (overlay_sector != overlay_index.end()) {
+        for (size_t overlay_index_value : overlay_sector->second) {
+            const ModResolution::Overlay& overlay =
+                s.plan.overlays[overlay_index_value];
+            const uint64_t overlay_end =
+                overlay.location + overlay.payload.size();
+            const uint64_t copy_begin = std::max(base, overlay.location);
+            const uint64_t copy_end = std::min(end, overlay_end);
+            if (copy_begin >= copy_end) continue;
+            const size_t destination = (size_t)(copy_begin - base);
+            const size_t source = (size_t)(copy_begin - overlay.location);
+            const size_t count = (size_t)(copy_end - copy_begin);
+            std::memcpy(bytes + destination,
+                        overlay.payload.data() + source, count);
+        }
     }
+    if (has_mode2_form1_user_data && !s.disc_guard_failed)
+        mod_runtime_patch_disc_sector(lba, 0, bytes + 24, 2048);
 }

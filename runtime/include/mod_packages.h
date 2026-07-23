@@ -21,6 +21,7 @@ struct ModChoice {
 };
 
 struct ModOption {
+    std::string feature_id;
     std::string id;
     std::string label;
     std::string description;
@@ -31,6 +32,15 @@ struct ModOption {
     int64_t max_value = 0;
     int64_t step = 1;
     std::vector<ModChoice> choices;
+};
+
+struct ModFeature {
+    std::string id;
+    std::string name;
+    std::string description;
+    std::string group = "General";
+    bool default_enabled = false;
+    bool legacy = false;
 };
 
 struct ModRequirement {
@@ -51,12 +61,25 @@ enum class ModPatchTarget {
 };
 
 struct ModPatch {
+    std::string feature_id;
     ModPatchTarget target = ModPatchTarget::MainExe;
     uint64_t location = 0; /* guest address or canonical disc-stream byte offset */
     std::vector<uint8_t> expected;
     std::vector<uint8_t> replacement;
     std::string when_option;
     std::string when_value;
+    std::map<std::string, std::string> when;
+    int64_t order = 0;
+};
+
+struct ModOverlay {
+    std::string feature_id;
+    ModPatchTarget target = ModPatchTarget::DiscRaw;
+    uint64_t location = 0;
+    std::filesystem::path file;
+    std::string sha256;
+    std::string expected_sha256;
+    uint64_t size = 0;
     std::map<std::string, std::string> when;
     int64_t order = 0;
 };
@@ -86,15 +109,25 @@ struct ModPackage {
     std::vector<ModTarget> targets;
     std::vector<ModRequirement> dependencies;
     std::vector<std::string> conflicts;
+    std::vector<ModFeature> features;
     std::vector<ModOption> options;
     std::vector<ModPatch> patches;
+    std::vector<ModOverlay> overlays;
     std::vector<ModDerivedDisc> derived_discs;
 };
 
+struct ModFeatureSelection {
+    bool enabled = false;
+    bool has_enabled = false;
+    std::map<std::string, std::string> values;
+};
+
 struct ModSelection {
+    /* v1 migration state. Feature-style manifests do not use these fields. */
     bool enabled = false;
     std::string version;
     std::map<std::string, std::string> values;
+    std::map<std::string, ModFeatureSelection> features;
 };
 
 struct ModResolution {
@@ -107,8 +140,19 @@ struct ModResolution {
         std::vector<uint8_t> expected;
         std::vector<uint8_t> replacement;
         std::string package_id;
+        std::string feature_id;
     };
     std::vector<Write> writes;
+    struct Overlay {
+        ModPatchTarget target = ModPatchTarget::DiscRaw;
+        uint64_t location = 0;
+        std::vector<uint8_t> payload;
+        std::string payload_sha256;
+        std::string expected_sha256;
+        std::string package_id;
+        std::string feature_id;
+    };
+    std::vector<Overlay> overlays;
     struct DerivedDisc {
         std::string kind;
         std::filesystem::path patch;
@@ -118,6 +162,15 @@ struct ModResolution {
         std::string package_id;
     };
     std::vector<DerivedDisc> derived_discs;
+    struct Diagnostic {
+        std::string message;
+        std::string resource;
+        std::string package_id;
+        std::string feature_id;
+        std::string other_package_id;
+        std::string other_feature_id;
+    };
+    std::vector<Diagnostic> diagnostics;
     std::vector<std::string> errors;
 };
 
@@ -150,12 +203,27 @@ public:
                         std::string* error = nullptr);
     bool set_option(const std::string& id, const std::string& option,
                     const std::string& value, std::string* error = nullptr);
+    bool set_feature_enabled(const std::string& package_id,
+                             const std::string& feature_id, bool enabled,
+                             std::string* error = nullptr);
+    bool set_feature_option(const std::string& package_id,
+                            const std::string& feature_id,
+                            const std::string& option_id,
+                            const std::string& value,
+                            std::string* error = nullptr);
 
     const std::map<std::string, std::map<std::string, ModPackage>>& packages() const {
         return packages_;
     }
     const std::map<std::string, ModSelection>& selections() const { return selections_; }
     const ModPackage* selected_package(const std::string& id) const;
+    const ModFeature* selected_feature(const std::string& package_id,
+                                       const std::string& feature_id) const;
+    bool feature_enabled(const std::string& package_id,
+                         const std::string& feature_id) const;
+    std::string feature_option_value(const std::string& package_id,
+                                     const std::string& feature_id,
+                                     const std::string& option_id) const;
 
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},
