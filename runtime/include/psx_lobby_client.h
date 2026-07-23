@@ -12,7 +12,7 @@ extern "C" {
 #define PSX_LOBBY_VERSION_LEN 32
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
-#define PSX_LOBBY_MAX_MEMBERS 4
+#define PSX_LOBBY_MAX_MEMBERS 5
 #define PSX_LOBBY_LANG_LEN 16
 
 #ifndef PSX_GAME_VERSION
@@ -89,6 +89,9 @@ void psx_lobby_pump(void);
  */
 void psx_lobby_set_game_identity(const char *game_name, const char *game_version);
 const char *psx_lobby_game_version(void);
+
+/* Default max_slots for create (clamped 2..5, default 2). */
+void psx_lobby_set_max_slots(int max_slots);
 
 void psx_lobby_request_list(void);
 int  psx_lobby_list_count(void);

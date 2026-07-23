@@ -21,11 +21,19 @@
 #include "recomp_net/recomp_net.h"
 #endif
 
+#ifndef PSX_MAX_PLAYERS
+#define PSX_MAX_PLAYERS 2
+#endif
+
+/* Session pad count mirrored for release_pads (available without recomp-net). */
+static int g_np_slot_count = 2;
+
 void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
 {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->local_slot = 0;
+    cfg->slot_count = 2;
     cfg->input_player = -1;
     cfg->input_delay = 2;
     cfg->session_id = 1;
@@ -48,6 +56,8 @@ void psx_netplay_apply_env(PsxNetplayConfig *cfg)
     if (v && v[0] && v[0] != '0') cfg->enabled = 1;
     v = getenv("PSX_NET_SLOT");
     if (v && v[0]) cfg->local_slot = (int)strtol(v, NULL, 10);
+    v = getenv("PSX_NET_SLOTS");
+    if (v && v[0]) cfg->slot_count = (int)strtol(v, NULL, 10);
     v = getenv("PSX_NET_INPUT_PLAYER");
     if (v && v[0]) cfg->input_player = (int)strtol(v, NULL, 10);
     v = getenv("PSX_NET_DELAY");
@@ -83,7 +93,11 @@ static void force_session_pads_connected(int slot_count)
 {
     int i;
     if (slot_count < 2) slot_count = 2;
-    if (slot_count > 2) slot_count = 2;
+    if (slot_count > PSX_MAX_PLAYERS) slot_count = PSX_MAX_PLAYERS;
+    if (slot_count >= 3)
+        sio_set_multitap(1);
+    else
+        sio_set_multitap(0);
     for (i = 0; i < slot_count; ++i) {
         sio_connect_pad(i);
         sio_set_pad_config_capable(i, 1);
@@ -92,13 +106,16 @@ static void force_session_pads_connected(int slot_count)
 
 void psx_netplay_release_pads(void)
 {
-    force_session_pads_connected(2);
-    sio_set_pad_state_slot(0, 0xFFFFu);
-    sio_set_pad_state_slot(1, 0xFFFFu);
-    sio_set_pad_sticks(0, 0x80, 0x80, 0x80, 0x80);
-    sio_set_pad_sticks(1, 0x80, 0x80, 0x80, 0x80);
-    sio_request_pad_type(0, 1);
-    sio_request_pad_type(1, 1);
+    int i;
+    int n = g_np_slot_count;
+    if (n < 2) n = 2;
+    if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    force_session_pads_connected(n);
+    for (i = 0; i < n; ++i) {
+        sio_set_pad_state_slot(i, 0xFFFFu);
+        sio_set_pad_sticks(i, 0x80, 0x80, 0x80, 0x80);
+        sio_request_pad_type(i, 1);
+    }
 }
 
 #if !defined(PSX_HAS_RECOMP_NET)
@@ -164,7 +181,7 @@ typedef struct {
     int          active;
     int          slot_count;
     int          local_slot;
-    int          input_player; /* resolved 0/1 */
+    int          input_player; /* resolved host PlayerInput index */
     int          needs_advance;
     int          latched_for_tick; /* 1 if staged pad frozen for current sim_tick */
     uint32_t     latched_sim_tick;
@@ -771,7 +788,7 @@ static void decode_pad(const RNetInputSample *in, PsxNetPad *pad)
 
 static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
-    if (slot < 0 || slot > 1 || !pad) return;
+    if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
     sio_set_pad_connected(slot, 1);
     sio_set_pad_config_capable(slot, 1);
     sio_set_pad_state_slot(slot, pad->buttons);
@@ -796,11 +813,15 @@ static void host_sample_local(rnet_u32 tick, RNetInputSample *out, void *ctx)
 static void host_publish(rnet_u32 tick, const RNetInputSample *by_slot, int slots, void *ctx)
 {
     int i;
+    int n;
     (void)tick;
     (void)ctx;
     if (!by_slot || slots <= 0) return;
-    force_session_pads_connected(slots);
-    for (i = 0; i < slots && i < 2; ++i) {
+    n = g_np.slot_count;
+    if (n > slots) n = slots;
+    if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    force_session_pads_connected(n);
+    for (i = 0; i < n; ++i) {
         PsxNetPad pad;
         decode_pad(&by_slot[i], &pad);
         apply_pad_slot(i, &pad);
@@ -922,18 +943,30 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     RNetConfig rcfg;
     RNetHostVTable host;
     int in_player;
+    int slots;
+    int local;
 
     if (!cfg || !cfg->enabled) return -1;
     if (g_np.session) psx_netplay_shutdown();
 
+    slots = cfg->slot_count;
+    if (slots < 2) slots = 2;
+    if (slots > PSX_MAX_PLAYERS) slots = PSX_MAX_PLAYERS;
+    if (slots > RNET_MAX_SLOTS) slots = RNET_MAX_SLOTS;
+
+    local = cfg->local_slot;
+    if (local < 0) local = 0;
+    if (local >= slots) local = slots - 1;
+
     rnet_config_init_defaults(&rcfg);
-    rcfg.slot_count = 2;
-    rcfg.local_slot = (rnet_u8)(cfg->local_slot < 0 ? 0 : (cfg->local_slot > 1 ? 1 : cfg->local_slot));
+    rcfg.slot_count = (rnet_u8)slots;
+    rcfg.local_slot = (rnet_u8)local;
     rcfg.input_delay = (rnet_u8)(cfg->input_delay < 0 ? 0 : (cfg->input_delay > 16 ? 16 : cfg->input_delay));
     rcfg.session_id = cfg->session_id ? cfg->session_id : 1u;
 
-    /* Host resolves auto (-1) before start; accept only 0/1 here. */
-    in_player = (cfg->input_player == 1) ? 1 : 0;
+    /* Host resolves auto (-1) before start; accept 0..PSX_MAX_PLAYERS-1. */
+    in_player = cfg->input_player;
+    if (in_player < 0 || in_player >= PSX_MAX_PLAYERS) in_player = 0;
 
     memset(&host, 0, sizeof(host));
     host.sample_local = host_sample_local;
@@ -949,8 +982,13 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     }
     g_np.active = 1;
     g_np.slot_count = (int)rcfg.slot_count;
+    g_np_slot_count = g_np.slot_count;
     g_np.local_slot = (int)rcfg.local_slot;
     g_np.input_player = in_player;
+    if (g_np.slot_count >= 3)
+        sio_set_multitap(1);
+    else
+        sio_set_multitap(0);
     g_np.staged_valid = 0;
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;

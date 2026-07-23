@@ -7,6 +7,16 @@
 extern "C" {
 #endif
 
+/* Logical pad count. Default 2 (port1=pad0, port2=pad1). With multitap
+ * (sio_set_multitap) and PSX_MAX_PLAYERS>=5: port1 hosts SCPH-1070 pads
+ * A–D as logical 0–3, port2 is logical pad 4. Absolute max for this pass. */
+#ifndef PSX_MAX_PLAYERS
+#define PSX_MAX_PLAYERS 2
+#endif
+#if PSX_MAX_PLAYERS < 1 || PSX_MAX_PLAYERS > 5
+#error "PSX_MAX_PLAYERS must be in 1..5"
+#endif
+
 /* SIO0 register base: 0x1F801040 */
 #define SIO_BASE 0x1F801040
 
@@ -57,14 +67,22 @@ uint32_t sio_cycles_to_irq(uint32_t i_mask);
 uint64_t sio_get_advance_called(void);
 uint64_t sio_get_advance_with_work(void);
 
+/* SCPH-1070 multitap on physical port 1 (SIO slot bit 0). Off by default.
+ * When enabled (and PSX_MAX_PLAYERS>=5): port1 bulk-polls logical pads 0–3;
+ * port2 is a single pad at logical index 4. When disabled / MAX==2: today's
+ * mapping (port1=pad0, port2=pad1). */
+void sio_set_multitap(int enabled);
+int  sio_get_multitap(void);
+
 /* Update pad button state. Buttons use PS1 convention: 0=pressed, 1=released.
    Bit layout: SELECT, L3, R3, START, UP, RIGHT, DOWN, LEFT,
                L2, R2, L1, R1, TRIANGLE, CIRCLE, CROSS, SQUARE
-   sio_set_pad_state targets port 1 (slot 0); the _slot form targets either. */
+   sio_set_pad_state targets logical pad 0; the _slot form targets
+   logical pad 0 .. PSX_MAX_PLAYERS-1. */
 void sio_set_pad_state(uint16_t buttons);
 void sio_set_pad_state_slot(int slot, uint16_t buttons);
 
-/* Set the analog stick state + pad type for a slot. enabled selects the
+/* Set the analog stick state + pad type for a logical pad. enabled selects the
  * emulated pad: 0 = digital (poll id 0x41), 1 = DualShock/analog (poll id
  * 0x73, with the four 0..255 stick axes appended; 0x80 = centred). */
 void sio_set_pad_analog(int slot, int enabled,
@@ -79,22 +97,23 @@ void sio_set_pad_analog(int slot, int enabled,
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
 void sio_request_pad_type(int slot, int analog);
 
-/* Connect / disconnect a pad on a slot (0=port1, 1=port2). By default no pads
- * are connected during initial BIOS boot. */
+/* Connect / disconnect a logical pad (0 .. PSX_MAX_PLAYERS-1). By default no
+ * pads are connected during initial BIOS boot. */
 void sio_connect_pad(int slot);
 void sio_set_pad_connected(int slot, int connected);
 
-/* Declare whether the pad on a slot is a config-capable DualShock (1) or a
- * plain digital controller (0). A real digital controller (SCPH-1080, poll id
- * 0x41) does NOT answer the config-mode commands (0x43/0x44/0x45/0x46/0x47/
- * 0x4C/0x4D/0x4F) — it returns hi-z / no ACK, so a game's pad driver classifies
- * it as digital-only and just polls with 0x42. A DualShock answers them. Set
- * from the per-player pad mode (DIGITAL => 0, ANALOG/HYBRID => 1) at boot/
- * hotplug. Default is 1 (config-capable) so existing analog/hybrid behaviour is
- * unchanged. */
+/* Declare whether the pad on a logical slot is a config-capable DualShock (1)
+ * or a plain digital controller (0). A real digital controller (SCPH-1080,
+ * poll id 0x41) does NOT answer the config-mode commands (0x43/0x44/0x45/
+ * 0x46/0x47/0x4C/0x4D/0x4F) — it returns hi-z / no ACK, so a game's pad
+ * driver classifies it as digital-only and just polls with 0x42. A DualShock
+ * answers them. Set from the per-player pad mode (DIGITAL => 0, ANALOG/HYBRID
+ * => 1) at boot/hotplug. Default is 1 (config-capable) so existing
+ * analog/hybrid behaviour is unchanged. */
 void sio_set_pad_config_capable(int slot, int capable);
 
-/* Return current pad button state (for debug server). _slot targets either. */
+/* Return current pad button state (for debug server). _slot targets a logical
+ * pad 0 .. PSX_MAX_PLAYERS-1. */
 uint16_t sio_get_pad_buttons(void);
 uint16_t sio_get_pad_buttons_slot(int slot);
 
@@ -106,7 +125,7 @@ uint16_t sio_peek_stat(void);
 uint16_t sio_peek_ctrl(void);
 uint8_t  sio_peek_rx_data(void);
 
-/* Debug accessors: is a pad connected on the slot, and is it in analog mode. */
+/* Debug accessors: is a logical pad connected, and is it in analog mode. */
 int sio_get_pad_connected(int slot);
 int sio_get_pad_analog(int slot);
 void sio_get_pad_sticks(int slot, uint8_t out[4]);

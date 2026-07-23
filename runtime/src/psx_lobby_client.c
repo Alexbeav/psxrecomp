@@ -25,6 +25,7 @@ int  psx_lobby_list_count(void) { return 0; }
 int  psx_lobby_list_get(int index, PsxLobbyRow *out) { (void)index; (void)out; return 0; }
 void psx_lobby_set_game_identity(const char *a, const char *b) { (void)a; (void)b; }
 const char *psx_lobby_game_version(void) { return PSX_GAME_VERSION; }
+void psx_lobby_set_max_slots(int max_slots) { (void)max_slots; }
 int  psx_lobby_create(const char *a, const char *b, const char *c, const char *d,
                       const char *e, const PsxLobbyMatchCaps *f)
 { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; return -1; }
@@ -112,6 +113,16 @@ static LobbyClient g_lc = {
     .fd = -1,
     .filter_game_version = PSX_GAME_VERSION,
 };
+
+/* Default max_slots for create (clamped 2..5). */
+static int g_lobby_max_slots = 2;
+
+void psx_lobby_set_max_slots(int max_slots)
+{
+    if (max_slots < 2) max_slots = 2;
+    if (max_slots > 5) max_slots = 5;
+    g_lobby_max_slots = max_slots;
+}
 
 static const char *effective_game_version(const char *override_ver)
 {
@@ -649,7 +660,7 @@ static void handle_server_json(const char *json)
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
         g_lc.join.player_count = 1;
-        g_lc.join.max_slots = 2;
+        g_lc.join.max_slots = json_get_int(json, "max_slots", g_lobby_max_slots);
         g_lc.join.last_error[0] = '\0';
         if (g_lc.player_id[0]) {
             strncpy(g_lc.host_player_id, g_lc.player_id, sizeof(g_lc.host_player_id) - 1);
@@ -1075,9 +1086,9 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
     }
     n = snprintf(msg, sizeof(msg),
                  "{\"op\":\"create\",\"name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
-                 "\"password\":\"%s\",\"max_slots\":2,\"host_bind\":\"%s\",\"display_name\":\"%s\"%s}",
+                 "\"password\":\"%s\",\"max_slots\":%d,\"host_bind\":\"%s\",\"display_name\":\"%s\"%s}",
                  name && name[0] ? name : "Lobby", gn, gv,
-                 password ? password : "", g_lc.my_bind,
+                 password ? password : "", g_lobby_max_slots, g_lc.my_bind,
                  g_lc.display_name[0] ? g_lc.display_name : "Host", caps_json);
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);

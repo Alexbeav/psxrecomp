@@ -35,6 +35,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "frame_pacing.h"
 #include "latency_ring.h"
 #include "sio.h"
+#ifndef PSX_MAX_PLAYERS
+#define PSX_MAX_PLAYERS 2
+#endif
 #include "psx_netplay.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
@@ -294,7 +297,9 @@ struct PlayerInput {
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
 };
-static PlayerInput g_players[2];
+static PlayerInput g_players[PSX_MAX_PLAYERS];
+/* Offline SIO sample loop bound (from game.toml players; clamped). */
+static int g_offline_pad_count = 2;
 /* ARGB8888 staging buffer. Sized for the active internal resolution:
  * 640*scale x 512*scale. Allocated once the supersampling scale is known
  * (sized for the native 640x512 when supersampling is off). */
@@ -2116,15 +2121,23 @@ static void close_player(PlayerInput& p) {
 }
 
 static void close_controller(void) {
-    close_player(g_players[0]);
-    close_player(g_players[1]);
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+        close_player(g_players[s]);
+}
+
+static int device_claimed_by_other(int self_slot, SDL_JoystickID inst) {
+    for (int o = 0; o < PSX_MAX_PLAYERS; o++) {
+        if (o == self_slot) continue;
+        if (g_players[o].handle && g_players[o].instance == inst) return 1;
+    }
+    return 0;
 }
 
 /* Open the SDL controller whose GUID matches p.guid. If no exact GUID match
  * exists (e.g. a different physical unit of the same model, or Steam's virtual
  * pad at an unpredictable slot), fall back to the first controller not already
- * claimed by the other player. */
-static void open_player(PlayerInput& p, const PlayerInput& other) {
+ * claimed by another player. */
+static void open_player(PlayerInput& p, int self_slot) {
     if (p.kind != 2 || p.handle) return;
 
     int chosen = -1, fallback = -1;
@@ -2134,9 +2147,9 @@ static void open_player(PlayerInput& p, const PlayerInput& other) {
         SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(i);
         char buf[40] = {0};
         SDL_JoystickGetGUIDString(g, buf, sizeof(buf));
-        /* Skip a device already opened by the other player. */
+        /* Skip a device already opened by another player. */
         SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
-        if (other.handle && other.instance == inst) continue;
+        if (device_claimed_by_other(self_slot, inst)) continue;
         if (p.guid[0] && std::strcmp(buf, p.guid) == 0) { chosen = i; break; }
         if (fallback < 0) fallback = i;
     }
@@ -2170,10 +2183,10 @@ static int pad_mode_boot_analog(int mode) {
  * psx_netplay (session slots stay plugged); only refresh host SDL handles. */
 static void refresh_player_devices(void) {
     const int netplay = psx_netplay_active();
-    for (int s = 0; s < 2; s++) {
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         PlayerInput& p = g_players[s];
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
-        else open_player(p, g_players[s ^ 1]);
+        else open_player(p, s);
         if (netplay) continue;
         sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
         sio_set_pad_analog(s, pad_mode_boot_analog(p.mode), 0x80, 0x80, 0x80, 0x80);
@@ -2634,9 +2647,9 @@ static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
  * capture — no keyboard-all / all-controllers merge — so peers hash-agree. */
 static void capture_local_human_pad(PsxNetPad* out) {
     int idx = psx_netplay_input_player();
-    if (idx < 0 || idx > 1) idx = 0;
+    if (idx < 0 || idx >= PSX_MAX_PLAYERS) idx = 0;
     if (!capture_pad_slot_exclusive(idx, out)) {
-        /* Fallback: if auto picked empty P2, try P1 (two-machine guest). */
+        /* Fallback: if auto picked empty local slot, try P1 (two-machine guest). */
         if (idx != 0 && capture_pad_slot_exclusive(0, out)) {
             out->connected = 1;
             psx_netplay_normalize_pad(out);
@@ -2803,7 +2816,10 @@ static void sample_pad_into_sio(int override) {
         apply_input_override_to_sio(override);
         return;
     }
-    for (int s = 0; s < 2; s++) {
+    int n = g_offline_pad_count;
+    if (n < 1) n = 1;
+    if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    for (int s = 0; s < n; s++) {
         PsxNetPad pad;
         if (!capture_pad_slot(s, &pad)) continue;  /* no device in this port */
         /* Push sticks every frame; request the pad type (digital/analog) through
@@ -3148,8 +3164,11 @@ static void sdl_vblank_present(void) {
             } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
                 refresh_player_devices();
             } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
-                if (ev.cdevice.which == g_players[0].instance ||
-                    ev.cdevice.which == g_players[1].instance) {
+                bool ours = false;
+                for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+                    if (ev.cdevice.which == g_players[s].instance) { ours = true; break; }
+                }
+                if (ours) {
                     close_controller();
                     refresh_player_devices();
                 }
@@ -3806,6 +3825,7 @@ namespace {
     }
 
     std::string g_lnch_netplay_game_name;
+    int g_lnch_game_players = 2; /* from game.toml; lobby max_slots default */
     std::filesystem::path g_lnch_settings_path;
     std::string g_lnch_lobby_url;
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
@@ -4079,7 +4099,8 @@ namespace {
         std::snprintf(out->game_name, sizeof(out->game_name), "%s",
                       state.game.empty() ? "PSX" : state.game.c_str());
         out->player_count = state.joiner_name.empty() ? 1 : 2;
-        out->max_slots = 2;
+        out->max_slots = g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
+        if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
         out->has_password = state.password.empty() ? 0 : 1;
         return 1;
     }
@@ -4314,6 +4335,7 @@ namespace {
 
     int ae_np_connect(void*) {
         psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_max_slots(g_lnch_game_players);
         return psx_lobby_connect(ae_np_default_url(nullptr));
     }
 
@@ -4723,7 +4745,8 @@ namespace {
      * port when the requested one is busy. Returns 0 ok, -4 port unavailable. */
     int ae_np_create(void*, const char* lobby_name, char* host_endpoint,
                      const char* password,
-                     const RecompLauncherCSettings* settings) {
+                     const RecompLauncherCSettings* settings,
+                     int lan_only) {
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
         char endpoint[96];
         if (host_endpoint && host_endpoint[0])
@@ -4732,7 +4755,9 @@ namespace {
             std::snprintf(endpoint, sizeof(endpoint), "0.0.0.0:7777");
         const int want_port = ae_np_lan_endpoint_port(endpoint);
 
-        if (!ae_np_endpoint_is_any_bind(endpoint)) {
+        /* lan_only: publish only the local LAN registry (no lobby server).
+         * Also take this path when the UI already bound a concrete LAN IP. */
+        if (lan_only || !ae_np_endpoint_is_any_bind(endpoint)) {
             /* LAN/Direct IP: exact port required — fail if busy. */
             if (psx_lobby_in_lobby())
                 (void)psx_lobby_leave();
@@ -4763,6 +4788,7 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
+        psx_lobby_set_max_slots(g_lnch_game_players);
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
                                 g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
                                 password ? password : "", endpoint, &caps);
@@ -5024,6 +5050,10 @@ namespace {
                 g_lnch_pending_direct_launch.input_player = 0;
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = 2;
+                g_lnch_pending_direct_launch.max_slots =
+                    g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
+                if (g_lnch_pending_direct_launch.max_slots > PSX_MAX_PLAYERS)
+                    g_lnch_pending_direct_launch.max_slots = PSX_MAX_PLAYERS;
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
                     const char* port = colon == std::string::npos
@@ -5090,6 +5120,9 @@ namespace {
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
         out->session_id = ji->session_id;
         out->input_delay = (caps && caps->valid) ? caps->input_delay : 2;
+        out->max_slots = ji->max_slots >= 2 ? ji->max_slots
+                         : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2);
+        if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
         return 1;
     }
 
@@ -5338,6 +5371,9 @@ int main(int argc, char** argv) {
             game_id   = gc.id;
             game_region = gc.region;
             game_players = gc.players;
+            g_offline_pad_count = game_players > 0 ? game_players : 1;
+            if (g_offline_pad_count > PSX_MAX_PLAYERS)
+                g_offline_pad_count = PSX_MAX_PLAYERS;
             game_has_disc_crc = gc.has_disc_crc;
             game_disc_crc     = gc.disc_crc;
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
@@ -6124,7 +6160,13 @@ int main(int argc, char** argv) {
             gi.memcard_inspect = ae_memcard_inspect;
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
-            gi.netplay_supported = (game_players == 2) ? 1 : 0;
+            g_lnch_game_players = game_players;
+            g_offline_pad_count = game_players > 0 ? game_players : 1;
+            if (g_offline_pad_count > PSX_MAX_PLAYERS)
+                g_offline_pad_count = PSX_MAX_PLAYERS;
+            psx_lobby_set_max_slots(game_players);
+            gi.netplay_supported =
+                (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
             gi.netplay = &g_lnch_netplay_callbacks;
 #endif
 
@@ -6226,15 +6268,21 @@ int main(int argc, char** argv) {
                     net_cfg.input_player = ls.netplay_launch.input_player;
                     net_cfg.session_id = ls.netplay_launch.session_id;
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
+                    net_cfg.slot_count = ls.netplay_launch.max_slots >= 2
+                                             ? ls.netplay_launch.max_slots
+                                             : game_players;
+                    if (net_cfg.slot_count < 2) net_cfg.slot_count = 2;
+                    if (net_cfg.slot_count > PSX_MAX_PLAYERS)
+                        net_cfg.slot_count = PSX_MAX_PLAYERS;
                     std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                                   ls.netplay_launch.bind_hostport);
                     std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
                                   ls.netplay_launch.peer_hostport);
                     g_netplay_from_lobby = 1;
                     std::fprintf(stdout,
-                        "psxrecomp: launcher netplay slot=%d bind=%s peer=%s session=%u\n",
-                        net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport,
-                        (unsigned)net_cfg.session_id);
+                        "psxrecomp: launcher netplay slot=%d slots=%d bind=%s peer=%s session=%u\n",
+                        net_cfg.local_slot, net_cfg.slot_count, net_cfg.bind_hostport,
+                        net_cfg.peer_hostport, (unsigned)net_cfg.session_id);
                     std::fflush(stdout);
                 } else {
                     g_netplay_from_lobby = 0;
@@ -6408,7 +6456,10 @@ session_reboot:
      * ports during early boot. */
     set_player_device(g_players[0], p1_device, p1_mode);
     set_player_device(g_players[1], p2_device, p2_mode);
-    for (int s = 0; s < 2; s++) {
+    /* Slots 2+ stay kind=0 until assigned; still size SIO for the build ceiling. */
+    if (game_players >= 3)
+        sio_set_multitap(1);
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         /* Dev-any-input keeps P1 connected even with no assigned controller so the
          * keyboard / any plugged-in controller can drive port 1 standalone. */
         const bool dev_p1 = (dev_any_input_enabled() && s == 0);
@@ -6746,13 +6797,17 @@ session_reboot:
         /* Resolve which host PlayerInput feeds this peer's net sample.
          * Auto: prefer g_players[local_slot] when assigned (same-PC: host
          * C40 on P1 + guest keyboard on P2); else player 0 (two-machine). */
-        if (net_cfg.input_player != 0 && net_cfg.input_player != 1) {
-            const int prefer = (net_cfg.local_slot == 1) ? 1 : 0;
-            if (prefer == 1 && g_players[1].kind != 0)
-                net_cfg.input_player = 1;
+        if (net_cfg.input_player < 0 || net_cfg.input_player >= PSX_MAX_PLAYERS) {
+            const int prefer = net_cfg.local_slot;
+            if (prefer >= 0 && prefer < PSX_MAX_PLAYERS && g_players[prefer].kind != 0)
+                net_cfg.input_player = prefer;
             else
                 net_cfg.input_player = 0;
         }
+        if (net_cfg.slot_count < 2)
+            net_cfg.slot_count = game_players >= 2 ? game_players : 2;
+        if (net_cfg.slot_count > PSX_MAX_PLAYERS)
+            net_cfg.slot_count = PSX_MAX_PLAYERS;
         const int nrc = psx_netplay_start(&net_cfg);
         if (nrc != 0) {
             std::fprintf(stderr,
@@ -7124,7 +7179,10 @@ soft_return_lobby:
         launcher_profile_apply("psx", &gi);
         gi.name = game_name.empty() ? nullptr : game_name.c_str();
         gi.num_players = game_players;
-        gi.netplay_supported = 1;
+        g_lnch_game_players = game_players;
+        psx_lobby_set_max_slots(game_players);
+        gi.netplay_supported =
+            (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
         gi.netplay = &g_lnch_netplay_callbacks;
         gi.resume_netplay_room = 1;
         gi.resume_netplay_endpoint = ae_np_lan_endpoint_cstr();
@@ -7159,6 +7217,12 @@ soft_return_lobby:
                 net_cfg.input_player = ls.netplay_launch.input_player;
                 net_cfg.session_id = ls.netplay_launch.session_id;
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
+                net_cfg.slot_count = ls.netplay_launch.max_slots >= 2
+                                         ? ls.netplay_launch.max_slots
+                                         : game_players;
+                if (net_cfg.slot_count < 2) net_cfg.slot_count = 2;
+                if (net_cfg.slot_count > PSX_MAX_PLAYERS)
+                    net_cfg.slot_count = PSX_MAX_PLAYERS;
                 std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                               ls.netplay_launch.bind_hostport);
                 std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
