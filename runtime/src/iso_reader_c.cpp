@@ -5,6 +5,7 @@
  */
 
 #include "iso_reader.h"
+#include "mod_runtime.h"
 #include <cstdio>
 
 extern "C" {
@@ -22,13 +23,17 @@ int iso_read_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
     if (!handle) return 0;
     auto* reader = static_cast<PS1::ISOReader*>(handle);
     (void)size; /* ReadSector always reads 2048 bytes */
-    return reader->ReadSector(lba, buffer) ? 1 : 0;
+    if (!reader->ReadSector(lba, buffer)) return 0;
+    mod_runtime_patch_disc_sector(lba, 0, buffer, 2048);
+    return 1;
 }
 
 int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size) {
     if (!handle || size < 2352) return 0;
     auto* reader = static_cast<PS1::ISOReader*>(handle);
-    return reader->ReadRawSector(lba, buffer) ? 1 : 0;
+    if (!reader->ReadRawSector(lba, buffer)) return 0;
+    mod_runtime_patch_disc_sector(lba, 1, buffer, 2352);
+    return 1;
 }
 
 uint32_t iso_sector_count(void* handle) {

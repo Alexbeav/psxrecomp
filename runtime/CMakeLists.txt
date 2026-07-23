@@ -111,6 +111,27 @@ if(BUILD_TESTING)
     target_include_directories(iso_reader_cdda_test PRIVATE include)
     add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
 
+    add_executable(mod_packages_test
+        tests/test_mod_packages.cpp
+        src/mod_packages.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(mod_packages_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME mod_packages_test COMMAND mod_packages_test)
+
+    add_executable(mod_runtime_test
+        tests/test_mod_runtime.cpp
+        src/mod_runtime.cpp
+        src/mod_packages.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(mod_runtime_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME mod_runtime_test COMMAND mod_runtime_test)
+
     if(WIN32)
         add_executable(autocompile_publication_test
             tests/test_autocompile_publication.c
