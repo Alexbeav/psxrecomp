@@ -478,6 +478,12 @@ int main() {
                "expected = \"00000000\"\n"
                "replace_from = { option = \"dword\", encoding = \"u32le\" }\n"
                "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500040\n"
+               "expected = \"0000aabb\"\n"
+               "replace_from = { option = \"word\", encoding = \"u16le\", offset = 0 }\n"
+               "[[patch]]\n"
                "feature = \"numeric-collision\"\n"
                "target = \"main_exe\"\n"
                "address = 2147500032\n"
@@ -507,6 +513,8 @@ int main() {
     const ModResolution::Write* noop_write = numeric_write(0x80004001ull);
     const ModResolution::Write* word_write = numeric_write(0x80004002ull);
     const ModResolution::Write* dword_write = numeric_write(0x80004004ull);
+    const ModResolution::Write* guarded_word_write =
+        numeric_write(0x80004008ull);
     check(parametric.ok && byte_write &&
               byte_write->replacement == std::vector<uint8_t>({7}),
           "u8 replace_from must encode the selected value");
@@ -519,6 +527,10 @@ int main() {
               dword_write->replacement ==
                   std::vector<uint8_t>({0x78, 0x56, 0x34, 0x12}),
           "u32le replace_from must encode little-endian");
+    check(guarded_word_write &&
+              guarded_word_write->replacement ==
+                  std::vector<uint8_t>({0x34, 0x12, 0xaa, 0xbb}),
+          "replace_from must preserve guarded bytes outside its value field");
     const std::string parametric_fingerprint = parametric.fingerprint;
     check(feature_reload.set_feature_option(
               "parametric.mod", "numeric", "byte", "9", &error),
@@ -577,8 +589,8 @@ int main() {
               "format_version=2\n" + dynamic_prelude +
                   "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
                   "address=2147487744\nexpected=\"0000\"\n"
-                  "replace_from={option=\"value\",encoding=\"u8\"}\n"),
-          "replace_from width must match the expected guard");
+                  "replace_from={option=\"value\",encoding=\"u8\",offset=2}\n"),
+          "replace_from value must stay inside the expected guard");
     check(reject_parametric_manifest(
               "dynamic-overflow",
               "format_version=2\n" + dynamic_prelude +

@@ -74,6 +74,7 @@ struct ModPatch {
     std::vector<uint8_t> replacement;
     std::string replace_from_option;
     ModValueEncoding replace_encoding = ModValueEncoding::U8;
+    uint64_t replace_offset = 0;
     int64_t replace_addend = 0;
     std::string when_option;
     std::string when_value;

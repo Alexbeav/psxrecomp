@@ -109,22 +109,26 @@ default = 2
 feature = "starting-lives"
 target = "main_exe"
 address = 0x8001DE64
-expected = "02 00"
-replace_from = { option = "count", encoding = "u16le" }
+expected = "02 00 02 24"
+replace_from = { option = "count", encoding = "u16le", offset = 0 }
 
 [[patch]]
 feature = "starting-lives"
 target = "main_exe"
 address = 0x8001DE70
-expected = "03 00"
-replace_from = { option = "count", encoding = "u16le", addend = 1 }
+expected = "03 00 02 24"
+replace_from = { option = "count", encoding = "u16le", offset = 0, addend = 1 }
 ```
 
 `replace_from` and literal `replace` are mutually exclusive. The referenced
 option must be a bounded integer owned by the same feature. The initial
-encodings are `u8`, `u16le`, and `u32le`; the expected guard must have exactly
-the selected width. `addend` is the only supported transform, and the complete
-declared option range after that addend must fit the unsigned encoding.
+encodings are `u8`, `u16le`, and `u32le`. `offset` selects a byte field inside
+the expected guard and defaults to zero. Generated replacement bytes begin as
+an exact copy of the expected bytes, then the encoded value replaces only that
+field. This lets a MIPS immediate, for example, retain a guard and collision
+claim over its complete instruction. `addend` is the only supported transform,
+and the complete declared option range after that addend must fit the unsigned
+encoding.
 
 There is deliberately no host-endian encoding, signed inference, mask, shift,
 scale, expression language, or partial-field merge. A package uses multiple

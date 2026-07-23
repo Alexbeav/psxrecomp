@@ -1155,7 +1155,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     for (const auto& [key, unused] : table) {
                         (void)unused;
                         if (key != "option" && key != "encoding" &&
-                            key != "addend")
+                            key != "offset" && key != "addend")
                             throw std::runtime_error(
                                 "replace_from has unknown field: " + key);
                     }
@@ -1163,6 +1163,13 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         toml::find<std::string>(replacement, "option");
                     const std::string encoding =
                         toml::find<std::string>(replacement, "encoding");
+                    const int64_t replace_offset =
+                        toml::find_or<int64_t>(replacement, "offset", 0);
+                    if (replace_offset < 0)
+                        throw std::runtime_error(
+                            "replace_from offset must not be negative");
+                    patch.replace_offset =
+                        static_cast<uint64_t>(replace_offset);
                     patch.replace_addend =
                         toml::find_or<int64_t>(replacement, "addend", 0);
                     if (!parse_value_encoding(
@@ -1174,10 +1181,13 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     if (!option || option->type != ModOptionType::Integer)
                         throw std::runtime_error(
                             "replace_from must reference a same-feature integer option");
-                    if (patch.expected.size() !=
-                        value_encoding_size(patch.replace_encoding))
+                    const uint64_t encoded_size =
+                        value_encoding_size(patch.replace_encoding);
+                    if (patch.replace_offset > patch.expected.size() ||
+                        encoded_size >
+                            patch.expected.size() - patch.replace_offset)
                         throw std::runtime_error(
-                            "replace_from encoding width must match expected bytes");
+                            "replace_from value exceeds expected byte range");
                     if (!option_range_fits_encoding(
                             *option, patch.replace_encoding,
                             patch.replace_addend))
@@ -1893,18 +1903,24 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                             patch->replace_from_option);
                     int64_t parsed = 0;
                     int64_t adjusted = 0;
+                    std::vector<uint8_t> encoded;
                     if (!parse_canonical_int64(selected_value, parsed) ||
                         !checked_add_int64(
                             parsed, patch->replace_addend, adjusted) ||
                         !encode_unsigned_value(
                             patch->replace_encoding, adjusted,
-                            write.replacement)) {
+                            encoded)) {
                         result.errors.push_back(
                             package->id + "/" + patch->feature_id +
                             ": could not encode replace_from option " +
                             patch->replace_from_option);
                         continue;
                     }
+                    write.replacement = write.expected;
+                    std::copy(
+                        encoded.begin(), encoded.end(),
+                        write.replacement.begin() +
+                            static_cast<size_t>(patch->replace_offset));
                     if (write.replacement == write.expected)
                         continue;
                 }
