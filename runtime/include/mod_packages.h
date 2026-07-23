@@ -60,12 +60,21 @@ enum class ModPatchTarget {
     DiscUser,
 };
 
+enum class ModValueEncoding {
+    U8,
+    U16LE,
+    U32LE,
+};
+
 struct ModPatch {
     std::string feature_id;
     ModPatchTarget target = ModPatchTarget::MainExe;
     uint64_t location = 0; /* guest address or canonical disc-stream byte offset */
     std::vector<uint8_t> expected;
     std::vector<uint8_t> replacement;
+    std::string replace_from_option;
+    ModValueEncoding replace_encoding = ModValueEncoding::U8;
+    int64_t replace_addend = 0;
     std::string when_option;
     std::string when_value;
     std::map<std::string, std::string> when;

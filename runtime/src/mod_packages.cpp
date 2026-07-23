@@ -20,7 +20,8 @@ namespace fs = std::filesystem;
 namespace PSXRecompV4 {
 namespace {
 
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kMinFormatVersion = 1;
+constexpr uint32_t kMaxFormatVersion = 2;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -71,6 +72,33 @@ bool parse_hex_bytes(const std::string& text, std::vector<uint8_t>& out) {
         out.push_back((uint8_t)((hi << 4) | lo));
     }
     return true;
+}
+
+bool parse_value_encoding(const std::string& text, ModValueEncoding& out) {
+    static const std::pair<const char*, ModValueEncoding> values[] = {
+        {"u8", ModValueEncoding::U8},
+        {"u16le", ModValueEncoding::U16LE},
+        {"u32le", ModValueEncoding::U32LE},
+    };
+    for (const auto& [name, encoding] : values) {
+        if (text == name) {
+            out = encoding;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t value_encoding_size(ModValueEncoding encoding) {
+    switch (encoding) {
+    case ModValueEncoding::U8:
+        return 1;
+    case ModValueEncoding::U16LE:
+        return 2;
+    case ModValueEncoding::U32LE:
+        return 4;
+    }
+    return 0;
 }
 
 std::string hex_bytes(const std::vector<uint8_t>& bytes) {
@@ -702,6 +730,8 @@ bool conditions_match(const ModPackage& package, const ModSelection& selection,
     return true;
 }
 
+bool valid_option_value(const ModOption& option, const std::string& value);
+
 void read_conditions(const toml::value& value, const std::vector<ModOption>& options,
                      const std::string& feature_id,
                      std::map<std::string, std::string>& when,
@@ -732,6 +762,9 @@ void read_conditions(const toml::value& value, const std::vector<ModOption>& opt
             });
         if (option == options.end())
             throw std::runtime_error(std::string(label) + " references unknown option");
+        if (!valid_option_value(*option, condition_value))
+            throw std::runtime_error(
+                std::string(label) + " condition has invalid option value");
     }
 }
 
@@ -825,21 +858,77 @@ std::string byte_resource(ModPatchTarget target, uint64_t location) {
     return overlap_resource(target, location, 1, location, 1);
 }
 
+bool parse_canonical_int64(const std::string& value, int64_t& parsed) {
+    try {
+        size_t used = 0;
+        parsed = std::stoll(value, &used);
+        return used == value.size() && std::to_string(parsed) == value;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool integer_step_aligned(int64_t value, int64_t minimum, int64_t step) {
+    if (value < minimum || step <= 0) return false;
+    const uint64_t distance =
+        static_cast<uint64_t>(value) - static_cast<uint64_t>(minimum);
+    return distance % static_cast<uint64_t>(step) == 0;
+}
+
 bool valid_option_value(const ModOption& option, const std::string& value) {
     if (option.type == ModOptionType::Boolean)
         return value == "true" || value == "false";
     if (option.type == ModOptionType::Choice)
         return std::any_of(option.choices.begin(), option.choices.end(),
             [&](const ModChoice& choice) { return choice.value == value; });
-    try {
-        size_t used = 0;
-        const int64_t parsed = std::stoll(value, &used);
-        return used == value.size() && parsed >= option.min_value &&
-               parsed <= option.max_value &&
-               ((parsed - option.min_value) % option.step) == 0;
-    } catch (...) {
+    int64_t parsed = 0;
+    return parse_canonical_int64(value, parsed) &&
+           parsed >= option.min_value && parsed <= option.max_value &&
+           integer_step_aligned(parsed, option.min_value, option.step);
+}
+
+bool checked_add_int64(int64_t left, int64_t right, int64_t& out) {
+    if ((right > 0 && left > std::numeric_limits<int64_t>::max() - right) ||
+        (right < 0 && left < std::numeric_limits<int64_t>::min() - right))
         return false;
+    out = left + right;
+    return true;
+}
+
+uint64_t value_encoding_max(ModValueEncoding encoding) {
+    switch (encoding) {
+    case ModValueEncoding::U8:
+        return UINT8_MAX;
+    case ModValueEncoding::U16LE:
+        return UINT16_MAX;
+    case ModValueEncoding::U32LE:
+        return UINT32_MAX;
     }
+    return 0;
+}
+
+bool option_range_fits_encoding(const ModOption& option,
+                                ModValueEncoding encoding,
+                                int64_t addend) {
+    int64_t low = 0;
+    int64_t high = 0;
+    return checked_add_int64(option.min_value, addend, low) &&
+           checked_add_int64(option.max_value, addend, high) &&
+           low >= 0 &&
+           static_cast<uint64_t>(high) <= value_encoding_max(encoding);
+}
+
+bool encode_unsigned_value(ModValueEncoding encoding, int64_t value,
+                           std::vector<uint8_t>& out) {
+    if (value < 0 ||
+        static_cast<uint64_t>(value) > value_encoding_max(encoding))
+        return false;
+    const uint32_t size = value_encoding_size(encoding);
+    out.resize(size);
+    const uint64_t encoded = static_cast<uint64_t>(value);
+    for (uint32_t i = 0; i < size; ++i)
+        out[i] = static_cast<uint8_t>(encoded >> (i * 8));
+    return true;
 }
 
 std::string fingerprint_text(const std::string& text) {
@@ -888,7 +977,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
         out.save_compatibility = cfg.contains("save_compatibility")
             ? toml::find<std::string>(cfg, "save_compatibility") : "shared";
         out.root = path.parent_path();
-        if (out.format_version != kFormatVersion)
+        if (out.format_version < kMinFormatVersion ||
+            out.format_version > kMaxFormatVersion)
             throw std::runtime_error("unsupported format_version");
         if (!valid_id(out.id)) throw std::runtime_error("invalid package id");
         if (!parse_semver(out.version).valid) throw std::runtime_error("invalid semantic version");
@@ -999,7 +1089,9 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     option.step = toml::find_or<int64_t>(v, "step", 1);
                     const int64_t def = toml::find<int64_t>(v, "default");
                     if (option.min_value > option.max_value || option.step <= 0 ||
-                        def < option.min_value || def > option.max_value)
+                        def < option.min_value || def > option.max_value ||
+                        !integer_step_aligned(
+                            def, option.min_value, option.step))
                         throw std::runtime_error("invalid integer bounds/default");
                     option.default_value = std::to_string(def);
                 } else {
@@ -1037,20 +1129,79 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         "patch target must be main_exe, disc_raw, or disc_user");
                 }
                 const std::string expected = toml::find<std::string>(v, "expected");
-                const std::string replacement = toml::find<std::string>(v, "replace");
                 if (!parse_hex_bytes(expected, patch.expected) ||
-                    !parse_hex_bytes(replacement, patch.replacement) ||
-                    patch.expected.empty() ||
-                    patch.expected.size() != patch.replacement.size())
+                    patch.expected.empty())
                     throw std::runtime_error(
-                        "patch expected/replace must be equal-length non-empty hex");
+                        "patch expected must be non-empty hex");
+                const bool has_static_replace = v.contains("replace");
+                const bool has_dynamic_replace = v.contains("replace_from");
+                if (has_static_replace == has_dynamic_replace)
+                    throw std::runtime_error(
+                        "patch requires exactly one of replace or replace_from");
+                if (has_static_replace) {
+                    const std::string replacement =
+                        toml::find<std::string>(v, "replace");
+                    if (!parse_hex_bytes(replacement, patch.replacement) ||
+                        patch.expected.size() != patch.replacement.size())
+                        throw std::runtime_error(
+                            "patch expected/replace must be equal-length non-empty hex");
+                } else {
+                    if (out.format_version < 2)
+                        throw std::runtime_error(
+                            "replace_from requires format_version 2");
+                    const toml::value& replacement =
+                        toml::find(v, "replace_from");
+                    const auto& table = replacement.as_table();
+                    for (const auto& [key, unused] : table) {
+                        (void)unused;
+                        if (key != "option" && key != "encoding" &&
+                            key != "addend")
+                            throw std::runtime_error(
+                                "replace_from has unknown field: " + key);
+                    }
+                    patch.replace_from_option =
+                        toml::find<std::string>(replacement, "option");
+                    const std::string encoding =
+                        toml::find<std::string>(replacement, "encoding");
+                    patch.replace_addend =
+                        toml::find_or<int64_t>(replacement, "addend", 0);
+                    if (!parse_value_encoding(
+                            encoding, patch.replace_encoding))
+                        throw std::runtime_error(
+                            "replace_from encoding must be u8, u16le, or u32le");
+                    const ModOption* option = find_option(
+                        out, patch.feature_id, patch.replace_from_option);
+                    if (!option || option->type != ModOptionType::Integer)
+                        throw std::runtime_error(
+                            "replace_from must reference a same-feature integer option");
+                    if (patch.expected.size() !=
+                        value_encoding_size(patch.replace_encoding))
+                        throw std::runtime_error(
+                            "replace_from encoding width must match expected bytes");
+                    if (!option_range_fits_encoding(
+                            *option, patch.replace_encoding,
+                            patch.replace_addend))
+                        throw std::runtime_error(
+                            "replace_from option range/addend does not fit encoding");
+                }
                 const uint64_t sector_size =
                     patch.target == ModPatchTarget::DiscRaw ? 2352 :
                     patch.target == ModPatchTarget::DiscUser ? 2048 : 0;
                 if (sector_size != 0 &&
-                    patch.location % sector_size + patch.replacement.size() > sector_size)
+                    patch.location % sector_size + patch.expected.size() > sector_size)
                     throw std::runtime_error(
                         "disc patch may not cross a sector boundary");
+                if (patch.target == ModPatchTarget::MainExe &&
+                    (patch.location > UINT32_MAX ||
+                     patch.expected.size() >
+                         static_cast<uint64_t>(UINT32_MAX) + 1 -
+                             patch.location))
+                    throw std::runtime_error(
+                        "main_exe patch exceeds 32-bit guest address space");
+                if (sector_size != 0 &&
+                    patch.location / sector_size > UINT32_MAX)
+                    throw std::runtime_error(
+                        "disc patch LBA exceeds runtime index range");
                 patch.order = toml::find_or<int64_t>(
                     v, "order", (int64_t)declaration_index);
                 read_conditions(v, out.options, patch.feature_id, patch.when, "patch");
@@ -1733,7 +1884,30 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 write.target = patch->target;
                 write.location = patch->location;
                 write.expected = patch->expected;
-                write.replacement = patch->replacement;
+                if (patch->replace_from_option.empty()) {
+                    write.replacement = patch->replacement;
+                } else {
+                    const std::string selected_value =
+                        effective_option_value(
+                            *package, selected, patch->feature_id,
+                            patch->replace_from_option);
+                    int64_t parsed = 0;
+                    int64_t adjusted = 0;
+                    if (!parse_canonical_int64(selected_value, parsed) ||
+                        !checked_add_int64(
+                            parsed, patch->replace_addend, adjusted) ||
+                        !encode_unsigned_value(
+                            patch->replace_encoding, adjusted,
+                            write.replacement)) {
+                        result.errors.push_back(
+                            package->id + "/" + patch->feature_id +
+                            ": could not encode replace_from option " +
+                            patch->replace_from_option);
+                        continue;
+                    }
+                    if (write.replacement == write.expected)
+                        continue;
+                }
                 write.package_id = package->id;
                 write.feature_id = patch->feature_id;
                 result.writes.push_back(std::move(write));

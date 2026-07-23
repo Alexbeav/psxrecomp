@@ -68,7 +68,7 @@ int main() {
     write_bytes(root / "packages/runtime.test/1.0.0/assets/overlay.bin",
                 overlay);
     write_text(root / "packages/runtime.test/1.0.0/manifest.toml",
-        "format_version = 1\n"
+        "format_version = 2\n"
         "id = \"runtime.test\"\n"
         "version = \"1.0.0\"\n"
         "name = \"Runtime Test\"\n"
@@ -87,6 +87,17 @@ int main() {
         "[[feature]]\n"
         "id = \"user-byte\"\n"
         "name = \"User Byte\"\n"
+        "[[feature]]\n"
+        "id = \"dynamic-main\"\n"
+        "name = \"Dynamic Main\"\n"
+        "[[option]]\n"
+        "feature = \"dynamic-main\"\n"
+        "id = \"count\"\n"
+        "label = \"Count\"\n"
+        "type = \"integer\"\n"
+        "min = 0\n"
+        "max = 254\n"
+        "default = 42\n"
         "[[patch]]\n"
         "feature = \"main-code\"\n"
         "target = \"main_exe\"\n"
@@ -105,6 +116,18 @@ int main() {
         "offset = 6154\n"
         "expected = \"cc\"\n"
         "replace = \"dd\"\n"
+        "[[patch]]\n"
+        "feature = \"dynamic-main\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2147488000\n"
+        "expected = \"0000\"\n"
+        "replace_from = { option = \"count\", encoding = \"u16le\" }\n"
+        "[[patch]]\n"
+        "feature = \"dynamic-main\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2147488002\n"
+        "expected = \"0100\"\n"
+        "replace_from = { option = \"count\", encoding = \"u16le\", addend = 1 }\n"
         "[[overlay]]\n"
         "feature = \"asset-overlay\"\n"
         "target = \"disc_raw\"\n"
@@ -133,7 +156,13 @@ int main() {
         "[[feature]]\n"
         "package_id = \"runtime.test\"\n"
         "id = \"user-byte\"\n"
-        "enabled = true\n");
+        "enabled = true\n"
+        "[[feature]]\n"
+        "package_id = \"runtime.test\"\n"
+        "id = \"dynamic-main\"\n"
+        "enabled = true\n"
+        "[feature.values]\n"
+        "count = 42\n");
 
     std::string error;
     check(PSXRecompV4::mod_runtime_initialize(
@@ -142,11 +171,16 @@ int main() {
     check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    ram[0x1100] = 0; ram[0x1101] = 0;
+    ram[0x1102] = 1; ram[0x1103] = 0;
     mod_runtime_on_dispatch(0x80001000);
     check(ram[0x1000] == 1, "patch must wait for the configured entry point");
     mod_runtime_on_dispatch(0x80002000);
     check(ram[0x1000] == 0xa1 && ram[0x1003] == 0xa4,
           "main-EXE patch must apply before entry execution");
+    check(ram[0x1100] == 42 && ram[0x1101] == 0 &&
+              ram[0x1102] == 43 && ram[0x1103] == 0,
+          "dynamic main-EXE patches must encode all sites before entry");
 
     std::array<uint8_t, 2352> sector{};
     sector[10] = 0xaa;
@@ -191,6 +225,18 @@ int main() {
         3, 1, audio_sector.data(), (uint32_t)audio_sector.size());
     check(audio_sector[24 + 10] == 0xcc,
           "disc_user operations must not modify CDDA/non-data sectors");
+
+    check(PSXRecompV4::mod_runtime_initialize(
+              root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+          error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    ram[0x1100] = 0; ram[0x1101] = 0;
+    ram[0x1102] = 2; ram[0x1103] = 0; /* second dynamic guard is wrong */
+    mod_runtime_on_dispatch(0x80002000);
+    check(ram[0x1000] == 1 && ram[0x1003] == 4 &&
+              ram[0x1100] == 0 && ram[0x1101] == 0,
+          "one failed generated guard must leave the complete main plan untouched");
 
     fs::remove_all(root, ec);
     if (failures) return 1;

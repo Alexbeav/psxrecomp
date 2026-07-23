@@ -1,6 +1,7 @@
 #include "mod_packages.h"
 #include "psx_sha256.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -402,6 +403,205 @@ int main() {
     check(feature_reload.resolve("SLUS-TEST").fingerprint ==
               partial_compatible.fingerprint,
           "feature state must resolve deterministically after reload");
+
+    write_text(root / "packages/parametric.mod/1.0.0/manifest.toml",
+               "format_version = 2\n"
+               "id = \"parametric.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Parametric\"\n"
+               "resolver = \"declarative\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"numeric\"\n"
+               "name = \"Numeric\"\n"
+               "[[feature]]\n"
+               "id = \"numeric-collision\"\n"
+               "name = \"Numeric Collision\"\n"
+               "[[option]]\n"
+               "feature = \"numeric\"\n"
+               "id = \"byte\"\n"
+               "label = \"Byte\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 255\n"
+               "step = 1\n"
+               "default = 7\n"
+               "[[option]]\n"
+               "feature = \"numeric\"\n"
+               "id = \"word\"\n"
+               "label = \"Word\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 65534\n"
+               "step = 1\n"
+               "default = 4660\n"
+               "[[option]]\n"
+               "feature = \"numeric\"\n"
+               "id = \"dword\"\n"
+               "label = \"Dword\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 4294967295\n"
+               "step = 1\n"
+               "default = 305419896\n"
+               "[[option]]\n"
+               "feature = \"numeric-collision\"\n"
+               "id = \"byte\"\n"
+               "label = \"Byte\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 255\n"
+               "default = 8\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500032\n"
+               "expected = \"00\"\n"
+               "replace_from = { option = \"byte\", encoding = \"u8\" }\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500033\n"
+               "expected = \"07\"\n"
+               "replace_from = { option = \"byte\", encoding = \"u8\" }\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500034\n"
+               "expected = \"0000\"\n"
+               "replace_from = { option = \"word\", encoding = \"u16le\", addend = 1 }\n"
+               "[[patch]]\n"
+               "feature = \"numeric\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500036\n"
+               "expected = \"00000000\"\n"
+               "replace_from = { option = \"dword\", encoding = \"u32le\" }\n"
+               "[[patch]]\n"
+               "feature = \"numeric-collision\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147500032\n"
+               "expected = \"00\"\n"
+               "replace_from = { option = \"byte\", encoding = \"u8\" }\n");
+    check(feature_reload.scan(&error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric", true, &error), error.c_str());
+    check(!feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "byte", "+7", &error),
+          "integer options must reject a leading plus");
+    check(!feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "byte", "07", &error),
+          "integer options must reject noncanonical leading zeroes");
+    ModResolution parametric = feature_reload.resolve("SLUS-TEST");
+    const auto numeric_write = [&](uint64_t location)
+        -> const ModResolution::Write* {
+        const auto found = std::find_if(
+            parametric.writes.begin(), parametric.writes.end(),
+            [&](const ModResolution::Write& write) {
+                return write.package_id == "parametric.mod" &&
+                       write.location == location;
+            });
+        return found == parametric.writes.end() ? nullptr : &*found;
+    };
+    const ModResolution::Write* byte_write = numeric_write(0x80004000ull);
+    const ModResolution::Write* noop_write = numeric_write(0x80004001ull);
+    const ModResolution::Write* word_write = numeric_write(0x80004002ull);
+    const ModResolution::Write* dword_write = numeric_write(0x80004004ull);
+    check(parametric.ok && byte_write &&
+              byte_write->replacement == std::vector<uint8_t>({7}),
+          "u8 replace_from must encode the selected value");
+    check(!noop_write,
+          "replace_from equal to the stock guard must elide the no-op write");
+    check(word_write &&
+              word_write->replacement == std::vector<uint8_t>({0x35, 0x12}),
+          "u16le replace_from must apply addend and encode little-endian");
+    check(dword_write &&
+              dword_write->replacement ==
+                  std::vector<uint8_t>({0x78, 0x56, 0x34, 0x12}),
+          "u32le replace_from must encode little-endian");
+    const std::string parametric_fingerprint = parametric.fingerprint;
+    check(feature_reload.set_feature_option(
+              "parametric.mod", "numeric", "byte", "9", &error),
+          error.c_str());
+    ModResolution changed_parametric = feature_reload.resolve("SLUS-TEST");
+    check(changed_parametric.ok &&
+              changed_parametric.fingerprint != parametric_fingerprint,
+          "changing a generated integer must change the plan fingerprint");
+    check(feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric-collision", true, &error),
+          error.c_str());
+    check(!feature_reload.resolve("SLUS-TEST").ok,
+          "different generated values at one guarded byte must collide");
+    check(feature_reload.set_feature_enabled(
+              "parametric.mod", "numeric-collision", false, &error),
+          error.c_str());
+    check(feature_reload.save_state(&error), error.c_str());
+    ModPackageManager parametric_reload(root);
+    check(parametric_reload.scan(&error), error.c_str());
+    check(parametric_reload.load_state(&error), error.c_str());
+    check(parametric_reload.feature_option_value(
+              "parametric.mod", "numeric", "byte") == "9" &&
+              parametric_reload.resolve("SLUS-TEST").fingerprint ==
+                  changed_parametric.fingerprint,
+          "generated integer state and fingerprint must survive reload");
+
+    const auto reject_parametric_manifest =
+        [&](const std::string& name, const std::string& body) {
+            const fs::path path = root / (name + ".toml");
+            write_text(path, body);
+            ModPackage rejected;
+            return !ModPackageManager::read_manifest(path, rejected, &error);
+        };
+    const std::string dynamic_prelude =
+        "id=\"bad.dynamic\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"
+        "[[target]]\ngame_id=\"SLUS-TEST\"\n"
+        "[[feature]]\nid=\"bad\"\nname=\"Bad\"\n"
+        "[[option]]\nfeature=\"bad\"\nid=\"value\"\nlabel=\"Value\"\n"
+        "type=\"integer\"\nmin=0\nmax=255\ndefault=1\n";
+    check(reject_parametric_manifest(
+              "dynamic-v1",
+              "format_version=1\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"00\"\n"
+                  "replace_from={option=\"value\",encoding=\"u8\"}\n"),
+          "format 1 manifests must reject replace_from");
+    check(reject_parametric_manifest(
+              "dynamic-both",
+              "format_version=2\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"00\"\nreplace=\"01\"\n"
+                  "replace_from={option=\"value\",encoding=\"u8\"}\n"),
+          "a patch must reject simultaneous replace and replace_from");
+    check(reject_parametric_manifest(
+              "dynamic-width",
+              "format_version=2\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"0000\"\n"
+                  "replace_from={option=\"value\",encoding=\"u8\"}\n"),
+          "replace_from width must match the expected guard");
+    check(reject_parametric_manifest(
+              "dynamic-overflow",
+              "format_version=2\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"00\"\n"
+                  "replace_from={option=\"value\",encoding=\"u8\",addend=1}\n"),
+          "the full option range plus addend must fit its encoding");
+    check(reject_parametric_manifest(
+              "dynamic-unknown",
+              "format_version=2\n" + dynamic_prelude +
+                  "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+                  "address=2147487744\nexpected=\"00\"\n"
+                  "replace_from={option=\"value\",encoding=\"u8\",shift=1}\n"),
+          "replace_from must reject unknown transform fields");
+    check(reject_parametric_manifest(
+              "dynamic-step-default",
+              "format_version=2\n"
+              "id=\"bad.dynamic\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"
+              "[[target]]\ngame_id=\"SLUS-TEST\"\n"
+              "[[feature]]\nid=\"bad\"\nname=\"Bad\"\n"
+              "[[option]]\nfeature=\"bad\"\nid=\"value\"\nlabel=\"Value\"\n"
+              "type=\"integer\"\nmin=0\nmax=10\nstep=2\ndefault=3\n"),
+          "integer defaults must align to their declared step");
 
     const std::vector<uint8_t> overlay_a = {1, 2, 3, 4};
     const std::vector<uint8_t> overlay_b = {8, 9};
