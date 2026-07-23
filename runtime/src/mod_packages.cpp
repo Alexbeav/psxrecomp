@@ -42,6 +42,13 @@ bool valid_id(const std::string& value) {
     return value.front() != '.' && value.back() != '.';
 }
 
+bool valid_sha256(const std::string& value) {
+    return value.size() == 64 &&
+        std::all_of(value.begin(), value.end(), [](unsigned char c) {
+            return std::isdigit(c) || (c >= 'a' && c <= 'f');
+        });
+}
+
 bool parse_hex_bytes(const std::string& text, std::vector<uint8_t>& out) {
     std::string compact;
     compact.reserve(text.size());
@@ -561,8 +568,11 @@ bool target_matches(const ModPackage& package, const std::string& game,
 
 std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
                                  const std::map<std::string, ModSelection>& selections,
-                                 const std::vector<ModResolution::Write>& writes) {
+                                 const std::vector<ModResolution::Write>& writes,
+                                 const std::vector<ModResolution::DerivedDisc>& derived_discs,
+                                 const std::string& source_disc_sha256) {
     std::ostringstream out;
+    out << "source_disc=" << source_disc_sha256 << '\n';
     for (const ModPackage* package : ordered) {
         out << package->id << '@' << package->version << '\n';
         const auto sit = selections.find(package->id);
@@ -576,6 +586,11 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
             << '@' << std::hex << write.location << std::dec << ':'
             << hex_bytes(write.expected) << '>' << hex_bytes(write.replacement)
             << ':' << write.package_id << '\n';
+    }
+    for (const ModResolution::DerivedDisc& derived : derived_discs) {
+        out << "derived_disc:" << derived.kind << ':'
+            << derived.patch_sha256 << ':' << derived.output_size << ':'
+            << derived.output_sha256 << ':' << derived.package_id << '\n';
     }
     return out.str();
 }
@@ -784,6 +799,47 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 }
                 out.patches.push_back(std::move(patch));
                 ++declaration_index;
+            }
+        }
+        if (cfg.contains("derived_disc")) {
+            for (const toml::value& v : toml::find(cfg, "derived_disc").as_array()) {
+                ModDerivedDisc derived;
+                derived.kind = toml::find_or<std::string>(v, "kind", "vcdiff");
+                const std::string relative_patch = toml::find<std::string>(v, "patch");
+                derived.patch_sha256 = toml::find<std::string>(v, "patch_sha256");
+                const int64_t output_size = toml::find<int64_t>(v, "output_size");
+                derived.output_sha256 = toml::find<std::string>(v, "output_sha256");
+                derived.when_option =
+                    v.contains("when_option") ? toml::find<std::string>(v, "when_option") : "";
+                derived.when_value =
+                    v.contains("when_value") ? toml::find<std::string>(v, "when_value") : "";
+                if (derived.kind != "vcdiff")
+                    throw std::runtime_error("derived_disc kind must be vcdiff");
+                if (!safe_archive_name(relative_patch))
+                    throw std::runtime_error("derived_disc patch path is unsafe");
+                if (!valid_sha256(derived.patch_sha256) ||
+                    !valid_sha256(derived.output_sha256))
+                    throw std::runtime_error(
+                        "derived_disc hashes must be lowercase SHA-256");
+                if (output_size <= 0)
+                    throw std::runtime_error("derived_disc output_size must be positive");
+                derived.output_size = (uint64_t)output_size;
+                if (derived.when_option.empty() != derived.when_value.empty())
+                    throw std::runtime_error(
+                        "derived_disc condition requires both when_option and when_value");
+                if (!derived.when_option.empty()) {
+                    const auto option = std::find_if(
+                        out.options.begin(), out.options.end(),
+                        [&](const ModOption& item) { return item.id == derived.when_option; });
+                    if (option == out.options.end())
+                        throw std::runtime_error(
+                            "derived_disc references unknown option");
+                }
+                derived.patch = out.root / fs::path(relative_patch);
+                if (!fs::is_regular_file(derived.patch))
+                    throw std::runtime_error(
+                        "derived_disc patch asset is missing: " + relative_patch);
+                out.derived_discs.push_back(std::move(derived));
             }
         }
         return true;
@@ -1168,6 +1224,20 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         const ModSelection& selected =
             selected_it == selections_.end() ? blank : selected_it->second;
         if (package->resolver == "declarative") {
+            for (const ModDerivedDisc& derived : package->derived_discs) {
+                if (!derived.when_option.empty() &&
+                    effective_option_value(*package, selected, derived.when_option) !=
+                        derived.when_value)
+                    continue;
+                ModResolution::DerivedDisc resolved;
+                resolved.kind = derived.kind;
+                resolved.patch = derived.patch;
+                resolved.patch_sha256 = derived.patch_sha256;
+                resolved.output_size = derived.output_size;
+                resolved.output_sha256 = derived.output_sha256;
+                resolved.package_id = package->id;
+                result.derived_discs.push_back(std::move(resolved));
+            }
             std::vector<const ModPatch*> patches;
             patches.reserve(package->patches.size());
             for (const ModPatch& patch : package->patches) {
@@ -1197,6 +1267,15 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 result.errors.push_back(package->id + ": built-in resolver failed");
         }
     }
+    if (result.derived_discs.size() > 1) {
+        std::string providers;
+        for (const auto& derived : result.derived_discs) {
+            if (!providers.empty()) providers += ", ";
+            providers += derived.package_id;
+        }
+        result.errors.push_back(
+            "more than one derived-disc provider is active: " + providers);
+    }
     for (size_t i = 0; i < result.writes.size(); ++i) {
         const ModResolution::Write& write = result.writes[i];
         if (write.expected.empty() ||
@@ -1216,10 +1295,13 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
     if (!result.errors.empty()) {
         result.ordered.clear();
         result.writes.clear();
+        result.derived_discs.clear();
         return result;
     }
     result.fingerprint = fingerprint_text(
-        canonical_resolution(result.ordered, selections_, result.writes));
+        canonical_resolution(
+            result.ordered, selections_, result.writes, result.derived_discs,
+            disc_sha256));
     result.ok = true;
     return result;
 }

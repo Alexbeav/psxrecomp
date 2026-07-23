@@ -19,6 +19,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
 bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
                         std::string* error = nullptr);
 const std::string& mod_runtime_fingerprint();
+const std::filesystem::path& mod_runtime_effective_disc_path();
 
 #if defined(RECOMP_LAUNCHER)
 const ::RecompLauncherCModProvider* mod_runtime_launcher_provider();

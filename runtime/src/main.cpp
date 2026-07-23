@@ -5813,6 +5813,18 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    /* Resolve the actual stock image before mod resolution. In particular,
+     * --disc is a late CLI override and must participate in target hashing;
+     * the launcher already stores its imported stock path in resolved_disc. */
+    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
+        resolved_disc =
+            resolve_disc_for_runtime(resolved_disc, disc_override_path, game_id, argv[0]);
+        if (game_config_path && resolved_disc.empty()) {
+            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
+            return 1;
+        }
+    }
+
     {
         std::string mod_error;
         if (!PSXRecompV4::mod_runtime_commit(resolved_disc, &mod_error)) {
@@ -5848,19 +5860,19 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "psxrecomp: no BIOS selected; exiting.\n");
         return 1;
     }
-    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
-        resolved_disc = resolve_disc_for_runtime(resolved_disc, disc_override_path, game_id, argv[0]);
-        if (game_config_path && resolved_disc.empty()) {
-            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
-            return 1;
-        }
-    }
-
     /* memcard_dir was resolved to its default before the launcher (above). */
 
     std::string bios_path_str    = resolved_bios.string();
     std::string memcard_dir_str  = memcard_dir.string();
-    std::string disc_path_str    = resolved_disc.string();
+    const std::filesystem::path& mod_disc =
+        PSXRecompV4::mod_runtime_effective_disc_path();
+    std::string disc_path_str =
+        (mod_disc.empty() ? resolved_disc : mod_disc).string();
+    if (!mod_disc.empty()) {
+        std::fprintf(stdout,
+            "psxrecomp: stock disc remains %s; mounting private mod cache %s\n",
+            resolved_disc.string().c_str(), mod_disc.string().c_str());
+    }
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */

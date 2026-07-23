@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -18,6 +19,17 @@
 #include <sstream>
 #include <set>
 #include <string>
+#include <system_error>
+#include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 extern "C" uint8_t psx_read_byte(uint32_t addr);
 extern "C" void psx_write_byte(uint32_t addr, uint8_t value);
@@ -34,6 +46,7 @@ struct RuntimeMods {
     std::string exe_sha256;
     std::string disc_sha256;
     std::filesystem::path disc_path;
+    std::filesystem::path effective_disc_path;
     uint32_t entry_phys = 0;
     bool initialized = false;
     bool main_applied = false;
@@ -134,6 +147,213 @@ bool sha256_file(const std::filesystem::path& path, std::string& out,
     for (uint8_t byte : digest)
         text << std::hex << std::setw(2) << std::setfill('0') << (unsigned)byte;
     out = text.str();
+    return true;
+}
+
+std::filesystem::path raw_image_path(const std::filesystem::path& path,
+                                     std::string* error) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension != ".cue") return path;
+    std::ifstream cue(path);
+    if (!cue) {
+        if (error) *error = "cannot open CUE for derived disc: " + path.string();
+        return {};
+    }
+    std::string line;
+    while (std::getline(cue, line)) {
+        size_t at = line.find_first_not_of(" \t");
+        if (at == std::string::npos || line.size() - at < 4) continue;
+        std::string keyword = line.substr(at, 4);
+        std::transform(keyword.begin(), keyword.end(), keyword.begin(),
+            [](unsigned char c) { return (char)std::toupper(c); });
+        if (keyword != "FILE") continue;
+        at = line.find_first_not_of(" \t", at + 4);
+        if (at == std::string::npos) continue;
+        std::string name;
+        if (line[at] == '"') {
+            const size_t end = line.find('"', at + 1);
+            if (end == std::string::npos) continue;
+            name = line.substr(at + 1, end - at - 1);
+        } else {
+            const size_t end = line.find_first_of(" \t", at);
+            name = line.substr(at, end - at);
+        }
+        return (path.parent_path() / name).lexically_normal();
+    }
+    if (error) *error = "CUE has no source file for derived disc: " + path.string();
+    return {};
+}
+
+#if defined(_WIN32)
+std::wstring quote_windows_argument(const std::wstring& value) {
+    if (value.find_first_of(L" \t\n\v\"") == std::wstring::npos) return value;
+    std::wstring out = L"\"";
+    size_t slashes = 0;
+    for (wchar_t c : value) {
+        if (c == L'\\') {
+            ++slashes;
+        } else if (c == L'"') {
+            out.append(slashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+            slashes = 0;
+        } else {
+            out.append(slashes, L'\\');
+            slashes = 0;
+            out.push_back(c);
+        }
+    }
+    out.append(slashes * 2, L'\\');
+    out.push_back(L'"');
+    return out;
+}
+#endif
+
+bool run_xdelta_decode(const std::filesystem::path& executable,
+                       const std::filesystem::path& source,
+                       const std::filesystem::path& patch,
+                       const std::filesystem::path& output,
+                       std::string* error) {
+#if defined(_WIN32)
+    std::wstring command =
+        quote_windows_argument(executable.wstring()) + L" -f -n -d -s " +
+        quote_windows_argument(source.wstring()) + L" " +
+        quote_windows_argument(patch.wstring()) + L" " +
+        quote_windows_argument(output.wstring());
+    std::vector<wchar_t> mutable_command(command.begin(), command.end());
+    mutable_command.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.wstring().c_str(), mutable_command.data(),
+                        nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                        &startup, &process)) {
+        if (error) *error = "cannot start trusted xdelta3 decoder (Windows error " +
+            std::to_string((unsigned long)GetLastError()) + ")";
+        return false;
+    }
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (exit_code != 0) {
+        if (error) *error =
+            "trusted xdelta3 decoder failed with exit code " + std::to_string(exit_code);
+        return false;
+    }
+    return true;
+#else
+    const pid_t child = fork();
+    if (child == 0) {
+        execl(executable.c_str(), executable.c_str(), "-f", "-n", "-d", "-s",
+              source.c_str(), patch.c_str(), output.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    if (child < 0) {
+        if (error) *error = "cannot start trusted xdelta3 decoder";
+        return false;
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        if (error) *error = "trusted xdelta3 decoder failed";
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool valid_cached_disc(const std::filesystem::path& path,
+                       const ModResolution::DerivedDisc& derived) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(path, ec) &&
+           std::filesystem::file_size(path, ec) == derived.output_size && !ec;
+}
+
+bool materialize_derived_disc(RuntimeMods& s, const ModResolution& plan,
+                              std::filesystem::path& out, std::string* error) {
+    out.clear();
+    if (plan.derived_discs.empty()) return true;
+    const ModResolution::DerivedDisc& derived = plan.derived_discs.front();
+    std::string digest;
+    if (!sha256_file(derived.patch, digest, error) ||
+        digest != derived.patch_sha256) {
+        if (error && error->empty())
+            *error = derived.package_id + ": derived-disc patch checksum failed";
+        else if (error && digest != derived.patch_sha256)
+            *error = derived.package_id + ": derived-disc patch checksum failed";
+        return false;
+    }
+    const std::filesystem::path cache_root = s.manager.root() / "cache";
+    const std::filesystem::path cached = cache_root / (plan.fingerprint + ".bin");
+    if (valid_cached_disc(cached, derived)) {
+        out = cached;
+        return true;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(cache_root, ec);
+    if (ec) {
+        if (error) *error = "cannot create derived-disc cache: " + ec.message();
+        return false;
+    }
+    const char* override_tool = std::getenv("PSXRECOMP_XDELTA3");
+    const std::filesystem::path decoder =
+        override_tool && override_tool[0]
+            ? std::filesystem::path(override_tool)
+#if defined(_WIN32)
+            : s.manager.root().parent_path() / "xdelta3.exe";
+#else
+            : s.manager.root().parent_path() / "xdelta3";
+#endif
+    if (!std::filesystem::is_regular_file(decoder, ec)) {
+        if (error) *error =
+            "this mod needs the trusted xdelta3 decoder, but it is missing: " +
+            decoder.string();
+        return false;
+    }
+    const std::filesystem::path source = raw_image_path(s.disc_path, error);
+    if (source.empty()) return false;
+#if defined(_WIN32)
+    const unsigned long process_id = GetCurrentProcessId();
+#else
+    const unsigned long process_id = (unsigned long)getpid();
+#endif
+    const std::filesystem::path temporary =
+        cache_root / (plan.fingerprint + ".tmp." + std::to_string(process_id));
+    std::filesystem::remove(temporary, ec);
+    std::fprintf(stdout, "psxrecomp: building derived disc for %s...\n",
+                 derived.package_id.c_str());
+    if (!run_xdelta_decode(decoder, source, derived.patch, temporary, error)) {
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    if (!valid_cached_disc(temporary, derived)) {
+        std::filesystem::remove(temporary, ec);
+        if (error) *error = derived.package_id +
+            ": derived disc has the wrong output size";
+        return false;
+    }
+    if (!sha256_file(temporary, digest, error) || digest != derived.output_sha256) {
+        std::filesystem::remove(temporary, ec);
+        if (error && digest != derived.output_sha256)
+            *error = derived.package_id + ": derived disc checksum failed";
+        return false;
+    }
+    std::filesystem::rename(temporary, cached, ec);
+    if (ec) {
+        std::filesystem::remove(cached, ec);
+        ec.clear();
+        std::filesystem::rename(temporary, cached, ec);
+    }
+    if (ec) {
+        std::filesystem::remove(temporary, ec);
+        if (error) *error = "cannot publish derived-disc cache: " + ec.message();
+        return false;
+    }
+    std::fprintf(stdout, "psxrecomp: cached derived disc %s\n", cached.string().c_str());
+    out = cached;
     return true;
 }
 
@@ -328,6 +548,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
     s.exe_sha256.clear();
     s.disc_sha256.clear();
     s.disc_path.clear();
+    s.effective_disc_path.clear();
     s.entry_phys = 0;
     s.initialized = false;
     s.main_applied = false;
@@ -371,11 +592,17 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         if (error) *error = s.error;
         return false;
     }
+    std::filesystem::path effective_disc;
+    if (!materialize_derived_disc(s, plan, effective_disc, &s.error)) {
+        if (error) *error = s.error;
+        return false;
+    }
     if (!s.manager.save_state(&s.error)) {
         if (error) *error = s.error;
         return false;
     }
     s.plan = std::move(plan);
+    s.effective_disc_path = std::move(effective_disc);
     s.main_applied = false;
     s.error.clear();
     return true;
@@ -383,6 +610,10 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
 
 const std::string& mod_runtime_fingerprint() {
     return state().plan.fingerprint;
+}
+
+const std::filesystem::path& mod_runtime_effective_disc_path() {
+    return state().effective_disc_path;
 }
 
 #if defined(RECOMP_LAUNCHER)

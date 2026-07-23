@@ -107,7 +107,16 @@ int main() {
                    "expected = \"01 02 03 04\"\n"
                    "replace = \"05 06 07 08\"\n"
                    "when_option = \"difficulty\"\n"
+                   "when_value = \"hard\"\n"
+                   "[[derived_disc]]\n"
+                   "kind = \"vcdiff\"\n"
+                   "patch = \"assets/base.xdelta3\"\n"
+                   "patch_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n"
+                   "output_size = 123456\n"
+                   "output_sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"\n"
+                   "when_option = \"difficulty\"\n"
                    "when_value = \"hard\"\n"));
+    write_text(root / "packages/base.mod/1.0.0/assets/base.xdelta3", "test");
     write_text(root / "packages/addon.mod/2.0.0/manifest.toml",
                manifest("addon.mod", "2.0.0",
                    "\n[[dependency]]\nid = \"base.mod\"\nversion = \"^1.0.0\"\n"));
@@ -148,6 +157,9 @@ int main() {
               resolved.writes[0].location == 0x80001000ull &&
               resolved.writes[0].replacement[0] == 5,
           "resolved write must retain guest address and bytes");
+    check(resolved.derived_discs.size() == 1 &&
+              resolved.derived_discs[0].output_size == 123456,
+          "selected derived-disc recipe must resolve");
     check(resolved.fingerprint.size() == 64, "plan fingerprint must be SHA-256 hex");
     const std::string fingerprint = resolved.fingerprint;
 

@@ -848,6 +848,31 @@ function(psxrecomp_add_runtime_target target)
             $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
             $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>)
     endif()
+
+    # Packages may contain data-only VCDIFF recipes for deriving a private,
+    # fingerprinted runtime image from the user's verified stock disc. The
+    # decoder is supplied by the release builder and invoked only from this
+    # fixed path; packages cannot provide or execute binaries.
+    set(PSXRECOMP_XDELTA3_EXECUTABLE "" CACHE FILEPATH
+        "Trusted xdelta3 executable copied beside runtime targets")
+    if(PSXRECOMP_XDELTA3_EXECUTABLE)
+        if(NOT EXISTS "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+            message(FATAL_ERROR
+                "PSXRECOMP_XDELTA3_EXECUTABLE does not exist: "
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+        endif()
+        if(WIN32)
+            set(_psxmod_xdelta_name "xdelta3.exe")
+        else()
+            set(_psxmod_xdelta_name "xdelta3")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}"
+                "$<TARGET_FILE_DIR:${target}>/${_psxmod_xdelta_name}"
+            COMMENT "Staging trusted xdelta3 decoder for derived-disc mods"
+            VERBATIM)
+    endif()
 endfunction()
 
 # Compatibility for early v4 game projects that used the longer helper name.

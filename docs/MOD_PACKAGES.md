@@ -56,6 +56,18 @@ replace = "0e 00 02 24"
 when_option = "delay"
 when_value = "fast"
 order = 10
+
+# Optional: use this for structural changes that cannot be represented as
+# equal-size sector writes. Multiple entries may select different recipes from
+# one launcher option, but exactly one may resolve in the complete mod plan.
+[[derived_disc]]
+kind = "vcdiff"
+patch = "assets/fast.xdelta3"
+patch_sha256 = "..."
+output_size = 600000000
+output_sha256 = "..."
+when_option = "delay"
+when_value = "fast"
 ```
 
 Option types are `boolean`, `choice`, and bounded `integer`. `when_option` /
@@ -81,6 +93,33 @@ cache. Untouched functions stay on the static native path. This makes runtime
 cost proportional to the code actually changed, not to the number of possible
 option combinations.
 
+## Derived discs
+
+A `derived_disc` is a data-only VCDIFF recipe whose source is the verified stock
+disc from `[[target]].disc_sha256`. It is intended for mods that relocate files,
+grow the ISO, replace large assets, or otherwise change disc geometry.
+
+The launcher continues to display and persist the user's stock BIN/CUE. Before
+boot, the runtime:
+
+1. fingerprints that stock image and resolves package options;
+2. verifies the package's VCDIFF payload;
+3. invokes the release's trusted `xdelta3` binary (packages cannot provide an
+   executable);
+4. verifies the derived size and SHA-256; and
+5. atomically publishes and mounts
+   `mods/cache/<plan-fingerprint>.bin`.
+
+Changing package versions or options changes the plan fingerprint and therefore
+the cache key. A cached result is reused on later launches. Ordinary guarded
+sector overlays may be applied on top of the derived image, so a structural
+base package can support many small composable add-ons.
+
+Release builders stage the trusted decoder with
+`-DPSXRECOMP_XDELTA3_EXECUTABLE=/path/to/xdelta3`. More than one active
+derived-disc provider is rejected; packages should use dependencies and
+conflicts to make ownership explicit.
+
 ## Resolution rules
 
 - Installed versions are side-by-side. The launcher can select an older version
@@ -89,9 +128,10 @@ option combinations.
   package/patch order.
 - Missing dependencies, version mismatches, declared conflicts, dependency
   cycles, overlapping writes, unavailable trusted resolvers, invalid option
-  values, and target mismatches prevent launch.
-- The resolved package versions, option values, and writes produce a canonical
-  SHA-256 plan fingerprint suitable for diagnostics and multiplayer agreement.
+  values, multiple derived-disc providers, and target mismatches prevent launch.
+- The resolved package versions, option values, writes, and derived-disc recipe
+  produce a canonical SHA-256 plan fingerprint suitable for diagnostics and
+  multiplayer agreement.
 - Package and state changes apply on the next launch. There is no mid-frame
   mutation.
 

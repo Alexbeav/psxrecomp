@@ -60,6 +60,16 @@ struct ModPatch {
     int64_t order = 0;
 };
 
+struct ModDerivedDisc {
+    std::string kind = "vcdiff";
+    std::filesystem::path patch;
+    std::string patch_sha256;
+    uint64_t output_size = 0;
+    std::string output_sha256;
+    std::string when_option;
+    std::string when_value;
+};
+
 struct ModPackage {
     uint32_t format_version = 0;
     std::string id;
@@ -76,6 +86,7 @@ struct ModPackage {
     std::vector<std::string> conflicts;
     std::vector<ModOption> options;
     std::vector<ModPatch> patches;
+    std::vector<ModDerivedDisc> derived_discs;
 };
 
 struct ModSelection {
@@ -96,6 +107,15 @@ struct ModResolution {
         std::string package_id;
     };
     std::vector<Write> writes;
+    struct DerivedDisc {
+        std::string kind;
+        std::filesystem::path patch;
+        std::string patch_sha256;
+        uint64_t output_size = 0;
+        std::string output_sha256;
+        std::string package_id;
+    };
+    std::vector<DerivedDisc> derived_discs;
     std::vector<std::string> errors;
 };
 
