@@ -755,6 +755,58 @@ bool identical_write(const ModResolution::Write& a, const ModResolution::Write& 
            a.expected == b.expected && a.replacement == b.replacement;
 }
 
+bool write_overlap_mismatch(const ModResolution::Write& a,
+                            const ModResolution::Write& b,
+                            uint64_t& mismatch) {
+    const uint64_t begin = std::max(a.location, b.location);
+    const uint64_t end = std::min(
+        a.location + a.replacement.size(),
+        b.location + b.replacement.size());
+    for (uint64_t at = begin; at < end; ++at) {
+        const size_t ai = (size_t)(at - a.location);
+        const size_t bi = (size_t)(at - b.location);
+        if (a.expected[ai] != b.expected[bi] ||
+            a.replacement[ai] != b.replacement[bi]) {
+            mismatch = at;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool write_overlay_mismatch(const ModResolution::Write& write,
+                            const ModResolution::Overlay& overlay,
+                            uint64_t& mismatch) {
+    const uint64_t begin = std::max(write.location, overlay.location);
+    const uint64_t end = std::min(
+        write.location + write.replacement.size(),
+        overlay.location + overlay.payload.size());
+    for (uint64_t at = begin; at < end; ++at) {
+        if (write.replacement[(size_t)(at - write.location)] !=
+            overlay.payload[(size_t)(at - overlay.location)]) {
+            mismatch = at;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool overlay_overlap_mismatch(const ModResolution::Overlay& a,
+                              const ModResolution::Overlay& b,
+                              uint64_t& mismatch) {
+    const uint64_t begin = std::max(a.location, b.location);
+    const uint64_t end = std::min(
+        a.location + a.payload.size(), b.location + b.payload.size());
+    for (uint64_t at = begin; at < end; ++at) {
+        if (a.payload[(size_t)(at - a.location)] !=
+            b.payload[(size_t)(at - b.location)]) {
+            mismatch = at;
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string overlap_resource(ModPatchTarget target,
                              uint64_t a_location, size_t a_size,
                              uint64_t b_location, size_t b_size) {
@@ -767,6 +819,10 @@ std::string overlap_resource(ModPatchTarget target,
     std::ostringstream out;
     out << name << ":0x" << std::hex << begin << "-0x" << end;
     return out.str();
+}
+
+std::string byte_resource(ModPatchTarget target, uint64_t location) {
+    return overlap_resource(target, location, 1, location, 1);
 }
 
 bool valid_option_value(const ModOption& option, const std::string& value) {
@@ -1761,10 +1817,11 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 break;
             }
             if (!writes_overlap(previous, write)) continue;
+            uint64_t mismatch = 0;
+            if (!write_overlap_mismatch(previous, write, mismatch))
+                continue;
             ModResolution::Diagnostic diagnostic;
-            diagnostic.resource = overlap_resource(
-                write.target, write.location, write.replacement.size(),
-                previous.location, previous.replacement.size());
+            diagnostic.resource = byte_resource(write.target, mismatch);
             diagnostic.package_id = write.package_id;
             diagnostic.feature_id = write.feature_id;
             diagnostic.other_package_id = previous.package_id;
@@ -1790,10 +1847,11 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                     overlay.target, overlay.location, overlay.payload.size(),
                     write.target, write.location, write.replacement.size()))
                 continue;
+            uint64_t mismatch = 0;
+            if (!write_overlay_mismatch(write, overlay, mismatch))
+                continue;
             ModResolution::Diagnostic diagnostic;
-            diagnostic.resource = overlap_resource(
-                overlay.target, overlay.location, overlay.payload.size(),
-                write.location, write.replacement.size());
+            diagnostic.resource = byte_resource(overlay.target, mismatch);
             diagnostic.package_id = overlay.package_id;
             diagnostic.feature_id = overlay.feature_id;
             diagnostic.other_package_id = write.package_id;
@@ -1820,10 +1878,11 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 claimed = true;
                 break;
             }
+            uint64_t mismatch = 0;
+            if (!overlay_overlap_mismatch(previous, overlay, mismatch))
+                continue;
             ModResolution::Diagnostic diagnostic;
-            diagnostic.resource = overlap_resource(
-                overlay.target, overlay.location, overlay.payload.size(),
-                previous.location, previous.payload.size());
+            diagnostic.resource = byte_resource(overlay.target, mismatch);
             diagnostic.package_id = overlay.package_id;
             diagnostic.feature_id = overlay.feature_id;
             diagnostic.other_package_id = previous.package_id;

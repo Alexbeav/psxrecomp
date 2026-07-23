@@ -274,6 +274,12 @@ int main() {
                    "\n[[feature]]\n"
                    "id = \"title-identical\"\n"
                    "name = \"Title Identical\"\n"
+                   "\n[[feature]]\n"
+                   "id = \"title-partial-compatible\"\n"
+                   "name = \"Title Partial Compatible\"\n"
+                   "\n[[feature]]\n"
+                   "id = \"title-partial-conflict\"\n"
+                   "name = \"Title Partial Conflict\"\n"
                    "\n[[option]]\n"
                    "feature = \"title-screen\"\n"
                    "id = \"variant\"\n"
@@ -317,7 +323,19 @@ int main() {
                    "target = \"main_exe\"\n"
                    "address = 2147495936\n"
                    "expected = \"0102\"\n"
-                   "replace = \"a1a2\"\n"));
+                   "replace = \"a1a2\"\n"
+                   "\n[[patch]]\n"
+                   "feature = \"title-partial-compatible\"\n"
+                   "target = \"main_exe\"\n"
+                   "address = 2147495937\n"
+                   "expected = \"0209\"\n"
+                   "replace = \"a2c9\"\n"
+                   "\n[[patch]]\n"
+                   "feature = \"title-partial-conflict\"\n"
+                   "target = \"main_exe\"\n"
+                   "address = 2147495937\n"
+                   "expected = \"ff09\"\n"
+                   "replace = \"a2c9\"\n"));
     check(reload.scan(&error), error.c_str());
     check(!reload.set_enabled("features.mod", true, &error),
           "feature-style package must not expose package enablement");
@@ -351,6 +369,25 @@ int main() {
     ModResolution identical = reload.resolve("SLUS-TEST");
     check(identical.ok && identical.writes.size() == 2,
           "truly identical writes must coalesce deterministically");
+    check(reload.set_feature_enabled(
+              "features.mod", "title-partial-compatible", true, &error),
+          error.c_str());
+    ModResolution partial_compatible = reload.resolve("SLUS-TEST");
+    check(partial_compatible.ok && partial_compatible.writes.size() == 3,
+          "partially overlapping writes with matching expected and replacement "
+          "bytes must compose");
+    check(reload.set_feature_enabled(
+              "features.mod", "title-partial-conflict", true, &error),
+          error.c_str());
+    ModResolution partial_conflict = reload.resolve("SLUS-TEST");
+    check(!partial_conflict.ok && !partial_conflict.diagnostics.empty() &&
+              partial_conflict.diagnostics[0].resource ==
+                  "main_exe:0x80003001-0x80003002",
+          "one differing expected byte in a partial overlap must identify "
+          "the exact contested byte");
+    check(reload.set_feature_enabled(
+              "features.mod", "title-partial-conflict", false, &error),
+          error.c_str());
     check(reload.save_state(&error), error.c_str());
     ModPackageManager feature_reload(root);
     check(feature_reload.scan(&error), error.c_str());
@@ -363,14 +400,16 @@ int main() {
               "features.mod", "title-screen", "variant") == "japan",
           "feature-scoped option values must survive save/reload");
     check(feature_reload.resolve("SLUS-TEST").fingerprint ==
-              identical.fingerprint,
+              partial_compatible.fingerprint,
           "feature state must resolve deterministically after reload");
 
     const std::vector<uint8_t> overlay_a = {1, 2, 3, 4};
     const std::vector<uint8_t> overlay_b = {8, 9};
+    const std::vector<uint8_t> overlay_c = {3, 4, 7};
     const std::string overlay_disc_hash(64, '4');
     write_bytes(root / "packages/overlay.mod/1.0.0/assets/a.bin", overlay_a);
     write_bytes(root / "packages/overlay.mod/1.0.0/assets/b.bin", overlay_b);
+    write_bytes(root / "packages/overlay.mod/1.0.0/assets/c.bin", overlay_c);
     write_text(root / "packages/overlay.mod/1.0.0/manifest.toml",
                manifest("overlay.mod", "1.0.0",
                    "disc_sha256 = \"" + overlay_disc_hash + "\"\n"
@@ -380,6 +419,9 @@ int main() {
                    "[[feature]]\n"
                    "id = \"asset-b\"\n"
                    "name = \"Asset B\"\n"
+                   "[[feature]]\n"
+                   "id = \"asset-c\"\n"
+                   "name = \"Asset C\"\n"
                    "[[overlay]]\n"
                    "feature = \"asset-a\"\n"
                    "target = \"disc_raw\"\n"
@@ -391,15 +433,28 @@ int main() {
                    "target = \"disc_raw\"\n"
                    "offset = 102\n"
                    "file = \"assets/b.bin\"\n"
-                   "sha256 = \"" + sha256_hex(overlay_b) + "\"\n"));
+                   "sha256 = \"" + sha256_hex(overlay_b) + "\"\n"
+                   "[[overlay]]\n"
+                   "feature = \"asset-c\"\n"
+                   "target = \"disc_raw\"\n"
+                   "offset = 102\n"
+                   "file = \"assets/c.bin\"\n"
+                   "sha256 = \"" + sha256_hex(overlay_c) + "\"\n"));
     check(feature_reload.scan(&error), error.c_str());
     const ModPackage* overlay_package =
         feature_reload.selected_package("overlay.mod");
-    check(overlay_package && overlay_package->overlays.size() == 2 &&
+    check(overlay_package && overlay_package->overlays.size() == 3 &&
               overlay_package->overlays[0].size == overlay_a.size(),
           "manifest scan must verify and retain overlay metadata");
     check(feature_reload.set_feature_enabled(
               "overlay.mod", "asset-a", true, &error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "overlay.mod", "asset-c", true, &error), error.c_str());
+    ModResolution overlay_compatible =
+        feature_reload.resolve("SLUS-TEST", {}, overlay_disc_hash);
+    check(overlay_compatible.ok && overlay_compatible.overlays.size() == 2,
+          "partially overlapping file overlays with matching payload bytes "
+          "must compose");
     check(feature_reload.set_feature_enabled(
               "overlay.mod", "asset-b", true, &error), error.c_str());
     ModResolution overlay_collision =
@@ -413,9 +468,10 @@ int main() {
               "overlay.mod", "asset-b", false, &error), error.c_str());
     ModResolution one_overlay =
         feature_reload.resolve("SLUS-TEST", {}, overlay_disc_hash);
-    check(one_overlay.ok && one_overlay.overlays.size() == 1 &&
-              one_overlay.overlays[0].payload == overlay_a,
-          "only enabled overlay payloads must enter the resolved plan");
+    check(one_overlay.ok && one_overlay.overlays.size() == 2 &&
+              one_overlay.overlays[0].payload == overlay_a &&
+              one_overlay.overlays[1].payload == overlay_c,
+          "compatible enabled overlay payloads must remain in the plan");
 
     write_text(root / "feature-derived.toml",
                manifest("bad.derived", "1.0.0",

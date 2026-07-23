@@ -155,6 +155,12 @@ Incompatible overlaps fail before launch. Structured diagnostics identify both
 marks both feature rows and lets the user decide what to disable. It never
 silently chooses a winner.
 
+Operation boundaries are not semantic boundaries. Partially overlapping writes
+compose when both their expected and replacement bytes agree throughout the
+intersection; partially overlapping overlays compose when their replacement
+payload bytes agree. A differing byte produces a diagnostic at that exact
+location. Exact duplicate operations may be coalesced.
+
 Package-level dependencies and conflicts are reserved for actual implementation
 relationships. Mutually exclusive choices such as US versus Japanese artwork
 belong inside one feature as option values.
