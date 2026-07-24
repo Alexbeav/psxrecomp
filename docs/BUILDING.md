@@ -124,9 +124,13 @@ for TombaRecomp:
 # Extract the game's PS-X EXE from your disc (helper included in the game repo):
 python3 tools/extract_psx_exe.py tomba/tomba.bin SCUS_942.36 tomba/SCUS_942.36
 
-# Regenerate the game's C from the disc/EXE (game repos invoke the recompiler
-# binary directly with their config):
-../psxrecomp/recompiler/build/psxrecomp-game --config game.toml
+# Regenerate the game's C from the disc/EXE. The framework is a submodule at
+# psxrecomp/ inside the game repo, so build its recompiler once, then run it.
+# (Game repos also ship tools/regen.sh (macOS/Linux) / tools/regen.ps1 (Windows)
+# that wrap this command.)
+cmake -S psxrecomp/recompiler -B psxrecomp/recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build psxrecomp/recompiler/build
+psxrecomp/recompiler/build/psxrecomp-game --config game.toml
 
 # Configure + build the game runtime:
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
