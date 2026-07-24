@@ -383,10 +383,18 @@ int dirty_ram_text_native_ok(uint32_t phys) {
  * Each pair is {virtual/physical lo, byte len}; non-code gaps and mutable data
  * on the same page are intentionally absent. Unlike the legacy 256-byte probe,
  * a mismatch never poisons an unrelated 4 KB page forever: every decision is
- * made from the live bytes the native body will actually execute. */
-int dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
-                                    uint32_t count) {
+ * made from the live bytes the native body will actually execute.
+ *
+ * exec_pc is the dispatch/resume address. Ranges that end at or before that PC
+ * are skipped, and a range that straddles it is clipped to [exec_pc, end). A
+ * runtime patch of a function prologue must not block a compiled continuation
+ * that never fetches the patched bytes. */
+int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
+                                         uint32_t count,
+                                         uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
+    uint32_t at = exec_pc & 0x1FFFFFFFu;
+    int any = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t phys = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
         uint32_t len = lo_len_pairs[i * 2u + 1u];
@@ -395,6 +403,12 @@ int dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
             g_text_native_blocked++;
             return 0;
         }
+        if (phys + len <= at) continue;
+        if (phys < at) {
+            len -= at - phys;
+            phys = at;
+        }
+        any = 1;
         if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len) != 0) {
             uint32_t off = 0;
             const uint8_t *live = ram + phys;
@@ -406,21 +420,23 @@ int dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
             g_text_exact_last_mismatch = phys + off;
             g_text_exact_last_live = off < len ? live[off] : 0;
             g_text_exact_last_ref = off < len ? ref[off] : 0;
-            uint32_t first_page = phys >> DIRTY_RAM_PAGE_SHIFT;
-            uint32_t last_page = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
-            for (uint32_t page = first_page; page <= last_page; page++) {
-                uint32_t bit = 1u << (page & 31u);
-                uint32_t *word = &text_diverged_bitmap[page >> 5];
-                if (!(*word & bit)) {
-                    *word |= bit;
-                    g_text_diverged_pages++;
-                }
-            }
+            /* Do not sticky-poison the page. A continuation on the same page
+             * may still match its clipped ranges. */
             g_text_native_blocked++;
             return 0;
         }
     }
+    if (!any) {
+        g_text_native_blocked++;
+        return 0;
+    }
     return 1;
+}
+
+/* Preserve the generated-code ABI used by existing game projects. */
+int dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
+                                    uint32_t count) {
+    return dirty_ram_text_native_ok_ranges_from(lo_len_pairs, count, 0u);
 }
 
 void dirty_ram_text_exact_mismatch_stats(uint64_t *count,
