@@ -927,12 +927,26 @@ extern "C" void mod_runtime_on_dispatch(uint32_t target) {
     }
     for (const ModResolution::Write& write : s.plan.writes) {
         if (write.target != ModPatchTarget::MainExe) continue;
-        for (size_t i = 0; i < write.replacement.size(); ++i)
-            psx_write_byte((uint32_t)write.location + (uint32_t)i,
-                           write.replacement[i]);
-        dirty_ram_mark_executable_range(
-            (uint32_t)write.location & 0x1FFFFFFFu,
-            (uint32_t)write.replacement.size());
+        if (write.fields.empty()) {
+            for (size_t i = 0; i < write.replacement.size(); ++i)
+                psx_write_byte((uint32_t)write.location + (uint32_t)i,
+                               write.replacement[i]);
+            dirty_ram_mark_executable_range(
+                (uint32_t)write.location & 0x1FFFFFFFu,
+                (uint32_t)write.replacement.size());
+        } else {
+            for (const ModResolution::Write::Field& field : write.fields) {
+                for (size_t i = 0; i < field.replacement.size(); ++i)
+                    psx_write_byte(
+                        (uint32_t)write.location +
+                            (uint32_t)field.offset + (uint32_t)i,
+                        field.replacement[i]);
+                dirty_ram_mark_executable_range(
+                    ((uint32_t)write.location +
+                     (uint32_t)field.offset) & 0x1FFFFFFFu,
+                    (uint32_t)field.replacement.size());
+            }
+        }
     }
     s.main_applied = true;
     if (!s.plan.writes.empty())
@@ -975,7 +989,7 @@ extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
         for (size_t write_index : sector->second) {
             const ModResolution::Write& write = s.plan.writes[write_index];
             if (write.target != target || write.location < base ||
-                write.location + write.replacement.size() > end) continue;
+                write.location + write.expected.size() > end) continue;
             const size_t offset = (size_t)(write.location - base);
             if (std::memcmp(bytes + offset, write.expected.data(),
                             write.expected.size()) != 0) {
@@ -990,10 +1004,20 @@ extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
         for (size_t write_index : sector->second) {
             const ModResolution::Write& write = s.plan.writes[write_index];
             if (write.target != target || write.location < base ||
-                write.location + write.replacement.size() > end) continue;
+                write.location + write.expected.size() > end) continue;
             const size_t offset = (size_t)(write.location - base);
-            std::memcpy(bytes + offset, write.replacement.data(),
-                        write.replacement.size());
+            if (write.fields.empty()) {
+                std::memcpy(bytes + offset, write.replacement.data(),
+                            write.replacement.size());
+            } else {
+                for (const ModResolution::Write::Field& field :
+                     write.fields)
+                    std::memcpy(
+                        bytes + offset +
+                            static_cast<size_t>(field.offset),
+                        field.replacement.data(),
+                        field.replacement.size());
+            }
         }
     }
     if (overlay_sector != overlay_index.end()) {

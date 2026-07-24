@@ -88,6 +88,30 @@ enum class ModValueEncoding {
     MipsLuiOriU32,
 };
 
+enum class ModIntegerPredicateOp {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+};
+
+struct ModIntegerPredicate {
+    bool present = false;
+    std::string option;
+    ModIntegerPredicateOp op = ModIntegerPredicateOp::Equal;
+    int64_t value = 0;
+};
+
+struct ModPatchField {
+    uint64_t offset = 0;
+    std::vector<uint8_t> replacement;
+    std::string replace_from_option;
+    ModValueEncoding replace_encoding = ModValueEncoding::U8;
+    int64_t replace_addend = 0;
+};
+
 struct ModPatch {
     std::string feature_id;
     ModPatchTarget target = ModPatchTarget::MainExe;
@@ -102,6 +126,8 @@ struct ModPatch {
     std::string when_option;
     std::string when_value;
     std::map<std::string, std::string> when;
+    ModIntegerPredicate when_integer;
+    std::vector<ModPatchField> fields;
     int64_t order = 0;
 };
 
@@ -169,10 +195,15 @@ struct ModResolution {
     std::string fingerprint;
     std::vector<const ModPackage*> ordered;
     struct Write {
+        struct Field {
+            uint64_t offset = 0;
+            std::vector<uint8_t> replacement;
+        };
         ModPatchTarget target = ModPatchTarget::MainExe;
         uint64_t location = 0;
         std::vector<uint8_t> expected;
         std::vector<uint8_t> replacement;
+        std::vector<Field> fields;
         std::string package_id;
         std::string feature_id;
     };

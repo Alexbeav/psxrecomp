@@ -187,6 +187,80 @@ different stock values. For any nondefault selection, every declared site
 retains its collision claim even if one generated replacement happens to equal
 its stock guard.
 
+## Sparse fields and integer predicates
+
+Package format 4 separates a patch's complete expected-byte guard from the
+fields it owns and writes. This is for semantic records whose independently
+configurable fields share one useful guard:
+
+```toml
+format_version = 4
+
+[[option]]
+feature = "saber-timing"
+id = "frames"
+label = "Frames"
+type = "integer"
+min = 0
+max = 99
+default = 2
+
+# Positive values change only byte 0.
+[[patch]]
+feature = "saber-timing"
+target = "main_exe"
+address = 0x80077640
+expected = "02 42 01 02"
+fields = [
+  { offset = 0, option = "frames", encoding = "u8" },
+]
+when_integer = { option = "frames", op = "gt", value = 0 }
+
+# Zero has a narrow, explicitly declared compound representation.
+[[patch]]
+feature = "saber-timing"
+target = "main_exe"
+address = 0x80077640
+expected = "02 42 01 02"
+fields = [
+  { offset = 0, replace = "01" },
+  { offset = 2, replace = "00" },
+]
+when_integer = { option = "frames", op = "eq", value = 0 }
+```
+
+`fields` is mutually exclusive with `replace` and `replace_from`. Every field
+has a nonnegative `offset` and exactly one payload form:
+
+- `replace = "..."` supplies non-empty literal bytes; or
+- `option` plus `encoding` uses a bounded integer option on the same feature,
+  with the optional checked `addend`.
+
+Fields must fit inside `expected` and their owned byte ranges may not overlap.
+The supported dynamic encodings are the existing `u8`, `u16le`, `u32le`, and
+linked `mips_lui_ori_u32` forms. A sparse MIPS field owns only the two
+immediate halfwords while the complete linked instruction pair remains
+guarded; as with format 3, that encoding does not accept an addend.
+
+Resolution omits individual fields whose generated payload already equals the
+guard. If no field changes, the patch is a no-op. Otherwise the plan retains
+the complete guard and the exact remaining owned ranges. Runtime guard
+validation checks every byte of `expected` before applying any writes, while
+collision detection and writing use only the owned fields. Thus two features
+can safely own adjacent bytes in one record without either overwriting the
+other. Overlapping guards must still agree on their expected bytes; conflicting
+guards make the plan unsatisfiable and are rejected.
+
+`when_integer` is a patch-level, feature-local predicate over one bounded
+integer option. `op` is exactly one of `eq`, `ne`, `lt`, `le`, `gt`, or `ge`,
+and `value` is an integer constant inside the option bounds. Equality
+constants must also be selectable under the option's `step`. String-valued
+`when` conditions and one `when_integer` predicate may coexist and are ANDed.
+
+Sparse fields and integer predicates are still pre-boot plan construction.
+They do not provide a general expression evaluator, masks, arithmetic beyond
+the checked field addend, package code execution, or per-frame dispatch.
+
 ## Native operations
 
 `main_exe` writes use PSX guest virtual addresses. Expected bytes are checked
@@ -249,7 +323,8 @@ Before boot, the manager:
 2. expands only enabled features and their selected options;
 3. orders active packages deterministically by dependencies;
 4. verifies enabled payloads and operation bounds;
-5. collision-checks the complete byte-range plan;
+5. collision-checks the complete owned byte-range plan and guard
+   compatibility;
 6. coalesces only truly identical target/range/expected/replacement writes or
    identical overlays; and
 7. produces a canonical SHA-256 plan fingerprint.
@@ -259,11 +334,13 @@ Incompatible overlaps fail before launch. Structured diagnostics identify both
 marks both feature rows and lets the user decide what to disable. It never
 silently chooses a winner.
 
-Operation boundaries are not semantic boundaries. Partially overlapping writes
+Operation boundaries are not semantic boundaries. Legacy full-record writes
 compose when both their expected and replacement bytes agree throughout the
-intersection; partially overlapping overlays compose when their replacement
-payload bytes agree. A differing byte produces a diagnostic at that exact
-location. Exact duplicate operations may be coalesced.
+owned intersection. Format-4 sparse patches collide only on declared owned
+fields, while their complete guards must remain mutually compatible.
+Partially overlapping overlays compose when their replacement payload bytes
+agree. A differing owned byte or incompatible guard produces a diagnostic at
+that exact location. Exact duplicate operations may be coalesced.
 
 Package-level dependencies and conflicts are reserved for actual implementation
 relationships. Mutually exclusive choices such as US versus Japanese artwork

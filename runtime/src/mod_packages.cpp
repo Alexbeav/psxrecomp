@@ -90,6 +90,25 @@ bool parse_value_encoding(const std::string& text, ModValueEncoding& out) {
     return false;
 }
 
+bool parse_integer_predicate_op(const std::string& text,
+                                ModIntegerPredicateOp& out) {
+    static const std::pair<const char*, ModIntegerPredicateOp> values[] = {
+        {"eq", ModIntegerPredicateOp::Equal},
+        {"ne", ModIntegerPredicateOp::NotEqual},
+        {"lt", ModIntegerPredicateOp::Less},
+        {"le", ModIntegerPredicateOp::LessEqual},
+        {"gt", ModIntegerPredicateOp::Greater},
+        {"ge", ModIntegerPredicateOp::GreaterEqual},
+    };
+    for (const auto& [name, op] : values) {
+        if (text == name) {
+            out = op;
+            return true;
+        }
+    }
+    return false;
+}
+
 uint32_t value_encoding_size(ModValueEncoding encoding) {
     switch (encoding) {
     case ModValueEncoding::U8:
@@ -102,6 +121,44 @@ uint32_t value_encoding_size(ModValueEncoding encoding) {
         return 8;
     }
     return 0;
+}
+
+bool valid_mips_lui_ori_guard(const std::vector<uint8_t>& expected,
+                              uint64_t offset) {
+    if (offset > expected.size() || expected.size() - offset < 8)
+        return false;
+    const uint8_t* bytes =
+        expected.data() + static_cast<size_t>(offset);
+    const uint32_t lui =
+        static_cast<uint32_t>(bytes[0]) |
+        (static_cast<uint32_t>(bytes[1]) << 8) |
+        (static_cast<uint32_t>(bytes[2]) << 16) |
+        (static_cast<uint32_t>(bytes[3]) << 24);
+    const uint32_t ori =
+        static_cast<uint32_t>(bytes[4]) |
+        (static_cast<uint32_t>(bytes[5]) << 8) |
+        (static_cast<uint32_t>(bytes[6]) << 16) |
+        (static_cast<uint32_t>(bytes[7]) << 24);
+    const uint32_t lui_rs = (lui >> 21) & 0x1Fu;
+    const uint32_t lui_rt = (lui >> 16) & 0x1Fu;
+    const uint32_t ori_rs = (ori >> 21) & 0x1Fu;
+    const uint32_t ori_rt = (ori >> 16) & 0x1Fu;
+    return (lui >> 26) == 0x0Fu && lui_rs == 0 &&
+           lui_rt != 0 && (ori >> 26) == 0x0Du &&
+           ori_rs == lui_rt && ori_rt == lui_rt;
+}
+
+struct RelativeRange {
+    uint64_t offset = 0;
+    uint64_t size = 0;
+};
+
+std::vector<RelativeRange> patch_field_ranges(const ModPatchField& field) {
+    if (!field.replacement.empty())
+        return {{field.offset, field.replacement.size()}};
+    if (field.replace_encoding == ModValueEncoding::MipsLuiOriU32)
+        return {{field.offset, 2}, {field.offset + 4, 2}};
+    return {{field.offset, value_encoding_size(field.replace_encoding)}};
 }
 
 std::string hex_bytes(const std::vector<uint8_t>& bytes) {
@@ -639,11 +696,25 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
         }
     }
     for (const ModResolution::Write& write : writes) {
-        out << (write.target == ModPatchTarget::MainExe ? "main_exe" :
-                write.target == ModPatchTarget::DiscRaw ? "disc_raw" : "disc_user")
-            << '@' << std::hex << write.location << std::dec << ':'
-            << hex_bytes(write.expected) << '>' << hex_bytes(write.replacement)
-            << ':' << write.package_id << ':' << write.feature_id << '\n';
+        const char* target =
+            write.target == ModPatchTarget::MainExe ? "main_exe" :
+            write.target == ModPatchTarget::DiscRaw ? "disc_raw" :
+                                                       "disc_user";
+        if (write.fields.empty()) {
+            out << target << '@' << std::hex << write.location << std::dec
+                << ':' << hex_bytes(write.expected) << '>'
+                << hex_bytes(write.replacement) << ':' << write.package_id
+                << ':' << write.feature_id << '\n';
+        } else {
+            out << "sparse_" << target << '@' << std::hex
+                << write.location << std::dec << ":guard="
+                << hex_bytes(write.expected) << ":owned=";
+            for (const ModResolution::Write::Field& field : write.fields)
+                out << std::hex << field.offset << std::dec << '='
+                    << hex_bytes(field.replacement) << ',';
+            out << ':' << write.package_id << ':' << write.feature_id
+                << '\n';
+        }
     }
     for (const ModResolution::Overlay& overlay : overlays) {
         out << (overlay.target == ModPatchTarget::DiscRaw
@@ -945,11 +1016,38 @@ void read_conditions(const toml::value& value, const std::vector<ModOption>& opt
     }
 }
 
+bool ranges_overlap(ModPatchTarget a_target, uint64_t a_location, size_t a_size,
+                    ModPatchTarget b_target, uint64_t b_location, size_t b_size);
+
+template <typename Fn>
+void for_each_owned_span(const ModResolution::Write& write, Fn&& fn) {
+    if (write.fields.empty()) {
+        fn(write.location, write.expected.data(), write.replacement.data(),
+           write.replacement.size());
+        return;
+    }
+    for (const ModResolution::Write::Field& field : write.fields) {
+        fn(write.location + field.offset,
+           write.expected.data() + static_cast<size_t>(field.offset),
+           field.replacement.data(), field.replacement.size());
+    }
+}
+
 bool writes_overlap(const ModResolution::Write& a, const ModResolution::Write& b) {
     if (a.target != b.target) return false;
-    const uint64_t a_end = a.location + a.replacement.size();
-    const uint64_t b_end = b.location + b.replacement.size();
-    return a.location < b_end && b.location < a_end;
+    bool overlap = false;
+    for_each_owned_span(
+        a, [&](uint64_t a_location, const uint8_t*, const uint8_t*,
+               size_t a_size) {
+            for_each_owned_span(
+                b, [&](uint64_t b_location, const uint8_t*, const uint8_t*,
+                       size_t b_size) {
+                    overlap = overlap || ranges_overlap(
+                        a.target, a_location, a_size,
+                        b.target, b_location, b_size);
+                });
+        });
+    return overlap;
 }
 
 bool ranges_overlap(ModPatchTarget a_target, uint64_t a_location, size_t a_size,
@@ -961,22 +1059,58 @@ bool ranges_overlap(ModPatchTarget a_target, uint64_t a_location, size_t a_size,
 }
 
 bool identical_write(const ModResolution::Write& a, const ModResolution::Write& b) {
-    return a.target == b.target && a.location == b.location &&
-           a.expected == b.expected && a.replacement == b.replacement;
+    if (a.target != b.target || a.location != b.location ||
+        a.expected != b.expected || a.replacement != b.replacement ||
+        a.fields.size() != b.fields.size())
+        return false;
+    for (size_t i = 0; i < a.fields.size(); ++i) {
+        if (a.fields[i].offset != b.fields[i].offset ||
+            a.fields[i].replacement != b.fields[i].replacement)
+            return false;
+    }
+    return true;
 }
 
 bool write_overlap_mismatch(const ModResolution::Write& a,
                             const ModResolution::Write& b,
                             uint64_t& mismatch) {
+    bool found = false;
+    for_each_owned_span(
+        a, [&](uint64_t a_location, const uint8_t* a_expected,
+               const uint8_t* a_replacement, size_t a_size) {
+            for_each_owned_span(
+                b, [&](uint64_t b_location, const uint8_t* b_expected,
+                       const uint8_t* b_replacement, size_t b_size) {
+                    const uint64_t begin =
+                        std::max(a_location, b_location);
+                    const uint64_t end = std::min(
+                        a_location + a_size, b_location + b_size);
+                    for (uint64_t at = begin; !found && at < end; ++at) {
+                        const size_t ai =
+                            static_cast<size_t>(at - a_location);
+                        const size_t bi =
+                            static_cast<size_t>(at - b_location);
+                        if (a_expected[ai] != b_expected[bi] ||
+                            a_replacement[ai] != b_replacement[bi]) {
+                            mismatch = at;
+                            found = true;
+                        }
+                    }
+                });
+        });
+    return found;
+}
+
+bool write_guard_overlap_mismatch(const ModResolution::Write& a,
+                                  const ModResolution::Write& b,
+                                  uint64_t& mismatch) {
+    if (a.target != b.target) return false;
     const uint64_t begin = std::max(a.location, b.location);
     const uint64_t end = std::min(
-        a.location + a.replacement.size(),
-        b.location + b.replacement.size());
+        a.location + a.expected.size(), b.location + b.expected.size());
     for (uint64_t at = begin; at < end; ++at) {
-        const size_t ai = (size_t)(at - a.location);
-        const size_t bi = (size_t)(at - b.location);
-        if (a.expected[ai] != b.expected[bi] ||
-            a.replacement[ai] != b.replacement[bi]) {
+        if (a.expected[static_cast<size_t>(at - a.location)] !=
+            b.expected[static_cast<size_t>(at - b.location)]) {
             mismatch = at;
             return true;
         }
@@ -984,21 +1118,41 @@ bool write_overlap_mismatch(const ModResolution::Write& a,
     return false;
 }
 
+bool write_overlaps_range(const ModResolution::Write& write,
+                          ModPatchTarget target, uint64_t location,
+                          size_t size) {
+    if (write.target != target) return false;
+    bool overlap = false;
+    for_each_owned_span(
+        write, [&](uint64_t owned_location, const uint8_t*,
+                   const uint8_t*, size_t owned_size) {
+            overlap = overlap || ranges_overlap(
+                write.target, owned_location, owned_size,
+                target, location, size);
+        });
+    return overlap;
+}
+
 bool write_overlay_mismatch(const ModResolution::Write& write,
                             const ModResolution::Overlay& overlay,
                             uint64_t& mismatch) {
-    const uint64_t begin = std::max(write.location, overlay.location);
-    const uint64_t end = std::min(
-        write.location + write.replacement.size(),
-        overlay.location + overlay.payload.size());
-    for (uint64_t at = begin; at < end; ++at) {
-        if (write.replacement[(size_t)(at - write.location)] !=
-            overlay.payload[(size_t)(at - overlay.location)]) {
-            mismatch = at;
-            return true;
-        }
-    }
-    return false;
+    bool found = false;
+    for_each_owned_span(
+        write, [&](uint64_t location, const uint8_t*,
+                   const uint8_t* replacement, size_t size) {
+            const uint64_t begin = std::max(location, overlay.location);
+            const uint64_t end = std::min(
+                location + size, overlay.location + overlay.payload.size());
+            for (uint64_t at = begin; !found && at < end; ++at) {
+                if (replacement[static_cast<size_t>(at - location)] !=
+                    overlay.payload[
+                        static_cast<size_t>(at - overlay.location)]) {
+                    mismatch = at;
+                    found = true;
+                }
+            }
+        });
+    return found;
 }
 
 bool overlay_overlap_mismatch(const ModResolution::Overlay& a,
@@ -1062,6 +1216,34 @@ bool valid_option_value(const ModOption& option, const std::string& value) {
     return parse_canonical_int64(value, parsed) &&
            parsed >= option.min_value && parsed <= option.max_value &&
            integer_step_aligned(parsed, option.min_value, option.step);
+}
+
+bool integer_predicate_matches(
+    const ModPackage& package, const ModSelection& selection,
+    const std::string& feature_id,
+    const ModIntegerPredicate& predicate) {
+    if (!predicate.present) return true;
+    int64_t selected = 0;
+    if (!parse_canonical_int64(
+            effective_option_value(
+                package, selection, feature_id, predicate.option),
+            selected))
+        return false;
+    switch (predicate.op) {
+    case ModIntegerPredicateOp::Equal:
+        return selected == predicate.value;
+    case ModIntegerPredicateOp::NotEqual:
+        return selected != predicate.value;
+    case ModIntegerPredicateOp::Less:
+        return selected < predicate.value;
+    case ModIntegerPredicateOp::LessEqual:
+        return selected <= predicate.value;
+    case ModIntegerPredicateOp::Greater:
+        return selected > predicate.value;
+    case ModIntegerPredicateOp::GreaterEqual:
+        return selected >= predicate.value;
+    }
+    return false;
 }
 
 bool constraint_satisfied(
@@ -1448,9 +1630,15 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         "patch expected must be non-empty hex");
                 const bool has_static_replace = v.contains("replace");
                 const bool has_dynamic_replace = v.contains("replace_from");
-                if (has_static_replace == has_dynamic_replace)
+                const bool has_sparse_fields = v.contains("fields");
+                const unsigned replacement_forms =
+                    static_cast<unsigned>(has_static_replace) +
+                    static_cast<unsigned>(has_dynamic_replace) +
+                    static_cast<unsigned>(has_sparse_fields);
+                if (replacement_forms != 1)
                     throw std::runtime_error(
-                        "patch requires exactly one of replace or replace_from");
+                        "patch requires exactly one of replace, replace_from, "
+                        "or fields");
                 if (has_static_replace) {
                     const std::string replacement =
                         toml::find<std::string>(v, "replace");
@@ -1458,7 +1646,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                         patch.expected.size() != patch.replacement.size())
                         throw std::runtime_error(
                             "patch expected/replace must be equal-length non-empty hex");
-                } else {
+                } else if (has_dynamic_replace) {
                     if (out.format_version < 2)
                         throw std::runtime_error(
                             "replace_from requires format_version 2");
@@ -1550,6 +1738,129 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                                 "typed MIPS encoding guard is not a linked "
                                 "LUI/ORI register pair");
                     }
+                } else {
+                    if (out.format_version < 4)
+                        throw std::runtime_error(
+                            "sparse patch fields require format_version 4");
+                    const toml::value fields_value =
+                        toml::find(v, "fields");
+                    const toml::array& fields =
+                        fields_value.as_array();
+                    if (fields.empty())
+                        throw std::runtime_error(
+                            "sparse patch fields must not be empty");
+                    std::vector<RelativeRange> claimed;
+                    for (const toml::value& field_value : fields) {
+                        const auto& table = field_value.as_table();
+                        for (const auto& [key, unused] : table) {
+                            (void)unused;
+                            if (key != "offset" && key != "replace" &&
+                                key != "option" && key != "encoding" &&
+                                key != "addend")
+                                throw std::runtime_error(
+                                    "sparse patch field has unknown field: " +
+                                    key);
+                        }
+                        ModPatchField field;
+                        const int64_t field_offset =
+                            toml::find_or<int64_t>(
+                                field_value, "offset", 0);
+                        if (field_offset < 0)
+                            throw std::runtime_error(
+                                "sparse patch field offset must not be "
+                                "negative");
+                        field.offset =
+                            static_cast<uint64_t>(field_offset);
+                        const bool literal =
+                            field_value.contains("replace");
+                        const bool dynamic =
+                            field_value.contains("option") ||
+                            field_value.contains("encoding") ||
+                            field_value.contains("addend");
+                        if (literal == dynamic)
+                            throw std::runtime_error(
+                                "sparse patch field requires exactly one of "
+                                "literal replace or option encoding");
+                        if (literal) {
+                            if (!parse_hex_bytes(
+                                    toml::find<std::string>(
+                                        field_value, "replace"),
+                                    field.replacement) ||
+                                field.replacement.empty())
+                                throw std::runtime_error(
+                                    "sparse patch literal field must be "
+                                    "non-empty hex");
+                        } else {
+                            if (!field_value.contains("option") ||
+                                !field_value.contains("encoding"))
+                                throw std::runtime_error(
+                                    "sparse dynamic field requires option "
+                                    "and encoding");
+                            field.replace_from_option =
+                                toml::find<std::string>(
+                                    field_value, "option");
+                            if (!parse_value_encoding(
+                                    toml::find<std::string>(
+                                        field_value, "encoding"),
+                                    field.replace_encoding))
+                                throw std::runtime_error(
+                                    "sparse dynamic field encoding is "
+                                    "unsupported");
+                            field.replace_addend =
+                                toml::find_or<int64_t>(
+                                    field_value, "addend", 0);
+                            const ModOption* option = find_option(
+                                out, patch.feature_id,
+                                field.replace_from_option);
+                            if (!option ||
+                                option->type != ModOptionType::Integer)
+                                throw std::runtime_error(
+                                    "sparse dynamic field must reference a "
+                                    "same-feature integer option");
+                            if (!option_range_fits_encoding(
+                                    *option, field.replace_encoding,
+                                    field.replace_addend))
+                                throw std::runtime_error(
+                                    "sparse dynamic field option range/"
+                                    "addend does not fit encoding");
+                            if (field.replace_encoding ==
+                                ModValueEncoding::MipsLuiOriU32) {
+                                if (patch.target !=
+                                        ModPatchTarget::MainExe ||
+                                    field.replace_addend != 0 ||
+                                    (patch.location + field.offset) % 4 != 0 ||
+                                    !valid_mips_lui_ori_guard(
+                                        patch.expected, field.offset))
+                                    throw std::runtime_error(
+                                        "sparse typed MIPS field requires an "
+                                        "aligned linked main_exe LUI/ORI "
+                                        "guard without an addend");
+                            }
+                        }
+                        const uint64_t guard_span =
+                            field.replacement.empty()
+                                ? value_encoding_size(
+                                      field.replace_encoding)
+                                : field.replacement.size();
+                        if (field.offset > patch.expected.size() ||
+                            guard_span >
+                                patch.expected.size() - field.offset)
+                            throw std::runtime_error(
+                                "sparse patch field exceeds expected guard");
+                        for (const RelativeRange& range :
+                             patch_field_ranges(field)) {
+                            for (const RelativeRange& previous : claimed) {
+                                if (range.offset <
+                                        previous.offset + previous.size &&
+                                    previous.offset <
+                                        range.offset + range.size)
+                                    throw std::runtime_error(
+                                        "sparse patch fields overlap");
+                            }
+                            claimed.push_back(range);
+                        }
+                        patch.fields.push_back(std::move(field));
+                    }
                 }
                 const uint64_t sector_size =
                     patch.target == ModPatchTarget::DiscRaw ? 2352 :
@@ -1575,6 +1886,53 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 if (!patch.when.empty()) {
                     patch.when_option = patch.when.begin()->first;
                     patch.when_value = patch.when.begin()->second;
+                }
+                if (v.contains("when_integer")) {
+                    if (out.format_version < 4)
+                        throw std::runtime_error(
+                            "when_integer requires format_version 4");
+                    const toml::value predicate =
+                        toml::find(v, "when_integer");
+                    const auto& table = predicate.as_table();
+                    for (const auto& [key, unused] : table) {
+                        (void)unused;
+                        if (key != "option" && key != "op" &&
+                            key != "value")
+                            throw std::runtime_error(
+                                "when_integer has unknown field: " + key);
+                    }
+                    patch.when_integer.present = true;
+                    patch.when_integer.option =
+                        toml::find<std::string>(predicate, "option");
+                    if (!parse_integer_predicate_op(
+                            toml::find<std::string>(predicate, "op"),
+                            patch.when_integer.op))
+                        throw std::runtime_error(
+                            "when_integer op must be eq, ne, lt, le, gt, "
+                            "or ge");
+                    patch.when_integer.value =
+                        toml::find<int64_t>(predicate, "value");
+                    const ModOption* option = find_option(
+                        out, patch.feature_id,
+                        patch.when_integer.option);
+                    if (!option ||
+                        option->type != ModOptionType::Integer)
+                        throw std::runtime_error(
+                            "when_integer must reference a same-feature "
+                            "integer option");
+                    if (patch.when_integer.value < option->min_value ||
+                        patch.when_integer.value > option->max_value)
+                        throw std::runtime_error(
+                            "when_integer value is outside option bounds");
+                    if ((patch.when_integer.op ==
+                             ModIntegerPredicateOp::Equal ||
+                         patch.when_integer.op ==
+                             ModIntegerPredicateOp::NotEqual) &&
+                        !integer_step_aligned(
+                            patch.when_integer.value,
+                            option->min_value, option->step))
+                        throw std::runtime_error(
+                            "when_integer equality value is not selectable");
                 }
                 out.patches.push_back(std::move(patch));
                 ++declaration_index;
@@ -2285,7 +2643,10 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 if (!feature ||
                     !is_feature_enabled(*package, selected, *feature) ||
                     !conditions_match(*package, selected,
-                                      patch.feature_id, patch.when))
+                                      patch.feature_id, patch.when) ||
+                    !integer_predicate_matches(
+                        *package, selected, patch.feature_id,
+                        patch.when_integer))
                     continue;
                 patches.push_back(&patch);
             }
@@ -2296,7 +2657,110 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 write.target = patch->target;
                 write.location = patch->location;
                 write.expected = patch->expected;
-                if (patch->replace_from_option.empty()) {
+                if (!patch->fields.empty()) {
+                    bool encode_failed = false;
+                    for (const ModPatchField& field : patch->fields) {
+                        std::vector<uint8_t> encoded = field.replacement;
+                        if (encoded.empty()) {
+                            const std::string selected_value =
+                                effective_option_value(
+                                    *package, selected, patch->feature_id,
+                                    field.replace_from_option);
+                            int64_t parsed = 0;
+                            int64_t adjusted = 0;
+                            if (!parse_canonical_int64(
+                                    selected_value, parsed) ||
+                                !checked_add_int64(
+                                    parsed, field.replace_addend,
+                                    adjusted)) {
+                                result.errors.push_back(
+                                    package->id + "/" +
+                                    patch->feature_id +
+                                    ": could not encode sparse field option " +
+                                    field.replace_from_option);
+                                encode_failed = true;
+                                break;
+                            }
+                            if (field.replace_encoding ==
+                                ModValueEncoding::MipsLuiOriU32) {
+                                if (adjusted < 0 ||
+                                    static_cast<uint64_t>(adjusted) >
+                                        UINT32_MAX) {
+                                    result.errors.push_back(
+                                        package->id + "/" +
+                                        patch->feature_id +
+                                        ": could not encode sparse field "
+                                        "option " +
+                                        field.replace_from_option);
+                                    encode_failed = true;
+                                    break;
+                                }
+                                const uint32_t value =
+                                    static_cast<uint32_t>(adjusted);
+                                const std::array<
+                                    std::pair<uint64_t,
+                                              std::vector<uint8_t>>, 2>
+                                    halves{{
+                                        {field.offset,
+                                         {
+                                             static_cast<uint8_t>(
+                                                 value >> 16),
+                                             static_cast<uint8_t>(
+                                                 value >> 24),
+                                         }},
+                                        {field.offset + 4,
+                                         {
+                                             static_cast<uint8_t>(value),
+                                             static_cast<uint8_t>(
+                                                 value >> 8),
+                                         }},
+                                    }};
+                                for (const auto& [offset, bytes] : halves) {
+                                    if (std::equal(
+                                            bytes.begin(), bytes.end(),
+                                            write.expected.begin() +
+                                                static_cast<size_t>(
+                                                    offset)))
+                                        continue;
+                                    ModResolution::Write::Field resolved;
+                                    resolved.offset = offset;
+                                    resolved.replacement = bytes;
+                                    write.fields.push_back(
+                                        std::move(resolved));
+                                }
+                                continue;
+                            }
+                            if (!encode_unsigned_value(
+                                    field.replace_encoding, adjusted,
+                                    encoded)) {
+                                result.errors.push_back(
+                                    package->id + "/" +
+                                    patch->feature_id +
+                                    ": could not encode sparse field option " +
+                                    field.replace_from_option);
+                                encode_failed = true;
+                                break;
+                            }
+                        }
+                        if (std::equal(
+                                encoded.begin(), encoded.end(),
+                                write.expected.begin() +
+                                    static_cast<size_t>(field.offset)))
+                            continue;
+                        ModResolution::Write::Field resolved;
+                        resolved.offset = field.offset;
+                        resolved.replacement = std::move(encoded);
+                        write.fields.push_back(std::move(resolved));
+                    }
+                    if (encode_failed) continue;
+                    if (write.fields.empty()) continue;
+                    std::sort(
+                        write.fields.begin(), write.fields.end(),
+                        [](const ModResolution::Write::Field& a,
+                           const ModResolution::Write::Field& b) {
+                            return a.offset < b.offset;
+                        });
+                } else if (patch->replace_from_option.empty()) {
                     write.replacement = patch->replacement;
                 } else {
                     const std::string selected_value =
@@ -2434,8 +2898,28 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
     std::vector<ModResolution::Write> coalesced;
     coalesced.reserve(result.writes.size());
     for (const ModResolution::Write& write : result.writes) {
-        if (write.expected.empty() ||
-            write.expected.size() != write.replacement.size()) {
+        bool valid_write = !write.expected.empty();
+        if (write.fields.empty()) {
+            valid_write =
+                valid_write &&
+                write.expected.size() == write.replacement.size();
+        } else {
+            valid_write = valid_write && write.replacement.empty();
+            uint64_t previous_end = 0;
+            for (const ModResolution::Write::Field& field : write.fields) {
+                if (field.replacement.empty() ||
+                    field.offset > write.expected.size() ||
+                    field.replacement.size() >
+                        write.expected.size() - field.offset ||
+                    field.offset < previous_end) {
+                    valid_write = false;
+                    break;
+                }
+                previous_end =
+                    field.offset + field.replacement.size();
+            }
+        }
+        if (!valid_write) {
             result.errors.push_back(
                 write.package_id + "/" + write.feature_id +
                 ": resolver emitted invalid write");
@@ -2444,6 +2928,27 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         bool duplicate = false;
         for (const ModResolution::Write& previous : coalesced) {
             if (identical_write(previous, write)) {
+                duplicate = true;
+                break;
+            }
+            uint64_t guard_mismatch = 0;
+            if (write_guard_overlap_mismatch(
+                    previous, write, guard_mismatch)) {
+                ModResolution::Diagnostic diagnostic;
+                diagnostic.resource =
+                    byte_resource(write.target, guard_mismatch);
+                diagnostic.package_id = write.package_id;
+                diagnostic.feature_id = write.feature_id;
+                diagnostic.other_package_id = previous.package_id;
+                diagnostic.other_feature_id = previous.feature_id;
+                diagnostic.message =
+                    write.package_id + "/" + write.feature_id +
+                    " has an incompatible guard at " +
+                    diagnostic.resource + " with " +
+                    previous.package_id + "/" +
+                    previous.feature_id;
+                result.diagnostics.push_back(diagnostic);
+                result.errors.push_back(diagnostic.message);
                 duplicate = true;
                 break;
             }
@@ -2474,9 +2979,9 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
     for (const ModResolution::Overlay& overlay : result.overlays) {
         bool claimed = false;
         for (const ModResolution::Write& write : result.writes) {
-            if (!ranges_overlap(
-                    overlay.target, overlay.location, overlay.payload.size(),
-                    write.target, write.location, write.replacement.size()))
+            if (!write_overlaps_range(
+                    write, overlay.target, overlay.location,
+                    overlay.payload.size()))
                 continue;
             uint64_t mismatch = 0;
             if (!write_overlay_mismatch(write, overlay, mismatch))

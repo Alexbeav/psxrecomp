@@ -77,7 +77,7 @@ int main() {
     write_bytes(root / "packages/runtime.test/1.0.0/assets/overlay.bin",
                 overlay);
     write_text(root / "packages/runtime.test/1.0.0/manifest.toml",
-        "format_version = 2\n"
+        "format_version = 4\n"
         "id = \"runtime.test\"\n"
         "version = \"1.0.0\"\n"
         "name = \"Runtime Test\"\n"
@@ -99,6 +99,15 @@ int main() {
         "[[feature]]\n"
         "id = \"dynamic-main\"\n"
         "name = \"Dynamic Main\"\n"
+        "[[feature]]\n"
+        "id = \"sparse-main\"\n"
+        "name = \"Sparse Main\"\n"
+        "[[feature]]\n"
+        "id = \"sparse-flag\"\n"
+        "name = \"Sparse Flag\"\n"
+        "[[feature]]\n"
+        "id = \"sparse-disc\"\n"
+        "name = \"Sparse Disc\"\n"
         "[[option]]\n"
         "feature = \"dynamic-main\"\n"
         "id = \"count\"\n"
@@ -107,6 +116,14 @@ int main() {
         "min = 0\n"
         "max = 254\n"
         "default = 42\n"
+        "[[option]]\n"
+        "feature = \"sparse-main\"\n"
+        "id = \"frames\"\n"
+        "label = \"Frames\"\n"
+        "type = \"integer\"\n"
+        "min = 0\n"
+        "max = 99\n"
+        "default = 2\n"
         "[[patch]]\n"
         "feature = \"main-code\"\n"
         "target = \"main_exe\"\n"
@@ -137,6 +154,34 @@ int main() {
         "address = 2147488002\n"
         "expected = \"0100\"\n"
         "replace_from = { option = \"count\", encoding = \"u16le\", addend = 1 }\n"
+        "[[patch]]\n"
+        "feature = \"sparse-main\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2147488256\n"
+        "expected = \"02000132\"\n"
+        "fields = [{ offset = 0, option = \"frames\", encoding = \"u8\" }]\n"
+        "when_integer = { option = \"frames\", op = \"gt\", value = 0 }\n"
+        "[[patch]]\n"
+        "feature = \"sparse-main\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2147488256\n"
+        "expected = \"02000132\"\n"
+        "fields = [{ offset = 0, replace = \"01\" }, "
+        "{ offset = 2, replace = \"00\" }]\n"
+        "when_integer = { option = \"frames\", op = \"eq\", value = 0 }\n"
+        "[[patch]]\n"
+        "feature = \"sparse-flag\"\n"
+        "target = \"main_exe\"\n"
+        "address = 2147488256\n"
+        "expected = \"02000132\"\n"
+        "fields = [{ offset = 1, replace = \"42\" }]\n"
+        "[[patch]]\n"
+        "feature = \"sparse-disc\"\n"
+        "target = \"disc_user\"\n"
+        "offset = 6164\n"
+        "expected = \"11223344\"\n"
+        "fields = [{ offset = 0, replace = \"aa\" }, "
+        "{ offset = 2, replace = \"bb\" }]\n"
         "[[overlay]]\n"
         "feature = \"asset-overlay\"\n"
         "target = \"disc_raw\"\n"
@@ -171,7 +216,21 @@ int main() {
         "id = \"dynamic-main\"\n"
         "enabled = true\n"
         "[feature.values]\n"
-        "count = 42\n");
+        "count = 42\n"
+        "[[feature]]\n"
+        "package_id = \"runtime.test\"\n"
+        "id = \"sparse-main\"\n"
+        "enabled = true\n"
+        "[feature.values]\n"
+        "frames = 0\n"
+        "[[feature]]\n"
+        "package_id = \"runtime.test\"\n"
+        "id = \"sparse-flag\"\n"
+        "enabled = true\n"
+        "[[feature]]\n"
+        "package_id = \"runtime.test\"\n"
+        "id = \"sparse-disc\"\n"
+        "enabled = true\n");
 
     std::string error;
     check(PSXRecompV4::mod_runtime_initialize(
@@ -183,6 +242,8 @@ int main() {
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;
     ram[0x1102] = 1; ram[0x1103] = 0;
+    ram[0x1200] = 2; ram[0x1201] = 0;
+    ram[0x1202] = 1; ram[0x1203] = 0x32;
     mod_runtime_on_dispatch(0x80001000);
     check(ram[0x1000] == 1, "patch must wait for the configured entry point");
     mod_runtime_on_dispatch(0x80002000);
@@ -191,6 +252,10 @@ int main() {
     check(ram[0x1100] == 42 && ram[0x1101] == 0 &&
               ram[0x1102] == 43 && ram[0x1103] == 0,
           "dynamic main-EXE patches must encode all sites before entry");
+    check(ram[0x1200] == 1 && ram[0x1201] == 0x42 &&
+              ram[0x1202] == 0 && ram[0x1203] == 0x32,
+          "adjacent sparse fields must compose while preserving guard-only "
+          "bytes");
 
     std::array<uint8_t, 2352> sector{};
     sector[10] = 0xaa;
@@ -225,10 +290,20 @@ int main() {
     mode2_sector[15] = 2;
     mode2_sector[18] = 0;
     mode2_sector[24 + 10] = 0xcc;
+    mode2_sector[24 + 20] = 0x11;
+    mode2_sector[24 + 21] = 0x22;
+    mode2_sector[24 + 22] = 0x33;
+    mode2_sector[24 + 23] = 0x44;
     mod_runtime_patch_disc_sector(
         3, 1, mode2_sector.data(), (uint32_t)mode2_sector.size());
     check(mode2_sector[24 + 10] == 0xdd,
           "disc_user operations must apply to raw Mode2 Form1 user data");
+    check(mode2_sector[24 + 20] == 0xaa &&
+              mode2_sector[24 + 21] == 0x22 &&
+              mode2_sector[24 + 22] == 0xbb &&
+              mode2_sector[24 + 23] == 0x44,
+          "sparse disc writes must validate a complete guard and modify only "
+          "owned fields");
     std::array<uint8_t, 2352> audio_sector{};
     audio_sector[24 + 10] = 0xcc;
     mod_runtime_patch_disc_sector(
@@ -247,6 +322,40 @@ int main() {
     check(ram[0x1000] == 1 && ram[0x1003] == 4 &&
               ram[0x1100] == 0 && ram[0x1101] == 0,
           "one failed generated guard must leave the complete main plan untouched");
+
+    check(PSXRecompV4::mod_runtime_initialize(
+              root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+          error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    ram[0x1100] = 0; ram[0x1101] = 0;
+    ram[0x1102] = 1; ram[0x1103] = 0;
+    ram[0x1200] = 2; ram[0x1201] = 0;
+    ram[0x1202] = 1; ram[0x1203] = 0x33; /* guard-only byte is wrong */
+    mod_runtime_on_dispatch(0x80002000);
+    check(ram[0x1000] == 1 && ram[0x1003] == 4 &&
+              ram[0x1200] == 2 && ram[0x1201] == 0 &&
+              ram[0x1202] == 1 && ram[0x1203] == 0x33,
+          "a failed sparse guard-only byte must leave the complete main plan "
+          "untouched");
+
+    mod_runtime_enable_disc_patches();
+    std::array<uint8_t, 2352> bad_sparse_disc{};
+    bad_sparse_disc[15] = 2;
+    bad_sparse_disc[18] = 0;
+    bad_sparse_disc[24 + 10] = 0xcc;
+    bad_sparse_disc[24 + 20] = 0x11;
+    bad_sparse_disc[24 + 21] = 0x99; /* guard-only byte is wrong */
+    bad_sparse_disc[24 + 22] = 0x33;
+    bad_sparse_disc[24 + 23] = 0x44;
+    mod_runtime_patch_disc_sector(
+        3, 1, bad_sparse_disc.data(),
+        (uint32_t)bad_sparse_disc.size());
+    check(bad_sparse_disc[24 + 10] == 0xcc &&
+              bad_sparse_disc[24 + 20] == 0x11 &&
+              bad_sparse_disc[24 + 22] == 0x33,
+          "a failed sparse disc guard must leave every write in the sector "
+          "untouched");
 
     fs::remove_all(root, ec);
     if (failures) return 1;

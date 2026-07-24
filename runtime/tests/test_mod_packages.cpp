@@ -841,6 +841,290 @@ int main() {
               "type=\"integer\"\nmin=0\nmax=10\nstep=2\ndefault=3\n"),
           "integer defaults must align to their declared step");
 
+    write_text(root / "packages/sparse.mod/1.0.0/manifest.toml",
+               "format_version = 4\n"
+               "id = \"sparse.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Sparse Fields\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"timing\"\n"
+               "name = \"Timing\"\n"
+               "[[feature]]\n"
+               "id = \"cancellable\"\n"
+               "name = \"Cancellable\"\n"
+               "[[feature]]\n"
+               "id = \"collision\"\n"
+               "name = \"Collision\"\n"
+               "[[feature]]\n"
+               "id = \"guard-mismatch\"\n"
+               "name = \"Guard Mismatch\"\n"
+               "[[feature]]\n"
+               "id = \"predicates\"\n"
+               "name = \"Predicates\"\n"
+               "[[option]]\n"
+               "feature = \"timing\"\n"
+               "id = \"frames\"\n"
+               "label = \"Frames\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 99\n"
+               "default = 2\n"
+               "[[option]]\n"
+               "feature = \"predicates\"\n"
+               "id = \"value\"\n"
+               "label = \"Value\"\n"
+               "type = \"integer\"\n"
+               "min = 0\n"
+               "max = 10\n"
+               "default = 5\n"
+               "[[patch]]\n"
+               "feature = \"timing\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508224\n"
+               "expected = \"02000132\"\n"
+               "fields = [{ offset = 0, option = \"frames\", encoding = \"u8\" }]\n"
+               "when_integer = { option = \"frames\", op = \"gt\", value = 0 }\n"
+               "[[patch]]\n"
+               "feature = \"timing\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508224\n"
+               "expected = \"02000132\"\n"
+               "fields = [{ offset = 0, replace = \"01\" }, "
+               "{ offset = 2, replace = \"00\" }]\n"
+               "when_integer = { option = \"frames\", op = \"eq\", value = 0 }\n"
+               "[[patch]]\n"
+               "feature = \"cancellable\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508224\n"
+               "expected = \"02000132\"\n"
+               "fields = [{ offset = 1, replace = \"42\" }]\n"
+               "[[patch]]\n"
+               "feature = \"collision\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508224\n"
+               "expected = \"02000132\"\n"
+               "fields = [{ offset = 0, replace = \"09\" }]\n"
+               "[[patch]]\n"
+               "feature = \"guard-mismatch\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508224\n"
+               "expected = \"03000132\"\n"
+               "fields = [{ offset = 3, replace = \"33\" }]\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508480\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"eq\", value = 5 }\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508481\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"ne\", value = 5 }\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508482\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"lt\", value = 6 }\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508483\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"le\", value = 5 }\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508484\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"gt\", value = 4 }\n"
+               "[[patch]]\n"
+               "feature = \"predicates\"\n"
+               "target = \"main_exe\"\n"
+               "address = 2147508485\n"
+               "expected = \"00\"\n"
+               "fields = [{ replace = \"01\" }]\n"
+               "when_integer = { option = \"value\", op = \"ge\", value = 5 }\n");
+    check(feature_reload.scan(&error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "timing", true, &error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "cancellable", true, &error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "predicates", true, &error), error.c_str());
+    check(feature_reload.set_feature_option(
+              "sparse.mod", "timing", "frames", "5", &error),
+          error.c_str());
+    ModResolution sparse_positive = feature_reload.resolve("SLUS-TEST");
+    const auto sparse_writes_at = [&](const ModResolution& plan,
+                                      uint64_t location) {
+        return std::count_if(
+            plan.writes.begin(), plan.writes.end(),
+            [&](const ModResolution::Write& write) {
+                return write.package_id == "sparse.mod" &&
+                       write.location == location;
+            });
+    };
+    check(sparse_positive.ok &&
+              sparse_writes_at(sparse_positive, 0x80006000ull) == 2,
+          "adjacent sparse fields in one guarded record must compose");
+    const auto timing_write = std::find_if(
+        sparse_positive.writes.begin(), sparse_positive.writes.end(),
+        [](const ModResolution::Write& write) {
+            return write.package_id == "sparse.mod" &&
+                   write.feature_id == "timing" &&
+                   write.location == 0x80006000ull;
+        });
+    check(timing_write != sparse_positive.writes.end() &&
+              timing_write->expected ==
+                  std::vector<uint8_t>({2, 0, 1, 0x32}) &&
+              timing_write->replacement.empty() &&
+              timing_write->fields.size() == 1 &&
+              timing_write->fields[0].offset == 0 &&
+              timing_write->fields[0].replacement ==
+                  std::vector<uint8_t>({5}),
+          "sparse resolution must retain the complete guard but own only "
+          "declared fields");
+    check(std::count_if(
+              sparse_positive.writes.begin(),
+              sparse_positive.writes.end(),
+              [](const ModResolution::Write& write) {
+                  return write.package_id == "sparse.mod" &&
+                         write.feature_id == "predicates";
+              }) == 5,
+          "eq/ne/lt/le/gt/ge predicates must resolve with typed integer "
+          "semantics");
+    const std::string sparse_positive_fingerprint =
+        sparse_positive.fingerprint;
+    check(feature_reload.set_feature_option(
+              "sparse.mod", "timing", "frames", "0", &error),
+          error.c_str());
+    ModResolution sparse_zero = feature_reload.resolve("SLUS-TEST");
+    const auto zero_timing = std::find_if(
+        sparse_zero.writes.begin(), sparse_zero.writes.end(),
+        [](const ModResolution::Write& write) {
+            return write.package_id == "sparse.mod" &&
+                   write.feature_id == "timing";
+        });
+    check(sparse_zero.ok && zero_timing != sparse_zero.writes.end() &&
+              zero_timing->fields.size() == 2 &&
+              zero_timing->fields[0].offset == 0 &&
+              zero_timing->fields[0].replacement ==
+                  std::vector<uint8_t>({1}) &&
+              zero_timing->fields[1].offset == 2 &&
+              zero_timing->fields[1].replacement ==
+                  std::vector<uint8_t>({0}) &&
+              sparse_zero.fingerprint != sparse_positive_fingerprint,
+          "zero and nonzero conditional sparse plans must own their exact "
+          "distinct fields and fingerprints");
+    check(feature_reload.set_feature_option(
+              "sparse.mod", "timing", "frames", "2", &error),
+          error.c_str());
+    ModResolution sparse_stock = feature_reload.resolve("SLUS-TEST");
+    check(sparse_stock.ok &&
+              sparse_writes_at(sparse_stock, 0x80006000ull) == 1,
+          "stock-equal sparse fields must elide only their own no-op while "
+          "an adjacent feature remains active");
+    check(feature_reload.set_feature_option(
+              "sparse.mod", "timing", "frames", "5", &error),
+          error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "collision", true, &error), error.c_str());
+    check(!feature_reload.resolve("SLUS-TEST").ok,
+          "different sparse replacements for one owned byte must collide");
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "collision", false, &error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "guard-mismatch", true, &error), error.c_str());
+    check(!feature_reload.resolve("SLUS-TEST").ok,
+          "overlapping complete guards with incompatible expected bytes "
+          "must fail before runtime");
+    check(feature_reload.set_feature_enabled(
+              "sparse.mod", "guard-mismatch", false, &error),
+          error.c_str());
+
+    const std::string sparse_prelude =
+        "id=\"bad.sparse\"\nversion=\"1.0.0\"\nname=\"Bad\"\n"
+        "[[target]]\ngame_id=\"SLUS-TEST\"\n"
+        "[[feature]]\nid=\"bad\"\nname=\"Bad\"\n"
+        "[[option]]\nfeature=\"bad\"\nid=\"value\"\nlabel=\"Value\"\n"
+        "type=\"integer\"\nmin=0\nmax=10\nstep=2\ndefault=2\n";
+    const std::string sparse_patch =
+        "[[patch]]\nfeature=\"bad\"\ntarget=\"main_exe\"\n"
+        "address=2147487744\nexpected=\"00000000\"\n";
+    check(reject_parametric_manifest(
+              "sparse-v3",
+              "format_version=3\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\"}]\n"),
+          "sparse fields must require format 4");
+    check(reject_parametric_manifest(
+              "sparse-empty",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[]\n"),
+          "sparse fields must not be empty");
+    check(reject_parametric_manifest(
+              "sparse-both",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "replace=\"01000000\"\n"
+                  "fields=[{offset=0,replace=\"01\"}]\n"),
+          "sparse fields must be mutually exclusive with full replace");
+    check(reject_parametric_manifest(
+              "sparse-overlap",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"0102\"},"
+                  "{offset=1,replace=\"03\"}]\n"),
+          "sparse fields must reject overlapping owned ranges");
+    check(reject_parametric_manifest(
+              "sparse-bounds",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=4,replace=\"01\"}]\n"),
+          "sparse fields must stay inside the complete guard");
+    check(reject_parametric_manifest(
+              "sparse-mixed",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\",option=\"value\","
+                  "encoding=\"u8\"}]\n"),
+          "one sparse field must not mix literal and dynamic forms");
+    check(reject_parametric_manifest(
+              "sparse-overflow",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,option=\"value\",encoding=\"u8\","
+                  "addend=250}]\n"),
+          "sparse dynamic field ranges plus addends must fit encoding");
+    check(reject_parametric_manifest(
+              "sparse-predicate-op",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\"}]\n"
+                  "when_integer={option=\"value\",op=\"between\",value=2}\n"),
+          "typed integer predicates must reject unknown operations");
+    check(reject_parametric_manifest(
+              "sparse-predicate-feature",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\"}]\n"
+                  "when_integer={option=\"missing\",op=\"eq\",value=2}\n"),
+          "typed integer predicates must reference same-feature integers");
+    check(reject_parametric_manifest(
+              "sparse-predicate-bounds",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\"}]\n"
+                  "when_integer={option=\"value\",op=\"gt\",value=11}\n"),
+          "typed integer predicate constants must stay in option bounds");
+    check(reject_parametric_manifest(
+              "sparse-predicate-step",
+              "format_version=4\n" + sparse_prelude + sparse_patch +
+                  "fields=[{offset=0,replace=\"01\"}]\n"
+                  "when_integer={option=\"value\",op=\"eq\",value=3}\n"),
+          "typed equality predicates must use selectable values");
+
     const std::vector<uint8_t> overlay_a = {1, 2, 3, 4};
     const std::vector<uint8_t> overlay_b = {8, 9};
     const std::vector<uint8_t> overlay_c = {3, 4, 7};
