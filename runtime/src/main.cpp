@@ -4903,7 +4903,21 @@ namespace {
                                 password ? password : "", endpoint, &caps);
     }
 
-    int ae_np_join(void*, const char* lobby_id, const char* password) {
+    /* guest_bind is in/out (capacity >= 64). recomp-ui fills a real UDP port
+     * (prefer 7778); never advertise :0 to the lobby. */
+    int ae_np_join(void*, const char* lobby_id, const char* password,
+                   char* guest_bind) {
+        char bind_buf[64];
+        const char* bind = guest_bind;
+        const char* colon = (bind && bind[0]) ? std::strrchr(bind, ':') : nullptr;
+        const unsigned port = (colon && colon[1])
+            ? static_cast<unsigned>(std::strtoul(colon + 1, nullptr, 10)) : 0u;
+        if (!bind || !bind[0] || port == 0u) {
+            std::snprintf(bind_buf, sizeof(bind_buf), "0.0.0.0:7778");
+            bind = bind_buf;
+            if (guest_bind)
+                std::snprintf(guest_bind, 64, "%s", bind_buf);
+        }
         if (lobby_id && strncmp(lobby_id, "lan:", 4) == 0) {
             const char* endpoint = lobby_id + 4;
             if (!endpoint[0]) return -1;
@@ -4975,7 +4989,17 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
-        return psx_lobby_join(lobby_id, password ? password : "", "0.0.0.0:0");
+        return psx_lobby_join(lobby_id, password ? password : "", bind);
+    }
+
+    const char* ae_np_last_error(void*) {
+        const PsxLobbyJoinInfo* ji = psx_lobby_join_info();
+        return (ji && ji->last_error[0]) ? ji->last_error : nullptr;
+    }
+
+    void ae_np_clear_last_error(void*) {
+        PsxLobbyJoinInfo* ji = const_cast<PsxLobbyJoinInfo*>(psx_lobby_join_info());
+        if (ji) ji->last_error[0] = '\0';
     }
 
     int ae_np_leave(void*) {
@@ -5266,6 +5290,8 @@ namespace {
         ae_np_fill_launch,
         ae_np_local_address_get,
         ae_np_kick_member,
+        ae_np_last_error,
+        ae_np_clear_last_error,
     };
 }  // namespace
 #endif
