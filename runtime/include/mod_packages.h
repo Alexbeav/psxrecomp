@@ -45,6 +45,7 @@ struct ModFeature {
 
 enum class ModConstraintKind {
     OrderedInteger,
+    RequiresFeature,
 };
 
 enum class ModConstraintDirection {
@@ -58,6 +59,9 @@ struct ModConstraint {
     ModConstraintDirection direction =
         ModConstraintDirection::Nondecreasing;
     std::vector<std::string> options;
+    std::string required_feature_id;
+    std::string required_option_id;
+    std::string required_value;
 };
 
 struct ModRequirement {
@@ -204,9 +208,15 @@ struct ModResolution {
     std::vector<std::string> errors;
 };
 
+struct ModBuiltinResolverContext {
+    const std::map<std::string, const ModPackage*>* active_packages = nullptr;
+    const std::map<std::string, ModSelection>* selections = nullptr;
+};
+
 using ModBuiltinResolver = std::function<bool(
     const ModPackage& package,
     const ModSelection& selection,
+    const ModBuiltinResolverContext& context,
     std::vector<ModResolution::Write>& writes,
     std::vector<std::string>& errors)>;
 

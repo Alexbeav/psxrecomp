@@ -21,7 +21,7 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 3;
+constexpr uint32_t kMaxFormatVersion = 4;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
@@ -728,23 +728,107 @@ std::string effective_option_value(const ModPackage& package,
     return option ? option->default_value : std::string();
 }
 
-bool feature_constraints_satisfied(
+bool prospective_feature_enabled(
     const ModPackage& package, const ModSelection& selection,
-    const std::string& feature_id, const std::string* override_id,
+    const std::string& feature_id, const std::string* override_feature_id,
+    const bool* override_enabled) {
+    if (override_feature_id && override_enabled &&
+        feature_id == *override_feature_id)
+        return *override_enabled;
+    const ModFeature* feature = find_feature(package, feature_id);
+    return feature && is_feature_enabled(package, selection, *feature);
+}
+
+std::string prospective_option_value(
+    const ModPackage& package, const ModSelection& selection,
+    const std::string& feature_id, const std::string& option_id,
+    const std::string* override_feature_id,
+    const std::string* override_option_id,
+    const std::string* override_value) {
+    if (override_feature_id && override_option_id && override_value &&
+        feature_id == *override_feature_id && option_id == *override_option_id)
+        return *override_value;
+    return effective_option_value(package, selection, feature_id, option_id);
+}
+
+bool runtime_constraint_satisfied(
+    const ModPackage& package, const ModSelection& selection,
+    const ModConstraint& constraint,
+    const std::string* override_feature_id, const bool* override_enabled,
+    const std::string* override_option_feature_id,
+    const std::string* override_option_id,
     const std::string* override_value, std::string* reason) {
-    for (const ModConstraint& constraint : package.constraints) {
-        if (constraint.feature_id != feature_id) continue;
-        if (!constraint_satisfied(
-                package, constraint,
-                [&](const std::string& id) {
-                    return override_id && override_value &&
-                                   id == *override_id
-                               ? *override_value
-                               : effective_option_value(
-                                     package, selection, feature_id, id);
-                },
-                reason))
+    if (!prospective_feature_enabled(
+            package, selection, constraint.feature_id, override_feature_id,
+            override_enabled))
+        return true;
+    if (constraint.kind == ModConstraintKind::OrderedInteger) {
+        return constraint_satisfied(
+            package, constraint,
+            [&](const std::string& id) {
+                return prospective_option_value(
+                    package, selection, constraint.feature_id, id,
+                    override_option_feature_id, override_option_id,
+                    override_value);
+            },
+            reason);
+    }
+    if (constraint.kind == ModConstraintKind::RequiresFeature) {
+        const ModFeature* required =
+            find_feature(package, constraint.required_feature_id);
+        const std::string required_name =
+            required && !required->name.empty()
+                ? required->name
+                : constraint.required_feature_id;
+        if (!prospective_feature_enabled(
+                package, selection, constraint.required_feature_id,
+                override_feature_id, override_enabled)) {
+            if (reason) *reason = "requires " + required_name + " to be enabled";
             return false;
+        }
+        if (!constraint.required_option_id.empty()) {
+            const std::string actual = prospective_option_value(
+                package, selection, constraint.required_feature_id,
+                constraint.required_option_id, override_option_feature_id,
+                override_option_id, override_value);
+            if (actual != constraint.required_value) {
+                const ModOption* option = find_option(
+                    package, constraint.required_feature_id,
+                    constraint.required_option_id);
+                if (reason) {
+                    *reason =
+                        "requires " + required_name + " " +
+                        (option && !option->label.empty()
+                             ? option->label
+                             : constraint.required_option_id) +
+                        " = " + constraint.required_value;
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+    if (reason) *reason = "unsupported constraint kind";
+    return false;
+}
+
+bool package_constraints_satisfied(
+    const ModPackage& package, const ModSelection& selection,
+    const std::string* override_feature_id, const bool* override_enabled,
+    const std::string* override_option_feature_id,
+    const std::string* override_option_id,
+    const std::string* override_value,
+    std::string* failing_feature_id, std::string* reason) {
+    for (const ModConstraint& constraint : package.constraints) {
+        std::string local_reason;
+        if (!runtime_constraint_satisfied(
+                package, selection, constraint, override_feature_id,
+                override_enabled, override_option_feature_id,
+                override_option_id, override_value, &local_reason)) {
+            if (failing_feature_id) *failing_feature_id = constraint.feature_id;
+            if (reason) *reason = local_reason;
+            return false;
+        }
     }
     return true;
 }
@@ -1183,53 +1267,85 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     toml::find<std::string>(v, "feature");
                 const std::string kind =
                     toml::find<std::string>(v, "kind");
-                const std::string direction =
-                    toml::find<std::string>(v, "direction");
-                constraint.options =
-                    toml::find<std::vector<std::string>>(v, "options");
                 if (!find_feature(out, constraint.feature_id))
                     throw std::runtime_error(
                         "constraint references unknown feature");
-                if (kind != "ordered_integer")
-                    throw std::runtime_error(
-                        "constraint kind must be ordered_integer");
-                if (direction == "nondecreasing") {
-                    constraint.direction =
-                        ModConstraintDirection::Nondecreasing;
-                } else if (direction == "nonincreasing") {
-                    constraint.direction =
-                        ModConstraintDirection::Nonincreasing;
+                if (kind == "ordered_integer") {
+                    const std::string direction =
+                        toml::find<std::string>(v, "direction");
+                    constraint.options =
+                        toml::find<std::vector<std::string>>(v, "options");
+                    if (direction == "nondecreasing") {
+                        constraint.direction =
+                            ModConstraintDirection::Nondecreasing;
+                    } else if (direction == "nonincreasing") {
+                        constraint.direction =
+                            ModConstraintDirection::Nonincreasing;
+                    } else {
+                        throw std::runtime_error(
+                            "ordered_integer direction must be "
+                            "nondecreasing or nonincreasing");
+                    }
+                    if (constraint.options.size() < 2)
+                        throw std::runtime_error(
+                            "ordered_integer requires at least two options");
+                    std::set<std::string> option_ids;
+                    for (const std::string& id : constraint.options) {
+                        const ModOption* option =
+                            find_option(out, constraint.feature_id, id);
+                        if (!option || option->type != ModOptionType::Integer)
+                            throw std::runtime_error(
+                                "ordered_integer must reference same-feature "
+                                "integer options");
+                        if (!option_ids.insert(id).second)
+                            throw std::runtime_error(
+                                "ordered_integer contains a duplicate option");
+                    }
+                    std::string reason;
+                    if (!constraint_satisfied(
+                            out, constraint,
+                            [&](const std::string& id) {
+                                return find_option(
+                                    out, constraint.feature_id, id)
+                                    ->default_value;
+                            },
+                            &reason))
+                        throw std::runtime_error(
+                            "constraint defaults are invalid: " + reason);
+                } else if (kind == "requires_feature") {
+                    if (out.format_version < 4)
+                        throw std::runtime_error(
+                            "requires_feature constraints require format_version 4");
+                    constraint.kind = ModConstraintKind::RequiresFeature;
+                    constraint.required_feature_id =
+                        toml::find<std::string>(v, "requires_feature");
+                    if (!find_feature(out, constraint.required_feature_id))
+                        throw std::runtime_error(
+                            "requires_feature references unknown feature");
+                    constraint.required_option_id =
+                        toml::find_or<std::string>(v, "requires_option", "");
+                    constraint.required_value =
+                        toml::find_or<std::string>(v, "requires_value", "");
+                    if (constraint.required_option_id.empty() !=
+                        constraint.required_value.empty())
+                        throw std::runtime_error(
+                            "requires_feature option constraint requires both "
+                            "requires_option and requires_value");
+                    if (!constraint.required_option_id.empty()) {
+                        const ModOption* option = find_option(
+                            out, constraint.required_feature_id,
+                            constraint.required_option_id);
+                        if (!option)
+                            throw std::runtime_error(
+                                "requires_feature references unknown option");
+                        if (!valid_option_value(
+                                *option, constraint.required_value))
+                            throw std::runtime_error(
+                                "requires_feature references invalid option value");
+                    }
                 } else {
-                    throw std::runtime_error(
-                        "ordered_integer direction must be "
-                        "nondecreasing or nonincreasing");
+                    throw std::runtime_error("unknown constraint kind");
                 }
-                if (constraint.options.size() < 2)
-                    throw std::runtime_error(
-                        "ordered_integer requires at least two options");
-                std::set<std::string> option_ids;
-                for (const std::string& id : constraint.options) {
-                    const ModOption* option =
-                        find_option(out, constraint.feature_id, id);
-                    if (!option || option->type != ModOptionType::Integer)
-                        throw std::runtime_error(
-                            "ordered_integer must reference same-feature "
-                            "integer options");
-                    if (!option_ids.insert(id).second)
-                        throw std::runtime_error(
-                            "ordered_integer contains a duplicate option");
-                }
-                std::string reason;
-                if (!constraint_satisfied(
-                        out, constraint,
-                        [&](const std::string& id) {
-                            return find_option(
-                                out, constraint.feature_id, id)
-                                ->default_value;
-                        },
-                        &reason))
-                    throw std::runtime_error(
-                        "constraint defaults are invalid: " + reason);
                 out.constraints.push_back(std::move(constraint));
             }
         }
@@ -1869,14 +1985,15 @@ bool ModPackageManager::set_feature_enabled(const std::string& package_id,
         return false;
     }
     ModSelection& package_selection = selections_[package_id];
-    if (enabled) {
-        std::string reason;
-        if (!feature_constraints_satisfied(
-                *package, package_selection, feature_id,
-                nullptr, nullptr, &reason)) {
-            set_error(error, package_id + "/" + feature_id + ": " + reason);
-            return false;
-        }
+    std::string failing_feature;
+    std::string reason;
+    if (!package_constraints_satisfied(
+            *package, package_selection, &feature_id, &enabled,
+            nullptr, nullptr, nullptr, &failing_feature, &reason)) {
+        set_error(error, package_id + "/" +
+            (failing_feature.empty() ? feature_id : failing_feature) +
+            ": " + reason);
+        return false;
     }
     ModFeatureSelection& selection = package_selection.features[feature_id];
     selection.enabled = enabled;
@@ -1903,14 +2020,15 @@ bool ModPackageManager::set_feature_option(const std::string& package_id,
         return false;
     }
     ModSelection& package_selection = selections_[package_id];
-    if (is_feature_enabled(*package, package_selection, *feature)) {
-        std::string reason;
-        if (!feature_constraints_satisfied(
-                *package, package_selection, feature_id,
-                &option_id, &value, &reason)) {
-            set_error(error, package_id + "/" + feature_id + ": " + reason);
-            return false;
-        }
+    std::string failing_feature;
+    std::string reason;
+    if (!package_constraints_satisfied(
+            *package, package_selection, nullptr, nullptr,
+            &feature_id, &option_id, &value, &failing_feature, &reason)) {
+        set_error(error, package_id + "/" +
+            (failing_feature.empty() ? feature_id : failing_feature) +
+            ": " + reason);
+        return false;
     }
     package_selection.features[feature_id].values[option_id] = value;
     return true;
@@ -1997,24 +2115,13 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             selection == selections_.end()
                 ? blank_selection
                 : selection->second;
-        for (const ModConstraint& constraint : package->constraints) {
-            const ModFeature* feature =
-                find_feature(*package, constraint.feature_id);
-            if (!feature ||
-                !is_feature_enabled(
-                    *package, effective_selection, *feature))
-                continue;
-            std::string reason;
-            if (!constraint_satisfied(
-                    *package, constraint,
-                    [&](const std::string& option_id) {
-                        return effective_option_value(
-                            *package, effective_selection,
-                            constraint.feature_id, option_id);
-                    },
-                    &reason))
-                result.errors.push_back(
-                    id + "/" + constraint.feature_id + ": " + reason);
+        std::string failing_feature;
+        std::string reason;
+        if (!package_constraints_satisfied(
+                *package, effective_selection, nullptr, nullptr,
+                nullptr, nullptr, nullptr, &failing_feature, &reason)) {
+            result.errors.push_back(
+                id + "/" + failing_feature + ": " + reason);
         }
         if (selection != selections_.end()) {
             for (const ModOption& option : package->options) {
@@ -2074,6 +2181,9 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         return result;
     }
 
+    ModBuiltinResolverContext resolver_context;
+    resolver_context.active_packages = &active;
+    resolver_context.selections = &selections_;
     for (const ModPackage* package : result.ordered) {
         const auto selected_it = selections_.find(package->id);
         const ModSelection blank;
@@ -2233,7 +2343,9 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
             const std::string resolver_id = package->resolver.substr(8);
             const auto resolver = builtin_resolvers().find(resolver_id);
             if (resolver != builtin_resolvers().end() &&
-                !resolver->second(*package, selected, result.writes, result.errors) &&
+                !resolver->second(
+                    *package, selected, resolver_context,
+                    result.writes, result.errors) &&
                 result.errors.empty())
                 result.errors.push_back(package->id + ": built-in resolver failed");
         }

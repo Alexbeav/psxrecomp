@@ -259,6 +259,47 @@ int main() {
               matrix.derived_discs[0].output_size == 222222,
           "multi-option derived-disc condition must match selected values");
 
+    mod_clear_builtin_resolvers_for_tests();
+    bool resolver_context_seen = false;
+    check(mod_register_builtin_resolver(
+              "context-test",
+              [&](const ModPackage& package, const ModSelection& selection,
+                  const ModBuiltinResolverContext& context,
+                  std::vector<ModResolution::Write>& writes,
+                  std::vector<std::string>& errors) {
+                  (void)writes;
+                  (void)errors;
+                  resolver_context_seen =
+                      package.id == "context.consumer" &&
+                      selection.enabled &&
+                      context.active_packages &&
+                      context.selections &&
+                      context.active_packages->count("context.provider") == 1 &&
+                      context.active_packages->count("context.consumer") == 1 &&
+                      context.selections->at("context.provider").enabled &&
+                      context.selections->at("context.consumer").enabled;
+                  return resolver_context_seen;
+              }),
+          "test resolver must register");
+    write_text(root / "packages/context.provider/1.0.0/manifest.toml",
+               manifest("context.provider", "1.0.0"));
+    write_text(root / "packages/context.consumer/1.0.0/manifest.toml",
+               "format_version = 1\n"
+               "id = \"context.consumer\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"context.consumer\"\n"
+               "resolver = \"builtin:context-test\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n");
+    check(reload.scan(&error), error.c_str());
+    check(reload.set_enabled("matrix.mod", false, &error), error.c_str());
+    check(reload.set_enabled("context.provider", true, &error), error.c_str());
+    check(reload.set_enabled("context.consumer", true, &error), error.c_str());
+    ModResolution context_resolution = reload.resolve("SLUS-TEST");
+    check(context_resolution.ok && resolver_context_seen,
+          "built-in resolver must receive active package selection context");
+    mod_clear_builtin_resolvers_for_tests();
+
     write_text(root / "packages/features.mod/1.0.0/manifest.toml",
                manifest("features.mod", "1.0.0",
                    "\n[[feature]]\n"
