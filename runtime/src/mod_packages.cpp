@@ -833,6 +833,70 @@ bool package_constraints_satisfied(
     return true;
 }
 
+void set_feature_selected(ModSelection& selection,
+                          const std::string& feature_id, bool enabled) {
+    ModFeatureSelection& feature = selection.features[feature_id];
+    feature.enabled = enabled;
+    feature.has_enabled = true;
+}
+
+bool apply_feature_requirements(const ModPackage& package,
+                                ModSelection& selection,
+                                const std::string& feature_id,
+                                std::set<std::string>& visiting,
+                                std::string* error) {
+    if (!visiting.insert(feature_id).second) return true;
+    for (const ModConstraint& constraint : package.constraints) {
+        if (constraint.kind != ModConstraintKind::RequiresFeature ||
+            constraint.feature_id != feature_id)
+            continue;
+        const ModFeature* required =
+            find_feature(package, constraint.required_feature_id);
+        if (!required || required->legacy) {
+            set_error(error, feature_id + ": has an invalid feature requirement");
+            visiting.erase(feature_id);
+            return false;
+        }
+        set_feature_selected(selection, constraint.required_feature_id, true);
+        if (!constraint.required_option_id.empty()) {
+            selection.features[constraint.required_feature_id]
+                .values[constraint.required_option_id] =
+                constraint.required_value;
+        }
+        if (!apply_feature_requirements(
+                package, selection, constraint.required_feature_id,
+                visiting, error)) {
+            visiting.erase(feature_id);
+            return false;
+        }
+    }
+    visiting.erase(feature_id);
+    return true;
+}
+
+void cascade_unsatisfied_feature_requirements(const ModPackage& package,
+                                              ModSelection& selection) {
+    bool changed = false;
+    do {
+        changed = false;
+        for (const ModConstraint& constraint : package.constraints) {
+            if (constraint.kind != ModConstraintKind::RequiresFeature)
+                continue;
+            const ModFeature* dependent =
+                find_feature(package, constraint.feature_id);
+            if (!dependent || dependent->legacy ||
+                !is_feature_enabled(package, selection, *dependent))
+                continue;
+            if (runtime_constraint_satisfied(
+                    package, selection, constraint, nullptr, nullptr,
+                    nullptr, nullptr, nullptr, nullptr))
+                continue;
+            set_feature_selected(selection, constraint.feature_id, false);
+            changed = true;
+        }
+    } while (changed);
+}
+
 bool conditions_match(const ModPackage& package, const ModSelection& selection,
                       const std::string& feature_id,
                       const std::map<std::string, std::string>& conditions) {
@@ -1641,8 +1705,7 @@ bool ModPackageManager::scan(std::string* error) {
             ModPackage package;
             std::string parse_error;
             if (!read_manifest(manifest, package, &parse_error)) {
-                set_error(error, parse_error);
-                return false;
+                continue;
             }
             if (package.id != id_dir.path().filename().string() ||
                 package.version != version_dir.path().filename().string()) {
@@ -1984,20 +2047,27 @@ bool ModPackageManager::set_feature_enabled(const std::string& package_id,
         set_error(error, "unknown package feature");
         return false;
     }
-    ModSelection& package_selection = selections_[package_id];
+    ModSelection package_selection = selections_[package_id];
+    if (enabled) {
+        std::set<std::string> visiting;
+        if (!apply_feature_requirements(
+                *package, package_selection, feature_id, visiting, error))
+            return false;
+    }
+    set_feature_selected(package_selection, feature_id, enabled);
+    if (!enabled)
+        cascade_unsatisfied_feature_requirements(*package, package_selection);
     std::string failing_feature;
     std::string reason;
     if (!package_constraints_satisfied(
-            *package, package_selection, &feature_id, &enabled,
-            nullptr, nullptr, nullptr, &failing_feature, &reason)) {
+            *package, package_selection, nullptr, nullptr, nullptr, nullptr,
+            nullptr, &failing_feature, &reason)) {
         set_error(error, package_id + "/" +
             (failing_feature.empty() ? feature_id : failing_feature) +
             ": " + reason);
         return false;
     }
-    ModFeatureSelection& selection = package_selection.features[feature_id];
-    selection.enabled = enabled;
-    selection.has_enabled = true;
+    selections_[package_id] = std::move(package_selection);
     return true;
 }
 
@@ -2019,18 +2089,20 @@ bool ModPackageManager::set_feature_option(const std::string& package_id,
         set_error(error, "invalid feature option value");
         return false;
     }
-    ModSelection& package_selection = selections_[package_id];
+    ModSelection package_selection = selections_[package_id];
+    package_selection.features[feature_id].values[option_id] = value;
+    cascade_unsatisfied_feature_requirements(*package, package_selection);
     std::string failing_feature;
     std::string reason;
     if (!package_constraints_satisfied(
-            *package, package_selection, nullptr, nullptr,
-            &feature_id, &option_id, &value, &failing_feature, &reason)) {
+            *package, package_selection, nullptr, nullptr, nullptr, nullptr,
+            nullptr, &failing_feature, &reason)) {
         set_error(error, package_id + "/" +
             (failing_feature.empty() ? feature_id : failing_feature) +
             ": " + reason);
         return false;
     }
-    package_selection.features[feature_id].values[option_id] = value;
+    selections_[package_id] = std::move(package_selection);
     return true;
 }
 

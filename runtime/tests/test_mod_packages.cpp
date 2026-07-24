@@ -686,6 +686,73 @@ int main() {
                   changed_parametric.fingerprint,
           "generated integer state and fingerprint must survive reload");
 
+    write_text(root / "packages/requires.mod/1.0.0/manifest.toml",
+               "format_version = 4\n"
+               "id = \"requires.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Requires\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"prereq\"\n"
+               "name = \"Prerequisite\"\n"
+               "[[feature]]\n"
+               "id = \"dependent\"\n"
+               "name = \"Dependent\"\n"
+               "[[feature]]\n"
+               "id = \"optioned-dependent\"\n"
+               "name = \"Optioned Dependent\"\n"
+               "[[option]]\n"
+               "feature = \"prereq\"\n"
+               "id = \"availability\"\n"
+               "label = \"Available in\"\n"
+               "type = \"choice\"\n"
+               "default = \"main\"\n"
+               "[[option.choice]]\n"
+               "value = \"main\"\n"
+               "label = \"Main Stages\"\n"
+               "[[option.choice]]\n"
+               "value = \"everywhere\"\n"
+               "label = \"Everywhere\"\n"
+               "[[constraint]]\n"
+               "feature = \"dependent\"\n"
+               "kind = \"requires_feature\"\n"
+               "requires_feature = \"prereq\"\n"
+               "[[constraint]]\n"
+               "feature = \"optioned-dependent\"\n"
+               "kind = \"requires_feature\"\n"
+               "requires_feature = \"prereq\"\n"
+               "requires_option = \"availability\"\n"
+               "requires_value = \"everywhere\"\n");
+    check(parametric_reload.scan(&error), error.c_str());
+    check(parametric_reload.set_feature_enabled(
+              "requires.mod", "dependent", true, &error), error.c_str());
+    check(parametric_reload.feature_enabled("requires.mod", "prereq") &&
+              parametric_reload.feature_enabled("requires.mod", "dependent"),
+          "enabling a dependent feature must auto-enable its prerequisite");
+    check(parametric_reload.set_feature_enabled(
+              "requires.mod", "optioned-dependent", true, &error),
+          error.c_str());
+    check(parametric_reload.feature_enabled(
+              "requires.mod", "optioned-dependent") &&
+              parametric_reload.feature_option_value(
+                  "requires.mod", "prereq", "availability") == "everywhere",
+          "enabling an optioned dependent must auto-select the required "
+          "prerequisite value");
+    check(parametric_reload.set_feature_option(
+              "requires.mod", "prereq", "availability", "main", &error),
+          error.c_str());
+    check(parametric_reload.feature_enabled("requires.mod", "prereq") &&
+              parametric_reload.feature_enabled("requires.mod", "dependent") &&
+              !parametric_reload.feature_enabled(
+                  "requires.mod", "optioned-dependent"),
+          "weakening a prerequisite option must disable invalid dependents");
+    check(parametric_reload.set_feature_enabled(
+              "requires.mod", "prereq", false, &error), error.c_str());
+    check(!parametric_reload.feature_enabled("requires.mod", "prereq") &&
+              !parametric_reload.feature_enabled("requires.mod", "dependent"),
+          "disabling a prerequisite must disable downstream dependents");
+
     const auto reject_parametric_manifest =
         [&](const std::string& name, const std::string& body) {
             const fs::path path = root / (name + ".toml");
