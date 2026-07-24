@@ -97,9 +97,11 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <netdb.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -294,6 +296,7 @@ struct PlayerInput {
      * input), false => currently presenting a digital pad (D-pad was last). */
     int   mode = PSXRecompV4::PAD_MODE_HYBRID;
     bool  hybrid_analog = false;
+    int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
 };
@@ -1779,7 +1782,9 @@ struct PsxButtonMap {
 };
 
 static int controller_device_index = 0;
-static int controller_deadzone = 12000;
+/* Default ~10% of SDL axis range (32767). Overridden per-player via settings. */
+static int controller_deadzone = 3277;
+static constexpr int kDefaultDeadzoneRaw = 3277;
 static std::array<PsxButtonMap, 16> controller_map = {{
     { PAD_UP,       "up",       {} },
     { PAD_DOWN,     "down",     {} },
@@ -2030,7 +2035,7 @@ static std::string default_input_ini_text(void) {
         "[controller]\n"
         "enabled = true\n"
         "device = 0\n"
-        "deadzone = 12000\n"
+        "deadzone = 3277\n"
         "\n"
         "[mapping]\n"
         "up = dpup,lefty-\n"
@@ -2177,6 +2182,15 @@ static int pad_mode_boot_analog(int mode) {
             mode == PSXRecompV4::PAD_MODE_HYBRID) ? 1 : 0;
 }
 
+/* Keyboard has no DualShock sticks/config handshake — always present as a
+ * plain digital pad (SCPH-1080). Leaving keyboard slots in ANALOG/HYBRID made
+ * P2–P5 show as connected while games that expect digital multitap pads never
+ * saw usable button input. */
+static int effective_player_mode(const PlayerInput& p) {
+    if (p.kind == 1) return (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    return p.mode;
+}
+
 /* Open/close SDL handles so they match g_players, and (re)assert each slot's
  * PSX connection + pad type. Safe to call repeatedly (hotplug, boot).
  * While delay-sync netplay is active, SIO connection/type are owned by
@@ -2188,13 +2202,14 @@ static void refresh_player_devices(void) {
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
         else open_player(p, s);
         if (netplay) continue;
+        const int mode = effective_player_mode(p);
         sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(p.mode), 0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
         /* DIGITAL mode == a plain digital controller that ignores the DualShock
          * config-mode commands (real SCPH-1080 behaviour); ANALOG/HYBRID == a
          * config-capable DualShock. A digital pad that wrongly answered 0x43
          * sent Tomba 2's pad driver down the config path -> phantom 0x00 reads. */
-        sio_set_pad_config_capable(s, p.mode != PSXRecompV4::PAD_MODE_DIGITAL);
+        sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
 }
 
@@ -2227,8 +2242,10 @@ static void set_player_device(PlayerInput& p, const std::string& dev, int mode) 
  * component became a D-Pad bit. Analog stick bytes still use radial rescale
  * in axes_to_pad_pair; this path is digital buttons only. Triggers share the
  * same per-axis threshold. */
-static bool controller_source_pressed_h(SDL_GameController* h, const ControllerSource& source) {
+static bool controller_source_pressed_h(SDL_GameController* h, const ControllerSource& source,
+                                        int deadzone_raw) {
     if (!h) return false;
+    const int dz = deadzone_raw > 0 ? deadzone_raw : controller_deadzone;
 
     switch (source.kind) {
     case ControllerSource::Kind::Button:
@@ -2238,8 +2255,8 @@ static bool controller_source_pressed_h(SDL_GameController* h, const ControllerS
     case ControllerSource::Kind::AxisNegative: {
         const int16_t v = SDL_GameControllerGetAxis(h, (SDL_GameControllerAxis)source.id);
         if (source.kind == ControllerSource::Kind::AxisPositive)
-            return v > controller_deadzone;
-        return v < -controller_deadzone;
+            return v > dz;
+        return v < -dz;
     }
     case ControllerSource::Kind::None:
     default:
@@ -2278,13 +2295,14 @@ static bool source_is_stick_axis(const ControllerSource& s) {
  * left/right analog-stick axes do NOT contribute button bits — see
  * source_is_stick_axis above. Digital mode passes false, so the stick still
  * folds onto the D-pad (its only outlet there). */
-static uint16_t controller_pad_buttons(SDL_GameController* h, bool suppress_stick_axes) {
+static uint16_t controller_pad_buttons(SDL_GameController* h, bool suppress_stick_axes,
+                                       int deadzone_raw) {
     uint16_t buttons = 0xFFFF;  /* all released */
     if (!h) return buttons;
     for (const auto& entry : controller_map) {
         for (const auto& source : entry.sources) {
             if (suppress_stick_axes && source_is_stick_axis(source)) continue;
-            if (controller_source_pressed_h(h, source)) {
+            if (controller_source_pressed_h(h, source, deadzone_raw)) {
                 buttons &= (uint16_t)~entry.bit;
                 break;
             }
@@ -2302,8 +2320,9 @@ static uint16_t controller_pad_buttons(SDL_GameController* h, bool suppress_stic
  * capped at 32767 before rescale so a full-diagonal push (raw mag ~46341) maps
  * to ~0x9E/0x9E per axis — the circular gate a real DualShock stick reports,
  * not 0xFF/0xFF. At dz==0 it reduces to a plain magnitude-preserving map. */
-static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby) {
-    const double dz = controller_deadzone;
+static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby,
+                             int deadzone_raw) {
+    const double dz = (double)(deadzone_raw > 0 ? deadzone_raw : controller_deadzone);
     double x = vx, y = vy;
     double mag = std::sqrt(x * x + y * y);            /* 0 .. ~46341 */
     if (mag <= dz || mag <= 0.0) { *obx = 0x80; *oby = 0x80; return; }
@@ -2323,10 +2342,10 @@ static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby)
 }
 
 /* Buttons for a player's selected device (0xFFFF = none pressed). `player` is
- * 1 or 2 — selects which keybinds.ini section drives a keyboard port. */
+ * 1..5 — selects which keybinds.ini section drives a keyboard port. */
 static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_stick_axes) {
     if (p.kind == 1) return pad_from_keyboard(player);
-    if (p.kind == 2) return controller_pad_buttons(p.handle, suppress_stick_axes);
+    if (p.kind == 2) return controller_pad_buttons(p.handle, suppress_stick_axes, p.deadzone);
     return 0xFFFF;
 }
 
@@ -2356,10 +2375,10 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
     if (p.kind == 2 && p.handle) {
         axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX),
                          SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY),
-                         &out[0], &out[1]);
+                         &out[0], &out[1], p.deadzone);
         axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTX),
                          SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTY),
-                         &out[2], &out[3]);
+                         &out[2], &out[3], p.deadzone);
         if (fold_dpad) {
             if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  out[0] = 0x00;
             if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) out[0] = 0xFF;
@@ -2378,7 +2397,8 @@ static bool hybrid_stick_active(const PlayerInput& p) {
     if (p.kind != 2 || !p.handle) return false;
     const double lx = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX);
     const double ly = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY);
-    return std::sqrt(lx * lx + ly * ly) > (double)controller_deadzone;
+    const double dz = (double)(p.deadzone > 0 ? p.deadzone : controller_deadzone);
+    return std::sqrt(lx * lx + ly * ly) > dz;
 }
 static bool hybrid_dpad_active(const PlayerInput& p, int player, bool kb_always) {
     if (p.kind == 2 && p.handle) {
@@ -2412,13 +2432,16 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player, bool kb_always)
  * pad TYPE is left unchanged: a launcher-assigned analog DualShock still presents
  * as analog (so the game's analog input path / SIO handshake cadence is preserved
  * exactly), and merged sources only contribute button/stick STATE, never a type
- * downgrade. Controlled by PSX_DEV_INPUT (default ON for the dev workflow); set
- * PSX_DEV_INPUT=0 to restore strict single-device-per-port routing. */
+ * downgrade.
+ *
+ * Default OFF: each player slot accepts input only from its launcher-assigned
+ * device (keyboard XOR that controller). Opt in with PSX_DEV_INPUT=1 for the
+ * old "any device drives P1" workflow. */
 static bool dev_any_input_enabled() {
     static int cached = -1;
     if (cached < 0) {
         const char* e = std::getenv("PSX_DEV_INPUT");
-        cached = (e && (e[0] == '0' || e[0] == 'n' || e[0] == 'N' || e[0] == 'f' || e[0] == 'F')) ? 0 : 1;
+        cached = (e && (e[0] == '1' || e[0] == 'y' || e[0] == 'Y' || e[0] == 't' || e[0] == 'T')) ? 1 : 0;
     }
     return cached != 0;
 }
@@ -2437,7 +2460,7 @@ static uint16_t dev_all_controllers_buttons(bool suppress_stick_axes) {
         SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
         SDL_GameController* h = SDL_GameControllerFromInstanceID(inst);
         if (!h) h = SDL_GameControllerOpen(i);   /* open once; SDL keeps it */
-        if (h) btn &= controller_pad_buttons(h, suppress_stick_axes);
+        if (h) btn &= controller_pad_buttons(h, suppress_stick_axes, controller_deadzone);
     }
     return btn;
 }
@@ -2456,9 +2479,11 @@ static void dev_any_controller_sticks(uint8_t st[4]) {
         if (!h) continue;
         uint8_t lx, ly, rx, ry;
         axes_to_pad_pair(SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTX),
-                         SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTY), &lx, &ly);
+                         SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTY),
+                         &lx, &ly, controller_deadzone);
         axes_to_pad_pair(SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_RIGHTX),
-                         SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_RIGHTY), &rx, &ry);
+                         SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_RIGHTY),
+                         &rx, &ry, controller_deadzone);
         if (lx != 0x80 || ly != 0x80) { st[0] = lx; st[1] = ly; }
         if (rx != 0x80 || ry != 0x80) { st[2] = rx; st[3] = ry; }
     }
@@ -2488,7 +2513,7 @@ static void apply_input_override_to_sio(int override_word) {
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
     int mode;
-    if (p.kind != 0)                  mode = p.mode;
+    if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
     else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
 
@@ -2517,10 +2542,9 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     out->connected = 0;
 
     PlayerInput& p = g_players[s];
-    const int  player  = s + 1;             /* keybinds.ini section (1|2) */
-    /* Dev input: P1 is driven by the keyboard AND every connected controller,
-     * so a tester can navigate from whatever is plugged in (P2 keeps strict
-     * per-port routing). */
+    const int  player  = s + 1;             /* keybinds.ini section (1..5) */
+    /* Opt-in dev merge: P1 is driven by the keyboard AND every connected
+     * controller (PSX_DEV_INPUT=1). Default is strict per-slot routing. */
     const bool dev_here = (dev_any_input_enabled() && s == 0);
     if (p.kind == 0 && !dev_here) return 0;  /* no device in this port */
 
@@ -2528,13 +2552,10 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * state gates how the left stick is read for BOTH the button word and the
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
-     * handshake cadence is preserved exactly). A P1 with no assigned device but
-     * dev-any-input on presents as HYBRID — boots analog like a DualShock and
-     * auto-drops to digital on the d-pad — so any plugged controller and the
-     * keyboard both navigate. The hybrid latch reads raw device state, so it is
-     * safe to resolve here before the button word is built. */
+     * handshake cadence is preserved exactly). Keyboard is always digital.
+     * A P1 with no assigned device but dev-any-input on presents as HYBRID. */
     int mode;
-    if (p.kind != 0)      mode = p.mode;
+    if (p.kind != 0)      mode = effective_player_mode(p);
     else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
     else                  mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
     int eff_analog;
@@ -2602,11 +2623,11 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out) {
     out->connected = 0;
 
     PlayerInput& p = g_players[s];
-    const int  player  = s + 1;             /* keybinds.ini section (1|2) */
+    const int  player  = s + 1;             /* keybinds.ini section (1..5) */
     const bool dev_here = false;
     if (p.kind == 0) return 0;  /* no device in this port */
 
-    int mode = p.mode;
+    int mode = effective_player_mode(p);
     int eff_analog;
     if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
         eff_analog = 0;
@@ -2677,7 +2698,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;
 
     int mode;
-    if (p.kind != 0)                  mode = p.mode;
+    if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
     else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
 
@@ -3265,10 +3286,16 @@ static void sdl_vblank_present(void) {
     if (psx_netplay_active()) {
         psx_netplay_finish_frame();
     } else {
-        /* Offline N-pad: enable multitap only once the game EXE is running. */
+        /* Offline N-pad: enable multitap only once the game EXE is running.
+         * Port comes from game.toml [controller] multitap_port (default Port 1;
+         * BPE uses Port 2). Empty tap slots are OK — P1 may be the standalone
+         * pad on the other port. */
         if (g_offline_pad_count >= 3 && fntrace_is_game_started() &&
             !sio_get_multitap()) {
             sio_set_multitap(1);
+            std::fprintf(stdout,
+                         "psxrecomp: multitap armed (console Port %d)\n",
+                         sio_get_multitap_port() + 1);
         }
         if (g_headless)
             sample_headless_pad_into_sio(override);
@@ -3938,6 +3965,23 @@ namespace {
     std::filesystem::path g_lnch_settings_path;
     std::string g_lnch_lobby_url;
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
+    int g_lnch_lobby_input_delay = 2;
+    int g_lnch_force_input_relay = 0;
+    int g_lnch_host_max_slots = 2;
+
+    /* Delay-sync READY/START waits for every seat in slot_count. Use seated
+     * players (not lobby max_slots) so a 3/5 room can start. Sparse seats
+     * (moved) still need width covering the highest occupied index. */
+    static int ae_np_session_slot_count(int player_count, int max_slots,
+                                       int local_slot, int game_fallback) {
+        int slots = player_count >= 2 ? player_count
+                    : (max_slots >= 2 ? max_slots
+                       : (game_fallback >= 2 ? game_fallback : 2));
+        if (local_slot + 1 > slots) slots = local_slot + 1;
+        if (slots < 2) slots = 2;
+        if (slots > PSX_MAX_PLAYERS) slots = PSX_MAX_PLAYERS;
+        return slots;
+    }
     bool g_lnch_hosting_lan = false;
     bool g_lnch_joined_lan = false;
     /* Join Direct / cross-machine: membership via UDP, not the local file. */
@@ -3945,18 +3989,24 @@ namespace {
     std::string g_lnch_lan_endpoint;
     uint32_t g_lnch_lan_session_id = 1;
 
+    static constexpr int kAeLanMaxSlots = RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
     struct AeLanLobbyState {
         std::string name;
         std::string game;
         std::string endpoint;
         std::string host_name;
-        std::string joiner_name;
+        std::string joiner_name; /* legacy / first guest mirror */
         std::string password;
         bool started = false;
         int host_slot = 0;
+        int max_slots = 2;
         uint32_t session_id = 1;
+        std::string slot_name[kAeLanMaxSlots];
+        std::string slot_id[kAeLanMaxSlots]; /* stable per-seat player id */
     };
     AeLanLobbyState g_lnch_remote_lan_state{};
+    int g_lnch_lan_my_slot = -1;
+    std::string g_lnch_lan_player_id; /* local process identity for LAN seats */
 
 #ifdef _WIN32
     using AeLanSock = SOCKET;
@@ -3966,8 +4016,8 @@ namespace {
     static constexpr AeLanSock kAeLanSockInvalid = -1;
 #endif
     AeLanSock g_lnch_lan_udp = kAeLanSockInvalid;
-    sockaddr_in g_lnch_lan_peer{};
-    bool g_lnch_lan_peer_valid = false;
+    sockaddr_in g_lnch_lan_peers[kAeLanMaxSlots]{};
+    bool g_lnch_lan_peer_ok[kAeLanMaxSlots]{};
     uint32_t g_lnch_lan_join_pulse_ms = 0;
 
     std::filesystem::path ae_np_lan_file() {
@@ -3986,7 +4036,150 @@ namespace {
 
     static void ae_np_lan_udp_close(void) {
         ae_np_lan_sock_close(&g_lnch_lan_udp);
-        g_lnch_lan_peer_valid = false;
+        for (int i = 0; i < kAeLanMaxSlots; ++i)
+            g_lnch_lan_peer_ok[i] = false;
+    }
+
+    static void ae_np_lan_sync_legacy_names(AeLanLobbyState& state) {
+        if (state.max_slots < 2) state.max_slots = 2;
+        if (state.max_slots > kAeLanMaxSlots) state.max_slots = kAeLanMaxSlots;
+        if (state.host_slot < 0 || state.host_slot >= state.max_slots)
+            state.host_slot = 0;
+        if (!state.slot_name[state.host_slot].empty())
+            state.host_name = state.slot_name[state.host_slot];
+        else if (!state.host_name.empty())
+            state.slot_name[state.host_slot] = state.host_name;
+        state.joiner_name.clear();
+        for (int i = 0; i < state.max_slots; ++i) {
+            if (i == state.host_slot) continue;
+            if (!state.slot_name[i].empty()) {
+                state.joiner_name = state.slot_name[i];
+                break;
+            }
+        }
+    }
+
+    static int ae_np_lan_occupied(const AeLanLobbyState& state) {
+        int n = 0;
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i)
+            if (!state.slot_name[i].empty()) ++n;
+        return n;
+    }
+
+    static int ae_np_lan_find_free_slot(const AeLanLobbyState& state) {
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i) {
+            if (i == state.host_slot) continue;
+            if (state.slot_name[i].empty()) return i;
+        }
+        return -1;
+    }
+
+    /* Guest seat by display name. Never match host_slot — same-machine
+     * instances often share settings.toml player_name, and reclaiming the
+     * host seat made JOIN "succeed" with no visible joiner. */
+    static int ae_np_lan_find_guest_slot_by_name(const AeLanLobbyState& state,
+                                                const char* name) {
+        if (!name || !name[0]) return -1;
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i) {
+            if (i == state.host_slot) continue;
+            if (state.slot_name[i] == name) return i;
+        }
+        return -1;
+    }
+
+    static int ae_np_lan_find_slot_by_id(const AeLanLobbyState& state,
+                                        const char* player_id) {
+        if (!player_id || !player_id[0]) return -1;
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i) {
+            if (state.slot_id[i] == player_id) return i;
+        }
+        return -1;
+    }
+
+    /* Stable per-process LAN identity (prefer WS player_id when connected). */
+    static const char* ae_np_lan_local_player_id(void) {
+        if (!g_lnch_lan_player_id.empty()) return g_lnch_lan_player_id.c_str();
+        const char* ws = psx_lobby_player_id();
+        if (ws && ws[0]) {
+            g_lnch_lan_player_id = ws;
+            return g_lnch_lan_player_id.c_str();
+        }
+        unsigned char b[16];
+        bool ok = false;
+#if !defined(_WIN32)
+        FILE* ur = std::fopen("/dev/urandom", "rb");
+        if (ur) {
+            ok = std::fread(b, 1, sizeof(b), ur) == sizeof(b);
+            std::fclose(ur);
+        }
+#endif
+        if (!ok) {
+            uint64_t t = (uint64_t)SDL_GetTicks()
+                ^ ((uint64_t)(uintptr_t)&g_lnch_lan_player_id << 32)
+                ^ ((uint64_t)SDL_GetPerformanceCounter() << 17);
+            for (size_t i = 0; i < sizeof(b); ++i) {
+                t = t * 6364136223846793005ull + 1ull;
+                b[i] = (unsigned char)(t >> 56);
+            }
+        }
+        char hex[40];
+        std::snprintf(hex, sizeof(hex),
+                      "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                      b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
+                      b[10], b[11], b[12], b[13], b[14], b[15]);
+        g_lnch_lan_player_id = hex;
+        return g_lnch_lan_player_id.c_str();
+    }
+
+    /* Exact-name uniqueness among seats: Alex, Alex (2), Alex (3), … */
+    static std::string ae_np_lan_unique_display_name(const AeLanLobbyState& state,
+                                                    const char* requested,
+                                                    int skip_slot) {
+        std::string base = (requested && requested[0]) ? requested : "Player";
+        auto taken = [&](const std::string& n) {
+            for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i) {
+                if (i == skip_slot) continue;
+                if (state.slot_name[i] == n) return true;
+            }
+            return false;
+        };
+        if (!taken(base)) return base;
+        for (int n = 2; n <= 64; ++n) {
+            char cand[96];
+            std::snprintf(cand, sizeof(cand), "%s (%d)", base.c_str(), n);
+            if (!taken(cand)) return cand;
+        }
+        return base + " (" + std::string(ae_np_lan_local_player_id()).substr(0, 8) + ")";
+    }
+
+    /* Seat or reconnect a guest by player_id; uniquify display name on insert. */
+    static int ae_np_lan_seat_guest(AeLanLobbyState& st, const char* player_id,
+                                   const char* requested_name) {
+        if (!player_id || !player_id[0]) return -1;
+        int slot = ae_np_lan_find_slot_by_id(st, player_id);
+        if (slot >= 0) {
+            if (slot == st.host_slot) return -1;
+            st.slot_name[slot] =
+                ae_np_lan_unique_display_name(st, requested_name, slot);
+            return slot;
+        }
+        slot = ae_np_lan_find_free_slot(st);
+        if (slot < 0) return -1;
+        st.slot_id[slot] = player_id;
+        st.slot_name[slot] =
+            ae_np_lan_unique_display_name(st, requested_name, -1);
+        return slot;
+    }
+
+    static void ae_np_lan_clear_peer_slot(int slot) {
+        if (slot < 0 || slot >= kAeLanMaxSlots) return;
+        g_lnch_lan_peer_ok[slot] = false;
+    }
+
+    static void ae_np_lan_set_peer_slot(int slot, const sockaddr_in& addr) {
+        if (slot < 0 || slot >= kAeLanMaxSlots) return;
+        g_lnch_lan_peers[slot] = addr;
+        g_lnch_lan_peer_ok[slot] = true;
     }
 
     static int ae_np_lan_endpoint_port(const std::string& endpoint) {
@@ -4101,11 +4294,12 @@ namespace {
         if (!state) return false;
         if (g_lnch_remote_lan) {
             *state = g_lnch_remote_lan_state;
+            ae_np_lan_sync_legacy_names(*state);
             return !state->endpoint.empty();
         }
         std::ifstream f(ae_np_lan_file());
         if (!f) return false;
-        std::string started, host_slot, session;
+        std::string started, host_slot, session, max_slots_s;
         std::getline(f, state->name);
         std::getline(f, state->game);
         std::getline(f, state->endpoint);
@@ -4116,16 +4310,40 @@ namespace {
         std::getline(f, state->password);
         std::getline(f, session);
         state->started = started == "1";
-        state->host_slot = host_slot == "1" ? 1 : 0;
+        state->host_slot = std::atoi(host_slot.c_str());
+        if (state->host_slot < 0) state->host_slot = 0;
         state->session_id = 1;
         if (!session.empty()) {
             const unsigned v = (unsigned)std::strtoul(session.c_str(), nullptr, 10);
             if (v) state->session_id = (uint32_t)v;
         }
+        state->max_slots = 2;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) {
+            state->slot_name[i].clear();
+            state->slot_id[i].clear();
+        }
+        if (std::getline(f, max_slots_s)) {
+            int ms = std::atoi(max_slots_s.c_str());
+            if (ms >= 2 && ms <= kAeLanMaxSlots) state->max_slots = ms;
+            for (int i = 0; i < state->max_slots; ++i)
+                std::getline(f, state->slot_name[i]);
+            for (int i = 0; i < state->max_slots; ++i) {
+                if (!std::getline(f, state->slot_id[i]))
+                    state->slot_id[i].clear();
+            }
+        } else {
+            /* Legacy 2P file: host + single joiner. */
+            state->slot_name[state->host_slot == 1 ? 1 : 0] = state->host_name;
+            const int guest = state->host_slot == 1 ? 0 : 1;
+            state->slot_name[guest] = state->joiner_name;
+        }
+        ae_np_lan_sync_legacy_names(*state);
         return !state->endpoint.empty();
     }
 
-    bool ae_np_write_lan_state(const AeLanLobbyState& state) {
+    bool ae_np_write_lan_state(const AeLanLobbyState& state_in) {
+        AeLanLobbyState state = state_in;
+        ae_np_lan_sync_legacy_names(state);
         if (g_lnch_remote_lan) {
             g_lnch_remote_lan_state = state;
             return true;
@@ -4141,20 +4359,35 @@ namespace {
           << (state.started ? "1" : "0") << "\n"
           << state.host_slot << "\n"
           << state.password << "\n"
-          << sid << "\n";
+          << sid << "\n"
+          << state.max_slots << "\n";
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i)
+            f << state.slot_name[i] << "\n";
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i)
+            f << state.slot_id[i] << "\n";
         return (bool)f;
     }
 
-    static void ae_np_lan_send_update_to_peer(const AeLanLobbyState& state) {
-        if (!g_lnch_lan_peer_valid) return;
-        char msg[384];
-        std::snprintf(msg, sizeof(msg),
-                      "MOTK1 UPDATE\n%s\n%s\n%d\n%d\n",
-                      state.host_name.c_str(),
-                      state.joiner_name.c_str(),
-                      state.host_slot,
-                      state.started ? 1 : 0);
-        ae_np_lan_udp_sendto(g_lnch_lan_peer, msg);
+    static void ae_np_lan_send_update_to_peers(const AeLanLobbyState& state_in) {
+        AeLanLobbyState state = state_in;
+        ae_np_lan_sync_legacy_names(state);
+        char msg[1536];
+        int off = std::snprintf(msg, sizeof(msg),
+                                "MOTK3 UPDATE\n%d\n%d\n%d\n%u\n",
+                                state.max_slots, state.host_slot,
+                                state.started ? 1 : 0,
+                                (unsigned)(state.session_id ? state.session_id : 1u));
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots && off > 0 &&
+             off < (int)sizeof(msg) - 128; ++i) {
+            off += std::snprintf(msg + off, sizeof(msg) - (size_t)off, "%s\n%s\n",
+                                 state.slot_id[i].c_str(),
+                                 state.slot_name[i].c_str());
+        }
+        if (off <= 0) return;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) {
+            if (!g_lnch_lan_peer_ok[i]) continue;
+            ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg);
+        }
     }
 
     static void ae_np_lan_atexit_cleanup(void) {
@@ -4166,10 +4399,11 @@ namespace {
 
     /* Returns false if the lobby UDP port cannot be bound (in use). */
     bool ae_np_write_lan_lobby(const char* name, const char* endpoint,
-                               const char* password) {
+                               const char* password, int max_slots) {
         ae_np_lan_udp_close();
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
+        g_lnch_lan_my_slot = 0;
         AeLanLobbyState state;
         state.name = name && name[0] ? name : "LAN Lobby";
         state.game = g_lnch_netplay_game_name.empty() ? "PSX" : g_lnch_netplay_game_name;
@@ -4177,6 +4411,12 @@ namespace {
         state.host_name = psx_lobby_display_name();
         if (state.host_name.empty()) state.host_name = "Host";
         state.password = password ? password : "";
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > kAeLanMaxSlots) max_slots = kAeLanMaxSlots;
+        state.max_slots = max_slots;
+        state.host_slot = 0;
+        state.slot_name[0] = state.host_name;
+        state.slot_id[0] = ae_np_lan_local_player_id();
         const int port = ae_np_lan_endpoint_port(state.endpoint);
         if (!ae_np_udp_port_available(port) ||
             !ae_np_lan_udp_ensure(true, port)) {
@@ -4207,9 +4447,12 @@ namespace {
                       state.name.empty() ? "Lobby" : state.name.c_str());
         std::snprintf(out->game_name, sizeof(out->game_name), "%s",
                       state.game.empty() ? "PSX" : state.game.c_str());
-        out->player_count = state.joiner_name.empty() ? 1 : 2;
-        out->max_slots = g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
+        out->player_count = ae_np_lan_occupied(state);
+        out->max_slots = state.max_slots >= 2 ? state.max_slots
+            : (g_lnch_host_max_slots >= 2 ? g_lnch_host_max_slots
+               : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2));
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
+        if (out->max_slots > kAeLanMaxSlots) out->max_slots = kAeLanMaxSlots;
         out->has_password = state.password.empty() ? 0 : 1;
         return 1;
     }
@@ -4230,26 +4473,11 @@ namespace {
 
     static bool ae_np_read_lan_file_state(AeLanLobbyState* state) {
         if (!state) return false;
-        std::ifstream f(ae_np_lan_file());
-        if (!f) return false;
-        std::string started, host_slot, session;
-        std::getline(f, state->name);
-        std::getline(f, state->game);
-        std::getline(f, state->endpoint);
-        std::getline(f, state->host_name);
-        std::getline(f, state->joiner_name);
-        std::getline(f, started);
-        std::getline(f, host_slot);
-        std::getline(f, state->password);
-        std::getline(f, session);
-        state->started = started == "1";
-        state->host_slot = host_slot == "1" ? 1 : 0;
-        state->session_id = 1;
-        if (!session.empty()) {
-            const unsigned v = (unsigned)std::strtoul(session.c_str(), nullptr, 10);
-            if (v) state->session_id = (uint32_t)v;
-        }
-        return !state->endpoint.empty();
+        const bool prior = g_lnch_remote_lan;
+        g_lnch_remote_lan = false;
+        const bool ok = ae_np_read_lan_state(state);
+        g_lnch_remote_lan = prior;
+        return ok;
     }
 
     /* Probe whether a LAN host is still answering on endpoint. */
@@ -4310,6 +4538,95 @@ namespace {
         return ae_np_lan_probe_host_ms(endpoint, 200u);
     }
 
+
+    static int ae_np_lan_parse_motk2_update(char* body, AeLanLobbyState* out) {
+        if (!body || !out) return -1;
+        char* lines[8] = {};
+        char* p = body;
+        for (int i = 0; i < 4; ++i) {
+            lines[i] = p;
+            char* nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            p = nl + 1;
+        }
+        int max_slots = std::atoi(lines[0]);
+        int host_slot = std::atoi(lines[1]);
+        int started = std::atoi(lines[2]);
+        unsigned sid = (unsigned)std::strtoul(lines[3], nullptr, 10);
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > kAeLanMaxSlots) max_slots = kAeLanMaxSlots;
+        if (host_slot < 0 || host_slot >= max_slots) host_slot = 0;
+        out->max_slots = max_slots;
+        out->host_slot = host_slot;
+        out->started = started != 0;
+        out->session_id = sid ? (uint32_t)sid : 1u;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) {
+            out->slot_name[i].clear();
+            out->slot_id[i].clear();
+        }
+        for (int i = 0; i < max_slots; ++i) {
+            char* nl = std::strchr(p, '\n');
+            if (nl) {
+                *nl = '\0';
+                out->slot_name[i] = p;
+                p = nl + 1;
+            } else {
+                out->slot_name[i] = p;
+                p = p + std::strlen(p);
+            }
+        }
+        ae_np_lan_sync_legacy_names(*out);
+        return 0;
+    }
+
+    /* MOTK3 UPDATE: header + (player_id, display_name) per slot. */
+    static int ae_np_lan_parse_motk3_update(char* body, AeLanLobbyState* out) {
+        if (!body || !out) return -1;
+        char* lines[8] = {};
+        char* p = body;
+        for (int i = 0; i < 4; ++i) {
+            lines[i] = p;
+            char* nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            p = nl + 1;
+        }
+        int max_slots = std::atoi(lines[0]);
+        int host_slot = std::atoi(lines[1]);
+        int started = std::atoi(lines[2]);
+        unsigned sid = (unsigned)std::strtoul(lines[3], nullptr, 10);
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > kAeLanMaxSlots) max_slots = kAeLanMaxSlots;
+        if (host_slot < 0 || host_slot >= max_slots) host_slot = 0;
+        out->max_slots = max_slots;
+        out->host_slot = host_slot;
+        out->started = started != 0;
+        out->session_id = sid ? (uint32_t)sid : 1u;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) {
+            out->slot_name[i].clear();
+            out->slot_id[i].clear();
+        }
+        for (int i = 0; i < max_slots; ++i) {
+            char* nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            out->slot_id[i] = p;
+            p = nl + 1;
+            nl = std::strchr(p, '\n');
+            if (nl) {
+                *nl = '\0';
+                out->slot_name[i] = p;
+                p = nl + 1;
+            } else {
+                out->slot_name[i] = p;
+                p = p + std::strlen(p);
+            }
+        }
+        ae_np_lan_sync_legacy_names(*out);
+        return 0;
+    }
+
     /* Send JOIN and wait for UPDATE / ERR. Returns 0, -1 full, -2 password, -3 timeout. */
     static int ae_np_lan_wait_join_ack(const std::string& endpoint, const char* password,
                                        AeLanLobbyState* out) {
@@ -4324,14 +4641,15 @@ namespace {
 
         std::string me = psx_lobby_display_name();
         if (me.empty()) me = "Player";
-        char msg[320];
-        std::snprintf(msg, sizeof(msg), "MOTK1 JOIN\n%s\n%s\n", me.c_str(),
+        const char* my_id = ae_np_lan_local_player_id();
+        char msg[384];
+        std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n", my_id, me.c_str(),
                       password ? password : "");
         ae_np_lan_udp_sendto(to, msg);
 
         const uint32_t deadline = SDL_GetTicks() + 1000u;
         while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
-            char buf[512];
+            char buf[1536];
             sockaddr_in from{};
 #ifdef _WIN32
             int fromlen = (int)sizeof(from);
@@ -4352,6 +4670,33 @@ namespace {
                 if (std::strncmp(code, "bad_password", 12) == 0) return -2;
                 return -1;
             }
+            if (std::strncmp(buf, "MOTK3 UPDATE\n", 13) == 0) {
+                if (ae_np_lan_parse_motk3_update(buf + 13, out) != 0) continue;
+                out->endpoint = endpoint;
+                const int my_slot = ae_np_lan_find_slot_by_id(*out, my_id);
+                if (my_slot < 0) return -1;
+                g_lnch_lan_my_slot = my_slot;
+                return 0;
+            }
+            if (std::strncmp(buf, "MOTK2 UPDATE\n", 13) == 0) {
+                if (ae_np_lan_parse_motk2_update(buf + 13, out) != 0) continue;
+                out->endpoint = endpoint;
+                /* Legacy host: uniquified name may differ from requested. */
+                int my_slot = ae_np_lan_find_guest_slot_by_name(*out, me.c_str());
+                if (my_slot < 0) {
+                    for (int i = 0; i < out->max_slots; ++i) {
+                        if (i == out->host_slot) continue;
+                        if (!out->slot_name[i].empty() &&
+                            out->slot_name[i].rfind(me, 0) == 0) {
+                            my_slot = i;
+                            break;
+                        }
+                    }
+                }
+                if (my_slot < 0) return -1;
+                g_lnch_lan_my_slot = my_slot;
+                return 0;
+            }
             if (std::strncmp(buf, "MOTK1 UPDATE\n", 13) == 0) {
                 char* p = buf + 13;
                 char* lines[4] = {};
@@ -4367,8 +4712,14 @@ namespace {
                 out->joiner_name = lines[1];
                 out->host_slot = (std::atoi(lines[2]) == 1) ? 1 : 0;
                 out->started = std::atoi(lines[3]) != 0;
+                out->max_slots = 2;
+                out->slot_name[0].clear();
+                out->slot_name[1].clear();
+                out->slot_name[out->host_slot] = out->host_name;
+                out->slot_name[1 - out->host_slot] = out->joiner_name;
                 out->endpoint = endpoint;
                 if (out->joiner_name != me) return -1;
+                g_lnch_lan_my_slot = 1 - out->host_slot;
                 return 0;
             }
             SDL_Delay(5);
@@ -4413,8 +4764,56 @@ namespace {
         }
         caps.turbo_loads   = s ? (s->turbo_loads != 0) : 0;
         caps.auto_skip_fmv = s ? (s->auto_skip_fmv != 0) : 0;
-        caps.input_delay   = 2;
+        caps.input_delay   = g_lnch_lobby_input_delay;
+        if (caps.input_delay < 2) caps.input_delay = 2;
+        if (caps.input_delay > 20) caps.input_delay = 20;
+        caps.force_input_relay = g_lnch_force_input_relay != 0;
         return caps;
+    }
+
+    static void ae_np_push_match_caps(const RecompLauncherCSettings* settings) {
+        if (!psx_lobby_in_lobby() || !psx_lobby_is_host()) return;
+        const PsxLobbyMatchCaps* cur = psx_lobby_match_caps();
+        PsxLobbyMatchCaps caps = (cur && cur->valid)
+            ? *cur
+            : ae_netplay_caps_from_settings(settings);
+        caps.valid = 1;
+        caps.input_delay = g_lnch_lobby_input_delay;
+        if (caps.input_delay < 2) caps.input_delay = 2;
+        if (caps.input_delay > 20) caps.input_delay = 20;
+        caps.force_input_relay = g_lnch_force_input_relay != 0;
+        (void)psx_lobby_set_match_caps(&caps);
+    }
+
+    int ae_np_input_delay_get(void*) { return g_lnch_lobby_input_delay; }
+    int ae_np_input_delay_set(void*, int delay_frames) {
+        if (delay_frames < 2) delay_frames = 2;
+        if (delay_frames > 20) delay_frames = 20;
+        g_lnch_lobby_input_delay = delay_frames;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+    int ae_np_force_input_relay_get(void*) { return g_lnch_force_input_relay; }
+    int ae_np_force_input_relay_set(void*, int force) {
+        g_lnch_force_input_relay = force ? 1 : 0;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+
+    /* Seat ceiling for the active room (listing / LOBBY UI). 0 if unknown. */
+    int ae_np_lobby_max_slots(void*) {
+        if (g_lnch_hosting_lan || g_lnch_joined_lan) {
+            AeLanLobbyState state;
+            if (ae_np_read_lan_state(&state) && state.max_slots >= 2)
+                return state.max_slots;
+            return g_lnch_host_max_slots >= 2 ? g_lnch_host_max_slots : 0;
+        }
+        if (psx_lobby_in_lobby()) {
+            const PsxLobbyJoinInfo* ji = psx_lobby_join_info();
+            if (ji && ji->max_slots >= 2) return ji->max_slots;
+            return g_lnch_host_max_slots >= 2 ? g_lnch_host_max_slots : 0;
+        }
+        return 0;
     }
 
     const char* ae_np_default_url(void*) {
@@ -4476,9 +4875,9 @@ namespace {
                     if (inet_pton(AF_INET, host, &to.sin_addr) == 1) {
                         std::string me = psx_lobby_display_name();
                         if (me.empty()) me = "Player";
-                        char msg[320];
-                        std::snprintf(msg, sizeof(msg), "MOTK1 JOIN\n%s\n%s\n",
-                                      me.c_str(),
+                        char msg[384];
+                        std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n",
+                                      ae_np_lan_local_player_id(), me.c_str(),
                                       g_lnch_remote_lan_state.password.c_str());
                         ae_np_lan_udp_sendto(to, msg);
                     }
@@ -4489,7 +4888,7 @@ namespace {
         if (g_lnch_lan_udp == kAeLanSockInvalid) return;
 
         for (;;) {
-            char buf[512];
+            char buf[1536];
             sockaddr_in from{};
 #ifdef _WIN32
             int fromlen = (int)sizeof(from);
@@ -4505,6 +4904,40 @@ namespace {
 
             if (std::strncmp(buf, "MOTK1 PING", 10) == 0 && g_lnch_hosting_lan) {
                 ae_np_lan_udp_sendto(from, "MOTK1 PONG\n");
+                continue;
+            }
+
+            if (std::strncmp(buf, "MOTK3 JOIN\n", 11) == 0 && g_lnch_hosting_lan) {
+                char* p = buf + 11;
+                char* nl = std::strchr(p, '\n');
+                if (!nl) continue;
+                *nl = '\0';
+                const char* player_id = p;
+                p = nl + 1;
+                nl = std::strchr(p, '\n');
+                if (!nl) continue;
+                *nl = '\0';
+                const char* name = p;
+                p = nl + 1;
+                nl = std::strchr(p, '\n');
+                if (nl) *nl = '\0';
+                const char* pass = p;
+                AeLanLobbyState st;
+                if (!ae_np_read_lan_state(&st)) continue;
+                if (st.password != pass) {
+                    ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
+                    continue;
+                }
+                const int slot = ae_np_lan_seat_guest(st, player_id, name);
+                if (slot < 0) {
+                    ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
+                    continue;
+                }
+                st.started = false;
+                ae_np_lan_sync_legacy_names(st);
+                if (!ae_np_write_lan_state(st)) continue;
+                ae_np_lan_set_peer_slot(slot, from);
+                ae_np_lan_send_update_to_peers(st);
                 continue;
             }
 
@@ -4524,31 +4957,120 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nbad_password\n");
                     continue;
                 }
-                if (!st.joiner_name.empty() && st.joiner_name != name) {
+                /* Legacy JOIN: synthesize an id from peer addr so same-name
+                 * clients still get distinct seats + (2)/(3) labels. */
+                char synth_id[48];
+                std::snprintf(synth_id, sizeof(synth_id), "motk1-%08x-%04x",
+                              (unsigned)ntohl(from.sin_addr.s_addr),
+                              (unsigned)ntohs(from.sin_port));
+                const int slot = ae_np_lan_seat_guest(st, synth_id, name);
+                if (slot < 0) {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
                     continue;
                 }
-                st.joiner_name = name;
                 st.started = false;
+                ae_np_lan_sync_legacy_names(st);
                 if (!ae_np_write_lan_state(st)) continue;
-                g_lnch_lan_peer = from;
-                g_lnch_lan_peer_valid = true;
-                ae_np_lan_send_update_to_peer(st);
+                ae_np_lan_set_peer_slot(slot, from);
+                ae_np_lan_send_update_to_peers(st);
                 continue;
             }
 
-            if (std::strncmp(buf, "MOTK1 LEAVE\n", 12) == 0 && g_lnch_hosting_lan) {
+            if ((std::strncmp(buf, "MOTK3 LEAVE\n", 12) == 0 ||
+                 std::strncmp(buf, "MOTK1 LEAVE\n", 12) == 0) &&
+                g_lnch_hosting_lan) {
+                const bool by_id = std::strncmp(buf, "MOTK3 LEAVE\n", 12) == 0;
+                char* p = buf + 12;
+                char* nl = std::strchr(p, '\n');
+                if (nl) *nl = '\0';
+                const char* leave_key = (p && p[0]) ? p : nullptr;
                 AeLanLobbyState st;
                 if (!ae_np_read_lan_state(&st)) continue;
-                st.joiner_name.clear();
+                int cleared = -1;
+                if (leave_key) {
+                    if (by_id) {
+                        cleared = ae_np_lan_find_slot_by_id(st, leave_key);
+                        if (cleared == st.host_slot) cleared = -1;
+                    } else {
+                        for (int i = 0; i < st.max_slots; ++i) {
+                            if (i == st.host_slot) continue;
+                            if (st.slot_name[i] == leave_key) {
+                                cleared = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (cleared >= 0) {
+                        st.slot_name[cleared].clear();
+                        st.slot_id[cleared].clear();
+                    }
+                } else {
+                    /* Legacy leave without name: drop first guest. */
+                    for (int i = 0; i < st.max_slots; ++i) {
+                        if (i == st.host_slot) continue;
+                        if (!st.slot_name[i].empty()) {
+                            st.slot_name[i].clear();
+                            st.slot_id[i].clear();
+                            cleared = i;
+                            break;
+                        }
+                    }
+                }
                 st.started = false;
+                ae_np_lan_sync_legacy_names(st);
                 ae_np_write_lan_state(st);
-                g_lnch_lan_peer_valid = false;
+                if (cleared >= 0) ae_np_lan_clear_peer_slot(cleared);
+                ae_np_lan_send_update_to_peers(st);
                 continue;
             }
 
             if (!g_lnch_remote_lan) continue;
 
+            if (std::strncmp(buf, "MOTK3 UPDATE\n", 13) == 0) {
+                AeLanLobbyState st = g_lnch_remote_lan_state;
+                if (ae_np_lan_parse_motk3_update(buf + 13, &st) != 0) continue;
+                st.endpoint = g_lnch_lan_endpoint;
+                g_lnch_remote_lan_state = st;
+                const int my_slot =
+                    ae_np_lan_find_slot_by_id(st, ae_np_lan_local_player_id());
+                if (my_slot < 0) {
+                    g_lnch_joined_lan = false;
+                    g_lnch_remote_lan = false;
+                    g_lnch_lan_endpoint.clear();
+                    g_lnch_lan_my_slot = -1;
+                    ae_np_lan_udp_close();
+                } else {
+                    g_lnch_lan_my_slot = my_slot;
+                }
+                continue;
+            }
+
+            if (std::strncmp(buf, "MOTK2 UPDATE\n", 13) == 0) {
+                AeLanLobbyState st = g_lnch_remote_lan_state;
+                if (ae_np_lan_parse_motk2_update(buf + 13, &st) != 0) continue;
+                st.endpoint = g_lnch_lan_endpoint;
+                g_lnch_remote_lan_state = st;
+                if (g_lnch_lan_my_slot >= 0 &&
+                    g_lnch_lan_my_slot < st.max_slots &&
+                    !st.slot_name[g_lnch_lan_my_slot].empty()) {
+                    /* keep assigned slot */
+                } else {
+                    std::string me = psx_lobby_display_name();
+                    if (me.empty()) me = "Player";
+                    const int my_slot =
+                        ae_np_lan_find_guest_slot_by_name(st, me.c_str());
+                    if (my_slot < 0) {
+                        g_lnch_joined_lan = false;
+                        g_lnch_remote_lan = false;
+                        g_lnch_lan_endpoint.clear();
+                        g_lnch_lan_my_slot = -1;
+                        ae_np_lan_udp_close();
+                    } else {
+                        g_lnch_lan_my_slot = my_slot;
+                    }
+                }
+                continue;
+            }
             if (std::strncmp(buf, "MOTK1 UPDATE\n", 13) == 0) {
                 char* p = buf + 13;
                 char* lines[4] = {};
@@ -4564,13 +5086,23 @@ namespace {
                 g_lnch_remote_lan_state.joiner_name = lines[1];
                 g_lnch_remote_lan_state.host_slot = (std::atoi(lines[2]) == 1) ? 1 : 0;
                 g_lnch_remote_lan_state.started = std::atoi(lines[3]) != 0;
+                g_lnch_remote_lan_state.max_slots = 2;
+                g_lnch_remote_lan_state.slot_name[0].clear();
+                g_lnch_remote_lan_state.slot_name[1].clear();
+                g_lnch_remote_lan_state.slot_name[g_lnch_remote_lan_state.host_slot] =
+                    g_lnch_remote_lan_state.host_name;
+                g_lnch_remote_lan_state.slot_name[1 - g_lnch_remote_lan_state.host_slot] =
+                    g_lnch_remote_lan_state.joiner_name;
                 std::string me = psx_lobby_display_name();
                 if (me.empty()) me = "Player";
                 if (g_lnch_remote_lan_state.joiner_name != me) {
                     g_lnch_joined_lan = false;
                     g_lnch_remote_lan = false;
                     g_lnch_lan_endpoint.clear();
+                    g_lnch_lan_my_slot = -1;
                     ae_np_lan_udp_close();
+                } else {
+                    g_lnch_lan_my_slot = 1 - g_lnch_remote_lan_state.host_slot;
                 }
                 continue;
             }
@@ -4644,64 +5176,64 @@ namespace {
         return 1;
     }
 
-    int ae_np_local_ip(void*, char* out, size_t out_len) {
-        if (!out || out_len == 0) return 0;
-#ifdef _WIN32
-        WSADATA wsa;
-        WSAStartup(MAKEWORD(2, 2), &wsa);
-        SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (s == INVALID_SOCKET) return 0;
-        sockaddr_in dst{};
-        dst.sin_family = AF_INET;
-        dst.sin_port = htons(80);
-        inet_pton(AF_INET, "8.8.8.8", &dst.sin_addr);
-        if (connect(s, (sockaddr*)&dst, sizeof(dst)) == SOCKET_ERROR) {
-            closesocket(s);
-            return 0;
-        }
-        sockaddr_in local{};
-        int len = sizeof(local);
-        if (getsockname(s, (sockaddr*)&local, &len) == SOCKET_ERROR) {
-            closesocket(s);
-            return 0;
-        }
-        char buf[64] = {};
-        const char* ip = inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf));
-        closesocket(s);
-        if (!ip || !buf[0]) return 0;
-        std::snprintf(out, out_len, "%s", buf);
-        return 1;
-#else
-        std::snprintf(out, out_len, "Unavailable");
-        return 0;
-#endif
-    }
-
     int ae_np_external_ip(void*, char* out, size_t out_len) {
         if (!out || out_len == 0) return 0;
 #ifdef _WIN32
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
         addrinfo hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
         addrinfo* res = nullptr;
         if (getaddrinfo("api.ipify.org", "80", &hints, &res) != 0 || !res)
             return 0;
+#ifdef _WIN32
         SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (s == INVALID_SOCKET) {
             freeaddrinfo(res);
             return 0;
         }
+        DWORD timeout_ms = 3000;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms,
+                   sizeof(timeout_ms));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms,
+                   sizeof(timeout_ms));
+#else
+        int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (s < 0) {
+            freeaddrinfo(res);
+            return 0;
+        }
+        timeval tv{};
+        tv.tv_sec = 3;
+        tv.tv_usec = 0;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
         int ok = 0;
-        if (connect(s, res->ai_addr, (int)res->ai_addrlen) != SOCKET_ERROR) {
+#ifdef _WIN32
+        const int connected =
+            connect(s, res->ai_addr, (int)res->ai_addrlen) != SOCKET_ERROR;
+#else
+        const int connected =
+            connect(s, res->ai_addr, (socklen_t)res->ai_addrlen) == 0;
+#endif
+        if (connected) {
             const char req[] =
                 "GET / HTTP/1.1\r\n"
                 "Host: api.ipify.org\r\n"
+                "User-Agent: psxrecomp-netplay/1.0\r\n"
                 "Connection: close\r\n\r\n";
+#ifdef _WIN32
             (void)send(s, req, (int)strlen(req), 0);
             char resp[1024];
             int n = recv(s, resp, sizeof(resp) - 1, 0);
+#else
+            (void)send(s, req, strlen(req), 0);
+            char resp[1024];
+            ssize_t n = recv(s, resp, sizeof(resp) - 1, 0);
+#endif
             if (n > 0) {
                 resp[n] = '\0';
                 char* body = strstr(resp, "\r\n\r\n");
@@ -4720,13 +5252,13 @@ namespace {
                 }
             }
         }
+#ifdef _WIN32
         closesocket(s);
+#else
+        close(s);
+#endif
         freeaddrinfo(res);
         return ok;
-#else
-        std::snprintf(out, out_len, "Unavailable");
-        return 0;
-#endif
     }
 
     /* Collect non-loopback IPv4 addresses for local_address_get. */
@@ -4809,14 +5341,16 @@ namespace {
         return out->address[0] ? 1 : 0;
     }
 
-    /* Online create uses 0.0.0.0 / * / :: so the lobby server can rewrite the
-     * peer-facing endpoint. Those binds are never a same-machine LAN room. */
-    static bool ae_np_endpoint_is_any_bind(const char* endpoint) {
-        if (!endpoint || !endpoint[0]) return true;
-        const char* colon = std::strrchr(endpoint, ':');
-        std::string host = colon ? std::string(endpoint, colon) : std::string(endpoint);
-        return host.empty() || host == "0.0.0.0" || host == "*" || host == "::" ||
-               host == "[::]";
+    int ae_np_local_ip(void*, char* out, size_t out_len) {
+        if (!out || out_len == 0) return 0;
+        std::vector<RecompLauncherCNetplayLocalAddress> addrs;
+        ae_np_collect_local_addresses(&addrs);
+        if (addrs.empty()) {
+            std::snprintf(out, out_len, "Unavailable");
+            return 0;
+        }
+        std::snprintf(out, out_len, "%s", addrs[0].address);
+        return 1;
     }
 
     /* LAN/Direct IP rooms own membership via the local file registry. Server
@@ -4837,16 +5371,36 @@ namespace {
             return;
         }
         AeLanLobbyState state;
-        if (!ae_np_read_lan_state(&state) || state.joiner_name.empty()) {
+        if (!ae_np_read_lan_state(&state)) {
             g_lnch_joined_lan = false;
             g_lnch_lan_endpoint.clear();
+            g_lnch_lan_my_slot = -1;
             return;
         }
-        std::string me = psx_lobby_display_name();
-        if (me.empty()) me = "Player";
-        if (state.joiner_name != me) {
+        bool seated = false;
+        const int by_id =
+            ae_np_lan_find_slot_by_id(state, ae_np_lan_local_player_id());
+        if (by_id >= 0 && by_id != state.host_slot) {
+            seated = true;
+            g_lnch_lan_my_slot = by_id;
+        } else if (g_lnch_lan_my_slot >= 0 &&
+                   g_lnch_lan_my_slot < state.max_slots &&
+                   g_lnch_lan_my_slot != state.host_slot &&
+                   !state.slot_name[g_lnch_lan_my_slot].empty()) {
+            seated = true;
+        } else {
+            std::string me = psx_lobby_display_name();
+            if (me.empty()) me = "Player";
+            const int slot = ae_np_lan_find_guest_slot_by_name(state, me.c_str());
+            if (slot >= 0) {
+                seated = true;
+                g_lnch_lan_my_slot = slot;
+            }
+        }
+        if (!seated) {
             g_lnch_joined_lan = false;
             g_lnch_lan_endpoint.clear();
+            g_lnch_lan_my_slot = -1;
         }
     }
 
@@ -4855,7 +5409,16 @@ namespace {
     int ae_np_create(void*, const char* lobby_name, char* host_endpoint,
                      const char* password,
                      const RecompLauncherCSettings* settings,
-                     int lan_only) {
+                     int lan_only, int max_slots) {
+        int game_max = g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
+        if (game_max > PSX_MAX_PLAYERS) game_max = PSX_MAX_PLAYERS;
+        if (game_max > 8) game_max = 8;
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > game_max) max_slots = game_max;
+        /* Lobby + delay-sync ceiling (party games up to 8). */
+        if (max_slots > RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS)
+            max_slots = RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
+        g_lnch_host_max_slots = max_slots;
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
         char endpoint[96];
         if (host_endpoint && host_endpoint[0])
@@ -4864,13 +5427,14 @@ namespace {
             std::snprintf(endpoint, sizeof(endpoint), "0.0.0.0:7777");
         const int want_port = ae_np_lan_endpoint_port(endpoint);
 
-        /* lan_only: publish only the local LAN registry (no lobby server).
-         * Also take this path when the UI already bound a concrete LAN IP. */
-        if (lan_only || !ae_np_endpoint_is_any_bind(endpoint)) {
+        /* LAN/Direct IP only: local registry + UDP membership (no lobby WS).
+         * Online create always uses psx_lobby_create — even when the UI passes
+         * a concrete LAN IPv4 for MotK-style host_bind rewrite. */
+        if (lan_only) {
             /* LAN/Direct IP: exact port required — fail if busy. */
             if (psx_lobby_in_lobby())
                 (void)psx_lobby_leave();
-            if (!ae_np_write_lan_lobby(lobby_name, endpoint, password))
+            if (!ae_np_write_lan_lobby(lobby_name, endpoint, password, max_slots))
                 return -4;
             if (host_endpoint)
                 std::snprintf(host_endpoint, 96, "%s", endpoint);
@@ -4897,7 +5461,7 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
-        psx_lobby_set_max_slots(g_lnch_game_players);
+        psx_lobby_set_max_slots(max_slots);
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
                                 g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
                                 password ? password : "", endpoint, &caps);
@@ -4938,16 +5502,20 @@ namespace {
             /* Same-machine / shared cwd: claim the local LAN file when the
              * endpoint matches. */
             if (have_file && !g_lnch_hosting_lan && file.endpoint == endpoint) {
-                if (!file.joiner_name.empty()) return -1;
                 if (file.password != (password ? password : "")) return -2;
+                std::string me = psx_lobby_display_name();
+                if (me.empty()) me = "Player";
+                const int slot =
+                    ae_np_lan_seat_guest(file, ae_np_lan_local_player_id(), me.c_str());
+                if (slot < 0) return -1;
+                file.started = false;
+                ae_np_lan_sync_legacy_names(file);
                 g_lnch_remote_lan = false;
                 g_lnch_remote_lan_state = {};
-                file.joiner_name = psx_lobby_display_name();
-                if (file.joiner_name.empty()) file.joiner_name = "Player";
-                file.started = false;
                 if (!ae_np_write_lan_state(file)) return -1;
                 g_lnch_hosting_lan = false;
                 g_lnch_joined_lan = true;
+                g_lnch_lan_my_slot = slot;
                 g_lnch_lan_endpoint = file.endpoint;
                 return 0;
             }
@@ -4971,11 +5539,7 @@ namespace {
             }
             g_lnch_remote_lan = true;
             g_lnch_remote_lan_state = seated;
-            if (g_lnch_remote_lan_state.joiner_name.empty()) {
-                g_lnch_remote_lan_state.joiner_name = psx_lobby_display_name();
-                if (g_lnch_remote_lan_state.joiner_name.empty())
-                    g_lnch_remote_lan_state.joiner_name = "Player";
-            }
+            ae_np_lan_sync_legacy_names(g_lnch_remote_lan_state);
             g_lnch_hosting_lan = false;
             g_lnch_joined_lan = true;
             g_lnch_lan_endpoint = endpoint;
@@ -5004,12 +5568,16 @@ namespace {
 
     int ae_np_leave(void*) {
         if (g_lnch_hosting_lan) {
-            if (g_lnch_lan_peer_valid)
-                ae_np_lan_udp_sendto(g_lnch_lan_peer, "MOTK1 KICK\n");
+            for (int i = 0; i < kAeLanMaxSlots; ++i) {
+                if (g_lnch_lan_peer_ok[i])
+                    ae_np_lan_udp_sendto(g_lnch_lan_peers[i], "MOTK1 KICK\n");
+            }
             std::error_code ec;
             std::filesystem::remove(ae_np_lan_file(), ec);
             g_lnch_hosting_lan = false;
         } else if (g_lnch_joined_lan) {
+            std::string me = psx_lobby_display_name();
+            if (me.empty()) me = "Player";
             if (g_lnch_remote_lan) {
                 char host[64];
                 if (ae_np_lan_endpoint_host(g_lnch_lan_endpoint, host, sizeof(host)) &&
@@ -5018,14 +5586,31 @@ namespace {
                     to.sin_family = AF_INET;
                     to.sin_port =
                         htons((uint16_t)ae_np_lan_endpoint_port(g_lnch_lan_endpoint));
-                    if (inet_pton(AF_INET, host, &to.sin_addr) == 1)
-                        ae_np_lan_udp_sendto(to, "MOTK1 LEAVE\n");
+                    if (inet_pton(AF_INET, host, &to.sin_addr) == 1) {
+                        char leave_msg[160];
+                        std::snprintf(leave_msg, sizeof(leave_msg),
+                                      "MOTK3 LEAVE\n%s\n",
+                                      ae_np_lan_local_player_id());
+                        ae_np_lan_udp_sendto(to, leave_msg);
+                    }
                 }
             } else {
                 AeLanLobbyState state;
                 if (ae_np_read_lan_state(&state)) {
-                    state.joiner_name.clear();
+                    int slot = ae_np_lan_find_slot_by_id(state, ae_np_lan_local_player_id());
+                    if (slot < 0 && g_lnch_lan_my_slot >= 0 &&
+                        g_lnch_lan_my_slot < state.max_slots &&
+                        g_lnch_lan_my_slot != state.host_slot) {
+                        slot = g_lnch_lan_my_slot;
+                    }
+                    if (slot < 0)
+                        slot = ae_np_lan_find_guest_slot_by_name(state, me.c_str());
+                    if (slot >= 0) {
+                        state.slot_name[slot].clear();
+                        state.slot_id[slot].clear();
+                    }
                     state.started = false;
+                    ae_np_lan_sync_legacy_names(state);
                     ae_np_write_lan_state(state);
                 }
             }
@@ -5035,6 +5620,7 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
+        g_lnch_lan_my_slot = -1;
         g_lnch_pending_direct_launch = {};
         return psx_lobby_leave();
     }
@@ -5057,7 +5643,12 @@ namespace {
             const int n = psx_lobby_member_count();
             return n > 0 ? n : 1;
         }
-        if (ae_np_use_lan_members()) return 2;
+        if (ae_np_use_lan_members()) {
+            AeLanLobbyState state;
+            if (!ae_np_read_lan_state(&state)) return 1;
+            const int n = ae_np_lan_occupied(state);
+            return n > 0 ? n : 1;
+        }
         return psx_lobby_member_count();
     }
 
@@ -5077,19 +5668,27 @@ namespace {
                 out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
             else
                 out->is_host = (mem.slot == 0) ? 1 : 0;
+            out->latency_ms = -1;
             return 1;
         }
         if (ae_np_use_lan_members()) {
-            if (index < 0 || index > 1) return 0;
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return 0;
-            const bool host = index == 0;
-            out->slot = host ? state.host_slot : 1 - state.host_slot;
-            const std::string& name = host ? state.host_name : state.joiner_name;
-            std::snprintf(out->display_name, sizeof(out->display_name), "%s", name.c_str());
-            out->ready = !name.empty();
-            out->is_host = host ? 1 : 0;
-            return 1;
+            int seen = 0;
+            for (int slot = 0; slot < state.max_slots; ++slot) {
+                if (state.slot_name[slot].empty()) continue;
+                if (seen == index) {
+                    out->slot = slot;
+                    std::snprintf(out->display_name, sizeof(out->display_name), "%s",
+                                  state.slot_name[slot].c_str());
+                    out->ready = 1;
+                    out->is_host = (slot == state.host_slot) ? 1 : 0;
+                    out->latency_ms = -1;
+                    return 1;
+                }
+                ++seen;
+            }
+            return 0;
         }
         PsxLobbyMember mem{};
         if (!psx_lobby_member_get(index, &mem)) return 0;
@@ -5101,19 +5700,31 @@ namespace {
             out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
         else
             out->is_host = (mem.slot == 0) ? 1 : 0;
+        out->latency_ms = -1;
         return 1;
     }
 
     int ae_np_move_member(void*, int from_slot, int to_slot) {
         if (from_slot < 0 || to_slot < 0 || from_slot == to_slot) return -1;
-        if (g_lnch_hosting_lan && from_slot <= 1 && to_slot <= 1) {
+        if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return -1;
-            /* Swap which physical seat is "host slot" (P1/P2). */
-            state.host_slot = 1 - state.host_slot;
+            if (from_slot < 0 || to_slot < 0 ||
+                from_slot >= state.max_slots || to_slot >= state.max_slots)
+                return -1;
+            std::swap(state.slot_name[from_slot], state.slot_name[to_slot]);
+            std::swap(state.slot_id[from_slot], state.slot_id[to_slot]);
+            if (state.host_slot == from_slot) state.host_slot = to_slot;
+            else if (state.host_slot == to_slot) state.host_slot = from_slot;
+            /* Swap peer bindings with seats. */
+            if (from_slot < kAeLanMaxSlots && to_slot < kAeLanMaxSlots) {
+                std::swap(g_lnch_lan_peers[from_slot], g_lnch_lan_peers[to_slot]);
+                std::swap(g_lnch_lan_peer_ok[from_slot], g_lnch_lan_peer_ok[to_slot]);
+            }
             state.started = false;
+            ae_np_lan_sync_legacy_names(state);
             if (!ae_np_write_lan_state(state)) return -1;
-            ae_np_lan_send_update_to_peer(state);
+            ae_np_lan_send_update_to_peers(state);
             return 0;
         }
         if (ae_np_use_ws_members() && psx_lobby_is_host())
@@ -5125,13 +5736,19 @@ namespace {
         if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return -1;
-            if (slot < 0 || slot > 1 || slot == state.host_slot) return -1;
-            state.joiner_name.clear();
+            if (slot < 0 || slot >= state.max_slots || slot == state.host_slot)
+                return -1;
+            if (state.slot_name[slot].empty()) return -1;
+            state.slot_name[slot].clear();
+            state.slot_id[slot].clear();
             state.started = false;
+            ae_np_lan_sync_legacy_names(state);
             if (!ae_np_write_lan_state(state)) return -1;
-            if (g_lnch_lan_peer_valid)
-                ae_np_lan_udp_sendto(g_lnch_lan_peer, "MOTK1 KICK\n");
-            g_lnch_lan_peer_valid = false;
+            if (slot < kAeLanMaxSlots && g_lnch_lan_peer_ok[slot]) {
+                ae_np_lan_udp_sendto(g_lnch_lan_peers[slot], "MOTK1 KICK\n");
+                ae_np_lan_clear_peer_slot(slot);
+            }
+            ae_np_lan_send_update_to_peers(state);
             return 0;
         }
         if (ae_np_use_ws_members() && psx_lobby_is_host())
@@ -5146,18 +5763,20 @@ namespace {
     int ae_np_request_start(void*, const RecompLauncherCSettings* settings) {
         if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
-            if (!ae_np_read_lan_state(&state) || state.joiner_name.empty()) return -1;
+            if (!ae_np_read_lan_state(&state) || ae_np_lan_occupied(state) < 2)
+                return -1;
             state.started = true;
             state.session_id += 1u;
             if (state.session_id == 0) state.session_id = 1;
             g_lnch_lan_session_id = state.session_id;
             if (!ae_np_write_lan_state(state)) return -1;
-            if (g_lnch_lan_peer_valid) {
-                ae_np_lan_send_update_to_peer(state);
-                char start_msg[64];
-                std::snprintf(start_msg, sizeof(start_msg), "MOTK1 START\n%u\n",
-                              (unsigned)state.session_id);
-                ae_np_lan_udp_sendto(g_lnch_lan_peer, start_msg);
+            ae_np_lan_send_update_to_peers(state);
+            char start_msg[64];
+            std::snprintf(start_msg, sizeof(start_msg), "MOTK1 START\n%u\n",
+                          (unsigned)state.session_id);
+            for (int i = 0; i < kAeLanMaxSlots; ++i) {
+                if (g_lnch_lan_peer_ok[i])
+                    ae_np_lan_udp_sendto(g_lnch_lan_peers[i], start_msg);
             }
             return 0;
         }
@@ -5178,15 +5797,25 @@ namespace {
                 g_lnch_lan_session_id = state.session_id ? state.session_id : 1u;
                 g_lnch_pending_direct_launch = {};
                 g_lnch_pending_direct_launch.enabled = 1;
-                g_lnch_pending_direct_launch.local_slot = g_lnch_hosting_lan
-                    ? state.host_slot : 1 - state.host_slot;
+                {
+                    int local_slot = g_lnch_hosting_lan ? state.host_slot : g_lnch_lan_my_slot;
+                    if (local_slot < 0)
+                        local_slot = g_lnch_hosting_lan ? state.host_slot : 1;
+                    g_lnch_pending_direct_launch.local_slot = local_slot;
+                }
                 g_lnch_pending_direct_launch.input_player = 0;
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
-                g_lnch_pending_direct_launch.input_delay = 2;
+                g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
                 g_lnch_pending_direct_launch.max_slots =
-                    g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
+                    state.max_slots >= 2 ? state.max_slots
+                    : (g_lnch_host_max_slots >= 2 ? g_lnch_host_max_slots
+                       : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2));
                 if (g_lnch_pending_direct_launch.max_slots > PSX_MAX_PLAYERS)
                     g_lnch_pending_direct_launch.max_slots = PSX_MAX_PLAYERS;
+                if (g_lnch_pending_direct_launch.max_slots > kAeLanMaxSlots)
+                    g_lnch_pending_direct_launch.max_slots = kAeLanMaxSlots;
+                g_lnch_pending_direct_launch.force_input_relay = 0;
+                g_lnch_pending_direct_launch.player_count = ae_np_lan_occupied(state);
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
                     const char* port = colon == std::string::npos
@@ -5194,6 +5823,8 @@ namespace {
                     std::snprintf(g_lnch_pending_direct_launch.bind_hostport,
                                   sizeof(g_lnch_pending_direct_launch.bind_hostport),
                                   "0.0.0.0:%s", port);
+                    /* 3+ host-as-relay: empty peer → lan_hub. 2P: accept-first. */
+                    g_lnch_pending_direct_launch.peer_hostport[0] = '\0';
                 } else {
                     std::snprintf(g_lnch_pending_direct_launch.bind_hostport,
                                   sizeof(g_lnch_pending_direct_launch.bind_hostport), "0.0.0.0:0");
@@ -5224,8 +5855,8 @@ namespace {
         if (g_lnch_hosting_lan && !g_lnch_lan_endpoint.empty()) {
             ae_np_lan_udp_close();
             (void)ae_np_lan_udp_ensure(true, ae_np_lan_endpoint_port(g_lnch_lan_endpoint));
-            if (g_lnch_lan_peer_valid && ae_np_read_lan_state(&st))
-                ae_np_lan_send_update_to_peer(st);
+            if (ae_np_read_lan_state(&st))
+                ae_np_lan_send_update_to_peers(st);
         } else if (g_lnch_remote_lan) {
             ae_np_lan_udp_close();
             (void)ae_np_lan_udp_ensure(false, 0);
@@ -5252,10 +5883,29 @@ namespace {
         std::snprintf(out->bind_hostport, sizeof(out->bind_hostport), "%s", ji->bind_hostport);
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
         out->session_id = ji->session_id;
-        out->input_delay = (caps && caps->valid) ? caps->input_delay : 2;
+        out->input_delay = (caps && caps->valid) ? caps->input_delay
+                                                 : g_lnch_lobby_input_delay;
         out->max_slots = ji->max_slots >= 2 ? ji->max_slots
                          : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2);
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
+        /* Seated width for delay-sync (not lobby ceiling). Bump for sparse
+         * seat indices so a moved player at slot N still fits. */
+        {
+            int seated = ji->player_count > 0 ? ji->player_count : 0;
+            int high = ji->local_slot;
+            const int mc = psx_lobby_member_count();
+            for (int i = 0; i < mc; ++i) {
+                PsxLobbyMember mem{};
+                if (!psx_lobby_member_get(i, &mem)) continue;
+                if (mem.slot > high) high = mem.slot;
+            }
+            if (high + 1 > seated) seated = high + 1;
+            if (seated < 2) seated = out->max_slots;
+            if (seated > out->max_slots) seated = out->max_slots;
+            out->player_count = seated;
+        }
+        out->force_input_relay =
+            (caps && caps->valid && caps->force_input_relay) ? 1 : 0;
         return 1;
     }
 
@@ -5292,6 +5942,11 @@ namespace {
         ae_np_kick_member,
         ae_np_last_error,
         ae_np_clear_last_error,
+        ae_np_input_delay_get,
+        ae_np_input_delay_set,
+        ae_np_force_input_relay_get,
+        ae_np_force_input_relay_set,
+        ae_np_lobby_max_slots,
     };
 }  // namespace
 #endif
@@ -5445,33 +6100,33 @@ int main(int argc, char** argv) {
     bool memcard1_enabled = true;
     bool memcard2_enabled = true;
     /* [controller] device routing (defaults: P1 keyboard/digital, P2 none). */
-    /* Dev builds default Player 1 to the first connected controller ("auto"):
-     * combined with dev-any-input (dev_any_input_enabled(), default ON) the
-     * selected controller, EVERY other plugged-in controller, AND the keyboard
-     * all drive P1 with no launcher setup. If no controller is present, "auto"
-     * opens nothing and the keyboard/any-controller merge still drives P1.
-     * Release keeps "keyboard" (the launcher assigns devices). */
+    /* Dev builds default Player 1 to the first connected controller ("auto").
+     * Strict per-slot routing is the default (PSX_DEV_INPUT off): only the
+     * assigned device drives each port. Opt in with PSX_DEV_INPUT=1 to merge
+     * keyboard + every controller onto P1 for quick testing. Release keeps
+     * "keyboard" until the launcher assigns devices. */
+std::string player_device[PSX_MAX_PLAYERS];
+    int  player_mode[PSX_MAX_PLAYERS];
+    int  player_deadzone[PSX_MAX_PLAYERS];
+    int  ctrl_locked_mode[PSX_MAX_PLAYERS];
+    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
 #if defined(PSX_DEBUG_TOOLS)
-    std::string p1_device = "auto";
+        player_device[i] = (i == 0) ? "auto" : "none";
 #else
-    std::string p1_device = "keyboard";
+        player_device[i] = (i == 0) ? "keyboard" : "none";
 #endif
-    std::string p2_device = "none";
-    int  p1_mode = PSXRecompV4::PAD_MODE_HYBRID;
-    int  p2_mode = PSXRecompV4::PAD_MODE_HYBRID;
+        player_mode[i] = PSXRecompV4::PAD_MODE_HYBRID;
+        player_deadzone[i] = kDefaultDeadzoneRaw;
+        ctrl_locked_mode[i] = PSXRecompV4::PAD_MODE_HYBRID;
+    }
     bool ctrl_allow_hybrid = true;  /* game.toml [controller] allow_hybrid; false hides Hybrid in the launcher */
     bool ctrl_lock_mode    = false; /* game.toml [controller] lock_mode; true hides the whole pad-mode selector */
     bool ctrl_lock_device  = false; /* game.toml [controller] lock_device; true hides the Player controller cards entirely */
-    /* The game-DECLARED port modes, captured at game.toml load and immune to the
-     * settings.toml overrides below. Under lock_mode these are the only valid
-     * modes (the game supports exactly one pad type), so they are what the
-     * runtime clamps to and what the launcher locks its selector to. */
-    int  ctrl_locked_p1_mode = PSXRecompV4::PAD_MODE_HYBRID;
-    int  ctrl_locked_p2_mode = PSXRecompV4::PAD_MODE_HYBRID;
     bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
     bool ws_ultrawide_offered = false;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
-    int  resolved_deadzone = -1;  /* <0 => keep input.ini/runtime default (12000) */
+    /* Legacy single deadzone (<0 => keep per-slot / input.ini defaults). */
+    int  resolved_deadzone = -1;
     /* Localization: the effective language (game.toml default -> settings.toml ->
      * launcher choice), applied to the translation layer AFTER the launcher runs.
      * lang_menu_options drives the launcher's "Localization" dropdown (empty =>
@@ -5659,15 +6314,32 @@ int main(int argc, char** argv) {
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
             if (gc.runtime.has_default_mode) {
-                p1_mode = gc.runtime.default_p1_mode;
-                p2_mode = gc.runtime.default_p2_mode;
+                for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+                    player_mode[i] = (i == 0) ? gc.runtime.default_p1_mode
+                                              : gc.runtime.default_p2_mode;
+                    /* Beyond P2, reuse default_mode (same as P1 when set via default_mode). */
+                    if (i >= 2) player_mode[i] = gc.runtime.default_p1_mode;
+                }
             }
-            ctrl_locked_p1_mode = gc.runtime.default_p1_mode;
-            ctrl_locked_p2_mode = gc.runtime.default_p2_mode;
+            for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
+                ctrl_locked_mode[i] = player_mode[i];
             ctrl_allow_hybrid = gc.runtime.controller_allow_hybrid;
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
             ctrl_lock_device  = gc.runtime.controller_lock_device;
-            if (gc.runtime.has_deadzone) resolved_deadzone = gc.runtime.deadzone;
+            if (gc.runtime.has_deadzone) {
+                resolved_deadzone = gc.runtime.deadzone;
+                for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
+                    player_deadzone[i] = gc.runtime.deadzone;
+            }
+            /* Console port for SCPH-1070 when offline/netplay arms multitap.
+             * Most titles use Port 1; Bomberman Party Edition needs Port 2. */
+            if (gc.runtime.has_multitap_port) {
+                const int phys = (gc.runtime.multitap_port == 2) ? 1 : 0;
+                sio_set_multitap_port(phys);
+                std::fprintf(stdout,
+                             "psxrecomp: multitap on console Port %d\n",
+                             gc.runtime.multitap_port);
+            }
             /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
              * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
              * libpad manufacture a 1-frame "pad unplugged". sio_init() does not
@@ -5964,11 +6636,16 @@ int main(int argc, char** argv) {
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
         if (us.has_language) resolved_language = us.language;
-        if (us.has_p1_device) p1_device = us.p1_device;
-        if (us.has_p2_device) p2_device = us.p2_device;
-        if (us.has_p1_mode) p1_mode = us.p1_mode;
-        if (us.has_p2_mode) p2_mode = us.p2_mode;
-        if (us.has_deadzone)  resolved_deadzone = us.deadzone;
+        {
+            const int n = std::min(PSX_MAX_PLAYERS,
+                                   PSXRecompV4::UserSettings::kMaxControllerPlayers);
+            for (int i = 0; i < n; ++i) {
+                if (us.has_p_device[i]) player_device[i] = us.p_device[i];
+                if (us.has_p_mode[i])   player_mode[i]   = us.p_mode[i];
+                if (us.has_p_deadzone[i]) player_deadzone[i] = us.p_deadzone[i];
+            }
+            if (us.has_deadzone) resolved_deadzone = us.deadzone;
+        }
         if (us.has_low_latency_input) g_low_latency_input = us.low_latency_input ? 1 : 0;
         if (us.has_vsync)             g_video_vsync       = us.vsync;
         if (us.has_frame_interpolation)
@@ -5987,8 +6664,8 @@ int main(int argc, char** argv) {
      * config/settings source has been applied, so a locked game can never boot
      * a pad type it doesn't support. */
     if (ctrl_lock_mode) {
-        p1_mode = ctrl_locked_p1_mode;
-        p2_mode = ctrl_locked_p2_mode;
+        for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
+            player_mode[i] = ctrl_locked_mode[i];
     }
 
     /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
@@ -6142,17 +6819,29 @@ int main(int argc, char** argv) {
             if (!memcard1_path.empty()) { seed.memcard1_path = memcard1_path; seed.has_memcard1_path = true; }
             if (!memcard2_path.empty()) { seed.memcard2_path = memcard2_path; seed.has_memcard2_path = true; }
             seed.language = resolved_language; seed.has_language = true;
-            seed.p1_device = p1_device; seed.has_p1_device = true;
-            seed.p2_device = p2_device; seed.has_p2_device = true;
-            seed.p1_mode = p1_mode; seed.has_p1_mode = true;
-            seed.p2_mode = p2_mode; seed.has_p2_mode = true;
-            seed.deadzone = resolved_deadzone >= 0 ? resolved_deadzone : 12000;
-            seed.has_deadzone = true;
+            {
+                const int n = std::min(PSX_MAX_PLAYERS,
+                                       PSXRecompV4::UserSettings::kMaxControllerPlayers);
+                for (int i = 0; i < n; ++i) {
+                    seed.p_device[i] = player_device[i];
+                    seed.has_p_device[i] = true;
+                    seed.p_mode[i] = player_mode[i];
+                    seed.has_p_mode[i] = true;
+                    seed.p_deadzone[i] = player_deadzone[i];
+                    seed.has_p_deadzone[i] = true;
+                }
+                seed.deadzone = player_deadzone[0];
+                seed.has_deadzone = true;
+            }
             seed.window_width = g_video_win_w; seed.has_window_width = true;
 
             /* recomp-ui creates + owns its SDL2/GL window internally, so there
              * is no launcher window/context to manage here. */
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
+            /* Same path the runtime's psx_keybinds_init(argv0) reads — keep the
+             * launcher Controls page and in-game keyboard map on one file. */
+            static std::string s_rui_keybinds_path;
+            s_rui_keybinds_path = (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
                                      + " \xE2\x80\x94 Launcher";
@@ -6168,20 +6857,30 @@ int main(int argc, char** argv) {
             ls.enable_audio   = 1;
             ls.audio_freq     = 44100;
             ls.volume         = 100;
-            ls.player_src[0]  = (p1_device == "keyboard") ? 1 : (p1_device == "none") ? 0 : 2;
-            ls.player_src[1]  = (p2_device == "keyboard") ? 1 : (p2_device == "none") ? 0 : 2;
             {
-                int rui_deadzone_pct = seed.deadzone * 100 / 32767;
-                ls.deadzone[0] = rui_deadzone_pct;
-                ls.deadzone[1] = rui_deadzone_pct;
+                const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
+                for (int i = 0; i < n; ++i) {
+                    const std::string& d = player_device[i];
+                    ls.player_src[i] = (d == "keyboard") ? 1
+                                       : (d == "none" || d.empty()) ? 0 : 2;
+                    ls.deadzone[i] = (player_deadzone[i] * 100 + 16383) / 32767;
+                    ls.pad_mode[i] = (ls.player_src[i] == 1)
+                                        ? PSXRecompV4::PAD_MODE_DIGITAL
+                                        : player_mode[i];
+                    ls.player_gamepad_guid[i][0] = '\0';
+                    if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
+                        d != "gamepad" && d != "controller") {
+                        std::snprintf(ls.player_gamepad_guid[i],
+                                      sizeof(ls.player_gamepad_guid[i]), "%s",
+                                      d.c_str());
+                    }
+                }
             }
             ls.skip_launcher  = seed.skip_launcher ? 1 : 0;
             ls.msu1_enabled   = 0;
             ls.msu1_dir[0]    = '\0';
             std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
                           has_netplay_player_name ? netplay_player_name.c_str() : "");
-            ls.pad_mode[0]    = seed.p1_mode;
-            ls.pad_mode[1]    = seed.p2_mode;
             /* aspect_index: 0 = 4:3, 1 = 16:9, 2 = 21:9 (see RecompLauncherCSettings). */
             ls.aspect_index   = (seed.aspect_num * 9 == seed.aspect_den * 21) ? 2 :
                                  (seed.aspect_num == 16 && seed.aspect_den == 9) ? 1 : 0;
@@ -6260,6 +6959,7 @@ int main(int argc, char** argv) {
             launcher_profile_apply("psx", &gi);
             gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
             gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
+            gi.keybinds_path        = s_rui_keybinds_path.c_str();
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
                                                   PSX multi-track discs — skip verification */
             gi.num_known_sha256     = 0;
@@ -6271,7 +6971,7 @@ int main(int argc, char** argv) {
              * [controller]/[widescreen] via GameConfig. PSX always has pad modes. */
             gi.pad_mode_selectable  = ctrl_lock_mode ? 0 : 1;
             gi.allow_hybrid         = ctrl_allow_hybrid ? 1 : 0;
-            gi.locked_pad_mode      = p1_mode;  /* force the game's declared mode (default_mode) */
+            gi.locked_pad_mode      = ctrl_locked_mode[0];  /* game-declared default_mode */
             gi.lock_device          = ctrl_lock_device ? 1 : 0;
             gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
             gi.renderer_labels      = kPsxRendererLabels;
@@ -6371,13 +7071,40 @@ int main(int argc, char** argv) {
                  * is the legacy fallback field for consoles without the cap and is
                  * left unused here. */
                 seed.texture_filter = ls.texture_filter ? 1 : 0; seed.has_texture_filter = true;
-                p1_device = (ls.player_src[0] == 1) ? "keyboard" : (ls.player_src[0] == 0) ? "none" : p1_device;
-                p2_device = (ls.player_src[1] == 1) ? "keyboard" : (ls.player_src[1] == 0) ? "none" : p2_device;
-                seed.p1_device = p1_device; seed.has_p1_device = true;
-                seed.p2_device = p2_device; seed.has_p2_device = true;
-                seed.deadzone = ls.deadzone[0] * 32767 / 100; seed.has_deadzone = true;
-                seed.p1_mode = ls.pad_mode[0]; seed.has_p1_mode = true;
-                seed.p2_mode = ls.pad_mode[1]; seed.has_p2_mode = true;
+                {
+                    const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
+                    const int un = std::min(n, PSXRecompV4::UserSettings::kMaxControllerPlayers);
+                    for (int i = 0; i < n; ++i) {
+                        if (ls.player_src[i] == 1) {
+                            player_device[i] = "keyboard";
+                            /* Keyboard is always a digital pad at runtime. */
+                            player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
+                        } else if (ls.player_src[i] == 0) {
+                            player_device[i] = "none";
+                            player_mode[i] = ls.pad_mode[i];
+                        } else if (ls.player_gamepad_guid[i][0]) {
+                            player_device[i] = ls.player_gamepad_guid[i];
+                            player_mode[i] = ls.pad_mode[i];
+                        } else if (player_device[i] == "none" ||
+                                   player_device[i] == "keyboard") {
+                            player_device[i] = "gamepad";
+                            player_mode[i] = ls.pad_mode[i];
+                        } else {
+                            player_mode[i] = ls.pad_mode[i];
+                        }
+                        player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
+                        if (i < un) {
+                            seed.p_device[i] = player_device[i];
+                            seed.has_p_device[i] = true;
+                            seed.p_mode[i] = player_mode[i];
+                            seed.has_p_mode[i] = true;
+                            seed.p_deadzone[i] = player_deadzone[i];
+                            seed.has_p_deadzone[i] = true;
+                        }
+                    }
+                    seed.deadzone = player_deadzone[0];
+                    seed.has_deadzone = true;
+                }
 
                 /* ---- deeper PSX-style settings write-back (mirrors the seed
                  * fields above), all gated on by the "psx" launcher_profile caps. */
@@ -6440,12 +7167,13 @@ int main(int argc, char** argv) {
                     net_cfg.input_player = ls.netplay_launch.input_player;
                     net_cfg.session_id = ls.netplay_launch.session_id;
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
-                    net_cfg.slot_count = ls.netplay_launch.max_slots >= 2
-                                             ? ls.netplay_launch.max_slots
-                                             : game_players;
-                    if (net_cfg.slot_count < 2) net_cfg.slot_count = 2;
-                    if (net_cfg.slot_count > PSX_MAX_PLAYERS)
-                        net_cfg.slot_count = PSX_MAX_PLAYERS;
+                    net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+                    net_cfg.player_count = ls.netplay_launch.player_count;
+                    net_cfg.slot_count = ae_np_session_slot_count(
+                        ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
+                        ls.netplay_launch.local_slot, game_players);
+                    if (net_cfg.player_count <= 0)
+                        net_cfg.player_count = net_cfg.slot_count;
                     std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                                   ls.netplay_launch.bind_hostport);
                     std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
@@ -6490,9 +7218,16 @@ int main(int argc, char** argv) {
                 if (seed.has_memcard1_path) memcard1_path = seed.memcard1_path;
                 if (seed.has_memcard2_path) memcard2_path = seed.memcard2_path;
                 if (seed.has_language) resolved_language = seed.language;
-                p1_device = seed.p1_device; p2_device = seed.p2_device;
-                p1_mode = seed.p1_mode; p2_mode = seed.p2_mode;
-                if (seed.has_deadzone) resolved_deadzone = seed.deadzone;
+                {
+                    const int n = std::min(PSX_MAX_PLAYERS,
+                                           PSXRecompV4::UserSettings::kMaxControllerPlayers);
+                    for (int i = 0; i < n; ++i) {
+                        if (seed.has_p_device[i]) player_device[i] = seed.p_device[i];
+                        if (seed.has_p_mode[i]) player_mode[i] = seed.p_mode[i];
+                        if (seed.has_p_deadzone[i]) player_deadzone[i] = seed.p_deadzone[i];
+                    }
+                    if (seed.has_deadzone) resolved_deadzone = seed.deadzone;
+                }
                 g_video_win_w = seed.window_width;
                 /* Persist the user's choices next to the exe. */
                 PSXRecompV4::save_user_settings(
@@ -6628,8 +7363,10 @@ session_reboot:
      * SDL controller handles are opened later (after SDL_Init); here we only
      * set the PSX-visible connection + pad type so the BIOS sees the right
      * ports during early boot. */
-    set_player_device(g_players[0], p1_device, p1_mode);
-    set_player_device(g_players[1], p2_device, p2_mode);
+    for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
+        set_player_device(g_players[s], player_device[s], player_mode[s]);
+        g_players[s].deadzone = player_deadzone[s];
+    }
     /* Multitap stays OFF through BIOS boot: SCPH-1070 on port 1 breaks shell /
      * LoadExe pad bring-up for titles that expect a lone digital pad. Offline
      * 3+ player builds arm it after game entry (see vblank path); netplay arms
@@ -6638,8 +7375,10 @@ session_reboot:
         /* Dev-any-input keeps P1 connected even with no assigned controller so the
          * keyboard / any plugged-in controller can drive port 1 standalone. */
         const bool dev_p1 = (dev_any_input_enabled() && s == 0);
+        const int mode = effective_player_mode(g_players[s]);
         sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(g_players[s].mode), 0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
     /* SPU float-shadow gate must be set before spu_init() (which runs
      * spu_shadow_reset()). Default OFF; PSX_AUDIO_SHADOW env overrides. */
@@ -6758,6 +7497,15 @@ session_reboot:
      * load_input_config has read input.ini. */
     if (resolved_deadzone >= 0)
         controller_deadzone = std::max(0, std::min(32767, resolved_deadzone));
+    else
+        controller_deadzone = kDefaultDeadzoneRaw;
+    for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
+        if (player_deadzone[s] >= 0)
+            g_players[s].deadzone = std::max(0, std::min(32767, player_deadzone[s]));
+        else
+            g_players[s].deadzone = controller_deadzone;
+    }
+    controller_deadzone = g_players[0].deadzone;
     refresh_player_devices();  /* open SDL handles to match the player config */
 #ifndef PSX_SDL_NO_AUDIO
     audio_trace_init();
@@ -7392,12 +8140,13 @@ soft_return_lobby:
                 net_cfg.input_player = ls.netplay_launch.input_player;
                 net_cfg.session_id = ls.netplay_launch.session_id;
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
-                net_cfg.slot_count = ls.netplay_launch.max_slots >= 2
-                                         ? ls.netplay_launch.max_slots
-                                         : game_players;
-                if (net_cfg.slot_count < 2) net_cfg.slot_count = 2;
-                if (net_cfg.slot_count > PSX_MAX_PLAYERS)
-                    net_cfg.slot_count = PSX_MAX_PLAYERS;
+                net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+                net_cfg.player_count = ls.netplay_launch.player_count;
+                net_cfg.slot_count = ae_np_session_slot_count(
+                    ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
+                    ls.netplay_launch.local_slot, game_players);
+                if (net_cfg.player_count <= 0)
+                    net_cfg.player_count = net_cfg.slot_count;
                 std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                               ls.netplay_launch.bind_hostport);
                 std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",

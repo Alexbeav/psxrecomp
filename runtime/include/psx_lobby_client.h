@@ -12,7 +12,7 @@ extern "C" {
 #define PSX_LOBBY_VERSION_LEN 32
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
-#define PSX_LOBBY_MAX_MEMBERS 5
+#define PSX_LOBBY_MAX_MEMBERS 8
 #define PSX_LOBBY_LANG_LEN 16
 
 #ifndef PSX_GAME_VERSION
@@ -49,6 +49,7 @@ typedef struct PsxLobbyMatchCaps {
     int  fast_boot;        /* 0/1 */
     int  auto_skip_fmv;    /* 0/1 */
     int  input_delay;      /* recomp-net delay frames */
+    int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
     char language[PSX_LOBBY_LANG_LEN];
 } PsxLobbyMatchCaps;
 
@@ -90,7 +91,7 @@ void psx_lobby_pump(void);
 void psx_lobby_set_game_identity(const char *game_name, const char *game_version);
 const char *psx_lobby_game_version(void);
 
-/* Default max_slots for create (clamped 2..5, default 2). */
+/* Default max_slots for create (clamped 2..8, default 2). */
 void psx_lobby_set_max_slots(int max_slots);
 
 void psx_lobby_request_list(void);

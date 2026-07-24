@@ -1,6 +1,7 @@
 #ifndef PSX_NETPLAY_H
 #define PSX_NETPLAY_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -46,8 +47,10 @@ typedef struct PsxNetplayConfig {
     int         enabled;
     int         local_slot;    /* 0 .. slot_count-1 */
     int         slot_count;    /* 2 .. PSX_MAX_PLAYERS (session pad count) */
+    int         player_count;  /* seated players at launch (0 = use slot_count) */
     int         input_player;  /* host device index; -1 = auto */
     int         input_delay;
+    int         force_input_relay; /* 1 = lobby-server UDP input relay */
     uint32_t    session_id;
     char        bind_hostport[64];
     char        peer_hostport[64];
@@ -62,6 +65,14 @@ int  psx_netplay_local_slot(void);
 /* Resolved host player index used for local capture. */
 int  psx_netplay_input_player(void);
 uint32_t psx_netplay_sim_tick(void);
+
+/*
+ * Snapshot for diagnostic dumps (starvation_dump.jsonl meta, etc.).
+ * arch_out: "off" | "p2p" | "host_relay" | "server_relay" (never NULL when
+ * arch_cap > 0). Returns 1 when netplay is/was configured this run.
+ */
+int  psx_netplay_diag_snapshot(char *arch_out, size_t arch_cap,
+                               int *max_players_out, int *player_count_out);
 
 int  psx_netplay_start(const PsxNetplayConfig *cfg);
 void psx_netplay_shutdown(void);

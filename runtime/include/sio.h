@@ -67,12 +67,18 @@ uint32_t sio_cycles_to_irq(uint32_t i_mask);
 uint64_t sio_get_advance_called(void);
 uint64_t sio_get_advance_with_work(void);
 
-/* SCPH-1070 multitap on physical port 1 (SIO slot bit 0). Off by default.
- * When enabled (and PSX_MAX_PLAYERS>=5): port1 bulk-polls logical pads 0–3;
- * port2 is a single pad at logical index 4. When disabled / MAX==2: today's
- * mapping (port1=pad0, port2=pad1). */
+/* SCPH-1070 multitap. Off by default. When enabled (PSX_MAX_PLAYERS>=5):
+ *   multitap_port==0 (console Port 1): tap on phys0 → logical pads 0–3,
+ *     phys1 → logical 4.
+ *   multitap_port==1 (console Port 2): phys0 → logical 0, tap on phys1 →
+ *     logical pads 1–4 (Bomberman Party Edition and a few others).
+ * Bulk 0x80 responses follow the real TAP/REQ latch (psx-spx): REQ=1 in the
+ * third command byte arms the *next* transfer; empty tap slots are fine. */
 void sio_set_multitap(int enabled);
 int  sio_get_multitap(void);
+/* phys_port: 0 = console Port 1, 1 = console Port 2. Default 0. */
+void sio_set_multitap_port(int phys_port);
+int  sio_get_multitap_port(void);
 
 /* Update pad button state. Buttons use PS1 convention: 0=pressed, 1=released.
    Bit layout: SELECT, L3, R3, START, UP, RIGHT, DOWN, LEFT,

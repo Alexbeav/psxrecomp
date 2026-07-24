@@ -38,14 +38,10 @@
 extern "C" {
 #endif
 
-/* Load-charge batching (MotK VLC): accumulate into g_psx_cyc_batch instead of
- * storing psx_cycle_count every insn. Absorb/fudge still update per insn —
- * only the host counter publish is deferred until:
- *   - psx_cyc_batch_flush (IRQ / MMIO / savestate), or
- *   - the deferred batch grows past PSX_CYC_BATCH_SOFT (device deadline check),
- *   - or emitter BB-defer is active (g_psx_cyc_bb_defer): no mid-BB deadline
- *     probe at all; compiled branches already flush via psx_check_interrupts.
- * Guest totals at those barriers are unchanged. */
+/* Load-charge batching (MotK VLC): cache the nearer of the next device
+ * deadline or a 64-cycle soft publication limit once per batch. Generated
+ * GCC/Clang blocks may defer to their IRQ edge; MMIO also flushes. Pipeline
+ * state still updates per instruction, and guest totals at barriers match. */
 enum { PSX_CYC_BATCH_SOFT = 64u };
 
 static inline void psx_cyc_bb_defer_begin(void) { g_psx_cyc_bb_defer++; }
@@ -77,17 +73,25 @@ static inline void psx_cyc_charge(uint32_t cycles) {
     }
 #if !defined(PSX_COSIM)
     {
-        uint32_t sum = g_psx_cyc_batch + cycles;
-        if (sum >= g_psx_cyc_batch) { /* no uint32 wrap */
-            g_psx_cyc_batch = sum;
-            /* Compiled BB defer: IRQ edges publish. Otherwise probe deadline
-             * only after a soft quantum so MotK VLC doesn't 64-bit-compare
-             * on every LW. */
-            if (g_psx_cyc_bb_defer > 0) return;
-            if (sum < (uint32_t)PSX_CYC_BATCH_SOFT) return;
-            uint64_t next = psx_cycle_count + (uint64_t)sum;
-            if (psx_next_service_cycle != 0u && next < psx_next_service_cycle)
+        uint32_t prior = g_psx_cyc_batch;
+        uint32_t sum = prior + cycles;
+        if (sum >= prior) { /* no uint32 wrap */
+            if (g_psx_cyc_bb_defer > 0) {
+                g_psx_cyc_batch = sum;
                 return;
+            }
+            if (prior == 0u) {
+                uint64_t room = 0u;
+                if (psx_next_service_cycle > psx_cycle_count)
+                    room = psx_next_service_cycle - psx_cycle_count;
+                g_psx_cyc_batch_limit = room == 0u ? 1u :
+                    (room < (uint64_t)PSX_CYC_BATCH_SOFT
+                        ? (uint32_t)room : (uint32_t)PSX_CYC_BATCH_SOFT);
+            }
+            if (sum < g_psx_cyc_batch_limit) {
+                g_psx_cyc_batch = sum;
+                return;
+            }
         }
     }
 #endif

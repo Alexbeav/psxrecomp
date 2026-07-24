@@ -66,6 +66,8 @@ static uint8_t pad_connected = 0;
 
 /* Host-side SCPH-1070 enable. Only meaningful when PSX_MAX_PLAYERS >= 5. */
 static int sio_multitap_enabled = 0;
+/* Physical SIO port hosting the tap: 0 = console Port 1, 1 = Port 2. */
+static int sio_multitap_port = 0;
 
 /* Pad communication state machine */
 typedef enum {
@@ -77,6 +79,13 @@ typedef enum {
 /* Multitap 0x42 bulk: ID(0x80)+0x5A + 4×8 pad status bytes. */
 #define PAD_RESPONSE_MAX 34
 
+/* What the next 0x42 on the multitap port returns (psx-spx TAP/REQ latch). */
+typedef enum {
+    MTAP_NEXT_SLOT_A = 0,
+    MTAP_NEXT_BULK,
+    MTAP_NEXT_GARBAGE,
+} MtapNextMode;
+
 static PadState pad_state = PAD_IDLE;
 static int selected_slot = 0;          /* physical SIO slot (CTRL bit13): 0 or 1 */
 static int pad_active_logical = 0;     /* logical pad for single-pad / config cmds */
@@ -84,6 +93,11 @@ static uint8_t pad_response[PAD_RESPONSE_MAX];
 static uint8_t pad_response_len = 0;
 static uint8_t pad_response_idx = 0;
 static uint8_t pad_current_cmd = 0;
+/* Address byte that opened this pad txn (01h=Slot A / bulk, 02h..04h=B..D). */
+static uint8_t pad_mtap_addr = 0x01;
+static int mtap_next_mode = MTAP_NEXT_SLOT_A;
+static int mtap_req_this = 0;          /* TAP==1 seen on current 0x42 txn */
+static int mtap_returned = MTAP_NEXT_SLOT_A; /* what this txn returned */
 /* DualShock config-mode latch, per logical pad. A real controller only answers
  * the config commands (0x44/0x45/0x46/0x47/0x4C/0x4D/0x4F) and reports the
  * config ID 0xF3 while it is IN config mode; outside config it reports its
@@ -127,9 +141,12 @@ static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
  *
  * Multitap off (default / PSX_MAX_PLAYERS==2):
  *   physical 0 → logical 0, physical 1 → logical 1
- * Multitap on (SCPH-1070 on port 1, single pad on port 2):
- *   physical 0 → multitap (bulk pads 0–3 on 0x42; config/other → pad A = 0)
+ * Multitap on Port 1 (sio_multitap_port==0):
+ *   physical 0 → multitap (pads A–D = logical 0–3; Slot A path = 0)
  *   physical 1 → logical 4
+ * Multitap on Port 2 (sio_multitap_port==1):
+ *   physical 0 → logical 0
+ *   physical 1 → multitap (pads A–D = logical 1–4; Slot A path = 1)
  */
 static int sio_multitap_active(void) {
 #if PSX_MAX_PLAYERS >= 5
@@ -139,22 +156,53 @@ static int sio_multitap_active(void) {
 #endif
 }
 
+static int mtap_slot_a_logical(void) {
+    return (sio_multitap_port == 0) ? 0 : 1;
+}
+
+static int mtap_standalone_logical(void) {
+    return (sio_multitap_port == 0) ? 4 : 0;
+}
+
 static int pad_logical_for_port(int phys_port) {
     if (phys_port < 0 || phys_port > 1) return -1;
-    if (sio_multitap_active())
-        return (phys_port == 0) ? 0 : 4;
+    if (sio_multitap_active()) {
+        if (phys_port == sio_multitap_port)
+            return mtap_slot_a_logical();
+        return mtap_standalone_logical();
+    }
     return phys_port;
 }
 
-/* Physical port answers 0x01 when a device is present. Multitap itself is
- * present whenever enabled (individual tap slots may still be empty). */
+/* Physical port answers when a device is present. Multitap itself is present
+ * whenever enabled (individual tap slots may still be empty). */
 static int pad_port_has_device(int phys_port) {
     if (phys_port < 0 || phys_port > 1) return 0;
     if (sio_multitap_active()) {
-        if (phys_port == 0) return 1;
-        return (pad_connected & (1u << 4)) ? 1 : 0;
+        if (phys_port == sio_multitap_port) return 1;
+        return (pad_connected & (1u << mtap_standalone_logical())) ? 1 : 0;
     }
     return (pad_connected & (1u << phys_port)) ? 1 : 0;
+}
+
+static int selected_is_mtap_port(void) {
+    return sio_multitap_active() && selected_slot == sio_multitap_port;
+}
+
+/* After a completed 0x42 on the multitap port, arm the next response mode
+ * from the REQ bit seen this transfer and what we just returned (psx-spx). */
+static void mtap_finish_42(void) {
+    if (!selected_is_mtap_port() || pad_current_cmd != 0x42 || pad_mtap_addr != 0x01)
+        return;
+    if (!mtap_req_this) {
+        mtap_next_mode = MTAP_NEXT_SLOT_A;
+    } else if (mtap_returned == MTAP_NEXT_SLOT_A) {
+        mtap_next_mode = MTAP_NEXT_BULK;
+    } else if (mtap_returned == MTAP_NEXT_BULK) {
+        mtap_next_mode = MTAP_NEXT_GARBAGE;
+    } else {
+        mtap_next_mode = MTAP_NEXT_BULK;
+    }
 }
 
 /* Fill 8-byte per-pad status block used in multitap bulk 0x42 responses.
@@ -625,8 +673,8 @@ void sio_init(void) {
         pad_supports_config[i] = 1;
     }
     pad_connected = 0;
-    /* Multitap enable is a host preference — leave sio_multitap_enabled alone
-     * across sio_init so a soft reset does not drop the tap configuration. */
+    /* Multitap enable/port are host preferences — leave them alone across
+     * sio_init so a soft reset does not drop the tap configuration. */
     mc_state = MC_IDLE;
     for (int i = 0; i < 2; i++) {
         mc_slots[i].state = MC_IDLE;
@@ -685,6 +733,11 @@ uint32_t sio_cycles_to_irq(uint32_t i_mask) {
 void sio_set_multitap(int enabled) {
 #if PSX_MAX_PLAYERS >= 5
     sio_multitap_enabled = enabled ? 1 : 0;
+    if (!enabled) {
+        mtap_next_mode = MTAP_NEXT_SLOT_A;
+        mtap_req_this = 0;
+        mtap_returned = MTAP_NEXT_SLOT_A;
+    }
 #else
     (void)enabled;
     sio_multitap_enabled = 0;
@@ -693,6 +746,26 @@ void sio_set_multitap(int enabled) {
 
 int sio_get_multitap(void) {
     return sio_multitap_active();
+}
+
+void sio_set_multitap_port(int phys_port) {
+#if PSX_MAX_PLAYERS >= 5
+    sio_multitap_port = (phys_port == 1) ? 1 : 0;
+    mtap_next_mode = MTAP_NEXT_SLOT_A;
+    mtap_req_this = 0;
+    mtap_returned = MTAP_NEXT_SLOT_A;
+#else
+    (void)phys_port;
+    sio_multitap_port = 0;
+#endif
+}
+
+int sio_get_multitap_port(void) {
+#if PSX_MAX_PLAYERS >= 5
+    return sio_multitap_port;
+#else
+    return 0;
+#endif
 }
 
 void sio_connect_pad(int slot) {
@@ -861,8 +934,17 @@ static void pad_process_byte(uint8_t tx_byte) {
     }
     switch (pad_state) {
     case PAD_IDLE:
+        /* Standard address 01h selects Slot A (or the standalone pad). With a
+         * multitap, 02h..04h select pads B–D on that port (psx-spx method 2). */
         if (tx_byte == 0x01 && pad_port_has_device(selected_slot)) {
             pad_active_logical = pad_logical_for_port(selected_slot);
+            pad_mtap_addr = 0x01;
+            pad_state = PAD_WAIT_ACCESS;
+            sio_rx_data = 0xFF;
+            sio_stat |= SIO_STAT_ACK;
+        } else if (selected_is_mtap_port() && tx_byte >= 0x02 && tx_byte <= 0x04) {
+            pad_active_logical = mtap_slot_a_logical() + (int)(tx_byte - 1);
+            pad_mtap_addr = tx_byte;
             pad_state = PAD_WAIT_ACCESS;
             sio_rx_data = 0xFF;
             sio_stat |= SIO_STAT_ACK;
@@ -874,21 +956,44 @@ static void pad_process_byte(uint8_t tx_byte) {
     case PAD_WAIT_ACCESS:
         pad_current_cmd = tx_byte;
         pad_response_idx = 1;
-        /* SCPH-1070 multitap bulk poll on physical port 0: ID 0x80, 0x5A, then
-         * concatenated 8-byte status for logical pads 0–3 (Beetle/DuckStation/
-         * BlueRetro SCPH-1070). */
-        if (sio_multitap_active() && selected_slot == 0 && tx_byte == 0x42) {
+        mtap_req_this = 0;
+        /* SCPH-1070 method 1: only when address was 01h AND a prior transfer
+         * latched REQ=1. Otherwise Slot A (or garbage) — never force bulk on
+         * every 0x42 (that breaks P1 when the tap is present with one pad). */
+        if (selected_is_mtap_port() && pad_mtap_addr == 0x01 && tx_byte == 0x42 &&
+            mtap_next_mode == MTAP_NEXT_BULK) {
+            const int base = mtap_slot_a_logical();
             pad_response[0] = 0x80;
             pad_response[1] = 0x5A;
             for (int i = 0; i < 4; i++)
-                pad_fill_status8(i, &pad_response[2 + i * 8]);
+                pad_fill_status8(base + i, &pad_response[2 + i * 8]);
             pad_response_len = PAD_RESPONSE_MAX;
+            mtap_returned = MTAP_NEXT_BULK;
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
             sio_stat |= SIO_STAT_ACK;
             break;
         }
-        /* Single-pad path (port2 / multitap-off / non-0x42 on multitap port A). */
+        if (selected_is_mtap_port() && pad_mtap_addr == 0x01 && tx_byte == 0x42 &&
+            mtap_next_mode == MTAP_NEXT_GARBAGE) {
+            /* HiZ,80h,5Ah,LSB(Slot A id) then abort (psx-spx). */
+            const int a = mtap_slot_a_logical();
+            const uint8_t id = (!(pad_connected & (1u << a))) ? 0xFFu
+                               : (pad_in_config[a] ? 0xF3u
+                                  : (pad_analog[a] ? 0x73u : 0x41u));
+            pad_response[0] = 0x80;
+            pad_response[1] = 0x5A;
+            pad_response[2] = id;
+            pad_response_len = 3;
+            mtap_returned = MTAP_NEXT_GARBAGE;
+            pad_state = PAD_SEND_RESPONSE;
+            sio_rx_data = pad_response[0];
+            sio_stat |= SIO_STAT_ACK;
+            break;
+        }
+        if (selected_is_mtap_port() && pad_mtap_addr == 0x01 && tx_byte == 0x42)
+            mtap_returned = MTAP_NEXT_SLOT_A;
+        /* Single-pad path (standalone port / Slot A / method-2 pad / non-0x42). */
         {
         const int lp = pad_active_logical;
         if (lp < 0 || lp >= PSX_MAX_PLAYERS || !(pad_connected & (1u << lp))) {
@@ -1046,6 +1151,11 @@ static void pad_process_byte(uint8_t tx_byte) {
         break;
 
     case PAD_SEND_RESPONSE:
+        /* TAP/REQ (third command byte, paired with idhi/5Ah at idx==1): does not
+         * change *this* response; it arms the next 0x42 on the multitap port. */
+        if (selected_is_mtap_port() && pad_current_cmd == 0x42 &&
+            pad_mtap_addr == 0x01 && pad_response_idx == 1)
+            mtap_req_this = (tx_byte == 0x01) ? 1 : 0;
         /* For 0x43 (enter/exit config), the data byte selecting enter(0x01)/
          * exit(0x00) arrives paired with response index 2. Latch the new config
          * state; it takes effect from the next transaction (the ID byte already
@@ -1077,12 +1187,14 @@ static void pad_process_byte(uint8_t tx_byte) {
             if (pad_response_idx < pad_response_len) {
                 sio_stat |= SIO_STAT_ACK;
             } else {
+                mtap_finish_42();
                 pad_state = PAD_IDLE;
                 pad_response_len = 0;
                 pad_response_idx = 0;
                 pad_current_cmd = 0;
             }
         } else {
+            mtap_finish_42();
             pad_state = PAD_IDLE;
             pad_response_len = 0;
             pad_response_idx = 0;

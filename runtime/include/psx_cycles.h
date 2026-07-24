@@ -54,8 +54,10 @@ extern int g_ls_replay_active;
  * psx_advance_cycles before IRQ checks, MMIO, or any cycle read that must
  * match the published counter. Guest totals at those barriers are unchanged. */
 extern uint32_t g_psx_cyc_batch;
-/* Emitter BB-defer depth: when >0, psx_cyc_charge skips mid-BB deadline
- * probes (compiled IRQ edges / psx_cyc_bb_defer_end publish). */
+extern uint32_t g_psx_cyc_batch_limit;
+
+/* GCC/Clang-generated functions can defer deadline probes within a basic
+ * block. Interrupt/MMIO edges still publish the accumulated guest cycles. */
 extern int g_psx_cyc_bb_defer;
 
 /* Advance guest time. The common production path is inlined: bump the
@@ -71,6 +73,7 @@ static inline void psx_advance_cycles(uint32_t cycles) {
     if (g_psx_cyc_batch) {
         uint32_t b = g_psx_cyc_batch;
         g_psx_cyc_batch = 0;
+        g_psx_cyc_batch_limit = 0;
         if (cycles <= UINT32_MAX - b) cycles += b;
         else {
             /* Extreme: publish b first, then continue with cycles. */
@@ -114,6 +117,7 @@ static inline void psx_cyc_batch_flush(void) {
     uint32_t b = g_psx_cyc_batch;
     if (!b) return;
     g_psx_cyc_batch = 0;
+    g_psx_cyc_batch_limit = 0;
     psx_advance_cycles(b);
 #endif
 }

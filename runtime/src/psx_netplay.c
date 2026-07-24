@@ -28,14 +28,32 @@
 /* Session pad count mirrored for release_pads (available without recomp-net). */
 static int g_np_slot_count = 2;
 
+/* Persists across shutdown so starvation dumps still see last session topology. */
+static char g_np_diag_arch[24] = "off";
+static int  g_np_diag_max_players = 0;
+static int  g_np_diag_player_count = 0;
+static int  g_np_diag_configured = 0;
+
+int psx_netplay_diag_snapshot(char *arch_out, size_t arch_cap,
+                              int *max_players_out, int *player_count_out)
+{
+    if (arch_out && arch_cap)
+        snprintf(arch_out, arch_cap, "%s", g_np_diag_arch);
+    if (max_players_out) *max_players_out = g_np_diag_max_players;
+    if (player_count_out) *player_count_out = g_np_diag_player_count;
+    return g_np_diag_configured;
+}
+
 void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
 {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->local_slot = 0;
     cfg->slot_count = 2;
+    cfg->player_count = 0;
     cfg->input_player = -1;
     cfg->input_delay = 2;
+    cfg->force_input_relay = 0;
     cfg->session_id = 1;
     strncpy(cfg->bind_hostport, "0.0.0.0:7777", sizeof(cfg->bind_hostport) - 1);
     cfg->peer_hostport[0] = '\0';
@@ -903,6 +921,23 @@ int psx_netplay_peer_disconnected(uint32_t timeout_ms)
     return rnet_session_peer_disconnected(g_np.session, (rnet_u64)timeout_ms);
 }
 
+static void np_diag_capture(const PsxNetplayConfig *cfg, int slots)
+{
+    const char *arch = "p2p";
+    int players;
+    if (!cfg) return;
+    if (cfg->force_input_relay)
+        arch = "server_relay";
+    else if (slots >= 3)
+        arch = "host_relay";
+    players = cfg->player_count > 0 ? cfg->player_count : slots;
+    if (players < 1) players = slots;
+    snprintf(g_np_diag_arch, sizeof(g_np_diag_arch), "%s", arch);
+    g_np_diag_max_players = slots;
+    g_np_diag_player_count = players;
+    g_np_diag_configured = 1;
+}
+
 #if defined(__linux__)
 static int peer_is_loopback(const char *peer_hostport)
 {
@@ -975,10 +1010,21 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
 
     g_np.session = rnet_session_create(&rcfg, &host);
     if (!g_np.session) return -2;
-    if (rnet_session_start_lan(g_np.session, cfg->bind_hostport, cfg->peer_hostport) != 0) {
-        rnet_session_destroy(g_np.session);
-        g_np.session = NULL;
-        return -3;
+    /* Host-as-relay: slot 0 with 3+ seats and no dial peer (guests dial host). */
+    {
+        const int peer_empty =
+            !cfg->peer_hostport || !cfg->peer_hostport[0];
+        const int use_hub = (local == 0 && slots >= 3 && peer_empty);
+        const int rc = use_hub
+            ? rnet_session_start_lan_hub(g_np.session, cfg->bind_hostport)
+            : rnet_session_start_lan(g_np.session, cfg->bind_hostport,
+                                    cfg->peer_hostport);
+        if (rc != 0) {
+            rnet_session_destroy(g_np.session);
+            g_np.session = NULL;
+            return -3;
+        }
+        np_diag_capture(cfg, slots);
     }
     g_np.active = 1;
     g_np.slot_count = (int)rcfg.slot_count;

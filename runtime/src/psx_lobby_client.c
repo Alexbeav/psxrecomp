@@ -114,13 +114,13 @@ static LobbyClient g_lc = {
     .filter_game_version = PSX_GAME_VERSION,
 };
 
-/* Default max_slots for create (clamped 2..5). */
+/* Default max_slots for create (clamped 2..8). */
 static int g_lobby_max_slots = 2;
 
 void psx_lobby_set_max_slots(int max_slots)
 {
     if (max_slots < 2) max_slots = 2;
-    if (max_slots > 5) max_slots = 5;
+    if (max_slots > 8) max_slots = 8;
     g_lobby_max_slots = max_slots;
 }
 
@@ -344,6 +344,7 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     out->input_delay = json_get_int(obj, "input_delay", 2);
     if (out->input_delay < 0) out->input_delay = 0;
     if (out->input_delay > 16) out->input_delay = 16;
+    out->force_input_relay = json_get_bool(obj, "force_input_relay", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
     out->valid = 1;
 }
@@ -372,13 +373,16 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
     return snprintf(dst, dst_cap,
                     ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
                     "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
-                    "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"language\":\"%s\"}",
+                    "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"force_input_relay\":%s,"
+                    "\"language\":\"%s\"}",
                     caps->aspect_num, caps->aspect_den,
                     caps->turbo_loads ? "true" : "false",
                     caps->bios_hle ? "true" : "false",
                     caps->fast_boot ? "true" : "false",
                     caps->auto_skip_fmv ? "true" : "false",
-                    caps->input_delay, lang);
+                    caps->input_delay,
+                    caps->force_input_relay ? "true" : "false",
+                    lang);
 }
 
 static void queue_send(const char *json)
@@ -412,21 +416,72 @@ static int endpoint_port_is_zero(const char *ep)
     return (int)strtoul(colon + 1, NULL, 10) == 0;
 }
 
+/* Prefer a usable host:port among candidates (skip empty / :0). */
+static void copy_first_usable_endpoint(char *dst, size_t dst_len, const char *a,
+                                       const char *b, const char *c)
+{
+    const char *cands[3];
+    int i;
+    if (!dst || dst_len == 0) return;
+    dst[0] = '\0';
+    cands[0] = a;
+    cands[1] = b;
+    cands[2] = c;
+    for (i = 0; i < 3; ++i) {
+        if (cands[i] && cands[i][0] && !endpoint_port_is_zero(cands[i])) {
+            strncpy(dst, cands[i], dst_len - 1);
+            dst[dst_len - 1] = '\0';
+            return;
+        }
+    }
+}
+
+static int using_server_input_relay(const PsxLobbyJoinInfo *j)
+{
+    if (g_lc.match_caps.valid && g_lc.match_caps.force_input_relay)
+        return 1;
+    /* Server rewrote both endpoints to the same relay advertise address. */
+    if (j && j->host_endpoint[0] && j->guest_endpoint[0] &&
+        !endpoint_port_is_zero(j->host_endpoint) &&
+        !endpoint_port_is_zero(j->guest_endpoint) &&
+        strcmp(j->host_endpoint, j->guest_endpoint) == 0 &&
+        (!g_lc.my_bind[0] || strcmp(j->host_endpoint, g_lc.my_bind) != 0))
+        return 1;
+    return 0;
+}
+
 static void fill_peer_bind_from_join(void)
 {
     PsxLobbyJoinInfo *j = &g_lc.join;
+    const int force_relay = using_server_input_relay(j);
+    const int seats = j->player_count >= 2 ? j->player_count : j->max_slots;
+    const int host_hub = (g_lc.is_host && seats >= 3 && !force_relay) ? 1 : 0;
     memset(j->bind_hostport, 0, sizeof(j->bind_hostport));
     memset(j->peer_hostport, 0, sizeof(j->peer_hostport));
-    if (g_lc.is_host) {
+    if (force_relay) {
+        /* Everyone dials the lobby-server UDP relay — ephemeral local bind
+         * (same as LAN guests) so same-PC multi-instance doesn't collide. */
+        strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
+        copy_first_usable_endpoint(j->peer_hostport, sizeof(j->peer_hostport),
+                                   j->host_endpoint, j->guest_endpoint, NULL);
+    } else if (g_lc.is_host) {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
-        /* Online guests join with 0.0.0.0:0 (ephemeral). The lobby rewrites
-         * that to peer_ip:0, which rnet rejects as a dial target. Leave peer
-         * empty so the host learns the guest from the first HELLO (guest
-         * dials host_endpoint). Fixed guest ports still dial normally. */
-        if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
-            strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
+        if (!host_hub) {
+            /* 2P P2P: dial guest when they advertised a fixed port. Online
+             * guests often join with :0 — leave peer empty (accept-first). */
+            if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
+                strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
+        }
+        /* host_hub: peer stays empty → rnet_session_start_lan_hub */
     } else {
-        strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
+        /* Guests dialing 3+ host hub: ephemeral local UDP (join only probes
+         * 7778+ and does not hold the socket). 2P P2P keeps the advertised
+         * fixed guest_bind so the host can dial. */
+        if (seats >= 3) {
+            strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
+        } else {
+            strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
+        }
         strncpy(j->peer_hostport, j->host_endpoint, sizeof(j->peer_hostport) - 1);
     }
     j->bind_hostport[sizeof(j->bind_hostport) - 1] = '\0';
@@ -617,10 +672,11 @@ static void handle_server_json(const char *json)
                     json_get_str(chunk, "game_name", g_lc.list[n].game_name, sizeof(g_lc.list[n].game_name));
                     json_get_str(chunk, "game_version", g_lc.list[n].game_version,
                                  sizeof(g_lc.list[n].game_version));
-                    if (!g_lc.list[n].game_version[0]) {
-                        strncpy(g_lc.list[n].game_version, "dev",
-                                sizeof(g_lc.list[n].game_version) - 1);
-                    }
+                    /* Missing version stays empty for filter decisions; display
+                     * defaults to "dev" only after accept. Old servers omitted
+                     * game_version — rewriting to "dev" before the strict pin
+                     * hid those rows from release clients. */
+                    const int has_game_version = g_lc.list[n].game_version[0] != '\0';
                     /* Drop lobbies that don't match our title (broadcast list
                      * is unfiltered). Release builds also pin game_version;
                      * "dev" keeps other versions visible for testing. */
@@ -629,13 +685,17 @@ static void handle_server_json(const char *json)
                         p = end;
                         continue;
                     }
-                    if (list_filter_version_strict()) {
+                    if (list_filter_version_strict() && has_game_version) {
                         const char *want_ver = effective_game_version(NULL);
                         if (want_ver && want_ver[0] &&
                             strcmp(g_lc.list[n].game_version, want_ver) != 0) {
                             p = end;
                             continue;
                         }
+                    }
+                    if (!has_game_version) {
+                        strncpy(g_lc.list[n].game_version, "dev",
+                                sizeof(g_lc.list[n].game_version) - 1);
                     }
                     g_lc.list[n].player_count = json_get_int(chunk, "player_count", 0);
                     g_lc.list[n].max_slots = json_get_int(chunk, "max_slots", 2);
@@ -720,24 +780,56 @@ static void handle_server_json(const char *json)
         return;
     }
     if (strcmp(op, "launch") == 0) {
+        char relay_endpoint[PSX_LOBBY_ENDPOINT_LEN];
         json_get_str(json, "host_endpoint", g_lc.join.host_endpoint, sizeof(g_lc.join.host_endpoint));
         json_get_str(json, "guest_endpoint", g_lc.join.guest_endpoint, sizeof(g_lc.join.guest_endpoint));
+        relay_endpoint[0] = '\0';
+        json_get_str(json, "relay_endpoint", relay_endpoint, sizeof(relay_endpoint));
         g_lc.join.player_count = json_get_int(json, "player_count", g_lc.join.player_count);
         g_lc.join.max_slots = json_get_int(json, "max_slots", g_lc.join.max_slots);
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", (int)g_lc.join.session_id);
         ingest_match_caps_from_json(json);
+        /* Prefer explicit relay_endpoint when the server opened input relay.
+         * Apply after caps ingest: omitted force_input_relay must not leave
+         * hosts on the hub path while guests dial the relay. */
+        if (relay_endpoint[0] && !endpoint_port_is_zero(relay_endpoint)) {
+            strncpy(g_lc.join.host_endpoint, relay_endpoint,
+                    sizeof(g_lc.join.host_endpoint) - 1);
+            g_lc.join.host_endpoint[sizeof(g_lc.join.host_endpoint) - 1] = '\0';
+            strncpy(g_lc.join.guest_endpoint, relay_endpoint,
+                    sizeof(g_lc.join.guest_endpoint) - 1);
+            g_lc.join.guest_endpoint[sizeof(g_lc.join.guest_endpoint) - 1] = '\0';
+            if (!g_lc.match_caps.valid)
+                g_lc.match_caps.valid = 1;
+            g_lc.match_caps.force_input_relay = 1;
+        }
         fill_peer_bind_from_join();
         parse_slots_array(json);
-        /* Guest must know host:port. Host may leave peer empty (accept-first)
-         * when the guest advertised an ephemeral :0 bind. */
-        if (!g_lc.join.host_endpoint[0] ||
-            (g_lc.is_host && !g_lc.join.guest_endpoint[0]) ||
-            (!g_lc.is_host && (!g_lc.join.peer_hostport[0] ||
-                              endpoint_port_is_zero(g_lc.join.peer_hostport)))) {
-            strncpy(g_lc.join.last_error, "missing_endpoints",
-                    sizeof(g_lc.join.last_error) - 1);
-            g_lc.launch_pending = 0;
-            return;
+        /* Guest must know host:port (or relay). Host may leave peer empty for
+         * accept-first / host-as-relay. Server relay: every peer dials relay. */
+        {
+            const int force_relay = using_server_input_relay(&g_lc.join);
+            const int seats = g_lc.join.player_count >= 2 ? g_lc.join.player_count
+                                                         : g_lc.join.max_slots;
+            const int host_hub =
+                (g_lc.is_host && seats >= 3 && !force_relay) ? 1 : 0;
+            const int peer_bad = !g_lc.join.peer_hostport[0] ||
+                                 endpoint_port_is_zero(g_lc.join.peer_hostport);
+            if (force_relay) {
+                if (peer_bad) {
+                    strncpy(g_lc.join.last_error, "missing_endpoints",
+                            sizeof(g_lc.join.last_error) - 1);
+                    g_lc.launch_pending = 0;
+                    return;
+                }
+            } else if (!g_lc.join.host_endpoint[0] ||
+                       (g_lc.is_host && !host_hub && !g_lc.join.guest_endpoint[0]) ||
+                       (!g_lc.is_host && peer_bad)) {
+                strncpy(g_lc.join.last_error, "missing_endpoints",
+                        sizeof(g_lc.join.last_error) - 1);
+                g_lc.launch_pending = 0;
+                return;
+            }
         }
         g_lc.join.last_error[0] = '\0';
         g_lc.launch_pending = 1;
