@@ -41,7 +41,6 @@ static void sio_debug_poll_maybe(void) {
     }
 }
 
-<<<<<<< Updated upstream
 /* Pad state: 0=pressed, 1=released (PS1 convention). Indexed by LOGICAL pad
  * 0 .. PSX_MAX_PLAYERS-1 (not physical SIO slot). */
 static uint16_t pad_buttons[PSX_MAX_PLAYERS] = { [0 ... PSX_MAX_PLAYERS - 1] = 0xFFFF };
@@ -61,27 +60,6 @@ static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
  * flips underneath a game that pinned DualShock, the exact desync the
  * deferred-request machinery cannot otherwise prevent. */
 static uint8_t analog_mode_locked[PSX_MAX_PLAYERS];
-=======
-/* Logical pad slots: without multitap, 0/1 are console ports 1/2. With
- * SCPH-1070 multitap on a port, that port exposes four pads at
- * port*4 + {0..3}. Netplay maps session seats onto these indices. */
-#define SIO_PAD_SLOTS 8
-#define SIO_MT_RSP_MAX 34 /* 5A80h + 4 pads × 4 halfwords */
-
-/* Pad state: 0=pressed, 1=released (PS1 convention). */
-static uint16_t pad_buttons[SIO_PAD_SLOTS];
-static uint8_t  pad_analog[SIO_PAD_SLOTS];
-static uint8_t  pad_stick[SIO_PAD_SLOTS][4]; /* lx,ly,rx,ry */
-
-/* Analog-mode lock, per slot. A real DualShock's config command 0x44 0x..02/0x03
- * locks/unlocks the mode (dualshock.cpp:714-725); a locked pad ignores the
- * physical analog button (dualshock.cpp:203). We emulate the analog button via
- * the host hybrid heuristic (pad_type_req), so when a game LOCKS the mode the
- * hybrid auto-flip must not override it — else the type flips underneath a game
- * that pinned DualShock, the exact desync the deferred-request machinery cannot
- * otherwise prevent. */
-static uint8_t analog_mode_locked[SIO_PAD_SLOTS];
->>>>>>> Stashed changes
 
 /* Which logical pads have devices connected (bit i = pad i). Fits 5 pads. */
 static uint8_t pad_connected = 0;
@@ -109,7 +87,6 @@ typedef enum {
 } MtapNextMode;
 
 static PadState pad_state = PAD_IDLE;
-<<<<<<< Updated upstream
 static int selected_slot = 0;          /* physical SIO slot (CTRL bit13): 0 or 1 */
 static int pad_active_logical = 0;     /* logical pad for single-pad / config cmds */
 static uint8_t pad_response[PAD_RESPONSE_MAX];
@@ -144,40 +121,6 @@ static uint8_t pad_in_config[PSX_MAX_PLAYERS];
 static uint8_t pad_supports_config[PSX_MAX_PLAYERS] = {
     [0 ... PSX_MAX_PLAYERS - 1] = 1
 };
-=======
-static int selected_slot = 0; /* console port 0/1 from SIO_CTRL bit 13 */
-static int active_pad = 0;    /* logical pad for the current transaction */
-static uint8_t pad_response[SIO_MT_RSP_MAX];
-static uint8_t pad_response_len = 0;
-static uint8_t pad_response_idx = 0;
-static uint8_t pad_current_cmd = 0;
-/* SCPH-1070: multitap on console port 0 and/or 1. Method-1 LONG response is
- * armed by TX byte 3 == 0x01 on a Slot-A poll and consumed on the next poll. */
-static uint8_t mt_on[2];
-static uint8_t mt_req_next[2];
-static uint8_t mt_prev_long[2];
-/* DualShock config-mode latch, per slot. A real controller only answers the
- * config commands (0x44/0x45/0x46/0x47/0x4C/0x4D/0x4F) and reports the config
- * ID 0xF3 while it is IN config mode; outside config it reports its normal ID
- * (0x41 digital / 0x73 analog) and ignores config commands. Config is entered/
- * exited by command 0x43 with the data byte 0x01(enter)/0x00(exit). Faking
- * "always in config" (constant 0xF3) wedges games that probe the pad type via
- * 0x43 before polling — e.g. Mega Man X6 loops 01 43 00 00 forever and never
- * reaches 0x42. (MMX6 ISSUES.md #2.) */
-static uint8_t pad_in_config[SIO_PAD_SLOTS];
-
-/* Whether the pad on a slot is a config-capable DualShock (1) or a plain
- * digital controller (0). A real SCPH-1080 digital pad (poll id 0x41) does NOT
- * answer the config-mode commands (0x43/0x44/.../0x4F): it returns hi-z and the
- * transaction ends. A game's pad driver that probes with 0x43 to detect a
- * DualShock therefore classifies a digital pad as digital-only and just polls
- * it with 0x42. Tomba 2's driver probes this way every frame; when the SM
- * (wrongly) answered 0x43 for its digital pad it went down the DualShock config
- * path and read the 0x00 config-response bytes as buttons -> phantom "all
- * pressed" input. Default 1 keeps analog/hybrid pads unchanged; main.cpp sets 0
- * for PAD_MODE_DIGITAL. */
-static uint8_t pad_supports_config[SIO_PAD_SLOTS];
->>>>>>> Stashed changes
 
 /* Coherent-DualShock model (Tomba phantom-input fix). A real controller never
  * changes its reported type (0x41 digital <-> 0x73 analog) in the middle of a
@@ -190,7 +133,6 @@ static uint8_t pad_supports_config[SIO_PAD_SLOTS];
  * host REQUESTS a type via pad_type_req[] and the change is applied atomically
  * only when the bus is idle (PAD_IDLE) and the pad is NOT in config mode. A
  * request raised during config is held until config exits. -1 = no request. */
-<<<<<<< Updated upstream
 static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
     [0 ... PSX_MAX_PLAYERS - 1] = -1
 };
@@ -288,9 +230,6 @@ static void pad_fill_status8(int logical, uint8_t out[8]) {
         out[4] = out[5] = out[6] = out[7] = 0xFF;
     }
 }
-=======
-static int8_t  pad_type_req[SIO_PAD_SLOTS];
->>>>>>> Stashed changes
 
 /* Memory card SIO state machine */
 typedef enum {
@@ -713,7 +652,6 @@ static int sio_ack_visible_reads = 0;
 #define SIO_CTRL_SLOT        (1 << 13)
 
 void sio_init(void) {
-    int p;
     sio_tx_data = 0;
     sio_rx_data = 0xFF;
     sio_stat = SIO_STAT_TX_RDY | SIO_STAT_TX_EMPTY;
@@ -724,7 +662,6 @@ void sio_init(void) {
     pad_response_len = 0;
     pad_response_idx = 0;
     pad_current_cmd = 0;
-<<<<<<< Updated upstream
     pad_active_logical = 0;
     for (int i = 0; i < PSX_MAX_PLAYERS; i++) {
         pad_buttons[i] = 0xFFFF;
@@ -734,21 +671,6 @@ void sio_init(void) {
         pad_type_req[i] = -1;
         analog_mode_locked[i] = 0;
         pad_supports_config[i] = 1;
-=======
-    active_pad = 0;
-    selected_slot = 0;
-    mt_on[0] = mt_on[1] = 0;
-    mt_req_next[0] = mt_req_next[1] = 0;
-    mt_prev_long[0] = mt_prev_long[1] = 0;
-    for (p = 0; p < SIO_PAD_SLOTS; p++) {
-        pad_buttons[p] = 0xFFFF;
-        pad_analog[p] = 0;
-        pad_stick[p][0] = pad_stick[p][1] = pad_stick[p][2] = pad_stick[p][3] = 0x80;
-        pad_in_config[p] = 0;
-        pad_type_req[p] = -1;
-        analog_mode_locked[p] = 0;
-        pad_supports_config[p] = 1;
->>>>>>> Stashed changes
     }
     pad_connected = 0;
     /* Multitap enable/port are host preferences — leave them alone across
@@ -847,7 +769,6 @@ int sio_get_multitap_port(void) {
 }
 
 void sio_connect_pad(int slot) {
-<<<<<<< Updated upstream
     if (slot >= 0 && slot < PSX_MAX_PLAYERS)
         pad_connected |= (uint8_t)(1u << slot);
 }
@@ -860,20 +781,6 @@ void sio_set_pad_connected(int slot, int connected) {
 
 void sio_set_pad_config_capable(int slot, int capable) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-=======
-    if (slot >= 0 && slot < SIO_PAD_SLOTS)
-        pad_connected |= (uint8_t)(1 << slot);
-}
-
-void sio_set_pad_connected(int slot, int connected) {
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return;
-    if (connected) pad_connected |=  (uint8_t)(1 << slot);
-    else           pad_connected &= (uint8_t)~(1 << slot);
-}
-
-void sio_set_pad_config_capable(int slot, int capable) {
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return;
->>>>>>> Stashed changes
     pad_supports_config[slot] = capable ? 1 : 0;
     /* A plain digital pad can never be in config mode; clear any stale latch so
      * the next poll reports the digital id (0x41), not the config id (0xF3). */
@@ -885,28 +792,7 @@ void sio_set_pad_state(uint16_t buttons) {
 }
 
 void sio_set_pad_state_slot(int slot, uint16_t buttons) {
-<<<<<<< Updated upstream
     if (slot >= 0 && slot < PSX_MAX_PLAYERS) pad_buttons[slot] = buttons;
-=======
-    if (slot >= 0 && slot < SIO_PAD_SLOTS) pad_buttons[slot] = buttons;
-}
-
-/* Enable SCPH-1070 multitap on both console ports (covers port-1 games and
- * BPE-style port-2 multitap). Netplay seats map to logical pads 0..N-1 and
- * are mirrored onto port-2's multitap (4..4+N-1) by the netplay layer. */
-void sio_set_multitap(int enabled) {
-    const uint8_t on = enabled ? 1u : 0u;
-    mt_on[0] = on;
-    mt_on[1] = on;
-    if (!on) {
-        mt_req_next[0] = mt_req_next[1] = 0;
-        mt_prev_long[0] = mt_prev_long[1] = 0;
-    }
-}
-
-int sio_get_multitap(void) {
-    return (mt_on[0] || mt_on[1]) ? 1 : 0;
->>>>>>> Stashed changes
 }
 
 /* Direct set of pad type + sticks. Used at boot/hotplug (refresh_player_devices)
@@ -916,11 +802,7 @@ int sio_get_multitap(void) {
  * coherently (see pad_type_req[] above). */
 void sio_set_pad_analog(int slot, int enabled,
                         uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry) {
-<<<<<<< Updated upstream
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-=======
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return;
->>>>>>> Stashed changes
     pad_analog[slot]   = enabled ? 1 : 0;
     pad_type_req[slot] = -1;   /* explicit set supersedes any pending request */
     pad_stick[slot][0] = lx; pad_stick[slot][1] = ly;
@@ -929,11 +811,7 @@ void sio_set_pad_analog(int slot, int enabled,
 
 /* Per-frame stick update (does not touch the reported pad type). */
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry) {
-<<<<<<< Updated upstream
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-=======
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return;
->>>>>>> Stashed changes
     pad_stick[slot][0] = lx; pad_stick[slot][1] = ly;
     pad_stick[slot][2] = rx; pad_stick[slot][3] = ry;
 }
@@ -942,11 +820,7 @@ void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry
  * deferred and applied atomically at the next idle, non-config boundary, so it
  * can never split a poll or a config handshake. A no-op if already that type. */
 void sio_request_pad_type(int slot, int analog) {
-<<<<<<< Updated upstream
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-=======
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return;
->>>>>>> Stashed changes
     int want = analog ? 1 : 0;
     pad_type_req[slot] = (pad_analog[slot] == want) ? -1 : (int8_t)want;
 }
@@ -956,7 +830,6 @@ uint16_t sio_get_pad_buttons(void) {
 }
 
 uint16_t sio_get_pad_buttons_slot(int slot) {
-<<<<<<< Updated upstream
     return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_buttons[slot] : 0xFFFF;
 }
 
@@ -967,27 +840,11 @@ int sio_get_pad_connected(int slot) {
 
 int sio_get_pad_analog(int slot) {
     return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_analog[slot] : 0;
-=======
-    return (slot >= 0 && slot < SIO_PAD_SLOTS) ? pad_buttons[slot] : 0xFFFF;
-}
-
-int sio_get_pad_connected(int slot) {
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) return 0;
-    return (pad_connected & (1 << slot)) ? 1 : 0;
-}
-
-int sio_get_pad_analog(int slot) {
-    return (slot >= 0 && slot < SIO_PAD_SLOTS) ? pad_analog[slot] : 0;
->>>>>>> Stashed changes
 }
 
 void sio_get_pad_sticks(int slot, uint8_t out[4]) {
     if (!out) return;
-<<<<<<< Updated upstream
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) {
-=======
-    if (slot < 0 || slot >= SIO_PAD_SLOTS) {
->>>>>>> Stashed changes
         out[0] = out[1] = out[2] = out[3] = 0x80;
         return;
     }
@@ -1051,68 +908,21 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
 volatile int g_pad_legacy_cfg = 0;
 int sio_get_legacy_cfg(void) { return g_pad_legacy_cfg; }
 void sio_set_legacy_cfg(int v) {
-    int s;
     g_pad_legacy_cfg = v ? 1 : 0;
     /* Clear any in-flight config latch so a mid-session toggle can't carry a
      * stale 0xF3/8-byte poll into the other mode's dispatch. */
-<<<<<<< Updated upstream
     for (int s = 0; s < PSX_MAX_PLAYERS; s++)
         pad_in_config[s] = 0;
-=======
-    for (s = 0; s < SIO_PAD_SLOTS; s++)
-        pad_in_config[s] = 0;
-}
-
-/* Pack one pad's 4 halfwords into an 8-byte multitap slot block (digital pads
- * and empty slots pad unused halfwords with FFFFh per psx-spx). */
-static void mt_pack_pad_block(uint8_t *dst, int pad) {
-    if (pad < 0 || pad >= SIO_PAD_SLOTS || !(pad_connected & (1 << pad))) {
-        memset(dst, 0xFF, 8);
-        return;
-    }
-    {
-        const uint16_t btn = pad_buttons[pad];
-        const uint8_t id = pad_in_config[pad] ? 0xF3u
-                           : (pad_analog[pad] ? 0x73u : 0x41u);
-        dst[0] = id;
-        dst[1] = 0x5A;
-        dst[2] = (uint8_t)(btn & 0xFF);
-        dst[3] = (uint8_t)(btn >> 8);
-        if (pad_analog[pad] || pad_in_config[pad]) {
-            dst[4] = pad_stick[pad][2];
-            dst[5] = pad_stick[pad][3];
-            dst[6] = pad_stick[pad][0];
-            dst[7] = pad_stick[pad][1];
-        } else {
-            dst[4] = dst[5] = dst[6] = dst[7] = 0xFF;
-        }
-    }
-}
-
-static void mt_build_long_response(int port) {
-    int t;
-    pad_response[0] = 0x80;
-    pad_response[1] = 0x5A;
-    for (t = 0; t < 4; t++)
-        mt_pack_pad_block(&pad_response[2 + t * 8], port * 4 + t);
-    pad_response_len = SIO_MT_RSP_MAX;
->>>>>>> Stashed changes
 }
 
 static void pad_process_byte(uint8_t tx_byte) {
-    const int port = selected_slot;
-    const int mt = (port >= 0 && port <= 1 && mt_on[port]) ? 1 : 0;
     /* Apply any pending host type change (the emulated analog button) ONLY while
      * the bus is idle and the pad is not in config mode. This guarantees the
      * reported type (0x41/0x73) is stable for the whole of any poll or config
      * handshake — a hybrid stick/d-pad flip can never desync the game's driver
      * mid-transaction. A request raised during config stays pending until exit. */
     if (pad_state == PAD_IDLE) {
-<<<<<<< Updated upstream
         for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
-=======
-        for (int s = 0; s < SIO_PAD_SLOTS; s++) {
->>>>>>> Stashed changes
             /* A game-LOCKED analog mode (0x44 ..03) ignores the physical analog
              * button — and our hybrid auto-flip IS that button — so a locked slot
              * drops the pending host request instead of applying it. */
@@ -1124,7 +934,6 @@ static void pad_process_byte(uint8_t tx_byte) {
     }
     switch (pad_state) {
     case PAD_IDLE:
-<<<<<<< Updated upstream
         /* Standard address 01h selects Slot A (or the standalone pad). With a
          * multitap, 02h..04h select pads B–D on that port (psx-spx method 2). */
         if (tx_byte == 0x01 && pad_port_has_device(selected_slot)) {
@@ -1136,34 +945,6 @@ static void pad_process_byte(uint8_t tx_byte) {
         } else if (selected_is_mtap_port() && tx_byte >= 0x02 && tx_byte <= 0x04) {
             pad_active_logical = mtap_slot_a_logical() + (int)(tx_byte - 1);
             pad_mtap_addr = tx_byte;
-=======
-        /* 0x01 = pad/multitap select; with multitap, 0x02..0x04 select taps B-D
-         * (method 2). Slot A (tap 0) must be present to arm method-1 REQ. */
-        if (tx_byte >= 0x01 && tx_byte <= 0x04) {
-            const int tap = (int)tx_byte - 1;
-            if (mt) {
-                active_pad = port * 4 + tap;
-                if (!(pad_connected & (1 << (port * 4)))) {
-                    /* Empty Slot A: transfer aborts after first byte. */
-                    sio_rx_data = 0xFF;
-                    break;
-                }
-                if (tap > 0 && !(pad_connected & (1 << active_pad))) {
-                    sio_rx_data = 0xFF;
-                    break;
-                }
-            } else {
-                if (tx_byte != 0x01) {
-                    sio_rx_data = 0xFF;
-                    break;
-                }
-                active_pad = port;
-                if (!(pad_connected & (1 << active_pad))) {
-                    sio_rx_data = 0xFF;
-                    break;
-                }
-            }
->>>>>>> Stashed changes
             pad_state = PAD_WAIT_ACCESS;
             sio_rx_data = 0xFF;
             sio_stat |= SIO_STAT_ACK;
@@ -1228,20 +1009,13 @@ static void pad_process_byte(uint8_t tx_byte) {
         /* Controller ID reported as the first response byte. Real hardware
          * reports the config ID (0xF3) ONLY while in config mode; otherwise the
          * normal mode ID (0x41 digital / 0x73 analog). */
-<<<<<<< Updated upstream
         const uint8_t cur_id = pad_in_config[lp] ? 0xF3
                                : (pad_analog[lp] ? 0x73 : 0x41);
-=======
-        {
-        const uint8_t cur_id = pad_in_config[active_pad] ? 0xF3
-                               : (pad_analog[active_pad] ? 0x73 : 0x41);
->>>>>>> Stashed changes
         /* A plain digital controller (SCPH-1080) answers ONLY the 0x42 poll; it
          * ignores every config-mode command (returns hi-z, no ACK). A driver
          * that probes with 0x43 to detect a DualShock then classifies it as
          * digital-only and just polls. Gate all config branches on this so a
          * digital-mode pad behaves like real hardware (see pad_supports_config). */
-<<<<<<< Updated upstream
         const int ds = pad_supports_config[lp];
         if (tx_byte == 0x42) {
             /* Read poll. Analog (or in-config) uses the 8-byte format with the
@@ -1257,42 +1031,8 @@ static void pad_process_byte(uint8_t tx_byte) {
                 pad_response[6] = pad_stick[lp][0]; /* left X */
                 pad_response[7] = pad_stick[lp][1]; /* left Y */
                 pad_response_len = 8;
-=======
-        const int ds = pad_supports_config[active_pad];
-        if (tx_byte == 0x42) {
-            /* Multitap method 1: previous REQ arms a LONG Slot A-D response. */
-            if (mt && mt_req_next[port]) {
-                mt_req_next[port] = 0;
-                if (mt_prev_long[port]) {
-                    /* REQ while already long → short "garbage" (psx-spx). */
-                    pad_response[0] = 0x80;
-                    pad_response[1] = 0x5A;
-                    pad_response[2] = pad_analog[port * 4] ? 0x73 : 0x41;
-                    pad_response_len = 3;
-                    mt_prev_long[port] = 0;
-                } else {
-                    mt_build_long_response(port);
-                    mt_prev_long[port] = 1;
-                }
->>>>>>> Stashed changes
             } else {
-                mt_prev_long[port] = 0;
-                /* Read poll. Analog (or in-config) uses the 8-byte format with the
-                 * four stick axes; a plain digital pad uses the 4-byte format. */
-                const uint16_t btn = pad_buttons[active_pad];
-                pad_response[0] = cur_id;
-                pad_response[1] = 0x5A;
-                pad_response[2] = (uint8_t)(btn & 0xFF);
-                pad_response[3] = (uint8_t)(btn >> 8);
-                if (pad_analog[active_pad] || pad_in_config[active_pad]) {
-                    pad_response[4] = pad_stick[active_pad][2]; /* right X */
-                    pad_response[5] = pad_stick[active_pad][3]; /* right Y */
-                    pad_response[6] = pad_stick[active_pad][0]; /* left X */
-                    pad_response[7] = pad_stick[active_pad][1]; /* left Y */
-                    pad_response_len = 8;
-                } else {
-                    pad_response_len = 4;
-                }
+                pad_response_len = 4;
             }
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
@@ -1301,11 +1041,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             /* Enter/exit config mode. The ID byte reflects the CURRENT mode; the
              * enter(0x01)/exit(0x00) flag is the second data byte, latched in
              * PAD_SEND_RESPONSE so it takes effect after this transaction. */
-<<<<<<< Updated upstream
             const uint16_t btn = pad_buttons[lp];
-=======
-            const uint16_t btn = pad_buttons[active_pad];
->>>>>>> Stashed changes
             pad_response[1] = 0x5A;
             if (g_pad_legacy_cfg) {
                 /* LEGACY (pre-98aa688): always config ID 0xF3, zero frame, no
@@ -1315,11 +1051,7 @@ static void pad_process_byte(uint8_t tx_byte) {
                 pad_response[4] = 0x00; pad_response[5] = 0x00;
                 pad_response[6] = 0x00; pad_response[7] = 0x00;
                 pad_response_len = 8;
-<<<<<<< Updated upstream
             } else if (!pad_in_config[lp]) {
-=======
-            } else if (!pad_in_config[active_pad]) {
->>>>>>> Stashed changes
                 /* ENTER attempt (normal mode): a real DualShock transmits the LIVE
                  * poll frame here — identical framing to 0x42 (dualshock.cpp:471-490)
                  * — and only latches config entry from the 0x01 data byte AFTERWARD.
@@ -1330,19 +1062,11 @@ static void pad_process_byte(uint8_t tx_byte) {
                 pad_response[0] = cur_id;
                 pad_response[2] = (uint8_t)(btn & 0xFF);
                 pad_response[3] = (uint8_t)(btn >> 8);
-<<<<<<< Updated upstream
                 if (pad_analog[lp]) {
                     pad_response[4] = pad_stick[lp][2]; /* right X */
                     pad_response[5] = pad_stick[lp][3]; /* right Y */
                     pad_response[6] = pad_stick[lp][0]; /* left X */
                     pad_response[7] = pad_stick[lp][1]; /* left Y */
-=======
-                if (pad_analog[active_pad]) {
-                    pad_response[4] = pad_stick[active_pad][2]; /* right X */
-                    pad_response[5] = pad_stick[active_pad][3]; /* right Y */
-                    pad_response[6] = pad_stick[active_pad][0]; /* left X */
-                    pad_response[7] = pad_stick[active_pad][1]; /* left Y */
->>>>>>> Stashed changes
                     pad_response_len = 8;
                 } else {
                     pad_response_len = 4;
@@ -1379,20 +1103,12 @@ static void pad_process_byte(uint8_t tx_byte) {
             /* 0x45 status byte must report the LIVE analog mode, not a fixed
              * analog-on (dualshock.cpp:743) — see fix below for the modern path. */
             if (tx_byte == 0x45)
-<<<<<<< Updated upstream
                 pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
-=======
-                pad_response[3] = pad_analog[active_pad] ? 0x01 : 0x00;
->>>>>>> Stashed changes
             pad_response_len = 8;
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
             sio_stat |= SIO_STAT_ACK;
-<<<<<<< Updated upstream
         } else if (ds && !g_pad_legacy_cfg && pad_in_config[lp] &&
-=======
-        } else if (ds && !g_pad_legacy_cfg && pad_in_config[active_pad] &&
->>>>>>> Stashed changes
                    (tx_byte == 0x44 || tx_byte == 0x45 || tx_byte == 0x46 ||
                     tx_byte == 0x47 || tx_byte == 0x4C || tx_byte == 0x4D ||
                     tx_byte == 0x4F)) {
@@ -1417,11 +1133,7 @@ static void pad_process_byte(uint8_t tx_byte) {
              * driver mis-parse the poll frame length → off-by-frame garbage buttons
              * (axis5_sio_controller.md D8). */
             if (tx_byte == 0x45)
-<<<<<<< Updated upstream
                 pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
-=======
-                pad_response[3] = pad_analog[active_pad] ? 0x01 : 0x00;
->>>>>>> Stashed changes
             pad_response_len = 8;
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
@@ -1439,61 +1151,36 @@ static void pad_process_byte(uint8_t tx_byte) {
         break;
 
     case PAD_SEND_RESPONSE:
-<<<<<<< Updated upstream
         /* TAP/REQ (third command byte, paired with idhi/5Ah at idx==1): does not
          * change *this* response; it arms the next 0x42 on the multitap port. */
         if (selected_is_mtap_port() && pad_current_cmd == 0x42 &&
             pad_mtap_addr == 0x01 && pad_response_idx == 1)
             mtap_req_this = (tx_byte == 0x01) ? 1 : 0;
-=======
-        /* Multitap method 1: third TX byte (paired with response idx 2) is REQ.
-         * REQ=1 arms a LONG Slot A-D response on the *next* poll (psx-spx). */
-        if (mt && pad_current_cmd == 0x42 && pad_response_idx == 2 &&
-            active_pad == port * 4)
-            mt_req_next[port] = (tx_byte == 0x01) ? 1u : 0u;
->>>>>>> Stashed changes
         /* For 0x43 (enter/exit config), the data byte selecting enter(0x01)/
          * exit(0x00) arrives paired with response index 2. Latch the new config
          * state; it takes effect from the next transaction (the ID byte already
          * reported the mode that was current at the start of this one). */
-<<<<<<< Updated upstream
         if (!g_pad_legacy_cfg && pad_current_cmd == 0x43 && pad_response_idx == 2 &&
             pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS)
             pad_in_config[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
-=======
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x43 && pad_response_idx == 2)
-            pad_in_config[active_pad] = (tx_byte == 0x01) ? 1 : 0;
->>>>>>> Stashed changes
         /* 0x44 set-mode (game owns the analog/digital mode): the mode byte rides
          * in the same slot as 0x43's enter/exit flag (data position 3). 0x01 =>
          * analog (0x73), 0x00 => digital (0x41). Honouring it makes the pad
          * coherent — the type the game just selected is the type it then polls,
          * instead of the host hybrid silently winning. Drop any stale host
          * request so it can't immediately undo the game's choice. */
-<<<<<<< Updated upstream
         if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 2 &&
             pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS) {
             pad_analog[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
             pad_type_req[pad_active_logical] = -1;
-=======
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 2) {
-            pad_analog[active_pad] = (tx_byte == 0x01) ? 1 : 0;
-            pad_type_req[active_pad] = -1;
->>>>>>> Stashed changes
         }
         /* 0x44 lock byte (data position 4, the byte after the mode byte): 0x03 =>
          * lock analog mode, 0x02 => unlock (dualshock.cpp:714-725). A locked slot
          * ignores the host hybrid auto-flip (see analog_mode_locked). */
-<<<<<<< Updated upstream
         if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 3 &&
             pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS) {
             if      (tx_byte == 0x03) analog_mode_locked[pad_active_logical] = 1;
             else if (tx_byte == 0x02) analog_mode_locked[pad_active_logical] = 0;
-=======
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 3) {
-            if      (tx_byte == 0x03) analog_mode_locked[active_pad] = 1;
-            else if (tx_byte == 0x02) analog_mode_locked[active_pad] = 0;
->>>>>>> Stashed changes
         }
         if (pad_response_idx < pad_response_len) {
             sio_rx_data = pad_response[pad_response_idx++];
@@ -1787,10 +1474,11 @@ static void sio_process_byte(uint8_t tx_byte) {
     if (active_device == DEV_NONE) {
         selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
 
-        if (tx_byte >= 0x01 && tx_byte <= 0x04) {
-            /* Pad / multitap select (0x01 = Slot A or single pad; 0x02..0x04 =
-             * multitap taps B-D). Save any in-flight card state back to its
-             * slot so it survives pad polling. */
+        if (tx_byte == 0x01) {
+            /* Pad select.  Save any in-flight card state back to its slot
+             * so it survives pad polling.  Don't touch mc_state — we need
+             * it per-slot, and mc_load_slot will restore it when the card
+             * slot is selected again. */
             if (mc_state != MC_IDLE) {
                 mc_save_slot(mc_slot);
                 mc_state = MC_IDLE; /* working vars idle while pad talks */
@@ -1868,7 +1556,7 @@ static void sio_process_byte(uint8_t tx_byte) {
             } else {
                 active_device = DEV_NONE;
                 selected_slot = (sio_ctrl & SIO_CTRL_SLOT) ? 1 : 0;
-                if (tx_byte >= 0x01 && tx_byte <= 0x04) {
+                if (tx_byte == 0x01) {
                     active_device = DEV_PAD;
                     pad_process_byte(tx_byte);
                 } else {

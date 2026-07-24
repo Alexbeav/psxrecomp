@@ -416,10 +416,7 @@ static int endpoint_port_is_zero(const char *ep)
     return (int)strtoul(colon + 1, NULL, 10) == 0;
 }
 
-<<<<<<< Updated upstream
 /* Prefer a usable host:port among candidates (skip empty / :0). */
-=======
->>>>>>> Stashed changes
 static void copy_first_usable_endpoint(char *dst, size_t dst_len, const char *a,
                                        const char *b, const char *c)
 {
@@ -443,10 +440,7 @@ static int using_server_input_relay(const PsxLobbyJoinInfo *j)
 {
     if (g_lc.match_caps.valid && g_lc.match_caps.force_input_relay)
         return 1;
-<<<<<<< Updated upstream
     /* Server rewrote both endpoints to the same relay advertise address. */
-=======
->>>>>>> Stashed changes
     if (j && j->host_endpoint[0] && j->guest_endpoint[0] &&
         !endpoint_port_is_zero(j->host_endpoint) &&
         !endpoint_port_is_zero(j->guest_endpoint) &&
@@ -465,18 +459,14 @@ static void fill_peer_bind_from_join(void)
     memset(j->bind_hostport, 0, sizeof(j->bind_hostport));
     memset(j->peer_hostport, 0, sizeof(j->peer_hostport));
     if (force_relay) {
-<<<<<<< Updated upstream
         /* Everyone dials the lobby-server UDP relay — ephemeral local bind
          * (same as LAN guests) so same-PC multi-instance doesn't collide. */
-=======
->>>>>>> Stashed changes
         strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
         copy_first_usable_endpoint(j->peer_hostport, sizeof(j->peer_hostport),
                                    j->host_endpoint, j->guest_endpoint, NULL);
     } else if (g_lc.is_host) {
         strncpy(j->bind_hostport, g_lc.my_bind, sizeof(j->bind_hostport) - 1);
         if (!host_hub) {
-<<<<<<< Updated upstream
             /* 2P P2P: dial guest when they advertised a fixed port. Online
              * guests often join with :0 — leave peer empty (accept-first). */
             if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
@@ -487,12 +477,6 @@ static void fill_peer_bind_from_join(void)
         /* Guests dialing 3+ host hub: ephemeral local UDP (join only probes
          * 7778+ and does not hold the socket). 2P P2P keeps the advertised
          * fixed guest_bind so the host can dial. */
-=======
-            if (j->guest_endpoint[0] && !endpoint_port_is_zero(j->guest_endpoint))
-                strncpy(j->peer_hostport, j->guest_endpoint, sizeof(j->peer_hostport) - 1);
-        }
-    } else {
->>>>>>> Stashed changes
         if (seats >= 3) {
             strncpy(j->bind_hostport, "0.0.0.0:0", sizeof(j->bind_hostport) - 1);
         } else {
@@ -805,12 +789,9 @@ static void handle_server_json(const char *json)
         g_lc.join.max_slots = json_get_int(json, "max_slots", g_lc.join.max_slots);
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", (int)g_lc.join.session_id);
         ingest_match_caps_from_json(json);
-<<<<<<< Updated upstream
         /* Prefer explicit relay_endpoint when the server opened input relay.
          * Apply after caps ingest: omitted force_input_relay must not leave
          * hosts on the hub path while guests dial the relay. */
-=======
->>>>>>> Stashed changes
         if (relay_endpoint[0] && !endpoint_port_is_zero(relay_endpoint)) {
             strncpy(g_lc.join.host_endpoint, relay_endpoint,
                     sizeof(g_lc.join.host_endpoint) - 1);

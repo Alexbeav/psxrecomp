@@ -21,14 +21,8 @@
 #include "recomp_net/recomp_net.h"
 #endif
 
-<<<<<<< Updated upstream
 #ifndef PSX_MAX_PLAYERS
 #define PSX_MAX_PLAYERS 2
-=======
-/* Align with RNET_MAX_SLOTS / SCPH-1070 (2 ports × 4 taps). */
-#ifndef PSX_MAX_PLAYERS
-#define PSX_MAX_PLAYERS 8
->>>>>>> Stashed changes
 #endif
 
 /* Session pad count mirrored for release_pads (available without recomp-net). */
@@ -125,11 +119,6 @@ static void force_session_pads_connected(int slot_count)
     for (i = 0; i < slot_count; ++i) {
         sio_connect_pad(i);
         sio_set_pad_config_capable(i, 1);
-        /* Mirror onto port-2 multitap taps (BPE and other port-2 MT titles). */
-        if (slot_count >= 3 && i < 4) {
-            sio_connect_pad(4 + i);
-            sio_set_pad_config_capable(4 + i, 1);
-        }
     }
 }
 
@@ -182,9 +171,6 @@ int  psx_netplay_in_load_barrier(void) { return 0; }
 int  psx_netplay_poll_admit(void) { return 1; }
 void psx_netplay_finish_frame(void) {}
 void psx_netplay_wait_recv(int timeout_ms) { (void)timeout_ms; }
-int  psx_netplay_remote_lead(void) { return 0; }
-int  psx_netplay_input_delay(void) { return 2; }
-int  psx_netplay_catchup_budget(void) { return 0; }
 
 #else /* PSX_HAS_RECOMP_NET */
 
@@ -818,26 +804,14 @@ static void decode_pad(const RNetInputSample *in, PsxNetPad *pad)
     psx_netplay_normalize_pad(pad);
 }
 
-static void apply_pad_slot_one(int slot, const PsxNetPad *pad)
+static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
-<<<<<<< Updated upstream
     if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
-=======
->>>>>>> Stashed changes
     sio_set_pad_connected(slot, 1);
     sio_set_pad_config_capable(slot, 1);
     sio_set_pad_state_slot(slot, pad->buttons);
     sio_set_pad_sticks(slot, pad->lx, pad->ly, pad->rx, pad->ry);
     sio_request_pad_type(slot, pad->analog ? 1 : 0);
-}
-
-static void apply_pad_slot(int slot, const PsxNetPad *pad)
-{
-    if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
-    apply_pad_slot_one(slot, pad);
-    /* Port-2 multitap mirror for titles that require MT on console port 2. */
-    if (g_np.slot_count >= 3 && slot < 4)
-        apply_pad_slot_one(4 + slot, pad);
 }
 
 static void host_sample_local(rnet_u32 tick, RNetInputSample *out, void *ctx)
@@ -1036,20 +1010,11 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
 
     g_np.session = rnet_session_create(&rcfg, &host);
     if (!g_np.session) return -2;
-<<<<<<< Updated upstream
     /* Host-as-relay: slot 0 with 3+ seats and no dial peer (guests dial host). */
     {
         const int peer_empty =
             !cfg->peer_hostport || !cfg->peer_hostport[0];
         const int use_hub = (local == 0 && slots >= 3 && peer_empty);
-=======
-    /* Host-as-relay: lobby owner gets an empty peer and fans out UDP. Transport
-     * hub role is independent of sim local_slot (seats may be reordered). */
-    {
-        const int peer_empty =
-            !cfg->peer_hostport || !cfg->peer_hostport[0];
-        const int use_hub = (slots >= 3 && peer_empty);
->>>>>>> Stashed changes
         const int rc = use_hub
             ? rnet_session_start_lan_hub(g_np.session, cfg->bind_hostport)
             : rnet_session_start_lan(g_np.session, cfg->bind_hostport,
@@ -1066,14 +1031,10 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     g_np_slot_count = g_np.slot_count;
     g_np.local_slot = (int)rcfg.local_slot;
     g_np.input_player = in_player;
-<<<<<<< Updated upstream
     if (g_np.slot_count >= 3)
         sio_set_multitap(1);
     else
         sio_set_multitap(0);
-=======
-    force_session_pads_connected(g_np.slot_count);
->>>>>>> Stashed changes
     g_np.staged_valid = 0;
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
@@ -1253,35 +1214,6 @@ void psx_netplay_wait_recv(int timeout_ms)
 {
     if (!psx_netplay_active()) return;
     (void)rnet_session_wait_recv(g_np.session, timeout_ms);
-}
-
-int psx_netplay_remote_lead(void)
-{
-    RNetSessionStats st;
-    if (!psx_netplay_active()) return 0;
-    memset(&st, 0, sizeof(st));
-    rnet_session_get_stats(g_np.session, &st);
-    return st.remote_lead;
-}
-
-int psx_netplay_input_delay(void)
-{
-    int d;
-    if (!psx_netplay_active()) return 2;
-    d = (int)rnet_session_committed_delay(g_np.session);
-    return d > 0 ? d : 2;
-}
-
-int psx_netplay_catchup_budget(void)
-{
-    int lead, delay, budget;
-    if (!psx_netplay_active()) return 0;
-    lead = psx_netplay_remote_lead();
-    delay = psx_netplay_input_delay();
-    budget = lead - delay;
-    if (budget < 0) budget = 0;
-    if (budget > 8) budget = 8;
-    return budget;
 }
 
 #endif /* PSX_HAS_RECOMP_NET */
