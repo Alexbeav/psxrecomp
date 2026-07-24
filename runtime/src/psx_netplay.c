@@ -1010,8 +1010,11 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
 
     g_np.session = rnet_session_create(&rcfg, &host);
     if (!g_np.session) return -2;
-    /* Host-as-relay: slot 0 with 3+ seats and no dial peer (guests dial host). */
+    /* Host-as-relay: slot 0 with 3+ seats and no dial peer (guests dial host).
+     * MotK is 2P (PSX_MAX_PLAYERS=2); skip the hub API so we still build
+     * against older recomp-net trees that only expose start_lan. */
     {
+#if PSX_MAX_PLAYERS >= 3
         const int peer_empty =
             !cfg->peer_hostport || !cfg->peer_hostport[0];
         const int use_hub = (local == 0 && slots >= 3 && peer_empty);
@@ -1019,6 +1022,10 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
             ? rnet_session_start_lan_hub(g_np.session, cfg->bind_hostport)
             : rnet_session_start_lan(g_np.session, cfg->bind_hostport,
                                     cfg->peer_hostport);
+#else
+        const int rc = rnet_session_start_lan(g_np.session, cfg->bind_hostport,
+                                              cfg->peer_hostport);
+#endif
         if (rc != 0) {
             rnet_session_destroy(g_np.session);
             g_np.session = NULL;
