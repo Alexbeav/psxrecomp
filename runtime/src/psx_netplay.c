@@ -118,7 +118,8 @@ static void force_session_pads_connected(int slot_count)
         sio_set_multitap(0);
     for (i = 0; i < slot_count; ++i) {
         sio_connect_pad(i);
-        sio_set_pad_config_capable(i, 1);
+        /* Multitap taps are plain digital (sio clamps); lone port pad may be DS. */
+        sio_set_pad_config_capable(i, sio_pad_on_multitap(i) ? 0 : 1);
     }
 }
 
@@ -132,7 +133,8 @@ void psx_netplay_release_pads(void)
     for (i = 0; i < n; ++i) {
         sio_set_pad_state_slot(i, 0xFFFFu);
         sio_set_pad_sticks(i, 0x80, 0x80, 0x80, 0x80);
-        sio_request_pad_type(i, 1);
+        /* Tap slots stay digital; standalone port may request DualShock. */
+        sio_request_pad_type(i, sio_pad_on_multitap(i) ? 0 : 1);
     }
 }
 
@@ -807,11 +809,15 @@ static void decode_pad(const RNetInputSample *in, PsxNetPad *pad)
 static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
     if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
+    const int on_tap = sio_pad_on_multitap(slot);
     sio_set_pad_connected(slot, 1);
-    sio_set_pad_config_capable(slot, 1);
+    sio_set_pad_config_capable(slot, on_tap ? 0 : 1);
     sio_set_pad_state_slot(slot, pad->buttons);
-    sio_set_pad_sticks(slot, pad->lx, pad->ly, pad->rx, pad->ry);
-    sio_request_pad_type(slot, pad->analog ? 1 : 0);
+    if (on_tap)
+        sio_set_pad_sticks(slot, 0x80, 0x80, 0x80, 0x80);
+    else
+        sio_set_pad_sticks(slot, pad->lx, pad->ly, pad->rx, pad->ry);
+    sio_request_pad_type(slot, (!on_tap && pad->analog) ? 1 : 0);
 }
 
 static void host_sample_local(rnet_u32 tick, RNetInputSample *out, void *ctx)
@@ -1090,9 +1096,6 @@ int psx_netplay_request_save(int slot)
 {
     if (!psx_netplay_active() || !rnet_session_is_running(g_np.session))
         return 0;
-    printf("psxrecomp: netplay savestates are disabled\n");
-    fflush(stdout);
-    return 1;
     if (g_np.local_slot != 0)
         return 1; /* guest: host-only; ignore */
     if (np_xfer_busy() || !g_np.mc_sync_done)
@@ -1103,7 +1106,9 @@ int psx_netplay_request_save(int slot)
     if (!savestate_request_save_protocol(slot))
         return 1;
     /* Coord probe (size=0) does not stall admit — both peers must keep
-     * running until savestate_poll writes the .pst, then hash-probe stalls. */
+     * running until savestate_poll writes the .pst, then hash-probe stalls.
+     * STATE_* rides the same UDP/relay path as inputs (LAN hub / server
+     * input relay fan-out). */
     if (rnet_session_state_probe(g_np.session, RNET_STATE_OP_SAVE, (rnet_u8)slot, 0, 0) != 0)
         return 1;
     g_np.xfer = NP_XFER_SAVE_COORD;
@@ -1118,9 +1123,6 @@ int psx_netplay_request_load(int slot)
     uint32_t size = 0, crc = 0;
     if (!psx_netplay_active() || !rnet_session_is_running(g_np.session))
         return 0;
-    printf("psxrecomp: netplay savestates are disabled\n");
-    fflush(stdout);
-    return 1;
     if (g_np.local_slot != 0)
         return 1;
     if (np_xfer_busy() || !g_np.mc_sync_done)
