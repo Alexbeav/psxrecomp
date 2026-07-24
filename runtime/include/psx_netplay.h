@@ -109,15 +109,39 @@ int  psx_netplay_input_desync(uint32_t *tick, uint32_t *local_hash, uint32_t *re
 int  psx_netplay_peer_disconnected(uint32_t timeout_ms);
 
 /*
+ * Ingress / lobby / INPUT retransmit without try_admit. Used while the
+ * delay-sync starvation latch holds for remote runway refill.
+ */
+void psx_netplay_pump(void);
+
+/*
  * Pump + try_admit for the current sim tick. On success, publish has written
  * SIO and a finish_frame() is owed after the guest completes that tick.
  * Returns 1 if admitted, 0 if caller must keep polling (linking / wait).
  * Does NOT advance the session clock.
+ *
+ * After sustained admit misses, latches starvation (pump-only) until
+ * remote_lead >= D for a few frames, then arms a recovery catch-up boost.
+ * Env: PSX_NET_STARVATION_ENTER_FRAMES, EXIT_FRAMES, EXIT_HR_LEAD.
  */
 int  psx_netplay_poll_admit(void);
 
 /* Call after the guest finishes the admitted tick (vblank boundary). */
 void psx_netplay_finish_frame(void);
+
+/* highest_remote_wire - sim_tick (0 if inactive; can be negative). */
+int  psx_netplay_remote_lead(void);
+/* Session input delay frames (default 2 when inactive). */
+int  psx_netplay_input_delay(void);
+
+/*
+ * Extra headroom for post-starvation / behind-peer catch-up
+ * (min(16, max(0, remote_lead - D, recovery_burst))).
+ * Host should skip wall-clock pace while this is > 0, then call
+ * psx_netplay_catchup_consume_frame() once per skipped pace.
+ */
+int  psx_netplay_catchup_budget(void);
+void psx_netplay_catchup_consume_frame(void);
 
 /* Park the admit barrier until a peer datagram may be ready (or timeout). */
 void psx_netplay_wait_recv(int timeout_ms);

@@ -170,8 +170,13 @@ int  psx_netplay_is_host(void) { return 0; }
 int  psx_netplay_request_save(int slot) { (void)slot; return 0; }
 int  psx_netplay_request_load(int slot) { (void)slot; return 0; }
 int  psx_netplay_in_load_barrier(void) { return 0; }
+void psx_netplay_pump(void) {}
 int  psx_netplay_poll_admit(void) { return 1; }
 void psx_netplay_finish_frame(void) {}
+int  psx_netplay_remote_lead(void) { return 0; }
+int  psx_netplay_input_delay(void) { return 2; }
+int  psx_netplay_catchup_budget(void) { return 0; }
+void psx_netplay_catchup_consume_frame(void) {}
 void psx_netplay_wait_recv(int timeout_ms) { (void)timeout_ms; }
 
 #else /* PSX_HAS_RECOMP_NET */
@@ -1076,6 +1081,56 @@ void psx_netplay_bind_guest_saves(void)
     np_enter_guest_sandbox();
 }
 
+/* Delay-sync starvation hold (lockstep-safe; mirrors snes_host_barrier_admit). */
+#define PSX_STARVATION_ENTER_DEFAULT 4
+#define PSX_STARVATION_EXIT_DEFAULT 3
+#define PSX_STARVATION_EXIT_HR_LEAD_DEFAULT 0
+#define PSX_STARVATION_GRACE_TICKS 60
+#define PSX_STARVATION_RECOVERY_BURST 16
+#define PSX_CATCHUP_CAP 16
+
+static struct {
+    int latched;
+    int enter_run;
+    int exit_run;
+    int recovery_amount;
+    int latch_logged;
+    int just_cleared;
+} g_starv;
+
+/* Defined below poll_admit; used by the starvation runway check. */
+int psx_netplay_remote_lead(void);
+int psx_netplay_input_delay(void);
+
+static int np_starv_env_int(const char *name, int def)
+{
+    const char *v = getenv(name);
+    long n;
+    char *end;
+    if (!v || !v[0])
+        return def;
+    n = strtol(v, &end, 10);
+    if (end == v || *end != '\0' || n < 0 || n > 64)
+        return def;
+    return (int)n;
+}
+
+static void np_starv_reset(void)
+{
+    memset(&g_starv, 0, sizeof(g_starv));
+}
+
+static int np_starv_runway_ok(void)
+{
+    int lead = psx_netplay_remote_lead();
+    int delay = psx_netplay_input_delay();
+    int hr_lead = np_starv_env_int("PSX_NET_STARVATION_EXIT_HR_LEAD",
+                                   PSX_STARVATION_EXIT_HR_LEAD_DEFAULT);
+    if (delay < 0)
+        delay = 0;
+    return lead >= delay + hr_lead;
+}
+
 void psx_netplay_shutdown(void)
 {
     if (g_np.session) {
@@ -1085,6 +1140,7 @@ void psx_netplay_shutdown(void)
     }
     np_leave_guest_sandbox();
     memset(&g_np, 0, sizeof(g_np));
+    np_starv_reset();
 }
 
 int psx_netplay_is_host(void)
@@ -1148,23 +1204,51 @@ int psx_netplay_in_load_barrier(void)
     return (g_np.xfer == NP_XFER_LOAD_APPLYING || g_np.xfer == NP_XFER_LOAD_READY) ? 1 : 0;
 }
 
-int psx_netplay_poll_admit(void)
+static void np_pump_session(void)
 {
-    rnet_u32 sim;
-    if (!psx_netplay_active()) return 1;
-
     rnet_session_pump(g_np.session);
     np_guest_handle_probe();
     np_apply_ready_state();
     np_drive_load_barrier();
     np_host_drive_xfer();
+    if (rnet_session_is_running(g_np.session))
+        np_maybe_start_mc_sync();
+}
+
+void psx_netplay_pump(void)
+{
+    if (!psx_netplay_active())
+        return;
+    np_pump_session();
+}
+
+static int np_try_admit_gameplay(void)
+{
+    rnet_u32 sim = rnet_session_sim_tick(g_np.session);
+    if (rnet_session_try_admit(g_np.session, sim)) {
+        g_np.needs_advance = 1;
+        return 1;
+    }
+    force_session_pads_connected(g_np.slot_count);
+    return 0;
+}
+
+int psx_netplay_poll_admit(void)
+{
+    rnet_u32 sim;
+    int enter_need;
+    int exit_need;
+
+    if (!psx_netplay_active()) return 1;
+
+    np_pump_session();
 
     if (!rnet_session_is_running(g_np.session)) {
         psx_netplay_release_pads();
+        np_starv_reset();
         return 0;
     }
 
-    np_maybe_start_mc_sync();
     /* Both peers stall until initial memcard hash-agree / transfer finishes. */
     if (!g_np.mc_sync_done)
         return 0;
@@ -1202,11 +1286,66 @@ int psx_netplay_poll_admit(void)
     if (g_np.needs_advance) return 1;
 
     sim = rnet_session_sim_tick(g_np.session);
-    if (rnet_session_try_admit(g_np.session, sim)) {
-        g_np.needs_advance = 1;
+    enter_need = np_starv_env_int("PSX_NET_STARVATION_ENTER_FRAMES",
+                                  PSX_STARVATION_ENTER_DEFAULT);
+    exit_need = np_starv_env_int("PSX_NET_STARVATION_EXIT_FRAMES",
+                                 PSX_STARVATION_EXIT_DEFAULT);
+
+    /* Startup grace: do not latch before the delay rings warm up. */
+    if (sim < (rnet_u32)PSX_STARVATION_GRACE_TICKS) {
+        g_starv.enter_run = 0;
+        g_starv.exit_run = 0;
+        g_starv.latched = 0;
+        g_starv.just_cleared = 0;
+        return np_try_admit_gameplay();
+    }
+
+    if (g_starv.latched) {
+        /* Pump already ran; hold try_admit until remote tip refills. */
+        if (np_starv_runway_ok()) {
+            g_starv.exit_run++;
+            if (g_starv.exit_run >= exit_need) {
+                g_starv.latched = 0;
+                g_starv.exit_run = 0;
+                g_starv.latch_logged = 0;
+                g_starv.just_cleared = 1;
+            } else {
+                return 0;
+            }
+        } else {
+            g_starv.exit_run = 0;
+            return 0;
+        }
+    }
+
+    if (np_try_admit_gameplay()) {
+        g_starv.enter_run = 0;
+        if (g_starv.just_cleared) {
+            g_starv.just_cleared = 0;
+            g_starv.recovery_amount = PSX_STARVATION_RECOVERY_BURST;
+            fprintf(stderr,
+                    "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
+                    "D=%d — recovery burst %d\n",
+                    (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                    psx_netplay_input_delay(), PSX_STARVATION_RECOVERY_BURST);
+        }
         return 1;
     }
-    force_session_pads_connected(g_np.slot_count);
+
+    g_starv.just_cleared = 0;
+    g_starv.enter_run++;
+    if (g_starv.enter_run >= enter_need) {
+        g_starv.latched = 1;
+        g_starv.enter_run = 0;
+        if (!g_starv.latch_logged) {
+            fprintf(stderr,
+                    "psxrecomp: delay_sync_starvation latched sim=%u lead=%d "
+                    "D=%d (enter=%d)\n",
+                    (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                    psx_netplay_input_delay(), enter_need);
+            g_starv.latch_logged = 1;
+        }
+    }
     return 0;
 }
 
@@ -1217,6 +1356,56 @@ void psx_netplay_finish_frame(void)
     rnet_session_advance(g_np.session);
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
+}
+
+int psx_netplay_remote_lead(void)
+{
+    RNetSessionStats st;
+    if (!psx_netplay_active())
+        return 0;
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(g_np.session, &st);
+    return st.remote_lead;
+}
+
+int psx_netplay_input_delay(void)
+{
+    RNetSessionStats st;
+    if (!psx_netplay_active())
+        return 2;
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(g_np.session, &st);
+    return st.delay > 0 ? (int)st.delay : 2;
+}
+
+int psx_netplay_catchup_budget(void)
+{
+    int lead;
+    int delay;
+    int extra;
+    int budget;
+
+    if (!psx_netplay_active())
+        return 0;
+    lead = psx_netplay_remote_lead();
+    delay = psx_netplay_input_delay();
+    if (delay < 0)
+        delay = 0;
+    extra = lead - delay;
+    if (extra < 0)
+        extra = 0;
+    budget = extra;
+    if (g_starv.recovery_amount > budget)
+        budget = g_starv.recovery_amount;
+    if (budget > PSX_CATCHUP_CAP)
+        budget = PSX_CATCHUP_CAP;
+    return budget;
+}
+
+void psx_netplay_catchup_consume_frame(void)
+{
+    if (g_starv.recovery_amount > 0)
+        g_starv.recovery_amount--;
 }
 
 void psx_netplay_wait_recv(int timeout_ms)

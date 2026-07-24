@@ -3309,6 +3309,12 @@ static void sdl_vblank_present(void) {
             if (psx_return_to_lobby_requested()) return;
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
+            /* Post-starvation / behind-peer catch-up: skip wall pace so admits
+             * can burn down remote tip (mirrors snes_host_catchup_budget). */
+            if (psx_netplay_catchup_budget() > 0) {
+                psx_netplay_catchup_consume_frame();
+                return;
+            }
             uint64_t perf_start = runtime_perf_section_begin();
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
             runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
@@ -5865,7 +5871,7 @@ namespace {
                         local_slot = g_lnch_hosting_lan ? state.host_slot : 1;
                     g_lnch_pending_direct_launch.local_slot = local_slot;
                 }
-                /* -1 => resolve at netplay start (prefer local_slot's device). */
+                /* -1 => resolve at netplay start (prefer NETPLAY/P1 card). */
                 g_lnch_pending_direct_launch.input_player = -1;
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
@@ -5944,7 +5950,7 @@ namespace {
         if (!caps || !caps->valid) return 0;
         out->enabled = 1;
         out->local_slot = ji->local_slot;
-        /* -1 => resolve at netplay start (prefer local_slot's device). */
+        /* -1 => resolve at netplay start (prefer NETPLAY/P1 card). */
         out->input_player = -1;
         std::snprintf(out->bind_hostport, sizeof(out->bind_hostport), "%s", ji->bind_hostport);
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
