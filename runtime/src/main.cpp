@@ -6844,7 +6844,7 @@ std::string player_device[PSX_MAX_PLAYERS];
             s_rui_keybinds_path = (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
-                                     + " \xE2\x80\x94 Launcher";
+                                     + " - Launcher";
 
             RecompLauncherCSettings ls{};
             ls.output_method  = 2;  /* OpenGL */
@@ -8071,7 +8071,7 @@ soft_return_lobby:
     {
         std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
         std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
-                                 + " \xE2\x80\x94 Launcher";
+                                 + " - Launcher";
         std::string rui_initial_disc = disc_path_str;
 
         RecompLauncherCSettings ls{};
