@@ -103,6 +103,7 @@ void sio_set_pad_analog(int slot, int enabled,
 void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
 void sio_request_pad_type(int slot, int analog);
 
+<<<<<<< Updated upstream
 /* Connect / disconnect a logical pad (0 .. PSX_MAX_PLAYERS-1). By default no
  * pads are connected during initial BIOS boot. */
 void sio_connect_pad(int slot);
@@ -116,6 +117,27 @@ void sio_set_pad_connected(int slot, int connected);
  * answers them. Set from the per-player pad mode (DIGITAL => 0, ANALOG/HYBRID
  * => 1) at boot/hotplug. Default is 1 (config-capable) so existing
  * analog/hybrid behaviour is unchanged. */
+=======
+/* Connect / disconnect a pad on a logical slot (0..7). Without multitap,
+ * 0/1 are console ports 1/2. With SCPH-1070 multitap, port N exposes pads
+ * N*4 .. N*4+3. By default no pads are connected during initial BIOS boot. */
+void sio_connect_pad(int slot);
+void sio_set_pad_connected(int slot, int connected);
+
+/* Enable/disable SCPH-1070 multitap on both console ports (method-1 LONG
+ * Slot A-D polls + method-2 tap select 0x01..0x04). */
+void sio_set_multitap(int enabled);
+int  sio_get_multitap(void);
+
+/* Declare whether the pad on a slot is a config-capable DualShock (1) or a
+ * plain digital controller (0). A real digital controller (SCPH-1080, poll id
+ * 0x41) does NOT answer the config-mode commands (0x43/0x44/0x45/0x46/0x47/
+ * 0x4C/0x4D/0x4F) — it returns hi-z / no ACK, so a game's pad driver classifies
+ * it as digital-only and just polls with 0x42. A DualShock answers them. Set
+ * from the per-player pad mode (DIGITAL => 0, ANALOG/HYBRID => 1) at boot/
+ * hotplug. Default is 1 (config-capable) so existing analog/hybrid behaviour is
+ * unchanged. */
+>>>>>>> Stashed changes
 void sio_set_pad_config_capable(int slot, int capable);
 
 /* Return current pad button state (for debug server). _slot targets a logical

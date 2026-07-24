@@ -25,7 +25,12 @@ extern "C" {
  *     (prefer g_players[local_slot] if assigned, else player 0).
  *   - While active, publish / release_pads is the sole SIO writer.
  *   - Every session slot stays plugged for in-game N-player detect.
+<<<<<<< Updated upstream
  *   - slot_count >= 3 enables SCPH-1070 multitap (sio_set_multitap).
+=======
+ *   - slot_count >= 3 enables SCPH-1070 multitap on both console ports
+ *     (pads mirrored onto port-2 taps for BPE-style titles).
+>>>>>>> Stashed changes
  *
  * Pad blob (8 bytes):
  *   [0..1] buttons LE u16 (PSX active-low)
@@ -121,6 +126,13 @@ void psx_netplay_finish_frame(void);
 
 /* Park the admit barrier until a peer datagram may be ready (or timeout). */
 void psx_netplay_wait_recv(int timeout_ms);
+
+/* highest_remote_wire - sim_tick (0 if inactive; can be negative). */
+int  psx_netplay_remote_lead(void);
+/* Session input delay frames (default 2 when inactive). */
+int  psx_netplay_input_delay(void);
+/* Extra wall-frame catch-up budget: min(8, max(0, remote_lead - delay)). */
+int  psx_netplay_catchup_budget(void);
 
 /* Normalize sticks (deadzone → center) for stabler cross-device blobs. */
 void psx_netplay_normalize_pad(PsxNetPad *pad);

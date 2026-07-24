@@ -40,6 +40,10 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #endif
 #include "psx_netplay.h"
 #include "psx_lobby_client.h"
+
+#ifndef PSX_MAX_PLAYERS
+#define PSX_MAX_PLAYERS 8
+#endif
 #include "spu.h"
 #include "audio_trace.h"
 #include "spu_shadow.h"
@@ -1122,6 +1126,134 @@ static void netplay_host_present_uncap(void) {
     if (g_vk_active) vk_renderer_set_present_mode(0);
 #endif
     g_netplay_vsync_forced_off = 1;
+}
+
+/* Last successful present — re-swapped while admit is starved (no guest advance). */
+enum {
+    NP_HELD_NONE = 0,
+    NP_HELD_SDL,
+    NP_HELD_GL_CPU,
+    NP_HELD_GL_VRAM,
+    NP_HELD_GL_WIDE,
+    NP_HELD_VK_CPU,
+    NP_HELD_VK_VRAM,
+    NP_HELD_VK_WIDE
+};
+static struct {
+    int mode;
+    int src_w, src_h;
+    int linear, pin43;
+    int disp_x, disp_y, disp_w, disp_h;
+} s_np_held;
+static uint32_t s_np_held_last_ms;
+
+static void netplay_held_note_sdl(int src_w, int src_h) {
+    s_np_held.mode = NP_HELD_SDL;
+    s_np_held.src_w = src_w;
+    s_np_held.src_h = src_h;
+}
+static void netplay_held_note_gl_cpu(int src_w, int src_h, int linear, int pin43) {
+    s_np_held.mode = NP_HELD_GL_CPU;
+    s_np_held.src_w = src_w;
+    s_np_held.src_h = src_h;
+    s_np_held.linear = linear;
+    s_np_held.pin43 = pin43;
+}
+static void netplay_held_note_gl_vram(int x, int y, int w, int h, int linear, int pin43) {
+    s_np_held.mode = NP_HELD_GL_VRAM;
+    s_np_held.disp_x = x;
+    s_np_held.disp_y = y;
+    s_np_held.disp_w = w;
+    s_np_held.disp_h = h;
+    s_np_held.linear = linear;
+    s_np_held.pin43 = pin43;
+    s_np_held.src_w = w;
+    s_np_held.src_h = h;
+}
+static void netplay_held_note_gl_wide(int x, int y, int h, int linear) {
+    s_np_held.mode = NP_HELD_GL_WIDE;
+    s_np_held.disp_x = x;
+    s_np_held.disp_y = y;
+    s_np_held.disp_h = h;
+    s_np_held.linear = linear;
+    s_np_held.src_w = 1;
+    s_np_held.src_h = h;
+}
+static void netplay_held_note_vk_cpu(int src_w, int src_h, int linear, int pin43) {
+    s_np_held.mode = NP_HELD_VK_CPU;
+    s_np_held.src_w = src_w;
+    s_np_held.src_h = src_h;
+    s_np_held.linear = linear;
+    s_np_held.pin43 = pin43;
+}
+static void netplay_held_note_vk_vram(int x, int y, int w, int h, int linear, int pin43) {
+    s_np_held.mode = NP_HELD_VK_VRAM;
+    s_np_held.disp_x = x;
+    s_np_held.disp_y = y;
+    s_np_held.disp_w = w;
+    s_np_held.disp_h = h;
+    s_np_held.linear = linear;
+    s_np_held.pin43 = pin43;
+    s_np_held.src_w = w;
+    s_np_held.src_h = h;
+}
+static void netplay_held_note_vk_wide(int x, int y, int h, int linear) {
+    s_np_held.mode = NP_HELD_VK_WIDE;
+    s_np_held.disp_x = x;
+    s_np_held.disp_y = y;
+    s_np_held.disp_h = h;
+    s_np_held.linear = linear;
+    s_np_held.src_w = 1;
+    s_np_held.src_h = h;
+}
+
+/* Re-present last framebuffer without advancing guest / rescanning VRAM logic. */
+static void present_held_netplay_frame(void) {
+#ifndef PSX_SDL_NO_RENDER
+    if (g_headless || psx_netplay_in_load_barrier())
+        return;
+    if (s_np_held.mode == NP_HELD_NONE || s_np_held.src_w <= 0)
+        return;
+    if (g_gl_active) {
+        if (s_np_held.mode == NP_HELD_GL_WIDE) {
+            (void)gl_renderer_present_wide_fbo(s_np_held.disp_x, s_np_held.disp_y,
+                                               s_np_held.disp_h, s_np_held.linear);
+        } else if (s_np_held.mode == NP_HELD_GL_VRAM) {
+            gl_renderer_present_vram(s_np_held.disp_x, s_np_held.disp_y,
+                                     s_np_held.disp_w, s_np_held.disp_h,
+                                     s_np_held.linear, s_np_held.pin43);
+        } else if (sdl_pixel_buf) {
+            gl_renderer_present(sdl_pixel_buf, s_np_held.src_w, s_np_held.src_h,
+                                s_np_held.linear, s_np_held.pin43, 0);
+        }
+        return;
+    }
+    if (g_vk_active) {
+        if (s_np_held.mode == NP_HELD_VK_WIDE) {
+            (void)vk_renderer_present_wide(s_np_held.disp_x, s_np_held.disp_y,
+                                           s_np_held.disp_h, s_np_held.linear);
+        } else if (s_np_held.mode == NP_HELD_VK_VRAM) {
+            vk_renderer_present_vram(s_np_held.disp_x, s_np_held.disp_y,
+                                     s_np_held.disp_w, s_np_held.disp_h,
+                                     s_np_held.linear, s_np_held.pin43);
+        } else if (sdl_pixel_buf) {
+            vk_renderer_present_cpu(sdl_pixel_buf, s_np_held.src_w, s_np_held.src_h,
+                                    s_np_held.linear, s_np_held.pin43);
+        }
+        return;
+    }
+    if (sdl_renderer && sdl_texture && s_np_held.src_w > 0 && s_np_held.src_h > 0) {
+        SDL_Rect src = { 0, 0, s_np_held.src_w, s_np_held.src_h };
+        int dst_w = g_logical_w;
+        int dst_h = 480 * g_video_scale;
+        SDL_Rect dst = { 0, 0, dst_w, dst_h };
+        SDL_RenderClear(sdl_renderer);
+        SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
+        SDL_RenderPresent(sdl_renderer);
+    }
+#else
+    (void)0;
+#endif
 }
 
 static void netplay_host_present_restore(void) {
@@ -2772,6 +2904,7 @@ static void netplay_barrier_admit(int override) {
                 std::fflush(stdout);
                 desync_logged = 1;
             }
+            present_held_netplay_frame();
             SDL_Delay(16);
 #ifndef PSX_NO_DEBUG_TOOLS
             debug_server_poll();
@@ -2823,6 +2956,15 @@ static void netplay_barrier_admit(int override) {
             SDL_GameControllerUpdate();
         }
         if (psx_return_to_lobby_requested()) return;
+        /* Keep the window alive while starved — re-present last frame ~60 Hz
+         * without advancing sim (PSX finish→present→admit order parks here). */
+        {
+            const uint32_t now = SDL_GetTicks();
+            if (now - s_np_held_last_ms >= 16u) {
+                present_held_netplay_frame();
+                s_np_held_last_ms = now;
+            }
+        }
         /* Wake on peer UDP (or 1ms timeout). SDL_Delay(1) under dual FMV load
          * often stretches multi-ms and cut MotK netplay intro ~59→~36; Delay(0)
          * busy-spins and can starve the peer (tick-0 hang). */
@@ -3273,6 +3415,10 @@ static void sdl_vblank_present(void) {
             if (psx_return_to_lobby_requested()) return;
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
+            /* Remote input buffered ahead of delay: skip wall pace so this
+             * peer drains lead (PSX catch-up; no multi-RtlRunFrame burst). */
+            if (psx_netplay_catchup_budget() > 0)
+                return;
             uint64_t perf_start = runtime_perf_section_begin();
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
             runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
@@ -3613,12 +3759,18 @@ static void sdl_vblank_present(void) {
                  * SW stayed smooth). Falls through to the CPU readout path only if
                  * the wide surface for this buffer doesn't exist yet. */
                 if (gl_renderer_present_wide_fbo((int)di.display_x, (int)di.display_y,
-                                                 (int)h, g_video_aa ? 1 : 0))
+                                                 (int)h, g_video_aa ? 1 : 0)) {
+                    netplay_held_note_gl_wide((int)di.display_x, (int)di.display_y,
+                                              (int)h, g_video_aa ? 1 : 0);
                     return;
+                }
             } else {
                 gl_renderer_present_vram((int)di.display_x, (int)di.display_y,
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
+                netplay_held_note_gl_vram((int)di.display_x, (int)di.display_y,
+                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
+                                          (fmv_frame || nw_pin) ? 1 : 0);
                 return;
             }
         }
@@ -3640,14 +3792,20 @@ static void sdl_vblank_present(void) {
                 depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h);
                 vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w, (int)h,
                                         0 /* nearest */, fmv_frame ? 1 : 0);
+                netplay_held_note_vk_cpu((int)present_w, (int)h, 0,
+                                         fmv_frame ? 1 : 0);
             } else if (wide_present &&
                        vk_renderer_present_wide((int)di.display_x, (int)di.display_y,
                                                 (int)h, g_video_aa ? 1 : 0)) {
-                /* presented wide */
+                netplay_held_note_vk_wide((int)di.display_x, (int)di.display_y,
+                                          (int)h, g_video_aa ? 1 : 0);
             } else {
                 vk_renderer_present_vram((int)di.display_x, (int)di.display_y,
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
+                netplay_held_note_vk_vram((int)di.display_x, (int)di.display_y,
+                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
+                                          (fmv_frame || nw_pin) ? 1 : 0);
             }
             return;
         }
@@ -3769,6 +3927,9 @@ static void sdl_vblank_present(void) {
         gl_renderer_present(sdl_pixel_buf, src_w, src_h,
                             (g_video_aa && !depth24_frame) ? 1 : 0,
                             pin_43 ? 1 : 0, 0 /* full width */);
+        netplay_held_note_gl_cpu(src_w, src_h,
+                                 (g_video_aa && !depth24_frame) ? 1 : 0,
+                                 pin_43 ? 1 : 0);
     } else {
     SDL_Rect src = { 0, 0, src_w, src_h };
     SDL_UpdateTexture(sdl_texture, &src, sdl_pixel_buf,
@@ -3806,6 +3967,7 @@ static void sdl_vblank_present(void) {
         SDL_RenderPresent(sdl_renderer);
         const Uint64 t1 = SDL_GetPerformanceCounter();
         latency_ring_mark(LAT_SWAP_END);
+        netplay_held_note_sdl(src_w, src_h);
         const Uint64 freq = SDL_GetPerformanceFrequency();
         const Uint64 present_ms = (t1 >= t0 && freq) ? ((t1 - t0) * 1000u) / freq : 0;
         if (!g_present_vsync_disabled && present_ms > 250) {
@@ -3987,7 +4149,14 @@ namespace {
     /* Join Direct / cross-machine: membership via UDP, not the local file. */
     bool g_lnch_remote_lan = false;
     std::string g_lnch_lan_endpoint;
+<<<<<<< Updated upstream
     uint32_t g_lnch_lan_session_id = 1;
+=======
+    std::string g_lnch_lan_guest_bind;
+    int g_lnch_lobby_input_delay = 2;
+    int g_lnch_force_input_relay = 0;
+    int g_lnch_host_max_slots = 2;
+>>>>>>> Stashed changes
 
     static constexpr int kAeLanMaxSlots = RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
     struct AeLanLobbyState {
@@ -4800,6 +4969,7 @@ namespace {
         return 0;
     }
 
+<<<<<<< Updated upstream
     /* Seat ceiling for the active room (listing / LOBBY UI). 0 if unknown. */
     int ae_np_lobby_max_slots(void*) {
         if (g_lnch_hosting_lan || g_lnch_joined_lan) {
@@ -4816,6 +4986,8 @@ namespace {
         return 0;
     }
 
+=======
+>>>>>>> Stashed changes
     const char* ae_np_default_url(void*) {
         return g_lnch_lobby_url.empty() ? psx_lobby_default_url() : g_lnch_lobby_url.c_str();
     }
@@ -5353,10 +5525,96 @@ namespace {
         return 1;
     }
 
+<<<<<<< Updated upstream
     /* LAN/Direct IP rooms own membership via the local file registry. Server
      * lobbies use WebSocket lobby_update. Never mix: LAN mode wins if set. */
     static bool ae_np_use_lan_members(void) {
         return g_lnch_hosting_lan || g_lnch_joined_lan;
+=======
+    int ae_np_external_ip(void*, char* out, size_t out_len) {
+        if (!out || out_len == 0) return 0;
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        addrinfo hints{};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo* res = nullptr;
+        if (getaddrinfo("api.ipify.org", "80", &hints, &res) != 0 || !res)
+            return 0;
+#ifdef _WIN32
+        SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (s == INVALID_SOCKET) {
+            freeaddrinfo(res);
+            return 0;
+        }
+        DWORD timeout_ms = 3000;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms,
+                   sizeof(timeout_ms));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms,
+                   sizeof(timeout_ms));
+#else
+        int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (s < 0) {
+            freeaddrinfo(res);
+            return 0;
+        }
+        timeval tv{};
+        tv.tv_sec = 3;
+        tv.tv_usec = 0;
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+        int ok = 0;
+#ifdef _WIN32
+        const int connected =
+            connect(s, res->ai_addr, (int)res->ai_addrlen) != SOCKET_ERROR;
+#else
+        const int connected =
+            connect(s, res->ai_addr, (socklen_t)res->ai_addrlen) == 0;
+#endif
+        if (connected) {
+            const char req[] =
+                "GET / HTTP/1.1\r\n"
+                "Host: api.ipify.org\r\n"
+                "User-Agent: psxrecomp-netplay/1.0\r\n"
+                "Connection: close\r\n\r\n";
+#ifdef _WIN32
+            (void)send(s, req, (int)strlen(req), 0);
+            char resp[1024];
+            int n = recv(s, resp, sizeof(resp) - 1, 0);
+#else
+            (void)send(s, req, strlen(req), 0);
+            char resp[1024];
+            ssize_t n = recv(s, resp, sizeof(resp) - 1, 0);
+#endif
+            if (n > 0) {
+                resp[n] = '\0';
+                char* body = strstr(resp, "\r\n\r\n");
+                body = body ? body + 4 : resp;
+                char ip[64] = {};
+                int j = 0;
+                for (int i = 0; body[i] && j < (int)sizeof(ip) - 1; ++i) {
+                    if ((body[i] >= '0' && body[i] <= '9') || body[i] == '.')
+                        ip[j++] = body[i];
+                    else if (j > 0)
+                        break;
+                }
+                if (j > 0) {
+                    std::snprintf(out, out_len, "%s", ip);
+                    ok = 1;
+                }
+            }
+        }
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        freeaddrinfo(res);
+        return ok;
+>>>>>>> Stashed changes
     }
 
     static bool ae_np_use_ws_members(void) {
@@ -5410,6 +5668,7 @@ namespace {
                      const char* password,
                      const RecompLauncherCSettings* settings,
                      int lan_only, int max_slots) {
+<<<<<<< Updated upstream
         int game_max = g_lnch_game_players >= 2 ? g_lnch_game_players : 2;
         if (game_max > PSX_MAX_PLAYERS) game_max = PSX_MAX_PLAYERS;
         if (game_max > 8) game_max = 8;
@@ -5418,6 +5677,11 @@ namespace {
         /* Lobby + delay-sync ceiling (party games up to 8). */
         if (max_slots > RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS)
             max_slots = RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
+=======
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > PSX_MAX_PLAYERS) max_slots = PSX_MAX_PLAYERS;
+        if (max_slots > 8) max_slots = 8;
+>>>>>>> Stashed changes
         g_lnch_host_max_slots = max_slots;
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
         char endpoint[96];
@@ -5461,6 +5725,12 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
+<<<<<<< Updated upstream
+=======
+        g_lnch_lan_guest_bind.clear();
+        if (host_endpoint)
+            std::snprintf(host_endpoint, 96, "%s", endpoint);
+>>>>>>> Stashed changes
         psx_lobby_set_max_slots(max_slots);
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
                                 g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
@@ -5674,6 +5944,7 @@ namespace {
         if (ae_np_use_lan_members()) {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return 0;
+<<<<<<< Updated upstream
             int seen = 0;
             for (int slot = 0; slot < state.max_slots; ++slot) {
                 if (state.slot_name[slot].empty()) continue;
@@ -5689,17 +5960,31 @@ namespace {
                 ++seen;
             }
             return 0;
+=======
+            const bool host = index == 0;
+            out->slot = host ? state.host_slot : 1 - state.host_slot;
+            const std::string& name = host ? state.host_name : state.joiner_name;
+            std::snprintf(out->display_name, sizeof(out->display_name), "%s", name.c_str());
+            out->ready = !name.empty();
+            out->is_host = host ? 1 : 0;
+            out->latency_ms = -1;
+            return 1;
+>>>>>>> Stashed changes
         }
         PsxLobbyMember mem{};
         if (!psx_lobby_member_get(index, &mem)) return 0;
         out->slot = mem.slot;
         std::snprintf(out->display_name, sizeof(out->display_name), "%s", mem.display_name);
         out->ready = mem.ready;
+<<<<<<< Updated upstream
         const char* host_id = psx_lobby_host_player_id();
         if (host_id && host_id[0] && mem.player_id[0])
             out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
         else
             out->is_host = (mem.slot == 0) ? 1 : 0;
+=======
+        out->is_host = mem.slot == 0;
+>>>>>>> Stashed changes
         out->latency_ms = -1;
         return 1;
     }
@@ -5804,6 +6089,7 @@ namespace {
                     g_lnch_pending_direct_launch.local_slot = local_slot;
                 }
                 g_lnch_pending_direct_launch.input_player = 0;
+<<<<<<< Updated upstream
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
                 g_lnch_pending_direct_launch.max_slots =
@@ -5816,6 +6102,14 @@ namespace {
                     g_lnch_pending_direct_launch.max_slots = kAeLanMaxSlots;
                 g_lnch_pending_direct_launch.force_input_relay = 0;
                 g_lnch_pending_direct_launch.player_count = ae_np_lan_occupied(state);
+=======
+                g_lnch_pending_direct_launch.session_id = 1;
+                g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
+                g_lnch_pending_direct_launch.max_slots = 2;
+                g_lnch_pending_direct_launch.force_input_relay = 0;
+                g_lnch_pending_direct_launch.player_count =
+                    state.joiner_name.empty() ? 1 : 2;
+>>>>>>> Stashed changes
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
                     const char* port = colon == std::string::npos
@@ -5885,6 +6179,7 @@ namespace {
         out->session_id = ji->session_id;
         out->input_delay = (caps && caps->valid) ? caps->input_delay
                                                  : g_lnch_lobby_input_delay;
+<<<<<<< Updated upstream
         out->max_slots = ji->max_slots >= 2 ? ji->max_slots
                          : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2);
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
@@ -5904,6 +6199,12 @@ namespace {
             if (seated > out->max_slots) seated = out->max_slots;
             out->player_count = seated;
         }
+=======
+        out->max_slots = ji->max_slots >= 2 ? ji->max_slots : 2;
+        if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
+        out->player_count = ji->player_count > 0 ? ji->player_count : out->max_slots;
+        if (out->player_count > out->max_slots) out->player_count = out->max_slots;
+>>>>>>> Stashed changes
         out->force_input_relay =
             (caps && caps->valid && caps->force_input_relay) ? 1 : 0;
         return 1;
@@ -5946,7 +6247,10 @@ namespace {
         ae_np_input_delay_set,
         ae_np_force_input_relay_get,
         ae_np_force_input_relay_set,
+<<<<<<< Updated upstream
         ae_np_lobby_max_slots,
+=======
+>>>>>>> Stashed changes
     };
 }  // namespace
 #endif
@@ -7169,9 +7473,23 @@ std::string player_device[PSX_MAX_PLAYERS];
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
                     net_cfg.player_count = ls.netplay_launch.player_count;
+<<<<<<< Updated upstream
                     net_cfg.slot_count = ae_np_session_slot_count(
                         ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
                         ls.netplay_launch.local_slot, game_players);
+=======
+                    /* Delay-sync READY/START needs seated count, not lobby ceiling. */
+                    net_cfg.slot_count = ls.netplay_launch.player_count >= 2
+                                             ? ls.netplay_launch.player_count
+                                             : (ls.netplay_launch.max_slots >= 2
+                                                    ? ls.netplay_launch.max_slots
+                                                    : 2);
+                    if (ls.netplay_launch.local_slot + 1 > net_cfg.slot_count)
+                        net_cfg.slot_count = ls.netplay_launch.local_slot + 1;
+                    if (net_cfg.slot_count < 2) net_cfg.slot_count = 2;
+                    if (net_cfg.slot_count > PSX_MAX_PLAYERS)
+                        net_cfg.slot_count = PSX_MAX_PLAYERS;
+>>>>>>> Stashed changes
                     if (net_cfg.player_count <= 0)
                         net_cfg.player_count = net_cfg.slot_count;
                     std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
