@@ -3803,6 +3803,107 @@ namespace {
     std::string g_lnch_expected_serial;
     uint32_t    g_lnch_expected_crc  = 0;
     bool        g_lnch_has_crc       = false;
+    const char* g_lnch_argv0         = nullptr;
+
+    int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
+        if (!bios_path || !bios_path[0] || !out) return 0;
+        std::memset(out, 0, sizeof(*out));
+        std::ifstream f(bios_path, std::ios::binary | std::ios::ate);
+        if (!f.is_open()) {
+            std::snprintf(out->detail, sizeof(out->detail), "BIOS file not found.");
+            return 1;
+        }
+        const std::streamoff size = f.tellg();
+        if (size != 512 * 1024) {
+            std::snprintf(out->detail, sizeof(out->detail),
+                          "BIOS must be exactly 512 KiB (got %lld). Use SCPH1001.BIN.",
+                          (long long)size);
+            return 1;
+        }
+        std::vector<uint8_t> data((size_t)size);
+        if (!read_at(f, 0, data.data(), data.size())) {
+            std::snprintf(out->detail, sizeof(out->detail), "Failed to read BIOS file.");
+            return 1;
+        }
+        const uint32_t crc = crc32_compute(data.data(), data.size());
+        out->ok = 1;
+        if (crc != 0x37157331u) {
+            out->warn = 1;
+            std::snprintf(out->detail, sizeof(out->detail),
+                          "CRC32 %08X (validated dump is SCPH1001 CRC32 37157331). "
+                          "Boot may still work.",
+                          crc);
+        } else {
+            std::snprintf(out->detail, sizeof(out->detail), "SCPH1001.BIN (CRC OK).");
+        }
+        return 1;
+    }
+
+    int ae_prepare_disc(const char* source_path, char* out_disc_path, size_t out_cap,
+                        char* err_msg, size_t err_cap) {
+        if (!source_path || !source_path[0] || !out_disc_path || out_cap == 0) return 0;
+        out_disc_path[0] = '\0';
+        if (err_msg && err_cap) err_msg[0] = '\0';
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        if (!fs::is_regular_file(source_path, ec)) {
+            if (err_msg && err_cap)
+                std::snprintf(err_msg, err_cap, "Source dump not found.");
+            return 0;
+        }
+        const fs::path exe_dir = exe_dir_from_argv(g_lnch_argv0 ? g_lnch_argv0 : "");
+        const fs::path root = find_upward(exe_dir, "tools/prepare_disc.py");
+        if (root.empty()) {
+            if (err_msg && err_cap)
+                std::snprintf(err_msg, err_cap,
+                              "tools/prepare_disc.py not found near the executable.");
+            return 0;
+        }
+        const fs::path script = root / "tools" / "prepare_disc.py";
+        const fs::path out_dir = root / "motk";
+        fs::create_directories(out_dir, ec);
+        /* Prefer python3; fall back to python (Windows). */
+        const char* py = "python3";
+#if defined(_WIN32)
+        /* On Windows `python` is the usual launcher; python3 may be absent. */
+        py = "python";
+#endif
+        std::string cmd = std::string(py) + " \"" + script.string() + "\" \"" +
+                          source_path + "\" --out-dir \"" + out_dir.string() + "\"";
+#if !defined(_WIN32)
+        /* If python3 missing, retry with python. */
+        int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            cmd = std::string("python \"") + script.string() + "\" \"" + source_path +
+                  "\" --out-dir \"" + out_dir.string() + "\"";
+            rc = std::system(cmd.c_str());
+        }
+#else
+        int rc = std::system(cmd.c_str());
+#endif
+        if (rc != 0) {
+            if (err_msg && err_cap)
+                std::snprintf(err_msg, err_cap,
+                              "prepare_disc.py failed (exit %d). Check the dump is "
+                              "2448 bytes/sector.",
+                              rc);
+            return 0;
+        }
+        const fs::path cue =
+            out_dir / "Star Wars - Masters of Teras Kasi (USA).cue";
+        const fs::path bin =
+            out_dir / "Star Wars - Masters of Teras Kasi (USA).bin";
+        fs::path playable = fs::exists(cue, ec) ? cue : bin;
+        if (!fs::exists(playable, ec)) {
+            if (err_msg && err_cap)
+                std::snprintf(err_msg, err_cap,
+                              "prepare_disc finished but no .cue/.bin was written.");
+            return 0;
+        }
+        playable = normalize_disc_path_for_launch(playable);
+        std::snprintf(out_disc_path, out_cap, "%s", playable.string().c_str());
+        return 1;
+    }
 
     int ae_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
         if (!disc_path || !disc_path[0] || !out) return 0;
@@ -6164,8 +6265,45 @@ int main(int argc, char** argv) {
             g_lnch_expected_serial = game_id;
             g_lnch_expected_crc    = game_disc_crc;
             g_lnch_has_crc         = game_has_disc_crc;
+            g_lnch_argv0           = argv[0];
             gi.disc_verify     = ae_disc_verify;
             gi.memcard_inspect = ae_memcard_inspect;
+            gi.bios_verify     = ae_bios_verify;
+            /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
+             * first-run wizard so players need not run the script by hand. */
+            {
+                const auto root = find_upward(exe_dir_from_argv(argv[0]),
+                                              "tools/prepare_disc.py");
+                if (!root.empty()) {
+                    gi.prepare_disc = ae_prepare_disc;
+                    gi.prepare_disc_label = "Convert 2448-byte dump…";
+                    gi.prepare_disc_note =
+                        "If you have a 2448-byte/sector MotK ISO dump, convert it "
+                        "to a MODE2/2352 .bin/.cue under motk/ (same as "
+                        "tools/prepare_disc.py).";
+                }
+            }
+            /* Quiet first-run detection: missing/unreadable BIOS or disc opens
+             * the setup wizard inside recomp-ui (cross-platform file pickers). */
+            {
+                bool bios_ok = false;
+                if (ls.bios_path[0]) {
+                    RecompLauncherCBiosVerify bv{};
+                    if (ae_bios_verify(ls.bios_path, &bv) && bv.ok) bios_ok = true;
+                    else ls.bios_path[0] = '\0';
+                }
+                bool disc_ok = false;
+                if (!rui_initial_disc.empty()) {
+                    std::error_code ec;
+                    if (std::filesystem::exists(rui_initial_disc, ec)) {
+                        const DiscValidation dv =
+                            validate_disc_image(rui_initial_disc, game_id);
+                        disc_ok = dv.opened && dv.has_header;
+                    }
+                    if (!disc_ok) rui_initial_disc.clear();
+                }
+                gi.needs_setup = (!bios_ok || !disc_ok) ? 1 : 0;
+            }
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
             g_lnch_game_players = game_players;
@@ -6314,10 +6452,12 @@ int main(int argc, char** argv) {
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
                     bios_path = settings_bios_storage.c_str();
+                    write_cached_path(argv[0], "bios.cfg", seed.bios_path);
                 }
                 if (seed.has_disc_path) {
                     seed.disc_path = normalize_disc_path_for_launch(seed.disc_path);
                     resolved_disc = seed.disc_path;
+                    write_cached_path(argv[0], "disc.cfg", resolved_disc);
                 }
                 memcard1_enabled = seed.memcard1_enabled;
                 memcard2_enabled = seed.memcard2_enabled;
