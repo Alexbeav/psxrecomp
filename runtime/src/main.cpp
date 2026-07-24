@@ -998,16 +998,27 @@ static bool validate_bios_for_launch(const std::filesystem::path& path) {
     const std::streamoff size = f.tellg();
     if (size != 512 * 1024) {
         launcher_warning("BIOS Warning",
-            "The selected BIOS is not 512 KiB. Please select SCPH1001.BIN.");
+            "The selected BIOS is not 512 KiB. Please select a valid PS1 BIOS dump.");
         return false;
     }
     std::vector<uint8_t> data((size_t)size);
     if (!read_at(f, 0, data.data(), data.size())) return false;
     const uint32_t crc = crc32_compute(data.data(), data.size());
-    if (crc != 0x37157331u) {
+    // Known BIOS CRC32 values: SCPH1001 (US), SCPH101 (US PSOne),
+    // SCPH5552 (EUR). Others are accepted with a warning.
+    static const uint32_t known_bios_crcs[] = {
+        0x37157331u,  // SCPH1001  (US, v2.2 12/04/95)
+        0x171bdcecu,  // SCPH101   (US PSOne, v4.5 05/25/00)
+        0xd786f0b9u,  // SCPH5552  (EUR, v3.0 01/06/97)
+    };
+    bool known = false;
+    for (uint32_t k : known_bios_crcs) {
+        if (crc == k) { known = true; break; }
+    }
+    if (!known) {
         char buf[256];
         std::snprintf(buf, sizeof(buf),
-            "The selected BIOS CRC32 is %08X, but this build was validated with SCPH1001.BIN CRC32 37157331.\n\n"
+            "Unrecognized BIOS CRC32 %08X. Supported: SCPH1001, SCPH101, SCPH5552.\n\n"
             "The runtime will try it anyway, but boot may fail.", crc);
         launcher_warning("BIOS Warning", buf);
     }

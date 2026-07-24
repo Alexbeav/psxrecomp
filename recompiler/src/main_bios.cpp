@@ -773,6 +773,7 @@ int run_boot_slice(const fs::path& bios_path, const fs::path& out_dir,
 
 int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
                   const fs::path& seed_path,
+                  const std::string& out_stem,
                   const std::vector<PSXRecompV4::BiosVectorTable>& bios_vectors = {},
                   const std::vector<PSXRecompV4::BiosAlias>& bios_aliases = {}) {
     // 1. Load + validate BIOS file.
@@ -833,7 +834,7 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
     // 4. Emit full C.
     const auto stats = PSXRecompV4::FullFunctionEmitter::emit(
         rom, kBiosBase, kBiosBase + static_cast<uint32_t>(kBiosSize) - 1,
-        dr, sha, out_dir.string(), bios_vectors, bios_aliases);
+        dr, sha, out_dir.string(), out_stem, bios_vectors, bios_aliases);
 
     std::fprintf(stdout,
         "psxrecomp-bios: EMIT OK  emitted=%u  skipped=%u  instructions=%u  "
@@ -945,13 +946,13 @@ int main(int argc, char** argv) {
                     cfg.out_dir.string().c_str(),
                     cfg.out_stem.c_str());
                 return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
-                                     cfg.bios_vectors, cfg.bios_aliases);
+                                     cfg.out_stem, cfg.bios_vectors, cfg.bios_aliases);
             }
             if (a == "--config=" || a.rfind("--config=", 0) == 0) {
                 const fs::path config_path = a.substr(std::string("--config=").size());
                 const auto cfg = PSXRecompV4::load_bios_config(config_path);
                 return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
-                                     cfg.bios_vectors, cfg.bios_aliases);
+                                     cfg.out_stem, cfg.bios_vectors, cfg.bios_aliases);
             }
         }
 
@@ -985,7 +986,9 @@ int main(int argc, char** argv) {
         }
 
         if (emit_full_seed_path) {
-            return run_emit_full(bios_path, out_dir, *emit_full_seed_path);
+            // Derive out_stem from ROM filename: "SCPH1001.BIN" -> "SCPH1001"
+            const std::string stem = bios_path.stem().string();
+            return run_emit_full(bios_path, out_dir, *emit_full_seed_path, stem);
         } else if (seed_path) {
             return run_discover(bios_path, out_dir, *seed_path);
         } else {

@@ -1753,6 +1753,7 @@ EmitStats FullFunctionEmitter::emit(
     const DiscoveryResult&            dr,
     const std::string&                bios_sha256,
     const std::string&                out_dir,
+    const std::string&                out_stem,
     const std::vector<BiosVectorTable>& bios_vectors,
     const std::vector<BiosAlias>&       bios_aliases)
 {
@@ -1934,20 +1935,20 @@ EmitStats FullFunctionEmitter::emit(
         stats.dispatch_entries += stats.continuation_entries;
     }
 
-    // Write SCPH1001_full.c
+    // Write <out_stem>_full.c
     {
-        std::string path = out_dir + "/SCPH1001_full.c";
+        std::string path = out_dir + "/" + out_stem + "_full.c";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(full_c.data(), static_cast<std::streamsize>(full_c.size()));
     }
 
-    // Emit and write SCPH1001_dispatch.c
+    // Emit and write <out_stem>_dispatch.c
     {
         std::string dispatch_c;
         emit_dispatch(dispatch_c, dr, emitted_normalized, unique_continuations,
                       bios_sha256, rom, base_addr, bios_vectors, bios_aliases);
-        std::string path = out_dir + "/SCPH1001_dispatch.c";
+        std::string path = out_dir + "/" + out_stem + "_dispatch.c";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(dispatch_c.data(), static_cast<std::streamsize>(dispatch_c.size()));

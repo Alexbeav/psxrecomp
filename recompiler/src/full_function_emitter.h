@@ -3,8 +3,8 @@
 // Phase 2: Full BIOS C emitter.
 //
 // Given a DiscoveryResult and the ROM image, emits:
-//   - SCPH1001_full.c      (one C function per discovered BIOS function)
-//   - SCPH1001_dispatch.c  (normalized-address -> function-pointer table)
+//   - <out_stem>_full.c      (one C function per discovered BIOS function)
+//   - <out_stem>_dispatch.c  (normalized-address -> function-pointer table)
 //
 // Design constraints:
 //   - Does NOT modify strict_translator. Consumes TranslateResult metadata
@@ -50,12 +50,13 @@ struct ContinuationLabel {
 
 class FullFunctionEmitter {
 public:
-    // Emit SCPH1001_full.c and SCPH1001_dispatch.c into out_dir.
+    // Emit <out_stem>_full.c and <out_stem>_dispatch.c into out_dir.
     // rom: flat BIOS image bytes
     // base_addr: virtual address of rom[0] (0xBFC00000)
     // rom_end: last valid address inclusive (0xBFC7FFFF)
     // dr: discovery result from Phase 1c/2 discovery pass
     // bios_sha256: hex string for provenance header
+    // out_stem: output filename stem (e.g. "SCPH1001", "SCPH101")
     static EmitStats emit(
         const std::vector<uint8_t>&       rom,
         uint32_t                          base_addr,
@@ -63,6 +64,7 @@ public:
         const DiscoveryResult&            dr,
         const std::string&                bios_sha256,
         const std::string&                out_dir,
+        const std::string&                out_stem,
         const std::vector<BiosVectorTable>& bios_vectors = {},
         const std::vector<BiosAlias>&       bios_aliases = {});
 

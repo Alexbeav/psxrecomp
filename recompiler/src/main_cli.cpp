@@ -39,10 +39,11 @@ struct Options {
 void usage(const char* program) {
     fmt::print(
         "Usage:\n"
-        "  {} build --disc <game.cue|bin|iso> --bios <SCPH1001.BIN> "
+        "  {} build --disc <game.cue|bin|iso> --bios <PS1_BIOS.BIN> "
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
-        "and build scripts. No compiler toolchain is bundled.\n",
+        "and build scripts. No compiler toolchain is bundled.\n"
+        "Supported BIOS: SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
         program);
 }
 
@@ -339,6 +340,8 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     fmt::print("[3/4] Copying build framework...\n");
     copy_framework(find_framework(exe_dir), options.output / "psxrecomp");
 
+    // Derive BIOS stem from filename: "SCPH1001.BIN" -> "SCPH1001"
+    const std::string bios_stem = options.bios.stem().string();
     const std::string cmake = fmt::format(
         "cmake_minimum_required(VERSION 3.20)\n"
         "project({} C CXX)\n"
@@ -354,12 +357,12 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "psxrecomp_add_runtime_target(psx-runtime\n"
         "  GAME_GENERATED_FULL_C \"${{GAME_FULL}}\"\n"
         "  GAME_GENERATED_DISPATCH_C \"${{GAME_DISPATCH}}\"\n"
-        "  BIOS_GENERATED_FULL_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/SCPH1001_full.c\"\n"
-        "  BIOS_GENERATED_DISPATCH_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/SCPH1001_dispatch.c\"\n"
+        "  BIOS_GENERATED_FULL_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_full.c\"\n"
+        "  BIOS_GENERATED_DISPATCH_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_dispatch.c\"\n"
         "  WINDOW_TITLE \"{} Recompiled\"\n"
         "  DEFAULT_GAME_CONFIG_PATH \"game.toml\"\n"
         ")\n",
-        project_name, game_name);
+        project_name, bios_stem, bios_stem, game_name);
     write_file(options.output / "CMakeLists.txt", cmake);
 
     write_file(options.output / "build.ps1",

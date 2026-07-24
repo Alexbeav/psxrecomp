@@ -99,6 +99,7 @@ endif()
 # root recomp-ui submodule (CMAKE_SOURCE_DIR/recomp-ui). Not vendored in
 # psxrecomp — games that need the launcher own the pin.
 option(PSX_RECOMP_UI "Build the shared recomp-ui Dear ImGui launcher" ON)
+option(PSX_SHELLWIN_INTERP "Default the shell-window dirty-RAM interpreter to ON ( BIOS without shell seeds )" OFF)
 set(RECOMP_UI_ROOT "" CACHE PATH
     "Path to recomp-ui; empty = <game>/recomp-ui")
 if(PSX_RECOMP_UI AND (NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL ""))
@@ -236,22 +237,25 @@ if(PSXRECOMP_LOBBY_INCLUDE_DIR)
     list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_LOBBY_INCLUDE_DIR})
 endif()
 
+if(NOT PSXRECOMP_BIOS_STEM)
+    set(PSXRECOMP_BIOS_STEM "SCPH1001")
+endif()
 set(PSXRECOMP_BIOS_GENERATED
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_full.c
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_dispatch.c
+    ${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}_full.c
+    ${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}_dispatch.c
 )
 
 # --- BIOS generated/ staleness check (hygiene) -----------------------------------
-# generated/SCPH1001_*.c is gitignored build output produced by a SEPARATE build
+# generated/<BIOS_STEM>_*.c is gitignored build output produced by a SEPARATE build
 # (recompiler/ -> psxrecomp-bios). Editing the BIOS emitter without re-running
 # tools/regen_bios.sh leaves the runtime linking a stale BIOS that no longer matches
 # the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
-# fingerprint in generated/SCPH1001.emitter.sha; recompute it here and WARN on a
+# fingerprint in generated/<BIOS_STEM>.emitter.sha; recompute it here and WARN on a
 # mismatch so the staleness is impossible to miss. Non-fatal: a stale-but-consistent
 # BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
     find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/SCPH1001.emitter.sha")
+    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
     if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
         execute_process(
             COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
@@ -501,6 +505,9 @@ function(psxrecomp_add_runtime_target target)
             PSX_NATIVE_BUILD=1
             PSX_ENABLE_BLOCK_CYCLES=1
         )
+    endif()
+    if(PSX_SHELLWIN_INTERP)
+        target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)
