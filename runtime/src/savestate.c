@@ -136,9 +136,16 @@ int savestate_write_slot(int slot, const void* data, size_t size) {
     return 1;
 }
 
-static int netplay_savestate_blocked(void) {
+/* User APIs during netplay: guests cannot initiate; host must use
+ * psx_netplay_request_* so peers hash-probe and sync over STATE_*. */
+static int netplay_user_blocked(void) {
     if (!psx_netplay_active()) return 0;
-    fprintf(stderr, "savestate: disabled during netplay\n");
+    if (!psx_netplay_is_host()) {
+        fprintf(stderr, "savestate: netplay guest cannot save/load (host-only)\n");
+        return 1;
+    }
+    fprintf(stderr,
+            "savestate: during netplay use host Shift+F / F (synced path)\n");
     return 1;
 }
 
@@ -171,22 +178,22 @@ static int request_load_inner(int slot) {
 }
 
 int savestate_request_save(int slot) {
-    if (netplay_savestate_blocked()) return 0;
+    if (netplay_user_blocked()) return 0;
     return request_save_inner(slot);
 }
 
 int savestate_request_load(int slot) {
-    if (netplay_savestate_blocked()) return 0;
+    if (netplay_user_blocked()) return 0;
     return request_load_inner(slot);
 }
 
 int savestate_request_save_protocol(int slot) {
-    if (netplay_savestate_blocked()) return 0;
+    /* Follow-host sync: guests must write the host-authoritative .pst. */
     return request_save_inner(slot);
 }
 
 int savestate_request_load_protocol(int slot) {
-    if (netplay_savestate_blocked()) return 0;
+    /* Follow-host sync: guests must apply the host-authoritative .pst. */
     return request_load_inner(slot);
 }
 

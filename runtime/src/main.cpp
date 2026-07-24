@@ -2191,6 +2191,14 @@ static int effective_player_mode(const PlayerInput& p) {
     return p.mode;
 }
 
+/* Pad mode for the SIO seat this sample will drive. Multitap taps are always
+ * plain digital (0x41) — DualShock on a SCPH-1070 tap is not reliable. */
+static int effective_player_mode_for_sio(const PlayerInput& p, int sio_slot) {
+    if (sio_pad_on_multitap(sio_slot))
+        return (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    return effective_player_mode(p);
+}
+
 /* Open/close SDL handles so they match g_players, and (re)assert each slot's
  * PSX connection + pad type. Safe to call repeatedly (hotplug, boot).
  * While delay-sync netplay is active, SIO connection/type are owned by
@@ -2202,13 +2210,14 @@ static void refresh_player_devices(void) {
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
         else open_player(p, s);
         if (netplay) continue;
-        const int mode = effective_player_mode(p);
+        const int mode = effective_player_mode_for_sio(p, s);
         sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
         sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
         /* DIGITAL mode == a plain digital controller that ignores the DualShock
          * config-mode commands (real SCPH-1080 behaviour); ANALOG/HYBRID == a
          * config-capable DualShock. A digital pad that wrongly answered 0x43
-         * sent Tomba 2's pad driver down the config path -> phantom 0x00 reads. */
+         * sent Tomba 2's pad driver down the config path -> phantom 0x00 reads.
+         * Multitap taps are always digital (see sio_pad_on_multitap). */
         sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
 }
@@ -2553,9 +2562,12 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
      * handshake cadence is preserved exactly). Keyboard is always digital.
-     * A P1 with no assigned device but dev-any-input on presents as HYBRID. */
+     * Multitap taps are forced digital. A P1 with no assigned device but
+     * dev-any-input on presents as HYBRID. */
     int mode;
-    if (p.kind != 0)      mode = effective_player_mode(p);
+    if (sio_pad_on_multitap(s))
+        mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else if (p.kind != 0) mode = effective_player_mode(p);
     else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
     else                  mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
     int eff_analog;
@@ -2614,8 +2626,9 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
 
 /* Netplay-only capture: assigned PlayerInput for this slot only. Never merges
  * keyboard-all / all-controllers (dev_any_input). Same pad-mode / stick rules
- * as capture_pad_slot otherwise. */
-static int capture_pad_slot_exclusive(int s, PsxNetPad* out) {
+ * as capture_pad_slot otherwise. present_sio_slot is the delay-sync seat this
+ * blob will publish to (may differ from host card `s` on guests). */
+static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slot) {
     if (!out) return 0;
     out->buttons = 0xFFFFu;
     out->lx = out->ly = out->rx = out->ry = 0x80u;
@@ -2627,7 +2640,8 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out) {
     const bool dev_here = false;
     if (p.kind == 0) return 0;  /* no device in this port */
 
-    int mode = effective_player_mode(p);
+    const int sio_slot = (present_sio_slot >= 0) ? present_sio_slot : s;
+    int mode = effective_player_mode_for_sio(p, sio_slot);
     int eff_analog;
     if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
         eff_analog = 0;
@@ -2657,6 +2671,8 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out) {
 }
 
 static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
+    if (sio_pad_on_multitap(s))
+        sio_set_pad_config_capable(s, 0);
     sio_set_pad_state_slot(s, pad.buttons);
     sio_set_pad_sticks(s, pad.lx, pad.ly, pad.rx, pad.ry);
     sio_request_pad_type(s, pad.analog ? 1 : 0);
@@ -2664,22 +2680,42 @@ static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
 
 /* Local human pad for delay-sync: sample the host PlayerInput selected for
  * this peer (see --net-input-player / auto), then recomp-net maps that blob
- * onto local_slot (host→sim P1, guest→sim P2). Never writes SIO. Exclusive
+ * onto local_slot (lobby seat → sim P1/P2/…). Never writes SIO. Exclusive
  * capture — no keyboard-all / all-controllers merge — so peers hash-agree. */
 static void capture_local_human_pad(PsxNetPad* out) {
     int idx = psx_netplay_input_player();
     if (idx < 0 || idx >= PSX_MAX_PLAYERS) idx = 0;
-    if (!capture_pad_slot_exclusive(idx, out)) {
-        /* Fallback: if auto picked empty local slot, try P1 (two-machine guest). */
-        if (idx != 0 && capture_pad_slot_exclusive(0, out)) {
+    /* Present as the lobby seat (multitap taps → digital), not the host card. */
+    const int seat = psx_netplay_local_slot();
+    const int present = (seat >= 0) ? seat : idx;
+    if (capture_pad_slot_exclusive(idx, out, present)) {
+        out->connected = 1;
+        psx_netplay_normalize_pad(out);
+        return;
+    }
+    /* Fallbacks: NETPLAY/P1 card, lobby seat card, then any assigned device. */
+    if (idx != 0 && capture_pad_slot_exclusive(0, out, present)) {
+        out->connected = 1;
+        psx_netplay_normalize_pad(out);
+        return;
+    }
+    if (seat >= 0 && seat < PSX_MAX_PLAYERS && seat != idx && seat != 0 &&
+        capture_pad_slot_exclusive(seat, out, present)) {
+        out->connected = 1;
+        psx_netplay_normalize_pad(out);
+        return;
+    }
+    for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
+        if (s == idx || s == 0 || s == seat) continue;
+        if (capture_pad_slot_exclusive(s, out, present)) {
             out->connected = 1;
             psx_netplay_normalize_pad(out);
             return;
         }
-        out->buttons = 0xFFFFu;
-        out->lx = out->ly = out->rx = out->ry = 0x80u;
-        out->analog = 1;
     }
+    out->buttons = 0xFFFFu;
+    out->lx = out->ly = out->rx = out->ry = 0x80u;
+    out->analog = 1;
     out->connected = 1;
     psx_netplay_normalize_pad(out);
 }
@@ -3273,6 +3309,12 @@ static void sdl_vblank_present(void) {
             if (psx_return_to_lobby_requested()) return;
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
+            /* Post-starvation / behind-peer catch-up: skip wall pace so admits
+             * can burn down remote tip (mirrors snes_host_catchup_budget). */
+            if (psx_netplay_catchup_budget() > 0) {
+                psx_netplay_catchup_consume_frame();
+                return;
+            }
             uint64_t perf_start = runtime_perf_section_begin();
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
             runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
@@ -3293,8 +3335,15 @@ static void sdl_vblank_present(void) {
         if (g_offline_pad_count >= 3 && fntrace_is_game_started() &&
             !sio_get_multitap()) {
             sio_set_multitap(1);
+            /* Tap seats drop to plain digital as soon as the tap is live. */
+            for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
+                if (!sio_pad_on_multitap(s)) continue;
+                sio_set_pad_config_capable(s, 0);
+                sio_set_pad_analog(s, 0, 0x80, 0x80, 0x80, 0x80);
+            }
             std::fprintf(stdout,
-                         "psxrecomp: multitap armed (console Port %d)\n",
+                         "psxrecomp: multitap armed (console Port %d; "
+                         "tap pads forced digital)\n",
                          sio_get_multitap_port() + 1);
         }
         if (g_headless)
@@ -4785,7 +4834,19 @@ namespace {
         (void)psx_lobby_set_match_caps(&caps);
     }
 
-    int ae_np_input_delay_get(void*) { return g_lnch_lobby_input_delay; }
+    int ae_np_input_delay_get(void*) {
+        /* Online guests show host-authoritative match_caps. */
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid) {
+                int d = caps->input_delay;
+                if (d < 2) d = 2;
+                if (d > 20) d = 20;
+                return d;
+            }
+        }
+        return g_lnch_lobby_input_delay;
+    }
     int ae_np_input_delay_set(void*, int delay_frames) {
         if (delay_frames < 2) delay_frames = 2;
         if (delay_frames > 20) delay_frames = 20;
@@ -4793,7 +4854,14 @@ namespace {
         ae_np_push_match_caps(nullptr);
         return 0;
     }
-    int ae_np_force_input_relay_get(void*) { return g_lnch_force_input_relay; }
+    int ae_np_force_input_relay_get(void*) {
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid)
+                return caps->force_input_relay ? 1 : 0;
+        }
+        return g_lnch_force_input_relay;
+    }
     int ae_np_force_input_relay_set(void*, int force) {
         g_lnch_force_input_relay = force ? 1 : 0;
         ae_np_push_match_caps(nullptr);
@@ -5803,7 +5871,8 @@ namespace {
                         local_slot = g_lnch_hosting_lan ? state.host_slot : 1;
                     g_lnch_pending_direct_launch.local_slot = local_slot;
                 }
-                g_lnch_pending_direct_launch.input_player = 0;
+                /* -1 => resolve at netplay start (prefer NETPLAY/P1 card). */
+                g_lnch_pending_direct_launch.input_player = -1;
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
                 g_lnch_pending_direct_launch.max_slots =
@@ -5877,9 +5946,11 @@ namespace {
         const PsxLobbyJoinInfo* ji = psx_lobby_join_info();
         if (!ji || !ji->ok) return 0;
         const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+        if (!caps || !caps->valid) return 0;
         out->enabled = 1;
         out->local_slot = ji->local_slot;
-        out->input_player = 0;
+        /* -1 => resolve at netplay start (prefer NETPLAY/P1 card). */
+        out->input_player = -1;
         std::snprintf(out->bind_hostport, sizeof(out->bind_hostport), "%s", ji->bind_hostport);
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
         out->session_id = ji->session_id;
@@ -7375,7 +7446,7 @@ session_reboot:
         /* Dev-any-input keeps P1 connected even with no assigned controller so the
          * keyboard / any plugged-in controller can drive port 1 standalone. */
         const bool dev_p1 = (dev_any_input_enabled() && s == 0);
-        const int mode = effective_player_mode(g_players[s]);
+        const int mode = effective_player_mode_for_sio(g_players[s], s);
         sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
         sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
         sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
@@ -7718,12 +7789,23 @@ session_reboot:
             return 1;
         }
         /* Resolve which host PlayerInput feeds this peer's net sample.
-         * Auto: prefer g_players[local_slot] when assigned (same-PC: host
-         * C40 on P1 + guest keyboard on P2); else player 0 (two-machine). */
+         * Auto (-1): always prefer dashboard P1 ("PLAYER N / NETPLAY") — that
+         * pad is published as lobby local_slot. Seat-card P2/P3… are only used
+         * when P1 is empty (legacy same-PC layout). Else sole assigned / P1. */
         if (net_cfg.input_player < 0 || net_cfg.input_player >= PSX_MAX_PLAYERS) {
-            const int prefer = net_cfg.local_slot;
-            if (prefer >= 0 && prefer < PSX_MAX_PLAYERS && g_players[prefer].kind != 0)
-                net_cfg.input_player = prefer;
+            const int seat = net_cfg.local_slot;
+            int sole = -1, n_assigned = 0;
+            for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+                if (g_players[i].kind == 0) continue;
+                ++n_assigned;
+                sole = i;
+            }
+            if (g_players[0].kind != 0)
+                net_cfg.input_player = 0;
+            else if (seat >= 0 && seat < PSX_MAX_PLAYERS && g_players[seat].kind != 0)
+                net_cfg.input_player = seat;
+            else if (n_assigned == 1)
+                net_cfg.input_player = sole;
             else
                 net_cfg.input_player = 0;
         }

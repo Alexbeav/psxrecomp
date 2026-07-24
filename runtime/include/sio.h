@@ -79,6 +79,11 @@ int  sio_get_multitap(void);
 /* phys_port: 0 = console Port 1, 1 = console Port 2. Default 0. */
 void sio_set_multitap_port(int phys_port);
 int  sio_get_multitap_port(void);
+/* 1 when multitap is armed and `logical_slot` is a tap pad (not the lone
+ * pad on the opposite console port). SCPH-1070 taps are treated as plain
+ * digital controllers (0x41) — DualShock/analog on a tap is not reliable
+ * across titles, so host input and SIO type requests are forced digital. */
+int  sio_pad_on_multitap(int logical_slot);
 
 /* Update pad button state. Buttons use PS1 convention: 0=pressed, 1=released.
    Bit layout: SELECT, L3, R3, START, UP, RIGHT, DOWN, LEFT,
