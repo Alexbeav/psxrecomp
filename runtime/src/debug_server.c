@@ -2670,6 +2670,7 @@ static void handle_dirty_insn_log(int id, const char *json)
                         "\"a2\":\"0x%08X\",\"a3\":\"0x%08X\","
                         "\"t0\":\"0x%08X\",\"t1\":\"0x%08X\","
                         "\"t2\":\"0x%08X\","
+                        "\"at\":\"0x%08X\",\"k0\":\"0x%08X\",\"k1\":\"0x%08X\","
                         "\"current_tcb\":\"0x%08X\",\"task_ptr\":\"0x%08X\","
                         "\"task_mode\":\"0x%08X\",\"task_submode\":\"0x%08X\","
                         "\"frame\":%u,\"transferred\":%u}",
@@ -2679,6 +2680,7 @@ static void handle_dirty_insn_log(int id, const char *json)
                         e->before_s0, e->after_s0, e->sp, e->ra,
                         e->v0, e->v1, e->a0, e->a1, e->a2, e->a3,
                         e->t0, e->t1, e->t2,
+                        e->at, e->k0, e->k1,
                         e->current_tcb, e->task_ptr, e->task_mode,
                         e->task_submode, e->frame, (unsigned)e->transferred);
         emitted++;
