@@ -734,10 +734,15 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     if (opcode == 0x01) {
         uint32_t regimm_op = (instr >> 16) & 0x1F;
         if ((regimm_op & 0x01u) == 0x00u) { // bltz family (incl. bltzal + undefined mirrors)
-            // Classified LEFT-edge funnel bltz (auto_screen_x, signed idioms):
-            // reject only past the revealed margin. Identity at 4:3 (margin 0).
-            if (regimm_op == 0x00 && ws_cull_bltz_pcs_.count(addr))
-                return fmt::format("psx_ws_cull_bltz({}) /* ws auto screen-x cull (left edge) */",
+            // LEFT-edge funnel bltz: reject only past the revealed margin.
+            // Identity at 4:3 (margin 0). Two sources: (a) auto_screen_x's
+            // detect_cull_bltz_sites classification (ws_cull_bltz_pcs_), and
+            // (b) explicit [widescreen.cull] bltz_sites — the left-edge
+            // counterpart to slti_sites, for X-only funnels auto_screen_x can't
+            // qualify (whose bltz would otherwise never be widened).
+            if (regimm_op == 0x00 &&
+                (ws_cull_bltz_pcs_.count(addr) || config_.ws_cull_bltz_sites.count(addr)))
+                return fmt::format("psx_ws_cull_bltz({}) /* ws cull (left edge) */",
                                    reg_name(rs));
             return fmt::format("(int32_t){} < 0", reg_name(rs));
         } else {                            // bgez family (incl. bgezal + undefined mirrors)

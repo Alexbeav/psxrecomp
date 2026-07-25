@@ -156,6 +156,7 @@ int main(int argc, char** argv) {
     std::set<uint32_t>    ws_cull_bias, ws_cull_range, ws_cull_a1; // [widescreen.cull]
     std::set<uint32_t>    ws_cull_screen_x;    // [widescreen.cull] screen_x_sites
     std::set<uint32_t>    ws_cull_slti;         // [widescreen.cull] slti_sites
+    std::set<uint32_t>    ws_cull_bltz;         // [widescreen.cull] bltz_sites
     std::set<uint32_t>    ws_cull_negsub;       // [widescreen.cull] negsub_sites
     std::set<uint32_t>    ws_cull_vxrange;      // [widescreen.cull] vxrange_sites
     std::set<uint32_t>    ws_cull_depth;        // [widescreen.cull] depth_sites
@@ -204,6 +205,7 @@ int main(int argc, char** argv) {
         ws_cull_a1.insert(cfg.ws_cull_a1_sites.begin(), cfg.ws_cull_a1_sites.end());
         ws_cull_screen_x.insert(cfg.ws_cull_screen_x_sites.begin(), cfg.ws_cull_screen_x_sites.end());
         ws_cull_slti.insert(cfg.ws_cull_slti_sites.begin(), cfg.ws_cull_slti_sites.end());
+        ws_cull_bltz.insert(cfg.ws_cull_bltz_sites.begin(), cfg.ws_cull_bltz_sites.end());
         ws_cull_negsub.insert(cfg.ws_cull_negsub_sites.begin(), cfg.ws_cull_negsub_sites.end());
         ws_cull_vxrange.insert(cfg.ws_cull_vxrange_sites.begin(), cfg.ws_cull_vxrange_sites.end());
         ws_cull_depth.insert(cfg.ws_cull_depth_sites.begin(), cfg.ws_cull_depth_sites.end());
@@ -282,6 +284,7 @@ int main(int argc, char** argv) {
         ws_cull_a1.insert(wscfg.ws_cull_a1_sites.begin(), wscfg.ws_cull_a1_sites.end());
         ws_cull_screen_x.insert(wscfg.ws_cull_screen_x_sites.begin(), wscfg.ws_cull_screen_x_sites.end());
         ws_cull_slti.insert(wscfg.ws_cull_slti_sites.begin(), wscfg.ws_cull_slti_sites.end());
+        ws_cull_bltz.insert(wscfg.ws_cull_bltz_sites.begin(), wscfg.ws_cull_bltz_sites.end());
         ws_cull_negsub.insert(wscfg.ws_cull_negsub_sites.begin(), wscfg.ws_cull_negsub_sites.end());
         ws_cull_vxrange.insert(wscfg.ws_cull_vxrange_sites.begin(), wscfg.ws_cull_vxrange_sites.end());
         ws_cull_depth.insert(wscfg.ws_cull_depth_sites.begin(), wscfg.ws_cull_depth_sites.end());
@@ -1109,6 +1112,7 @@ int main(int argc, char** argv) {
     codegen_config.ws_cull_a1_sites    = ws_cull_a1;
     codegen_config.ws_cull_screen_x_sites = ws_cull_screen_x;
     codegen_config.ws_cull_slti_sites  = ws_cull_slti;
+    codegen_config.ws_cull_bltz_sites  = ws_cull_bltz;
     codegen_config.ws_cull_negsub_sites = ws_cull_negsub;
     codegen_config.ws_cull_vxrange_sites = ws_cull_vxrange;
     codegen_config.ws_cull_depth_sites = ws_cull_depth;

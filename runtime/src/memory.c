@@ -540,7 +540,14 @@ static int dirty_ram_force_interp(void) {
  * captured. Must be reverted before any merge; it is a probe, not the fix. */
 static int dirty_ram_shellwin_interp(void) {
     static int s = -1;
-    if (s < 0) { const char* e = getenv("PSX_SHELLWIN_INTERP"); s = (e && e[0] && e[0] != '0'); }
+    if (s < 0) {
+#ifdef PSX_SHELLWIN_INTERP_DEFAULT
+        s = 1;
+#else
+        const char* e = getenv("PSX_SHELLWIN_INTERP");
+        s = (e && e[0] && e[0] != '0');
+#endif
+    }
     return s;
 }
 

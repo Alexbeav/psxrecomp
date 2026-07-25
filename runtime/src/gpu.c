@@ -1674,6 +1674,8 @@ static uint16_t vram_write_pixels[1024 * 512];
 /* Depth24 CPU→VRAM upload span (halfwords, exclusive end). See
  * gpu_depth24_rgb_limit — declared early so gpu_reset_state can clear it. */
 static uint32_t s_d24_upload_x1 = 0;
+static int      s_d24_present_hold = 0; /* vblanks to skip Swap after GP1(07h) */
+static uint32_t s_d24_prev_disp_h = 0;  /* last GP1(07h) band height */
 static void depth24_note_upload(uint32_t x, uint32_t w);
 
 static void gp0_commit_cpu_to_vram(void) {
@@ -1911,6 +1913,8 @@ static void gpu_reset_state(int clear_vram) {
     s_ws_fmv_frame_cache = 0xFFFFFFFFu;
     s_ws_fmv_cached = 0;
     s_d24_upload_x1 = 0;
+    s_d24_present_hold = 0;
+    s_d24_prev_disp_h = 0;
 }
 
 void gpu_init(void) {
@@ -2102,9 +2106,12 @@ static uint8_t gpu_vram_byte(uint32_t byte_x, uint32_t y) {
 
 /* Depth24: note/query/reset the CPU→VRAM upload span tracked above. Used to
  * hide trailing RGB columns when a movie blit doesn't fill the full CRTC
- * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right. */
+ * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right.
+ * Only FB-class A0s (w >= 256 halfwords) grow the span; texture uploads must
+ * not collapse it. During present-hold, ignore updates entirely. */
 static void depth24_note_upload(uint32_t x, uint32_t w) {
-    if (!(display_depth & 1u) || w == 0u) return;
+    if (!(display_depth & 1u) || w < 256u) return;
+    if (s_d24_present_hold > 0) return;
     uint32_t x1 = x + w;
     if (x1 > 1024u) x1 = 1024u;
     if (x1 > s_d24_upload_x1) s_d24_upload_x1 = x1;
@@ -2123,6 +2130,12 @@ uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
 
 void gpu_depth24_upload_span_reset(void) {
     s_d24_upload_x1 = 0;
+}
+
+int gpu_depth24_present_hold_tick(void) {
+    if (s_d24_present_hold <= 0) return 0;
+    s_d24_present_hold--;
+    return 1;
 }
 
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
@@ -4263,8 +4276,19 @@ static void gp1_v_display_range(uint32_t val) {
     /* GP1(07h): Vertical display range
      * bits 0-9: Y1
      * bits 10-19: Y2 */
-    v_display_y1 = val & 0x3FF;
-    v_display_y2 = (val >> 10) & 0x3FF;
+    uint32_t y1 = val & 0x3FF;
+    uint32_t y2 = (val >> 10) & 0x3FF;
+    uint32_t h = (y2 > y1) ? (y2 - y1) : 0u;
+    /* MotK intro→crawl retargets the band while staying in depth24. Stale
+     * trailing RGB from the prior movie would flash for a frame or two —
+     * reset the upload span and hold present (skip Swap) for 3 vblanks. */
+    if ((display_depth & 1u) && s_d24_prev_disp_h != 0u && h != s_d24_prev_disp_h) {
+        s_d24_upload_x1 = 0;
+        s_d24_present_hold = 3;
+    }
+    v_display_y1 = y1;
+    v_display_y2 = y2;
+    if (h != 0u) s_d24_prev_disp_h = h;
 }
 
 static void gp1_display_mode(uint32_t val) {

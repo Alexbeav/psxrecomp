@@ -40,6 +40,7 @@
 #include "fmt/format.h"
 
 #include "bios_slice_walker.h"
+#include "bios_rom_alias.h"
 #include "config_loader.h"
 #include "full_function_emitter.h"
 #include "function_discovery.h"
@@ -995,7 +996,11 @@ int main(int argc, char** argv) {
                 "       psxrecomp-bios <bios.bin> <out_dir> --emit-full <seeds.json>\n");
             return 2;
         }
-        const fs::path bios_path = argv[1];
+        // Accept either BIOS filename convention: the legacy bare model name
+        // ("SCPH1001.BIN", which tools/regen_bios.sh still defaults to) and the
+        // region-qualified one ("US-PSX-SCPH1001.BIN") each resolve to whichever
+        // is actually on disk. See recompiler/include/bios_rom_alias.h.
+        const fs::path bios_path = PSXRecompV4::resolve_bios_rom(fs::path(argv[1]));
         const fs::path out_dir   = argv[2];
         std::optional<std::string> cc_override;
         std::optional<fs::path> seed_path;

@@ -99,6 +99,7 @@ endif()
 # root recomp-ui submodule (CMAKE_SOURCE_DIR/recomp-ui). Not vendored in
 # psxrecomp — games that need the launcher own the pin.
 option(PSX_RECOMP_UI "Build the shared recomp-ui Dear ImGui launcher" ON)
+option(PSX_SHELLWIN_INTERP "Default the shell-window dirty-RAM interpreter to ON ( BIOS without shell seeds )" OFF)
 set(RECOMP_UI_ROOT "" CACHE PATH
     "Path to recomp-ui; empty = <game>/recomp-ui")
 if(PSX_RECOMP_UI AND (NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL ""))
@@ -142,6 +143,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
     ${PSXRECOMP_ROOT}/runtime/src/disc_identity.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/cue_sheet.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/disc_path.cpp
     ${PSXRECOMP_ROOT}/runtime/src/cdrom.c
     ${PSXRECOMP_ROOT}/runtime/src/spu.c
     ${PSXRECOMP_ROOT}/runtime/src/spu_shadow.c
@@ -404,16 +407,22 @@ function(psxrecomp_add_runtime_target target)
     else()
         set(generated_sources ${PSXRECOMP_BIOS_GENERATED})
     endif()
+    # Game recompiled C that a from-source builder must generate before building
+    # (see the require-generated guard added after add_executable below). Collected
+    # here so the guard names the exact files that are missing.
+    set(_game_generated_check "")
     if(PSXRT_GAME_GENERATED_FULL_C)
         foreach(_full_src IN LISTS PSXRT_GAME_GENERATED_FULL_C)
             set_source_files_properties("${_full_src}" PROPERTIES GENERATED TRUE)
             list(APPEND generated_sources "${_full_src}")
+            list(APPEND _game_generated_check "${_full_src}")
         endforeach()
         set(has_game_dispatch TRUE)
     endif()
     if(PSXRT_GAME_GENERATED_DISPATCH_C)
         set_source_files_properties("${PSXRT_GAME_GENERATED_DISPATCH_C}" PROPERTIES GENERATED TRUE)
         list(APPEND generated_sources "${PSXRT_GAME_GENERATED_DISPATCH_C}")
+        list(APPEND _game_generated_check "${PSXRT_GAME_GENERATED_DISPATCH_C}")
         set(has_game_dispatch TRUE)
         if(EXISTS "${PSXRT_GAME_GENERATED_DISPATCH_C}")
             file(STRINGS "${PSXRT_GAME_GENERATED_DISPATCH_C}"
@@ -492,6 +501,54 @@ function(psxrecomp_add_runtime_target target)
     endif()
     add_dependencies(${target} psxrecomp_codegen_hash)
 
+    # ---- require-generated guard -------------------------------------------
+    # The game's recompiled C (generated/<serial>_{full,dispatch}.c) is produced
+    # by the recompiler tool in a step BEFORE this build, and its paths are marked
+    # GENERATED so `cmake configure` succeeds before that step has run. Without a
+    # guard, a builder who skips generation only finds out deep in the build via
+    #   cc1: fatal error: .../<serial>_full.c: No such file or directory
+    # with no hint that a step was skipped or what produces the file. Catch it
+    # first — a WARNING now (early, at configure) and a hard, actionable stop at
+    # build start (below) — so the raw compiler error is never the first signal.
+    # Only guards GAME sources: the BIOS path is either bundled OpenBIOS (emitted
+    # by a custom command here) or has its own staleness check above.
+    if(_game_generated_check)
+        if(EXISTS "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game.exe")
+            set(_psxrt_recompiler_hint "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game.exe")
+        else()
+            set(_psxrt_recompiler_hint "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game")
+        endif()
+        set(_psxrt_missing_now "")
+        foreach(_g IN LISTS _game_generated_check)
+            if(NOT EXISTS "${_g}")
+                list(APPEND _psxrt_missing_now "${_g}")
+            endif()
+        endforeach()
+        if(_psxrt_missing_now)
+            message(WARNING
+                "${target}: recompiled game C is not present yet — the build will "
+                "fail until you generate it.\n"
+                "  Run the recompiler once:  ${_psxrt_recompiler_hint} --config "
+                "${PSXRT_DEFAULT_GAME_CONFIG_PATH}\n"
+                "  (build that tool first if needed; see psxrecomp/docs/BUILDING.md). "
+                "This is expected on a fresh checkout before the first generation.")
+        endif()
+        add_custom_target(${target}_require_generated
+            COMMAND ${CMAKE_COMMAND}
+                    "-DSOURCES=${_game_generated_check}"
+                    "-DTARGET=${target}"
+                    "-DGAME_CONFIG=${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
+                    "-DRECOMPILER=${_psxrt_recompiler_hint}"
+                    "-DDOC=psxrecomp/docs/BUILDING.md  (\"Build and run a game\")"
+                    -P "${PSXRECOMP_ROOT}/runtime/check_generated_sources.cmake"
+            COMMENT "Verifying recompiled game C exists for ${target}"
+            VERBATIM)
+        # Target-level dependency: this check runs to completion before ANY of
+        # ${target}'s objects compile, so a missing generated source aborts with
+        # our message rather than the compiler's.
+        add_dependencies(${target} ${target}_require_generated)
+    endif()
+
     # Force the cg-tag CONSUMERS to recompile whenever overlay_codegen_hash.h
     # changes. overlay_api.h pulls that header via __has_include, which the
     # compiler depfile does NOT record when the header is absent at first compile —
@@ -569,6 +626,9 @@ function(psxrecomp_add_runtime_target target)
             PSX_NATIVE_BUILD=1
             PSX_ENABLE_BLOCK_CYCLES=1
         )
+    endif()
+    if(PSX_SHELLWIN_INTERP)
+        target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)

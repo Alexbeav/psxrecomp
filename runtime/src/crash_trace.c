@@ -670,6 +670,15 @@ static void psx_signal_handler(int sig) {
     raise(sig);
 }
 
+/* Default SIGINT/SIGTERM terminate without running atexit, so GCC/LLVM
+ * never flush PGO profiles (train scripts use kill). Route those through
+ * exit(0) so __gcov_exit / instr-profile writers run. Not async-signal-safe;
+ * acceptable for intentional train/Ctrl+C stop. */
+static void psx_soft_exit_handler(int sig) {
+    (void)sig;
+    exit(0);
+}
+
 #ifdef _WIN32
 static LONG WINAPI psx_seh_handler(EXCEPTION_POINTERS *info) {
     psx_crash_trace_dump("seh", info);
@@ -677,6 +686,15 @@ static LONG WINAPI psx_seh_handler(EXCEPTION_POINTERS *info) {
     if (!g_psx_fatal_reason) g_psx_fatal_reason = "seh";
     freeze_heartbeat_fatal_dump("seh");
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static BOOL WINAPI psx_console_ctrl_handler(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT ||
+        type == CTRL_CLOSE_EVENT) {
+        exit(0);
+        return TRUE;
+    }
+    return FALSE;
 }
 #endif
 
@@ -690,6 +708,12 @@ void psx_crash_trace_install_handlers(void) {
 #ifndef _WIN32
     signal(SIGSEGV, psx_signal_handler);
 #endif
+    /* Soft-exit on all hosts (incl. MinGW): MSYS2 kill -TERM must flush PGO. */
+    signal(SIGINT, psx_soft_exit_handler);
+    signal(SIGTERM, psx_soft_exit_handler);
+#ifdef SIGUSR1
+    signal(SIGUSR1, psx_soft_exit_handler);
+#endif
     signal(SIGABRT, psx_signal_handler);
 #ifdef _WIN32
     /* Let access violations reach the SEH filter with their faulting CONTEXT.
@@ -700,6 +724,7 @@ void psx_crash_trace_install_handlers(void) {
      * filter and we can write the report without the user having to
      * dismiss a popup first. */
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    SetConsoleCtrlHandler(psx_console_ctrl_handler, TRUE);
 #endif
     atexit(psx_atexit_handler);
 }

@@ -38,7 +38,7 @@ make platform=unix STATIC_LINKING=1 HAVE_LIGHTREC=0 -j"$(nproc)"
 cp mednafen_psx_libretro.so libmednafen_psx.a
 
 cd ../runtime
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_LAUNCHER=OFF -DPSX_DEBUG_TOOLS=ON
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF -DPSX_DEBUG_TOOLS=ON
 ninja -C build psx-beetle
 
 # Headless run (picks the next free port from 4380 if taken; watch stderr)

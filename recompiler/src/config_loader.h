@@ -572,6 +572,13 @@ struct GameConfig {
     // auto-detector cannot qualify (e.g. an X-only test with no height compare
     // in the same function — Ape Escape 0x8004AB64). Empty by default; regen.
     std::vector<uint32_t> ws_cull_slti_sites;
+    // [widescreen.cull] bltz_sites — explicit signed LEFT-edge widen sites
+    // (`bltz rs, reject` -> psx_ws_cull_bltz), the counterpart to slti_sites.
+    // detect_cull_bltz_sites only classifies left-edge bltz for functions
+    // auto_screen_x qualified, so an X-only funnel wired through explicit
+    // slti_sites has no left-edge widen without this. Empty by default;
+    // identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_bltz_sites;
     // Horizontal low-edge form `subu rd,zero,rs` -> `-rs-x_margin`.
     // Empty by default; configured sites require regenerated native code.
     std::vector<uint32_t> ws_cull_negsub_sites;

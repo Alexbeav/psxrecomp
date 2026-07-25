@@ -304,9 +304,9 @@ on a fixed region -> next.
   re-enumerates gamecontrollers, keeps selection by GUID. Offline + netplay.
 
 - **2026-07-20 (launcher: lobby lock emoji via symbol fallback font):**
-  Password lobbies showed □ for 🔒 — LatoLatin has no emoji. Load bundled
-  `NotoSansSymbols2-Regular.ttf` (system Segoe UI Symbol on Windows) with
-  RmlUi `fallback_face=true` so missing glyphs resolve.
+  Password lobbies showed □ for 🔒 because the primary face has no emoji.
+  Load a symbol fallback face through the shared Dear ImGui font atlas so
+  missing glyphs resolve.
 
 - **2026-07-20 (launcher lobbies: button order + dblclick join):**
   Lobbies actions: Return to Launcher → Change Player Name → Host Game →
@@ -559,7 +559,7 @@ on a fixed region -> next.
 - **2026-07-19 (netplay lobby server + launcher menus):**
   Lobby WS+JSON owned by proprietary `recomp-net-server` (was C
   `servers/lobby/` under open recomp-net);
-  `psx_lobby_client` + RmlUi home → Offline / Netplay → lobbies table
+  `psx_lobby_client` + shared launcher home → Offline / Netplay → lobbies table
   (host/join/password). Launch hands `PsxNetplayConfig` to
   `psx_netplay_start` (LAN endpoints from lobby). ICE relay stubbed.
 

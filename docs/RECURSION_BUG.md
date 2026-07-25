@@ -203,7 +203,7 @@ cmake --build ../psxrecomp/recompiler/build --target psxrecomp-game psxrecomp-bi
 (cd ../psxrecomp && ./recompiler/build/psxrecomp-bios.exe --config bios/SCPH1001.toml)
 ../psxrecomp/recompiler/build/psxrecomp-game.exe --config tomba_soak_e.toml
 # build:
-cmake -S . -B <build-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_DEBUG_TOOLS=ON -DPSX_LAUNCHER=OFF \
+cmake -S . -B <build-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_DEBUG_TOOLS=ON -DPSX_RECOMP_UI=OFF \
   -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe
 cmake --build <build-dir> --target psx-runtime -j8
 # run (per-instance card; taskkill first):

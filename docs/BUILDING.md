@@ -115,7 +115,7 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 |---|---|---|
 | `PSX_DEBUG_TOOLS` | ON for Debug/RelWithDebInfo, OFF for Release | TCP debug server + heartbeat + per-block recording |
 | `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL2 + libgcc/libstdc++) |
-| `PSX_LAUNCHER` | ON | Allow downstream game projects to wire recomp-ui launcher support |
+| `PSX_RECOMP_UI` | ON | Wire a downstream game's pinned recomp-ui launcher; set OFF for headless/generated builds |
 | `PSX_ENABLE_VULKAN` | OFF | Build the experimental Vulkan renderer |
 | `PSX_BUILD_COSIM` | OFF | Build the first-divergence co-sim oracle target |
 
@@ -129,9 +129,13 @@ for TombaRecomp:
 # Extract the game's PS-X EXE from your disc (helper included in the game repo):
 python3 tools/extract_psx_exe.py tomba/tomba.bin SCUS_942.36 tomba/SCUS_942.36
 
-# Regenerate the game's C from the disc/EXE (game repos invoke the recompiler
-# binary directly with their config):
-../psxrecomp/recompiler/build/psxrecomp-game --config game.toml
+# Regenerate the game's C from the disc/EXE. The framework is a submodule at
+# psxrecomp/ inside the game repo, so build its recompiler once, then run it.
+# (Game repos also ship tools/regen.sh (macOS/Linux) / tools/regen.ps1 (Windows)
+# that wrap this command.)
+cmake -S psxrecomp/recompiler -B psxrecomp/recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build psxrecomp/recompiler/build
+psxrecomp/recompiler/build/psxrecomp-game --config game.toml
 
 # Configure + build the game runtime:
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

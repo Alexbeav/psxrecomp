@@ -2555,7 +2555,10 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
      * with the right edge clipped. Letterbox within the present rect instead.
      * Apply whenever the source is short — not only when force_4_3 — so a
      * misclassified FMV frame still keeps correct pixel aspect. */
-    if (src_h > 0 && src_h < 240) {
+    /* Genuinely windowed video bands only (<80% of the 240-line field, e.g.
+     * MotK's 128-line FMV). A game's native short display mode (216/224)
+     * fills the rect as on hardware. */
+    if (src_h > 0 && src_h < 192) {
         int content_h = (lh * src_h) / 240;
         if (content_h < 1) content_h = 1;
         ly += (lh - content_h) / 2;
@@ -3488,9 +3491,13 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
+    /* Half-texel inset: with GL_LINEAR, corner-mapped UVs make the outermost
+     * dest pixels blend the border texel with VRAM outside the content rect
+     * (visible edge stripe with AA on). Center-mapped UVs keep edge samples
+     * inside the rect; interior sampling is unchanged. */
     p_glUniform4f(s_present_uUvRect,
-                  (float)x / (float)tex_w, (float)y / (float)tex_h,
-                  (float)(x + w) / (float)tex_w, (float)(y + h) / (float)tex_h);
+                  ((float)x + 0.5f) / (float)tex_w, ((float)y + 0.5f) / (float)tex_h,
+                  ((float)(x + w) - 0.5f) / (float)tex_w, ((float)(y + h) - 0.5f) / (float)tex_h);
     p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);
@@ -3519,13 +3526,9 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
     else
         letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
-    /* Match CPU present: short GP1(07h) bands letterbox inside the rect. */
-    if (h > 0 && h < 240) {
-        int content_h = (lh * h) / 240;
-        if (content_h < 1) content_h = 1;
-        ly += (lh - content_h) / 2;
-        lh = content_h;
-    }
+    /* No short-band adjustment on the 15-bit FBO path: a game's native short
+     * display mode (e.g. 216/224-line menus) must fill the rect as before.
+     * The FMV band fix lives in the depth24/CPU present paths only. */
 
     p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);

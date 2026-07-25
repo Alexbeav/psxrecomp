@@ -33,6 +33,12 @@ psxrecomp_add_runtime_target(psx-runtime
 )
 
 if(BUILD_TESTING)
+    add_executable(launcher_device_roundtrip_test
+        tests/test_launcher_device_roundtrip.cpp)
+    target_include_directories(launcher_device_roundtrip_test PRIVATE include)
+    add_test(NAME launcher_device_roundtrip_test
+             COMMAND launcher_device_roundtrip_test)
+
     add_executable(psx_cyc_batch_test tests/test_psx_cyc_batch.c)
     target_include_directories(psx_cyc_batch_test PRIVATE include)
     target_compile_definitions(psx_cyc_batch_test PRIVATE
@@ -78,6 +84,31 @@ if(BUILD_TESTING)
         src/overlay_path_canon.c)
     target_include_directories(overlay_path_canon_test PRIVATE include)
     add_test(NAME overlay_path_canon_test COMMAND overlay_path_canon_test)
+
+    # Either member of a disc dump (.cue or .bin) is a valid pick: both mount
+    # the same disc and identify off the same data track.
+    add_executable(disc_path_resolve_test
+        tests/test_disc_path_resolve.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
+        src/iso_reader.cpp)
+    target_include_directories(disc_path_resolve_test PRIVATE include)
+    add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
+
+    # Both BIOS filename conventions (bare vs region-qualified) resolve, in
+    # both directions, so a config and a dump folder may disagree.
+    add_executable(bios_rom_alias_test tests/test_bios_rom_alias.cpp)
+    target_include_directories(bios_rom_alias_test PRIVATE
+        ${PSXRECOMP_ROOT}/recompiler/include)
+    add_test(NAME bios_rom_alias_test COMMAND bios_rom_alias_test)
+
+    # Multi-file cue TOC mapping (data track + CD-DA in separate bins).
+    add_executable(iso_reader_cdda_test
+        tests/test_iso_reader_cdda.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_cdda_test PRIVATE include)
+    add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
 
     if(WIN32)
         add_executable(autocompile_publication_test

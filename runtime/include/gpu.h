@@ -44,6 +44,10 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
  * trailing margin without shrinking the CRTC-derived width globally. */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
+/* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip
+ * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
+ * per vblank; returns non-zero while the hold is still active after tick. */
+int      gpu_depth24_present_hold_tick(void);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);

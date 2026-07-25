@@ -58,7 +58,10 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "game_options.h"
 #include "crc32.h"
 #include "disc_identity.h"
+#include "disc_path.h"
+#include "bios_rom_alias.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
+#include "launcher_device.h" /* recomp-ui controller-source round-trip */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
@@ -733,7 +736,9 @@ static uint64_t g_legacy_underruns = 0;
 int g_audio_unmute_resync = 0;
 /* Actual device rate the host opened at (bridge mode may differ from 44100;
  * the T3 tap ring runs at this rate and its WAV dump must say so). */
-extern "C" int g_audio_host_rate = 44100;
+extern "C" {
+int g_audio_host_rate = 44100;
+}
 
 static void sdl_drc_callback(void* /*user*/, Uint8* stream, int len) {
     if (!s_drc_ready) { std::memset(stream, 0, (size_t)len); return; }
@@ -872,12 +877,14 @@ static std::string s_bundled_bios_rel  = "bios/openbios.bin";
 #endif
 
 static bool pick_runtime_file(const char* title, const char* filter,
-                              std::filesystem::path& out) {
+                              std::filesystem::path& out, const char* cli_flag) {
     // Headless: never open an interactive file dialog (it blocks). Fail the
     // resolve so boot aborts cleanly with the stderr message the caller printed.
     if (g_headless) {
-        std::fprintf(stderr, "psxrecomp: headless — cannot prompt for '%s'; "
-                             "supply it via game.toml / --disc / --bios.\n", title);
+        std::fprintf(stderr,
+            "psxrecomp: headless — cannot prompt for '%s'.\n"
+            "  Supply it on the command line:  %s <path>   (or set it in game.toml).\n",
+            title, cli_flag);
         return false;
     }
 #ifdef _WIN32
@@ -900,7 +907,16 @@ static bool pick_runtime_file(const char* title, const char* filter,
 #else
     (void)filter;
     (void)out;
-    std::fprintf(stderr, "psxrecomp: %s requires a command-line path on this platform.\n", title);
+    // No native GUI file picker on this platform (macOS/Linux): the file must be
+    // named on the command line. Tell the user the exact flag + a full example
+    // instead of a dead-end "requires a command-line path".
+    std::fprintf(stderr,
+        "psxrecomp: no graphical file picker on this platform — '%s'\n"
+        "  must be supplied on the command line:  %s <path>\n"
+        "  Example:  ./<game-exe> --game game.toml "
+        "--bios /path/to/SCPH1001.BIN --disc /path/to/game.cue\n"
+        "  (or set the path in game.toml). See the game's README, \"Building From Source\".\n",
+        title, cli_flag);
     return false;
 #endif
 }
@@ -977,28 +993,18 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
     return true;
 }
 
+// Canonicalize whichever member of a dump the user pointed us at. Picking the
+// .cue and picking the .bin must both mount and both verify — see
+// runtime/include/disc_path.h for the preference rules. This used to swap a
+// .cue for its same-named .bin unconditionally, which silently discarded the
+// cue's table of contents (and with it every CD-DA track and pregap) on
+// single-file multi-track dumps.
+// Pure: no dialog here. Every caller feeds the result to
+// validate_disc_for_launch(), whose detail text already carries the resolver's
+// note (identify_disc surfaces it), so a broken dump is reported exactly once
+// instead of popping a modal on every boot.
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path p = fs::absolute(path, ec);
-    if (ec) p = path;
-
-    if (uppercase_ascii(p.extension().string()) == ".CUE") {
-        fs::path bin = p;
-        bin.replace_extension(".bin");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-        ec.clear();
-        bin.replace_extension(".BIN");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-    }
-
-    return p;
+    return PSXRecompV4::resolve_disc_path(path).mount;
 }
 
 /* Which compiled-in backend, if any, was recompiled from THIS file?
@@ -1135,7 +1141,7 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
         if (!pick_runtime_file(
                 bios_title.c_str(),
                 "PlayStation BIOS (*.bin)\0*.bin\0All Files (*.*)\0*.*\0",
-                picked)) {
+                picked, "--bios")) {
             return {};
         }
         if (validate_bios_for_launch(picked)) {
@@ -1194,7 +1200,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         if (!pick_runtime_file(
                 disc_title.c_str(),
                 "PS1 Disc Images (*.cue;*.bin;*.iso)\0*.cue;*.bin;*.iso\0All Files (*.*)\0*.*\0",
-                picked)) {
+                picked, "--disc")) {
             return {};
         }
         picked = normalize_disc_path_for_launch(picked);
@@ -1213,11 +1219,26 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
         fs::path abs = fs::absolute(p, ec);
         return ec ? p : abs;
     }
+    // Either BIOS filename convention is acceptable: a dump folder holding
+    // "US-PSX-SCPH1001.BIN" satisfies a request for "SCPH1001.BIN" and vice
+    // versa (see recompiler/include/bios_rom_alias.h).
+    if (fs::path aliased = PSXRecompV4::resolve_bios_rom(p); aliased != p) {
+        fs::path abs = fs::absolute(aliased, ec);
+        return ec ? aliased : abs;
+    }
     if (p.is_absolute()) return p;
 
     // Anchor on the exe directory — never cwd (see exe_dir_from_argv).
     fs::path found = find_upward(exe_dir_from_argv(argv0), p);
     if (!found.empty()) return found / p;
+    // Same walk, accepting the other naming convention at each rung: the
+    // literal name is absent but a region-qualified sibling may be present.
+    for (fs::path dir = fs::absolute(exe_dir_from_argv(argv0), ec);
+         !dir.empty(); dir = dir.parent_path()) {
+        const fs::path aliased = PSXRecompV4::resolve_bios_rom(dir / p);
+        if (aliased != dir / p && fs::exists(aliased, ec)) return aliased;
+        if (!dir.has_parent_path() || dir.parent_path() == dir) break;
+    }
 
     // Dev-checkout rung: game projects keep the framework at
     // <game root>/psxrecomp-v4 (junction/worktree), so a relative default like
@@ -3141,36 +3162,23 @@ static void load_transition_note(int read_active, int load_active,
     prev_turbo = turbo_active;
 }
 
-/* Depth24 FMV: last ~8 RGB columns can be stale/chroma junk while CRTC width
- * stays full (e.g. MotK 512). Present width is never shrunk — cropping the
- * GL/SDL rect left a flickering black pillar when upload coverage varied.
+/* Depth24 FMV: trailing RGB columns can be stale while CRTC width stays full
+ * (MotK 512). Present width is never shrunk — cropping the GL/SDL rect left a
+ * flickering black pillar when upload coverage varied.
  *
- * Do NOT replicate the last good column: on MotK's starfield intro that turns
- * a single tinted edge pixel into an 8-wide horizontal streak (flickering
- * stretch into the pillar). Black-fill the margin instead. Require a dense
- * chroma signal so sparse stars never trip the repair. */
-static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h) {
-    if (!buf || w < 24u || h == 0u) return;
-    const uint32_t margin = 8u;
-    const uint32_t edge = w - margin;
-    const uint32_t total = margin * h;
-    uint32_t junk_px = 0;
-    for (uint32_t x = edge; x < w; x++) {
-        for (uint32_t y = 0; y < h; y++) {
-            uint32_t p = buf[y * w + x];
-            int r = (int)((p >> 16) & 255u);
-            int g = (int)((p >> 8) & 255u);
-            int b = (int)(p & 255u);
-            int m = (r + g + b) / 3;
-            int ch = (r > m ? r - m : m - r) + (g > m ? g - m : m - g) +
-                     (b > m ? b - m : m - b);
-            if (ch > 40) junk_px++;
-        }
-    }
-    /* ~12% of margin texels — sparse stars stay; dense chroma fringe cleans. */
-    if (total == 0u || junk_px * 100u < total * 12u) return;
+ * Always black-fill the last 8 RGB cols. Also blank beyond the tracked FB A0
+ * span when it falls short of the CRTC (movie cut / partial cover). Do NOT
+ * replicate the last good column — that smeared MotK's starfield into an
+ * 8-wide streak. */
+static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
+                                          uint32_t display_x) {
+    if (!buf || w < 8u || h == 0u) return;
+    uint32_t start = w - 8u;
+    uint32_t lim = gpu_depth24_rgb_limit(display_x, w);
+    if (lim > 0u && lim < w && lim < start)
+        start = lim;
     for (uint32_t y = 0; y < h; y++) {
-        for (uint32_t x = edge; x < w; x++)
+        for (uint32_t x = start; x < w; x++)
             buf[y * w + x] = 0xFF000000u;
     }
 }
@@ -3584,6 +3592,15 @@ static void sdl_vblank_present(void) {
      * the actual wide compositor remains disengaged until game entry. */
     update_adaptive_widescreen();
 
+    /* Resize-driven mode updates the pending aspect during BIOS boot too, but
+     * the actual wide compositor remains disengaged until game entry. */
+    update_adaptive_widescreen();
+
+    /* Depth24 GP1(07h) retarget (MotK intro→crawl): keep the prior Swap for a
+     * few vblanks so stale trailing VRAM never flashes on the right edge. */
+    if (gpu_depth24_present_hold_tick())
+        return;
+
     /* Engage widescreen at game entry: BIOS boot stays authentic 4:3. */
     if (!g_ws_engaged) {
         extern int fntrace_is_game_started(void);
@@ -3724,9 +3741,10 @@ static void sdl_vblank_present(void) {
                     for (uint32_t x = 0; x < present_w; x++)
                         sdl_pixel_buf[y * present_w + x] =
                             gpu_display_pixel_argb(&di, x, y);
-                /* Trailing margin: replicate last good column into junk cols
-                 * inside the full-width buffer — never shrink present width. */
-                depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h);
+                /* Trailing margin: blank junk cols inside the full-width
+                 * buffer — never shrink present width. */
+                depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
+                                             di.display_x);
                 vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w, (int)h,
                                         0 /* nearest */, fmv_frame ? 1 : 0);
             } else if (wide_present &&
@@ -3788,11 +3806,12 @@ static void sdl_vblank_present(void) {
             }
         }
 
-        /* Depth24 trailing margin: MotK CRTC is 512 RGB but the last ~8 cols
+        /* Depth24 trailing margin: MotK CRTC is 512 RGB but trailing cols
          * can be stale. Fix pixels in-place at full present_w — never crop the
          * GL/SDL draw width (that caused a flickering black pillar). */
         if (di.depth24 && active_scale == 1 && !wide_present)
-            depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h);
+            depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
+                                         di.display_x);
 
         smooth_60_present(sdl_pixel_buf,
                           present_w * (uint32_t)active_scale,
@@ -3870,8 +3889,10 @@ static void sdl_vblank_present(void) {
     int dst_w = pin_43 ? 640 * g_video_scale : g_logical_w;
     int dst_h = 480 * g_video_scale;
     SDL_Rect dst = { (g_logical_w - dst_w) / 2, 0, dst_w, dst_h };
-    /* Match GL: short display bands letterbox inside the 4:3 rect. */
-    if (pin_43 && h > 0 && h < 240) {
+    /* Match GL: short display bands letterbox inside the 4:3 rect — FMV only
+     * (depth24), and only genuinely windowed bands (<80% of the field; a
+     * native short display mode like 216/224 fills the rect). */
+    if (pin_43 && depth24_frame && h > 0 && h < 192) {
         int content_h = (dst_h * (int)h) / 240;
         if (content_h < 1) content_h = 1;
         dst.y = (dst_h - content_h) / 2;
@@ -3955,6 +3976,7 @@ namespace {
     bool g_lnch_hosting_lan = false;
     bool g_lnch_joined_lan = false;
     std::string g_lnch_lan_endpoint;
+    std::string g_lnch_lan_guest_bind;
 
     struct AeLanLobbyState {
         std::string name;
@@ -4016,6 +4038,7 @@ namespace {
         g_lnch_hosting_lan = true;
         g_lnch_joined_lan = false;
         g_lnch_lan_endpoint = state.endpoint;
+        g_lnch_lan_guest_bind.clear();
     }
 
     int ae_np_read_lan_lobby(RecompLauncherCNetplayLobby* out) {
@@ -4293,6 +4316,7 @@ namespace {
         }
         g_lnch_joined_lan = false;
         g_lnch_lan_endpoint.clear();
+        g_lnch_lan_guest_bind.clear();
         if (host_endpoint)
             std::snprintf(host_endpoint, 96, "%s", endpoint);
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
@@ -4300,7 +4324,21 @@ namespace {
                                 password ? password : "", endpoint, &caps);
     }
 
-    int ae_np_join(void*, const char* lobby_id, const char* password) {
+    /* guest_bind is in/out (capacity >= 64). recomp-ui fills a real UDP port
+     * (prefer 7778); never advertise :0 to the lobby. */
+    int ae_np_join(void*, const char* lobby_id, const char* password,
+                   char* guest_bind) {
+        char bind_buf[64];
+        const char* bind = guest_bind;
+        const char* colon = (bind && bind[0]) ? std::strrchr(bind, ':') : nullptr;
+        const unsigned port = (colon && colon[1])
+            ? static_cast<unsigned>(std::strtoul(colon + 1, nullptr, 10)) : 0u;
+        if (!bind || !bind[0] || port == 0u) {
+            std::snprintf(bind_buf, sizeof(bind_buf), "0.0.0.0:7778");
+            bind = bind_buf;
+            if (guest_bind)
+                std::snprintf(guest_bind, 64, "%s", bind_buf);
+        }
         if (lobby_id && strncmp(lobby_id, "lan:", 4) == 0) {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state) || !state.joiner_name.empty()) return -1;
@@ -4312,9 +4350,10 @@ namespace {
             g_lnch_hosting_lan = false;
             g_lnch_joined_lan = true;
             g_lnch_lan_endpoint = state.endpoint;
+            g_lnch_lan_guest_bind = bind;
             return 0;
         }
-        return psx_lobby_join(lobby_id, password ? password : "", "0.0.0.0:0");
+        return psx_lobby_join(lobby_id, password ? password : "", bind);
     }
 
     int ae_np_leave(void*) {
@@ -4332,6 +4371,7 @@ namespace {
         }
         g_lnch_joined_lan = false;
         g_lnch_lan_endpoint.clear();
+        g_lnch_lan_guest_bind.clear();
         g_lnch_pending_direct_launch = {};
         return psx_lobby_leave();
     }
@@ -4416,7 +4456,9 @@ namespace {
                                   "0.0.0.0:%s", port);
                 } else {
                     std::snprintf(g_lnch_pending_direct_launch.bind_hostport,
-                                  sizeof(g_lnch_pending_direct_launch.bind_hostport), "0.0.0.0:0");
+                                  sizeof(g_lnch_pending_direct_launch.bind_hostport), "%s",
+                                  g_lnch_lan_guest_bind.empty()
+                                      ? "0.0.0.0:0" : g_lnch_lan_guest_bind.c_str());
                     std::snprintf(g_lnch_pending_direct_launch.peer_hostport,
                                   sizeof(g_lnch_pending_direct_launch.peer_hostport), "%s",
                                   state.endpoint.c_str());
@@ -5391,7 +5433,7 @@ int main(int argc, char** argv) {
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
-                                     + " \xE2\x80\x94 Launcher";
+                                     + " - Launcher";
 
             RecompLauncherCSettings ls{};
             ls.output_method  = 2;  /* OpenGL */
@@ -5404,8 +5446,20 @@ int main(int argc, char** argv) {
             ls.enable_audio   = 1;
             ls.audio_freq     = 44100;
             ls.volume         = 100;
-            ls.player_src[0]  = (p1_device == "keyboard") ? 1 : (p1_device == "none") ? 0 : 2;
-            ls.player_src[1]  = (p2_device == "keyboard") ? 1 : (p2_device == "none") ? 0 : 2;
+            ls.player_src[0]  = PSXRecompV4::launcher_source_from_device(p1_device);
+            ls.player_src[1]  = PSXRecompV4::launcher_source_from_device(p2_device);
+#if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_GUID)
+            if (ls.player_src[0] == 2) {
+                std::snprintf(ls.player_gamepad_guid[0],
+                              sizeof(ls.player_gamepad_guid[0]), "%s",
+                              p1_device.c_str());
+            }
+            if (ls.player_src[1] == 2) {
+                std::snprintf(ls.player_gamepad_guid[1],
+                              sizeof(ls.player_gamepad_guid[1]), "%s",
+                              p2_device.c_str());
+            }
+#endif
             {
                 int rui_deadzone_pct = seed.deadzone * 100 / 32767;
                 ls.deadzone[0] = rui_deadzone_pct;
@@ -5601,8 +5655,18 @@ int main(int argc, char** argv) {
                  * is the legacy fallback field for consoles without the cap and is
                  * left unused here. */
                 seed.texture_filter = ls.texture_filter ? 1 : 0; seed.has_texture_filter = true;
-                p1_device = (ls.player_src[0] == 1) ? "keyboard" : (ls.player_src[0] == 0) ? "none" : p1_device;
-                p2_device = (ls.player_src[1] == 1) ? "keyboard" : (ls.player_src[1] == 0) ? "none" : p2_device;
+                std::string p1_launcher_device = p1_device;
+                std::string p2_launcher_device = p2_device;
+#if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_GUID)
+                if (ls.player_gamepad_guid[0][0])
+                    p1_launcher_device = ls.player_gamepad_guid[0];
+                if (ls.player_gamepad_guid[1][0])
+                    p2_launcher_device = ls.player_gamepad_guid[1];
+#endif
+                p1_device = PSXRecompV4::launcher_device_from_source(
+                    ls.player_src[0], p1_launcher_device);
+                p2_device = PSXRecompV4::launcher_device_from_source(
+                    ls.player_src[1], p2_launcher_device);
                 seed.p1_device = p1_device; seed.has_p1_device = true;
                 seed.p2_device = p2_device; seed.has_p2_device = true;
                 seed.deadzone = ls.deadzone[0] * 32767 / 100; seed.has_deadzone = true;
@@ -5873,6 +5937,29 @@ session_reboot:
         std::fprintf(stdout, "psxrecomp: SPU float-shadow enabled (verified-enhancement)\n");
     spu_init();
     cdrom_init(disc_path_str.empty() ? NULL : disc_path_str.c_str());
+
+    /* A disc was requested but nothing mounted. cdrom_init() is non-fatal here
+     * (BIOS-only targets run with an empty drive on purpose), so without this
+     * check the game would boot into an empty drive and render NOTHING -- the
+     * "black screen on a .cue that works as a .bin" symptom. The earlier
+     * validate_disc_for_launch() pass cannot catch it: identify_disc() reads
+     * the data track FILE directly, so a cue whose sheet the mounting reader
+     * rejects still shows a green "Disc verified" badge. Report the actual
+     * failure instead of leaving the player staring at black. */
+    if (!disc_path_str.empty() && !cdrom_has_disc()) {
+        const PSXRecompV4::DiscPathResolution r =
+            PSXRecompV4::resolve_disc_path(disc_path_str);
+        std::string detail =
+            "The disc image was found and verified, but the CD-ROM drive could "
+            "not mount it, so the game would boot with an empty drive.\n\n"
+            "Selected:\n" + disc_path_str;
+        if (r.mount != r.picked) detail += "\nMounted as:\n" + r.mount.string();
+        if (!r.note.empty())     detail += "\n\n" + r.note;
+        detail += "\n\nIf this is a .cue, check that every FILE line it names "
+                  "exists next to it; selecting the .bin directly also works.";
+        launcher_warning("Disc Could Not Be Mounted", detail);
+        return 1;
+    }
     for (const auto& route : warm_cd_routes) {
         cdrom_register_warm_route(route.arm_lba, route.lbas.data(),
                                   (int)route.lbas.size(),

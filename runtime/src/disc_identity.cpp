@@ -7,6 +7,7 @@
 #include "disc_identity.h"
 
 #include "crc32.h"
+#include "disc_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -24,47 +25,6 @@ namespace {
 std::string uppercase_ascii(std::string s) {
     for (char& c : s) c = (char)std::toupper((unsigned char)c);
     return s;
-}
-
-bool ends_with_ci(const std::string& s, const std::string& suffix) {
-    if (s.size() < suffix.size()) return false;
-    for (size_t i = 0; i < suffix.size(); i++) {
-        char a = (char)std::toupper((unsigned char)s[s.size() - suffix.size() + i]);
-        char b = (char)std::toupper((unsigned char)suffix[i]);
-        if (a != b) return false;
-    }
-    return true;
-}
-
-// If `path` is a .cue, return the first BINARY FILE it references (resolved
-// relative to the cue's directory). Otherwise return `path` unchanged.
-fs::path cue_data_path(const fs::path& path) {
-    if (!ends_with_ci(path.string(), ".cue")) return path;
-    std::ifstream cue(path);
-    if (!cue.is_open()) return path;
-
-    std::string line;
-    while (std::getline(cue, line)) {
-        const std::string upper = uppercase_ascii(line);
-        if (upper.find("FILE") == std::string::npos ||
-            upper.find("BINARY") == std::string::npos)
-            continue;
-        const size_t file_pos = upper.find("FILE");
-        size_t q1 = line.find('"', file_pos);
-        size_t q2 = (q1 == std::string::npos) ? std::string::npos : line.find('"', q1 + 1);
-        std::string bin_name;
-        if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1) {
-            bin_name = line.substr(q1 + 1, q2 - q1 - 1);
-        } else {
-            std::istringstream iss(line.substr(file_pos + 4));
-            iss >> bin_name;
-        }
-        if (bin_name.empty()) break;
-        fs::path bin_path(bin_name);
-        if (bin_path.is_relative()) return path.parent_path() / bin_path;
-        return bin_path;
-    }
-    return path;
 }
 
 bool read_at(std::ifstream& f, uint64_t offset, uint8_t* out, size_t len) {
@@ -162,10 +122,16 @@ DiscIdentity identify_disc(const fs::path& path,
     v.expected_serial_given = !expected_serial.empty();
     v.expected_crc_given    = has_expected_crc;
 
-    const fs::path data_path = cue_data_path(path);
+    // Resolve through the shared picked-path resolver so identity is read from
+    // the data track no matter which member of the dump the user handed us —
+    // the .cue and its .bin must produce the same verdict, serial and CRC32.
+    const DiscPathResolution resolved = resolve_disc_path(path);
+    const fs::path data_path = resolved.data;
     std::ifstream f(data_path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) {
-        v.detail = "Could not open the disc image or its CUE-referenced BIN file.";
+        v.detail = resolved.note.empty()
+                       ? "Could not open the disc image or its CUE-referenced BIN file."
+                       : resolved.note;
         return v;
     }
     v.opened = true;

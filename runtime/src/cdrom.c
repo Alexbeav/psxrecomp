@@ -2316,6 +2316,10 @@ void cdrom_init(const char* cue_path) {
     trace_cdrom('N', 0, has_disc() ? 1u : 0u, 0);
 }
 
+int cdrom_has_disc(void) {
+    return has_disc();
+}
+
 uint32_t cdrom_read(uint32_t addr) {
     uint32_t ret = 0;
     switch (addr) {

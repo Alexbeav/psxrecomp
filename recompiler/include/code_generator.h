@@ -101,6 +101,11 @@ struct CodeGenConfig {
     // the auto-detector cannot qualify (X-only test, no height compare).
     std::set<uint32_t> ws_cull_slti_sites;
 
+    // `bltz rs, reject` emitted through psx_ws_cull_bltz — the explicit
+    // LEFT-edge counterpart to ws_cull_slti_sites ([widescreen.cull]
+    // bltz_sites), for X-only funnels the auto-detector cannot qualify.
+    std::set<uint32_t> ws_cull_bltz_sites;
+
     // Explicit horizontal low-edge widen sites ([widescreen.cull]
     // negsub_sites): `subu rd, zero, rs` becomes `-rs - x_margin`.
     // Identity at 4:3; empty by default.
