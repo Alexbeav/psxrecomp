@@ -312,17 +312,44 @@ int main(int argc, char** argv) {
     static PSXRecompV4::BiosAddressModel s_bios_model;
     {
         std::filesystem::path prof = bios_profile_path;
+        /* An explicit bios_config that does not resolve is a different failure
+         * from having none at all — say which, or the message sends you looking
+         * for an unset key that is in fact set. */
+        if (!prof.empty() && !std::filesystem::exists(prof)) {
+            fmt::print(stderr,
+                "psxrecomp-game: FATAL: [recompiler] bios_config = '{}' does "
+                "not exist (path is relative to the game project root)\n",
+                prof.string());
+            return 1;
+        }
         if (prof.empty()) {
-            for (const char* cand : { "bios/SCPH1001.toml",
-                                      "psxrecomp/bios/SCPH1001.toml" }) {
-                if (std::filesystem::exists(cand)) { prof = cand; break; }
+            if (std::filesystem::exists("bios/SCPH1001.toml")) {
+                prof = "bios/SCPH1001.toml";          /* framework checkout */
+            } else {
+                /* Game repo vendoring the framework. Do NOT assume the
+                 * directory is named "psxrecomp": ApeEscapeRecomp vendors it as
+                 * "psxrecomp-v4", and hardcoding the name made regeneration
+                 * fail outright there. Probe one level for any vendored
+                 * framework, sorted so the pick is deterministic. */
+                std::vector<std::filesystem::path> found;
+                std::error_code ec;
+                for (const auto& de :
+                         std::filesystem::directory_iterator(".", ec)) {
+                    if (ec) break;
+                    if (!de.is_directory(ec) || ec) continue;
+                    auto cand = de.path() / "bios" / "SCPH1001.toml";
+                    if (std::filesystem::exists(cand)) found.push_back(cand);
+                }
+                std::sort(found.begin(), found.end());
+                if (!found.empty()) prof = found.front();
             }
         }
-        if (prof.empty() || !std::filesystem::exists(prof)) {
+        if (prof.empty()) {
             fmt::print(stderr,
                 "psxrecomp-game: FATAL: no BIOS profile found (set "
                 "[recompiler] bios_config in game.toml, or run from a root "
-                "containing bios/SCPH1001.toml or psxrecomp/bios/SCPH1001.toml)\n");
+                "containing bios/SCPH1001.toml or <framework>/bios/"
+                "SCPH1001.toml)\n");
             return 1;
         }
         const auto bios_cfg = PSXRecompV4::load_bios_config(prof);
