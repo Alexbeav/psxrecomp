@@ -1316,7 +1316,23 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
         if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
         cpu->gpr[0] = 0;
     } else if (s_ld_pend_armed) {
-        s_ld_pend_age = 1u;   /* this instruction IS the delay slot: stay hidden */
+        /* LWL/LWR exemption. `lwl rt,x` immediately followed by `lwr rt,y` is
+         * THE unaligned-load idiom every MIPS compiler emits, and MIPS-I
+         * explicitly permits the pair back-to-back: the second half merges with
+         * the first's result rather than the pre-load register. Hiding the
+         * pending write here would make the merge read a stale rt and silently
+         * corrupt every unaligned load (it wedged Tomba 2 at boot). Retire the
+         * write early so the partner sees it — this is forwarding, not a
+         * shortcut around the delay slot. */
+        const uint32_t nx_op = op_field(insn);
+        const int is_lwlr = (nx_op == 0x22u || nx_op == 0x26u);
+        if (is_lwlr && rt_field(insn) == s_ld_pend_rt) {
+            s_ld_pend_armed = 0;
+            if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
+            cpu->gpr[0] = 0;
+        } else {
+            s_ld_pend_age = 1u; /* this instruction IS the delay slot: stay hidden */
+        }
     }
 
     /* op 0x20..0x26 = LB/LH/LWL/LW/LBU/LHU/LWR. LWC2 (GTE, 0x32) targets a COP2
