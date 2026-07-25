@@ -168,6 +168,22 @@ void test_cue_syntax_tolerance(const fs::path& root) {
     check(lower.usable(), "syntax: lowercase + unquoted + CRLF parses");
     check(same(lower.files.front().path, dir / "game.bin"), "syntax: resolves the payload");
 
+    // THE BLACK-SCREEN CASE. The old mount-side parser matched the literal
+    // uppercase "BINARY" and required a quoted filename, so a cue like the one
+    // above made ISOReader::Open() return false -- while the verify side
+    // (identify_disc) uppercased the line, found the payload, and happily
+    // reported "Disc verified". The launcher therefore showed a green badge and
+    // the runtime then booted with an EMPTY DRIVE: a black screen that went
+    // away if you picked the .bin instead. Both sides share one parser now, so
+    // pin that they agree: this cue must MOUNT, not just parse.
+    {
+        PS1::ISOReader r;
+        check(r.Open((dir / "lower.cue").string()),
+              "syntax: a cue the verify side accepts must also MOUNT (black-screen regression)");
+        check(r.TrackCount() >= 1, "syntax: mounted cue exposes its data track");
+        r.Close();
+    }
+
     // A WAVE payload has no fixed sector geometry — refuse rather than guess.
     write_text(dir / "wave.cue",
                "FILE \"game.bin\" BINARY\n"
