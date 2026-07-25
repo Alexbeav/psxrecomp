@@ -83,3 +83,16 @@ int psx_bios_activate(const PsxBiosBackend *backend)
     psx_bios_kernel_body_count  = backend->kernel_body_count;
     return 1;
 }
+
+/* Is there any image the player could supply, i.e. a linked backend that is
+ * NOT the bundled one? Drives whether the launcher shows its BIOS row: with
+ * both a bundled and a retail image linked, a player must be able to opt into
+ * the retail one (and clear back). */
+int psx_bios_has_selectable(void)
+{
+    for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
+        const PsxBiosBackend *b = psx_bios_registry[i];
+        if (b && b->image && !b->image->image_bundled) return 1;
+    }
+    return 0;
+}

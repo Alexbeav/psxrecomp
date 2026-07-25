@@ -5173,11 +5173,17 @@ int main(int argc, char** argv) {
          * as-hide treatment as lock_mode / ws_offered below) so a stale
          * settings.toml or launcher-less build can never point a bundled
          * build at a foreign image. The identity gate is the backstop. */
-        /* A BIOS named in settings.toml is a player choice. Note this runs
-         * BEFORE any backend is activated, so it must not consult
-         * psx_bios_image (all-zero until selection) — ask the registry. */
-        if (us.has_bios_path && !bios_from_cli &&
-            !(s_openbios_allowed && psx_bios_bundled() != nullptr)) {
+        /* A non-empty BIOS in settings.toml is the player's choice, made in
+         * the launcher's SYSTEM row, and is honoured on every build — that row
+         * is the only way to opt into a retail image now that bundled builds
+         * no longer prompt. An EMPTY value is equally meaningful: it is the
+         * launcher's Clear, i.e. "go back to the bundled BIOS", so it must NOT
+         * be adopted as a path.
+         *
+         * The identity gate is what protects a bundled build from a stale or
+         * foreign path here — previously this was guarded by refusing to read
+         * the setting at all, which would now silently ignore the player. */
+        if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
             settings_bios_storage = us.bios_path.string();
             bios_path = settings_bios_storage.c_str();
             bios_explicit = true;
@@ -5503,12 +5509,15 @@ int main(int argc, char** argv) {
              * drifting apart across PSX titles. Per-game specifics below override
              * only what the profile can't know. */
             launcher_profile_apply("psx", &gi);
-            /* Bundled-BIOS builds (psx_bios_image.image_bundled — a
-             * redistributable image like OpenBIOS ships next to the exe and
-             * the identity hard-gate pins it) hide the SYSTEM module's BIOS
-             * picker: there is nothing for the player to select, and a picked
-             * path would be ignored by resolve_bios_for_runtime anyway. */
-            gi.has_bios             = psx_bios_image.image_bundled ? 0 : 1;
+            /* Show the SYSTEM module's BIOS row whenever this build can
+             * actually use a player-supplied image — i.e. some linked backend
+             * is not the bundled one. Bundled builds used to hide the row
+             * entirely, which under the current model would strand the player:
+             * with OpenBIOS AND a retail image linked, choosing retail (and
+             * clearing back to bundled) is exactly what the row is for.
+             * Asks the registry rather than psx_bios_image, which is not
+             * populated until a backend is activated. */
+            gi.has_bios             = psx_bios_has_selectable();
             gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
             gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit

@@ -72,6 +72,10 @@ int psx_bios_activate(const PsxBiosBackend *backend);
  * build has none. */
 const PsxBiosBackend *psx_bios_bundled(void);
 
+/* True if a player-supplied image is meaningful for this build (some linked
+ * backend is not the bundled one). */
+int psx_bios_has_selectable(void);
+
 #ifdef __cplusplus
 }
 #endif
