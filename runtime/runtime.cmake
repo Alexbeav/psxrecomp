@@ -179,7 +179,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
 # Optional delay-sync netplay (recomp-net). Auto-discovers a sibling checkout
 # (…/recomp-net next to the game repo or next to psxrecomp). Override with
 # -DRECOMP_NET_ROOT=… or -DPSX_NETPLAY=OFF.
-option(PSX_NETPLAY "Link recomp-net delay-sync when available" ON)
+# OFF by default: netplay is a per-title opt-in, not something every build
+# carries. Most titles here are single-player, and an ON default silently
+# pulled in the recomp-net library, the lobby WebSocket client and their link
+# deps for games that can never use them. A multiplayer title opts in with
+# -DPSX_NETPLAY=ON (or sets it before including this file).
+option(PSX_NETPLAY "Link recomp-net delay-sync (opt-in; needs recomp-net)" OFF)
 set(RECOMP_NET_ROOT "" CACHE PATH "Path to recomp-net; empty = auto-discover")
 if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
     foreach(_cand
@@ -213,7 +218,12 @@ endif()
 # Lobby WebSocket client helpers are vendored under runtime/src/lobby_ws/
 # (protocol talks to the proprietary recomp-net-server, not recomp-net).
 set(PSXRECOMP_LOBBY_WS_DIR "${PSXRECOMP_ROOT}/runtime/src/lobby_ws")
-if(EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c" AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_sha1.c")
+# Gated on PSX_NETPLAY: this is the client for the netplay lobby server, so it
+# is dead weight in a single-player build. It used to enable itself on nothing
+# more than the source files existing, i.e. always.
+if(PSX_NETPLAY
+   AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c"
+   AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_sha1.c")
     set(PSXRECOMP_HAS_LOBBY_CLIENT TRUE)
     list(APPEND PSXRECOMP_RUNTIME_SOURCES
         ${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c
