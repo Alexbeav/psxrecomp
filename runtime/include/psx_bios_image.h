@@ -28,8 +28,20 @@ typedef struct {
     uint32_t body_hi;  /* exclusive */
 } PsxKernelBody;
 
-extern const PsxKernelBody psx_bios_kernel_bodies[];
-extern const uint32_t      psx_bios_kernel_body_count;
+/* Published from the ACTIVE backend at selection (psx_bios_backend.c),
+ * hence a pointer rather than an array: a build links more than one
+ * recompiled BIOS and each carries its own table. Indexing is unchanged
+ * for consumers. */
+extern const PsxKernelBody *psx_bios_kernel_bodies;
+extern uint32_t             psx_bios_kernel_body_count;
+
+/* Native call-stub extents (A0/B0/C0). Layout shared with the generated
+ * dispatch, which keeps its own static table. */
+typedef struct {
+    uint32_t key;
+    uint32_t body_lo;
+    uint32_t body_hi;
+} PsxNativeStub;
 
 typedef struct {
     /* Kernel-bless window (profile address_model copy with kernel_bless):
@@ -57,7 +69,9 @@ typedef struct {
     int         image_bundled;
 } PsxBiosImageInfo;
 
-extern const PsxBiosImageInfo psx_bios_image;
+/* Assigned from the active backend at selection; not const for that
+ * reason. Reads are unchanged. */
+extern PsxBiosImageInfo psx_bios_image;
 
 #ifdef __cplusplus
 }

@@ -52,6 +52,37 @@ void FullFunctionEmitter::set_bios_profile(const BiosConfig* cfg) {
     g_bios_profile = cfg;
 }
 
+/* Symbol namespace for this BIOS image, derived from the profile's out_stem
+ * (e.g. "OpenBIOS_"). Every symbol this emitter DEFINES is prefixed with it so
+ * two recompiled BIOSes can be linked into one binary and chosen at runtime.
+ *
+ * Scoped deliberately: only names defined here. Runtime-provided externs the
+ * emitted code calls (psx_check_interrupts, psx_cyc_bb_defer_flush,
+ * psx_unknown_dispatch, psx_dispatch_game_compiled, ...) keep their real names,
+ * as does game codegen — code_generator.cpp emits the game's own func_ symbols
+ * and must stay unprefixed, since one game image serves both BIOSes.
+ *
+ * Measured collision set without this: 16 func_ at coincident normalized
+ * addresses plus 6 dispatch entry points. */
+static std::string g_sym_prefix;
+
+/* Name of a BIOS function body: <STEM>_func_1FC00000. */
+static std::string fn_sym(uint32_t norm) {
+    return fmt::format("{}func_{:08X}", g_sym_prefix, norm);
+}
+
+/* Name of a dispatch continuation inside a BIOS function. */
+static std::string cont_sym(uint32_t parent_norm, uint32_t rom_addr) {
+    return fmt::format("{}func_{:08X}_cont_{:08X}", g_sym_prefix, parent_norm,
+                       rom_addr);
+}
+
+/* Name of a dispatch-layer entry point this emitter defines. Pass the bare
+ * name, e.g. rt_sym("psx_dispatch"). */
+static std::string rt_sym(const char* base) {
+    return g_sym_prefix + base;
+}
+
 static const BiosAddressModel& addr_model() {
     if (!g_addr_model) {
         throw std::runtime_error(
@@ -1457,7 +1488,7 @@ bool FullFunctionEmitter::emit_function(
     }
 
     // Emit function header.
-    out += fmt::format("void func_{:08X}(CPUState* cpu) {{\n", norm);
+    out += fmt::format("void {}(CPUState* cpu) {{\n", fn_sym(norm));
     out += "#if defined(PSX_ENABLE_BLOCK_CYCLES) && "
            "(defined(__GNUC__) || defined(__clang__))\n"
            "    __attribute__((cleanup(psx_cyc_bb_defer_cleanup))) "
@@ -1532,7 +1563,20 @@ void FullFunctionEmitter::emit_dispatch(
     out += fmt::format(" * BIOS SHA256: {}\n", bios_sha256);
     out += fmt::format(" * Dispatch entries: {}\n", emitted_normalized.size());
     out += " */\n\n";
+    // Namespace the two externally-visible dispatch entry points to this
+    // image. They are referenced from ~20 emit sites and from the sibling
+    // generated file, so renaming them in the preamble is both smaller and
+    // harder to get wrong than rewriting each reference. The runtime keeps
+    // the unprefixed names as thin forwarders to the ACTIVE bios, which is
+    // what the game's generated C calls. Everything else this file defines
+    // is either static (file-local, cannot collide) or already stem-prefixed.
+    out += fmt::format("#define psx_dispatch      {}psx_dispatch\n", g_sym_prefix);
+    out += fmt::format("#define psx_dispatch_call {}psx_dispatch_call\n\n", g_sym_prefix);
     out += "#include \"cpu_state.h\"\n";
+    // Layouts (PsxKernelBody / PsxBiosImageInfo / PsxNativeStub) and the
+    // backend ABI come from the runtime headers rather than being
+    // re-declared here, so they cannot drift from what the runtime reads.
+    out += "#include \"psx_bios_backend.h\"\n";
     out += "#include <stdint.h>\n";
     out += "#include <stdio.h>\n";
     out += "#include <stdlib.h>\n\n";
@@ -1565,10 +1609,10 @@ void FullFunctionEmitter::emit_dispatch(
         if (continuations.count(norm)) {
             // Continuation wrapper: use the wrapper name.
             const auto& cl = continuations.at(norm);
-            out += fmt::format("extern void func_{:08X}_cont_{:08X}(CPUState* cpu);\n",
-                               cl.parent_func_norm, cl.rom_addr);
+            out += fmt::format("extern void {}(CPUState* cpu);\n",
+                               cont_sym(cl.parent_func_norm, cl.rom_addr));
         } else {
-            out += fmt::format("extern void func_{:08X}(CPUState* cpu);\n", norm);
+            out += fmt::format("extern void {}(CPUState* cpu);\n", fn_sym(norm));
         }
     }
     out += "\n";
@@ -1598,11 +1642,11 @@ void FullFunctionEmitter::emit_dispatch(
                                ba.ram_addr, ba.target_key);
             continue;
         }
-        out += fmt::format("/* BIOS fixed alias: 0x{:08X} -> func_{:08X} */\n",
-                           ba.ram_addr, ba.target_key);
+        out += fmt::format("/* BIOS fixed alias: 0x{:08X} -> {} */\n",
+                           ba.ram_addr, fn_sym(ba.target_key));
         out += fmt::format("static void bios_alias_{:08X}(CPUState* cpu) "
-                           "{{ func_{:08X}(cpu); }}\n\n",
-                           ba.ram_addr, ba.target_key);
+                           "{{ {}(cpu); }}\n\n",
+                           ba.ram_addr, fn_sym(ba.target_key));
         vec_handlers.push_back({ba.ram_addr,
                                  fmt::format("bios_alias_{:08X}", ba.ram_addr)});
     }
@@ -1633,12 +1677,12 @@ void FullFunctionEmitter::emit_dispatch(
                 if (entry == 0u) continue;
                 const uint32_t key = normalize_address(entry);
                 if (emitted_normalized.count(key) == 0) {
-                    out += fmt::format("        /* case 0x{:02X}: func_{:08X} — "
-                                       "not in dispatch table, skipped */\n", i, key);
+                    out += fmt::format("        /* case 0x{:02X}: {} — "
+                                       "not in dispatch table, skipped */\n", i, fn_sym(key));
                     continue;
                 }
-                out += fmt::format("        case 0x{:02X}: func_{:08X}(cpu); return;\n",
-                                   i, key);
+                out += fmt::format("        case 0x{:02X}: {}(cpu); return;\n",
+                                   i, fn_sym(key));
             }
 
             out += "    }\n";
@@ -1693,10 +1737,10 @@ void FullFunctionEmitter::emit_dispatch(
     for (uint32_t norm : emitted_normalized) {
         if (continuations.count(norm)) {
             const auto& cl = continuations.at(norm);
-            out += fmt::format("    {{ 0x{:08X}u, func_{:08X}_cont_{:08X} }},\n",
-                               norm, cl.parent_func_norm, cl.rom_addr);
+            out += fmt::format("    {{ 0x{:08X}u, {} }},\n",
+                               norm, cont_sym(cl.parent_func_norm, cl.rom_addr));
         } else {
-            out += fmt::format("    {{ 0x{:08X}u, func_{:08X} }},\n", norm, norm);
+            out += fmt::format("    {{ 0x{:08X}u, {} }},\n", norm, fn_sym(norm));
         }
     }
     out += "};\n\n";
@@ -1740,15 +1784,16 @@ void FullFunctionEmitter::emit_dispatch(
                               norm, lo, hi);
             kb_count++;
         }
-        out += "typedef struct {\n";
-        out += "    uint32_t key;      /* dispatch key (RAM, normalized) */\n";
-        out += "    uint32_t body_lo;  /* RAM extent of code reachable from key */\n";
-        out += "    uint32_t body_hi;  /* exclusive */\n";
-        out += "} PsxKernelBody;\n\n";
-        out += fmt::format("const PsxKernelBody psx_bios_kernel_bodies[{}] = {{\n", kb_count);
+        // Per-image table. static + stem-prefixed: a build links more than
+        // one recompiled BIOS, and only the backend descriptor is exported.
+        // The PsxKernelBody layout now comes from psx_bios_image.h rather
+        // than being re-declared here, so it cannot drift from the runtime.
+        out += fmt::format("static const PsxKernelBody {}psx_bios_kernel_bodies[{}] = {{\n",
+                           g_sym_prefix, kb_count);
         out += kb;
         out += "};\n";
-        out += fmt::format("const uint32_t psx_bios_kernel_body_count = {}u;\n\n", kb_count);
+        out += fmt::format("static const uint32_t {}psx_bios_kernel_body_count = {}u;\n\n",
+                           g_sym_prefix, kb_count);
     }
 
     // --- Image self-description (runtime/include/psx_bios_image.h) ---
@@ -1775,21 +1820,8 @@ void FullFunctionEmitter::emit_dispatch(
         const uint32_t    kb_off = addr_model().has_kbless() ? addr_model().kbless_rom_off() : 0u;
 
         const int bundled = (g_bios_profile && g_bios_profile->image_redistributable) ? 1 : 0;
-        out += "typedef struct {\n";
-        out += "    uint32_t kbless_ram_lo;\n";
-        out += "    uint32_t kbless_ram_hi;\n";
-        out += "    uint32_t kbless_rom_off;\n";
-        out += "    uint32_t shell_entry_phys;\n";
-        out += "    uint32_t deliver_event_ret;\n";
-        out += "    uint32_t image_size;\n";
-        out += "    uint32_t image_crc32;\n";
-        out += "    uint32_t image_wordsum;\n";
-        out += "    const char* image_sha256;\n";
-        out += "    const char* image_id;\n";
-        out += "    int image_bundled;\n";
-        out += "} PsxBiosImageInfo;\n\n";
         out += fmt::format(
-            "const PsxBiosImageInfo psx_bios_image = {{\n"
+            "static const PsxBiosImageInfo {}psx_bios_image = {{\n"
             "    0x{:08X}u, 0x{:08X}u, 0x{:08X}u,  /* kbless lo/hi/rom_off */\n"
             "    0x{:08X}u,                        /* shell_entry_phys */\n"
             "    0x{:08X}u,                        /* deliver_event_ret */\n"
@@ -1798,7 +1830,7 @@ void FullFunctionEmitter::emit_dispatch(
             "    \"{}\",\n"
             "    {},                               /* image_bundled */\n"
             "}};\n\n",
-            kb_lo, kb_hi, kb_off, sep, der,
+            g_sym_prefix, kb_lo, kb_hi, kb_off, sep, der,
             rom.size(), crc, wsum, bios_sha256, id, bundled);
     }
     // --- Runtime-installed BIOS call-vector stubs ---
@@ -1807,17 +1839,14 @@ void FullFunctionEmitter::emit_dispatch(
     // BIOS-specific, so decode it from live RAM and require the complete shape
     // before taking the native tail transfer. A game/BIOS patch that changes
     // even one word fails closed to dirty_ram_interp below.
-    out += "typedef struct {\n";
-    out += "    uint32_t key;\n";
-    out += "    uint32_t body_lo;\n";
-    out += "    uint32_t body_hi;\n";
-    out += "} PsxNativeStub;\n\n";
-    out += "const PsxNativeStub psx_bios_native_stubs[3] = {\n";
+    out += fmt::format("static const PsxNativeStub {}psx_bios_native_stubs[3] = {{\n",
+                       g_sym_prefix);
     out += "    { 0x000000A0u, 0x000000A0u, 0x000000B0u },\n";
     out += "    { 0x000000B0u, 0x000000B0u, 0x000000C0u },\n";
     out += "    { 0x000000C0u, 0x000000C0u, 0x000000D0u },\n";
     out += "};\n";
-    out += "const uint32_t psx_bios_native_stub_count = 3u;\n\n";
+    out += fmt::format("static const uint32_t {}psx_bios_native_stub_count = 3u;\n\n",
+                       g_sym_prefix);
     out += "static int psx_bios_try_native_call_stub(CPUState* cpu, "
            "uint32_t addr) {\n";
     out += "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
@@ -1857,7 +1886,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "extern void fntrace_record(CPUState* cpu, uint32_t target);\n";
     out += "extern uint64_t g_dispatch_static_hits;\n";
     out += "\n";
-    out += "int g_psx_dispatch_depth = 0;\n\n";
+    out += "extern int g_psx_dispatch_depth;  /* runtime-owned: shared dispatch state, not per-image */\n\n";
     out += "static void psx_dispatch_check_return_boundary(CPUState* cpu, uint32_t stop_addr) {\n";
     out += "    if (stop_addr != 0u) {\n";
     out += "        psx_check_interrupts_at(cpu, stop_addr);\n";
@@ -2110,6 +2139,23 @@ void FullFunctionEmitter::emit_dispatch(
         out += "__attribute__((constructor)) static void psx_cps_mark_bios_ctor(void) { psx_cps_mark_bios(); }\n";
         out += "#endif\n";
     }
+
+    // --- Backend descriptor (runtime/include/psx_bios_backend.h) ---
+    // The ONE symbol this file exports. Everything else it defines is
+    // static or stem-prefixed, so a second recompiled BIOS can be linked
+    // alongside and chosen at runtime. The runtime routes psx_dispatch(),
+    // psx_dispatch_call() and psx_bios_image through the selected backend,
+    // which is why adding one changed no call sites.
+    out += fmt::format(
+        "\n/* Backend descriptor: the one exported symbol of this image. */\n"
+        "const PsxBiosBackend {0}psx_bios_backend = {{" "\n"
+        "    &{0}psx_bios_image," "\n"
+        "    {0}psx_dispatch," "\n"
+        "    {0}psx_dispatch_call," "\n"
+        "    {0}psx_bios_kernel_bodies," "\n"
+        "    {0}psx_bios_kernel_body_count," "\n"
+        "}};" "\n",
+        g_sym_prefix);
 }
 
 // ---------------------------------------------------------------------------
@@ -2128,6 +2174,10 @@ EmitStats FullFunctionEmitter::emit(
     const std::vector<BiosAlias>&       bios_aliases)
 {
     EmitStats stats;
+
+    // Namespace every symbol this emitter defines under the image's stem, so
+    // two recompiled BIOSes can coexist in one binary (see g_sym_prefix).
+    g_sym_prefix = out_stem + "_";
 
     // Build the set of all known function entry addresses (normalized).
     std::set<uint32_t> all_function_entries_norm;
@@ -2166,6 +2216,15 @@ EmitStats FullFunctionEmitter::emit(
     full_c += fmt::format(" * BIOS SHA256: {}\n", bios_sha256);
     full_c += fmt::format(" * Functions: {}\n", dr.functions.size());
     full_c += " */\n\n";
+    // Namespace the two externally-visible dispatch entry points to this
+    // image. They are referenced from ~20 emit sites and from the sibling
+    // generated file, so renaming them in the preamble is both smaller and
+    // harder to get wrong than rewriting each reference. The runtime keeps
+    // the unprefixed names as thin forwarders to the ACTIVE bios, which is
+    // what the game's generated C calls. Everything else this file defines
+    // is either static (file-local, cannot collide) or already stem-prefixed.
+    full_c += fmt::format("#define psx_dispatch      {}psx_dispatch\n", g_sym_prefix);
+    full_c += fmt::format("#define psx_dispatch_call {}psx_dispatch_call\n\n", g_sym_prefix);
     full_c += "#include \"cpu_state.h\"\n\n";
 
     // Forward declare psx_dispatch, psx_unknown_dispatch, and interrupt check.
@@ -2196,7 +2255,7 @@ EmitStats FullFunctionEmitter::emit(
 
     // Forward declare ALL functions so intra-file calls resolve.
     for (const auto& fn : dr.functions) {
-        full_c += fmt::format("void func_{:08X}(CPUState* cpu);\n", fn.normalized_addr);
+        full_c += fmt::format("void {}(CPUState* cpu);\n", fn_sym(fn.normalized_addr));
     }
     full_c += "\n";
 
@@ -2297,7 +2356,7 @@ EmitStats FullFunctionEmitter::emit(
     // link but abort at runtime with a diagnostic.
     for (const auto& [skip_addr, reason] : stats.skipped) {
         uint32_t skip_norm = normalize_address(skip_addr);
-        full_c += fmt::format("void func_{:08X}(CPUState* cpu) {{\n", skip_norm);
+        full_c += fmt::format("void {}(CPUState* cpu) {{\n", fn_sym(skip_norm));
         full_c += fmt::format("    psx_unknown_dispatch(cpu, 0x{:08X}u, 0x{:08X}u);\n",
                               skip_addr, skip_norm);
         full_c += "}\n\n";
@@ -2321,10 +2380,10 @@ EmitStats FullFunctionEmitter::emit(
         for (const auto& [cnorm, cl] : unique_continuations) {
             // Wrapper: sets cpu->pc to the ROM label address so the parent's
             // entry-switch routes to the correct goto label.
-            full_c += fmt::format("void func_{:08X}_cont_{:08X}(CPUState* cpu) {{\n",
-                                  cl.parent_func_norm, cl.rom_addr);
+            full_c += fmt::format("void {}(CPUState* cpu) {{\n",
+                                  cont_sym(cl.parent_func_norm, cl.rom_addr));
             full_c += fmt::format("    cpu->pc = 0x{:08X}u;\n", cl.rom_addr);
-            full_c += fmt::format("    func_{:08X}(cpu);\n", cl.parent_func_norm);
+            full_c += fmt::format("    {}(cpu);\n", fn_sym(cl.parent_func_norm));
             full_c += "}\n\n";
             emitted_normalized.insert(cnorm);
         }
