@@ -76,6 +76,17 @@ void psx_lobby_clear_launch_pending(void) {}
 #include <unistd.h>
 #endif
 
+/* Winsock sets WSAGetLastError(), not errno — bare errno checks drop the
+ * non-blocking WS handshake on Windows (list/create look permanently dead). */
+static int socket_would_block(void)
+{
+#if defined(_WIN32)
+    return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+#endif
+}
+
 typedef struct {
     int fd;
     int connected;
@@ -1026,7 +1037,7 @@ void psx_lobby_pump(void)
     if (!g_lc.handshake_done) {
         n = recv(g_lc.fd, buf, sizeof(buf), 0);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (socket_would_block()) {
                 return;
             }
             psx_lobby_disconnect();
@@ -1080,7 +1091,7 @@ void psx_lobby_pump(void)
             uint8_t peek[1];
             n = recv(g_lc.fd, (char *)peek, 1, MSG_PEEK);
             if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (socket_would_block()) {
                     break;
                 }
                 psx_lobby_disconnect();
