@@ -1,9 +1,18 @@
 name: CLI release
 
+# Release packaging ONLY. Deliberately does NOT run on pull_request or on
+# pushes to master.
+#
+# It ran on both until 2026-07-25 and was a net negative: the Windows `build`
+# job failed often enough that a red check stopped carrying information, so it
+# was routinely ignored -- at which point it is pure noise plus CI minutes. A
+# check nobody trusts is worse than no check, because it still costs attention.
+#
+# What remains is the part that does real work: attaching the CLI package to a
+# published GitHub release, plus workflow_dispatch so it can be run by hand
+# before cutting one. If per-PR verification comes back, it should come back as
+# something fast and reliable enough to be believed.
 on:
-  pull_request:
-  push:
-    branches: [master]
   workflow_dispatch:
   release:
     types: [published]
