@@ -222,6 +222,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("fast_boot")) {
         rt.fast_boot = toml::find<bool>(runtime, "fast_boot");
     }
+    if (runtime.contains("openbios")) {
+        rt.openbios = toml::find<bool>(runtime, "openbios");
+    }
     if (runtime.contains("bios_hle")) {
         rt.bios_hle = toml::find<bool>(runtime, "bios_hle");
     }

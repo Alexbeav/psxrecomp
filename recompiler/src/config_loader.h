@@ -132,6 +132,16 @@ struct RuntimeConfig {
     // to LLE. Implies the HLE boot shell-skip unless bios_hle_keep_intro.
     // PSX_BIOS_HLE / PSX_BIOS_HLE_KEEP_INTRO env override at launch.
     // Runtime: runtime/src/bios_hle.c.
+    // openbios: may this title run on the bundled, redistributable OpenBIOS?
+    // Default true — a player who chooses no BIOS gets OpenBIOS and never has
+    // to find one (docs/BIOS_SELECTION.md). Set false ONLY for a title with a
+    // verified OpenBIOS incompatibility; a retail image is then required and
+    // the player is prompted for it.
+    //
+    // Deliberately NOT overridable by a player's settings.toml: this records a
+    // developer's compatibility finding, not a preference.
+    bool                  openbios = true;
+
     bool                  bios_hle = true;
     bool                  bios_hle_keep_intro = false;
 
