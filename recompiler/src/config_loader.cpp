@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "bios_rom_alias.h"
 #include "fmt/format.h"
 #include "ps1_exe_parser.h"
 
@@ -542,7 +543,10 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             fmt::format("{}: [program] missing 'rom' or 'exe' field",
                         config_path.string()));
     }
-    const fs::path rom_path = fs::absolute(root / rom_field);
+    // Tolerate either BIOS filename convention (bare "SCPH1001.BIN" vs
+    // region-qualified "US-PSX-SCPH1001.BIN") — see bios_rom_alias.h. A no-op
+    // for game [program].exe fields, which never match a BIOS model token.
+    const fs::path rom_path = resolve_bios_rom(fs::absolute(root / rom_field));
 
     const uint32_t load_address =
         parse_hex(toml::find<std::string>(prog, "load_address"), "program.load_address");

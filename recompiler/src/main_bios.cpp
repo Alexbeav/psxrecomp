@@ -40,6 +40,7 @@
 #include "fmt/format.h"
 
 #include "bios_slice_walker.h"
+#include "bios_rom_alias.h"
 #include "config_loader.h"
 #include "full_function_emitter.h"
 #include "function_discovery.h"
@@ -965,7 +966,11 @@ int main(int argc, char** argv) {
                 "       psxrecomp-bios <bios.bin> <out_dir> --emit-full <seeds.json>\n");
             return 2;
         }
-        const fs::path bios_path = argv[1];
+        // Accept either BIOS filename convention: the legacy bare model name
+        // ("SCPH1001.BIN", which tools/regen_bios.sh still defaults to) and the
+        // region-qualified one ("US-PSX-SCPH1001.BIN") each resolve to whichever
+        // is actually on disk. See recompiler/include/bios_rom_alias.h.
+        const fs::path bios_path = PSXRecompV4::resolve_bios_rom(fs::path(argv[1]));
         const fs::path out_dir   = argv[2];
         std::optional<std::string> cc_override;
         std::optional<fs::path> seed_path;
@@ -986,8 +991,13 @@ int main(int argc, char** argv) {
         }
 
         if (emit_full_seed_path) {
-            // Derive out_stem from ROM filename: "SCPH1001.BIN" -> "SCPH1001"
-            const std::string stem = bios_path.stem().string();
+            // Derive out_stem from the ROM's MODEL TOKEN, not its raw stem, so
+            // the emitted filenames are the same either way the ROM is named:
+            //   "SCPH1001.BIN"         -> SCPH1001
+            //   "US-PSX-SCPH1001.BIN"  -> SCPH1001   (not "US-PSX-SCPH1001")
+            // runtime.cmake links generated/<stem>_full.c by the model name, so
+            // deriving the raw stem here would emit files it cannot find.
+            const std::string stem = PSXRecompV4::bios_model_token(bios_path);
             return run_emit_full(bios_path, out_dir, *emit_full_seed_path, stem);
         } else if (seed_path) {
             return run_discover(bios_path, out_dir, *seed_path);

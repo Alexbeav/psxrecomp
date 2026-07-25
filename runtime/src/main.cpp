@@ -56,6 +56,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "game_options.h"
 #include "crc32.h"
 #include "disc_identity.h"
+#include "disc_path.h"
+#include "bios_rom_alias.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "launcher_device.h" /* recomp-ui controller-source round-trip */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
@@ -979,28 +981,18 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
     return true;
 }
 
+// Canonicalize whichever member of a dump the user pointed us at. Picking the
+// .cue and picking the .bin must both mount and both verify — see
+// runtime/include/disc_path.h for the preference rules. This used to swap a
+// .cue for its same-named .bin unconditionally, which silently discarded the
+// cue's table of contents (and with it every CD-DA track and pregap) on
+// single-file multi-track dumps.
+// Pure: no dialog here. Every caller feeds the result to
+// validate_disc_for_launch(), whose detail text already carries the resolver's
+// note (identify_disc surfaces it), so a broken dump is reported exactly once
+// instead of popping a modal on every boot.
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path p = fs::absolute(path, ec);
-    if (ec) p = path;
-
-    if (uppercase_ascii(p.extension().string()) == ".CUE") {
-        fs::path bin = p;
-        bin.replace_extension(".bin");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-        ec.clear();
-        bin.replace_extension(".BIN");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-    }
-
-    return p;
+    return PSXRecompV4::resolve_disc_path(path).mount;
 }
 
 static bool validate_bios_for_launch(const std::filesystem::path& path) {
@@ -1148,11 +1140,26 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
         fs::path abs = fs::absolute(p, ec);
         return ec ? p : abs;
     }
+    // Either BIOS filename convention is acceptable: a dump folder holding
+    // "US-PSX-SCPH1001.BIN" satisfies a request for "SCPH1001.BIN" and vice
+    // versa (see recompiler/include/bios_rom_alias.h).
+    if (fs::path aliased = PSXRecompV4::resolve_bios_rom(p); aliased != p) {
+        fs::path abs = fs::absolute(aliased, ec);
+        return ec ? aliased : abs;
+    }
     if (p.is_absolute()) return p;
 
     // Anchor on the exe directory — never cwd (see exe_dir_from_argv).
     fs::path found = find_upward(exe_dir_from_argv(argv0), p);
     if (!found.empty()) return found / p;
+    // Same walk, accepting the other naming convention at each rung: the
+    // literal name is absent but a region-qualified sibling may be present.
+    for (fs::path dir = fs::absolute(exe_dir_from_argv(argv0), ec);
+         !dir.empty(); dir = dir.parent_path()) {
+        const fs::path aliased = PSXRecompV4::resolve_bios_rom(dir / p);
+        if (aliased != dir / p && fs::exists(aliased, ec)) return aliased;
+        if (!dir.has_parent_path() || dir.parent_path() == dir) break;
+    }
 
     // Dev-checkout rung: game projects keep the framework at
     // <game root>/psxrecomp-v4 (junction/worktree), so a relative default like

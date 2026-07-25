@@ -5,7 +5,7 @@
 [program]
 name = "SCPH5552 BIOS (Europe)"
 id = "SCPH-5552"
-rom = "EUR-PSX-SCPH5552.bin"
+rom = "bios/EUR-PSX-SCPH5552.bin"
 load_address = "0xBFC00000"
 entry_pc = "0xBFC00000"
 text_size = "0x80000"
