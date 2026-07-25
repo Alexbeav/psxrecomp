@@ -1008,7 +1008,9 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     rnet_config_init_defaults(&rcfg);
     rcfg.slot_count = (rnet_u8)slots;
     rcfg.local_slot = (rnet_u8)local;
-    rcfg.input_delay = (rnet_u8)(cfg->input_delay < 0 ? 0 : (cfg->input_delay > 16 ? 16 : cfg->input_delay));
+    /* Max delay 20 matches RNET_MAX_BUNDLE 21 (neutral prefix + tip). */
+    rcfg.input_delay = (rnet_u8)(cfg->input_delay < 0 ? 0
+                               : (cfg->input_delay > 20 ? 20 : cfg->input_delay));
     rcfg.session_id = cfg->session_id ? cfg->session_id : 1u;
 
     /* Host resolves auto (-1) before start; accept 0..PSX_MAX_PLAYERS-1. */
@@ -1087,8 +1089,11 @@ void psx_netplay_bind_guest_saves(void)
 #define PSX_STARVATION_EXIT_DEFAULT 3
 #define PSX_STARVATION_EXIT_HR_LEAD_DEFAULT 0
 #define PSX_STARVATION_GRACE_TICKS 60
-#define PSX_STARVATION_RECOVERY_BURST 16
-#define PSX_CATCHUP_CAP 16
+/* Default 0: after starvation clears, resume ~1 sim/wall frame and let
+ * remote_lead rebuild toward D instead of a turbo recovery burst.
+ * Override: PSX_NET_STARVATION_RECOVERY_BURST / PSX_NET_CATCHUP_CAP. */
+#define PSX_STARVATION_RECOVERY_BURST_DEFAULT 0
+#define PSX_CATCHUP_CAP_DEFAULT 0
 
 static struct {
     int latched;
@@ -1322,13 +1327,23 @@ int psx_netplay_poll_admit(void)
     if (np_try_admit_gameplay()) {
         g_starv.enter_run = 0;
         if (g_starv.just_cleared) {
+            int burst = np_starv_env_int("PSX_NET_STARVATION_RECOVERY_BURST",
+                                         PSX_STARVATION_RECOVERY_BURST_DEFAULT);
             g_starv.just_cleared = 0;
-            g_starv.recovery_amount = PSX_STARVATION_RECOVERY_BURST;
-            fprintf(stderr,
-                    "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
-                    "D=%d — recovery burst %d\n",
-                    (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
-                    psx_netplay_input_delay(), PSX_STARVATION_RECOVERY_BURST);
+            g_starv.recovery_amount = burst;
+            if (burst > 0) {
+                fprintf(stderr,
+                        "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
+                        "D=%d — recovery burst %d\n",
+                        (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                        psx_netplay_input_delay(), burst);
+            } else {
+                fprintf(stderr,
+                        "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
+                        "D=%d — resume 1:1 (rebuild input buffer)\n",
+                        (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                        psx_netplay_input_delay());
+            }
         }
         return 1;
     }
@@ -1385,21 +1400,26 @@ int psx_netplay_catchup_budget(void)
     int delay;
     int extra;
     int budget;
+    int cap;
 
     if (!psx_netplay_active())
+        return 0;
+    cap = np_starv_env_int("PSX_NET_CATCHUP_CAP", PSX_CATCHUP_CAP_DEFAULT);
+    if (cap <= 0 && g_starv.recovery_amount <= 0)
         return 0;
     lead = psx_netplay_remote_lead();
     delay = psx_netplay_input_delay();
     if (delay < 0)
         delay = 0;
+    /* Only spend surplus above D; keep the delay runway intact. */
     extra = lead - delay;
     if (extra < 0)
         extra = 0;
     budget = extra;
     if (g_starv.recovery_amount > budget)
         budget = g_starv.recovery_amount;
-    if (budget > PSX_CATCHUP_CAP)
-        budget = PSX_CATCHUP_CAP;
+    if (budget > cap)
+        budget = cap;
     return budget;
 }
 
