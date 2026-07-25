@@ -4016,6 +4016,7 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
     int g_lnch_force_input_relay = 0;
+    int g_lnch_force_turn = 0;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -4817,6 +4818,7 @@ namespace {
         if (caps.input_delay < 2) caps.input_delay = 2;
         if (caps.input_delay > 20) caps.input_delay = 20;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.force_turn = g_lnch_force_turn != 0;
         return caps;
     }
 
@@ -4831,6 +4833,7 @@ namespace {
         if (caps.input_delay < 2) caps.input_delay = 2;
         if (caps.input_delay > 20) caps.input_delay = 20;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
+        caps.force_turn = g_lnch_force_turn != 0;
         (void)psx_lobby_set_match_caps(&caps);
     }
 
@@ -4864,6 +4867,21 @@ namespace {
     }
     int ae_np_force_input_relay_set(void*, int force) {
         g_lnch_force_input_relay = force ? 1 : 0;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+    int ae_np_force_turn_get(void*) {
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid)
+                return caps->force_turn ? 1 : 0;
+        }
+        return g_lnch_force_turn;
+    }
+    int ae_np_force_turn_set(void*, int force) {
+        if (g_lnch_hosting_lan || g_lnch_joined_lan)
+            return 0; /* LAN/Direct IP does not use ICE TURN */
+        g_lnch_force_turn = force ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
     }
@@ -5884,6 +5902,7 @@ namespace {
                 if (g_lnch_pending_direct_launch.max_slots > kAeLanMaxSlots)
                     g_lnch_pending_direct_launch.max_slots = kAeLanMaxSlots;
                 g_lnch_pending_direct_launch.force_input_relay = 0;
+                g_lnch_pending_direct_launch.force_turn = 0;
                 g_lnch_pending_direct_launch.player_count = ae_np_lan_occupied(state);
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
@@ -5977,6 +5996,8 @@ namespace {
         }
         out->force_input_relay =
             (caps && caps->valid && caps->force_input_relay) ? 1 : 0;
+        out->force_turn =
+            (caps && caps->valid && caps->force_turn) ? 1 : 0;
         return 1;
     }
 
@@ -6018,6 +6039,8 @@ namespace {
         ae_np_force_input_relay_get,
         ae_np_force_input_relay_set,
         ae_np_lobby_max_slots,
+        ae_np_force_turn_get,
+        ae_np_force_turn_set,
     };
 }  // namespace
 #endif
@@ -7239,6 +7262,7 @@ std::string player_device[PSX_MAX_PLAYERS];
                     net_cfg.session_id = ls.netplay_launch.session_id;
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+                    net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                     net_cfg.player_count = ls.netplay_launch.player_count;
                     net_cfg.slot_count = ae_np_session_slot_count(
                         ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
@@ -8223,6 +8247,7 @@ soft_return_lobby:
                 net_cfg.session_id = ls.netplay_launch.session_id;
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
                 net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
+                net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                 net_cfg.player_count = ls.netplay_launch.player_count;
                 net_cfg.slot_count = ae_np_session_slot_count(
                     ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
