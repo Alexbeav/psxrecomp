@@ -5965,6 +5965,7 @@ namespace {
         const PsxLobbyJoinInfo* ji = psx_lobby_join_info();
         if (!ji || !ji->ok) return 0;
         const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+        /* Host match_caps are required online — do not silently default D/relay. */
         if (!caps || !caps->valid) return 0;
         out->enabled = 1;
         out->local_slot = ji->local_slot;
@@ -5973,8 +5974,7 @@ namespace {
         std::snprintf(out->bind_hostport, sizeof(out->bind_hostport), "%s", ji->bind_hostport);
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
         out->session_id = ji->session_id;
-        out->input_delay = (caps && caps->valid) ? caps->input_delay
-                                                 : g_lnch_lobby_input_delay;
+        out->input_delay = caps->input_delay;
         out->max_slots = ji->max_slots >= 2 ? ji->max_slots
                          : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2);
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
