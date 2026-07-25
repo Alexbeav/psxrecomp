@@ -277,6 +277,44 @@ int psx_exec_phase(void) { return g_exec_phase; }
  * dispatch of candidate g_insn_freeze_addr the insn ring stops recording, so
  * its tail preserves the window immediately BEFORE that dispatch — query the
  * ring afterward at leisure (ring-first; no arm-then-hope). */
+/* ── R3000A load-delay VALUE semantics ──────────────────────────────────────
+ * On MIPS-I there is no load interlock: a load's target register is NOT
+ * visible to the instruction in the load-delay slot, which still sees the
+ * PREVIOUS value. The writeback lands one instruction later.
+ *
+ * We already modelled the load-delay *interlock timing* (psx_cyc_load_*),
+ * but wrote the destination register immediately — so the slot observed the
+ * loaded value. That silently diverged from BOTH real hardware and our own
+ * compiled backend (full_function_emitter defers the writeback past the
+ * successor for dependent pairs), and hand-written kernel asm depends on it.
+ *
+ * The concrete casualty: OpenBIOS's cardfasttrack.s stashes the pointer
+ * variable's BASE with `or $at,$k0,$zero` in the delay slot of
+ * `lw $k0,off($k0)`, then writes the advanced pointer back through $at. With
+ * an immediate writeback $at became the pointer itself, the write-back landed
+ * in unrelated memory, the pointer never advanced, and every byte of a
+ * 128-byte memory-card frame was stored to one address (cards read as
+ * permanently unformatted; the send side transmitted one byte 128x).
+ *
+ * Contract: on a same-register conflict the LOAD wins (it retires later),
+ * matching the compiled emitter. Pending state is flushed on interpreter exit
+ * and before exception delivery, where the pipeline would have drained. */
+static uint32_t s_ld_pend_rt    = 0;
+static uint32_t s_ld_pend_val   = 0;
+static uint32_t s_ld_pend_age   = 0;  /* 0 = armed; 1 = delay slot has run */
+static int      s_ld_pend_armed = 0;
+
+/* Retire a deferred load writeback. Call wherever the interpreter stops
+ * stepping instructions (hand-off to compiled code, exception entry), since
+ * nothing downstream knows about the pending register write. */
+void dirty_ram_ld_delay_flush(CPUState *cpu) {
+    if (!s_ld_pend_armed) return;
+    s_ld_pend_armed = 0;
+    s_ld_pend_age   = 0;
+    if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
+    cpu->gpr[0] = 0;
+}
+
 uint32_t g_insn_gate_lo = 0;       /* extra always-log phys range [lo,hi)      */
 uint32_t g_insn_gate_hi = 0;       /* 0 = extra range disabled                 */
 uint32_t g_insn_freeze_addr  = 0;  /* candidate phys entry to watch            */
@@ -591,6 +629,9 @@ static void dirty_ram_log_instruction(CPUState *cpu, uint32_t pc, uint32_t insn,
     e->t0           = cpu->gpr[8];
     e->t1           = cpu->gpr[9];
     e->t2           = cpu->gpr[10];
+    e->at           = cpu->gpr[1];
+    e->k0           = cpu->gpr[26];
+    e->k1           = cpu->gpr[27];
     e->current_tcb  = current_tcb;
     e->task_ptr     = task_ptr;
     e->task_mode    = task_ptr ? cpu->read_half(task_ptr + 72u) : 0;
@@ -1252,8 +1293,64 @@ static void exec_delay_slot(CPUState *cpu, uint32_t pc) {
      * pair costs both, matching hardware. No separate charge here. */
 }
 
+/* Load-delay shim around the decoder (see dirty_ram_ld_delay_flush above).
+ * Wrapping here keeps every individual load case untouched: the inner decoder
+ * still writes gpr[rt] eagerly, and we roll that write back by one instruction
+ * so the delay-slot instruction observes the architecturally-correct value. */
+static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
+                                  uint32_t *next_pc_out);
+
 static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
                             uint32_t *next_pc_out) {
+    /* A load's writeback becomes visible to the instruction AFTER its delay
+     * slot: load at N, hidden from N+1, visible from N+2. s_ld_pend_age tracks
+     * that: 0 = armed by the instruction just executed, 1 = the delay slot has
+     * now run, so retire it before executing anything else.
+     *
+     * Doing the retire HERE (rather than after the slot returns) is what makes
+     * branches correct: a branch's own delay slot is executed nested inside
+     * exec_one_fetched_inner, and re-enters this wrapper — by then age is 1, so
+     * the slot correctly observes the loaded value. */
+    if (s_ld_pend_armed && s_ld_pend_age != 0u) {
+        s_ld_pend_armed = 0;
+        if (s_ld_pend_rt != 0u) cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
+        cpu->gpr[0] = 0;
+    } else if (s_ld_pend_armed) {
+        s_ld_pend_age = 1u;   /* this instruction IS the delay slot: stay hidden */
+    }
+
+    /* op 0x20..0x26 = LB/LH/LWL/LW/LBU/LHU/LWR. LWC2 (GTE, 0x32) targets a COP2
+     * register, not a GPR, so it needs no deferral here. */
+    const uint32_t ld_op = op_field(insn);
+    const uint32_t ld_rt = rt_field(insn);
+    const int      is_ld = (ld_op >= 0x20u && ld_op <= 0x26u) && (ld_rt != 0u);
+    const uint32_t ld_before = is_ld ? cpu->gpr[ld_rt] : 0u;
+
+    const int rv = exec_one_fetched_inner(cpu, pc, insn, next_pc_out);
+
+    if (is_ld) {
+        const uint32_t loaded = cpu->gpr[ld_rt];
+        if (loaded != ld_before) {
+            /* Back-to-back loads: retire the older writeback before reusing the
+             * slot, otherwise its register write would be dropped entirely. */
+            if (s_ld_pend_armed && s_ld_pend_rt != ld_rt && s_ld_pend_rt != 0u)
+                cpu->gpr[s_ld_pend_rt] = s_ld_pend_val;
+            /* Undo the eager write; it becomes visible one instruction later.
+             * On a same-register conflict this naturally makes the LOAD win,
+             * matching what the compiled backend emits for a dependent pair. */
+            cpu->gpr[ld_rt] = ld_before;
+            s_ld_pend_rt    = ld_rt;
+            s_ld_pend_val   = loaded;
+            s_ld_pend_age   = 0u;
+            s_ld_pend_armed = 1;
+            cpu->gpr[0]     = 0;
+        }
+    }
+    return rv;
+}
+
+static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
+                                  uint32_t *next_pc_out) {
     exec_pc_table_record(pc);
     uint32_t opc  = op_field(insn);
     uint32_t rs   = rs_field(insn);
@@ -2410,7 +2507,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             return 1;
         }
     }
-#define OV_FPLOG_RET1() do { if (_ovfp) overlay_fp_log(addr, _in_regs, cpu, 0); return 1; } while (0)
+/* Every exit retires any deferred load writeback: once we hand control back to
+ * compiled code (or the dispatch loop) nothing downstream knows a register
+ * write is still owed, and the pipeline would have drained by then anyway. */
+#define OV_FPLOG_RET1() do { dirty_ram_ld_delay_flush(cpu); if (_ovfp) overlay_fp_log(addr, _in_regs, cpu, 0); return 1; } while (0)
 
     if (!dirty_ram_is_dirty(phys) && !clean_game_text_miss) {
         /* Bulk host transfers can populate post-EXE executable RAM without
@@ -2655,6 +2755,10 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 uint32_t saved_resume = g_dirty_safe_resume_pc;
                 cpu->pc = next_pc ? next_pc : pc + 4u;
                 g_dirty_safe_resume_pc = cpu->pc;
+                /* Retire an owed load writeback before vectoring: the R3000A
+                 * pipeline drains on exception entry, and the handler must not
+                 * observe a stale destination register. */
+                dirty_ram_ld_delay_flush(cpu);
                 psx_check_interrupts(cpu);
                 g_dirty_safe_resume_pc = saved_resume;
             }
@@ -2851,6 +2955,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             g_cosim_dirty_pump_site = 4;
             g_dirty_safe_resume_pc = committed;
             s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
+            dirty_ram_ld_delay_flush(cpu);   /* pipeline drains on exception entry */
             psx_check_interrupts(cpu);
             /* Frame-1997 fix (see outer pump): restore the committed PC if a game RFE
              * longjmp left cpu->pc=0, so the trampoline re-dispatches instead of exiting. */
