@@ -50,6 +50,7 @@ typedef struct PsxLobbyMatchCaps {
     int  auto_skip_fmv;    /* 0/1 */
     int  input_delay;      /* recomp-net delay frames */
     int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
+    int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
     char language[PSX_LOBBY_LANG_LEN];
 } PsxLobbyMatchCaps;
 

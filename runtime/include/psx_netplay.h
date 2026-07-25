@@ -51,6 +51,7 @@ typedef struct PsxNetplayConfig {
     int         input_player;  /* host device index; -1 = auto */
     int         input_delay;
     int         force_input_relay; /* 1 = lobby-server UDP input relay */
+    int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
     uint32_t    session_id;
     char        bind_hostport[64];
     char        peer_hostport[64];

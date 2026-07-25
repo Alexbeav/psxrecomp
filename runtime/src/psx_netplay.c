@@ -54,6 +54,7 @@ void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
     cfg->input_player = -1;
     cfg->input_delay = 2;
     cfg->force_input_relay = 0;
+    cfg->force_turn = 0;
     cfg->session_id = 1;
     strncpy(cfg->bind_hostport, "0.0.0.0:7777", sizeof(cfg->bind_hostport) - 1);
     cfg->peer_hostport[0] = '\0';

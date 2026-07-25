@@ -345,6 +345,7 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     if (out->input_delay < 0) out->input_delay = 0;
     if (out->input_delay > 16) out->input_delay = 16;
     out->force_input_relay = json_get_bool(obj, "force_input_relay", 0);
+    out->force_turn = json_get_bool(obj, "force_turn", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
     out->valid = 1;
 }
@@ -374,7 +375,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                     ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
                     "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
                     "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"force_input_relay\":%s,"
-                    "\"language\":\"%s\"}",
+                    "\"force_turn\":%s,\"language\":\"%s\"}",
                     caps->aspect_num, caps->aspect_den,
                     caps->turbo_loads ? "true" : "false",
                     caps->bios_hle ? "true" : "false",
@@ -382,6 +383,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                     caps->auto_skip_fmv ? "true" : "false",
                     caps->input_delay,
                     caps->force_input_relay ? "true" : "false",
+                    caps->force_turn ? "true" : "false",
                     lang);
 }
 
