@@ -1339,7 +1339,18 @@ static int exec_one_fetched(CPUState *cpu, uint32_t pc, uint32_t insn,
      * register, not a GPR, so it needs no deferral here. */
     const uint32_t ld_op = op_field(insn);
     const uint32_t ld_rt = rt_field(insn);
-    const int      is_ld = (ld_op >= 0x20u && ld_op <= 0x26u) && (ld_rt != 0u);
+    const uint32_t pc_phys = pc & 0x1FFFFFFFu;
+    /* OpenBIOS executes cardfasttrack both from ROM and from its low-RAM
+     * kernel copy (for example 0x3554..0x36D4). Its hand-written dependent
+     * load requires the real R3000A value delay. Game-owned dirty RAM crosses
+     * mixed compiled/interpreted boundaries that do not carry this pending
+     * writeback yet, so preserve the historical eager-value contract there. */
+    const int      in_bios_rom =
+        pc_phys >= 0x1FC00000u && pc_phys < 0x1FC80000u;
+    const int      in_bios_kernel_ram = pc_phys < 0x00010000u;
+    const int      is_ld = (in_bios_rom || in_bios_kernel_ram) &&
+                           (ld_op >= 0x20u && ld_op <= 0x26u) &&
+                           (ld_rt != 0u);
     const uint32_t ld_before = is_ld ? cpu->gpr[ld_rt] : 0u;
 
     const int rv = exec_one_fetched_inner(cpu, pc, insn, next_pc_out);

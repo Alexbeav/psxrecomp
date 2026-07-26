@@ -97,6 +97,14 @@ def main():
     dispatch_inner = body(interp, "dirty_ram_dispatch_inner")
     if "(!current_page_dirty || next_page != current_page)" not in dispatch_inner:
         raise AssertionError("page fast path does not preserve clean-miss behavior")
+    exec_one = body(interp, "exec_one_fetched")
+    for scope_guard in (
+            "pc_phys >= 0x1FC00000u && pc_phys < 0x1FC80000u",
+            "pc_phys < 0x00010000u",
+            "(in_bios_rom || in_bios_kernel_ram)"):
+        if scope_guard not in exec_one:
+            raise AssertionError(
+                f"load-delay value semantics lost BIOS ownership guard: {scope_guard}")
     # RFE backend-contract parity: the recompiled rfe and every overlay shard
     # (ABI v12) call psx_rfe_mark_escape after popping SR, and the generated
     # trampoline runs psx_rfe_escape_check after each return. The interpreter
