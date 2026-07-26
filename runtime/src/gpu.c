@@ -1104,8 +1104,21 @@ int psx_ws_cull_bltz_at(const uint32_t *words, int n, int idx) {
  * was GPU-clipped → the blue void / half-rectangles at the edges) is pulled
  * in to cover the revealed FOV. Identity at 4:3 / boot / FMV / full-2D (the
  * exact ws_active() predicate the GTE squash uses), so one build serves both.
+ * In native-wide mode there is nothing to squash (the 4:3 frame is presented
+ * with side reveal instead), so the same sites are STRETCHED about the screen
+ * centre by (disp_w + nw_extra) / disp_w: a 4:3-authored backdrop then covers
+ * the widened frame instead of leaving unpainted margins (Xenogears battle
+ * mountain panels — pre-calculated POLY_FT4 screen coords stored by main-EXE
+ * `sh` sites, wtrace-evidenced).
  * x is the int16 screenX the handler was about to store. */
 int psx_ws_backdrop_x(int x) {
+    if (ws_native_wide_active()) {
+        int32_t W = (int32_t)ws_disp_w();
+        int32_t extra = ws_nw_extra();
+        int32_t cx = W / 2;
+        int32_t d = (int16_t)x - cx;
+        return (int)(cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W);
+    }
     if (!ws_active()) return (int16_t)x;
     int32_t cx = ws_disp_w() / 2;                 /* screen centre (=160 @ 320) */
     return ws_scale_about((int16_t)x, cx);
