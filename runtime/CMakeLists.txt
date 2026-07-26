@@ -125,6 +125,8 @@ if(BUILD_TESTING)
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
         src/mod_packages.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
         src/crc32.c
         src/psx_sha256.c)
     target_include_directories(mod_runtime_test PRIVATE

@@ -1,5 +1,6 @@
 #include "mod_runtime.h"
 
+#include "disc_path.h"
 #include "mod_packages.h"
 #include "psx_sha256.h"
 
@@ -17,7 +18,6 @@
 #include <iomanip>
 #include <map>
 #include <sstream>
-#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -119,66 +119,24 @@ bool sha256_file(const std::filesystem::path& path, std::string& out,
                  std::string* error) {
     out.clear();
     if (path.empty()) return true;
-    std::vector<std::filesystem::path> inputs{path};
-    std::string extension = path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-        [](unsigned char c) { return (char)std::tolower(c); });
-    if (extension == ".cue") {
-        std::ifstream cue(path);
-        if (!cue) {
-            if (error) *error = "cannot fingerprint image: " + path.string();
-            return false;
-        }
-        inputs.clear();
-        std::set<std::filesystem::path> seen;
-        std::string line;
-        while (std::getline(cue, line)) {
-            size_t at = line.find_first_not_of(" \t");
-            if (at == std::string::npos || line.size() - at < 4) continue;
-            std::string keyword = line.substr(at, 4);
-            std::transform(keyword.begin(), keyword.end(), keyword.begin(),
-                [](unsigned char c) { return (char)std::toupper(c); });
-            if (keyword != "FILE") continue;
-            at += 4;
-            at = line.find_first_not_of(" \t", at);
-            if (at == std::string::npos) continue;
-            std::string name;
-            if (line[at] == '"') {
-                const size_t end = line.find('"', at + 1);
-                if (end == std::string::npos) continue;
-                name = line.substr(at + 1, end - at - 1);
-            } else {
-                const size_t end = line.find_first_of(" \t", at);
-                name = line.substr(at, end - at);
-            }
-            const std::filesystem::path input =
-                (path.parent_path() / name).lexically_normal();
-            if (seen.insert(input).second) inputs.push_back(input);
-        }
-        if (inputs.empty()) {
-            if (error) *error = "CUE has no FILE entries: " + path.string();
-            return false;
-        }
-    }
+    const std::filesystem::path input = resolve_disc_path(path).data;
     psx_sha256_ctx hash;
     psx_sha256_init(&hash);
     std::array<uint8_t, 1024 * 1024> buffer{};
-    for (const std::filesystem::path& input : inputs) {
-        std::ifstream file(input, std::ios::binary);
-        if (!file) {
-            if (error) *error = "cannot fingerprint image: " + input.string();
-            return false;
-        }
-        while (file) {
-            file.read((char*)buffer.data(), (std::streamsize)buffer.size());
-            const std::streamsize got = file.gcount();
-            if (got > 0) psx_sha256_update(&hash, buffer.data(), (size_t)got);
-        }
-        if (!file.eof()) {
-            if (error) *error =
-                "cannot finish fingerprinting image: " + input.string();
-            return false;
-        }
+    std::ifstream file(input, std::ios::binary);
+    if (!file) {
+        if (error) *error = "cannot fingerprint image: " + input.string();
+        return false;
+    }
+    while (file) {
+        file.read((char*)buffer.data(), (std::streamsize)buffer.size());
+        const std::streamsize got = file.gcount();
+        if (got > 0) psx_sha256_update(&hash, buffer.data(), (size_t)got);
+    }
+    if (!file.eof()) {
+        if (error) *error =
+            "cannot finish fingerprinting image: " + input.string();
+        return false;
     }
     uint8_t digest[32];
     psx_sha256_final(&hash, digest);

@@ -65,6 +65,15 @@ int main() {
         overlay[i] = (uint8_t)(i * 17u + 3u);
     const fs::path stock_path = root / "stock.bin";
     write_bytes(stock_path, stock);
+    write_bytes(root / "audio.bin", std::vector<uint8_t>(2 * 2352, 0x5a));
+    const fs::path cue_path = root / "stock.cue";
+    write_text(cue_path,
+        "FILE \"stock.bin\" BINARY\n"
+        "  TRACK 01 MODE2/2352\n"
+        "    INDEX 01 00:00:00\n"
+        "FILE \"audio.bin\" BINARY\n"
+        "  TRACK 02 AUDIO\n"
+        "    INDEX 01 00:00:00\n");
     write_bytes(root / "packages/runtime.test/1.0.0/assets/overlay.bin",
                 overlay);
     write_text(root / "packages/runtime.test/1.0.0/manifest.toml",
@@ -168,7 +177,8 @@ int main() {
     check(PSXRecompV4::mod_runtime_initialize(
               root, "SLUS-RUNTIME", 0x80002000, {}, &error),
           error.c_str());
-    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(cue_path, &error),
+          "CUE and its data-track BIN must have the same mod target identity");
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;
