@@ -144,6 +144,29 @@ Patches are build-time inputs, not runtime memory writes or live toggles.
 Regenerate the affected main executable or captured overlays after changing
 them.
 
+### Guarded widescreen participation comparisons
+
+Games may disable a proven object/model cull verdict in widened world views
+without changing true 4:3 behavior:
+
+```toml
+[[widescreen.cull.keep]]
+address = "0x8002B310"
+expected = "0x28A21C01"
+result = 1
+```
+
+- `expected` must encode `SLT`, `SLTU`, `SLTI`, or `SLTIU`.
+- `result` must be 0 or 1.
+- The site identity is the normalized physical address plus the complete
+  32-bit instruction. A nonmatching overlay variant at the same VA is left
+  unchanged.
+- At true 4:3 the original comparison is evaluated. The configured result is
+  forced only when `psx_ws_x_margin() > 0`.
+- Native generated code and the dirty-RAM interpreter implement the same
+  semantics.
+- Regenerate main/overlay native code after changing the list.
+
 ## Runtime block
 
 Consumed by the cmake macro `psxrecomp_v4_add_runtime_target` (eventually)

@@ -1666,13 +1666,24 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[0] = 0;
             return 0;
         case 0x2A: /* SLT */
-            cpu->gpr[rd] = ((int32_t)cpu->gpr[rs] < (int32_t)cpu->gpr[rt]) ? 1u : 0u;
+        {
+            uint32_t vanilla =
+                ((int32_t)cpu->gpr[rs] < (int32_t)cpu->gpr[rt]) ? 1u : 0u;
+            uint32_t kept = vanilla;
+            (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
+            cpu->gpr[rd] = kept;
             cpu->gpr[0] = 0;
             return 0;
+        }
         case 0x2B: /* SLTU */
-            cpu->gpr[rd] = (cpu->gpr[rs] < cpu->gpr[rt]) ? 1u : 0u;
+        {
+            uint32_t vanilla = (cpu->gpr[rs] < cpu->gpr[rt]) ? 1u : 0u;
+            uint32_t kept = vanilla;
+            (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
+            cpu->gpr[rd] = kept;
             cpu->gpr[0] = 0;
             return 0;
+        }
         default:
             return abort_unsupported(pc, insn, "SPECIAL funct");
         }
@@ -1806,7 +1817,12 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         cpu->gpr[0] = 0;
         return 0;
     case 0x0A: /* SLTI */
-        if (psx_ws_is_cull_depth_site(pc))
+    {
+        uint32_t vanilla = ((int32_t)cpu->gpr[rs] < simm) ? 1u : 0u;
+        uint32_t kept = vanilla;
+        if (psx_ws_cull_keep_site(pc, insn, vanilla, &kept))
+            cpu->gpr[rt] = kept;
+        else if (psx_ws_is_cull_depth_site(pc))
             cpu->gpr[rt] = ((int32_t)cpu->gpr[rs] < psx_ws_depth_bound(simm)) ? 1u : 0u;
         /* Widescreen render-funnel RIGHT-edge widen (auto_screen_x) for the
          * signed min/max funnel idiom (`slti v, minSX, W`) — the paired left
@@ -1818,12 +1834,18 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[rt] = ((int32_t)cpu->gpr[rs] < simm) ? 1u : 0u;
         cpu->gpr[0] = 0;
         return 0;
+    }
     case 0x0B: /* SLTIU */
+    {
+        uint32_t vanilla = (cpu->gpr[rs] < (uint32_t)simm) ? 1u : 0u;
+        uint32_t kept = vanilla;
         /* Widescreen render-funnel cull widening (auto_screen_x): apply the
          * shared helper for a flagged render-cull site — it is byte-identical
          * to the vanilla compare at 4:3 (margin 0) and widens at 16:9, so the one
          * code path serves both aspects (no widescreen-specific caching). */
-        if (psx_ws_is_cull_depth_site(pc))
+        if (psx_ws_cull_keep_site(pc, insn, vanilla, &kept))
+            cpu->gpr[rt] = kept;
+        else if (psx_ws_is_cull_depth_site(pc))
             cpu->gpr[rt] = (cpu->gpr[rs] <
                             (uint32_t)psx_ws_depth_bound(simm)) ? 1u : 0u;
         else if (psx_ws_is_cull_vxrange_site(pc))
@@ -1840,6 +1862,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             cpu->gpr[rt] = (cpu->gpr[rs] < (uint32_t)simm) ? 1u : 0u;
         cpu->gpr[0] = 0;
         return 0;
+    }
     case 0x0C: /* ANDI */
         cpu->gpr[rt] = cpu->gpr[rs] & imm;
         cpu->gpr[0] = 0;

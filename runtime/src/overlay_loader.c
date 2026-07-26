@@ -2281,6 +2281,11 @@ static void init_callbacks(void) {
             extern uint32_t psx_ws_xclip_bound(uint32_t vanilla);
             s_callbacks.ws_xclip_bound = psx_ws_xclip_bound;
         }
+        {
+            extern uint32_t psx_ws_cull_keep_result(uint32_t vanilla,
+                                                     uint32_t forced);
+            s_callbacks.ws_cull_keep_result = psx_ws_cull_keep_result;
+        }
     }
 }
 

@@ -53,6 +53,15 @@ struct WidescreenSignedBoundSite {
     uint32_t address = 0;
     uint32_t expected = 0; // guarded LUI instruction
 };
+
+// One exact compare whose verdict is forced while a widescreen reveal is
+// active. The full instruction word is part of the identity because overlay
+// variants routinely place unrelated code at the same virtual address.
+struct WidescreenCullKeepSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded SLT/SLTU/SLTI/SLTIU instruction
+    uint32_t result = 0;   // forced comparison result (0 or 1)
+};
 // Parse/format a pad mode. pad_mode_from_string accepts "hybrid"/"analog"/
 // "digital" (case-insensitive) and returns `fallback` for anything else.
 int         pad_mode_from_string(const std::string& s, int fallback);
@@ -600,6 +609,11 @@ struct GameConfig {
     // scissor clips the overflow and wrapped off-left coords pass); the
     // vanilla loaded value at 4:3. Empty by default; regen required.
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    // Exact comparison sites whose result is forced only while widescreen
+    // reveals extra world. Used for proven object/model participation gates
+    // where maximal overdraw is preferable to range guessing. Each entry is
+    // guarded by the complete MIPS word; 4:3 executes the vanilla comparison.
+    std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     // Extra per-side actor overdraw beyond the visible widescreen edge.
     int                   ws_cull_guard_pixels = 0;
 

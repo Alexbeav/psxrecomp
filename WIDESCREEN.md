@@ -71,6 +71,14 @@ nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
 nw_left_hud_packet_hi = "0x000E4100"  # (half-open); avoids shifting 2D scenery.
 offer_ultrawide    = true              # separate experimental 21:9 launcher row.
 adaptive_view      = true              # expose live resize-driven aspect mode.
+
+# Proven object/model participation comparisons may be forced only while a
+# widened world view is configured. The complete instruction word guards
+# same-address overlay variants; true 4:3 executes the vanilla comparison.
+[[widescreen.cull.keep]]
+address  = "0x8002B310"
+expected = "0x28A21C01"                # SLT/SLTU/SLTI/SLTIU only
+result   = 1                           # forced comparison result, 0 or 1
 ```
 
 When `adaptive_view` is enabled by the game, the launcher's **Aspect ratio**
@@ -95,7 +103,10 @@ all ~23 character render functions (RTPS cluster `0x800459E0`–`0x8004FB54`) ca
 the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
 
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
-emitted into the generated C). Everything else is runtime-only.
+emitted into the generated C). `widescreen.cull.keep` is consumed by both the
+native recompiler and the dirty-RAM interpreter: regenerate main/overlay native
+code after changing it, while the interpreter reads the same guarded records
+from the runtime config.
 
 ---
 

@@ -4881,6 +4881,20 @@ int main(int argc, char** argv) {
                 gc.ws_cull_plane_nx_sites.data(), (int)gc.ws_cull_plane_nx_sites.size());
             gpu_ws_set_xclip_load_sites(
                 gc.ws_cull_xclip_load_sites.data(), (int)gc.ws_cull_xclip_load_sites.size());
+            {
+                std::vector<uint32_t> addresses, expected, results;
+                addresses.reserve(gc.ws_cull_keep_sites.size());
+                expected.reserve(gc.ws_cull_keep_sites.size());
+                results.reserve(gc.ws_cull_keep_sites.size());
+                for (const auto& site : gc.ws_cull_keep_sites) {
+                    addresses.push_back(site.address);
+                    expected.push_back(site.expected);
+                    results.push_back(site.result);
+                }
+                gpu_ws_set_cull_keep_sites(
+                    addresses.data(), expected.data(), results.data(),
+                    (int)addresses.size());
+            }
             gte_ws_configure_dome_sites(
                 gc.ws_dome_call_sites.data(), (int)gc.ws_dome_call_sites.size());
             /* [widescreen.cull] per-game gates + signature immediates for the

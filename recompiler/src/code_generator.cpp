@@ -799,6 +799,49 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                            reg_name(get_rt(instr)), (uint32_t)vanilla, comment);
     }
 
+    // Full-word-guarded object/model participation compares. At 4:3 the
+    // helper returns the comparison's vanilla value; when widescreen reveals
+    // extra world it returns the configured keep verdict. Overlay variants
+    // with another instruction at the same VA are deliberately untouched.
+    for (const auto& site : config_.ws_cull_keep_sites) {
+        if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: cull keep expected 0x{:08X} at 0x{:08X}, found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        uint32_t dst = 0;
+        std::string vanilla;
+        if (opcode == 0x0A) { // SLTI
+            dst = get_rt(instr);
+            vanilla = fmt::format("((int32_t){} < {}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), (int)get_imm16(instr));
+        } else if (opcode == 0x0B) { // SLTIU (sign-extended immediate)
+            dst = get_rt(instr);
+            vanilla = fmt::format("({} < (uint32_t){}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), (int)get_imm16(instr));
+        } else if (opcode == 0x00 && funct == 0x2A) { // SLT
+            dst = get_rd(instr);
+            vanilla = fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        } else if (opcode == 0x00 && funct == 0x2B) { // SLTU
+            dst = get_rd(instr);
+            vanilla = fmt::format("({} < {}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        } else {
+            fmt::print(stderr,
+                       "ERROR: cull keep site 0x{:08X} is not a compare (0x{:08X})\n",
+                       addr, instr);
+            std::exit(1);
+        }
+        return fmt::format(
+            "{} = psx_ws_cull_keep_result(({}), {}u);"
+            "  /* ws maximal object/model participation */{}",
+            reg_name(dst), vanilla, site.result, comment);
+    }
+
     // Widescreen automatic far-backdrop column PRELOAD ([widescreen.cull]
     // auto_backdrop). At a detected window's START/END finalize, route the value
     // through psx_ws_backdrop_value(orig, is_end): identity at 4:3, but in
@@ -2832,6 +2875,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";
     ss << "extern int32_t psx_ws_plane_nx(int32_t nx);                /* ws side-plane normal-X scale (gpu.c) */\n";
     ss << "extern uint32_t psx_ws_xclip_bound(uint32_t vanilla);      /* ws per-prim X reject bound load (gpu.c) */\n";
+    ss << "extern uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced); /* ws guarded keep compare (gpu.c) */\n";
     ss << "extern int  psx_ws_backdrop_x(int x);  /* widescreen backdrop screenX squash (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_cols(int base);                    /* ws 2D bg tile-loop widen: col count (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_startcol(int col, unsigned mask);  /* ws 2D bg tile-loop widen: start tile col (gpu.c) */\n";

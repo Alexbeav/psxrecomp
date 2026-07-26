@@ -220,6 +220,37 @@ xclip_load_sites = ["0x80012340"]
               std::vector<uint32_t>{0x80012340u},
           "parser preserves per-prim bound-load sites");
 
+    const auto keep = write_config(root, "cull-keep", R"toml(
+[[widescreen.cull.keep]]
+address = "0x8002B310"
+expected = "0x28A21C01"
+result = 1
+
+[[widescreen.cull.keep]]
+address = "0x8002B368"
+expected = "0x0082202A"
+result = 0
+)toml");
+    const auto keep_config = PSXRecompV4::load_game_config(keep);
+    check(keep_config.ws_cull_keep_sites.size() == 2 &&
+              keep_config.ws_cull_keep_sites[0].address == 0x8002B310u &&
+              keep_config.ws_cull_keep_sites[0].expected == 0x28A21C01u &&
+              keep_config.ws_cull_keep_sites[0].result == 1u &&
+              keep_config.ws_cull_keep_sites[1].address == 0x8002B368u &&
+              keep_config.ws_cull_keep_sites[1].expected == 0x0082202Au &&
+              keep_config.ws_cull_keep_sites[1].result == 0u,
+          "parser preserves full-word-guarded maximal-participation sites");
+
+    const auto bad_keep = write_config(root, "cull-keep-bad", R"toml(
+[[widescreen.cull.keep]]
+address = "0x8002B310"
+expected = "0x24820001"
+result = 1
+)toml");
+    check_throws([&] { (void)PSXRecompV4::load_game_config(bad_keep); },
+                 "expected must be SLT/SLTU/SLTI/SLTIU",
+                 "parser rejects non-comparison maximal-participation sites");
+
     const auto range = write_config(root, "range-cull", R"toml(
 [widescreen.cull]
 range_sites = ["0x80012340"]
@@ -382,6 +413,29 @@ void codegen_tests() {
         0x246200F8u, {}, true, xclip_config); // addiu v0,v1,0xf8
     check(xclip_overlay_mismatch.find("ws cull xclip") == std::string::npos,
           "overlay nonmatching xclip variant remains unchanged");
+
+    PSXRecomp::CodeGenConfig keep_config;
+    keep_config.ws_cull_keep_sites.push_back(
+        {0x80010000u, 0x28821C01u, 1u}); // slti v0,a0,0x1c01
+    const std::string keep_true = generate_first_instruction(
+        0x28821C01u, {}, false, keep_config);
+    check(keep_true.find("psx_ws_cull_keep_result") != std::string::npos &&
+              keep_true.find(", 1u)") != std::string::npos,
+          "codegen emits guarded widescreen keep-true comparison");
+
+    keep_config.ws_cull_keep_sites[0] =
+        {0x80010000u, 0x0082202Au, 0u}; // slt a0,a0,v0
+    const std::string keep_false = generate_first_instruction(
+        0x0082202Au, {}, false, keep_config);
+    check(keep_false.find("psx_ws_cull_keep_result") != std::string::npos &&
+              keep_false.find(", 0u)") != std::string::npos,
+          "codegen emits guarded widescreen keep-false comparison");
+
+    const std::string keep_overlay_mismatch = generate_first_instruction(
+        0x0082202Bu, {}, true, keep_config); // sltu at same overlay VA
+    check(keep_overlay_mismatch.find("maximal object/model participation") ==
+              std::string::npos,
+          "overlay full-word mismatch leaves keep site unchanged");
 }
 
 void gte_codegen_classification_tests() {

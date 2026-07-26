@@ -131,6 +131,10 @@ struct CodeGenConfig {
     // (INT32_MAX while revealed, vanilla at 4:3); empty by default.
     std::set<uint32_t> ws_cull_xclip_load_sites;
 
+    // Exact, full-word-guarded comparison sites whose result is forced only
+    // while widescreen reveals extra world. 4:3 evaluates the original compare.
+    std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep_sites;
+
     // Screen-extent signature immediates ([widescreen.cull] screen_w_imms /
     // screen_h_imms) — per-game display-width-derived bounds. Defaults are the
     // Tomba signature; Ape Escape uses 0x181 (+ 0xF1 height).

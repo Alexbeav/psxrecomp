@@ -1185,6 +1185,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_depth_sites;
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     int ws_cull_guard_pixels = 0;
     // Cull-signature immediates (screen_w_imms / screen_h_imms). Defaults are
     // the original Tomba signature (320-display: 0x140/0x141 + 0xE0/0xF1); a
@@ -1213,6 +1214,37 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("depth_sites", ws_cull_depth_sites);
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
+            if (cull.contains("keep")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "keep")) {
+                    WidescreenCullKeepSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.keep.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.keep.expected");
+                    site.result = (uint32_t)toml::find<int>(item, "result");
+                    const uint32_t op = site.expected >> 26;
+                    const uint32_t fn = site.expected & 0x3Fu;
+                    if (!((op == 0x0Au) || (op == 0x0Bu) ||
+                          (op == 0u && (fn == 0x2Au || fn == 0x2Bu)))) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.keep]] expected must be "
+                            "SLT/SLTU/SLTI/SLTIU",
+                            config_path.string()));
+                    }
+                    if (site.result > 1u) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.keep]] result must be 0 or 1",
+                            config_path.string()));
+                    }
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate [[widescreen.cull.keep]] address 0x{:08X}",
+                            config_path.string(), site.address));
+                    }
+                    ws_cull_keep_sites.push_back(site);
+                }
+            }
             if (cull.contains("guard_pixels")) {
                 ws_cull_guard_pixels = toml::find<int>(cull, "guard_pixels");
                 if (ws_cull_guard_pixels < 0 || ws_cull_guard_pixels > 256)
@@ -1372,6 +1404,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_depth_sites*/   ws_cull_depth_sites,
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
+        /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_guard_pixels*/  ws_cull_guard_pixels,
         /*ws_cull_w_imms*/        ws_cull_w_imms,
         /*ws_cull_h_imms*/        ws_cull_h_imms,

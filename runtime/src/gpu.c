@@ -449,6 +449,40 @@ uint32_t psx_ws_xclip_bound(uint32_t vanilla) {
     return psx_ws_x_margin() > 0 ? 0x7FFFFFFFu : vanilla;
 }
 
+typedef struct {
+    uint32_t address;
+    uint32_t expected;
+    uint32_t result;
+} WsCullKeepSite;
+static WsCullKeepSite ws_cull_keep_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_cull_keep_n = 0;
+void gpu_ws_set_cull_keep_sites(const uint32_t *addresses,
+                                const uint32_t *expected,
+                                const uint32_t *results, int nsites) {
+    if (nsites < 0) nsites = 0;
+    if (nsites > WS_EXPLICIT_CULL_SITES_MAX) nsites = WS_EXPLICIT_CULL_SITES_MAX;
+    ws_cull_keep_n = nsites;
+    for (int i = 0; i < nsites; i++) {
+        ws_cull_keep_sites[i].address = addresses[i] & 0x1FFFFFFFu;
+        ws_cull_keep_sites[i].expected = expected[i];
+        ws_cull_keep_sites[i].result = results[i] ? 1u : 0u;
+    }
+}
+uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
+    return psx_ws_x_margin() > 0 ? (forced ? 1u : 0u) : vanilla;
+}
+int psx_ws_cull_keep_site(uint32_t pc, uint32_t instr, uint32_t vanilla,
+                          uint32_t *out) {
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    for (int i = 0; i < ws_cull_keep_n; i++) {
+        const WsCullKeepSite *site = &ws_cull_keep_sites[i];
+        if (site->address != phys || site->expected != instr) continue;
+        if (out) *out = psx_ws_cull_keep_result(vanilla, site->result);
+        return 1;
+    }
+    return 0;
+}
+
 int psx_ws_x_margin(void) {
     if (ws_margin_override >= 0) return ws_margin_override;
     /* Native-wide: widen the world-space draw cull by the per-side reveal
