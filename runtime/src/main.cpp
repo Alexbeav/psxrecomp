@@ -5251,6 +5251,14 @@ int main(int argc, char** argv) {
             g_frame_interpolation_fps = us.frame_interpolation_fps;
     }
 
+    /* The launcher must inspect the same explicit disc override that the
+     * runtime will validate and mount. Applying --disc only in the later
+     * resolve_disc_for_runtime() pass left the launcher showing game.toml's
+     * path, which may not exist in a build/worktree even though the CLI path
+     * is valid. */
+    if (disc_override_path && disc_override_path[0])
+        resolved_disc = normalize_disc_path_for_launch(disc_override_path);
+
     /* lock_mode: the game supports exactly ONE pad type (e.g. X4 / Tomba 2 are
      * digital-only — X4's pre-DualShock libpad silently discards input from a
      * pad answering id 0x73). The launcher hides its selector for such games,
