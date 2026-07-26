@@ -286,16 +286,18 @@ release from the [Games](#games) table.
 3. It boots on the bundled OpenBIOS. To use your own dump instead, pick it in
    settings.
 
-The package includes OpenBIOS but no retail PS1 BIOS, game disc image, generated
-game code, or save data. If you choose your own BIOS, that path is remembered
-next to the executable as `bios.cfg`; clear the choice (or delete that file) to
-go back to OpenBIOS.
+The package includes `bios/openbios.bin` and its MIT notice at
+`bios/OpenBIOS.LICENSE`, but no retail PS1 BIOS, game disc image, generated game
+code, or save data. If you choose your own BIOS, that path is remembered next
+to the executable as `bios.cfg`; clear the choice (or delete that file) to go
+back to OpenBIOS.
 
 The game recomp projects use the same runtime picker contract but ship a
-**Dear ImGui launcher**: on first run it prompts for your legally obtained BIOS
-and game disc image, then lets you configure video, controls, and per-game
-settings before launching. Keyboard/controller mappings live in each game's repo
-and launcher, not here.
+**Dear ImGui launcher**: on first run it asks for the game disc image and uses
+OpenBIOS automatically. The optional BIOS row lets you select your own verified
+retail dump or clear that choice to return to OpenBIOS. The launcher also
+configures video, controls, and per-game settings. Keyboard/controller mappings
+live in each game's repo and launcher, not here.
 
 ## Setup
 
@@ -322,7 +324,7 @@ Build the framework (recompiler tool + BIOS-only runtime):
 git clone --recurse-submodules https://github.com/mstan/psxrecomp.git && cd psxrecomp
 
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build recompiler/build
-cmake -S runtime    -B runtime/build    -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build runtime/build --target psx-runtime
+cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF && cmake --build runtime/build --target psx-runtime
 ```
 
 On Windows swap `-G Ninja` for your generator if you prefer (e.g.
@@ -425,13 +427,14 @@ discussion happens in the **R.A.I.D.** Discord (invite below).
 
 PolyForm Noncommercial 1.0.0. See `LICENSE`.
 
-The PSX BIOS and game disc images remain copyrighted by their respective
-owners. This project distributes no BIOS images, no disc images, and no
-game assets — those are always supplied by the user from their own
-collection. Release executables (and per-game overlay caches) contain
-statically recompiled (machine-translated) builds of the original code,
-the same distribution model used by other static recompilation projects
-such as N64: Recompiled.
+Retail PS1 BIOS images and game disc images remain copyrighted by their
+respective owners and are not distributed. This project does distribute the
+from-scratch, MIT-licensed OpenBIOS image under the notice in
+[`bios/OpenBIOS.LICENSE`](bios/OpenBIOS.LICENSE). Game assets and disc data are
+always supplied by the user from their own collection. Release executables (and
+per-game overlay caches) contain statically recompiled (machine-translated)
+builds of the original code, the same distribution model used by other static
+recompilation projects such as N64: Recompiled.
 
 ---
 

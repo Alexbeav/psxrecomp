@@ -14,7 +14,10 @@ $MingwBin = "C:\msys64\mingw64\bin"
 
 $env:PATH = "$MingwBin;$env:PATH"
 
-cmake -S (Join-Path $Root "runtime") -B $BuildPath -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_DEBUG_TOOLS=OFF
+cmake -S (Join-Path $Root "runtime") -B $BuildPath -G Ninja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DPSX_DEBUG_TOOLS=OFF `
+    -DPSX_RECOMP_UI=OFF
 cmake --build $BuildPath --target psx-runtime -j $env:NUMBER_OF_PROCESSORS
 
 if (Test-Path $StageRoot) {
@@ -23,16 +26,18 @@ if (Test-Path $StageRoot) {
 New-Item -ItemType Directory -Force $Stage | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $Stage "saves") | Out-Null
 
-Copy-Item (Join-Path $BuildPath "psx-runtime.exe") (Join-Path $Stage "PSXRecomp.exe")
+Copy-Item (Join-Path $BuildPath "PSXRecomp.exe") (Join-Path $Stage "PSXRecomp.exe")
 Copy-Item (Join-Path $Root "README.md") $Stage
 Copy-Item (Join-Path $Root "LICENSE") $Stage
+Copy-Item -Recurse -Force (Join-Path $BuildPath "bios") (Join-Path $Stage "bios")
+Copy-Item (Join-Path $Root "THIRD_PARTY_ATTRIBUTION.md") $Stage
 if (Test-Path (Join-Path $Root "RELEASE_NOTES.md")) {
     Copy-Item (Join-Path $Root "RELEASE_NOTES.md") $Stage
 }
 
 # The Release build is statically linked (PSX_STATIC_RUNTIME defaults ON for
 # MinGW Release in runtime.cmake), so the exe imports ONLY Windows system DLLs
-# — no SDL2.dll / libgcc_s_seh-1.dll / libstdc++-6.dll to bundle. Shipping
+# so there is no SDL2.dll / libgcc_s_seh-1.dll / libstdc++-6.dll to bundle. Shipping
 # those side-by-side was the cause of the 0xc000007b launch crash on user
 # machines that had a mismatched copy earlier on the DLL search path.
 #
@@ -47,7 +52,7 @@ $systemDlls = @("kernel32.dll","user32.dll","gdi32.dll","shell32.dll","msvcrt.dl
                 "dinput8.dll","rpcrt4.dll","hid.dll","cfgmgr32.dll")
 $nonSystem = $imports | Where-Object { $systemDlls -notcontains $_.ToLower() }
 if ($nonSystem) {
-    throw "Release exe is NOT self-contained — imports non-system DLL(s): $($nonSystem -join ', ')"
+    throw "Release exe is NOT self-contained; imports non-system DLL(s): $($nonSystem -join ', ')"
 }
 Write-Host "Verified self-contained: imports only system DLLs ($($imports.Count) total)"
 
@@ -58,11 +63,13 @@ $exeBytes = [System.IO.File]::ReadAllBytes((Join-Path $Stage "PSXRecomp.exe"))
 $exeText  = [System.Text.Encoding]::ASCII.GetString($exeBytes)
 $bakedBios = [regex]::Matches($exeText, '[A-Za-z]:[/\\][ -~]*?SCPH1001\.BIN') | ForEach-Object { $_.Value } | Select-Object -Unique
 if ($bakedBios) {
-    throw "Release exe contains baked absolute BIOS path(s): $($bakedBios -join '; ') — build with a relative DEFAULT_BIOS_PATH"
+    throw "Release exe contains baked absolute BIOS path(s): $($bakedBios -join '; '); build with a relative DEFAULT_BIOS_PATH"
 }
 Write-Host "Verified no baked absolute BIOS path in the exe"
 
-# No user-machine or copyrighted files may ride along in the stage.
+# No user-machine or copyrighted files may ride along in the stage. OpenBIOS
+# is intentionally present and redistributable; retail SCPH images remain
+# forbidden.
 $strayPatterns = @("SCPH*.BIN","*.cue","*.iso","*.mcd","bios.cfg","disc.cfg",
                    "settings.toml","keybinds.ini","overlay_captures.json")
 $stray = foreach ($pat in $strayPatterns) { Get-ChildItem $Stage -Recurse -File -Filter $pat -ErrorAction SilentlyContinue }
@@ -73,7 +80,14 @@ $savesFiles = Get-ChildItem (Join-Path $Stage "saves") -Recurse -File -ErrorActi
 if ($savesFiles) {
     throw "Stage saves/ directory must be empty, contains: $(($savesFiles | ForEach-Object FullName) -join '; ')"
 }
-Write-Host "Verified stage carries no BIOS/disc/save/sidecar files"
+$bundledBios = Join-Path $Stage "bios/openbios.bin"
+$bundledLicense = Join-Path $Stage "bios/OpenBIOS.LICENSE"
+if (!(Test-Path $bundledBios) -or
+    (Get-Item $bundledBios).Length -ne 524288 -or
+    !(Test-Path $bundledLicense)) {
+    throw "Stage must contain the 512 KiB OpenBIOS image and its MIT notice"
+}
+Write-Host "Verified bundled OpenBIOS + notice; no retail BIOS/disc/save/sidecar files"
 
 @"
 ; PSXRecomp input mapping. PSX buttons are active when any listed source is pressed.
@@ -108,15 +122,16 @@ select = back
 @"
 PSXRecomp $Version
 
-This package does not include a PlayStation BIOS, game disc image, generated
-game source, save data, or any copyrighted Sony/game assets.
+This package includes the MIT-licensed OpenBIOS from PCSX-Redux. Its notice is
+in bios/OpenBIOS.LICENSE. It does not include a retail PlayStation BIOS, game
+disc image, generated game source, save data, or copyrighted Sony/game assets.
 
 First launch:
 1. Run PSXRecomp.exe.
-2. Select your legally obtained SCPH1001.BIN BIOS when prompted.
+2. OpenBIOS runs by default. No external BIOS is required.
 
-The selected BIOS path is saved in bios.cfg next to the executable. Delete that
-file if you want to pick a different BIOS later.
+You can select your legally obtained SCPH1001.BIN instead. The selected path is
+saved in bios.cfg next to the executable; clear it to return to OpenBIOS.
 
 This framework package is BIOS-only. Game-specific PSXRecomp releases use the
 same BIOS picker and additionally prompt for the required game disc image.

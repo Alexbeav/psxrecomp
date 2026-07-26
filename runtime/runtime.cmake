@@ -262,6 +262,10 @@ endif()
 # cross-checking them, and it linked cleanly when they disagreed.
 set(PSXRECOMP_BUNDLED_BIOS_PATH "bios/openbios.bin" CACHE STRING
     "Bundled redistributable BIOS image, relative to the executable")
+set(PSXRECOMP_BUNDLED_BIOS_SOURCE "${PSXRECOMP_ROOT}/bios/openbios.bin" CACHE FILEPATH
+    "Source image copied into native runtime builds as the bundled BIOS")
+set(PSXRECOMP_BUNDLED_BIOS_LICENSE "${PSXRECOMP_ROOT}/bios/OpenBIOS.LICENSE" CACHE FILEPATH
+    "License notice copied alongside the bundled BIOS")
 set(PSXRECOMP_BIOS_STEMS "OpenBIOS;SCPH1001" CACHE STRING
     "Recompiled BIOS stems to link (first bundled/redistributable one is the default at runtime)")
 # The profile is still needed as the staleness-stamp input for the primary stem.
@@ -618,6 +622,48 @@ function(psxrecomp_add_runtime_target target)
         FMT_HEADER_ONLY=1
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
+
+    # OpenBIOS is part of the native runtime product, not a developer-machine
+    # prerequisite. Stage both the exact ROM consumed by the compiled backend
+    # and its required MIT notice beside every native executable. Release
+    # packagers copy this directory as a unit.
+    if(NOT PSXRT_ORACLE)
+        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        if(NOT _psxrt_openbios_index EQUAL -1)
+            if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
+                message(FATAL_ERROR
+                    "Bundled OpenBIOS image is missing: "
+                    "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
+            endif()
+            if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+                message(FATAL_ERROR
+                    "Bundled OpenBIOS license is missing: "
+                    "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+            endif()
+            get_filename_component(
+                _psxrt_bundled_bios_dir
+                "${PSXRECOMP_BUNDLED_BIOS_PATH}"
+                DIRECTORY)
+            get_filename_component(
+                _psxrt_bundled_bios_license_name
+                "${PSXRECOMP_BUNDLED_BIOS_LICENSE}"
+                NAME)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target}>/${_psxrt_bundled_bios_dir}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
+                    "$<TARGET_FILE_DIR:${target}>/${PSXRECOMP_BUNDLED_BIOS_PATH}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PSXRECOMP_BUNDLED_BIOS_LICENSE}"
+                    "$<TARGET_FILE_DIR:${target}>/${_psxrt_bundled_bios_dir}/${_psxrt_bundled_bios_license_name}"
+                COMMENT "Staging bundled OpenBIOS image and MIT notice"
+                VERBATIM)
+            set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+                "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
+                "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+        endif()
+    endif()
 
     if(PSXRT_ORACLE)
         target_compile_definitions(${target} PRIVATE PSX_ORACLE_BUILD=1)

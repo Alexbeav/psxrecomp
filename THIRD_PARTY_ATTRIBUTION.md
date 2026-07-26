@@ -1,6 +1,6 @@
 # Third-Party Attribution
 
-## OpenBIOS — PCSX-Redux's free PS1 BIOS (optional recompilation target)
+## OpenBIOS — PCSX-Redux's free PS1 BIOS
 
 [OpenBIOS](https://github.com/grumpycoders/pcsx-redux) (src/mips/openbios) by
 the PCSX-Redux authors, licensed **MIT** (notice: `bios/OpenBIOS.LICENSE`;
@@ -9,9 +9,8 @@ the binary also links permissively-licensed code from
 as the prebuilt image `bios/openbios.bin` (pin and build recipe recorded in
 `bios/OpenBIOS.toml`) and statically recompiled by
 `psxrecomp-bios --config bios/OpenBIOS.toml` exactly like the retail BIOS.
-Because MIT permits redistribution, a game verified against OpenBIOS can ship
-it with the build (`[program.image] redistributable = true`) so players supply
-only a disc; `bios/OpenBIOS.LICENSE` must ride along with the shipped image.
+Normal runtime builds stage it automatically so players supply only a disc;
+`bios/OpenBIOS.LICENSE` always rides alongside the shipped image.
 
 
 ## sljit — stack-less JIT compiler (Tier-2 in-process overlay backend)

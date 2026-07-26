@@ -10,7 +10,7 @@ Silicon & Intel), and **Linux**. There are two things you can build:
 
 For the retail **`SCPH1001.BIN` BIOS** you supply your own dump; the
 MIT-licensed **OpenBIOS** alternative is bundled (`bios/openbios.bin`, see
-[Selecting the BIOS to recompile](#selecting-the-bios-to-recompile)). For a
+[Regenerating BIOS backends](#regenerating-bios-backends)). For a
 game you always supply your own legally-obtained **disc image** — this
 project ships no game data.
 
@@ -77,14 +77,15 @@ Two CMake trees: the recompiler (a tool) and the runtime (the engine).
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build recompiler/build
 
-# 2. (Optional) regenerate the BIOS C from your SCPH1001.BIN
-#    Requires bios/SCPH1001.BIN to be present. To target the bundled
-#    OpenBIOS instead: --config bios/OpenBIOS.toml (see "Selecting the
-#    BIOS to recompile" below).
-bash tools/regen_bios.sh
+# 2. (Optional) regenerate either statically recompiled BIOS backend.
+#    OpenBIOS can always be regenerated from the tracked image. Regenerating
+#    the retail backend requires your own bios/SCPH1001.BIN dump.
+bash tools/regen_bios.sh --config bios/OpenBIOS.toml
+bash tools/regen_bios.sh --config bios/SCPH1001.toml
 
 # 3. Runtime → produces psx-runtime (BIOS-only for this repo)
-cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DPSX_RECOMP_UI=OFF
 cmake --build runtime/build --target psx-runtime
 ```
 
@@ -197,28 +198,29 @@ pack beside the repo at `../sdl2-msvc/SDL2-*`. Use the MSYS2/MinGW toolchain
 for the `gcc` tier; otherwise areas stay in the interpreter. See
 [`EXECUTION_MODEL.md`](EXECUTION_MODEL.md).
 
-## Selecting the BIOS to recompile
+## Regenerating BIOS backends
 
-The runtime links exactly one statically recompiled BIOS (generated symbols
-collide across images), chosen at configure time:
+Every normal runtime links both statically recompiled BIOS backends. OpenBIOS
+symbols and retail SCPH-1001 symbols are namespaced so they coexist in one
+executable; the active backend is selected at launch:
 
 ```bash
-# Retail SCPH1001 (default; user supplies the dump at first launch)
-tools/regen_bios.sh                      # == --config bios/SCPH1001.toml
-cmake -B build ...                       # PSXRECOMP_BIOS_STEM defaults to SCPH1001
-
-# OpenBIOS (redistributable; ships with the game, player supplies only a disc)
+# OpenBIOS (tracked and redistributable)
 tools/regen_bios.sh --config bios/OpenBIOS.toml
-cmake -B build -DPSXRECOMP_BIOS_STEM=OpenBIOS \
-      -DPSXRECOMP_BIOS_PROFILE=$PWD/bios/OpenBIOS.toml ...
+
+# Retail SCPH-1001 (requires your own local dump)
+tools/regen_bios.sh --config bios/SCPH1001.toml
 ```
 
-Game repos set `DEFAULT_BIOS_PATH` (psxrecomp_add_runtime_target) to the
-image the profile names, and `[recompiler] bios_config` in game.toml so game
-codegen folds BIOS-copy RAM aliases through the same profile. Per-title
-compatibility is NOT implied: verify a title on the target BIOS in a
-reference emulator before switching its build (the identity gate refuses a
-mismatched image at launch either way).
+`PSXRECOMP_BIOS_STEMS` defaults to `OpenBIOS;SCPH1001`. The runtime build
+automatically stages `bios/openbios.bin` and `bios/OpenBIOS.LICENSE` beside
+every native executable. A release packager must copy that `bios/` directory
+unchanged.
+
+At runtime, no explicit player choice means OpenBIOS. A retail BIOS selected
+with the launcher, `settings.toml`, or `--bios` wins after its exact identity is
+verified. `[runtime] openbios = false` is reserved for a title with a verified
+OpenBIOS incompatibility. See [`BIOS_SELECTION.md`](BIOS_SELECTION.md).
 
 OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
 see the pin + regeneration recipe in `bios/OpenBIOS.toml`.

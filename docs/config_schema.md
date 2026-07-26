@@ -250,15 +250,16 @@ These are noted here so future work knows where to slot them:
 One profile per BIOS image; the profile is the single source of truth for the
 image identity, the relocation windows, and the runtime anchors. Two ship:
 `bios/SCPH1001.toml` (retail; user supplies the dump) and `bios/OpenBIOS.toml`
-(MIT, redistributable, shipped with the build). Selected at configure time:
-`-DPSXRECOMP_BIOS_STEM=<stem> -DPSXRECOMP_BIOS_PROFILE=<path>`, and per game
-by `[recompiler] bios_config` in game.toml.
+(MIT, redistributable, shipped with the build). Normal runtimes link both
+generated backends (`PSXRECOMP_BIOS_STEMS=OpenBIOS;SCPH1001`) and select one at
+launch. The recompiler's `[recompiler] bios_config` identifies the profile used
+for game code generation; it does not choose the player's runtime BIOS.
 
 ```toml
 [program.image]              # identity; recompiler refuses a mismatched ROM
 sha256          = "..."      # pins the exact image (empty = unchecked)
 redistributable = false      # true: BIOS ships with the game; runtime hides
-                             # the whole BIOS-selection surface
+                             # any requirement to provide that image
 
 [recompiler.address_model]   # boot-time bulk code copies out of ROM
 normalize_mask = "0x1FFFFFFF"
