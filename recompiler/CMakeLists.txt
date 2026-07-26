@@ -113,6 +113,7 @@ add_executable(psxrecomp
     src/main_cli.cpp
     src/cli_boot_path.cpp
     src/ps1_exe_parser.cpp
+    ../runtime/src/cue_sheet.cpp
     ../runtime/src/iso_reader.cpp
 )
 target_include_directories(psxrecomp PRIVATE
