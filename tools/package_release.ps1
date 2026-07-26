@@ -29,7 +29,11 @@ New-Item -ItemType Directory -Force (Join-Path $Stage "saves") | Out-Null
 Copy-Item (Join-Path $BuildPath "PSXRecomp.exe") (Join-Path $Stage "PSXRecomp.exe")
 Copy-Item (Join-Path $Root "README.md") $Stage
 Copy-Item (Join-Path $Root "LICENSE") $Stage
-Copy-Item -Recurse -Force (Join-Path $BuildPath "bios") (Join-Path $Stage "bios")
+$BundledBiosSrc = Join-Path $BuildPath "bios"
+$BundledBiosDst = Join-Path $Stage "bios"
+New-Item -ItemType Directory -Force $BundledBiosDst | Out-Null
+Copy-Item (Join-Path $BundledBiosSrc "openbios.bin") $BundledBiosDst
+Copy-Item (Join-Path $BundledBiosSrc "OpenBIOS.LICENSE") $BundledBiosDst
 Copy-Item (Join-Path $Root "THIRD_PARTY_ATTRIBUTION.md") $Stage
 if (Test-Path (Join-Path $Root "RELEASE_NOTES.md")) {
     Copy-Item (Join-Path $Root "RELEASE_NOTES.md") $Stage
