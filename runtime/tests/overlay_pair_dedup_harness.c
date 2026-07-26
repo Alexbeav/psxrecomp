@@ -282,7 +282,7 @@ int main(int argc, char **argv) {
     const char *first = argv[3];
     const char *second = argv[4];
     memset(s_ram, 0, sizeof(s_ram));
-    overlay_loader_init(argv[1], "PAIR-TEST");
+    overlay_loader_init(argv[1], "PAIR-TEST", 0);
 
     int alias = strcmp(scenario, "alias-at-cap") == 0;
     int partial = strcmp(scenario, "partial-first") == 0;

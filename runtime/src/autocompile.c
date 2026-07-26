@@ -42,6 +42,38 @@ static void ac_state_store(int value) { s_state = value; }
 static uint32_t     s_runs      = 0;
 static uint32_t     s_fails     = 0;
 static uint32_t     s_rescans   = 0;
+/* Completed failures impose a wall-clock retry gate owned by the provider.
+ * Capture manifests are grow-only and can change every few frames, so capture
+ * signature backoff alone cannot stop a broken command from spawning forever.
+ * Only a fully successful compiler/publication run resets this sequence. */
+static uint32_t     s_consecutive_fails = 0;
+static uint64_t     s_retry_not_before_ms = 0;
+#define AC_RETRY_INITIAL_MS 1000ull
+#define AC_RETRY_MAX_MS   300000ull
+
+static uint64_t autocompile_now_ms(void) {
+#ifdef _WIN32
+    return (uint64_t)GetTickCount64();
+#else
+    return 0;
+#endif
+}
+
+static void autocompile_note_failure(void) {
+    s_fails++;
+    if (s_consecutive_fails < 31u) s_consecutive_fails++;
+    unsigned shift = s_consecutive_fails > 1u
+                   ? s_consecutive_fails - 1u : 0u;
+    if (shift > 18u) shift = 18u;
+    uint64_t delay = AC_RETRY_INITIAL_MS << shift;
+    if (delay > AC_RETRY_MAX_MS) delay = AC_RETRY_MAX_MS;
+    s_retry_not_before_ms = autocompile_now_ms() + delay;
+}
+
+static void autocompile_note_success(void) {
+    s_consecutive_fails = 0;
+    s_retry_not_before_ms = 0;
+}
 /* Per-shard build accounting, parsed from compile_overlays.py's machine-readable
  * "PSX_SHARD_RESULT ok=N failed=M skipped=K" line. Before this, a compile run
  * that built zero shards because a header change broke EVERY shard compile
@@ -108,15 +140,39 @@ static int  s_child_line_overflow = 0;
  * tail even though the marker was complete and valid when it arrived.  Keep
  * the last valid result here; poll_main accounts it exactly once after both
  * child-output workers have joined. */
-static int shard_result_line_locked(const char *line) {
+static int shard_result_values(const char *line, unsigned *ok_out,
+                               unsigned *failed_out, unsigned *skipped_out) {
     unsigned ok = 0, failed = 0, skipped = 0;
     int consumed = 0;
-    if (sscanf(line, "PSX_SHARD_RESULT ok=%u failed=%u skipped=%u %n",
+    if (sscanf(line, "PSX_SHARD_RESULT ok=%u failed=%u skipped=%u%n",
                &ok, &failed, &skipped, &consumed) != 3)
         return 0;
-    for (const char *tail = line + consumed; *tail; tail++) {
-        if (*tail != ' ' && *tail != '\t' && *tail != '\r') return 0;
+    /* Producers may append forward-compatible numeric telemetry, currently
+     * `capacity_fastpath=N`. Validate the extension grammar rather than
+     * rejecting every newer marker or accepting arbitrary trailing text. */
+    const char *tail = line + consumed;
+    for (;;) {
+        while (*tail == ' ' || *tail == '\t' || *tail == '\r') tail++;
+        if (!*tail) break;
+        const char *key = tail;
+        while ((*tail >= 'a' && *tail <= 'z') ||
+               (*tail >= 'A' && *tail <= 'Z') ||
+               (*tail >= '0' && *tail <= '9') || *tail == '_')
+            tail++;
+        if (tail == key || *tail++ != '=') return 0;
+        const char *digits = tail;
+        while (*tail >= '0' && *tail <= '9') tail++;
+        if (tail == digits) return 0;
     }
+    *ok_out = ok;
+    *failed_out = failed;
+    *skipped_out = skipped;
+    return 1;
+}
+
+static int shard_result_line_locked(const char *line) {
+    unsigned ok = 0, failed = 0, skipped = 0;
+    if (!shard_result_values(line, &ok, &failed, &skipped)) return 0;
     s_shard_ok = ok;
     s_shard_fail = failed;
     s_shard_skipped = skipped;
@@ -516,6 +572,8 @@ int autocompile_request(void) {
     /* DONE owns an unconsumed cache rescan/result. Only the emulation-thread
      * poll may return it to IDLE; never overwrite it with another child. */
     if (!autocompile_configured() || ac_state_load() != AC_IDLE) return 0;
+    if (s_retry_not_before_ms &&
+        autocompile_now_ms() < s_retry_not_before_ms) return 0;
 #ifdef _WIN32
     /* IDLE should imply empty queues; discard defensively so a prior aborted
      * run can never leak a speculative module reference into the next one. */
@@ -604,7 +662,7 @@ int autocompile_request(void) {
     if (!ok) {
         if (job) CloseHandle(job);
         CloseHandle(rd);
-        s_fails++;
+        autocompile_note_failure();
         return 0;
     }
     if (job && !AssignProcessToJobObject(job, pi.hProcess)) {
@@ -623,7 +681,7 @@ int autocompile_request(void) {
         CloseHandle(rd);
         CloseHandle(pi.hProcess);
         if (job) CloseHandle(job);   /* reaps any grandchild */
-        s_fails++;
+        autocompile_note_failure();
         return 0;
     }
     ctx->read_pipe = rd;
@@ -643,7 +701,7 @@ int autocompile_request(void) {
         s_proc = NULL;
         if (s_job) { CloseHandle(s_job); s_job = NULL; }
         ac_state_store(AC_IDLE);
-        s_fails++;
+        autocompile_note_failure();
         return 0;
     }
     s_watch_thread = CreateThread(NULL, 0, watch_thread, ctx, 0, NULL);
@@ -665,7 +723,7 @@ int autocompile_request(void) {
         s_prepare_thread = NULL;
         if (s_job) { CloseHandle(s_job); s_job = NULL; }
         ac_state_store(AC_IDLE);
-        s_fails++;
+        autocompile_note_failure();
         return 0;
     }
     return 1;
@@ -705,13 +763,7 @@ static int parse_shard_result(void) {
     size_t cp = span < sizeof(line) - 1 ? span : sizeof(line) - 1;
     memcpy(line, hit, cp);
     line[cp] = '\0';
-    int consumed = 0;
-    if (sscanf(line, "PSX_SHARD_RESULT ok=%u failed=%u skipped=%u %n",
-               &ok, &failed, &skipped, &consumed) != 3)
-        return 0;
-    for (const char *tail = line + consumed; *tail; tail++) {
-        if (*tail != ' ' && *tail != '\t' && *tail != '\r') return 0;
-    }
+    if (!shard_result_values(line, &ok, &failed, &skipped)) return 0;
     s_shard_ok      = ok;
     s_shard_fail    = failed;
     s_shard_skipped = skipped;
@@ -784,7 +836,9 @@ void autocompile_poll_main(void) {
     if (s_exit_code != 0 || !s_shard_result_seen || s_shard_fail > 0 ||
         s_publish_drops_run != 0 || s_publish_load_fail_run != 0 ||
         s_publish_parse_fail_run != 0)
-        s_fails++;
+        autocompile_note_failure();
+    else
+        autocompile_note_success();
 }
 
 void autocompile_shutdown(void) {
@@ -880,9 +934,14 @@ int autocompile_status_json(char *out, int cap) {
     }
 #endif
     (void)tn;
+    uint64_t retry_ms = 0;
+    const uint64_t now_ms = autocompile_now_ms();
+    if (s_retry_not_before_ms > now_ms)
+        retry_ms = s_retry_not_before_ms - now_ms;
     return snprintf(out, cap,
         "{\"configured\":%d,\"state\":\"%s\",\"runs\":%u,\"fails\":%u,"
         "\"rescans\":%u,\"last_exit\":%d,"
+        "\"consecutive_fails\":%u,\"retry_ms\":%llu,"
         "\"shard_ok\":%u,\"shard_fail\":%u,\"shard_skipped\":%u,"
         "\"shard_fail_total\":%u,\"shard_result_seen\":%d,"
         "\"publish_ready\":%u,\"publish_ready_highwater\":%u,"
@@ -894,7 +953,8 @@ int autocompile_status_json(char *out, int cap) {
         "\"publish_prepare_last_us\":%llu,"
         "\"output_tail\":\"%s\"}",
         autocompile_configured(), names[ac_state_load() & 3], s_runs, s_fails,
-        s_rescans, s_exit_code,
+        s_rescans, s_exit_code, s_consecutive_fails,
+        (unsigned long long)retry_ms,
         s_shard_ok, s_shard_fail, s_shard_skipped,
         s_shard_fail_total, s_shard_result_seen,
         publish_ready, publish_ready_highwater, publish_preparing,

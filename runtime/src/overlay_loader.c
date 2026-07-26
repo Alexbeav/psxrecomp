@@ -1064,6 +1064,7 @@ static int cand_register(uint32_t phys, OverlayFn fn, const ManFn *m, int dll,
 
 static char s_cache_dir[512];
 static char s_game_id[64];
+static uint32_t s_config_hash;
 static int  s_active = 0;
 
 /* Canonical (filesystem-resolved) form of s_cache_dir, computed lazily on the
@@ -1701,8 +1702,9 @@ static void warn_on_cgtag_mismatch(const char *tier) {
     snprintf(base, sizeof base, "%s/%s/%s/%s",
              s_cache_dir, s_game_id, tier, PSX_OVERLAY_ARCH_ABI);
     char expect[64];
-    snprintf(expect, sizeof expect, "cg%d_%08x",
-             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x",
+             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
+             (unsigned)s_config_hash);
     snprintf(pattern, sizeof pattern, "%s/cg*", base);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
@@ -1717,7 +1719,7 @@ static void warn_on_cgtag_mismatch(const char *tier) {
             FindClose(h2);
             loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
                        "shards exist under %s/%s. The autocompile is writing to a "
-                       "DIFFERENT codegen hash than this runtime reads -> ALL overlays "
+                       "DIFFERENT codegen/config hash than this runtime reads -> ALL overlays "
                        "run INTERPRETED (slow). Fix overlay_autocompile_cmd's "
                        "--recompiler/--runtime-include to match THIS build's framework.",
                        tier, expect, tier, fd.cFileName);
@@ -1728,13 +1730,14 @@ static void warn_on_cgtag_mismatch(const char *tier) {
     char base[768], expect[64], found[256];
     snprintf(base, sizeof base, "%s/%s/%s/%s",
              s_cache_dir, s_game_id, tier, PSX_OVERLAY_ARCH_ABI);
-    snprintf(expect, sizeof expect, "cg%d_%08x",
-             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x",
+             PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
+             (unsigned)s_config_hash);
     if (psx_overlay_posix_find_other_cache_tag(base, expect, found,
                                                sizeof(found))) {
         loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
                    "shards exist under %s/%s. The autocompile is writing to a "
-                   "DIFFERENT codegen hash than this runtime reads -> ALL overlays "
+                   "DIFFERENT codegen/config hash than this runtime reads -> ALL overlays "
                    "run INTERPRETED (slow). Fix overlay_autocompile_cmd's "
                    "--recompiler/--runtime-include to match THIS build's framework.",
                    tier, expect, tier, found);
@@ -1878,14 +1881,14 @@ static void scan_cache_dir(void) {
     /* Index both tiers and every immutable artifact. Runtime selection prefers
      * usable GCC over TCC; an invalid GCC artifact cannot suppress a valid TCC
      * fallback merely because its filename was enumerated first. */
-    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x",
+    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x_gc%08x",
              s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash);
     scan_one_cache_dir(dir, CACHE_TIER_GCC);
     abi_preflight_sweep(dir);
-    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x",
+    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x_gc%08x",
              s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash);
     scan_one_cache_dir(dir, CACHE_TIER_TCC);
     abi_preflight_sweep(dir);
 
@@ -2591,7 +2594,8 @@ static int load_bios_resident_shards(void) {
     return functions;
 }
 
-void overlay_loader_init(const char *cache_dir, const char *game_id) {
+void overlay_loader_init(const char *cache_dir, const char *game_id,
+                         uint32_t config_hash) {
     {
         const char *perf = getenv("PSX_RUNTIME_PERF_DIAG");
         s_native_hot_enabled = perf && perf[0] && perf[0] != '0';
@@ -2606,6 +2610,7 @@ void overlay_loader_init(const char *cache_dir, const char *game_id) {
         s_range_pc_cache[i].cand = -1;
     strncpy(s_cache_dir, cache_dir, sizeof(s_cache_dir) - 1);
     strncpy(s_game_id,   game_id,   sizeof(s_game_id)   - 1);
+    s_config_hash = config_hash;
     s_cache_root_canon_ok = 0;   /* re-resolve for the (re)assigned root */
     /* data shards persist under the same unified cache root (data_shards.c) */
     { extern void ds_init(const char*, const char*); ds_init(cache_dir, game_id); }

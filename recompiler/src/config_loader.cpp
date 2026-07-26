@@ -2,6 +2,7 @@
 
 #include "config_loader.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
@@ -20,6 +21,110 @@
 namespace PSXRecompV4 {
 
 namespace fs = std::filesystem;
+
+namespace {
+
+struct ConfigHash {
+    uint32_t value = 2166136261u; // FNV-1a 32
+
+    void byte(uint8_t v) {
+        value ^= v;
+        value *= 16777619u;
+    }
+    void u32(uint32_t v) {
+        byte((uint8_t)(v >> 0));
+        byte((uint8_t)(v >> 8));
+        byte((uint8_t)(v >> 16));
+        byte((uint8_t)(v >> 24));
+    }
+    void tag(const char *s) {
+        while (*s) byte((uint8_t)*s++);
+        byte(0);
+    }
+    void words(const char *name, std::vector<uint32_t> values) {
+        tag(name);
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+        u32((uint32_t)values.size());
+        for (uint32_t value : values) u32(value);
+    }
+};
+
+} // namespace
+
+uint32_t overlay_codegen_config_hash(const GameConfig& c) {
+    ConfigHash h;
+    h.tag("psxrecomp-overlay-config-v1");
+
+    h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
+    h.words("cull_bias", c.ws_cull_bias_sites);
+    h.words("cull_range", c.ws_cull_range_sites);
+    h.words("cull_a1", c.ws_cull_a1_sites);
+    h.words("cull_screen_x", c.ws_cull_screen_x_sites);
+    h.words("cull_slti", c.ws_cull_slti_sites);
+    h.words("cull_bltz", c.ws_cull_bltz_sites);
+    h.words("cull_negsub", c.ws_cull_negsub_sites);
+    h.words("cull_vxrange", c.ws_cull_vxrange_sites);
+    h.words("cull_depth", c.ws_cull_depth_sites);
+    h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
+    h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
+    h.words("cull_w_imms", c.ws_cull_w_imms);
+    h.words("cull_h_imms", c.ws_cull_h_imms);
+    h.words("backdrop_x", c.ws_backdrop_x_sites);
+    h.words("backdrop_unsquash", c.ws_backdrop_unsquash_funcs);
+
+    h.tag("flags");
+    h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
+    h.u32(c.ws_auto_backdrop_preload ? 1u : 0u);
+    h.u32(c.ws_bg2d_init_func);
+
+    std::vector<WidescreenSignedBoundSite> signed_sites =
+        c.ws_signed_x_bound_sites;
+    std::sort(signed_sites.begin(), signed_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("signed_x_bounds");
+    h.u32((uint32_t)signed_sites.size());
+    for (const auto& site : signed_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+    }
+
+    std::vector<WidescreenCullKeepSite> keep_sites = c.ws_cull_keep_sites;
+    std::sort(keep_sites.begin(), keep_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  if (a.expected != b.expected) return a.expected < b.expected;
+                  return a.result < b.result;
+              });
+    h.tag("cull_keep");
+    h.u32((uint32_t)keep_sites.size());
+    for (const auto& site : keep_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+        h.u32(site.result);
+    }
+
+    std::vector<RecompilerPatch> patches = c.recompiler_patches;
+    std::sort(patches.begin(), patches.end(),
+              [](const auto& a, const auto& b) {
+                  const uint32_t aa = recompiler_patch_address_key(a.address);
+                  const uint32_t ba = recompiler_patch_address_key(b.address);
+                  if (aa != ba) return aa < ba;
+                  if (a.expected != b.expected) return a.expected < b.expected;
+                  return a.replacement < b.replacement;
+              });
+    h.tag("instruction_patches");
+    h.u32((uint32_t)patches.size());
+    for (const auto& patch : patches) {
+        h.u32(recompiler_patch_address_key(patch.address));
+        h.u32(patch.expected);
+        h.u32(patch.replacement);
+    }
+    return h.value;
+}
 
 // Pad mode <-> string. Accepts "hybrid"/"analog"/"digital" (case-insensitive);
 // returns `fallback` for anything unrecognised so a typo never silently flips

@@ -5010,7 +5010,13 @@ int main(int argc, char** argv) {
                     capture_persist_dir.empty() ? nullptr :
                         capture_persist_dir.c_str(),
                     game_id.c_str());
-                overlay_loader_init(cache_dir.c_str(), game_id.c_str());
+                const uint32_t overlay_config_hash =
+                    PSXRecompV4::overlay_codegen_config_hash(gc);
+                overlay_loader_init(cache_dir.c_str(), game_id.c_str(),
+                                    overlay_config_hash);
+                std::fprintf(stdout,
+                    "psxrecomp: overlay codegen config hash = %08x\n",
+                    (unsigned)overlay_config_hash);
                 for (uint32_t addr : gc.runtime.overlay_native_block) {
                     overlay_loader_native_block_add(addr);
                 }

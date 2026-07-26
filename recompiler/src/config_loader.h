@@ -964,4 +964,11 @@ BiosConfig load_bios_config(const std::filesystem::path& config_path);
 // Load a game config TOML. Throws std::runtime_error on schema violations.
 GameConfig load_game_config(const std::filesystem::path& config_path);
 
+// Hash exactly the per-game settings that can change generated overlay code.
+// The runtime and compile_overlays.py (via psxrecomp-game's
+// --overlay-config-hash query) use this as part of the cache namespace, so a
+// widescreen/patch config edit can never reuse shards emitted under the old
+// rules. Runtime-only settings and comments deliberately do not participate.
+uint32_t overlay_codegen_config_hash(const GameConfig& config);
+
 } // namespace PSXRecompV4

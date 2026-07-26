@@ -108,6 +108,17 @@ int main(int argc, char** argv) {
             fmt::print("{:08x}\n", (unsigned)PSX_OVERLAY_CODEGEN_HASH);
             return 0;
         }
+        if (std::string(argv[i]) == "--overlay-config-hash" && i + 1 < argc) {
+            try {
+                const auto cfg = PSXRecompV4::load_game_config(argv[i + 1]);
+                fmt::print("{:08x}\n",
+                           (unsigned)PSXRecompV4::overlay_codegen_config_hash(cfg));
+                return 0;
+            } catch (const std::exception& e) {
+                fmt::print(stderr, "overlay config hash failed: {}\n", e.what());
+                return 2;
+            }
+        }
     }
 
     fmt::print("PSXRecomp - PlayStation 1 Static Recompiler\n");
