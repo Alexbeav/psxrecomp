@@ -198,12 +198,19 @@ Runtime video defaults live in `[video]`:
 [video]
 renderer = "opengl"       # "software", "opengl", or "vulkan"
 offer_vulkan = false      # show Vulkan in the launcher only after game validation
+auto_skip_fmv = false     # legacy Settings/runtime default
+offer_skip_fmv = true     # false when the game exposes this through Mods
 ```
 
 `renderer = "vulkan"` remains an experimental runtime choice and still requires
 a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
+
+`offer_skip_fmv` defaults to true for compatibility with the shared PSX
+Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
+it to false. The runtime then hides the Settings row, ignores stale persisted
+values, and leaves activation to the selected trusted plugin.
 
 Reserved future fields:
 - `default_disc_path` — game runtimes can pre-mount a disc

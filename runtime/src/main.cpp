@@ -588,6 +588,19 @@ extern "C" int psx_mod_set_fixed_display_aspect(
     return 1;
 }
 
+extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
+    if (enabled != 0 && enabled != 1) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid auto-skip-FMV value %d\n",
+            enabled);
+        return 0;
+    }
+    g_auto_skip_fmv = enabled;
+    std::fprintf(stdout, "psxrecomp: mod %s automatic FMV skipping\n",
+                 enabled ? "enabled" : "disabled");
+    return 1;
+}
+
 /* [widescreen] per-game hooks (see config_loader.h): anchor scratch addr for
  * tagged sprite prims + HUD SPRT center-squash. Inert at 0/false. */
 static uint32_t      g_ws_anchor_addr = 0;
@@ -4741,6 +4754,7 @@ int main(int argc, char** argv) {
     bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
     bool ws_ultrawide_offered = false;
     bool ws_adaptive_view_supported = false;
+    bool skip_fmv_offered = true;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     int  resolved_deadzone = -1;  /* <0 => keep input.ini/runtime default (12000) */
     /* Localization: the effective language (game.toml default -> settings.toml ->
@@ -4915,6 +4929,7 @@ int main(int argc, char** argv) {
             ws_offered = gc.ws_offered;
             ws_ultrawide_offered = gc.ws_ultrawide_offered;
             ws_adaptive_view_supported = gc.ws_adaptive_view;
+            skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
              * interpreter applies the backdrop screenX squash on the interp
@@ -5294,6 +5309,16 @@ int main(int argc, char** argv) {
         p2_mode = ctrl_locked_p2_mode;
     }
 
+    /* A game may migrate Skip FMVs from generic Settings into its mod catalog.
+     * Clamp stale settings before seeding recomp-ui; an enabled activation
+     * plugin applies the feature after the final mod-plan commit. */
+    if (!skip_fmv_offered && g_auto_skip_fmv) {
+        std::fprintf(stdout,
+            "psxrecomp: Skip FMVs is mod-owned for this title; "
+            "ignoring the legacy Settings value\n");
+        g_auto_skip_fmv = 0;
+    }
+
     /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
      * so the launcher hides its toggle — and, same completeness treatment as
      * lock_mode above, the runtime clamps the display aspect to native 4:3 here
@@ -5429,7 +5454,8 @@ int main(int argc, char** argv) {
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
             seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
             seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
-            seed.auto_skip_fmv = (g_auto_skip_fmv != 0);  seed.has_auto_skip_fmv = true;
+            seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
+            seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0); seed.has_turbo_loads = true;
             seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
             seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
@@ -5641,6 +5667,7 @@ int main(int argc, char** argv) {
             }
             gi.renderer_labels      = kPsxRendererLabels;
             gi.num_renderers        = vulkan_offered ? 3 : 2;
+            gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
             /* Localization menu: shown only when the game declares languages. */
             if (!rui_lang_labels.empty()) {
                 gi.language_labels = rui_lang_labels.data();
@@ -5729,7 +5756,8 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
-                seed.auto_skip_fmv         = ls.auto_skip_fmv != 0;    seed.has_auto_skip_fmv         = true;
+                seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
+                seed.has_auto_skip_fmv = skip_fmv_offered;
                 seed.turbo_loads           = ls.turbo_loads != 0;      seed.has_turbo_loads           = true;
                 /* Bundled-BIOS builds ignore any launcher-supplied path (the
                  * picker is hidden, but a stale settings file could still
@@ -5762,8 +5790,10 @@ int main(int argc, char** argv) {
                         seed.has_aspect_ratio = true;
                         seed.turbo_loads = caps->turbo_loads != 0;
                         seed.has_turbo_loads = true;
-                        seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
-                        seed.has_auto_skip_fmv = true;
+                        if (skip_fmv_offered) {
+                            seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
+                            seed.has_auto_skip_fmv = true;
+                        }
                         if (caps->language[0]) {
                             seed.language = caps->language;
                             seed.has_language = true;
@@ -5802,7 +5832,7 @@ int main(int argc, char** argv) {
                 g_video_aa        = seed.antialiasing;
                 g_video_texfilter = seed.texture_filter;
                 g_video_screen    = seed.screen_kind;
-                g_auto_skip_fmv   = seed.auto_skip_fmv ? 1 : 0;
+                g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled = seed.turbo_loads ? 1 : 0;
                 fast_boot = seed.fast_boot;
                 bios_hle  = seed.bios_hle;

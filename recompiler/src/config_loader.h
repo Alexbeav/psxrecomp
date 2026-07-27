@@ -275,6 +275,12 @@ struct RuntimeConfig {
     // no per-game config it falls back to holding the skip button.
     bool                  video_auto_skip_fmv = false;
 
+    // offer_skip_fmv: expose auto_skip_fmv through recomp-ui Settings.
+    // Defaults true for compatibility. A game migrating the feature into its
+    // mod catalog sets this false; stale persisted Settings values are then
+    // ignored and a trusted activation plugin owns the runtime switch.
+    bool                  video_offer_skip_fmv = true;
+
     // fmv_skip_*: per-game FMV instant-skip via the game's own end-of-movie path.
     // Some players (Tomba) end a movie when the streamed frame number reaches that
     // movie's per-movie frame total minus a small offset. When auto_skip_fmv is on
