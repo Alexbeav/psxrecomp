@@ -302,7 +302,7 @@ int main() {
     check(reload.set_enabled("context.provider", false, &error), error.c_str());
     mod_clear_builtin_resolvers_for_tests();
 
-    mod_clear_vblank_plugins_for_tests();
+    mod_clear_plugins_for_tests();
     check(mod_register_vblank_plugin(
               "test.vblank", +[]() {}),
           "test plugin must register");
@@ -339,7 +339,7 @@ int main() {
           "the fingerprint");
     check(reload.set_feature_enabled(
               "plugin.mod", "vblank", true, &error), error.c_str());
-    mod_clear_vblank_plugins_for_tests();
+    mod_clear_plugins_for_tests();
     ModResolution plugin_unavailable = reload.resolve("SLUS-TEST");
     check(!plugin_unavailable.ok &&
               std::any_of(

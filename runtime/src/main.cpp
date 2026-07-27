@@ -568,6 +568,26 @@ static int           g_video_aspect_den = 3;
 static bool          g_ws_adaptive_view = false;
 static int           g_ws_adaptive_max_num = 16;
 static int           g_ws_adaptive_max_den = 9;
+
+extern "C" int psx_mod_set_fixed_display_aspect(
+    uint32_t numerator, uint32_t denominator) {
+    if (numerator == 0 || denominator == 0 ||
+        numerator > 99 || denominator > 99 ||
+        3u * numerator < 4u * denominator ||
+        9u * numerator > 32u * denominator) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid display aspect %u:%u\n",
+            (unsigned)numerator, (unsigned)denominator);
+        return 0;
+    }
+    g_video_aspect_num = (int)numerator;
+    g_video_aspect_den = (int)denominator;
+    g_ws_adaptive_view = false;
+    std::fprintf(stdout, "psxrecomp: mod selected fixed display aspect %u:%u\n",
+                 (unsigned)numerator, (unsigned)denominator);
+    return 1;
+}
+
 /* [widescreen] per-game hooks (see config_loader.h): anchor scratch addr for
  * tagged sprite prims + HUD SPRT center-squash. Inert at 0/false. */
 static uint32_t      g_ws_anchor_addr = 0;
@@ -5833,6 +5853,7 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    mod_runtime_activate_plugins();
 
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the

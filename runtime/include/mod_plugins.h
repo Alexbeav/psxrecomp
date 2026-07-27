@@ -7,12 +7,15 @@ extern "C" {
 #endif
 
 typedef void (*PSXModVBlankCallback)(void);
+typedef void (*PSXModActivationCallback)(void);
 
 /*
  * Register a trusted, statically linked plugin implementation. Package
  * manifests select implementations by this stable id; archives never provide
  * native code or symbol names.
  */
+int psx_mod_register_activation_plugin(const char* id,
+                                       PSXModActivationCallback callback);
 int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
 
@@ -20,6 +23,14 @@ int psx_mod_register_vblank_plugin(const char* id,
 int psx_mod_game_started(void);
 uint8_t psx_mod_read_byte(uint32_t address);
 void psx_mod_write_byte(uint32_t address, uint8_t value);
+
+/*
+ * Request a fixed host display aspect before renderer/window initialization.
+ * Intended for activation callbacks that move a game's widescreen enhancement
+ * out of generic Settings and into its mod catalog.
+ */
+int psx_mod_set_fixed_display_aspect(uint32_t numerator,
+                                     uint32_t denominator);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

@@ -959,6 +959,14 @@ extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
 }
 
+extern "C" void mod_runtime_activate_plugins(void) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return;
+    for (const ModResolution::Plugin& plugin : s.plan.plugins)
+        mod_invoke_activation_plugin(plugin.id);
+}
+
 extern "C" void mod_runtime_on_vblank(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();

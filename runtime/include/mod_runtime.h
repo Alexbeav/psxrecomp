@@ -35,6 +35,9 @@ extern "C" {
 /* Called before a guest dispatch. Applies the complete main-EXE plan
  * transactionally on the first dispatch to the configured entry point. */
 void mod_runtime_on_dispatch(uint32_t target);
+/* Invokes activation callbacks for the committed plan. Call after the final
+ * launcher commit and before renderer/window initialization. */
+void mod_runtime_activate_plugins(void);
 void mod_runtime_on_vblank(void);
 void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
                                    uint8_t* bytes, uint32_t size);

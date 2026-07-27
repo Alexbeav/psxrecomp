@@ -31,8 +31,13 @@ std::map<std::string, ModBuiltinResolver>& builtin_resolvers() {
     return value;
 }
 
-std::map<std::string, PSXModVBlankCallback>& vblank_plugins() {
-    static std::map<std::string, PSXModVBlankCallback> value;
+struct RegisteredPlugin {
+    PSXModActivationCallback activation = nullptr;
+    PSXModVBlankCallback vblank = nullptr;
+};
+
+std::map<std::string, RegisteredPlugin>& registered_plugins() {
+    static std::map<std::string, RegisteredPlugin> value;
     return value;
 }
 
@@ -1364,22 +1369,42 @@ void mod_clear_builtin_resolvers_for_tests() {
     builtin_resolvers().clear();
 }
 
-bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
+bool mod_register_activation_plugin(const std::string& id, void (*callback)(void)) {
     if (!valid_id(id) || !callback) return false;
-    return vblank_plugins().emplace(id, callback).second;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.activation) return false;
+    plugin.activation = callback;
+    return true;
 }
 
-bool mod_vblank_plugin_registered(const std::string& id) {
-    return vblank_plugins().find(id) != vblank_plugins().end();
+bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    RegisteredPlugin& plugin = registered_plugins()[id];
+    if (plugin.vblank) return false;
+    plugin.vblank = callback;
+    return true;
+}
+
+bool mod_plugin_registered(const std::string& id) {
+    const auto found = registered_plugins().find(id);
+    return found != registered_plugins().end() &&
+        (found->second.activation || found->second.vblank);
+}
+
+void mod_invoke_activation_plugin(const std::string& id) {
+    const auto found = registered_plugins().find(id);
+    if (found != registered_plugins().end() && found->second.activation)
+        found->second.activation();
 }
 
 void mod_invoke_vblank_plugin(const std::string& id) {
-    const auto found = vblank_plugins().find(id);
-    if (found != vblank_plugins().end()) found->second();
+    const auto found = registered_plugins().find(id);
+    if (found != registered_plugins().end() && found->second.vblank)
+        found->second.vblank();
 }
 
-void mod_clear_vblank_plugins_for_tests() {
-    vblank_plugins().clear();
+void mod_clear_plugins_for_tests() {
+    registered_plugins().clear();
 }
 
 ModPackageManager::ModPackageManager(fs::path mods_root) : root_(std::move(mods_root)) {}
@@ -2959,7 +2984,7 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 return a->order < b->order;
             });
         for (const ModPlugin* plugin : plugins) {
-            if (!mod_vblank_plugin_registered(plugin->id)) {
+            if (!mod_plugin_registered(plugin->id)) {
                 result.errors.push_back(
                     package->id + "/" + plugin->feature_id +
                     ": trusted plugin is unavailable: " + plugin->id);
@@ -3173,4 +3198,10 @@ extern "C" int psx_mod_register_vblank_plugin(
     const char* id, PSXModVBlankCallback callback) {
     return id &&
         PSXRecompV4::mod_register_vblank_plugin(id, callback) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_activation_plugin(
+    const char* id, PSXModActivationCallback callback) {
+    return id &&
+        PSXRecompV4::mod_register_activation_plugin(id, callback) ? 1 : 0;
 }

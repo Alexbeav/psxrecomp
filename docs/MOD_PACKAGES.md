@@ -284,10 +284,14 @@ an enabled plugin has no registered implementation or when two features claim
 the same plugin id. Active plugin identities and owners participate in the
 canonical plan fingerprint.
 
-The initial lifecycle is a deterministic guest-VBlank callback. It runs from
-the emulated GPU VBlank event, independent of host presentation, pacing, turbo,
-or skipped frames. Trusted callbacks receive only the narrow C services exposed
-by `runtime/include/mod_plugins.h`. Games should continue to use declarative
+An implementation may register an activation callback, a deterministic
+guest-VBlank callback, or both under the same id. Activation runs after the
+launcher's final mod-plan commit and before renderer/window initialization; it
+is appropriate for a game-owned mod that selects a fixed display aspect or
+another pre-boot host feature. VBlank callbacks run from the emulated GPU
+VBlank event, independent of host presentation, pacing, turbo, or skipped
+frames. Trusted callbacks receive only the narrow C services exposed by
+`runtime/include/mod_plugins.h`. Games should continue to use declarative
 patches and overlays when those operations are sufficient.
 
 ## Native operations

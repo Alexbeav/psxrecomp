@@ -14,6 +14,7 @@ namespace fs = std::filesystem;
 
 static std::array<uint8_t, 2 * 1024 * 1024> ram;
 static int failures;
+static int activation_calls;
 static int plugin_calls;
 
 extern "C" uint8_t psx_read_byte(uint32_t address) {
@@ -29,6 +30,10 @@ extern "C" int fntrace_is_game_started(void) { return 1; }
 
 static void test_vblank_plugin(void) {
     plugin_calls++;
+}
+
+static void test_activation_plugin(void) {
+    activation_calls++;
 }
 
 static void check(bool value, const char* message) {
@@ -250,7 +255,10 @@ int main() {
         "enabled = true\n");
 
     std::string error;
-    PSXRecompV4::mod_clear_vblank_plugins_for_tests();
+    PSXRecompV4::mod_clear_plugins_for_tests();
+    check(PSXRecompV4::mod_register_activation_plugin(
+              "runtime.test-vblank", test_activation_plugin),
+          "runtime test activation hook must register");
     check(PSXRecompV4::mod_register_vblank_plugin(
               "runtime.test-vblank", test_vblank_plugin),
           "runtime test plugin must register");
@@ -259,6 +267,9 @@ int main() {
           error.c_str());
     check(PSXRecompV4::mod_runtime_commit(cue_path, &error),
           "CUE and its data-track BIN must have the same mod target identity");
+    mod_runtime_activate_plugins();
+    check(activation_calls == 1,
+          "resolved trusted plugin must activate before runtime startup");
     mod_runtime_on_vblank();
     check(plugin_calls == 1,
           "resolved trusted plugin must run on guest VBlank");
