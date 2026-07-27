@@ -72,7 +72,10 @@ Three things sit on that foundation:
   directly — a player-facing convenience and optimization, enabled by default
   but fully opt-out (`[runtime] bios_hle = false`). Anything it doesn't
   implement falls straight through to the recompiled BIOS, so the LLE path stays
-  load-bearing and remains the oracle every accuracy check runs against.
+  load-bearing and remains the oracle every accuracy check runs against. The
+  boot-skip half works on **every** BIOS the build links — the bundled OpenBIOS
+  and a player's retail dump reach the game the same way — while the kernel-call
+  half is enabled per image and says so at startup when it isn't.
 - **Capture-and-compile for overlays.** PS1 games stream code off the disc at
   runtime (*overlays*) that no ahead-of-time recompiler can see. PSXRecomp
   captures each overlay the moment it loads and recompiles it to native code,

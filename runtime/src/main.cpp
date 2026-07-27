@@ -17,6 +17,7 @@
 #include "text_xlate.h"
 #include "boot_state.h"
 #include "bios_hle.h"
+#include "bios_hle_plan.h"
 #include "psx_cycles.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
@@ -4879,7 +4880,13 @@ int main(int argc, char** argv) {
     std::vector<PSXRecompV4::RuntimeConfig::WarmCdRoute> warm_cd_routes;
     uint32_t   game_entry_pc = 0;
     bool       fast_boot     = false;  /* DEPRECATED alias: HLE boot-skip only */
-    bool       bios_hle      = false;  /* HLE kernel-service tier (bios_hle.c) */
+    /* REQUESTED intent, never the granted result: "run the HLE tier" as asked
+     * for by game.toml / settings.toml / a netplay seed / env. What each of the
+     * tier's two axes actually gets is derived per BIOS image by
+     * psx_bios_hle_plan() at bring-up and must NOT be written back here — the
+     * session_reboot path re-enters that block, and folding a refusal back into
+     * the request would make a rematch differ from the first launch. */
+    bool       bios_hle_requested = false;  /* [runtime] bios_hle (bios_hle.c) */
     bool       bios_hle_keep_intro = false;
     /* Text-image guard source, captured at config load; armed after the disc
      * path is resolved (arm_text_image_guard). */
@@ -5129,7 +5136,7 @@ int main(int argc, char** argv) {
               if (e && e[0] && e[0] != '0') g_gl_fbo_present = 0; }
             game_entry_pc = gc.entry_pc;
             fast_boot     = gc.runtime.fast_boot;
-            bios_hle      = gc.runtime.bios_hle;
+            bios_hle_requested = gc.runtime.bios_hle;
             bios_hle_keep_intro = gc.runtime.bios_hle_keep_intro;
             /* Developer compatibility finding, applied before BIOS selection.
              * Not exposed to settings.toml on purpose — see BIOS_SELECTION.md. */
@@ -5412,7 +5419,7 @@ int main(int argc, char** argv) {
          * Config + env own it until a launcher toggle exists; if one is
          * added, restore this line together with the UI. The seed write
          * below still persists the effective value for inspection. */
-        if (us.has_bios_hle)       bios_hle  = us.bios_hle;
+        if (us.has_bios_hle)       bios_hle_requested = us.bios_hle;
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
         if (us.has_aspect_ratio) {
             g_video_aspect_num = us.aspect_num;
@@ -5657,7 +5664,7 @@ int main(int argc, char** argv) {
             seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0); seed.has_turbo_loads = true;
             seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
-            seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
+            seed.bios_hle  = bios_hle_requested;          seed.has_bios_hle  = true;
             seed.fullscreen = g_fullscreen;                seed.has_fullscreen = true;
             seed.frame_interpolation = (g_frame_interpolation != 0);
             seed.has_frame_interpolation = frame_interpolation_offered;
@@ -6050,7 +6057,7 @@ int main(int argc, char** argv) {
                 g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled = seed.turbo_loads ? 1 : 0;
                 fast_boot = seed.fast_boot;
-                bios_hle  = seed.bios_hle;
+                bios_hle_requested = seed.bios_hle;
                 g_fullscreen      = seed.fullscreen;
                 g_frame_interpolation =
                     frame_interpolation_offered && seed.frame_interpolation ? 1 : 0;
@@ -6664,35 +6671,57 @@ session_reboot:
      * game EXE load still run in the real recompiled BIOS, unpaced) — this
      * REPLACES the old fast_boot snapshot restore, and fast_boot=true now
      * aliases the boot-skip alone. Env overrides: PSX_BIOS_HLE /
-     * PSX_BIOS_HLE_KEEP_INTRO ('0' = off, anything else = on). */
+     * PSX_BIOS_HLE_KEEP_INTRO ('0' = off, anything else = on).
+     *
+     * The two axes are decided in ONE pure place — psx_bios_hle_plan(),
+     * runtime/src/bios_hle_plan.c — because they have DIFFERENT per-image
+     * requirements and conflating them broke boot-skip on OpenBIOS: call-HLE
+     * needs deliver_event_ret, the boot-skip needs only shell_entry_phys, so
+     * refusing the former must not silently cancel the latter. See that
+     * header for the full rationale and the bug it fixes. */
     {
         if (const char* e = std::getenv("PSX_BIOS_HLE"))
-            bios_hle = (e[0] && e[0] != '0');
+            bios_hle_requested = (e[0] && e[0] != '0');
         if (const char* e = std::getenv("PSX_BIOS_HLE_KEEP_INTRO"))
             bios_hle_keep_intro = (e[0] && e[0] != '0');
-        /* HLE is a per-image capability, not just a preference: its kernel
-         * service semantics were validated against the SCPH1001 kernel, and
-         * a profile that exports no HLE anchors (psx_bios_image
-         * deliver_event_ret == 0, e.g. OpenBIOS until validated) declares
-         * the tier STRUCTURALLY UNAVAILABLE. Config/env cannot turn it on
-         * for such a BIOS — servicing B0 events with mismatched semantics
-         * wedges the guest in event waits (OpenBIOS bring-up: the shell
-         * menu hung in a CD-event wait under HLE, booted the game under
-         * LLE). The boot skip is separately anchor-gated in bios_hle.c. */
-        if (bios_hle && psx_bios_image.deliver_event_ret == 0) {
+
+        PsxBiosHleRequest req;
+        req.bios_hle               = bios_hle_requested ? 1 : 0;
+        req.keep_intro             = bios_hle_keep_intro ? 1 : 0;
+        req.fast_boot              = fast_boot ? 1 : 0;
+        req.have_deliver_event_ret = (psx_bios_image.deliver_event_ret != 0);
+        req.have_shell_entry       = (psx_bios_image.shell_entry_phys != 0);
+        req.have_game_entry        = (game_entry_pc != 0);
+        const PsxBiosHlePlan plan = psx_bios_hle_plan(req);
+
+        /* Call-HLE is a per-image capability, not just a preference: its kernel
+         * service semantics were validated against the SCPH1001 kernel, and an
+         * image that exports no DeliverEvent anchor (psx_bios_image
+         * deliver_event_ret == 0, e.g. OpenBIOS until validated) declares that
+         * axis STRUCTURALLY UNAVAILABLE. Config/env cannot turn it on for such
+         * a BIOS — servicing B0 events with mismatched semantics wedges the
+         * guest in event waits (OpenBIOS bring-up: the shell menu hung in a
+         * CD-event wait under HLE, booted the game under LLE). */
+        if (plan.call_hle_denied) {
             std::fprintf(stdout,
-                "psxrecomp: bios_hle requested but %s exports no HLE "
-                "anchors; forcing LLE\n", psx_bios_image.image_id);
-            bios_hle = false;
+                "psxrecomp: bios_hle kernel-call tier unavailable on %s (no "
+                "DeliverEvent anchor); kernel calls stay LLE\n",
+                psx_bios_image.image_id);
         }
-        const bool boot_skip =
-            (bios_hle && !bios_hle_keep_intro) || fast_boot;
-        psx_bios_hle_configure(bios_hle ? 1 : 0,
-                               (boot_skip && game_entry_pc != 0) ? 1 : 0);
+        /* Boot-skip refusal is only possible on an image with no shell entry at
+         * all. Say so rather than quietly playing the intro. */
+        if (plan.boot_skip_denied) {
+            std::fprintf(stdout,
+                "psxrecomp: BIOS boot-skip unavailable on %s (no shell entry "
+                "anchor); playing the real intro\n",
+                psx_bios_image.image_id);
+        }
+        psx_bios_hle_configure(plan.call_hle, plan.boot_skip);
         std::fprintf(stdout, "psxrecomp: bios_backend=%s  bios_boot=%s\n",
                      psx_bios_hle_backend_name(),
                      psx_bios_hle_boot_skip_enabled()
-                         ? "HLE (shell skipped)" : "LLE (real intro)");
+                         ? "skip to game (shell skipped)"
+                         : "real intro");
     }
 
     /* R3000A reset state. */

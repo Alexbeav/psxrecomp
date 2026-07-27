@@ -200,8 +200,15 @@ ring names the return path that let it come back.
 
 Always-on ring (`runtime/src/bios_hle.c`, 16K entries) recording every
 A0/B0/C0 kernel-vector dispatch the HLE tier's hook observes, plus the boot
-shell-skip event. Empty in pure-LLE mode (the tier installs no hook there —
-use `bioscall_dump` for LLE-side vector observation).
+shell-skip event.
+
+The hook is installed when EITHER axis is on (`bios_hle_plan.h`), so a run with
+the boot-skip on but kernel calls left to LLE — the default on the bundled
+OpenBIOS, which exports no `deliver_event_ret` — reports
+`backend: "LLE (recompiled BIOS)"` and still fills the ring with `route: 0`
+vector observations plus the one `route: 2` boot entry. Only a run with BOTH axes
+off installs no hook and leaves the ring empty; use `bioscall_dump` for LLE-side
+vector observation there.
 
 - `{"cmd":"hle_dump"}` — status: `backend` (`HLE (LLE fallback)` /
   `LLE (recompiled BIOS)`), `boot_skip`, `boot_turbo_active`, `total`.

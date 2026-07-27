@@ -666,6 +666,22 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             fmt::format("TOML syntax error in {}: {}", config_path.string(), ex.what()));
     }
 
+    // A BIOS profile describes an IMAGE — facts about bytes — never a runtime
+    // preference. This block used to be parsed into BiosConfig::runtime and
+    // read by nothing, which let bios/OpenBIOS.toml carry a `bios_hle = false`
+    // that looked authoritative and was inert. Fail loud instead of ignoring:
+    // a preference put here would never take effect, and believing it had is
+    // how the OpenBIOS boot-skip regression got explained away.
+    if (cfg.contains("runtime")) {
+        throw std::runtime_error(fmt::format(
+            "{}: a BIOS profile has no [runtime] block — it describes an image, "
+            "not a preference. Runtime options belong in game.toml / "
+            "settings.toml. (The BIOS-dependent HLE gating is expressed by "
+            "[recompiler.runtime_exports]: shell_entry_phys enables the boot-"
+            "skip, deliver_event_ret enables the kernel-call HLE tier.)",
+            config_path.string()));
+    }
+
     // [program] — bios.toml uses this; some legacy files use [game]
     const toml::value* prog_ptr = nullptr;
     if (cfg.contains("program")) {
@@ -886,7 +902,6 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         /*install_slots*/  std::move(install_slots),
         /*shell_entry_phys*/  shell_entry_phys,
         /*deliver_event_ret*/ deliver_event_ret,
-        /*runtime*/      parse_runtime_block(cfg, root),
     };
 }
 

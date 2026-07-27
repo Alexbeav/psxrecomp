@@ -51,8 +51,15 @@ if(BUILD_TESTING)
         src/psx_icache.c
     )
     target_include_directories(psx_icache_fastpath_test PRIVATE include)
+    # PSX_OVERLAY_DLL_BUILD is the seam psx_cycles.h already provides for a TU
+    # that supplies its own psx_advance_cycles (overlay DLLs forward it through
+    # a callback shim). Without it the header inlines the production definition
+    # and this test's counting stub is a redefinition — the whole runtime test
+    # suite stopped building at "redefinition of 'psx_advance_cycles'", which
+    # also blocked every test registered after it.
     target_compile_definitions(psx_icache_fastpath_test PRIVATE
-        PSX_ENABLE_BLOCK_CYCLES=1)
+        PSX_ENABLE_BLOCK_CYCLES=1
+        PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
     add_executable(gte_register_access_test
@@ -100,6 +107,15 @@ if(BUILD_TESTING)
         src/overlay_path_canon.c)
     target_include_directories(overlay_path_canon_test PRIVATE include)
     add_test(NAME overlay_path_canon_test COMMAND overlay_path_canon_test)
+
+    # The player-facing "skip the BIOS" flag must resolve to the same boot
+    # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
+    # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.
+    add_executable(bios_hle_plan_test
+        tests/test_bios_hle_plan.c
+        src/bios_hle_plan.c)
+    target_include_directories(bios_hle_plan_test PRIVATE include)
+    add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
     # Either member of a disc dump (.cue or .bin) is a valid pick: both mount
     # the same disc and identify off the same data track.

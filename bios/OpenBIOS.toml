@@ -87,9 +87,19 @@ kernel_bless = false
 
 # HLE anchors: only the boot-skip anchor is exported. deliver_event_ret is
 # deliberately ABSENT (0) until the B0 event services are validated against
-# this kernel, which keeps the whole call-HLE tier structurally unavailable
-# (main.cpp forces LLE on deliver_event_ret == 0); fast_boot's one-shot
-# shell intercept is gated only on shell_entry_phys and works under LLE.
+# this kernel's EvCB behavior (they are believed compatible — OpenBIOS
+# reimplements the documented kernel ABI, EvCB anchor 0x120/0x124, TCB
+# 0x108/0x110 — but believed is not verified). Absent = the kernel-call HLE
+# tier is STRUCTURALLY UNAVAILABLE here and config/env cannot force it on.
+#
+# That refusal is scoped to kernel calls ONLY. The boot-skip is a separate axis
+# gated on shell_entry_phys alone and works under pure LLE, so `bios_hle` (and
+# the deprecated `fast_boot` alias) skips the boot animation and goes straight
+# to the game on THIS image exactly as it does on retail SCPH-1001 — the flag
+# means one thing on every BIOS. Both axes are decided in one pure place,
+# psx_bios_hle_plan() (runtime/include/bios_hle_plan.h), which exists because
+# deriving the boot-skip from the anchor-gated call tier silently took the skip
+# away on this image (fixed 2026-07-27).
 #
 # shell_entry_phys was verified against the generated C (2026-07-23):
 #  - startShell (ELF symbol, ROM 0xBFC074DC) ends `lui $t9,0x8003; jr $t9`
@@ -108,9 +118,9 @@ kernel_bless = false
 [recompiler.runtime_exports]
 shell_entry_phys = "0x00030000"
 
-[runtime]
-# Everything stays LLE until the HLE B0 event services are validated against
-# this kernel's EvCB behavior (they are believed compatible: OpenBIOS
-# reimplements the documented kernel ABI — EvCB anchor 0x120/0x124, TCB
-# 0x108/0x110 — but believed is not verified).
-bios_hle = false
+# No [runtime] block: a BIOS profile states facts about an image, never runtime
+# preferences, and load_bios_config rejects one outright. This file used to end
+# with `[runtime] bios_hle = false`, which nothing read — the recompiler parsed
+# it into a field with no consumers. Runtime options live in game.toml /
+# settings.toml; per-image HLE capability is expressed by which anchors
+# [recompiler.runtime_exports] above does and does not export.

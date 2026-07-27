@@ -75,13 +75,30 @@ kernel, and it is the reference implementation and the correctness oracle. There
 are no per-vector HLE shims replacing it.
 
 On top of that, PSXRecomp carries an optional **HLE tier** (`bios_hle`, on by
-default for player convenience) that can synthesize the post-boot kernel handoff
-state to skip the BIOS boot sequence, and intercept a small set of BIOS services
-— always falling through to the recompiled BIOS for anything it doesn't
-implement. LLE stays fully linked and is what every accuracy check runs against.
-Turn it off with `[runtime] bios_hle = false` or `PSX_BIOS_HLE=0`; with it off the
-build behaves as pure LLE. (Design notes:
+default for player convenience) that skips the BIOS boot sequence and intercepts
+a small set of BIOS services — always falling through to the recompiled BIOS for
+anything it doesn't implement. LLE stays fully linked and is what every accuracy
+check runs against. Turn it off with `[runtime] bios_hle = false` or
+`PSX_BIOS_HLE=0`; with it off the build behaves as pure LLE. (Design notes:
 [`docs/internal/HLE_SCHEDULER_CARVEOUT_PLAN.md`](internal/HLE_SCHEDULER_CARVEOUT_PLAN.md).)
+
+Those are **two independent axes**, and the distinction matters because a build
+links more than one BIOS ([`BIOS_SELECTION.md`](BIOS_SELECTION.md)):
+
+| axis | what it needs from the image | on retail SCPH-1001 | on bundled OpenBIOS |
+|---|---|---|---|
+| boot-skip | `shell_entry_phys` — works under pure LLE | yes | yes |
+| kernel-call HLE | `deliver_event_ret` — the kernel's own DeliverEvent `$ra` | yes | refused, loudly |
+
+So **"skip the BIOS and go straight to the game" means the same thing on every
+BIOS**: the boot-skip is not synthesis, it just returns immediately from the
+shell call, so it needs nothing BIOS-specific beyond knowing where the shell is
+entered. Whether the *kernel-call* tier is additionally available is a separate,
+per-image question, and refusing it must never cancel the boot-skip — deriving
+one from the other is the bug fixed in 2026-07. Both axes are decided in one pure
+place, `psx_bios_hle_plan()`
+([`runtime/include/bios_hle_plan.h`](../runtime/include/bios_hle_plan.h)), which
+is unit-tested over the whole matrix.
 
 ### Static / overlay / interpreter dispatch
 

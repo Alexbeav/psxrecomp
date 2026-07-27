@@ -81,6 +81,30 @@ There is no third mode. A title either allows OpenBIOS (and still honours an
 explicit retail choice) or requires retail. "OpenBIOS only, retail forbidden"
 would take away a working option from players for no reason.
 
+## Boot behaviour does not depend on which BIOS runs
+
+Whichever BIOS is active, `[runtime] bios_hle` (on by default) skips the BIOS
+boot sequence and goes straight to the game. That is deliberate and enforced: the
+skip is not a synthesized handoff, it just returns immediately from the BIOS's
+call into its shell, so all it needs is the per-image address of that shell entry
+— which every linked BIOS records. A player who switches BIOS gets the same
+boot, and the flag means one thing everywhere.
+
+The HLE tier's *other* half — servicing a few kernel calls (the B0 event family)
+in the runtime instead of the recompiled BIOS — **is** per-image, because it needs
+the kernel's own `DeliverEvent` return address to send a delivered callback back
+to. Retail SCPH-1001 exports it; OpenBIOS deliberately does not until its event
+semantics are validated, so OpenBIOS runs those calls on the recompiled kernel and
+prints one line at startup saying so. That refusal is scoped to kernel calls and
+never cancels the boot-skip.
+
+Until 2026-07 it did: the boot-skip was derived from the already-refused
+kernel-call decision, so choosing OpenBIOS silently sat the player in the boot
+animation while the identical build on retail went straight to the game. The two
+axes are now resolved in one pure, unit-tested function
+(`psx_bios_hle_plan()`, `runtime/include/bios_hle_plan.h`), and the test asserts
+the boot decision is byte-identical across the two images.
+
 ## Save data
 
 **Memory cards are unaffected.** They are card images; they carry no BIOS state

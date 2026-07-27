@@ -332,7 +332,11 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
 void psx_bios_hle_configure(int call_hle, int boot_skip)
 {
     s_call_hle_on  = call_hle ? 1 : 0;
-    s_boot_skip_on = boot_skip ? 1 : 0;
+    /* Clamp to what THIS image can actually do, so the state the banner and
+     * `hle_dump` report can never claim a skip that bios_hle_dispatch below is
+     * structurally unable to perform. Callers are expected to have gone
+     * through psx_bios_hle_plan(); this is the backstop, not the policy. */
+    s_boot_skip_on = (boot_skip && psx_bios_image.shell_entry_phys != 0) ? 1 : 0;
     /* Rematch / session_reboot re-enters bring-up without process exit; the
      * shell-skip latch must arm again or peers run the interactive shell and
      * appear hung after netplay lockstep. */

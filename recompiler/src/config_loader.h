@@ -169,12 +169,14 @@ struct RuntimeConfig {
     };
     std::vector<WarmCdRoute> warm_cd_routes;
 
-    // fast_boot: DEPRECATED alias for the HLE boot shell-skip (see bios_hle
+    // fast_boot: DEPRECATED alias for the BIOS boot shell-skip (see bios_hle
     // below). The old mechanism (snapshot BIOS state at first handoff, restore
     // on later launches) is gone; fast_boot=true now skips only the BIOS shell
     // (the boot animation) via the HLE tier's one-shot shell intercept, with
     // kernel init + game EXE load still executed by the real recompiled BIOS
-    // at host speed. Kept so existing game.toml/settings.toml keep working.
+    // at host speed. It is boot-only: it never enables the kernel-call HLE
+    // tier, and it works on any BIOS image that exports a shell entry.
+    // Kept so existing game.toml/settings.toml keep working.
     bool                  fast_boot = false;
 
     // bios_hle: High-Level Emulation tier for BIOS kernel services
@@ -185,9 +187,20 @@ struct RuntimeConfig {
     // and the oracle — this only flips the default, LLE is still fully linked and
     // selectable. When on, implemented kernel services are computed in-runtime
     // against the real guest kernel structures and every other call falls through
-    // to LLE. Implies the HLE boot shell-skip unless bios_hle_keep_intro.
+    // to LLE. Implies the BIOS boot shell-skip unless bios_hle_keep_intro.
     // PSX_BIOS_HLE / PSX_BIOS_HLE_KEEP_INTRO env override at launch.
     // Runtime: runtime/src/bios_hle.c.
+    //
+    // The flag drives TWO axes with different per-image requirements, resolved
+    // in runtime/src/bios_hle_plan.c:
+    //   * boot shell-skip — needs only the image's shell_entry_phys anchor and
+    //     works under pure LLE, so it fires the SAME WAY on every linked BIOS
+    //     (retail SCPH-1001 and the bundled OpenBIOS alike). "Skip the BIOS and
+    //     go straight to the game" is one behaviour, not a per-BIOS lottery.
+    //   * kernel-call HLE — needs the image's deliver_event_ret anchor; an
+    //     image without it (OpenBIOS, until its B0 semantics are validated)
+    //     refuses this axis and says so at startup, WITHOUT cancelling the
+    //     boot-skip. Collapsing the two is exactly the bug fixed 2026-07-27.
     // openbios: may this title run on the bundled, redistributable OpenBIOS?
     // Default true — a player who chooses no BIOS gets OpenBIOS and never has
     // to find one (docs/BIOS_SELECTION.md). Set false ONLY for a title with a
@@ -502,11 +515,24 @@ struct BiosConfig {
     // into the generated C (psx_bios_image, runtime/include/psx_bios_image.h)
     // for the runtime's HLE tier. 0 = this BIOS has no such anchor — the
     // consumer treats the feature as structurally unavailable.
-    uint32_t shell_entry_phys  = 0;  // HLE boot-skip trigger (bios_hle.c)
+    // shell_entry_phys gates the BIOS boot-skip and NOTHING else; it works
+    // under pure LLE, so every image that exports it skips the boot the same
+    // way. deliver_event_ret gates the kernel-call HLE tier, separately. The
+    // runtime decides the two axes in psx_bios_hle_plan()
+    // (runtime/include/bios_hle_plan.h) — read that header before touching
+    // either, it records why collapsing them broke OpenBIOS boot-skip.
+    uint32_t shell_entry_phys  = 0;  // BIOS boot-skip trigger (bios_hle.c)
     uint32_t deliver_event_ret = 0;  // $ra after the kernel DeliverEvent jalr
 
-    // [runtime] block (optional)
-    RuntimeConfig         runtime;
+    // NOTE: a BIOS profile has NO [runtime] block. It describes an IMAGE —
+    // facts about bytes — never a preference; runtime options belong to
+    // game.toml/settings.toml, where the player and the title can both be
+    // heard. There used to be a RuntimeConfig here, parsed and never read by
+    // anything, and bios/OpenBIOS.toml carried a `bios_hle = false` in it that
+    // looked like the reason HLE was off on OpenBIOS. It was not (the real gate
+    // is the absent deliver_event_ret anchor), and reading it as one is how the
+    // boot-skip regression got rationalized instead of fixed. load_bios_config
+    // now REJECTS a [runtime] block rather than silently ignoring it.
 };
 
 struct GameConfig {
