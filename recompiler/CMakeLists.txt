@@ -383,6 +383,7 @@ if(BUILD_TESTING)
                 capture_history
                 default_renderer_guards
                 fmv_quiet_guards
+                fps_telemetry_opt_in
                 launcher_vulkan_option
                 overlay_candidate_capacity
                 overlay_decodable_fallback
