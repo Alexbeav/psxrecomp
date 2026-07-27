@@ -156,23 +156,20 @@ add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 set_source_files_properties(src/main_psx.cpp PROPERTIES OBJECT_DEPENDS ${_baked_hash_hdr})
 target_include_directories(psxrecomp-game PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-add_executable(PSXRecomp ${PSXRECOMP_GAME_SOURCES})
-target_include_directories(PSXRecomp PRIVATE
-    include
-    lib/rabbitizer/include
-    lib/rabbitizer/cplusplus/include
-    lib/fmt/include
-    lib/toml11
-    lib/ELFIO
-)
-target_link_libraries(PSXRecomp PRIVATE fmt rabbitizer)
-
-# Increase stack size for large binaries (1447+ functions)
-if(MINGW)
-    target_link_options(PSXRecomp PRIVATE -Wl,--stack,16777216)
-elseif(MSVC)
-    target_link_options(PSXRecomp PRIVATE /STACK:16777216)
-endif()
+# NOTE (2026-07-27): the legacy `PSXRecomp` target was REMOVED here.
+# It built ${PSXRECOMP_GAME_SOURCES} — byte-for-byte the same source list as
+# `psxrecomp-game` above — and was a leftover from before that target was
+# introduced. Because Windows and macOS filesystems are case-insensitive, its
+# output `PSXRecomp.exe` collided with the user-facing CLI `psxrecomp.exe`
+# (the `psxrecomp` target above): both wrote the SAME file on disk and the
+# last one linked won. In practice the CLI lost, so `psxrecomp.exe` shipped in
+# `psxrecomp-cli-windows-x86_64.zip` (tools/build_cli.py) was actually the game
+# recompiler, with a completely different argument grammar than the README
+# documents. The bug is invisible on Linux, which is why it survived.
+# The `PSXRecomp.exe` users are told to run in README's "Release Package"
+# section is a DIFFERENT artifact — the BIOS-only runtime, whose name comes
+# from OUTPUT_NAME in runtime/runtime.cmake — and is unaffected by this removal.
+# See the collision guard at the bottom of this file.
 
 # psxrecomp-bios — Phase 1a BIOS boot slice recompiler.
 # Strict, fail-loud, ingests bios/SCPH1001.BIN as a flat ROM at 0xBFC00000.
@@ -355,3 +352,9 @@ target_include_directories(reachable_discovery_test PRIVATE
     lib/fmt/include
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
+
+# ---- output-name collision guard (must stay LAST) ---------------------------
+# Fails configure if any two targets here would write the same file on a
+# case-insensitive filesystem. See the module header for the shipped-bug story.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
+psxrecomp_check_output_name_collisions()
