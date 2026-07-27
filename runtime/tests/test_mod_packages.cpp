@@ -298,8 +298,62 @@ int main() {
     ModResolution context_resolution = reload.resolve("SLUS-TEST");
     check(context_resolution.ok && resolver_context_seen,
           "built-in resolver must receive active package selection context");
+    check(reload.set_enabled("context.consumer", false, &error), error.c_str());
+    check(reload.set_enabled("context.provider", false, &error), error.c_str());
     mod_clear_builtin_resolvers_for_tests();
 
+    mod_clear_vblank_plugins_for_tests();
+    check(mod_register_vblank_plugin(
+              "test.vblank", +[]() {}),
+          "test plugin must register");
+    write_text(root / "packages/plugin.mod/1.0.0/manifest.toml",
+               "format_version = 5\n"
+               "id = \"plugin.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Plugin Mod\"\n"
+               "resolver = \"declarative\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"vblank\"\n"
+               "name = \"VBlank Plugin\"\n"
+               "[[plugin]]\n"
+               "feature = \"vblank\"\n"
+               "id = \"test.vblank\"\n");
+    check(reload.scan(&error), error.c_str());
+    check(reload.set_feature_enabled(
+              "plugin.mod", "vblank", true, &error), error.c_str());
+    ModResolution plugin_resolution = reload.resolve("SLUS-TEST");
+    check(plugin_resolution.ok && plugin_resolution.plugins.size() == 1 &&
+              plugin_resolution.plugins[0].id == "test.vblank" &&
+              plugin_resolution.plugins[0].package_id == "plugin.mod" &&
+              plugin_resolution.plugins[0].feature_id == "vblank",
+          "enabled trusted plugin must resolve with feature ownership");
+    const std::string plugin_fingerprint = plugin_resolution.fingerprint;
+    check(reload.set_feature_enabled(
+              "plugin.mod", "vblank", false, &error), error.c_str());
+    ModResolution plugin_disabled = reload.resolve("SLUS-TEST");
+    check(plugin_disabled.ok && plugin_disabled.plugins.empty() &&
+              plugin_disabled.fingerprint != plugin_fingerprint,
+          "disabling a plugin feature must remove its activation and change "
+          "the fingerprint");
+    check(reload.set_feature_enabled(
+              "plugin.mod", "vblank", true, &error), error.c_str());
+    mod_clear_vblank_plugins_for_tests();
+    ModResolution plugin_unavailable = reload.resolve("SLUS-TEST");
+    check(!plugin_unavailable.ok &&
+              std::any_of(
+                  plugin_unavailable.errors.begin(),
+                  plugin_unavailable.errors.end(),
+                  [](const std::string& item) {
+                      return item.find(
+                          "trusted plugin is unavailable: test.vblank") !=
+                          std::string::npos;
+                  }),
+          "enabled plugin must fail closed when its trusted implementation "
+          "is unavailable");
+    check(reload.set_feature_enabled(
+              "plugin.mod", "vblank", false, &error), error.c_str());
     write_text(root / "packages/features.mod/1.0.0/manifest.toml",
                manifest("features.mod", "1.0.0",
                    "\n[[feature]]\n"

@@ -1,6 +1,7 @@
 #include "mod_packages.h"
 
 #include "crc32.h"
+#include "mod_plugins.h"
 #include "psx_sha256.h"
 #include "toml.hpp"
 
@@ -21,12 +22,17 @@ namespace PSXRecompV4 {
 namespace {
 
 constexpr uint32_t kMinFormatVersion = 1;
-constexpr uint32_t kMaxFormatVersion = 4;
+constexpr uint32_t kMaxFormatVersion = 5;
 constexpr uint64_t kMaxArchiveBytes = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kMaxArchiveFiles = 4096;
 
 std::map<std::string, ModBuiltinResolver>& builtin_resolvers() {
     static std::map<std::string, ModBuiltinResolver> value;
+    return value;
+}
+
+std::map<std::string, PSXModVBlankCallback>& vblank_plugins() {
+    static std::map<std::string, PSXModVBlankCallback> value;
     return value;
 }
 
@@ -659,6 +665,7 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
                                  const std::vector<ModResolution::Write>& writes,
                                  const std::vector<ModResolution::Overlay>& overlays,
                                  const std::vector<ModResolution::DerivedDisc>& derived_discs,
+                                 const std::vector<ModResolution::Plugin>& plugins,
                                  const std::string& source_disc_sha256) {
     std::ostringstream out;
     out << "source_disc=" << source_disc_sha256 << '\n';
@@ -727,6 +734,10 @@ std::string canonical_resolution(const std::vector<const ModPackage*>& ordered,
         out << "derived_disc:" << derived.kind << ':'
             << derived.patch_sha256 << ':' << derived.output_size << ':'
             << derived.output_sha256 << ':' << derived.package_id << '\n';
+    }
+    for (const ModResolution::Plugin& plugin : plugins) {
+        out << "plugin:" << plugin.id << ':' << plugin.package_id << ':'
+            << plugin.feature_id << '\n';
     }
     return out.str();
 }
@@ -1351,6 +1362,24 @@ bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver res
 
 void mod_clear_builtin_resolvers_for_tests() {
     builtin_resolvers().clear();
+}
+
+bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
+    if (!valid_id(id) || !callback) return false;
+    return vblank_plugins().emplace(id, callback).second;
+}
+
+bool mod_vblank_plugin_registered(const std::string& id) {
+    return vblank_plugins().find(id) != vblank_plugins().end();
+}
+
+void mod_invoke_vblank_plugin(const std::string& id) {
+    const auto found = vblank_plugins().find(id);
+    if (found != vblank_plugins().end()) found->second();
+}
+
+void mod_clear_vblank_plugins_for_tests() {
+    vblank_plugins().clear();
 }
 
 ModPackageManager::ModPackageManager(fs::path mods_root) : root_(std::move(mods_root)) {}
@@ -2003,6 +2032,33 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 throw std::runtime_error(
                     "feature disc overlays require an exact disc_sha256 "
                     "on every [[target]]");
+        }
+        if (cfg.contains("plugin")) {
+            if (!feature_style)
+                throw std::runtime_error(
+                    "plugins require explicit [[feature]] ownership");
+            if (out.format_version < 5)
+                throw std::runtime_error(
+                    "plugins require format_version 5");
+            size_t declaration_index = 0;
+            for (const toml::value& v :
+                 toml::find(cfg, "plugin").as_array()) {
+                ModPlugin plugin;
+                plugin.feature_id =
+                    toml::find<std::string>(v, "feature");
+                if (!find_feature(out, plugin.feature_id))
+                    throw std::runtime_error(
+                        "plugin references unknown feature");
+                plugin.id = toml::find<std::string>(v, "id");
+                if (!valid_id(plugin.id))
+                    throw std::runtime_error("invalid plugin id");
+                plugin.order = toml::find_or<int64_t>(
+                    v, "order", (int64_t)declaration_index);
+                read_conditions(v, out.options, plugin.feature_id,
+                                plugin.when, "plugin");
+                out.plugins.push_back(std::move(plugin));
+                ++declaration_index;
+            }
         }
         if (cfg.contains("derived_disc")) {
             if (feature_style)
@@ -2885,6 +2941,36 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 result.errors.empty())
                 result.errors.push_back(package->id + ": built-in resolver failed");
         }
+        std::vector<const ModPlugin*> plugins;
+        plugins.reserve(package->plugins.size());
+        for (const ModPlugin& plugin : package->plugins) {
+            const ModFeature* feature =
+                find_feature(*package, plugin.feature_id);
+            if (!feature ||
+                !is_feature_enabled(*package, selected, *feature) ||
+                !conditions_match(*package, selected,
+                                  plugin.feature_id, plugin.when))
+                continue;
+            plugins.push_back(&plugin);
+        }
+        std::stable_sort(
+            plugins.begin(), plugins.end(),
+            [](const ModPlugin* a, const ModPlugin* b) {
+                return a->order < b->order;
+            });
+        for (const ModPlugin* plugin : plugins) {
+            if (!mod_vblank_plugin_registered(plugin->id)) {
+                result.errors.push_back(
+                    package->id + "/" + plugin->feature_id +
+                    ": trusted plugin is unavailable: " + plugin->id);
+                continue;
+            }
+            ModResolution::Plugin resolved;
+            resolved.id = plugin->id;
+            resolved.package_id = package->id;
+            resolved.feature_id = plugin->feature_id;
+            result.plugins.push_back(std::move(resolved));
+        }
     }
     if (result.derived_discs.size() > 1) {
         std::string providers;
@@ -2895,6 +2981,35 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         result.errors.push_back(
             "more than one derived-disc provider is active: " + providers);
     }
+    std::vector<ModResolution::Plugin> coalesced_plugins;
+    coalesced_plugins.reserve(result.plugins.size());
+    for (const ModResolution::Plugin& plugin : result.plugins) {
+        bool claimed = false;
+        for (const ModResolution::Plugin& previous : coalesced_plugins) {
+            if (plugin.id != previous.id) continue;
+            if (plugin.package_id == previous.package_id &&
+                plugin.feature_id == previous.feature_id) {
+                claimed = true;
+                break;
+            }
+            ModResolution::Diagnostic diagnostic;
+            diagnostic.resource = "plugin:" + plugin.id;
+            diagnostic.package_id = plugin.package_id;
+            diagnostic.feature_id = plugin.feature_id;
+            diagnostic.other_package_id = previous.package_id;
+            diagnostic.other_feature_id = previous.feature_id;
+            diagnostic.message =
+                plugin.package_id + "/" + plugin.feature_id +
+                " collides at " + diagnostic.resource + " with " +
+                previous.package_id + "/" + previous.feature_id;
+            result.diagnostics.push_back(diagnostic);
+            result.errors.push_back(diagnostic.message);
+            claimed = true;
+            break;
+        }
+        if (!claimed) coalesced_plugins.push_back(plugin);
+    }
+    result.plugins = std::move(coalesced_plugins);
     std::vector<ModResolution::Write> coalesced;
     coalesced.reserve(result.writes.size());
     for (const ModResolution::Write& write : result.writes) {
@@ -3040,15 +3155,22 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
         result.writes.clear();
         result.overlays.clear();
         result.derived_discs.clear();
+        result.plugins.clear();
         return result;
     }
     result.fingerprint = fingerprint_text(
         canonical_resolution(
             result.ordered, selections_, result.writes, result.overlays,
-            result.derived_discs,
+            result.derived_discs, result.plugins,
             disc_sha256));
     result.ok = true;
     return result;
 }
 
 } // namespace PSXRecompV4
+
+extern "C" int psx_mod_register_vblank_plugin(
+    const char* id, PSXModVBlankCallback callback) {
+    return id &&
+        PSXRecompV4::mod_register_vblank_plugin(id, callback) ? 1 : 0;
+}

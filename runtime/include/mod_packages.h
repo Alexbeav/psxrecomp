@@ -143,6 +143,13 @@ struct ModOverlay {
     int64_t order = 0;
 };
 
+struct ModPlugin {
+    std::string feature_id;
+    std::string id;
+    std::map<std::string, std::string> when;
+    int64_t order = 0;
+};
+
 struct ModDerivedDisc {
     std::string kind = "vcdiff";
     std::filesystem::path patch;
@@ -173,6 +180,7 @@ struct ModPackage {
     std::vector<ModConstraint> constraints;
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
+    std::vector<ModPlugin> plugins;
     std::vector<ModDerivedDisc> derived_discs;
 };
 
@@ -227,6 +235,12 @@ struct ModResolution {
         std::string package_id;
     };
     std::vector<DerivedDisc> derived_discs;
+    struct Plugin {
+        std::string id;
+        std::string package_id;
+        std::string feature_id;
+    };
+    std::vector<Plugin> plugins;
     struct Diagnostic {
         std::string message;
         std::string resource;
@@ -311,5 +325,9 @@ private:
 
 bool mod_register_builtin_resolver(const std::string& id, ModBuiltinResolver resolver);
 void mod_clear_builtin_resolvers_for_tests();
+bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void));
+bool mod_vblank_plugin_registered(const std::string& id);
+void mod_invoke_vblank_plugin(const std::string& id);
+void mod_clear_vblank_plugins_for_tests();
 
 } // namespace PSXRecompV4

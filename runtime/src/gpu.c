@@ -20,6 +20,7 @@
 #include "cpu_state.h"
 #include "event_ring.h"
 #include "color_lut.h"
+#include "mod_runtime.h"
 #include "ws_cull_detect.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -2104,6 +2105,9 @@ void gpu_vblank_tick(void) {
     }
     g_doff_min_this = 0x7fffffff; g_doff_max_this = -0x7fffffff; g_doff_cnt_this = 0;
     gpustat_poll_count = 0;
+    /* Trusted package-selected plugins run on guest VBlank, independent of
+     * host presentation, pacing, turbo, or skipped frames. */
+    mod_runtime_on_vblank();
     psx_irq_raise(0, 0); /* IRQ_VBLANK (gpu_vblank_tick) */
     if (vblank_callback) vblank_callback();
 }

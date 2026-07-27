@@ -261,6 +261,35 @@ Sparse fields and integer predicates are still pre-boot plan construction.
 They do not provide a general expression evaluator, masks, arithmetic beyond
 the checked field addend, package code execution, or per-frame dispatch.
 
+## Trusted static plugins
+
+Package format 5 can activate a game-owned plugin that is already statically
+linked into the executable:
+
+```toml
+format_version = 5
+
+[[feature]]
+id = "warp-debug-menu"
+name = "Warp Debug Menu"
+
+[[plugin]]
+feature = "warp-debug-menu"
+id = "example.warp-debug"
+```
+
+The plugin id is a stable registry key, not a library path or symbol name. The
+package archive supplies no native code. Resolution fails before launch when
+an enabled plugin has no registered implementation or when two features claim
+the same plugin id. Active plugin identities and owners participate in the
+canonical plan fingerprint.
+
+The initial lifecycle is a deterministic guest-VBlank callback. It runs from
+the emulated GPU VBlank event, independent of host presentation, pacing, turbo,
+or skipped frames. Trusted callbacks receive only the narrow C services exposed
+by `runtime/include/mod_plugins.h`. Games should continue to use declarative
+patches and overlays when those operations are sufficient.
+
 ## Native operations
 
 `main_exe` writes use PSX guest virtual addresses. Expected bytes are checked
@@ -349,7 +378,9 @@ belong inside one feature as option values.
 ## Trusted adapters and archive safety
 
 `resolver = "builtin:<id>"` selects a resolver statically registered by the
-game. Packages cannot load arbitrary native code or select arbitrary symbols.
+game. Format-5 plugin ids likewise select only statically registered
+implementations. Packages cannot load arbitrary native code or select
+arbitrary symbols.
 
 The installer accepts stored or DEFLATE-compressed ZIP entries, validates CRCs,
 rejects encrypted entries and unsafe or absolute paths, limits archives to 4096

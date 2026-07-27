@@ -1,4 +1,5 @@
 #include "mod_runtime.h"
+#include "mod_packages.h"
 #include "psx_sha256.h"
 
 #include <array>
@@ -13,6 +14,7 @@ namespace fs = std::filesystem;
 
 static std::array<uint8_t, 2 * 1024 * 1024> ram;
 static int failures;
+static int plugin_calls;
 
 extern "C" uint8_t psx_read_byte(uint32_t address) {
     return ram[address & 0x1fffffu];
@@ -23,6 +25,11 @@ extern "C" void psx_write_byte(uint32_t address, uint8_t value) {
 }
 
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
+extern "C" int fntrace_is_game_started(void) { return 1; }
+
+static void test_vblank_plugin(void) {
+    plugin_calls++;
+}
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -77,7 +84,7 @@ int main() {
     write_bytes(root / "packages/runtime.test/1.0.0/assets/overlay.bin",
                 overlay);
     write_text(root / "packages/runtime.test/1.0.0/manifest.toml",
-        "format_version = 4\n"
+        "format_version = 5\n"
         "id = \"runtime.test\"\n"
         "version = \"1.0.0\"\n"
         "name = \"Runtime Test\"\n"
@@ -108,6 +115,9 @@ int main() {
         "[[feature]]\n"
         "id = \"sparse-disc\"\n"
         "name = \"Sparse Disc\"\n"
+        "[[feature]]\n"
+        "id = \"vblank-plugin\"\n"
+        "name = \"VBlank Plugin\"\n"
         "[[option]]\n"
         "feature = \"dynamic-main\"\n"
         "id = \"count\"\n"
@@ -189,7 +199,10 @@ int main() {
         "file = \"assets/overlay.bin\"\n"
         "sha256 = \"" + sha256_hex(overlay) + "\"\n"
         "expected_sha256 = \"" +
-            sha256_hex(std::vector<uint8_t>(overlay.size(), 0)) + "\"\n");
+            sha256_hex(std::vector<uint8_t>(overlay.size(), 0)) + "\"\n"
+        "[[plugin]]\n"
+        "feature = \"vblank-plugin\"\n"
+        "id = \"runtime.test-vblank\"\n");
     write_text(root / "state.toml",
         "format_version = 2\n"
         "[[package]]\n"
@@ -230,14 +243,25 @@ int main() {
         "[[feature]]\n"
         "package_id = \"runtime.test\"\n"
         "id = \"sparse-disc\"\n"
+        "enabled = true\n"
+        "[[feature]]\n"
+        "package_id = \"runtime.test\"\n"
+        "id = \"vblank-plugin\"\n"
         "enabled = true\n");
 
     std::string error;
+    PSXRecompV4::mod_clear_vblank_plugins_for_tests();
+    check(PSXRecompV4::mod_register_vblank_plugin(
+              "runtime.test-vblank", test_vblank_plugin),
+          "runtime test plugin must register");
     check(PSXRecompV4::mod_runtime_initialize(
               root, "SLUS-RUNTIME", 0x80002000, {}, &error),
           error.c_str());
     check(PSXRecompV4::mod_runtime_commit(cue_path, &error),
           "CUE and its data-track BIN must have the same mod target identity");
+    mod_runtime_on_vblank();
+    check(plugin_calls == 1,
+          "resolved trusted plugin must run on guest VBlank");
 
     ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
     ram[0x1100] = 0; ram[0x1101] = 0;

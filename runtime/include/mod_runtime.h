@@ -35,6 +35,7 @@ extern "C" {
 /* Called before a guest dispatch. Applies the complete main-EXE plan
  * transactionally on the first dispatch to the configured entry point. */
 void mod_runtime_on_dispatch(uint32_t target);
+void mod_runtime_on_vblank(void);
 void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
                                    uint8_t* bytes, uint32_t size);
 void mod_runtime_enable_disc_patches(void);

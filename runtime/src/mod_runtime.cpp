@@ -34,6 +34,7 @@
 extern "C" uint8_t psx_read_byte(uint32_t addr);
 extern "C" void psx_write_byte(uint32_t addr, uint8_t value);
 extern "C" void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
+extern "C" int fntrace_is_game_started(void);
 
 namespace PSXRecompV4 {
 namespace {
@@ -956,6 +957,26 @@ extern "C" void mod_runtime_on_dispatch(uint32_t target) {
 
 extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
+}
+
+extern "C" void mod_runtime_on_vblank(void) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return;
+    for (const ModResolution::Plugin& plugin : s.plan.plugins)
+        mod_invoke_vblank_plugin(plugin.id);
+}
+
+extern "C" int psx_mod_game_started(void) {
+    return fntrace_is_game_started();
+}
+
+extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
+    return psx_read_byte(address);
+}
+
+extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
+    psx_write_byte(address, value);
 }
 
 extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,
