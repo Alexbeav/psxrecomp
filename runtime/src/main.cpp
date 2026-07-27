@@ -527,6 +527,10 @@ static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
 static int           g_frame_interpolation_fps = 0;
 static double        g_host_refresh_hz = 0.0;
+static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
+static double        g_frame_period_ms = PSX_FRAME_PERIOD_MS;
+static bool          g_mod_native_vblank_rate = false;
+static uint32_t      g_mod_native_vblank_fps = 0;
 
 /* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
  * window-fullscreen flag: used both to open the window in that mode and to
@@ -607,6 +611,39 @@ extern "C" int psx_mod_set_adaptive_display_aspect(
         "(initial %d:%d, range 4:3 through %u:%u)\n",
         g_video_aspect_num, g_video_aspect_den,
         (unsigned)max_numerator, (unsigned)max_denominator);
+    return 1;
+}
+
+extern "C" int psx_mod_set_native_vblank_rate(
+    uint32_t frames_per_second) {
+    if (frames_per_second != 0 &&
+        (frames_per_second < 60 || frames_per_second > 1000)) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid native VBlank rate %u FPS\n",
+            (unsigned)frames_per_second);
+        return 0;
+    }
+    g_mod_native_vblank_rate = true;
+    g_mod_native_vblank_fps = frames_per_second;
+    g_frame_period_ms = frames_per_second
+        ? 1000.0 / (double)frames_per_second
+        : 0.0;
+    /*
+     * Above the physical panel rate (and in uncapped mode), swap-interval
+     * blocking would silently replace the requested guest cadence with the
+     * display cadence. The frame pacer owns fixed-rate timing here.
+     */
+    if (frames_per_second == 0 || frames_per_second > 60)
+        g_video_vsync = 0;
+    if (frames_per_second) {
+        std::fprintf(stdout,
+            "psxrecomp: mod selected native guest VBlank pacing at %u FPS "
+            "(%.4f ms/frame)\n",
+            (unsigned)frames_per_second, g_frame_period_ms);
+    } else {
+        std::fprintf(stdout,
+            "psxrecomp: mod selected uncapped native guest VBlank pacing\n");
+    }
     return 1;
 }
 
@@ -3056,12 +3093,10 @@ static void sample_headless_pad_into_sio(int override) {
  * do not fight — a fixed 59.94 pacer against a 60.00 Hz panel makes rendered
  * frames land on an uneven vblank count (a 2/3/1 beat) that reads as
  * moving-object judder/flicker. See g_frame_period_ms. */
-static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
 /* Live pacer period (ms). Defaults to the PSX rate; set to the host refresh
  * period when the panel is within ~2% of 60 Hz so 30fps content pads evenly to
  * two host refreshes. Left at the PSX rate on non-~60Hz panels to avoid running
  * the sim at the wrong speed. */
-static double g_frame_period_ms = PSX_FRAME_PERIOD_MS;
 
 /* ── Host-stack-usage profile (RECURSION_BUG.md §17) ──────────────────────────
  * The decisive instrument for the long-run freeze. The guest call graph mirrors
@@ -3429,7 +3464,8 @@ static void sdl_vblank_present(void) {
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
             uint64_t perf_start = runtime_perf_section_begin();
-            frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+            if (g_frame_period_ms > 0.0)
+                frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
             runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
             latency_ring_mark(LAT_PACED);
         }
@@ -3618,7 +3654,8 @@ static void sdl_vblank_present(void) {
      * AFTER present so Swap overlaps the peer's guest quantum. */
     if (!psx_netplay_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
-        frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+        if (g_frame_period_ms > 0.0)
+            frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
 
@@ -6286,7 +6323,18 @@ session_reboot:
         if (disp_idx >= 0 && SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 && dm.refresh_rate > 0) {
             double host_hz = (double)dm.refresh_rate;
             g_host_refresh_hz = host_hz;
-            if (host_hz >= 58.8 && host_hz <= 61.2) {
+            if (g_mod_native_vblank_rate) {
+                if (g_mod_native_vblank_fps) {
+                    std::printf("psxrecomp: native VBlank mod owns pacing at "
+                                "%u FPS; ignoring %d Hz panel sync\n",
+                                (unsigned)g_mod_native_vblank_fps,
+                                dm.refresh_rate);
+                } else {
+                    std::printf("psxrecomp: native VBlank mod owns uncapped "
+                                "pacing; ignoring %d Hz panel sync\n",
+                                dm.refresh_rate);
+                }
+            } else if (host_hz >= 58.8 && host_hz <= 61.2) {
                 g_frame_period_ms = 1000.0 / host_hz;
                 std::printf("psxrecomp: sync-to-host-refresh: pacing to %d Hz panel "
                             "(%.4f ms/frame)\n", dm.refresh_rate, g_frame_period_ms);
