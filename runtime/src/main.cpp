@@ -1435,6 +1435,11 @@ static void shutdown_runtime(void) {
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
     memcard_flush_all();
+    /* Stop and join the active external compiler before capture/debug teardown.
+     * Otherwise closing the window can leave cmd/python/gcc running against
+     * cache and capture files while the main thread performs synchronous
+     * shutdown work, making the window appear frozen until that tree exits. */
+    autocompile_shutdown();
     overlay_autocapture_shutdown();
     overlay_capture_wait_pending();
     overlay_capture_write_json();
