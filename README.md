@@ -9,10 +9,11 @@ disc into a native executable — MIPS R3000A translated to C, compiled to x64,
 linked against a hardware-accurate runtime. Not an emulator: the game becomes a
 program your CPU runs directly.
 
-Eight titles have been brought up on it so far, seven in this ecosystem and one
-by the community. They ship as standalone builds with widescreen, mods, and a
-launcher — and, thanks to a bundled open-source BIOS, most need no BIOS dump at
-all.
+Titles brought up on it ship as standalone builds with widescreen, mods, live
+language switching and a launcher — and, thanks to a bundled open-source BIOS,
+most need no BIOS dump at all. The framework is general-purpose: bringing up a
+new game is a matter of configuration and reverse engineering, not new engine
+work.
 
 <table>
   <tr>
@@ -44,7 +45,7 @@ yet fully validated end to end.
 | *Mega Man X4* | [MegaManX4Recomp](https://github.com/mstan/MegaManX4Recomp) | [releases](https://github.com/mstan/MegaManX4Recomp/releases/latest) | Playable; 2D widescreen. |
 | *Mega Man X5* | [MegaManX5Recomp](https://github.com/mstan/MegaManX5Recomp) | [releases](https://github.com/mstan/MegaManX5Recomp/releases/latest) | Playable; 2D widescreen. |
 | *Mega Man X6* | [MegaManX6Recomp](https://github.com/mstan/MegaManX6Recomp) | [releases](https://github.com/mstan/MegaManX6Recomp/releases/latest) | Playable; stages, controller, save/load; 2D widescreen to 21:9. |
-| *Tsumu Light* | [TsumuLightRecomp](https://github.com/mstan/TsumuLightRecomp) | [releases](https://github.com/mstan/TsumuLightRecomp/releases/latest) | Japanese-only title (SLPS-02253); first consumer of [on-the-fly translation](#play-a-japanese-only-game-in-english). |
+| *Tsumu Light* | [TsumuLightRecomp](https://github.com/mstan/TsumuLightRecomp) | [releases](https://github.com/mstan/TsumuLightRecomp/releases/latest) | Japanese-only title (SLPS-02253); first consumer of [live language switching](#swap-language-on-the-fly). |
 | *Xenogears* — **community** | [OpokXeno/xenogears-recomp](https://github.com/OpokXeno/xenogears-recomp) | — | Independent project by [@OpokXeno](https://github.com/OpokXeno), who also contributed widescreen cull-site work upstream. |
 
 Each game repo carries its own build/run instructions, keyboard/controller
@@ -127,10 +128,15 @@ Not a stretch and not a crop — a genuinely **wider field of view**, computed a
 recompile time by widening the game's own projection and culling maths. 4:3
 output stays byte-identical when widescreen is off.
 
-Six of the seven titles support it, across both 3D and 2D engines. 2D is the
-harder case: a sprite engine has no camera to widen, so the background tile
-ring, streamer and packet budget all have to be widened in step with the
-renderer.
+This is framework tooling, not a per-game bolt-on. Any project built on
+PSXRecomp can enable it from a `[widescreen]` block in its `game.toml` — the
+generic cull-widening, FOV and aspect machinery lives here, and bringing up a
+new title is a matter of locating that game's cull sites rather than writing new
+rendering code.
+
+It works on both 3D and 2D engines. 2D is the harder case: a sprite engine has
+no camera to widen, so the background tile ring, streamer and packet budget all
+have to be widened in step with the renderer.
 
 <table>
   <tr><td><img src="docs/assets/widescreen/mmx6-16x9.png" alt="Mega Man X6 at 16:9" width="100%"></td></tr>
@@ -169,16 +175,27 @@ Tomba! ships three today — widescreen, skip-FMV, and a warp debug menu that
 re-enables the developers' own hidden menu. Full format in
 [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md).
 
-## Play a Japanese-only game in English
+## Swap language on the fly
 
-A reusable localization layer captures the game's own strings out of memory and
-substitutes translated bytes on the fly, so menus, tutorials and dialogue render
-in a target language the original never shipped. It is multilingual by design —
-English is simply the first target — and driven by `translations/*.toml` with a
-language picker in the launcher.
+A general localization layer captures the game's own strings out of memory and
+substitutes translated bytes as it runs. Any source language to any target — the
+mechanism has no built-in notion of a "default" language, so a Japanese-only
+release can be played in English just as readily as an English one can be played
+in another language.
 
-*Tsumu Light* (SLPS-02253) is the first consumer. See
-[`docs/STRING_TRANSLATION.md`](docs/STRING_TRANSLATION.md).
+Switching is live. Tables are human-editable TOML under `translations/`, one
+column per language, hot-reloaded while the game is running — and the launcher
+carries a language picker. A translator can edit a line and see it in-game
+without rebuilding anything.
+
+The hard part is glyphs, not strings. Substituted text is drawn through the
+game's *own* glyph routine with per-character proportional advances calibrated
+by measuring the real ink width of each glyph tile in VRAM, plus auto-fit
+condensing so longer translations still fit a box sized for the original. That
+means no engine changes and no regeneration to add a language.
+
+See [`docs/STRING_TRANSLATION.md`](docs/STRING_TRANSLATION.md); *Tsumu Light*
+(SLPS-02253) is the first title using it.
 
 ## Renderers
 
