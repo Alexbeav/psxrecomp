@@ -934,10 +934,30 @@ static int ws_bg2d_left_cols(void) {
  * and draw the reveal margins ourselves into the wide surface (gpu_ws_mmx6_emit_reveal).
  * The stream hooks below stay active either way (they widen the tile RING, which the
  * host-side decoder reads). Toggle via gpu_ws_mmx6_set_hostside(); 0 = old guest-widen. */
-static int g_mmx6_hostside = 0;   /* DEFAULT OFF: host-side reveal was the wrong approach
-                                   * (garbled tpage + stale early ring read). The buffer-
-                                   * relocation fix keeps the engine's correct guest-widen
-                                   * render instead. Code kept inert pending removal. */
+/* DEAD IN EVERY SHIPPING BUILD -- scheduled for removal, deliberately deferred
+ * (surveyed 2026-07-27).
+ *
+ * Host-side reveal was the wrong approach (garbled tpage + stale early ring
+ * read); the buffer-relocation route kept the engine's correct guest-widen
+ * render instead. What the original "kept inert pending removal" note did not
+ * say is HOW inert:
+ *   - nothing sets g_mmx6_hostside except the mmx6_reveal debug command
+ *     (debug_server.c), and PSX_DEBUG_TOOLS defaults OFF for Release, so in a
+ *     shipped build this is permanently 0 and unreachable;
+ *   - zero generated sources in any game repo reference any host-side symbol.
+ *
+ * So mmx6_hostside_active() below is a compile-time-ish constant false, and
+ * every branch it guards -- including the ternaries in the supposedly generic
+ * psx_ws_bg2d_cols/startcol/startx -- always takes the else path.
+ *
+ * Removing it is safe and worthwhile: it is the last thing coupling the
+ * generic psx_ws_bg2d_* API to MMX6, so deleting it collapses those three
+ * functions to their real bodies. Left in place only because that touches the
+ * renderer and wants its own session with MMX6 revalidation, not because
+ * anything depends on it. Also delete gpu_ws_mmx6_emit_reveal,
+ * gpu_ws_mmx6_reveal_is_active, g_mmx6_clut and the mmx6_reveal handler when
+ * it goes. */
+static int g_mmx6_hostside = 0;
 void gpu_ws_mmx6_set_hostside(int on) { g_mmx6_hostside = on ? 1 : 0; }
 static int mmx6_hostside_active(void) {
     return g_mmx6_hostside && ws_native_wide_active() && ws_disp_w() <= 384
@@ -977,7 +997,12 @@ int psx_ws_bg2d_undercap(int counter, int native_cap) {
     return counter < cap;
 }
 
-/* Compatibility for generated MMX6 sources predating the generic names. */
+/* NOT MMX6-only, and NOT dead -- see the survey note on the declarations in
+ * runtime/include/gpu.h. Live generated code in CrashBash, MegaManX5 and Tsumu
+ * calls these, and seven repos call psx_ws_mmx6_bg_undercap below. The mmx6 in
+ * the name is historical; the recompiler emits these names for any title with
+ * a [widescreen.bg2d] block. Renaming means touching code_generator.cpp, which
+ * rolls the overlay cache tag for every game. */
 int psx_ws_mmx6_bg_cols(int base)       { return psx_ws_bg2d_cols(base); }
 int psx_ws_mmx6_bg_startcol(int col)    { return psx_ws_bg2d_startcol(col, 0x3fu); }
 int psx_ws_mmx6_bg_startx(int x)        { return psx_ws_bg2d_startx(x); }
@@ -1012,7 +1037,30 @@ void psx_ws_mmx6_bg_stage_init(void) {
 #define MMX6_RELOC_CAP    1800          /* per-frame BG tile cap (was 1000; <= 2048) */
 extern void psx_write_word(uint32_t addr, uint32_t val);
 
-/* PARKED (default 0): relocation moves the BG packets to a larger free buffer and the
+/* PARKED FEATURE, LOAD-BEARING SYMBOL -- do not "delete the dead code" here
+ * without reading this (surveyed 2026-07-27).
+ *
+ * The feature is off and does nothing: with g_mmx6_reloc == 0 both
+ * psx_ws_mmx6_bg_bufbase() and psx_ws_mmx6_bg_undercap() return their argument
+ * unchanged. Only the mmx6_reveal debug command can flip it, and the debug
+ * server is compiled out of Release.
+ *
+ * The FUNCTIONS, however, are called by real generated code and cannot simply
+ * be unlinked. MegaManX6Recomp/game.toml sets [widescreen.bg2d] bufbase_site
+ * and cap_site, config_loader feeds them to code_generator.cpp, and the
+ * emitter writes calls at those exact instruction addresses:
+ *   psx_ws_mmx6_bg_bufbase  -> called by MegaManX6Recomp/generated
+ *   psx_ws_mmx6_bg_undercap -> called by SEVEN repos' generated code
+ *                              (Ape, CrashBash, MMX4, MMX5, Tsumu,
+ *                               Vigilante8, THPS2 -- see gpu.h note)
+ * Removing the symbols therefore means changing the emitter, and
+ * code_generator.cpp is in codegen_hash_sources.cmake, so that rolls the
+ * overlay cache tag and forces regen + reshard of every title.
+ *
+ * The supportable cleanup, when someone takes it on, is to gut the BODIES to
+ * plain identity and keep the symbols -- not to delete the functions.
+ *
+ * Why it is parked: relocation moves the BG packets to a larger free buffer and the
  * prims DO render from there (census-confirmed), but the engine's OT chain / per-slot
  * DR_TPAGE primitives are keyed to the original buffer layout, so relocated BG draws
  * BLACK (wrong/absent texpage). Needs the OT-chain + DR_TPAGE relocation REd before it

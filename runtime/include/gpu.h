@@ -137,7 +137,32 @@ int psx_ws_bg2d_startx(int x);
 int psx_ws_bg2d_stream_left(int x);
 int psx_ws_bg2d_stream_right(int x);
 int psx_ws_bg2d_undercap(int counter, int native_cap);
-/* Compatibility entry points for already-generated MMX6 sources. */
+/* MISNAMED, NOT MMX6-SPECIFIC, AND NOT SAFE TO DELETE (surveyed 2026-07-27).
+ *
+ * These read as "MMX6 compat shims" and the comment here used to say exactly
+ * that. They are not. They are the widescreen-2D entry points that the
+ * recompiler emits for ANY title with a [widescreen.bg2d] block, and live
+ * generated code in several non-MMX6 games links them today:
+ *
+ *   psx_ws_mmx6_bg_cols/startcol/startx/stream_left/stream_right
+ *       -> CrashBashRecomp, MegaManX5Recomp, TsumuRecomp (+ -release)
+ *   psx_ws_mmx6_bg_undercap (below, in gpu.c)
+ *       -> ApeEscapeRecomp, CrashBashRecomp, MegaManX4Recomp,
+ *          MegaManX5Recomp, TsumuRecomp, Vigilante8PSXRecomp, THPS2
+ *
+ * Each one forwards to its psx_ws_bg2d_* twin above, which is the real
+ * implementation. Only the NAME is historical: this began as MMX6 widescreen
+ * work and was generalised without renaming the emitted symbols.
+ *
+ * Deleting or renaming them breaks widescreen in every repo listed above, and
+ * a rename cannot be runtime-only: the names are emitted by
+ * recompiler/src/code_generator.cpp, which is in codegen_hash_sources.cmake,
+ * so changing it rolls the overlay cache tag and forces a regen + reshard of
+ * every title. That is the reason this is still called mmx6 in 2026.
+ *
+ * Verify before touching, don't trust this comment: grep the generated trees
+ * of the game repos for psx_ws_mmx6_bg_undercap and see who turns up.
+ */
 int psx_ws_mmx6_bg_cols(int base);
 int psx_ws_mmx6_bg_startcol(int col);
 int psx_ws_mmx6_bg_startx(int x);
