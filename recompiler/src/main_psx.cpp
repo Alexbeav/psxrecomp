@@ -1223,7 +1223,25 @@ int main(int argc, char** argv) {
             pos = hex_pos + 8;
         }
     }
-    if (dispatch_addrs.empty()) {
+    // Data/untranslatable entries are emitted as fail-closed
+    // psx_unknown_dispatch stubs. Do not put those stubs in the callable game
+    // dispatch table: a runtime overlay can legitimately replace the same EXE
+    // address, and a tiny stub range (especially a single NOP) can
+    // coincidentally byte-match the live overlay continuation. Advertising the
+    // stub as native-safe then turns valid dynamic code into a false fail-fast.
+    for (const auto& gen_func : codegen.last_gen_funcs()) {
+        if (gen_func.dispatchable) continue;
+        const std::string prefix = "func_";
+        if (gen_func.function_name.rfind(prefix, 0) != 0 ||
+            gen_func.function_name.size() < prefix.size() + 8) {
+            continue;
+        }
+        const std::string hex =
+            gen_func.function_name.substr(prefix.size(), 8);
+        dispatch_addrs.erase(
+            (uint32_t)std::strtoul(hex.c_str(), nullptr, 16));
+    }
+    if (dispatch_addrs.empty() && codegen.last_gen_funcs().empty()) {
         for (const auto& func : analysis_result.functions) {
             dispatch_addrs.insert(func.start_addr);
         }
@@ -1388,6 +1406,9 @@ int main(int argc, char** argv) {
             const auto& conts = codegen.cps_continuations();
             for (const auto& [cont, owner] : conts) {
                 if (dispatch_addrs.count(cont)) continue;
+                // A continuation owned by a fail-closed stub is no more
+                // executable than the stub entry itself.
+                if (!dispatch_addrs.count(owner)) continue;
                 records.push_back({cont, cont, owner, 0, 0});
             }
         }

@@ -42,6 +42,15 @@ def make_psxexe():
     for offset in (0x100, 0x200, 0x1100):
         for i, word in enumerate((0x27BDFFF0, 0x03E00008, 0x27BD0010)):
             put32(text, offset + i * 4, word)
+    # Valid primary opcodes with unsupported SPECIAL subfields followed by a
+    # return: discovery admits the entry, then production emission correctly
+    # demotes the >=50%-untranslatable body to a fail-closed data stub.
+    for i, word in enumerate((
+            0x27BDFFF0,
+            0x00000001, 0x00000001, 0x00000001, 0x00000001, 0x00000001,
+            jal(LOAD + 0x100), 0,
+            0x03E00008, 0x27BD0010)):
+        put32(text, 0x300 + i * 4, word)
     return bytes(header + text)
 
 
@@ -87,7 +96,12 @@ def main():
         with open(exe, "wb") as f:
             f.write(make_psxexe())
         with open(seeds, "w", encoding="utf-8") as f:
-            f.write("0x80010000\n")
+            # 0x80010300 is the deliberately untranslatable fixture above. It
+            # is retained as a fail-closed psx_unknown_dispatch stub for
+            # diagnostics, but must not be advertised as a callable native
+            # entry: runtime overlays can replace the same address and
+            # coincidentally share a short instruction such as NOP.
+            f.write("0x80010000\n0x80010300\n")
 
         write_config(config)
         result = run(args.recompiler, config)
@@ -136,6 +150,25 @@ def main():
         default_output = default_mode.stdout + default_mode.stderr
         if default_mode.returncode != 0 or "=== Function Boundary Detection ===" not in default_output:
             failures.append("omitted discovery key did not preserve whole-image default")
+        else:
+            default_full_paths = sorted(path for path in
+                                        pathlib.Path(tmp, "generated").glob("test.exe_full*.c")
+                                        if "_dispatch" not in path.name)
+            default_full = "\n".join(path.read_text(encoding="utf-8")
+                                       for path in default_full_paths)
+            default_dispatch = pathlib.Path(
+                tmp, "generated", "test.exe_dispatch.c").read_text(
+                    encoding="utf-8")
+            if "void func_80010300" not in default_full:
+                failures.append("forced data diagnostic stub was not emitted")
+            elif ("void func_80010300(CPUState* cpu)\n{\n"
+                  "    psx_unknown_dispatch(cpu, 0x80010300u, "
+                  "0x00010300u);") not in default_full:
+                failures.append("forced data entry was not fail-closed")
+            if "{0x80010300u," in default_dispatch:
+                failures.append("fail-closed data stub leaked into game dispatch")
+            if "{0x80010320u," in default_dispatch:
+                failures.append("fail-closed stub continuation leaked into game dispatch")
 
         write_config(config, discovery="invent-functions")
         invalid_mode = run(args.recompiler, config)

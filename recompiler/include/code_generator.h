@@ -213,6 +213,10 @@ struct GeneratedFunction {
     std::string body;             // C code body
     std::string full_code;        // signature + body
     int line_count;               // Number of lines generated
+    // False for fail-closed data/untranslatable stubs whose only operation is
+    // psx_unknown_dispatch. They remain emitted for direct diagnostics, but
+    // must not advertise themselves as executable native game entries.
+    bool dispatchable = true;
 };
 
 class CodeGenerator {

@@ -2863,6 +2863,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
                 func.start_addr, func.start_addr & 0x1FFFFFFFu);
             stub.full_code = stub.signature + "\n" + stub.body;
             stub.line_count = 4;
+            stub.dispatchable = false;
             results.push_back(stub);
             continue;
         }
@@ -2915,6 +2916,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
                     func.start_addr, func.start_addr & 0x1FFFFFFFu);
                 data_stub.full_code = data_stub.signature + "\n" + data_stub.body;
                 data_stub.line_count = 4;
+                data_stub.dispatchable = false;
                 total_lines += data_stub.line_count;
                 results.push_back(std::move(data_stub));
                 continue;
