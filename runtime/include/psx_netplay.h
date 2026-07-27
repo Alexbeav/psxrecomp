@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 /*
- * Delay-sync netplay facade over recomp-net (LAN peer UDP for now).
- * Lobby UI / ICE signaling are later work — this layer is CLI/env driven.
+ * Delay-sync netplay facade over recomp-net (LAN UDP or MotK ICE).
+ * Online hosted lobbies use ICE + WS signaling; Direct IP / LAN stay on UDP.
  *
  * Lockstep contract (matches recomp-net host_integration.md):
  *   wait_admit (publish pads for tick T) → guest runs frame T →
@@ -52,6 +52,9 @@ typedef struct PsxNetplayConfig {
     int         input_delay;
     int         force_input_relay; /* 1 = lobby-server UDP input relay */
     int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
+    /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
+     * Env PSX_NET_TRANSPORT=lan|ice overrides. */
+    int         transport;
     uint32_t    session_id;
     char        bind_hostport[64];
     char        peer_hostport[64];
@@ -62,6 +65,12 @@ void psx_netplay_apply_env(PsxNetplayConfig *cfg);
 
 int  psx_netplay_active(void);
 int  psx_netplay_is_running(void);
+/* "ice" | "lan" | "none" */
+const char *psx_netplay_transport_name(void);
+/* 1 when ICE agent reached FAILED (online path). */
+int  psx_netplay_ice_failed(void);
+/* Optional JSONL samples when PSX_NET_DIAG=1 (saves/netplay/net_diag.jsonl). */
+void psx_netplay_diag_tick(void);
 int  psx_netplay_local_slot(void);
 /* Resolved host player index used for local capture. */
 int  psx_netplay_input_player(void);

@@ -3,6 +3,7 @@
 #include "psx_cycles.h"
 #include "cpu_state.h"
 #include <stdlib.h>
+#include <string.h>
 #if defined(_MSC_VER)
 #include <intrin.h>       /* MSVC intrinsics: _BitScanReverse (no __builtin_clz) */
 #endif
@@ -107,6 +108,11 @@ static uint64_t s_devices_synced_cycle = 0;  /* devices are advanced up to here 
 /* Exported for the inlined psx_advance_cycles / psx_cyc_charge hot path. */
 uint64_t psx_next_service_cycle = 0;         /* absolute; 0 = dirty, recompute  */
 int      psx_in_device_service  = 0;         /* re-entrancy guard               */
+int      g_plp_cycle_diag       = 0;
+uint64_t g_plp_adv_calls        = 0;
+uint32_t g_plp_adv_max_chunk    = 0;
+uint64_t g_plp_adv_sum          = 0;
+uint64_t g_plp_svc_calls        = 0;
 #define s_next_service_cycle psx_next_service_cycle
 #define s_in_device_service  psx_in_device_service
 static uint64_t s_next_watchdog        = 0;
@@ -158,6 +164,7 @@ static void psx_devices_recompute_deadline(void) {
 
 void psx_devices_service_to_now(void) {
     if (s_in_device_service) return;                 /* device code charged cycles: absorb */
+    if (g_plp_cycle_diag) g_plp_svc_calls++;
     g_psx_cycle_fast_limit = 0;
     s_in_device_service = 1;
     uint64_t target = psx_cycle_count;
@@ -518,13 +525,35 @@ void psx_idle_note_check(CPUState *cpu, uint32_t check_pc) {
  * the deadline-model bookkeeping (synced position + next deadline) is stale and
  * would try to replay a bogus gap. Re-anchor devices at the restored cycle and
  * force a fresh deadline on the next charge. */
-void psx_cycles_resync_after_restore(void) {
+void psx_cycles_resync_after_restore(CPUState *cpu) {
     g_psx_cyc_batch        = 0;
     g_psx_cyc_batch_limit  = 0;
     g_psx_cyc_bb_defer     = 0;
     s_devices_synced_cycle = psx_cycle_count;
     psx_next_service_cycle = 0;   /* recompute on next charge */
     psx_in_device_service  = 0;
+    /* Idle-skip detector latches absolute cycle/store counters from the
+     * pre-load timeline; drop them so a rewound clock cannot false-train. */
+    s_idle_pc = 0;
+    s_idle_streak = 0;
+    s_idle_have_snap = 0;
+    s_idle_progress_reg = -2;
+    s_idle_last_cycle = psx_cycle_count;
+    /* GTE/muldiv completion deadlines and load-absorb give-back are host-only
+     * absolute cycle stamps (not in BS_SEC_CPU). After a warm load they still
+     * hold the pre-load live timeline; the next psx_gte_stall / muldiv_stall
+     * would then advance (live_ts - restored_cycle) in one shot — tens of
+     * millions of cycles / N nested presents with zero IRQ checks (MotK
+     * transform CTC2 path). Anchor them at the restored clock. */
+    if (cpu) {
+        cpu->gte_ts_done = psx_cycle_count;
+        cpu->muldiv_ts_done = psx_cycle_count;
+        memset(cpu->read_absorb, 0, sizeof(cpu->read_absorb));
+        cpu->read_absorb_which = 0;
+        cpu->read_fudge = 0x20u; /* no committed predecessor load */
+        cpu->ld_which_t = 0x20u; /* no pending load dest */
+        cpu->ld_absorb = 0;
+    }
 }
 
 void psx_cycles_reset_for_boot(void) {

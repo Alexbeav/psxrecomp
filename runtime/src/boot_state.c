@@ -1,11 +1,36 @@
 #include "boot_state.h"
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
+#include "dirty_ram_interp.h"
 #include "gpu_render.h"    /* gr_vram_transfer_in / gr_vram_transfer_out          */
+#include "cpu_state.h"     /* gte_canonicalize_cpu_state after CPU wire restore   */
 #include "psx_cycles.h"
 #include "pst_wire.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zlib.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <time.h>
+#endif
+
+static double boot_state_mono_ms(void) {
+#if defined(_WIN32)
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+#endif
+}
+
+/* Compress payloads at/above this size (RAM/VRAM/SPU/dirty dominate I/O). */
+#define BOOT_STATE_ZLIB_MIN 256u
 
 #define RAM_SIZE   (2u * 1024u * 1024u)
 #define SPAD_SIZE  (1024u)
@@ -16,9 +41,6 @@
 /* ---- core accessors (existing runtime modules) ---- */
 extern uint8_t*  memory_get_ram_ptr(void);
 extern uint8_t*  memory_get_scratchpad_ptr(void);
-extern uint32_t  dirty_ram_get_bitmap_word(uint32_t word_index);
-extern uint32_t  dirty_ram_get_bitmap_word_count(void);
-extern void      dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count);
 extern uint32_t  i_stat;
 extern uint32_t  i_mask;
 extern uint64_t  psx_cycle_count;
@@ -80,34 +102,42 @@ static int write_header_le(FILE* f, const BootStateHeader* h) {
     return fwrite_all(f, buf, sizeof buf);
 }
 
-static int read_header_le(FILE* f, BootStateHeader* h) {
-    uint8_t buf[BOOT_STATE_HEADER_WIRE_BYTES];
-    PstR r;
-    if (fread(buf, 1, sizeof buf, f) != sizeof buf) return 0;
-    pst_r_init(&r, buf, sizeof buf);
-    memset(h, 0, sizeof *h);
-    if (!pst_r_u32(&r, &h->magic) ||
-        !pst_r_u32(&r, &h->version) ||
-        !pst_r_u32(&r, &h->bios_checksum) ||
-        !pst_r_u32(&r, &h->entry_pc) ||
-        !pst_r_u32(&r, &h->codegen_hash) ||
-        !pst_r_i32(&r, &h->abi_tag) ||
-        !pst_r_u32(&r, &h->codegen_ver) ||
-        !pst_r_u32(&r, &h->section_count) ||
-        !pst_r_u32(&r, &h->reserved))
-        return 0;
-    return 1;
-}
-
-static int write_section(FILE* f, uint32_t tag, const void* data, uint64_t len) {
+static int write_section_raw(FILE* f, uint32_t tag, uint32_t flags,
+                             const void* data, uint64_t len) {
     uint8_t hdr[16];
     PstW w;
     pst_w_init(&w, hdr, sizeof hdr);
-    if (!pst_w_u32(&w, tag) || !pst_w_u32(&w, 0u) || !pst_w_u64(&w, len))
+    if (!pst_w_u32(&w, tag) || !pst_w_u32(&w, flags) || !pst_w_u64(&w, len))
         return 0;
     if (!fwrite_all(f, hdr, sizeof hdr)) return 0;
     if (len && !fwrite_all(f, data, (size_t)len)) return 0;
     return 1;
+}
+
+/* Prefer zlib for large blobs (smaller disk + faster load on slow storage).
+ * Falls back to raw if compressBound/compress fails. */
+static int write_section(FILE* f, uint32_t tag, const void* data, uint64_t len) {
+    if (!data && len) return 0;
+    if (len >= BOOT_STATE_ZLIB_MIN && len <= 0xffffffffu) {
+        uLong bound = compressBound((uLong)len);
+        uint8_t* packed = (uint8_t*)malloc(4u + (size_t)bound);
+        if (packed) {
+            PstW lw;
+            uLong dest_len = bound;
+            pst_w_init(&lw, packed, 4);
+            if (pst_w_u32(&lw, (uint32_t)len) &&
+                compress2(packed + 4, &dest_len, (const Bytef*)data, (uLong)len,
+                          Z_BEST_SPEED) == Z_OK) {
+                uint64_t payload = 4u + (uint64_t)dest_len;
+                int ok = write_section_raw(f, tag, BOOT_STATE_SEC_ZLIB,
+                                           packed, payload);
+                free(packed);
+                return ok;
+            }
+            free(packed);
+        }
+    }
+    return write_section_raw(f, tag, 0u, data, len);
 }
 
 static int write_module_section(FILE* f, uint32_t tag,
@@ -208,7 +238,8 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
         if (!vbuf) ok = 0;
         else {
             gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, vbuf);
-            /* VRAM is uint16 LE guest pixels — emit as LE u16 stream. */
+            /* VRAM is uint16 LE guest pixels — emit as LE u16 stream.
+             * pst_w_pod is a memcpy on LE hosts (see pst_wire.h). */
             uint8_t* wire = (uint8_t*)malloc(VRAM_SIZE);
             if (!wire) ok = 0;
             else {
@@ -269,6 +300,9 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
             if (!pst_r_u32(&r, &cpu->gte_data[i])) return 0;
         for (int i = 0; i < 32; i++)
             if (!pst_r_u32(&r, &cpu->gte_ctrl[i])) return 0;
+        /* Architectural normalize + drop host-only projection provenance that
+         * belonged to the pre-load timeline (not part of the wire format). */
+        gte_canonicalize_cpu_state(cpu);
         return 1;
     }
     case BS_SEC_RAM:
@@ -325,19 +359,27 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
     case BS_SEC_GPU:
         return gpu_snapshot_read(p, len);
     case BS_SEC_VRAM: {
-        uint16_t* vbuf;
-        PstR r;
         if (len != VRAM_SIZE) return 0;
-        vbuf = (uint16_t*)malloc(VRAM_SIZE);
-        if (!vbuf) return 0;
-        pst_r_init(&r, p, len);
-        if (!pst_r_pod(&r, vbuf, VRAM_SIZE, 2)) {
-            free(vbuf);
-            return 0;
-        }
-        gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, vbuf);
-        free(vbuf);
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+        /* Wire == host layout: upload straight from the section buffer. */
+        gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, (const uint16_t*)p);
         return 1;
+#else
+        {
+            uint16_t* vbuf;
+            PstR r;
+            vbuf = (uint16_t*)malloc(VRAM_SIZE);
+            if (!vbuf) return 0;
+            pst_r_init(&r, p, len);
+            if (!pst_r_pod(&r, vbuf, VRAM_SIZE, 2)) {
+                free(vbuf);
+                return 0;
+            }
+            gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, vbuf);
+            free(vbuf);
+            return 1;
+        }
+#endif
     }
     case BS_SEC_SPU:
         return spu_snapshot_read(p, len);
@@ -378,22 +420,13 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
 int boot_state_load(const char* path, uint32_t bios_checksum,
                     uint32_t entry_pc, CPUState* cpu) {
     FILE* f = fopen(path, "rb");
-    if (!f) return 0;
-
+    long sz;
+    uint8_t* file = NULL;
+    size_t file_len = 0;
+    const uint8_t* cur;
+    const uint8_t* end;
     BootStateHeader h;
-    if (!read_header_le(f, &h)) { fclose(f); return 0; }
-
-    if (h.magic         != BOOT_STATE_MAGIC               ||
-        h.version       != BOOT_STATE_VERSION             ||
-        h.bios_checksum != bios_checksum                  ||
-        h.entry_pc      != entry_pc                       ||
-        h.codegen_hash  != (uint32_t)PSX_OVERLAY_CODEGEN_HASH ||
-        h.abi_tag       != (int32_t)PSX_OVERLAY_ABI_TAG   ||
-        h.codegen_ver   != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
-        fclose(f);
-        return 0;
-    }
-
+    PstR hr;
     const uint32_t required =
         (1u<<BS_SEC_CPU)|(1u<<BS_SEC_RAM)|(1u<<BS_SEC_SPAD)|(1u<<BS_SEC_IRQ)|
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
@@ -401,29 +434,151 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
         (1u<<BS_SEC_SIO)|(1u<<BS_SEC_DIRTY);
     uint32_t seen = 0;
     int ok = 1;
+    const double t0 = boot_state_mono_ms();
+    double t_after_read = t0;
+    double inflate_ms = 0.0;
+    double apply_ram_ms = 0.0;
+    double apply_vram_ms = 0.0;
+    double apply_spuram_ms = 0.0;
+    double apply_other_ms = 0.0;
 
-    for (uint32_t i = 0; ok && i < h.section_count; i++) {
-        uint8_t shdr[16];
-        PstR hr;
-        uint32_t tag = 0, pad = 0;
-        uint64_t len = 0;
-        if (fread(shdr, 1, sizeof shdr, f) != sizeof shdr) { ok = 0; break; }
-        pst_r_init(&hr, shdr, sizeof shdr);
-        if (!pst_r_u32(&hr, &tag) || !pst_r_u32(&hr, &pad) || !pst_r_u64(&hr, &len)) {
-            ok = 0; break;
-        }
-        if (len > 64u * 1024u * 1024u) { ok = 0; break; }
-        uint8_t* buf = (uint8_t*)malloc(len ? (size_t)len : 1);
-        if (!buf) { ok = 0; break; }
-        if (len && fread(buf, 1, (size_t)len, f) != (size_t)len) { free(buf); ok = 0; break; }
-        if (!apply_section(tag, buf, (uint32_t)len, cpu, entry_pc)) ok = 0;
-        else if (tag < 32) seen |= (1u << tag);
-        free(buf);
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    sz = ftell(f);
+    if (sz < (long)BOOT_STATE_HEADER_WIRE_BYTES || sz > 64L * 1024L * 1024L) {
+        fclose(f);
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
+    file_len = (size_t)sz;
+    file = (uint8_t*)malloc(file_len);
+    if (!file) { fclose(f); return 0; }
+    if (fread(file, 1, file_len, f) != file_len) {
+        free(file);
+        fclose(f);
+        return 0;
     }
     fclose(f);
+    t_after_read = boot_state_mono_ms();
+
+    /* Parse header from the in-memory image (one I/O, then CPU-side inflate). */
+    pst_r_init(&hr, file, BOOT_STATE_HEADER_WIRE_BYTES);
+    memset(&h, 0, sizeof h);
+    if (!pst_r_u32(&hr, &h.magic) ||
+        !pst_r_u32(&hr, &h.version) ||
+        !pst_r_u32(&hr, &h.bios_checksum) ||
+        !pst_r_u32(&hr, &h.entry_pc) ||
+        !pst_r_u32(&hr, &h.codegen_hash) ||
+        !pst_r_i32(&hr, &h.abi_tag) ||
+        !pst_r_u32(&hr, &h.codegen_ver) ||
+        !pst_r_u32(&hr, &h.section_count) ||
+        !pst_r_u32(&hr, &h.reserved)) {
+        free(file);
+        return 0;
+    }
+
+    if (h.magic         != BOOT_STATE_MAGIC               ||
+        h.version       < BOOT_STATE_VERSION_MIN_READ     ||
+        h.version       > BOOT_STATE_VERSION              ||
+        h.bios_checksum != bios_checksum                  ||
+        h.entry_pc      != entry_pc                       ||
+        h.codegen_hash  != (uint32_t)PSX_OVERLAY_CODEGEN_HASH ||
+        h.abi_tag       != (int32_t)PSX_OVERLAY_ABI_TAG   ||
+        h.codegen_ver   != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
+        free(file);
+        return 0;
+    }
+
+    cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
+    end = file + file_len;
+
+    for (uint32_t i = 0; ok && i < h.section_count; i++) {
+        PstR sh;
+        uint32_t tag = 0, pad = 0;
+        uint64_t len = 0;
+        const uint8_t* payload;
+        uint8_t* inflated = NULL;
+        const uint8_t* apply_ptr;
+        uint32_t apply_len;
+        double t_sec;
+
+        if ((size_t)(end - cur) < 16u) { ok = 0; break; }
+        pst_r_init(&sh, cur, 16);
+        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) || !pst_r_u64(&sh, &len)) {
+            ok = 0; break;
+        }
+        cur += 16;
+        if (len > 64u * 1024u * 1024u || (uint64_t)(end - cur) < len) {
+            ok = 0; break;
+        }
+        payload = cur;
+        cur += (size_t)len;
+
+        if (h.version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
+            PstR lr;
+            uint32_t raw_len = 0;
+            uLong dest_len;
+            double t_inf;
+            if (len < 4u) { ok = 0; break; }
+            pst_r_init(&lr, payload, 4);
+            if (!pst_r_u32(&lr, &raw_len) || raw_len == 0 ||
+                raw_len > 64u * 1024u * 1024u) {
+                ok = 0; break;
+            }
+            inflated = (uint8_t*)malloc(raw_len);
+            if (!inflated) { ok = 0; break; }
+            dest_len = (uLong)raw_len;
+            t_inf = boot_state_mono_ms();
+            if (uncompress(inflated, &dest_len, payload + 4,
+                           (uLong)(len - 4u)) != Z_OK ||
+                dest_len != (uLong)raw_len) {
+                free(inflated);
+                ok = 0;
+                break;
+            }
+            inflate_ms += boot_state_mono_ms() - t_inf;
+            apply_ptr = inflated;
+            apply_len = raw_len;
+        } else if (pad != 0u) {
+            /* v3 requires pad==0; v4 unknown/extra flags are a hard reject. */
+            ok = 0;
+            break;
+        } else {
+            if (len > 0xffffffffu) { ok = 0; break; }
+            apply_ptr = payload;
+            apply_len = (uint32_t)len;
+        }
+
+        t_sec = boot_state_mono_ms();
+        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) ok = 0;
+        else if (tag < 32) seen |= (1u << tag);
+        {
+            double dt = boot_state_mono_ms() - t_sec;
+            if (tag == BS_SEC_RAM) apply_ram_ms += dt;
+            else if (tag == BS_SEC_VRAM) apply_vram_ms += dt;
+            else if (tag == BS_SEC_SPURAM) apply_spuram_ms += dt;
+            else apply_other_ms += dt;
+        }
+        free(inflated);
+    }
+    free(file);
 
     if (!ok || (seen & required) != required)
         return 0;
+
+    /* RAM was memcpy'd; force overlay revalidation before resume. */
+    overlay_watch_invalidate_after_ram_restore();
+
+    {
+        const double total_ms = boot_state_mono_ms() - t0;
+        fprintf(stderr,
+                "savestate: load_timing read=%.1f inflate=%.1f "
+                "apply_ram=%.1f apply_vram=%.1f apply_spuram=%.1f "
+                "apply_other=%.1f total=%.1f ms (file=%zu)\n",
+                t_after_read - t0, inflate_ms,
+                apply_ram_ms, apply_vram_ms, apply_spuram_ms,
+                apply_other_ms, total_ms, file_len);
+    }
     return 1;
 }
 

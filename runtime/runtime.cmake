@@ -196,6 +196,10 @@ if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
 endif()
 if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt")
     if(NOT TARGET recomp_net)
+        option(PSX_NET_ICE "Build recomp-net with ICE/libjuice for MotK online" ON)
+        if(PSX_NET_ICE)
+            set(RNET_ENABLE_ICE ON CACHE BOOL "Build libjuice ICE transport" FORCE)
+        endif()
         set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
@@ -462,6 +466,10 @@ function(psxrecomp_add_runtime_target target)
     else()
         target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
     endif()
+
+    # zlib: boot_state v4 savestate compression (RAM/VRAM/SPU blobs).
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(${target} PRIVATE ZLIB::ZLIB)
 
     # Build identity: stamp the psxrecomp commit into the binary so a crash report
     # can be correlated to an exact build (issue #1 user reports had no version).

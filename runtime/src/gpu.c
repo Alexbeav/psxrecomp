@@ -2070,22 +2070,32 @@ static uint8_t gpu_vram_byte(uint32_t byte_x, uint32_t y) {
 
 /* Depth24: note/query/reset the CPU→VRAM upload span tracked above. Used to
  * hide trailing RGB columns when a movie blit doesn't fill the full CRTC
- * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right. */
+ * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right, and
+ * movie cutovers can flash a large colorful junk block for one frame. */
 static void depth24_note_upload(uint32_t x, uint32_t w) {
     if (!(display_depth & 1u) || w == 0u) return;
+    /* Left-anchored FB-class blit: start a fresh coverage window so the next
+     * movie's first incomplete decode doesn't inherit the previous span. */
+    uint32_t dx = display_area_x & 1023u;
+    if (w >= 64u && x <= dx + 16u)
+        s_d24_upload_x1 = 0;
     uint32_t x1 = x + w;
     if (x1 > 1024u) x1 = 1024u;
     if (x1 > s_d24_upload_x1) s_d24_upload_x1 = x1;
 }
 
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
-    if (!(display_depth & 1u) || s_d24_upload_x1 == 0u || crtc_w == 0u)
+    if (!(display_depth & 1u) || crtc_w == 0u)
         return crtc_w;
+    /* No uploads yet → treat as uncovered (present blanks until first blit). */
+    if (s_d24_upload_x1 == 0u)
+        return 0u;
     uint32_t dx = display_x & 1023u;
-    if (s_d24_upload_x1 <= dx) return crtc_w;
+    if (s_d24_upload_x1 <= dx) return 0u;
     uint32_t hw = s_d24_upload_x1 - dx;
     uint32_t rgb = (hw * 2u) / 3u;
-    if (rgb == 0u || rgb >= crtc_w) return crtc_w;
+    if (rgb == 0u) return 0u;
+    if (rgb >= crtc_w) return crtc_w;
     return rgb;
 }
 
@@ -4205,10 +4215,13 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
+    uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
     video_mode = (val >> 3) & 1;
-    display_depth = (val >> 4) & 1;
+    if (new_depth != display_depth)
+        s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
+    display_depth = new_depth;
     vertical_interlace = (val >> 5) & 1;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;

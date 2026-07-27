@@ -60,6 +60,14 @@ extern uint32_t g_psx_cyc_batch_limit;
  * block. Interrupt/MMIO edges still publish the accumulated guest cycles. */
 extern int g_psx_cyc_bb_defer;
 
+/* Opt-in advance attribution for PSX_POST_LOAD_PROBE (armed from main).
+ * Zero when disarmed — hot path pays one predictable branch. */
+extern int      g_plp_cycle_diag;
+extern uint64_t g_plp_adv_calls;
+extern uint32_t g_plp_adv_max_chunk;
+extern uint64_t g_plp_adv_sum;
+extern uint64_t g_plp_svc_calls;
+
 /* Advance guest time. The common production path is inlined: bump the
  * counter and only service devices when the next event deadline is due.
  * Guest-visible timing is unchanged (service_to_now replays exact events).
@@ -87,6 +95,11 @@ static inline void psx_advance_cycles(uint32_t cycles) {
     }
 #endif
     if (cycles == 0u) return;
+    if (g_plp_cycle_diag) {
+        g_plp_adv_calls++;
+        g_plp_adv_sum += (uint64_t)cycles;
+        if (cycles > g_plp_adv_max_chunk) g_plp_adv_max_chunk = cycles;
+    }
 #if defined(PSX_COSIM)
     psx_advance_cycles_slow(cycles);
     return;
@@ -136,8 +149,11 @@ extern uint32_t g_idle_skip_last_pc;
 extern uint32_t g_idle_skip_last_quantum;
 
 /* Save-state restore: re-anchor the deadline device model after psx_cycle_count
- * is overwritten from a snapshot. */
-void psx_cycles_resync_after_restore(void);
+ * is overwritten from a snapshot. Also clears host-only CPU timing residual
+ * (gte_ts_done / muldiv_ts_done / load-absorb) that is not in the wire format —
+ * a pre-load absolute deadline past the rewound clock otherwise becomes one
+ * multi-vblank psx_advance_cycles stall (warm-load picture freeze). */
+void psx_cycles_resync_after_restore(struct CPUState *cpu);
 
 /* Soft rematch / session_reboot: zero the guest clock and deadline bookkeeping.
  * Soft-exit longjmps out of vblank (inside psx_devices_service_to_now) leave

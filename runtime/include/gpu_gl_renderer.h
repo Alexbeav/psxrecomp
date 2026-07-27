@@ -64,6 +64,15 @@ void gl_renderer_flush_cpu_uploads(void);
  * reloaded identical frame still reaches the window (double/triple buffer). */
 void gl_renderer_invalidate_present(void);
 
+/* Post-savestate freeze probe: skip/swap/dirty-mark counters (GL present path).
+ * take() returns deltas since the previous take/reset. Safe no-ops when GL is
+ * inactive. rect_dirty tests the current present-tile dirty bits. */
+void gl_renderer_present_probe_reset(void);
+void gl_renderer_present_probe_take(uint64_t *skip_delta, uint64_t *swap_delta,
+                                    uint64_t *dirty_mark_delta,
+                                    int *force_remaining);
+int  gl_renderer_present_rect_dirty(int disp_x, int disp_y, int w, int h);
+
 /* THE present path for 15-bit frames: blit the display region straight from
  * the authoritative VRAM FBO into a letterboxed rect (no readback).
  * Deterministic — used for every 15-bit frame. linear = filter on scale.

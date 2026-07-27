@@ -613,6 +613,11 @@ static int s_last_dx, s_last_dy, s_last_dw, s_last_dh;
  * (and FPS) keep advancing — especially on a 2nd+ load of the same slot. */
 static int s_force_present_remaining = 0;
 
+/* Post-load freeze probe (main.cpp): accumulate skip/swap/dirty marks. */
+static uint64_t s_probe_skip = 0;
+static uint64_t s_probe_swap = 0;
+static uint64_t s_probe_dirty_marks = 0;
+
 static void present_dirty_rect(int x0, int y0, int x1, int y1, int set) {
     if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
     if (x1 >= VRAM_W) x1 = VRAM_W - 1; if (y1 >= VRAM_H) y1 = VRAM_H - 1;
@@ -622,6 +627,7 @@ static void present_dirty_rect(int x0, int y0, int x1, int y1, int set) {
     for (int ty = y0 / PRES_TILE; ty <= y1 / PRES_TILE; ty++) {
         if (set) s_present_dirty[ty] |= mask; else s_present_dirty[ty] &= ~mask;
     }
+    if (set) s_probe_dirty_marks++;
 }
 
 static int present_dirty_test(int x0, int y0, int x1, int y1) {
@@ -2599,6 +2605,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
+    s_probe_swap++;
     present_force_consumed();
     s_last_present_path = GL_PRES_CPU;
 }
@@ -2613,6 +2620,7 @@ void gl_renderer_present_blank(void) {
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
+    s_probe_swap++;
     present_force_consumed();
     s_last_present_path = GL_PRES_BLANK;
 }
@@ -2628,6 +2636,29 @@ void gl_renderer_invalidate_present(void) {
     s_last_present_path = -1;
     s_force_present_remaining = 8;
     interp_reset_history();
+}
+
+void gl_renderer_present_probe_reset(void) {
+    s_probe_skip = 0;
+    s_probe_swap = 0;
+    s_probe_dirty_marks = 0;
+}
+
+void gl_renderer_present_probe_take(uint64_t *skip_delta, uint64_t *swap_delta,
+                                    uint64_t *dirty_mark_delta,
+                                    int *force_remaining) {
+    if (skip_delta) { *skip_delta = s_probe_skip; s_probe_skip = 0; }
+    if (swap_delta) { *swap_delta = s_probe_swap; s_probe_swap = 0; }
+    if (dirty_mark_delta) {
+        *dirty_mark_delta = s_probe_dirty_marks;
+        s_probe_dirty_marks = 0;
+    }
+    if (force_remaining) *force_remaining = s_force_present_remaining;
+}
+
+int gl_renderer_present_rect_dirty(int disp_x, int disp_y, int w, int h) {
+    if (!s_raster_ok || w <= 0 || h <= 0) return 0;
+    return present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1);
 }
 
 void gl_renderer_flush_cpu_uploads(void) {
@@ -3521,6 +3552,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == w && s_last_dh == h &&
         !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1)) {
+        s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(0);
         return;
@@ -3558,6 +3590,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
+    s_probe_swap++;
     gl_perf_present_exit(0);
     present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
     present_force_consumed();
@@ -3621,6 +3654,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == g_wide_w && s_last_dh == disp_h &&
         !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1)) {
+        s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(1);
         return 1;
@@ -3654,6 +3688,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
+    s_probe_swap++;
     gl_perf_present_exit(1);
     present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
     present_force_consumed();

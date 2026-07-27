@@ -557,6 +557,9 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
     if (count > DIRTY_RAM_BITMAP_WORDS) count = DIRTY_RAM_BITMAP_WORDS;
     for (uint32_t i = 0; i < count; i++)
         dirty_ram_bitmap[i] = words[i];
+    /* Bitmap replace bypasses clean→dirty transitions; bump so interpreter
+     * site caches keyed on g_dirty_ram_code_gen cannot survive a restore. */
+    g_dirty_ram_code_gen++;
 }
 
 /* ---- Inc3: watched overlay pages + per-page generation counters ---------
@@ -608,6 +611,17 @@ uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
     uint32_t sum = 0;
     for (uint32_t pg = fp; pg <= lp; pg++) sum += overlay_page_gen[pg];
     return sum;
+}
+
+/* Savestate restores RAM via memcpy and never hits the store chokepoint that
+ * bumps overlay_page_gen. Without this, ENTRY_VALID overlays keep the gen-gated
+ * fast path and run native code against restored bytes they were not validated
+ * for — hang / freeze after the restored frame presents. */
+void overlay_watch_invalidate_after_ram_restore(void) {
+    for (uint32_t pg = 0; pg < DIRTY_RAM_PAGE_COUNT; pg++)
+        overlay_page_gen[pg]++;
+    extern void overlay_loader_note_code_write(void);
+    overlay_loader_note_code_write();
 }
 
 static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {

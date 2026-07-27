@@ -36,8 +36,13 @@ extern "C" {
 
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
- * v3 = little-endian field wire (portable Win/Linux/macOS ARM). */
-#define BOOT_STATE_VERSION 3u
+ * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
+ * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed). */
+#define BOOT_STATE_VERSION 4u
+/* Older readers reject v4; load still accepts v3 uncompressed blobs. */
+#define BOOT_STATE_VERSION_MIN_READ 3u
+/* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
+#define BOOT_STATE_SEC_ZLIB 1u
 
 /*
  * On-disk header (v3): nine little-endian uint32 fields at offset 0 (36 bytes),
@@ -61,11 +66,12 @@ typedef struct {
 #define BOOT_STATE_HEADER_WIRE_BYTES 36u
 
 /*
- * Section stream (v3): section_count records, each laid out as
+ * Section stream (v3/v4): section_count records, each laid out as
  *     uint32_t tag;        LE (one of BS_SEC_*)
- *     uint32_t pad;        LE 0
+ *     uint32_t pad;        LE flags (v3: 0; v4: BOOT_STATE_SEC_ZLIB optional)
  *     uint64_t len;        LE payload byte count
  *     uint8_t  payload[len];   (module payloads are LE field wires too)
+ * When BOOT_STATE_SEC_ZLIB is set, payload = u32 LE raw_len + zlib(raw).
  * An unknown tag, a length mismatch, or a missing required section on load is a
  * hard reject (incomplete restore is never allowed) -> normal boot + recapture.
  */

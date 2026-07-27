@@ -26,6 +26,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "interrupts.h"
 #include "present_ring.h"
 #include "load_transition_ring.h"
 #include "gpu_sw_renderer.h"
@@ -64,6 +65,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
+#include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #endif
 #include <SDL.h>
 #if defined(PSX_WEB)
@@ -71,6 +73,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #endif
 #include <algorithm>
 #include <atomic>
+#include <thread>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -347,6 +350,61 @@ static Smooth60State g_smooth_60_state;
  * survive soft-return and poison FMV/FPS after session_reboot). */
 static bool     s_disabled_frame_presented = false;
 static bool     s_force_present_after_load = false;
+/* After LOADED: optional freeze probe (PSX_POST_LOAD_PROBE=1). Off by default. */
+static int      s_post_load_probe_enabled = -1; /* -1 = unread env */
+static int      s_post_load_probe_left = 0;
+static int      s_post_load_probe_i = 0;
+static uint64_t s_post_load_probe_gp00 = 0;
+static uint64_t s_post_load_probe_skip_tot = 0;
+static uint64_t s_post_load_probe_swap_tot = 0;
+static uint64_t s_post_load_probe_dirty_tot = 0;
+static uint64_t s_post_load_probe_gp0_tot = 0;
+static uint64_t s_post_load_probe_vb_raise0 = 0;
+static uint64_t s_post_load_probe_vb_deliv0 = 0;
+static uint64_t s_post_load_probe_vb_ack0 = 0;
+static uint64_t s_post_load_probe_dirty_blks0 = 0;
+static uint64_t s_post_load_probe_chk_entry0 = 0;
+static uint64_t s_post_load_probe_chk_fsr0 = 0;
+static uint64_t s_post_load_probe_chk_fnone0 = 0;
+static uint64_t s_post_load_probe_chk_mid0 = 0;
+static uint64_t s_post_load_probe_chk_eval0 = 0;
+static uint64_t s_post_load_probe_chk_deliv0 = 0;
+static uint64_t s_post_load_probe_cyc0 = 0;
+static uint64_t s_post_load_probe_ci_unit0 = 0;
+static uint64_t s_post_load_probe_ci_supp0 = 0;
+static uint64_t s_post_load_probe_ci_none0 = 0;
+static uint64_t s_post_load_probe_ci_sr0 = 0;
+static uint64_t s_post_load_probe_ci_deliv0 = 0;
+static uint64_t s_post_load_probe_ci_enter0 = 0;
+static uint64_t s_post_load_probe_adv_calls0 = 0;
+static uint64_t s_post_load_probe_adv_sum0 = 0;
+static uint64_t s_post_load_probe_svc0 = 0;
+static uint64_t s_post_load_probe_dirty_insns0 = 0;
+static uint64_t s_post_load_probe_dirty_pump0 = 0;
+static uint64_t s_post_load_probe_stores0 = 0;
+static uint64_t s_post_load_probe_idle_n0 = 0;
+static uint64_t s_post_load_probe_idle_cyc0 = 0;
+static uint64_t s_post_load_probe_hz_hits0 = 0;
+static uint64_t s_post_load_probe_hz_cyc0 = 0;
+static Uint64   s_post_load_probe_host_t0 = 0;
+static int      s_post_load_probe_stall_run = 0;
+static int      s_post_load_probe_in_stall = 0;
+#define POST_LOAD_STALL_PC_CAP 8
+static uint32_t s_stall_pc[POST_LOAD_STALL_PC_CAP];
+static uint32_t s_stall_pc_n[POST_LOAD_STALL_PC_CAP];
+static int      s_stall_pc_used = 0;
+#define POST_LOAD_LIVE_PC_CAP 8
+static uint32_t s_live_pc[POST_LOAD_LIVE_PC_CAP];
+static uint32_t s_live_pc_n[POST_LOAD_LIVE_PC_CAP];
+static int      s_live_pc_used = 0;
+
+static int post_load_probe_env_on(void) {
+    if (s_post_load_probe_enabled < 0) {
+        const char *e = std::getenv("PSX_POST_LOAD_PROBE");
+        s_post_load_probe_enabled = (e && e[0] == '1') ? 1 : 0;
+    }
+    return s_post_load_probe_enabled;
+}
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
 static std::string s_fps_base_title;
@@ -357,6 +415,14 @@ static int      s_fmv_skip_present_skip = 0;
 static int      s_netplay_depth24_present_skip = 0;
 static uint32_t s_fmv_skip_last_mdec = 0;
 static int      s_fmv_skip_hold = 0;
+/* MotK FMV cutover: after an idle gap, blank the first depth24+MDEC presents
+ * so one-frame RGB888 junk (stale VRAM) never reaches the window. */
+static int      s_d24_prev_mdec = 0;
+static int      s_d24_saw_gap = 0;
+static int      s_d24_cutover_blank = 0;
+/* Savestate restore → audio pump: re-anchor last_cycles (declared early so
+ * psx_frontend_on_savestate_loaded can set it). */
+static int      g_audio_cycle_resync = 0;
 
 static void smooth_60_reset(void) {
     g_smooth_60_state.previous_source.clear();
@@ -379,7 +445,372 @@ static void present_session_reset(void) {
     s_netplay_depth24_present_skip = 0;
     s_fmv_skip_last_mdec = 0;
     s_fmv_skip_hold = 0;
+    s_d24_prev_mdec = 0;
+    s_d24_saw_gap = 0;
+    s_d24_cutover_blank = 0;
     smooth_60_reset();
+}
+
+static void post_load_probe_stall_pc_note(uint32_t pc) {
+    if (!pc) return;
+    for (int i = 0; i < s_stall_pc_used; i++) {
+        if (s_stall_pc[i] == pc) {
+            if (s_stall_pc_n[i] < 0xffffffffu) s_stall_pc_n[i]++;
+            return;
+        }
+    }
+    if (s_stall_pc_used >= POST_LOAD_STALL_PC_CAP) return;
+    s_stall_pc[s_stall_pc_used] = pc;
+    s_stall_pc_n[s_stall_pc_used] = 1;
+    s_stall_pc_used++;
+}
+
+static void post_load_probe_stall_pc_dump(const char *why) {
+    if (s_stall_pc_used <= 0) return;
+    std::fprintf(stderr, "post_load_probe stall_pcs (%s):", why);
+    for (int i = 0; i < s_stall_pc_used; i++) {
+        std::fprintf(stderr, " 0x%08X×%u",
+                     (unsigned)s_stall_pc[i], (unsigned)s_stall_pc_n[i]);
+    }
+    std::fprintf(stderr, "\n");
+}
+
+static void post_load_probe_live_pc_note(uint32_t pc) {
+    if (!pc) return;
+    for (int i = 0; i < s_live_pc_used; i++) {
+        if (s_live_pc[i] == pc) {
+            if (s_live_pc_n[i] < 0xffffffffu) s_live_pc_n[i]++;
+            return;
+        }
+    }
+    if (s_live_pc_used >= POST_LOAD_LIVE_PC_CAP) return;
+    s_live_pc[s_live_pc_used] = pc;
+    s_live_pc_n[s_live_pc_used] = 1;
+    s_live_pc_used++;
+}
+
+static void post_load_probe_live_pc_dump(const char *why) {
+    if (s_live_pc_used <= 0) return;
+    std::fprintf(stderr, "post_load_probe live_pcs (%s):", why);
+    for (int i = 0; i < s_live_pc_used; i++) {
+        std::fprintf(stderr, " 0x%08X×%u",
+                     (unsigned)s_live_pc[i], (unsigned)s_live_pc_n[i]);
+    }
+    std::fprintf(stderr, "\n");
+}
+
+static void post_load_probe_arm(void) {
+    if (!post_load_probe_env_on()) {
+        s_post_load_probe_left = 0;
+        g_plp_cycle_diag = 0;
+        return;
+    }
+    extern uint64_t g_vblank_raise_count, g_vblank_deliver_count, g_vblank_ack_count;
+    extern uint64_t g_dirty_ram_blocks_run;
+    extern uint64_t g_dirty_ram_insns_run;
+    extern uint64_t g_dirty_pump_count;
+    extern uint64_t g_guest_store_count;
+    uint64_t e = 0, fsr = 0, fn = 0, mid = 0, ev = 0, id = 0;
+    psx_interrupt_check_path_diag(&e, &fsr, &fn, &mid, &ev, &id);
+    uint64_t ci_u = 0, ci_s = 0, ci_n = 0, ci_sr = 0, ci_d = 0, ci_e = 0;
+    overlay_loader_get_ci_skip_diag(&ci_u, &ci_s, &ci_n, &ci_sr, &ci_d, &ci_e);
+    uint64_t hz_h = 0, hz_c = 0;
+    psx_vsync_query_hle_horizon_totals(&hz_h, &hz_c);
+    g_plp_cycle_diag = 1;
+    g_plp_adv_calls = 0;
+    g_plp_adv_max_chunk = 0;
+    g_plp_adv_sum = 0;
+    g_plp_svc_calls = 0;
+    s_post_load_probe_left = 300;
+    s_post_load_probe_i = 0;
+    s_post_load_probe_gp00 = gpu_get_gp0_count();
+    s_post_load_probe_skip_tot = 0;
+    s_post_load_probe_swap_tot = 0;
+    s_post_load_probe_dirty_tot = 0;
+    s_post_load_probe_gp0_tot = 0;
+    s_post_load_probe_vb_raise0 = g_vblank_raise_count;
+    s_post_load_probe_vb_deliv0 = g_vblank_deliver_count;
+    s_post_load_probe_vb_ack0 = g_vblank_ack_count;
+    s_post_load_probe_dirty_blks0 = g_dirty_ram_blocks_run;
+    s_post_load_probe_chk_entry0 = e;
+    s_post_load_probe_chk_fsr0 = fsr;
+    s_post_load_probe_chk_fnone0 = fn;
+    s_post_load_probe_chk_mid0 = mid;
+    s_post_load_probe_chk_eval0 = ev;
+    s_post_load_probe_chk_deliv0 = id;
+    s_post_load_probe_cyc0 = psx_get_cycle_count();
+    s_post_load_probe_ci_unit0 = ci_u;
+    s_post_load_probe_ci_supp0 = ci_s;
+    s_post_load_probe_ci_none0 = ci_n;
+    s_post_load_probe_ci_sr0 = ci_sr;
+    s_post_load_probe_ci_deliv0 = ci_d;
+    s_post_load_probe_ci_enter0 = ci_e;
+    s_post_load_probe_adv_calls0 = 0;
+    s_post_load_probe_adv_sum0 = 0;
+    s_post_load_probe_svc0 = 0;
+    s_post_load_probe_dirty_insns0 = g_dirty_ram_insns_run;
+    s_post_load_probe_dirty_pump0 = g_dirty_pump_count;
+    s_post_load_probe_stores0 = g_guest_store_count;
+    s_post_load_probe_idle_n0 = g_idle_skip_count;
+    s_post_load_probe_idle_cyc0 = g_idle_skip_cycles;
+    s_post_load_probe_hz_hits0 = hz_h;
+    s_post_load_probe_hz_cyc0 = hz_c;
+    s_post_load_probe_host_t0 = SDL_GetPerformanceCounter();
+    s_post_load_probe_stall_run = 0;
+    s_post_load_probe_in_stall = 0;
+    s_stall_pc_used = 0;
+    s_live_pc_used = 0;
+    gl_renderer_present_probe_reset();
+    std::fprintf(stderr,
+                 "savestate: post_load_probe armed (300 vblanks; "
+                 "PSX_POST_LOAD_PROBE=1; live_pc/ci/adv diag on)\n");
+}
+
+static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
+    if (s_post_load_probe_left <= 0) return;
+    s_post_load_probe_i++;
+    s_post_load_probe_left--;
+
+    uint64_t skip = 0, swap = 0, dirty_marks = 0;
+    int force_left = 0;
+    gl_renderer_present_probe_take(&skip, &swap, &dirty_marks, &force_left);
+    s_post_load_probe_skip_tot += skip;
+    s_post_load_probe_swap_tot += swap;
+    s_post_load_probe_dirty_tot += dirty_marks;
+
+    const uint64_t gp0_now = gpu_get_gp0_count();
+    const uint64_t gp0_delta = gp0_now - s_post_load_probe_gp00;
+    s_post_load_probe_gp00 = gp0_now;
+    s_post_load_probe_gp0_tot += gp0_delta;
+
+    extern uint64_t g_vblank_raise_count, g_vblank_deliver_count, g_vblank_ack_count;
+    extern uint64_t g_dirty_ram_blocks_run;
+    extern uint32_t i_stat, i_mask;
+    extern CPUState *debug_cpu_ptr;
+    const uint64_t vb_r = g_vblank_raise_count - s_post_load_probe_vb_raise0;
+    const uint64_t vb_d = g_vblank_deliver_count - s_post_load_probe_vb_deliv0;
+    const uint64_t vb_a = g_vblank_ack_count - s_post_load_probe_vb_ack0;
+    s_post_load_probe_vb_raise0 = g_vblank_raise_count;
+    s_post_load_probe_vb_deliv0 = g_vblank_deliver_count;
+    s_post_load_probe_vb_ack0 = g_vblank_ack_count;
+    const uint64_t dirty_blks = g_dirty_ram_blocks_run - s_post_load_probe_dirty_blks0;
+    s_post_load_probe_dirty_blks0 = g_dirty_ram_blocks_run;
+
+    uint32_t tcb = 0, gp_a = 0, gp_b = 0, gp_reg = 0;
+    uint32_t sr = 0, cause = 0;
+    int iec = 0, im2 = 0;
+    if (debug_cpu_ptr) {
+        gp_reg = debug_cpu_ptr->gpr[28];
+        tcb = psx_sched_current_tcb(debug_cpu_ptr);
+        sr = debug_cpu_ptr->cop0[12];    /* COP0 Status */
+        cause = debug_cpu_ptr->cop0[13]; /* COP0 Cause */
+        iec = (sr & 0x1u) ? 1 : 0;
+        im2 = (sr & (1u << 10)) ? 1 : 0;
+        /* func_8004FD14 frame-counter compare at 0x800501E8. */
+        if (debug_cpu_ptr->read_word) {
+            gp_a = debug_cpu_ptr->read_word(gp_reg + 2552u);
+            gp_b = debug_cpu_ptr->read_word(gp_reg + 2632u);
+        }
+    }
+    /* Hot-path check_interrupts attribution (not delivery_needed — that only
+     * samples at present time and was misleading). */
+    uint64_t chk_e = 0, chk_fsr = 0, chk_fn = 0, chk_mid = 0, chk_ev = 0, chk_id = 0;
+    psx_interrupt_check_path_diag(&chk_e, &chk_fsr, &chk_fn, &chk_mid, &chk_ev, &chk_id);
+    const uint64_t d_entry = chk_e - s_post_load_probe_chk_entry0;
+    const uint64_t d_fsr = chk_fsr - s_post_load_probe_chk_fsr0;
+    const uint64_t d_fnone = chk_fn - s_post_load_probe_chk_fnone0;
+    const uint64_t d_mid = chk_mid - s_post_load_probe_chk_mid0;
+    const uint64_t d_eval = chk_ev - s_post_load_probe_chk_eval0;
+    const uint64_t d_irqd = chk_id - s_post_load_probe_chk_deliv0;
+    s_post_load_probe_chk_entry0 = chk_e;
+    s_post_load_probe_chk_fsr0 = chk_fsr;
+    s_post_load_probe_chk_fnone0 = chk_fn;
+    s_post_load_probe_chk_mid0 = chk_mid;
+    s_post_load_probe_chk_eval0 = chk_ev;
+    s_post_load_probe_chk_deliv0 = chk_id;
+    const uint64_t cyc_now = psx_get_cycle_count();
+    const uint64_t d_cyc = cyc_now - s_post_load_probe_cyc0;
+    s_post_load_probe_cyc0 = cyc_now;
+
+    uint64_t ci_u = 0, ci_s = 0, ci_n = 0, ci_sr = 0, ci_d = 0, ci_e = 0;
+    overlay_loader_get_ci_skip_diag(&ci_u, &ci_s, &ci_n, &ci_sr, &ci_d, &ci_e);
+    const uint64_t d_ci_unit = ci_u - s_post_load_probe_ci_unit0;
+    const uint64_t d_ci_supp = ci_s - s_post_load_probe_ci_supp0;
+    const uint64_t d_ci_none = ci_n - s_post_load_probe_ci_none0;
+    const uint64_t d_ci_sr = ci_sr - s_post_load_probe_ci_sr0;
+    const uint64_t d_ci_deliv = ci_d - s_post_load_probe_ci_deliv0;
+    const uint64_t d_ci_enter = ci_e - s_post_load_probe_ci_enter0;
+    s_post_load_probe_ci_unit0 = ci_u;
+    s_post_load_probe_ci_supp0 = ci_s;
+    s_post_load_probe_ci_none0 = ci_n;
+    s_post_load_probe_ci_sr0 = ci_sr;
+    s_post_load_probe_ci_deliv0 = ci_d;
+    s_post_load_probe_ci_enter0 = ci_e;
+
+    const uint64_t adv_calls = g_plp_adv_calls;
+    const uint64_t adv_sum = g_plp_adv_sum;
+    const uint32_t adv_max = g_plp_adv_max_chunk;
+    const uint64_t svc_calls = g_plp_svc_calls;
+    const uint64_t d_adv_calls = adv_calls - s_post_load_probe_adv_calls0;
+    const uint64_t d_adv_sum = adv_sum - s_post_load_probe_adv_sum0;
+    const uint64_t d_svc = svc_calls - s_post_load_probe_svc0;
+    s_post_load_probe_adv_calls0 = adv_calls;
+    s_post_load_probe_adv_sum0 = adv_sum;
+    s_post_load_probe_svc0 = svc_calls;
+    g_plp_adv_max_chunk = 0; /* per-frame max */
+
+    extern uint64_t g_dirty_ram_insns_run;
+    extern uint64_t g_dirty_pump_count;
+    extern uint64_t g_guest_store_count;
+    const uint64_t d_dirty_insns = g_dirty_ram_insns_run - s_post_load_probe_dirty_insns0;
+    const uint64_t d_dirty_pump = g_dirty_pump_count - s_post_load_probe_dirty_pump0;
+    const uint64_t d_stores = g_guest_store_count - s_post_load_probe_stores0;
+    s_post_load_probe_dirty_insns0 = g_dirty_ram_insns_run;
+    s_post_load_probe_dirty_pump0 = g_dirty_pump_count;
+    s_post_load_probe_stores0 = g_guest_store_count;
+
+    const uint64_t d_idle_n = g_idle_skip_count - s_post_load_probe_idle_n0;
+    const uint64_t d_idle_cyc = g_idle_skip_cycles - s_post_load_probe_idle_cyc0;
+    s_post_load_probe_idle_n0 = g_idle_skip_count;
+    s_post_load_probe_idle_cyc0 = g_idle_skip_cycles;
+
+    uint64_t hz_h = 0, hz_c = 0;
+    psx_vsync_query_hle_horizon_totals(&hz_h, &hz_c);
+    const uint64_t d_hz_hits = hz_h - s_post_load_probe_hz_hits0;
+    const uint64_t d_hz_cyc = hz_c - s_post_load_probe_hz_cyc0;
+    s_post_load_probe_hz_hits0 = hz_h;
+    s_post_load_probe_hz_cyc0 = hz_c;
+
+    const Uint64 host_now = SDL_GetPerformanceCounter();
+    const Uint64 host_freq = SDL_GetPerformanceFrequency();
+    const double host_ms = (host_freq > 0)
+        ? (1000.0 * (double)(host_now - s_post_load_probe_host_t0) /
+           (double)host_freq)
+        : 0.0;
+    s_post_load_probe_host_t0 = host_now;
+
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    const int rect_dirty = (di.width > 0 && di.height > 0)
+        ? gl_renderer_present_rect_dirty((int)di.display_x, (int)di.display_y,
+                                         (int)di.width, (int)di.height)
+        : 0;
+
+    CDROMDebugState cd;
+    cdrom_debug_snapshot(&cd);
+    const int cd_wait = cdrom_savestate_cd_wait_active();
+    const int boost_left = cdrom_savestate_boost_vblanks_remaining();
+    const int xa = cdrom_xa_stream_active();
+
+    const uint32_t irq_pc = psx_last_irq_check_pc();
+    const uint32_t resume_pc = psx_compiled_irq_resume_pc();
+    extern uint32_t g_debug_current_func_addr;
+    extern uint32_t g_debug_last_store_pc;
+    extern int g_psx_dispatch_depth;
+    const uint32_t func = g_debug_current_func_addr;
+    const uint32_t store_pc = g_debug_last_store_pc;
+    const uint32_t live_pc = debug_cpu_ptr ? debug_cpu_ptr->pc : 0u;
+    const uint32_t live_ra = debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0u;
+    const int unit_depth = overlay_loader_call_unit_depth();
+    const int disp_depth = g_psx_dispatch_depth;
+    int cooldown_left = 0;
+    int in_exc = 0;
+    psx_get_freeze_diag(NULL, NULL, &in_exc, &cooldown_left, NULL, NULL);
+
+    const int stalled = (gp0_delta == 0);
+    if (stalled) {
+        s_post_load_probe_stall_run++;
+        s_post_load_probe_in_stall = 1;
+        post_load_probe_stall_pc_note(irq_pc ? irq_pc : resume_pc);
+        post_load_probe_stall_pc_note(func);
+        post_load_probe_live_pc_note(live_pc);
+    } else if (s_post_load_probe_in_stall) {
+        std::fprintf(stderr,
+                     "post_load_probe STALL_END at #%d after %d vblanks "
+                     "(irq_pc=0x%08X resume=0x%08X func=0x%08X "
+                     "live=0x%08X ra=0x%08X unit=%d disp=%d)\n",
+                     s_post_load_probe_i, s_post_load_probe_stall_run,
+                     (unsigned)irq_pc, (unsigned)resume_pc, (unsigned)func,
+                     (unsigned)live_pc, (unsigned)live_ra,
+                     unit_depth, disp_depth);
+        post_load_probe_stall_pc_dump("end");
+        post_load_probe_live_pc_dump("end");
+        s_post_load_probe_in_stall = 0;
+        s_post_load_probe_stall_run = 0;
+        s_stall_pc_used = 0;
+        s_live_pc_used = 0;
+    }
+
+    /* Dense samples during soft-stall; otherwise first 32 + every 15. */
+    const int log_line =
+        stalled ||
+        (s_post_load_probe_i <= 32) ||
+        (s_post_load_probe_i % 15 == 0) ||
+        (s_post_load_probe_left == 0);
+    if (log_line) {
+        std::fprintf(stderr,
+            "post_load_probe #%d: live=0x%08X ra=0x%08X "
+            "irq_pc=0x%08X resume=0x%08X func=0x%08X "
+            "store=0x%08X idle=0x%08X unit=%d disp=%d turbo=%d reached=%d "
+            "swap=%llu skip=%llu dirty_marks=%llu force=%d rect_dirty=%d "
+            "fb=%ux%u@(%u,%u) dis=%d d24=%d gp0=%llu "
+            "cd(pend=%d cmd=0x%02X dly=%d read=%d rdly=%d xa=%d wait=%d boost=%d) "
+            "exc=%d cool=%d istat=0x%X imask=0x%X "
+            "vb(r=%llu d=%llu a=%llu) tcb=0x%08X "
+            "gp9f8=%d gpA48=%d dirty_blks=%llu dins=%llu dpump=%llu stores=%llu "
+            "sr=0x%08X iec=%d im2=%d cause=0x%08X cyc=%llu host_ms=%.2f "
+            "chk(e=%llu fsr=%llu fn=%llu mid=%llu eval=%llu irq=%llu) "
+            "ci(unit=%llu supp=%llu none=%llu sr=%llu deliv=%llu enter=%llu) "
+            "adv(n=%llu sum=%llu max=%u svc=%llu) "
+            "idle_skip(n=%llu cyc=%llu) hz(n=%llu cyc=%llu)\n",
+            s_post_load_probe_i,
+            (unsigned)live_pc, (unsigned)live_ra,
+            (unsigned)irq_pc, (unsigned)resume_pc, (unsigned)func,
+            (unsigned)store_pc, (unsigned)g_idle_skip_last_pc,
+            unit_depth, disp_depth,
+            turbo_active, present_reached,
+            (unsigned long long)swap, (unsigned long long)skip,
+            (unsigned long long)dirty_marks, force_left, rect_dirty,
+            (unsigned)di.width, (unsigned)di.height,
+            (unsigned)di.display_x, (unsigned)di.display_y,
+            di.disabled ? 1 : 0, di.depth24 ? 1 : 0,
+            (unsigned long long)gp0_delta,
+            cd.pending_pending, (unsigned)cd.pending_cmd, cd.pending_delay,
+            cd.reading, cd.read_delay, xa, cd_wait, boost_left,
+            in_exc, cooldown_left, (unsigned)i_stat, (unsigned)i_mask,
+            (unsigned long long)vb_r, (unsigned long long)vb_d,
+            (unsigned long long)vb_a, (unsigned)tcb,
+            (int)gp_a, (int)gp_b, (unsigned long long)dirty_blks,
+            (unsigned long long)d_dirty_insns, (unsigned long long)d_dirty_pump,
+            (unsigned long long)d_stores,
+            (unsigned)sr, iec, im2, (unsigned)cause,
+            (unsigned long long)d_cyc, host_ms,
+            (unsigned long long)d_entry, (unsigned long long)d_fsr,
+            (unsigned long long)d_fnone, (unsigned long long)d_mid,
+            (unsigned long long)d_eval, (unsigned long long)d_irqd,
+            (unsigned long long)d_ci_unit, (unsigned long long)d_ci_supp,
+            (unsigned long long)d_ci_none, (unsigned long long)d_ci_sr,
+            (unsigned long long)d_ci_deliv, (unsigned long long)d_ci_enter,
+            (unsigned long long)d_adv_calls, (unsigned long long)d_adv_sum,
+            (unsigned)adv_max, (unsigned long long)d_svc,
+            (unsigned long long)d_idle_n, (unsigned long long)d_idle_cyc,
+            (unsigned long long)d_hz_hits, (unsigned long long)d_hz_cyc);
+    }
+    if (s_post_load_probe_left == 0) {
+        if (s_post_load_probe_in_stall) {
+            post_load_probe_stall_pc_dump("done-still-stalled");
+            post_load_probe_live_pc_dump("done-still-stalled");
+        }
+        g_plp_cycle_diag = 0;
+        std::fprintf(stderr,
+            "post_load_probe DONE: n=%d swap_tot=%llu skip_tot=%llu "
+            "dirty_tot=%llu gp0_tot=%llu\n",
+            s_post_load_probe_i,
+            (unsigned long long)s_post_load_probe_swap_tot,
+            (unsigned long long)s_post_load_probe_skip_tot,
+            (unsigned long long)s_post_load_probe_dirty_tot,
+            (unsigned long long)s_post_load_probe_gp0_tot);
+    }
 }
 
 /* Called from savestate_poll after a successful restore (before scheduler
@@ -394,11 +825,14 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     s_frame_pacer = FramePacer{ 0 };
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
+    /* Re-anchor guest-cycle→sample budgeting (pump clears queued PCM too). */
+    g_audio_cycle_resync = 1;
     /* GL present-dirty early-out can skip SwapWindow when the restored frame
      * matches the last swap (typical on 2nd+ load of the same slot). Invalidate
      * tiles + force several swaps so the window actually updates. Safe no-op
      * when the GL pipeline was never brought up. */
     gl_renderer_invalidate_present();
+    post_load_probe_arm();
 }
 
 static uint64_t smooth_60_frame_hash(const uint32_t* pixels, size_t count) {
@@ -1273,6 +1707,16 @@ static void sdl_audio_pump(bool discard_output = false) {
     static uint64_t last_cycles = 0;
     static uint64_t cycle_carry = 0;
     const uint64_t now_cycles = psx_cycle_count;
+    if (g_audio_cycle_resync) {
+        last_cycles = now_cycles;
+        cycle_carry = 0;
+        g_audio_cycle_resync = 0;
+        if (legacy)
+            SDL_ClearQueuedAudio(sdl_audio_device);
+        else
+            g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
+        return;
+    }
     if (last_cycles == 0) last_cycles = now_cycles;
     uint64_t delta = (now_cycles - last_cycles) + cycle_carry;
     last_cycles = now_cycles;
@@ -3076,16 +3520,59 @@ static void load_transition_note(int read_active, int load_active,
     prev_turbo = turbo_active;
 }
 
-/* Depth24 FMV: last ~8 RGB columns can be stale/chroma junk while CRTC width
- * stays full (e.g. MotK 512). Present width is never shrunk — cropping the
- * GL/SDL rect left a flickering black pillar when upload coverage varied.
+/* Tick MotK-style depth24 cutover state once per present. Arm a short full-
+ * frame blank when MDEC returns after an idle gap (or after leaving depth24). */
+static void depth24_cutover_tick(int depth24) {
+    const int mdec_on = depth24 && mdec_recently_active(3);
+    if (!depth24) {
+        s_d24_prev_mdec = 0;
+        s_d24_cutover_blank = 0;
+        s_d24_saw_gap = 1; /* next depth24+MDEC is a fresh movie cutover */
+        return;
+    }
+    if (!mdec_on)
+        s_d24_saw_gap = 1;
+    if (s_d24_saw_gap && mdec_on && !s_d24_prev_mdec) {
+        /* Hide the transitional present(s) that still show stale RGB888 junk. */
+        s_d24_cutover_blank = 2;
+        s_d24_saw_gap = 0;
+    }
+    s_d24_prev_mdec = mdec_on;
+}
+
+/* Depth24 FMV: CRTC width stays full (e.g. MotK 512) while MDEC uploads may
+ * not cover the right side yet — cutover flashes a large colorful junk block
+ * when leftover VRAM is read as RGB888. Present width is never shrunk
+ * (cropping caused a flickering black pillar); black-fill uncovered columns.
  *
- * Do NOT replicate the last good column: on MotK's starfield intro that turns
- * a single tinted edge pixel into an 8-wide horizontal streak (flickering
- * stretch into the pillar). Black-fill the margin instead. Require a dense
- * chroma signal so sparse stars never trip the repair. */
-static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h) {
-    if (!buf || w < 24u || h == 0u) return;
+ * 0) Cutover hold: full-frame black for the first presents after an MDEC gap
+ * 1) Upload-span blank: [gpu_depth24_rgb_limit .. w)
+ * 2) Chroma fringe: if span reports full, still black the last ~8 cols when
+ *    dense chroma junk is present (MotK crawl). Do NOT replicate the last
+ *    good column — that stretched a tinted edge into an 8-wide streak. */
+static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
+                                          uint32_t display_x) {
+    if (!buf || w == 0u || h == 0u) return;
+
+    if (s_d24_cutover_blank > 0) {
+        s_d24_cutover_blank--;
+        const uint32_t n = w * h;
+        for (uint32_t i = 0; i < n; i++)
+            buf[i] = 0xFF000000u;
+        return;
+    }
+
+    uint32_t good = gpu_depth24_rgb_limit(display_x, w);
+    if (good > w) good = w;
+    if (good < w) {
+        for (uint32_t y = 0; y < h; y++) {
+            for (uint32_t x = good; x < w; x++)
+                buf[y * w + x] = 0xFF000000u;
+        }
+        return; /* span blank already covered the junk region */
+    }
+
+    if (w < 24u) return;
     const uint32_t margin = 8u;
     const uint32_t edge = w - margin;
     const uint32_t total = margin * h;
@@ -3112,6 +3599,16 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h) {
 
 /* Called from gpu_vblank_tick() at each simulated vblank. */
 static void sdl_vblank_present(void) {
+    int probe_turbo = 0;
+    int probe_reached = 0;
+    struct PostLoadProbeScope {
+        int *turbo;
+        int *reached;
+        ~PostLoadProbeScope() {
+            post_load_probe_on_vblank(*turbo, *reached);
+        }
+    } probe_scope{&probe_turbo, &probe_reached};
+
 #ifndef PSX_NO_DEBUG_TOOLS
     debug_server_set_fmv_quiet(mdec_recently_active(2));
     /* Debug server: pause gate, poll commands, record frame, check watchpoints. */
@@ -3310,8 +3807,10 @@ static void sdl_vblank_present(void) {
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
             /* Post-starvation / behind-peer catch-up: skip wall pace so admits
-             * can burn down remote tip (mirrors snes_host_catchup_budget). */
-            if (psx_netplay_catchup_budget() > 0) {
+             * can burn down remote tip (mirrors snes_host_catchup_budget).
+             * Never unpace during depth24 FMV — catch-up would race XA/video
+             * ahead of wall clock (~90fps) and make movies play too fast. */
+            if (!gpu_display_is_depth24() && psx_netplay_catchup_budget() > 0) {
                 psx_netplay_catchup_consume_frame();
                 return;
             }
@@ -3356,9 +3855,13 @@ static void sdl_vblank_present(void) {
      * sampled into SIO.  Always-on; queried via the debug server "latency". */
     latency_ring_frame_begin();
 
+    /* Post-savestate CD delay boost (ReadTOC/seek clamp window). */
+    cdrom_savestate_boost_vblank();
+
     /* Turbo-active test shared by the pacing/present gate below. */
     int turbo_loads_active = 0;
-    int logical_load_active = fntrace_is_game_started() && cdrom_load_in_progress();
+    int logical_load_active = fntrace_is_game_started() &&
+        (cdrom_load_in_progress() || cdrom_savestate_cd_wait_active());
     int load_run_value = 0;
     static int load_run = 0;
     static int release_run = 0;
@@ -3389,6 +3892,7 @@ static void sdl_vblank_present(void) {
      * old fast_boot snapshot restore; all guest timing is authentic. */
     if (psx_bios_hle_boot_turbo_active())
         turbo_loads_active = 1;
+    probe_turbo = turbo_loads_active;
 
     load_transition_note(cdrom_data_read_active(), logical_load_active,
                          turbo_loads_active, load_run_value);
@@ -3509,12 +4013,12 @@ static void sdl_vblank_present(void) {
         }
     }
 
-    /* Netplay FMV: skip present every other depth24 vblank (admit still runs
-     * in the RAII tail). Present-first frame, then alternate. */
+    /* Netplay FMV: skip present every other depth24 vblank to cut GPU cost
+     * (admit + wall pace still run in the RAII tail every tick). Do NOT skip
+     * pace here — that let MotK movies run ~90fps once decode was fast enough. */
     if (psx_netplay_active() && gpu_display_is_depth24()) {
         if (s_netplay_depth24_present_skip) {
             s_netplay_depth24_present_skip = 0;
-            netplay_tail.skip_pace();
             return;
         }
         s_netplay_depth24_present_skip = 1;
@@ -3561,6 +4065,7 @@ static void sdl_vblank_present(void) {
     }
 
     /* ---- Display from our VRAM ---- */
+    probe_reached = 1;
     uint32_t w = 0, h = 0;
     uint32_t present_w = 0;  /* display width actually presented (w + native-wide EXTRA) */
     int active_scale = 1;   /* hi-res mirror used only for 15-bit display */
@@ -3574,6 +4079,7 @@ static void sdl_vblank_present(void) {
         GpuDisplayInfo di;
         gpu_get_display_info(&di);
         depth24_frame = di.depth24 != 0;
+        depth24_cutover_tick(depth24_frame ? 1 : 0);
         if (di.disabled || di.width == 0 || di.height == 0) {
             smooth_60_present(nullptr, 0, 0, false);
             present_ring_commit(PRES_PATH_BLANK, (uint16_t)di.width,
@@ -3684,9 +4190,10 @@ static void sdl_vblank_present(void) {
                     for (uint32_t x = 0; x < present_w; x++)
                         sdl_pixel_buf[y * present_w + x] =
                             gpu_display_pixel_argb(&di, x, y);
-                /* Trailing margin: replicate last good column into junk cols
+                /* Trailing / cutover blank: black-fill uncovered RGB cols
                  * inside the full-width buffer — never shrink present width. */
-                depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h);
+                depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
+                                             di.display_x);
                 vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w, (int)h,
                                         0 /* nearest */, fmv_frame ? 1 : 0);
             } else if (wide_present &&
@@ -3748,11 +4255,12 @@ static void sdl_vblank_present(void) {
             }
         }
 
-        /* Depth24 trailing margin: MotK CRTC is 512 RGB but the last ~8 cols
-         * can be stale. Fix pixels in-place at full present_w — never crop the
-         * GL/SDL draw width (that caused a flickering black pillar). */
+        /* Depth24 trailing / cutover blank: MotK CRTC is 512 RGB but uploads
+         * may not cover the right side yet (colorful junk flash). Fix pixels
+         * in-place at full present_w — never crop the GL/SDL draw width. */
         if (di.depth24 && active_scale == 1 && !wide_present)
-            depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h);
+            depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
+                                         di.display_x);
 
         smooth_60_present(sdl_pixel_buf,
                           present_w * (uint32_t)active_scale,
@@ -5754,7 +6262,7 @@ namespace {
                 out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
             else
                 out->is_host = (mem.slot == 0) ? 1 : 0;
-            out->latency_ms = -1;
+            out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
             return 1;
         }
         if (ae_np_use_lan_members()) {
@@ -5786,7 +6294,7 @@ namespace {
             out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
         else
             out->is_host = (mem.slot == 0) ? 1 : 0;
-        out->latency_ms = -1;
+        out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
         return 1;
     }
 
@@ -6051,10 +6559,16 @@ int main(int argc, char** argv) {
     std::setvbuf(stderr, nullptr, _IOLBF, 0);
     std::fprintf(stderr, "psxrecomp: main() entered\n");
     std::fflush(stderr);
+#if defined(RECOMP_LAUNCHER)
+    launcher_boot_timing_mark("host:main_enter");
+#endif
 
     /* Install crash handlers early so they catch issues during init too.
      * Writes psx_last_run_report.json on signal/SEH/atexit/fail-fast. */
     psx_crash_trace_install_handlers();
+#if defined(RECOMP_LAUNCHER)
+    launcher_boot_timing_mark("host:crash_handlers");
+#endif
 
     const char* bios_path = PSX_DEFAULT_BIOS_PATH;
     const char* game_config_path = nullptr;
@@ -6247,6 +6761,19 @@ std::string player_device[PSX_MAX_PLAYERS];
      * path is resolved (arm_text_image_guard). */
     std::string text_guard_exe_path;
     uint32_t    text_guard_load_addr = 0;
+
+    /* Overlay cache init is deferred until after the launcher window so ABI
+     * preflight / resident DLL loads do not delay first paint. */
+    bool deferred_overlay_cache = false;
+    std::filesystem::path deferred_overlay_project_root;
+    std::vector<uint32_t> deferred_overlay_native_block;
+    std::string deferred_overlay_backend;
+    bool deferred_has_overlay_ac = false;
+    std::string deferred_overlay_ac;
+    bool deferred_has_overlay_ac_tcc = false;
+    std::string deferred_overlay_ac_tcc;
+    bool deferred_overlay_capture_history = false;
+    std::string deferred_overlay_capture_persist_dir;
 
     if (game_config_path) {
         try {
@@ -6474,167 +7001,20 @@ std::string player_device[PSX_MAX_PLAYERS];
                     "psxrecomp: overlay_region_floor = 0x%05X (game text end)\n",
                     g_overlay_region_floor);
             }
-            /* Overlay DLL cache (Layer A). Off unless enabled in [runtime];
-             * when on, capture overlay bytes and scan cache/<game_id>/ for
-             * precompiled overlay DLLs. */
+            /* Overlay DLL cache (Layer A): stash config now; heavy init
+             * (cache scan / ABI preflight / resident LoadLibrary) runs after
+             * the launcher window so first UI paint is not blocked. */
             if (gc.runtime.overlay_cache) {
-                std::filesystem::path exe_dir = exe_dir_from_argv(argv[0]);
-                std::string cache_dir = (exe_dir / "cache").string();
-                std::filesystem::path captures_path =
-                    resolve_overlay_capture_path(gc.project_root, exe_dir, game_id);
-                if (!overlay_capture_set_path(captures_path.string().c_str())) {
-                    captures_path = exe_dir / "overlay_captures.json";
-                    if (!overlay_capture_set_path(captures_path.string().c_str()))
-                        throw std::runtime_error("overlay capture path exceeds runtime limit");
-                }
-                overlay_capture_set_enabled(1);
-                std::fprintf(stdout,
-                    "psxrecomp: additive overlay capture store = %s (+ .d history)\n",
-                    captures_path.string().c_str());
-                std::string capture_persist_dir;
-                if (gc.runtime.overlay_capture_history &&
-                    !gc.runtime.overlay_capture_persist_dir.empty()) {
-                    std::filesystem::path persist =
-                        gc.project_root / gc.runtime.overlay_capture_persist_dir;
-                    std::error_code persist_ec;
-                    std::filesystem::create_directories(persist, persist_ec);
-                    if (persist_ec) {
-                        std::fprintf(stderr,
-                            "psxrecomp: cannot create overlay capture history %s: %s\n",
-                            persist.string().c_str(), persist_ec.message().c_str());
-                    } else {
-                        capture_persist_dir = persist.string();
-                    }
-                }
-                overlay_capture_configure_history(
-                    gc.runtime.overlay_capture_history ? 1 : 0,
-                    capture_persist_dir.empty() ? nullptr :
-                        capture_persist_dir.c_str(),
-                    game_id.c_str());
-                overlay_loader_init(cache_dir.c_str(), game_id.c_str());
-                for (uint32_t addr : gc.runtime.overlay_native_block) {
-                    overlay_loader_native_block_add(addr);
-                }
-                if (!gc.runtime.overlay_native_block.empty()) {
-                    std::fprintf(stdout,
-                        "psxrecomp: overlay native blocklist seeded with %zu entr%s\n",
-                        gc.runtime.overlay_native_block.size(),
-                        gc.runtime.overlay_native_block.size() == 1 ? "y" : "ies");
-                }
-                /* Scoped pre-DMA journaling and the shutdown snapshot remain
-                 * active whenever the cache is on, including toolchain-less
-                 * production machines. The periodic pressure trigger exists to
-                 * feed a live compiler; leave it off when no provider command
-                 * exists, otherwise it rewrites manifests every cooldown while
-                 * being unable to reduce interpreter residency. */
-                overlay_autocapture_set_enabled(0);
-                /* Resolve the overlay tier first so we wire the RIGHT compiler's
-                 * autocompile command. gcc is "available" only when a gcc cmd is
-                 * configured AND a gcc toolchain is actually reachable (a real
-                 * dev/production box). auto => gcc if so, else tcc; auto-no-gcc =>
-                 * tcc even with gcc present (simulate a toolchain-less user box).
-                 * env PSX_OVERLAY_BACKEND overrides. Tiers: static > gcc > tcc >
-                 * interp. */
-                const char *cfg_backend = gc.runtime.overlay_backend.empty()
-                        ? nullptr : gc.runtime.overlay_backend.c_str();
-                int gcc_avail = gc.runtime.has_overlay_autocompile_cmd
-                                && autocompile_toolchain_available();
-                OverlayBackend eff = overlay_backend_resolve(cfg_backend, gcc_avail);
-                /* gcc and tcc run the IDENTICAL recompiler->C->DLL->load pipeline;
-                 * only the compiler binary differs. Wire the autocompile spawn with
-                 * the command for the resolved tier (tcc cmd for the tcc tier, gcc
-                 * cmd otherwise). gcc shards already on disk still LOAD either way
-                 * (the loader is compiler-blind), so a tcc box uses shipped gcc
-                 * shards first and fills the rest with tcc. */
-                std::string built_tcc_cmd;  /* runtime-constructed bundled tcc cmd */
-                std::string env_ac_cmd;
-                const std::string *ac_cmd = nullptr;
-                if (eff == OVERLAY_BACKEND_TCC) {
-                    if (gc.runtime.has_overlay_autocompile_cmd_tcc) {
-                        ac_cmd = &gc.runtime.overlay_autocompile_cmd_tcc;  /* explicit override (dev) */
-                    } else {
-                        /* PRODUCTION: construct the tcc autocompile cmd from the
-                         * self-contained toolchain bundled beside the exe
-                         * (<exe>/overlay_toolchain/ = embedded python + tcc +
-                         * recompiler + compile_overlays.py + runtime headers). No
-                         * system python or gcc required. */
-                        extern int g_psx_cps_mode;
-                        std::filesystem::path xd = exe_dir_from_argv(argv[0]);
-                        std::filesystem::path tk = xd / "overlay_toolchain";
-                        std::filesystem::path py = tk / "python" / "python.exe";
-                        if (std::filesystem::exists(py)) {
-                            auto cmd_quote = [](const std::string& s) {
-                                return std::string("\"") + s + "\"";
-                            };
-                            built_tcc_cmd =
-                                cmd_quote(py.string()) + " " +
-                                cmd_quote((tk / "compile_overlays.py").string()) +
-                                " --captures " + cmd_quote(captures_path.string()) +
-                                " --game-toml " + cmd_quote(std::string(
-                                    game_config_path ? game_config_path : "game.toml")) +
-                                " --recompiler " + cmd_quote((tk / "psxrecomp-game.exe").string()) +
-                                " --runtime-include " + cmd_quote((tk / "include").string()) +
-                                " --out-dir " + cmd_quote((xd / "cache").string()) +
-                                (g_psx_cps_mode ? " --cps" : "") +
-                                " --compiler tcc --tcc " +
-                                cmd_quote((tk / "tcc" / "tcc.exe").string());
-                            ac_cmd = &built_tcc_cmd;
-                            std::fprintf(stdout,
-                                "psxrecomp: tcc tier using bundled toolchain (%s)\n",
-                                tk.string().c_str());
-                        } else {
-                            std::fprintf(stdout,
-                                "psxrecomp: tcc tier active but no bundled toolchain at %s "
-                                "(overlay gaps -> interpreter)\n", tk.string().c_str());
-                        }
-                    }
-                } else {
-                    if (gc.runtime.has_overlay_autocompile_cmd)
-                        ac_cmd = &gc.runtime.overlay_autocompile_cmd;
-                }
-                /* A developer may run a game config from one checkout against a
-                 * runtime/recompiler built in another worktree. Let the launch
-                 * pin the producer command to that exact worktree so the baked
-                 * codegen hash, additive-capture reader, and runtime headers
-                 * cannot silently drift through a game-repo junction. */
-                if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CMD")) {
-                    if (e[0]) {
-                        env_ac_cmd = e;
-                        ac_cmd = &env_ac_cmd;
-                        std::fprintf(stdout,
-                            "psxrecomp: overlay autocompile command overridden by environment\n");
-                    }
-                }
-                if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_OFF")) {
-                    if (e[0] && e[0] != '0') {
-                        ac_cmd = nullptr;
-                        std::fprintf(stdout,
-                            "psxrecomp: overlay autocompile disabled by environment\n");
-                    }
-                }
-                if (ac_cmd) {
-                    /* Pin the compile's WRITE cache + READ captures to the SAME
-                     * canonical locations the loader uses (cache_dir = <exe>/cache,
-                     * <exe>/overlay_captures.json — set above). The framework owns
-                     * the cache location; no game.toml --out-dir/--captures can make
-                     * the write drift from the read. Single source of truth, all
-                     * games, dev or prod. */
-                    autocompile_set_cache_paths(cache_dir.c_str(),
-                                                captures_path.string().c_str());
-                    std::string ac_cwd = gc.project_root.string();
-                    if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CWD")) {
-                        if (e[0]) ac_cwd = e;
-                    }
-                    autocompile_configure(ac_cmd->c_str(), ac_cwd.c_str());
-                    overlay_autocapture_set_enabled(1);
-                    std::fprintf(stdout,
-                        "psxrecomp: overlay autocompile enabled (%s); cache=%s; captures=%s\n",
-                        overlay_backend_name(eff), cache_dir.c_str(),
-                        captures_path.string().c_str());
-                }
-                code_provider_init(cfg_backend, gcc_avail);
-                /* (sljit removed 2026-07-15: overlay_loader_apply_live_policy was
-                 * called here once the backend resolved.) */
+                deferred_overlay_cache = true;
+                deferred_overlay_project_root = gc.project_root;
+                deferred_overlay_native_block = gc.runtime.overlay_native_block;
+                deferred_overlay_backend = gc.runtime.overlay_backend;
+                deferred_has_overlay_ac = gc.runtime.has_overlay_autocompile_cmd;
+                deferred_overlay_ac = gc.runtime.overlay_autocompile_cmd;
+                deferred_has_overlay_ac_tcc = gc.runtime.has_overlay_autocompile_cmd_tcc;
+                deferred_overlay_ac_tcc = gc.runtime.overlay_autocompile_cmd_tcc;
+                deferred_overlay_capture_history = gc.runtime.overlay_capture_history;
+                deferred_overlay_capture_persist_dir = gc.runtime.overlay_capture_persist_dir;
             }
             std::fprintf(stdout, "psxrecomp: loaded game config %s (%s, %s)\n",
                          game_config_path, game_name.c_str(), game_id.c_str());
@@ -6644,6 +7024,9 @@ std::string player_device[PSX_MAX_PLAYERS];
             return 1;
         }
     }
+#if defined(RECOMP_LAUNCHER)
+    launcher_boot_timing_mark("host:game_config_done");
+#endif
 
     if (!game_name.empty()) s_picker_game_name = game_name;
 
@@ -6862,11 +7245,154 @@ std::string player_device[PSX_MAX_PLAYERS];
     }
 
 #if defined(RECOMP_LAUNCHER)
+    launcher_boot_timing_mark("host:pre_overlay_worker");
+#endif
+    /* Overlay cache: run ABI preflight / resident DLL loads on a worker so the
+     * launcher can open immediately and init overlaps with UI time. Join before
+     * guest boot. When the launcher is skipped, the join still runs below. */
+    std::thread overlay_init_thread;
+    std::exception_ptr overlay_init_exc;
+    auto run_deferred_overlay_init = [&]() {
+        std::filesystem::path exe_dir = exe_dir_from_argv(argv[0]);
+        std::string cache_dir = (exe_dir / "cache").string();
+        std::filesystem::path captures_path =
+            resolve_overlay_capture_path(deferred_overlay_project_root, exe_dir, game_id);
+        if (!overlay_capture_set_path(captures_path.string().c_str())) {
+            captures_path = exe_dir / "overlay_captures.json";
+            if (!overlay_capture_set_path(captures_path.string().c_str())) {
+                throw std::runtime_error(
+                    "overlay capture path exceeds runtime limit");
+            }
+        }
+        overlay_capture_set_enabled(1);
+        std::fprintf(stdout,
+            "psxrecomp: additive overlay capture store = %s (+ .d history)\n",
+            captures_path.string().c_str());
+        std::string capture_persist_dir;
+        if (deferred_overlay_capture_history &&
+            !deferred_overlay_capture_persist_dir.empty()) {
+            std::filesystem::path persist =
+                deferred_overlay_project_root / deferred_overlay_capture_persist_dir;
+            std::error_code persist_ec;
+            std::filesystem::create_directories(persist, persist_ec);
+            if (persist_ec) {
+                std::fprintf(stderr,
+                    "psxrecomp: cannot create overlay capture history %s: %s\n",
+                    persist.string().c_str(), persist_ec.message().c_str());
+            } else {
+                capture_persist_dir = persist.string();
+            }
+        }
+        overlay_capture_configure_history(
+            deferred_overlay_capture_history ? 1 : 0,
+            capture_persist_dir.empty() ? nullptr :
+                capture_persist_dir.c_str(),
+            game_id.c_str());
+        overlay_loader_init(cache_dir.c_str(), game_id.c_str());
+        for (uint32_t addr : deferred_overlay_native_block) {
+            overlay_loader_native_block_add(addr);
+        }
+        if (!deferred_overlay_native_block.empty()) {
+            std::fprintf(stdout,
+                "psxrecomp: overlay native blocklist seeded with %zu entr%s\n",
+                deferred_overlay_native_block.size(),
+                deferred_overlay_native_block.size() == 1 ? "y" : "ies");
+        }
+        overlay_autocapture_set_enabled(0);
+        const char *cfg_backend = deferred_overlay_backend.empty()
+                ? nullptr : deferred_overlay_backend.c_str();
+        int gcc_avail = deferred_has_overlay_ac
+                        && autocompile_toolchain_available();
+        OverlayBackend eff = overlay_backend_resolve(cfg_backend, gcc_avail);
+        std::string built_tcc_cmd;
+        std::string env_ac_cmd;
+        const std::string *ac_cmd = nullptr;
+        if (eff == OVERLAY_BACKEND_TCC) {
+            if (deferred_has_overlay_ac_tcc) {
+                ac_cmd = &deferred_overlay_ac_tcc;
+            } else {
+                extern int g_psx_cps_mode;
+                std::filesystem::path xd = exe_dir_from_argv(argv[0]);
+                std::filesystem::path tk = xd / "overlay_toolchain";
+                std::filesystem::path py = tk / "python" / "python.exe";
+                if (std::filesystem::exists(py)) {
+                    auto cmd_quote = [](const std::string& s) {
+                        return std::string("\"") + s + "\"";
+                    };
+                    built_tcc_cmd =
+                        cmd_quote(py.string()) + " " +
+                        cmd_quote((tk / "compile_overlays.py").string()) +
+                        " --captures " + cmd_quote(captures_path.string()) +
+                        " --game-toml " + cmd_quote(std::string(
+                            game_config_path ? game_config_path : "game.toml")) +
+                        " --recompiler " + cmd_quote((tk / "psxrecomp-game.exe").string()) +
+                        " --runtime-include " + cmd_quote((tk / "include").string()) +
+                        " --out-dir " + cmd_quote((xd / "cache").string()) +
+                        (g_psx_cps_mode ? " --cps" : "") +
+                        " --compiler tcc --tcc " +
+                        cmd_quote((tk / "tcc" / "tcc.exe").string());
+                    ac_cmd = &built_tcc_cmd;
+                    std::fprintf(stdout,
+                        "psxrecomp: tcc tier using bundled toolchain (%s)\n",
+                        tk.string().c_str());
+                } else {
+                    std::fprintf(stdout,
+                        "psxrecomp: tcc tier active but no bundled toolchain at %s "
+                        "(overlay gaps -> interpreter)\n", tk.string().c_str());
+                }
+            }
+        } else {
+            if (deferred_has_overlay_ac)
+                ac_cmd = &deferred_overlay_ac;
+        }
+        if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CMD")) {
+            if (e[0]) {
+                env_ac_cmd = e;
+                ac_cmd = &env_ac_cmd;
+                std::fprintf(stdout,
+                    "psxrecomp: overlay autocompile command overridden by environment\n");
+            }
+        }
+        if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_OFF")) {
+            if (e[0] && e[0] != '0') {
+                ac_cmd = nullptr;
+                std::fprintf(stdout,
+                    "psxrecomp: overlay autocompile disabled by environment\n");
+            }
+        }
+        if (ac_cmd) {
+            autocompile_set_cache_paths(cache_dir.c_str(),
+                                        captures_path.string().c_str());
+            std::string ac_cwd = deferred_overlay_project_root.string();
+            if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CWD")) {
+                if (e[0]) ac_cwd = e;
+            }
+            autocompile_configure(ac_cmd->c_str(), ac_cwd.c_str());
+            overlay_autocapture_set_enabled(1);
+            std::fprintf(stdout,
+                "psxrecomp: overlay autocompile enabled (%s); cache=%s; captures=%s\n",
+                overlay_backend_name(eff), cache_dir.c_str(),
+                captures_path.string().c_str());
+        }
+        code_provider_init(cfg_backend, gcc_avail);
+    };
+
+    if (deferred_overlay_cache) {
+        overlay_init_thread = std::thread([&]() {
+            try {
+                run_deferred_overlay_init();
+            } catch (...) {
+                overlay_init_exc = std::current_exception();
+            }
+        });
+    }
+
+#if defined(RECOMP_LAUNCHER)
     /* Integrated recomp-ui launcher: shown in its own GL window before the emulator
      * boots. Seeded with the effective settings (game.toml ∪ settings.toml);
      * on LAUNCH the user's choices are persisted to settings.toml and applied.
-     * The launcher window/context is fully torn down before the emulator's own
-     * window is created, so the emulator boot path below is untouched.
+     * The launcher window/GL context is destroyed afterward, but SDL subsystems
+     * stay initialized so the game window can open without a second SDL_Init.
      *
      * Skip the GUI (boot straight in) when ANY of: PSX_NO_LAUNCHER=1 env,
      * --no-launcher, or the persisted [launcher] skip_launcher setting — unless
@@ -6876,7 +7402,10 @@ std::string player_device[PSX_MAX_PLAYERS];
         force_launcher ||
         (!std::getenv("PSX_NO_LAUNCHER") && !force_no_launcher && !skip_launcher_setting);
     if (want_launcher) {
+        launcher_boot_timing_mark("host:before_sdl_init");
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0) {
+            launcher_boot_timing_mark("host:after_sdl_init");
+            recomp_launcher_set_preserve_sdl(1);
             int lr = 2; /* 0 = launch, 1 = quit, 2 = unavailable */
             PSXRecompV4::UserSettings seed;
             seed.renderer = g_video_renderer;             seed.has_renderer = true;
@@ -7124,6 +7653,7 @@ std::string player_device[PSX_MAX_PLAYERS];
                 }
                 gi.needs_setup = (!bios_ok || !disc_ok) ? 1 : 0;
             }
+            launcher_boot_timing_mark("host:setup_checks_done");
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
             g_lnch_game_players = game_players;
@@ -7137,9 +7667,11 @@ std::string player_device[PSX_MAX_PLAYERS];
 #endif
 
             char rui_out_disc[1024] = {0};
+            launcher_boot_timing_mark("host:before_run_window");
             int rui_rc = recomp_launcher_run_window(
                 rui_title.c_str(), &ls, &gi, assets_dir_str.c_str(),
                 rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));
+            launcher_boot_timing_mark("host:after_run_window");
 
             lr = rui_rc;
 
@@ -7252,6 +7784,9 @@ std::string player_device[PSX_MAX_PLAYERS];
 
             if (lr == 1) {
                 std::fprintf(stdout, "psxrecomp: launcher closed; exiting.\n");
+                if (overlay_init_thread.joinable())
+                    overlay_init_thread.join();
+                SDL_Quit();
                 return 0;
             }
             if (lr == 0) {
@@ -7331,6 +7866,20 @@ std::string player_device[PSX_MAX_PLAYERS];
         }
     }
 #endif
+
+    if (overlay_init_thread.joinable()) {
+        overlay_init_thread.join();
+        if (overlay_init_exc) {
+            try {
+                std::rethrow_exception(overlay_init_exc);
+            } catch (const std::exception& ex) {
+                std::fprintf(stderr, "psxrecomp: overlay cache init failed: %s\n",
+                             ex.what());
+                return 1;
+            }
+        }
+    }
+
 
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
@@ -7845,10 +8394,14 @@ session_reboot:
                 nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
             return 1;
         }
-        std::printf("psxrecomp: netplay LAN slot=%d input_player=%d delay=%d "
-                    "bind=%s peer=%s session=%u\n",
+        std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
+                    "force_turn=%d bind=%s peer=%s session=%u\n",
+                    psx_netplay_transport_name(),
                     net_cfg.local_slot, net_cfg.input_player, net_cfg.input_delay,
-                    net_cfg.bind_hostport, net_cfg.peer_hostport,
+                    net_cfg.force_turn ? 1 : 0,
+                    net_cfg.bind_hostport,
+                    (std::strcmp(psx_netplay_transport_name(), "ice") == 0)
+                        ? "(ice)" : net_cfg.peer_hostport,
                     (unsigned)net_cfg.session_id);
     }
 
@@ -8219,6 +8772,7 @@ soft_return_lobby:
         gi.memcard_inspect = ae_memcard_inspect;
 
         char rui_out_disc[1024] = {0};
+        recomp_launcher_set_preserve_sdl(1);
         const int rui_rc = recomp_launcher_run_window(
             rui_title.c_str(), &ls, &gi, assets_dir_str.c_str(),
             rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));

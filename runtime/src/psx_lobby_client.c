@@ -51,6 +51,33 @@ const PsxLobbyMatchCaps *psx_lobby_match_caps(void)
 int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
 int  psx_lobby_member_count(void) { return 0; }
 int  psx_lobby_member_get(int index, PsxLobbyMember *out) { (void)index; (void)out; return 0; }
+int  psx_lobby_member_latency_ms(int slot) { (void)slot; return -1; }
+int  psx_lobby_member_is_host(const PsxLobbyMember *member)
+{
+    (void)member;
+    return 0;
+}
+int  psx_lobby_send_signal(int type, int flag, const char *text)
+{
+    (void)type;
+    (void)flag;
+    (void)text;
+    return -1;
+}
+int  psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap)
+{
+    (void)type;
+    (void)flag;
+    (void)text;
+    (void)text_cap;
+    return 0;
+}
+int  psx_lobby_request_turn_credentials(void) { return -1; }
+const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void)
+{
+    static PsxLobbyTurnCredentials z;
+    return &z;
+}
 int  psx_lobby_local_ready(void) { return 0; }
 int  psx_lobby_all_ready(void) { return 0; }
 int  psx_lobby_set_ready(int ready) { (void)ready; return -1; }
@@ -118,12 +145,73 @@ typedef struct {
     PsxLobbyMatchCaps match_caps;
     char pending_tx[8][2048];
     int pending_n;
+    /* Inbound ICE signals (WS op:signal). */
+    struct {
+        int type;
+        int flag;
+        char text[2048];
+    } sig_q[32];
+    int sig_head;
+    int sig_tail;
+    int sig_count;
+    /* Coturn mint from WS get_turn_credentials. */
+    PsxLobbyTurnCredentials turn;
+    time_t turn_received_at;
+    int turn_request_pending;
+    /* Waiting-room latency (ms) keyed by pad slot; -1 = unknown. */
+    int member_rtt_ms[PSX_LOBBY_MAX_MEMBERS];
+    uint64_t rtt_next_ping_ms;
 } LobbyClient;
 
 static LobbyClient g_lc = {
     .fd = -1,
     .filter_game_version = PSX_GAME_VERSION,
 };
+
+enum {
+    PSX_LOBBY_SIG_RTT_PING = 100,
+    PSX_LOBBY_SIG_RTT_PONG = 101,
+    PSX_LOBBY_SIG_RTT_REPORT = 102
+};
+
+static uint64_t lobby_mono_ms(void)
+{
+#if defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000ull +
+               (uint64_t)ts.tv_nsec / 1000000ull;
+#endif
+    return (uint64_t)time(NULL) * 1000ull;
+}
+
+/* Defined later; used by waiting-room RTT signal handling. */
+int psx_lobby_send_signal(int type, int flag, const char *text);
+
+static void member_rtt_clear(void)
+{
+    int i;
+    for (i = 0; i < PSX_LOBBY_MAX_MEMBERS; ++i)
+        g_lc.member_rtt_ms[i] = -1;
+    g_lc.rtt_next_ping_ms = 0;
+}
+
+static int member_slot_for_player(const char *player_id)
+{
+    int i;
+    if (!player_id || !player_id[0])
+        return -1;
+    for (i = 0; i < g_lc.member_count; ++i) {
+        if (strcmp(g_lc.members[i].player_id, player_id) == 0)
+            return g_lc.members[i].slot;
+    }
+    return -1;
+}
+
+static int local_member_slot(void)
+{
+    return member_slot_for_player(g_lc.player_id);
+}
 
 /* Default max_slots for create (clamped 2..8). */
 static int g_lobby_max_slots = 2;
@@ -156,6 +244,24 @@ static int list_filter_version_strict(void)
 }
 
 static void queue_send(const char *json);
+static void clear_turn_credentials(void);
+static int queue_turn_credentials_request(void);
+
+static void clear_turn_credentials(void)
+{
+    memset(&g_lc.turn, 0, sizeof(g_lc.turn));
+    g_lc.turn_received_at = 0;
+    g_lc.turn_request_pending = 0;
+}
+
+static int queue_turn_credentials_request(void)
+{
+    if (!psx_lobby_connected())
+        return -1;
+    queue_send("{\"op\":\"get_turn_credentials\"}");
+    g_lc.turn_request_pending = 1;
+    return 0;
+}
 
 static void queue_list_request(void)
 {
@@ -265,11 +371,71 @@ static const char *json_get_str(const char *json, const char *key, char *out, si
     while (*p && *p != '"' && o + 1 < cap) {
         if (*p == '\\' && p[1]) {
             ++p;
+            switch (*p) {
+            case 'n': out[o++] = '\n'; break;
+            case 'r': out[o++] = '\r'; break;
+            case 't': out[o++] = '\t'; break;
+            case '"': out[o++] = '"'; break;
+            case '\\': out[o++] = '\\'; break;
+            case '/': out[o++] = '/'; break;
+            default: out[o++] = *p; break;
+            }
+            ++p;
+            continue;
         }
         out[o++] = *p++;
     }
     out[o] = '\0';
     return out;
+}
+
+static size_t json_escape(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    if (!in || !out || cap == 0) return 0;
+    while (*in && o + 2 < cap) {
+        unsigned char c = (unsigned char)*in++;
+        if (c == '"' || c == '\\') {
+            if (o + 3 >= cap) break;
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c == '\n') {
+            if (o + 3 >= cap) break;
+            out[o++] = '\\';
+            out[o++] = 'n';
+        } else if (c == '\r') {
+            if (o + 3 >= cap) break;
+            out[o++] = '\\';
+            out[o++] = 'r';
+        } else if (c == '\t') {
+            if (o + 3 >= cap) break;
+            out[o++] = '\\';
+            out[o++] = 't';
+        } else if (c < 0x20) {
+            continue;
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+    return o;
+}
+
+static void enqueue_signal(int type, int flag, const char *text)
+{
+    int i;
+    if (g_lc.sig_count >= (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]))) {
+        g_lc.sig_head = (g_lc.sig_head + 1) % (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]));
+        g_lc.sig_count--;
+    }
+    i = g_lc.sig_tail;
+    g_lc.sig_q[i].type = type;
+    g_lc.sig_q[i].flag = flag;
+    g_lc.sig_q[i].text[0] = '\0';
+    if (text)
+        strncpy(g_lc.sig_q[i].text, text, sizeof(g_lc.sig_q[i].text) - 1);
+    g_lc.sig_tail = (g_lc.sig_tail + 1) % (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]));
+    g_lc.sig_count++;
 }
 
 static int json_get_int(const char *json, const char *key, int def)
@@ -634,6 +800,50 @@ static void handle_server_json(const char *json)
             queue_send(msg);
         }
         queue_list_request();
+        /* Prefetch Coturn creds for ICE (no-op reply if server lacks COTURN_*). */
+        (void)queue_turn_credentials_request();
+        return;
+    }
+    if (strcmp(op, "turn_credentials") == 0) {
+        int ok = json_get_bool(json, "ok", 0);
+        g_lc.turn_request_pending = 0;
+        memset(&g_lc.turn, 0, sizeof(g_lc.turn));
+        g_lc.turn_received_at = 0;
+        if (!ok) {
+            char err[64];
+            json_get_str(json, "error", err, sizeof(err));
+            fprintf(stderr,
+                    "psx_lobby: turn_credentials failed (%s) — ICE will be "
+                    "STUN-only unless PSX_NET_TURN_* is set\n",
+                    err[0] ? err : "unknown");
+            return;
+        }
+        json_get_str(json, "stun_host", g_lc.turn.stun_host,
+                     sizeof(g_lc.turn.stun_host));
+        json_get_str(json, "turn_host", g_lc.turn.turn_host,
+                     sizeof(g_lc.turn.turn_host));
+        json_get_str(json, "username", g_lc.turn.username,
+                     sizeof(g_lc.turn.username));
+        json_get_str(json, "password", g_lc.turn.password,
+                     sizeof(g_lc.turn.password));
+        g_lc.turn.stun_port = json_get_int(json, "stun_port", 3478);
+        g_lc.turn.turn_port = json_get_int(json, "turn_port", 3478);
+        g_lc.turn.ttl_secs = (uint32_t)json_get_int(json, "ttl_secs", 86400);
+        if (g_lc.turn.turn_host[0] && g_lc.turn.username[0] &&
+            g_lc.turn.password[0]) {
+            g_lc.turn.valid = 1;
+            g_lc.turn_received_at = time(NULL);
+            fprintf(stderr,
+                    "psx_lobby: turn_credentials ok stun=%s:%d turn=%s:%d "
+                    "user=%s ttl=%us\n",
+                    g_lc.turn.stun_host[0] ? g_lc.turn.stun_host : "(none)",
+                    g_lc.turn.stun_port,
+                    g_lc.turn.turn_host, g_lc.turn.turn_port,
+                    g_lc.turn.username, (unsigned)g_lc.turn.ttl_secs);
+        } else {
+            fprintf(stderr,
+                    "psx_lobby: turn_credentials ok but incomplete fields\n");
+        }
         return;
     }
     if (strcmp(op, "lobby_list") == 0) {
@@ -727,6 +937,7 @@ static void handle_server_json(const char *json)
         g_lc.join.ok = 1;
         g_lc.launch_pending = 0;
         g_lc.all_ready = 0;
+        member_rtt_clear();
         json_get_str(json, "lobby_id", g_lc.join.lobby_id, sizeof(g_lc.join.lobby_id));
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", 1);
         g_lc.join.local_slot = json_get_int(json, "local_slot", 0);
@@ -760,6 +971,7 @@ static void handle_server_json(const char *json)
         g_lc.join.ok = 1;
         g_lc.launch_pending = 0;
         g_lc.all_ready = 0;
+        member_rtt_clear();
         json_get_str(json, "lobby_id", g_lc.join.lobby_id, sizeof(g_lc.join.lobby_id));
         g_lc.join.session_id = (uint32_t)json_get_int(json, "session_id", 1);
         g_lc.join.local_slot = json_get_int(json, "local_slot", 1);
@@ -848,6 +1060,50 @@ static void handle_server_json(const char *json)
         g_lc.launch_pending = 1;
         return;
     }
+    if (strcmp(op, "signal") == 0) {
+        char text_buf[2048];
+        char from[PSX_LOBBY_ID_LEN];
+        int type = json_get_int(json, "type", 0);
+        int flag = json_get_int(json, "flag", 0);
+        text_buf[0] = '\0';
+        from[0] = '\0';
+        json_get_str(json, "text", text_buf, sizeof(text_buf));
+        json_get_str(json, "from_player_id", from, sizeof(from));
+        if (type == PSX_LOBBY_SIG_RTT_PING) {
+            if (g_lc.is_host)
+                (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_PONG, 0, text_buf);
+            return;
+        }
+        if (type == PSX_LOBBY_SIG_RTT_PONG) {
+            unsigned long long sent = 0;
+            uint64_t now = lobby_mono_ms();
+            int slot;
+            if (sscanf(text_buf, "%llu", &sent) == 1 && (uint64_t)sent <= now) {
+                int ms = (int)(now - (uint64_t)sent);
+                if (ms < 0) ms = 0;
+                if (ms > 60000) ms = 60000;
+                slot = local_member_slot();
+                if (slot >= 0 && slot < PSX_LOBBY_MAX_MEMBERS)
+                    g_lc.member_rtt_ms[slot] = ms;
+                {
+                    char report[32];
+                    snprintf(report, sizeof(report), "%d", ms);
+                    (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
+                }
+            }
+            return;
+        }
+        if (type == PSX_LOBBY_SIG_RTT_REPORT) {
+            int slot = member_slot_for_player(from);
+            int ms = (int)strtol(text_buf, NULL, 10);
+            if (slot >= 0 && slot < PSX_LOBBY_MAX_MEMBERS && ms >= 0 && ms <= 60000)
+                g_lc.member_rtt_ms[slot] = ms;
+            return;
+        }
+        enqueue_signal(type, flag, text_buf);
+        (void)flag;
+        return;
+    }
     if (strcmp(op, "error") == 0) {
         char code[64];
         json_get_str(json, "code", code, sizeof(code));
@@ -879,6 +1135,7 @@ static void handle_server_json(const char *json)
         g_lc.launch_pending = 0;
         memset(&g_lc.join, 0, sizeof(g_lc.join));
         match_caps_clear(&g_lc.match_caps);
+        member_rtt_clear();
         return;
     }
 }
@@ -996,6 +1253,7 @@ void psx_lobby_disconnect(void)
         memset(&g_lc, 0, sizeof(g_lc));
         g_lc.fd = -1;
         strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
+        member_rtt_clear();
     }
 }
 
@@ -1080,43 +1338,44 @@ void psx_lobby_pump(void)
     }
     flush_pending();
     drain_ws_pending();
+    /* Non-blocking recv into ws_pending + frame parse. Avoid MSG_PEEK /
+     * MSG_WAITALL / temporary blocking — those break on Windows MinGW when
+     * the socket stays O_NONBLOCK (list/create never see welcome/created). */
     for (;;) {
-        int closed = 0;
-        int fl;
-#if !defined(_WIN32)
-        fl = fcntl(g_lc.fd, F_GETFL, 0);
-        /* Non-blocking peek: if no data, EAGAIN from first recv inside read */
-#endif
-        {
-            uint8_t peek[1];
-            n = recv(g_lc.fd, (char *)peek, 1, MSG_PEEK);
-            if (n < 0) {
-                if (socket_would_block()) {
-                    break;
-                }
-                psx_lobby_disconnect();
-                return;
-            }
-            if (n == 0) {
-                psx_lobby_disconnect();
-                return;
-            }
+        size_t available = sizeof(g_lc.ws_pending) - g_lc.ws_pending_len;
+        if (available == 0) {
+            psx_lobby_disconnect();
+            return;
         }
-#if !defined(_WIN32)
-        fcntl(g_lc.fd, F_SETFL, fl & ~O_NONBLOCK);
-#endif
-        n = rnet_ws_read_text(g_lc.fd, buf, sizeof(buf), &closed);
-#if !defined(_WIN32)
-        fcntl(g_lc.fd, F_SETFL, fl | O_NONBLOCK);
-#endif
-        if (closed || n < 0) {
+        n = recv(g_lc.fd,
+                 (char *)g_lc.ws_pending + g_lc.ws_pending_len,
+                 (int)available, 0);
+        if (n < 0) {
+            if (socket_would_block()) {
+                break;
+            }
             psx_lobby_disconnect();
             return;
         }
         if (n == 0) {
+            psx_lobby_disconnect();
+            return;
+        }
+        g_lc.ws_pending_len += (size_t)n;
+        drain_ws_pending();
+        if (!psx_lobby_connected()) {
             break;
         }
-        handle_server_json(buf);
+    }
+    /* Guests: probe host RTT about once per second while seated. */
+    if (g_lc.in_lobby && !g_lc.is_host && !g_lc.launch_pending) {
+        uint64_t now = lobby_mono_ms();
+        if (now >= g_lc.rtt_next_ping_ms) {
+            char ts[32];
+            snprintf(ts, sizeof(ts), "%llu", (unsigned long long)now);
+            (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_PING, 0, ts);
+            g_lc.rtt_next_ping_ms = now + 1000ull;
+        }
     }
 }
 
@@ -1237,6 +1496,7 @@ int psx_lobby_leave(void)
     g_lc.all_ready = 0;
     g_lc.launch_pending = 0;
     match_caps_clear(&g_lc.match_caps);
+    member_rtt_clear();
     return 0;
 }
 
@@ -1331,6 +1591,30 @@ int psx_lobby_member_get(int index, PsxLobbyMember *out)
     return 1;
 }
 
+int psx_lobby_member_latency_ms(int slot)
+{
+    if (slot < 0 || slot >= PSX_LOBBY_MAX_MEMBERS)
+        return -1;
+    if (g_lc.host_player_id[0]) {
+        int i;
+        for (i = 0; i < g_lc.member_count; ++i) {
+            if (g_lc.members[i].slot == slot &&
+                strcmp(g_lc.members[i].player_id, g_lc.host_player_id) == 0)
+                return -1; /* host row */
+        }
+    }
+    return g_lc.member_rtt_ms[slot];
+}
+
+int psx_lobby_member_is_host(const PsxLobbyMember *member)
+{
+    const char *host_id;
+    if (!member || !member->player_id[0])
+        return 0;
+    host_id = psx_lobby_host_player_id();
+    return host_id && host_id[0] && strcmp(member->player_id, host_id) == 0;
+}
+
 int psx_lobby_local_ready(void)
 {
     return g_lc.local_ready;
@@ -1381,6 +1665,74 @@ int psx_lobby_launch_pending(void)
 void psx_lobby_clear_launch_pending(void)
 {
     g_lc.launch_pending = 0;
+}
+
+int psx_lobby_send_signal(int type, int flag, const char *text)
+{
+    char esc[4096];
+    char msg[4608];
+    const char *lid;
+    if (!psx_lobby_connected() || !g_lc.in_lobby) {
+        return -1;
+    }
+    lid = g_lc.join.lobby_id[0] ? g_lc.join.lobby_id : "";
+    json_escape(text ? text : "", esc, sizeof(esc));
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"signal\",\"lobby_id\":\"%s\",\"to_player_id\":\"\","
+             "\"type\":%d,\"flag\":%d,\"text\":\"%s\"}",
+             lid, type, flag, esc);
+    /* Write immediately — ICE candidates arrive in bursts larger than pending_tx. */
+    if (g_lc.handshake_done && g_lc.fd >= 0) {
+        if (rnet_ws_write_text(g_lc.fd, msg, 1) < 0)
+            return -1;
+        return 0;
+    }
+    queue_send(msg);
+    return 0;
+}
+
+int psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap)
+{
+    int i;
+    if (g_lc.sig_count <= 0) {
+        return 0;
+    }
+    i = g_lc.sig_head;
+    if (type) *type = g_lc.sig_q[i].type;
+    if (flag) *flag = g_lc.sig_q[i].flag;
+    if (text && text_cap) {
+        strncpy(text, g_lc.sig_q[i].text, text_cap - 1);
+        text[text_cap - 1] = '\0';
+    }
+    g_lc.sig_head = (g_lc.sig_head + 1) % (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]));
+    g_lc.sig_count--;
+    return 1;
+}
+
+int psx_lobby_request_turn_credentials(void)
+{
+    if (!psx_lobby_connected())
+        return -1;
+    if (g_lc.turn.valid && g_lc.turn_received_at > 0 && g_lc.turn.ttl_secs > 0) {
+        time_t now = time(NULL);
+        if (now >= g_lc.turn_received_at &&
+            (uint32_t)(now - g_lc.turn_received_at) + 60u < g_lc.turn.ttl_secs) {
+            return 0; /* still fresh (60s skew margin) */
+        }
+    }
+    return queue_turn_credentials_request();
+}
+
+const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void)
+{
+    if (g_lc.turn.valid && g_lc.turn_received_at > 0 && g_lc.turn.ttl_secs > 0) {
+        time_t now = time(NULL);
+        if (now < g_lc.turn_received_at ||
+            (uint32_t)(now - g_lc.turn_received_at) >= g_lc.turn.ttl_secs) {
+            clear_turn_credentials();
+        }
+    }
+    return &g_lc.turn;
 }
 
 #endif /* PSX_HAS_LOBBY_CLIENT */

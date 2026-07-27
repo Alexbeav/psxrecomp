@@ -7,6 +7,8 @@
 
 #include "savestate.h"
 #include "boot_state.h"
+#include "cdrom.h"
+#include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include "psx_scheduler.h"
@@ -15,9 +17,25 @@
 #include <string.h>
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #else
 #include <sys/stat.h>
+#include <time.h>
 #endif
+
+static double savestate_mono_ms(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+#endif
+}
 
 static char     s_dir[512];
 static uint32_t s_bios_checksum;
@@ -32,7 +50,10 @@ static int      s_load_cooldown_notice = 0;
 extern int psx_hle_scheduler_enabled(void);
 extern uint64_t s_frame_count;
 
-#define SAVESTATE_LOAD_COOLDOWN_FRAMES 60u
+/* Debounce only — long enough to ignore key-repeat / double F-key, short
+ * enough that a deliberate second load is not blocked for a full second.
+ * Wall time stretches if a restore hitch drops FPS (cooldown is in frames). */
+#define SAVESTATE_LOAD_COOLDOWN_FRAMES 12u
 
 static void ensure_dir(const char* dir) {
     if (!dir || !dir[0]) return;
@@ -161,7 +182,12 @@ static int request_load_inner(int slot) {
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
     if (s_frame_count < s_load_cooldown_until_frame) {
         if (!s_load_cooldown_notice) {
-            fprintf(stderr, "savestate: load ignored during restore cooldown\n");
+            uint64_t left = s_load_cooldown_until_frame - s_frame_count;
+            fprintf(stderr,
+                    "savestate: load ignored (%llu frame cooldown after restore; "
+                    "%llu left)\n",
+                    (unsigned long long)SAVESTATE_LOAD_COOLDOWN_FRAMES,
+                    (unsigned long long)left);
             s_load_cooldown_notice = 1;
         }
         return 1;
@@ -229,19 +255,37 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int slot = s_load_pending;
         s_load_pending = -1;
         char path[600];
+        const double t_load0 = savestate_mono_ms();
+        double t_after_boot = t_load0;
+        double t_after_frontend = t_load0;
         if (!savestate_slot_path(slot, path, sizeof(path))) return;
         if (boot_state_load(path, s_bios_checksum, s_entry_pc, cpu)) {
-            psx_cycles_resync_after_restore();
+            t_after_boot = savestate_mono_ms();
+            psx_cycles_resync_after_restore(cpu);
+            /* Drop absolute-cycle IRQ cooldowns / VBlank phase from the
+             * pre-load host timeline (cycle rewind would otherwise blackout
+             * VBlank delivery for however long the user played past the save). */
+            interrupts_resync_after_restore();
+            /* Collapse restored / imminent CD second-response debt (ReadTOC,
+             * Init, seeks) so the picture does not freeze for ~1s after the
+             * restored frame presents. */
+            cdrom_accelerate_after_savestate();
             s_load_cooldown_until_frame =
                 s_frame_count + SAVESTATE_LOAD_COOLDOWN_FRAMES;
             s_load_cooldown_notice = 0;
-            fprintf(stderr, "savestate: LOADED slot %d -> resuming pc=0x%08X\n",
-                    slot, (unsigned)cpu->pc);
             /* Netplay post-load barrier observes this before the longjmp. */
             s_load_completed = 1;
             /* Restage FBO/present latch so the restored frame is visible
              * immediately (avoids disabled-display blank latch + stale smooth). */
             psx_frontend_on_savestate_loaded();
+            t_after_frontend = savestate_mono_ms();
+            fprintf(stderr,
+                    "savestate: LOADED slot %d -> resuming pc=0x%08X "
+                    "(boot=%.1f frontend=%.1f poll_total=%.1f ms)\n",
+                    slot, (unsigned)cpu->pc,
+                    t_after_boot - t_load0,
+                    t_after_frontend - t_after_boot,
+                    t_after_frontend - t_load0);
             /* Unwind to the scheduler and re-dispatch the restored PC. Never
              * returns; abandons the suspended CPS frames on the current stack. */
             psx_scheduler_resume_at(cpu->pc);

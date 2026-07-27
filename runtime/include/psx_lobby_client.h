@@ -1,6 +1,7 @@
 #ifndef PSX_LOBBY_CLIENT_H
 #define PSX_LOBBY_CLIENT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -138,6 +139,46 @@ int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
 /* Live member table from lobby_update (and create/join). */
 int  psx_lobby_member_count(void);
 int  psx_lobby_member_get(int index, PsxLobbyMember *out);
+
+/* Waiting-room RTT to the lobby host in ms for `slot`, or -1 if unknown.
+ * Host's own seat is always -1. Guests measure via signal ping; hosts learn
+ * guest RTT from peer reports. */
+int  psx_lobby_member_latency_ms(int slot);
+
+/* True when member.player_id matches psx_lobby_host_player_id().
+ * Prefer this over `slot == 0` — seats can move. */
+int  psx_lobby_member_is_host(const PsxLobbyMember *member);
+
+/*
+ * ICE signaling relay (MotK WS op:signal). text is SDP/candidate (max 2047).
+ * send returns 0 if queued/written; poll returns 1 when an inbound signal was
+ * copied out (LOCAL_* types as emitted by the peer — remap to REMOTE_* before
+ * rnet_session_push_signal).
+ */
+int  psx_lobby_send_signal(int type, int flag, const char *text);
+int  psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap);
+
+/*
+ * Coturn / ICE credentials minted by the WS lobby
+ * (`get_turn_credentials` → `turn_credentials`). Valid until disconnect or TTL.
+ * Strings are stable until the next successful mint or disconnect — safe to
+ * pass into RNetIceConfig for juice_create.
+ */
+typedef struct PsxLobbyTurnCredentials {
+    int      valid; /* 1 when ok mint cached and not expired */
+    char     stun_host[128];
+    int      stun_port;
+    char     turn_host[128];
+    int      turn_port;
+    char     username[192];
+    char     password[128];
+    uint32_t ttl_secs;
+} PsxLobbyTurnCredentials;
+
+/* Queue WS get_turn_credentials. Returns 0 if sent/queued. */
+int  psx_lobby_request_turn_credentials(void);
+/* Non-NULL; valid==0 when unavailable / expired / STUN-only. */
+const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void);
 
 /* Local ready flag (from last lobby_update matching our player_id). */
 int  psx_lobby_local_ready(void);
