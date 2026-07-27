@@ -588,6 +588,28 @@ extern "C" int psx_mod_set_fixed_display_aspect(
     return 1;
 }
 
+extern "C" int psx_mod_set_adaptive_display_aspect(
+    uint32_t max_numerator, uint32_t max_denominator) {
+    if (max_numerator == 0 || max_denominator == 0 ||
+        max_numerator > 99 || max_denominator > 99 ||
+        3u * max_numerator < 4u * max_denominator ||
+        9u * max_numerator > 32u * max_denominator) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid adaptive display aspect %u:%u\n",
+            (unsigned)max_numerator, (unsigned)max_denominator);
+        return 0;
+    }
+    g_ws_adaptive_view = true;
+    g_ws_adaptive_max_num = (int)max_numerator;
+    g_ws_adaptive_max_den = (int)max_denominator;
+    std::fprintf(stdout,
+        "psxrecomp: mod selected adaptive display aspect "
+        "(initial %d:%d, range 4:3 through %u:%u)\n",
+        g_video_aspect_num, g_video_aspect_den,
+        (unsigned)max_numerator, (unsigned)max_denominator);
+    return 1;
+}
+
 extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     if (enabled != 0 && enabled != 1) {
         std::fprintf(stderr,

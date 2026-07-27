@@ -31,6 +31,13 @@ void psx_mod_write_byte(uint32_t address, uint8_t value);
  */
 int psx_mod_set_fixed_display_aspect(uint32_t numerator,
                                      uint32_t denominator);
+/*
+ * Request resize-driven widescreen, capped at the supplied maximum aspect.
+ * The current fixed aspect continues to shape the initial game window, so a
+ * plugin may select that first with psx_mod_set_fixed_display_aspect().
+ */
+int psx_mod_set_adaptive_display_aspect(uint32_t max_numerator,
+                                        uint32_t max_denominator);
 int psx_mod_set_auto_skip_fmv(int enabled);
 
 /*
