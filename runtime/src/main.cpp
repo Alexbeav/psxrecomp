@@ -355,6 +355,16 @@ static int      s_netplay_depth24_present_skip = 0;
 static uint32_t s_fmv_skip_last_mdec = 0;
 static int      s_fmv_skip_hold = 0;
 
+/* Lightweight title/stderr FPS telemetry is developer-facing and opt-in.
+ * Keep release window titles clean unless explicitly requested. */
+static bool fps_telemetry_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PSX_FPS_TELEMETRY");
+        return value && value[0] && value[0] != '0';
+    }();
+    return enabled;
+}
+
 static void smooth_60_reset(void) {
     g_smooth_60_state.previous_source.clear();
     g_smooth_60_state.source_hash = 0;
@@ -3334,14 +3344,14 @@ static void sdl_vblank_present(void) {
      * than presents so turbo and skipped-frame modes still report game speed.
      * Skip during netplay post-load barrier — admit is stalled and the window
      * is not updating, so a climbing FPS line is misleading. */
-    if (!psx_netplay_in_load_barrier()) {
+    if (fps_telemetry_enabled() && !psx_netplay_in_load_barrier()) {
         extern uint64_t s_frame_count;
         const Uint64 now = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
         if (!s_fps_last_time) {
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
-            if (sdl_window) {
+            if (sdl_window && s_fps_base_title.empty()) {
                 const char *title = SDL_GetWindowTitle(sdl_window);
                 if (title) s_fps_base_title = title;
             }
