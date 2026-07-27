@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+typedef struct CPUState CPUState;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -168,6 +170,24 @@ void gpu_ws_set_xclip_load_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_cull_keep_sites(const uint32_t *addresses,
                                 const uint32_t *expected,
                                 const uint32_t *results, int nsites);
+void gpu_ws_set_angle_sites(const uint32_t *addresses,
+                            const uint32_t *expected, int nsites);
+void gpu_ws_set_aspect_cone(const uint32_t *addresses,
+                            const uint32_t *expected,
+                            const uint32_t *cosine_thresholds,
+                            const uint32_t *object_regs,
+                            const uint32_t *x_regs,
+                            const uint32_t *z_regs,
+                            const uint32_t *y_regs,
+                            const uint32_t *queue_guards,
+                            int nsites,
+                            uint32_t forward_addr,
+                            uint32_t object_type_offset,
+                            uint32_t hysteresis_pixels,
+                            uint32_t queue_reserve,
+                            const uint32_t queue_count_addrs[3],
+                            const uint32_t queue_capacities[3],
+                            const uint32_t queue_type_masks[3]);
 int  psx_ws_is_cull_bias_site(uint32_t pc);
 int  psx_ws_is_cull_slti_site(uint32_t pc);
 int  psx_ws_is_cull_negsub_site(uint32_t pc);
@@ -182,6 +202,13 @@ uint32_t psx_ws_xclip_bound(uint32_t vanilla);
 uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced);
 int psx_ws_cull_keep_site(uint32_t pc, uint32_t instr, uint32_t vanilla,
                           uint32_t *out);
+uint32_t psx_ws_angle_widen(uint32_t vanilla);
+int psx_ws_angle_site(uint32_t pc, uint32_t instr, uint32_t *out);
+uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
+                                   uint32_t object, int32_t x, int32_t z,
+                                   int32_t y);
+int psx_ws_aspect_cone_site(CPUState *cpu, uint32_t pc, uint32_t instr,
+                            uint32_t vanilla, uint32_t *out);
 /* Scale a signed Q16 horizontal gameplay limit into the active native-wide
  * game field. Identity at 4:3 / menus / FMV. */
 int32_t psx_ws_player_x_bound(int32_t vanilla);
@@ -314,8 +341,37 @@ typedef struct {
     uint32_t ovh_prims;         /* overhanging polys in the last completed frame */
     uint32_t last_ovh_frame;    /* newest SUSTAINED polygon-overhang frame (the
                                    2D-only-scene classifier's world signal) */
+    uint64_t aspect_cone_calls;
+    uint64_t aspect_cone_43_identity;
+    uint64_t aspect_cone_vanilla_keep;
+    uint64_t aspect_cone_visible_keep;
+    uint64_t aspect_cone_guard_keep;
+    uint64_t aspect_cone_hysteresis_keep;
+    uint64_t aspect_cone_outside_reject;
+    uint64_t aspect_cone_queue_reject;
+    uint32_t aspect_cone_queue_highwater[3];
+    uint64_t angle_calls;
+    uint64_t angle_43_identity;
+    uint32_t angle_max_vanilla;
+    uint32_t angle_max_widened;
 } GpuWsDebug;
 void gpu_ws_get_debug(GpuWsDebug* out);
+
+typedef struct {
+    uint32_t address;
+    uint64_t calls;
+    uint64_t identity_43;
+    uint64_t vanilla_keep;
+    uint64_t visible_keep;
+    uint64_t guard_keep;
+    uint64_t hysteresis_keep;
+    uint64_t outside_reject;
+    uint64_t queue_reject;
+} GpuWsAspectConeSiteDebug;
+/* Exact-site telemetry for separating actor-list and per-child participation
+ * predicates. Returns zero when address is not configured. */
+int gpu_ws_get_aspect_cone_site_debug(
+    uint32_t address, GpuWsAspectConeSiteDebug* out);
 
 /* Diagnostic: force psx_ws_x_margin() to return v (>=0) regardless of state,
  * or -1 to restore the normal computed margin. For live cull-margin sweeps. */

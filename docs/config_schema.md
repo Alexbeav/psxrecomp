@@ -167,6 +167,79 @@ result = 1
   semantics.
 - Regenerate main/overlay native code after changing the list.
 
+Prefer an aspect-derived cone over `keep` when the original predicate is a
+camera-frustum test. `keep` has no queue policy and is appropriate only for a
+separately proven binary verdict.
+
+### Aspect-aware terrain and model participation
+
+Exact terrain-frustum angle loads can follow the live horizontal field:
+
+```toml
+[[widescreen.cull.angle]]
+address = "0x8013F138"
+expected = "0x24020155"
+```
+
+`expected` must be `ADDI`/`ADDIU rt,zero,imm`, with a positive 12-bit angular
+half-extent below one quarter-turn. The helper widens `tan(angle)` by the live
+per-side horizontal extent. It is exact at 4:3 and full-word guarded against
+same-address overlay variants.
+
+A model-list or per-child cosine rejection can use a horizontal-only envelope:
+
+```toml
+[widescreen.cull.aspect_cone]
+forward_addr = "0x1F8000E8" # signed Q12 X/Z/Y halfwords
+object_type_offset = 12
+object_reg = 19
+x_reg = 16
+z_reg = 17
+y_reg = 18
+hysteresis_pixels = 24
+queue_reserve = 4
+queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
+queue_capacities = [24, 40, 28]
+queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
+
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80077368"
+expected = "0x28620358" # signed SLTI reject predicate
+
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x8002B368"
+expected = "0x0082202A" # signed SLT reject predicate
+cosine_threshold = 856  # required for SLT; Q10
+object_reg = 20         # optional per-site register overrides
+x_reg = 19
+z_reg = 18
+y_reg = 17
+queue_guard = false     # this lower-level predicate appends to no fixed queue
+```
+
+- Sites must be signed `SLTI` or `SLT` reject predicates: zero is the keep
+  path and one is rejection.
+- An `SLTI` site derives its Q10 cosine threshold from the immediate unless
+  `cosine_threshold` is given. An `SLT` site requires it explicitly.
+- A vanilla keep is always preserved. Only a vanilla rejection is retested.
+- Horizontal reach follows the current client aspect. Vertical reach,
+  near/far checks, type dispatch, and the game’s queue-capacity branches are
+  unchanged.
+- `guard_pixels` is the activation guard outside the visible field.
+  `hysteresis_pixels` moves deactivation farther out.
+- For `queue_guard = true`, non-visible guard/hysteresis candidates are
+  rejected at `capacity - queue_reserve`, preserving headroom for candidates
+  intersecting the visible wide field.
+- Use `queue_guard = false` only after proving that the exact predicate does
+  not append to those queues.
+- Site address, instruction, threshold, registers, queue policy, guard size,
+  and enclosing cone/queue metadata all contribute to overlay cache identity.
+- Generated/native overlay code and the dirty-RAM interpreter use the same
+  live helper. Dynamic resizing therefore needs no recompilation.
+
+The debug server’s `ws_aspect_cone_site` command accepts an `address` string
+and reports exact-site identity/keep/reject counters.
+
 ## Runtime block
 
 Consumed by the cmake macro `psxrecomp_v4_add_runtime_target` (eventually)

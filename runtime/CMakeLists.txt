@@ -70,6 +70,15 @@ if(BUILD_TESTING)
     target_include_directories(psx_instr_cost_test PRIVATE include)
     add_test(NAME psx_instr_cost_test COMMAND psx_instr_cost_test)
 
+    add_executable(ws_aspect_cone_math_test
+        tests/test_ws_aspect_cone_math.c
+        src/ws_aspect_cone_math.c)
+    target_include_directories(ws_aspect_cone_math_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(ws_aspect_cone_math_test PRIVATE m)
+    endif()
+    add_test(NAME ws_aspect_cone_math_test COMMAND ws_aspect_cone_math_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)

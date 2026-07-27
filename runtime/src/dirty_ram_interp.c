@@ -1670,7 +1670,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             uint32_t vanilla =
                 ((int32_t)cpu->gpr[rs] < (int32_t)cpu->gpr[rt]) ? 1u : 0u;
             uint32_t kept = vanilla;
-            (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
+            if (!psx_ws_aspect_cone_site(cpu, pc, insn, vanilla, &kept))
+                (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
             cpu->gpr[rd] = kept;
             cpu->gpr[0] = 0;
             return 0;
@@ -1807,20 +1808,36 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         return 1;
     }
     case 0x08: /* ADDI rt, rs, simm — same as ADDIU, sans overflow trap (we don't model traps here) */
-        cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
-                     + (psx_ws_is_cull_bias_site(pc) ? (uint32_t)psx_ws_x_margin() : 0u);
+    {
+        uint32_t widened = 0;
+        if (psx_ws_angle_site(pc, insn, &widened))
+            cpu->gpr[rt] = widened;
+        else
+            cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
+                         + (psx_ws_is_cull_bias_site(pc)
+                                ? (uint32_t)psx_ws_x_margin() : 0u);
         cpu->gpr[0] = 0;
         return 0;
+    }
     case 0x09: /* ADDIU rt, rs, simm */
-        cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
-                     + (psx_ws_is_cull_bias_site(pc) ? (uint32_t)psx_ws_x_margin() : 0u);
+    {
+        uint32_t widened = 0;
+        if (psx_ws_angle_site(pc, insn, &widened))
+            cpu->gpr[rt] = widened;
+        else
+            cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
+                         + (psx_ws_is_cull_bias_site(pc)
+                                ? (uint32_t)psx_ws_x_margin() : 0u);
         cpu->gpr[0] = 0;
         return 0;
+    }
     case 0x0A: /* SLTI */
     {
         uint32_t vanilla = ((int32_t)cpu->gpr[rs] < simm) ? 1u : 0u;
         uint32_t kept = vanilla;
-        if (psx_ws_cull_keep_site(pc, insn, vanilla, &kept))
+        if (psx_ws_aspect_cone_site(cpu, pc, insn, vanilla, &kept))
+            cpu->gpr[rt] = kept;
+        else if (psx_ws_cull_keep_site(pc, insn, vanilla, &kept))
             cpu->gpr[rt] = kept;
         else if (psx_ws_is_cull_depth_site(pc))
             cpu->gpr[rt] = ((int32_t)cpu->gpr[rs] < psx_ws_depth_bound(simm)) ? 1u : 0u;

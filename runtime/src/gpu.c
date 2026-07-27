@@ -22,10 +22,14 @@
 #include "color_lut.h"
 #include "mod_runtime.h"
 #include "ws_cull_detect.h"
+#include "ws_aspect_cone_math.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+extern uint16_t psx_read_half(uint32_t addr);
+extern uint8_t  psx_read_byte(uint32_t addr);
 
 /* ---- VRAM ---- */
 static uint16_t vram[1024 * 512];
@@ -484,6 +488,346 @@ int psx_ws_cull_keep_site(uint32_t pc, uint32_t instr, uint32_t vanilla,
     return 0;
 }
 
+typedef struct {
+    uint32_t address;
+    uint32_t expected;
+} WsAngleSite;
+static WsAngleSite ws_angle_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_angle_n = 0;
+static uint64_t ws_angle_calls = 0;
+static uint64_t ws_angle_43_identity = 0;
+static uint32_t ws_angle_max_vanilla = 0;
+static uint32_t ws_angle_max_widened = 0;
+
+void gpu_ws_set_angle_sites(const uint32_t *addresses,
+                            const uint32_t *expected, int nsites) {
+    if (nsites < 0) nsites = 0;
+    if (nsites > WS_EXPLICIT_CULL_SITES_MAX)
+        nsites = WS_EXPLICIT_CULL_SITES_MAX;
+    ws_angle_n = nsites;
+    for (int i = 0; i < nsites; i++) {
+        ws_angle_sites[i].address = addresses[i] & 0x1FFFFFFFu;
+        ws_angle_sites[i].expected = expected[i];
+    }
+    ws_angle_calls = 0;
+    ws_angle_43_identity = 0;
+    ws_angle_max_vanilla = 0;
+    ws_angle_max_widened = 0;
+}
+
+uint32_t psx_ws_angle_widen(uint32_t vanilla) {
+    ws_angle_calls++;
+    const int margin = psx_ws_x_margin();
+    if (margin <= 0) {
+        ws_angle_43_identity++;
+        return vanilla;
+    }
+    const uint32_t widened =
+        psx_ws_widen_angle_q12(vanilla, margin);
+    if (vanilla > ws_angle_max_vanilla)
+        ws_angle_max_vanilla = vanilla;
+    if (widened > ws_angle_max_widened)
+        ws_angle_max_widened = widened;
+    return widened;
+}
+
+int psx_ws_angle_site(uint32_t pc, uint32_t instr, uint32_t *out) {
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    for (int i = 0; i < ws_angle_n; i++) {
+        const WsAngleSite *site = &ws_angle_sites[i];
+        if (site->address != phys || site->expected != instr) continue;
+        if (out)
+            *out = psx_ws_angle_widen(
+                (uint32_t)(int32_t)(int16_t)(instr & 0xFFFFu));
+        return 1;
+    }
+    return 0;
+}
+
+typedef struct {
+    uint32_t address;
+    uint32_t expected;
+    uint32_t cosine_threshold;
+    uint8_t object_reg;
+    uint8_t x_reg;
+    uint8_t z_reg;
+    uint8_t y_reg;
+    uint8_t queue_guard;
+    uint64_t calls;
+    uint64_t identity_43;
+    uint64_t vanilla_keep;
+    uint64_t visible_keep;
+    uint64_t guard_keep;
+    uint64_t hysteresis_keep;
+    uint64_t outside_reject;
+    uint64_t queue_reject;
+} WsAspectConeSite;
+
+typedef struct {
+    uint32_t site;
+    uint32_t object;
+    uint32_t last_seen_frame;
+    uint8_t active;
+} WsAspectConeState;
+
+#define WS_ASPECT_CONE_STATE_CAP 512
+static WsAspectConeSite ws_aspect_cone_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_aspect_cone_n = 0;
+static uint32_t ws_aspect_cone_forward_addr = 0;
+static uint32_t ws_aspect_cone_object_type_offset = 0;
+static uint32_t ws_aspect_cone_hysteresis_pixels = 0;
+static uint32_t ws_aspect_cone_queue_reserve = 0;
+static uint32_t ws_aspect_cone_queue_count_addrs[3];
+static uint32_t ws_aspect_cone_queue_capacities[3];
+static uint32_t ws_aspect_cone_queue_type_masks[3];
+static WsAspectConeState ws_aspect_cone_state[WS_ASPECT_CONE_STATE_CAP];
+static int ws_aspect_cone_wide_latched = 0;
+static uint64_t ws_aspect_cone_calls = 0;
+static uint64_t ws_aspect_cone_43_identity = 0;
+static uint64_t ws_aspect_cone_vanilla_keep = 0;
+static uint64_t ws_aspect_cone_visible_keep = 0;
+static uint64_t ws_aspect_cone_guard_keep = 0;
+static uint64_t ws_aspect_cone_hysteresis_keep = 0;
+static uint64_t ws_aspect_cone_outside_reject = 0;
+static uint64_t ws_aspect_cone_queue_reject = 0;
+static uint32_t ws_aspect_cone_queue_highwater[3];
+
+void gpu_ws_set_aspect_cone(const uint32_t *addresses,
+                            const uint32_t *expected,
+                            const uint32_t *cosine_thresholds,
+                            const uint32_t *object_regs,
+                            const uint32_t *x_regs,
+                            const uint32_t *z_regs,
+                            const uint32_t *y_regs,
+                            const uint32_t *queue_guards,
+                            int nsites,
+                            uint32_t forward_addr,
+                            uint32_t object_type_offset,
+                            uint32_t hysteresis_pixels,
+                            uint32_t queue_reserve,
+                            const uint32_t queue_count_addrs[3],
+                            const uint32_t queue_capacities[3],
+                            const uint32_t queue_type_masks[3]) {
+    if (nsites < 0) nsites = 0;
+    if (nsites > WS_EXPLICIT_CULL_SITES_MAX)
+        nsites = WS_EXPLICIT_CULL_SITES_MAX;
+    ws_aspect_cone_n = nsites;
+    memset(ws_aspect_cone_sites, 0, sizeof(ws_aspect_cone_sites));
+    for (int i = 0; i < nsites; i++) {
+        ws_aspect_cone_sites[i].address = addresses[i] & 0x1FFFFFFFu;
+        ws_aspect_cone_sites[i].expected = expected[i];
+        ws_aspect_cone_sites[i].cosine_threshold =
+            cosine_thresholds ? cosine_thresholds[i] : 0;
+        ws_aspect_cone_sites[i].object_reg =
+            (uint8_t)(object_regs ? object_regs[i] & 31u : 0u);
+        ws_aspect_cone_sites[i].x_reg =
+            (uint8_t)(x_regs ? x_regs[i] & 31u : 0u);
+        ws_aspect_cone_sites[i].z_reg =
+            (uint8_t)(z_regs ? z_regs[i] & 31u : 0u);
+        ws_aspect_cone_sites[i].y_reg =
+            (uint8_t)(y_regs ? y_regs[i] & 31u : 0u);
+        ws_aspect_cone_sites[i].queue_guard =
+            (uint8_t)(!queue_guards || queue_guards[i] != 0);
+    }
+    ws_aspect_cone_forward_addr = forward_addr;
+    ws_aspect_cone_object_type_offset = object_type_offset;
+    ws_aspect_cone_hysteresis_pixels = hysteresis_pixels;
+    ws_aspect_cone_queue_reserve = queue_reserve;
+    for (int i = 0; i < 3; i++) {
+        ws_aspect_cone_queue_count_addrs[i] =
+            queue_count_addrs ? queue_count_addrs[i] : 0;
+        ws_aspect_cone_queue_capacities[i] =
+            queue_capacities ? queue_capacities[i] : 0;
+        ws_aspect_cone_queue_type_masks[i] =
+            queue_type_masks ? queue_type_masks[i] : 0;
+    }
+    memset(ws_aspect_cone_state, 0, sizeof(ws_aspect_cone_state));
+    ws_aspect_cone_wide_latched = 0;
+    ws_aspect_cone_calls = 0;
+    ws_aspect_cone_43_identity = 0;
+    ws_aspect_cone_vanilla_keep = 0;
+    ws_aspect_cone_visible_keep = 0;
+    ws_aspect_cone_guard_keep = 0;
+    ws_aspect_cone_hysteresis_keep = 0;
+    ws_aspect_cone_outside_reject = 0;
+    ws_aspect_cone_queue_reject = 0;
+    memset(ws_aspect_cone_queue_highwater, 0,
+           sizeof(ws_aspect_cone_queue_highwater));
+}
+
+static WsAspectConeSite *ws_aspect_cone_find(uint32_t address,
+                                             uint32_t expected) {
+    const uint32_t phys = address & 0x1FFFFFFFu;
+    for (int i = 0; i < ws_aspect_cone_n; i++) {
+        WsAspectConeSite *site = &ws_aspect_cone_sites[i];
+        if (site->address == phys &&
+            (expected == 0 || site->expected == expected))
+            return site;
+    }
+    return NULL;
+}
+
+static WsAspectConeState *ws_aspect_cone_object_state(uint32_t site,
+                                                       uint32_t object) {
+    const uint32_t now = (uint32_t)s_frame_count;
+    uint32_t slot = (((object >> 2) * 2654435761u) ^
+                     ((site >> 2) * 2246822519u)) &
+                    (WS_ASPECT_CONE_STATE_CAP - 1u);
+    WsAspectConeState *oldest = NULL;
+    for (uint32_t probe = 0; probe < 8; probe++) {
+        WsAspectConeState *entry =
+            &ws_aspect_cone_state[(slot + probe) &
+                                  (WS_ASPECT_CONE_STATE_CAP - 1u)];
+        if (entry->site == site && entry->object == object) {
+            entry->last_seen_frame = now;
+            return entry;
+        }
+        if (entry->object == 0 || now - entry->last_seen_frame > 120u) {
+            entry->site = site;
+            entry->object = object;
+            entry->last_seen_frame = now;
+            entry->active = 0;
+            return entry;
+        }
+        if (!oldest ||
+            entry->last_seen_frame < oldest->last_seen_frame)
+            oldest = entry;
+    }
+    oldest->site = site;
+    oldest->object = object;
+    oldest->last_seen_frame = now;
+    oldest->active = 0;
+    return oldest;
+}
+
+static int ws_aspect_cone_queue_has_guard_room(uint32_t object) {
+    if (object == 0) return 0;
+    const uint8_t type =
+        psx_read_byte(object + ws_aspect_cone_object_type_offset);
+    if (type >= 32) return 1;
+    const uint32_t bit = 1u << type;
+    for (int i = 0; i < 3; i++) {
+        if ((ws_aspect_cone_queue_type_masks[i] & bit) == 0) continue;
+        const uint32_t cap = ws_aspect_cone_queue_capacities[i];
+        const uint32_t reserve = ws_aspect_cone_queue_reserve;
+        if (cap == 0 || ws_aspect_cone_queue_count_addrs[i] == 0)
+            return 1;
+        const uint32_t count =
+            psx_read_half(ws_aspect_cone_queue_count_addrs[i]);
+        return count < ((cap > reserve) ? cap - reserve : 0u);
+    }
+    return 1;
+}
+
+static void ws_aspect_cone_sample_queues(void) {
+    /* The game clears each queue at frame start and appends as candidates are
+     * accepted. Sample throughout the producer loop so the high-water mark
+     * sees the final occupancy rather than only the first zero count. */
+    for (int i = 0; i < 3; i++) {
+        if (ws_aspect_cone_queue_count_addrs[i] == 0) continue;
+        const uint32_t count =
+            psx_read_half(ws_aspect_cone_queue_count_addrs[i]);
+        if (count > ws_aspect_cone_queue_highwater[i])
+            ws_aspect_cone_queue_highwater[i] = count;
+    }
+}
+
+uint32_t psx_ws_aspect_cone_result(uint32_t site_address, uint32_t vanilla,
+                                   uint32_t object, int32_t x, int32_t z,
+                                   int32_t y) {
+    WsAspectConeSite *site = ws_aspect_cone_find(site_address, 0);
+    if (!site) return vanilla;
+
+    ws_aspect_cone_calls++;
+    site->calls++;
+    const int total_margin = psx_ws_x_margin();
+    if (total_margin <= 0) {
+        ws_aspect_cone_43_identity++;
+        site->identity_43++;
+        if (ws_aspect_cone_wide_latched) {
+            memset(ws_aspect_cone_state, 0, sizeof(ws_aspect_cone_state));
+            ws_aspect_cone_wide_latched = 0;
+        }
+        return vanilla;
+    }
+    ws_aspect_cone_wide_latched = 1;
+    ws_aspect_cone_sample_queues();
+
+    WsAspectConeState *state =
+        ws_aspect_cone_object_state(site->address, object);
+    /* The guarded Tomba sites are signed reject predicates: zero falls
+     * through to model participation, while one branches to rejection. */
+    if (!vanilla) {
+        state->active = 1;
+        ws_aspect_cone_vanilla_keep++;
+        site->vanilla_keep++;
+        return 0;
+    }
+
+    const int visible_margin =
+        (total_margin > ws_cull_guard_pixels)
+            ? total_margin - ws_cull_guard_pixels : 0;
+    const int32_t fx =
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 0u);
+    const int32_t fz =
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 2u);
+    const int32_t fy =
+        (int16_t)psx_read_half(ws_aspect_cone_forward_addr + 4u);
+    const uint32_t threshold = site->cosine_threshold;
+
+    const int in_visible =
+        psx_ws_aspect_cone_contains(x, z, y, fx, fz, fy, threshold,
+                                    visible_margin);
+    const int in_guard =
+        !in_visible && psx_ws_aspect_cone_contains(
+            x, z, y, fx, fz, fy, threshold, total_margin);
+    const int in_hysteresis =
+        !in_visible && !in_guard && state->active &&
+        psx_ws_aspect_cone_contains(
+            x, z, y, fx, fz, fy, threshold,
+            total_margin + (int)ws_aspect_cone_hysteresis_pixels);
+
+    if (!in_visible && !in_guard && !in_hysteresis) {
+        state->active = 0;
+        ws_aspect_cone_outside_reject++;
+        site->outside_reject++;
+        return 1;
+    }
+    if (!in_visible && site->queue_guard &&
+        !ws_aspect_cone_queue_has_guard_room(object)) {
+        state->active = 0;
+        ws_aspect_cone_queue_reject++;
+        site->queue_reject++;
+        return 1;
+    }
+    state->active = 1;
+    if (in_visible) {
+        ws_aspect_cone_visible_keep++;
+        site->visible_keep++;
+    } else if (in_guard) {
+        ws_aspect_cone_guard_keep++;
+        site->guard_keep++;
+    } else {
+        ws_aspect_cone_hysteresis_keep++;
+        site->hysteresis_keep++;
+    }
+    return 0;
+}
+
+int psx_ws_aspect_cone_site(CPUState *cpu, uint32_t pc, uint32_t instr,
+                            uint32_t vanilla, uint32_t *out) {
+    const WsAspectConeSite *site = ws_aspect_cone_find(pc, instr);
+    if (!site) return 0;
+    if (out) {
+        *out = psx_ws_aspect_cone_result(
+            pc, vanilla, cpu->gpr[site->object_reg],
+            (int32_t)(int16_t)cpu->gpr[site->x_reg],
+            (int32_t)(int16_t)cpu->gpr[site->z_reg],
+            (int32_t)(int16_t)cpu->gpr[site->y_reg]);
+    }
+    return 1;
+}
+
 int psx_ws_x_margin(void) {
     if (ws_margin_override >= 0) return ws_margin_override;
     /* Native-wide: widen the world-space draw cull by the per-side reveal
@@ -498,7 +842,8 @@ int psx_ws_x_margin(void) {
     if (ws_native_wide_configured())
         return ws_nw_configured_offset() + ws_cull_guard_pixels;
     if (!ws_active()) return 0;
-    return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum;
+    return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
+           + ws_cull_guard_pixels;
 }
 
 int32_t psx_ws_player_x_bound(int32_t vanilla)
@@ -1304,6 +1649,39 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
     out->last_world3d_frame = ws_sust_world3d_stamp;
     out->ovh_prims         = ws_ovh_prev;
     out->last_ovh_frame    = ws_sust_ovh_stamp;
+    out->aspect_cone_calls = ws_aspect_cone_calls;
+    out->aspect_cone_43_identity = ws_aspect_cone_43_identity;
+    out->aspect_cone_vanilla_keep = ws_aspect_cone_vanilla_keep;
+    out->aspect_cone_visible_keep = ws_aspect_cone_visible_keep;
+    out->aspect_cone_guard_keep = ws_aspect_cone_guard_keep;
+    out->aspect_cone_hysteresis_keep =
+        ws_aspect_cone_hysteresis_keep;
+    out->aspect_cone_outside_reject =
+        ws_aspect_cone_outside_reject;
+    out->aspect_cone_queue_reject = ws_aspect_cone_queue_reject;
+    for (int i = 0; i < 3; i++)
+        out->aspect_cone_queue_highwater[i] =
+            ws_aspect_cone_queue_highwater[i];
+    out->angle_calls = ws_angle_calls;
+    out->angle_43_identity = ws_angle_43_identity;
+    out->angle_max_vanilla = ws_angle_max_vanilla;
+    out->angle_max_widened = ws_angle_max_widened;
+}
+
+int gpu_ws_get_aspect_cone_site_debug(
+    uint32_t address, GpuWsAspectConeSiteDebug* out) {
+    WsAspectConeSite *site = ws_aspect_cone_find(address, 0);
+    if (!site || !out) return 0;
+    out->address = site->address | 0x80000000u;
+    out->calls = site->calls;
+    out->identity_43 = site->identity_43;
+    out->vanilla_keep = site->vanilla_keep;
+    out->visible_keep = site->visible_keep;
+    out->guard_keep = site->guard_keep;
+    out->hysteresis_keep = site->hysteresis_keep;
+    out->outside_reject = site->outside_reject;
+    out->queue_reject = site->queue_reject;
+    return 1;
 }
 
 void gpu_ws_configure(int aspect_num, int aspect_den,

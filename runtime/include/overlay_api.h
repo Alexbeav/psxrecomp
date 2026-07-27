@@ -81,7 +81,11 @@
 /* v19: ws_cull_keep_result forwarder for full-word-guarded object/model
  *      participation comparisons. The verdict depends on the host's live
  *      widescreen margin; NULL preserves the vanilla comparison. */
-#define PSX_OVERLAY_ABI_VERSION 19
+/* v20: ws_aspect_cone_result forwarder for camera-horizontal, aspect-aware
+ *      model participation with queue-safe guard/hysteresis policy. */
+/* v21: ws_angle_widen forwarder for exact, aspect-scaled 12-bit terrain
+ *      frustum half-angle constants. */
+#define PSX_OVERLAY_ABI_VERSION 21
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -279,6 +283,14 @@ typedef struct {
     /* Guarded object/model participation comparison helper (ABI v19).
      * Runtime-state dependent; NULL preserves the vanilla comparison. */
     uint32_t (*ws_cull_keep_result)(uint32_t vanilla, uint32_t forced);
+
+    /* Aspect-aware model-participation cone helper (ABI v20). */
+    uint32_t (*ws_aspect_cone_result)(uint32_t site, uint32_t vanilla,
+                                      uint32_t object, int32_t x,
+                                      int32_t z, int32_t y);
+
+    /* Aspect-scaled terrain-frustum angle helper (ABI v21). */
+    uint32_t (*ws_angle_widen)(uint32_t vanilla);
 } OverlayCallbacks;
 
 #ifdef __cplusplus

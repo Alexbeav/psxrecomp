@@ -77,6 +77,7 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
     h.u32(c.ws_auto_backdrop_preload ? 1u : 0u);
     h.u32(c.ws_bg2d_init_func);
+    h.u32((uint32_t)c.ws_cull_guard_pixels);
 
     std::vector<WidescreenSignedBoundSite> signed_sites =
         c.ws_signed_x_bound_sites;
@@ -106,6 +107,50 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(site.expected);
         h.u32(site.result);
     }
+
+    std::vector<WidescreenAngleSite> angle_sites = c.ws_cull_angle_sites;
+    std::sort(angle_sites.begin(), angle_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("cull_angle");
+    h.u32((uint32_t)angle_sites.size());
+    for (const auto& site : angle_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+    }
+
+    std::vector<WidescreenAspectConeSite> cone_sites =
+        c.ws_aspect_cone.sites;
+    std::sort(cone_sites.begin(), cone_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("aspect_cone");
+    h.u32((uint32_t)cone_sites.size());
+    for (const auto& site : cone_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+        h.u32(site.cosine_threshold);
+        h.u32(site.object_reg);
+        h.u32(site.x_reg);
+        h.u32(site.z_reg);
+        h.u32(site.y_reg);
+        h.u32(site.queue_guard ? 1u : 0u);
+    }
+    h.u32(c.ws_aspect_cone.forward_addr);
+    h.u32(c.ws_aspect_cone.object_type_offset);
+    h.u32(c.ws_aspect_cone.object_reg);
+    h.u32(c.ws_aspect_cone.x_reg);
+    h.u32(c.ws_aspect_cone.z_reg);
+    h.u32(c.ws_aspect_cone.y_reg);
+    h.u32(c.ws_aspect_cone.hysteresis_pixels);
+    h.u32(c.ws_aspect_cone.queue_reserve);
+    for (uint32_t value : c.ws_aspect_cone.queue_count_addrs) h.u32(value);
+    for (uint32_t value : c.ws_aspect_cone.queue_capacities) h.u32(value);
+    for (uint32_t value : c.ws_aspect_cone.queue_type_masks) h.u32(value);
 
     std::vector<RecompilerPatch> patches = c.recompiler_patches;
     std::sort(patches.begin(), patches.end(),
@@ -1287,6 +1332,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    std::vector<WidescreenAngleSite> ws_cull_angle_sites;
+    WidescreenAspectConeConfig ws_aspect_cone;
     int ws_cull_guard_pixels = 0;
     // Cull-signature immediates (screen_w_imms / screen_h_imms). Defaults are
     // the original Tomba signature (320-display: 0x140/0x141 + 0xE0/0xF1); a
@@ -1344,6 +1391,220 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                             config_path.string(), site.address));
                     }
                     ws_cull_keep_sites.push_back(site);
+                }
+            }
+            if (cull.contains("angle")) {
+                std::set<uint32_t> seen;
+                for (const auto& item :
+                     toml::find<toml::array>(cull, "angle")) {
+                    WidescreenAngleSite site;
+                    site.address = parse_hex(
+                        toml::find<std::string>(item, "address"),
+                        "widescreen.cull.angle.address");
+                    site.expected = parse_hex(
+                        toml::find<std::string>(item, "expected"),
+                        "widescreen.cull.angle.expected");
+                    const uint32_t op = site.expected >> 26;
+                    const uint32_t rs = (site.expected >> 21) & 31u;
+                    const int32_t imm = (int16_t)(site.expected & 0xFFFFu);
+                    if ((op != 0x08u && op != 0x09u) || rs != 0u ||
+                        imm <= 0 || imm >= 1024) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.angle]] expected must be "
+                            "ADDI/ADDIU rt,zero,imm with imm in [1, 1023]",
+                            config_path.string()));
+                    }
+                    if ((site.address & 3u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: cull-angle address 0x{:08X} is not "
+                            "instruction-aligned",
+                            config_path.string(), site.address));
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate cull-angle address 0x{:08X}",
+                            config_path.string(), site.address));
+                    ws_cull_angle_sites.push_back(site);
+                }
+            }
+            if (cull.contains("aspect_cone")) {
+                const toml::value& cone = toml::find(cull, "aspect_cone");
+                auto cone_hex = [&](const char *key) {
+                    return parse_hex(toml::find<std::string>(cone, key),
+                                     fmt::format("widescreen.cull.aspect_cone.{}", key));
+                };
+                ws_aspect_cone.forward_addr = cone_hex("forward_addr");
+                const int object_type_offset =
+                    toml::find<int>(cone, "object_type_offset");
+                const int object_reg = toml::find<int>(cone, "object_reg");
+                const int x_reg = toml::find<int>(cone, "x_reg");
+                const int z_reg = toml::find<int>(cone, "z_reg");
+                const int y_reg = toml::find<int>(cone, "y_reg");
+                const int hysteresis_pixels =
+                    toml::find_or<int>(cone, "hysteresis_pixels", 0);
+                const int queue_reserve =
+                    toml::find_or<int>(cone, "queue_reserve", 0);
+                if (object_type_offset < 0 || object_type_offset > 0xFFFF) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] "
+                        "object_type_offset must be in [0, 65535]",
+                        config_path.string()));
+                }
+                if (object_reg < 0 || object_reg > 31 ||
+                    x_reg < 0 || x_reg > 31 ||
+                    z_reg < 0 || z_reg > 31 ||
+                    y_reg < 0 || y_reg > 31) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] register indices "
+                        "must be in [0, 31]", config_path.string()));
+                }
+                if (hysteresis_pixels < 0 || hysteresis_pixels > 256 ||
+                    queue_reserve < 0 || queue_reserve > 256) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] hysteresis_pixels "
+                        "and queue_reserve must be in [0, 256]",
+                        config_path.string()));
+                }
+                if ((ws_aspect_cone.forward_addr & 1u) != 0) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] forward_addr "
+                        "must be halfword-aligned", config_path.string()));
+                }
+                ws_aspect_cone.object_type_offset =
+                    (uint32_t)object_type_offset;
+                ws_aspect_cone.object_reg = (uint32_t)object_reg;
+                ws_aspect_cone.x_reg = (uint32_t)x_reg;
+                ws_aspect_cone.z_reg = (uint32_t)z_reg;
+                ws_aspect_cone.y_reg = (uint32_t)y_reg;
+                ws_aspect_cone.hysteresis_pixels =
+                    (uint32_t)hysteresis_pixels;
+                ws_aspect_cone.queue_reserve = (uint32_t)queue_reserve;
+                auto load_cone_hex_array =
+                    [&](const char *key, std::array<uint32_t, 3>& out) {
+                        const auto values =
+                            toml::find<std::vector<std::string>>(cone, key);
+                        if (values.size() != out.size())
+                            throw std::runtime_error(fmt::format(
+                                "{}: [widescreen.cull.aspect_cone] {} must "
+                                "contain exactly three values",
+                                config_path.string(), key));
+                        for (size_t i = 0; i < out.size(); i++)
+                            out[i] = parse_hex(
+                                values[i],
+                                fmt::format("widescreen.cull.aspect_cone.{}",
+                                            key));
+                    };
+                auto load_cone_int_array =
+                    [&](const char *key, std::array<uint32_t, 3>& out) {
+                        const auto values =
+                            toml::find<std::vector<int>>(cone, key);
+                        if (values.size() != out.size())
+                            throw std::runtime_error(fmt::format(
+                                "{}: [widescreen.cull.aspect_cone] {} must "
+                                "contain exactly three values",
+                                config_path.string(), key));
+                        for (size_t i = 0; i < out.size(); i++) {
+                            if (values[i] < 0)
+                                throw std::runtime_error(fmt::format(
+                                    "{}: [widescreen.cull.aspect_cone] {} "
+                                    "values must be non-negative",
+                                    config_path.string(), key));
+                            out[i] = (uint32_t)values[i];
+                        }
+                    };
+                load_cone_hex_array("queue_count_addrs",
+                                    ws_aspect_cone.queue_count_addrs);
+                load_cone_int_array("queue_capacities",
+                                    ws_aspect_cone.queue_capacities);
+                load_cone_hex_array("queue_type_masks",
+                                    ws_aspect_cone.queue_type_masks);
+                uint32_t used_type_mask = 0;
+                for (size_t i = 0; i < 3; i++) {
+                    if ((ws_aspect_cone.queue_count_addrs[i] & 1u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_count_addrs values must be "
+                            "halfword-aligned", config_path.string()));
+                    if (ws_aspect_cone.queue_capacities[i] == 0 ||
+                        ws_aspect_cone.queue_capacities[i] > 0x7FFFu)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_capacities values must be in [1, 32767]",
+                            config_path.string()));
+                    if (ws_aspect_cone.queue_reserve >=
+                        ws_aspect_cone.queue_capacities[i])
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_reserve must be smaller than every "
+                            "queue capacity", config_path.string()));
+                    if ((used_type_mask &
+                         ws_aspect_cone.queue_type_masks[i]) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_type_masks must not overlap",
+                            config_path.string()));
+                    used_type_mask |= ws_aspect_cone.queue_type_masks[i];
+                }
+                if (!cone.contains("sites"))
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] requires at least "
+                        "one [[...sites]] entry", config_path.string()));
+                std::set<uint32_t> seen;
+                for (const auto& item :
+                     toml::find<toml::array>(cone, "sites")) {
+                    WidescreenAspectConeSite site;
+                    site.address = parse_hex(
+                        toml::find<std::string>(item, "address"),
+                        "widescreen.cull.aspect_cone.sites.address");
+                    site.expected = parse_hex(
+                        toml::find<std::string>(item, "expected"),
+                        "widescreen.cull.aspect_cone.sites.expected");
+                    const uint32_t opcode = site.expected >> 26;
+                    const bool is_slti = opcode == 0x0Au;
+                    const bool is_slt =
+                        opcode == 0u &&
+                        (site.expected & 0x3Fu) == 0x2Au &&
+                        ((site.expected >> 6) & 0x1Fu) == 0u;
+                    if (!is_slti && !is_slt)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.aspect_cone.sites]] "
+                            "expected must be signed SLTI or SLT",
+                            config_path.string()));
+                    const int threshold = toml::find_or<int>(
+                        item, "cosine_threshold",
+                        is_slti ? (int)(site.expected & 0xFFFFu) : -1);
+                    if (threshold < 1 || threshold > 1023)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.aspect_cone.sites]] "
+                            "cosine_threshold must be in [1, 1023] "
+                            "(and is required for SLT)",
+                            config_path.string()));
+                    site.cosine_threshold = (uint32_t)threshold;
+                    auto site_reg = [&](const char *key, int fallback) {
+                        const int value = item.contains(key)
+                            ? toml::find<int>(item, key) : fallback;
+                        if (value < 0 || value > 31)
+                            throw std::runtime_error(fmt::format(
+                                "{}: [[widescreen.cull.aspect_cone.sites]] "
+                                "{} must be in [0, 31]",
+                                config_path.string(), key));
+                        return (uint32_t)value;
+                    };
+                    site.object_reg = site_reg("object_reg", object_reg);
+                    site.x_reg = site_reg("x_reg", x_reg);
+                    site.z_reg = site_reg("z_reg", z_reg);
+                    site.y_reg = site_reg("y_reg", y_reg);
+                    site.queue_guard =
+                        toml::find_or<bool>(item, "queue_guard", true);
+                    if ((site.address & 3u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: aspect-cone address 0x{:08X} is not "
+                            "instruction-aligned",
+                            config_path.string(), site.address));
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate aspect-cone address 0x{:08X}",
+                            config_path.string(), site.address));
+                    ws_aspect_cone.sites.push_back(site);
                 }
             }
             if (cull.contains("guard_pixels")) {
@@ -1506,6 +1767,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
+        /*ws_cull_angle_sites*/   ws_cull_angle_sites,
+        /*ws_aspect_cone*/         ws_aspect_cone,
         /*ws_cull_guard_pixels*/  ws_cull_guard_pixels,
         /*ws_cull_w_imms*/        ws_cull_w_imms,
         /*ws_cull_h_imms*/        ws_cull_h_imms,

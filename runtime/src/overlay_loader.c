@@ -2289,6 +2289,17 @@ static void init_callbacks(void) {
                                                      uint32_t forced);
             s_callbacks.ws_cull_keep_result = psx_ws_cull_keep_result;
         }
+        {
+            extern uint32_t psx_ws_aspect_cone_result(
+                uint32_t site, uint32_t vanilla, uint32_t object,
+                int32_t x, int32_t z, int32_t y);
+            s_callbacks.ws_aspect_cone_result =
+                psx_ws_aspect_cone_result;
+        }
+        {
+            extern uint32_t psx_ws_angle_widen(uint32_t vanilla);
+            s_callbacks.ws_angle_widen = psx_ws_angle_widen;
+        }
     }
 }
 

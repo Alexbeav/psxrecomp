@@ -784,6 +784,36 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
 
     std::string code;
 
+    // Full-word-guarded terrain-frustum half-angle constants. Scaling the
+    // tangent is the geometric counterpart of widening the horizontal
+    // projection; adding screen pixels directly to 12-bit angle units is not.
+    for (const auto& site : config_.ws_cull_angle_sites) {
+        if ((site.address & 0x1FFFFFFFu) !=
+            (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: cull angle expected 0x{:08X} at 0x{:08X}, "
+                       "found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        if ((opcode != 0x08u && opcode != 0x09u) ||
+            get_rs(instr) != 0u) {
+            fmt::print(stderr,
+                       "ERROR: cull angle site 0x{:08X} is not "
+                       "ADDI/ADDIU rt,zero,imm (0x{:08X})\n",
+                       addr, instr);
+            std::exit(1);
+        }
+        const uint32_t dst = get_rt(instr);
+        const int32_t vanilla = (int16_t)(instr & 0xFFFFu);
+        return fmt::format(
+            "{} = psx_ws_angle_widen({}u);"
+            "  /* aspect-scaled terrain frustum half-angle */{}",
+            reg_name(dst), (uint32_t)vanilla, comment);
+    }
+
     for (const auto& site : config_.ws_signed_x_bound_sites) {
         if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
         if (instr != site.expected) {
@@ -797,6 +827,57 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         return fmt::format("{} = (uint32_t)psx_ws_player_x_bound((int32_t)0x{:08X});"
                            "  /* typed native-wide signed X bound */{}",
                            reg_name(get_rt(instr)), (uint32_t)vanilla, comment);
+    }
+
+    // Full-word-guarded, camera-horizontal model-participation cones. The
+    // runtime helper preserves the original compare at 4:3 and every vanilla
+    // keep verdict, adding only the aspect-derived horizontal fringe.
+    for (const auto& site : config_.ws_aspect_cone.sites) {
+        if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: aspect cone expected 0x{:08X} at 0x{:08X}, "
+                       "found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        const bool is_slti = opcode == 0x0A;
+        const bool is_slt =
+            opcode == 0x00 && (instr & 0x3Fu) == 0x2Au &&
+            ((instr >> 6) & 0x1Fu) == 0u;
+        if (!is_slti && !is_slt) {
+            fmt::print(stderr,
+                       "ERROR: aspect cone site 0x{:08X} is not signed "
+                       "SLTI/SLT "
+                       "(0x{:08X})\n", addr, instr);
+            std::exit(1);
+        }
+        const uint32_t dst = is_slti ? get_rt(instr) : get_rd(instr);
+        const std::string vanilla = is_slti
+            ? fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                          reg_name(get_rs(instr)),
+                          (int32_t)(int16_t)(instr & 0xFFFFu))
+            : fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                          reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        const auto effective_reg = [](uint32_t site_reg,
+                                      uint32_t default_reg) {
+            return site_reg == 0xFFFFFFFFu ? default_reg : site_reg;
+        };
+        return fmt::format(
+            "{} = psx_ws_aspect_cone_result(0x{:08X}u, ({}), {}, "
+            "(int32_t)(int16_t){}, (int32_t)(int16_t){}, "
+            "(int32_t)(int16_t){});"
+            "  /* aspect-aware horizontal model participation */{}",
+            reg_name(dst), addr, vanilla,
+            reg_name(effective_reg(
+                site.object_reg, config_.ws_aspect_cone.object_reg)),
+            reg_name(effective_reg(
+                site.x_reg, config_.ws_aspect_cone.x_reg)),
+            reg_name(effective_reg(
+                site.z_reg, config_.ws_aspect_cone.z_reg)),
+            reg_name(effective_reg(
+                site.y_reg, config_.ws_aspect_cone.y_reg)), comment);
     }
 
     // Full-word-guarded object/model participation compares. At 4:3 the
@@ -2876,6 +2957,8 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int32_t psx_ws_plane_nx(int32_t nx);                /* ws side-plane normal-X scale (gpu.c) */\n";
     ss << "extern uint32_t psx_ws_xclip_bound(uint32_t vanilla);      /* ws per-prim X reject bound load (gpu.c) */\n";
     ss << "extern uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced); /* ws guarded keep compare (gpu.c) */\n";
+    ss << "extern uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla, uint32_t object, int32_t x, int32_t z, int32_t y); /* aspect-aware participation cone */\n";
+    ss << "extern uint32_t psx_ws_angle_widen(uint32_t vanilla); /* aspect-scaled 12-bit terrain-frustum half-angle */\n";
     ss << "extern int  psx_ws_backdrop_x(int x);  /* widescreen backdrop screenX squash (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_cols(int base);                    /* ws 2D bg tile-loop widen: col count (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_startcol(int col, unsigned mask);  /* ws 2D bg tile-loop widen: start tile col (gpu.c) */\n";

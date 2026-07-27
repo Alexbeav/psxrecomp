@@ -135,6 +135,14 @@ struct CodeGenConfig {
     // while widescreen reveals extra world. 4:3 evaluates the original compare.
     std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep_sites;
 
+    // Exact `addi[u] rt,zero,imm` 12-bit angular half-extents. The runtime
+    // scales tan(angle) by the current horizontal reveal factor.
+    std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle_sites;
+
+    // Exact model-participation cosine compares that gain a camera-horizontal
+    // aspect envelope while preserving the vanilla vertical cone.
+    PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
+
     // Screen-extent signature immediates ([widescreen.cull] screen_w_imms /
     // screen_h_imms) — per-game display-width-derived bounds. Defaults are the
     // Tomba signature; Ape Escape uses 0x181 (+ 0xF1 height).

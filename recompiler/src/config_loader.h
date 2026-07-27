@@ -19,6 +19,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -61,6 +62,52 @@ struct WidescreenCullKeepSite {
     uint32_t address = 0;
     uint32_t expected = 0; // guarded SLT/SLTU/SLTI/SLTIU instruction
     uint32_t result = 0;   // forced comparison result (0 or 1)
+};
+
+// Aspect-scaled 12-bit angular half-extent. These sites load a positive angle
+// constant with `addi[u] rt,zero,imm`; the runtime widens tan(angle) by the
+// live horizontal reveal factor. Full-word guards prevent overlay-address
+// aliases from changing unrelated immediates.
+struct WidescreenAngleSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded ADDI/ADDIU with rs == zero
+};
+
+// Aspect-aware horizontal participation cone. The exact compare sites are
+// full-word guarded because overlay variants can reuse a virtual address for
+// unrelated code. Registers are MIPS GPR indices captured at each comparison.
+// Queue metadata is optional; when present it lets guard/hysteresis candidates
+// leave configured headroom without changing the game's fixed capacities.
+struct WidescreenAspectConeSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded signed SLTI or SLT reject comparison
+    // Q10 cosine threshold. Zero derives the threshold from an SLTI
+    // immediate; register-register SLT sites must provide it explicitly.
+    uint32_t cosine_threshold = 0;
+    // Per-site register overrides. UINT32_MAX inherits the enclosing
+    // aspect-cone defaults.
+    uint32_t object_reg = 0xFFFFFFFFu;
+    uint32_t x_reg = 0xFFFFFFFFu;
+    uint32_t z_reg = 0xFFFFFFFFu;
+    uint32_t y_reg = 0xFFFFFFFFu;
+    // False for lower-level model/child predicates that do not append to the
+    // configured fixed-capacity queues.
+    bool queue_guard = true;
+};
+
+struct WidescreenAspectConeConfig {
+    std::vector<WidescreenAspectConeSite> sites;
+    uint32_t forward_addr = 0;       // three signed Q12 halfwords: X,Z,Y
+    uint32_t object_type_offset = 0;
+    uint32_t object_reg = 0;
+    uint32_t x_reg = 0;
+    uint32_t z_reg = 0;
+    uint32_t y_reg = 0;
+    uint32_t hysteresis_pixels = 0;
+    uint32_t queue_reserve = 0;
+    std::array<uint32_t, 3> queue_count_addrs{};
+    std::array<uint32_t, 3> queue_capacities{};
+    std::array<uint32_t, 3> queue_type_masks{};
 };
 // Parse/format a pad mode. pad_mode_from_string accepts "hybrid"/"analog"/
 // "digital" (case-insensitive) and returns `fallback` for anything else.
@@ -610,6 +657,11 @@ struct GameConfig {
     // where maximal overdraw is preferable to range guessing. Each entry is
     // guarded by the complete MIPS word; 4:3 executes the vanilla comparison.
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    // Exact 12-bit angular half-extents used by terrain-cell frusta.
+    std::vector<WidescreenAngleSite> ws_cull_angle_sites;
+    // Full-word-guarded model-participation cosine compares widened only in
+    // the camera-horizontal plane. Empty/default is completely inert.
+    WidescreenAspectConeConfig ws_aspect_cone;
     // Extra per-side actor overdraw beyond the visible widescreen edge.
     int                   ws_cull_guard_pixels = 0;
 

@@ -4726,7 +4726,14 @@ static void handle_gpu_state(int id, const char *json)
              "\"mode\":%d,\"nw_extra\":%d,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
-             "\"ovh_prims\":%u,\"last_ovh_frame\":%u}}",
+             "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
+             "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
+             "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
+             "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
+             "\"outside_reject\":%llu,\"queue_reject\":%llu,"
+             "\"queue_highwater\":[%u,%u,%u]},"
+             "\"terrain_angle\":{\"calls\":%llu,\"identity_43\":%llu,"
+             "\"max_vanilla\":%u,\"max_widened\":%u}}}",
              id, di.display_x, di.display_y,
              di.width, di.height,
              di.depth24 ? 24 : 15, di.depth24,
@@ -4744,7 +4751,49 @@ static void handle_gpu_state(int id, const char *json)
              ws.mode, ws.nw_extra,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
              ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
-             ws.ovh_prims, ws.last_ovh_frame);
+             ws.ovh_prims, ws.last_ovh_frame,
+             (unsigned long long)ws.aspect_cone_calls,
+             (unsigned long long)ws.aspect_cone_43_identity,
+             (unsigned long long)ws.aspect_cone_vanilla_keep,
+             (unsigned long long)ws.aspect_cone_visible_keep,
+             (unsigned long long)ws.aspect_cone_guard_keep,
+             (unsigned long long)ws.aspect_cone_hysteresis_keep,
+             (unsigned long long)ws.aspect_cone_outside_reject,
+             (unsigned long long)ws.aspect_cone_queue_reject,
+             ws.aspect_cone_queue_highwater[0],
+             ws.aspect_cone_queue_highwater[1],
+             ws.aspect_cone_queue_highwater[2],
+             (unsigned long long)ws.angle_calls,
+             (unsigned long long)ws.angle_43_identity,
+             ws.angle_max_vanilla, ws.angle_max_widened);
+}
+
+static void handle_ws_aspect_cone_site(int id, const char *json)
+{
+    char addr_str[32];
+    if (!json_get_str(json, "address", addr_str, sizeof(addr_str))) {
+        send_err(id, "missing address");
+        return;
+    }
+    GpuWsAspectConeSiteDebug site;
+    if (!gpu_ws_get_aspect_cone_site_debug(hex_to_u32(addr_str), &site)) {
+        send_err(id, "aspect-cone site not configured");
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"address\":\"0x%08X\","
+             "\"calls\":%llu,\"identity_43\":%llu,"
+             "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
+             "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
+             "\"outside_reject\":%llu,\"queue_reject\":%llu}",
+             id, site.address,
+             (unsigned long long)site.calls,
+             (unsigned long long)site.identity_43,
+             (unsigned long long)site.vanilla_keep,
+             (unsigned long long)site.visible_keep,
+             (unsigned long long)site.guard_keep,
+             (unsigned long long)site.hysteresis_keep,
+             (unsigned long long)site.outside_reject,
+             (unsigned long long)site.queue_reject);
 }
 
 static void handle_mem_words(int id, const char *json)
@@ -12297,6 +12346,7 @@ static const CmdEntry s_commands[] = {
     { "dump_ram",          handle_read_ram },   /* alias: one request, one response */
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
+    { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },
     { "kernel_bless",      handle_kernel_bless },
