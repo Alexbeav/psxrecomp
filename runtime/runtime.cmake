@@ -779,6 +779,24 @@ function(psxrecomp_add_runtime_target target)
                 "https://github.com/mstan/recomp-ui.git recomp-ui\n"
                 "Or set -DRECOMP_UI_ROOT=/path/to/recomp-ui")
         endif()
+        # recomp-ui gates its Mods view behind RECOMP_UI_ENABLE_MODS, which
+        # defaults OFF there -- correct for a cross-console launcher, since a
+        # console with no mod system should not show an empty Mods tab.
+        #
+        # psxrecomp does ship mod packages as a first-class, documented feature
+        # (docs/MOD_PACKAGES.md; Tomba! and Ape Escape ship catalogs today), so
+        # the framework opts in on every title's behalf. Without this, a title
+        # that already shipped a Mods panel silently loses it on its next
+        # rebuild -- the panel compiles in but stays inert, which reads as "this
+        # build is old" rather than as a missing build flag.
+        #
+        # Set before the include so recomp-ui's option() honours it, and only
+        # when the caller has not already decided, so -DRECOMP_UI_ENABLE_MODS=OFF
+        # still wins.
+        if(NOT DEFINED RECOMP_UI_ENABLE_MODS)
+            set(RECOMP_UI_ENABLE_MODS ON CACHE BOOL
+                "Enable the recomp-ui Mods view (psxrecomp ships mod packages)")
+        endif()
         include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
 
         set(_psx_recomp_ui_args)
