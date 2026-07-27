@@ -5626,7 +5626,13 @@ int main(int argc, char** argv) {
             gi.allow_hybrid         = ctrl_allow_hybrid ? 1 : 0;
             gi.locked_pad_mode      = p1_mode;  /* force the game's declared mode (default_mode) */
             gi.lock_device          = ctrl_lock_device ? 1 : 0;
-            gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
+            /* No aspect capability means recomp-ui omits View mode entirely.
+             * Games still using the legacy Settings path advertise Native plus
+             * their offered wide modes; games migrating widescreen into Mods
+             * set [widescreen] offer=false and let a plugin own activation. */
+            gi.aspect_mask          = ws_offered
+                ? (0x1 | 0x2 | (ws_ultrawide_offered ? 0x4 : 0))
+                : 0;
             if (ws_adaptive_view_supported) {
                 gi.aspect_labels = ws_ultrawide_offered
                     ? kAdaptiveAspectLabels : kAdaptiveAspectLabelsNoUltrawide;
