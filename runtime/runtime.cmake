@@ -279,21 +279,66 @@ set(PSXRECOMP_BIOS_STEM "${PSXRECOMP_BIOS_STEM_PRIMARY}" CACHE STRING
 set(PSXRECOMP_BIOS_PROFILE "${PSXRECOMP_ROOT}/bios/${PSXRECOMP_BIOS_STEM}.toml" CACHE FILEPATH
     "BIOS profile TOML this build regenerates from (staleness stamp input)")
 
+# Link a stem only if its generated sources are actually present.
+#
+# PSXRECOMP_BIOS_STEMS lists every stem this build WOULD like. SCPH1001 is in
+# the default list, but its generated C is a derivative of a copyrighted Sony
+# BIOS, so it is gitignored and only exists once a developer regenerates it
+# from their own dump. Requiring it unconditionally meant a fresh checkout --
+# which legitimately has only the bundled MIT OpenBIOS -- failed every game
+# link with "undefined reference to SCPH1001_psx_bios_backend", long after
+# configure had succeeded. Filtering here keeps SCPH1001 fully supported for
+# anyone who has regenerated it, without making it mandatory for everyone else.
 set(PSXRECOMP_BIOS_GENERATED "")
 set(_psxrt_registry_externs "")
 set(_psxrt_registry_entries "")
+set(_psxrt_bios_linked "")
+set(_psxrt_bios_skipped "")
 foreach(_stem IN LISTS PSXRECOMP_BIOS_STEMS)
-    list(APPEND PSXRECOMP_BIOS_GENERATED
-        ${PSXRECOMP_ROOT}/generated/${_stem}_full.c
-        ${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c)
-    string(APPEND _psxrt_registry_externs
-        "extern const PsxBiosBackend ${_stem}_psx_bios_backend;
+    # Presence is not enough: a generated/ tree left over from before the
+    # backend-descriptor mechanism has both files but defines no descriptor,
+    # which links fine at configure time and then fails at link with an
+    # undefined reference. Probe the descriptor itself. It is emitted into
+    # <stem>_dispatch.c (~1MB), never the multi-megabyte <stem>_full.c, so
+    # this scan stays cheap.
+    set(_psxrt_desc "")
+    if(EXISTS "${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c")
+        file(STRINGS "${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c" _psxrt_desc
+             REGEX "${_stem}_psx_bios_backend" LIMIT_COUNT 1)
+    endif()
+    if(EXISTS "${PSXRECOMP_ROOT}/generated/${_stem}_full.c" AND _psxrt_desc)
+        list(APPEND PSXRECOMP_BIOS_GENERATED
+            ${PSXRECOMP_ROOT}/generated/${_stem}_full.c
+            ${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c)
+        string(APPEND _psxrt_registry_externs
+            "extern const PsxBiosBackend ${_stem}_psx_bios_backend;
 ")
-    string(APPEND _psxrt_registry_entries
-        "    &${_stem}_psx_bios_backend,
+        string(APPEND _psxrt_registry_entries
+            "    &${_stem}_psx_bios_backend,
 ")
+        list(APPEND _psxrt_bios_linked "${_stem}")
+    else()
+        list(APPEND _psxrt_bios_skipped "${_stem}")
+    endif()
 endforeach()
-list(LENGTH PSXRECOMP_BIOS_STEMS _psxrt_bios_count)
+
+if(_psxrt_bios_skipped)
+    message(STATUS
+        "BIOS backends skipped (generated C missing or predates the backend "
+        "descriptor): ${_psxrt_bios_skipped} -- regenerate with "
+        "tools/regen_bios.sh --config bios/<stem>.toml")
+endif()
+if(NOT _psxrt_bios_linked)
+    message(FATAL_ERROR
+        "No recompiled BIOS backend available. Wanted: ${PSXRECOMP_BIOS_STEMS}, "
+        "but no matching generated/<stem>_full.c + <stem>_dispatch.c were found "
+        "under ${PSXRECOMP_ROOT}/generated.\n"
+        "Generate at least one before building the runtime:\n"
+        "    bash tools/regen_bios.sh --config bios/OpenBIOS.toml\n"
+        "(OpenBIOS is bundled and MIT-licensed, so this needs no BIOS dump.)")
+endif()
+message(STATUS "BIOS backends linked: ${_psxrt_bios_linked}")
+list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
 
 # Registry of the compiled-in backends, in preference order. Generated so the
 # stem list stays the single source of truth.
