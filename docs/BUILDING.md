@@ -36,17 +36,31 @@ project ships no game data.
 | **TinyCC (TCC) 0.9.27** | Not in this repo — downloaded at release-packaging time and bundled beside the game exe in `overlay_toolchain/`. | Toolchain-free overlay compilation for players (run as a subprocess) |
 | **Python 3** | System (development) or an embedded copy bundled in releases | Runs `tools/compile_overlays.py` in the overlay pipeline |
 | **OpenGL** | System (`opengl32` on Windows; `find_package(OpenGL)` elsewhere) | The GL renderer |
-| **Vulkan** | Headers only, optional, **off by default** (`PSX_ENABLE_VULKAN=OFF`); loaded dynamically via SDL. Shader compilation needs `glslc` from the Vulkan SDK. | The experimental Vulkan renderer |
+| **Vulkan** | Headers only, **on by default** (`PSX_ENABLE_VULKAN=ON`) — built when the SDK tools are available, otherwise skipped; loaded dynamically via SDL. Shader compilation needs `glslc` from the Vulkan SDK. Pass `-DPSX_ENABLE_VULKAN=OFF` to exclude it. | The experimental Vulkan renderer |
 
 Developers building overlays locally just need `gcc` on `PATH` (the `gcc` tier);
 the bundled `tcc` matters only for end-user release packages.
 
 ### Get the source
 
-This repository has no required git submodules:
+This repository has two submodules, **neither of which is required** for the
+recompiler and runtime builds described below:
+
+| Submodule | Needed when |
+|---|---|
+| `recomp-ui` | `-DPSX_RECOMP_UI=ON` (the launcher UI). Configure **fails** with a `FATAL_ERROR` if this is ON and the submodule is absent. |
+| `lib/recomp-net` | `-DPSX_NETPLAY=ON` (netplay). |
+
+A plain clone is enough to build the recompiler and the runtime:
 
 ```sh
 git clone https://github.com/mstan/psxrecomp.git
+```
+
+Add `--recurse-submodules` if you intend to build the launcher or netplay:
+
+```sh
+git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
 ```
 
 ## Per-platform prerequisites
@@ -77,11 +91,19 @@ Two CMake trees: the recompiler (a tool) and the runtime (the engine).
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build recompiler/build
 
-# 2. (Optional) regenerate either statically recompiled BIOS backend.
+# 2. REQUIRED before the first runtime build: generate a BIOS backend.
+#    Step 3 configures psx-runtime from generated/OpenBIOS_full.c. If generated/
+#    is empty, CMake does NOT fall back -- it fails at configure time with
+#    "Cannot find source file: .../generated/OpenBIOS_full.c" followed by
+#    "No SOURCES given to target: psx-runtime". Re-run this step whenever the
+#    recompiler emitter changes; a stale generated/ raises a fingerprint-mismatch
+#    warning from runtime.cmake.
+#
 #    OpenBIOS can always be regenerated from the tracked image. Regenerating
-#    the retail backend requires your own bios/SCPH1001.BIN dump.
+#    the retail backend requires your own bios/SCPH1001.BIN dump and is genuinely
+#    optional -- OpenBIOS alone is enough to build and boot.
 bash tools/regen_bios.sh --config bios/OpenBIOS.toml
-bash tools/regen_bios.sh --config bios/SCPH1001.toml
+bash tools/regen_bios.sh --config bios/SCPH1001.toml   # optional, needs your own dump
 
 # 3. Runtime → produces psx-runtime (BIOS-only for this repo)
 cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -117,8 +139,8 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | `PSX_DEBUG_TOOLS` | ON for Debug/RelWithDebInfo, OFF for Release | TCP debug server + heartbeat + per-block recording |
 | `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL2 + libgcc/libstdc++) |
 | `PSX_RECOMP_UI` | ON | Wire a downstream game's pinned recomp-ui launcher; set OFF for headless/generated builds |
-| `PSX_ENABLE_VULKAN` | OFF | Build the experimental Vulkan renderer |
-| `PSX_BUILD_COSIM` | OFF | Build the first-divergence co-sim oracle target |
+| `PSX_ENABLE_VULKAN` | **ON** | Build the experimental Vulkan renderer when the SDK tools are present (skipped if not). Pass `OFF` to exclude it outright. |
+| `PSX_NETPLAY` | OFF | Netplay support; requires the `lib/recomp-net` submodule |
 
 ## Build and run a game
 

@@ -46,7 +46,22 @@ includes `generated/overlays.c` when it exists.
 
 ---
 
-## Layer A — Dynamic DLL loading (runtime, SHELVED)
+## Layer A — Dynamic DLL loading (runtime) — SHIPPED
+
+> **Status corrected 2026-07-27.** This section described Layer A as "SHELVED".
+> It is not: dynamic DLL overlay loading is the **live production dispatch
+> path**. `runtime/src/overlay_loader.c` is ~4,400 lines with 15 `LoadLibrary`
+> call sites and was last modified 2026-07-26;
+> [`COMPILING_OVERLAYS.md`](COMPILING_OVERLAYS.md) documents building the
+> `cache/…/<phys>_<crc>.dll` shards that ship inside release packages. The
+> shelving described below was a real moment in the project's history, and the
+> account of the CRC-keying dead ends is worth keeping — but it was superseded.
+> Content-hash dispatch replaced the unstable CRC key, and the Load Game crash
+> was subsequently root-caused rather than worked around.
+>
+> Read everything below this banner as **history**, not current state. For the
+> current pipeline see [`COMPILING_OVERLAYS.md`](COMPILING_OVERLAYS.md) and
+> [`AOT_OVERLAY_PLAN.md`](AOT_OVERLAY_PLAN.md).
 
 ### What it was supposed to do
 
@@ -99,6 +114,10 @@ but the Load Game crash was not diagnosed before shelving.
    cross-call patching or missing extern declarations.
 
 The infrastructure is complete. The blocker is code correctness, not plumbing.
+
+*(Historical. All three items were subsequently resolved — the CRC key was
+replaced by content-hash dispatch and the cache layout now carries an emitter
+tag, `<game-id>/<gcc|tcc>/<os>-<arch>/cg<N>_<hash>/<phys>_<crc>.dll`.)*
 
 ---
 

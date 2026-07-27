@@ -1,7 +1,28 @@
 # On-the-Fly String Translation / Localization for psxrecomp
 
-**Status:** SPEC (design only — no implementation yet). Reusable framework
-feature; **Tsumu Light (SLPS-02253)** is the first consumer.
+**Status:** IMPLEMENTED and wired into the runtime. Reusable framework feature;
+**Tsumu Light (SLPS-02253)** is the first consumer.
+
+> This document was left marked "SPEC (design only — no implementation yet)"
+> long after the feature shipped. It now reads as the design rationale behind
+> working code, not a proposal. Where the prose below says "will" or "should",
+> read it as describing what was built.
+
+The implementation lives in `runtime/src/text_xlate.cpp` (~970 lines) behind
+`runtime/include/text_xlate.h`:
+
+| Entry point | Role |
+|---|---|
+| `text_xlate_init(project_root, language)` | Loads `translations/*.toml` under the project root; called from `runtime/src/main.cpp` at startup |
+| `text_xlate_set_language(language)` | Re-applies the resolved language (launcher/settings selection) |
+| `text_xlate_on_dispatch(cpu, target)` | Per-dispatch capture/substitution hook |
+| `text_xlate_vram_upload(x, y, w, h)` | VRAM-upload interception path |
+| `text_xlate_debug_json(subcmd, out, cap)` | TCP debug-server introspection |
+
+Configuration is `[localization].language` (falling back to `[runtime]`), with
+`[localization].languages` driving the launcher's language dropdown; see
+`recompiler/src/config_loader.h`. Setting the language to `jp`, `off`, or empty
+disables substitution while leaving capture running.
 
 **Goal.** Let a Japanese-only PSX title be played in English (or any target
 language) by **capturing the game's source strings from memory and substituting

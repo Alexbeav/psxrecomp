@@ -26,10 +26,18 @@ psx-runtime                          # boots BIOS discless
 psx-runtime games/tomba/game.toml    # boots BIOS, then loads game
 ```
 
-When both are loaded, keys merge:
+How the two configs relate:
 
-- **Scalar keys (`debug_port`, `window_title`, `memcard_dir`, ...)**: game
-  wins if set, inherit from bios.toml otherwise. Shallow override.
+- **Scalar keys (`debug_port`, `window_title`, `memcard_dir`, ...)**: these come
+  from `game.toml` only. There is **no BIOS→game inheritance.** An earlier
+  version of this document described a shallow override where the game won and
+  otherwise inherited from `bios.toml`; that merge was never implemented.
+  `load_bios_config` (`recompiler/src/config_loader.cpp`) is called only from the
+  recompiler front-ends — `main_bios.cpp`, and `main_psx.cpp` purely to build the
+  `BiosAddressModel` — and never from `runtime/src/main.cpp`. Setting a
+  `[runtime]` scalar in a BIOS toml has no effect on a game run.
+  Runtime precedence is: environment > CLI > `settings.toml` > `game.toml` >
+  compiled-in default.
 - **`[program]` (BIOS) and `[game]` blocks**: NOT merged — they describe
   different programs. Both are visible to the loader.
 - **Generated dispatch tables and C output**: ADDITIVE. BIOS contributes

@@ -44,10 +44,15 @@ OpenBIOS. The compiled-in code is generated *from that exact image*, so a
 different dump — SCPH-101, SCPH-5552, a bad rip — cannot be substituted: the
 recompiled code would execute against data it does not match, and crash.
 
-Every build therefore checks the identity (size, CRC32, SHA-256) of a chosen
-BIOS before using it, and says which image it expects if the check fails. This
-is not DRM and not a preference; it is the difference between running and
-wild-jumping.
+Every build therefore checks the identity of a chosen BIOS before using it, and
+says which image it expects if the check fails. This is not DRM and not a
+preference; it is the difference between running and wild-jumping.
+
+The acceptance gate compares **file size and CRC32** against each linked
+backend's recorded identity (`bios_backend_for_file` in `runtime/src/main.cpp`).
+A SHA-256 is also recorded per image (`image_sha256` in
+`runtime/include/psx_bios_image.h`) and is surfaced for provenance and bug
+reports, but it is **not** part of the accept/reject decision.
 
 If a chosen BIOS does not match:
 

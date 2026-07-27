@@ -123,7 +123,10 @@ Three GPU backends behind one interface:
 - **OpenGL** — GPU-authoritative VRAM/FBO renderer, the default; moves
   rasterization and supersampling onto the GPU. Falls back to software if GL
   init fails. (See [`docs/internal/GL_RENDERER_HANDOFF.md`](internal/GL_RENDERER_HANDOFF.md).)
-- **Vulkan** — experimental, off by default (`PSX_ENABLE_VULKAN=OFF`).
+- **Vulkan** — experimental. The build option `PSX_ENABLE_VULKAN` defaults **ON**
+  (compiled when the SDK tools are present), but it is not the runtime default
+  renderer: selecting it also requires the game to offer Vulkan and the user to
+  request it, otherwise the runtime falls back to OpenGL.
 
 Widescreen (a genuine wider GTE FOV, not a stretch) is opt-in and gen-time; see
 [`WIDESCREEN.md`](../WIDESCREEN.md) and
@@ -146,9 +149,14 @@ backend against the interpreter. See
 
 ## Configuration
 
-Every process has a **BIOS config**; a game adds a **game config** (`game.toml`),
-and the two are merged (game wins on scalar keys; program blocks and generated
-dispatch tables are additive). Full schema:
+A game is configured by its **game config** (`game.toml`). A **BIOS config**
+(`bios/*.toml`) describes a BIOS image's identity and address model.
+
+The two are **not merged.** The BIOS config is consumed only by the recompiler
+at build time (`psxrecomp-bios`, and `psxrecomp-game` for the address model);
+the shipping runtime never loads it — `runtime/src/main.cpp` contains no call to
+`load_bios_config`. `[runtime]` keys therefore take effect only from `game.toml`,
+`settings.toml`, the CLI, and the environment. Full schema:
 [`docs/config_schema.md`](config_schema.md).
 
 ## Where to go next
