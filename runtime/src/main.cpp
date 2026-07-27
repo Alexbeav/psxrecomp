@@ -647,6 +647,40 @@ extern "C" int psx_mod_set_native_vblank_rate(
     return 1;
 }
 
+extern "C" int psx_mod_set_frame_interpolation(
+    uint32_t frames_per_second) {
+    if (frames_per_second != 0 &&
+        (frames_per_second < 60 || frames_per_second > 1000)) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid interpolated frame rate %u FPS\n",
+            (unsigned)frames_per_second);
+        return 0;
+    }
+
+    /*
+     * Interpolation is a presentation feature of the OpenGL renderer. Mods are
+     * activated before the game window and renderer are created, so selecting
+     * it here is deterministic and does not require a live backend switch.
+     */
+    g_video_renderer = 1;
+    g_video_vsync = 0;
+    g_frame_interpolation = 1;
+    g_frame_interpolation_fps =
+        frames_per_second ? (int)frames_per_second : -1;
+
+    if (frames_per_second) {
+        std::fprintf(stdout,
+            "psxrecomp: mod selected presentation-only interpolation at "
+            "%u FPS; guest timing remains stock\n",
+            (unsigned)frames_per_second);
+    } else {
+        std::fprintf(stdout,
+            "psxrecomp: mod selected uncapped presentation-only "
+            "interpolation; guest timing remains stock\n");
+    }
+    return 1;
+}
+
 extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     if (enabled != 0 && enabled != 1) {
         std::fprintf(stderr,

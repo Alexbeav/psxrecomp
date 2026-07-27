@@ -45,6 +45,14 @@ int psx_mod_set_adaptive_display_aspect(uint32_t max_numerator,
  * machine realtime speed and is for experimental game-owned frame-rate mods.
  */
 int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
+
+/*
+ * Enable presentation-only frame interpolation while leaving guest VBlank,
+ * game logic, timers, and audio at their stock cadence. The OpenGL presenter
+ * blends between completed guest frames at the requested output rate.
+ * A value of zero selects an uncapped presentation loop.
+ */
+int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 int psx_mod_set_auto_skip_fmv(int enabled);
 
 /*

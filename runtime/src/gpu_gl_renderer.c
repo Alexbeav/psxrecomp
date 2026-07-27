@@ -3236,8 +3236,11 @@ static void interp_reset_history(void) {
 }
 
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz) {
-    int active = (enabled && host_hz >= 90.0) ? 1 : 0;
-    double effective_hz = target_hz >= 90.0 ? target_hz : host_hz;
+    double effective_hz = target_hz < 0.0
+        ? -1.0
+        : (target_hz >= 60.0 ? target_hz : host_hz);
+    int active = (enabled &&
+                  (effective_hz < 0.0 || effective_hz >= 50.0)) ? 1 : 0;
     const char *diag = getenv("PSX_GL_INTERP_DIAG");
     s_interp_diag = diag && diag[0] && diag[0] != '0';
     if (active && !s_interp_ctx && s_ctx) {
@@ -3268,7 +3271,10 @@ void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz
     s_interp_host_hz = host_hz;
     s_interp_target_hz = active ? effective_hz : 0.0;
     if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
-    if (active)
+    if (active && effective_hz < 0.0)
+        fprintf(stdout, "psxrecomp: GL frame interpolation enabled: uncapped "
+                "target on %.1f Hz display\n", host_hz);
+    else if (active)
         fprintf(stdout, "psxrecomp: GL frame interpolation enabled: %.1f FPS "
                 "target on %.1f Hz display\n", effective_hz, host_hz);
     else
@@ -3443,25 +3449,34 @@ static int interp_thread_main(void *opaque) {
 
     while (SDL_AtomicGet(&s_interp_thread_run)) {
         SDL_LockMutex(s_interp_mutex);
-        double hz = s_interp_target_hz >= 90.0 ? s_interp_target_hz : 120.0;
+        double hz = s_interp_target_hz;
         SDL_UnlockMutex(s_interp_mutex);
-        uint64_t period = (uint64_t)((double)freq / hz);
-        if (!period) period = 1;
-        deadline += period;
+        int uncapped = hz < 0.0;
         uint64_t now = SDL_GetPerformanceCounter();
-        if (now > deadline + period * 4u) deadline = now + period;
-        for (;;) {
+        if (!uncapped) {
+            if (hz < 50.0) hz = 60.0;
+            uint64_t period = (uint64_t)((double)freq / hz);
+            if (!period) period = 1;
+            deadline += period;
+            if (now > deadline + period * 4u) deadline = now + period;
+            for (;;) {
+                now = SDL_GetPerformanceCounter();
+                if (now >= deadline) break;
+                uint64_t remain = deadline - now;
+                uint32_t ms = (uint32_t)((remain * 1000u) /
+                                         (freq ? freq : 1u));
+                if (ms > 1) SDL_Delay(ms - 1);
+            }
+            while (SDL_GetPerformanceCounter() < deadline) {}
             now = SDL_GetPerformanceCounter();
-            if (now >= deadline) break;
-            uint64_t remain = deadline - now;
-            uint32_t ms = (uint32_t)((remain * 1000u) / (freq ? freq : 1u));
-            if (ms > 1) SDL_Delay(ms - 1);
+        } else {
+            deadline = now;
         }
-        while (SDL_GetPerformanceCounter() < deadline) {}
 
         SDL_LockMutex(s_interp_mutex);
+        int presented = 0;
         if (SDL_AtomicGet(&s_interp_thread_run) && s_interp_enabled)
-            interp_present();
+            presented = interp_present();
         if (s_interp_diag && now - diag_start >= freq * 5u) {
             double seconds = (double)(now - diag_start) / (double)freq;
             fprintf(stdout, "psxrecomp: GL interpolation cadence: "
@@ -3474,6 +3489,7 @@ static int interp_thread_main(void *opaque) {
             diag_swaps = s_interp_swaps;
         }
         SDL_UnlockMutex(s_interp_mutex);
+        if (uncapped && !presented) SDL_Delay(1);
     }
     p_glBindVertexArray(0);
     SDL_GL_MakeCurrent(s_win, NULL);
