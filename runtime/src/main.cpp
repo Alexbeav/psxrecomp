@@ -4855,6 +4855,7 @@ int main(int argc, char** argv) {
     bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
     bool ws_ultrawide_offered = false;
     bool ws_adaptive_view_supported = false;
+    bool frame_interpolation_offered = true;
     bool skip_fmv_offered = true;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     int  resolved_deadzone = -1;  /* <0 => keep input.ini/runtime default (12000) */
@@ -5099,6 +5100,8 @@ int main(int argc, char** argv) {
             ws_offered = gc.ws_offered;
             ws_ultrawide_offered = gc.ws_ultrawide_offered;
             ws_adaptive_view_supported = gc.ws_adaptive_view;
+            frame_interpolation_offered =
+                gc.runtime.video_offer_frame_interpolation;
             skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
@@ -5503,6 +5506,17 @@ int main(int argc, char** argv) {
             "ignoring the legacy Settings value\n");
         g_auto_skip_fmv = 0;
     }
+    /* Treat presentation interpolation the same way when a title moves it to
+     * Mods. Both the boolean and target rate are cleared so launcher-less
+     * starts cannot revive an old generic Settings selection. */
+    if (!frame_interpolation_offered &&
+        (g_frame_interpolation || g_frame_interpolation_fps)) {
+        std::fprintf(stdout,
+            "psxrecomp: Frame interpolation is mod-owned for this title; "
+            "ignoring the legacy Settings value\n");
+        g_frame_interpolation = 0;
+        g_frame_interpolation_fps = 0;
+    }
 
     /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
      * so the launcher hides its toggle — and, same completeness treatment as
@@ -5646,12 +5660,14 @@ int main(int argc, char** argv) {
             seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
             seed.fullscreen = g_fullscreen;                seed.has_fullscreen = true;
             seed.frame_interpolation = (g_frame_interpolation != 0);
-            seed.has_frame_interpolation = true;
+            seed.has_frame_interpolation = frame_interpolation_offered;
             seed.frame_interpolation_fps = g_frame_interpolation_fps;
-            seed.has_frame_interpolation_fps = true;
+            seed.has_frame_interpolation_fps = frame_interpolation_offered;
             seed.aspect_num = g_video_aspect_num;
-            seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
-            seed.adaptive_view = g_ws_adaptive_view;      seed.has_adaptive_view = true;
+            seed.aspect_den = g_video_aspect_den;
+            seed.has_aspect_ratio = ws_offered;
+            seed.adaptive_view = g_ws_adaptive_view;
+            seed.has_adaptive_view = ws_offered;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
@@ -5844,7 +5860,8 @@ int main(int argc, char** argv) {
             gi.aspect_mask          = ws_offered
                 ? (0x1 | 0x2 | (ws_ultrawide_offered ? 0x4 : 0))
                 : 0;
-            if (ws_adaptive_view_supported) {
+            gi.has_frame_interp     = frame_interpolation_offered ? 1 : 0;
+            if (ws_offered && ws_adaptive_view_supported) {
                 gi.aspect_labels = ws_ultrawide_offered
                     ? kAdaptiveAspectLabels : kAdaptiveAspectLabelsNoUltrawide;
                 gi.num_aspect_labels = ws_ultrawide_offered ? 4 : 3;
@@ -5895,19 +5912,30 @@ int main(int argc, char** argv) {
                 seed.skip_launcher = ls.skip_launcher != 0;   seed.has_skip_launcher = true;
                 /* Adaptive preserves the previous fixed aspect as the initial
                  * window shape. Selecting a fixed entry turns adaptation off. */
-                if (ws_adaptive_view_supported &&
-                    ls.aspect_index == adaptive_aspect_index) {
-                    seed.adaptive_view = true;
-                } else {
-                    seed.adaptive_view = false;
-                    switch (ls.aspect_index) {
-                        case 2:  seed.aspect_num = 21; seed.aspect_den = 9; break;
-                        case 1:  seed.aspect_num = 16; seed.aspect_den = 9; break;
-                        default: seed.aspect_num = 4;  seed.aspect_den = 3; break;
+                if (ws_offered) {
+                    if (ws_adaptive_view_supported &&
+                        ls.aspect_index == adaptive_aspect_index) {
+                        seed.adaptive_view = true;
+                    } else {
+                        seed.adaptive_view = false;
+                        switch (ls.aspect_index) {
+                            case 2:  seed.aspect_num = 21; seed.aspect_den = 9; break;
+                            case 1:  seed.aspect_num = 16; seed.aspect_den = 9; break;
+                            default: seed.aspect_num = 4;  seed.aspect_den = 3; break;
+                        }
                     }
+                    seed.has_aspect_ratio = true;
+                    seed.has_adaptive_view = true;
+                } else {
+                    /* A mod-owned widescreen path starts from an unpersisted
+                     * 4:3 baseline. Its activation plugin selects the actual
+                     * fixed/adaptive aspect after the launcher commits Mods. */
+                    seed.adaptive_view = false;
+                    seed.aspect_num = 4;
+                    seed.aspect_den = 3;
+                    seed.has_aspect_ratio = false;
+                    seed.has_adaptive_view = false;
                 }
-                seed.has_aspect_ratio = true;
-                seed.has_adaptive_view = true;
                 /* has_texture_filter is on (PSX profile) so the launcher edits
                  * ls.texture_filter directly (0=nearest,1=bilinear); ls.linear_filter
                  * is the legacy fallback field for consoles without the cap and is
@@ -5938,8 +5966,10 @@ int main(int argc, char** argv) {
                 seed.supersampling         = ls.supersampling;         seed.has_supersampling         = true;
                 seed.antialiasing          = ls.antialiasing != 0;     seed.has_antialiasing          = true;
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
-                seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
-                seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
+                seed.frame_interpolation = ls.frame_interp != 0;
+                seed.has_frame_interpolation = frame_interpolation_offered;
+                seed.frame_interpolation_fps = ls.frame_interp_fps;
+                seed.has_frame_interpolation_fps = frame_interpolation_offered;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = skip_fmv_offered;
@@ -6022,11 +6052,14 @@ int main(int argc, char** argv) {
                 fast_boot = seed.fast_boot;
                 bios_hle  = seed.bios_hle;
                 g_fullscreen      = seed.fullscreen;
-                g_frame_interpolation = seed.frame_interpolation ? 1 : 0;
-                g_frame_interpolation_fps = seed.frame_interpolation_fps;
-                g_video_aspect_num = seed.aspect_num;
-                g_video_aspect_den = seed.aspect_den;
-                g_ws_adaptive_view = seed.adaptive_view;
+                g_frame_interpolation =
+                    frame_interpolation_offered && seed.frame_interpolation ? 1 : 0;
+                g_frame_interpolation_fps =
+                    frame_interpolation_offered
+                        ? seed.frame_interpolation_fps : 0;
+                g_video_aspect_num = ws_offered ? seed.aspect_num : 4;
+                g_video_aspect_den = ws_offered ? seed.aspect_den : 3;
+                g_ws_adaptive_view = ws_offered && seed.adaptive_view;
                 g_audio_spu_hq    = seed.spu_hq;
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {

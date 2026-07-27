@@ -316,6 +316,12 @@ struct RuntimeConfig {
     int                   video_vsync             = 1;
     bool                  video_frame_interpolation = false;
     int                   video_frame_interpolation_fps = 0; // 0 = display refresh
+    // offer_frame_interpolation: expose the generic interpolation controls
+    // through recomp-ui Settings. Defaults true for compatibility. A game
+    // migrating interpolation into its mod catalog sets this false; stale
+    // persisted Settings values are then ignored and a trusted activation
+    // plugin owns the runtime switch.
+    bool                  video_offer_frame_interpolation = true;
 
     // crt_filter: present-time screen-colour model (verified-enhancement LUT).
     // "raw" (default, byte-identical 5->8 passthrough) | "crt" | "composite" |
