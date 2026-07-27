@@ -313,8 +313,10 @@ and is a Phase-0 deliverable.)
 
 ## 3. Framework design (PSX)
 
-Shared module, proposed location: `runtime/src/text_xlate.c` +
-`runtime/include/text_xlate.h` (peers of `fntrace.*` and `bios_hle.*`).
+Shared module, shipped at `runtime/src/text_xlate.cpp` +
+`runtime/include/text_xlate.h` (peers of `fntrace.*` and `bios_hle.*`). The
+design below was written as a proposal and is described in the future tense in
+places; it is built, so read "will" as "does".
 
 ### 3.1 The hook point — `psx_dispatch`
 
@@ -705,7 +707,11 @@ slots, and screenshot the level-select / HUD.
 - `tools/pms_build_translations.py` — decode/build/todo authoring.
 - `translations.json` — table format.
 
-**psxrecomp hook points** (`F:\Projects\psxrecomp\_wt-tsumu\psxrecomp\`):
+**psxrecomp hook points** (paths relative to this repository; they were captured
+from the since-removed `_wt-tsumu` worktree, but the files live on `master`):
+- `runtime/src/text_xlate.cpp` + `runtime/include/text_xlate.h` — the shipped
+  module: `text_xlate_init` / `_set_language` / `_on_dispatch` /
+  `_vram_upload` / `_debug_json`. Loads every `translations/*.toml`.
 - `runtime/include/fntrace.h` + `runtime/src/fntrace.c:58` — always-on dispatch
   ring (capture analogue).
 - `runtime/include/bios_hle.h:54` (`g_psx_bios_hle_hook`) + `runtime/src/bios_hle.c:297`
