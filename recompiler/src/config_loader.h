@@ -570,6 +570,10 @@ struct GameConfig {
     std::vector<uint32_t> ws_sprite_tag_funcs;
     uint32_t              ws_sprite_anchor_addr = 0;
     bool                  ws_hud_sprt_squash = false;
+    // auto_ui_squash: proportion-correct textured screen-space primitives in
+    // the final ordering-table layer. Repeated glyph/icon rows share an anchor
+    // so centred text and edge counters cannot split at thirds boundaries.
+    bool                  ws_auto_ui_squash = false;
 
     // [data_shards] funcs: functions that get the memoized pure-function
     // replay entry/return hooks (psx_datashard_enter/psx_datashard_ret).

@@ -65,6 +65,10 @@ sprite_anchor_addr = "0x1F800070"      # scratchpad holding the prim's
                                        # GTE-projected anchor SXY at tag time.
 hud_sprt_squash    = true              # center/edge-squash untagged SPRTs
                                        # (screen-space HUD/menus).
+auto_ui_squash     = true              # pre-scan the current GPU linked list,
+                                       # select its highest populated UI rank,
+                                       # and share one anchor across each
+                                       # complete glyph/icon run.
 clear_reveal       = true              # clear synthetic native-wide side margins
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
@@ -101,6 +105,13 @@ targets, so offscreen texture targets retain the original host-side pruning.
 Tomba's values are Ghidra-evidenced: `0x8005E08C` is the shared per-prim helper
 all ~23 character render functions (RTPS cluster `0x800459E0`–`0x8004FB54`) call;
 the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
+
+`auto_ui_squash` is a runtime-only opt-in and does not require regenerated game
+code. It applies only on the projection-and-stretch path: eligible
+axis-aligned textured quads/rectangles in the front populated ordering-table
+layer are grouped by texture and screen row before any command is transformed.
+Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
+untouched.
 
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
 emitted into the generated C). `widescreen.cull.keep` is consumed by both the

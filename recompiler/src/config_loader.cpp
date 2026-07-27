@@ -1129,6 +1129,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_sprite_tag_funcs;
     uint32_t ws_sprite_anchor_addr = 0;
     bool ws_hud_sprt_squash = false;
+    bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
     bool ws_native_wide = true;
@@ -1247,6 +1248,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                 config_path.string()));
         if (ws.contains("hud_sprt_squash"))
             ws_hud_sprt_squash = toml::find<bool>(ws, "hud_sprt_squash");
+        if (ws.contains("auto_ui_squash"))
+            ws_auto_ui_squash = toml::find<bool>(ws, "auto_ui_squash");
         if (ws.contains("full_2d"))
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
@@ -1745,6 +1748,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_sprite_tag_funcs*/   ws_sprite_tag_funcs,
         /*ws_sprite_anchor_addr*/ ws_sprite_anchor_addr,
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
+        /*ws_auto_ui_squash*/      ws_auto_ui_squash,
         /*data_shard_funcs*/      data_shard_funcs,
         /*hot_funcs*/             hot_funcs,
         /*vsync_query_func*/      vsync_query_func,

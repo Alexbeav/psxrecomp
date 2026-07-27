@@ -79,6 +79,12 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME ws_aspect_cone_math_test COMMAND ws_aspect_cone_math_test)
 
+    add_executable(ws_ui_group_test
+        tests/test_ws_ui_group.c
+        src/ws_ui_group.c)
+    target_include_directories(ws_ui_group_test PRIVATE include)
+    add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)

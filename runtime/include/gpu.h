@@ -21,6 +21,11 @@ uint32_t gpu_read_gpuread(void);   /* 0x1F801810 read */
 void     gpu_write_gp0(uint32_t val);  /* 0x1F801810 write */
 void     gpu_write_gp1(uint32_t val);  /* 0x1F801814 write */
 void     gpu_set_gp0_source(uint32_t addr); /* diagnostic source for next GP0 word */
+/* Linked-list provenance for the next GP0 words. `word_count == 0` identifies
+ * an ordering-table link node; packet nodes retain the most recently visited
+ * OT rank. This lets diagnostics distinguish front-layer UI packets from
+ * depth-sorted world packets without guessing from primitive shape. */
+void     gpu_set_gp0_linked_list_node(uint32_t addr, uint32_t word_count);
 void     gpu_vblank_tick(void);        /* Toggle LCF, called at each simulated vblank */
 
 /* Display presentation accessors (Phase 3). */
@@ -86,7 +91,7 @@ typedef struct {
     uint32_t ra;            /* guest $ra at issue: direct caller of the leaf GP0 helper */
     uint8_t  opcode;
     uint8_t  n_words;       /* total command length; >MAX means truncated */
-    uint16_t pad;
+    uint16_t ot_rank;       /* linked-list OT rank, 0xFFFF outside/unknown */
     uint32_t cmd[GPU_GP0_RING_MAX_WORDS];
     /* Builder attribution (populated only for VRAM->VRAM copies, op 0x80):
      * bounded guest-stack unwind of validated return addresses, innermost
@@ -124,6 +129,7 @@ void gpu_ws_configure(int aspect_num, int aspect_den,
 /* [widescreen] full_2d: opt a pure-2D sprite game into the widescreen present
  * path (treat every in-game frame as gameplay, since it never tags 3D prims). */
 void gpu_ws_set_full_2d(int on);
+void gpu_ws_set_auto_ui_squash(int on);
 /* [widescreen.bg2d] Capcom 2D background tile-loop widen — hooked at the renderer's
  * column-count / start-tile-col / start-screen-x instructions. Identity at 4:3
  * and in the engine's 512 hi-res mode. */
@@ -280,6 +286,8 @@ void gpu_ws_set_nw_hud_corners(int on);
  * whose ordering-table packet lives in the configured half-open RAM range. */
 void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
 void gpu_ws_begin_linked_list(void);
+void gpu_ws_end_linked_list(void);
+void gpu_ws_prepass_linked_list(uint32_t start_addr);
 /* Native-wide full-frame 2D backdrop stretch ([widescreen] nw_backdrop):
  * stretch a screen-space quad that covers the whole 4:3 framebuffer (sky
  * gradient / backdrop image) to fill the wide frame, so it no longer
@@ -366,6 +374,11 @@ typedef struct {
     uint32_t ovh_prims;         /* overhanging polys in the last completed frame */
     uint32_t last_ovh_frame;    /* newest SUSTAINED polygon-overhang frame (the
                                    2D-only-scene classifier's world signal) */
+    int      auto_ui_squash;     /* final-OT grouped UI correction configured */
+    int      auto_ui_dense;      /* current list classified as a dense menu */
+    uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
+    uint64_t auto_ui_candidates;
+    uint64_t auto_ui_transforms;
     uint64_t aspect_cone_calls;
     uint64_t aspect_cone_43_identity;
     uint64_t aspect_cone_vanilla_keep;

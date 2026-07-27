@@ -4727,6 +4727,8 @@ static void handle_gpu_state(int id, const char *json)
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
              "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
+             "\"auto_ui\":{\"configured\":%d,\"dense\":%d,\"ot_rank\":%u,"
+             "\"candidates\":%llu,\"transforms\":%llu},"
              "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
              "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
              "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
@@ -4750,9 +4752,12 @@ static void handle_gpu_state(int id, const char *json)
              ws.present_native_43, ws.x_margin, ws.xnum, ws.xden,
              ws.mode, ws.nw_extra,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
-             ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
-             ws.ovh_prims, ws.last_ovh_frame,
-             (unsigned long long)ws.aspect_cone_calls,
+              ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
+              ws.ovh_prims, ws.last_ovh_frame,
+              ws.auto_ui_squash, ws.auto_ui_dense, ws.auto_ui_ot_rank,
+              (unsigned long long)ws.auto_ui_candidates,
+              (unsigned long long)ws.auto_ui_transforms,
+              (unsigned long long)ws.aspect_cone_calls,
              (unsigned long long)ws.aspect_cone_43_identity,
              (unsigned long long)ws.aspect_cone_vanilla_keep,
              (unsigned long long)ws.aspect_cone_visible_keep,
@@ -5546,10 +5551,10 @@ static void handle_gpu_frame_dump(int id, const char *json)
         const GpuGp0RingEntry *e = &entries[i];
         pos += (size_t)snprintf(buf + pos, buf_sz - pos,
             "%s{\"seq\":%u,\"op\":\"0x%02X\",\"n\":%u,"
-            "\"src\":\"0x%08X\",\"pc\":\"0x%08X\","
+            "\"src\":\"0x%08X\",\"ot\":%u,\"pc\":\"0x%08X\","
             "\"func\":\"0x%08X\",\"ra\":\"0x%08X\",\"w\":[",
             i ? "," : "", e->seq, e->opcode, e->n_words,
-            e->src_addr, e->pc, e->func, e->ra);
+            e->src_addr, (unsigned)e->ot_rank, e->pc, e->func, e->ra);
         int show = e->n_words < GPU_GP0_RING_MAX_WORDS
                  ? e->n_words : GPU_GP0_RING_MAX_WORDS;
         for (int k = 0; k < show && pos < buf_sz - 32; k++) {
