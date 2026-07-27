@@ -142,6 +142,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
     ${PSXRECOMP_ROOT}/runtime/src/disc_identity.cpp
     ${PSXRECOMP_ROOT}/runtime/src/cue_sheet.cpp
     ${PSXRECOMP_ROOT}/runtime/src/disc_path.cpp
@@ -170,6 +171,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/code_provider.c
     ${PSXRECOMP_ROOT}/runtime/src/event_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
@@ -362,6 +365,8 @@ function(psxrecomp_add_runtime_target target)
         DEFAULT_BIOS_PATH
         DEFAULT_GAME_CONFIG_PATH
         LAUNCHER_BOXART
+        LAUNCHER_PAD
+        LAUNCHER_BRAND
         EXE_NAME
         GAME_VERSION
     )
@@ -734,6 +739,12 @@ function(psxrecomp_add_runtime_target target)
         if(PSXRT_LAUNCHER_BOXART)
             list(APPEND _psx_recomp_ui_args BOXART "${PSXRT_LAUNCHER_BOXART}")
         endif()
+        if(PSXRT_LAUNCHER_PAD)
+            list(APPEND _psx_recomp_ui_args PAD "${PSXRT_LAUNCHER_PAD}")
+        endif()
+        if(PSXRT_LAUNCHER_BRAND)
+            list(APPEND _psx_recomp_ui_args BRAND "${PSXRT_LAUNCHER_BRAND}")
+        endif()
         recomp_target_launcher_ui(${target} ${_psx_recomp_ui_args})
     endif()
 
@@ -836,6 +847,31 @@ function(psxrecomp_add_runtime_target target)
         target_link_options(${target} PRIVATE
             $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
             $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>)
+    endif()
+
+    # Packages may contain data-only VCDIFF recipes for deriving a private,
+    # fingerprinted runtime image from the user's verified stock disc. The
+    # decoder is supplied by the release builder and invoked only from this
+    # fixed path; packages cannot provide or execute binaries.
+    set(PSXRECOMP_XDELTA3_EXECUTABLE "" CACHE FILEPATH
+        "Trusted xdelta3 executable copied beside runtime targets")
+    if(PSXRECOMP_XDELTA3_EXECUTABLE)
+        if(NOT EXISTS "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+            message(FATAL_ERROR
+                "PSXRECOMP_XDELTA3_EXECUTABLE does not exist: "
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+        endif()
+        if(WIN32)
+            set(_psxmod_xdelta_name "xdelta3.exe")
+        else()
+            set(_psxmod_xdelta_name "xdelta3")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}"
+                "$<TARGET_FILE_DIR:${target}>/${_psxmod_xdelta_name}"
+            COMMENT "Staging trusted xdelta3 decoder for derived-disc mods"
+            VERBATIM)
     endif()
 endfunction()
 

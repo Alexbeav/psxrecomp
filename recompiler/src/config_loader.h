@@ -284,6 +284,12 @@ struct RuntimeConfig {
     // no per-game config it falls back to holding the skip button.
     bool                  video_auto_skip_fmv = false;
 
+    // offer_skip_fmv: expose auto_skip_fmv through recomp-ui Settings.
+    // Defaults true for compatibility. A game migrating the feature into its
+    // mod catalog sets this false; stale persisted Settings values are then
+    // ignored and a trusted activation plugin owns the runtime switch.
+    bool                  video_offer_skip_fmv = true;
+
     // fmv_skip_*: per-game FMV instant-skip via the game's own end-of-movie path.
     // Some players (Tomba) end a movie when the streamed frame number reaches that
     // movie's per-movie frame total minus a small offset. When auto_skip_fmv is on
@@ -375,16 +381,6 @@ struct RuntimeConfig {
     bool                  has_deadzone = false;
     int                   deadzone     = 0;
 
-    // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
-    // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
-    // 0xF3 only while in config) — required by MMX6 and the correct default for every
-    // title. true = the pre-98aa688 behaviour (config commands always answer 0xF3, no
-    // enter/exit tracking). Only Tomba opts in: its libpad re-detect — triggered by the
-    // launcher Hybrid mode's analog<->digital type flip — manufactures a 1-frame "pad
-    // unplugged" under the modern SM (menu unpause / phantom input). The legacy answers
-    // make that re-detect benign. Scoped per-game; no other title's behaviour changes.
-    // Wired to sio_set_legacy_cfg(); see sio.c g_pad_legacy_cfg.
-    bool                  legacy_pad_config = false;
 };
 
 // One entry from [[recompiler.bios_vectors]].

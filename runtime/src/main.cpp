@@ -56,6 +56,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
 #include "game_options.h"
+#include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
 #include "disc_path.h"
@@ -567,6 +568,39 @@ static int           g_video_aspect_den = 3;
 static bool          g_ws_adaptive_view = false;
 static int           g_ws_adaptive_max_num = 16;
 static int           g_ws_adaptive_max_den = 9;
+
+extern "C" int psx_mod_set_fixed_display_aspect(
+    uint32_t numerator, uint32_t denominator) {
+    if (numerator == 0 || denominator == 0 ||
+        numerator > 99 || denominator > 99 ||
+        3u * numerator < 4u * denominator ||
+        9u * numerator > 32u * denominator) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid display aspect %u:%u\n",
+            (unsigned)numerator, (unsigned)denominator);
+        return 0;
+    }
+    g_video_aspect_num = (int)numerator;
+    g_video_aspect_den = (int)denominator;
+    g_ws_adaptive_view = false;
+    std::fprintf(stdout, "psxrecomp: mod selected fixed display aspect %u:%u\n",
+                 (unsigned)numerator, (unsigned)denominator);
+    return 1;
+}
+
+extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
+    if (enabled != 0 && enabled != 1) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid auto-skip-FMV value %d\n",
+            enabled);
+        return 0;
+    }
+    g_auto_skip_fmv = enabled;
+    std::fprintf(stdout, "psxrecomp: mod %s automatic FMV skipping\n",
+                 enabled ? "enabled" : "disabled");
+    return 1;
+}
+
 /* [widescreen] per-game hooks (see config_loader.h): anchor scratch addr for
  * tagged sprite prims + HUD SPRT center-squash. Inert at 0/false. */
 static uint32_t      g_ws_anchor_addr = 0;
@@ -2637,10 +2671,10 @@ static void apply_input_override_to_sio(int override_word) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
-    int mode;
-    if (p.kind != 0)                  mode = p.mode;
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    /* Debug injection follows the game's resolved mode even when P1 has no
+     * assigned device. This keeps dev-any-input from manufacturing Hybrid for
+     * a title that deliberately exposes only Analog / D-Pad. */
+    const int mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -2678,15 +2712,11 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * state gates how the left stick is read for BOTH the button word and the
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
-     * handshake cadence is preserved exactly). A P1 with no assigned device but
-     * dev-any-input on presents as HYBRID — boots analog like a DualShock and
-     * auto-drops to digital on the d-pad — so any plugged controller and the
-     * keyboard both navigate. The hybrid latch reads raw device state, so it is
-     * safe to resolve here before the button word is built. */
-    int mode;
-    if (p.kind != 0)      mode = p.mode;
-    else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                  mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+     * handshake cadence is preserved exactly). A P1 with no assigned device
+     * keeps the game's resolved mode while dev-any-input merges the keyboard and
+     * all connected controllers. This is important for games that deliberately
+     * do not support Hybrid. */
+    const int mode = p.mode;
     int eff_analog;
     if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
         eff_analog = 0;
@@ -2826,10 +2856,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;
 
-    int mode;
-    if (p.kind != 0)                  mode = p.mode;
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    const int mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4720,6 +4747,7 @@ int main(int argc, char** argv) {
     bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
     bool ws_ultrawide_offered = false;
     bool ws_adaptive_view_supported = false;
+    bool skip_fmv_offered = true;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     int  resolved_deadzone = -1;  /* <0 => keep input.ini/runtime default (12000) */
     /* Localization: the effective language (game.toml default -> settings.toml ->
@@ -4908,6 +4936,7 @@ int main(int argc, char** argv) {
             ws_offered = gc.ws_offered;
             ws_ultrawide_offered = gc.ws_ultrawide_offered;
             ws_adaptive_view_supported = gc.ws_adaptive_view;
+            skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
              * interpreter applies the backdrop screenX squash on the interp
@@ -4930,12 +4959,6 @@ int main(int argc, char** argv) {
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
             ctrl_lock_device  = gc.runtime.controller_lock_device;
             if (gc.runtime.has_deadzone) resolved_deadzone = gc.runtime.deadzone;
-            /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
-             * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
-             * libpad manufacture a 1-frame "pad unplugged". sio_init() does not
-             * touch this flag, so applying it here (config-load time) is stable.
-             * Full history + removal plan: psxrecomp sio.c g_pad_legacy_cfg. */
-            sio_set_legacy_cfg(gc.runtime.legacy_pad_config ? 1 : 0);
             { const char *e = std::getenv("PSX_GL_FORCE_CPU_PRESENT");
               if (e && e[0] && e[0] != '0') g_gl_fbo_present = 0; }
             game_entry_pc = gc.entry_pc;
@@ -5292,6 +5315,31 @@ int main(int argc, char** argv) {
         p1_mode = ctrl_locked_p1_mode;
         p2_mode = ctrl_locked_p2_mode;
     }
+    /* allow_hybrid=false removes Hybrid from the game's supported controller
+     * modes. Clamp an old persisted Hybrid value here as well as hiding it in
+     * recomp-ui, so launcher-less builds cannot revive an unsupported mode.
+     * Prefer each port's game-declared default; malformed/legacy configs that
+     * also default to Hybrid fall back to Analog, matching recomp-ui. */
+    if (!ctrl_allow_hybrid) {
+        const int fallback_p1 =
+            ctrl_locked_p1_mode == PSXRecompV4::PAD_MODE_HYBRID
+                ? PSXRecompV4::PAD_MODE_ANALOG : ctrl_locked_p1_mode;
+        const int fallback_p2 =
+            ctrl_locked_p2_mode == PSXRecompV4::PAD_MODE_HYBRID
+                ? PSXRecompV4::PAD_MODE_ANALOG : ctrl_locked_p2_mode;
+        if (p1_mode == PSXRecompV4::PAD_MODE_HYBRID) p1_mode = fallback_p1;
+        if (p2_mode == PSXRecompV4::PAD_MODE_HYBRID) p2_mode = fallback_p2;
+    }
+
+    /* A game may migrate Skip FMVs from generic Settings into its mod catalog.
+     * Clamp stale settings before seeding recomp-ui; an enabled activation
+     * plugin applies the feature after the final mod-plan commit. */
+    if (!skip_fmv_offered && g_auto_skip_fmv) {
+        std::fprintf(stdout,
+            "psxrecomp: Skip FMVs is mod-owned for this title; "
+            "ignoring the legacy Settings value\n");
+        g_auto_skip_fmv = 0;
+    }
 
     /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
      * so the launcher hides its toggle — and, same completeness treatment as
@@ -5395,6 +5443,16 @@ int main(int argc, char** argv) {
         }
     }
 
+    {
+        std::string mod_error;
+        if (!PSXRecompV4::mod_runtime_initialize(
+                exe_dir_from_argv(argv[0]) / "mods", game_id,
+                game_entry_pc, text_guard_exe_path, &mod_error)) {
+            std::fprintf(stderr, "psxrecomp: mods unavailable: %s\n",
+                         mod_error.c_str());
+        }
+    }
+
 #if defined(RECOMP_LAUNCHER)
     /* Integrated recomp-ui launcher: shown in its own GL window before the emulator
      * boots. Seeded with the effective settings (game.toml ∪ settings.toml);
@@ -5418,7 +5476,8 @@ int main(int argc, char** argv) {
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
             seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
             seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
-            seed.auto_skip_fmv = (g_auto_skip_fmv != 0);  seed.has_auto_skip_fmv = true;
+            seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
+            seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0); seed.has_turbo_loads = true;
             seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
             seed.bios_hle  = bios_hle;                    seed.has_bios_hle  = true;
@@ -5615,7 +5674,13 @@ int main(int argc, char** argv) {
             gi.allow_hybrid         = ctrl_allow_hybrid ? 1 : 0;
             gi.locked_pad_mode      = p1_mode;  /* force the game's declared mode (default_mode) */
             gi.lock_device          = ctrl_lock_device ? 1 : 0;
-            gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
+            /* No aspect capability means recomp-ui omits View mode entirely.
+             * Games still using the legacy Settings path advertise Native plus
+             * their offered wide modes; games migrating widescreen into Mods
+             * set [widescreen] offer=false and let a plugin own activation. */
+            gi.aspect_mask          = ws_offered
+                ? (0x1 | 0x2 | (ws_ultrawide_offered ? 0x4 : 0))
+                : 0;
             if (ws_adaptive_view_supported) {
                 gi.aspect_labels = ws_ultrawide_offered
                     ? kAdaptiveAspectLabels : kAdaptiveAspectLabelsNoUltrawide;
@@ -5624,6 +5689,7 @@ int main(int argc, char** argv) {
             }
             gi.renderer_labels      = kPsxRendererLabels;
             gi.num_renderers        = vulkan_offered ? 3 : 2;
+            gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
             /* Localization menu: shown only when the game declares languages. */
             if (!rui_lang_labels.empty()) {
                 gi.language_labels = rui_lang_labels.data();
@@ -5641,6 +5707,7 @@ int main(int argc, char** argv) {
             g_lnch_has_crc         = game_has_disc_crc;
             gi.disc_verify     = ae_disc_verify;
             gi.memcard_inspect = ae_memcard_inspect;
+            gi.mods            = PSXRecompV4::mod_runtime_launcher_provider();
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
             gi.netplay_supported = (game_players == 2) ? 1 : 0;
@@ -5711,7 +5778,8 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
-                seed.auto_skip_fmv         = ls.auto_skip_fmv != 0;    seed.has_auto_skip_fmv         = true;
+                seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
+                seed.has_auto_skip_fmv = skip_fmv_offered;
                 seed.turbo_loads           = ls.turbo_loads != 0;      seed.has_turbo_loads           = true;
                 /* Bundled-BIOS builds ignore any launcher-supplied path (the
                  * picker is hidden, but a stale settings file could still
@@ -5744,8 +5812,10 @@ int main(int argc, char** argv) {
                         seed.has_aspect_ratio = true;
                         seed.turbo_loads = caps->turbo_loads != 0;
                         seed.has_turbo_loads = true;
-                        seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
-                        seed.has_auto_skip_fmv = true;
+                        if (skip_fmv_offered) {
+                            seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
+                            seed.has_auto_skip_fmv = true;
+                        }
                         if (caps->language[0]) {
                             seed.language = caps->language;
                             seed.has_language = true;
@@ -5784,7 +5854,7 @@ int main(int argc, char** argv) {
                 g_video_aa        = seed.antialiasing;
                 g_video_texfilter = seed.texture_filter;
                 g_video_screen    = seed.screen_kind;
-                g_auto_skip_fmv   = seed.auto_skip_fmv ? 1 : 0;
+                g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled = seed.turbo_loads ? 1 : 0;
                 fast_boot = seed.fast_boot;
                 bios_hle  = seed.bios_hle;
@@ -5821,6 +5891,28 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    /* Resolve the actual stock image before mod resolution. In particular,
+     * --disc is a late CLI override and must participate in target hashing;
+     * the launcher already stores its imported stock path in resolved_disc. */
+    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
+        resolved_disc =
+            resolve_disc_for_runtime(resolved_disc, disc_override_path, game_id, argv[0]);
+        if (game_config_path && resolved_disc.empty()) {
+            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
+            return 1;
+        }
+    }
+
+    {
+        std::string mod_error;
+        if (!PSXRecompV4::mod_runtime_commit(resolved_disc, &mod_error)) {
+            std::fprintf(stderr, "psxrecomp: cannot launch with selected mods: %s\n",
+                         mod_error.c_str());
+            return 1;
+        }
+    }
+    mod_runtime_activate_plugins();
+
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
      * settings.toml override and the launcher's choice. No-op when unchanged. */
@@ -5847,19 +5939,19 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "psxrecomp: no BIOS selected; exiting.\n");
         return 1;
     }
-    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
-        resolved_disc = resolve_disc_for_runtime(resolved_disc, disc_override_path, game_id, argv[0]);
-        if (game_config_path && resolved_disc.empty()) {
-            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
-            return 1;
-        }
-    }
-
     /* memcard_dir was resolved to its default before the launcher (above). */
 
     std::string bios_path_str    = resolved_bios.string();
     std::string memcard_dir_str  = memcard_dir.string();
-    std::string disc_path_str    = resolved_disc.string();
+    const std::filesystem::path& mod_disc =
+        PSXRecompV4::mod_runtime_effective_disc_path();
+    std::string disc_path_str =
+        (mod_disc.empty() ? resolved_disc : mod_disc).string();
+    if (!mod_disc.empty()) {
+        std::fprintf(stdout,
+            "psxrecomp: stock disc remains %s; mounting private mod cache %s\n",
+            resolved_disc.string().c_str(), mod_disc.string().c_str());
+    }
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
@@ -6017,6 +6109,7 @@ session_reboot:
     if (game_config_path)
         arm_text_image_guard(text_guard_exe_path, text_guard_load_addr,
                              disc_path_str);
+    mod_runtime_enable_disc_patches();
     {
         int divisor = 1; /* default: authentic 1x timing */
         if (disc_speed == "instant") divisor = 0;

@@ -436,6 +436,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("auto_skip_fmv")) {
             rt.video_auto_skip_fmv = toml::find<bool>(video, "auto_skip_fmv");
         }
+        if (video.contains("offer_skip_fmv")) {
+            rt.video_offer_skip_fmv = toml::find<bool>(video, "offer_skip_fmv");
+        }
         if (video.contains("fmv_skip_total_table")) {
             rt.video_fmv_skip_total_table =
                 (uint32_t)toml::find<int64_t>(video, "fmv_skip_total_table");
@@ -555,13 +558,6 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] deadzone out of range (0..32767): {}", n));
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
-        }
-        // LEGACY per-game pad-config opt-in (default modern). Tomba sets this so
-        // its launcher Hybrid mode's analog<->digital type flip doesn't make libpad
-        // manufacture a disconnect; no other title is affected. Full history and
-        // the removal plan live in psxrecomp runtime/src/sio.c (g_pad_legacy_cfg).
-        if (ct.contains("legacy_pad_config")) {
-            rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
         }
     }
 

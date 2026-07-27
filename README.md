@@ -138,7 +138,8 @@ repositories and link this one in as a **git submodule** to build a game binary.
 [`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) (how a game actually
 runs — static / native-overlay / interpreter), then
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/BUILDING.md`](docs/BUILDING.md), and
+[`docs/BUILDING.md`](docs/BUILDING.md),
+[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) (versioned runtime mods),
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Games

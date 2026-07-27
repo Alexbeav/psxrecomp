@@ -3,6 +3,7 @@
 #include "fntrace.h"
 #include "text_xlate.h"     /* on-the-fly string translation hook (framework) */
 #include "parity_trace.h"   /* general control-flow parity ring (native producer) */
+#include "mod_runtime.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -86,6 +87,9 @@ DispTailEntry g_disp_tail[DISP_TAIL_CAP];
 uint64_t      g_disp_tail_seq = 0;
 
 void fntrace_record(CPUState* cpu, uint32_t target) {
+    /* The BIOS has completed the PS-X EXE load by the time it dispatches the
+     * entry point. Apply the validated plan before the first guest instruction. */
+    mod_runtime_on_dispatch(target);
     {
         extern uint64_t psx_get_cycle_count(void);
         DispTailEntry *t = &g_disp_tail[g_disp_tail_seq % DISP_TAIL_CAP];
