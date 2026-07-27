@@ -131,10 +131,28 @@ Correctness is demonstrated, not asserted:
 - **A decoder / codegen change requires a playthrough check**, not just a clean
   build: cosim/lockstep first, then run the affected area.
 
+### Automated tests — run these first
+
+```sh
+cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build recompiler/build
+cd recompiler/build && ctest --output-on-failure
+```
+
+29 tests, under five seconds, no BIOS dump or disc image required. See
+[`docs/TESTING.md`](docs/TESTING.md) for running individual tests, what the
+suite covers, and the three known-failing tests that are deliberately not
+registered.
+
+If you add a test, register it with `ctest` in the same commit. An unregistered
+test cannot fail, and a test that cannot fail is not a test.
+
 ### Regression checklist
 
-A framework change should not break a game that worked before it. When practical,
-build against the known-working game repos above and confirm, for each:
+The automated suite does not cover whether a game still runs; only playing one
+does. A framework change should not break a game that worked before it. When
+practical, build against the known-working game repos above and confirm, for
+each:
 
 - The game **boots**.
 - The **attract demo** plays without issue.

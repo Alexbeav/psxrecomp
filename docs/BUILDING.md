@@ -123,6 +123,16 @@ present, and builds the BIOS-only runtime when BIOS/generated sources are
 available. It does not create per-game runtime targets; use the CLI generator
 for game projects.
 
+### Check the build
+
+After step 1 above — no BIOS or disc needed — verify the tree is sane:
+
+```sh
+cd recompiler/build && ctest --output-on-failure
+```
+
+29 tests, under five seconds. See [`TESTING.md`](TESTING.md).
+
 On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generator
 (e.g. `-G "Unix Makefiles"`); everything else is identical.
 

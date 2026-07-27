@@ -337,6 +337,70 @@ if(BUILD_TESTING)
             NAME dirty_text_continuation_guards
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
+
+        # ---- codegen tests that were written but never registered -----------
+        # These existed in recompiler/tests/ with no add_test() entry, so they
+        # had no way to run and no way to fail. Each was executed manually
+        # before being wired here; all pass. They drive psxrecomp-game, so they
+        # run from the framework root for BIOS-profile resolution, exactly like
+        # the two above.
+        foreach(_t IN ITEMS
+                aot_base_recovery
+                bios_resident_shard
+                msvc_cps_codegen
+                overlay_guard_codegen
+                overlay_store_barrier_codegen
+                reachable_discovery_codegen)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_t}.py
+                        --recompiler $<TARGET_FILE:psxrecomp-game>
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
+
+        # ---- runtime source-invariant guards --------------------------------
+        # These live in runtime/tests/ but only READ runtime source, so they
+        # need neither a generated BIOS nor a built runtime. Registering them
+        # here (as dirty_text_continuation_guards already was) means they run
+        # from a plain recompiler build, which is the only tree a newcomer can
+        # configure before regenerating a BIOS. Each was run manually first;
+        # all pass.
+        #
+        # Deliberately NOT registered, because they currently FAIL — see
+        # docs/TESTING.md for the detail. Wiring a known-failing test would
+        # recreate the exact problem that took CI off PRs (a red check nobody
+        # trusts), so these need an owner's decision first:
+        #   test_interpreter_perf_guards.py   - psx_devices_mmio_sync's
+        #       recompute-deadline branch never clears g_psx_cycle_fast_limit,
+        #       and the guard also still names the pre-rename
+        #       s_next_service_cycle
+        #   test_runtime_perf_diag_guards.py  - asserts a substring no longer
+        #       present in the runtime source
+        #   test_overlay_pair_dedup_runtime.py - needs its companion harness
+        #       built; not a source-only guard
+        foreach(_t IN ITEMS
+                capture_history
+                default_renderer_guards
+                fmv_quiet_guards
+                launcher_vulkan_option
+                overlay_candidate_capacity
+                overlay_decodable_fallback
+                overlay_init_guard
+                vk_build_default
+                vk_color_self_barrier
+                vk_command_buffer_batching
+                vk_draw_area_batch_boundary
+                vk_mailbox_policy
+                vk_present_timing
+                vk_present_wait_stage
+                vk_staging_cache)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
     endif()
 endif()
 
