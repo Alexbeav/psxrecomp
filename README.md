@@ -16,14 +16,14 @@ all.
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/assets/games/tomba.png" alt="Tomba!"><br><sub><b>Tomba!</b></sub></td>
-    <td width="33%"><img src="docs/assets/games/tomba-2.png" alt="Tomba! 2"><br><sub><b>Tomba! 2</b></sub></td>
-    <td width="33%"><img src="docs/assets/games/ape-escape.png" alt="Ape Escape"><br><sub><b>Ape Escape</b></sub></td>
+    <td width="33%"><img src="docs/assets/games/tomba.png" alt="Tomba!" width="100%"><br><sub><b>Tomba!</b></sub></td>
+    <td width="33%"><img src="docs/assets/games/tomba-2.png" alt="Tomba! 2" width="100%"><br><sub><b>Tomba! 2</b></sub></td>
+    <td width="33%"><img src="docs/assets/games/ape-escape.png" alt="Ape Escape" width="100%"><br><sub><b>Ape Escape</b></sub></td>
   </tr>
   <tr>
-    <td><img src="docs/assets/games/mega-man-x4.png" alt="Mega Man X4"><br><sub><b>Mega Man X4</b></sub></td>
-    <td><img src="docs/assets/games/mega-man-x5.png" alt="Mega Man X5"><br><sub><b>Mega Man X5</b></sub></td>
-    <td><img src="docs/assets/games/mega-man-x6.png" alt="Mega Man X6"><br><sub><b>Mega Man X6</b></sub></td>
+    <td><img src="docs/assets/games/mega-man-x4.png" alt="Mega Man X4" width="100%"><br><sub><b>Mega Man X4</b></sub></td>
+    <td><img src="docs/assets/games/mega-man-x5.png" alt="Mega Man X5" width="100%"><br><sub><b>Mega Man X5</b></sub></td>
+    <td><img src="docs/assets/games/mega-man-x6.png" alt="Mega Man X6" width="100%"><br><sub><b>Mega Man X6</b></sub></td>
   </tr>
 </table>
 
@@ -135,17 +135,17 @@ ring, streamer and packet budget all have to be widened in step with the
 renderer.
 
 <table>
-  <tr><td><img src="docs/assets/widescreen/mmx6-16x9.png" alt="Mega Man X6 at 16:9"></td></tr>
+  <tr><td><img src="docs/assets/widescreen/mmx6-16x9.png" alt="Mega Man X6 at 16:9" width="100%"></td></tr>
   <tr><td align="center"><sub><b>Mega Man X6 — 16:9.</b> A 2D sprite engine widened: more stage either side, no stretching.</sub></td></tr>
 </table>
 
 <table>
-  <tr><td><img src="docs/assets/widescreen/ape-escape-21x9.png" alt="Ape Escape at 21:9"></td></tr>
+  <tr><td><img src="docs/assets/widescreen/ape-escape-21x9.png" alt="Ape Escape at 21:9" width="100%"></td></tr>
   <tr><td align="center"><sub><b>Ape Escape — 21:9.</b> A wider 3D frustum, not a zoomed one.</sub></td></tr>
 </table>
 
 <table>
-  <tr><td><img src="docs/assets/widescreen/tomba-2-adaptive.png" alt="Tomba! 2 adaptive widescreen"></td></tr>
+  <tr><td><img src="docs/assets/widescreen/tomba-2-adaptive.png" alt="Tomba! 2 adaptive widescreen" width="100%"></td></tr>
   <tr><td align="center"><sub><b>Tomba! 2 — adaptive.</b> The view tracks the window, up to an ultrawide cap.</sub></td></tr>
 </table>
 
