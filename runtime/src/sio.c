@@ -686,68 +686,6 @@ void sio_get_pad_sticks(int slot, uint8_t out[4]) {
     out[2] = pad_stick[slot][2]; out[3] = pad_stick[slot][3];
 }
 
-/* ── LEGACY pad-config compatibility (Tomba "Hybrid" controller) ─────────────
- *
- * Why this exists, and why it is explicitly LEGACY:
- *
- *   This is the descendant of our FIRST controller implementation. It was built
- *   for Tomba, to reproduce the seamless analog/digital feel of Tomba: Special
- *   Edition — the launcher "Hybrid" mode flips the emulated pad's reported TYPE
- *   between digital (poll id 0x41) and DualShock/analog (poll id 0x73) as the
- *   player moves between the d-pad and the stick. In that first implementation
- *   the SIO pad answered the DualShock config-mode commands trivially (it always
- *   reported the config id 0xF3), and Tomba's Hybrid flip worked.
- *
- *   We then matured the pad against Mega Man X6. MMX6's libpad probes the pad
- *   type via config mode (01 43 00 00 ...) BEFORE it ever polls, and the trivial
- *   "always 0xF3" answer WEDGED it: it looped the probe forever, never reached
- *   the 0x42 poll, and had no input. The fix (commit 98aa688) was a REAL
- *   DualShock config-mode state machine — report 0xF3 only while actually in
- *   config, track 0x43 enter/exit, answer the capability queries (0x45/0x46/
- *   0x47/0x4C) like the real pad. That "modern" SM is the correct behaviour, is
- *   what MMX6 and every other title needs, and is the default.
- *
- *   But post-MMX6, under the modern SM, Tomba's Hybrid flip regressed. Any type
- *   change makes libpad re-run findpad / re-detect the pad; under the modern SM
- *   that re-detect manufactures a one-frame "pad unplugged" (buf[0] = 0xFF).
- *   Tomba reads it as a controller disconnect and unpauses the menu / drops
- *   input; MMX6 reads the held direction as released-then-re-pressed and fires a
- *   phantom dash. We could NOT, with the modern SM, keep the flip benign. Rather
- *   than block Tomba's Hybrid feature, we kept the original behaviour available
- *   as a per-game opt-in — this flag.
- *
- * What the flag does:
- *   g_pad_legacy_cfg == 0 (default)  -> modern DualShock config state machine.
- *                                       Required by MMX6; correct for every title.
- *   g_pad_legacy_cfg != 0            -> the pre-98aa688 behaviour: config commands
- *                                       always answer the config id 0xF3, with no
- *                                       enter/exit tracking. Tomba's libpad was
- *                                       written against exactly this, so its Hybrid
- *                                       flip re-detect is benign.
- *
- *   Driven per-game by [controller] legacy_pad_config in game.toml (applied via
- *   sio_set_legacy_cfg() at boot). ONLY Tomba opts in. Because the default is 0,
- *   the modern path in pad_process_byte() below is byte-for-byte unchanged when
- *   the flag is off — no other title is affected. The `pad_cfg` debug command can
- *   also flip it live for A/B testing.
- *
- * THIS IS LEGACY — remove it once the behavioural mechanism is right. A real
- * DualShock tolerates unlimited analog-button presses (type changes) with no
- * disconnect, which proves the Hybrid flip CAN be benign under a correct state
- * machine for every game, with no per-game compatibility branch. When that
- * findpad/re-detect refactor lands, DELETE this whole legacy feature set — this
- * flag, the g_pad_legacy_cfg-gated branches in pad_process_byte(), the
- * legacy_pad_config config field, and the per-game game.toml opt-in — and let
- * Tomba ride the modern SM like everything else. */
-volatile int g_pad_legacy_cfg = 0;
-int sio_get_legacy_cfg(void) { return g_pad_legacy_cfg; }
-void sio_set_legacy_cfg(int v) {
-    g_pad_legacy_cfg = v ? 1 : 0;
-    /* Clear any in-flight config latch so a mid-session toggle can't carry a
-     * stale 0xF3/8-byte poll into the other mode's dispatch. */
-    pad_in_config[0] = pad_in_config[1] = 0;
-}
-
 static void pad_process_byte(uint8_t tx_byte) {
     /* Apply any pending host type change (the emulated analog button) ONLY while
      * the bus is idle and the pad is not in config mode. This guarantees the
@@ -817,15 +755,7 @@ static void pad_process_byte(uint8_t tx_byte) {
              * PAD_SEND_RESPONSE so it takes effect after this transaction. */
             const uint16_t btn = pad_buttons[selected_slot];
             pad_response[1] = 0x5A;
-            if (g_pad_legacy_cfg) {
-                /* LEGACY (pre-98aa688): always config ID 0xF3, zero frame, no
-                 * enter/exit tracking. */
-                pad_response[0] = 0xF3;
-                pad_response[2] = 0x00; pad_response[3] = 0x00;
-                pad_response[4] = 0x00; pad_response[5] = 0x00;
-                pad_response[6] = 0x00; pad_response[7] = 0x00;
-                pad_response_len = 8;
-            } else if (!pad_in_config[selected_slot]) {
+            if (!pad_in_config[selected_slot]) {
                 /* ENTER attempt (normal mode): a real DualShock transmits the LIVE
                  * poll frame here — identical framing to 0x42 (dualshock.cpp:471-490)
                  * — and only latches config entry from the 0x01 data byte AFTERWARD.
@@ -857,32 +787,7 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
             sio_stat |= SIO_STAT_ACK;
-        } else if (ds && g_pad_legacy_cfg &&
-                   (tx_byte == 0x45 || tx_byte == 0x46 || tx_byte == 0x47 ||
-                    tx_byte == 0x4C || tx_byte == 0x4D)) {
-            /* LEGACY config answers (pre-98aa688): canned 0xF3 responses given
-             * UNCONDITIONALLY (no config-mode gating). 0x44/0x4F had no handler
-             * then, so they fall through to the hi-z "no response" else below. */
-            static const uint8_t r_45[8] = { 0xF3,0x5A,0x03,0x02,0x01,0x02,0x01,0x00 };
-            static const uint8_t r_46[8] = { 0xF3,0x5A,0x00,0x00,0x01,0x02,0x00,0x0A };
-            static const uint8_t r_47[8] = { 0xF3,0x5A,0x00,0x00,0x02,0x00,0x01,0x00 };
-            static const uint8_t r_4c[8] = { 0xF3,0x5A,0x00,0x00,0x00,0x04,0x00,0x00 };
-            static const uint8_t r_4d[8] = { 0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00 };
-            const uint8_t *r = r_4d;
-            if      (tx_byte == 0x45) r = r_45;
-            else if (tx_byte == 0x46) r = r_46;
-            else if (tx_byte == 0x47) r = r_47;
-            else if (tx_byte == 0x4C) r = r_4c;
-            memcpy(pad_response, r, 8);
-            /* 0x45 status byte must report the LIVE analog mode, not a fixed
-             * analog-on (dualshock.cpp:743) — see fix below for the modern path. */
-            if (tx_byte == 0x45)
-                pad_response[3] = pad_analog[selected_slot] ? 0x01 : 0x00;
-            pad_response_len = 8;
-            pad_state = PAD_SEND_RESPONSE;
-            sio_rx_data = pad_response[0];
-            sio_stat |= SIO_STAT_ACK;
-        } else if (ds && !g_pad_legacy_cfg && pad_in_config[selected_slot] &&
+        } else if (ds && pad_in_config[selected_slot] &&
                    (tx_byte == 0x44 || tx_byte == 0x45 || tx_byte == 0x46 ||
                     tx_byte == 0x47 || tx_byte == 0x4C || tx_byte == 0x4D ||
                     tx_byte == 0x4F)) {
@@ -929,7 +834,7 @@ static void pad_process_byte(uint8_t tx_byte) {
          * exit(0x00) arrives paired with response index 2. Latch the new config
          * state; it takes effect from the next transaction (the ID byte already
          * reported the mode that was current at the start of this one). */
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x43 && pad_response_idx == 2)
+        if (pad_current_cmd == 0x43 && pad_response_idx == 2)
             pad_in_config[selected_slot] = (tx_byte == 0x01) ? 1 : 0;
         /* 0x44 set-mode (game owns the analog/digital mode): the mode byte rides
          * in the same slot as 0x43's enter/exit flag (data position 3). 0x01 =>
@@ -937,14 +842,14 @@ static void pad_process_byte(uint8_t tx_byte) {
          * coherent — the type the game just selected is the type it then polls,
          * instead of the host hybrid silently winning. Drop any stale host
          * request so it can't immediately undo the game's choice. */
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 2) {
+        if (pad_current_cmd == 0x44 && pad_response_idx == 2) {
             pad_analog[selected_slot] = (tx_byte == 0x01) ? 1 : 0;
             pad_type_req[selected_slot] = -1;
         }
         /* 0x44 lock byte (data position 4, the byte after the mode byte): 0x03 =>
          * lock analog mode, 0x02 => unlock (dualshock.cpp:714-725). A locked slot
          * ignores the host hybrid auto-flip (see analog_mode_locked). */
-        if (!g_pad_legacy_cfg && pad_current_cmd == 0x44 && pad_response_idx == 3) {
+        if (pad_current_cmd == 0x44 && pad_response_idx == 3) {
             if      (tx_byte == 0x03) analog_mode_locked[selected_slot] = 1;
             else if (tx_byte == 0x02) analog_mode_locked[selected_slot] = 0;
         }

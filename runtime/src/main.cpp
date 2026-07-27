@@ -2671,10 +2671,10 @@ static void apply_input_override_to_sio(int override_word) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
-    int mode;
-    if (p.kind != 0)                  mode = p.mode;
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    /* Debug injection follows the game's resolved mode even when P1 has no
+     * assigned device. This keeps dev-any-input from manufacturing Hybrid for
+     * a title that deliberately exposes only Analog / D-Pad. */
+    const int mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -2712,15 +2712,11 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * state gates how the left stick is read for BOTH the button word and the
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
-     * handshake cadence is preserved exactly). A P1 with no assigned device but
-     * dev-any-input on presents as HYBRID — boots analog like a DualShock and
-     * auto-drops to digital on the d-pad — so any plugged controller and the
-     * keyboard both navigate. The hybrid latch reads raw device state, so it is
-     * safe to resolve here before the button word is built. */
-    int mode;
-    if (p.kind != 0)      mode = p.mode;
-    else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                  mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+     * handshake cadence is preserved exactly). A P1 with no assigned device
+     * keeps the game's resolved mode while dev-any-input merges the keyboard and
+     * all connected controllers. This is important for games that deliberately
+     * do not support Hybrid. */
+    const int mode = p.mode;
     int eff_analog;
     if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
         eff_analog = 0;
@@ -2860,10 +2856,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;
 
-    int mode;
-    if (p.kind != 0)                  mode = p.mode;
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    const int mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4952,12 +4945,6 @@ int main(int argc, char** argv) {
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
             ctrl_lock_device  = gc.runtime.controller_lock_device;
             if (gc.runtime.has_deadzone) resolved_deadzone = gc.runtime.deadzone;
-            /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
-             * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
-             * libpad manufacture a 1-frame "pad unplugged". sio_init() does not
-             * touch this flag, so applying it here (config-load time) is stable.
-             * Full history + removal plan: psxrecomp sio.c g_pad_legacy_cfg. */
-            sio_set_legacy_cfg(gc.runtime.legacy_pad_config ? 1 : 0);
             { const char *e = std::getenv("PSX_GL_FORCE_CPU_PRESENT");
               if (e && e[0] && e[0] != '0') g_gl_fbo_present = 0; }
             game_entry_pc = gc.entry_pc;
@@ -5307,6 +5294,21 @@ int main(int argc, char** argv) {
     if (ctrl_lock_mode) {
         p1_mode = ctrl_locked_p1_mode;
         p2_mode = ctrl_locked_p2_mode;
+    }
+    /* allow_hybrid=false removes Hybrid from the game's supported controller
+     * modes. Clamp an old persisted Hybrid value here as well as hiding it in
+     * recomp-ui, so launcher-less builds cannot revive an unsupported mode.
+     * Prefer each port's game-declared default; malformed/legacy configs that
+     * also default to Hybrid fall back to Analog, matching recomp-ui. */
+    if (!ctrl_allow_hybrid) {
+        const int fallback_p1 =
+            ctrl_locked_p1_mode == PSXRecompV4::PAD_MODE_HYBRID
+                ? PSXRecompV4::PAD_MODE_ANALOG : ctrl_locked_p1_mode;
+        const int fallback_p2 =
+            ctrl_locked_p2_mode == PSXRecompV4::PAD_MODE_HYBRID
+                ? PSXRecompV4::PAD_MODE_ANALOG : ctrl_locked_p2_mode;
+        if (p1_mode == PSXRecompV4::PAD_MODE_HYBRID) p1_mode = fallback_p1;
+        if (p2_mode == PSXRecompV4::PAD_MODE_HYBRID) p2_mode = fallback_p2;
     }
 
     /* A game may migrate Skip FMVs from generic Settings into its mod catalog.

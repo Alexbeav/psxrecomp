@@ -231,11 +231,6 @@ typedef struct {
 
 uint32_t sio_get_irq_ring(const SioIrqEntry **buf_out, int *write_idx_out);
 
-/* Phantom-input regression A/B instrument: select pre/post-98aa688 pad config
- * behavior at runtime (0 = new state machine, 1 = legacy always-0xF3). */
-int  sio_get_legacy_cfg(void);
-void sio_set_legacy_cfg(int v);
-
 #ifdef __cplusplus
 }
 #endif
