@@ -880,6 +880,10 @@ static int16_t       sdl_audio_buf[2048 * 2];
  * thread. */
 static rab_bridge s_drc;
 static bool       s_drc_ready = false;
+/* Per-game bridge fill target. 180 ms remains the compatibility default;
+ * [audio].buffer_ms may lower it for titles whose production cadence has been
+ * validated with less reserve. */
+static double     g_audio_buffer_ms = 180.0;
 
 /* Observability + A/B. PSXRECOMP_AUDIO_LEGACY=1 keeps the historical push model
  * (SDL_QueueAudio, no bridge) so the underrun baseline can be measured against
@@ -1658,12 +1662,14 @@ static void sdl_audio_pump(bool discard_output = false) {
  *     across the first ~50 ms of samples (sdl_audio_pump above). */
 /* Bridge/legacy output health, surfaced through the audio_stats TCP command
  * (debug_server.c) — no stderr probe; rule 3. */
-extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
+extern "C" int psx_audio_out_stats(double *fill_ms, double *target_ms,
+                                   uint64_t *underruns,
                                    uint64_t *overflow_drops, double *correction,
                                    int *legacy, int *host_rate)
 {
     *legacy = audio_legacy_mode() ? 1 : 0;
     *host_rate = g_audio_host_rate;
+    *target_ms = g_audio_buffer_ms;
     if (*legacy || !s_drc_ready) {
         *fill_ms = sdl_audio_device
                    ? (double)psx_sdl_audio_queued_size(sdl_audio_device)
@@ -1916,11 +1922,11 @@ static void runtime_perf_diag_tick() {
     RuntimePerfSnapshot current = runtime_perf_snapshot(now);
     AudioTraceStats audio;
     audio_trace_get_stats(&audio);
-    double fill_ms = 0.0, correction = 0.0;
+    double fill_ms = 0.0, target_ms = 0.0, correction = 0.0;
     uint64_t underruns = 0, overflows = 0;
     int legacy = 0, host_rate = 0;
-    psx_audio_out_stats(&fill_ms, &underruns, &overflows, &correction,
-                        &legacy, &host_rate);
+    psx_audio_out_stats(&fill_ms, &target_ms, &underruns, &overflows,
+                        &correction, &legacy, &host_rate);
     uint64_t up[6] = {0};
     gl_renderer_runtime_diag(up);
     uint64_t overlay_load_us = 0, overlay_load_max_us = 0, overlay_load_last_us = 0;
@@ -1941,7 +1947,7 @@ static void runtime_perf_diag_tick() {
                       (double)g_runtime_perf.frequency;
     std::fprintf(stdout,
         "psxrecomp: runtime cadence: guest=%.2f Hz, spu=%.1f Hz, "
-        "audio_fill=%.1f ms, underruns=+%llu, overflows=+%llu, corr=%+.5f; "
+        "audio_fill=%.1f/%.1f ms, underruns=+%llu, overflows=+%llu, corr=%+.5f; "
         "GL upload=%.1f calls/s %.1f rect/s %.2f Mpix/s, "
         "cpu=%.1f tex=%.1f draw=%.1f ms/s; "
         "work guest=%.1f pacer=%.1f autocapture=%.1f provider_poll=%.1f ms/s, "
@@ -1953,7 +1959,7 @@ static void runtime_perf_diag_tick() {
         "capture triggers=+%u overlays=+%d last_dispatch_delta=%llu\n",
         (double)(current.frame - last.frame) / dt,
         (double)(audio.tap_frames[AUDIO_TAP_SPU_OUT] - last_spu) / dt,
-        fill_ms, (unsigned long long)(underruns - last_underruns),
+        fill_ms, target_ms, (unsigned long long)(underruns - last_underruns),
         (unsigned long long)(overflows - last_overflows), correction,
         (double)(up[0] - last_up[0]) / dt,
         (double)(up[1] - last_up[1]) / dt,
@@ -5168,6 +5174,7 @@ int main(int argc, char** argv) {
                 psx_ws_set_backdrop_sites(gc.ws_backdrop_x_sites.data(),
                                           (int)gc.ws_backdrop_x_sites.size());
             g_audio_spu_hq     = gc.runtime.audio_spu_hq;
+            g_audio_buffer_ms  = (double)gc.runtime.audio_buffer_ms;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
@@ -6484,6 +6491,7 @@ session_reboot:
                 cfg.channels    = 2;
                 cfg.source_rate = 44100.0;            /* SPU render rate */
                 cfg.host_rate   = (double)have.freq;  /* actual device rate */
+                cfg.target_ms   = g_audio_buffer_ms;   /* per-game cushion */
                 if (rab_init(&s_drc, &cfg) == 0) s_drc_ready = true;
             }
             g_audio_host_rate = have.freq;

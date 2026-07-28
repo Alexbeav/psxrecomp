@@ -549,6 +549,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     // Optional [audio] block.
     if (cfg.contains("audio")) {
         const toml::value& audio = toml::find(cfg, "audio");
+        if (audio.contains("buffer_ms")) {
+            const auto n = toml::find<int64_t>(audio, "buffer_ms");
+            if (n < 30 || n > 500) {
+                throw std::runtime_error(fmt::format(
+                    "[audio] buffer_ms out of range (30..500): {}", n));
+            }
+            rt.audio_buffer_ms = static_cast<int>(n);
+        }
         if (audio.contains("spu_hq")) {
             rt.audio_spu_hq = toml::find<bool>(audio, "spu_hq");
         }

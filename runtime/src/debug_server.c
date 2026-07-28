@@ -5999,7 +5999,8 @@ static void handle_spu_events_reset(int id, const char *json)
  *                UNDERRUN/MUTE/UNMUTE/CD_PUSH/DMA), sample-clock stamped.
  * Protocol mirrored on psx-beetle's port 4380 (beetle_debug_server.c). */
 /* Bridge/legacy output health (main.cpp; C linkage). Returns 0 pre-device. */
-extern int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
+extern int psx_audio_out_stats(double *fill_ms, double *target_ms,
+                               uint64_t *underruns,
                                uint64_t *overflow_drops, double *correction,
                                int *legacy, int *host_rate);
 
@@ -6008,11 +6009,12 @@ static void handle_audio_stats(int id, const char *json)
     (void)json;
     AudioTraceStats st;
     audio_trace_get_stats(&st);
-    double fill_ms = 0.0, correction = 0.0;
+    double fill_ms = 0.0, target_ms = 0.0, correction = 0.0;
     uint64_t out_underruns = 0, overflow_drops = 0;
     int legacy = 1, host_rate = 44100;
-    int out_ok = psx_audio_out_stats(&fill_ms, &out_underruns, &overflow_drops,
-                                     &correction, &legacy, &host_rate);
+    int out_ok = psx_audio_out_stats(&fill_ms, &target_ms, &out_underruns,
+                                     &overflow_drops, &correction, &legacy,
+                                     &host_rate);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"taps\":["
              "{\"name\":\"spu_out\",\"frames\":%llu,\"nonzero\":%llu,"
@@ -6025,7 +6027,8 @@ static void handle_audio_stats(int id, const char *json)
              "\"queue_hiwater\":%u,\"queue_lowater\":%u,"
              "\"mutes\":%llu,\"unmutes\":%llu,\"events_total\":%llu,"
              "\"out\":{\"active\":%d,\"mode\":\"%s\",\"host_rate\":%d,"
-             "\"fill_ms\":%.1f,\"underruns\":%llu,\"overflow_drops\":%llu,"
+             "\"fill_ms\":%.1f,\"target_ms\":%.1f,\"underruns\":%llu,"
+             "\"overflow_drops\":%llu,"
              "\"correction\":%.5f}}",
              id,
              (unsigned long long)st.tap_frames[0],
@@ -6048,7 +6051,7 @@ static void handle_audio_stats(int id, const char *json)
              (unsigned long long)st.unmute_events,
              (unsigned long long)st.events_total,
              out_ok, legacy ? "legacy-push" : "bridge-pull", host_rate,
-             fill_ms,
+             fill_ms, target_ms,
              (unsigned long long)out_underruns,
              (unsigned long long)overflow_drops,
              correction);

@@ -213,6 +213,16 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
+  Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded
+  30–500 ms range. The compatibility default remains 180 ms, preserving the
+  reserve required by titles with long streamed-stage production gaps; a game
+  may opt into a lower target after validation to reduce audible latency.
+  `audio_stats` and the opt-in runtime cadence report now expose both actual
+  fill and configured target. This changes only the host playback bridge and
+  does not alter guest SPU state, instruction timing, or code generation.
+  Recompiler build and all 33 registered tests pass.
+
 - **2026-07-27 (BIOS boot-skip parity across BIOS images — FIXED, validated):**
   `bios_hle`'s boot-skip did nothing under the bundled OpenBIOS. Root cause was
   ordering, not policy: `main.cpp` correctly forced the *kernel-call* tier off

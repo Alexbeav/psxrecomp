@@ -313,6 +313,22 @@ turbo_audio_sink = true
 the guest SPU timeline advancing but discards accelerated samples before host
 playback, then fades normal output back in.
 
+## Audio Block
+
+Game projects may choose the host playback cushion after validating their
+audio production cadence:
+
+```toml
+[audio]
+buffer_ms = 60
+```
+
+`buffer_ms` accepts 30–500 milliseconds and defaults to 180. Lower values
+reduce audible input-to-sound delay, but leave less reserve for frames where a
+game temporarily produces no audio and can therefore crackle on affected
+titles. This is deliberately a per-game developer choice; it is not read from
+the player's `settings.toml`.
+
 ## Video Block
 
 Runtime video defaults live in `[video]`:

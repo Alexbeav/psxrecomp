@@ -398,6 +398,13 @@ struct RuntimeConfig {
     int                   video_aspect_den = 3;
 
     // ---- [audio] block ----
+    // buffer_ms: steady-state host playback cushion. The ecosystem default
+    // remains 180 ms because it survives long streamed-stage production gaps;
+    // games with smoother production cadence may opt into a lower value to
+    // reduce controller-to-sound latency. This is a game-developer setting,
+    // not a player preference.
+    int                   audio_buffer_ms = 180;
+
     // spu_hq: enable the SPU float-shadow re-render (Catmull-Rom resample, float
     // headroom). Verified-enhancement, default OFF — spu_render output is
     // byte-identical to the canon hardware mix when off. The PSX_AUDIO_SHADOW

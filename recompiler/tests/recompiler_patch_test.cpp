@@ -132,6 +132,27 @@ note = "Test-only fixture"
           config.recompiler_patches[0].replacement == 0x24020001u,
           "parser preserves patch fields");
 
+    const auto audio_buffer = write_config(root, "audio-buffer", R"toml(
+[runtime]
+
+[audio]
+buffer_ms = 60
+)toml");
+    const auto audio_config = PSXRecompV4::load_game_config(audio_buffer);
+    check(audio_config.runtime.audio_buffer_ms == 60,
+          "parser preserves per-game audio buffer target");
+
+    const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
+[runtime]
+
+[audio]
+buffer_ms = 20
+)toml");
+    check_throws(
+        [&] { (void)PSXRecompV4::load_game_config(bad_audio_buffer); },
+        "[audio] buffer_ms out of range (30..500)",
+        "parser rejects unsafe audio buffer target");
+
     const auto duplicate_address = write_config(root, "duplicate-address", R"toml(
 [[recompiler.patch]]
 id = "first"
