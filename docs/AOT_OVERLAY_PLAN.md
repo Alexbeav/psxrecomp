@@ -331,7 +331,10 @@ additively merging every valid snapshot.
 
 Development configs may also set a project-relative
 `overlay_capture_persist_dir`. This creates one atomically published, immutable
-JSON snapshot per changed capture. Absolute paths and `..` components are rejected.
+JSON snapshot per changed capture. Rooted, UNC, drive-qualified and
+drive-relative paths are rejected, as is any `..` component or an embedded NUL,
+under both `/` and `\` separators, so a config is accepted or rejected
+identically on every host.
 Production configs normally omit this key and retain only the naive executable-
 local addendum. Both history modes are off by default and contain game-derived
 bytes, so their outputs remain private/gitignored artifacts.
