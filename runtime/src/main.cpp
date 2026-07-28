@@ -5328,10 +5328,19 @@ int main(int argc, char** argv) {
                     }
                     autocompile_configure(ac_cmd->c_str(), ac_cwd.c_str());
                     overlay_autocapture_set_enabled(1);
+                    /* cwd is printed because every relative path in
+                     * overlay_autocompile_cmd resolves against it, and it is
+                     * derived from game.toml's detected project root. Staging a
+                     * game.toml somewhere that is not the real project root
+                     * therefore repoints the whole compile command, and the only
+                     * symptom is that nothing ever goes native and frame times
+                     * are 10-30x worse. Printing the root makes that a one-line
+                     * diagnosis instead of a TCP query against
+                     * autocompile_status. */
                     std::fprintf(stdout,
-                        "psxrecomp: overlay autocompile enabled (%s); cache=%s; captures=%s\n",
+                        "psxrecomp: overlay autocompile enabled (%s); cache=%s; captures=%s; cwd=%s\n",
                         overlay_backend_name(eff), cache_dir.c_str(),
-                        captures_path.string().c_str());
+                        captures_path.string().c_str(), ac_cwd.c_str());
                 }
                 code_provider_init(cfg_backend, gcc_avail);
                 /* (sljit removed 2026-07-15: overlay_loader_apply_live_policy was

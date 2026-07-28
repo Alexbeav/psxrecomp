@@ -59,6 +59,25 @@ static uint64_t autocompile_now_ms(void) {
 #endif
 }
 
+/* Loud-once threshold. One or two failures are ordinary (a shard racing a
+ * capture rewrite, a transient file lock) and self-heal on the next run. A
+ * SUSTAINED failure run means no overlay will ever go native, so the title
+ * runs wholly interpreted — a 10-30x frame-cost difference. That used to be
+ * visible only by querying autocompile_status over TCP and noticing fails ==
+ * runs, which in practice meant it was discovered by someone saying "why is
+ * this slow" (the CWD-relative overlay_autocompile_cmd class of breakage:
+ * every build dir outside the game repo root silently degraded to the
+ * interpreter). Report it on stdout once, with the child's own output. */
+#define AC_LOUD_AFTER_FAILS 3u
+static int s_reported_broken = 0;
+/* Defined below, once the child-output tail ring it reads is declared. */
+static void autocompile_report_broken_once(void);
+#ifndef _WIN32
+/* The compile spawner and its output ring are Windows-only in this file, so
+ * there is no child output to quote off-Windows and nothing to report. */
+static void autocompile_report_broken_once(void) { }
+#endif
+
 static void autocompile_note_failure(void) {
     s_fails++;
     if (s_consecutive_fails < 31u) s_consecutive_fails++;
@@ -68,6 +87,7 @@ static void autocompile_note_failure(void) {
     uint64_t delay = AC_RETRY_INITIAL_MS << shift;
     if (delay > AC_RETRY_MAX_MS) delay = AC_RETRY_MAX_MS;
     s_retry_not_before_ms = autocompile_now_ms() + delay;
+    autocompile_report_broken_once();
 }
 
 static void autocompile_note_success(void) {
@@ -132,6 +152,36 @@ static unsigned s_publish_prepare_giveup;
 static char s_child_line[1024];
 static int  s_child_line_len = 0;
 static int  s_child_line_overflow = 0;
+
+/* See the forward declaration above for why this is loud. */
+static void autocompile_report_broken_once(void) {
+    if (s_reported_broken || s_consecutive_fails < AC_LOUD_AFTER_FAILS) return;
+    s_reported_broken = 1;
+    char tail[AC_OUT_CAP];
+    int n = 0;
+    if (s_out_lock_init) {
+        EnterCriticalSection(&s_out_lock);
+        n = s_out_len < (int)sizeof tail - 1 ? s_out_len : (int)sizeof tail - 1;
+        if (n > 0) memcpy(tail, s_out + (s_out_len - n), (size_t)n);
+        LeaveCriticalSection(&s_out_lock);
+    }
+    tail[n > 0 ? n : 0] = '\0';
+    fprintf(stdout,
+        "psxrecomp: WARNING: overlay autocompile has failed %u consecutive "
+        "runs (last exit %d).\n"
+        "  Nothing is being compiled to native code, so overlay execution "
+        "stays in the interpreter and\n"
+        "  frame times will be far worse than this build is capable of.\n"
+        "  Check [runtime] overlay_autocompile_cmd in game.toml: every path in "
+        "it must resolve from the\n"
+        "  process working directory, and the recompiler and "
+        "tools/compile_overlays.py it names must exist.\n"
+        "  Last compiler output:\n%s%s",
+        s_consecutive_fails, (int)s_exit_code,
+        n > 0 ? tail : "    (no output captured)\n",
+        (n > 0 && tail[n - 1] != '\n') ? "\n" : "");
+    fflush(stdout);
+}
 
 /* Parse result markers while stdout is streaming, not from s_out after exit.
  * The configured child command may chain post-processing after

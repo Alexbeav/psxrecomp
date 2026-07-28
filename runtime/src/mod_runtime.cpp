@@ -979,6 +979,28 @@ extern "C" int psx_mod_game_started(void) {
     return fntrace_is_game_started();
 }
 
+extern "C" int psx_mod_option_value(const char* package_id,
+                                    const char* feature_id,
+                                    const char* option_id,
+                                    char* out, uint32_t out_size) {
+    using namespace PSXRecompV4;
+    if (out && out_size) out[0] = '\0';
+    if (!package_id || !feature_id || !option_id || !out || out_size == 0)
+        return 0;
+    RuntimeMods& s = state();
+    /* Activation runs after the final plan commit, so a committed plan is the
+     * precondition for a meaningful answer. Without one there is no selection
+     * to read and the caller must fall back to its own default rather than
+     * treat an empty string as a value. */
+    if (!s.initialized || !s.plan.ok) return 0;
+    const std::string value = s.manager.feature_option_value(
+        package_id, feature_id, option_id);
+    if (value.empty()) return 0;
+    if (value.size() + 1 > (size_t)out_size) return 0;
+    std::memcpy(out, value.c_str(), value.size() + 1);
+    return 1;
+}
+
 extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
     return psx_read_byte(address);
 }

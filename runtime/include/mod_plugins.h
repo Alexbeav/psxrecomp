@@ -25,6 +25,29 @@ uint8_t psx_mod_read_byte(uint32_t address);
 void psx_mod_write_byte(uint32_t address, uint8_t value);
 
 /*
+ * Read the committed value of one of this package's declared options, as the
+ * player left it in the launcher (or the manifest default when untouched).
+ * Writes a NUL-terminated string into `out` and returns 1; returns 0 with
+ * out[0] = '\0' when the plan is not committed, the ids do not resolve, or the
+ * value does not fit — the caller then applies its own default rather than
+ * treating an empty string as a selection.
+ *
+ * Why this exists: the manifest schema already carries typed, validated,
+ * launcher-rendered, persisted options ([[option]] boolean/choice/integer), but
+ * an activation callback takes no arguments and had no way to read them, so a
+ * trusted plugin could only ever be an on/off switch. A parameterised feature
+ * then had to be modelled as one feature per value — and `constraint` only
+ * expresses ordered_integer WITHIN a feature, so those pseudo-features could
+ * not even be made mutually exclusive. This closes that gap: one feature, one
+ * option, the plugin reads what was chosen.
+ *
+ * Ids are passed explicitly because registration is by plugin id alone and the
+ * callback carries no package/feature context.
+ */
+int psx_mod_option_value(const char* package_id, const char* feature_id,
+                         const char* option_id, char* out, uint32_t out_size);
+
+/*
  * Request a fixed host display aspect before renderer/window initialization.
  * Intended for activation callbacks that move a game's widescreen enhancement
  * out of generic Settings and into its mod catalog.

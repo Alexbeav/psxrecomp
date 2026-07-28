@@ -799,6 +799,29 @@ function(psxrecomp_add_runtime_target target)
             set(RECOMP_UI_ENABLE_MODS ON CACHE BOOL
                 "Enable the recomp-ui Mods view (psxrecomp ships mod packages)")
         endif()
+        # The seed above only fires on a FRESH cache. A build tree configured
+        # before it existed already has RECOMP_UI_ENABLE_MODS=OFF in its cache,
+        # written by recomp-ui's own option(), and nothing can distinguish that
+        # stale default from a deliberate -DRECOMP_UI_ENABLE_MODS=OFF. Such a
+        # tree therefore keeps producing a Mods-less build across reconfigures,
+        # which is the same "reads as a stale build" failure the seed was added
+        # to prevent -- just one level up, and invisible.
+        #
+        # The explicit-OFF contract above is deliberate, so this does not
+        # override it. It makes the state audible instead: whoever sees a
+        # Mods-less build now gets told why and how to change it, rather than
+        # having to query the running game to discover the panel was compiled
+        # out. Deliberate opt-outs get one line per configure, which is the
+        # price of the two cases being genuinely indistinguishable.
+        if(NOT RECOMP_UI_ENABLE_MODS)
+            message(WARNING
+                "RECOMP_UI_ENABLE_MODS is OFF in this build tree, so the "
+                "launcher will have NO Mods page even for a title that ships a "
+                "catalog.\n"
+                "  If that was not deliberate, this cache predates the "
+                "framework opting in: delete CMakeCache.txt (or just that "
+                "entry) to pick up the ON default.")
+        endif()
         include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
 
         set(_psx_recomp_ui_args)
