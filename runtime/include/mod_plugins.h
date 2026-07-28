@@ -73,10 +73,24 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
  * Enable presentation-only frame interpolation while leaving guest VBlank,
  * game logic, timers, and audio at their stock cadence. The OpenGL presenter
  * blends between completed guest frames at the requested output rate.
- * A value of zero selects an uncapped presentation loop.
+ * A value of zero follows the measured host-display refresh rate.
  */
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 int psx_mod_set_auto_skip_fmv(int enabled);
+
+/*
+ * Override one player's resolved controller presentation mode for this launch.
+ * This is intentionally a trusted-plugin API, not a generic launcher setting:
+ * games may hide Hybrid from their normal selector while offering it as an
+ * explicit game-owned mod.
+ */
+enum {
+    PSX_MOD_CONTROLLER_HYBRID = 0,
+    PSX_MOD_CONTROLLER_ANALOG = 1,
+    PSX_MOD_CONTROLLER_DIGITAL = 2
+};
+int psx_mod_set_controller_mode_override(uint32_t player,
+                                         uint32_t controller_mode);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

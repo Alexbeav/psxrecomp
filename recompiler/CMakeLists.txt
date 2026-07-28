@@ -384,7 +384,9 @@ if(BUILD_TESTING)
                 default_renderer_guards
                 fmv_quiet_guards
                 fps_telemetry_opt_in
+                frame_interpolation_display_rate
                 launcher_vulkan_option
+                mod_controller_override
                 overlay_candidate_capacity
                 overlay_decodable_fallback
                 overlay_init_guard

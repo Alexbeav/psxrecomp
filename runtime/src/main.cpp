@@ -57,6 +57,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
 #include "game_options.h"
+#include "mod_plugins.h"
 #include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
@@ -537,6 +538,13 @@ static int           g_low_latency_input = 1;
 static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
 static int           g_frame_interpolation_fps = 0;
+static int           g_mod_controller_mode_override[2] = { -1, -1 };
+static_assert((int)PSX_MOD_CONTROLLER_HYBRID ==
+              (int)PSXRecompV4::PAD_MODE_HYBRID);
+static_assert((int)PSX_MOD_CONTROLLER_ANALOG ==
+              (int)PSXRecompV4::PAD_MODE_ANALOG);
+static_assert((int)PSX_MOD_CONTROLLER_DIGITAL ==
+              (int)PSXRecompV4::PAD_MODE_DIGITAL);
 static double        g_host_refresh_hz = 0.0;
 static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
 static double        g_frame_period_ms = PSX_FRAME_PERIOD_MS;
@@ -677,7 +685,7 @@ extern "C" int psx_mod_set_frame_interpolation(
     g_video_vsync = 0;
     g_frame_interpolation = 1;
     g_frame_interpolation_fps =
-        frames_per_second ? (int)frames_per_second : -1;
+        frames_per_second ? (int)frames_per_second : 0;
 
     if (frames_per_second) {
         std::fprintf(stdout,
@@ -686,7 +694,7 @@ extern "C" int psx_mod_set_frame_interpolation(
             (unsigned)frames_per_second);
     } else {
         std::fprintf(stdout,
-            "psxrecomp: mod selected uncapped presentation-only "
+            "psxrecomp: mod selected display-refresh presentation-only "
             "interpolation; guest timing remains stock\n");
     }
     return 1;
@@ -702,6 +710,20 @@ extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     g_auto_skip_fmv = enabled;
     std::fprintf(stdout, "psxrecomp: mod %s automatic FMV skipping\n",
                  enabled ? "enabled" : "disabled");
+    return 1;
+}
+
+extern "C" int psx_mod_set_controller_mode_override(
+    uint32_t player, uint32_t controller_mode) {
+    if (player >= 2 ||
+        controller_mode > (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected controller-mode override "
+            "(player %u, mode %u)\n",
+            (unsigned)player, (unsigned)controller_mode);
+        return 0;
+    }
+    g_mod_controller_mode_override[player] = (int)controller_mode;
     return 1;
 }
 
@@ -6123,7 +6145,16 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    /* Activation callbacks are re-run after every launcher session. Clear
+     * game-owned controller overrides first so disabling a package cannot
+     * leave its prior mode latched across a soft return to the launcher. */
+    g_mod_controller_mode_override[0] = -1;
+    g_mod_controller_mode_override[1] = -1;
     mod_runtime_activate_plugins();
+    if (g_mod_controller_mode_override[0] >= 0)
+        p1_mode = g_mod_controller_mode_override[0];
+    if (g_mod_controller_mode_override[1] >= 0)
+        p2_mode = g_mod_controller_mode_override[1];
 
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
