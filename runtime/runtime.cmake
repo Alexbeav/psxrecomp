@@ -897,7 +897,10 @@ function(psxrecomp_add_runtime_target target)
         set(RECOMP_UI_SDL3 ${PSX_SDL3})
         include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
 
-        set(_psx_recomp_ui_args)
+        # Asset staging is console-scoped in recomp-ui. Select PSX once here so
+        # every game using this framework ships only PlayStation launcher art
+        # (plus common chrome), never unrelated NES/N64/etc. assets.
+        set(_psx_recomp_ui_args CONSOLE psx)
         if(PSXRT_LAUNCHER_BOXART)
             list(APPEND _psx_recomp_ui_args BOXART "${PSXRT_LAUNCHER_BOXART}")
         endif()
