@@ -78,6 +78,7 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.u32(c.ws_auto_backdrop_preload ? 1u : 0u);
     h.u32(c.ws_bg2d_init_func);
     h.u32((uint32_t)c.ws_cull_guard_pixels);
+    h.u32((uint32_t)c.ws_cull_activation_guard_pixels);
 
     std::vector<WidescreenSignedBoundSite> signed_sites =
         c.ws_signed_x_bound_sites;
@@ -1365,6 +1366,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
     int ws_cull_guard_pixels = 0;
+    int ws_cull_activation_guard_pixels = 0;
     // Cull-signature immediates (screen_w_imms / screen_h_imms). Defaults are
     // the original Tomba signature (320-display: 0x140/0x141 + 0xE0/0xF1); a
     // game with a different display width overrides them (Ape Escape: 0x181).
@@ -1644,6 +1646,16 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                         "{}: [widescreen.cull] guard_pixels must be in [0, 256]",
                         config_path.string()));
             }
+            if (cull.contains("activation_guard_pixels")) {
+                ws_cull_activation_guard_pixels =
+                    toml::find<int>(cull, "activation_guard_pixels");
+                if (ws_cull_activation_guard_pixels < 0 ||
+                    ws_cull_activation_guard_pixels > 256)
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull] activation_guard_pixels must "
+                        "be in [0, 256]",
+                        config_path.string()));
+            }
             if (cull.contains("screen_w_imms")) {
                 ws_cull_w_imms.clear();
                 load_sites("screen_w_imms", ws_cull_w_imms);
@@ -1801,6 +1813,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
         /*ws_aspect_cone*/         ws_aspect_cone,
         /*ws_cull_guard_pixels*/  ws_cull_guard_pixels,
+        /*ws_cull_activation_guard_pixels*/ ws_cull_activation_guard_pixels,
         /*ws_cull_w_imms*/        ws_cull_w_imms,
         /*ws_cull_h_imms*/        ws_cull_h_imms,
         /*ws_backdrop_x_sites*/   ws_backdrop_x_sites,

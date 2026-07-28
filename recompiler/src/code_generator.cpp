@@ -975,8 +975,15 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         if (opcode == 0x08 || opcode == 0x09) {  // addi / addiu
             uint32_t rs = get_rs(instr), rt = get_rt(instr);
             int16_t imm = get_imm16(instr);
-            return fmt::format("{} = {} + ((int32_t){} + psx_ws_x_margin());{}",
-                               reg_name(rt), reg_name(rs), imm, comment);
+            const std::string margin =
+                config_.ws_cull_activation_guard_pixels > 0
+                    ? fmt::format(
+                          "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + {} : 0)",
+                          config_.ws_cull_activation_guard_pixels)
+                    : "psx_ws_x_margin()";
+            return fmt::format("{} = {} + ((int32_t){} + {});{}",
+                               reg_name(rt), reg_name(rs), imm, margin,
+                               comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] bias site 0x{:08X} is not "
                        "addi/addiu (opcode 0x{:02X})\n", addr, opcode);
@@ -1072,8 +1079,15 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         if (opcode == 0x0B) {  // sltiu
             uint32_t rs = get_rs(instr), rt = get_rt(instr);
             int16_t imm = get_imm16(instr);
-            return fmt::format("{} = ({} < (uint32_t)((int32_t){} + 2*psx_ws_x_margin())) ? 1 : 0;{}",
-                               reg_name(rt), reg_name(rs), imm, comment);
+            const std::string margin =
+                config_.ws_cull_activation_guard_pixels > 0
+                    ? fmt::format(
+                          "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + {} : 0)",
+                          config_.ws_cull_activation_guard_pixels)
+                    : "psx_ws_x_margin()";
+            return fmt::format(
+                "{} = ({} < (uint32_t)((int32_t){} + 2*{})) ? 1 : 0;{}",
+                reg_name(rt), reg_name(rs), imm, margin, comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] range site 0x{:08X} is not "
                        "sltiu (opcode 0x{:02X})\n", addr, opcode);

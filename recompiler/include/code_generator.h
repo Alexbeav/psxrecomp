@@ -95,6 +95,9 @@ struct CodeGenConfig {
     std::set<uint32_t> ws_cull_range_sites;
     std::set<uint32_t> ws_cull_a1_sites;
     std::set<uint32_t> ws_cull_screen_x_sites;
+    // Extra lead for bias/range activation windows only. Render/terrain
+    // helpers continue to use psx_ws_x_margin() without this term.
+    int ws_cull_activation_guard_pixels = 0;
 
     // Explicit signed right-edge widen sites ([widescreen.cull] slti_sites):
     // `slti rt, sx, W` emitted through psx_ws_cull_slti for funnel functions

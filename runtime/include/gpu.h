@@ -190,6 +190,10 @@ int  gpu_ws_present_native_43(void);
  * cull immediates by the recompiler ([widescreen.cull]); 0 unless stretching. */
 int  psx_ws_x_margin(void);
 void gpu_ws_set_cull_guard_pixels(int pixels);
+/* Bias/range activation-window margin. This may include an additional
+ * resident-object lead while render/terrain paths retain psx_ws_x_margin(). */
+int  psx_ws_activation_margin(void);
+void gpu_ws_set_activation_guard_pixels(int pixels);
 void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
                                     const uint32_t *slti, int nslti,
                                     const uint32_t *range, int nrange);
@@ -363,6 +367,7 @@ typedef struct {
     int      game_mode;         /* tagged char/billboard prim within 2 frames */
     int      present_native_43; /* frame presents pillarboxed 4:3 (FMV/full-2D) */
     int      x_margin;          /* psx_ws_x_margin() right now */
+    int      activation_margin; /* psx_ws_activation_margin() right now */
     int      xnum, xden;        /* squash factor */
     int      mode;              /* 0 = off, 1 = squash, 2 = native-wide */
     int      nw_extra;          /* native-wide frame growth (display px), 0 if off */

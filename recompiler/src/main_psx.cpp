@@ -176,6 +176,7 @@ int main(int argc, char** argv) {
     std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep;
     std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle;
     PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
+    int                   ws_cull_activation_guard_pixels = 0;
     std::vector<uint32_t> ws_cull_w_imms = { 0x140, 0x141 }; // [widescreen.cull] screen_w_imms
     std::vector<uint32_t> ws_cull_h_imms = { 0xE0, 0xF1 };   // [widescreen.cull] screen_h_imms
     std::set<uint32_t>    ws_backdrop_x;        // [widescreen.backdrop] x_sites
@@ -228,6 +229,8 @@ int main(int argc, char** argv) {
         ws_cull_keep = cfg.ws_cull_keep_sites;
         ws_cull_angle = cfg.ws_cull_angle_sites;
         ws_aspect_cone = cfg.ws_aspect_cone;
+        ws_cull_activation_guard_pixels =
+            cfg.ws_cull_activation_guard_pixels;
         ws_cull_w_imms = cfg.ws_cull_w_imms;
         ws_cull_h_imms = cfg.ws_cull_h_imms;
         ws_backdrop_x.insert(cfg.ws_backdrop_x_sites.begin(), cfg.ws_backdrop_x_sites.end());
@@ -311,6 +314,8 @@ int main(int argc, char** argv) {
         if (ws_cull_angle.empty()) ws_cull_angle = wscfg.ws_cull_angle_sites;
         if (ws_aspect_cone.sites.empty())
             ws_aspect_cone = wscfg.ws_aspect_cone;
+        ws_cull_activation_guard_pixels =
+            wscfg.ws_cull_activation_guard_pixels;
         ws_cull_w_imms = wscfg.ws_cull_w_imms;
         ws_cull_h_imms = wscfg.ws_cull_h_imms;
         ws_backdrop_x.insert(wscfg.ws_backdrop_x_sites.begin(), wscfg.ws_backdrop_x_sites.end());
@@ -1132,6 +1137,8 @@ int main(int argc, char** argv) {
     codegen_config.ws_cull_range_sites = ws_cull_range;
     codegen_config.ws_cull_a1_sites    = ws_cull_a1;
     codegen_config.ws_cull_screen_x_sites = ws_cull_screen_x;
+    codegen_config.ws_cull_activation_guard_pixels =
+        ws_cull_activation_guard_pixels;
     codegen_config.ws_cull_slti_sites  = ws_cull_slti;
     codegen_config.ws_cull_bltz_sites  = ws_cull_bltz;
     codegen_config.ws_cull_negsub_sites = ws_cull_negsub;

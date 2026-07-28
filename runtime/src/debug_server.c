@@ -4721,7 +4721,8 @@ static void handle_gpu_state(int id, const char *json)
              "\"draw_area\":[%u,%u,%u,%u],"
              "\"draw_offset\":[%d,%d],"
              "\"ws\":{\"configured\":%d,\"active\":%d,\"game_mode\":%d,"
-             "\"present_native_43\":%d,\"x_margin\":%d,\"squash\":[%d,%d],"
+             "\"present_native_43\":%d,\"x_margin\":%d,"
+             "\"activation_margin\":%d,\"squash\":[%d,%d],"
              "\"mode\":%d,\"nw_extra\":%d,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
@@ -4748,7 +4749,8 @@ static void handle_gpu_state(int id, const char *json)
              da.left, da.top, da.right, da.bottom,
              da.offset_x, da.offset_y,
              ws.configured, ws.active, ws.game_mode,
-             ws.present_native_43, ws.x_margin, ws.xnum, ws.xden,
+             ws.present_native_43, ws.x_margin, ws.activation_margin,
+             ws.xnum, ws.xden,
              ws.mode, ws.nw_extra,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
               ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
@@ -6949,8 +6951,9 @@ static void handle_ws_margin(int id, const char *json)
     gpu_ws_set_margin_override(v);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
-    send_fmt("{\"id\":%d,\"ok\":true,\"override\":%d,\"x_margin\":%d,\"active\":%d}",
-             id, v, ws.x_margin, ws.active);
+    send_fmt("{\"id\":%d,\"ok\":true,\"override\":%d,\"x_margin\":%d,"
+             "\"activation_margin\":%d,\"active\":%d}",
+             id, v, ws.x_margin, ws.activation_margin, ws.active);
 }
 
 /* frame_perf: per-frame GPU/CPU phase timing (gpu_gl_renderer.c frame_perf ring).

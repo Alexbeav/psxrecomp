@@ -248,6 +248,25 @@ queue_guard = false     # this lower-level predicate appends to no fixed queue
 The debug server’s `ws_aspect_cone_site` command accepts an `address` string
 and reports exact-site identity/keep/reject counters.
 
+Explicit `bias_sites` / `range_sites` may opt into an additional resident
+object lead without widening terrain or render queues:
+
+```toml
+[widescreen.cull]
+guard_pixels = 16
+activation_guard_pixels = 256
+bias_sites = ["0x80069BA8"]
+range_sites = ["0x80069BB0"]
+```
+
+`activation_guard_pixels` is added only to the live margin emitted at those
+two explicit site families, and only while widescreen reveals extra world.
+At true 4:3 it is exactly zero. `guard_pixels` remains the shared
+render/terrain participation guard; keep it small when terrain producers or
+model queues have fixed capacity. Both values are restricted to `[0, 256]`
+and contribute to native-overlay cache identity. Changing the activation
+guard requires regenerating the game and overlay code.
+
 ## Runtime block
 
 Consumed by the cmake macro `psxrecomp_v4_add_runtime_target` (eventually)

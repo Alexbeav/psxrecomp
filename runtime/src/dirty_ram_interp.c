@@ -1815,7 +1815,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         else
             cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
                          + (psx_ws_is_cull_bias_site(pc)
-                                ? (uint32_t)psx_ws_x_margin() : 0u);
+                                ? (uint32_t)psx_ws_activation_margin() : 0u);
         cpu->gpr[0] = 0;
         return 0;
     }
@@ -1827,7 +1827,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         else
             cpu->gpr[rt] = cpu->gpr[rs] + (uint32_t)simm
                          + (psx_ws_is_cull_bias_site(pc)
-                                ? (uint32_t)psx_ws_x_margin() : 0u);
+                                ? (uint32_t)psx_ws_activation_margin() : 0u);
         cpu->gpr[0] = 0;
         return 0;
     }
@@ -1871,7 +1871,8 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             /* Explicit world-space classifier widen. The native emitter uses
              * the same bound transform for configured range_sites. */
             cpu->gpr[rt] = (cpu->gpr[rs] <
-                            ((uint32_t)simm + 2u * (uint32_t)psx_ws_x_margin())) ? 1u : 0u;
+                            ((uint32_t)simm + 2u *
+                             (uint32_t)psx_ws_activation_margin())) ? 1u : 0u;
         }
         else if (psx_ws_auto_cull_on() && psx_ws_is_cull_w_imm(imm) && ws_cull_site(pc))
             cpu->gpr[rt] = (uint32_t)psx_ws_cull_sltiu(cpu->gpr[rs], imm);

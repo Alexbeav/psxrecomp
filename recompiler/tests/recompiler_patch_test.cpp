@@ -255,11 +255,25 @@ result = 1
     const auto range = write_config(root, "range-cull", R"toml(
 [widescreen.cull]
 range_sites = ["0x80012340"]
+activation_guard_pixels = 256
 )toml");
     const auto range_config = PSXRecompV4::load_game_config(range);
     check(range_config.ws_cull_range_sites ==
-              std::vector<uint32_t>{0x80012340u},
-          "parser preserves explicit range cull sites");
+              std::vector<uint32_t>{0x80012340u} &&
+              range_config.ws_cull_activation_guard_pixels == 256,
+          "parser preserves explicit range sites and activation guard");
+
+    const auto bad_activation_guard =
+        write_config(root, "range-cull-bad-activation-guard", R"toml(
+[widescreen.cull]
+activation_guard_pixels = 257
+)toml");
+    check_throws(
+        [&] {
+            (void)PSXRecompV4::load_game_config(bad_activation_guard);
+        },
+        "activation_guard_pixels must be in [0, 256]",
+        "parser rejects an oversized activation-only guard");
 
     const auto angle = write_config(root, "angle-cull", R"toml(
 [[widescreen.cull.angle]]
@@ -360,6 +374,11 @@ queue_guard = false
     check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
                              changed_aspect_config),
           "widescreen guard changes overlay cache identity");
+    changed_aspect_config = aspect_config;
+    changed_aspect_config.ws_cull_activation_guard_pixels++;
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
+                             changed_aspect_config),
+          "activation-only guard changes overlay cache identity");
     changed_aspect_config = aspect_config;
     changed_aspect_config.ws_aspect_cone.sites[1].queue_guard = true;
     check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
@@ -565,6 +584,27 @@ void codegen_tests() {
     check(range.find("2*psx_ws_x_margin()") != std::string::npos,
           "native range emit widens by both horizontal margins");
 
+    auto activation_range_config = range_config;
+    activation_range_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_range = generate_first_instruction(
+        0x2C8201C1u, {}, false,
+        activation_range_config); // sltiu v0,a0,0x1c1
+    check(activation_range.find(
+              "2*(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
+              std::string::npos,
+          "activation range gains an isolated resident-object lead");
+
+    PSXRecomp::CodeGenConfig activation_bias_config;
+    activation_bias_config.ws_cull_bias_sites.insert(0x80010000u);
+    activation_bias_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_bias = generate_first_instruction(
+        0x248200E6u, {}, false,
+        activation_bias_config); // addiu v0,a0,230
+    check(activation_bias.find(
+              "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
+              std::string::npos,
+          "activation bias gains the same isolated resident-object lead");
+
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);
     const std::string plane_nx = generate_first_instruction(
@@ -621,6 +661,12 @@ void codegen_tests() {
     check(angle.find("psx_ws_angle_widen(341u)") !=
               std::string::npos,
           "codegen emits exact terrain-frustum angle helper");
+    auto activation_isolated_angle_config = angle_config;
+    activation_isolated_angle_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_isolated_angle = generate_first_instruction(
+        0x24020155u, {}, false, activation_isolated_angle_config);
+    check(activation_isolated_angle == angle,
+          "activation guard leaves terrain-frustum emission byte-identical");
     const std::string angle_overlay_mismatch =
         generate_first_instruction(0x240201C7u, {}, true, angle_config);
     check(angle_overlay_mismatch.find("psx_ws_angle_widen") ==

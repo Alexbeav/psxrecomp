@@ -704,8 +704,13 @@ struct GameConfig {
     // Full-word-guarded model-participation cosine compares widened only in
     // the camera-horizontal plane. Empty/default is completely inert.
     WidescreenAspectConeConfig ws_aspect_cone;
-    // Extra per-side actor overdraw beyond the visible widescreen edge.
+    // Extra per-side render/terrain participation beyond the visible edge.
     int                   ws_cull_guard_pixels = 0;
+    // Additional per-side lead used only by the explicit bias_sites and
+    // range_sites world-space activation windows. This lets a game activate
+    // already-resident objects well before the visible edge without widening
+    // terrain producers or fixed-capacity render cones by the same amount.
+    int                   ws_cull_activation_guard_pixels = 0;
 
     // [widescreen.cull] screen_w_imms / screen_h_imms — the width/height
     // immediates of the GTE screen-extent reject signature, per game (the

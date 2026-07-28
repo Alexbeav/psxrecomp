@@ -340,11 +340,17 @@ int ws_nw_extra(void) { return 2 * ws_nw_offset(); }
  * -1 = normal computed margin. */
 static int ws_margin_override = -1;
 static int ws_cull_guard_pixels = 0;
+static int ws_activation_guard_pixels = 0;
 void gpu_ws_set_margin_override(int v) { ws_margin_override = v; }
 void gpu_ws_set_cull_guard_pixels(int pixels) {
     if (pixels < 0) pixels = 0;
     if (pixels > 256) pixels = 256;
     ws_cull_guard_pixels = pixels;
+}
+void gpu_ws_set_activation_guard_pixels(int pixels) {
+    if (pixels < 0) pixels = 0;
+    if (pixels > 256) pixels = 256;
+    ws_activation_guard_pixels = pixels;
 }
 
 #define WS_EXPLICIT_CULL_SITES_MAX 64
@@ -868,6 +874,11 @@ int psx_ws_x_margin(void) {
     if (!ws_active()) return 0;
     return (160 * (ws_xden - ws_xnum) + ws_xnum / 2) / ws_xnum
            + ws_cull_guard_pixels;
+}
+
+int psx_ws_activation_margin(void) {
+    const int margin = psx_ws_x_margin();
+    return margin > 0 ? margin + ws_activation_guard_pixels : 0;
 }
 
 int32_t psx_ws_player_x_bound(int32_t vanilla)
@@ -1481,6 +1492,7 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
     out->game_mode         = ws_game_mode();
     out->present_native_43 = gpu_ws_present_native_43();
     out->x_margin          = psx_ws_x_margin();
+    out->activation_margin = psx_ws_activation_margin();
     out->xnum              = ws_xnum;
     out->xden              = ws_xden;
     out->mode              = ws_mode;
