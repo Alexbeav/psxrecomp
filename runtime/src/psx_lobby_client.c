@@ -72,6 +72,8 @@ int  psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap)
     (void)text_cap;
     return 0;
 }
+void psx_lobby_clear_signals(void) {}
+void psx_lobby_set_ice_signal_accept(int accept) { (void)accept; }
 int  psx_lobby_request_turn_credentials(void) { return -1; }
 const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void)
 {
@@ -89,6 +91,9 @@ void psx_lobby_clear_launch_pending(void) {}
 
 #include "rnet_ws.h"
 #include "rnet_sha1.h"
+#include "recomp_net/address.h"
+#include "recomp_net/lan_beacon.h"
+#include "recomp_net/rtt_probe.h"
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -154,6 +159,8 @@ typedef struct {
     int sig_head;
     int sig_tail;
     int sig_count;
+    /* 0 while in lobby / after soft-return — drop stale ICE; launch sets 1. */
+    int ice_signal_accept;
     /* Coturn mint from WS get_turn_credentials. */
     PsxLobbyTurnCredentials turn;
     time_t turn_received_at;
@@ -187,6 +194,545 @@ static uint64_t lobby_mono_ms(void)
 
 /* Defined later; used by waiting-room RTT signal handling. */
 int psx_lobby_send_signal(int type, int flag, const char *text);
+static int endpoint_port_is_zero(const char *ep);
+static int using_server_input_relay(const PsxLobbyJoinInfo *j);
+static void queue_send(const char *msg);
+static void flush_pending(void);
+static void lobby_rtt_close(void);
+
+static RNetRttProbe *g_rtt_probe;
+
+/* One-shot list latency: burst-ping LAN + public candidates after lobby_list. */
+#define PSX_LOBBY_MAX_PROBE_PEND (PSX_LOBBY_MAX_LIST * (PSX_LOBBY_MAX_LAN_EPS + 1))
+static RNetRttProbe *g_list_rtt_probe;
+static int g_list_rtt_active;
+static int g_list_rtt_on_next_list; /* set by request_list / Refresh */
+static uint64_t g_list_rtt_deadline_ms;
+static unsigned long long g_list_rtt_sent_ts[PSX_LOBBY_MAX_PROBE_PEND];
+static int g_list_rtt_lobby_idx[PSX_LOBBY_MAX_PROBE_PEND];
+static int g_list_rtt_pend_active[PSX_LOBBY_MAX_PROBE_PEND];
+static int g_list_rtt_pend_count;
+
+/* Local UDP broadcast discovery — LAN endpoint never goes to the hub. */
+static RNetLanBeacon *g_lan_beacon_pub;
+static RNetLanBeacon *g_lan_beacon_listen;
+
+/* Host STUN advertise → set_host_endpoint for list / pre-join RTT. */
+enum {
+    HOST_ADV_IDLE = 0,
+    HOST_ADV_WAIT_TURN,
+    HOST_ADV_DONE
+};
+static int g_host_adv_state;
+static uint64_t g_host_adv_deadline_ms;
+
+static void lobby_host_advertise_reset(void)
+{
+    g_host_adv_state = HOST_ADV_IDLE;
+    g_host_adv_deadline_ms = 0;
+}
+
+static int host_endpoint_is_loopback(const char *ep)
+{
+    if (!ep || !ep[0])
+        return 0;
+    if (strncmp(ep, "127.", 4) == 0)
+        return 1;
+    if (strncmp(ep, "::1:", 4) == 0 || strcmp(ep, "::1") == 0)
+        return 1;
+    if (strncmp(ep, "localhost:", 10) == 0 || strcmp(ep, "localhost") == 0)
+        return 1;
+    return 0;
+}
+
+static int endpoint_host_port(const char *ep, char *host, size_t host_cap, int *port_out)
+{
+    const char *colon;
+    size_t n;
+    if (!ep || !ep[0] || !host || host_cap == 0 || !port_out)
+        return 0;
+    colon = strrchr(ep, ':');
+    if (!colon || colon == ep || !colon[1])
+        return 0;
+    n = (size_t)(colon - ep);
+    if (n + 1 > host_cap)
+        n = host_cap - 1;
+    memcpy(host, ep, n);
+    host[n] = '\0';
+    *port_out = (int)strtoul(colon + 1, NULL, 10);
+    return *port_out > 0 && *port_out <= 65535;
+}
+
+static int parse_ipv4_dotted(const char *host, unsigned *o)
+{
+    unsigned a, b, c, d;
+    char extra;
+    if (!host || !o)
+        return 0;
+    if (sscanf(host, "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4)
+        return 0;
+    if (a > 255 || b > 255 || c > 255 || d > 255)
+        return 0;
+    o[0] = a;
+    o[1] = b;
+    o[2] = c;
+    o[3] = d;
+    return 1;
+}
+
+static int ipv4_is_rfc1918(const unsigned o[4])
+{
+    if (!o)
+        return 0;
+    if (o[0] == 10)
+        return 1;
+    if (o[0] == 172 && o[1] >= 16 && o[1] <= 31)
+        return 1;
+    if (o[0] == 192 && o[1] == 168)
+        return 1;
+    return 0;
+}
+
+static int ipv4_is_link_local(const unsigned o[4])
+{
+    return o && o[0] == 169 && o[1] == 254;
+}
+
+/* Public WAN IPv4 suitable for lobby-list host_endpoint (not LAN/loopback). */
+static int endpoint_is_public_ipv4(const char *ep)
+{
+    char host[128];
+    unsigned o[4];
+    int port = 0;
+    if (!endpoint_host_port(ep, host, sizeof(host), &port))
+        return 0;
+    if (!parse_ipv4_dotted(host, o))
+        return 0;
+    if (o[0] == 0 || o[0] == 127 || o[0] >= 224)
+        return 0;
+    if (ipv4_is_rfc1918(o) || ipv4_is_link_local(o))
+        return 0;
+    return 1;
+}
+
+static void lobby_rtt_ensure(void);
+static void lobby_list_rtt_start(int force_all);
+
+/* /24 heuristic — good enough for typical home/small office LANs. */
+static int ipv4_same_lan24(const unsigned a[4], const unsigned b[4])
+{
+    return a && b && a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
+
+static int my_bind_port(void)
+{
+    char host[128];
+    int port = 7777;
+    if (g_lc.my_bind[0] && endpoint_host_port(g_lc.my_bind, host, sizeof(host), &port))
+        return port;
+    return 7777;
+}
+
+/* Single LAN advertise candidate: the Host Lobby "Advertised IP" / my_bind NIC.
+ * Do not enumerate every local interface — only the menu selection. */
+static int collect_host_lan_endpoints(char out[][PSX_LOBBY_ENDPOINT_LEN], int max_out)
+{
+    char bind_host[128];
+    unsigned bind_o[4];
+    int port = my_bind_port();
+
+    if (!out || max_out <= 0)
+        return 0;
+    bind_host[0] = '\0';
+    if (!g_lc.my_bind[0] ||
+        !endpoint_host_port(g_lc.my_bind, bind_host, sizeof(bind_host), &port) ||
+        !parse_ipv4_dotted(bind_host, bind_o) || !ipv4_is_rfc1918(bind_o) ||
+        strcmp(bind_host, "0.0.0.0") == 0)
+        return 0;
+    snprintf(out[0], PSX_LOBBY_ENDPOINT_LEN, "%s:%d", bind_host, port);
+    return 1;
+}
+
+/* Discover a public UDP mapping for the game port. Coturn on the same LAN can
+ * return RFC1918 — reject those and fall back to any:/port + public STUN. */
+static int lobby_host_stun_public(char *out, size_t out_len)
+{
+    RNetExternalIpv4Config stun;
+    char any_bind[64];
+    char endpoint[RNET_ENDPOINT_TEXT_MAX];
+    int port = my_bind_port();
+    int attempt;
+    int last_rc = RNET_EXTERNAL_IPV4_ERR_ARGUMENT;
+
+    if (!out || out_len == 0)
+        return -1;
+    out[0] = '\0';
+    snprintf(any_bind, sizeof(any_bind), "0.0.0.0:%d", port);
+
+    for (attempt = 0; attempt < 4; ++attempt) {
+        const char *bind_hp;
+        endpoint[0] = '\0';
+        rnet_external_ipv4_config_init(&stun);
+        if (attempt < 2 && g_lc.turn.valid && g_lc.turn.stun_host[0]) {
+            stun.stun_host = g_lc.turn.stun_host;
+            stun.stun_port = (unsigned short)g_lc.turn.stun_port;
+        }
+        /* attempt 0: coturn + my_bind, 1: coturn + any, 2: default + my_bind,
+         * 3: default + any */
+        bind_hp = (attempt & 1) ? any_bind
+                                : (g_lc.my_bind[0] ? g_lc.my_bind : any_bind);
+        last_rc = rnet_external_udp_endpoint_discover(&stun, bind_hp, endpoint,
+                                                      sizeof(endpoint));
+        if (last_rc != RNET_EXTERNAL_IPV4_OK || !endpoint[0])
+            continue;
+        if (!endpoint_is_public_ipv4(endpoint)) {
+            fprintf(stderr,
+                    "psx_lobby: STUN mapped private %s (bind=%s stun=%s) — "
+                    "retrying\n",
+                    endpoint, bind_hp,
+                    stun.stun_host ? stun.stun_host : "(default)");
+            continue;
+        }
+        strncpy(out, endpoint, out_len - 1);
+        out[out_len - 1] = '\0';
+        return 0;
+    }
+    return last_rc != 0 ? last_rc : -1;
+}
+
+static void lobby_lan_beacon_close_all(void)
+{
+    rnet_lan_beacon_close(&g_lan_beacon_pub);
+    rnet_lan_beacon_close(&g_lan_beacon_listen);
+}
+
+static void lobby_lan_beacon_publish_update(void)
+{
+    char lan[PSX_LOBBY_MAX_LAN_EPS][PSX_LOBBY_ENDPOINT_LEN];
+    int lan_n;
+    if (!g_lc.is_host || !g_lc.in_lobby || g_lc.launch_pending)
+        return;
+    if (!g_lc.join.lobby_id[0])
+        return;
+    lan_n = collect_host_lan_endpoints(lan, PSX_LOBBY_MAX_LAN_EPS);
+    if (lan_n <= 0) {
+        rnet_lan_beacon_close(&g_lan_beacon_pub);
+        return;
+    }
+    if (!g_lan_beacon_pub &&
+        rnet_lan_beacon_publish_open(&g_lan_beacon_pub, 0) != 0)
+        return;
+    if (rnet_lan_beacon_publish_set(g_lan_beacon_pub, g_lc.join.lobby_id, lan[0],
+                                    g_lc.filter_game_name) != 0) {
+        rnet_lan_beacon_close(&g_lan_beacon_pub);
+        return;
+    }
+    fprintf(stderr, "psx_lobby: LAN beacon publish %s → %s\n",
+            g_lc.join.lobby_id, lan[0]);
+}
+
+static void lobby_lan_beacon_tick(void)
+{
+    if (g_lc.is_host && g_lc.in_lobby && !g_lc.launch_pending) {
+        if (!g_lan_beacon_pub)
+            lobby_lan_beacon_publish_update();
+        if (g_lan_beacon_pub)
+            (void)rnet_lan_beacon_publish_tick(g_lan_beacon_pub);
+    } else if (g_lan_beacon_pub) {
+        rnet_lan_beacon_close(&g_lan_beacon_pub);
+    }
+
+    /* Guests (and hosts browsing after leave) listen for same-LAN announces. */
+    if (!g_lc.is_host || !g_lc.in_lobby) {
+        int updated = 0;
+        if (!g_lan_beacon_listen)
+            (void)rnet_lan_beacon_listen_open(&g_lan_beacon_listen, 0);
+        if (g_lan_beacon_listen)
+            updated = rnet_lan_beacon_listen_pump(g_lan_beacon_listen);
+        /* New beacon → re-probe list rows still missing latency. */
+        if (updated > 0 && g_lc.list_count > 0 && !g_list_rtt_active) {
+            int i;
+            int need = 0;
+            for (i = 0; i < g_lc.list_count; ++i) {
+                if (g_lc.list[i].latency_ms < 0) {
+                    need = 1;
+                    break;
+                }
+            }
+            if (need)
+                lobby_list_rtt_start(0);
+        }
+    }
+}
+
+static void lobby_host_advertise_tick(void)
+{
+    char endpoint[RNET_ENDPOINT_TEXT_MAX];
+    char msg[384];
+    int rc;
+
+    if (g_host_adv_state != HOST_ADV_WAIT_TURN)
+        return;
+    if (!g_lc.is_host || !g_lc.in_lobby || g_lc.launch_pending) {
+        lobby_host_advertise_reset();
+        return;
+    }
+    if (using_server_input_relay(&g_lc.join)) {
+        g_host_adv_state = HOST_ADV_DONE;
+        return;
+    }
+    /* Prefer Coturn STUN from turn_credentials; don't block forever. */
+    if (!g_lc.turn.valid && lobby_mono_ms() < g_host_adv_deadline_ms)
+        return;
+    if (!g_lc.my_bind[0]) {
+        g_host_adv_state = HOST_ADV_DONE;
+        return;
+    }
+
+    /* Free the game UDP port for an exclusive STUN bind (skip on loopback hub). */
+    if (!host_endpoint_is_loopback(g_lc.join.host_endpoint)) {
+        lobby_rtt_close();
+        endpoint[0] = '\0';
+        rc = lobby_host_stun_public(endpoint, sizeof(endpoint));
+        if (rc == 0 && endpoint[0]) {
+            strncpy(g_lc.join.host_endpoint, endpoint,
+                    sizeof(g_lc.join.host_endpoint) - 1);
+            g_lc.join.host_endpoint[sizeof(g_lc.join.host_endpoint) - 1] = '\0';
+        } else {
+            fprintf(stderr,
+                    "psx_lobby: STUN advertise failed (%d) — keeping %s%s\n", rc,
+                    g_lc.join.host_endpoint[0] ? g_lc.join.host_endpoint
+                                               : "(none)",
+                    endpoint_is_public_ipv4(g_lc.join.host_endpoint)
+                        ? ""
+                        : " (use LAN beacon for local list RTT)");
+        }
+        /* Answer list/waiting-room PINGs again as soon as STUN frees the port. */
+        lobby_rtt_ensure();
+    }
+
+    /* Private IPs stay on the LAN beacon only — never on the hub list. */
+    lobby_lan_beacon_publish_update();
+
+    g_host_adv_state = HOST_ADV_DONE;
+    if (!g_lc.join.host_endpoint[0])
+        return;
+    snprintf(msg, sizeof(msg),
+             "{\"op\":\"set_host_endpoint\",\"host_endpoint\":\"%s\"}",
+             g_lc.join.host_endpoint);
+    queue_send(msg);
+    flush_pending();
+    fprintf(stderr, "psx_lobby: advertised host_endpoint=%s (LAN via local beacon)\n",
+            g_lc.join.host_endpoint);
+}
+
+static void lobby_rtt_close(void)
+{
+    rnet_rtt_probe_close(&g_rtt_probe);
+}
+
+static void lobby_list_rtt_close(void)
+{
+    rnet_rtt_probe_close(&g_list_rtt_probe);
+    g_list_rtt_active = 0;
+    g_list_rtt_pend_count = 0;
+    memset(g_list_rtt_pend_active, 0, sizeof(g_list_rtt_pend_active));
+    memset(g_list_rtt_sent_ts, 0, sizeof(g_list_rtt_sent_ts));
+    memset(g_list_rtt_lobby_idx, 0, sizeof(g_list_rtt_lobby_idx));
+}
+
+static int collect_local_rfc1918(unsigned out[][4], int max_out)
+{
+    RNetIpv4Address addrs[16];
+    int n;
+    int i;
+    int count = 0;
+
+    if (!out || max_out <= 0)
+        return 0;
+    n = rnet_ipv4_enumerate(addrs, sizeof(addrs) / sizeof(addrs[0]));
+    if (n < 0)
+        n = 0;
+    if (n > (int)(sizeof(addrs) / sizeof(addrs[0])))
+        n = (int)(sizeof(addrs) / sizeof(addrs[0]));
+    for (i = 0; i < n && count < max_out; ++i) {
+        unsigned o[4];
+        if (!parse_ipv4_dotted(addrs[i].address, o) || !ipv4_is_rfc1918(o))
+            continue;
+        memcpy(out[count], o, sizeof(o));
+        ++count;
+    }
+    return count;
+}
+
+static int cand_already(char cands[][PSX_LOBBY_ENDPOINT_LEN], int n, const char *ep)
+{
+    int i;
+    for (i = 0; i < n; ++i) {
+        if (strcmp(cands[i], ep) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Prefer local beacon LAN, then legacy server lan_endpoints, then public. */
+static int lobby_row_build_candidates(const PsxLobbyRow *row,
+                                      char cands[][PSX_LOBBY_ENDPOINT_LEN],
+                                      int max_cands)
+{
+    unsigned local[8][4];
+    int local_n;
+    int n = 0;
+    int i;
+    int pass;
+    char beacon_ep[PSX_LOBBY_ENDPOINT_LEN];
+
+    if (!row || !cands || max_cands <= 0)
+        return 0;
+
+    beacon_ep[0] = '\0';
+    if (g_lan_beacon_listen && row->lobby_id[0] &&
+        rnet_lan_beacon_lookup(g_lan_beacon_listen, row->lobby_id, beacon_ep,
+                               sizeof(beacon_ep)) &&
+        beacon_ep[0] && !endpoint_port_is_zero(beacon_ep)) {
+        strncpy(cands[n], beacon_ep, PSX_LOBBY_ENDPOINT_LEN - 1);
+        cands[n][PSX_LOBBY_ENDPOINT_LEN - 1] = '\0';
+        ++n;
+    }
+
+    local_n = collect_local_rfc1918(local, 8);
+
+    for (pass = 0; pass < 2; ++pass) {
+        for (i = 0; i < row->lan_count && n < max_cands; ++i) {
+            char host[64];
+            int port = 0;
+            unsigned o[4];
+            int same = 0;
+            int j;
+            if (!row->lan_endpoints[i][0] ||
+                endpoint_port_is_zero(row->lan_endpoints[i]))
+                continue;
+            if (!endpoint_host_port(row->lan_endpoints[i], host, sizeof(host), &port) ||
+                !parse_ipv4_dotted(host, o) || !ipv4_is_rfc1918(o))
+                continue;
+            for (j = 0; j < local_n; ++j) {
+                if (ipv4_same_lan24(local[j], o)) {
+                    same = 1;
+                    break;
+                }
+            }
+            if (pass == 0 && !same)
+                continue;
+            if (pass == 1 && same)
+                continue; /* already added */
+            if (cand_already(cands, n, row->lan_endpoints[i]))
+                continue;
+            strncpy(cands[n], row->lan_endpoints[i], PSX_LOBBY_ENDPOINT_LEN - 1);
+            cands[n][PSX_LOBBY_ENDPOINT_LEN - 1] = '\0';
+            ++n;
+        }
+    }
+    if (n < max_cands && row->host_endpoint[0] &&
+        !endpoint_port_is_zero(row->host_endpoint) &&
+        !cand_already(cands, n, row->host_endpoint)) {
+        strncpy(cands[n], row->host_endpoint, PSX_LOBBY_ENDPOINT_LEN - 1);
+        cands[n][PSX_LOBBY_ENDPOINT_LEN - 1] = '\0';
+        ++n;
+    }
+    return n;
+}
+
+/* force_all: Refresh — re-probe every row. Otherwise only rows with unknown RTT. */
+static void lobby_list_rtt_start(int force_all)
+{
+    int i;
+
+    lobby_list_rtt_close();
+    if (g_lc.list_count <= 0)
+        return;
+    /* Drain local beacons before building candidates (may beat WS list). */
+    if (!g_lan_beacon_listen)
+        (void)rnet_lan_beacon_listen_open(&g_lan_beacon_listen, 0);
+    if (g_lan_beacon_listen)
+        (void)rnet_lan_beacon_listen_pump(g_lan_beacon_listen);
+    if (rnet_rtt_probe_open(&g_list_rtt_probe, NULL) != 0)
+        return;
+
+    for (i = 0; i < g_lc.list_count; ++i) {
+        char cands[PSX_LOBBY_MAX_LAN_EPS + 1][PSX_LOBBY_ENDPOINT_LEN];
+        int cn;
+        int c;
+        if (force_all)
+            g_lc.list[i].latency_ms = -1;
+        if (g_lc.list[i].latency_ms >= 0)
+            continue;
+        cn = lobby_row_build_candidates(&g_lc.list[i], cands,
+                                        PSX_LOBBY_MAX_LAN_EPS + 1);
+        for (c = 0; c < cn && g_list_rtt_pend_count < PSX_LOBBY_MAX_PROBE_PEND; ++c) {
+            unsigned long long sent = 0;
+            int slot = g_list_rtt_pend_count;
+            if (rnet_rtt_probe_set_peer(g_list_rtt_probe, cands[c]) != 0)
+                continue;
+            if (rnet_rtt_probe_ping_ts(g_list_rtt_probe, &sent) != 0)
+                continue;
+            g_list_rtt_sent_ts[slot] = sent;
+            g_list_rtt_lobby_idx[slot] = i;
+            g_list_rtt_pend_active[slot] = 1;
+            ++g_list_rtt_pend_count;
+        }
+    }
+
+    if (g_list_rtt_pend_count <= 0) {
+        lobby_list_rtt_close();
+        return;
+    }
+    g_list_rtt_active = 1;
+    /* STUN advertise briefly drops the host answer sock; give guests time. */
+    g_list_rtt_deadline_ms = lobby_mono_ms() + 1500ull;
+}
+
+static void lobby_list_rtt_tick(void)
+{
+    int remaining;
+
+    if (!g_list_rtt_active || !g_list_rtt_probe)
+        return;
+
+    for (;;) {
+        int ms = 0;
+        unsigned long long echo = 0;
+        int p;
+        int got = rnet_rtt_probe_pump_ex(g_list_rtt_probe, &ms, &echo);
+        if (got != 1)
+            break;
+        for (p = 0; p < g_list_rtt_pend_count; ++p) {
+            int li;
+            int q;
+            if (!g_list_rtt_pend_active[p] || g_list_rtt_sent_ts[p] != echo)
+                continue;
+            li = g_list_rtt_lobby_idx[p];
+            if (li >= 0 && li < g_lc.list_count && g_lc.list[li].latency_ms < 0)
+                g_lc.list[li].latency_ms = ms;
+            /* Drop remaining candidates for this lobby. */
+            for (q = 0; q < g_list_rtt_pend_count; ++q) {
+                if (g_list_rtt_lobby_idx[q] == li)
+                    g_list_rtt_pend_active[q] = 0;
+            }
+            break;
+        }
+    }
+
+    remaining = 0;
+    {
+        int p;
+        for (p = 0; p < g_list_rtt_pend_count; ++p) {
+            if (g_list_rtt_pend_active[p])
+                ++remaining;
+        }
+    }
+    if (remaining <= 0 || lobby_mono_ms() >= g_list_rtt_deadline_ms)
+        lobby_list_rtt_close();
+}
 
 static void member_rtt_clear(void)
 {
@@ -389,6 +935,65 @@ static const char *json_get_str(const char *json, const char *key, char *out, si
     return out;
 }
 
+/* Parse JSON string array values for key into out[0..max_out). Returns count. */
+static int json_parse_str_array(const char *json, const char *key,
+                                char out[][PSX_LOBBY_ENDPOINT_LEN], int max_out)
+{
+    char pat[80];
+    const char *p;
+    int n = 0;
+
+    if (!json || !key || !out || max_out <= 0)
+        return 0;
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    p = strstr(json, pat);
+    if (!p)
+        return 0;
+    p = strchr(p + strlen(pat), '[');
+    if (!p)
+        return 0;
+    ++p;
+    while (*p && n < max_out) {
+        size_t o = 0;
+        while (*p && (isspace((unsigned char)*p) || *p == ','))
+            ++p;
+        if (*p == ']')
+            break;
+        if (*p != '"')
+            break;
+        ++p;
+        while (*p && *p != '"' && o + 1 < PSX_LOBBY_ENDPOINT_LEN)
+            out[n][o++] = *p++;
+        out[n][o] = '\0';
+        if (*p == '"')
+            ++p;
+        if (out[n][0])
+            ++n;
+    }
+    return n;
+}
+
+static void lobby_row_lan_fingerprint(const PsxLobbyRow *row, char *out, size_t cap)
+{
+    size_t o = 0;
+    int i;
+    if (!out || cap == 0)
+        return;
+    out[0] = '\0';
+    if (!row)
+        return;
+    for (i = 0; i < row->lan_count; ++i) {
+        int wrote;
+        if (!row->lan_endpoints[i][0])
+            continue;
+        wrote = snprintf(out + o, cap > o ? cap - o : 0, "%s%s", o ? "|" : "",
+                         row->lan_endpoints[i]);
+        if (wrote < 0 || (size_t)wrote >= (cap > o ? cap - o : 0))
+            break;
+        o += (size_t)wrote;
+    }
+}
+
 static size_t json_escape(const char *in, char *out, size_t cap)
 {
     size_t o = 0;
@@ -424,6 +1029,8 @@ static size_t json_escape(const char *in, char *out, size_t cap)
 static void enqueue_signal(int type, int flag, const char *text)
 {
     int i;
+    if (!g_lc.ice_signal_accept)
+        return;
     if (g_lc.sig_count >= (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]))) {
         g_lc.sig_head = (g_lc.sig_head + 1) % (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]));
         g_lc.sig_count--;
@@ -436,6 +1043,18 @@ static void enqueue_signal(int type, int flag, const char *text)
         strncpy(g_lc.sig_q[i].text, text, sizeof(g_lc.sig_q[i].text) - 1);
     g_lc.sig_tail = (g_lc.sig_tail + 1) % (int)(sizeof(g_lc.sig_q) / sizeof(g_lc.sig_q[0]));
     g_lc.sig_count++;
+}
+
+void psx_lobby_clear_signals(void)
+{
+    g_lc.sig_head = 0;
+    g_lc.sig_tail = 0;
+    g_lc.sig_count = 0;
+}
+
+void psx_lobby_set_ice_signal_accept(int accept)
+{
+    g_lc.ice_signal_accept = accept ? 1 : 0;
 }
 
 static int json_get_int(const char *json, const char *key, int def)
@@ -813,8 +1432,9 @@ static void handle_server_json(const char *json)
             char err[64];
             json_get_str(json, "error", err, sizeof(err));
             fprintf(stderr,
-                    "psx_lobby: turn_credentials failed (%s) — ICE will be "
-                    "STUN-only unless PSX_NET_TURN_* is set\n",
+                    "psx_lobby: turn_credentials failed (%s) — online ICE "
+                    "requires Coturn (or PSX_NET_TURN_* / "
+                    "PSX_NET_ALLOW_STUN_ONLY=1)\n",
                     err[0] ? err : "unknown");
             return;
         }
@@ -849,6 +1469,25 @@ static void handle_server_json(const char *json)
     if (strcmp(op, "lobby_list") == 0) {
         const char *p = strstr(json, "\"lobbies\"");
         int n = 0;
+        /* Keep prior RTTs across server list pushes; Refresh re-probes.
+         * Invalidate when host_endpoint or lan_endpoints change. */
+        char prev_ids[PSX_LOBBY_MAX_LIST][PSX_LOBBY_ID_LEN];
+        char prev_eps[PSX_LOBBY_MAX_LIST][PSX_LOBBY_ENDPOINT_LEN];
+        char prev_lan[PSX_LOBBY_MAX_LIST][256];
+        int prev_ms[PSX_LOBBY_MAX_LIST];
+        int prev_n = g_lc.list_count;
+        int i;
+        int want_probe = g_list_rtt_on_next_list;
+        g_list_rtt_on_next_list = 0;
+        for (i = 0; i < prev_n && i < PSX_LOBBY_MAX_LIST; ++i) {
+            strncpy(prev_ids[i], g_lc.list[i].lobby_id, PSX_LOBBY_ID_LEN - 1);
+            prev_ids[i][PSX_LOBBY_ID_LEN - 1] = '\0';
+            strncpy(prev_eps[i], g_lc.list[i].host_endpoint,
+                    PSX_LOBBY_ENDPOINT_LEN - 1);
+            prev_eps[i][PSX_LOBBY_ENDPOINT_LEN - 1] = '\0';
+            lobby_row_lan_fingerprint(&g_lc.list[i], prev_lan[i], sizeof(prev_lan[i]));
+            prev_ms[i] = g_lc.list[i].latency_ms;
+        }
         g_lc.list_count = 0;
         if (!p) {
             return;
@@ -863,6 +1502,10 @@ static void handle_server_json(const char *json)
             while (*p && *p != '{') {
                 if (*p == ']') {
                     g_lc.list_count = n;
+                    if (want_probe)
+                        lobby_list_rtt_start(1);
+                    else if (n > 0 && !g_list_rtt_active)
+                        lobby_list_rtt_start(0);
                     return;
                 }
                 ++p;
@@ -883,13 +1526,16 @@ static void handle_server_json(const char *json)
                     ++end;
                 } while (*end && depth > 0);
                 {
-                    char chunk[1024];
+                    char chunk[1536];
+                    char lan_fp[256];
                     size_t len = (size_t)(end - obj);
                     if (len >= sizeof(chunk)) {
                         len = sizeof(chunk) - 1;
                     }
                     memcpy(chunk, obj, len);
                     chunk[len] = '\0';
+                    memset(&g_lc.list[n], 0, sizeof(g_lc.list[n]));
+                    g_lc.list[n].latency_ms = -1;
                     json_get_str(chunk, "lobby_id", g_lc.list[n].lobby_id, sizeof(g_lc.list[n].lobby_id));
                     json_get_str(chunk, "name", g_lc.list[n].name, sizeof(g_lc.list[n].name));
                     json_get_str(chunk, "game_name", g_lc.list[n].game_name, sizeof(g_lc.list[n].game_name));
@@ -923,12 +1569,45 @@ static void handle_server_json(const char *json)
                     g_lc.list[n].player_count = json_get_int(chunk, "player_count", 0);
                     g_lc.list[n].max_slots = json_get_int(chunk, "max_slots", 2);
                     g_lc.list[n].has_password = json_get_bool(chunk, "has_password", 0);
+                    json_get_str(chunk, "host_endpoint", g_lc.list[n].host_endpoint,
+                                 sizeof(g_lc.list[n].host_endpoint));
+                    g_lc.list[n].lan_count = json_parse_str_array(
+                        chunk, "lan_endpoints", g_lc.list[n].lan_endpoints,
+                        PSX_LOBBY_MAX_LAN_EPS);
+                    lobby_row_lan_fingerprint(&g_lc.list[n], lan_fp, sizeof(lan_fp));
+                    if (!want_probe) {
+                        for (i = 0; i < prev_n; ++i) {
+                            if (prev_ids[i][0] &&
+                                strcmp(prev_ids[i], g_lc.list[n].lobby_id) == 0 &&
+                                strcmp(prev_eps[i], g_lc.list[n].host_endpoint) == 0 &&
+                                strcmp(prev_lan[i], lan_fp) == 0) {
+                                g_lc.list[n].latency_ms = prev_ms[i];
+                                break;
+                            }
+                        }
+                    }
                     ++n;
                     p = end;
                 }
             }
         }
         g_lc.list_count = n;
+        if (want_probe)
+            lobby_list_rtt_start(1);
+        else {
+            int need = 0;
+            for (i = 0; i < n; ++i) {
+                if (g_lc.list[i].latency_ms < 0 &&
+                    (g_lc.list[i].host_endpoint[0] || g_lc.list[i].lan_count > 0)) {
+                    need = 1;
+                    break;
+                }
+            }
+            /* Restart even if a prior burst is mid-flight — advertise may have
+             * just published a public host_endpoint / LAN candidate. */
+            if (need)
+                lobby_list_rtt_start(0);
+        }
         return;
     }
     if (strcmp(op, "created") == 0) {
@@ -963,6 +1642,13 @@ static void handle_server_json(const char *json)
             g_lc.member_count = 1;
             g_lc.local_ready = 0;
         }
+        /* After create: LAN beacon immediately; STUN for public host_endpoint. */
+        g_host_adv_state = HOST_ADV_WAIT_TURN;
+        g_host_adv_deadline_ms = lobby_mono_ms() + 500ull;
+        lobby_lan_beacon_publish_update();
+        return;
+    }
+    if (strcmp(op, "host_endpoint_ok") == 0) {
         return;
     }
     if (strcmp(op, "joined") == 0) {
@@ -1058,6 +1744,11 @@ static void handle_server_json(const char *json)
         }
         g_lc.join.last_error[0] = '\0';
         g_lc.launch_pending = 1;
+        /* Accept ICE for this match; queue was idle (accept=0) during lobby. */
+        g_lc.ice_signal_accept = 1;
+        lobby_rtt_close(); /* free game UDP port for the session bind */
+        rnet_lan_beacon_close(&g_lan_beacon_pub);
+        lobby_host_advertise_reset();
         return;
     }
     if (strcmp(op, "signal") == 0) {
@@ -1069,30 +1760,10 @@ static void handle_server_json(const char *json)
         from[0] = '\0';
         json_get_str(json, "text", text_buf, sizeof(text_buf));
         json_get_str(json, "from_player_id", from, sizeof(from));
-        if (type == PSX_LOBBY_SIG_RTT_PING) {
-            if (g_lc.is_host)
-                (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_PONG, 0, text_buf);
+        /* Legacy WS RTT_PING/PONG ignored — waiting-room latency uses UDP
+         * rnet_rtt_probe (peer path). REPORT still accepted from peers. */
+        if (type == PSX_LOBBY_SIG_RTT_PING || type == PSX_LOBBY_SIG_RTT_PONG)
             return;
-        }
-        if (type == PSX_LOBBY_SIG_RTT_PONG) {
-            unsigned long long sent = 0;
-            uint64_t now = lobby_mono_ms();
-            int slot;
-            if (sscanf(text_buf, "%llu", &sent) == 1 && (uint64_t)sent <= now) {
-                int ms = (int)(now - (uint64_t)sent);
-                if (ms < 0) ms = 0;
-                if (ms > 60000) ms = 60000;
-                slot = local_member_slot();
-                if (slot >= 0 && slot < PSX_LOBBY_MAX_MEMBERS)
-                    g_lc.member_rtt_ms[slot] = ms;
-                {
-                    char report[32];
-                    snprintf(report, sizeof(report), "%d", ms);
-                    (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
-                }
-            }
-            return;
-        }
         if (type == PSX_LOBBY_SIG_RTT_REPORT) {
             int slot = member_slot_for_player(from);
             int ms = (int)strtol(text_buf, NULL, 10);
@@ -1126,6 +1797,8 @@ static void handle_server_json(const char *json)
     }
     if (strcmp(op, "lobby_closed") == 0 || strcmp(op, "left") == 0 ||
         strcmp(op, "kicked") == 0) {
+        lobby_rtt_close();
+        lobby_host_advertise_reset();
         g_lc.in_lobby = 0;
         g_lc.is_host = 0;
         g_lc.host_player_id[0] = '\0';
@@ -1244,6 +1917,11 @@ int psx_lobby_connect(const char *ws_url)
 
 void psx_lobby_disconnect(void)
 {
+    lobby_rtt_close();
+    lobby_list_rtt_close();
+    lobby_lan_beacon_close_all();
+    lobby_host_advertise_reset();
+    g_list_rtt_on_next_list = 0;
     if (g_lc.fd >= 0) {
         close(g_lc.fd);
     }
@@ -1279,6 +1957,91 @@ const char *psx_lobby_display_name(void)
 const char *psx_lobby_player_id(void)
 {
     return g_lc.player_id;
+}
+
+static int first_guest_member_slot(void)
+{
+    int i;
+    for (i = 0; i < g_lc.member_count; ++i) {
+        if (!psx_lobby_member_is_host(&g_lc.members[i]))
+            return g_lc.members[i].slot;
+    }
+    return -1;
+}
+
+/* UDP peer RTT for the waiting-room latency column (not WS signal RTT). */
+static void lobby_rtt_ensure(void)
+{
+    const char *bind;
+    const char *peer;
+
+    if (!g_lc.in_lobby || g_lc.launch_pending || using_server_input_relay(&g_lc.join)) {
+        lobby_rtt_close();
+        return;
+    }
+
+    if (!g_rtt_probe) {
+        bind = g_lc.my_bind[0] ? g_lc.my_bind : NULL;
+        /* 3+ guests use ephemeral session binds; probe the same way. */
+        if (!g_lc.is_host && g_lc.join.max_slots >= 3)
+            bind = NULL;
+        if (rnet_rtt_probe_open(&g_rtt_probe, bind) != 0)
+            return;
+    }
+
+    peer = NULL;
+    if (g_lc.join.peer_hostport[0] && !endpoint_port_is_zero(g_lc.join.peer_hostport))
+        peer = g_lc.join.peer_hostport;
+    else if (!g_lc.is_host && g_lc.join.host_endpoint[0] &&
+             !endpoint_port_is_zero(g_lc.join.host_endpoint))
+        peer = g_lc.join.host_endpoint;
+    if (peer)
+        (void)rnet_rtt_probe_set_peer(g_rtt_probe, peer);
+}
+
+static void lobby_rtt_tick(void)
+{
+    int ms = 0;
+    int got;
+
+    if (!g_lc.in_lobby || g_lc.launch_pending) {
+        lobby_rtt_close();
+        return;
+    }
+    if (using_server_input_relay(&g_lc.join)) {
+        lobby_rtt_close();
+        return;
+    }
+
+    lobby_rtt_ensure();
+    if (!g_rtt_probe)
+        return;
+
+    got = rnet_rtt_probe_pump(g_rtt_probe, &ms);
+    if (got == 1) {
+        if (g_lc.is_host) {
+            int slot = first_guest_member_slot();
+            if (slot >= 0)
+                g_lc.member_rtt_ms[slot] = ms;
+        } else {
+            int slot = local_member_slot();
+            if (slot >= 0)
+                g_lc.member_rtt_ms[slot] = ms;
+            {
+                char report[32];
+                snprintf(report, sizeof(report), "%d", ms);
+                (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
+            }
+        }
+    }
+
+    {
+        uint64_t now = lobby_mono_ms();
+        if (now >= g_lc.rtt_next_ping_ms && rnet_rtt_probe_peer_known(g_rtt_probe)) {
+            (void)rnet_rtt_probe_ping(g_rtt_probe);
+            g_lc.rtt_next_ping_ms = now + 2500ull;
+        }
+    }
 }
 
 void psx_lobby_pump(void)
@@ -1367,16 +2130,14 @@ void psx_lobby_pump(void)
             break;
         }
     }
-    /* Guests: probe host RTT about once per second while seated. */
-    if (g_lc.in_lobby && !g_lc.is_host && !g_lc.launch_pending) {
-        uint64_t now = lobby_mono_ms();
-        if (now >= g_lc.rtt_next_ping_ms) {
-            char ts[32];
-            snprintf(ts, sizeof(ts), "%llu", (unsigned long long)now);
-            (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_PING, 0, ts);
-            g_lc.rtt_next_ping_ms = now + 1000ull;
-        }
-    }
+    /* Host STUN advertise (may briefly close the waiting-room RTT sock). */
+    lobby_host_advertise_tick();
+    /* Local UDP broadcast: host announce / guest cache for list RTT. */
+    lobby_lan_beacon_tick();
+    /* Peer-path UDP latency for the lobby seat table. */
+    lobby_rtt_tick();
+    /* One-shot list latency after Refresh / lobby_list. */
+    lobby_list_rtt_tick();
 }
 
 void psx_lobby_set_game_identity(const char *game_name, const char *game_version)
@@ -1404,6 +2165,7 @@ const char *psx_lobby_game_version(void)
 
 void psx_lobby_request_list(void)
 {
+    g_list_rtt_on_next_list = 1;
     queue_list_request();
     flush_pending();
 }
@@ -1488,6 +2250,8 @@ int psx_lobby_leave(void)
 {
     queue_send("{\"op\":\"leave\"}");
     flush_pending();
+    lobby_rtt_close();
+    lobby_host_advertise_reset();
     g_lc.in_lobby = 0;
     g_lc.is_host = 0;
     g_lc.host_player_id[0] = '\0';
@@ -1495,6 +2259,8 @@ int psx_lobby_leave(void)
     g_lc.local_ready = 0;
     g_lc.all_ready = 0;
     g_lc.launch_pending = 0;
+    g_lc.ice_signal_accept = 0;
+    psx_lobby_clear_signals();
     match_caps_clear(&g_lc.match_caps);
     member_rtt_clear();
     return 0;

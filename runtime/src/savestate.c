@@ -12,6 +12,7 @@
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include "psx_scheduler.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,24 +45,51 @@ static int      s_configured   = 0;
 static int      s_save_pending = -1;   /* slot, or -1 */
 static int      s_load_pending = -1;
 static int      s_load_completed = 0;
-static uint64_t s_load_cooldown_until_frame = 0;
-static int      s_load_cooldown_notice = 0;
+static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
+static size_t   s_load_blob_len = 0;
 
 extern int psx_hle_scheduler_enabled(void);
-extern uint64_t s_frame_count;
 
-/* Debounce only — long enough to ignore key-repeat / double F-key, short
- * enough that a deliberate second load is not blocked for a full second.
- * Wall time stretches if a restore hitch drops FPS (cooldown is in frames). */
-#define SAVESTATE_LOAD_COOLDOWN_FRAMES 12u
-
+/* Create each path component (mkdir -p). Single-level mkdir fails for
+ * "saves/netplay" when parent "saves" is missing. */
 static void ensure_dir(const char* dir) {
+    char tmp[512];
+    size_t len;
+    size_t i;
     if (!dir || !dir[0]) return;
+    strncpy(tmp, dir, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    len = strlen(tmp);
+    while (len > 1 && (tmp[len - 1] == '/' || tmp[len - 1] == '\\')) {
+        tmp[--len] = '\0';
+    }
+    for (i = 1; i < len; i++) {
+        if (tmp[i] == '/' || tmp[i] == '\\') {
 #ifdef _WIN32
-    (void)_mkdir(dir);
-#else
-    (void)mkdir(dir, 0755);
+            /* Keep drive prefix "C:" intact — do not mkdir("C:"). */
+            if (i == 2 && tmp[1] == ':')
+                continue;
 #endif
+            tmp[i] = '\0';
+#ifdef _WIN32
+            (void)_mkdir(tmp);
+#else
+            (void)mkdir(tmp, 0755);
+#endif
+            tmp[i] = '/';
+        }
+    }
+#ifdef _WIN32
+    (void)_mkdir(tmp);
+#else
+    (void)mkdir(tmp, 0755);
+#endif
+}
+
+static void clear_load_blob(void) {
+    free(s_load_blob);
+    s_load_blob = NULL;
+    s_load_blob_len = 0;
 }
 
 void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry_pc) {
@@ -140,17 +168,34 @@ int savestate_read_slot(int slot, uint8_t** data_out, size_t* size_out) {
 int savestate_write_slot(int slot, const void* data, size_t size) {
     char path[600];
     FILE* f;
+    size_t wrote;
     if (!data || size == 0) return 0;
-    if (!savestate_slot_path(slot, path, sizeof(path))) return 0;
+    if (!savestate_slot_path(slot, path, sizeof(path))) {
+        fprintf(stderr,
+                "savestate: write_slot=%d failed (not configured / bad slot) "
+                "dir='%s' configured=%d\n",
+                slot, s_dir, s_configured);
+        return 0;
+    }
     ensure_dir(s_dir);
     f = fopen(path, "wb");
-    if (!f) return 0;
-    if (fwrite(data, 1, size, f) != size) {
+    if (!f) {
+        fprintf(stderr, "savestate: write_slot fopen('%s') failed: %s\n",
+                path, strerror(errno));
+        return 0;
+    }
+    wrote = fwrite(data, 1, size, f);
+    if (wrote != size) {
+        fprintf(stderr,
+                "savestate: write_slot fwrite('%s') %zu/%zu failed: %s\n",
+                path, wrote, size, strerror(errno));
         fclose(f);
         remove(path);
         return 0;
     }
     if (fflush(f) != 0 || fclose(f) != 0) {
+        fprintf(stderr, "savestate: write_slot flush/close('%s') failed: %s\n",
+                path, strerror(errno));
         remove(path);
         return 0;
     }
@@ -180,18 +225,6 @@ static int request_save_inner(int slot) {
 static int request_load_inner(int slot) {
     if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
-    if (s_frame_count < s_load_cooldown_until_frame) {
-        if (!s_load_cooldown_notice) {
-            uint64_t left = s_load_cooldown_until_frame - s_frame_count;
-            fprintf(stderr,
-                    "savestate: load ignored (%llu frame cooldown after restore; "
-                    "%llu left)\n",
-                    (unsigned long long)SAVESTATE_LOAD_COOLDOWN_FRAMES,
-                    (unsigned long long)left);
-            s_load_cooldown_notice = 1;
-        }
-        return 1;
-    }
     if (!psx_hle_scheduler_enabled()) {
         /* LLE (host-fiber) mode: the restore longjmp target lives on the
          * scheduler fiber; cross-fiber unwind is unsafe. HLE is the default. */
@@ -220,7 +253,33 @@ int savestate_request_save_protocol(int slot) {
 
 int savestate_request_load_protocol(int slot) {
     /* Follow-host sync: guests must apply the host-authoritative .pst. */
+    clear_load_blob();
     return request_load_inner(slot);
+}
+
+int savestate_request_load_blob_protocol(const void* data, size_t size) {
+    uint8_t* copy;
+    if (!s_configured) {
+        fprintf(stderr, "savestate: load_blob — not configured\n");
+        return 0;
+    }
+    if (!data || size == 0 || size > 64u * 1024u * 1024u)
+        return 0;
+    if (!psx_hle_scheduler_enabled()) {
+        fprintf(stderr, "savestate: load_blob requires the HLE scheduler\n");
+        return 0;
+    }
+    copy = (uint8_t*)malloc(size);
+    if (!copy) {
+        fprintf(stderr, "savestate: load_blob malloc(%zu) failed\n", size);
+        return 0;
+    }
+    memcpy(copy, data, size);
+    clear_load_blob();
+    s_load_blob = copy;
+    s_load_blob_len = size;
+    s_load_pending = 0; /* non-negative: poll will prefer the blob */
+    return 1;
 }
 
 int savestate_pending(void) {
@@ -253,13 +312,34 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
 
     if (s_load_pending >= 0) {
         int slot = s_load_pending;
+        int loaded = 0;
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
         double t_after_boot = t_load0;
         double t_after_frontend = t_load0;
-        if (!savestate_slot_path(slot, path, sizeof(path))) return;
-        if (boot_state_load(path, s_bios_checksum, s_entry_pc, cpu)) {
+        path[0] = '\0';
+        if (s_load_blob && s_load_blob_len > 0) {
+            const size_t blob_len = s_load_blob_len;
+            loaded = boot_state_load_buffer(s_load_blob, blob_len,
+                                            s_bios_checksum, s_entry_pc, cpu);
+            clear_load_blob();
+            if (!loaded) {
+                fprintf(stderr,
+                        "savestate: LOAD FAILED blob (%zu bytes, entry=%08X)\n",
+                        blob_len, (unsigned)s_entry_pc);
+            }
+        } else if (savestate_slot_path(slot, path, sizeof(path))) {
+            loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
+            if (!loaded) {
+                fprintf(stderr,
+                        "savestate: LOAD FAILED slot %d (missing/mismatched) %s\n",
+                        slot, path);
+            }
+        } else {
+            fprintf(stderr, "savestate: LOAD FAILED slot %d (no path)\n", slot);
+        }
+        if (loaded) {
             t_after_boot = savestate_mono_ms();
             psx_cycles_resync_after_restore(cpu);
             /* Drop absolute-cycle IRQ cooldowns / VBlank phase from the
@@ -270,9 +350,6 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
              * Init, seeks) so the picture does not freeze for ~1s after the
              * restored frame presents. */
             cdrom_accelerate_after_savestate();
-            s_load_cooldown_until_frame =
-                s_frame_count + SAVESTATE_LOAD_COOLDOWN_FRAMES;
-            s_load_cooldown_notice = 0;
             /* Netplay post-load barrier observes this before the longjmp. */
             s_load_completed = 1;
             /* Restage FBO/present latch so the restored frame is visible
@@ -281,17 +358,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             t_after_frontend = savestate_mono_ms();
             fprintf(stderr,
                     "savestate: LOADED slot %d -> resuming pc=0x%08X "
-                    "(boot=%.1f frontend=%.1f poll_total=%.1f ms)\n",
+                    "(boot=%.1f frontend=%.1f poll_total=%.1f ms)%s\n",
                     slot, (unsigned)cpu->pc,
                     t_after_boot - t_load0,
                     t_after_frontend - t_after_boot,
-                    t_after_frontend - t_load0);
+                    t_after_frontend - t_load0,
+                    path[0] ? "" : " [blob]");
             /* Unwind to the scheduler and re-dispatch the restored PC. Never
              * returns; abandons the suspended CPS frames on the current stack. */
             psx_scheduler_resume_at(cpu->pc);
-        } else {
-            fprintf(stderr, "savestate: LOAD FAILED slot %d (missing/mismatched) %s\n",
-                    slot, path);
         }
     }
 }

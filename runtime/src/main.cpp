@@ -1627,6 +1627,11 @@ static void teardown_game_session_keep_lobby(void) {
     if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; }
     psx_lobby_set_ready(0);
     psx_lobby_clear_launch_pending();
+#if defined(PSX_HAS_LOBBY_CLIENT)
+    /* Drop prior-match ICE SDP/candidates; ignore new ones until next launch. */
+    psx_lobby_clear_signals();
+    psx_lobby_set_ice_signal_accept(0);
+#endif
     psx_clear_return_to_lobby();
 }
 
@@ -3226,6 +3231,8 @@ static void netplay_barrier_admit(int override) {
     SDL_PumpEvents();
     SDL_FlushEvent(SDL_QUIT);
     static int desync_logged = 0;
+    const Uint64 barrier_t0 = SDL_GetTicks64();
+    Uint64 last_stall_log_ms = barrier_t0;
     const uint64_t admit_t0 =
         netplay_timing_on() ? SDL_GetPerformanceCounter() : 0;
     /* Guest quantum = time since previous admit returned (fiber ran). */
@@ -3235,6 +3242,7 @@ static void netplay_barrier_admit(int override) {
     }
     for (;;) {
         uint32_t dt = 0, lh = 0, rh = 0;
+        const Uint64 now_ms = SDL_GetTicks64();
         /* Load apply/ready suppresses INPUT (and can sit silent for seconds on
          * a hash-match .pst). timeout=0 still honors BYE (peer_gone) but does
          * not treat rx silence as disconnect — that was kicking both peers to
@@ -3243,6 +3251,44 @@ static void netplay_barrier_admit(int override) {
                 psx_netplay_in_load_barrier() ? 0u : 1500u)) {
             netplay_soft_exit("netplay_peer_disconnect");
             if (psx_return_to_lobby_requested()) return;
+        }
+        /* Mutual INPUT/CONFIRM stall still refreshes last_peer_rx — detect
+         * "no sim progress" separately (common rematch + TURN loss mode).
+         * Load probe/xfer/apply/ready uses a longer budget (TURN + 1.4MB). */
+        if (psx_netplay_in_load_barrier() && now_ms - barrier_t0 >= 90000u) {
+            char stall[96];
+            uint32_t sim = 0;
+            int lead = 0;
+            psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
+            std::fprintf(stderr,
+                         "psxrecomp: netplay load barrier timeout sim=%u "
+                         "stall=%s lead=%d — returning to lobby\n",
+                         (unsigned)sim, stall[0] ? stall : "?", lead);
+            netplay_soft_exit("netplay_load_stall");
+            if (psx_return_to_lobby_requested()) return;
+        } else if (!psx_netplay_in_load_barrier() &&
+                   now_ms - barrier_t0 >= 20000u) {
+            char stall[64];
+            uint32_t sim = 0;
+            int lead = 0;
+            psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
+            std::fprintf(stderr,
+                         "psxrecomp: netplay admit stall timeout sim=%u "
+                         "stall=%s lead=%d — returning to lobby\n",
+                         (unsigned)sim, stall[0] ? stall : "?", lead);
+            netplay_soft_exit("netplay_admit_stall");
+            if (psx_return_to_lobby_requested()) return;
+        } else if (now_ms - last_stall_log_ms >= 2000u) {
+            char stall[96];
+            uint32_t sim = 0;
+            int lead = 0;
+            psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
+            std::fprintf(stderr,
+                         "psxrecomp: netplay admit waiting sim=%u stall=%s "
+                         "lead=%d (%llums)\n",
+                         (unsigned)sim, stall[0] ? stall : "?", lead,
+                         (unsigned long long)(now_ms - barrier_t0));
+            last_stall_log_ms = now_ms;
         }
         psx_lobby_pump();
         if (psx_netplay_input_desync(&dt, &lh, &rh)) {
@@ -4524,7 +4570,8 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
     int g_lnch_force_input_relay = 0;
-    int g_lnch_force_turn = 0;
+    /* Default on: CGNAT-safe relay-only ICE (BattleShip-style online path). */
+    int g_lnch_force_turn = 1;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -4577,6 +4624,8 @@ namespace {
     sockaddr_in g_lnch_lan_peers[kAeLanMaxSlots]{};
     bool g_lnch_lan_peer_ok[kAeLanMaxSlots]{};
     uint32_t g_lnch_lan_join_pulse_ms = 0;
+    /* LAN list latency from last Refresh probe; -1 unknown. */
+    int g_lnch_lan_latency_ms = -1;
 
     std::filesystem::path ae_np_lan_file() {
         return std::filesystem::current_path() / "netplay_lan_lobby.txt";
@@ -5012,6 +5061,7 @@ namespace {
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
         if (out->max_slots > kAeLanMaxSlots) out->max_slots = kAeLanMaxSlots;
         out->has_password = state.password.empty() ? 0 : 1;
+        out->latency_ms = g_lnch_hosting_lan ? 0 : g_lnch_lan_latency_ms;
         return 1;
     }
 
@@ -5038,35 +5088,36 @@ namespace {
         return ok;
     }
 
-    /* Probe whether a LAN host is still answering on endpoint. */
-    static bool ae_np_lan_probe_host_ms(const std::string& endpoint, uint32_t timeout_ms) {
+    /* Probe LAN host; returns RTT ms, or -1 on timeout/failure. */
+    static int ae_np_lan_probe_rtt_ms(const std::string& endpoint, uint32_t timeout_ms) {
         char host[64];
-        if (!ae_np_lan_endpoint_host(endpoint, host, sizeof(host))) return false;
+        if (!ae_np_lan_endpoint_host(endpoint, host, sizeof(host))) return -1;
 #ifdef _WIN32
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
         AeLanSock s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (s == kAeLanSockInvalid) return false;
+        if (s == kAeLanSockInvalid) return -1;
         if (!ae_np_lan_set_nonblock(s)) {
             ae_np_lan_sock_close(&s);
-            return false;
+            return -1;
         }
         sockaddr_in to{};
         to.sin_family = AF_INET;
         to.sin_port = htons((uint16_t)ae_np_lan_endpoint_port(endpoint));
         if (inet_pton(AF_INET, host, &to.sin_addr) != 1) {
             ae_np_lan_sock_close(&s);
-            return false;
+            return -1;
         }
         const char ping[] = "MOTK1 PING\n";
+        const uint32_t t0 = SDL_GetTicks();
 #ifdef _WIN32
         sendto(s, ping, (int)sizeof(ping) - 1, 0, (const sockaddr*)&to, sizeof(to));
 #else
         sendto(s, ping, sizeof(ping) - 1, 0, (const sockaddr*)&to, sizeof(to));
 #endif
-        const uint32_t deadline = SDL_GetTicks() + timeout_ms;
-        bool alive = false;
+        const uint32_t deadline = t0 + timeout_ms;
+        int rtt = -1;
         while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
             char buf[64];
             sockaddr_in from{};
@@ -5082,14 +5133,18 @@ namespace {
             if (n > 0) {
                 buf[n] = '\0';
                 if (std::strncmp(buf, "MOTK1 PONG", 10) == 0) {
-                    alive = true;
+                    rtt = (int)(SDL_GetTicks() - t0);
                     break;
                 }
             }
             SDL_Delay(5);
         }
         ae_np_lan_sock_close(&s);
-        return alive;
+        return rtt;
+    }
+
+    static bool ae_np_lan_probe_host_ms(const std::string& endpoint, uint32_t timeout_ms) {
+        return ae_np_lan_probe_rtt_ms(endpoint, timeout_ms) >= 0;
     }
 
     static bool ae_np_lan_probe_host(const std::string& endpoint) {
@@ -5291,12 +5346,19 @@ namespace {
      * reading session_id/started from the file. Started lobbies are already
      * hidden by ae_np_lan_list_visible(). */
     static void ae_np_lan_rescan(void) {
-        if (g_lnch_hosting_lan) return;
+        if (g_lnch_hosting_lan) {
+            g_lnch_lan_latency_ms = 0;
+            return;
+        }
         if (g_lnch_joined_lan) return;
         AeLanLobbyState st;
-        if (!ae_np_read_lan_file_state(&st)) return;
+        if (!ae_np_read_lan_file_state(&st)) {
+            g_lnch_lan_latency_ms = -1;
+            return;
+        }
         if (st.started) return;
-        if (!ae_np_lan_probe_host(st.endpoint)) {
+        g_lnch_lan_latency_ms = ae_np_lan_probe_rtt_ms(st.endpoint, 200u);
+        if (g_lnch_lan_latency_ms < 0) {
             std::error_code ec;
             std::filesystem::remove(ae_np_lan_file(), ec);
         }
@@ -5767,6 +5829,7 @@ namespace {
         out->player_count = row.player_count;
         out->max_slots = row.max_slots;
         out->has_password = row.has_password;
+        out->latency_ms = row.latency_ms;
         return 1;
     }
 
@@ -6442,6 +6505,8 @@ namespace {
         g_lnch_pending_direct_launch = {};
         psx_lobby_set_ready(0);
         psx_lobby_clear_launch_pending();
+        psx_lobby_clear_signals();
+        psx_lobby_set_ice_signal_accept(0);
         if (!(g_lnch_hosting_lan || g_lnch_joined_lan)) return;
         AeLanLobbyState st;
         if (ae_np_read_lan_state(&st)) {

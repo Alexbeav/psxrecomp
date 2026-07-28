@@ -13,6 +13,9 @@
 #include "sio.h"
 #include "starvation_ring.h"
 #include "timers.h"
+#if defined(PSX_HAS_RECOMP_NET)
+#include "psx_netplay.h"
+#endif
 #ifdef PSX_COSIM
 #include "cosim_state.h"
 #endif
@@ -205,6 +208,11 @@ void psx_devices_service_to_now(void) {
     if (target >= s_next_watchdog) {
         s_next_watchdog = target + 65536ull;
         psx_cycles_watchdog_fire();
+#if defined(PSX_HAS_RECOMP_NET)
+        /* INPUT/CONFIRM retransmit during BIOS free-run (before vblank admit). */
+        if (psx_netplay_active())
+            psx_netplay_pump();
+#endif
     }
     if (target >= s_next_pc_sample) {
         s_next_pc_sample = target + 1048576ull;
@@ -305,6 +313,19 @@ void psx_advance_cycles_slow(uint32_t cycles) {
     if (psx_pc_sample_throttle >= 1048576u) {
         psx_pc_sample_throttle = 0;
         psx_cycles_pc_sample_fire();
+    }
+#endif
+#if defined(PSX_HAS_RECOMP_NET)
+    /* Independent of starvation ring (off in PSX_NO_DEBUG_TOOLS release).
+     * Retransmit INPUT/CONFIRM during BIOS free-run before first vblank. */
+    {
+        static uint32_t s_net_pump_throttle;
+        s_net_pump_throttle += cycles;
+        if (s_net_pump_throttle >= 65536u) {
+            s_net_pump_throttle = 0;
+            if (psx_netplay_active())
+                psx_netplay_pump();
+        }
     }
 #endif
 }

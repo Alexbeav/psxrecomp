@@ -1,6 +1,7 @@
 #ifndef PSX_BOOT_STATE_H
 #define PSX_BOOT_STATE_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "cpu_state.h"
 
@@ -100,6 +101,11 @@ int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
  * or incompleteness returns 0 (caller then boots normally and recaptures). */
 int  boot_state_load(const char* path, uint32_t bios_checksum,
                      uint32_t entry_pc, CPUState* cpu);
+
+/* Same as boot_state_load, but from an already-buffered .pst image (netplay). */
+int  boot_state_load_buffer(const uint8_t* file, size_t file_len,
+                            uint32_t bios_checksum, uint32_t entry_pc,
+                            CPUState* cpu);
 
 /* Register a deferred capture: when boot_state_trigger_capture() fires (from
  * fntrace at game-start), serialize to path. One-shot. */

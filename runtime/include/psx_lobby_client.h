@@ -14,6 +14,7 @@ extern "C" {
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
 #define PSX_LOBBY_MAX_MEMBERS 8
+#define PSX_LOBBY_MAX_LAN_EPS 4
 #define PSX_LOBBY_LANG_LEN 16
 
 #ifndef PSX_GAME_VERSION
@@ -28,6 +29,13 @@ typedef struct PsxLobbyRow {
     int      player_count;
     int      max_slots;
     int      has_password;
+    /* Host UDP endpoint from the server list (for one-shot latency probes). */
+    char     host_endpoint[PSX_LOBBY_ENDPOINT_LEN];
+    /* Legacy hub lan_endpoints (compat). Prefer local UDP beacon by lobby_id. */
+    char     lan_endpoints[PSX_LOBBY_MAX_LAN_EPS][PSX_LOBBY_ENDPOINT_LEN];
+    int      lan_count;
+    /* Round-trip ms to a reachable candidate; -1 unknown / timed out. */
+    int      latency_ms;
 } PsxLobbyRow;
 
 typedef struct PsxLobbyMember {
@@ -140,9 +148,10 @@ int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
 int  psx_lobby_member_count(void);
 int  psx_lobby_member_get(int index, PsxLobbyMember *out);
 
-/* Waiting-room RTT to the lobby host in ms for `slot`, or -1 if unknown.
- * Host's own seat is always -1. Guests measure via signal ping; hosts learn
- * guest RTT from peer reports. */
+/* Waiting-room peer RTT in ms for `slot`, or -1 if unknown.
+ * Host's own seat is always -1. Measured over UDP (rnet_rtt_probe) on the
+ * advertised game endpoints — not the lobby WebSocket. Guests also REPORT
+ * so the host UI updates when it cannot dial the guest yet. */
 int  psx_lobby_member_latency_ms(int slot);
 
 /* True when member.player_id matches psx_lobby_host_player_id().
@@ -157,6 +166,11 @@ int  psx_lobby_member_is_host(const PsxLobbyMember *member);
  */
 int  psx_lobby_send_signal(int type, int flag, const char *text);
 int  psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap);
+/* Drop queued ICE SDP/candidates (soft-return / rematch hygiene). */
+void psx_lobby_clear_signals(void);
+/* When 0, inbound ICE op:signal is discarded (lobby / post-match). Launch
+ * re-enables so early peer offers are kept until netplay drains them. */
+void psx_lobby_set_ice_signal_accept(int accept);
 
 /*
  * Coturn / ICE credentials minted by the WS lobby

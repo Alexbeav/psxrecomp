@@ -417,12 +417,9 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
     }
 }
 
-int boot_state_load(const char* path, uint32_t bios_checksum,
-                    uint32_t entry_pc, CPUState* cpu) {
-    FILE* f = fopen(path, "rb");
-    long sz;
-    uint8_t* file = NULL;
-    size_t file_len = 0;
+int boot_state_load_buffer(const uint8_t* file, size_t file_len,
+                           uint32_t bios_checksum, uint32_t entry_pc,
+                           CPUState* cpu) {
     const uint8_t* cur;
     const uint8_t* end;
     BootStateHeader h;
@@ -435,31 +432,16 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();
-    double t_after_read = t0;
     double inflate_ms = 0.0;
     double apply_ram_ms = 0.0;
     double apply_vram_ms = 0.0;
     double apply_spuram_ms = 0.0;
     double apply_other_ms = 0.0;
 
-    if (!f) return 0;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
-    sz = ftell(f);
-    if (sz < (long)BOOT_STATE_HEADER_WIRE_BYTES || sz > 64L * 1024L * 1024L) {
-        fclose(f);
+    if (!file || file_len < BOOT_STATE_HEADER_WIRE_BYTES ||
+        file_len > 64u * 1024u * 1024u) {
         return 0;
     }
-    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
-    file_len = (size_t)sz;
-    file = (uint8_t*)malloc(file_len);
-    if (!file) { fclose(f); return 0; }
-    if (fread(file, 1, file_len, f) != file_len) {
-        free(file);
-        fclose(f);
-        return 0;
-    }
-    fclose(f);
-    t_after_read = boot_state_mono_ms();
 
     /* Parse header from the in-memory image (one I/O, then CPU-side inflate). */
     pst_r_init(&hr, file, BOOT_STATE_HEADER_WIRE_BYTES);
@@ -473,7 +455,6 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
         !pst_r_u32(&hr, &h.codegen_ver) ||
         !pst_r_u32(&hr, &h.section_count) ||
         !pst_r_u32(&hr, &h.reserved)) {
-        free(file);
         return 0;
     }
 
@@ -485,7 +466,6 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
         h.codegen_hash  != (uint32_t)PSX_OVERLAY_CODEGEN_HASH ||
         h.abi_tag       != (int32_t)PSX_OVERLAY_ABI_TAG   ||
         h.codegen_ver   != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
-        free(file);
         return 0;
     }
 
@@ -561,7 +541,6 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
         }
         free(inflated);
     }
-    free(file);
 
     if (!ok || (seen & required) != required)
         return 0;
@@ -572,14 +551,50 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
     {
         const double total_ms = boot_state_mono_ms() - t0;
         fprintf(stderr,
-                "savestate: load_timing read=%.1f inflate=%.1f "
+                "savestate: load_timing read=0.0 inflate=%.1f "
                 "apply_ram=%.1f apply_vram=%.1f apply_spuram=%.1f "
                 "apply_other=%.1f total=%.1f ms (file=%zu)\n",
-                t_after_read - t0, inflate_ms,
+                inflate_ms,
                 apply_ram_ms, apply_vram_ms, apply_spuram_ms,
                 apply_other_ms, total_ms, file_len);
     }
     return 1;
+}
+
+int boot_state_load(const char* path, uint32_t bios_checksum,
+                    uint32_t entry_pc, CPUState* cpu) {
+    FILE* f = fopen(path, "rb");
+    long sz;
+    uint8_t* file = NULL;
+    size_t file_len = 0;
+    int ok;
+    const double t0 = boot_state_mono_ms();
+    double t_after_read;
+
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    sz = ftell(f);
+    if (sz < (long)BOOT_STATE_HEADER_WIRE_BYTES || sz > 64L * 1024L * 1024L) {
+        fclose(f);
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
+    file_len = (size_t)sz;
+    file = (uint8_t*)malloc(file_len);
+    if (!file) { fclose(f); return 0; }
+    if (fread(file, 1, file_len, f) != file_len) {
+        free(file);
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    t_after_read = boot_state_mono_ms();
+    (void)t0;
+    (void)t_after_read;
+
+    ok = boot_state_load_buffer(file, file_len, bios_checksum, entry_pc, cpu);
+    free(file);
+    return ok;
 }
 
 void boot_state_set_capture(const char* path, uint32_t bios_checksum,

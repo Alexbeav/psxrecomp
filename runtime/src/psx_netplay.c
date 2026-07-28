@@ -204,10 +204,21 @@ int  psx_netplay_input_delay(void) { return 2; }
 int  psx_netplay_catchup_budget(void) { return 0; }
 void psx_netplay_catchup_consume_frame(void) {}
 void psx_netplay_wait_recv(int timeout_ms) { (void)timeout_ms; }
+void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
+                                 uint32_t *sim_tick_out, int *lead_out)
+{
+    if (stall_out && stall_cap) {
+        stall_out[0] = '\0';
+        if (stall_cap > 1)
+            strncpy(stall_out, "off", stall_cap - 1);
+    }
+    if (sim_tick_out) *sim_tick_out = 0;
+    if (lead_out) *lead_out = 0;
+}
 
 #else /* PSX_HAS_RECOMP_NET */
 
-#define NP_SANDBOX_DIR "saves/netplay"
+#define NP_SANDBOX_FALLBACK "saves/netplay"
 #define NP_MC_BLOB_BYTES (4u + (size_t)MEMCARD_SIZE * 2u)
 /* LOAD probe size==0 + this crc = post-load ready rendezvous (not SAVE coord). */
 #define NP_LOAD_READY_CRC 0x4C4F4144u /* 'LOAD' */
@@ -310,6 +321,7 @@ static uint32_t np_mono_ms(void)
 static void np_enter_load_ready(int slot);
 static void np_commit_load_sync(void);
 static void np_begin_load_apply(int slot);
+static void np_starv_reset(void);
 
 static int np_file_crc(const uint8_t *data, size_t size, uint32_t *crc_out)
 {
@@ -394,6 +406,7 @@ static void np_enter_guest_sandbox(void)
     const char *p0 = NULL;
     const char *p1 = NULL;
     uint32_t bios = 0, entry = 0;
+    char sandbox[560];
 
     savestate_get_integrity(&bios, &entry);
     g_np.bios_checksum = bios;
@@ -405,9 +418,24 @@ static void np_enter_guest_sandbox(void)
     if (p0) strncpy(g_np.personal_mc0, p0, sizeof(g_np.personal_mc0) - 1);
     if (p1) strncpy(g_np.personal_mc1, p1, sizeof(g_np.personal_mc1) - 1);
 
-    savestate_configure(NP_SANDBOX_DIR, bios, entry);
-    (void)memcard_rebind_dir(NP_SANDBOX_DIR);
+    /* Prefer <memcard_dir>/netplay (absolute, next to the binary) so CWD does
+     * not matter. Relative "saves/netplay" only as a last-resort fallback. */
+    if (g_np.personal_save_dir[0]) {
+        size_t n = strlen(g_np.personal_save_dir);
+        while (n > 0 && (g_np.personal_save_dir[n - 1] == '/' ||
+                         g_np.personal_save_dir[n - 1] == '\\')) {
+            g_np.personal_save_dir[--n] = '\0';
+        }
+        snprintf(sandbox, sizeof(sandbox), "%s/netplay", g_np.personal_save_dir);
+    } else {
+        snprintf(sandbox, sizeof(sandbox), "%s", NP_SANDBOX_FALLBACK);
+    }
+
+    savestate_configure(sandbox, bios, entry);
+    (void)memcard_rebind_dir(sandbox);
     g_np.guest_sandbox = 1;
+    printf("psxrecomp: netplay guest sandbox -> %s\n", sandbox);
+    fflush(stdout);
 }
 
 static void np_leave_guest_sandbox(void)
@@ -486,26 +514,29 @@ static void np_apply_ready_state(void)
         return;
     }
 
-    /* LOAD transfer (hash miss): guest writes sandbox; both stage apply here so
-     * the host cannot restore (and suppress INPUT) before the guest has bytes. */
+    /* LOAD transfer (hash miss): guest stages the wire blob in memory (no disk
+     * dependency — relative sandbox/CWD issues used to fail write_slot here).
+     * Both peers request apply so host cannot restore before guest has bytes. */
     if (g_np.local_slot != 0) {
-        if (!savestate_write_slot((int)slot, data, size)) {
+        if (!savestate_request_load_blob_protocol(data, size)) {
+            printf("psxrecomp: netplay guest load slot=%u — blob stage failed "
+                   "(%zu bytes, sandbox='%s')\n",
+                   (unsigned)slot, size, savestate_dir());
+            fflush(stdout);
             rnet_session_state_finish(g_np.session, 0);
             g_np.xfer = NP_XFER_NONE;
             return;
         }
-        {
-            uint32_t got_sz = 0, got_crc = 0;
-            if (!np_slot_crc((int)slot, &got_sz, &got_crc) ||
-                got_sz != (uint32_t)size ||
-                got_crc != rnet_checksum((const rnet_u8 *)data, size)) {
-                rnet_session_state_finish(g_np.session, 0);
-                g_np.xfer = NP_XFER_NONE;
-                return;
-            }
+        /* Best-effort mirror to sandbox for hash-probe hits on rematch. */
+        if (!savestate_write_slot((int)slot, data, size)) {
+            printf("psxrecomp: netplay guest load slot=%u — sandbox mirror "
+                   "failed (in-memory apply continues)\n",
+                   (unsigned)slot);
+            fflush(stdout);
         }
+    } else {
+        (void)savestate_request_load_protocol((int)slot);
     }
-    (void)savestate_request_load_protocol((int)slot);
     rnet_session_state_finish(g_np.session, 0);
     np_begin_load_apply((int)slot);
     printf("psxrecomp: netplay load slot=%u — applying after transfer…\n", (unsigned)slot);
@@ -754,22 +785,53 @@ static void np_host_drive_xfer(void)
 static void np_prime_after_hard_resync(void)
 {
     uint8_t bytes[PSX_NETPLAY_PAD_BYTES];
-    /* Released digital + centered sticks — delay tip only; real pads resume after. */
-    bytes[0] = 0xFFu;
-    bytes[1] = 0xFFu;
-    bytes[2] = bytes[3] = bytes[4] = bytes[5] = 0x80u;
-    bytes[6] = 1u;
+    PsxNetPad pad;
+
+    /* Prime delay prefix with the current local hold (not forced neutral) so the
+     * first D play frames continue what the player is already pressing. Each
+     * peer only primes its own slot — lockstep stays valid. Tip latency for
+     * *changes* remains D; we just avoid a post-load dead zone of released pads. */
+    memset(&pad, 0, sizeof(pad));
+    pad.buttons = 0xFFFFu;
+    pad.lx = pad.ly = pad.rx = pad.ry = 0x80u;
+    pad.analog = 1;
+    pad.connected = 1;
+    if (g_np.staged_valid)
+        pad = g_np.staged;
+    pad.connected = 1;
+    psx_netplay_normalize_pad(&pad);
+
+    bytes[0] = (uint8_t)(pad.buttons & 0xFFu);
+    bytes[1] = (uint8_t)((pad.buttons >> 8) & 0xFFu);
+    bytes[2] = pad.lx;
+    bytes[3] = pad.ly;
+    bytes[4] = pad.rx;
+    bytes[5] = pad.ry;
+    bytes[6] = pad.analog ? 1u : 0u;
     bytes[7] = 1u;
     rnet_session_prime_delay_inputs(g_np.session, bytes, (rnet_u16)PSX_NETPLAY_PAD_BYTES);
+
+    /* Keep staged matching the prime so the first tip sample is not a sudden
+     * release while [0..D) still holds the live pad. */
+    g_np.staged = pad;
+    g_np.staged_valid = 1;
 }
 
 /* Stage restore. Keep INPUT flowing so try_admit can still run guest cycles
- * for savestate_poll — suppress only at mutual ready (np_commit_load_sync). */
+ * for savestate_poll — suppress only at mutual ready (np_commit_load_sync).
+ * Ready probe must also leave INPUT unstalled (recomp-net size==0 LOAD). */
 static void np_begin_load_apply(int slot)
 {
+    /* Transfer admit failures (state_xfer) often latch starvation; lead can sit
+     * at D-1 after ICE xfer and would block the only frame savestate_poll needs. */
+    np_starv_reset();
     g_np.xfer = NP_XFER_LOAD_APPLYING;
     g_np.load_applied_local = 0;
     g_np.load_sync_done = 0;
+    g_np.load_ready_replied = 0;
+    g_np.needs_advance = 0;
+    g_np.latched_for_tick = 0;
+    g_np.staged_valid = 0;
     g_np.xfer_slot = slot;
 }
 
@@ -785,7 +847,7 @@ static void np_commit_load_sync(void)
     g_np.load_sync_done = 1;
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
-    g_np.staged_valid = 0;
+    /* staged_valid left set by prime — tip must match delay-prefix hold. */
 }
 
 static void np_enter_load_ready(int slot)
@@ -1123,6 +1185,21 @@ static int resolve_use_ice(const PsxNetplayConfig *cfg)
     in_motk_room = psx_lobby_connected() && psx_lobby_in_lobby();
 #endif
 
+    /* Server UDP pad relay: dial relay_endpoint with LAN transport (not ICE).
+     * MotK previously always preferred ICE and ignored the relay rewrite. */
+    if (cfg->force_input_relay) {
+        if (!cfg->peer_hostport || !cfg->peer_hostport[0]) {
+            fprintf(stderr,
+                    "psx_netplay: force_input_relay set but peer/relay "
+                    "endpoint empty\n");
+            return -1;
+        }
+        fprintf(stderr,
+                "psx_netplay: server input relay — LAN transport to %s\n",
+                cfg->peer_hostport);
+        return 0;
+    }
+
 #if defined(RNET_ENABLE_ICE) && defined(PSX_HAS_LOBBY_CLIENT)
     if (cfg->transport == 1) {
         if (!in_motk_room) {
@@ -1232,15 +1309,19 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         }
 
 #if defined(PSX_HAS_LOBBY_CLIENT)
+        /* Prefer TURN prefetched at WS welcome; re-request and wait if stale. */
         if (psx_lobby_connected()) {
             int i;
-            (void)psx_lobby_request_turn_credentials();
-            for (i = 0; i < 50; ++i) {
-                const PsxLobbyTurnCredentials *tc = psx_lobby_turn_credentials();
-                if (tc && tc->valid)
-                    break;
-                psx_lobby_pump();
-                np_sleep_ms(10);
+            const PsxLobbyTurnCredentials *tc = psx_lobby_turn_credentials();
+            if (!tc || !tc->valid) {
+                (void)psx_lobby_request_turn_credentials();
+                for (i = 0; i < 200; ++i) { /* up to ~2s */
+                    tc = psx_lobby_turn_credentials();
+                    if (tc && tc->valid)
+                        break;
+                    psx_lobby_pump();
+                    np_sleep_ms(10);
+                }
             }
         }
         {
@@ -1306,20 +1387,31 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
                     ice.turn_host, (unsigned)ice.turn_port, ice.turn_user,
                     ice.bind_address ? ice.bind_address : "(any)");
         } else {
+            const char *allow_stun = getenv("PSX_NET_ALLOW_STUN_ONLY");
             fprintf(stderr,
                     "psx_netplay: ICE STUN-only (no TURN) stun=%s:%u "
-                    "bind=%s — remote NAT may hang; configure Coturn on the "
-                    "lobby or PSX_NET_TURN_*\n",
+                    "bind=%s — online MotK requires Coturn "
+                    "(lobby get_turn_credentials or PSX_NET_TURN_*); set "
+                    "PSX_NET_ALLOW_STUN_ONLY=1 to override\n",
                     ice.stun_host ? ice.stun_host : "(default)",
                     (unsigned)ice.stun_port,
                     ice.bind_address ? ice.bind_address : "(any)");
+            /* BattleShip-style: refuse WAN ICE without TURN (CGNAT hangs). */
+            if (!allow_stun || !allow_stun[0] || allow_stun[0] == '0') {
+                rnet_session_destroy(g_np.session);
+                g_np.session = NULL;
+                return -4;
+            }
         }
 
         {
+            /* Online default is Force TURN (match_caps / UI); env overrides. */
             int force_turn = cfg->force_turn ? 1 : 0;
             const char *ft = getenv("PSX_NET_FORCE_TURN");
             if (ft && ft[0] && ft[0] != '0')
                 force_turn = 1;
+            else if (ft && ft[0] == '0')
+                force_turn = 0;
             if (force_turn && !g_np.ice_has_turn) {
                 fprintf(stderr,
                         "psx_netplay: FORCE_TURN requires Coturn credentials "
@@ -1581,7 +1673,12 @@ int psx_netplay_in_load_barrier(void)
 {
     if (!psx_netplay_active())
         return 0;
-    return (g_np.xfer == NP_XFER_LOAD_APPLYING || g_np.xfer == NP_XFER_LOAD_READY) ? 1 : 0;
+    /* Probe/SEND too: large ICE/TURN transfers can exceed the normal admit
+     * stall timeout, and FPS/present must stay frozen until mutual ready. */
+    return (g_np.xfer == NP_XFER_LOAD_PROBE || g_np.xfer == NP_XFER_LOAD_SEND ||
+            g_np.xfer == NP_XFER_LOAD_APPLYING || g_np.xfer == NP_XFER_LOAD_READY)
+               ? 1
+               : 0;
 }
 
 
@@ -1590,6 +1687,21 @@ static int np_diag_enabled(void)
     static int cached = -1;
     if (cached < 0) {
         const char *v = getenv("PSX_NET_DIAG");
+        cached = (v && v[0] && v[0] != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
+/* Verbose delay-sync starvation latch/clear spam. Off by default — the latch
+ * can toggle every few frames under jitter and floods stderr. Enable with
+ * PSX_NET_DELAY_SYNC_DIAG=1 (alias: PSX_NET_STARVATION_DIAG=1). */
+static int np_delay_sync_diag_enabled(void)
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("PSX_NET_DELAY_SYNC_DIAG");
+        if (!v || !v[0])
+            v = getenv("PSX_NET_STARVATION_DIAG");
         cached = (v && v[0] && v[0] != '0') ? 1 : 0;
     }
     return cached;
@@ -1886,6 +1998,14 @@ int psx_netplay_poll_admit(void)
     if (g_np.xfer == NP_XFER_LOAD_APPLYING && !savestate_pending())
         return 0;
 
+    /* Staged load must run guest cycles — bypass starvation latch. ICE xfer
+     * often leaves lead=D-1 and would otherwise block try_admit forever. */
+    if (g_np.xfer == NP_XFER_LOAD_APPLYING && savestate_pending()) {
+        if (g_np.needs_advance)
+            return 1;
+        return np_try_admit_gameplay();
+    }
+
     /* Both peers: after mutual ready + sync, stay in LOAD_READY until try_admit
      * succeeds (fresh tip exchange + INPUT_CONFIRM). Dropping the barrier early
      * on the host let it spin on confirm with FPS/present already "live". */
@@ -1917,6 +2037,18 @@ int psx_netplay_poll_admit(void)
                                   PSX_STARVATION_ENTER_DEFAULT);
     exit_need = np_starv_env_int("PSX_NET_STARVATION_EXIT_FRAMES",
                                  PSX_STARVATION_EXIT_DEFAULT);
+
+    /* Probe/SEND: state_xfer stalls are expected — do not latch starvation. */
+    if (g_np.xfer == NP_XFER_LOAD_PROBE || g_np.xfer == NP_XFER_LOAD_SEND ||
+        g_np.xfer == NP_XFER_SAVE_PROBE || g_np.xfer == NP_XFER_SAVE_SEND ||
+        g_np.xfer == NP_XFER_SAVE_COORD || g_np.xfer == NP_XFER_MC_PROBE ||
+        g_np.xfer == NP_XFER_MC_SEND) {
+        g_starv.enter_run = 0;
+        g_starv.exit_run = 0;
+        g_starv.latched = 0;
+        g_starv.just_cleared = 0;
+        return np_try_admit_gameplay();
+    }
 
     /* Startup grace: do not latch before the delay rings warm up. */
     if (sim < (rnet_u32)PSX_STARVATION_GRACE_TICKS) {
@@ -1952,18 +2084,20 @@ int psx_netplay_poll_admit(void)
                                          PSX_STARVATION_RECOVERY_BURST_DEFAULT);
             g_starv.just_cleared = 0;
             g_starv.recovery_amount = burst;
-            if (burst > 0) {
-                fprintf(stderr,
-                        "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
-                        "D=%d — recovery burst %d\n",
-                        (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
-                        psx_netplay_input_delay(), burst);
-            } else {
-                fprintf(stderr,
-                        "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
-                        "D=%d — resume 1:1 (rebuild input buffer)\n",
-                        (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
-                        psx_netplay_input_delay());
+            if (np_delay_sync_diag_enabled()) {
+                if (burst > 0) {
+                    fprintf(stderr,
+                            "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
+                            "D=%d — recovery burst %d\n",
+                            (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                            psx_netplay_input_delay(), burst);
+                } else {
+                    fprintf(stderr,
+                            "psxrecomp: delay_sync_starvation cleared sim=%u lead=%d "
+                            "D=%d — resume 1:1 (rebuild input buffer)\n",
+                            (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                            psx_netplay_input_delay());
+                }
             }
         }
         return 1;
@@ -1975,11 +2109,13 @@ int psx_netplay_poll_admit(void)
         g_starv.latched = 1;
         g_starv.enter_run = 0;
         if (!g_starv.latch_logged) {
-            fprintf(stderr,
-                    "psxrecomp: delay_sync_starvation latched sim=%u lead=%d "
-                    "D=%d (enter=%d)\n",
-                    (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
-                    psx_netplay_input_delay(), enter_need);
+            if (np_delay_sync_diag_enabled()) {
+                fprintf(stderr,
+                        "psxrecomp: delay_sync_starvation latched sim=%u lead=%d "
+                        "D=%d (enter=%d)\n",
+                        (unsigned)psx_netplay_sim_tick(), psx_netplay_remote_lead(),
+                        psx_netplay_input_delay(), enter_need);
+            }
             g_starv.latch_logged = 1;
         }
     }
@@ -2055,6 +2191,68 @@ void psx_netplay_wait_recv(int timeout_ms)
 {
     if (!psx_netplay_active()) return;
     (void)rnet_session_wait_recv(g_np.session, timeout_ms);
+}
+
+void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
+                                 uint32_t *sim_tick_out, int *lead_out)
+{
+    RNetSessionStats st;
+    const char *name = "inactive";
+    char phase[96];
+    memset(&st, 0, sizeof(st));
+    phase[0] = '\0';
+    if (psx_netplay_active() && g_np.session) {
+        rnet_session_get_stats(g_np.session, &st);
+        name = rnet_admit_stall_name(st.last_stall);
+        if (!name || !name[0])
+            name = "unknown";
+        /* LOAD_READY never calls try_admit, so last_stall stays "ok" — surface
+         * the app barrier phase (+ transfer progress) instead. */
+        switch (g_np.xfer) {
+        case NP_XFER_LOAD_PROBE:
+            snprintf(phase, sizeof(phase), "load_probe");
+            break;
+        case NP_XFER_LOAD_SEND:
+            if (st.state_bytes_total > 0)
+                snprintf(phase, sizeof(phase), "load_xfer_%u/%u",
+                         (unsigned)st.state_bytes_acked, (unsigned)st.state_bytes_total);
+            else
+                snprintf(phase, sizeof(phase), "load_xfer");
+            break;
+        case NP_XFER_LOAD_APPLYING:
+            if (savestate_pending()) {
+                if (g_starv.latched)
+                    snprintf(phase, sizeof(phase), "load_applying+starv_%s", name);
+                else
+                    snprintf(phase, sizeof(phase), "load_applying+%s", name);
+            } else {
+                snprintf(phase, sizeof(phase), "load_apply_done+%s", name);
+            }
+            break;
+        case NP_XFER_LOAD_READY:
+            if (g_np.load_ready_replied)
+                snprintf(phase, sizeof(phase), "load_ready_admit+%s", name);
+            else if (g_np.load_applied_local)
+                snprintf(phase, sizeof(phase), "load_ready_wait_peer+%s", name);
+            else
+                snprintf(phase, sizeof(phase), "load_ready+%s", name);
+            break;
+        default:
+            break;
+        }
+    }
+    if (stall_out && stall_cap) {
+        if (phase[0])
+            snprintf(stall_out, stall_cap, "%s", phase);
+        else {
+            strncpy(stall_out, name, stall_cap - 1);
+            stall_out[stall_cap - 1] = '\0';
+        }
+    }
+    if (sim_tick_out)
+        *sim_tick_out = st.sim_tick;
+    if (lead_out)
+        *lead_out = st.remote_lead;
 }
 
 #endif /* PSX_HAS_RECOMP_NET */

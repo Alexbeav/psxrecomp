@@ -103,7 +103,7 @@ int  psx_netplay_is_host(void);
 int  psx_netplay_request_save(int slot);
 int  psx_netplay_request_load(int slot);
 
-/* 1 while post-load apply/ready barrier owns the clock (no FPS / no present). */
+/* 1 while load probe/transfer/apply/ready owns the clock (no FPS / no present). */
 int  psx_netplay_in_load_barrier(void);
 
 /* Stage local pad for the current sim tick. Ignored once that tick is latched. */
@@ -155,6 +155,10 @@ void psx_netplay_catchup_consume_frame(void);
 
 /* Park the admit barrier until a peer datagram may be ready (or timeout). */
 void psx_netplay_wait_recv(int timeout_ms);
+
+/* Diagnostics for a stuck admit barrier (stall name, sim tick, remote lead). */
+void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
+                                 uint32_t *sim_tick_out, int *lead_out);
 
 /* Normalize sticks (deadzone → center) for stabler cross-device blobs. */
 void psx_netplay_normalize_pad(PsxNetPad *pad);
