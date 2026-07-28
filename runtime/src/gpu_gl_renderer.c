@@ -317,8 +317,10 @@ static GLsync        s_interp_fence[3];
 static GLsync        s_interp_draw_fence = NULL;
 static GLint         s_interp_uPrev = -1, s_interp_uCurr = -1;
 static GLint         s_interp_uAlpha = -1, s_interp_uUvRect = -1;
+static GLint         s_interp_uBlendMode = -1;
 static int           s_interp_enabled = 0, s_interp_valid = 0;
 static int           s_interp_suspended = 0;
+static int           s_interp_blend_mode = 0;
 static int           s_interp_prev = 0, s_interp_cur = 0;
 static int           s_interp_w = 0, s_interp_h = 0, s_interp_linear = 0;
 static int           s_interp_force_4_3 = 0, s_interp_source_path = -1;
@@ -743,8 +745,18 @@ static const char *PRESENT_FS =
 static const char *INTERP_FS =
     "#version 330\n"
     "in vec2 v_uv; uniform sampler2D u_prev; uniform sampler2D u_curr;\n"
-    "uniform float u_alpha; out vec4 frag;\n"
-    "void main(){ frag=mix(texture(u_prev,v_uv),texture(u_curr,v_uv),u_alpha); }\n";
+    "uniform float u_alpha; uniform int u_blend_mode; out vec4 frag;\n"
+    "void main(){\n"
+    "  vec4 prev=texture(u_prev,v_uv), curr=texture(u_curr,v_uv);\n"
+    "  float alpha=u_alpha;\n"
+    "  if(u_blend_mode==1){\n"
+    "    vec3 d=abs(prev.rgb-curr.rgb);\n"
+    "    float change=max(max(d.r,d.g),d.b);\n"
+    "    float safe_blend=1.0-smoothstep(0.08,0.20,change);\n"
+    "    alpha=mix(step(0.5,u_alpha),u_alpha,safe_blend);\n"
+    "  }\n"
+    "  frag=mix(prev,curr,alpha);\n"
+    "}\n";
 
 /* Geometry: position in VRAM pixels (draw offset already applied by gpu.c),
  * color rgb in 0..1, color a = mask bit (0/1). The clip transform is in
@@ -2464,6 +2476,8 @@ int gl_renderer_init_context(SDL_Window *win) {
             s_interp_uCurr = p_glGetUniformLocation(s_interp_prog, "u_curr");
             s_interp_uAlpha = p_glGetUniformLocation(s_interp_prog, "u_alpha");
             s_interp_uUvRect = p_glGetUniformLocation(s_interp_prog, "u_uv_rect");
+            s_interp_uBlendMode =
+                p_glGetUniformLocation(s_interp_prog, "u_blend_mode");
             glGenTextures(3, s_interp_tex);
             for (int i = 0; i < 3; i++) {
                 glBindTexture(GL_TEXTURE_2D, s_interp_tex[i]);
@@ -3239,7 +3253,8 @@ static void interp_reset_history(void) {
     if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
 }
 
-void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz) {
+void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
+                                   int blend_mode) {
     double effective_hz = target_hz < 0.0
         ? -1.0
         : (target_hz >= 60.0 ? target_hz : host_hz);
@@ -3274,13 +3289,16 @@ void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz
     s_interp_enabled = active;
     s_interp_host_hz = host_hz;
     s_interp_target_hz = active ? effective_hz : 0.0;
+    s_interp_blend_mode = blend_mode == 1 ? 1 : 0;
     if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
     if (active && effective_hz < 0.0)
         fprintf(stdout, "psxrecomp: GL frame interpolation enabled: uncapped "
-                "target on %.1f Hz display\n", host_hz);
+                "target on %.1f Hz display (%s blend)\n", host_hz,
+                s_interp_blend_mode ? "motion-adaptive" : "linear");
     else if (active)
         fprintf(stdout, "psxrecomp: GL frame interpolation enabled: %.1f FPS "
-                "target on %.1f Hz display\n", effective_hz, host_hz);
+                "target on %.1f Hz display (%s blend)\n", effective_hz, host_hz,
+                s_interp_blend_mode ? "motion-adaptive" : "linear");
     else
         fprintf(stdout, "psxrecomp: GL frame interpolation disabled (host %.1f Hz)\n", host_hz);
 }
@@ -3399,6 +3417,7 @@ static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
     p_glUniform1i(s_interp_uPrev, 0);
     p_glUniform1i(s_interp_uCurr, 1);
     p_glUniform1f(s_interp_uAlpha, alpha);
+    p_glUniform1i(s_interp_uBlendMode, s_interp_blend_mode);
     p_glUniform4f(s_interp_uUvRect, 0.f, 0.f, 1.f, 1.f);
     p_glBindVertexArray(s_interp_thread_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);

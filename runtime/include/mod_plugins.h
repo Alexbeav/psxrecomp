@@ -76,6 +76,17 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
  * A value of zero follows the measured host-display refresh rate.
  */
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
+/*
+ * Choose how the OpenGL presenter combines completed frames. Linear is the
+ * legacy full-frame crossfade. Motion-adaptive retains interpolation for
+ * small temporal changes but switches large changes cleanly to reduce the
+ * double-image trails produced by moving objects.
+ */
+enum {
+    PSX_MOD_FRAME_INTERPOLATION_LINEAR = 0,
+    PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE = 1
+};
+int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
 
 /*

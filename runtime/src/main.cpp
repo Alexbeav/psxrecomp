@@ -540,6 +540,10 @@ static int           g_low_latency_input = 1;
 static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
 static int           g_frame_interpolation_fps = 0;
+static int           g_frame_interpolation_blend =
+    PSX_MOD_FRAME_INTERPOLATION_LINEAR;
+static int           g_frame_interpolation_blend_default =
+    PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_mod_controller_mode_override[2] = { -1, -1 };
 static_assert((int)PSX_MOD_CONTROLLER_HYBRID ==
               (int)PSXRecompV4::PAD_MODE_HYBRID);
@@ -699,6 +703,22 @@ extern "C" int psx_mod_set_frame_interpolation(
             "psxrecomp: mod selected display-refresh presentation-only "
             "interpolation; guest timing remains stock\n");
     }
+    return 1;
+}
+
+extern "C" int psx_mod_set_frame_interpolation_blend(
+    uint32_t blend_mode) {
+    if (blend_mode != PSX_MOD_FRAME_INTERPOLATION_LINEAR &&
+        blend_mode != PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected invalid frame-interpolation blend %u\n",
+            (unsigned)blend_mode);
+        return 0;
+    }
+    g_frame_interpolation_blend = (int)blend_mode;
+    std::fprintf(stdout, "psxrecomp: frame-interpolation blend = %s\n",
+        blend_mode == PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE
+            ? "motion-adaptive clarity" : "linear crossfade");
     return 1;
 }
 
@@ -5616,7 +5636,8 @@ int main(int argc, char** argv) {
 
     /* Latency knobs: env overrides win over config (for A/B measurement).
      * PSX_LOW_LATENCY_INPUT=0/1 ; PSX_VSYNC=1(vsync)/0(immediate)/-1(adaptive);
-     * PSX_FRAME_INTERPOLATION=0/1; PSX_FRAME_INTERPOLATION_FPS=0|90+. */
+     * PSX_FRAME_INTERPOLATION=0/1; PSX_FRAME_INTERPOLATION_FPS=0|60+;
+     * PSX_FRAME_INTERPOLATION_BLEND=linear|adaptive. */
     if (const char *e = std::getenv("PSX_LOW_LATENCY_INPUT")) g_low_latency_input = atoi(e) ? 1 : 0;
     if (const char *e = std::getenv("PSX_VSYNC"))             g_video_vsync       = atoi(e);
     if (const char *e = std::getenv("PSX_SMOOTH_60FPS"))
@@ -5625,7 +5646,18 @@ int main(int argc, char** argv) {
         g_frame_interpolation = atoi(e) ? 1 : 0;
     if (const char *e = std::getenv("PSX_FRAME_INTERPOLATION_FPS")) {
         int fps = atoi(e);
-        if (fps == 0 || fps >= 90) g_frame_interpolation_fps = fps;
+        if (fps == 0 || fps >= 60) g_frame_interpolation_fps = fps;
+    }
+    if (const char *e = std::getenv("PSX_FRAME_INTERPOLATION_BLEND")) {
+        if (strcmp(e, "adaptive") == 0 || strcmp(e, "clarity") == 0 ||
+            strcmp(e, "1") == 0) {
+            g_frame_interpolation_blend_default =
+                PSX_MOD_FRAME_INTERPOLATION_MOTION_ADAPTIVE;
+        } else if (strcmp(e, "linear") == 0 || strcmp(e, "0") == 0) {
+            g_frame_interpolation_blend_default =
+                PSX_MOD_FRAME_INTERPOLATION_LINEAR;
+        }
+        g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     }
 
     /* Apply writable-state isolation before game-options and launcher setup,
@@ -6186,6 +6218,7 @@ int main(int argc, char** argv) {
      * leave its prior mode latched across a soft return to the launcher. */
     g_mod_controller_mode_override[0] = -1;
     g_mod_controller_mode_override[1] = -1;
+    g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     mod_runtime_activate_plugins();
     if (g_mod_controller_mode_override[0] >= 0)
         p1_mode = g_mod_controller_mode_override[0];
@@ -6580,7 +6613,8 @@ session_reboot:
          * undersized and the wide readback overflows it. */
         g_video_scale = gr_scale();
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
-                                      (double)g_frame_interpolation_fps);
+                                      (double)g_frame_interpolation_fps,
+                                      g_frame_interpolation_blend);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init
