@@ -41,7 +41,7 @@ if (Test-Path (Join-Path $Root "RELEASE_NOTES.md")) {
 
 # The Release build is statically linked (PSX_STATIC_RUNTIME defaults ON for
 # MinGW Release in runtime.cmake), so the exe imports ONLY Windows system DLLs
-# so there is no SDL2.dll / libgcc_s_seh-1.dll / libstdc++-6.dll to bundle. Shipping
+# so there is no SDL DLL / libgcc_s_seh-1.dll / libstdc++-6.dll to bundle. Shipping
 # those side-by-side was the cause of the 0xc000007b launch crash on user
 # machines that had a mismatched copy earlier on the DLL search path.
 #

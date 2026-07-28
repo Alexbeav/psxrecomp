@@ -1,7 +1,7 @@
 /* latency_ring.c — always-on input->photon latency ring.  See latency_ring.h. */
 
 #include "latency_ring.h"
-#include <SDL.h>
+#include "psx_sdl.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -5,22 +5,6 @@ include(CTest)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 17)
 
-# ---- SDL2 detection ----
-
-if(MSVC)
-    file(GLOB SDL2_MSVC_DIR "${CMAKE_SOURCE_DIR}/../sdl2-msvc/SDL2-*")
-    if(SDL2_MSVC_DIR)
-        set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
-        set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
-        message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
-    else()
-        message(FATAL_ERROR "SDL2 MSVC dev package not found. Run: bash tools/build_oracle.sh")
-    endif()
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED sdl2)
-endif()
-
 # ---- Native/oracle runtime targets ----
 
 set(PSXRECOMP_ROOT "${CMAKE_SOURCE_DIR}/..")
@@ -96,10 +80,11 @@ if(BUILD_TESTING)
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)
     target_include_directories(overlay_capture_retry_test PRIVATE
-        include ${SDL2_INCLUDE_DIRS})
+        include ${PSX_SDL_INCLUDE_DIRS})
     target_compile_definitions(overlay_capture_retry_test PRIVATE
-        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1)
-    target_link_libraries(overlay_capture_retry_test PRIVATE ${SDL2_LIBRARIES})
+        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_retry_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_retry_test COMMAND overlay_capture_retry_test)
 
     add_executable(overlay_path_canon_test
@@ -232,7 +217,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
 
     target_include_directories(psx-beetle PRIVATE
         include
-        ${SDL2_INCLUDE_DIRS}
+        ${PSX_SDL_INCLUDE_DIRS}
         ${CMAKE_SOURCE_DIR}/../beetle-psx/libretro-common/include
         ${CMAKE_SOURCE_DIR}/../beetle-psx
     )
@@ -240,6 +225,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
     target_compile_definitions(psx-beetle PRIVATE
         PSX_BEETLE_BUILD=1
         DEFAULT_DEBUG_PORT=4380
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
     )
     if(NOT PSX_DEBUG_TOOLS)
         target_compile_definitions(psx-beetle PRIVATE PSX_NO_DEBUG_TOOLS=1)
@@ -247,7 +233,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
 
     target_link_libraries(psx-beetle PRIVATE
         "${BEETLE_LIB}"
-        ${SDL2_LIBRARIES}
+        ${PSX_SDL_LIBRARIES}
     )
 
     if(WIN32 OR MINGW)

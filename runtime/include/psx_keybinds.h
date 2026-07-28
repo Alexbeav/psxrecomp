@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include <SDL.h>
+#include "psx_sdl.h"
 
 #ifdef __cplusplus
 extern "C" {

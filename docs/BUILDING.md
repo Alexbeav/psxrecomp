@@ -28,7 +28,8 @@ project ships no game data.
 
 | Dependency | How it's provided | Used for |
 |---|---|---|
-| **SDL2** | System. Windows/MSVC: prebuilt pack auto-found at `../sdl2-msvc/SDL2-*`. Windows/MinGW + macOS + Linux: found via pkg-config. | Window, input, GL/Vulkan context, audio, threads |
+| **SDL3 3.4+** | Preferred system package; otherwise SDL 3.4.10 is fetched from the official release archive with a pinned SHA-256. | Window, input, GL/Vulkan context, audio, threads |
+| **SDL2** | Optional explicit fallback (`-DPSX_SDL_BACKEND=SDL2`). Windows/MSVC uses `../sdl2-msvc/SDL2-*`; MinGW/macOS/Linux use pkg-config. | Compatibility and A/B testing |
 | **fmt** 9.1.0 | vendored `recompiler/lib/fmt` | String formatting (runtime uses it header-only) |
 | **toml11** | vendored `recompiler/lib/toml11` | Parsing `game.toml` / configs |
 | **ELFIO** | vendored `recompiler/lib/ELFIO` | ELF parsing (recompiler only) |
@@ -69,18 +70,22 @@ git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
 ```sh
 # In an MSYS2 MinGW64 shell:
 pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
-                   mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2 mingw-w64-x86_64-ccache
+                   mingw-w64-x86_64-ninja mingw-w64-x86_64-ccache
 ```
 
 **macOS:**
 ```sh
-brew install sdl2 pkg-config ninja cmake
+brew install ninja cmake
 ```
 
 **Linux (Debian/Ubuntu):**
 ```sh
-sudo apt install build-essential cmake ninja-build pkg-config libsdl2-dev
+sudo apt install build-essential cmake ninja-build
 ```
+
+These are the SDL3-default prerequisites. For the SDL2 fallback, additionally
+install `mingw-w64-x86_64-SDL2`, `sdl2`, or `libsdl2-dev` respectively, plus
+`pkg-config` outside MSVC.
 
 ## Build the framework
 
@@ -117,11 +122,10 @@ On Linux/macOS, `tools/setup_dev.sh` performs the same source-checkout setup:
 sh tools/setup_dev.sh
 ```
 
-It checks for the native toolchain and SDL2 development package, builds the CLI
-and recompiler tools, refreshes generated BIOS C when `bios/SCPH1001.BIN` is
-present, and builds the BIOS-only runtime when BIOS/generated sources are
-available. It does not create per-game runtime targets; use the CLI generator
-for game projects.
+It checks the native toolchain, builds the CLI and recompiler tools, refreshes
+generated BIOS C when `bios/SCPH1001.BIN` is present, and builds the BIOS-only
+runtime when BIOS/generated sources are available. It does not create per-game
+runtime targets; use the CLI generator for game projects.
 
 ### Check the build
 
@@ -147,10 +151,15 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | Option | Default | Effect |
 |---|---|---|
 | `PSX_DEBUG_TOOLS` | ON for Debug/RelWithDebInfo, OFF for Release | TCP debug server + heartbeat + per-block recording |
-| `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL2 + libgcc/libstdc++) |
+| `PSX_SDL_BACKEND` | `SDL3` | Host backend. Set `SDL2` explicitly for compatibility or A/B testing. |
+| `PSX_SDL3_FETCH` | ON | Fetch the pinned SDL3 release when a compatible system SDL3 package is unavailable. Set OFF for offline/system-only builds. |
+| `PSX_STATIC_RUNTIME` | ON for MinGW Release | Self-contained exe (statically links SDL + libgcc/libstdc++) |
 | `PSX_RECOMP_UI` | ON | Wire a downstream game's pinned recomp-ui launcher; set OFF for headless/generated builds |
 | `PSX_ENABLE_VULKAN` | **ON** | Build the experimental Vulkan renderer when the SDK tools are present (skipped if not). Pass `OFF` to exclude it outright. |
 | `PSX_NETPLAY` | OFF | Netplay support; requires the `lib/recomp-net` submodule |
+
+See [SDL backends](SDL_BACKENDS.md) for the fallback command and the initial
+SDL3/SDL2 game A/B results.
 
 ## Build and run a game
 
@@ -222,9 +231,14 @@ these files without it). If you hit this on a framework source file, please open
 an issue with your `gcc -v` / `as --version` — the build should apply the flag
 for you.
 
-**`SDL2 MSVC dev package not found`.** The MSVC build expects the prebuilt SDL2
-pack beside the repo at `../sdl2-msvc/SDL2-*`. Use the MSYS2/MinGW toolchain
-(which finds SDL2 via pkg-config) or place the pack there.
+**`SDL3 3.4+ was not found`.** The default build normally downloads the pinned
+release. Check network access, install a system SDL3 package and provide
+`SDL3_DIR`, or re-enable `-DPSX_SDL3_FETCH=ON`.
+
+**`SDL2 MSVC dev package not found`.** This applies only when
+`-DPSX_SDL_BACKEND=SDL2` is selected. Place the prebuilt SDL2 pack beside the
+repo at `../sdl2-msvc/SDL2-*`, or use the MSYS2/MinGW toolchain with SDL2
+available through pkg-config.
 
 **Overlays never compile / stay slow.** In development you need `gcc` on `PATH`
 for the `gcc` tier; otherwise areas stay in the interpreter. See

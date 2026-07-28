@@ -64,7 +64,8 @@ the paths to its generated C. The runtime provides:
   (`cdrom.c`, `iso_reader.cpp`), MDEC, SIO0 controllers/memory cards
   (`sio.c`, `memcard.c`), SPU (`spu.c`), GTE (`gte.cpp`), and interrupt delivery
   (`interrupts.c`).
-- **Host services** — window/input/audio via SDL2, a cooperative-thread
+- **Host services** — window/input/audio via SDL3 by default (SDL2 is an
+  explicit compatibility backend), a cooperative-thread
   scheduler on host fibers (`psx_fiber.c`: Win32 Fibers / POSIX `ucontext`), and
   the optional debug TCP server (`debug_server.c`).
 

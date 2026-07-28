@@ -45,8 +45,12 @@ const GpuRenderBackend *vk_backend_get(void) { return 0; }
 
 #else  /* PSX_HAVE_VULKAN */
 
-#include <SDL.h>
+#include "psx_sdl.h"
+#if defined(PSX_SDL3)
+#include <SDL3/SDL_vulkan.h>
+#else
 #include <SDL_vulkan.h>
+#endif
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "vk_shaders_spv.h"   /* generated: spv_geo_vert/frag, spv_geo_tex_vert/frag,
@@ -716,12 +720,21 @@ static int load_device_funcs(void) {
 /* ---- instance / device / swapchain ------------------------------------- */
 static int create_instance(void) {
     unsigned ext_count = 0;
+#if defined(PSX_SDL3)
+    const char *const *sdl_exts = SDL_Vulkan_GetInstanceExtensions(&ext_count);
+    if (!sdl_exts)
+        return vk_die("SDL_Vulkan_GetInstanceExtensions failed");
+    const char *exts[16];
+    if (ext_count > 16) ext_count = 16;
+    for (unsigned i = 0; i < ext_count; ++i) exts[i] = sdl_exts[i];
+#else
     if (!SDL_Vulkan_GetInstanceExtensions(s_win, &ext_count, NULL))
         return vk_die("SDL_Vulkan_GetInstanceExtensions(count) failed");
     const char *exts[16];
     if (ext_count > 16) ext_count = 16;
     if (!SDL_Vulkan_GetInstanceExtensions(s_win, &ext_count, exts))
         return vk_die("SDL_Vulkan_GetInstanceExtensions(list) failed");
+#endif
 
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     app.pApplicationName = "psxrecomp";
@@ -817,7 +830,12 @@ static int create_swapchain(void) {
 
     VkExtent2D ext = caps.currentExtent;
     if (ext.width == 0xFFFFFFFFu) {
-        int w = 0, h = 0; SDL_Vulkan_GetDrawableSize(s_win, &w, &h);
+        int w = 0, h = 0;
+#if defined(PSX_SDL3)
+        SDL_GetWindowSizeInPixels(s_win, &w, &h);
+#else
+        SDL_Vulkan_GetDrawableSize(s_win, &w, &h);
+#endif
         ext.width = (uint32_t)w; ext.height = (uint32_t)h;
     }
     s_sc_extent = ext;
@@ -1331,7 +1349,11 @@ static inline uint16_t rgba8_to_rgb555(const uint8_t in[4]) {
 
 int vk_renderer_init_context(SDL_Window *win) {
     s_win = win;
+#if defined(PSX_SDL3)
+    if (!SDL_Vulkan_LoadLibrary(NULL))
+#else
     if (SDL_Vulkan_LoadLibrary(NULL) != 0)
+#endif
         return vk_die("SDL_Vulkan_LoadLibrary failed (no Vulkan ICD?)");
     p_vkGetInstanceProcAddr =
         (PFN_vkGetInstanceProcAddr)SDL_Vulkan_GetVkGetInstanceProcAddr();
@@ -1340,7 +1362,11 @@ int vk_renderer_init_context(SDL_Window *win) {
     if (!load_global_funcs()) return 0;
     if (!create_instance()) return 0;
     if (!load_instance_funcs()) return 0;
+#if defined(PSX_SDL3)
+    if (!SDL_Vulkan_CreateSurface(s_win, s_instance, NULL, &s_surface))
+#else
     if (!SDL_Vulkan_CreateSurface(s_win, s_instance, &s_surface))
+#endif
         return vk_die("SDL_Vulkan_CreateSurface failed");
     if (!pick_device()) return 0;
     if (!create_device()) return 0;

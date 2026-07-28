@@ -71,7 +71,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #endif
-#include <SDL.h>
+#include "psx_sdl.h"
+#include "psx_sdl_audio.h"
 #if defined(PSX_WEB)
 #include <emscripten/emscripten.h>
 #endif
@@ -1478,8 +1479,8 @@ static void shutdown_runtime(void) {
     overlay_capture_wait_pending();
     overlay_capture_write_json();
     if (sdl_audio_device) {
-        SDL_ClearQueuedAudio(sdl_audio_device);
-        SDL_CloseAudioDevice(sdl_audio_device);   /* stops the pull callback */
+        psx_sdl_audio_clear(sdl_audio_device);
+        psx_sdl_audio_close(sdl_audio_device);   /* stops the pull callback */
         sdl_audio_device = 0;
     }
     if (s_drc_ready) { rab_free(&s_drc); s_drc_ready = false; }
@@ -1494,8 +1495,8 @@ static void teardown_game_session_keep_lobby(void) {
     psx_netplay_shutdown();
     memcard_flush_all();
     if (sdl_audio_device) {
-        SDL_ClearQueuedAudio(sdl_audio_device);
-        SDL_CloseAudioDevice(sdl_audio_device);
+        psx_sdl_audio_clear(sdl_audio_device);
+        psx_sdl_audio_close(sdl_audio_device);
         sdl_audio_device = 0;
     }
     if (s_drc_ready) { rab_free(&s_drc); s_drc_ready = false; }
@@ -1550,7 +1551,7 @@ static void sdl_audio_pump(bool discard_output = false) {
          * means the device was silence-filling since the last pump = a gap.
          * Only meaningful after the first audio has been queued. */
         const uint32_t max_queue_bytes = 44100u * bytes_per_frame / 5u;
-        queued = SDL_GetQueuedAudioSize(sdl_audio_device);
+        queued = psx_sdl_audio_queued_size(sdl_audio_device);
         if (queued == 0 && had_audio) {
             g_legacy_underruns++;
             audio_trace_event(AUDIO_EV_UNDERRUN, 0, 0);
@@ -1628,17 +1629,17 @@ static void sdl_audio_pump(bool discard_output = false) {
     if (legacy) {
         /* T3 tap: the exact post-fade bytes handed to the host audio queue. */
         audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, frames);
-        SDL_QueueAudio(sdl_audio_device, sdl_audio_buf,
-                       (uint32_t)frames * bytes_per_frame);
+        psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf,
+                            (uint32_t)frames * bytes_per_frame);
         had_audio = 1;
     } else {
         /* Hand to the bridge (band-limited resample + DRC) instead of
          * SDL_QueueAudio. Lock guards the SPSC ring against the pull callback.
          * The T3 tap moves to sdl_drc_callback: what the device actually
          * receives is the bridge's device-rate output, not this buffer. */
-        SDL_LockAudioDevice(sdl_audio_device);
+        psx_sdl_audio_lock(sdl_audio_device);
         rab_push(&s_drc, sdl_audio_buf, frames);
-        SDL_UnlockAudioDevice(sdl_audio_device);
+        psx_sdl_audio_unlock(sdl_audio_device);
     }
 }
 
@@ -1665,7 +1666,7 @@ extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
     *host_rate = g_audio_host_rate;
     if (*legacy || !s_drc_ready) {
         *fill_ms = sdl_audio_device
-                   ? (double)SDL_GetQueuedAudioSize(sdl_audio_device)
+                   ? (double)psx_sdl_audio_queued_size(sdl_audio_device)
                      / (44100.0 * 4.0) * 1000.0
                    : 0.0;
         *underruns = g_legacy_underruns;
@@ -2020,12 +2021,12 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             audio_trace_event(AUDIO_EV_MUTE, (uint32_t)tail, 0);
             if (audio_legacy_mode()) {
                 audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, tail);
-                SDL_QueueAudio(sdl_audio_device, sdl_audio_buf,
-                               (uint32_t)tail * sizeof(int16_t) * 2u);
+                psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf,
+                                    (uint32_t)tail * sizeof(int16_t) * 2u);
             } else if (s_drc_ready) {
-                SDL_LockAudioDevice(sdl_audio_device);
+                psx_sdl_audio_lock(sdl_audio_device);
                 rab_push(&s_drc, sdl_audio_buf, tail);
-                SDL_UnlockAudioDevice(sdl_audio_device);
+                psx_sdl_audio_unlock(sdl_audio_device);
             }
             muted = 1;
         }
@@ -3102,7 +3103,12 @@ static void netplay_barrier_admit(int override) {
                     netplay_soft_exit("sdl_window_close");
                     if (psx_return_to_lobby_requested()) return;
                 }
-                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
+                if (ev.type == SDL_KEYDOWN &&
+#if defined(PSX_SDL3)
+                    ev.key.key == SDLK_ESCAPE) {
+#else
+                    ev.key.keysym.sym == SDLK_ESCAPE) {
+#endif
                     netplay_soft_exit("netplay_barrier_escape");
                     if (psx_return_to_lobby_requested()) return;
                 }
@@ -3458,22 +3464,33 @@ static void sdl_vblank_present(void) {
             } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
                 refresh_player_devices();
             } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+#if defined(PSX_SDL3)
+                if (ev.gdevice.which == g_players[0].instance ||
+                    ev.gdevice.which == g_players[1].instance) {
+#else
                 if (ev.cdevice.which == g_players[0].instance ||
                     ev.cdevice.which == g_players[1].instance) {
+#endif
                     close_controller();
                     refresh_player_devices();
                 }
             } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+#else
                 const Uint16 mod = ev.key.keysym.mod;
-                if (ev.key.keysym.sym == SDLK_ESCAPE && psx_netplay_active()) {
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (key == SDLK_ESCAPE && psx_netplay_active()) {
                     netplay_soft_exit("netplay_escape");
                     return;
                 }
                 /* Save states: Shift+F1-F12 = save slot 0-11, F1-F12 = load.
                  * (F11 is a save slot per the user's spec, so fullscreen is
                  * Alt+Enter / Cmd+Ctrl+F only — no F11.) */
-                if (ev.key.keysym.sym >= SDLK_F1 && ev.key.keysym.sym <= SDLK_F12) {
-                    int slot = (int)(ev.key.keysym.sym - SDLK_F1);   /* 0..11 */
+                if (key >= SDLK_F1 && key <= SDLK_F12) {
+                    int slot = (int)(key - SDLK_F1);   /* 0..11 */
                     if (psx_netplay_active()) {
                         /* Match host only — guest F-keys must not initiate. */
                         if (!psx_netplay_is_host()) {
@@ -3489,7 +3506,7 @@ static void sdl_vblank_present(void) {
                         savestate_request_load(slot);
                     }
                 }
-                else if (ev.key.keysym.sym == SDLK_c && (mod & KMOD_CTRL)) {
+                else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
                 }
@@ -3501,8 +3518,8 @@ static void sdl_vblank_present(void) {
                  * set in both SDL_WINDOW_FULLSCREEN and
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
-                else if ((ev.key.keysym.sym == SDLK_RETURN && (mod & KMOD_ALT)) ||
-                         (ev.key.keysym.sym == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
+                else if ((key == SDLK_RETURN && (mod & KMOD_ALT)) ||
+                         (key == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
@@ -5742,7 +5759,7 @@ int main(int argc, char** argv) {
             seed.has_deadzone = true;
             seed.window_width = g_video_win_w; seed.has_window_width = true;
 
-            /* recomp-ui creates + owns its SDL2/GL window internally, so there
+            /* recomp-ui creates + owns its SDL/GL window internally, so there
              * is no launcher window/context to manage here. */
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
             std::string rui_initial_disc = resolved_disc.string();
@@ -6448,18 +6465,17 @@ session_reboot:
 #ifndef PSX_SDL_NO_AUDIO
     audio_trace_init();
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
-        SDL_AudioSpec want;
-        SDL_AudioSpec have;
-        SDL_zero(want);
+        PsxSdlAudioSpec want = {};
+        PsxSdlAudioSpec have = {};
         want.freq = 44100;
         want.format = AUDIO_S16SYS;
         want.channels = 2;
         want.samples = 1024;
         const bool legacy = audio_legacy_mode();
+        want.allow_frequency_change = legacy ? 0 : 1;
         if (!legacy)
             want.callback = sdl_drc_callback;  /* pull model: bridge resamples + DRC */
-        sdl_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have,
-                                               legacy ? 0 : SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+        sdl_audio_device = psx_sdl_audio_open(&want, &have);
         if (sdl_audio_device) {
             if (!legacy) {
                 rab_config cfg; rab_config_defaults(&cfg);
@@ -6470,7 +6486,7 @@ session_reboot:
             }
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
-            SDL_PauseAudioDevice(sdl_audio_device, 0);
+            (void)psx_sdl_audio_resume(sdl_audio_device);
         }
     }
 #endif
@@ -6520,21 +6536,21 @@ session_reboot:
             if (g_mod_native_vblank_rate) {
                 if (g_mod_native_vblank_fps) {
                     std::printf("psxrecomp: native VBlank mod owns pacing at "
-                                "%u FPS; ignoring %d Hz panel sync\n",
+                                "%u FPS; ignoring %.2f Hz panel sync\n",
                                 (unsigned)g_mod_native_vblank_fps,
-                                dm.refresh_rate);
+                                host_hz);
                 } else {
                     std::printf("psxrecomp: native VBlank mod owns uncapped "
-                                "pacing; ignoring %d Hz panel sync\n",
-                                dm.refresh_rate);
+                                "pacing; ignoring %.2f Hz panel sync\n",
+                                host_hz);
                 }
             } else if (host_hz >= 58.8 && host_hz <= 61.2) {
                 g_frame_period_ms = 1000.0 / host_hz;
-                std::printf("psxrecomp: sync-to-host-refresh: pacing to %d Hz panel "
-                            "(%.4f ms/frame)\n", dm.refresh_rate, g_frame_period_ms);
+                std::printf("psxrecomp: sync-to-host-refresh: pacing to %.2f Hz panel "
+                            "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
             } else {
-                std::printf("psxrecomp: host panel %d Hz not ~60 Hz; keeping PSX "
-                            "59.94 Hz pacing\n", dm.refresh_rate);
+                std::printf("psxrecomp: host panel %.2f Hz not ~60 Hz; keeping PSX "
+                            "59.94 Hz pacing\n", host_hz);
             }
         }
     }

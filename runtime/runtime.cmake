@@ -1,8 +1,8 @@
 ﻿# Shared psxrecomp runtime CMake helpers.
 #
 # Include this from either the framework runtime build or a sibling game
-# project. Call psxrecomp_add_runtime_target() after SDL2 detection has
-# populated SDL2_INCLUDE_DIRS and SDL2_LIBRARIES.
+# project. SDL3 is the default; set -DPSX_SDL_BACKEND=SDL2 for the legacy
+# backend.
 
 if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
@@ -51,48 +51,115 @@ else()
     option(PSX_DEBUG_TOOLS "Build with TCP debug server + heartbeat + per-block recording" ON)
 endif()
 
-if(NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES)
-    if(MSVC)
-        file(GLOB SDL2_MSVC_DIR "${PSXRECOMP_ROOT}/../sdl2-msvc/SDL2-*")
-        if(SDL2_MSVC_DIR)
-            set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
-            set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
-            message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
-        else()
-            message(FATAL_ERROR "SDL2 MSVC dev package not found")
-        endif()
-    else()
-        get_filename_component(_psxrecomp_compiler_dir "${CMAKE_C_COMPILER}" DIRECTORY)
-        find_program(_psxrecomp_pkg_config pkg-config
-            HINTS "${_psxrecomp_compiler_dir}"
-            NO_DEFAULT_PATH
-        )
-        if(_psxrecomp_pkg_config)
-            set(PKG_CONFIG_EXECUTABLE "${_psxrecomp_pkg_config}" CACHE FILEPATH "pkg-config executable" FORCE)
-        endif()
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(SDL2 REQUIRED sdl2)
-    endif()
-endif()
-
 # PSX_STATIC_RUNTIME: produce a 100% self-contained MinGW exe.
 #
 # A default MinGW build dynamically imports three NON-system DLLs —
-# SDL2.dll, libgcc_s_seh-1.dll, libstdc++-6.dll — which must be shipped
+# SDL.dll, libgcc_s_seh-1.dll, libstdc++-6.dll — which must be shipped
 # next to the exe. On a user's machine that side-by-side scheme breaks
 # when a different-architecture copy of one of those DLLs is found earlier
 # on the DLL search path (System32, another app on PATH), producing the
 # 0xc000007b STATUS_INVALID_IMAGE_FORMAT crash on launch.
 #
-# Linking those runtimes (and SDL2) statically removes every non-system
+# Linking those runtimes (and SDL) statically removes every non-system
 # import, so the exe runs from any folder with zero bundled DLLs and the
 # 0xc000007b failure mode becomes structurally impossible. Default ON for
 # MinGW Release/MinSizeRel (the configs used to cut releases); override
 # with -DPSX_STATIC_RUNTIME=OFF to force dynamic linking.
 if(MINGW AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
-    option(PSX_STATIC_RUNTIME "Statically link SDL2 + libgcc/libstdc++ for a self-contained exe" ON)
+    option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" ON)
 else()
-    option(PSX_STATIC_RUNTIME "Statically link SDL2 + libgcc/libstdc++ for a self-contained exe" OFF)
+    option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" OFF)
+endif()
+
+# SDL backend selection. SDL3 is fetched from an integrity-pinned stable
+# release when no system package is available, so a default build does not
+# silently fall back to SDL2. SDL2 remains an explicit, fully supported A/B
+# backend.
+set(PSX_SDL_BACKEND "SDL3" CACHE STRING "SDL backend (SDL3 or SDL2)")
+set_property(CACHE PSX_SDL_BACKEND PROPERTY STRINGS SDL3 SDL2)
+string(TOUPPER "${PSX_SDL_BACKEND}" _psx_sdl_backend)
+if(NOT _psx_sdl_backend STREQUAL "SDL3" AND
+   NOT _psx_sdl_backend STREQUAL "SDL2")
+    message(FATAL_ERROR
+        "PSX_SDL_BACKEND must be SDL3 or SDL2 (got '${PSX_SDL_BACKEND}')")
+endif()
+
+set(PSX_SDL_INCLUDE_DIRS "")
+set(PSX_SDL_LIBRARY_DIRS "")
+set(PSX_SDL_LIBRARIES "")
+set(PSX_SDL_STATIC_LDFLAGS "")
+set(PSX_SDL3 OFF)
+
+if(_psx_sdl_backend STREQUAL "SDL3")
+    set(PSX_SDL3 ON)
+    option(PSX_SDL3_FETCH
+        "Fetch the pinned SDL3 release when no system SDL3 package is found"
+        ON)
+    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3)
+    if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
+        include(FetchContent)
+        # The fetched dependency is private to this build, so link it directly
+        # instead of producing an SDL3 DLL that would need platform-specific
+        # staging beside every generated game executable.
+        set(SDL_SHARED OFF CACHE BOOL "Build SDL3 shared library" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "Build SDL3 static library" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL3 test library" FORCE)
+        set(SDL_TESTS OFF CACHE BOOL "Build SDL3 tests" FORCE)
+        set(SDL_EXAMPLES OFF CACHE BOOL "Build SDL3 examples" FORCE)
+        set(_psx_sdl3_timestamp_args "")
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+            list(APPEND _psx_sdl3_timestamp_args
+                DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        endif()
+        FetchContent_Declare(SDL3
+            URL
+                "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
+            URL_HASH
+                "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
+            ${_psx_sdl3_timestamp_args})
+        FetchContent_MakeAvailable(SDL3)
+    endif()
+    if(NOT TARGET SDL3::SDL3)
+        message(FATAL_ERROR
+            "SDL3 3.4+ was not found. Install SDL3, provide SDL3_DIR, or "
+            "configure with -DPSX_SDL3_FETCH=ON.")
+    endif()
+    if(PSX_STATIC_RUNTIME AND TARGET SDL3::SDL3-static)
+        set(PSX_SDL_LIBRARIES SDL3::SDL3-static)
+    else()
+        set(PSX_SDL_LIBRARIES SDL3::SDL3)
+    endif()
+    message(STATUS "psxrecomp: SDL backend = SDL3")
+else()
+    if(NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES)
+        if(MSVC)
+            file(GLOB SDL2_MSVC_DIR "${PSXRECOMP_ROOT}/../sdl2-msvc/SDL2-*")
+            if(SDL2_MSVC_DIR)
+                set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
+                set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
+                message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
+            else()
+                message(FATAL_ERROR "SDL2 MSVC dev package not found")
+            endif()
+        else()
+            get_filename_component(
+                _psxrecomp_compiler_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+            find_program(_psxrecomp_pkg_config pkg-config
+                HINTS "${_psxrecomp_compiler_dir}"
+                NO_DEFAULT_PATH)
+            if(_psxrecomp_pkg_config)
+                set(PKG_CONFIG_EXECUTABLE "${_psxrecomp_pkg_config}"
+                    CACHE FILEPATH "pkg-config executable" FORCE)
+            endif()
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(SDL2 REQUIRED sdl2)
+        endif()
+    endif()
+    set(PSX_SDL_INCLUDE_DIRS "${SDL2_INCLUDE_DIRS}")
+    set(PSX_SDL_LIBRARY_DIRS "${SDL2_LIBRARY_DIRS}")
+    set(PSX_SDL_LIBRARIES "${SDL2_LIBRARIES}")
+    set(PSX_SDL_STATIC_LDFLAGS "${SDL2_STATIC_LDFLAGS}")
+    message(STATUS "psxrecomp: SDL backend = SDL2 (explicit fallback)")
 endif()
 
 # PSX_RECOMP_UI: wire the shared Dear ImGui launcher from the *game* repo's
@@ -111,6 +178,7 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
@@ -624,22 +692,24 @@ function(psxrecomp_add_runtime_target target)
 
     target_include_directories(${target} PRIVATE
         ${PSXRECOMP_RUNTIME_INCLUDE_DIRS}
-        ${SDL2_INCLUDE_DIRS}
+        ${PSX_SDL_INCLUDE_DIRS}
     )
-    # pkg-config reports SDL2_LIBRARIES as a bare name (e.g. "SDL2" -> -lSDL2);
+    # pkg-config reports fallback SDL2_LIBRARIES as a bare name
+    # (e.g. "SDL2" -> -lSDL2);
     # add its library dirs so the linker finds it outside default paths
     # (e.g. Homebrew's /opt/homebrew/lib on macOS). Empty/harmless on MSVC.
-    if(SDL2_LIBRARY_DIRS)
-        target_link_directories(${target} PRIVATE ${SDL2_LIBRARY_DIRS})
+    if(PSX_SDL_LIBRARY_DIRS)
+        target_link_directories(${target} PRIVATE ${PSX_SDL_LIBRARY_DIRS})
     endif()
-    # For a self-contained MinGW build, link SDL2 statically via pkg-config's
+    # For a self-contained MinGW SDL2 fallback build, link SDL2 statically via
+    # pkg-config's
     # --static link line (libSDL2.a + the full Windows system-lib chain SDL2
     # needs: winmm, imm32, ole32, oleaut32, version, setupapi, dinput8, ...).
     # Otherwise link the SDL2 import lib (needs SDL2.dll at runtime).
-    if(PSX_STATIC_RUNTIME AND SDL2_STATIC_LDFLAGS)
-        target_link_libraries(${target} PRIVATE ${SDL2_STATIC_LDFLAGS})
+    if(PSX_STATIC_RUNTIME AND PSX_SDL_STATIC_LDFLAGS)
+        target_link_libraries(${target} PRIVATE ${PSX_SDL_STATIC_LDFLAGS})
     else()
-        target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
+        target_link_libraries(${target} PRIVATE ${PSX_SDL_LIBRARIES})
     endif()
 
     # Build identity: stamp the psxrecomp commit into the binary so a crash report
@@ -674,6 +744,7 @@ function(psxrecomp_add_runtime_target target)
         PSX_BUILD_REV="${PSX_GIT_REV}"
         PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         FMT_HEADER_ONLY=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
 
@@ -823,6 +894,7 @@ function(psxrecomp_add_runtime_target target)
                 "framework opting in: delete CMakeCache.txt (or just that "
                 "entry) to pick up the ON default.")
         endif()
+        set(RECOMP_UI_SDL3 ${PSX_SDL3})
         include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
 
         set(_psx_recomp_ui_args)
@@ -887,7 +959,32 @@ function(psxrecomp_add_runtime_target target)
         # Compile every shader under runtime/shaders/ to SPIR-V (glslc) and embed
         # them into one generated header (vk_shaders_spv.h) of uint32_t arrays, so
         # gpu_vk_renderer.c creates shader modules with no runtime file deps.
-        find_program(PSX_PYTHON NAMES python python3)
+        # Resolve the native interpreter behind the Windows Python launcher.
+        # Invoking py.exe with a .py file can honor that file's /usr/bin/env
+        # shebang and accidentally select an unrelated MSYS Python, which cannot
+        # open the native absolute paths emitted by Windows CMake/Ninja.
+        if(WIN32 AND NOT PSX_PYTHON)
+            find_program(_psx_python_launcher NAMES py)
+            if(_psx_python_launcher)
+                execute_process(
+                    COMMAND "${_psx_python_launcher}" -3 -c
+                            "import sys; print(sys.executable)"
+                    OUTPUT_VARIABLE _psx_native_python
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+                if(EXISTS "${_psx_native_python}")
+                    set(PSX_PYTHON "${_psx_native_python}" CACHE FILEPATH
+                        "Python 3 interpreter used by runtime build tools")
+                endif()
+            endif()
+        endif()
+        if(NOT PSX_PYTHON)
+            find_program(PSX_PYTHON NAMES python python3)
+        endif()
+        if(NOT PSX_PYTHON)
+            message(FATAL_ERROR
+                "Vulkan shader embedding requires Python 3 (py/python/python3)")
+        endif()
         set(_vk_shader_dir "${PSXRECOMP_ROOT}/runtime/shaders")
         file(GLOB _vk_shaders
             "${_vk_shader_dir}/*.vert" "${_vk_shader_dir}/*.frag"
@@ -925,7 +1022,7 @@ function(psxrecomp_add_runtime_target target)
         if(PSX_STATIC_RUNTIME)
             # Fold the GCC / C++ / winpthread runtimes into the exe so it
             # imports only Windows system DLLs (no libgcc_s_seh-1.dll /
-            # libstdc++-6.dll dependency). Pairs with the static SDL2 link
+            # libstdc++-6.dll dependency). Pairs with the static SDL link
             # above to make the exe fully self-contained.
             target_link_options(${target} PRIVATE -static -static-libgcc -static-libstdc++)
         endif()

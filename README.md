@@ -242,7 +242,8 @@ build this repository to generate a project.
 
 ### Build the generated project
 
-Install CMake, Ninja, a C/C++ compiler, and SDL2 development files. Then run:
+Install CMake, Ninja, and a C/C++ compiler. The build fetches its integrity-
+pinned SDL3 release automatically. Then run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Projects\MyGameRecomp\build.ps1"
@@ -423,11 +424,16 @@ prerequisites in [`docs/BUILDING.md`](docs/BUILDING.md)):
 
 - A C/C++ toolchain: MSVC or MinGW/MSYS2 (Windows), Apple Clang (macOS),
   Clang/GCC (Linux). CMake 3.20+; on macOS/Linux also `ninja` and `pkg-config`.
-- SDL2 (system / bundled).
+- SDL3 3.4+ (a system package when available, otherwise fetched automatically).
+  SDL2 is available only as an explicit build fallback.
 - A PS1 BIOS is **optional** — builds ship OpenBIOS. Supply a legally obtained
   `SCPH1001.BIN` dump only if you want to run on the retail BIOS instead
   (see [Do I need a PlayStation BIOS?](#do-i-need-a-playstation-bios)).
 - For game projects, a legally obtained game disc/EXE dump. Not included.
+
+Every runtime and game configure uses SDL3 unless you explicitly append
+`-DPSX_SDL_BACKEND=SDL2` to its CMake command. CMake prints the selected backend
+during configuration; it never silently falls back from SDL3 to SDL2.
 
 Build the framework (recompiler tool + BIOS-only runtime):
 

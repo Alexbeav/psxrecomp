@@ -79,7 +79,7 @@
    static int sock_error(void) { return errno; }
 #endif
 
-#include <SDL.h>
+#include "psx_sdl.h"
 
 /* ---- Externs from runtime ---- */
 extern uint32_t i_stat;
@@ -109,7 +109,6 @@ static int  s_recv_len = 0;
  * request slot suffices. A lock-free `ping` fast-path on the I/O thread answers
  * even while the emu thread is buried (freeze liveness). See debug_server_poll /
  * io_thread_main. */
-#include <SDL_thread.h>
 enum { IO_IDLE = 0, IO_REQ = 1, IO_RESP = 2 };
 static SDL_Thread *s_io_thread   = NULL;
 static SDL_mutex  *s_io_mutex    = NULL;

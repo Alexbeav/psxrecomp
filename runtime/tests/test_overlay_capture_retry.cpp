@@ -2,7 +2,7 @@
 #include "dirty_ram_interp.h"
 #include "overlay_capture.h"
 
-#include <SDL.h>
+#include "psx_sdl.h"
 
 #include <cstddef>
 #include <cstdio>

@@ -29,7 +29,6 @@ need_cmd() {
 printf '%s\n' '== Checking host tools =='
 need_cmd cmake
 need_cmd python3
-need_cmd pkg-config
 
 if command -v ninja >/dev/null 2>&1; then
     printf '%s\n' '  [ok]      ninja'
@@ -51,26 +50,19 @@ else
     missing="$missing cxx-compiler"
 fi
 
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2; then
-    printf '  [ok]      SDL2 %s\n' "$(pkg-config --modversion sdl2)"
-else
-    printf '%s\n' '  [missing] SDL2 development package'
-    missing="$missing sdl2"
-fi
-
 if [ -n "$missing" ]; then
     cat <<EOF
 
 Missing prerequisites:$missing
 
 Debian/Ubuntu:
-  sudo apt install build-essential cmake ninja-build pkg-config libsdl2-dev python3
+  sudo apt install build-essential cmake ninja-build python3
 
 Fedora:
-  sudo dnf install gcc gcc-c++ cmake ninja-build pkgconf-pkg-config SDL2-devel python3
+  sudo dnf install gcc gcc-c++ cmake ninja-build python3
 
 macOS/Homebrew:
-  brew install cmake ninja pkg-config sdl2 python3
+  brew install cmake ninja python3
 EOF
     exit 1
 fi
