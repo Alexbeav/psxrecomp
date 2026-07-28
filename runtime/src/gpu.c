@@ -951,58 +951,22 @@ static int ws_bg2d_left_cols(void) {
     if (off <= 0) return 0;
     return (off + 15) / 16;             /* ceil to whole tile columns */
 }
-/* HOST-SIDE reveal mode (elective, default ON): the guest-side widen below overruns
- * the engine's 1024-slot BG packet buffer / 999-tile cap in dense stages (void/stale
- * columns). When host-side mode is active we keep the GUEST renderer at its NATIVE 21
- * columns (these three helpers become IDENTITY → guest buffer/OT/cap byte-identical)
- * and draw the reveal margins ourselves into the wide surface (gpu_ws_mmx6_emit_reveal).
- * The stream hooks below stay active either way (they widen the tile RING, which the
- * host-side decoder reads). Toggle via gpu_ws_mmx6_set_hostside(); 0 = old guest-widen. */
-/* DEAD IN EVERY SHIPPING BUILD -- scheduled for removal, deliberately deferred
- * (surveyed 2026-07-27).
- *
- * Host-side reveal was the wrong approach (garbled tpage + stale early ring
- * read); the buffer-relocation route kept the engine's correct guest-widen
- * render instead. What the original "kept inert pending removal" note did not
- * say is HOW inert:
- *   - nothing sets g_mmx6_hostside except the mmx6_reveal debug command
- *     (debug_server.c), and PSX_DEBUG_TOOLS defaults OFF for Release, so in a
- *     shipped build this is permanently 0 and unreachable;
- *   - zero generated sources in any game repo reference any host-side symbol.
- *
- * So mmx6_hostside_active() below is a compile-time-ish constant false, and
- * every branch it guards -- including the ternaries in the supposedly generic
- * psx_ws_bg2d_cols/startcol/startx -- always takes the else path.
- *
- * Removing it is safe and worthwhile: it is the last thing coupling the
- * generic psx_ws_bg2d_* API to MMX6, so deleting it collapses those three
- * functions to their real bodies. Left in place only because that touches the
- * renderer and wants its own session with MMX6 revalidation, not because
- * anything depends on it. Also delete gpu_ws_mmx6_emit_reveal,
- * gpu_ws_mmx6_reveal_is_active, g_mmx6_clut and the mmx6_reveal handler when
- * it goes. */
-static int g_mmx6_hostside = 0;
-void gpu_ws_mmx6_set_hostside(int on) { g_mmx6_hostside = on ? 1 : 0; }
-static int mmx6_hostside_active(void) {
-    return g_mmx6_hostside && ws_native_wide_active() && ws_disp_w() <= 384
-        && ws_nw_offset() > 0;
-}
-/* Column count: native (21) under host-side mode; else base + both-side reveal. */
+/* Column count: base + both-side reveal. */
 static void mmx6_bg_refill_tick(void);   /* defined below (ring-freshness fix) */
 int psx_ws_bg2d_cols(int base) {
     g_bg2d_native_cols = base;
     mmx6_bg_refill_tick();
-    return mmx6_hostside_active() ? base : base + 2 * ws_bg2d_left_cols();
+    return base + 2 * ws_bg2d_left_cols();
 }
 /* Start tile column: refill before the first column is consumed, then begin LEFT
  * earlier in the ring. The count hook retains the same tick for layouts that load
  * their loop bound before calculating the starting column. */
 int psx_ws_bg2d_startcol(int col, unsigned mask) {
     mmx6_bg_refill_tick();
-    return mmx6_hostside_active() ? col : ((col - ws_bg2d_left_cols()) & (int)mask);
+    return (col - ws_bg2d_left_cols()) & (int)mask;
 }
-/* Start screen-x: native under host-side mode; else LEFT*16 further left. */
-int psx_ws_bg2d_startx(int x)        { return mmx6_hostside_active() ? x : (x - ws_bg2d_left_cols() * 16); }
+/* Start screen-x: LEFT*16 further left. */
+int psx_ws_bg2d_startx(int x)        { return x - ws_bg2d_left_cols() * 16; }
 
 /* Tile-RING STREAMER widen (same [widescreen.bg2d], FUN_800273e4). The renderer
  * above now draws LEFT extra columns each side, but the engine's 64-column tile
@@ -1046,207 +1010,14 @@ void psx_ws_mmx6_bg_stage_init(void) {
     ws_clear_all_reveal_margins();
 }
 
-/* ===== MMX6 BG packet-buffer RELOCATION ([widescreen.bg2d] bufbase_site/cap_site) ===
- * The widened BG render (29 cols) overruns the engine's BG packet double-buffer (driver
- * base 0x800B91C0, stride 0x4000 = 1024 tile slots/buffer) and its per-frame 1000-tile cap
- * (FUN_800270d0) in dense stages -> the renderer returns early -> void/garbled columns.
- * Fix: when the widen is active, relocate the double-buffer into a larger, proven-free RAM
- * region (the 828KB heap->stack gap [0x800EA000,0x801B9000), measured 2026-06-21) and raise
- * the cap to match. The packet TEMPLATE (opcode 0x7D at word1) is uniform, so we seed the
- * relocated slots once. The OT links point at the relocated packets and the GPU DMA reads
- * them from guest RAM exactly as before. IDENTITY (no relocation, cap 1000) at 4:3 / 512 /
- * when the widen is off -> 4:3 and every other game byte-identical. */
-#define MMX6_RELOC_BASE   0x80140000u   /* mid the proven-free heap->stack gap */
-#define MMX6_RELOC_STRIDE 0x8000u       /* 2048 tile slots/buffer (was 0x4000=1024) */
-#define MMX6_RELOC_CAP    1800          /* per-frame BG tile cap (was 1000; <= 2048) */
-extern void psx_write_word(uint32_t addr, uint32_t val);
-
-/* PARKED FEATURE, LOAD-BEARING SYMBOL -- do not "delete the dead code" here
- * without reading this (surveyed 2026-07-27).
- *
- * The feature is off and does nothing: with g_mmx6_reloc == 0 both
- * psx_ws_mmx6_bg_bufbase() and psx_ws_mmx6_bg_undercap() return their argument
- * unchanged. Only the mmx6_reveal debug command can flip it, and the debug
- * server is compiled out of Release.
- *
- * The FUNCTIONS, however, are called by real generated code and cannot simply
- * be unlinked. MegaManX6Recomp/game.toml sets [widescreen.bg2d] bufbase_site
- * and cap_site, config_loader feeds them to code_generator.cpp, and the
- * emitter writes calls at those exact instruction addresses:
- *   psx_ws_mmx6_bg_bufbase  -> called by MegaManX6Recomp/generated
- *   psx_ws_mmx6_bg_undercap -> called by SEVEN repos' generated code
- *                              (Ape, CrashBash, MMX4, MMX5, Tsumu,
- *                               Vigilante8, THPS2 -- see gpu.h note)
- * Removing the symbols therefore means changing the emitter, and
- * code_generator.cpp is in codegen_hash_sources.cmake, so that rolls the
- * overlay cache tag and forces regen + reshard of every title.
- *
- * The supportable cleanup, when someone takes it on, is to gut the BODIES to
- * plain identity and keep the symbols -- not to delete the functions.
- *
- * Why it is parked: relocation moves the BG packets to a larger free buffer and the
- * prims DO render from there (census-confirmed), but the engine's OT chain / per-slot
- * DR_TPAGE primitives are keyed to the original buffer layout, so relocated BG draws
- * BLACK (wrong/absent texpage). Needs the OT-chain + DR_TPAGE relocation REd before it
- * can ship. Toggle via mmx6_reveal {reloc:1} for continued debugging. When 0 the bufbase/
- * cap hooks are identity -> the committed guest-widen path (correct + fresh, dense-stage
- * overflow) is restored byte-for-byte. */
-static int g_mmx6_reloc = 0;
-void gpu_ws_mmx6_set_reloc(int on) { g_mmx6_reloc = on ? 1 : 0; }
-int  gpu_ws_mmx6_reloc_get(void)   { return g_mmx6_reloc; }
-static int mmx6_bg_reloc_active(void) {
-    return g_mmx6_reloc && !g_mmx6_hostside && ws_bg2d_left_cols() > 0;
-}
-
-/* Hook at the driver's buffer-address addu (0x80026DC4): remap base 0x800B91C0 + bufidx*0x4000
- * to the relocated buffer (larger stride). Seeds the relocated slots' uniform SPRT template
- * (word1 = 0x7D000000) once per buffer. */
+/* Retired packet-buffer relocation hooks. These symbols remain part of the
+ * generated-code ABI; their bodies preserve the committed guest-widen path. */
 int psx_ws_mmx6_bg_bufbase(int addr) {
-    if (!mmx6_bg_reloc_active()) return addr;
-    uint32_t a = (uint32_t)addr;
-    uint32_t bufidx = (a - 0x800B91C0u) >> 14;        /* 0 or 1 */
-    if (bufidx > 1u) return addr;                     /* unexpected -> leave untouched */
-    uint32_t newbase = MMX6_RELOC_BASE + bufidx * MMX6_RELOC_STRIDE;
-    static int seeded[2] = { 0, 0 };
-    if (!seeded[bufidx]) {
-        /* Seed BOTH template fields the renderer does NOT fully rewrite:
-         *   word0 = num_words(0x03, the libgpu OT header read by the GPU DMA) | next-link
-         *           (low 24; the renderer rebuilds active links each frame, but the head
-         *           packet's tail-link falls back to this default — terminate per buffer);
-         *   word1 = SPRT16 opcode 0x7D (the renderer only RMWs its semi bit).
-         * word2(xy)/word3(uv/clut) are written per draw, so they need no template. */
-        uint32_t nslots = MMX6_RELOC_STRIDE / 0x10u;
-        for (uint32_t s = 0; s < nslots; s++) {
-            uint32_t next = (s + 1u < nslots)
-                          ? ((newbase + (s + 1u) * 0x10u) & 0xFFFFFFu)
-                          : 0xFFFFFFu;                 /* terminate the default chain */
-            psx_write_word(newbase + s * 0x10u + 0u, 0x03000000u | next);
-            psx_write_word(newbase + s * 0x10u + 4u, 0x7D000000u);
-        }
-        seeded[bufidx] = 1;
-    }
-    return (int)newbase;
+    return addr;
 }
 
-/* Hook at the BG cap slti (0x80027278): counter < cap. Raises the cap to MMX6_RELOC_CAP when
- * relocated (the bigger buffer can hold them); plain 1000 otherwise (byte-identical). */
 int psx_ws_mmx6_bg_undercap(int counter) {
-    if (mmx6_bg_reloc_active()) return counter < MMX6_RELOC_CAP;
     return psx_ws_bg2d_undercap(counter, 1000);
-}
-
-/* ===== MMX6 host-side reveal columns ====================================== *
- * Keep the guest BG renderer native (21 cols) and draw the ±LEFT reveal-margin
- * columns ourselves, straight into the wide compositor surface, by replaying the
- * engine's own tile decode over guest RAM (FUN_800270d0). Guest packet buffer / OT /
- * 999-cap and the 4:3 image are untouched (no guest mutation; elective; 4:3 identical).
- *
- * The only field NOT in the tile packet is the texture PAGE (selected indirectly via
- * the tile's OT slot). We recover it empirically: as the guest draws its native BG
- * tiles we record clut -> {tpage, draw state} (clut<->tpage is 1:1 in this engine).
- * Reveal tiles resolve tpage by clut. Engine addresses (SLUS-01395):
- *   layer struct  0x800971F8 + layer*0x54  (scrollX +0xa, scrollY +0xe, parent +0x52)
- *   tile ring     0x800A21B8 + layer*0x1000 (u16[(col&0x3f) + (row&0x1f)*0x40])
- *   tile attr     [scratchpad 0x1F80000C] + (tile&0x3fff)*4   (>>0x18 == 0xff -> skip) */
-extern uint32_t psx_read_word(uint32_t addr);
-extern uint16_t psx_read_half(uint32_t addr);
-extern uint8_t  psx_read_byte(uint32_t addr);
-
-#define MMX6_CLUT_N    0x8000
-#define MMX6_BG_BUF_LO 0x000B91C0u   /* BG packet buffer (masked), driver base 0x800B91C0 */
-#define MMX6_BG_BUF_HI 0x000C11C0u   /* + 2 * 0x4000 */
-typedef struct { uint16_t tpage; uint32_t color24; uint8_t semi_mode; uint8_t flags; } Mmx6ClutEnt;
-static Mmx6ClutEnt *g_mmx6_clut = NULL;   /* flags: bit0 valid, bit1 raw_texture */
-
-/* Record clut -> tpage/state for a native BG SPRT16 (called from the GP0 handler). */
-void gpu_ws_mmx6_bg_record(uint32_t src_addr, uint16_t clut, uint16_t tpage,
-                           uint32_t color24, int semi_mode, int raw) {
-    uint32_t a = src_addr & 0x1FFFFFFFu;
-    if (a < MMX6_BG_BUF_LO || a >= MMX6_BG_BUF_HI) return;   /* only background tiles */
-    if (!g_mmx6_clut) {
-        g_mmx6_clut = (Mmx6ClutEnt *)calloc(MMX6_CLUT_N, sizeof(Mmx6ClutEnt));
-        if (!g_mmx6_clut) return;
-    }
-    Mmx6ClutEnt *e = &g_mmx6_clut[clut & (MMX6_CLUT_N - 1)];
-    e->tpage = tpage; e->color24 = color24;
-    e->semi_mode = (uint8_t)(semi_mode & 3);
-    e->flags = (uint8_t)(1u | (raw ? 2u : 0u));
-}
-
-int gpu_ws_mmx6_reveal_is_active(void) { return mmx6_hostside_active(); }
-
-/* Diagnostics (debug command mmx6_reveal). */
-static long g_mmx6_emit_tiles = 0;   /* tiles drawn in the last reveal pass */
-static long g_mmx6_emit_calls = 0;   /* reveal-pass invocations this run */
-int  gpu_ws_mmx6_hostside_get(void) { return g_mmx6_hostside; }
-long gpu_ws_mmx6_emit_tiles(void)   { return g_mmx6_emit_tiles; }
-long gpu_ws_mmx6_emit_calls(void)   { return g_mmx6_emit_calls; }
-int  gpu_ws_mmx6_clut_count(void) {
-    if (!g_mmx6_clut) return 0;
-    int n = 0;
-    for (int i = 0; i < MMX6_CLUT_N; i++) if (g_mmx6_clut[i].flags & 1) n++;
-    return n;
-}
-
-/* Draw the ±LEFT reveal columns for all 3 BG layers into the wide surface for the
- * vertical band being cleared (band_y / base_x from the GP0 fill). Pure guest reads. */
-void gpu_ws_mmx6_emit_reveal(int base_x, int band_y) {
-    if (!mmx6_hostside_active() || !g_mmx6_clut) return;
-    int left = ws_bg2d_left_cols();
-    if (left <= 0) return;
-    uint32_t attr_base = psx_read_word(0x1F80000Cu);
-    if (attr_base == 0) return;
-    g_mmx6_emit_calls++;
-    g_mmx6_emit_tiles = 0;
-    sw_wide_set_target(base_x);                 /* g_wide_cur = this band's surface */
-    for (uint32_t layer = 0; layer < g_bg2d_layer_count; layer++) {
-        uint32_t ls = g_bg2d_layer_base + layer * g_bg2d_layer_struct_stride;
-        int sx = (int16_t)psx_read_half(ls + 0xa);
-        int sy = (int16_t)psx_read_half(ls + 0xe);
-        int8_t parent = (int8_t)psx_read_byte(ls + 0x52);
-        if (parent >= 0) {                      /* linked layer: add parent's scroll */
-            uint32_t lp = g_bg2d_layer_base
-                        + (uint32_t)(uint8_t)parent * g_bg2d_layer_struct_stride;
-            sx += (int16_t)psx_read_half(lp + 0xa);
-            sy += (int16_t)psx_read_half(lp + 0xe);
-        }
-        int sxr = sx; if (sxr < 0) sxr += 0xf;  int start_col = sxr >> 4;
-        int sub_x = -(sx & 0xf);
-        int syr = sy; if (syr < 0) syr += 0xf;  int start_row = syr >> 4;
-        int sub_y = -(sy & 0xf);
-        uint32_t ring = g_bg2d_ring_base + layer * (g_bg2d_ring_cols * 64u);
-        for (int side = 0; side < 2; side++) {
-            int ci0 = (side == 0) ? -left : g_bg2d_native_cols;
-            for (int k = 0; k < left; k++) {
-                int ci  = ci0 + k;                  /* column index relative to native start */
-                int col = start_col + ci;
-                int scr_x = sub_x + ci * 16;
-                for (int row = 0; row < 16; row++) {
-                    int trow = start_row + row;
-                    uint16_t tile = psx_read_half(ring
-                        + (uint32_t)((col & (int)(g_bg2d_ring_cols - 1u)) * 2)
-                        + (uint32_t)((trow & 0x1f) * (int)(g_bg2d_ring_cols * 2u)));
-                    if (tile == 0) continue;
-                    uint32_t attr = psx_read_word(attr_base + (uint32_t)((tile & 0x3fff) * 4));
-                    if ((attr >> 0x18) == 0xff) continue;
-                    uint16_t clut = (uint16_t)(((((attr & 0xf000) >> 6) + 0x7980
-                                     + ((attr >> 0x18) & 0x40) * 0x10)) | ((attr >> 8) & 0xf));
-                    Mmx6ClutEnt *e = &g_mmx6_clut[clut & (MMX6_CLUT_N - 1)];
-                    if (!(e->flags & 1)) continue;  /* tpage not learned yet (warmup) */
-                    int u0 = (int)((attr >> 0xc)  & 0xf0);
-                    int v0 = (int)((attr >> 0x10) & 0xf0);
-                    uint16_t clut_x = (uint16_t)((clut & 0x3f) * 16);
-                    uint16_t clut_y = (uint16_t)((clut >> 6) & 0x1ff);
-                    int semi = (tile & 0x4000) ? 1 : 0;
-                    int wy = band_y + sub_y + row * 16;
-                    sw_wide_emit_tile(band_y, scr_x, wy, u0, v0, clut_x, clut_y,
-                                      e->tpage, e->color24, semi, e->semi_mode,
-                                      (e->flags & 2) ? 1 : 0);
-                    g_mmx6_emit_tiles++;
-                }
-            }
-        }
-    }
 }
 
 /* ===== MMX6 BG tile-ring freshness fix ([widescreen.bg2d]) ================== *
@@ -3778,11 +3549,6 @@ static void gp0_exec_textured_16x16(void) {
     uint16_t clut_x = (clut & 0x3F) * 16;
     uint16_t clut_y = (clut >> 6) & 0x1FF;
 
-    /* MMX6 host-side reveal: learn clut -> tpage/state from native BG tiles. */
-    if (gpu_ws_mmx6_reveal_is_active())
-        gpu_ws_mmx6_bg_record(gp0_cmd_source_addr, clut, current_texpage(),
-                              color24, (int)semi_transparency, raw_texture);
-
     {
         int dw = (ws_w && ws_w != 16) ? ws_w : 16;
         if (draw_area_out_rect(x0, y0, dw, 16)) return;
@@ -3824,10 +3590,6 @@ static void gp0_exec_fill_rect(void) {
      * content region and keeping the revealed margins clean. */
     if (ws_native_wide_active() && ws_is_fb_base(dst_x)) {
         gr_wide_clear((int)dst_x, (int)dst_y, (int)height, color16);
-        /* MMX6 host-side reveal: draw the ±LEFT margin BG columns into the freshly
-         * cleared band (backmost, so objects mirror over them). Uses dst_y as the band
-         * + live scroll; no dependence on this frame's not-yet-applied E3/E4/E5. */
-        gpu_ws_mmx6_emit_reveal((int)dst_x, (int)dst_y);
     }
 }
 
