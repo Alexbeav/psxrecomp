@@ -385,6 +385,7 @@ if(BUILD_TESTING)
                 fmv_quiet_guards
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
+                hybrid_dev_any_input
                 launcher_vulkan_option
                 mod_controller_override
                 overlay_candidate_capacity

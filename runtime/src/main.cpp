@@ -2668,21 +2668,50 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
  * player has reached for analog. hybrid_dpad_active: any D-pad direction (or,
  * for the keyboard, an arrow key) is held — the player wants classic digital.
  * The keyboard has no analog stick, so a keyboard player stays digital. */
-static bool hybrid_stick_active(const PlayerInput& p) {
-    if (p.kind != 2 || !p.handle) return false;
-    const double lx = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX);
-    const double ly = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY);
+static bool controller_stick_active(SDL_GameController* handle) {
+    if (!handle) return false;
+    const double lx =
+        SDL_GameControllerGetAxis(handle, SDL_CONTROLLER_AXIS_LEFTX);
+    const double ly =
+        SDL_GameControllerGetAxis(handle, SDL_CONTROLLER_AXIS_LEFTY);
     return std::sqrt(lx * lx + ly * ly) > (double)controller_deadzone;
 }
-static bool hybrid_dpad_active(const PlayerInput& p, int player, bool kb_always) {
-    if (p.kind == 2 && p.handle) {
-        if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT)  ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_UP)    ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN))
-            return true;
+static bool controller_dpad_active(SDL_GameController* handle) {
+    return handle &&
+        (SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN));
+}
+static bool hybrid_stick_active(const PlayerInput& p, bool dev_any) {
+    if (p.kind == 2 && controller_stick_active(p.handle)) return true;
+    if (dev_any) {
+        const int n = SDL_NumJoysticks();
+        for (int i = 0; i < n; i++) {
+            if (!SDL_IsGameController(i)) continue;
+            const SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+            SDL_GameController* handle =
+                SDL_GameControllerFromInstanceID(inst);
+            if (!handle) handle = SDL_GameControllerOpen(i);
+            if (controller_stick_active(handle)) return true;
+        }
     }
-    if (p.kind == 1 || kb_always) {
+    return false;
+}
+static bool hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any) {
+    if (p.kind == 2 && controller_dpad_active(p.handle)) return true;
+    if (dev_any) {
+        const int n = SDL_NumJoysticks();
+        for (int i = 0; i < n; i++) {
+            if (!SDL_IsGameController(i)) continue;
+            const SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+            SDL_GameController* handle =
+                SDL_GameControllerFromInstanceID(inst);
+            if (!handle) handle = SDL_GameControllerOpen(i);
+            if (controller_dpad_active(handle)) return true;
+        }
+    }
+    if (p.kind == 1 || dev_any) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }
@@ -2833,7 +2862,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
         eff_analog = 1;
     } else { /* HYBRID */
-        if (hybrid_stick_active(p))                       p.hybrid_analog = true;
+        if (hybrid_stick_active(p, dev_here))             p.hybrid_analog = true;
         else if (hybrid_dpad_active(p, player, dev_here)) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
@@ -2903,7 +2932,7 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out) {
     } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
         eff_analog = 1;
     } else { /* HYBRID */
-        if (hybrid_stick_active(p))                       p.hybrid_analog = true;
+        if (hybrid_stick_active(p, dev_here))             p.hybrid_analog = true;
         else if (hybrid_dpad_active(p, player, dev_here)) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
