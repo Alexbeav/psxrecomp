@@ -139,7 +139,7 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-29 tests, under five seconds, no BIOS dump or disc image required. See
+36 tests, under five seconds, no BIOS dump or disc image required. See
 [`docs/TESTING.md`](docs/TESTING.md) for running individual tests, what the
 suite covers, and the three known-failing tests that are deliberately not
 registered.

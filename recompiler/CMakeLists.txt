@@ -311,6 +311,11 @@ if(BUILD_TESTING)
              COMMAND bios_address_model_test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+    # These targets were already built by every test build, but without
+    # add_test() entries ctest could neither run nor fail them.
+    add_test(NAME l2_structural_test COMMAND l2_structural_test)
+    add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(
