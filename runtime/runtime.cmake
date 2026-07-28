@@ -111,6 +111,7 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c

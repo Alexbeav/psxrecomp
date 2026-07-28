@@ -66,6 +66,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "launcher_device.h" /* recomp-ui controller-source round-trip */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
+#include "psx_stick.h"       /* radial SDL-stick -> DualShock response transform */
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
@@ -2103,6 +2104,7 @@ struct PsxButtonMap {
 
 static int controller_device_index = 0;
 static int controller_deadzone = 12000;
+static int controller_anti_deadzone = 0;
 static std::array<PsxButtonMap, 16> controller_map = {{
     { PAD_UP,       "up",       {} },
     { PAD_DOWN,     "down",     {} },
@@ -2608,33 +2610,10 @@ static uint16_t controller_pad_buttons(SDL_GameController* h, bool suppress_stic
     return buttons;
 }
 
-/* Radial deadzone: process a stick's X and Y together so the dead region is a
- * small CIRCLE, not a per-axis square. Travel within controller_deadzone reads
- * centred (0x80/0x80); beyond it the vector MAGNITUDE is rescaled to the full
- * range along the stick's true direction, so diagonals are preserved (a
- * per-axis deadzone snaps diagonals toward the cardinals and feels notchy —
- * bad for directional analog like Ape Escape's net swing). The magnitude is
- * capped at 32767 before rescale so a full-diagonal push (raw mag ~46341) maps
- * to ~0x9E/0x9E per axis — the circular gate a real DualShock stick reports,
- * not 0xFF/0xFF. At dz==0 it reduces to a plain magnitude-preserving map. */
 static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby) {
-    const double dz = controller_deadzone;
-    double x = vx, y = vy;
-    double mag = std::sqrt(x * x + y * y);            /* 0 .. ~46341 */
-    if (mag <= dz || mag <= 0.0) { *obx = 0x80; *oby = 0x80; return; }
-    double capped = mag > 32767.0 ? 32767.0 : mag;
-    double range = 32767.0 - dz;
-    if (range < 1.0) range = 1.0;
-    double newmag = (capped - dz) * 32767.0 / range;  /* 0 .. 32767 */
-    double scale = newmag / mag;                       /* along true direction */
-    int sx = (int)std::lround(x * scale);
-    int sy = (int)std::lround(y * scale);
-    if (sx > 32767) sx = 32767; else if (sx < -32768) sx = -32768;
-    if (sy > 32767) sy = 32767; else if (sy < -32768) sy = -32768;
-    int bx = (sx + 32768) >> 8;
-    int by = (sy + 32768) >> 8;
-    *obx = (uint8_t)(bx < 0 ? 0 : (bx > 255 ? 255 : bx));
-    *oby = (uint8_t)(by < 0 ? 0 : (by > 255 ? 255 : by));
+    psx_stick_to_dualshock(vx, vy,
+                           controller_deadzone, controller_anti_deadzone,
+                           obx, oby);
 }
 
 /* Buttons for a player's selected device (0xFFFF = none pressed). `player` is
@@ -5154,6 +5133,8 @@ int main(int argc, char** argv) {
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
             ctrl_lock_device  = gc.runtime.controller_lock_device;
             if (gc.runtime.has_deadzone) resolved_deadzone = gc.runtime.deadzone;
+            if (gc.runtime.has_anti_deadzone)
+                controller_anti_deadzone = gc.runtime.anti_deadzone;
             { const char *e = std::getenv("PSX_GL_FORCE_CPU_PRESENT");
               if (e && e[0] && e[0] != '0') g_gl_fbo_present = 0; }
             game_entry_pc = gc.entry_pc;

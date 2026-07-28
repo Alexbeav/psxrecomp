@@ -447,6 +447,12 @@ struct RuntimeConfig {
     bool                  has_deadzone = false;
     int                   deadzone     = 0;
 
+    // anti_deadzone: minimum radial analog output after leaving deadzone, in
+    // raw SDL axis units (0..32767). This is a game-owned response setting used
+    // to compensate a title's own internal stick deadzone. Absent => 0.
+    bool                  has_anti_deadzone = false;
+    int                   anti_deadzone     = 0;
+
 };
 
 // One entry from [[recompiler.bios_vectors]].

@@ -608,6 +608,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
         }
+        if (ct.contains("anti_deadzone")) {
+            const auto n = toml::find<int64_t>(ct, "anti_deadzone");
+            if (n < 0 || n > 32767)
+                throw std::runtime_error(fmt::format(
+                    "[controller] anti_deadzone out of range (0..32767): {}", n));
+            rt.anti_deadzone = static_cast<int>(n);
+            rt.has_anti_deadzone = true;
+        }
     }
 
     return rt;
