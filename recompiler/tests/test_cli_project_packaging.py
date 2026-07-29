@@ -19,6 +19,12 @@ def main() -> int:
     package = (ROOT / "tools/build_cli.py").read_text(encoding="utf-8")
     launcher = (ROOT / "recomp-ui/src/recomp_launcher.h").read_text(
         encoding="utf-8")
+    launcher_cmake = (ROOT / "recomp-ui/recomp_ui.cmake").read_text(
+        encoding="utf-8")
+    boot_timing_header = (
+        ROOT / "recomp-ui/src/common/launcher_boot_timing.h")
+    boot_timing_source = (
+        ROOT / "recomp-ui/src/common/launcher_boot_timing.c")
 
     require(cli, 'bios_config = \\"psxrecomp/bios/{}\\"',
             "generated game.toml does not name its BIOS profile")
@@ -59,6 +65,14 @@ def main() -> int:
             "pinned recomp-ui predates the runtime Mods provider API")
     require(launcher, "const RecompLauncherCModProvider* mods;",
             "pinned recomp-ui GameInfo lacks the Mods provider field")
+    if not boot_timing_header.is_file():
+        raise AssertionError(
+            "pinned recomp-ui lacks launcher_boot_timing.h required by main.cpp")
+    if not boot_timing_source.is_file():
+        raise AssertionError(
+            "pinned recomp-ui lacks the launcher boot timing implementation")
+    require(launcher_cmake, "common/launcher_boot_timing.c",
+            "pinned recomp-ui does not compile launcher boot timing")
 
     print("PASS: CLI profiles, stage order, BIOS overrides, and launcher API agree")
     return 0
