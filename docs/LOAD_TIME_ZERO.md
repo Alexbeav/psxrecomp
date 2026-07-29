@@ -375,9 +375,12 @@ rejected on paper.
   `traps.c:540`; store `data_shards.c` (494 LOC, no TODOs); config
   `[data_shards] funcs` `config_loader.cpp:716-723`. `.dss` per shard,
   no manifest (doc/impl drift).
-- bios_hle: B0 events 0x07-0x0D only; boot = one-shot shell-skip at
-  `PSX_SHELL_ENTRY_PHYS` + boot-turbo until game start. A0/C0 observed,
-  fall through.
+- bios_hle: B0 events 0x07-0x0D only; boot = one-shot shell-skip at the
+  image's `shell_entry_phys` + boot-turbo until game start. A0/C0 observed,
+  fall through. The boot-skip and the B0 tier are independent axes
+  (`bios_hle_plan.h`): the skip needs only `shell_entry_phys` and so lands
+  the same load-time win under OpenBIOS as under retail, even though
+  OpenBIOS refuses the B0 tier for want of `deliver_event_ret`.
 - `_wt-tomba-loadshards-fw` worktree dir is EMPTY/unregistered — the
   spike lives only as branch `spike/tomba-load-shards` (fw) +
   `spike/load-shards` (TombaRecomp). Recreate worktrees before E4.

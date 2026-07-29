@@ -64,7 +64,8 @@ the paths to its generated C. The runtime provides:
   (`cdrom.c`, `iso_reader.cpp`), MDEC, SIO0 controllers/memory cards
   (`sio.c`, `memcard.c`), SPU (`spu.c`), GTE (`gte.cpp`), and interrupt delivery
   (`interrupts.c`).
-- **Host services** — window/input/audio via SDL2, a cooperative-thread
+- **Host services** — window/input/audio via SDL3 by default (SDL2 is an
+  explicit compatibility backend), a cooperative-thread
   scheduler on host fibers (`psx_fiber.c`: Win32 Fibers / POSIX `ucontext`), and
   the optional debug TCP server (`debug_server.c`).
 
@@ -75,13 +76,30 @@ kernel, and it is the reference implementation and the correctness oracle. There
 are no per-vector HLE shims replacing it.
 
 On top of that, PSXRecomp carries an optional **HLE tier** (`bios_hle`, on by
-default for player convenience) that can synthesize the post-boot kernel handoff
-state to skip the BIOS boot sequence, and intercept a small set of BIOS services
-— always falling through to the recompiled BIOS for anything it doesn't
-implement. LLE stays fully linked and is what every accuracy check runs against.
-Turn it off with `[runtime] bios_hle = false` or `PSX_BIOS_HLE=0`; with it off the
-build behaves as pure LLE. (Design notes:
+default for player convenience) that skips the BIOS boot sequence and intercepts
+a small set of BIOS services — always falling through to the recompiled BIOS for
+anything it doesn't implement. LLE stays fully linked and is what every accuracy
+check runs against. Turn it off with `[runtime] bios_hle = false` or
+`PSX_BIOS_HLE=0`; with it off the build behaves as pure LLE. (Design notes:
 [`docs/internal/HLE_SCHEDULER_CARVEOUT_PLAN.md`](internal/HLE_SCHEDULER_CARVEOUT_PLAN.md).)
+
+Those are **two independent axes**, and the distinction matters because a build
+links more than one BIOS ([`BIOS_SELECTION.md`](BIOS_SELECTION.md)):
+
+| axis | what it needs from the image | on retail SCPH-1001 | on bundled OpenBIOS |
+|---|---|---|---|
+| boot-skip | `shell_entry_phys` — works under pure LLE | yes | yes |
+| kernel-call HLE | `deliver_event_ret` — the kernel's own DeliverEvent `$ra` | yes | refused, loudly |
+
+So **"skip the BIOS and go straight to the game" means the same thing on every
+BIOS**: the boot-skip is not synthesis, it just returns immediately from the
+shell call, so it needs nothing BIOS-specific beyond knowing where the shell is
+entered. Whether the *kernel-call* tier is additionally available is a separate,
+per-image question, and refusing it must never cancel the boot-skip — deriving
+one from the other is the bug fixed in 2026-07. Both axes are decided in one pure
+place, `psx_bios_hle_plan()`
+([`runtime/include/bios_hle_plan.h`](../runtime/include/bios_hle_plan.h)), which
+is unit-tested over the whole matrix.
 
 ### Static / overlay / interpreter dispatch
 
@@ -123,7 +141,10 @@ Three GPU backends behind one interface:
 - **OpenGL** — GPU-authoritative VRAM/FBO renderer, the default; moves
   rasterization and supersampling onto the GPU. Falls back to software if GL
   init fails. (See [`docs/internal/GL_RENDERER_HANDOFF.md`](internal/GL_RENDERER_HANDOFF.md).)
-- **Vulkan** — experimental, off by default (`PSX_ENABLE_VULKAN=OFF`).
+- **Vulkan** — experimental. The build option `PSX_ENABLE_VULKAN` defaults **ON**
+  (compiled when the SDK tools are present), but it is not the runtime default
+  renderer: selecting it also requires the game to offer Vulkan and the user to
+  request it, otherwise the runtime falls back to OpenGL.
 
 Widescreen (a genuine wider GTE FOV, not a stretch) is opt-in and gen-time; see
 [`WIDESCREEN.md`](../WIDESCREEN.md) and
@@ -146,9 +167,14 @@ backend against the interpreter. See
 
 ## Configuration
 
-Every process has a **BIOS config**; a game adds a **game config** (`game.toml`),
-and the two are merged (game wins on scalar keys; program blocks and generated
-dispatch tables are additive). Full schema:
+A game is configured by its **game config** (`game.toml`). A **BIOS config**
+(`bios/*.toml`) describes a BIOS image's identity and address model.
+
+The two are **not merged.** The BIOS config is consumed only by the recompiler
+at build time (`psxrecomp-bios`, and `psxrecomp-game` for the address model);
+the shipping runtime never loads it — `runtime/src/main.cpp` contains no call to
+`load_bios_config`. `[runtime]` keys therefore take effect only from `game.toml`,
+`settings.toml`, the CLI, and the environment. Full schema:
 [`docs/config_schema.md`](config_schema.md).
 
 ## Where to go next

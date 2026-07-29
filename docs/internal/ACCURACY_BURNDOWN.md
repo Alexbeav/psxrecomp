@@ -159,9 +159,11 @@ bug**, not timing.
     now arms the cycle-paced ack scheduler, BAUD+ACK=1258 cyc, like the card
     path). This was the cause of the load=4 Tomba 2 boot wedge (accurate CPU
     exposed access-paced pad timing). See WEDGE_load4_shell_rootcause.md.
+  - DONE 2026-07-26: Tomba now offers explicit Analog / D-Pad modes; the
+    Tomba-only legacy pad-config fork and its debug/config surface were removed.
+    Every title now uses the modern DualShock config state machine.
   - TODO (axis5 Fix-6 / "1.0e-e2"): fully remove the pad fast-path so pad+card
-    share the unified shifter path; D4/D8 config-mode `0x43`/`0x45` semantics
-    (hybrid-pad fix, retire g_pad_legacy_cfg) still open.
+    share the unified shifter path.
 - [ ] **GPU**: GP0/GP1 command set, rasterization rules (top-left fill, dithering,
   semi-transparency modes, mask bit, texture windows, blending), VRAM-as-texture —
   cross-ref DuckStation gpu_*, Beetle gpu.cpp, GPU test ROMs; validate by VRAM diff.
@@ -224,8 +226,9 @@ overlap the cycle axis or each other (different files), so they parallelize.
   must transmit the LIVE button frame (like `0x42`) + use the trailing byte to toggle
   config; we send all-zeros → active-low → "all buttons pressed" phantom input every
   `0x43` frame. P0: `0x45` status must report the LIVE analog/digital mode, not always
-  analog-ON (→ frame-length misparse after a flip). Fixing both lets the
-  `g_pad_legacy_cfg` Tomba hack be DELETED. P1: analog-mode lock (`0x44`); P2: `0x4D`
+  analog-ON (→ frame-length misparse after a flip). Both were fixed, and the
+  Tomba legacy fork was deleted 2026-07-26 when Tomba moved to explicit
+  Analog / D-Pad modes. P1: analog-mode lock (`0x44`); P2: `0x4D`
   rumble echo + cycle-paced pad ACK. Validate: `sio_trace` diff on `0x43`/`0x45`.
 - **`accuracy/axis5_gpu.md`.** P1: dithering ENTIRELY MISSING in both renderers (decoded
   but never forwarded) — largest systematic banding divergence. P2: SW rasterizer uses
