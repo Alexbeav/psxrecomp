@@ -14,6 +14,8 @@
 #include "../src/annotations.hpp"
 #include "../src/config_loader.h"
 
+namespace PSXRecompV4 { class BiosAddressModel; }
+
 namespace PSXRecomp {
 
 // CPU state structure (registers + memory access)
@@ -93,11 +95,19 @@ struct CodeGenConfig {
     std::set<uint32_t> ws_cull_range_sites;
     std::set<uint32_t> ws_cull_a1_sites;
     std::set<uint32_t> ws_cull_screen_x_sites;
+    // Extra lead for bias/range activation windows only. Render/terrain
+    // helpers continue to use psx_ws_x_margin() without this term.
+    int ws_cull_activation_guard_pixels = 0;
 
     // Explicit signed right-edge widen sites ([widescreen.cull] slti_sites):
     // `slti rt, sx, W` emitted through psx_ws_cull_slti for funnel functions
     // the auto-detector cannot qualify (X-only test, no height compare).
     std::set<uint32_t> ws_cull_slti_sites;
+
+    // `bltz rs, reject` emitted through psx_ws_cull_bltz — the explicit
+    // LEFT-edge counterpart to ws_cull_slti_sites ([widescreen.cull]
+    // bltz_sites), for X-only funnels the auto-detector cannot qualify.
+    std::set<uint32_t> ws_cull_bltz_sites;
 
     // Explicit horizontal low-edge widen sites ([widescreen.cull]
     // negsub_sites): `subu rd, zero, rs` becomes `-rs - x_margin`.
@@ -123,6 +133,18 @@ struct CodeGenConfig {
     // xclip_load_sites). The configured lw routes through the runtime helper
     // (INT32_MAX while revealed, vanilla at 4:3); empty by default.
     std::set<uint32_t> ws_cull_xclip_load_sites;
+
+    // Exact, full-word-guarded comparison sites whose result is forced only
+    // while widescreen reveals extra world. 4:3 evaluates the original compare.
+    std::vector<PSXRecompV4::WidescreenCullKeepSite> ws_cull_keep_sites;
+
+    // Exact `addi[u] rt,zero,imm` 12-bit angular half-extents. The runtime
+    // scales tan(angle) by the current horizontal reveal factor.
+    std::vector<PSXRecompV4::WidescreenAngleSite> ws_cull_angle_sites;
+
+    // Exact model-participation cosine compares that gain a camera-horizontal
+    // aspect envelope while preserving the vanilla vertical cone.
+    PSXRecompV4::WidescreenAspectConeConfig ws_aspect_cone;
 
     // Screen-extent signature immediates ([widescreen.cull] screen_w_imms /
     // screen_h_imms) — per-game display-width-derived bounds. Defaults are the
@@ -194,11 +216,22 @@ struct GeneratedFunction {
     std::string body;             // C code body
     std::string full_code;        // signature + body
     int line_count;               // Number of lines generated
+    // False for fail-closed data/untranslatable stubs whose only operation is
+    // psx_unknown_dispatch. They remain emitted for direct diagnostics, but
+    // must not advertise themselves as executable native game entries.
+    bool dispatchable = true;
 };
 
 class CodeGenerator {
 public:
     explicit CodeGenerator(const PS1Executable& exe, const CodeGenConfig& config = CodeGenConfig());
+
+    // Set the BIOS address model the game codegen folds shell/kernel RAM
+    // aliases through (jump tables inside relocated BIOS code windows).
+    // Resolved from the game's [recompiler] bios_config profile (default:
+    // the SCPH1001 profile) in main_psx.cpp; there is no built-in window.
+    // Must outlive code generation.
+    static void set_bios_address_model(const PSXRecompV4::BiosAddressModel* m);
 
     // Generate C code for a single function.
     // fallthrough_name: if non-empty and the last block has no explicit control

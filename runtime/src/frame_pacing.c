@@ -7,7 +7,7 @@
 /* FRAME_PACING_PURE_ONLY: tests compile only the SDL-free decision
  * function (tests/test_frame_pacing.c includes this file directly). */
 #ifndef FRAME_PACING_PURE_ONLY
-#include <SDL.h>
+#include "psx_sdl.h"
 #endif
 
 uint32_t frame_pacing_sleep_ms(uint64_t now, uint64_t deadline,

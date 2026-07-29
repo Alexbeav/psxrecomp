@@ -71,6 +71,7 @@ set(PSXRECOMP_GAME_SOURCES
     src/control_flow.cpp
     src/function_analysis.cpp
     src/code_generator.cpp
+    src/bios_address_model.cpp
     src/annotations.cpp
     src/config_loader.cpp
     src/recompiler_patch.cpp
@@ -110,7 +111,9 @@ target_link_libraries(psxrecomp-toml PRIVATE fmt)
 # psxrecomp — user-facing media-to-source project generator.
 add_executable(psxrecomp
     src/main_cli.cpp
+    src/cli_boot_path.cpp
     src/ps1_exe_parser.cpp
+    ../runtime/src/cue_sheet.cpp
     ../runtime/src/iso_reader.cpp
 )
 target_include_directories(psxrecomp PRIVATE
@@ -153,23 +156,20 @@ add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 set_source_files_properties(src/main_psx.cpp PROPERTIES OBJECT_DEPENDS ${_baked_hash_hdr})
 target_include_directories(psxrecomp-game PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-add_executable(PSXRecomp ${PSXRECOMP_GAME_SOURCES})
-target_include_directories(PSXRecomp PRIVATE
-    include
-    lib/rabbitizer/include
-    lib/rabbitizer/cplusplus/include
-    lib/fmt/include
-    lib/toml11
-    lib/ELFIO
-)
-target_link_libraries(PSXRecomp PRIVATE fmt rabbitizer)
-
-# Increase stack size for large binaries (1447+ functions)
-if(MINGW)
-    target_link_options(PSXRecomp PRIVATE -Wl,--stack,16777216)
-elseif(MSVC)
-    target_link_options(PSXRecomp PRIVATE /STACK:16777216)
-endif()
+# NOTE (2026-07-27): the legacy `PSXRecomp` target was REMOVED here.
+# It built ${PSXRECOMP_GAME_SOURCES} — byte-for-byte the same source list as
+# `psxrecomp-game` above — and was a leftover from before that target was
+# introduced. Because Windows and macOS filesystems are case-insensitive, its
+# output `PSXRecomp.exe` collided with the user-facing CLI `psxrecomp.exe`
+# (the `psxrecomp` target above): both wrote the SAME file on disk and the
+# last one linked won. In practice the CLI lost, so `psxrecomp.exe` shipped in
+# `psxrecomp-cli-windows-x86_64.zip` (tools/build_cli.py) was actually the game
+# recompiler, with a completely different argument grammar than the README
+# documents. The bug is invisible on Linux, which is why it survived.
+# The `PSXRecomp.exe` users are told to run in README's "Release Package"
+# section is a DIFFERENT artifact — the BIOS-only runtime, whose name comes
+# from OUTPUT_NAME in runtime/runtime.cmake — and is unaffected by this removal.
+# See the collision guard at the bottom of this file.
 
 # psxrecomp-bios — Phase 1a BIOS boot slice recompiler.
 # Strict, fail-loud, ingests bios/SCPH1001.BIN as a flat ROM at 0xBFC00000.
@@ -181,6 +181,7 @@ add_executable(psxrecomp-bios
     src/mips_decoder.cpp
     src/strict_translator.cpp
     src/bios_slice_walker.cpp
+    src/bios_address_model.cpp
     src/function_discovery.cpp
     src/full_function_emitter.cpp
     src/config_loader.cpp
@@ -211,6 +212,24 @@ if(PSXRECOMP_STATIC_CLI AND MINGW)
         target_link_options(${_cli_target} PRIVATE -static -static-libgcc -static-libstdc++)
     endforeach()
 endif()
+
+# BIOS address-model equivalence test — sweeps every 4-byte address through
+# the profile-driven BiosAddressModel and compares against verbatim copies of
+# the pre-refactor hardcoded SCPH1001 helpers; also exercises the from_config
+# invariants. Run from the framework root: recompiler/build/bios_address_model_test
+add_executable(bios_address_model_test
+    tests/bios_address_model_test.cpp
+    src/bios_address_model.cpp
+    src/config_loader.cpp
+    src/ps1_exe_parser.cpp
+)
+target_include_directories(bios_address_model_test PRIVATE
+    include
+    src
+    lib/fmt/include
+    lib/toml11
+)
+target_link_libraries(bios_address_model_test PRIVATE fmt)
 
 # L1 decoder conformance test — compares MipsDecoder against Rabbitizer
 # oracle for every instruction in SCPH1001.BIN code regions.
@@ -245,6 +264,13 @@ target_include_directories(l2_structural_test PRIVATE
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(cli_boot_path_test
+        tests/cli_boot_path_test.cpp
+        src/cli_boot_path.cpp
+    )
+    target_include_directories(cli_boot_path_test PRIVATE src)
+    add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
+
     add_executable(recompiler_patch_test
         tests/recompiler_patch_test.cpp
         src/ps1_exe_parser.cpp
@@ -253,6 +279,7 @@ if(BUILD_TESTING)
         src/function_analysis.cpp
         src/code_generator.cpp
         src/annotations.cpp
+        src/bios_address_model.cpp
         src/config_loader.cpp
         src/recompiler_patch.cpp
     )
@@ -279,13 +306,105 @@ if(BUILD_TESTING)
     add_test(NAME recompiler_patch_cxx17_header_test
              COMMAND recompiler_patch_cxx17_header_test)
 
+    # Needs bios/SCPH1001.toml — run from the framework root.
+    add_test(NAME bios_address_model_test
+             COMMAND bios_address_model_test
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        # These two invoke psxrecomp-game, whose BIOS-profile resolution
+        # probes fixed working-directory-relative paths (bios/<name>.toml,
+        # then psxrecomp/bios/<name>.toml) -- run them from the framework
+        # root so the shipped profiles are found.
         add_test(
             NAME overlay_cross_page_delay_codegen
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_cross_page_delay_codegen.py
-                    --recompiler $<TARGET_FILE:psxrecomp-game>)
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME fmv_cycle_batch_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fmv_cycle_batch_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME overlay_shim_compile_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_shim_compile.py)
+        add_test(
+            NAME dirty_text_continuation_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
+
+        # ---- codegen tests that were written but never registered -----------
+        # These existed in recompiler/tests/ with no add_test() entry, so they
+        # had no way to run and no way to fail. Each was executed manually
+        # before being wired here; all pass. They drive psxrecomp-game, so they
+        # run from the framework root for BIOS-profile resolution, exactly like
+        # the two above.
+        foreach(_t IN ITEMS
+                aot_base_recovery
+                bios_resident_shard
+                msvc_cps_codegen
+                overlay_guard_codegen
+                overlay_store_barrier_codegen
+                reachable_discovery_codegen)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${_t}.py
+                        --recompiler $<TARGET_FILE:psxrecomp-game>
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
+
+        # ---- runtime source-invariant guards --------------------------------
+        # These live in runtime/tests/ but only READ runtime source, so they
+        # need neither a generated BIOS nor a built runtime. Registering them
+        # here (as dirty_text_continuation_guards already was) means they run
+        # from a plain recompiler build, which is the only tree a newcomer can
+        # configure before regenerating a BIOS. Each was run manually first;
+        # all pass.
+        #
+        # Deliberately NOT registered, because they currently FAIL — see
+        # docs/TESTING.md for the detail. Wiring a known-failing test would
+        # recreate the exact problem that took CI off PRs (a red check nobody
+        # trusts), so these need an owner's decision first:
+        #   test_interpreter_perf_guards.py   - psx_devices_mmio_sync's
+        #       recompute-deadline branch never clears g_psx_cycle_fast_limit,
+        #       and the guard also still names the pre-rename
+        #       s_next_service_cycle
+        #   test_runtime_perf_diag_guards.py  - asserts a substring no longer
+        #       present in the runtime source
+        #   test_overlay_pair_dedup_runtime.py - needs its companion harness
+        #       built; not a source-only guard
+        foreach(_t IN ITEMS
+                capture_history
+                default_renderer_guards
+                fmv_quiet_guards
+                fps_telemetry_opt_in
+                frame_interpolation_display_rate
+                hybrid_dev_any_input
+                launcher_vulkan_option
+                mod_controller_override
+                overlay_candidate_capacity
+                overlay_decodable_fallback
+                overlay_init_guard
+                vk_build_default
+                vk_color_self_barrier
+                vk_command_buffer_batching
+                vk_draw_area_batch_boundary
+                vk_mailbox_policy
+                vk_present_timing
+                vk_present_wait_stage
+                vk_staging_cache)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endforeach()
     endif()
 endif()
 
@@ -301,3 +420,9 @@ target_include_directories(reachable_discovery_test PRIVATE
     lib/fmt/include
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
+
+# ---- output-name collision guard (must stay LAST) ---------------------------
+# Fails configure if any two targets here would write the same file on a
+# case-insensitive filesystem. See the module header for the shipped-bug story.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_target_name_collisions.cmake)
+psxrecomp_check_output_name_collisions()

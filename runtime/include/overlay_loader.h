@@ -22,7 +22,8 @@ extern "C" {
 /* Called at game handoff to set the cache root directory and game ID.
  * cache_dir: absolute path to the cache root (e.g. "build-dev/cache")
  * game_id:   product code (e.g. "SCUS-94236") */
-void overlay_loader_init(const char *cache_dir, const char *game_id);
+void overlay_loader_init(const char *cache_dir, const char *game_id,
+                         uint32_t config_hash);
 
 /* Per-function native-disable for small timing-sensitive overlay routines.
  * Addresses may be KUSEG/KSEG0/KSEG1; the loader keys by physical address. */

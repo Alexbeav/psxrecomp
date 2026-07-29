@@ -1,4 +1,6 @@
+#define PSX_OVERLAY_DLL_BUILD 1
 #include "overlay_loader.h"
+#undef PSX_OVERLAY_DLL_BUILD
 
 #include <stdint.h>
 #include <stdio.h>
@@ -82,9 +84,17 @@ uint32_t psx_cyc_load_word(CPUState *cpu, uint32_t addr, uint32_t rt,
                            uint32_t mask) {
     (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
 }
+uint32_t psx_cyc_load_word_slow(CPUState *cpu, uint32_t addr, uint32_t rt,
+                                uint32_t mask) {
+    return psx_cyc_load_word(cpu, addr, rt, mask);
+}
 uint16_t psx_cyc_load_half(CPUState *cpu, uint32_t addr, uint32_t rt,
                            uint32_t mask) {
     (void)cpu; (void)addr; (void)rt; (void)mask; return 0;
+}
+uint16_t psx_cyc_load_half_slow(CPUState *cpu, uint32_t addr, uint32_t rt,
+                                uint32_t mask) {
+    return psx_cyc_load_half(cpu, addr, rt, mask);
 }
 uint8_t psx_cyc_load_byte(CPUState *cpu, uint32_t addr, uint32_t rt,
                           uint32_t mask) {
@@ -98,6 +108,9 @@ int psx_icache_shadow_replay_begin(void) { return 1; }
 void psx_icache_shadow_replay_end(void) {}
 void psx_icache_shadow_abort(void) {}
 void psx_icache_fetch(CPUState *cpu, uint32_t addr) { (void)cpu; (void)addr; }
+void psx_icache_fetch_fn(CPUState *cpu, uint32_t addr) {
+    psx_icache_fetch(cpu, addr);
+}
 void psx_muldiv_set(CPUState *cpu, uint32_t latency) {
     (void)cpu; (void)latency;
 }
@@ -109,6 +122,10 @@ void psx_gte_read(CPUState *cpu, uint32_t rt) { (void)cpu; (void)rt; }
 int psx_slice_block(CPUState *cpu, uint32_t addr, uint32_t cycles,
                     int side_effects) {
     (void)cpu; (void)addr; (void)cycles; (void)side_effects; return 0;
+}
+int psx_slice_block_impl(CPUState *cpu, uint32_t addr, uint32_t cycles,
+                         int side_effects) {
+    return psx_slice_block(cpu, addr, cycles, side_effects);
 }
 
 void gte_execute(CPUState *cpu, uint32_t cmd) { (void)cpu; (void)cmd; }
@@ -124,6 +141,8 @@ void gte_write_data(CPUState *cpu, uint8_t reg, uint32_t val) {
 void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t val) {
     (void)cpu; (void)reg; (void)val;
 }
+int32_t psx_ws_plane_nx(int32_t nx) { return nx; }
+uint32_t psx_ws_xclip_bound(uint32_t vanilla) { return vanilla; }
 void gte_precision_store_word(uint32_t addr, uint8_t reg) {
     (void)addr; (void)reg;
 }
@@ -263,7 +282,7 @@ int main(int argc, char **argv) {
     const char *first = argv[3];
     const char *second = argv[4];
     memset(s_ram, 0, sizeof(s_ram));
-    overlay_loader_init(argv[1], "PAIR-TEST");
+    overlay_loader_init(argv[1], "PAIR-TEST", 0);
 
     int alias = strcmp(scenario, "alias-at-cap") == 0;
     int partial = strcmp(scenario, "partial-first") == 0;

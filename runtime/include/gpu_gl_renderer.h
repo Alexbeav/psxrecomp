@@ -25,7 +25,8 @@ void gl_renderer_set_swap_interval(int interval);
 
 /* Presentation-only frame interpolation. High-refresh sub-presents blend the
  * two most recent stable display images; guest simulation timing is unchanged. */
-void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz);
+void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
+                                   int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,

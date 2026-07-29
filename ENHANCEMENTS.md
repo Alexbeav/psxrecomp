@@ -209,8 +209,8 @@ Findings (tracked for the next work cycle):
   has no sprite-tag ws hooks (ws work parked at 4:3).
 
 **Policy gates confirmed already in-tree (no code change needed for the merge):**
-- Vulkan is hidden by default: launcher offers only Software<->OpenGL
-  (launcher.cpp:347/776); PSX_ENABLE_VULKAN defaults OFF (runtime.cmake:484);
+- Vulkan is hidden by default: the shared launcher offers only
+  Software<->OpenGL; PSX_ENABLE_VULKAN defaults OFF (runtime.cmake);
   runtime downgrades renderer=vulkan -> opengl when not compiled (main.cpp:2463).
   Vulkan stays a dev/CLI-only backend (--renderer vulkan on a VK-enabled build).
 - Widescreen carries an EXPERIMENTAL tag in the launcher.

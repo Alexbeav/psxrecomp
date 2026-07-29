@@ -1,4 +1,5 @@
 #include "iso_reader.h"
+#include "cue_sheet.h"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -46,101 +47,30 @@ bool ISOReader::Open(const std::string& filename) {
     // OWNING FILE, so remember which file each track belongs to and convert
     // to disc-relative LBAs once the segment table (with each file's first
     // disc sector) is built below.
-    struct PendingTrack {
-        int      number;
-        bool     is_audio;
-        size_t   file_index;  // index into bin_files
-        uint32_t index01;     // INDEX 01 as a file-relative LBA
-        uint32_t index00;     // INDEX 00 pregap, file-relative
-        bool     has_index00;
-    };
+    using PendingTrack = PSXRecompV4::CueTrackRef;
     std::vector<PendingTrack> pending_tracks;
 
-    auto ends_with = [](const std::string& s, const std::string& suffix) {
-        return s.size() >= suffix.size() &&
-               s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-    if (ends_with(filename, ".cue") || ends_with(filename, ".CUE")) {
-        // Parse the .cue: resolve every FILE, AND build the track TOC from
-        // the TRACK/INDEX lines. Single-file cues keep their historical
-        // behavior; multi-file cues (data track + CD-DA audio tracks in
-        // separate .bin files) map each file to a contiguous run of disc
-        // sectors, concatenated in cue order.
-        std::ifstream cue_file(filename);
-        if (!cue_file.is_open()) {
+    if (PSXRecompV4::path_has_extension_ci(std::filesystem::path(filename), ".cue")) {
+        // Parse the .cue via the shared parser: resolve every FILE, AND build
+        // the track TOC from the TRACK/INDEX lines. Single-file cues keep
+        // their historical behavior; multi-file cues (data track + CD-DA audio
+        // tracks in separate .bin files) map each file to a contiguous run of
+        // disc sectors, concatenated in cue order.
+        const PSXRecompV4::CueSheet sheet =
+            PSXRecompV4::parse_cue_sheet(std::filesystem::path(filename));
+
+        // A cue we cannot read, one that names no FILE, or one whose payload is
+        // not raw BINARY (WAVE/MP3 have no fixed sector geometry — mis-mapping
+        // the TOC would be worse than refusing the image) has nothing to mount.
+        if (!sheet.opened || sheet.files.empty() || sheet.has_non_binary_file()) {
             return false;
         }
 
-        std::string line;
-        int  cur_track_num   = -1;
-        bool cur_track_audio = false;
-        uint32_t cur_index00 = 0;
-        bool cur_has_index00 = false;
-        while (std::getline(cue_file, line)) {
-            // FILE "filename.bin" BINARY
-            size_t file_pos = line.find("FILE");
-            if (file_pos != std::string::npos) {
-                size_t quote1 = line.find('"', file_pos);
-                size_t quote2 = (quote1 == std::string::npos)
-                                    ? std::string::npos : line.find('"', quote1 + 1);
-                if (quote1 != std::string::npos && quote2 != std::string::npos) {
-                    // Only raw BINARY payloads are supported (WAVE/MP3 audio
-                    // files have no fixed sector geometry). Mis-mapping the
-                    // TOC would be worse than refusing the image.
-                    if (line.find("BINARY", quote2) == std::string::npos) {
-                        return false;
-                    }
-                    std::string bin_name = line.substr(quote1 + 1, quote2 - quote1 - 1);
-                    std::filesystem::path cue_path(filename);
-                    std::filesystem::path bin_path(bin_name);
-                    if (bin_path.is_relative()) {
-                        bin_files.push_back((cue_path.parent_path() / bin_name).string());
-                    } else {
-                        bin_files.push_back(bin_name);
-                    }
-                }
-                continue;
-            }
-
-            // TRACK NN MODE2/2352 | TRACK NN AUDIO
-            int  tn = 0;
-            char type[32] = {0};
-            if (std::sscanf(line.c_str(), " TRACK %d %31s", &tn, type) == 2) {
-                cur_track_num   = tn;
-                cur_track_audio = (std::strstr(type, "AUDIO") != nullptr);
-                cur_index00 = 0;
-                cur_has_index00 = false;
-                continue;
-            }
-
-            // INDEX 01 MM:SS:FF — the track's start (INDEX 00 is its pregap).
-            int idx = 0, mm = 0, ss = 0, ff = 0;
-            if (std::sscanf(line.c_str(), " INDEX %d %d:%d:%d", &idx, &mm, &ss, &ff) == 4
-                && cur_track_num >= 1 && !bin_files.empty()) {
-                const uint32_t index_lba = (uint32_t)(((mm * 60 + ss) * 75) + ff);
-                if (idx == 0) {
-                    cur_index00 = index_lba;
-                    cur_has_index00 = true;
-                    continue;
-                }
-                if (idx != 1) continue;
-                PendingTrack t;
-                t.number     = cur_track_num;
-                t.is_audio   = cur_track_audio;
-                t.file_index = bin_files.size() - 1;
-                t.index01    = index_lba;
-                t.index00    = cur_index00;
-                t.has_index00 = cur_has_index00;
-                pending_tracks.push_back(t);
-                cur_track_num = -1;
-            }
+        bin_files.reserve(sheet.files.size());
+        for (const PSXRecompV4::CueFileRef& f : sheet.files) {
+            bin_files.push_back(f.path.string());
         }
-        cue_file.close();
-
-        // A cue with no FILE line has nothing to mount.
-        if (bin_files.empty()) {
-            return false;
-        }
+        pending_tracks = sheet.tracks;
     } else {
         bin_files.push_back(filename);
     }

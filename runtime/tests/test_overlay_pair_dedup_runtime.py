@@ -97,6 +97,7 @@ def compile_harness(gcc: str, out: pathlib) -> None:
     command = [
         gcc, "-std=c11", "-O0", "-Wall", "-Wextra",
         "-DPSX_NO_DEBUG_TOOLS",
+        "-DPSX_OVERLAY_DLL_BUILD",
         "-DPSX_OVERLAY_TEST_CANDIDATE_CAP=4", f"-I{RUNTIME / 'include'}",
         *platform_defines,
         str(RUNTIME / "src" / "overlay_loader.c"),
@@ -144,7 +145,8 @@ def scenario(tmp: pathlib.Path, harness: pathlib.Path, full_first: pathlib.Path,
     elif name == "provenance-mismatch":
         second_manifest = manifest(two, "hosted-v1")
 
-    first = publish(cache, first_tier, f"00010000_11111111_AAAAAAAA{ext}",
+    # Exercise the current transaction-bound name and the legacy additive name.
+    first = publish(cache, first_tier, f"00010000_11111111{ext}",
                     first_library, first_manifest)
     second = publish(cache, second_tier, f"00011000_22222222_BBBBBBBB{ext}",
                      full_second, second_manifest, pending=True)

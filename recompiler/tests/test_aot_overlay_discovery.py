@@ -1548,6 +1548,20 @@ def check_candidate_capacity_publication():
                 manifest, pair_id, manifest_funcs)
 
         with tempfile.TemporaryDirectory() as tmp:
+            leaf = os.path.join(
+                tmp, 'GAME', 'gcc', 'win-x64',
+                'cg9_a3003734_gc76b225b8')
+            final = os.path.join(leaf, '00010000_00000001.dll')
+            capacity_lock, cache_dirs = MOD._candidate_capacity_namespace(final)
+            assert capacity_lock == os.path.join(
+                tmp, 'GAME', '.overlay-candidate-capacity.lock')
+            assert cache_dirs == [
+                os.path.join(tmp, 'GAME', tier, 'win-x64',
+                             'cg9_a3003734_gc76b225b8')
+                for tier in ('gcc', 'tcc')
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
             first = os.path.join(tmp, '00010000_00000001.dll')
             duplicate = os.path.join(tmp, '00010000_00000002.dll')
             pair(first, 2, 0x100)
@@ -3062,7 +3076,7 @@ def check_real_batched_fragment_publication(recompiler):
         ids, status = MOD.compile_fragment_batch(
             {first}, bytes(data), LOAD, len(data), LOAD & 0x1FFFFFFF,
             td, args, env, {}, initial_recipe, ())
-        assert ids and status == 'built'
+        assert ids and status == 'built', (ids, status)
         initial_dlls = list(pathlib.Path(td).glob(f'*{extension}'))
         assert len(initial_dlls) == 1
         initial_dll = initial_dlls[0]

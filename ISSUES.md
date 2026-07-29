@@ -513,45 +513,6 @@ sites aren't, it's an emit gap (fix in code_generator.cpp). If
 neighbors are absent too, it's a discovery gap (fix in function
 discovery seeds). Either way, then close Issue #3 alongside.
 
-## Issue #6 — Launcher art has rough cutout edges (memory cards + controllers)
-
-**Status:** open, cosmetic — deferred
-**Date opened:** 2026-06-12
-**Phase:** Launcher initiative (UI polish)
-
-### Symptom
-
-This issue tracked cosmetic problems in the removed in-tree launcher asset
-pipeline. It is retained only as historical context.
-
-### Cause
-
-`FloodTransparent` uses a binary alpha decision (`max(R,G,B) < thresh`
-→ alpha 0, else keep). There is no feathering of the boundary band, so
-the object silhouette inherits the threshold's hard step. The memory
-card and (grey) controller bodies are closer in luminance to the dark
-mockup background than the disc is, so the same threshold leaves more
-fringe on them.
-
-### Fix options (later)
-
-- Soft alpha ramp across a luminance band (`t_lo..t_hi`) instead of a
-  hard cutoff, applied to the flooded boundary pixels.
-- Or supersample: crop at 2–4× from the mockup, knock out, then
-  downscale with high-quality bicubic so the edge anti-aliases.
-- Or hand-mask the four assets once in an image editor (cleanest, but
-  manual).
-- Best long-term: replace the mockup-derived crops with proper source
-  renders (transparent PNGs) — the `decorator: image(...)` pipeline is
-  already in place, so it's a drop-in.
-
-### Notes
-
-Tooling: this historical note referred to the removed in-tree launcher asset
-pipeline. The active launcher path is downstream `recomp-ui`.
-
----
-
 ## Issue #7 — sljit live execution is unvalidated (pure-live save-load wedge)
 
 **Status:** open, root-caused — fix in progress (branch `feat/sljit-backend`)

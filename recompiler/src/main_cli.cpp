@@ -21,6 +21,7 @@
 #endif
 
 #include "fmt/format.h"
+#include "cli_boot_path.h"
 #include "iso_reader.h"
 #include "ps1_exe_parser.h"
 
@@ -38,10 +39,11 @@ struct Options {
 void usage(const char* program) {
     fmt::print(
         "Usage:\n"
-        "  {} build --disc <game.cue|bin|iso> --bios <SCPH1001.BIN> "
+        "  {} build --disc <game.cue|bin|iso> --bios <PS1_BIOS.BIN> "
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
-        "and build scripts. No compiler toolchain is bundled.\n",
+        "and build scripts. No compiler toolchain is bundled.\n"
+        "Supported BIOS: SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
         program);
 }
 
@@ -80,18 +82,6 @@ std::string parse_boot_path(const std::string& cnf) {
         path += c;
     }
     return path;
-}
-
-std::string serial_from_boot(const std::string& boot) {
-    std::string base = fs::path(boot).filename().string();
-    std::string clean;
-    for (char c : base) {
-        if (std::isalnum((unsigned char)c)) clean += (char)std::toupper((unsigned char)c);
-    }
-    size_t split = 0;
-    while (split < clean.size() && std::isalpha((unsigned char)clean[split])) split++;
-    if (split && split < clean.size()) clean.insert(split, "-");
-    return clean.empty() ? "PSX-GAME" : clean;
 }
 
 std::string safe_stem(std::string value) {
@@ -260,10 +250,14 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     size_t cnf_read = disc.ReadFile("SYSTEM.CNF", cnf_bytes.data(), cnf_size);
     std::string boot = parse_boot_path(std::string((char*)cnf_bytes.data(), cnf_read));
     if (boot.empty()) throw std::runtime_error("SYSTEM.CNF does not contain a BOOT executable");
-    size_t exe_size = disc.GetFileSize(boot);
+    // Normalize boot path: convert backslashes to forward slashes so that
+    // std::filesystem::path (which treats '\' as a regular character on Linux)
+    // correctly splits the path into directory and filename components.
+    const std::string boot_norm = PSXRecompCLI::normalize_boot_path(boot);
+    size_t exe_size = disc.GetFileSize(boot_norm);
     if (!exe_size) throw std::runtime_error("boot executable was not found on disc: " + boot);
     std::vector<uint8_t> exe_bytes(exe_size);
-    if (disc.ReadFile(boot, exe_bytes.data(), exe_bytes.size()) != exe_bytes.size())
+    if (disc.ReadFile(boot_norm, exe_bytes.data(), exe_bytes.size()) != exe_bytes.size())
         throw std::runtime_error("failed to read the complete boot executable");
     if (exe_bytes.size() < 2048 || std::string((char*)exe_bytes.data(), 8) != "PS-X EXE")
         throw std::runtime_error("the disc BOOT file is not a PS-X EXE");
@@ -274,7 +268,7 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     // happens to live inside another checkout.
     write_file(options.output / ".gitignore",
         "build/\ninput/\ngenerated/\nbios-generated/\n*.mcr\nsaves/\n");
-    const std::string boot_file = fs::path(boot).filename().string();
+    const std::string boot_file = PSXRecompCLI::boot_filename(boot_norm);
     const fs::path local_exe = options.output / "input" / boot_file;
     write_bytes(local_exe, exe_bytes);
 
@@ -282,7 +276,7 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     auto parsed = PSXRecomp::PS1ExeParser::parse_file(local_exe, parse_error);
     if (!parsed) throw std::runtime_error("failed to parse boot executable: " + parse_error);
     const auto& image = *parsed;
-    const std::string serial = serial_from_boot(boot);
+    const std::string serial = PSXRecompCLI::serial_from_boot(boot_norm);
     const std::string title = options.name.empty()
                                   ? trim(disc.GetVolumeID())
                                   : options.name;
@@ -346,6 +340,8 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     fmt::print("[3/4] Copying build framework...\n");
     copy_framework(find_framework(exe_dir), options.output / "psxrecomp");
 
+    // Derive BIOS stem from filename: "SCPH1001.BIN" -> "SCPH1001"
+    const std::string bios_stem = options.bios.stem().string();
     const std::string cmake = fmt::format(
         "cmake_minimum_required(VERSION 3.20)\n"
         "project({} C CXX)\n"
@@ -361,12 +357,12 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "psxrecomp_add_runtime_target(psx-runtime\n"
         "  GAME_GENERATED_FULL_C \"${{GAME_FULL}}\"\n"
         "  GAME_GENERATED_DISPATCH_C \"${{GAME_DISPATCH}}\"\n"
-        "  BIOS_GENERATED_FULL_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/SCPH1001_full.c\"\n"
-        "  BIOS_GENERATED_DISPATCH_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/SCPH1001_dispatch.c\"\n"
+        "  BIOS_GENERATED_FULL_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_full.c\"\n"
+        "  BIOS_GENERATED_DISPATCH_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_dispatch.c\"\n"
         "  WINDOW_TITLE \"{} Recompiled\"\n"
         "  DEFAULT_GAME_CONFIG_PATH \"game.toml\"\n"
         ")\n",
-        project_name, game_name);
+        project_name, bios_stem, bios_stem, game_name);
     write_file(options.output / "CMakeLists.txt", cmake);
 
     write_file(options.output / "build.ps1",
@@ -388,8 +384,11 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "# {}\n\n"
         "Generated locally by PSXRecomp from your own disc and BIOS.\n\n"
         "## Build\n\n"
-        "Install CMake, Ninja, a C/C++ compiler, and SDL2 development files.\n"
+        "Install CMake, Ninja, and a C/C++ compiler. SDL3 is fetched automatically.\n"
         "Then run `sh build.sh` on macOS/Linux or `.\\build.ps1` in PowerShell.\n\n"
+        "SDL3 is the default. To use SDL2 explicitly, configure once with\n"
+        "`cmake -S . -B build -DPSX_SDL_BACKEND=SDL2`; later build-script runs\n"
+        "preserve that cached selection.\n\n"
         "The executable is written under `build/`. Keep your original disc image\n"
         "at the path stored in `game.toml`, or update that path before running.\n\n"
         "The `input/`, `generated/`, and `bios-generated/` folders contain data\n"

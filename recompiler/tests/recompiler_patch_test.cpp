@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -131,6 +132,27 @@ note = "Test-only fixture"
           config.recompiler_patches[0].replacement == 0x24020001u,
           "parser preserves patch fields");
 
+    const auto audio_buffer = write_config(root, "audio-buffer", R"toml(
+[runtime]
+
+[audio]
+buffer_ms = 60
+)toml");
+    const auto audio_config = PSXRecompV4::load_game_config(audio_buffer);
+    check(audio_config.runtime.audio_buffer_ms == 60,
+          "parser preserves per-game audio buffer target");
+
+    const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
+[runtime]
+
+[audio]
+buffer_ms = 20
+)toml");
+    check_throws(
+        [&] { (void)PSXRecompV4::load_game_config(bad_audio_buffer); },
+        "[audio] buffer_ms out of range (30..500)",
+        "parser rejects unsafe audio buffer target");
+
     const auto duplicate_address = write_config(root, "duplicate-address", R"toml(
 [[recompiler.patch]]
 id = "first"
@@ -220,14 +242,239 @@ xclip_load_sites = ["0x80012340"]
               std::vector<uint32_t>{0x80012340u},
           "parser preserves per-prim bound-load sites");
 
+    const auto keep = write_config(root, "cull-keep", R"toml(
+[[widescreen.cull.keep]]
+address = "0x8002B310"
+expected = "0x28A21C01"
+result = 1
+
+[[widescreen.cull.keep]]
+address = "0x8002B368"
+expected = "0x0082202A"
+result = 0
+)toml");
+    const auto keep_config = PSXRecompV4::load_game_config(keep);
+    check(keep_config.ws_cull_keep_sites.size() == 2 &&
+              keep_config.ws_cull_keep_sites[0].address == 0x8002B310u &&
+              keep_config.ws_cull_keep_sites[0].expected == 0x28A21C01u &&
+              keep_config.ws_cull_keep_sites[0].result == 1u &&
+              keep_config.ws_cull_keep_sites[1].address == 0x8002B368u &&
+              keep_config.ws_cull_keep_sites[1].expected == 0x0082202Au &&
+              keep_config.ws_cull_keep_sites[1].result == 0u,
+          "parser preserves full-word-guarded maximal-participation sites");
+
+    const auto bad_keep = write_config(root, "cull-keep-bad", R"toml(
+[[widescreen.cull.keep]]
+address = "0x8002B310"
+expected = "0x24820001"
+result = 1
+)toml");
+    check_throws([&] { (void)PSXRecompV4::load_game_config(bad_keep); },
+                 "expected must be SLT/SLTU/SLTI/SLTIU",
+                 "parser rejects non-comparison maximal-participation sites");
+
     const auto range = write_config(root, "range-cull", R"toml(
 [widescreen.cull]
 range_sites = ["0x80012340"]
+activation_guard_pixels = 256
 )toml");
     const auto range_config = PSXRecompV4::load_game_config(range);
     check(range_config.ws_cull_range_sites ==
-              std::vector<uint32_t>{0x80012340u},
-          "parser preserves explicit range cull sites");
+              std::vector<uint32_t>{0x80012340u} &&
+              range_config.ws_cull_activation_guard_pixels == 256,
+          "parser preserves explicit range sites and activation guard");
+
+    const auto bad_activation_guard =
+        write_config(root, "range-cull-bad-activation-guard", R"toml(
+[widescreen.cull]
+activation_guard_pixels = 257
+)toml");
+    check_throws(
+        [&] {
+            (void)PSXRecompV4::load_game_config(bad_activation_guard);
+        },
+        "activation_guard_pixels must be in [0, 256]",
+        "parser rejects an oversized activation-only guard");
+
+    const auto angle = write_config(root, "angle-cull", R"toml(
+[[widescreen.cull.angle]]
+address = "0x8013F138"
+expected = "0x24020155"
+)toml");
+    const auto angle_config = PSXRecompV4::load_game_config(angle);
+    check(angle_config.ws_cull_angle_sites.size() == 1 &&
+              angle_config.ws_cull_angle_sites[0].address ==
+                  0x8013F138u &&
+              angle_config.ws_cull_angle_sites[0].expected ==
+                  0x24020155u,
+          "parser preserves exact terrain-frustum angle sites");
+    auto changed_angle_config = angle_config;
+    changed_angle_config.ws_cull_angle_sites[0].expected =
+        0x24020156u;
+    check(PSXRecompV4::overlay_codegen_config_hash(angle_config) !=
+              PSXRecompV4::overlay_codegen_config_hash(
+                  changed_angle_config),
+          "terrain angle sites change overlay cache identity");
+
+    const auto bad_angle = write_config(root, "angle-cull-bad", R"toml(
+[[widescreen.cull.angle]]
+address = "0x8013F138"
+expected = "0x24420155"
+)toml");
+    check_throws([&] { (void)PSXRecompV4::load_game_config(bad_angle); },
+                 "expected must be ADDI/ADDIU rt,zero,imm",
+                 "parser rejects non-constant terrain-angle instructions");
+
+    const auto aspect_cone = write_config(root, "aspect-cone", R"toml(
+[widescreen.cull.aspect_cone]
+forward_addr = "0x1F8000E8"
+object_type_offset = 12
+object_reg = 19
+x_reg = 16
+z_reg = 17
+y_reg = 18
+hysteresis_pixels = 24
+queue_reserve = 4
+queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
+queue_capacities = [24, 40, 28]
+queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
+
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80010000"
+expected = "0x28620370"
+
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80010004"
+expected = "0x0082202A"
+cosine_threshold = 856
+object_reg = 20
+x_reg = 19
+z_reg = 18
+y_reg = 17
+queue_guard = false
+)toml");
+    const auto aspect_config =
+        PSXRecompV4::load_game_config(aspect_cone);
+    check(aspect_config.ws_aspect_cone.sites.size() == 2 &&
+              aspect_config.ws_aspect_cone.sites[0].address ==
+                  0x80010000u &&
+              aspect_config.ws_aspect_cone.sites[0].expected ==
+                  0x28620370u &&
+              aspect_config.ws_aspect_cone.sites[0].cosine_threshold ==
+                  0x370u &&
+              aspect_config.ws_aspect_cone.sites[1].expected ==
+                  0x0082202Au &&
+              aspect_config.ws_aspect_cone.sites[1].cosine_threshold ==
+                  856u &&
+              aspect_config.ws_aspect_cone.sites[1].object_reg == 20u &&
+              aspect_config.ws_aspect_cone.sites[1].x_reg == 19u &&
+              aspect_config.ws_aspect_cone.sites[1].z_reg == 18u &&
+              aspect_config.ws_aspect_cone.sites[1].y_reg == 17u &&
+              !aspect_config.ws_aspect_cone.sites[1].queue_guard &&
+              aspect_config.ws_aspect_cone.forward_addr ==
+                  0x1F8000E8u &&
+              aspect_config.ws_aspect_cone.object_reg == 19u &&
+              aspect_config.ws_aspect_cone.x_reg == 16u &&
+              aspect_config.ws_aspect_cone.z_reg == 17u &&
+              aspect_config.ws_aspect_cone.y_reg == 18u &&
+              aspect_config.ws_aspect_cone.hysteresis_pixels == 24u &&
+              aspect_config.ws_aspect_cone.queue_reserve == 4u &&
+              aspect_config.ws_aspect_cone.queue_capacities ==
+                  std::array<uint32_t, 3>{24u, 40u, 28u},
+          "parser preserves aspect-aware participation policy");
+
+    const auto aspect_hash = PSXRecompV4::overlay_codegen_config_hash(
+        aspect_config);
+    auto changed_aspect_config = aspect_config;
+    changed_aspect_config.ws_aspect_cone.hysteresis_pixels++;
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
+                             changed_aspect_config),
+          "aspect participation policy changes overlay cache identity");
+    changed_aspect_config = aspect_config;
+    changed_aspect_config.ws_cull_guard_pixels++;
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
+                             changed_aspect_config),
+          "widescreen guard changes overlay cache identity");
+    changed_aspect_config = aspect_config;
+    changed_aspect_config.ws_cull_activation_guard_pixels++;
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
+                             changed_aspect_config),
+          "activation-only guard changes overlay cache identity");
+    changed_aspect_config = aspect_config;
+    changed_aspect_config.ws_aspect_cone.sites[1].queue_guard = true;
+    check(aspect_hash != PSXRecompV4::overlay_codegen_config_hash(
+                             changed_aspect_config),
+          "per-site aspect participation policy changes cache identity");
+
+    const auto bad_aspect_opcode =
+        write_config(root, "aspect-cone-bad-opcode", R"toml(
+[widescreen.cull.aspect_cone]
+forward_addr = "0x1F8000E8"
+object_type_offset = 12
+object_reg = 19
+x_reg = 16
+z_reg = 17
+y_reg = 18
+queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
+queue_capacities = [24, 40, 28]
+queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80010000"
+expected = "0x2C620370"
+)toml");
+    check_throws(
+        [&] {
+            (void)PSXRecompV4::load_game_config(bad_aspect_opcode);
+        },
+        "expected must be signed SLTI or SLT",
+        "parser rejects unsigned aspect-cone guards");
+
+    const auto bad_aspect_slt_threshold =
+        write_config(root, "aspect-cone-bad-slt-threshold", R"toml(
+[widescreen.cull.aspect_cone]
+forward_addr = "0x1F8000E8"
+object_type_offset = 12
+object_reg = 19
+x_reg = 16
+z_reg = 17
+y_reg = 18
+queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
+queue_capacities = [24, 40, 28]
+queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80010000"
+expected = "0x0082202A"
+)toml");
+    check_throws(
+        [&] {
+            (void)PSXRecompV4::load_game_config(
+                bad_aspect_slt_threshold);
+        },
+        "cosine_threshold must be in [1, 1023]",
+        "parser requires an explicit Q10 threshold for SLT cones");
+
+    const auto bad_aspect_arrays =
+        write_config(root, "aspect-cone-bad-arrays", R"toml(
+[widescreen.cull.aspect_cone]
+forward_addr = "0x1F8000E8"
+object_type_offset = 12
+object_reg = 19
+x_reg = 16
+z_reg = 17
+y_reg = 18
+queue_count_addrs = ["0x1F800144", "0x1F800150"]
+queue_capacities = [24, 40, 28]
+queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
+[[widescreen.cull.aspect_cone.sites]]
+address = "0x80010000"
+expected = "0x28620370"
+)toml");
+    check_throws(
+        [&] {
+            (void)PSXRecompV4::load_game_config(bad_aspect_arrays);
+        },
+        "must contain exactly three values",
+        "parser rejects incomplete aspect-cone queue metadata");
 }
 
 void capture_history_config_tests(const fs::path& root) {
@@ -358,6 +605,27 @@ void codegen_tests() {
     check(range.find("2*psx_ws_x_margin()") != std::string::npos,
           "native range emit widens by both horizontal margins");
 
+    auto activation_range_config = range_config;
+    activation_range_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_range = generate_first_instruction(
+        0x2C8201C1u, {}, false,
+        activation_range_config); // sltiu v0,a0,0x1c1
+    check(activation_range.find(
+              "2*(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
+              std::string::npos,
+          "activation range gains an isolated resident-object lead");
+
+    PSXRecomp::CodeGenConfig activation_bias_config;
+    activation_bias_config.ws_cull_bias_sites.insert(0x80010000u);
+    activation_bias_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_bias = generate_first_instruction(
+        0x248200E6u, {}, false,
+        activation_bias_config); // addiu v0,a0,230
+    check(activation_bias.find(
+              "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
+              std::string::npos,
+          "activation bias gains the same isolated resident-object lead");
+
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);
     const std::string plane_nx = generate_first_instruction(
@@ -382,6 +650,100 @@ void codegen_tests() {
         0x246200F8u, {}, true, xclip_config); // addiu v0,v1,0xf8
     check(xclip_overlay_mismatch.find("ws cull xclip") == std::string::npos,
           "overlay nonmatching xclip variant remains unchanged");
+
+    PSXRecomp::CodeGenConfig keep_config;
+    keep_config.ws_cull_keep_sites.push_back(
+        {0x80010000u, 0x28821C01u, 1u}); // slti v0,a0,0x1c01
+    const std::string keep_true = generate_first_instruction(
+        0x28821C01u, {}, false, keep_config);
+    check(keep_true.find("psx_ws_cull_keep_result") != std::string::npos &&
+              keep_true.find(", 1u)") != std::string::npos,
+          "codegen emits guarded widescreen keep-true comparison");
+
+    keep_config.ws_cull_keep_sites[0] =
+        {0x80010000u, 0x0082202Au, 0u}; // slt a0,a0,v0
+    const std::string keep_false = generate_first_instruction(
+        0x0082202Au, {}, false, keep_config);
+    check(keep_false.find("psx_ws_cull_keep_result") != std::string::npos &&
+              keep_false.find(", 0u)") != std::string::npos,
+          "codegen emits guarded widescreen keep-false comparison");
+
+    const std::string keep_overlay_mismatch = generate_first_instruction(
+        0x0082202Bu, {}, true, keep_config); // sltu at same overlay VA
+    check(keep_overlay_mismatch.find("maximal object/model participation") ==
+              std::string::npos,
+          "overlay full-word mismatch leaves keep site unchanged");
+
+    PSXRecomp::CodeGenConfig angle_config;
+    angle_config.ws_cull_angle_sites.push_back(
+        {0x80010000u, 0x24020155u});
+    const std::string angle = generate_first_instruction(
+        0x24020155u, {}, false, angle_config);
+    check(angle.find("psx_ws_angle_widen(341u)") !=
+              std::string::npos,
+          "codegen emits exact terrain-frustum angle helper");
+    auto activation_isolated_angle_config = angle_config;
+    activation_isolated_angle_config.ws_cull_activation_guard_pixels = 256;
+    const std::string activation_isolated_angle = generate_first_instruction(
+        0x24020155u, {}, false, activation_isolated_angle_config);
+    check(activation_isolated_angle == angle,
+          "activation guard leaves terrain-frustum emission byte-identical");
+    const std::string angle_overlay_mismatch =
+        generate_first_instruction(0x240201C7u, {}, true, angle_config);
+    check(angle_overlay_mismatch.find("psx_ws_angle_widen") ==
+              std::string::npos,
+          "overlay full-word mismatch leaves terrain angle unchanged");
+
+    PSXRecomp::CodeGenConfig aspect_config;
+    aspect_config.ws_aspect_cone.sites.push_back(
+        {0x80010000u, 0x28620370u}); // slti v0,v1,0x370 reject predicate
+    aspect_config.ws_aspect_cone.object_reg = 19u;
+    aspect_config.ws_aspect_cone.x_reg = 16u;
+    aspect_config.ws_aspect_cone.z_reg = 17u;
+    aspect_config.ws_aspect_cone.y_reg = 18u;
+    const std::string aspect = generate_first_instruction(
+        0x28620370u, {}, false, aspect_config);
+    check(aspect.find(
+              "psx_ws_aspect_cone_result(0x80010000u") !=
+              std::string::npos &&
+              aspect.find("cpu->gpr[19]") != std::string::npos &&
+              aspect.find("(int32_t)(int16_t)cpu->gpr[16]") !=
+                  std::string::npos &&
+              aspect.find("(int32_t)(int16_t)cpu->gpr[17]") !=
+                  std::string::npos &&
+              aspect.find("(int32_t)(int16_t)cpu->gpr[18]") !=
+                  std::string::npos,
+          "codegen emits full-word-guarded aspect-cone helper");
+
+    const std::string aspect_overlay_mismatch =
+        generate_first_instruction(0x28620358u, {}, true, aspect_config);
+    check(aspect_overlay_mismatch.find("psx_ws_aspect_cone_result") ==
+              std::string::npos,
+          "overlay full-word mismatch leaves aspect-cone site unchanged");
+
+    PSXRecomp::CodeGenConfig part_config;
+    PSXRecompV4::WidescreenAspectConeSite part_site;
+    part_site.address = 0x80010000u;
+    part_site.expected = 0x0082202Au; // slt a0,a0,v0
+    part_site.cosine_threshold = 856u;
+    part_site.object_reg = 20u;
+    part_site.x_reg = 19u;
+    part_site.z_reg = 18u;
+    part_site.y_reg = 17u;
+    part_site.queue_guard = false;
+    part_config.ws_aspect_cone.sites.push_back(part_site);
+    const std::string part = generate_first_instruction(
+        0x0082202Au, {}, false, part_config);
+    check(part.find("cpu->gpr[4] = psx_ws_aspect_cone_result") !=
+              std::string::npos &&
+              part.find("cpu->gpr[20]") != std::string::npos &&
+              part.find("(int32_t)(int16_t)cpu->gpr[19]") !=
+                  std::string::npos &&
+              part.find("(int32_t)(int16_t)cpu->gpr[18]") !=
+                  std::string::npos &&
+              part.find("(int32_t)(int16_t)cpu->gpr[17]") !=
+                  std::string::npos,
+          "codegen supports exact per-child SLT cone metadata");
 }
 
 void gte_codegen_classification_tests() {

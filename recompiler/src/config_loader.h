@@ -19,10 +19,12 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <vector>
 
+#include "bios_address_model.h"   // BiosAddrCopy (BiosConfig::address_copies)
 #include "recompiler_patch.h"
 
 namespace PSXRecompV4 {
@@ -51,6 +53,61 @@ inline constexpr int DEFAULT_VIDEO_RENDERER = VIDEO_RENDERER_OPENGL;
 struct WidescreenSignedBoundSite {
     uint32_t address = 0;
     uint32_t expected = 0; // guarded LUI instruction
+};
+
+// One exact compare whose verdict is forced while a widescreen reveal is
+// active. The full instruction word is part of the identity because overlay
+// variants routinely place unrelated code at the same virtual address.
+struct WidescreenCullKeepSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded SLT/SLTU/SLTI/SLTIU instruction
+    uint32_t result = 0;   // forced comparison result (0 or 1)
+};
+
+// Aspect-scaled 12-bit angular half-extent. These sites load a positive angle
+// constant with `addi[u] rt,zero,imm`; the runtime widens tan(angle) by the
+// live horizontal reveal factor. Full-word guards prevent overlay-address
+// aliases from changing unrelated immediates.
+struct WidescreenAngleSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded ADDI/ADDIU with rs == zero
+};
+
+// Aspect-aware horizontal participation cone. The exact compare sites are
+// full-word guarded because overlay variants can reuse a virtual address for
+// unrelated code. Registers are MIPS GPR indices captured at each comparison.
+// Queue metadata is optional; when present it lets guard/hysteresis candidates
+// leave configured headroom without changing the game's fixed capacities.
+struct WidescreenAspectConeSite {
+    uint32_t address = 0;
+    uint32_t expected = 0; // guarded signed SLTI or SLT reject comparison
+    // Q10 cosine threshold. Zero derives the threshold from an SLTI
+    // immediate; register-register SLT sites must provide it explicitly.
+    uint32_t cosine_threshold = 0;
+    // Per-site register overrides. UINT32_MAX inherits the enclosing
+    // aspect-cone defaults.
+    uint32_t object_reg = 0xFFFFFFFFu;
+    uint32_t x_reg = 0xFFFFFFFFu;
+    uint32_t z_reg = 0xFFFFFFFFu;
+    uint32_t y_reg = 0xFFFFFFFFu;
+    // False for lower-level model/child predicates that do not append to the
+    // configured fixed-capacity queues.
+    bool queue_guard = true;
+};
+
+struct WidescreenAspectConeConfig {
+    std::vector<WidescreenAspectConeSite> sites;
+    uint32_t forward_addr = 0;       // three signed Q12 halfwords: X,Z,Y
+    uint32_t object_type_offset = 0;
+    uint32_t object_reg = 0;
+    uint32_t x_reg = 0;
+    uint32_t z_reg = 0;
+    uint32_t y_reg = 0;
+    uint32_t hysteresis_pixels = 0;
+    uint32_t queue_reserve = 0;
+    std::array<uint32_t, 3> queue_count_addrs{};
+    std::array<uint32_t, 3> queue_capacities{};
+    std::array<uint32_t, 3> queue_type_masks{};
 };
 // Parse/format a pad mode. pad_mode_from_string accepts "hybrid"/"analog"/
 // "digital" (case-insensitive) and returns `fallback` for anything else.
@@ -112,12 +169,14 @@ struct RuntimeConfig {
     };
     std::vector<WarmCdRoute> warm_cd_routes;
 
-    // fast_boot: DEPRECATED alias for the HLE boot shell-skip (see bios_hle
+    // fast_boot: DEPRECATED alias for the BIOS boot shell-skip (see bios_hle
     // below). The old mechanism (snapshot BIOS state at first handoff, restore
     // on later launches) is gone; fast_boot=true now skips only the BIOS shell
     // (the boot animation) via the HLE tier's one-shot shell intercept, with
     // kernel init + game EXE load still executed by the real recompiled BIOS
-    // at host speed. Kept so existing game.toml/settings.toml keep working.
+    // at host speed. It is boot-only: it never enables the kernel-call HLE
+    // tier, and it works on any BIOS image that exports a shell entry.
+    // Kept so existing game.toml/settings.toml keep working.
     bool                  fast_boot = false;
 
     // bios_hle: High-Level Emulation tier for BIOS kernel services
@@ -128,9 +187,30 @@ struct RuntimeConfig {
     // and the oracle — this only flips the default, LLE is still fully linked and
     // selectable. When on, implemented kernel services are computed in-runtime
     // against the real guest kernel structures and every other call falls through
-    // to LLE. Implies the HLE boot shell-skip unless bios_hle_keep_intro.
+    // to LLE. Implies the BIOS boot shell-skip unless bios_hle_keep_intro.
     // PSX_BIOS_HLE / PSX_BIOS_HLE_KEEP_INTRO env override at launch.
     // Runtime: runtime/src/bios_hle.c.
+    //
+    // The flag drives TWO axes with different per-image requirements, resolved
+    // in runtime/src/bios_hle_plan.c:
+    //   * boot shell-skip — needs only the image's shell_entry_phys anchor and
+    //     works under pure LLE, so it fires the SAME WAY on every linked BIOS
+    //     (retail SCPH-1001 and the bundled OpenBIOS alike). "Skip the BIOS and
+    //     go straight to the game" is one behaviour, not a per-BIOS lottery.
+    //   * kernel-call HLE — needs the image's deliver_event_ret anchor; an
+    //     image without it (OpenBIOS, until its B0 semantics are validated)
+    //     refuses this axis and says so at startup, WITHOUT cancelling the
+    //     boot-skip. Collapsing the two is exactly the bug fixed 2026-07-27.
+    // openbios: may this title run on the bundled, redistributable OpenBIOS?
+    // Default true — a player who chooses no BIOS gets OpenBIOS and never has
+    // to find one (docs/BIOS_SELECTION.md). Set false ONLY for a title with a
+    // verified OpenBIOS incompatibility; a retail image is then required and
+    // the player is prompted for it.
+    //
+    // Deliberately NOT overridable by a player's settings.toml: this records a
+    // developer's compatibility finding, not a preference.
+    bool                  openbios = true;
+
     bool                  bios_hle = true;
     bool                  bios_hle_keep_intro = false;
 
@@ -249,6 +329,12 @@ struct RuntimeConfig {
     int                   video_vsync             = 1;
     bool                  video_frame_interpolation = false;
     int                   video_frame_interpolation_fps = 0; // 0 = display refresh
+    // offer_frame_interpolation: expose the generic interpolation controls
+    // through recomp-ui Settings. Defaults true for compatibility. A game
+    // migrating interpolation into its mod catalog sets this false; stale
+    // persisted Settings values are then ignored and a trusted activation
+    // plugin owns the runtime switch.
+    bool                  video_offer_frame_interpolation = true;
 
     // crt_filter: present-time screen-colour model (verified-enhancement LUT).
     // "raw" (default, byte-identical 5->8 passthrough) | "crt" | "composite" |
@@ -263,6 +349,12 @@ struct RuntimeConfig {
     // intact. The skip is driven the GAME's own way (see fmv_skip_* below); with
     // no per-game config it falls back to holding the skip button.
     bool                  video_auto_skip_fmv = false;
+
+    // offer_skip_fmv: expose auto_skip_fmv through recomp-ui Settings.
+    // Defaults true for compatibility. A game migrating the feature into its
+    // mod catalog sets this false; stale persisted Settings values are then
+    // ignored and a trusted activation plugin owns the runtime switch.
+    bool                  video_offer_skip_fmv = true;
 
     // fmv_skip_*: per-game FMV instant-skip via the game's own end-of-movie path.
     // Some players (Tomba) end a movie when the streamed frame number reaches that
@@ -306,6 +398,13 @@ struct RuntimeConfig {
     int                   video_aspect_den = 3;
 
     // ---- [audio] block ----
+    // buffer_ms: steady-state host playback cushion. The ecosystem default
+    // remains 180 ms because it survives long streamed-stage production gaps;
+    // games with smoother production cadence may opt into a lower value to
+    // reduce controller-to-sound latency. This is a game-developer setting,
+    // not a player preference.
+    int                   audio_buffer_ms = 180;
+
     // spu_hq: enable the SPU float-shadow re-render (Catmull-Rom resample, float
     // headroom). Verified-enhancement, default OFF — spu_render output is
     // byte-identical to the canon hardware mix when off. The PSX_AUDIO_SHADOW
@@ -371,6 +470,12 @@ struct RuntimeConfig {
     // make that re-detect benign. Scoped per-game; no other title's behaviour changes.
     // Wired to sio_set_legacy_cfg(); see sio.c g_pad_legacy_cfg.
     bool                  legacy_pad_config = false;
+    // anti_deadzone: minimum radial analog output after leaving deadzone, in
+    // raw SDL axis units (0..32767). This is a game-owned response setting used
+    // to compensate a title's own internal stick deadzone. Absent => 0.
+    bool                  has_anti_deadzone = false;
+    int                   anti_deadzone     = 0;
+
 };
 
 // One entry from [[recompiler.bios_vectors]].
@@ -410,6 +515,15 @@ struct BiosConfig {
     uint32_t              entry_pc;
     uint32_t              text_size;
 
+    // [program.image] block (optional): declared image identity. When
+    // sha256 is present the recompiler REFUSES to emit from a ROM whose
+    // computed sha doesn't match — regenerating from the wrong image is a
+    // build defect, not a warning. redistributable=true marks a BIOS that
+    // ships WITH the game (OpenBIOS): the runtime then hides the whole
+    // BIOS-selection surface (couriered via psx_bios_image.image_bundled).
+    std::string           image_sha256;         // empty = unchecked
+    bool                  image_redistributable = false;
+
     // [recompiler] block
     std::filesystem::path seeds_path;    // absolute path to seeds JSON
     std::filesystem::path out_dir;       // absolute path to output dir
@@ -418,8 +532,36 @@ struct BiosConfig {
     std::vector<BiosVectorTable> bios_vectors; // optional vector dispatch tables
     std::vector<BiosAlias>       bios_aliases; // optional fixed-target trampolines
 
-    // [runtime] block (optional)
-    RuntimeConfig         runtime;
+    // [recompiler.address_model] block: the BIOS's boot-time ROM->RAM code
+    // copies, semantic validation and consumption in BiosAddressModel
+    // (bios_address_model.h). Empty = the BIOS runs entirely from ROM.
+    std::vector<BiosAddrCopy> address_copies;
+    // [[recompiler.install_slots]]: kernel-RAM PCs the BIOS overwrites with
+    // dispatch stubs at runtime (see docs/dynamic_handler_install.md).
+    std::vector<uint32_t>     install_slots;
+
+    // [recompiler.runtime_exports]: per-image anchors the emitter couriers
+    // into the generated C (psx_bios_image, runtime/include/psx_bios_image.h)
+    // for the runtime's HLE tier. 0 = this BIOS has no such anchor — the
+    // consumer treats the feature as structurally unavailable.
+    // shell_entry_phys gates the BIOS boot-skip and NOTHING else; it works
+    // under pure LLE, so every image that exports it skips the boot the same
+    // way. deliver_event_ret gates the kernel-call HLE tier, separately. The
+    // runtime decides the two axes in psx_bios_hle_plan()
+    // (runtime/include/bios_hle_plan.h) — read that header before touching
+    // either, it records why collapsing them broke OpenBIOS boot-skip.
+    uint32_t shell_entry_phys  = 0;  // BIOS boot-skip trigger (bios_hle.c)
+    uint32_t deliver_event_ret = 0;  // $ra after the kernel DeliverEvent jalr
+
+    // NOTE: a BIOS profile has NO [runtime] block. It describes an IMAGE —
+    // facts about bytes — never a preference; runtime options belong to
+    // game.toml/settings.toml, where the player and the title can both be
+    // heard. There used to be a RuntimeConfig here, parsed and never read by
+    // anything, and bios/OpenBIOS.toml carried a `bios_hle = false` in it that
+    // looked like the reason HLE was off on OpenBIOS. It was not (the real gate
+    // is the absent deliver_event_ret anchor), and reading it as one is how the
+    // boot-skip regression got rationalized instead of fixed. load_bios_config
+    // now REJECTS a [runtime] block rather than silently ignoring it.
 };
 
 struct GameConfig {
@@ -457,6 +599,9 @@ struct GameConfig {
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
     std::filesystem::path bios_thunks_path; // optional; empty if not set
+    // [recompiler] bios_config — BIOS profile this game builds against
+    // (empty = main_psx resolves the SCPH1001 profile default).
+    std::filesystem::path bios_config_path;
     std::filesystem::path out_dir;
     bool                  strict;
     std::string           discovery;     // "whole-image" (default) or "reachable"
@@ -486,6 +631,10 @@ struct GameConfig {
     std::vector<uint32_t> ws_sprite_tag_funcs;
     uint32_t              ws_sprite_anchor_addr = 0;
     bool                  ws_hud_sprt_squash = false;
+    // auto_ui_squash: proportion-correct textured screen-space primitives in
+    // the final ordering-table layer. Repeated glyph/icon rows share an anchor
+    // so centred text and edge counters cannot split at thirds boundaries.
+    bool                  ws_auto_ui_squash = false;
 
     // [data_shards] funcs: functions that get the memoized pure-function
     // replay entry/return hooks (psx_datashard_enter/psx_datashard_ret).
@@ -540,6 +689,13 @@ struct GameConfig {
     // auto-detector cannot qualify (e.g. an X-only test with no height compare
     // in the same function — Ape Escape 0x8004AB64). Empty by default; regen.
     std::vector<uint32_t> ws_cull_slti_sites;
+    // [widescreen.cull] bltz_sites — explicit signed LEFT-edge widen sites
+    // (`bltz rs, reject` -> psx_ws_cull_bltz), the counterpart to slti_sites.
+    // detect_cull_bltz_sites only classifies left-edge bltz for functions
+    // auto_screen_x qualified, so an X-only funnel wired through explicit
+    // slti_sites has no left-edge widen without this. Empty by default;
+    // identity at 4:3; regen required.
+    std::vector<uint32_t> ws_cull_bltz_sites;
     // Horizontal low-edge form `subu rd,zero,rs` -> `-rs-x_margin`.
     // Empty by default; configured sites require regenerated native code.
     std::vector<uint32_t> ws_cull_negsub_sites;
@@ -561,8 +717,23 @@ struct GameConfig {
     // scissor clips the overflow and wrapped off-left coords pass); the
     // vanilla loaded value at 4:3. Empty by default; regen required.
     std::vector<uint32_t> ws_cull_xclip_load_sites;
-    // Extra per-side actor overdraw beyond the visible widescreen edge.
+    // Exact comparison sites whose result is forced only while widescreen
+    // reveals extra world. Used for proven object/model participation gates
+    // where maximal overdraw is preferable to range guessing. Each entry is
+    // guarded by the complete MIPS word; 4:3 executes the vanilla comparison.
+    std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    // Exact 12-bit angular half-extents used by terrain-cell frusta.
+    std::vector<WidescreenAngleSite> ws_cull_angle_sites;
+    // Full-word-guarded model-participation cosine compares widened only in
+    // the camera-horizontal plane. Empty/default is completely inert.
+    WidescreenAspectConeConfig ws_aspect_cone;
+    // Extra per-side render/terrain participation beyond the visible edge.
     int                   ws_cull_guard_pixels = 0;
+    // Additional per-side lead used only by the explicit bias_sites and
+    // range_sites world-space activation windows. This lets a game activate
+    // already-resident objects well before the visible edge without widening
+    // terrain producers or fixed-capacity render cones by the same amount.
+    int                   ws_cull_activation_guard_pixels = 0;
 
     // [widescreen.cull] screen_w_imms / screen_h_imms — the width/height
     // immediates of the GTE screen-extent reject signature, per game (the
@@ -706,6 +877,12 @@ struct GameConfig {
     bool ws_offered = true;
     bool vulkan_offered = false;
 
+    // [widescreen] adaptive_view — let the user opt into a live, resize-driven
+    // aspect instead of selecting only fixed 4:3/16:9/21:9 modes. The fixed
+    // aspect remains the initial window shape; the live view is clamped to the
+    // widest aspect this title offers.
+    bool ws_adaptive_view = false;
+
     // [widescreen] offer_ultrawide — expose a separate experimental 21:9
     // launcher choice for titles that have explicitly tested it. Default off;
     // ordinary widescreen offer remains the independent 16:9 choice.
@@ -816,6 +993,7 @@ struct UserSettings {
     bool has_netplay_lobby_url = false; std::string netplay_lobby_url;
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
+    bool has_adaptive_view  = false; bool adaptive_view  = false;
     // [audio]
     bool has_spu_hq         = false; bool spu_hq         = false;
     // [bios] / [disc] / [memcard]
@@ -910,5 +1088,12 @@ BiosConfig load_bios_config(const std::filesystem::path& config_path);
 
 // Load a game config TOML. Throws std::runtime_error on schema violations.
 GameConfig load_game_config(const std::filesystem::path& config_path);
+
+// Hash exactly the per-game settings that can change generated overlay code.
+// The runtime and compile_overlays.py (via psxrecomp-game's
+// --overlay-config-hash query) use this as part of the cache namespace, so a
+// widescreen/patch config edit can never reuse shards emitted under the old
+// rules. Runtime-only settings and comments deliberately do not participate.
+uint32_t overlay_codegen_config_hash(const GameConfig& config);
 
 } // namespace PSXRecompV4

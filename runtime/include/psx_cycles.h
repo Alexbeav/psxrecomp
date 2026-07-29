@@ -60,15 +60,12 @@ extern uint32_t g_psx_cyc_batch_limit;
  * block. Interrupt/MMIO edges still publish the accumulated guest cycles. */
 extern int g_psx_cyc_bb_defer;
 
-/* Opt-in advance attribution for PSX_POST_LOAD_PROBE (armed from main).
- * Zero when disarmed — hot path pays one predictable branch. */
-extern int      g_plp_cycle_diag;
-extern uint64_t g_plp_adv_calls;
-extern uint32_t g_plp_adv_max_chunk;
-extern uint64_t g_plp_adv_sum;
-extern uint64_t g_plp_svc_calls;
-
-/* Advance guest time. The common production path is inlined: bump the
+/* Advance guest time. Overlay DLLs forward this through their callback shim;
+ * normal runtime/generated code keeps the common production path inlined. */
+#if defined(PSX_OVERLAY_DLL_BUILD)
+void psx_advance_cycles(uint32_t cycles);
+#else
+/* The common production path is inlined: bump the
  * counter and only service devices when the next event deadline is due.
  * Guest-visible timing is unchanged (service_to_now replays exact events).
  *
@@ -95,11 +92,6 @@ static inline void psx_advance_cycles(uint32_t cycles) {
     }
 #endif
     if (cycles == 0u) return;
-    if (g_plp_cycle_diag) {
-        g_plp_adv_calls++;
-        g_plp_adv_sum += (uint64_t)cycles;
-        if (cycles > g_plp_adv_max_chunk) g_plp_adv_max_chunk = cycles;
-    }
 #if defined(PSX_COSIM)
     psx_advance_cycles_slow(cycles);
     return;
@@ -123,8 +115,14 @@ static inline void psx_advance_cycles(uint32_t cycles) {
     }
 #endif
 }
+#endif
 
-/* Publish deferred charges (IRQ edge / MMIO / savestate). */
+/* Publish deferred charges (IRQ edge / MMIO / savestate). Overlay DLLs keep
+ * their pending total in the callback shim rather than these host globals. */
+#if defined(PSX_OVERLAY_DLL_BUILD)
+void overlay_flush_cycles(void);
+static inline void psx_cyc_batch_flush(void) { overlay_flush_cycles(); }
+#else
 static inline void psx_cyc_batch_flush(void) {
 #if !defined(PSX_COSIM)
     uint32_t b = g_psx_cyc_batch;
@@ -134,6 +132,7 @@ static inline void psx_cyc_batch_flush(void) {
     psx_advance_cycles(b);
 #endif
 }
+#endif
 
 /* Read accessor for telemetry (includes deferred batch). */
 uint64_t psx_get_cycle_count(void);
@@ -149,11 +148,8 @@ extern uint32_t g_idle_skip_last_pc;
 extern uint32_t g_idle_skip_last_quantum;
 
 /* Save-state restore: re-anchor the deadline device model after psx_cycle_count
- * is overwritten from a snapshot. Also clears host-only CPU timing residual
- * (gte_ts_done / muldiv_ts_done / load-absorb) that is not in the wire format —
- * a pre-load absolute deadline past the rewound clock otherwise becomes one
- * multi-vblank psx_advance_cycles stall (warm-load picture freeze). */
-void psx_cycles_resync_after_restore(struct CPUState *cpu);
+ * is overwritten from a snapshot. */
+void psx_cycles_resync_after_restore(void);
 
 /* Soft rematch / session_reboot: zero the guest clock and deadline bookkeeping.
  * Soft-exit longjmps out of vblank (inside psx_devices_service_to_now) leave

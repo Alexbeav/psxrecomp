@@ -8,6 +8,15 @@ extern "C" {
 #endif
 
 void cdrom_init(const char* cue_path);
+
+/* Did cdrom_init() actually mount an image? 0 = the drive is empty.
+ *
+ * cdrom_init() is deliberately non-fatal when iso_open() fails (a BIOS-only
+ * target legitimately runs with no disc), so a game that was GIVEN a disc path
+ * whose image could not be mounted would otherwise boot straight into an empty
+ * drive and render nothing -- a black screen with no explanation. Callers that
+ * passed a real path must check this and report. */
+int cdrom_has_disc(void);
 /* Disc license region for GetID ("SCEE"/"SCEA"/"SCEI"); derived from the
  * mounted disc's boot serial at launch. Defaults to "SCEA" (SCPH1001). */
 void cdrom_set_disc_scex(const char scex[4]);

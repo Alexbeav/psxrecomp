@@ -28,6 +28,7 @@
 #define PSX_CYC_H
 
 #include <stdint.h>
+#include <string.h>
 #if defined(_MSC_VER)
 #include <intrin.h>       /* MSVC intrinsics: _BitScanForward (no __builtin_ctz) */
 #endif
@@ -44,21 +45,32 @@ extern "C" {
  * state still updates per instruction, and guest totals at barriers match. */
 enum { PSX_CYC_BATCH_SOFT = 64u };
 
+#if defined(PSX_OVERLAY_DLL_BUILD)
+/* The overlay shim already batches cycle charges until a host callback edge. */
+static inline void psx_cyc_bb_defer_begin(void) { }
+static inline void psx_cyc_bb_defer_end(void) { }
+static inline void psx_cyc_bb_defer_flush(void) { overlay_flush_cycles(); }
+#else
 static inline void psx_cyc_bb_defer_begin(void) { g_psx_cyc_bb_defer++; }
 static inline void psx_cyc_bb_defer_end(void) {
     if (g_psx_cyc_bb_defer > 0) g_psx_cyc_bb_defer--;
     if (g_psx_cyc_bb_defer == 0) psx_cyc_batch_flush();
 }
 static inline void psx_cyc_bb_defer_flush(void) { psx_cyc_batch_flush(); }
-/* GCC/Clang cleanup helper: emitter places one guard at function entry so
- * every return path ends BB-defer (CPS/jr/bail) without per-site codegen. */
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
 static inline void psx_cyc_bb_defer_cleanup(int *guard) {
     (void)guard;
     psx_cyc_bb_defer_end();
 }
+#endif
 
 static inline void psx_cyc_charge(uint32_t cycles) {
     if (cycles == 0u) return;
+#if defined(PSX_OVERLAY_DLL_BUILD)
+    psx_advance_cycles(cycles);
+#else
 #if defined(__GNUC__) || defined(__clang__)
     if (__builtin_expect(g_ls_replay_active | g_event_step_conservative, 0)) {
 #else
@@ -96,6 +108,7 @@ static inline void psx_cyc_charge(uint32_t cycles) {
     }
 #endif
     psx_advance_cycles(cycles); /* publishes any pending batch first */
+#endif
 }
 
 /* §1 base (Beetle cpu.cpp:795-798). */
@@ -110,6 +123,16 @@ static inline void psx_cyc_base(CPUState* cpu) {
  * save/restore of ReadAbsorb[0]). */
 static inline void psx_cyc_deps(CPUState* cpu, uint32_t reg_mask) {
     reg_mask &= 0xFFFFFFFEu;   /* never touch ReadAbsorb[0] */
+    if (reg_mask && (reg_mask & (reg_mask - 1u)) == 0u) {
+#if defined(_MSC_VER)
+        unsigned long n;
+        _BitScanForward(&n, reg_mask);
+        cpu->read_absorb[(unsigned)n] = 0u;
+#else
+        cpu->read_absorb[(unsigned)__builtin_ctz(reg_mask)] = 0u;
+#endif
+        return;
+    }
     while (reg_mask) {
 #if defined(_MSC_VER)
         unsigned long _psx_ctz_idx;
@@ -157,6 +180,15 @@ int psx_load_delay_enabled(void);
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 
+/* Overlay DLLs route timed loads through the host callback shim so they share
+ * runtime timing and memory state. Normal generated code keeps the main-RAM
+ * fast path inline. */
+#if defined(PSX_OVERLAY_DLL_BUILD)
+uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
+                           uint32_t rt, uint32_t reg_mask);
+uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
+                           uint32_t rt, uint32_t reg_mask);
+#else
 /* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;
  * MMIO / lockstep / data-shard fall through to *_slow in memory.c. */
 static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
@@ -177,11 +209,9 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
             psx_cyc_charge(fudge + 5u);
             cpu->ld_which_t = (uint8_t)rt;
         }
-        uint32_t off = phys & 0x1FFFFFu;
-        return (uint32_t)g_psx_ram[off]
-             | ((uint32_t)g_psx_ram[off + 1] << 8)
-             | ((uint32_t)g_psx_ram[off + 2] << 16)
-             | ((uint32_t)g_psx_ram[off + 3] << 24);
+        uint32_t value;
+        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        return value;
     }
     return psx_cyc_load_word_slow(cpu, addr, rt, reg_mask);
 #else
@@ -209,9 +239,9 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
             psx_cyc_charge(fudge + 5u);
             cpu->ld_which_t = (uint8_t)rt;
         }
-        uint32_t off = phys & 0x1FFFFFu;
-        return (uint16_t)((uint32_t)g_psx_ram[off]
-                        | ((uint32_t)g_psx_ram[off + 1] << 8));
+        uint16_t value;
+        memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        return value;
     }
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);
 #else
@@ -220,6 +250,7 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
     return psx_read_half(addr);
 #endif
 }
+#endif
 
 extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 

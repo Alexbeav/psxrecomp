@@ -703,6 +703,7 @@ static uint32_t execute_ch2_gpu(void) {
          * The words following the header are sent to GP0. */
         gpu_ws_begin_linked_list();
         uint32_t addr = channels[2].madr & 0x1FFFFCu;
+        gpu_ws_prepass_linked_list(addr);
         uint32_t safety = 0;
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
 
@@ -716,6 +717,7 @@ static uint32_t execute_ch2_gpu(void) {
             uint32_t header = psx_read_word(addr);
             uint32_t num_words = (header >> 24) & 0xFF;
             uint32_t word_addr = (addr + 4) & 0x1FFFFCu;
+            gpu_set_gp0_linked_list_node(addr, num_words);
             actual_words += 1u;
 
             for (uint32_t i = 0; i < num_words; i++) {
@@ -737,6 +739,7 @@ static uint32_t execute_ch2_gpu(void) {
         if (safety > MAX_NODES) {
             channels[2].madr = addr;
         }
+        gpu_ws_end_linked_list();
     } else {
         /* Burst mode (sync_mode == 0) */
         uint32_t word_count = channels[2].bcr & 0xFFFF;

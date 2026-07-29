@@ -278,7 +278,21 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         "  \"frame\": %llu,\n"
         "  \"dispatch_depth\": %d,\n"
         "  \"last_func_addr\": \"0x%08X\",\n"
-        "  \"last_store_pc\": \"0x%08X\",\n",
+        "  \"last_store_pc\": \"0x%08X\",\n"
+        /* Dirty-RAM interpreter fail-closed detail. Without this, a run that
+         * died on an undecodable instruction reported only cpu->pc == 0 — and
+         * ten different sites set that, so the cause was unattributable. The
+         * interpreter already records all of it; this is the serializer. */
+        "  \"interp_unsupported\": {\n"
+        "    \"midblock_count\": %llu,\n"
+        "    \"pc\": \"0x%08X\",\n"
+        "    \"insn\": \"0x%08X\",\n"
+        "    \"reason\": \"%s\",\n"
+        "    \"block_entry\": \"0x%08X\",\n"
+        "    \"entry_ra\": \"0x%08X\",\n"
+        "    \"entry_sp\": \"0x%08X\",\n"
+        "    \"insns_into_block\": %u\n"
+        "  },\n",
         reason ? reason : "(unknown)",
         s_exit_origin,
         kBuildId,
@@ -286,7 +300,16 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         (unsigned long long)s_frame_count,
         g_psx_dispatch_depth,
         g_debug_current_func_addr,
-        g_debug_last_store_pc);
+        g_debug_last_store_pc,
+        (unsigned long long)g_dirty_ram_unsupported_midblock,
+        g_dirty_ram_last_unsupported_pc,
+        g_dirty_ram_last_unsupported_insn,
+        g_dirty_ram_last_unsupported_reason
+            ? g_dirty_ram_last_unsupported_reason : "(none)",
+        g_dirty_ram_last_unsupported_entry,
+        g_dirty_ram_last_unsupported_entry_ra,
+        g_dirty_ram_last_unsupported_entry_sp,
+        g_dirty_ram_last_unsupported_insns);
 
 #ifdef _WIN32
     if (seh_info) {

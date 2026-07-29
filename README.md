@@ -4,120 +4,83 @@
 
 # PSXRecomp
 
-Generic static recompiler framework for PlayStation 1: MIPS R3000A to C to
-native x64.
+**A general-purpose static recompiler for the PlayStation 1.** It turns a PS1
+disc into a native executable — MIPS R3000A translated to C, compiled to x64,
+linked against a hardware-accurate runtime. Not an emulator: the game becomes a
+program your CPU runs directly.
+
+Titles brought up on it ship as standalone builds with widescreen, mods, live
+language switching and a launcher. They can run on either the bundled,
+open-source **OpenBIOS** or a compatible **retail BIOS** supplied by the player;
+OpenBIOS is the default, so a retail BIOS dump is not normally required. The
+framework is general-purpose: bringing up a new game is a matter of
+configuration and reverse engineering, not new engine work.
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/assets/games/tomba.png" alt="Tomba!" width="100%"><br><sub><b>Tomba!</b></sub></td>
+    <td width="33%"><img src="docs/assets/games/tomba-2.png" alt="Tomba! 2" width="100%"><br><sub><b>Tomba! 2</b></sub></td>
+    <td width="33%"><img src="docs/assets/games/ape-escape.png" alt="Ape Escape" width="100%"><br><sub><b>Ape Escape</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/games/mega-man-x4.png" alt="Mega Man X4" width="100%"><br><sub><b>Mega Man X4</b></sub></td>
+    <td><img src="docs/assets/games/mega-man-x5.png" alt="Mega Man X5" width="100%"><br><sub><b>Mega Man X5</b></sub></td>
+    <td><img src="docs/assets/games/mega-man-x6.png" alt="Mega Man X6" width="100%"><br><sub><b>Mega Man X6</b></sub></td>
+  </tr>
+</table>
 
 Background on the original prototype:
 [I Built a PS1 Static Recompiler With No Prior Experience (and Claude Code)](https://1379.tech/i-built-a-ps1-static-recompiler-with-no-prior-experience-and-claude-code/)
 
-[![PSXRecomp demo](https://img.youtube.com/vi/CID9oVhgCyY/maxresdefault.jpg)](https://www.youtube.com/watch?v=CID9oVhgCyY)
+## Games
 
-## How to use PSXRecomp
+Each game is its own repository that pins a framework commit as a submodule and
+ships its own playable release with an in-app launcher. Validation and feature
+coverage continue to improve per title.
 
-PSXRecomp takes a PlayStation disc image and BIOS and creates a recompilation
-project containing C source and build scripts.
+| Game | Repository | Latest build | Notes |
+|---|---|---|---|
+| *Tomba!* | [TombaRecomp](https://github.com/mstan/TombaRecomp) | [releases](https://github.com/mstan/TombaRecomp/releases/latest) | Widescreen, supersampling, save/load, mod packages. |
+| *Tomba! 2* | [Tomba2Recomp](https://github.com/mstan/Tomba2Recomp) | [releases](https://github.com/mstan/Tomba2Recomp/releases/latest) | Multi-track disc support; adaptive widescreen through 21:9. |
+| *Ape Escape* | [ApeEscapeRecomp](https://github.com/mstan/ApeEscapeRecomp) | [releases](https://github.com/mstan/ApeEscapeRecomp/releases/latest) | Widescreen to 21:9, memory-card save/load, dual-analog. |
+| *Mega Man X4* | [MegaManX4Recomp](https://github.com/mstan/MegaManX4Recomp) | [releases](https://github.com/mstan/MegaManX4Recomp/releases/latest) | Playable; 2D widescreen. |
+| *Mega Man X5* | [MegaManX5Recomp](https://github.com/mstan/MegaManX5Recomp) | [releases](https://github.com/mstan/MegaManX5Recomp/releases/latest) | Playable; 2D widescreen. |
+| *Mega Man X6* | [MegaManX6Recomp](https://github.com/mstan/MegaManX6Recomp) | [releases](https://github.com/mstan/MegaManX6Recomp/releases/latest) | Playable; stages, controller, save/load; 2D widescreen to 21:9. |
+| *Tsumu Light* | [TsumuLightRecomp](https://github.com/mstan/TsumuLightRecomp) | [releases](https://github.com/mstan/TsumuLightRecomp/releases/latest) | Japanese-only title (SLPS-02253); first consumer of [live language switching](#swap-language-on-the-fly). |
+| *Xenogears* — **community** | [OpokXeno/xenogears-recomp](https://github.com/OpokXeno/xenogears-recomp) | — | Independent project by [@OpokXeno](https://github.com/OpokXeno), who also contributed widescreen cull-site work upstream. |
 
-### Generate a project with the released CLI
+Each game repo carries its own build/run instructions, keyboard/controller
+mappings, and per-game settings. **This repository builds the framework and a
+standalone BIOS runtime supporting OpenBIOS and a compatible retail BIOS** —
+see [Release Package](#release-package) below.
 
-1. Download `psxrecomp-cli-windows-x86_64.zip` from
-   [Releases](https://github.com/mstan/psxrecomp/releases).
-2. Extract the whole zip to a folder. Keep its contents together.
-3. Open PowerShell in that folder and run:
-
-```powershell
-.\psxrecomp.exe build `
-  --disc "C:\Games\My Game\game.cue" `
-  --bios "C:\BIOS\SCPH1001.BIN" `
-  --output "C:\Projects\MyGameRecomp"
-```
-
-Use the `.cue` file when a game has one, and keep its `.bin` track files beside
-it. Single-file `.bin` and `.iso` images are also accepted.
-
-The output folder contains:
-
-- generated C source for the game and BIOS;
-- `game.toml`, which you can edit for game-specific settings;
-- `CMakeLists.txt` and build scripts; and
-- a local copy of the PSXRecomp runtime source needed by the project.
-
-The downloaded CLI is self-contained. You do not need to install Python or
-build this repository to generate a project.
-
-### Build the generated project
-
-Install CMake, Ninja, a C/C++ compiler, and SDL2 development files. Then run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Projects\MyGameRecomp\build.ps1"
-```
-
-The generated project also includes a shell build script for macOS and Linux:
-
-```sh
-sh /path/to/MyGameRecomp/build.sh
-```
-
-The ready-made CLI release is currently for 64-bit Windows. You can build the
-CLI from source on another operating system using the instructions below.
-
-The generated project is a practical starting point, not a promise that every
-game works without game-specific fixes. PSX games can load extra code and use
-hardware in ways that require additional configuration or development.
-
-Use only disc and BIOS files you obtained legally. PSXRecomp does not include
-them. Generated game and BIOS source is derived from those files, so do not
-redistribute it.
-
-### Build the CLI from source
-
-You need Git, Python 3, CMake, Ninja, and a C++20 compiler.
-
-```sh
-git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
-cd psxrecomp
-python tools/build_cli.py release
-```
-
-The ready-to-use CLI archive is written to `dist/`. To package debug binaries
-instead, run `python tools/build_cli.py debug`.
-
-On Linux/macOS source checkouts, the same development setup can be driven by:
-
-```sh
-sh tools/setup_dev.sh
-```
-
-That script builds the CLI/recompiler tools and, when BIOS/generated sources are
-available, the BIOS-only runtime. Game projects should still be generated with
-`psxrecomp build` and built from their generated `build.sh`.
-
-> **Where the project is headed.** Development so far has been **breadth-first**:
-> stand up as many games as possible and get them into a playable alpha, proving
-> the framework generalizes. That phase has largely delivered — seven titles now
-> run and ship public builds (see [Games](#games)). The project is now pivoting to
-> a **depth / optimization** phase: pushing each game toward 100% static coverage,
-> tightening timing accuracy, driving load times toward zero, and hardening the
-> renderer and audio paths. Expect the fleet to get *faster and more accurate*
-> rather than *wider* from here.
+Bringing up a title of your own? Start with
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and open an issue — community projects are
+listed here alongside the rest.
 
 ## What It Is
 
 PSXRecomp translates PS1 MIPS binaries into C, then compiles that C as a
 native executable linked against a PS1 hardware runtime. The v4 architecture
-recompiles the real `SCPH1001.BIN` BIOS and runs it as the kernel — that
-**low-level (LLE) recompiled BIOS is the foundation and the correctness oracle.**
-Everything is architected LLE-first: accuracy comes first, and convenience is
-layered on top, opt-in, never underneath.
+links two recompiled low-level BIOS backends: the bundled OpenBIOS and a
+compatible retail BIOS (currently `SCPH1001.BIN`). Whichever one the player
+selects runs as the kernel; that **low-level (LLE) recompiled BIOS is the
+foundation and the correctness oracle.** Everything is architected LLE-first:
+accuracy comes first, and convenience is layered on top, opt-in, never
+underneath.
 
 Three things sit on that foundation:
 
 - **An optional HLE tier.** A high-level BIOS layer can be laid over the
-  recompiled kernel to skip the boot sequence and service a few BIOS calls
-  directly — a player-facing convenience and optimization, enabled by default
-  but fully opt-out (`[runtime] bios_hle = false`). Anything it doesn't
-  implement falls straight through to the recompiled BIOS, so the LLE path stays
-  load-bearing and remains the oracle every accuracy check runs against.
+  selected recompiled kernel — OpenBIOS or retail BIOS — to skip the boot
+  sequence and service a few BIOS calls directly. It is a player-facing
+  convenience and optimization, enabled by default but fully opt-out
+  (`[runtime] bios_hle = false`). Anything it doesn't implement falls straight
+  through to the selected recompiled BIOS, so the LLE path stays load-bearing
+  and remains the oracle every accuracy check runs against. The boot-skip half
+  works on both linked BIOS backends — the bundled OpenBIOS and a player's
+  retail BIOS dump reach the game the same way — while the kernel-call half is
+  enabled per image and says so at startup when it isn't.
 - **Capture-and-compile for overlays.** PS1 games stream code off the disc at
   runtime (*overlays*) that no ahead-of-time recompiler can see. PSXRecomp
   captures each overlay the moment it loads and recompiles it to native code,
@@ -138,48 +101,257 @@ repositories and link this one in as a **git submodule** to build a game binary.
 [`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) (how a game actually
 runs — static / native-overlay / interpreter), then
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/BUILDING.md`](docs/BUILDING.md), and
+[`docs/BUILDING.md`](docs/BUILDING.md),
+[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) (versioned runtime mods),
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Games
+## Which PlayStation BIOS does it use?
 
-Each game is its own repository that pins a framework commit as a submodule and
-ships its own release with an in-app launcher. All are **alpha** — playable, not
-yet fully validated end to end.
+Builds support two recompiled BIOS backends: **OpenBIOS** and a compatible
+**retail BIOS**. OpenBIOS is a free, open-source PlayStation BIOS from the
+[PCSX-Redux](https://github.com/grumpycoders/pcsx-redux) project that we're
+allowed to distribute. It is bundled and runs by default, so you usually do not
+need to provide a BIOS dump. Bring a game disc image and play.
 
-| Game | Repository | Latest build | Notes |
-|---|---|---|---|
-| *Tomba!* | [TombaRecomp](https://github.com/mstan/TombaRecomp) | [releases](https://github.com/mstan/TombaRecomp/releases/latest) | Most mature target; widescreen, supersampling, save/load. |
-| *Tomba! 2* | [Tomba2Recomp](https://github.com/mstan/Tomba2Recomp) | [releases](https://github.com/mstan/Tomba2Recomp/releases/latest) | Multi-track disc support, selectable 21:9. |
-| *Ape Escape* | [ApeEscapeRecomp](https://github.com/mstan/ApeEscapeRecomp) | [releases](https://github.com/mstan/ApeEscapeRecomp/releases/latest) | New launcher, widescreen, memory-card save/load. |
-| *Mega Man X4* | [MegaManX4Recomp](https://github.com/mstan/MegaManX4Recomp) | [releases](https://github.com/mstan/MegaManX4Recomp/releases/latest) | Playable; widescreen. |
-| *Mega Man X5* | [MegaManX5Recomp](https://github.com/mstan/MegaManX5Recomp) | [releases](https://github.com/mstan/MegaManX5Recomp/releases/latest) | Early bring-up. |
-| *Mega Man X6* | [MegaManX6Recomp](https://github.com/mstan/MegaManX6Recomp) | [releases](https://github.com/mstan/MegaManX6Recomp/releases/latest) | Playable; stages, controller, save/load. |
-| *Tsumu Light* | [TsumuLightRecomp](https://github.com/mstan/TsumuLightRecomp) | [releases](https://github.com/mstan/TsumuLightRecomp/releases/latest) | Japanese title (SLPS-02253); early bring-up. |
+**If you'd rather use a retail BIOS**, pick your dumped `SCPH1001.BIN` in
+settings and it will be used instead. Clear that choice to return to OpenBIOS.
 
-Each game repo carries its own build/run instructions, keyboard/controller
-mappings, and per-game settings. **This repository builds the framework and a
-BIOS-only runtime** — see [Release Package](#release-package) below.
+Two things worth knowing:
+
+- The retail BIOS has to be the *exact* image linked into the build, so a
+  different dump can't be swapped in. If yours doesn't match, the game says
+  which one it expects, and you can carry on with OpenBIOS.
+- **Save files work either way.** Memory cards are shared. *Savestates* are not:
+  one made with OpenBIOS won't load under the retail BIOS, or the other way
+  round, so the game won't let you mix them.
+
+Titles with a verified OpenBIOS incompatibility require the compatible retail
+BIOS instead and say so up front.
+
+> Developers: see [`docs/BIOS_SELECTION.md`](docs/BIOS_SELECTION.md) for the
+> `[runtime] openbios` setting and the selection rules.
+
+## Widescreen
+
+Not a stretch and not a crop — a genuinely **wider field of view**, computed at
+recompile time by widening the game's own projection and culling maths. 4:3
+output stays byte-identical when widescreen is off.
+
+This is framework tooling, not a per-game bolt-on. Any project built on
+PSXRecomp can enable it from a `[widescreen]` block in its `game.toml` — the
+generic cull-widening, FOV and aspect machinery lives here, and bringing up a
+new title is a matter of locating that game's cull sites rather than writing new
+rendering code.
+
+It works on both 3D and 2D engines. 2D is the harder case: a sprite engine has
+no camera to widen, so the background tile ring, streamer and packet budget all
+have to be widened in step with the renderer.
+
+<table>
+  <tr><td><img src="docs/assets/widescreen/mmx6-16x9.png" alt="Mega Man X6 at 16:9" width="100%"></td></tr>
+  <tr><td align="center"><sub><b>Mega Man X6 — 16:9.</b> A 2D sprite engine widened: more stage either side, no stretching.</sub></td></tr>
+</table>
+
+<table>
+  <tr><td><img src="docs/assets/widescreen/ape-escape-21x9.png" alt="Ape Escape at 21:9" width="100%"></td></tr>
+  <tr><td align="center"><sub><b>Ape Escape — 21:9.</b> A wider 3D frustum, not a zoomed one.</sub></td></tr>
+</table>
+
+<table>
+  <tr><td><img src="docs/assets/widescreen/tomba-2-adaptive.png" alt="Tomba! 2 adaptive widescreen" width="100%"></td></tr>
+  <tr><td align="center"><sub><b>Tomba! 2 — adaptive.</b> The view tracks the window, up to an ultrawide cap.</sub></td></tr>
+</table>
+
+See [`WIDESCREEN.md`](WIDESCREEN.md) for the per-game configuration.
+
+## Mods
+
+Mods are **versioned packages**, not patched discs. A `.psxmod` is an
+installation, provenance and trust boundary; each package contributes any number
+of independently toggleable **features**, and enabling one never silently
+reconfigures another.
+
+Crucially, your disc image is never rewritten. The player selects a verified
+stock BIN/CUE, and resolution produces guarded native operations and sparse disc
+overlays *over* that image — so the original stays intact and a mod can be
+turned off as easily as it was turned on.
+
+<p align="center">
+  <img src="docs/assets/ui/mod-launcher.png" alt="The mods panel in the launcher" width="820">
+</p>
+
+Tomba! ships three today — widescreen, skip-FMV, and a warp debug menu that
+re-enables the developers' own hidden menu. Full format in
+[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md).
+
+## Swap language on the fly
+
+A general localization layer captures the game's own strings out of memory and
+substitutes translated bytes as it runs. Any source language to any target — the
+mechanism has no built-in notion of a "default" language, so a Japanese-only
+release can be played in English just as readily as an English one can be played
+in another language.
+
+Switching is live. Tables are human-editable TOML under `translations/`, one
+column per language, hot-reloaded while the game is running — and the launcher
+carries a language picker. A translator can edit a line and see it in-game
+without rebuilding anything.
+
+The hard part is glyphs, not strings. Substituted text is drawn through the
+game's *own* glyph routine with per-character proportional advances calibrated
+by measuring the real ink width of each glyph tile in VRAM, plus auto-fit
+condensing so longer translations still fit a box sized for the original. That
+means no engine changes and no regeneration to add a language.
+
+See [`docs/STRING_TRANSLATION.md`](docs/STRING_TRANSLATION.md); *Tsumu Light*
+(SLPS-02253) is the first title using it.
+
+## Renderers
+
+| Backend | Status |
+|---|---|
+| **OpenGL** | **Default.** GPU-authoritative VRAM/FBO renderer; moves rasterization and supersampling onto the GPU. |
+| **Vulkan** | **Experimental.** Built when the SDK is present, opt-in at runtime; falls back to OpenGL if unavailable. |
+| **Software** | CPU rasterizer — the reference look, and the most portable fallback. |
+
+## How to use PSXRecomp
+
+PSXRecomp takes a PlayStation disc image and creates a recompilation project
+that supports the bundled OpenBIOS and a compatible retail BIOS. The CLI asks
+for a retail BIOS dump so it can generate that backend alongside OpenBIOS.
+
+### Generate a project with the released CLI
+
+1. Download `psxrecomp-cli-windows-x86_64.zip` from
+   [Releases](https://github.com/mstan/psxrecomp/releases).
+2. Extract the whole zip to a folder. Keep its contents together.
+3. Open PowerShell in that folder and run:
+
+```powershell
+.\psxrecomp.exe build `
+  --disc "C:\Games\My Game\game.cue" `
+  --bios "C:\BIOS\SCPH1001.BIN" `
+  --output "C:\Projects\MyGameRecomp"
+```
+
+Use the `.cue` file when a game has one, and keep its `.bin` track files beside
+it. Single-file `.bin` and `.iso` images are also accepted.
+
+The output folder contains:
+
+- generated C source for the game and compatible retail BIOS, with the bundled
+  OpenBIOS backend supplied by the framework;
+- `game.toml`, which you can edit for game-specific settings;
+- `CMakeLists.txt` and build scripts; and
+- a local copy of the PSXRecomp runtime source needed by the project.
+
+The downloaded CLI is self-contained. You do not need to install Python or
+build this repository to generate a project.
+
+### Build the generated project
+
+Install CMake, Ninja, and a C/C++ compiler. The build fetches its integrity-
+pinned SDL3 release automatically. Then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Projects\MyGameRecomp\build.ps1"
+```
+
+The generated project also includes a shell build script for macOS and Linux:
+
+```sh
+sh /path/to/MyGameRecomp/build.sh
+```
+
+The ready-made CLI release is currently for 64-bit Windows. You can build the
+CLI from source on another operating system using the instructions below.
+
+The generated project is a practical starting point, not a promise that every
+game works without game-specific fixes. PSX games can load extra code and use
+hardware in ways that require additional configuration or development.
+
+Use only disc and retail BIOS files you obtained legally. PSXRecomp does not
+include those copyrighted files; it includes only the redistributable OpenBIOS
+image. Generated game and retail BIOS source is derived from your files, so do
+not redistribute it.
+
+### Build the CLI from source
+
+You need Git, Python 3, CMake, Ninja, and a C++20 compiler.
+
+```sh
+git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
+cd psxrecomp
+python tools/build_cli.py release
+```
+
+The ready-to-use CLI archive is written to `dist/`. To package debug binaries
+instead, run `python tools/build_cli.py debug`.
+
+On Linux/macOS source checkouts, the same development setup can be driven by:
+
+```sh
+sh tools/setup_dev.sh
+```
+
+That script builds the CLI/recompiler tools and, when the OpenBIOS and retail
+BIOS generated sources are available, the standalone BIOS runtime. Game
+projects should still be generated with `psxrecomp build` and built from their
+generated `build.sh`.
+
+> **Where the project is headed.** Development so far has been **breadth-first**:
+> bring up varied games as playable public builds and prove that the framework
+> generalizes. With that foundation established, the project is now focused on a
+> **depth / optimization** phase: pushing each game toward 100% static coverage,
+> tightening timing accuracy, driving load times toward zero, and hardening the
+> renderer and audio paths. Expect existing projects to get *faster and more
+> accurate* from here.
+
+## Release Package
+
+**This repository's release is a standalone BIOS runtime, not a game.** It can
+boot either the bundled OpenBIOS or a compatible retail BIOS for memory-card
+management; to play a title, grab its release from the [Games](#games) table.
+
+1. Download `PSXRecomp-v*-windows-x64.zip` from Releases.
+2. Extract it and run `PSXRecomp.exe`.
+3. It boots on the bundled OpenBIOS. To use your compatible retail BIOS dump
+   instead, pick it in settings.
+
+The package includes `bios/openbios.bin` and its MIT notice at
+`bios/OpenBIOS.LICENSE`, but no retail PS1 BIOS, game disc image, generated game
+code, or save data. If you choose a retail BIOS, that path is remembered next to
+the executable as `bios.cfg`; clear the choice (or delete that file) to go back
+to OpenBIOS.
+
+The game recomp projects use the same runtime picker contract but ship a
+**Dear ImGui launcher**: on first run it asks for the game disc image and uses
+OpenBIOS automatically. The optional retail BIOS row lets you select your own
+verified dump or clear that choice to return to OpenBIOS. The launcher also
+configures video, controls, and per-game settings. Keyboard/controller mappings
+live in each game's repo and launcher, not here.
 
 ## Philosophy — toward 100% static recompilation
 
 The goal is simple and absolute: **a PS1 game should run as native code, not be
 emulated.** Every MIPS instruction the game executes should ideally have been
 translated to C and compiled ahead of time. No interpreter on the hot path, no
-HLE shims, no "good enough" approximation of the hardware — the recompiled BIOS
-*is* the kernel, and the recompiled game *is* the game.
+HLE shims, no "good enough" approximation of the hardware — the selected
+recompiled BIOS, OpenBIOS or retail BIOS, *is* the kernel, and the recompiled
+game *is* the game.
 
 PS1 games make that goal hard in one specific way: **overlays.** Games stream
 code off the disc into RAM at runtime and execute it, then overwrite it with the
 next overlay. That code does not exist in the executable at build time, so a
 pure ahead-of-time recompiler cannot see it. This is the frontier the project is
-working through, and it is why this is an **alpha/beta**: today a *majority* of a
-supported game runs as statically recompiled native code, but **not yet 100%.**
+working through. Today a *majority* of a supported game runs as statically
+recompiled native code, but **not yet 100%.**
 
 How we close the gap, without ever compromising correctness:
 
-1. **Static first.** The main executable and the BIOS are fully recompiled
-   ahead of time. This is the bulk of execution and it is always native.
+1. **Static first.** The main executable and both supported BIOS backends —
+   OpenBIOS and retail BIOS — are fully recompiled ahead of time. This is the
+   bulk of execution and it is always native.
 2. **Capture → compile → cache for overlays.** As the game runs, overlays are
    captured the moment they load. Offline, each is recompiled to a native DLL
    keyed by its content, cached, and on later runs loaded and dispatched as
@@ -188,8 +360,8 @@ How we close the gap, without ever compromising correctness:
 3. **Interpreter failover — only for code that isn't static yet.** A small
    MIPS interpreter runs *runtime-installed* code (overlays/dirty RAM) that
    hasn't been captured-and-compiled. It is a safety net and a coverage feeder,
-   never a substitute for recompiling static code, and never on the BIOS/main-EXE
-   path.
+   never a substitute for recompiling static code, and never on the selected
+   BIOS (OpenBIOS or retail BIOS) or main-EXE path.
 4. **Precision over recall.** A piece of code we *haven't* compiled safely falls
    back to the interpreter and gets captured for next time — under-coverage
    self-heals. A piece we compile *wrong* would corrupt the machine, so the
@@ -217,83 +389,73 @@ a game is played; this branch is where that machinery is being built.
 
 ## Status
 
-The framework is at **alpha**: the LLE recompiled BIOS boots and hands off to
-the game across all seven targets, and each runs as majority-native code with
-the capture-and-compile pipeline filling overlays as they're reached. The
-breadth-first push is essentially done; work now is depth and optimization.
+The LLE recompiled BIOS — either bundled OpenBIOS or the compatible retail
+backend — boots and hands off to the game across supported projects. Games run
+as majority-native code, with the capture-and-compile pipeline filling overlays
+as they're reached. The breadth-first push is essentially done; work now is
+depth and optimization.
 
 Core subsystems, framework-wide:
 
 | Subsystem | State |
 |---|---|
-| BIOS recompilation (`SCPH1001.BIN`) | Boots to shell and hands off to game; also the correctness oracle |
-| HLE BIOS tier | Optional boot-skip + service layer over the recompiled BIOS; default on, opt-out |
-| Game EXE recompilation | Title/menus/save-load/gameplay reached across the fleet |
+| BIOS recompilation (OpenBIOS + compatible retail BIOS) | Both boot to the shell and hand off to the game; the selected LLE backend is the correctness oracle |
+| HLE BIOS tier | Optional boot-skip + service layer over the selected recompiled BIOS (OpenBIOS or retail BIOS); default on, opt-out |
+| Game EXE recompilation | Title/menus/save-load/gameplay reached across supported projects |
 | Overlay capture → compile → cache | `static → gcc → tcc`; coverage grows as a game is played |
 | Interpreter failover | Correctness net for not-yet-native code; being compiled away by sharding |
 | CD-ROM / MDEC / XA | FMVs stream and play; XA/CDDA timing stays authentic |
-| Memory cards | Save and load verified on multiple titles |
+| Memory cards | Save and load supported across game projects |
 | SIO0 controllers | Digital pad + DualShock config; per-game analog/digital selection |
 | GPU | Software + OpenGL + Vulkan backends; widescreen FOV/HUD work per game |
 | SPU | Working; reverb/noise/sweep and exact SPU-IRQ accuracy still being tightened |
 | Interrupts, COP0, timers, GTE | Working; cycle-accuracy foundation is an active depth-phase focus |
 
-Per-game maturity varies — see the [Games](#games) table. None of the titles is
-declared fully validated end to end; users perform the final playthrough
-validation on each release.
+Validation scope varies by game — see the [Games](#games) table and each
+project's release notes for current coverage.
 
 Open depth-phase fronts: cycle/IRQ-phase timing accuracy, load-time-toward-zero
 (data sharding), renderer parity between the software/GL/Vulkan backends, and
 driving overlay coverage the last mile to 100% static.
 
-Running this repository's runtime without a game is useful for **BIOS-only
-memory-card management**; to build and play a title, use its game repo from the
-[Games](#games) table.
-
-## Release Package
-
-**This repository's release is BIOS-only** — it is the framework runtime, not a
-game. Use it for BIOS boot and memory-card management; to play a title, grab its
-release from the [Games](#games) table.
-
-1. Download `PSXRecomp-v*-windows-x64.zip` from Releases.
-2. Extract it and run `PSXRecomp.exe`.
-3. Select your legally obtained `SCPH1001.BIN` BIOS when prompted.
-
-The package does not include a PS1 BIOS, game disc image, generated game code,
-or save data. The selected BIOS path is saved next to the executable as
-`bios.cfg`; delete that file to pick a different BIOS later.
-
-The game recomp projects use the same runtime picker contract but ship a
-**Dear ImGui launcher**: on first run it prompts for your legally obtained BIOS
-and game disc image, then lets you configure video, controls, and per-game
-settings before launching. Keyboard/controller mappings live in each game's repo
-and launcher, not here.
+Running this repository's standalone BIOS runtime without a game is useful for
+**memory-card management under OpenBIOS or a compatible retail BIOS**; to build
+and play a title, use its game repo from the [Games](#games) table.
 
 ## Setup
 
 Builds natively on **Windows (MSVC/MinGW)**, **macOS (Apple Silicon & Intel)**,
-and **Linux**. The BIOS thread scheduler uses host fibers — Win32 Fibers on
-Windows, `ucontext` on POSIX (`runtime/src/psx_fiber.c`) — so the recompiled
-BIOS's cooperative thread switching (the CD-boot handoff in particular) behaves
-the same on every platform.
+and **Linux**. The selected BIOS backend — OpenBIOS or retail BIOS — uses host
+fibers for its thread scheduler: Win32 Fibers on Windows and `ucontext` on POSIX
+(`runtime/src/psx_fiber.c`). This keeps the selected recompiled backend's
+cooperative thread switching, especially the CD-boot handoff, consistent on
+every platform.
 
 Requirements at a glance (full details, dependency table, and per-platform
 prerequisites in [`docs/BUILDING.md`](docs/BUILDING.md)):
 
 - A C/C++ toolchain: MSVC or MinGW/MSYS2 (Windows), Apple Clang (macOS),
   Clang/GCC (Linux). CMake 3.20+; on macOS/Linux also `ninja` and `pkg-config`.
-- SDL2 (system / bundled).
-- A legally obtained `SCPH1001.BIN` BIOS dump. Not included.
+- SDL3 3.4+ (a system package when available, otherwise fetched automatically).
+  SDL2 is available only as an explicit build fallback.
+- A retail PS1 BIOS is **optional** — builds use the bundled OpenBIOS by
+  default. Supply a legally obtained `SCPH1001.BIN` dump only if you want to
+  select the retail BIOS instead (see
+  [Which PlayStation BIOS does it use?](#which-playstation-bios-does-it-use)).
 - For game projects, a legally obtained game disc/EXE dump. Not included.
 
-Build the framework (recompiler tool + BIOS-only runtime):
+Every runtime and game configure uses SDL3 unless you explicitly append
+`-DPSX_SDL_BACKEND=SDL2` to its CMake command. CMake prints the selected backend
+during configuration; it never silently falls back from SDL3 to SDL2.
+
+Build the framework (recompiler tool + standalone BIOS runtime with OpenBIOS and
+retail BIOS support):
 
 ```sh
 git clone --recurse-submodules https://github.com/mstan/psxrecomp.git && cd psxrecomp
 
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build recompiler/build
-cmake -S runtime    -B runtime/build    -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build runtime/build --target psx-runtime
+cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF && cmake --build runtime/build --target psx-runtime
 ```
 
 On Windows swap `-G Ninja` for your generator if you prefer (e.g.
@@ -307,18 +469,20 @@ generated C is optimized. Game projects generate their own
 Keyboard and Xbox-style controller input work out of the box; the default
 fullscreen toggle is F11 / Alt+Enter / Cmd+F. **Full button maps, controller
 configuration, and rebinding live in each game's repo and in-app launcher** —
-they're game-facing, not part of the framework. The BIOS-only framework runtime
-accepts keyboard input for navigating the BIOS shell and memory-card tools.
+they're game-facing, not part of the framework. The standalone framework runtime
+accepts keyboard input for navigating the selected OpenBIOS or retail BIOS shell
+and memory-card tools.
 
 ## Architecture
 
-The recompiler emits C functions and dispatch tables for BIOS and game code.
-The runtime loads the BIOS/game assets into emulated PS1 memory, links the
-generated C as native code, and simulates hardware through MMIO handlers for
-GPU, DMA, timers, CD-ROM, MDEC, SIO0, memory cards, SPU, GTE, and interrupt
-delivery. The recompiled `SCPH1001.BIN` is the low-level (LLE) kernel and the
-correctness oracle; an optional HLE tier lays instant boot-skip and a few BIOS
-services on top, always falling through to the recompiled BIOS.
+The recompiler emits C functions and dispatch tables for game code and both BIOS
+backends: bundled OpenBIOS and a compatible retail BIOS. The runtime loads the
+selected BIOS and game assets into emulated PS1 memory, links the generated C as
+native code, and simulates hardware through MMIO handlers for GPU, DMA, timers,
+CD-ROM, MDEC, SIO0, memory cards, SPU, GTE, and interrupt delivery. The selected
+recompiled BIOS is the low-level (LLE) kernel and correctness oracle; an optional
+HLE tier lays instant boot-skip and a few BIOS services on top, always falling
+through to that OpenBIOS or retail BIOS kernel.
 
 Code that can't be seen ahead of time (disc-streamed **overlays**) is captured
 and compiled to native code the first time it appears (`static → gcc → tcc`
@@ -381,10 +545,11 @@ game code) is planned so discoveries can be shared safely in the future.
 
 Contributions are welcome — AI-assisted or not — as long as they're reviewed,
 tested, and keep the core game-agnostic. A few things hold this project together:
-the faithful recompiled BIOS is the baseline and oracle, generated code is never
-hand-edited (fix the recompiler and regenerate), and a change proves itself
-against the Beetle oracle / on screen rather than by assertion. Game-specific work
-lives in the game repos, which pin an exact framework commit as a submodule.
+the selected faithfully recompiled BIOS — OpenBIOS or retail BIOS — is the
+baseline and oracle, generated code is never hand-edited (fix the recompiler and
+regenerate), and a change proves itself against the Beetle oracle / on screen
+rather than by assertion. Game-specific work lives in the game repos, which pin
+an exact framework commit as a submodule.
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the core
 rules, how to verify a change, the regression checklist across the known games,
@@ -396,13 +561,14 @@ discussion happens in the **R.A.I.D.** Discord (invite below).
 
 PolyForm Noncommercial 1.0.0. See `LICENSE`.
 
-The PSX BIOS and game disc images remain copyrighted by their respective
-owners. This project distributes no BIOS images, no disc images, and no
-game assets — those are always supplied by the user from their own
-collection. Release executables (and per-game overlay caches) contain
-statically recompiled (machine-translated) builds of the original code,
-the same distribution model used by other static recompilation projects
-such as N64: Recompiled.
+Retail PS1 BIOS images and game disc images remain copyrighted by their
+respective owners and are not distributed. This project does distribute the
+from-scratch, MIT-licensed OpenBIOS image under the notice in
+[`bios/OpenBIOS.LICENSE`](bios/OpenBIOS.LICENSE). Game assets and disc data are
+always supplied by the user from their own collection. Release executables (and
+per-game overlay caches) contain statically recompiled (machine-translated)
+builds of the original code, the same distribution model used by other static
+recompilation projects such as N64: Recompiled.
 
 ---
 

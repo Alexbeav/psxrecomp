@@ -1,8 +1,8 @@
 ﻿# Shared psxrecomp runtime CMake helpers.
 #
 # Include this from either the framework runtime build or a sibling game
-# project. Call psxrecomp_add_runtime_target() after SDL2 detection has
-# populated SDL2_INCLUDE_DIRS and SDL2_LIBRARIES.
+# project. SDL3 is the default; set -DPSX_SDL_BACKEND=SDL2 for the legacy
+# backend.
 
 if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
@@ -51,54 +51,122 @@ else()
     option(PSX_DEBUG_TOOLS "Build with TCP debug server + heartbeat + per-block recording" ON)
 endif()
 
-if(NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES)
-    if(MSVC)
-        file(GLOB SDL2_MSVC_DIR "${PSXRECOMP_ROOT}/../sdl2-msvc/SDL2-*")
-        if(SDL2_MSVC_DIR)
-            set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
-            set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
-            message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
-        else()
-            message(FATAL_ERROR "SDL2 MSVC dev package not found")
-        endif()
-    else()
-        get_filename_component(_psxrecomp_compiler_dir "${CMAKE_C_COMPILER}" DIRECTORY)
-        find_program(_psxrecomp_pkg_config pkg-config
-            HINTS "${_psxrecomp_compiler_dir}"
-            NO_DEFAULT_PATH
-        )
-        if(_psxrecomp_pkg_config)
-            set(PKG_CONFIG_EXECUTABLE "${_psxrecomp_pkg_config}" CACHE FILEPATH "pkg-config executable" FORCE)
-        endif()
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(SDL2 REQUIRED sdl2)
-    endif()
-endif()
-
 # PSX_STATIC_RUNTIME: produce a 100% self-contained MinGW exe.
 #
 # A default MinGW build dynamically imports three NON-system DLLs —
-# SDL2.dll, libgcc_s_seh-1.dll, libstdc++-6.dll — which must be shipped
+# SDL.dll, libgcc_s_seh-1.dll, libstdc++-6.dll — which must be shipped
 # next to the exe. On a user's machine that side-by-side scheme breaks
 # when a different-architecture copy of one of those DLLs is found earlier
 # on the DLL search path (System32, another app on PATH), producing the
 # 0xc000007b STATUS_INVALID_IMAGE_FORMAT crash on launch.
 #
-# Linking those runtimes (and SDL2) statically removes every non-system
+# Linking those runtimes (and SDL) statically removes every non-system
 # import, so the exe runs from any folder with zero bundled DLLs and the
 # 0xc000007b failure mode becomes structurally impossible. Default ON for
 # MinGW Release/MinSizeRel (the configs used to cut releases); override
 # with -DPSX_STATIC_RUNTIME=OFF to force dynamic linking.
 if(MINGW AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
-    option(PSX_STATIC_RUNTIME "Statically link SDL2 + libgcc/libstdc++ for a self-contained exe" ON)
+    option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" ON)
 else()
-    option(PSX_STATIC_RUNTIME "Statically link SDL2 + libgcc/libstdc++ for a self-contained exe" OFF)
+    option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" OFF)
+endif()
+
+# SDL backend selection. SDL3 is fetched from an integrity-pinned stable
+# release when no system package is available, so a default build does not
+# silently fall back to SDL2. SDL2 remains an explicit, fully supported A/B
+# backend.
+set(PSX_SDL_BACKEND "SDL3" CACHE STRING "SDL backend (SDL3 or SDL2)")
+set_property(CACHE PSX_SDL_BACKEND PROPERTY STRINGS SDL3 SDL2)
+string(TOUPPER "${PSX_SDL_BACKEND}" _psx_sdl_backend)
+if(NOT _psx_sdl_backend STREQUAL "SDL3" AND
+   NOT _psx_sdl_backend STREQUAL "SDL2")
+    message(FATAL_ERROR
+        "PSX_SDL_BACKEND must be SDL3 or SDL2 (got '${PSX_SDL_BACKEND}')")
+endif()
+
+set(PSX_SDL_INCLUDE_DIRS "")
+set(PSX_SDL_LIBRARY_DIRS "")
+set(PSX_SDL_LIBRARIES "")
+set(PSX_SDL_STATIC_LDFLAGS "")
+set(PSX_SDL3 OFF)
+
+if(_psx_sdl_backend STREQUAL "SDL3")
+    set(PSX_SDL3 ON)
+    option(PSX_SDL3_FETCH
+        "Fetch the pinned SDL3 release when no system SDL3 package is found"
+        ON)
+    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3)
+    if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
+        include(FetchContent)
+        # The fetched dependency is private to this build, so link it directly
+        # instead of producing an SDL3 DLL that would need platform-specific
+        # staging beside every generated game executable.
+        set(SDL_SHARED OFF CACHE BOOL "Build SDL3 shared library" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "Build SDL3 static library" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL3 test library" FORCE)
+        set(SDL_TESTS OFF CACHE BOOL "Build SDL3 tests" FORCE)
+        set(SDL_EXAMPLES OFF CACHE BOOL "Build SDL3 examples" FORCE)
+        set(_psx_sdl3_timestamp_args "")
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+            list(APPEND _psx_sdl3_timestamp_args
+                DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        endif()
+        FetchContent_Declare(SDL3
+            URL
+                "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
+            URL_HASH
+                "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
+            ${_psx_sdl3_timestamp_args})
+        FetchContent_MakeAvailable(SDL3)
+    endif()
+    if(NOT TARGET SDL3::SDL3)
+        message(FATAL_ERROR
+            "SDL3 3.4+ was not found. Install SDL3, provide SDL3_DIR, or "
+            "configure with -DPSX_SDL3_FETCH=ON.")
+    endif()
+    if(PSX_STATIC_RUNTIME AND TARGET SDL3::SDL3-static)
+        set(PSX_SDL_LIBRARIES SDL3::SDL3-static)
+    else()
+        set(PSX_SDL_LIBRARIES SDL3::SDL3)
+    endif()
+    message(STATUS "psxrecomp: SDL backend = SDL3")
+else()
+    if(NOT SDL2_INCLUDE_DIRS OR NOT SDL2_LIBRARIES)
+        if(MSVC)
+            file(GLOB SDL2_MSVC_DIR "${PSXRECOMP_ROOT}/../sdl2-msvc/SDL2-*")
+            if(SDL2_MSVC_DIR)
+                set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
+                set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
+                message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
+            else()
+                message(FATAL_ERROR "SDL2 MSVC dev package not found")
+            endif()
+        else()
+            get_filename_component(
+                _psxrecomp_compiler_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+            find_program(_psxrecomp_pkg_config pkg-config
+                HINTS "${_psxrecomp_compiler_dir}"
+                NO_DEFAULT_PATH)
+            if(_psxrecomp_pkg_config)
+                set(PKG_CONFIG_EXECUTABLE "${_psxrecomp_pkg_config}"
+                    CACHE FILEPATH "pkg-config executable" FORCE)
+            endif()
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(SDL2 REQUIRED sdl2)
+        endif()
+    endif()
+    set(PSX_SDL_INCLUDE_DIRS "${SDL2_INCLUDE_DIRS}")
+    set(PSX_SDL_LIBRARY_DIRS "${SDL2_LIBRARY_DIRS}")
+    set(PSX_SDL_LIBRARIES "${SDL2_LIBRARIES}")
+    set(PSX_SDL_STATIC_LDFLAGS "${SDL2_STATIC_LDFLAGS}")
+    message(STATUS "psxrecomp: SDL backend = SDL2 (explicit fallback)")
 endif()
 
 # PSX_RECOMP_UI: wire the shared Dear ImGui launcher from the *game* repo's
 # root recomp-ui submodule (CMAKE_SOURCE_DIR/recomp-ui). Not vendored in
 # psxrecomp — games that need the launcher own the pin.
 option(PSX_RECOMP_UI "Build the shared recomp-ui Dear ImGui launcher" ON)
+option(PSX_SHELLWIN_INTERP "Default the shell-window dirty-RAM interpreter to ON ( BIOS without shell seeds )" OFF)
 set(RECOMP_UI_ROOT "" CACHE PATH
     "Path to recomp-ui; empty = <game>/recomp-ui")
 if(PSX_RECOMP_UI AND (NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL ""))
@@ -110,8 +178,12 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
+    ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c
+    ${PSXRECOMP_ROOT}/runtime/src/ws_aspect_cone_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
@@ -133,6 +205,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/device_trace.c
     ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
+    ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
@@ -141,7 +214,10 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
     ${PSXRECOMP_ROOT}/runtime/src/crc32.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_sha256.c
     ${PSXRECOMP_ROOT}/runtime/src/disc_identity.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/cue_sheet.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/disc_path.cpp
     ${PSXRECOMP_ROOT}/runtime/src/cdrom.c
     ${PSXRECOMP_ROOT}/runtime/src/spu.c
     ${PSXRECOMP_ROOT}/runtime/src/spu_shadow.c
@@ -167,7 +243,10 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/code_provider.c
     ${PSXRECOMP_ROOT}/runtime/src/event_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_bios_backend.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c
     ${PSXRECOMP_ROOT}/recompiler/src/config_loader.cpp
@@ -179,7 +258,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
 # Optional delay-sync netplay (recomp-net). Auto-discovers a sibling checkout
 # (…/recomp-net next to the game repo or next to psxrecomp). Override with
 # -DRECOMP_NET_ROOT=… or -DPSX_NETPLAY=OFF.
-option(PSX_NETPLAY "Link recomp-net delay-sync when available" ON)
+# OFF by default: netplay is a per-title opt-in, not something every build
+# carries. Most titles here are single-player, and an ON default silently
+# pulled in the recomp-net library, the lobby WebSocket client and their link
+# deps for games that can never use them. A multiplayer title opts in with
+# -DPSX_NETPLAY=ON (or sets it before including this file).
+option(PSX_NETPLAY "Link recomp-net delay-sync (opt-in; needs recomp-net)" OFF)
 set(RECOMP_NET_ROOT "" CACHE PATH "Path to recomp-net; empty = auto-discover")
 if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
     foreach(_cand
@@ -217,7 +301,12 @@ endif()
 # Lobby WebSocket client helpers are vendored under runtime/src/lobby_ws/
 # (protocol talks to the proprietary recomp-net-server, not recomp-net).
 set(PSXRECOMP_LOBBY_WS_DIR "${PSXRECOMP_ROOT}/runtime/src/lobby_ws")
-if(EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c" AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_sha1.c")
+# Gated on PSX_NETPLAY: this is the client for the netplay lobby server, so it
+# is dead weight in a single-player build. It used to enable itself on nothing
+# more than the source files existing, i.e. always.
+if(PSX_NETPLAY
+   AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c"
+   AND EXISTS "${PSXRECOMP_LOBBY_WS_DIR}/rnet_sha1.c")
     set(PSXRECOMP_HAS_LOBBY_CLIENT TRUE)
     list(APPEND PSXRECOMP_RUNTIME_SOURCES
         ${PSXRECOMP_LOBBY_WS_DIR}/rnet_ws.c
@@ -240,25 +329,128 @@ if(PSXRECOMP_LOBBY_INCLUDE_DIR)
     list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_LOBBY_INCLUDE_DIR})
 endif()
 
-set(PSXRECOMP_BIOS_GENERATED
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_full.c
-    ${PSXRECOMP_ROOT}/generated/SCPH1001_dispatch.c
-)
+# Which recompiled BIOSes the runtime links. A build carries every image it
+# ships — bundled OpenBIOS plus a retail one — and chooses between them at
+# startup (docs/BIOS_SELECTION.md). Each image exports a single
+# <STEM>_psx_bios_backend descriptor and namespaces everything else, so they
+# co-link; the runtime routes psx_dispatch()/psx_bios_image through whichever
+# backend it selects.
+#
+# One build configuration on purpose: the previous per-BIOS flavour needed the
+# same choice restated in game.toml and two CMake variables with nothing
+# cross-checking them, and it linked cleanly when they disagreed.
+set(PSXRECOMP_BUNDLED_BIOS_PATH "bios/openbios.bin" CACHE STRING
+    "Bundled redistributable BIOS image, relative to the executable")
+set(PSXRECOMP_BUNDLED_BIOS_SOURCE "${PSXRECOMP_ROOT}/bios/openbios.bin" CACHE FILEPATH
+    "Source image copied into native runtime builds as the bundled BIOS")
+set(PSXRECOMP_BUNDLED_BIOS_LICENSE "${PSXRECOMP_ROOT}/bios/OpenBIOS.LICENSE" CACHE FILEPATH
+    "License notice copied alongside the bundled BIOS")
+set(PSXRECOMP_BIOS_STEMS "OpenBIOS;SCPH1001" CACHE STRING
+    "Recompiled BIOS stems to link (first bundled/redistributable one is the default at runtime)")
+# The profile is still needed as the staleness-stamp input for the primary stem.
+list(GET PSXRECOMP_BIOS_STEMS 0 PSXRECOMP_BIOS_STEM_PRIMARY)
+set(PSXRECOMP_BIOS_STEM "${PSXRECOMP_BIOS_STEM_PRIMARY}" CACHE STRING
+    "Primary recompiled BIOS stem (staleness stamp; see PSXRECOMP_BIOS_STEMS)")
+set(PSXRECOMP_BIOS_PROFILE "${PSXRECOMP_ROOT}/bios/${PSXRECOMP_BIOS_STEM}.toml" CACHE FILEPATH
+    "BIOS profile TOML this build regenerates from (staleness stamp input)")
+
+# Link a stem only if its generated sources are actually present.
+#
+# PSXRECOMP_BIOS_STEMS lists every stem this build WOULD like. SCPH1001 is in
+# the default list, but its generated C is a derivative of a copyrighted Sony
+# BIOS, so it is gitignored and only exists once a developer regenerates it
+# from their own dump. Requiring it unconditionally meant a fresh checkout --
+# which legitimately has only the bundled MIT OpenBIOS -- failed every game
+# link with "undefined reference to SCPH1001_psx_bios_backend", long after
+# configure had succeeded. Filtering here keeps SCPH1001 fully supported for
+# anyone who has regenerated it, without making it mandatory for everyone else.
+set(PSXRECOMP_BIOS_GENERATED "")
+set(_psxrt_registry_externs "")
+set(_psxrt_registry_entries "")
+set(_psxrt_bios_linked "")
+set(_psxrt_bios_skipped "")
+foreach(_stem IN LISTS PSXRECOMP_BIOS_STEMS)
+    # Presence is not enough: a generated/ tree left over from before the
+    # backend-descriptor mechanism has both files but defines no descriptor,
+    # which links fine at configure time and then fails at link with an
+    # undefined reference. Probe the descriptor itself. It is emitted into
+    # <stem>_dispatch.c (~1MB), never the multi-megabyte <stem>_full.c, so
+    # this scan stays cheap.
+    set(_psxrt_desc "")
+    if(EXISTS "${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c")
+        file(STRINGS "${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c" _psxrt_desc
+             REGEX "${_stem}_psx_bios_backend" LIMIT_COUNT 1)
+    endif()
+    if(EXISTS "${PSXRECOMP_ROOT}/generated/${_stem}_full.c" AND _psxrt_desc)
+        list(APPEND PSXRECOMP_BIOS_GENERATED
+            ${PSXRECOMP_ROOT}/generated/${_stem}_full.c
+            ${PSXRECOMP_ROOT}/generated/${_stem}_dispatch.c)
+        string(APPEND _psxrt_registry_externs
+            "extern const PsxBiosBackend ${_stem}_psx_bios_backend;
+")
+        string(APPEND _psxrt_registry_entries
+            "    &${_stem}_psx_bios_backend,
+")
+        list(APPEND _psxrt_bios_linked "${_stem}")
+    else()
+        list(APPEND _psxrt_bios_skipped "${_stem}")
+    endif()
+endforeach()
+
+if(_psxrt_bios_skipped)
+    message(STATUS
+        "BIOS backends skipped (generated C missing or predates the backend "
+        "descriptor): ${_psxrt_bios_skipped} -- regenerate with "
+        "tools/regen_bios.sh --config bios/<stem>.toml")
+endif()
+if(NOT _psxrt_bios_linked)
+    message(FATAL_ERROR
+        "No recompiled BIOS backend available. Wanted: ${PSXRECOMP_BIOS_STEMS}, "
+        "but no matching generated/<stem>_full.c + <stem>_dispatch.c were found "
+        "under ${PSXRECOMP_ROOT}/generated.\n"
+        "Generate at least one before building the runtime:\n"
+        "    bash tools/regen_bios.sh --config bios/OpenBIOS.toml\n"
+        "(OpenBIOS is bundled and MIT-licensed, so this needs no BIOS dump.)")
+endif()
+message(STATUS "BIOS backends linked: ${_psxrt_bios_linked}")
+list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
+
+# Registry of the compiled-in backends, in preference order. Generated so the
+# stem list stays the single source of truth.
+set(_psxrt_registry_c "${CMAKE_BINARY_DIR}/psx_bios_registry.c")
+file(WRITE "${_psxrt_registry_c}"
+"/* Generated by runtime.cmake from PSXRECOMP_BIOS_STEMS — do not edit. */
+"
+"#include \"psx_bios_backend.h\"
+
+"
+"${_psxrt_registry_externs}"
+"
+const PsxBiosBackend *const psx_bios_registry[] = {
+"
+"${_psxrt_registry_entries}"
+"};
+"
+"const uint32_t psx_bios_registry_count = ${_psxrt_bios_count}u;
+")
+list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 
 # --- BIOS generated/ staleness check (hygiene) -----------------------------------
-# generated/SCPH1001_*.c is gitignored build output produced by a SEPARATE build
+# generated/<stem>_*.c is gitignored build output produced by a SEPARATE build
 # (recompiler/ -> psxrecomp-bios). Editing the BIOS emitter without re-running
 # tools/regen_bios.sh leaves the runtime linking a stale BIOS that no longer matches
 # the emitter (this caused a 4439-vs-4406 drift). regen_bios.sh records an emitter
-# fingerprint in generated/SCPH1001.emitter.sha; recompute it here and WARN on a
-# mismatch so the staleness is impossible to miss. Non-fatal: a stale-but-consistent
+# fingerprint in generated/<stem>.emitter.sha; recompute it here (same profile
+# argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
+# impossible to miss. Non-fatal: a stale-but-consistent
 # BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
 if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
     find_program(_psxrt_bash NAMES bash)
-    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/SCPH1001.emitter.sha")
+    set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
     if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")
         execute_process(
             COMMAND "${_psxrt_bash}" "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh"
+                    "${PSXRECOMP_BIOS_PROFILE}"
             WORKING_DIRECTORY "${PSXRECOMP_ROOT}"
             OUTPUT_VARIABLE _psxrt_cur_fp OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE _psxrt_fp_rc ERROR_QUIET)
@@ -272,10 +464,10 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
                 message(WARNING
                     "BIOS generated/ is STALE vs the recompiler emitter "
                     "(fingerprint mismatch).\n"
-                    "  Linking generated/SCPH1001_*.c that may not match the current "
-                    "emitter source.\n"
-                    "  Fix:  tools/regen_bios.sh   (rebuilds psxrecomp-bios + "
-                    "regenerates the BIOS)\n"
+                    "  Linking generated/${PSXRECOMP_BIOS_STEM}_*.c that may not "
+                    "match the current emitter source, seeds, ROM or profile.\n"
+                    "  Fix:  tools/regen_bios.sh --config <profile>   (rebuilds "
+                    "psxrecomp-bios + regenerates the BIOS)\n"
                     "  (Suppress: -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON)")
             endif()
         endif()
@@ -294,6 +486,8 @@ function(psxrecomp_add_runtime_target target)
         DEFAULT_BIOS_PATH
         DEFAULT_GAME_CONFIG_PATH
         LAUNCHER_BOXART
+        LAUNCHER_PAD
+        LAUNCHER_BRAND
         EXE_NAME
         GAME_VERSION
         MAX_PLAYERS
@@ -344,16 +538,22 @@ function(psxrecomp_add_runtime_target target)
     else()
         set(generated_sources ${PSXRECOMP_BIOS_GENERATED})
     endif()
+    # Game recompiled C that a from-source builder must generate before building
+    # (see the require-generated guard added after add_executable below). Collected
+    # here so the guard names the exact files that are missing.
+    set(_game_generated_check "")
     if(PSXRT_GAME_GENERATED_FULL_C)
         foreach(_full_src IN LISTS PSXRT_GAME_GENERATED_FULL_C)
             set_source_files_properties("${_full_src}" PROPERTIES GENERATED TRUE)
             list(APPEND generated_sources "${_full_src}")
+            list(APPEND _game_generated_check "${_full_src}")
         endforeach()
         set(has_game_dispatch TRUE)
     endif()
     if(PSXRT_GAME_GENERATED_DISPATCH_C)
         set_source_files_properties("${PSXRT_GAME_GENERATED_DISPATCH_C}" PROPERTIES GENERATED TRUE)
         list(APPEND generated_sources "${PSXRT_GAME_GENERATED_DISPATCH_C}")
+        list(APPEND _game_generated_check "${PSXRT_GAME_GENERATED_DISPATCH_C}")
         set(has_game_dispatch TRUE)
         if(EXISTS "${PSXRT_GAME_GENERATED_DISPATCH_C}")
             file(STRINGS "${PSXRT_GAME_GENERATED_DISPATCH_C}"
@@ -432,6 +632,54 @@ function(psxrecomp_add_runtime_target target)
     endif()
     add_dependencies(${target} psxrecomp_codegen_hash)
 
+    # ---- require-generated guard -------------------------------------------
+    # The game's recompiled C (generated/<serial>_{full,dispatch}.c) is produced
+    # by the recompiler tool in a step BEFORE this build, and its paths are marked
+    # GENERATED so `cmake configure` succeeds before that step has run. Without a
+    # guard, a builder who skips generation only finds out deep in the build via
+    #   cc1: fatal error: .../<serial>_full.c: No such file or directory
+    # with no hint that a step was skipped or what produces the file. Catch it
+    # first — a WARNING now (early, at configure) and a hard, actionable stop at
+    # build start (below) — so the raw compiler error is never the first signal.
+    # Only guards GAME sources: the BIOS path is either bundled OpenBIOS (emitted
+    # by a custom command here) or has its own staleness check above.
+    if(_game_generated_check)
+        if(EXISTS "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game.exe")
+            set(_psxrt_recompiler_hint "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game.exe")
+        else()
+            set(_psxrt_recompiler_hint "${PSXRECOMP_ROOT}/recompiler/build/psxrecomp-game")
+        endif()
+        set(_psxrt_missing_now "")
+        foreach(_g IN LISTS _game_generated_check)
+            if(NOT EXISTS "${_g}")
+                list(APPEND _psxrt_missing_now "${_g}")
+            endif()
+        endforeach()
+        if(_psxrt_missing_now)
+            message(WARNING
+                "${target}: recompiled game C is not present yet — the build will "
+                "fail until you generate it.\n"
+                "  Run the recompiler once:  ${_psxrt_recompiler_hint} --config "
+                "${PSXRT_DEFAULT_GAME_CONFIG_PATH}\n"
+                "  (build that tool first if needed; see psxrecomp/docs/BUILDING.md). "
+                "This is expected on a fresh checkout before the first generation.")
+        endif()
+        add_custom_target(${target}_require_generated
+            COMMAND ${CMAKE_COMMAND}
+                    "-DSOURCES=${_game_generated_check}"
+                    "-DTARGET=${target}"
+                    "-DGAME_CONFIG=${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
+                    "-DRECOMPILER=${_psxrt_recompiler_hint}"
+                    "-DDOC=psxrecomp/docs/BUILDING.md  (\"Build and run a game\")"
+                    -P "${PSXRECOMP_ROOT}/runtime/check_generated_sources.cmake"
+            COMMENT "Verifying recompiled game C exists for ${target}"
+            VERBATIM)
+        # Target-level dependency: this check runs to completion before ANY of
+        # ${target}'s objects compile, so a missing generated source aborts with
+        # our message rather than the compiler's.
+        add_dependencies(${target} ${target}_require_generated)
+    endif()
+
     # Force the cg-tag CONSUMERS to recompile whenever overlay_codegen_hash.h
     # changes. overlay_api.h pulls that header via __has_include, which the
     # compiler depfile does NOT record when the header is absent at first compile —
@@ -449,22 +697,24 @@ function(psxrecomp_add_runtime_target target)
 
     target_include_directories(${target} PRIVATE
         ${PSXRECOMP_RUNTIME_INCLUDE_DIRS}
-        ${SDL2_INCLUDE_DIRS}
+        ${PSX_SDL_INCLUDE_DIRS}
     )
-    # pkg-config reports SDL2_LIBRARIES as a bare name (e.g. "SDL2" -> -lSDL2);
+    # pkg-config reports fallback SDL2_LIBRARIES as a bare name
+    # (e.g. "SDL2" -> -lSDL2);
     # add its library dirs so the linker finds it outside default paths
     # (e.g. Homebrew's /opt/homebrew/lib on macOS). Empty/harmless on MSVC.
-    if(SDL2_LIBRARY_DIRS)
-        target_link_directories(${target} PRIVATE ${SDL2_LIBRARY_DIRS})
+    if(PSX_SDL_LIBRARY_DIRS)
+        target_link_directories(${target} PRIVATE ${PSX_SDL_LIBRARY_DIRS})
     endif()
-    # For a self-contained MinGW build, link SDL2 statically via pkg-config's
+    # For a self-contained MinGW SDL2 fallback build, link SDL2 statically via
+    # pkg-config's
     # --static link line (libSDL2.a + the full Windows system-lib chain SDL2
     # needs: winmm, imm32, ole32, oleaut32, version, setupapi, dinput8, ...).
     # Otherwise link the SDL2 import lib (needs SDL2.dll at runtime).
-    if(PSX_STATIC_RUNTIME AND SDL2_STATIC_LDFLAGS)
-        target_link_libraries(${target} PRIVATE ${SDL2_STATIC_LDFLAGS})
+    if(PSX_STATIC_RUNTIME AND PSX_SDL_STATIC_LDFLAGS)
+        target_link_libraries(${target} PRIVATE ${PSX_SDL_STATIC_LDFLAGS})
     else()
-        target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
+        target_link_libraries(${target} PRIVATE ${PSX_SDL_LIBRARIES})
     endif()
 
     # zlib: boot_state v4 savestate compression (RAM/VRAM/SPU blobs).
@@ -511,14 +761,60 @@ function(psxrecomp_add_runtime_target target)
     target_compile_definitions(${target} PRIVATE
         DEFAULT_DEBUG_PORT=${PSXRT_DEBUG_PORT}
         PSX_DEFAULT_BIOS_PATH="${PSXRT_DEFAULT_BIOS_PATH}"
+        # Where the shipped redistributable image lives, relative to the exe.
+        # This is what a player gets when they choose no BIOS.
+        PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"
         PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
         PSX_BUILD_REV="${PSX_GIT_REV}"
         PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
+
+    # OpenBIOS is part of the native runtime product, not a developer-machine
+    # prerequisite. Stage both the exact ROM consumed by the compiled backend
+    # and its required MIT notice beside every native executable. Release
+    # packagers copy this directory as a unit.
+    if(NOT PSXRT_ORACLE)
+        list(FIND PSXRECOMP_BIOS_STEMS "OpenBIOS" _psxrt_openbios_index)
+        if(NOT _psxrt_openbios_index EQUAL -1)
+            if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
+                message(FATAL_ERROR
+                    "Bundled OpenBIOS image is missing: "
+                    "${PSXRECOMP_BUNDLED_BIOS_SOURCE}")
+            endif()
+            if(NOT EXISTS "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+                message(FATAL_ERROR
+                    "Bundled OpenBIOS license is missing: "
+                    "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+            endif()
+            get_filename_component(
+                _psxrt_bundled_bios_dir
+                "${PSXRECOMP_BUNDLED_BIOS_PATH}"
+                DIRECTORY)
+            get_filename_component(
+                _psxrt_bundled_bios_license_name
+                "${PSXRECOMP_BUNDLED_BIOS_LICENSE}"
+                NAME)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target}>/${_psxrt_bundled_bios_dir}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
+                    "$<TARGET_FILE_DIR:${target}>/${PSXRECOMP_BUNDLED_BIOS_PATH}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PSXRECOMP_BUNDLED_BIOS_LICENSE}"
+                    "$<TARGET_FILE_DIR:${target}>/${_psxrt_bundled_bios_dir}/${_psxrt_bundled_bios_license_name}"
+                COMMENT "Staging bundled OpenBIOS image and MIT notice"
+                VERBATIM)
+            set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+                "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
+                "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
+        endif()
+    endif()
 
     if(PSXRT_ORACLE)
         target_compile_definitions(${target} PRIVATE PSX_ORACLE_BUILD=1)
@@ -527,6 +823,9 @@ function(psxrecomp_add_runtime_target target)
             PSX_NATIVE_BUILD=1
             PSX_ENABLE_BLOCK_CYCLES=1
         )
+    endif()
+    if(PSX_SHELLWIN_INTERP)
+        target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)
@@ -580,11 +879,62 @@ function(psxrecomp_add_runtime_target target)
                 "https://github.com/mstan/recomp-ui.git recomp-ui\n"
                 "Or set -DRECOMP_UI_ROOT=/path/to/recomp-ui")
         endif()
+        # recomp-ui gates its Mods view behind RECOMP_UI_ENABLE_MODS, which
+        # defaults OFF there -- correct for a cross-console launcher, since a
+        # console with no mod system should not show an empty Mods tab.
+        #
+        # psxrecomp does ship mod packages as a first-class, documented feature
+        # (docs/MOD_PACKAGES.md; Tomba! and Ape Escape ship catalogs today), so
+        # the framework opts in on every title's behalf. Without this, a title
+        # that already shipped a Mods panel silently loses it on its next
+        # rebuild -- the panel compiles in but stays inert, which reads as "this
+        # build is old" rather than as a missing build flag.
+        #
+        # Set before the include so recomp-ui's option() honours it, and only
+        # when the caller has not already decided, so -DRECOMP_UI_ENABLE_MODS=OFF
+        # still wins.
+        if(NOT DEFINED RECOMP_UI_ENABLE_MODS)
+            set(RECOMP_UI_ENABLE_MODS ON CACHE BOOL
+                "Enable the recomp-ui Mods view (psxrecomp ships mod packages)")
+        endif()
+        # The seed above only fires on a FRESH cache. A build tree configured
+        # before it existed already has RECOMP_UI_ENABLE_MODS=OFF in its cache,
+        # written by recomp-ui's own option(), and nothing can distinguish that
+        # stale default from a deliberate -DRECOMP_UI_ENABLE_MODS=OFF. Such a
+        # tree therefore keeps producing a Mods-less build across reconfigures,
+        # which is the same "reads as a stale build" failure the seed was added
+        # to prevent -- just one level up, and invisible.
+        #
+        # The explicit-OFF contract above is deliberate, so this does not
+        # override it. It makes the state audible instead: whoever sees a
+        # Mods-less build now gets told why and how to change it, rather than
+        # having to query the running game to discover the panel was compiled
+        # out. Deliberate opt-outs get one line per configure, which is the
+        # price of the two cases being genuinely indistinguishable.
+        if(NOT RECOMP_UI_ENABLE_MODS)
+            message(WARNING
+                "RECOMP_UI_ENABLE_MODS is OFF in this build tree, so the "
+                "launcher will have NO Mods page even for a title that ships a "
+                "catalog.\n"
+                "  If that was not deliberate, this cache predates the "
+                "framework opting in: delete CMakeCache.txt (or just that "
+                "entry) to pick up the ON default.")
+        endif()
+        set(RECOMP_UI_SDL3 ${PSX_SDL3})
         include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
 
-        set(_psx_recomp_ui_args)
+        # Asset staging is console-scoped in recomp-ui. Select PSX once here so
+        # every game using this framework ships only PlayStation launcher art
+        # (plus common chrome), never unrelated NES/N64/etc. assets.
+        set(_psx_recomp_ui_args CONSOLE psx)
         if(PSXRT_LAUNCHER_BOXART)
             list(APPEND _psx_recomp_ui_args BOXART "${PSXRT_LAUNCHER_BOXART}")
+        endif()
+        if(PSXRT_LAUNCHER_PAD)
+            list(APPEND _psx_recomp_ui_args PAD "${PSXRT_LAUNCHER_PAD}")
+        endif()
+        if(PSXRT_LAUNCHER_BRAND)
+            list(APPEND _psx_recomp_ui_args BRAND "${PSXRT_LAUNCHER_BRAND}")
         endif()
         recomp_target_launcher_ui(${target} ${_psx_recomp_ui_args})
     endif()
@@ -612,11 +962,11 @@ function(psxrecomp_add_runtime_target target)
     # We need only the Vulkan HEADERS at compile time, plus glslc to build SPIR-V.
     # Both ship with the Vulkan SDK ($VULKAN_SDK) or a Vulkan-Headers package.
     #
-    # Build-EXCLUDED by default (silent WIP): the real Vulkan path compiles only
-    # with -DPSX_ENABLE_VULKAN=ON. When OFF, gpu_vk_renderer.c builds as the inert
-    # stub and the exe behaves exactly as the GL/software build — no SDK/glslc
-    # dependency, regardless of whether $VULKAN_SDK is present on the machine.
-    option(PSX_ENABLE_VULKAN "Build the experimental Vulkan renderer backend (WIP)" OFF)
+    # Build Vulkan when its SDK tools are available so release binaries can offer
+    # it without game projects opting in individually. This does not select the
+    # runtime renderer: OpenGL remains the default in config_loader.h. Builders
+    # can still use -DPSX_ENABLE_VULKAN=OFF to produce the inert stub explicitly.
+    option(PSX_ENABLE_VULKAN "Build the Vulkan renderer backend when SDK tools are available" ON)
     if(PSX_ENABLE_VULKAN)
     set(_vk_inc "")
     if(DEFINED ENV{VULKAN_SDK})
@@ -638,7 +988,32 @@ function(psxrecomp_add_runtime_target target)
         # Compile every shader under runtime/shaders/ to SPIR-V (glslc) and embed
         # them into one generated header (vk_shaders_spv.h) of uint32_t arrays, so
         # gpu_vk_renderer.c creates shader modules with no runtime file deps.
-        find_program(PSX_PYTHON NAMES python python3)
+        # Resolve the native interpreter behind the Windows Python launcher.
+        # Invoking py.exe with a .py file can honor that file's /usr/bin/env
+        # shebang and accidentally select an unrelated MSYS Python, which cannot
+        # open the native absolute paths emitted by Windows CMake/Ninja.
+        if(WIN32 AND NOT PSX_PYTHON)
+            find_program(_psx_python_launcher NAMES py)
+            if(_psx_python_launcher)
+                execute_process(
+                    COMMAND "${_psx_python_launcher}" -3 -c
+                            "import sys; print(sys.executable)"
+                    OUTPUT_VARIABLE _psx_native_python
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+                if(EXISTS "${_psx_native_python}")
+                    set(PSX_PYTHON "${_psx_native_python}" CACHE FILEPATH
+                        "Python 3 interpreter used by runtime build tools")
+                endif()
+            endif()
+        endif()
+        if(NOT PSX_PYTHON)
+            find_program(PSX_PYTHON NAMES python python3)
+        endif()
+        if(NOT PSX_PYTHON)
+            message(FATAL_ERROR
+                "Vulkan shader embedding requires Python 3 (py/python/python3)")
+        endif()
         set(_vk_shader_dir "${PSXRECOMP_ROOT}/runtime/shaders")
         file(GLOB _vk_shaders
             "${_vk_shader_dir}/*.vert" "${_vk_shader_dir}/*.frag"
@@ -676,7 +1051,7 @@ function(psxrecomp_add_runtime_target target)
         if(PSX_STATIC_RUNTIME)
             # Fold the GCC / C++ / winpthread runtimes into the exe so it
             # imports only Windows system DLLs (no libgcc_s_seh-1.dll /
-            # libstdc++-6.dll dependency). Pairs with the static SDL2 link
+            # libstdc++-6.dll dependency). Pairs with the static SDL link
             # above to make the exe fully self-contained.
             target_link_options(${target} PRIVATE -static -static-libgcc -static-libstdc++)
         endif()
@@ -688,6 +1063,31 @@ function(psxrecomp_add_runtime_target target)
         target_link_options(${target} PRIVATE
             $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
             $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>)
+    endif()
+
+    # Packages may contain data-only VCDIFF recipes for deriving a private,
+    # fingerprinted runtime image from the user's verified stock disc. The
+    # decoder is supplied by the release builder and invoked only from this
+    # fixed path; packages cannot provide or execute binaries.
+    set(PSXRECOMP_XDELTA3_EXECUTABLE "" CACHE FILEPATH
+        "Trusted xdelta3 executable copied beside runtime targets")
+    if(PSXRECOMP_XDELTA3_EXECUTABLE)
+        if(NOT EXISTS "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+            message(FATAL_ERROR
+                "PSXRECOMP_XDELTA3_EXECUTABLE does not exist: "
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}")
+        endif()
+        if(WIN32)
+            set(_psxmod_xdelta_name "xdelta3.exe")
+        else()
+            set(_psxmod_xdelta_name "xdelta3")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PSXRECOMP_XDELTA3_EXECUTABLE}"
+                "$<TARGET_FILE_DIR:${target}>/${_psxmod_xdelta_name}"
+            COMMENT "Staging trusted xdelta3 decoder for derived-disc mods"
+            VERBATIM)
     endif()
 endfunction()
 

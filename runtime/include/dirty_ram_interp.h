@@ -40,6 +40,12 @@ extern "C" {
  * corruption, 2026-06-10). */
 int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);
 
+/* Retire a deferred R3000A load-delay writeback (see dirty_ram_interp.c). The
+ * interpreter defers a load's destination-register write past the delay-slot
+ * instruction, as hardware does; call this anywhere control leaves the
+ * interpreter or an exception is delivered, so no register write is dropped. */
+void dirty_ram_ld_delay_flush(CPUState* cpu);
+
 /* Overlay-cache windows — the address ranges eligible for capture, offline
  * recompilation, and per-entry-validated native execution (Rule 18 code that
  * does not exist in any compile-time image):
@@ -275,6 +281,14 @@ typedef struct {
     uint32_t t0;
     uint32_t t1;
     uint32_t t2;
+    /* Kernel scratch registers. $at is the assembler-temp that hand-written
+     * kernel asm uses to stash a base across a load-delay slot, and $k0/$k1
+     * are the exception handlers' only free registers — i.e. exactly the state
+     * that matters when debugging BIOS exception/handler code, which is what
+     * this interpreter mostly runs. */
+    uint32_t at;
+    uint32_t k0;
+    uint32_t k1;
     uint32_t current_tcb;
     uint32_t task_ptr;
     uint32_t task_mode;

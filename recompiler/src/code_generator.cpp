@@ -1,6 +1,7 @@
 #include "code_generator.h"
 #include "control_flow.h"
 #include "gte_register_classification.h"
+#include "../src/bios_address_model.h"
 // Shared widescreen backdrop-window detector (single source of truth across the
 // recompiler and the interpreter). Self-contained C header;
 // included via relative path to avoid an include-dir collision (recompiler and
@@ -30,28 +31,38 @@ static bool codegen_cycle_per_insn() {
     return true;
 }
 
+/* The BIOS address model of the profile this game is built against
+ * (main_psx.cpp resolves [recompiler] bios_config, default the SCPH1001
+ * profile, and sets it before generation). A game artifact depends on a
+ * BIOS property here — jump tables inside relocated BIOS code windows —
+ * so the window comes from the profile, never from a constant. */
+static const ::PSXRecompV4::BiosAddressModel* g_game_bios_model = nullptr;
+
+void CodeGenerator::set_bios_address_model(const PSXRecompV4::BiosAddressModel* m) {
+    g_game_bios_model = m;
+}
+
 /*
  * Translate a runtime RAM address to an address that exe_.read_word() can
  * resolve.
  *
- * Game EXEs are read directly at their load address.  The BIOS shell code
- * lives at ROM 0xBFC18000-0xBFC427FF and gets copied to RAM at
- * 0x80030000-0x8005A7FF during BIOS init.  Jump tables within shell
- * functions store RAM-space target addresses (0x80058xxx), but at recompile
- * time we can only read the ROM.  This helper maps:
+ * Game EXEs are read directly at their load address.  The BIOS copies code
+ * into RAM at boot (SCPH1001: the shell to 0x80030000); jump tables within
+ * such code store RAM-space target addresses, but at recompile time we can
+ * only read the ROM.  This helper maps:
  *
- *   active EXE load range              ->  active EXE load range
- *   RAM phys 0x00030000-0x0005AFFF  →  ROM kseg1 0xBFC18000+
+ *   active EXE load range   ->  active EXE load range
+ *   BIOS-copy RAM windows   ->  ROM kseg1 (per the BIOS profile's model)
  *
- * Non-shell addresses pass through unchanged.
+ * Other addresses pass through unchanged.
  */
 static uint32_t ram_to_rom(uint32_t addr, const PS1Executable& exe) {
     uint32_t phys = addr & 0x1FFFFFFFu;
 
     /*
-     * Game EXEs can legitimately occupy physical 0x30000-0x5AFFF.  That
-     * overlaps the BIOS shell copy window below, so prefer the active EXE's
-     * load range before applying any BIOS-specific remap.
+     * Game EXEs can legitimately occupy the BIOS-copy RAM windows (the
+     * shell window especially), so prefer the active EXE's load range
+     * before applying any BIOS remap.
      */
     uint32_t exe_phys = exe.load_address() & 0x1FFFFFFFu;
     uint32_t exe_size = exe.code_size();
@@ -59,10 +70,12 @@ static uint32_t ram_to_rom(uint32_t addr, const PS1Executable& exe) {
         return exe.load_address() + (phys - exe_phys);
     }
 
-    if (phys >= 0x00030000u && phys <= 0x0005AFFFu) {
-        return 0xBFC18000u + (phys - 0x00030000u);
+    if (!g_game_bios_model) {
+        throw std::runtime_error(
+            "CodeGenerator: no BIOS address model set "
+            "(CodeGenerator::set_bios_address_model must run before generation)");
     }
-    return addr;
+    return g_game_bios_model->ram_alias_to_rom(addr);
 }
 
 CodeGenerator::CodeGenerator(const PS1Executable& exe, const CodeGenConfig& config)
@@ -114,12 +127,16 @@ std::string CodeGenerator::emit_mid_block_cycle_charge(uint32_t addr,
 
 std::string CodeGenerator::emit_interrupt_check(uint32_t resume_pc,
                                                 const std::string& indent) const {
-    return indent + fmt::format("psx_check_interrupts_at(cpu, 0x{:08X}u);\n", resume_pc);
+    return std::string("#ifdef PSX_ENABLE_BLOCK_CYCLES\n") + indent +
+           "psx_cyc_bb_defer_flush();\n#endif\n" + indent +
+           fmt::format("psx_check_interrupts_at(cpu, 0x{:08X}u);\n", resume_pc);
 }
 
 std::string CodeGenerator::emit_interrupt_check_expr(const std::string& resume_pc_expr,
                                                      const std::string& indent) const {
-    return indent + fmt::format("psx_check_interrupts_at(cpu, {});\n", resume_pc_expr);
+    return std::string("#ifdef PSX_ENABLE_BLOCK_CYCLES\n") + indent +
+           "psx_cyc_bb_defer_flush();\n#endif\n" + indent +
+           fmt::format("psx_check_interrupts_at(cpu, {});\n", resume_pc_expr);
 }
 
 std::string CodeGenerator::reg_name(int reg_num) {
@@ -717,10 +734,15 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     if (opcode == 0x01) {
         uint32_t regimm_op = (instr >> 16) & 0x1F;
         if ((regimm_op & 0x01u) == 0x00u) { // bltz family (incl. bltzal + undefined mirrors)
-            // Classified LEFT-edge funnel bltz (auto_screen_x, signed idioms):
-            // reject only past the revealed margin. Identity at 4:3 (margin 0).
-            if (regimm_op == 0x00 && ws_cull_bltz_pcs_.count(addr))
-                return fmt::format("psx_ws_cull_bltz({}) /* ws auto screen-x cull (left edge) */",
+            // LEFT-edge funnel bltz: reject only past the revealed margin.
+            // Identity at 4:3 (margin 0). Two sources: (a) auto_screen_x's
+            // detect_cull_bltz_sites classification (ws_cull_bltz_pcs_), and
+            // (b) explicit [widescreen.cull] bltz_sites — the left-edge
+            // counterpart to slti_sites, for X-only funnels auto_screen_x can't
+            // qualify (whose bltz would otherwise never be widened).
+            if (regimm_op == 0x00 &&
+                (ws_cull_bltz_pcs_.count(addr) || config_.ws_cull_bltz_sites.count(addr)))
+                return fmt::format("psx_ws_cull_bltz({}) /* ws cull (left edge) */",
                                    reg_name(rs));
             return fmt::format("(int32_t){} < 0", reg_name(rs));
         } else {                            // bgez family (incl. bgezal + undefined mirrors)
@@ -762,6 +784,36 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
 
     std::string code;
 
+    // Full-word-guarded terrain-frustum half-angle constants. Scaling the
+    // tangent is the geometric counterpart of widening the horizontal
+    // projection; adding screen pixels directly to 12-bit angle units is not.
+    for (const auto& site : config_.ws_cull_angle_sites) {
+        if ((site.address & 0x1FFFFFFFu) !=
+            (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: cull angle expected 0x{:08X} at 0x{:08X}, "
+                       "found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        if ((opcode != 0x08u && opcode != 0x09u) ||
+            get_rs(instr) != 0u) {
+            fmt::print(stderr,
+                       "ERROR: cull angle site 0x{:08X} is not "
+                       "ADDI/ADDIU rt,zero,imm (0x{:08X})\n",
+                       addr, instr);
+            std::exit(1);
+        }
+        const uint32_t dst = get_rt(instr);
+        const int32_t vanilla = (int16_t)(instr & 0xFFFFu);
+        return fmt::format(
+            "{} = psx_ws_angle_widen({}u);"
+            "  /* aspect-scaled terrain frustum half-angle */{}",
+            reg_name(dst), (uint32_t)vanilla, comment);
+    }
+
     for (const auto& site : config_.ws_signed_x_bound_sites) {
         if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
         if (instr != site.expected) {
@@ -775,6 +827,100 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         return fmt::format("{} = (uint32_t)psx_ws_player_x_bound((int32_t)0x{:08X});"
                            "  /* typed native-wide signed X bound */{}",
                            reg_name(get_rt(instr)), (uint32_t)vanilla, comment);
+    }
+
+    // Full-word-guarded, camera-horizontal model-participation cones. The
+    // runtime helper preserves the original compare at 4:3 and every vanilla
+    // keep verdict, adding only the aspect-derived horizontal fringe.
+    for (const auto& site : config_.ws_aspect_cone.sites) {
+        if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: aspect cone expected 0x{:08X} at 0x{:08X}, "
+                       "found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        const bool is_slti = opcode == 0x0A;
+        const bool is_slt =
+            opcode == 0x00 && (instr & 0x3Fu) == 0x2Au &&
+            ((instr >> 6) & 0x1Fu) == 0u;
+        if (!is_slti && !is_slt) {
+            fmt::print(stderr,
+                       "ERROR: aspect cone site 0x{:08X} is not signed "
+                       "SLTI/SLT "
+                       "(0x{:08X})\n", addr, instr);
+            std::exit(1);
+        }
+        const uint32_t dst = is_slti ? get_rt(instr) : get_rd(instr);
+        const std::string vanilla = is_slti
+            ? fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                          reg_name(get_rs(instr)),
+                          (int32_t)(int16_t)(instr & 0xFFFFu))
+            : fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                          reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        const auto effective_reg = [](uint32_t site_reg,
+                                      uint32_t default_reg) {
+            return site_reg == 0xFFFFFFFFu ? default_reg : site_reg;
+        };
+        return fmt::format(
+            "{} = psx_ws_aspect_cone_result(0x{:08X}u, ({}), {}, "
+            "(int32_t)(int16_t){}, (int32_t)(int16_t){}, "
+            "(int32_t)(int16_t){});"
+            "  /* aspect-aware horizontal model participation */{}",
+            reg_name(dst), addr, vanilla,
+            reg_name(effective_reg(
+                site.object_reg, config_.ws_aspect_cone.object_reg)),
+            reg_name(effective_reg(
+                site.x_reg, config_.ws_aspect_cone.x_reg)),
+            reg_name(effective_reg(
+                site.z_reg, config_.ws_aspect_cone.z_reg)),
+            reg_name(effective_reg(
+                site.y_reg, config_.ws_aspect_cone.y_reg)), comment);
+    }
+
+    // Full-word-guarded object/model participation compares. At 4:3 the
+    // helper returns the comparison's vanilla value; when widescreen reveals
+    // extra world it returns the configured keep verdict. Overlay variants
+    // with another instruction at the same VA are deliberately untouched.
+    for (const auto& site : config_.ws_cull_keep_sites) {
+        if ((site.address & 0x1FFFFFFFu) != (addr & 0x1FFFFFFFu)) continue;
+        if (instr != site.expected) {
+            if (config_.overlay_mode) continue;
+            fmt::print(stderr,
+                       "ERROR: cull keep expected 0x{:08X} at 0x{:08X}, found 0x{:08X}\n",
+                       site.expected, addr, instr);
+            std::exit(1);
+        }
+        uint32_t dst = 0;
+        std::string vanilla;
+        if (opcode == 0x0A) { // SLTI
+            dst = get_rt(instr);
+            vanilla = fmt::format("((int32_t){} < {}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), (int)get_imm16(instr));
+        } else if (opcode == 0x0B) { // SLTIU (sign-extended immediate)
+            dst = get_rt(instr);
+            vanilla = fmt::format("({} < (uint32_t){}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), (int)get_imm16(instr));
+        } else if (opcode == 0x00 && funct == 0x2A) { // SLT
+            dst = get_rd(instr);
+            vanilla = fmt::format("((int32_t){} < (int32_t){}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        } else if (opcode == 0x00 && funct == 0x2B) { // SLTU
+            dst = get_rd(instr);
+            vanilla = fmt::format("({} < {}) ? 1u : 0u",
+                                  reg_name(get_rs(instr)), reg_name(get_rt(instr)));
+        } else {
+            fmt::print(stderr,
+                       "ERROR: cull keep site 0x{:08X} is not a compare (0x{:08X})\n",
+                       addr, instr);
+            std::exit(1);
+        }
+        return fmt::format(
+            "{} = psx_ws_cull_keep_result(({}), {}u);"
+            "  /* ws maximal object/model participation */{}",
+            reg_name(dst), vanilla, site.result, comment);
     }
 
     // Widescreen automatic far-backdrop column PRELOAD ([widescreen.cull]
@@ -829,8 +975,15 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         if (opcode == 0x08 || opcode == 0x09) {  // addi / addiu
             uint32_t rs = get_rs(instr), rt = get_rt(instr);
             int16_t imm = get_imm16(instr);
-            return fmt::format("{} = {} + ((int32_t){} + psx_ws_x_margin());{}",
-                               reg_name(rt), reg_name(rs), imm, comment);
+            const std::string margin =
+                config_.ws_cull_activation_guard_pixels > 0
+                    ? fmt::format(
+                          "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + {} : 0)",
+                          config_.ws_cull_activation_guard_pixels)
+                    : "psx_ws_x_margin()";
+            return fmt::format("{} = {} + ((int32_t){} + {});{}",
+                               reg_name(rt), reg_name(rs), imm, margin,
+                               comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] bias site 0x{:08X} is not "
                        "addi/addiu (opcode 0x{:02X})\n", addr, opcode);
@@ -926,8 +1079,15 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         if (opcode == 0x0B) {  // sltiu
             uint32_t rs = get_rs(instr), rt = get_rt(instr);
             int16_t imm = get_imm16(instr);
-            return fmt::format("{} = ({} < (uint32_t)((int32_t){} + 2*psx_ws_x_margin())) ? 1 : 0;{}",
-                               reg_name(rt), reg_name(rs), imm, comment);
+            const std::string margin =
+                config_.ws_cull_activation_guard_pixels > 0
+                    ? fmt::format(
+                          "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + {} : 0)",
+                          config_.ws_cull_activation_guard_pixels)
+                    : "psx_ws_x_margin()";
+            return fmt::format(
+                "{} = ({} < (uint32_t)((int32_t){} + 2*{})) ? 1 : 0;{}",
+                reg_name(rt), reg_name(rs), imm, margin, comment);
         } else if (!config_.overlay_mode) {
             fmt::print(stderr, "ERROR: [widescreen.cull] range site 0x{:08X} is not "
                        "sltiu (opcode 0x{:02X})\n", addr, opcode);
@@ -2250,6 +2410,13 @@ GeneratedFunction CodeGenerator::generate_function(
 
     std::stringstream body_ss;
     body_ss << "{\n";
+    body_ss << "#if defined(PSX_ENABLE_BLOCK_CYCLES) && "
+               "(defined(__GNUC__) || defined(__clang__))\n"
+            << config_.indent
+            << "__attribute__((cleanup(psx_cyc_bb_defer_cleanup))) "
+               "int _psx_cyc_bb_guard = 1;\n"
+            << config_.indent << "psx_cyc_bb_defer_begin();\n"
+            << "#endif\n";
 
     // CPS entry-switch: when the unified flat trampoline dispatches a
     // continuation address (a callee published cpu->pc = $ra back to us), route
@@ -2710,6 +2877,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
                 func.start_addr, func.start_addr & 0x1FFFFFFFu);
             stub.full_code = stub.signature + "\n" + stub.body;
             stub.line_count = 4;
+            stub.dispatchable = false;
             results.push_back(stub);
             continue;
         }
@@ -2762,6 +2930,7 @@ std::vector<GeneratedFunction> CodeGenerator::generate_all_functions(
                     func.start_addr, func.start_addr & 0x1FFFFFFFu);
                 data_stub.full_code = data_stub.signature + "\n" + data_stub.body;
                 data_stub.line_count = 4;
+                data_stub.dispatchable = false;
                 total_lines += data_stub.line_count;
                 results.push_back(std::move(data_stub));
                 continue;
@@ -2803,6 +2972,9 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";
     ss << "extern int32_t psx_ws_plane_nx(int32_t nx);                /* ws side-plane normal-X scale (gpu.c) */\n";
     ss << "extern uint32_t psx_ws_xclip_bound(uint32_t vanilla);      /* ws per-prim X reject bound load (gpu.c) */\n";
+    ss << "extern uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced); /* ws guarded keep compare (gpu.c) */\n";
+    ss << "extern uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla, uint32_t object, int32_t x, int32_t z, int32_t y); /* aspect-aware participation cone */\n";
+    ss << "extern uint32_t psx_ws_angle_widen(uint32_t vanilla); /* aspect-scaled 12-bit terrain-frustum half-angle */\n";
     ss << "extern int  psx_ws_backdrop_x(int x);  /* widescreen backdrop screenX squash (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_cols(int base);                    /* ws 2D bg tile-loop widen: col count (gpu.c) */\n";
     ss << "extern int  psx_ws_bg2d_startcol(int col, unsigned mask);  /* ws 2D bg tile-loop widen: start tile col (gpu.c) */\n";

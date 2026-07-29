@@ -5,22 +5,6 @@ include(CTest)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 17)
 
-# ---- SDL2 detection ----
-
-if(MSVC)
-    file(GLOB SDL2_MSVC_DIR "${CMAKE_SOURCE_DIR}/../sdl2-msvc/SDL2-*")
-    if(SDL2_MSVC_DIR)
-        set(SDL2_INCLUDE_DIRS "${SDL2_MSVC_DIR}/include")
-        set(SDL2_LIBRARIES "${SDL2_MSVC_DIR}/lib/x64/SDL2.lib")
-        message(STATUS "SDL2 MSVC: ${SDL2_MSVC_DIR}")
-    else()
-        message(FATAL_ERROR "SDL2 MSVC dev package not found. Run: bash tools/build_oracle.sh")
-    endif()
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED sdl2)
-endif()
-
 # ---- Native/oracle runtime targets ----
 
 set(PSXRECOMP_ROOT "${CMAKE_SOURCE_DIR}/..")
@@ -30,16 +14,36 @@ psxrecomp_add_runtime_target(psx-runtime
     DEBUG_PORT 4370
     WINDOW_TITLE "psxrecomp - BIOS"
     DEFAULT_BIOS_PATH "${PSXRECOMP_ROOT}/bios/SCPH1001.BIN"
+    EXE_NAME "PSXRecomp"
 )
 
 if(BUILD_TESTING)
+    add_executable(launcher_device_roundtrip_test
+        tests/test_launcher_device_roundtrip.cpp)
+    target_include_directories(launcher_device_roundtrip_test PRIVATE include)
+    add_test(NAME launcher_device_roundtrip_test
+             COMMAND launcher_device_roundtrip_test)
+
+    add_executable(psx_cyc_batch_test tests/test_psx_cyc_batch.c)
+    target_include_directories(psx_cyc_batch_test PRIVATE include)
+    target_compile_definitions(psx_cyc_batch_test PRIVATE
+        PSX_ENABLE_BLOCK_CYCLES=1)
+    add_test(NAME psx_cyc_batch_test COMMAND psx_cyc_batch_test)
+
     add_executable(psx_icache_fastpath_test
         tests/test_psx_icache_fastpath.c
         src/psx_icache.c
     )
     target_include_directories(psx_icache_fastpath_test PRIVATE include)
+    # PSX_OVERLAY_DLL_BUILD is the seam psx_cycles.h already provides for a TU
+    # that supplies its own psx_advance_cycles (overlay DLLs forward it through
+    # a callback shim). Without it the header inlines the production definition
+    # and this test's counting stub is a redefinition — the whole runtime test
+    # suite stopped building at "redefinition of 'psx_advance_cycles'", which
+    # also blocked every test registered after it.
     target_compile_definitions(psx_icache_fastpath_test PRIVATE
-        PSX_ENABLE_BLOCK_CYCLES=1)
+        PSX_ENABLE_BLOCK_CYCLES=1
+        PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
     add_executable(gte_register_access_test
@@ -57,14 +61,30 @@ if(BUILD_TESTING)
     target_include_directories(psx_instr_cost_test PRIVATE include)
     add_test(NAME psx_instr_cost_test COMMAND psx_instr_cost_test)
 
+    add_executable(ws_aspect_cone_math_test
+        tests/test_ws_aspect_cone_math.c
+        src/ws_aspect_cone_math.c)
+    target_include_directories(ws_aspect_cone_math_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(ws_aspect_cone_math_test PRIVATE m)
+    endif()
+    add_test(NAME ws_aspect_cone_math_test COMMAND ws_aspect_cone_math_test)
+
+    add_executable(ws_ui_group_test
+        tests/test_ws_ui_group.c
+        src/ws_ui_group.c)
+    target_include_directories(ws_ui_group_test PRIVATE include)
+    add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)
     target_include_directories(overlay_capture_retry_test PRIVATE
-        include ${SDL2_INCLUDE_DIRS})
+        include ${PSX_SDL_INCLUDE_DIRS})
     target_compile_definitions(overlay_capture_retry_test PRIVATE
-        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1)
-    target_link_libraries(overlay_capture_retry_test PRIVATE ${SDL2_LIBRARIES})
+        SDL_MAIN_HANDLED PSX_OVERLAY_CAPTURE_TEST=1
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(overlay_capture_retry_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME overlay_capture_retry_test COMMAND overlay_capture_retry_test)
 
     add_executable(overlay_path_canon_test
@@ -72,6 +92,63 @@ if(BUILD_TESTING)
         src/overlay_path_canon.c)
     target_include_directories(overlay_path_canon_test PRIVATE include)
     add_test(NAME overlay_path_canon_test COMMAND overlay_path_canon_test)
+
+    # The player-facing "skip the BIOS" flag must resolve to the same boot
+    # behaviour on retail SCPH-1001 and on the bundled OpenBIOS, whose
+    # kernel-call HLE is (correctly) refused for want of a DeliverEvent anchor.
+    add_executable(bios_hle_plan_test
+        tests/test_bios_hle_plan.c
+        src/bios_hle_plan.c)
+    target_include_directories(bios_hle_plan_test PRIVATE include)
+    add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
+
+    # Either member of a disc dump (.cue or .bin) is a valid pick: both mount
+    # the same disc and identify off the same data track.
+    add_executable(disc_path_resolve_test
+        tests/test_disc_path_resolve.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
+        src/iso_reader.cpp)
+    target_include_directories(disc_path_resolve_test PRIVATE include)
+    add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
+
+    # Both BIOS filename conventions (bare vs region-qualified) resolve, in
+    # both directions, so a config and a dump folder may disagree.
+    add_executable(bios_rom_alias_test tests/test_bios_rom_alias.cpp)
+    target_include_directories(bios_rom_alias_test PRIVATE
+        ${PSXRECOMP_ROOT}/recompiler/include)
+    add_test(NAME bios_rom_alias_test COMMAND bios_rom_alias_test)
+
+    # Multi-file cue TOC mapping (data track + CD-DA in separate bins).
+    add_executable(iso_reader_cdda_test
+        tests/test_iso_reader_cdda.cpp
+        src/iso_reader.cpp
+        src/cue_sheet.cpp)
+    target_include_directories(iso_reader_cdda_test PRIVATE include)
+    add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
+
+    add_executable(mod_packages_test
+        tests/test_mod_packages.cpp
+        src/mod_packages.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(mod_packages_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME mod_packages_test COMMAND mod_packages_test)
+
+    add_executable(mod_runtime_test
+        tests/test_mod_runtime.cpp
+        src/mod_runtime.cpp
+        src/mod_packages.cpp
+        src/disc_path.cpp
+        src/cue_sheet.cpp
+        src/crc32.c
+        src/psx_sha256.c)
+    target_include_directories(mod_runtime_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME mod_runtime_test COMMAND mod_runtime_test)
 
     if(WIN32)
         add_executable(autocompile_publication_test
@@ -140,7 +217,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
 
     target_include_directories(psx-beetle PRIVATE
         include
-        ${SDL2_INCLUDE_DIRS}
+        ${PSX_SDL_INCLUDE_DIRS}
         ${CMAKE_SOURCE_DIR}/../beetle-psx/libretro-common/include
         ${CMAKE_SOURCE_DIR}/../beetle-psx
     )
@@ -148,6 +225,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
     target_compile_definitions(psx-beetle PRIVATE
         PSX_BEETLE_BUILD=1
         DEFAULT_DEBUG_PORT=4380
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
     )
     if(NOT PSX_DEBUG_TOOLS)
         target_compile_definitions(psx-beetle PRIVATE PSX_NO_DEBUG_TOOLS=1)
@@ -155,7 +233,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
 
     target_link_libraries(psx-beetle PRIVATE
         "${BEETLE_LIB}"
-        ${SDL2_LIBRARIES}
+        ${PSX_SDL_LIBRARIES}
     )
 
     if(WIN32 OR MINGW)

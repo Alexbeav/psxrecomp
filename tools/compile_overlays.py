@@ -148,6 +148,30 @@ def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
     print(f'recompiler codegen hash verified: {baked} == cg tag hash')
 
 
+def overlay_config_hash(recompiler: str, game_toml: str) -> int:
+    """Ask the recompiler for the canonical hash of config fields that affect
+    generated overlay code. Keeping the serializer in the shared C++ config
+    loader means the runtime and producer cannot disagree about which
+    widescreen/patch settings define a cache namespace."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            [recompiler, '--overlay-config-hash', os.path.abspath(game_toml)],
+            capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        raise SystemExit(
+            f'FATAL: cannot execute {recompiler} for --overlay-config-hash: {e}')
+    line = (out.stdout or '').strip().splitlines()
+    value = line[0].strip() if line else ''
+    if out.returncode != 0 or not re.fullmatch(r'[0-9a-fA-F]{8}', value):
+        detail = (out.stderr or out.stdout or '').strip()
+        raise SystemExit(
+            f'FATAL: {recompiler} could not hash overlay codegen config.\n'
+            f'  This binary may predate --overlay-config-hash; rebuild it.\n'
+            f'  detail: {detail}')
+    return int(value, 16)
+
+
 def is_windows() -> bool:
     """True on native Windows AND under MSYS/Cygwin/MinGW pythons.
     platform.system() there returns 'MSYS_NT-...'/'CYGWIN_NT-...', NOT
@@ -4287,10 +4311,10 @@ def _shard_pair_lock(dll_path: str, timeout: float = 120.0):
 def _candidate_capacity_namespace(dll_path: str) -> tuple[str, list[str]]:
     """Return the shared lock and compiler-tier dirs for one cache namespace.
 
-    Normal caches are ``GAME/compiler/arch/cgN_hash``.  The runtime candidate
-    table is process-global, so serialize/count every compiler tier with the
-    same GAME/arch/cg leaf.  Tests and hand-built paths fall back to their
-    containing directory.
+    Normal caches are ``GAME/compiler/arch/cgN_hash_gcCONFIG`` (legacy tests
+    may still use ``cgN_hash``). The runtime candidate table is process-global,
+    so serialize/count every compiler tier with the same GAME/arch/cg leaf.
+    Tests and hand-built paths fall back to their containing directory.
     """
     leaf = os.path.dirname(os.path.abspath(dll_path))
     cg_name = os.path.basename(leaf)
@@ -4298,7 +4322,7 @@ def _candidate_capacity_namespace(dll_path: str) -> tuple[str, list[str]]:
     compiler_dir = os.path.dirname(arch_dir)
     game_dir = os.path.dirname(compiler_dir)
     compiler_name = os.path.basename(compiler_dir)
-    if (re.fullmatch(r'cg\d+_[0-9A-Fa-f]{8}', cg_name) and
+    if (re.fullmatch(r'cg\d+_[0-9A-Fa-f]{8}(?:_gc[0-9A-Fa-f]{8})?', cg_name) and
             compiler_name in ('gcc', 'tcc')):
         arch_name = os.path.basename(arch_dir)
         tier_dirs = [
@@ -5224,16 +5248,19 @@ def main():
             return
         os.makedirs(args.out_dir, exist_ok=True)
     else:
-        # Namespaced + versioned gcc cache: <game_id>/gcc/<arch-abi>/cg<N>/
+        # Namespaced + versioned gcc cache:
+        # <game_id>/gcc/<arch-abi>/cg<N>_<emitter-hash>_gc<config-hash>/
         # (SLJIT.md §4 — no comingling; cg<N> = codegen version so a new emitter
         # build never reuses a stale DLL, old versions coexist). MUST match
         # overlay_loader.c scan_cache_dir(). Pre-1.0: no legacy fallback.
         cg = codegen_ver(args.runtime_include)
         ch = codegen_hash(args.runtime_include)
+        gh = overlay_config_hash(args.recompiler, args.game_toml)
         cache_dir = os.path.join(args.out_dir, game_id, args.compiler, cache_arch_abi(),
-                                 f'cg{cg}_{ch:08x}')
+                                 f'cg{cg}_{ch:08x}_gc{gh:08x}')
         os.makedirs(cache_dir, exist_ok=True)
-        print(f'Cache dir: {cache_dir}  (codegen ver {cg}, hash {ch:08x})')
+        print(f'Cache dir: {cache_dir}  '
+              f'(codegen ver {cg}, emitter {ch:08x}, config {gh:08x})')
 
     with open(args.captures) as f:
         captures = json.load(f)

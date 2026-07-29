@@ -79,7 +79,7 @@
    static int sock_error(void) { return errno; }
 #endif
 
-#include <SDL.h>
+#include "psx_sdl.h"
 
 /* ---- Externs from runtime ---- */
 extern uint32_t i_stat;
@@ -109,7 +109,6 @@ static int  s_recv_len = 0;
  * request slot suffices. A lock-free `ping` fast-path on the I/O thread answers
  * even while the emu thread is buried (freeze liveness). See debug_server_poll /
  * io_thread_main. */
-#include <SDL_thread.h>
 enum { IO_IDLE = 0, IO_REQ = 1, IO_RESP = 2 };
 static SDL_Thread *s_io_thread   = NULL;
 static SDL_mutex  *s_io_mutex    = NULL;
@@ -359,6 +358,15 @@ typedef struct {
     uint32_t a3;
     uint32_t t0;
     uint32_t t1;
+    /* Callee-saved regs: loop cursors/bounds live here (e.g. OpenBIOS
+     * readPad's s2/s0 halfword loop — debugging it needed them and the ring
+     * only had temps). Cheap: +24B/entry on a heap ring. */
+    uint32_t s0;
+    uint32_t s1;
+    uint32_t s2;
+    uint32_t s3;
+    uint32_t s4;
+    uint32_t s5;
     uint32_t frame;      /* VBlank frame number */
     uint8_t  width;      /* 1, 2, or 4 */
     int8_t   dma_ch;     /* DMA channel that produced this write (0-6), or -1 = CPU store.
@@ -2046,6 +2054,7 @@ void debug_server_log_call_entry(uint32_t func_addr) {
     g_psx_recent_fn[g_psx_recent_fn_i++ & (PSX_RECENT_FN_CAP - 1u)] = func_addr;
     psx_native_stack_guard(func_addr);   /* runs in debug AND release (before the early-return) */
 #endif
+    if (s_fmv_quiet) return;
     ls_suppress_begin();
     if (s_synth_recurse_armed) { s_synth_recurse_armed = 0; psx_synth_recurse(0); }
     /* cyc_watch: universal compiled-function-entry hook (game AND BIOS, incl.
@@ -2660,6 +2669,7 @@ static void handle_dirty_insn_log(int id, const char *json)
                         "\"a2\":\"0x%08X\",\"a3\":\"0x%08X\","
                         "\"t0\":\"0x%08X\",\"t1\":\"0x%08X\","
                         "\"t2\":\"0x%08X\","
+                        "\"at\":\"0x%08X\",\"k0\":\"0x%08X\",\"k1\":\"0x%08X\","
                         "\"current_tcb\":\"0x%08X\",\"task_ptr\":\"0x%08X\","
                         "\"task_mode\":\"0x%08X\",\"task_submode\":\"0x%08X\","
                         "\"frame\":%u,\"transferred\":%u}",
@@ -2669,6 +2679,7 @@ static void handle_dirty_insn_log(int id, const char *json)
                         e->before_s0, e->after_s0, e->sp, e->ra,
                         e->v0, e->v1, e->a0, e->a1, e->a2, e->a3,
                         e->t0, e->t1, e->t2,
+                        e->at, e->k0, e->k1,
                         e->current_tcb, e->task_ptr, e->task_mode,
                         e->task_submode, e->frame, (unsigned)e->transferred);
         emitted++;
@@ -2761,6 +2772,7 @@ static void handle_dirty_insn_dump_file(int id, const char *json)
 #include "fntrace.h"
 #include "starvation_ring.h"
 #include "bios_hle.h"
+#include "psx_bios_image.h"
 #include "parity_trace.h"
 #include "device_trace.h"
 
@@ -3064,6 +3076,37 @@ static void handle_bioscall_dump(int id, const char *json)
     }
     pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
     debug_server_send_line(out); free(out);
+}
+
+/* bios_info — which recompiled BIOS this build links, and whether the
+ * loaded ROM matches it. Everything static comes from psx_bios_image (the
+ * generated dispatch's self-description, couriered from the BIOS profile);
+ * `loaded_wordsum` is memory.c's checksum of the ROM actually loaded, and
+ * `match` compares the two — with the launch identity gate in place a
+ * running process should always report match:1.
+ *   {"cmd":"bios_info"} */
+static void handle_bios_info(int id, const char *json)
+{
+    (void)json;
+    extern uint32_t memory_get_bios_checksum(void);
+    char out[1024];   /* image_id + full sha256 + ~15 numeric fields */
+    snprintf(out, sizeof out,
+             "{\"id\":%d,\"ok\":true,\"image_id\":\"%s\",\"sha256\":\"%s\","
+             "\"crc32\":\"%08X\",\"size\":%u,\"bundled\":%d,"
+             "\"kbless_ram_lo\":\"0x%X\",\"kbless_ram_hi\":\"0x%X\","
+             "\"kbless_rom_off\":\"0x%X\",\"shell_entry_phys\":\"0x%X\","
+             "\"deliver_event_ret\":\"0x%X\","
+             "\"image_wordsum\":\"%08X\",\"loaded_wordsum\":\"%08X\","
+             "\"match\":%d}\n",
+             id, psx_bios_image.image_id, psx_bios_image.image_sha256,
+             psx_bios_image.image_crc32, psx_bios_image.image_size,
+             psx_bios_image.image_bundled,
+             psx_bios_image.kbless_ram_lo, psx_bios_image.kbless_ram_hi,
+             psx_bios_image.kbless_rom_off, psx_bios_image.shell_entry_phys,
+             psx_bios_image.deliver_event_ret,
+             psx_bios_image.image_wordsum, memory_get_bios_checksum(),
+             psx_bios_image.image_wordsum == memory_get_bios_checksum());
+    debug_server_send_line(out);
 }
 
 /* hle_dump — query the BIOS-HLE tier's always-on call ring (bios_hle.c).
@@ -4678,11 +4721,21 @@ static void handle_gpu_state(int id, const char *json)
              "\"draw_area\":[%u,%u,%u,%u],"
              "\"draw_offset\":[%d,%d],"
              "\"ws\":{\"configured\":%d,\"active\":%d,\"game_mode\":%d,"
-             "\"present_native_43\":%d,\"x_margin\":%d,\"squash\":[%d,%d],"
+             "\"present_native_43\":%d,\"x_margin\":%d,"
+             "\"activation_margin\":%d,\"squash\":[%d,%d],"
              "\"mode\":%d,\"nw_extra\":%d,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
-             "\"ovh_prims\":%u,\"last_ovh_frame\":%u}}",
+             "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
+             "\"auto_ui\":{\"configured\":%d,\"dense\":%d,\"ot_rank\":%u,"
+             "\"candidates\":%llu,\"transforms\":%llu},"
+             "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
+             "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
+             "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
+             "\"outside_reject\":%llu,\"queue_reject\":%llu,"
+             "\"queue_highwater\":[%u,%u,%u]},"
+             "\"terrain_angle\":{\"calls\":%llu,\"identity_43\":%llu,"
+             "\"max_vanilla\":%u,\"max_widened\":%u}}}",
              id, di.display_x, di.display_y,
              di.width, di.height,
              di.depth24 ? 24 : 15, di.depth24,
@@ -4696,11 +4749,57 @@ static void handle_gpu_state(int id, const char *json)
              da.left, da.top, da.right, da.bottom,
              da.offset_x, da.offset_y,
              ws.configured, ws.active, ws.game_mode,
-             ws.present_native_43, ws.x_margin, ws.xnum, ws.xden,
+             ws.present_native_43, ws.x_margin, ws.activation_margin,
+             ws.xnum, ws.xden,
              ws.mode, ws.nw_extra,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
-             ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
-             ws.ovh_prims, ws.last_ovh_frame);
+              ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
+              ws.ovh_prims, ws.last_ovh_frame,
+              ws.auto_ui_squash, ws.auto_ui_dense, ws.auto_ui_ot_rank,
+              (unsigned long long)ws.auto_ui_candidates,
+              (unsigned long long)ws.auto_ui_transforms,
+              (unsigned long long)ws.aspect_cone_calls,
+             (unsigned long long)ws.aspect_cone_43_identity,
+             (unsigned long long)ws.aspect_cone_vanilla_keep,
+             (unsigned long long)ws.aspect_cone_visible_keep,
+             (unsigned long long)ws.aspect_cone_guard_keep,
+             (unsigned long long)ws.aspect_cone_hysteresis_keep,
+             (unsigned long long)ws.aspect_cone_outside_reject,
+             (unsigned long long)ws.aspect_cone_queue_reject,
+             ws.aspect_cone_queue_highwater[0],
+             ws.aspect_cone_queue_highwater[1],
+             ws.aspect_cone_queue_highwater[2],
+             (unsigned long long)ws.angle_calls,
+             (unsigned long long)ws.angle_43_identity,
+             ws.angle_max_vanilla, ws.angle_max_widened);
+}
+
+static void handle_ws_aspect_cone_site(int id, const char *json)
+{
+    char addr_str[32];
+    if (!json_get_str(json, "address", addr_str, sizeof(addr_str))) {
+        send_err(id, "missing address");
+        return;
+    }
+    GpuWsAspectConeSiteDebug site;
+    if (!gpu_ws_get_aspect_cone_site_debug(hex_to_u32(addr_str), &site)) {
+        send_err(id, "aspect-cone site not configured");
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"address\":\"0x%08X\","
+             "\"calls\":%llu,\"identity_43\":%llu,"
+             "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
+             "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
+             "\"outside_reject\":%llu,\"queue_reject\":%llu}",
+             id, site.address,
+             (unsigned long long)site.calls,
+             (unsigned long long)site.identity_43,
+             (unsigned long long)site.vanilla_keep,
+             (unsigned long long)site.visible_keep,
+             (unsigned long long)site.guard_keep,
+             (unsigned long long)site.hysteresis_keep,
+             (unsigned long long)site.outside_reject,
+             (unsigned long long)site.queue_reject);
 }
 
 static void handle_mem_words(int id, const char *json)
@@ -5453,10 +5552,10 @@ static void handle_gpu_frame_dump(int id, const char *json)
         const GpuGp0RingEntry *e = &entries[i];
         pos += (size_t)snprintf(buf + pos, buf_sz - pos,
             "%s{\"seq\":%u,\"op\":\"0x%02X\",\"n\":%u,"
-            "\"src\":\"0x%08X\",\"pc\":\"0x%08X\","
+            "\"src\":\"0x%08X\",\"ot\":%u,\"pc\":\"0x%08X\","
             "\"func\":\"0x%08X\",\"ra\":\"0x%08X\",\"w\":[",
             i ? "," : "", e->seq, e->opcode, e->n_words,
-            e->src_addr, e->pc, e->func, e->ra);
+            e->src_addr, (unsigned)e->ot_rank, e->pc, e->func, e->ra);
         int show = e->n_words < GPU_GP0_RING_MAX_WORDS
                  ? e->n_words : GPU_GP0_RING_MAX_WORDS;
         for (int k = 0; k < show && pos < buf_sz - 32; k++) {
@@ -5900,7 +5999,8 @@ static void handle_spu_events_reset(int id, const char *json)
  *                UNDERRUN/MUTE/UNMUTE/CD_PUSH/DMA), sample-clock stamped.
  * Protocol mirrored on psx-beetle's port 4380 (beetle_debug_server.c). */
 /* Bridge/legacy output health (main.cpp; C linkage). Returns 0 pre-device. */
-extern int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
+extern int psx_audio_out_stats(double *fill_ms, double *target_ms,
+                               uint64_t *underruns,
                                uint64_t *overflow_drops, double *correction,
                                int *legacy, int *host_rate);
 
@@ -5909,11 +6009,12 @@ static void handle_audio_stats(int id, const char *json)
     (void)json;
     AudioTraceStats st;
     audio_trace_get_stats(&st);
-    double fill_ms = 0.0, correction = 0.0;
+    double fill_ms = 0.0, target_ms = 0.0, correction = 0.0;
     uint64_t out_underruns = 0, overflow_drops = 0;
     int legacy = 1, host_rate = 44100;
-    int out_ok = psx_audio_out_stats(&fill_ms, &out_underruns, &overflow_drops,
-                                     &correction, &legacy, &host_rate);
+    int out_ok = psx_audio_out_stats(&fill_ms, &target_ms, &out_underruns,
+                                     &overflow_drops, &correction, &legacy,
+                                     &host_rate);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"taps\":["
              "{\"name\":\"spu_out\",\"frames\":%llu,\"nonzero\":%llu,"
@@ -5926,7 +6027,8 @@ static void handle_audio_stats(int id, const char *json)
              "\"queue_hiwater\":%u,\"queue_lowater\":%u,"
              "\"mutes\":%llu,\"unmutes\":%llu,\"events_total\":%llu,"
              "\"out\":{\"active\":%d,\"mode\":\"%s\",\"host_rate\":%d,"
-             "\"fill_ms\":%.1f,\"underruns\":%llu,\"overflow_drops\":%llu,"
+             "\"fill_ms\":%.1f,\"target_ms\":%.1f,\"underruns\":%llu,"
+             "\"overflow_drops\":%llu,"
              "\"correction\":%.5f}}",
              id,
              (unsigned long long)st.tap_frames[0],
@@ -5949,7 +6051,7 @@ static void handle_audio_stats(int id, const char *json)
              (unsigned long long)st.unmute_events,
              (unsigned long long)st.events_total,
              out_ok, legacy ? "legacy-push" : "bridge-pull", host_rate,
-             fill_ms,
+             fill_ms, target_ms,
              (unsigned long long)out_underruns,
              (unsigned long long)overflow_drops,
              correction);
@@ -6251,21 +6353,6 @@ static void handle_sio_trace(int id, const char *json)
     }
 
     send_fmt("]}\n");
-}
-
-/* Live get/set of the pad config-SM mode, for A/B testing the LEGACY Tomba
- * Hybrid compatibility path (normally driven per-game by [controller]
- * legacy_pad_config; see sio.c g_pad_legacy_cfg for the full story).
- *   {"cmd":"pad_cfg"}            -> report current mode
- *   {"cmd":"pad_cfg","set":1}   -> legacy pre-98aa688 "always 0xF3" config
- *   {"cmd":"pad_cfg","set":0}   -> modern DualShock config state machine (default) */
-static void handle_pad_cfg(int id, const char *json)
-{
-    int set = json_get_int(json, "set", -1);
-    if (set >= 0) sio_set_legacy_cfg(set);
-    int mode = sio_get_legacy_cfg();
-    send_fmt("{\"id\":%d,\"ok\":true,\"legacy_cfg\":%d,\"mode\":\"%s\"}\n",
-             id, mode, mode ? "legacy-0xF3" : "new-state-machine");
 }
 
 static void handle_sio_trace_window(int id, const char *json)
@@ -6867,8 +6954,9 @@ static void handle_ws_margin(int id, const char *json)
     gpu_ws_set_margin_override(v);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
-    send_fmt("{\"id\":%d,\"ok\":true,\"override\":%d,\"x_margin\":%d,\"active\":%d}",
-             id, v, ws.x_margin, ws.active);
+    send_fmt("{\"id\":%d,\"ok\":true,\"override\":%d,\"x_margin\":%d,"
+             "\"activation_margin\":%d,\"active\":%d}",
+             id, v, ws.x_margin, ws.activation_margin, ws.active);
 }
 
 /* frame_perf: per-frame GPU/CPU phase timing (gpu_gl_renderer.c frame_perf ring).
@@ -7169,28 +7257,6 @@ static void handle_ws_census(int id, const char *json)
     if (n < 0) { send_err(id, "census dump: cannot open file"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"rows\":%d,\"path\":\"%s\",\"seq\":%llu}",
              id, n, path, (unsigned long long)gpu_ws_census_seq());
-}
-
-static void handle_mmx6_reveal(int id, const char *json)
-{
-    extern void gpu_ws_mmx6_set_hostside(int on);
-    extern int  gpu_ws_mmx6_hostside_get(void);
-    extern int  gpu_ws_mmx6_reveal_is_active(void);
-    extern long gpu_ws_mmx6_emit_tiles(void);
-    extern long gpu_ws_mmx6_emit_calls(void);
-    extern int  gpu_ws_mmx6_clut_count(void);
-    extern void gpu_ws_mmx6_set_reloc(int on);
-    extern int  gpu_ws_mmx6_reloc_get(void);
-    int on = json_get_int(json, "on", -1);
-    if (on >= 0) gpu_ws_mmx6_set_hostside(on);
-    int reloc = json_get_int(json, "reloc", -1);
-    if (reloc >= 0) gpu_ws_mmx6_set_reloc(reloc);
-    (void)gpu_ws_mmx6_reloc_get;
-    send_fmt("{\"id\":%d,\"ok\":true,\"hostside\":%d,\"active\":%d,"
-             "\"clut_cached\":%d,\"last_emit_tiles\":%ld,\"emit_calls\":%ld}",
-             id, gpu_ws_mmx6_hostside_get(), gpu_ws_mmx6_reveal_is_active(),
-             gpu_ws_mmx6_clut_count(), gpu_ws_mmx6_emit_tiles(),
-             gpu_ws_mmx6_emit_calls());
 }
 
 static void handle_mmx6_freshfix(int id, const char *json)
@@ -8252,6 +8318,12 @@ static void wtrace_fill_entry(WriteTraceEntry *e, uint64_t seq,
     e->a3        = debug_cpu_ptr ? debug_cpu_ptr->gpr[7]  : 0;
     e->t0        = debug_cpu_ptr ? debug_cpu_ptr->gpr[8]  : 0;
     e->t1        = debug_cpu_ptr ? debug_cpu_ptr->gpr[9]  : 0;
+    e->s0        = debug_cpu_ptr ? debug_cpu_ptr->gpr[16] : 0;
+    e->s1        = debug_cpu_ptr ? debug_cpu_ptr->gpr[17] : 0;
+    e->s2        = debug_cpu_ptr ? debug_cpu_ptr->gpr[18] : 0;
+    e->s3        = debug_cpu_ptr ? debug_cpu_ptr->gpr[19] : 0;
+    e->s4        = debug_cpu_ptr ? debug_cpu_ptr->gpr[20] : 0;
+    e->s5        = debug_cpu_ptr ? debug_cpu_ptr->gpr[21] : 0;
     e->frame     = (uint32_t)s_frame_count;
     e->width     = width;
 }
@@ -9794,12 +9866,16 @@ static void handle_wtrace_dump(int id, const char *json)
                         "\"a0\":\"0x%08X\",\"a1\":\"0x%08X\","
                         "\"a2\":\"0x%08X\",\"a3\":\"0x%08X\","
                         "\"t0\":\"0x%08X\",\"t1\":\"0x%08X\","
+                        "\"s0\":\"0x%08X\",\"s1\":\"0x%08X\","
+                        "\"s2\":\"0x%08X\",\"s3\":\"0x%08X\","
+                        "\"s4\":\"0x%08X\",\"s5\":\"0x%08X\","
                         "\"frame\":%u,\"w\":%u,\"dma_ch\":%d}",
                         (emitted == 0) ? "" : ",",
                         (unsigned long long)e->seq,
                         e->addr, e->old_val, e->new_val, e->ra, e->func_addr,
                         e->pc, e->cpu_pc, e->sp,
                         e->v0, e->v1, e->a0, e->a1, e->a2, e->a3, e->t0, e->t1,
+                        e->s0, e->s1, e->s2, e->s3, e->s4, e->s5,
                         e->frame, (unsigned)e->width, (int)e->dma_ch);
         emitted++;
     }
@@ -11094,6 +11170,100 @@ static void handle_insn_freeze_status(int id, const char *json)
  * instruction transfers to (or falls through to) <target>. Used to capture the
  * Tomba2 worker wild-jump to 0x49422E54 with the offending jr's register
  * snapshot as the ring tail. target=0 disarms. */
+/* s3_smear_watch lo=<hex> hi=<hex> [excl=<hex insn>] — arm the callee-smear
+ * tripwire (dirty_ram_interp.c): latches the first interp instruction in
+ * [lo,hi) whose execution changes $s3 (a jalr's exec_one spans the whole
+ * nested callee, so the latch names the callee that clobbered a callee-saved
+ * register). excl is an optional exact instruction encoding to ignore, so a
+ * watched loop's own $s3 advance doesn't trip the latch. Called with no
+ * args, reports the latch. lo=0 disarms. */
+static void handle_s3_smear_watch(int id, const char *json)
+{
+    extern uint32_t g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl;
+    extern uint32_t g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old,
+                    g_s3_smear_new, g_s3_smear_tgt, g_s3_smear_frame;
+    extern int g_s3_smear_valid;
+    char buf[32];
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        g_s3_smear_lo = hex_to_u32(buf);
+        /* each arming fully re-specifies the watch: omitted = cleared */
+        g_s3_smear_hi = json_get_str(json, "hi", buf, sizeof(buf))
+                            ? hex_to_u32(buf) : 0u;
+        g_s3_smear_excl = json_get_str(json, "excl", buf, sizeof(buf))
+                            ? hex_to_u32(buf) : 0u;
+        g_s3_smear_valid = 0;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+             "\"excl\":\"0x%08X\","
+             "\"valid\":%d,\"pc\":\"0x%08X\",\"insn\":\"0x%08X\","
+             "\"s3_old\":\"0x%08X\",\"s3_new\":\"0x%08X\","
+             "\"call_target\":\"0x%08X\",\"frame\":%u}\n",
+             id, g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
+             g_s3_smear_valid,
+             g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old, g_s3_smear_new,
+             g_s3_smear_tgt, g_s3_smear_frame);
+}
+
+/* callret_watch lo=<hex> hi=<hex> — arm the call-resolution ring
+ * (dirty_ram_interp.c): every interp JALR whose call PC lies in [lo,hi)
+ * records its resolution tier + full post-call outcome. No args = dump the
+ * ring (newest last). lo=0 disarms. */
+static void handle_callret_watch(int id, const char *json)
+{
+    /* MUST stay field-for-field identical to CallRetEnt in
+     * dirty_ram_interp.c (a divergence dumps garbage with no compiler
+     * diagnostic — the ring is only visible here as an opaque extern). */
+    typedef struct {
+        uint64_t cycle; uint32_t frame;
+        uint32_t pc, target, sp_b, ra_b, s0_b, s3_b;
+        uint32_t path;
+        uint32_t pc_a, ra_a, sp_a, s0_a, s3_a, v0_a;
+        uint32_t bail_a, rfe_a, esc_a, in_exc_a;
+        uint32_t dstatic, dblocks, dexc;
+        uint32_t last_func_a;
+    } E;
+    extern uint32_t g_callret_lo, g_callret_hi;
+    extern E g_callret_ring[]; extern uint64_t g_callret_seq;
+    const uint32_t cap = 64u;   /* MUST match CALLRET_CAP (dirty_ram_interp.c) */
+    char buf[32];
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        g_callret_lo = hex_to_u32(buf);
+        if (json_get_str(json, "hi", buf, sizeof(buf)))
+            g_callret_hi = hex_to_u32(buf);
+        g_callret_seq = 0;
+        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\"}\n",
+                 id, g_callret_lo, g_callret_hi);
+        return;
+    }
+    uint64_t total = g_callret_seq;
+    uint32_t avail = total < cap ? (uint32_t)total : cap;
+    size_t BUF_SZ = 512u + (size_t)avail * 512u;
+    char *out = (char *)malloc(BUF_SZ); if (!out) { send_err(id, "oom"); return; }
+    size_t pos = (size_t)snprintf(out, BUF_SZ,
+        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+        id, (unsigned long long)total);
+    for (uint32_t i = 0; i < avail && pos < BUF_SZ - 600; i++) {
+        E *e = &g_callret_ring[(total - avail + i) & (cap - 1u)];
+        pos += (size_t)snprintf(out + pos, BUF_SZ - pos,
+            "%s{\"cyc\":%llu,\"f\":%u,\"pc\":\"0x%08X\",\"tgt\":\"0x%08X\","
+            "\"path\":%u,"
+            "\"sp_b\":\"0x%08X\",\"ra_b\":\"0x%08X\",\"s0_b\":\"0x%08X\",\"s3_b\":\"0x%08X\","
+            "\"pc_a\":\"0x%08X\",\"ra_a\":\"0x%08X\",\"sp_a\":\"0x%08X\","
+            "\"s0_a\":\"0x%08X\",\"s3_a\":\"0x%08X\",\"v0_a\":\"0x%08X\","
+            "\"bail\":%u,\"rfe\":%u,\"esc\":%u,\"in_exc\":%u,"
+            "\"dstatic\":%u,\"dblocks\":%u,\"dexc\":%u,\"last_func\":\"0x%08X\"}",
+            i ? "," : "", (unsigned long long)e->cycle, e->frame, e->pc, e->target,
+            e->path,
+            e->sp_b, e->ra_b, e->s0_b, e->s3_b,
+            e->pc_a, e->ra_a, e->sp_a, e->s0_a, e->s3_a, e->v0_a,
+            e->bail_a, e->rfe_a, e->esc_a, e->in_exc_a,
+            e->dstatic, e->dblocks, e->dexc, e->last_func_a);
+    }
+    pos += (size_t)snprintf(out + pos, BUF_SZ - pos, "]}");
+    debug_server_send_line(out);
+    free(out);
+}
+
 static void handle_insn_freeze_target(int id, const char *json)
 {
     extern uint32_t g_insn_freeze_on_target;
@@ -12164,6 +12334,7 @@ static const CmdEntry s_commands[] = {
     { "dump_ram",          handle_read_ram },   /* alias: one request, one response */
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
+    { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },
     { "kernel_bless",      handle_kernel_bless },
@@ -12178,7 +12349,6 @@ static const CmdEntry s_commands[] = {
     { "ws_dome_probe",     handle_ws_dome_probe },
     { "ws_census",         handle_ws_census },
     { "mmx6_freshfix",     handle_mmx6_freshfix },
-    { "mmx6_reveal",       handle_mmx6_reveal },
     { "mem_words",         handle_mem_words },
     { "vram_peek",         handle_vram_peek },
     { "gl_coh_ring",       handle_gl_coh_ring },
@@ -12224,7 +12394,6 @@ static const CmdEntry s_commands[] = {
     { "chain_trace",       handle_chain_trace },
     { "sio_trace",         handle_sio_trace },
     { "sio_trace_window",  handle_sio_trace_window },
-    { "pad_cfg",           handle_pad_cfg },
     { "sio_pc_trace",      handle_sio_pc_trace },
     { "sio_pc_window",     handle_sio_pc_window },
     { "sio_ctrl_reg_trace", handle_sio_ctrl_reg_trace },
@@ -12256,6 +12425,7 @@ static const CmdEntry s_commands[] = {
     { "fntrace_dump",      handle_fntrace_dump },
     { "unknown_dispatch_log", handle_unknown_dispatch_log },
     { "bioscall_dump",     handle_bioscall_dump },
+    { "bios_info",         handle_bios_info },
     { "hle_dump",          handle_hle_dump },
     { "card_trace_dump",   handle_card_trace_dump },
     { "card_txn_dump",     handle_card_txn_dump },
@@ -12399,6 +12569,8 @@ static const CmdEntry s_commands[] = {
     { "insn_freeze",          handle_insn_freeze },
     { "insn_freeze_status",   handle_insn_freeze_status },
     { "insn_freeze_target",   handle_insn_freeze_target },
+    { "s3_smear_watch",       handle_s3_smear_watch },
+    { "callret_watch",        handle_callret_watch },
     { "insn_freeze_snapshot", handle_insn_freeze_snapshot },
     { "ra_load_watch",        handle_ra_load_watch },
     { "overlay_native_on",    handle_overlay_native_on },

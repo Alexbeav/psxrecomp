@@ -40,6 +40,7 @@
 #include "fmt/format.h"
 
 #include "bios_slice_walker.h"
+#include "bios_rom_alias.h"
 #include "config_loader.h"
 #include "full_function_emitter.h"
 #include "function_discovery.h"
@@ -773,11 +774,31 @@ int run_boot_slice(const fs::path& bios_path, const fs::path& out_dir,
 
 int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
                   const fs::path& seed_path,
+                  const std::string& out_stem,
+                  const PSXRecompV4::BiosAddressModel& model,
+                  const std::string& declared_sha = {},
                   const std::vector<PSXRecompV4::BiosVectorTable>& bios_vectors = {},
                   const std::vector<PSXRecompV4::BiosAlias>& bios_aliases = {}) {
+    // 0. Activate the profile's address model — the single source of truth
+    // for every relocation window discovery and the emitter use.
+    PSXRecompV4::FullFunctionEmitter::set_address_model(&model);
+    PSXRecompV4::FunctionDiscovery::set_address_model(&model);
+
     // 1. Load + validate BIOS file.
     const auto rom = load_file_strict(bios_path, kBiosSize);
     const std::string sha = sha256_hex(rom);
+
+    // Declared-identity gate: a profile that pins [program.image] sha256
+    // refuses to emit from any other image. Regenerating from the wrong ROM
+    // is a build defect (the generated C would carry the wrong provenance),
+    // not a warning.
+    if (!declared_sha.empty() && declared_sha != sha) {
+        std::fprintf(stderr,
+            "psxrecomp-bios: FATAL: profile declares [program.image] sha256\n"
+            "  %s\nbut %s hashes to\n  %s\n",
+            declared_sha.c_str(), bios_path.string().c_str(), sha.c_str());
+        return 1;
+    }
 
     // 2. Load seeds.
     auto seeds = load_seeds(seed_path);
@@ -833,7 +854,7 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
     // 4. Emit full C.
     const auto stats = PSXRecompV4::FullFunctionEmitter::emit(
         rom, kBiosBase, kBiosBase + static_cast<uint32_t>(kBiosSize) - 1,
-        dr, sha, out_dir.string(), bios_vectors, bios_aliases);
+        dr, sha, out_dir.string(), out_stem, bios_vectors, bios_aliases);
 
     std::fprintf(stdout,
         "psxrecomp-bios: EMIT OK  emitted=%u  skipped=%u  instructions=%u  "
@@ -854,7 +875,12 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
 // ----- Phase 1c discovery mode ---------------------------------------------
 
 int run_discover(const fs::path& bios_path, const fs::path& out_dir,
-                 const fs::path& seed_path) {
+                 const fs::path& seed_path,
+                 const PSXRecompV4::BiosAddressModel& model) {
+    // 0. Activate the profile's address model (discovery follows J/JAL
+    // targets through its relocation windows).
+    PSXRecompV4::FunctionDiscovery::set_address_model(&model);
+
     // 1. Load + validate BIOS file.
     const auto rom = load_file_strict(bios_path, kBiosSize);
     const std::string sha = sha256_hex(rom);
@@ -944,13 +970,19 @@ int main(int argc, char** argv) {
                     cfg.seeds_path.string().c_str(),
                     cfg.out_dir.string().c_str(),
                     cfg.out_stem.c_str());
+                const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
+                PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
                 return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
+                                     cfg.out_stem, model, cfg.image_sha256,
                                      cfg.bios_vectors, cfg.bios_aliases);
             }
             if (a == "--config=" || a.rfind("--config=", 0) == 0) {
                 const fs::path config_path = a.substr(std::string("--config=").size());
                 const auto cfg = PSXRecompV4::load_bios_config(config_path);
+                const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
+                PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
                 return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
+                                     cfg.out_stem, model, cfg.image_sha256,
                                      cfg.bios_vectors, cfg.bios_aliases);
             }
         }
@@ -964,7 +996,11 @@ int main(int argc, char** argv) {
                 "       psxrecomp-bios <bios.bin> <out_dir> --emit-full <seeds.json>\n");
             return 2;
         }
-        const fs::path bios_path = argv[1];
+        // Accept either BIOS filename convention: the legacy bare model name
+        // ("SCPH1001.BIN", which tools/regen_bios.sh still defaults to) and the
+        // region-qualified one ("US-PSX-SCPH1001.BIN") each resolve to whichever
+        // is actually on disk. See recompiler/include/bios_rom_alias.h.
+        const fs::path bios_path = PSXRecompV4::resolve_bios_rom(fs::path(argv[1]));
         const fs::path out_dir   = argv[2];
         std::optional<std::string> cc_override;
         std::optional<fs::path> seed_path;
@@ -984,10 +1020,34 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (emit_full_seed_path) {
-            return run_emit_full(bios_path, out_dir, *emit_full_seed_path);
-        } else if (seed_path) {
-            return run_discover(bios_path, out_dir, *seed_path);
+        if (emit_full_seed_path || seed_path) {
+            // Legacy positional discovery/emit: the address model must come
+            // from a profile (there are no compiled-in relocation windows).
+            // Resolve the canonical SCPH1001 profile relative to the CWD —
+            // regen_bios.sh guarantees the framework root. Other images must
+            // use --config with their own profile.
+            const fs::path default_profile{"bios/SCPH1001.toml"};
+            if (!fs::exists(default_profile)) {
+                std::fprintf(stderr,
+                    "psxrecomp-bios: positional form needs %s in the CWD for "
+                    "the address model (or use --config <profile.toml>)\n",
+                    default_profile.string().c_str());
+                return 2;
+            }
+            const auto prof = PSXRecompV4::load_bios_config(default_profile);
+            const auto model = PSXRecompV4::BiosAddressModel::from_config(prof);
+            PSXRecompV4::FullFunctionEmitter::set_bios_profile(&prof);
+            if (emit_full_seed_path) {
+                // Bring-your-own-dump form: the profile supplies the address
+                // model and stem, but its sha256 pin is deliberately NOT
+                // enforced here (regional retail dumps differ; --config is
+                // the strict path).
+                return run_emit_full(bios_path, out_dir, *emit_full_seed_path,
+                                     prof.out_stem.empty() ? "SCPH1001"
+                                                           : prof.out_stem,
+                                     model);
+            }
+            return run_discover(bios_path, out_dir, *seed_path, model);
         } else {
             return run_boot_slice(bios_path, out_dir, cc_override);
         }

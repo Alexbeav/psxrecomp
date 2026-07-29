@@ -22,16 +22,6 @@ if [ ! -f "duckstation/build/src/core/Release/core.lib" ]; then
     exit 1
 fi
 
-# Download SDL2 MSVC dev package if not present.
-if [ ! -d sdl2-msvc/SDL2-* ] 2>/dev/null; then
-    echo "Downloading SDL2 MSVC development package..."
-    curl -L -o sdl2-dev.zip \
-        "https://github.com/libsdl-org/SDL/releases/download/release-2.30.12/SDL2-devel-2.30.12-VC.zip"
-    mkdir -p sdl2-msvc
-    unzip -q -o sdl2-dev.zip -d sdl2-msvc/
-    rm -f sdl2-dev.zip
-fi
-
 # Configure with MSVC generator.
 BUILD_DIR="runtime/build-msvc"
 
@@ -54,7 +44,6 @@ echo ""
 echo "=== Build complete ==="
 echo "Binary: $BUILD_DIR/Release/psx-dsoracle.exe"
 
-# Copy SDL2.dll if not already there.
 if [ -f "$BUILD_DIR/Release/psx-dsoracle.exe" ]; then
     echo "Oracle binary ready."
 fi

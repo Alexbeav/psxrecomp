@@ -40,8 +40,10 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     # loading, and every NEW shard silently failed to compile against the moved-on
     # runtime (the recurring "header change broke the shards" class). Folding the
     # compile surface in makes such a change reshard SAME-TREE instead of breaking
-    # silently. overlay_api.h transitively pulls stdint; cpu_state.h is its only
-    # project include; the .inc is the shim every shard links against.
+    # silently. overlay_api.h pulls cpu_state.h and its cycle-helper headers; the
+    # .inc is the shim every shard links against.
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_api.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/cpu_state.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cyc.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/psx_cycles.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/runtime/include/overlay_dispatch_preamble.c.inc)

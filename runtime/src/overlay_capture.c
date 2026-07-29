@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <time.h>
-#include <SDL.h>
+#include "psx_sdl.h"
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>

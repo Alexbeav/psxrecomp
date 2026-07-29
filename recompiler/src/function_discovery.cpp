@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "fmt/format.h"
+#include "bios_address_model.h"
 #include "mips_decoder.h"
 
 namespace PSXRecompV4 {
@@ -33,69 +34,43 @@ uint32_t FunctionDiscovery::read_u32_le(const std::vector<uint8_t>& rom, uint32_
          | (static_cast<uint32_t>(rom[offset + 3]) << 24);
 }
 
-// Phase 1e normalization: KSEG strip + ROM-to-RAM copy offset.
+/* The active BIOS address model (profile-derived; bios_address_model.h) —
+ * shared single source of truth with full_function_emitter.cpp for every
+ * relocation window. No built-in default: discovery without a model is a
+ * caller bug and aborts loudly. */
+static const BiosAddressModel* g_addr_model = nullptr;
+
+void FunctionDiscovery::set_address_model(const BiosAddressModel* m) {
+    g_addr_model = m;
+}
+
+static const BiosAddressModel& addr_model() {
+    if (!g_addr_model) {
+        throw std::runtime_error(
+            "FunctionDiscovery: no BIOS address model set "
+            "(FunctionDiscovery::set_address_model must run before discover)");
+    }
+    return *g_addr_model;
+}
+
+// Phase 1e normalization: KSEG strip + per-copy key fold.
 // See generated/normalization_rule.md for the full derivation.
 static uint32_t normalize_address(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    // Kernel Part 2: ROM 0x1FC10000..0x1FC17FFF → RAM 0x00000500..0x00008500
-    if (phys >= 0x1FC10000u && phys <= 0x1FC17FFFu) {
-        phys = phys - 0x1FC10000u + 0x00000500u;
-    }
-    return phys;
+    return addr_model().normalize(addr);
 }
 
 static uint32_t ram_alias_to_rom(uint32_t addr) {
-    uint32_t phys = addr & 0x1FFFFFFFu;
-    if (phys >= 0x00000500u && phys < 0x00008500u) {
-        return 0xBFC10000u + (phys - 0x00000500u);
-    }
-    if (phys >= 0x00030000u && phys <= 0x0005AFFFu) {
-        return 0xBFC18000u + (phys - 0x00030000u);
-    }
-    return addr;
+    return addr_model().ram_alias_to_rom(addr);
 }
 
 // Relocated code (Shell, Kernel Part 2) runs at RAM addresses, not ROM
 // addresses. J/JAL targets use (PC & 0xF0000000) as the region base, so
 // when the instruction is analyzed at its ROM address the target lands in
-// 0xB0xxxxxx (KSEG1 expansion region) instead of the correct 0x80xxxxxx.
-// This mirrors full_function_emitter.cpp relocate_j_target, but converts
-// the resulting RAM address back to a ROM address so that function
-// discovery can follow it.
+// the wrong region. This mirrors full_function_emitter.cpp
+// relocate_j_target, but converts the resulting RAM address back to a ROM
+// address so that function discovery can follow it.
 static uint32_t remap_relocated_j_target(uint32_t target, uint32_t source_rom_addr) {
-    uint32_t src_phys = source_rom_addr & 0x1FFFFFFFu;
-
-    // Kernel Part 2: ROM 0x1FC10000..0x1FC17FFF → runs at RAM 0x500+
-    if (src_phys >= 0x1FC10000u && src_phys <= 0x1FC17FFFu) {
-        uint32_t runtime_addr = src_phys - 0x1FC10000u + 0x00000500u;
-        uint32_t ram_target = (runtime_addr & 0xF0000000u) | (target & 0x0FFFFFFFu);
-        uint32_t ram_phys = ram_target & 0x1FFFFFFFu;
-        // KP2 RAM → KP2 ROM
-        if (ram_phys >= 0x00000500u && ram_phys < 0x00008500u)
-            return 0xBFC10000u + (ram_phys - 0x00000500u);
-        // KP1 ROM (target already correct for 0x00 region)
-        if (ram_phys >= 0x1FC00000u && ram_phys < 0x1FC80000u)
-            return ram_target;
-        return target;
-    }
-
-    // Shell: ROM 0x1FC18000..0x1FC427FF → runs at RAM 0x80030000+
-    if (src_phys >= 0x1FC18000u && src_phys <= 0x1FC427FFu) {
-        uint32_t ram_target = 0x80000000u | (target & 0x0FFFFFFFu);
-        uint32_t ram_phys = ram_target & 0x1FFFFFFFu;
-        // Shell RAM → Shell ROM
-        if (ram_phys >= 0x00030000u && ram_phys < 0x0005A800u)
-            return 0xBFC18000u + (ram_phys - 0x00030000u);
-        // KP2 RAM → KP2 ROM
-        if (ram_phys >= 0x00000500u && ram_phys < 0x00008500u)
-            return 0xBFC10000u + (ram_phys - 0x00000500u);
-        // KP1 ROM range (Shell calling Kernel Part 1 — target already correct)
-        if (ram_phys >= 0x1FC00000u && ram_phys < 0x1FC10000u)
-            return 0xBFC00000u + (ram_phys - 0x1FC00000u);
-        return target;
-    }
-
-    return target;
+    return addr_model().remap_relocated_j_target(target, source_rom_addr);
 }
 
 FunctionDiscovery::CFInfo FunctionDiscovery::classify_control_flow(uint32_t raw, uint32_t addr) {
@@ -273,6 +248,12 @@ FunctionDiscovery::SingleFunctionResult FunctionDiscovery::walk_function(
                 if (cf.target != 0 && in_bounds(cf.target)) {
                     work.push(cf.target);
                     block_leader_set.insert(cf.target);
+                } else if (cf.target != 0 &&
+                           cf.target >= base_addr && cf.target <= rom_end) {
+                    // Escapes the walk range (seed-truncated fragment). The
+                    // emitter publishes this target; record it for the
+                    // dispatchability closure in discover().
+                    result.escaping_targets.insert(cf.target);
                 }
                 break;
 
@@ -296,7 +277,14 @@ FunctionDiscovery::SingleFunctionResult FunctionDiscovery::walk_function(
                     work.push(cf.target);
                     block_leader_set.insert(cf.target);
                 } else {
-                    // J to out-of-function: tail call or exit.
+                    // J to out-of-function: tail call or exit. Record the
+                    // target for the dispatchability closure — usually it is
+                    // another function's entry (covered), but a seed-truncated
+                    // fragment can jump into bytes no function walks.
+                    if (cf.target != 0 &&
+                        cf.target >= base_addr && cf.target <= rom_end) {
+                        result.escaping_targets.insert(cf.target);
+                    }
                     result.exit_types.insert("j_out_of_function");
                 }
                 break;
@@ -450,8 +438,13 @@ FunctionDiscovery::SingleFunctionResult FunctionDiscovery::walk_function(
                         // Also push fall-through after delay slot (code between
                         // jr and the first case target may be dead, but including
                         // it ensures no gaps in the generated function).
+                        // EXCEPT when the table itself sits right after the delay
+                        // slot (hand-written asm idiom: OpenBIOS fastMemset puts
+                        // jumptable1 at jr+8). Walking the table words as code
+                        // poisons the whole function with a bogus unsupported
+                        // instruction and the emitter skips it entirely.
                         uint32_t after_delay = addr + 8;
-                        if (in_bounds(after_delay)) {
+                        if (in_bounds(after_delay) && after_delay != rom_tb) {
                             work.push(after_delay);
                             block_leader_set.insert(after_delay);
                         }
@@ -702,20 +695,14 @@ DiscoveryResult FunctionDiscovery::discover(
     uint32_t                    rom_end,
     const std::vector<Seed>&    seeds)
 {
-    DiscoveryResult result;
-    result.ok = true;
-
-    // Sorted set of all known function entries (by address).
+    // Sorted set of all known function entries (by address). Persists across
+    // closure rounds (grows monotonically; the loop below re-discovers with
+    // the enlarged entry set each round).
     std::set<uint32_t> known_entries;
     // Map from entry address to lineage string.
     std::map<uint32_t, std::string> lineage_map;
-    // Set of normalized addresses to detect duplicates.
-    std::set<uint32_t> normalized_set;
 
-    // Worklist of entries to process.
-    std::queue<uint32_t> worklist;
-
-    // Seed the worklist.
+    // Seed the entry set.
     for (const auto& seed : seeds) {
         if (seed.address < base_addr || seed.address > rom_end) {
             throw std::runtime_error(fmt::format(
@@ -726,8 +713,42 @@ DiscoveryResult FunctionDiscovery::discover(
         if (!known_entries.count(seed.address)) {
             known_entries.insert(seed.address);
             lineage_map[seed.address] = seed.label;
-            worklist.push(seed.address);
         }
+    }
+
+    // Branch-target dispatchability closure. A conditional branch or direct J
+    // can escape its function's walk range when seeds truncate the function
+    // into fragments (OpenBIOS cdromRead is split by jump-table code_ptr
+    // seeds; its `beq ,,0xBFC1F3F8` lands past the fragment's cap in bytes no
+    // function walks). The emitter publishes every such target
+    // (`cpu->pc = target; return`), so each one MUST resolve to a dispatch
+    // key: either an address inside some walked function (the emitter's
+    // cross-target continuation injection covers that) or a function entry.
+    // An escaping target covered by NO function's instruction set would be a
+    // guaranteed runtime unknown-dispatch — promote it to a new entry and
+    // re-discover, to fixpoint so promoted fragments' own escapes close too.
+    // (The loop body below is deliberately NOT re-indented, to keep the
+    // pre-existing discovery pass reviewable as an unchanged block.)
+    for (int closure_round = 0; ; closure_round++) {
+    if (closure_round > 64) {
+        throw std::runtime_error(
+            "FunctionDiscovery: branch-target closure did not converge in 64 "
+            "rounds — runaway promotion (data walked as code?)");
+    }
+
+    DiscoveryResult result;
+    result.ok = true;
+    // Set of normalized addresses to detect duplicates.
+    std::set<uint32_t> normalized_set;
+    // Every instruction address walked this round (second pass), and every
+    // escaping direct branch/J target seen — the closure inputs.
+    std::set<uint32_t> closure_covered;
+    std::set<uint32_t> closure_escapes;
+
+    // Worklist of entries to process.
+    std::queue<uint32_t> worklist;
+    for (uint32_t e : known_entries) {
+        worklist.push(e);
     }
 
     // Phase 1: collect all function entries transitively before doing full walks.
@@ -849,13 +870,52 @@ DiscoveryResult FunctionDiscovery::discover(
         }
 
         result.total_instructions += static_cast<uint32_t>(sfr.instructions.size());
+
+        // Closure inputs: what this round walked, and what escaped it.
+        for (const auto& [iaddr, iraw] : sfr.instructions) {
+            closure_covered.insert(iaddr);
+        }
+        for (uint32_t t : sfr.escaping_targets) {
+            closure_escapes.insert(t);
+        }
     }
 
     result.total_functions = static_cast<uint32_t>(result.functions.size());
     result.total_edges = static_cast<uint32_t>(result.edges.size());
     result.total_indirect_jumps = static_cast<uint32_t>(result.indirect_jumps.size());
 
-    return result;
+    // Dispatchability closure check: any escaping direct target that no
+    // function's instruction set covers becomes a new entry; re-discover.
+    // (Targets covered by another function are fine — the emitter's
+    // cross-function continuation injection gives them dispatch keys.)
+    std::vector<uint32_t> closure_promote;
+    for (uint32_t t : closure_escapes) {
+        if (!closure_covered.count(t) && !known_entries.count(t)) {
+            closure_promote.push_back(t);
+        }
+    }
+    std::fprintf(stdout,
+        "FunctionDiscovery: closure round %d: escapes=%zu covered=%zu "
+        "entries=%zu promote=%zu\n",
+        closure_round, closure_escapes.size(), closure_covered.size(),
+        known_entries.size(), closure_promote.size());
+    for (uint32_t t : closure_promote) {
+        std::fprintf(stdout,
+            "FunctionDiscovery:   promoting uncovered escaping target 0x%08X\n", t);
+    }
+    // NOTE: iterate even when result.ok is false — unsupported instructions in
+    // unrelated walks (data-as-code seeds) are tolerated by the emitter (it
+    // skips those functions) and must not disable the closure.
+    if (closure_promote.empty()) {
+        return result;
+    }
+    for (uint32_t t : closure_promote) {
+        known_entries.insert(t);
+        lineage_map[t] = fmt::format(
+            "branch_closure: uncovered escaping branch/J target (round {})",
+            closure_round);
+    }
+    } // closure_round
 }
 
 } // namespace PSXRecompV4

@@ -2,6 +2,7 @@
 
 #include "config_loader.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
@@ -9,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "bios_rom_alias.h"
 #include "fmt/format.h"
 #include "ps1_exe_parser.h"
 
@@ -19,6 +21,156 @@
 namespace PSXRecompV4 {
 
 namespace fs = std::filesystem;
+
+namespace {
+
+struct ConfigHash {
+    uint32_t value = 2166136261u; // FNV-1a 32
+
+    void byte(uint8_t v) {
+        value ^= v;
+        value *= 16777619u;
+    }
+    void u32(uint32_t v) {
+        byte((uint8_t)(v >> 0));
+        byte((uint8_t)(v >> 8));
+        byte((uint8_t)(v >> 16));
+        byte((uint8_t)(v >> 24));
+    }
+    void tag(const char *s) {
+        while (*s) byte((uint8_t)*s++);
+        byte(0);
+    }
+    void words(const char *name, std::vector<uint32_t> values) {
+        tag(name);
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+        u32((uint32_t)values.size());
+        for (uint32_t value : values) u32(value);
+    }
+};
+
+} // namespace
+
+uint32_t overlay_codegen_config_hash(const GameConfig& c) {
+    ConfigHash h;
+    h.tag("psxrecomp-overlay-config-v1");
+
+    h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
+    h.words("cull_bias", c.ws_cull_bias_sites);
+    h.words("cull_range", c.ws_cull_range_sites);
+    h.words("cull_a1", c.ws_cull_a1_sites);
+    h.words("cull_screen_x", c.ws_cull_screen_x_sites);
+    h.words("cull_slti", c.ws_cull_slti_sites);
+    h.words("cull_bltz", c.ws_cull_bltz_sites);
+    h.words("cull_negsub", c.ws_cull_negsub_sites);
+    h.words("cull_vxrange", c.ws_cull_vxrange_sites);
+    h.words("cull_depth", c.ws_cull_depth_sites);
+    h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
+    h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
+    h.words("cull_w_imms", c.ws_cull_w_imms);
+    h.words("cull_h_imms", c.ws_cull_h_imms);
+    h.words("backdrop_x", c.ws_backdrop_x_sites);
+    h.words("backdrop_unsquash", c.ws_backdrop_unsquash_funcs);
+
+    h.tag("flags");
+    h.u32(c.ws_auto_screen_x_cull ? 1u : 0u);
+    h.u32(c.ws_auto_backdrop_preload ? 1u : 0u);
+    h.u32(c.ws_bg2d_init_func);
+    h.u32((uint32_t)c.ws_cull_guard_pixels);
+    h.u32((uint32_t)c.ws_cull_activation_guard_pixels);
+
+    std::vector<WidescreenSignedBoundSite> signed_sites =
+        c.ws_signed_x_bound_sites;
+    std::sort(signed_sites.begin(), signed_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("signed_x_bounds");
+    h.u32((uint32_t)signed_sites.size());
+    for (const auto& site : signed_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+    }
+
+    std::vector<WidescreenCullKeepSite> keep_sites = c.ws_cull_keep_sites;
+    std::sort(keep_sites.begin(), keep_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  if (a.expected != b.expected) return a.expected < b.expected;
+                  return a.result < b.result;
+              });
+    h.tag("cull_keep");
+    h.u32((uint32_t)keep_sites.size());
+    for (const auto& site : keep_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+        h.u32(site.result);
+    }
+
+    std::vector<WidescreenAngleSite> angle_sites = c.ws_cull_angle_sites;
+    std::sort(angle_sites.begin(), angle_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("cull_angle");
+    h.u32((uint32_t)angle_sites.size());
+    for (const auto& site : angle_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+    }
+
+    std::vector<WidescreenAspectConeSite> cone_sites =
+        c.ws_aspect_cone.sites;
+    std::sort(cone_sites.begin(), cone_sites.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.address != b.address) return a.address < b.address;
+                  return a.expected < b.expected;
+              });
+    h.tag("aspect_cone");
+    h.u32((uint32_t)cone_sites.size());
+    for (const auto& site : cone_sites) {
+        h.u32(site.address);
+        h.u32(site.expected);
+        h.u32(site.cosine_threshold);
+        h.u32(site.object_reg);
+        h.u32(site.x_reg);
+        h.u32(site.z_reg);
+        h.u32(site.y_reg);
+        h.u32(site.queue_guard ? 1u : 0u);
+    }
+    h.u32(c.ws_aspect_cone.forward_addr);
+    h.u32(c.ws_aspect_cone.object_type_offset);
+    h.u32(c.ws_aspect_cone.object_reg);
+    h.u32(c.ws_aspect_cone.x_reg);
+    h.u32(c.ws_aspect_cone.z_reg);
+    h.u32(c.ws_aspect_cone.y_reg);
+    h.u32(c.ws_aspect_cone.hysteresis_pixels);
+    h.u32(c.ws_aspect_cone.queue_reserve);
+    for (uint32_t value : c.ws_aspect_cone.queue_count_addrs) h.u32(value);
+    for (uint32_t value : c.ws_aspect_cone.queue_capacities) h.u32(value);
+    for (uint32_t value : c.ws_aspect_cone.queue_type_masks) h.u32(value);
+
+    std::vector<RecompilerPatch> patches = c.recompiler_patches;
+    std::sort(patches.begin(), patches.end(),
+              [](const auto& a, const auto& b) {
+                  const uint32_t aa = recompiler_patch_address_key(a.address);
+                  const uint32_t ba = recompiler_patch_address_key(b.address);
+                  if (aa != ba) return aa < ba;
+                  if (a.expected != b.expected) return a.expected < b.expected;
+                  return a.replacement < b.replacement;
+              });
+    h.tag("instruction_patches");
+    h.u32((uint32_t)patches.size());
+    for (const auto& patch : patches) {
+        h.u32(recompiler_patch_address_key(patch.address));
+        h.u32(patch.expected);
+        h.u32(patch.replacement);
+    }
+    return h.value;
+}
 
 // Pad mode <-> string. Accepts "hybrid"/"analog"/"digital" (case-insensitive);
 // returns `fallback` for anything unrecognised so a typo never silently flips
@@ -222,6 +374,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("fast_boot")) {
         rt.fast_boot = toml::find<bool>(runtime, "fast_boot");
     }
+    if (runtime.contains("openbios")) {
+        rt.openbios = toml::find<bool>(runtime, "openbios");
+    }
     if (runtime.contains("bios_hle")) {
         rt.bios_hle = toml::find<bool>(runtime, "bios_hle");
     }
@@ -327,6 +482,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("auto_skip_fmv")) {
             rt.video_auto_skip_fmv = toml::find<bool>(video, "auto_skip_fmv");
         }
+        if (video.contains("offer_skip_fmv")) {
+            rt.video_offer_skip_fmv = toml::find<bool>(video, "offer_skip_fmv");
+        }
         if (video.contains("fmv_skip_total_table")) {
             rt.video_fmv_skip_total_table =
                 (uint32_t)toml::find<int64_t>(video, "fmv_skip_total_table");
@@ -372,6 +530,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                 throw std::runtime_error(
                     "[video] frame_interpolation_fps must be 0 (display) or >= 90");
         }
+        if (video.contains("offer_frame_interpolation")) {
+            rt.video_offer_frame_interpolation =
+                toml::find<bool>(video, "offer_frame_interpolation");
+        }
         if (video.contains("aspect_ratio")) {
             const auto mode = toml::find<std::string>(video, "aspect_ratio");
             int n = 0, d = 0;
@@ -387,6 +549,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     // Optional [audio] block.
     if (cfg.contains("audio")) {
         const toml::value& audio = toml::find(cfg, "audio");
+        if (audio.contains("buffer_ms")) {
+            const auto n = toml::find<int64_t>(audio, "buffer_ms");
+            if (n < 30 || n > 500) {
+                throw std::runtime_error(fmt::format(
+                    "[audio] buffer_ms out of range (30..500): {}", n));
+            }
+            rt.audio_buffer_ms = static_cast<int>(n);
+        }
         if (audio.contains("spu_hq")) {
             rt.audio_spu_hq = toml::find<bool>(audio, "spu_hq");
         }
@@ -462,6 +632,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (ct.contains("legacy_pad_config")) {
             rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
         }
+        if (ct.contains("anti_deadzone")) {
+            const auto n = toml::find<int64_t>(ct, "anti_deadzone");
+            if (n < 0 || n > 32767)
+                throw std::runtime_error(fmt::format(
+                    "[controller] anti_deadzone out of range (0..32767): {}", n));
+            rt.anti_deadzone = static_cast<int>(n);
+            rt.has_anti_deadzone = true;
+        }
     }
 
     return rt;
@@ -520,6 +698,22 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             fmt::format("TOML syntax error in {}: {}", config_path.string(), ex.what()));
     }
 
+    // A BIOS profile describes an IMAGE — facts about bytes — never a runtime
+    // preference. This block used to be parsed into BiosConfig::runtime and
+    // read by nothing, which let bios/OpenBIOS.toml carry a `bios_hle = false`
+    // that looked authoritative and was inert. Fail loud instead of ignoring:
+    // a preference put here would never take effect, and believing it had is
+    // how the OpenBIOS boot-skip regression got explained away.
+    if (cfg.contains("runtime")) {
+        throw std::runtime_error(fmt::format(
+            "{}: a BIOS profile has no [runtime] block — it describes an image, "
+            "not a preference. Runtime options belong in game.toml / "
+            "settings.toml. (The BIOS-dependent HLE gating is expressed by "
+            "[recompiler.runtime_exports]: shell_entry_phys enables the boot-"
+            "skip, deliver_event_ret enables the kernel-call HLE tier.)",
+            config_path.string()));
+    }
+
     // [program] — bios.toml uses this; some legacy files use [game]
     const toml::value* prog_ptr = nullptr;
     if (cfg.contains("program")) {
@@ -550,7 +744,10 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             fmt::format("{}: [program] missing 'rom' or 'exe' field",
                         config_path.string()));
     }
-    const fs::path rom_path = fs::absolute(root / rom_field);
+    // Tolerate either BIOS filename convention (bare "SCPH1001.BIN" vs
+    // region-qualified "US-PSX-SCPH1001.BIN") — see bios_rom_alias.h. A no-op
+    // for game [program].exe fields, which never match a BIOS model token.
+    const fs::path rom_path = resolve_bios_rom(fs::absolute(root / rom_field));
 
     const uint32_t load_address =
         parse_hex(toml::find<std::string>(prog, "load_address"), "program.load_address");
@@ -560,6 +757,17 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
             : load_address;
     const uint32_t text_size =
         parse_hex(toml::find<std::string>(prog, "text_size"), "program.text_size");
+
+    // [program.image] — declared identity (optional)
+    std::string image_sha256;
+    bool image_redistributable = false;
+    if (prog.contains("image")) {
+        const toml::value& img = toml::find(prog, "image");
+        if (img.contains("sha256"))
+            image_sha256 = toml::find<std::string>(img, "sha256");
+        if (img.contains("redistributable"))
+            image_redistributable = toml::find<bool>(img, "redistributable");
+    }
 
     // [recompiler]
     if (!cfg.contains("recompiler")) {
@@ -628,6 +836,83 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         }
     }
 
+    // [recompiler.address_model] — the BIOS's boot-time ROM->RAM code copies.
+    // Optional: absent (or an empty copy list) means the BIOS runs entirely
+    // from ROM and normalization degenerates to the KSEG mask. Semantic
+    // invariants (window overlap, bless uniqueness, alignment) are enforced
+    // in BiosAddressModel::from_config, not here.
+    std::vector<BiosAddrCopy> address_copies;
+    if (recomp.contains("address_model")) {
+        const toml::value& am = toml::find(recomp, "address_model");
+        if (am.contains("normalize_mask")) {
+            const uint32_t mask = parse_hex(
+                toml::find<std::string>(am, "normalize_mask"),
+                "address_model.normalize_mask");
+            // Only the KSEG strip is implemented; refuse anything else rather
+            // than silently mis-normalizing (RELOCATION_MANIFEST_FORMAT.md
+            // echo-and-check).
+            if (mask != 0x1FFFFFFFu) {
+                throw std::runtime_error(fmt::format(
+                    "{}: address_model.normalize_mask must be 0x1FFFFFFF",
+                    config_path.string()));
+            }
+        }
+        if (am.contains("copy")) {
+            for (const auto& v : am.at("copy").as_array()) {
+                BiosAddrCopy c;
+                c.name   = toml::find<std::string>(v, "name");
+                c.rom_lo = parse_hex(toml::find<std::string>(v, "rom_lo"),
+                                     "address_model.copy.rom_lo");
+                c.rom_hi = parse_hex(toml::find<std::string>(v, "rom_hi"),
+                                     "address_model.copy.rom_hi");
+                c.ram_lo = parse_hex(toml::find<std::string>(v, "ram_lo"),
+                                     "address_model.copy.ram_lo");
+                c.runtime_base = parse_hex(
+                    toml::find<std::string>(v, "runtime_base"),
+                    "address_model.copy.runtime_base");
+                const std::string key =
+                    toml::find<std::string>(v, "dispatch_key");
+                if (key == "ram")      c.key_is_ram = true;
+                else if (key == "rom") c.key_is_ram = false;
+                else {
+                    throw std::runtime_error(fmt::format(
+                        "{}: address_model.copy '{}': dispatch_key must be "
+                        "\"ram\" or \"rom\", got '{}'",
+                        config_path.string(), c.name, key));
+                }
+                if (v.contains("kernel_bless"))
+                    c.kernel_bless = toml::find<bool>(v, "kernel_bless");
+                address_copies.push_back(std::move(c));
+            }
+        }
+    }
+
+    // [[recompiler.install_slots]] — kernel-RAM PCs the BIOS overwrites with
+    // dispatch stubs at runtime.
+    std::vector<uint32_t> install_slots;
+    if (recomp.contains("install_slots")) {
+        for (const auto& v : recomp.at("install_slots").as_array()) {
+            install_slots.push_back(parse_hex(
+                toml::find<std::string>(v, "ram_addr"),
+                "install_slots.ram_addr"));
+        }
+    }
+
+    // [recompiler.runtime_exports] — per-image HLE anchors couriered into the
+    // generated C. Absent keys stay 0 = structurally unavailable.
+    uint32_t shell_entry_phys = 0, deliver_event_ret = 0;
+    if (recomp.contains("runtime_exports")) {
+        const toml::value& rx = toml::find(recomp, "runtime_exports");
+        if (rx.contains("shell_entry_phys"))
+            shell_entry_phys = parse_hex(
+                toml::find<std::string>(rx, "shell_entry_phys"),
+                "runtime_exports.shell_entry_phys");
+        if (rx.contains("deliver_event_ret"))
+            deliver_event_ret = parse_hex(
+                toml::find<std::string>(rx, "deliver_event_ret"),
+                "runtime_exports.deliver_event_ret");
+    }
+
     return BiosConfig{
         /*config_path*/  config_path,
         /*project_root*/ root,
@@ -637,13 +922,18 @@ BiosConfig load_bios_config(const fs::path& config_path_in) {
         /*load_address*/ load_address,
         /*entry_pc*/     entry_pc,
         /*text_size*/    text_size,
+        /*image_sha256*/ image_sha256,
+        /*image_redistributable*/ image_redistributable,
         /*seeds_path*/   seeds_path,
         /*out_dir*/      out_dir,
         /*strict*/       strict,
         /*out_stem*/     out_stem,
         /*bios_vectors*/ std::move(bios_vectors),
         /*bios_aliases*/ std::move(bios_aliases),
-        /*runtime*/      parse_runtime_block(cfg, root),
+        /*address_copies*/ std::move(address_copies),
+        /*install_slots*/  std::move(install_slots),
+        /*shell_entry_phys*/  shell_entry_phys,
+        /*deliver_event_ret*/ deliver_event_ret,
     };
 }
 
@@ -804,6 +1094,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             fs::absolute(root / toml::find<std::string>(recomp, "bios_thunks"));
     }
 
+    // [recompiler] bios_config — the BIOS profile this game is built
+    // against. Optional: main_psx falls back to the SCPH1001 profile
+    // (bios/SCPH1001.toml, in-repo or under the psxrecomp/ submodule).
+    fs::path bios_config_path;
+    if (recomp.contains("bios_config")) {
+        bios_config_path =
+            fs::absolute(root / toml::find<std::string>(recomp, "bios_config"));
+    }
+
     const std::string out_dir_field =
         recomp.contains("out_dir")
             ? toml::find<std::string>(recomp, "out_dir")
@@ -881,6 +1180,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_sprite_tag_funcs;
     uint32_t ws_sprite_anchor_addr = 0;
     bool ws_hud_sprt_squash = false;
+    bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
     bool ws_native_wide = true;
@@ -897,6 +1197,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     bool ws_offered = true;
     bool vulkan_offered = false;
+    bool ws_adaptive_view = false;
     bool ws_ultrawide_offered = false;
     if (cfg.contains("video")) {
         const toml::value& video = toml::find(cfg, "video");
@@ -998,6 +1299,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                 config_path.string()));
         if (ws.contains("hud_sprt_squash"))
             ws_hud_sprt_squash = toml::find<bool>(ws, "hud_sprt_squash");
+        if (ws.contains("auto_ui_squash"))
+            ws_auto_ui_squash = toml::find<bool>(ws, "auto_ui_squash");
         if (ws.contains("full_2d"))
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
@@ -1068,18 +1371,25 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_offered = toml::find<bool>(ws, "offer");
         if (ws.contains("offer_ultrawide"))
             ws_ultrawide_offered = toml::find<bool>(ws, "offer_ultrawide");
+        if (ws.contains("adaptive_view"))
+            ws_adaptive_view = toml::find<bool>(ws, "adaptive_view");
     }
 
     // Optional [widescreen.cull] block — world-space draw-cull widening.
     std::vector<uint32_t> ws_cull_bias_sites, ws_cull_range_sites, ws_cull_a1_sites;
     std::vector<uint32_t> ws_cull_screen_x_sites;
     std::vector<uint32_t> ws_cull_slti_sites;
+    std::vector<uint32_t> ws_cull_bltz_sites;
     std::vector<uint32_t> ws_cull_negsub_sites;
     std::vector<uint32_t> ws_cull_vxrange_sites;
     std::vector<uint32_t> ws_cull_depth_sites;
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
+    std::vector<WidescreenAngleSite> ws_cull_angle_sites;
+    WidescreenAspectConeConfig ws_aspect_cone;
     int ws_cull_guard_pixels = 0;
+    int ws_cull_activation_guard_pixels = 0;
     // Cull-signature immediates (screen_w_imms / screen_h_imms). Defaults are
     // the original Tomba signature (320-display: 0x140/0x141 + 0xE0/0xF1); a
     // game with a different display width overrides them (Ape Escape: 0x181).
@@ -1101,16 +1411,272 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("a1_sites",    ws_cull_a1_sites);
             load_sites("screen_x_sites", ws_cull_screen_x_sites);
             load_sites("slti_sites",  ws_cull_slti_sites);
+            load_sites("bltz_sites",  ws_cull_bltz_sites);
             load_sites("negsub_sites", ws_cull_negsub_sites);
             load_sites("vxrange_sites", ws_cull_vxrange_sites);
             load_sites("depth_sites", ws_cull_depth_sites);
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
+            if (cull.contains("keep")) {
+                std::set<uint32_t> seen;
+                for (const auto& item : toml::find<toml::array>(cull, "keep")) {
+                    WidescreenCullKeepSite site;
+                    site.address = parse_hex(toml::find<std::string>(item, "address"),
+                                             "widescreen.cull.keep.address");
+                    site.expected = parse_hex(toml::find<std::string>(item, "expected"),
+                                              "widescreen.cull.keep.expected");
+                    site.result = (uint32_t)toml::find<int>(item, "result");
+                    const uint32_t op = site.expected >> 26;
+                    const uint32_t fn = site.expected & 0x3Fu;
+                    if (!((op == 0x0Au) || (op == 0x0Bu) ||
+                          (op == 0u && (fn == 0x2Au || fn == 0x2Bu)))) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.keep]] expected must be "
+                            "SLT/SLTU/SLTI/SLTIU",
+                            config_path.string()));
+                    }
+                    if (site.result > 1u) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.keep]] result must be 0 or 1",
+                            config_path.string()));
+                    }
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate [[widescreen.cull.keep]] address 0x{:08X}",
+                            config_path.string(), site.address));
+                    }
+                    ws_cull_keep_sites.push_back(site);
+                }
+            }
+            if (cull.contains("angle")) {
+                std::set<uint32_t> seen;
+                for (const auto& item :
+                     toml::find<toml::array>(cull, "angle")) {
+                    WidescreenAngleSite site;
+                    site.address = parse_hex(
+                        toml::find<std::string>(item, "address"),
+                        "widescreen.cull.angle.address");
+                    site.expected = parse_hex(
+                        toml::find<std::string>(item, "expected"),
+                        "widescreen.cull.angle.expected");
+                    const uint32_t op = site.expected >> 26;
+                    const uint32_t rs = (site.expected >> 21) & 31u;
+                    const int32_t imm = (int16_t)(site.expected & 0xFFFFu);
+                    if ((op != 0x08u && op != 0x09u) || rs != 0u ||
+                        imm <= 0 || imm >= 1024) {
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.angle]] expected must be "
+                            "ADDI/ADDIU rt,zero,imm with imm in [1, 1023]",
+                            config_path.string()));
+                    }
+                    if ((site.address & 3u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: cull-angle address 0x{:08X} is not "
+                            "instruction-aligned",
+                            config_path.string(), site.address));
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate cull-angle address 0x{:08X}",
+                            config_path.string(), site.address));
+                    ws_cull_angle_sites.push_back(site);
+                }
+            }
+            if (cull.contains("aspect_cone")) {
+                const toml::value& cone = toml::find(cull, "aspect_cone");
+                auto cone_hex = [&](const char *key) {
+                    return parse_hex(toml::find<std::string>(cone, key),
+                                     fmt::format("widescreen.cull.aspect_cone.{}", key));
+                };
+                ws_aspect_cone.forward_addr = cone_hex("forward_addr");
+                const int object_type_offset =
+                    toml::find<int>(cone, "object_type_offset");
+                const int object_reg = toml::find<int>(cone, "object_reg");
+                const int x_reg = toml::find<int>(cone, "x_reg");
+                const int z_reg = toml::find<int>(cone, "z_reg");
+                const int y_reg = toml::find<int>(cone, "y_reg");
+                const int hysteresis_pixels =
+                    toml::find_or<int>(cone, "hysteresis_pixels", 0);
+                const int queue_reserve =
+                    toml::find_or<int>(cone, "queue_reserve", 0);
+                if (object_type_offset < 0 || object_type_offset > 0xFFFF) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] "
+                        "object_type_offset must be in [0, 65535]",
+                        config_path.string()));
+                }
+                if (object_reg < 0 || object_reg > 31 ||
+                    x_reg < 0 || x_reg > 31 ||
+                    z_reg < 0 || z_reg > 31 ||
+                    y_reg < 0 || y_reg > 31) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] register indices "
+                        "must be in [0, 31]", config_path.string()));
+                }
+                if (hysteresis_pixels < 0 || hysteresis_pixels > 256 ||
+                    queue_reserve < 0 || queue_reserve > 256) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] hysteresis_pixels "
+                        "and queue_reserve must be in [0, 256]",
+                        config_path.string()));
+                }
+                if ((ws_aspect_cone.forward_addr & 1u) != 0) {
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] forward_addr "
+                        "must be halfword-aligned", config_path.string()));
+                }
+                ws_aspect_cone.object_type_offset =
+                    (uint32_t)object_type_offset;
+                ws_aspect_cone.object_reg = (uint32_t)object_reg;
+                ws_aspect_cone.x_reg = (uint32_t)x_reg;
+                ws_aspect_cone.z_reg = (uint32_t)z_reg;
+                ws_aspect_cone.y_reg = (uint32_t)y_reg;
+                ws_aspect_cone.hysteresis_pixels =
+                    (uint32_t)hysteresis_pixels;
+                ws_aspect_cone.queue_reserve = (uint32_t)queue_reserve;
+                auto load_cone_hex_array =
+                    [&](const char *key, std::array<uint32_t, 3>& out) {
+                        const auto values =
+                            toml::find<std::vector<std::string>>(cone, key);
+                        if (values.size() != out.size())
+                            throw std::runtime_error(fmt::format(
+                                "{}: [widescreen.cull.aspect_cone] {} must "
+                                "contain exactly three values",
+                                config_path.string(), key));
+                        for (size_t i = 0; i < out.size(); i++)
+                            out[i] = parse_hex(
+                                values[i],
+                                fmt::format("widescreen.cull.aspect_cone.{}",
+                                            key));
+                    };
+                auto load_cone_int_array =
+                    [&](const char *key, std::array<uint32_t, 3>& out) {
+                        const auto values =
+                            toml::find<std::vector<int>>(cone, key);
+                        if (values.size() != out.size())
+                            throw std::runtime_error(fmt::format(
+                                "{}: [widescreen.cull.aspect_cone] {} must "
+                                "contain exactly three values",
+                                config_path.string(), key));
+                        for (size_t i = 0; i < out.size(); i++) {
+                            if (values[i] < 0)
+                                throw std::runtime_error(fmt::format(
+                                    "{}: [widescreen.cull.aspect_cone] {} "
+                                    "values must be non-negative",
+                                    config_path.string(), key));
+                            out[i] = (uint32_t)values[i];
+                        }
+                    };
+                load_cone_hex_array("queue_count_addrs",
+                                    ws_aspect_cone.queue_count_addrs);
+                load_cone_int_array("queue_capacities",
+                                    ws_aspect_cone.queue_capacities);
+                load_cone_hex_array("queue_type_masks",
+                                    ws_aspect_cone.queue_type_masks);
+                uint32_t used_type_mask = 0;
+                for (size_t i = 0; i < 3; i++) {
+                    if ((ws_aspect_cone.queue_count_addrs[i] & 1u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_count_addrs values must be "
+                            "halfword-aligned", config_path.string()));
+                    if (ws_aspect_cone.queue_capacities[i] == 0 ||
+                        ws_aspect_cone.queue_capacities[i] > 0x7FFFu)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_capacities values must be in [1, 32767]",
+                            config_path.string()));
+                    if (ws_aspect_cone.queue_reserve >=
+                        ws_aspect_cone.queue_capacities[i])
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_reserve must be smaller than every "
+                            "queue capacity", config_path.string()));
+                    if ((used_type_mask &
+                         ws_aspect_cone.queue_type_masks[i]) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [widescreen.cull.aspect_cone] "
+                            "queue_type_masks must not overlap",
+                            config_path.string()));
+                    used_type_mask |= ws_aspect_cone.queue_type_masks[i];
+                }
+                if (!cone.contains("sites"))
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull.aspect_cone] requires at least "
+                        "one [[...sites]] entry", config_path.string()));
+                std::set<uint32_t> seen;
+                for (const auto& item :
+                     toml::find<toml::array>(cone, "sites")) {
+                    WidescreenAspectConeSite site;
+                    site.address = parse_hex(
+                        toml::find<std::string>(item, "address"),
+                        "widescreen.cull.aspect_cone.sites.address");
+                    site.expected = parse_hex(
+                        toml::find<std::string>(item, "expected"),
+                        "widescreen.cull.aspect_cone.sites.expected");
+                    const uint32_t opcode = site.expected >> 26;
+                    const bool is_slti = opcode == 0x0Au;
+                    const bool is_slt =
+                        opcode == 0u &&
+                        (site.expected & 0x3Fu) == 0x2Au &&
+                        ((site.expected >> 6) & 0x1Fu) == 0u;
+                    if (!is_slti && !is_slt)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.aspect_cone.sites]] "
+                            "expected must be signed SLTI or SLT",
+                            config_path.string()));
+                    const int threshold = toml::find_or<int>(
+                        item, "cosine_threshold",
+                        is_slti ? (int)(site.expected & 0xFFFFu) : -1);
+                    if (threshold < 1 || threshold > 1023)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.cull.aspect_cone.sites]] "
+                            "cosine_threshold must be in [1, 1023] "
+                            "(and is required for SLT)",
+                            config_path.string()));
+                    site.cosine_threshold = (uint32_t)threshold;
+                    auto site_reg = [&](const char *key, int fallback) {
+                        const int value = item.contains(key)
+                            ? toml::find<int>(item, key) : fallback;
+                        if (value < 0 || value > 31)
+                            throw std::runtime_error(fmt::format(
+                                "{}: [[widescreen.cull.aspect_cone.sites]] "
+                                "{} must be in [0, 31]",
+                                config_path.string(), key));
+                        return (uint32_t)value;
+                    };
+                    site.object_reg = site_reg("object_reg", object_reg);
+                    site.x_reg = site_reg("x_reg", x_reg);
+                    site.z_reg = site_reg("z_reg", z_reg);
+                    site.y_reg = site_reg("y_reg", y_reg);
+                    site.queue_guard =
+                        toml::find_or<bool>(item, "queue_guard", true);
+                    if ((site.address & 3u) != 0)
+                        throw std::runtime_error(fmt::format(
+                            "{}: aspect-cone address 0x{:08X} is not "
+                            "instruction-aligned",
+                            config_path.string(), site.address));
+                    if (!seen.insert(site.address & 0x1FFFFFFFu).second)
+                        throw std::runtime_error(fmt::format(
+                            "{}: duplicate aspect-cone address 0x{:08X}",
+                            config_path.string(), site.address));
+                    ws_aspect_cone.sites.push_back(site);
+                }
+            }
             if (cull.contains("guard_pixels")) {
                 ws_cull_guard_pixels = toml::find<int>(cull, "guard_pixels");
                 if (ws_cull_guard_pixels < 0 || ws_cull_guard_pixels > 256)
                     throw std::runtime_error(fmt::format(
                         "{}: [widescreen.cull] guard_pixels must be in [0, 256]",
+                        config_path.string()));
+            }
+            if (cull.contains("activation_guard_pixels")) {
+                ws_cull_activation_guard_pixels =
+                    toml::find<int>(cull, "activation_guard_pixels");
+                if (ws_cull_activation_guard_pixels < 0 ||
+                    ws_cull_activation_guard_pixels > 256)
+                    throw std::runtime_error(fmt::format(
+                        "{}: [widescreen.cull] activation_guard_pixels must "
+                        "be in [0, 256]",
                         config_path.string()));
             }
             if (cull.contains("screen_w_imms")) {
@@ -1234,6 +1800,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*disc_sha1*/        disc_sha1,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
+        /*bios_config_path*/ bios_config_path,
         /*out_dir*/          out_dir,
         /*strict*/           strict,
         /*discovery*/        discovery,
@@ -1243,6 +1810,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_sprite_tag_funcs*/   ws_sprite_tag_funcs,
         /*ws_sprite_anchor_addr*/ ws_sprite_anchor_addr,
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
+        /*ws_auto_ui_squash*/      ws_auto_ui_squash,
         /*data_shard_funcs*/      data_shard_funcs,
         /*hot_funcs*/             hot_funcs,
         /*vsync_query_func*/      vsync_query_func,
@@ -1258,12 +1826,17 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_a1_sites*/      ws_cull_a1_sites,
         /*ws_cull_screen_x_sites*/ ws_cull_screen_x_sites,
         /*ws_cull_slti_sites*/    ws_cull_slti_sites,
+        /*ws_cull_bltz_sites*/    ws_cull_bltz_sites,
         /*ws_cull_negsub_sites*/  ws_cull_negsub_sites,
         /*ws_cull_vxrange_sites*/ ws_cull_vxrange_sites,
         /*ws_cull_depth_sites*/   ws_cull_depth_sites,
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
+        /*ws_cull_keep_sites*/    ws_cull_keep_sites,
+        /*ws_cull_angle_sites*/   ws_cull_angle_sites,
+        /*ws_aspect_cone*/         ws_aspect_cone,
         /*ws_cull_guard_pixels*/  ws_cull_guard_pixels,
+        /*ws_cull_activation_guard_pixels*/ ws_cull_activation_guard_pixels,
         /*ws_cull_w_imms*/        ws_cull_w_imms,
         /*ws_cull_h_imms*/        ws_cull_h_imms,
         /*ws_backdrop_x_sites*/   ws_backdrop_x_sites,
@@ -1287,6 +1860,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_signed_x_bound_sites*/ ws_signed_x_bound_sites,
         /*ws_offered*/            ws_offered,
         /*vulkan_offered*/        vulkan_offered,
+        /*ws_adaptive_view*/      ws_adaptive_view,
         /*ws_ultrawide_offered*/  ws_ultrawide_offered,
         /*ws_bg2d_count_site*/    ws_bg2d_count_site,
         /*ws_bg2d_startcol_site*/ ws_bg2d_startcol_site,
@@ -1445,6 +2019,10 @@ UserSettings load_user_settings(const fs::path& path) {
             if (parse_aspect_ratio(m, &n, &d)) {
                 s.aspect_num = n; s.aspect_den = d; s.has_aspect_ratio = true;
             }
+        });
+        if (v.contains("adaptive_view")) try_get([&]{
+            s.adaptive_view = toml::find<bool>(v, "adaptive_view");
+            s.has_adaptive_view = true;
         });
     }
     if (doc.contains("audio")) {
@@ -1625,6 +2203,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "frame_interpolation_fps = " << s.frame_interpolation_fps << "\n";
     if (s.has_aspect_ratio)
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
+    if (s.has_adaptive_view)
+        f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
     f << "\n[audio]\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";

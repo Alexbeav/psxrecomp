@@ -27,7 +27,16 @@
  * straight to step 8 (SYSTEM.CNF + game EXE load) with kernel state built
  * entirely by the REAL recompiled kernel init. The frontend runs unpaced
  * (turbo) until game handoff. This is THE boot-skip mechanism; it deprecates
- * the old fast_boot snapshot restore. LLE always plays the real intro.
+ * the old fast_boot snapshot restore.
+ *
+ * The boot-skip is BIOS-INDEPENDENT and works under pure LLE. It needs only
+ * the image's shell_entry_phys anchor — nothing is synthesized, the shell call
+ * just returns immediately — so it fires identically on retail SCPH-1001 and
+ * on the bundled OpenBIOS, whose kernel-call HLE is separately (and correctly)
+ * refused for want of a DeliverEvent anchor. bios_hle_plan.h documents why the
+ * two axes must not be collapsed; deriving the skip from the granted call-HLE
+ * axis is exactly the bug that made the flag mean different things per BIOS.
+ * With the tier fully off, LLE plays the real intro.
  *
  * NO-STUBS STANDS: every handler here is a validated reimplementation of the
  * documented kernel mechanism operating on the real guest structures — never
@@ -55,10 +64,14 @@ extern int (*g_psx_bios_hle_hook)(struct CPUState* cpu, uint32_t phys);
 
 /* Select the BIOS backend. Call at bring-up (and again on netplay rematch
  * session_reboot), after config + env resolution, before psx_scheduler_run.
- * Two independent axes:
- *   call_hle  — service implemented kernel calls in HLE ([runtime] bios_hle)
+ * Two independent axes — decide them with psx_bios_hle_plan() (bios_hle_plan.h)
+ * rather than open-coding the policy at the call site:
+ *   call_hle  — service implemented kernel calls in HLE ([runtime] bios_hle);
+ *               requires the image's deliver_event_ret anchor
  *   boot_skip — one-shot shell intercept ((bios_hle && !keep_intro) OR the
- *               deprecated fast_boot alias, which skips boot only)
+ *               deprecated fast_boot alias, which skips boot only); requires
+ *               only the image's shell_entry_phys anchor, and is clamped to it
+ *               here so the reported state cannot overstate what can fire
  * Clears the shell-skip latch so rematch can skip again. The hook is installed
  * when either axis is on; both off = NULL = pure LLE. */
 void psx_bios_hle_configure(int call_hle, int boot_skip);

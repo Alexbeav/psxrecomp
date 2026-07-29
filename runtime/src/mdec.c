@@ -103,6 +103,13 @@ static uint64_t mdec_trace_seq;
 static uint32_t mdec_trace_head;
 
 static void trace_event(uint32_t kind, uint32_t value) {
+#ifdef PSX_NO_DEBUG_TOOLS
+    (void)kind;
+    (void)value;
+    return;
+#else
+    extern int debug_server_fmv_quiet(void);
+    if (debug_server_fmv_quiet()) return;
     MDECDebugEvent *e = &mdec_trace[mdec_trace_head];
     e->seq = mdec_trace_seq++;
     e->frame = (uint32_t)s_frame_count;
@@ -118,6 +125,7 @@ static void trace_event(uint32_t kind, uint32_t value) {
     e->stop_reason = mdec.decode_stop_reason;
     e->underruns = mdec.dma_read_underflows;
     mdec_trace_head = (mdec_trace_head + 1u) % MDEC_TRACE_CAP;
+#endif
 }
 
 static int16_t sign_extend_10(uint16_t value) {

@@ -108,8 +108,16 @@ struct DiscoveryResult {
     std::map<std::string, uint32_t> opcode_histogram;
 };
 
+class BiosAddressModel;
+
 class FunctionDiscovery {
 public:
+    // Set the active BIOS address model BEFORE any discover/walk call. The
+    // profile-derived model (bios_address_model.h) is the single source of
+    // truth for the relocation windows discovery follows J/JAL targets
+    // through; there is no built-in default. Must outlive the run.
+    static void set_address_model(const BiosAddressModel* m);
+
     // Discover functions starting from the given seeds.
     // rom: flat BIOS image bytes
     // base_addr: virtual address of rom[0] (e.g. 0xBFC00000)
@@ -132,6 +140,11 @@ public:
         std::vector<UnsupportedInstr>              unsupported;
         std::set<std::string>                      exit_types;   // "jr_ra", "rfe", etc.
         uint32_t                                   end_addr = 0;
+        // Direct branch/J targets that escape [entry, hard_cap) but land in
+        // ROM. Input to discover()'s dispatchability closure: every published
+        // target must resolve to a dispatch key, so an escaping target covered
+        // by no function's instruction set becomes a new entry.
+        std::set<uint32_t>                         escaping_targets;
     };
 
     static SingleFunctionResult walk_function(
