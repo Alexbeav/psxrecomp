@@ -450,6 +450,9 @@ static uint32_t s_compiled_interrupt_resume_pc = 0;
 static uint32_t s_last_interrupt_check_pc = 0;
 static uint64_t s_last_interrupt_check_cycle = UINT64_MAX;
 
+uint32_t psx_last_irq_check_pc(void) { return s_last_interrupt_check_pc; }
+uint32_t psx_compiled_irq_resume_pc(void) { return s_compiled_interrupt_resume_pc; }
+
 /* Deferred cooperative thread switch from nested exception delivery.
  *
  * A genuine in-exception ChangeThread (kind-30, escape site below) must be
@@ -607,6 +610,27 @@ void interrupts_init(void) {
     g_vblank_raise_count = 0;
     last_sio_seq_seen = sio_get_seq();
     last_sio_progress_cycle = psx_get_cycle_count();
+    s_defer_switch_pending = 0;
+    s_defer_switch_target = 0;
+    s_defer_switch_from = 0;
+}
+
+void interrupts_resync_after_restore(void) {
+    /* Absolute guest-cycle timestamps from the pre-load timeline are invalid
+     * once psx_cycle_count rewinds (typical: save → play N seconds → load).
+     * Leaving post_exception_cooldown_until in the future blocks every IRQ
+     * delivery — including VBlank — until the restored clock catches up,
+     * freezing the picture for those N seconds while host FPS stays at 60. */
+    post_exception_cooldown_until = 0;
+    cycles_since_vblank = 0;
+    dispatch_count = 0;
+    in_exception = 0;
+    exception_nest_depth = 0;
+    last_sio_seq_seen = sio_get_seq();
+    last_sio_progress_cycle = psx_get_cycle_count();
+    s_defer_switch_pending = 0;
+    s_defer_switch_target = 0;
+    s_defer_switch_from = 0;
 }
 
 /*
@@ -706,6 +730,23 @@ void psx_interrupt_delivery_diag(uint64_t *need_defer, uint64_t *need_irq,
     if (skip_nested)   *skip_nested   = s_skip_nested;
 }
 
+/* Hot-path attribution for post-load freeze probe (see psx_interrupt_check_path_diag). */
+static uint64_t s_irq_path_entry;
+static uint64_t s_irq_path_fast_sr;
+static uint64_t s_irq_path_fast_none;
+static uint64_t s_irq_path_eval;
+
+void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
+                                   uint64_t *fast_none, uint64_t *mid,
+                                   uint64_t *eval, uint64_t *irq_deliv) {
+    if (entry)     *entry     = s_irq_path_entry;
+    if (fast_sr)   *fast_sr   = s_irq_path_fast_sr;
+    if (fast_none) *fast_none = s_irq_path_fast_none;
+    if (mid)       *mid       = total_checks;
+    if (eval)      *eval      = s_irq_path_eval;
+    if (irq_deliv) *irq_deliv = g_irq_deliver_count;
+}
+
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
@@ -740,6 +781,8 @@ void psx_check_interrupts(CPUState* cpu) {
 #define COSIM_IRQ_NOTE(kind_) cosim_irq_note(cpu, (kind_), COSIM_IRQ_TAKE_PC(), g_dirty_safe_resume_pc, s_compiled_interrupt_resume_pc, cpu->cop0[COP0_SR])
 #endif
 
+    s_irq_path_entry++;
+
     /* MotK VLC / FMV hot edge: sticky unmasked I_STAT (CD/VBlank) while
      * IEc or IM2 is clear — no architectural delivery possible. Skip the
      * mid-path bookkeeping / irq_deliver_eval that used to run every BB.
@@ -749,6 +792,7 @@ void psx_check_interrupts(CPUState* cpu) {
     if (!in_exception && !s_defer_switch_pending && (i_stat & i_mask) != 0) {
         uint32_t sr = cpu->cop0[COP0_SR];
         if (!(sr & 0x01u) || !(sr & (1u << 10))) {
+            s_irq_path_fast_sr++;
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
@@ -795,6 +839,7 @@ void psx_check_interrupts(CPUState* cpu) {
             psx_idle_note_check(cpu, check_pc);
         }
         if ((i_stat & i_mask) == 0 && sw_pending == 0) {
+            s_irq_path_fast_none++;
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
@@ -956,6 +1001,7 @@ void psx_check_interrupts(CPUState* cpu) {
     }
 
 irq_deliver_eval:
+    s_irq_path_eval++;
     /* Check if any interrupts are pending (INTC hardware or COP0 software). */
     if ((i_stat & i_mask) == 0 && sw_pending == 0) { irq_record_outcome(EV_NONE, 0, 0); PSX_CHECK_INTERRUPTS_RETURN(); }
     /* Nested delivery (hardware semantics). Real R3000A has no 'in exception'

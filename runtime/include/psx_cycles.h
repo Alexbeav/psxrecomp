@@ -147,9 +147,17 @@ extern uint64_t g_idle_skip_cycles;
 extern uint32_t g_idle_skip_last_pc;
 extern uint32_t g_idle_skip_last_quantum;
 
+/* Post-load probe cycle diagnostics (optional; main.cpp soft-load tooling). */
+extern int      g_plp_cycle_diag;
+extern uint64_t g_plp_adv_calls;
+extern uint32_t g_plp_adv_max_chunk;
+extern uint64_t g_plp_adv_sum;
+extern uint64_t g_plp_svc_calls;
+
 /* Save-state restore: re-anchor the deadline device model after psx_cycle_count
- * is overwritten from a snapshot. */
-void psx_cycles_resync_after_restore(void);
+ * is overwritten from a snapshot. Pass the live CPU so GTE/muldiv completion
+ * stamps and load-absorb give-back are rewound with the guest clock. */
+void psx_cycles_resync_after_restore(struct CPUState *cpu);
 
 /* Soft rematch / session_reboot: zero the guest clock and deadline bookkeeping.
  * Soft-exit longjmps out of vblank (inside psx_devices_service_to_now) leave
