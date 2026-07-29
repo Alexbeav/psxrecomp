@@ -113,6 +113,18 @@ def main() -> int:
         "*.exe", "*.obj", "*.pdb", "*.lib")
     shutil.copytree(ROOT / "runtime", framework / "runtime", ignore=source_ignore)
     shutil.copytree(ROOT / "recompiler", framework / "recompiler", ignore=source_ignore)
+    bios_profiles = {
+        "OpenBIOS.toml": ROOT / "bios" / "OpenBIOS.toml",
+        "SCPH1001.toml": ROOT / "bios" / "SCPH1001.toml",
+        "SCPH101.toml": ROOT / "SCPH101.toml",
+        "SCPH5552.toml": ROOT / "SCPH5552.toml",
+    }
+    (framework / "bios").mkdir()
+    for filename, source in bios_profiles.items():
+        shutil.copy2(source, framework / "bios" / filename)
+    shutil.copy2(ROOT / "bios" / "openbios.bin", framework / "bios")
+    shutil.copy2(ROOT / "bios" / "OpenBIOS.LICENSE", framework / "bios")
+    shutil.copy2(ROOT / ".gitignore", framework)
     shutil.copy2(ROOT / "LICENSE", framework)
     shutil.copy2(ROOT / "THIRD_PARTY_ATTRIBUTION.md", framework)
     shutil.copy2(ROOT / "README.md", stage)

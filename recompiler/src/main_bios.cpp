@@ -943,6 +943,7 @@ int main(int argc, char** argv) {
             if (a == "-h" || a == "--help") {
                 std::fprintf(stdout,
                     "usage: psxrecomp-bios --config <path.toml>\n"
+                    "                      [--rom <bios.bin>] [--out-dir <dir>]\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> [--cc <c-compiler>]\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> --discover <seeds.json>\n"
                     "       psxrecomp-bios <bios.bin> <out_dir> --emit-full <seeds.json>\n");
@@ -954,37 +955,41 @@ int main(int argc, char** argv) {
         // If --config is the first (or only) flag, all paths come from the
         // TOML. This is the going-forward invocation; the positional form
         // below stays for backwards compat.
+        std::optional<fs::path> config_path;
+        std::optional<fs::path> config_rom_override;
+        std::optional<fs::path> config_out_override;
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
             if (a == "--config" && i + 1 < argc) {
-                const fs::path config_path = argv[i + 1];
-                const auto cfg = PSXRecompV4::load_bios_config(config_path);
-                std::fprintf(stdout,
-                    "psxrecomp-bios: --config %s\n"
-                    "  rom        = %s\n"
-                    "  seeds      = %s\n"
-                    "  out_dir    = %s\n"
-                    "  out_stem   = %s\n",
-                    config_path.string().c_str(),
-                    cfg.rom_path.string().c_str(),
-                    cfg.seeds_path.string().c_str(),
-                    cfg.out_dir.string().c_str(),
-                    cfg.out_stem.c_str());
-                const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
-                PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
-                return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
-                                     cfg.out_stem, model, cfg.image_sha256,
-                                     cfg.bios_vectors, cfg.bios_aliases);
+                config_path = argv[++i];
+            } else if (a.rfind("--config=", 0) == 0) {
+                config_path = a.substr(std::string("--config=").size());
+            } else if (a == "--rom" && i + 1 < argc) {
+                config_rom_override = fs::absolute(argv[++i]);
+            } else if (a == "--out-dir" && i + 1 < argc) {
+                config_out_override = fs::absolute(argv[++i]);
             }
-            if (a == "--config=" || a.rfind("--config=", 0) == 0) {
-                const fs::path config_path = a.substr(std::string("--config=").size());
-                const auto cfg = PSXRecompV4::load_bios_config(config_path);
-                const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
-                PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
-                return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
-                                     cfg.out_stem, model, cfg.image_sha256,
-                                     cfg.bios_vectors, cfg.bios_aliases);
-            }
+        }
+        if (config_path) {
+            auto cfg = PSXRecompV4::load_bios_config(*config_path);
+            if (config_rom_override) cfg.rom_path = *config_rom_override;
+            if (config_out_override) cfg.out_dir = *config_out_override;
+            std::fprintf(stdout,
+                "psxrecomp-bios: --config %s\n"
+                "  rom        = %s\n"
+                "  seeds      = %s\n"
+                "  out_dir    = %s\n"
+                "  out_stem   = %s\n",
+                config_path->string().c_str(),
+                cfg.rom_path.string().c_str(),
+                cfg.seeds_path.string().c_str(),
+                cfg.out_dir.string().c_str(),
+                cfg.out_stem.c_str());
+            const auto model = PSXRecompV4::BiosAddressModel::from_config(cfg);
+            PSXRecompV4::FullFunctionEmitter::set_bios_profile(&cfg);
+            return run_emit_full(cfg.rom_path, cfg.out_dir, cfg.seeds_path,
+                                 cfg.out_stem, model, cfg.image_sha256,
+                                 cfg.bios_vectors, cfg.bios_aliases);
         }
 
         // ── Positional form (legacy) ───────────────────────────────────

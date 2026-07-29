@@ -21,6 +21,7 @@
 #endif
 
 #include "fmt/format.h"
+#include "bios_rom_alias.h"
 #include "cli_boot_path.h"
 #include "iso_reader.h"
 #include "ps1_exe_parser.h"
@@ -36,6 +37,11 @@ struct Options {
     std::string name;
 };
 
+struct BiosProfile {
+    std::string filename;
+    std::string out_stem;
+};
+
 void usage(const char* program) {
     fmt::print(
         "Usage:\n"
@@ -43,7 +49,7 @@ void usage(const char* program) {
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
         "and build scripts. No compiler toolchain is bundled.\n"
-        "Supported BIOS: SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
+        "Supported BIOS: OpenBIOS, SCPH1001, SCPH101, SCPH5552 (any 512 KiB PS1 BIOS dump).\n",
         program);
 }
 
@@ -144,14 +150,32 @@ fs::path find_framework(const fs::path& exe_dir) {
     throw std::runtime_error("packaged framework sources are missing");
 }
 
-fs::path find_bios_seeds(const fs::path& exe_dir) {
+const BiosProfile& select_bios_profile(const fs::path& bios_path) {
+    static const std::vector<std::pair<std::string, BiosProfile>> profiles = {
+        {"OPENBIOS", {"OpenBIOS.toml", "OpenBIOS"}},
+        {"SCPH1001", {"SCPH1001.toml", "SCPH1001"}},
+        {"SCPH101",  {"SCPH101.toml",  "SCPH101"}},
+        {"SCPH5552", {"SCPH5552.toml", "SCPH5552"}},
+    };
+    const std::string token = PSXRecompV4::bios_model_token(bios_path);
+    for (const auto& [candidate, profile] : profiles) {
+        if (candidate == token) return profile;
+    }
+    throw std::runtime_error(
+        "unsupported BIOS filename '" + bios_path.filename().string() +
+        "' (expected openbios.bin, SCPH1001.BIN, SCPH101.BIN, or SCPH5552.BIN)");
+}
+
+fs::path find_bios_profile(const fs::path& framework,
+                           const BiosProfile& profile) {
     for (const fs::path& candidate : {
-             exe_dir / "share" / "phase2_ghidra_seeds.json",
-             exe_dir.parent_path() / "seeds" / "phase2_ghidra_seeds.json",
+             framework / "bios" / profile.filename,
+             framework / profile.filename,
          }) {
         if (fs::is_regular_file(candidate)) return fs::absolute(candidate);
     }
-    throw std::runtime_error("packaged BIOS seed data is missing");
+    throw std::runtime_error(
+        "packaged BIOS profile is missing: " + profile.filename);
 }
 
 int run_process(const std::vector<std::string>& args) {
@@ -282,6 +306,10 @@ int build_project(const Options& options, const fs::path& exe_dir) {
                                   : options.name;
     const std::string game_name = title.empty() ? serial : title;
     const std::string project_name = safe_stem(game_name) + "Recomp";
+    const BiosProfile& bios_profile = select_bios_profile(options.bios);
+    const fs::path framework_source = find_framework(exe_dir);
+    const fs::path profile_source =
+        find_bios_profile(framework_source, bios_profile);
 
     std::set<uint32_t> seeds = {image.entry_point()};
     for (uint32_t address = image.load_address(); address + 4 <= image.end_address(); address += 4) {
@@ -293,6 +321,15 @@ int build_project(const Options& options, const fs::path& exe_dir) {
     std::string seed_text = fmt::format("# Auto-generated JAL targets for {}\n", serial);
     for (uint32_t seed : seeds) seed_text += fmt::format("0x{:08X}\n", seed);
     write_file(options.output / "seeds" / "functions.txt", seed_text);
+
+    fmt::print("[1/4] Copying build framework...\n");
+    const fs::path framework_destination = options.output / "psxrecomp";
+    copy_framework(framework_source, framework_destination);
+    const fs::path profile_destination =
+        framework_destination / "bios" / bios_profile.filename;
+    fs::create_directories(profile_destination.parent_path());
+    fs::copy_file(profile_source, profile_destination,
+                  fs::copy_options::overwrite_existing);
 
     uint32_t text_size = image.code_size();
     if (text_size & 0xFFF) text_size = (text_size + 0xFFF) & ~0xFFFu;
@@ -309,6 +346,7 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "stack_base = \"0x{:08X}\"\n\n"
         "[recompiler]\n"
         "seeds = \"seeds/functions.txt\"\n"
+        "bios_config = \"psxrecomp/bios/{}\"\n"
         "strict = true\n"
         "out_dir = \"generated\"\n\n"
         "[runtime]\n"
@@ -319,29 +357,28 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "renderer = \"opengl\"\n",
         toml_string(game_name), serial, toml_string(boot_file),
         toml_string(options.disc.generic_string()), image.load_address(),
-        image.entry_point(), text_size, stack, toml_string(game_name));
+        image.entry_point(), text_size, stack, bios_profile.filename,
+        toml_string(game_name));
     write_file(options.output / "game.toml", config);
 
     const fs::path game_tool = find_helper(exe_dir, "psxrecomp-game");
     const fs::path bios_tool = find_helper(exe_dir, "psxrecomp-bios");
-    fmt::print("[1/4] Recompiling game executable...\n");
+    fmt::print("[2/4] Recompiling game executable...\n");
     {
         CurrentPathGuard project_directory(options.output);
         if (run_process({game_tool.string(), "--config", "game.toml"}))
             throw std::runtime_error("game recompilation failed");
     }
-    fmt::print("[2/4] Recompiling BIOS...\n");
-    fs::create_directories(options.output / "bios-generated");
-    if (run_process({bios_tool.string(), options.bios.string(),
-                     (options.output / "bios-generated").string(), "--emit-full",
-                     find_bios_seeds(exe_dir).string()}))
+    fmt::print("[3/4] Recompiling BIOS...\n");
+    const fs::path bios_generated = framework_destination / "generated";
+    fs::create_directories(bios_generated);
+    if (run_process({bios_tool.string(),
+                     "--config", fs::absolute(profile_destination).string(),
+                     "--rom", options.bios.string(),
+                     "--out-dir",
+                     fs::absolute(bios_generated).string()}))
         throw std::runtime_error("BIOS recompilation failed");
 
-    fmt::print("[3/4] Copying build framework...\n");
-    copy_framework(find_framework(exe_dir), options.output / "psxrecomp");
-
-    // Derive BIOS stem from filename: "SCPH1001.BIN" -> "SCPH1001"
-    const std::string bios_stem = options.bios.stem().string();
     const std::string cmake = fmt::format(
         "cmake_minimum_required(VERSION 3.20)\n"
         "project({} C CXX)\n"
@@ -349,6 +386,7 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "set(CMAKE_CXX_STANDARD 17)\n"
         "set(PSXRECOMP_ROOT \"${{CMAKE_CURRENT_SOURCE_DIR}}/psxrecomp\")\n"
         "set(PSX_RECOMP_UI OFF CACHE BOOL \"\" FORCE)\n"
+        "set(PSXRECOMP_BIOS_STEMS \"{}\" CACHE STRING \"\" FORCE)\n"
         "include(\"${{PSXRECOMP_ROOT}}/runtime/runtime.cmake\")\n"
         "file(GLOB GAME_FULL CONFIGURE_DEPENDS\n"
         "  \"${{CMAKE_CURRENT_SOURCE_DIR}}/generated/*_full.c\"\n"
@@ -357,12 +395,10 @@ int build_project(const Options& options, const fs::path& exe_dir) {
         "psxrecomp_add_runtime_target(psx-runtime\n"
         "  GAME_GENERATED_FULL_C \"${{GAME_FULL}}\"\n"
         "  GAME_GENERATED_DISPATCH_C \"${{GAME_DISPATCH}}\"\n"
-        "  BIOS_GENERATED_FULL_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_full.c\"\n"
-        "  BIOS_GENERATED_DISPATCH_C \"${{CMAKE_CURRENT_SOURCE_DIR}}/bios-generated/{}_dispatch.c\"\n"
         "  WINDOW_TITLE \"{} Recompiled\"\n"
         "  DEFAULT_GAME_CONFIG_PATH \"game.toml\"\n"
         ")\n",
-        project_name, bios_stem, bios_stem, game_name);
+        project_name, bios_profile.out_stem, game_name);
     write_file(options.output / "CMakeLists.txt", cmake);
 
     write_file(options.output / "build.ps1",

@@ -313,6 +313,12 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME cli_project_packaging
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
         # These two invoke psxrecomp-game, whose BIOS-profile resolution
         # probes fixed working-directory-relative paths (bios/<name>.toml,
         # then psxrecomp/bios/<name>.toml) -- run them from the framework
