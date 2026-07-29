@@ -6,13 +6,7 @@ against the in-tree Beetle/Mednafen oracle
 `frontio.cpp`, `input/dualshock.cpp`, `input/gamepad.cpp`, `input/memcard.cpp`)
 and nocash psx-spx "Controllers and Memory Cards".
 
-Historical read-only research; citations use the line numbers from that audit.
-
-> **Status 2026-07-26:** Tomba now offers explicit Analog / D-Pad modes instead
-> of Hybrid. The Tomba-only `g_pad_legacy_cfg` protocol fork, its game-config
-> key, debug command, and helper script have been removed. References to them
-> below document the retired implementation and are not descriptions of the
-> current runtime.
+READ-ONLY research. No code was modified. Citations use `file:line`.
 
 ---
 
@@ -251,10 +245,7 @@ every title — which is exactly what the LEGACY comment predicted, letting the
 
 ## 4. Prioritized fix list (player-visible impact first)
 
-> **STATUS 2026-07-26:** Fixes 1, 2, 3 are implemented. Fix 4 is also complete:
-> Tomba no longer uses Hybrid, and the legacy pad-config branch has been removed.
->
-> **Prior status 2026-06-27 (branch wt/tomba2-axis5-controller):** Fixes 1, 2, 3 IMPLEMENTED
+> **STATUS 2026-06-27 (branch wt/tomba2-axis5-controller):** Fixes 1, 2, 3 IMPLEMENTED
 > in sio.c (0x43 live frame; 0x45 live analog byte; 0x44 analog-mode-lock + hybrid-flip
 > lock gate), transcribed from dualshock.cpp. Validated no-regression on Tomba 2
 > (digital pad, pad 0xFFFF at rest, boots). These are gated to the MODERN SM and leave
@@ -284,10 +275,10 @@ every title — which is exactly what the LEGACY comment predicted, letting the
    game-locked mode) — mirror `dualshock.cpp:203,714-725`. Prevents the hybrid
    heuristic from fighting games that pin DualShock.
 
-4. **[DONE 2026-07-26] Retire `g_pad_legacy_cfg`.** Tomba now exposes only
-   explicit Analog / D-Pad modes, so there is no live type flip to accommodate.
-   The flag, legacy SIO branches, config key, debug command, helper script, and
-   Tomba opt-in were removed. All titles use the modern DualShock state machine.
+4. **[P1] Retire `g_pad_legacy_cfg` once 1–3 land** (sio.c:665-717, the LEGACY
+   block + `legacy_pad_config` game.toml key + Tomba's opt-in). The completeness
+   path the file itself mandates: one correct SM for all titles, no per-game
+   compat branch. Validate Tomba on the modern SM after 1–3.
 
 5. **[P2] Echo-back `0x4D` rumble map** (D7). Even with no rumble output,
    echo the previous `rumble_magic[]` bytes (`dualshock.cpp:993-1024`) so a game
@@ -330,8 +321,8 @@ the always-on rings), drive the same input, then diff:
   does), then deflect the stick. `pad_status.analog` must NOT change while
   locked; cross-check Beetle stays in its locked mode across the same input.
 
-- **Fix 4 (retire legacy):** run Tomba in both explicit Analog and D-Pad modes
-  on the modern SM. `pad_status` at rest = `0xFFFF` both slots, no disconnect blips; menu
+- **Fix 4 (retire legacy):** run Tomba on the modern SM with `legacy_pad_config`
+  off. `pad_status` at rest = `0xFFFF` both slots, no disconnect blips; menu
   responsive; in-game d-pad↔stick transitions produce no phantom dash/unpause.
   Diff a 600-byte `sio_trace` window vs Beetle for the same navigation — RX
   streams should match transaction-for-transaction (allowing the D3 stick-order

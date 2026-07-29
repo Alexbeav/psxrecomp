@@ -26,18 +26,10 @@ psx-runtime                          # boots BIOS discless
 psx-runtime games/tomba/game.toml    # boots BIOS, then loads game
 ```
 
-How the two configs relate:
+When both are loaded, keys merge:
 
-- **Scalar keys (`debug_port`, `window_title`, `memcard_dir`, ...)**: these come
-  from `game.toml` only. There is **no BIOS→game inheritance.** An earlier
-  version of this document described a shallow override where the game won and
-  otherwise inherited from `bios.toml`; that merge was never implemented.
-  `load_bios_config` (`recompiler/src/config_loader.cpp`) is called only from the
-  recompiler front-ends — `main_bios.cpp`, and `main_psx.cpp` purely to build the
-  `BiosAddressModel` — and never from `runtime/src/main.cpp`. Setting a
-  `[runtime]` scalar in a BIOS toml has no effect on a game run.
-  Runtime precedence is: environment > CLI > `settings.toml` > `game.toml` >
-  compiled-in default.
+- **Scalar keys (`debug_port`, `window_title`, `memcard_dir`, ...)**: game
+  wins if set, inherit from bios.toml otherwise. Shallow override.
 - **`[program]` (BIOS) and `[game]` blocks**: NOT merged — they describe
   different programs. Both are visible to the loader.
 - **Generated dispatch tables and C output**: ADDITIVE. BIOS contributes
@@ -91,10 +83,6 @@ respective files.
 seeds       = "recompiler/seeds/phase2_ghidra_seeds.json"  # BIOS
 seeds       = "seeds/ghidra_funcs.txt"                     # game (note: game seeds aren't json today)
 bios_thunks = "seeds/tomba_bios_thunks.txt"                # game-only
-bios_config = "psxrecomp/bios/SCPH1001.toml"               # game-only: BIOS profile whose address
-                                                           # model game codegen folds RAM aliases
-                                                           # through (see "BIOS profiles" below);
-                                                           # defaults to the SCPH1001 profile
 out_dir     = "generated"                                  # both
 strict      = true                                         # both — currently always true
 discovery   = "whole-image"                                # game-only: "whole-image" or "reachable"
@@ -152,121 +140,6 @@ Patches are build-time inputs, not runtime memory writes or live toggles.
 Regenerate the affected main executable or captured overlays after changing
 them.
 
-### Guarded widescreen participation comparisons
-
-Games may disable a proven object/model cull verdict in widened world views
-without changing true 4:3 behavior:
-
-```toml
-[[widescreen.cull.keep]]
-address = "0x8002B310"
-expected = "0x28A21C01"
-result = 1
-```
-
-- `expected` must encode `SLT`, `SLTU`, `SLTI`, or `SLTIU`.
-- `result` must be 0 or 1.
-- The site identity is the normalized physical address plus the complete
-  32-bit instruction. A nonmatching overlay variant at the same VA is left
-  unchanged.
-- At true 4:3 the original comparison is evaluated. The configured result is
-  forced only when `psx_ws_x_margin() > 0`.
-- Native generated code and the dirty-RAM interpreter implement the same
-  semantics.
-- Regenerate main/overlay native code after changing the list.
-
-Prefer an aspect-derived cone over `keep` when the original predicate is a
-camera-frustum test. `keep` has no queue policy and is appropriate only for a
-separately proven binary verdict.
-
-### Aspect-aware terrain and model participation
-
-Exact terrain-frustum angle loads can follow the live horizontal field:
-
-```toml
-[[widescreen.cull.angle]]
-address = "0x8013F138"
-expected = "0x24020155"
-```
-
-`expected` must be `ADDI`/`ADDIU rt,zero,imm`, with a positive 12-bit angular
-half-extent below one quarter-turn. The helper widens `tan(angle)` by the live
-per-side horizontal extent. It is exact at 4:3 and full-word guarded against
-same-address overlay variants.
-
-A model-list or per-child cosine rejection can use a horizontal-only envelope:
-
-```toml
-[widescreen.cull.aspect_cone]
-forward_addr = "0x1F8000E8" # signed Q12 X/Z/Y halfwords
-object_type_offset = 12
-object_reg = 19
-x_reg = 16
-z_reg = 17
-y_reg = 18
-hysteresis_pixels = 24
-queue_reserve = 4
-queue_count_addrs = ["0x1F800144", "0x1F800150", "0x1F80015C"]
-queue_capacities = [24, 40, 28]
-queue_type_masks = ["0x00000204", "0x00000010", "0x00000020"]
-
-[[widescreen.cull.aspect_cone.sites]]
-address = "0x80077368"
-expected = "0x28620358" # signed SLTI reject predicate
-
-[[widescreen.cull.aspect_cone.sites]]
-address = "0x8002B368"
-expected = "0x0082202A" # signed SLT reject predicate
-cosine_threshold = 856  # required for SLT; Q10
-object_reg = 20         # optional per-site register overrides
-x_reg = 19
-z_reg = 18
-y_reg = 17
-queue_guard = false     # this lower-level predicate appends to no fixed queue
-```
-
-- Sites must be signed `SLTI` or `SLT` reject predicates: zero is the keep
-  path and one is rejection.
-- An `SLTI` site derives its Q10 cosine threshold from the immediate unless
-  `cosine_threshold` is given. An `SLT` site requires it explicitly.
-- A vanilla keep is always preserved. Only a vanilla rejection is retested.
-- Horizontal reach follows the current client aspect. Vertical reach,
-  near/far checks, type dispatch, and the game’s queue-capacity branches are
-  unchanged.
-- `guard_pixels` is the activation guard outside the visible field.
-  `hysteresis_pixels` moves deactivation farther out.
-- For `queue_guard = true`, non-visible guard/hysteresis candidates are
-  rejected at `capacity - queue_reserve`, preserving headroom for candidates
-  intersecting the visible wide field.
-- Use `queue_guard = false` only after proving that the exact predicate does
-  not append to those queues.
-- Site address, instruction, threshold, registers, queue policy, guard size,
-  and enclosing cone/queue metadata all contribute to overlay cache identity.
-- Generated/native overlay code and the dirty-RAM interpreter use the same
-  live helper. Dynamic resizing therefore needs no recompilation.
-
-The debug server’s `ws_aspect_cone_site` command accepts an `address` string
-and reports exact-site identity/keep/reject counters.
-
-Explicit `bias_sites` / `range_sites` may opt into an additional resident
-object lead without widening terrain or render queues:
-
-```toml
-[widescreen.cull]
-guard_pixels = 16
-activation_guard_pixels = 256
-bias_sites = ["0x80069BA8"]
-range_sites = ["0x80069BB0"]
-```
-
-`activation_guard_pixels` is added only to the live margin emitted at those
-two explicit site families, and only while widescreen reveals extra world.
-At true 4:3 it is exactly zero. `guard_pixels` remains the shared
-render/terrain participation guard; keep it small when terrain producers or
-model queues have fixed capacity. Both values are restricted to `[0, 256]`
-and contribute to native-overlay cache identity. Changing the activation
-guard requires regenerating the game and overlay code.
-
 ## Runtime block
 
 Consumed by the cmake macro `psxrecomp_v4_add_runtime_target` (eventually)
@@ -313,22 +186,6 @@ turbo_audio_sink = true
 the guest SPU timeline advancing but discards accelerated samples before host
 playback, then fades normal output back in.
 
-## Audio Block
-
-Game projects may choose the host playback cushion after validating their
-audio production cadence:
-
-```toml
-[audio]
-buffer_ms = 60
-```
-
-`buffer_ms` accepts 30–500 milliseconds and defaults to 180. Lower values
-reduce audible input-to-sound delay, but leave less reserve for frames where a
-game temporarily produces no audio and can therefore crackle on affected
-titles. This is deliberately a per-game developer choice; it is not read from
-the player's `settings.toml`.
-
 ## Video Block
 
 Runtime video defaults live in `[video]`:
@@ -337,19 +194,12 @@ Runtime video defaults live in `[video]`:
 [video]
 renderer = "opengl"       # "software", "opengl", or "vulkan"
 offer_vulkan = false      # show Vulkan in the launcher only after game validation
-auto_skip_fmv = false     # legacy Settings/runtime default
-offer_skip_fmv = true     # false when the game exposes this through Mods
 ```
 
 `renderer = "vulkan"` remains an experimental runtime choice and still requires
 a build compiled with Vulkan support. `offer_vulkan` controls launcher
 visibility only; it defaults to false so game projects must explicitly expose
 Vulkan after validating their visuals and stability.
-
-`offer_skip_fmv` defaults to true for compatibility with the shared PSX
-Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
-it to false. The runtime then hides the Settings row, ignores stale persisted
-values, and leaves activation to the selected trusted plugin.
 
 Reserved future fields:
 - `default_disc_path` — game runtimes can pre-mount a disc
@@ -390,45 +240,3 @@ These are noted here so future work knows where to slot them:
   Phase A might allow multiple).
 - `[program] type` explicit discriminator (currently inferred from
   `rom` vs `exe` field presence).
-
-## BIOS profiles (`bios/<STEM>.toml`)
-
-One profile per BIOS image; the profile is the single source of truth for the
-image identity, the relocation windows, and the runtime anchors. Two ship:
-`bios/SCPH1001.toml` (retail; user supplies the dump) and `bios/OpenBIOS.toml`
-(MIT, redistributable, shipped with the build). Normal runtimes link both
-generated backends (`PSXRECOMP_BIOS_STEMS=OpenBIOS;SCPH1001`) and select one at
-launch. The recompiler's `[recompiler] bios_config` identifies the profile used
-for game code generation; it does not choose the player's runtime BIOS.
-
-```toml
-[program.image]              # identity; recompiler refuses a mismatched ROM
-sha256          = "..."      # pins the exact image (empty = unchecked)
-redistributable = false      # true: BIOS ships with the game; runtime hides
-                             # any requirement to provide that image
-
-[recompiler.address_model]   # boot-time bulk code copies out of ROM
-normalize_mask = "0x1FFFFFFF"
-[[recompiler.address_model.copy]]
-name         = "Kernel Part 2"   # comment label in the emitted C
-rom_lo       = "0x1FC10000"      # [lo, hi) physical, hi EXCLUSIVE
-rom_hi       = "0x1FC18000"
-ram_lo       = "0x00000500"      # physical RAM destination
-runtime_base = "0x00000500"      # vaddr the CPU executes the copy at
-dispatch_key = "ram"             # "ram": functions keyed by RAM address;
-                                 # "rom": RAM alias folds back to ROM
-kernel_bless = true              # runtime may byte-verify + run native
-
-[[recompiler.install_slots]] # kernel-RAM PCs the BIOS patches at runtime
-ram_addr = "0x00000CF0"
-
-[recompiler.runtime_exports] # per-image HLE anchors (omit = unavailable)
-shell_entry_phys  = "0x00030000"
-deliver_event_ret = "0x80001720"
-```
-
-Every `copy` entry is a claim that the boot copy is byte-verbatim; the
-runtime kernel-bless memcmp enforces it. A BIOS with no copies (runs
-entirely from ROM) is valid: normalization degenerates to the KSEG mask.
-Semantic invariants (disjoint windows, no fold-output/input intersection,
-single bless window) are enforced at load; violations refuse to build.

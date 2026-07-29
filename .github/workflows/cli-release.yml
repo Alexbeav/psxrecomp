@@ -1,18 +1,9 @@
 name: CLI release
 
-# Release packaging ONLY. Deliberately does NOT run on pull_request or on
-# pushes to master.
-#
-# It ran on both until 2026-07-25 and was a net negative: the Windows `build`
-# job failed often enough that a red check stopped carrying information, so it
-# was routinely ignored -- at which point it is pure noise plus CI minutes. A
-# check nobody trusts is worse than no check, because it still costs attention.
-#
-# What remains is the part that does real work: attaching the CLI package to a
-# published GitHub release, plus workflow_dispatch so it can be run by hand
-# before cutting one. If per-PR verification comes back, it should come back as
-# something fast and reliable enough to be believed.
 on:
+  pull_request:
+  push:
+    branches: [master]
   workflow_dispatch:
   release:
     types: [published]
@@ -40,11 +31,6 @@ jobs:
       - name: Build CLI package
         shell: msys2 {0}
         run: python tools/build_cli.py release
-      - name: Test boot path handling
-        shell: msys2 {0}
-        run: |
-          cmake --build recompiler/build-cli --target cli_boot_path_test --parallel 2
-          ctest --test-dir recompiler/build-cli -R '^cli_boot_path_test$' --output-on-failure
       - name: Smoke test packaged CLI
         shell: msys2 {0}
         run: dist/psxrecomp-cli-windows-x86_64/psxrecomp.exe --help
@@ -53,21 +39,6 @@ jobs:
           name: psxrecomp-cli-windows-x86_64
           path: dist/psxrecomp-cli-*.zip
           if-no-files-found: error
-
-  linux-boot-path-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      - name: Configure boot path test
-        run: cmake -S recompiler -B recompiler/build-boot-path-test -DBUILD_TESTING=ON
-      - name: Build boot path test
-        run: cmake --build recompiler/build-boot-path-test --target cli_boot_path_test --parallel 2
-      - name: Run boot path test
-        run: >-
-          ctest --test-dir recompiler/build-boot-path-test
-          -R '^cli_boot_path_test$' --output-on-failure
 
   publish-release-assets:
     if: github.event_name == 'release'

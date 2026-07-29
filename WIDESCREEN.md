@@ -65,59 +65,19 @@ sprite_anchor_addr = "0x1F800070"      # scratchpad holding the prim's
                                        # GTE-projected anchor SXY at tag time.
 hud_sprt_squash    = true              # center/edge-squash untagged SPRTs
                                        # (screen-space HUD/menus).
-auto_ui_squash     = true              # pre-scan the current GPU linked list,
-                                       # select its highest populated UI rank,
-                                       # and share one anchor across each
-                                       # complete glyph/icon run.
 clear_reveal       = true              # clear synthetic native-wide side margins
                                        # at opted-in scene/map boundaries (default false).
 nw_left_hud_packet_lo = "0x000E3400"  # optional targeted left-HUD packet range
 nw_left_hud_packet_hi = "0x000E4100"  # (half-open); avoids shifting 2D scenery.
 offer_ultrawide    = true              # separate experimental 21:9 launcher row.
-adaptive_view      = true              # expose live resize-driven aspect mode.
-
-# Proven object/model participation comparisons may be forced only while a
-# widened world view is configured. The complete instruction word guards
-# same-address overlay variants; true 4:3 executes the vanilla comparison.
-[[widescreen.cull.keep]]
-address  = "0x8002B310"
-expected = "0x28A21C01"                # SLT/SLTU/SLTI/SLTIU only
-result   = 1                           # forced comparison result, 0 or 1
 ```
-
-When `adaptive_view` is enabled by the game, the launcher's **Aspect ratio**
-selector gains an **Adaptive** entry. The previously selected fixed aspect
-still determines the initial window shape. Once the game window exists,
-resizing it continuously
-updates the GTE/native-wide projection, cull margins, wide render target, and
-present aspect. The live ratio is clamped to 4:3 on the narrow side and to the
-widest mode the game offers (`16:9`, or `21:9` with `offer_ultrawide`). BIOS,
-FMV, menus, and other title-classified 2D frames retain their existing 4:3
-pillarbox policy. The user choice persists as `[video] adaptive_view` in
-`settings.toml`.
-
-The native-wide draw-area early-out correction was independently identified
-and contributed by **OpokXeno** in
-[PR #73](https://github.com/mstan/psxrecomp/pull/73). The landed variant keeps
-that mirror-space correction while restricting it to active framebuffer
-targets, so offscreen texture targets retain the original host-side pruning.
 
 Tomba's values are Ghidra-evidenced: `0x8005E08C` is the shared per-prim helper
 all ~23 character render functions (RTPS cluster `0x800459E0`–`0x8004FB54`) call;
 the RTPS preamble stores the anchor SXY to scratchpad `0x1F800070`.
 
-`auto_ui_squash` is a runtime-only opt-in and does not require regenerated game
-code. It applies only on the projection-and-stretch path: eligible
-axis-aligned textured quads/rectangles in the front populated ordering-table
-layer are grouped by texture and screen row before any command is transformed.
-Depth-sorted world packets, full-frame backdrops, and true 4:3 frames remain
-untouched.
-
 **Changing `sprite_tag_funcs` requires a game regen** (the tag callback is
-emitted into the generated C). `widescreen.cull.keep` is consumed by both the
-native recompiler and the dirty-RAM interpreter: regenerate main/overlay native
-code after changing it, while the interpreter reads the same guarded records
-from the runtime config.
+emitted into the generated C). Everything else is runtime-only.
 
 ---
 
