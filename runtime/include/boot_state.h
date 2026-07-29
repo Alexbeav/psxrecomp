@@ -91,6 +91,7 @@ enum {
     BS_SEC_DMA    = 0x0C,  /* DMA channels[7] + dpcr/dicr + async-transfer state  */
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
+    BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */
@@ -106,6 +107,12 @@ int  boot_state_load(const char* path, uint32_t bios_checksum,
 int  boot_state_load_buffer(const uint8_t* file, size_t file_len,
                             uint32_t bios_checksum, uint32_t entry_pc,
                             CPUState* cpu);
+
+/* Header-only integrity check (no section inflate/apply). Returns 1 if this
+ * build can load the image; 0 and fills reason (when non-NULL) on reject. */
+int  boot_state_check_buffer(const uint8_t* file, size_t file_len,
+                             uint32_t bios_checksum, uint32_t entry_pc,
+                             char* reason, size_t reason_cap);
 
 /* Register a deferred capture: when boot_state_trigger_capture() fires (from
  * fntrace at game-start), serialize to path. One-shot. */

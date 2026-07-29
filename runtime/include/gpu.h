@@ -56,6 +56,9 @@ void     gpu_depth24_upload_span_reset(void);
  * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
  * per vblank; returns non-zero while the hold is still active after tick. */
 int      gpu_depth24_present_hold_tick(void);
+/* After savestate restore: clear ephemeral hold so the restored depth24
+ * frame can present immediately (span/prev_h come from the GPU snap). */
+void     gpu_depth24_on_savestate_loaded(void);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);

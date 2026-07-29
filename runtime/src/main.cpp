@@ -15,6 +15,7 @@
 #include "text_xlate.h"
 #include "boot_state.h"
 #include "bios_hle.h"
+#include "psx_bios_backend.h"
 #include "psx_cycles.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
@@ -67,7 +68,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #endif
-#include <SDL.h>
+#include "psx_sdl.h"
+#include "psx_sdl_audio.h"
 #if defined(PSX_WEB)
 #include <emscripten/emscripten.h>
 #endif
@@ -110,7 +112,13 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #endif
 
 #ifndef PSX_DEFAULT_BIOS_PATH
+/* Compile-time fallback name only — not an implicit player choice.
+ * Runtime default with no explicit pick is bios/openbios.bin (see
+ * resolve_bios_for_runtime / docs/BIOS_SELECTION.md). */
 #define PSX_DEFAULT_BIOS_PATH "bios/SCPH1001.BIN"
+#endif
+#ifndef PSX_BUNDLED_BIOS_PATH
+#define PSX_BUNDLED_BIOS_PATH "bios/openbios.bin"
 #endif
 #ifndef PSX_DEFAULT_GAME_CONFIG_PATH
 #define PSX_DEFAULT_GAME_CONFIG_PATH ""
@@ -827,6 +835,19 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     s_fps_last_frame = 0;
     /* Re-anchor guest-cycle→sample budgeting (pump clears queued PCM too). */
     g_audio_cycle_resync = 1;
+    /* Depth24 FMV: drop ephemeral present hold/cutover so restored VRAM shows.
+     * Upload span came back with the GPU snap; treat MDEC as already active if
+     * depth24 is on so we don't full-black the first post-load presents. */
+    gpu_depth24_on_savestate_loaded();
+    s_d24_cutover_blank = 0;
+    s_d24_saw_gap = 0;
+    s_d24_prev_mdec = gpu_display_is_depth24() ? 1 : 0;
+    /* Depth24 load skipped framebuffer-sized CPU→GPU uploads — including the
+     * full-VRAM boot_state blit — so restage the mirror into the FBO/image
+     * before present. Otherwise post-FMV menus miss texture pages. Safe
+     * no-ops when that backend was never brought up. */
+    gl_renderer_restage_vram_after_savestate();
+    vk_renderer_restage_vram_after_savestate();
     /* GL present-dirty early-out can skip SwapWindow when the restored frame
      * matches the last swap (typical on 2nd+ load of the same slot). Invalidate
      * tiles + force several swaps so the window actually updates. Safe no-op
@@ -1379,57 +1400,133 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
     return p;
 }
 
-static bool validate_bios_for_launch(const std::filesystem::path& path) {
+/* BIOS selection state (docs/BIOS_SELECTION.md). s_openbios_allowed is the
+ * game's [runtime] openbios; s_bundled_bios_rel is where the shipped
+ * redistributable image lives relative to the executable. */
+static bool        s_openbios_allowed  = true;
+static std::string s_bundled_bios_rel  = PSX_BUNDLED_BIOS_PATH;
+
+/* Identity-match a file against a linked backend. Size+CRC must agree —
+ * bytes is a guaranteed wild jump. Identity therefore decides WHICH backend
+ * may run, not merely whether to warn. Null = no linked image matches.
+ */
+static const PsxBiosBackend* bios_backend_for_file(const std::filesystem::path& path,
+                                                   uint32_t* out_crc,
+                                                   uint64_t* out_size) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;
+    if (!f.is_open()) return nullptr;
     const std::streamoff size = f.tellg();
-    if (size != 512 * 1024) {
-        launcher_warning("BIOS Warning",
-            "The selected BIOS is not 512 KiB. Please select SCPH1001.BIN.");
-        return false;
-    }
+    if (out_size) *out_size = (uint64_t)size;
+    if (size <= 0) return nullptr;
     std::vector<uint8_t> data((size_t)size);
-    if (!read_at(f, 0, data.data(), data.size())) return false;
+    if (!read_at(f, 0, data.data(), data.size())) return nullptr;
     const uint32_t crc = crc32_compute(data.data(), data.size());
-    if (crc != 0x37157331u) {
-        char buf[256];
-        std::snprintf(buf, sizeof(buf),
-            "The selected BIOS CRC32 is %08X, but this build was validated with SCPH1001.BIN CRC32 37157331.\n\n"
-            "The runtime will try it anyway, but boot may fail.", crc);
-        launcher_warning("BIOS Warning", buf);
+    if (out_crc) *out_crc = crc;
+    for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
+        const PsxBiosBackend* b = psx_bios_registry[i];
+        if (!b || !b->image) continue;
+        if ((uint64_t)size == (uint64_t)b->image->image_size &&
+            crc == b->image->image_crc32)
+            return b;
     }
-    return true;
+    return nullptr;
+}
+
+/* What a player may supply, for mismatch and picker copy. The bundled image is
+ * excluded: it is never something to go and find. */
+static std::string bios_accepted_images() {
+    std::string s;
+    for (uint32_t i = 0; i < psx_bios_registry_count; i++) {
+        const PsxBiosBackend* b = psx_bios_registry[i];
+        if (!b || !b->image || b->image->image_bundled) continue;
+        if (!s.empty()) s += ", ";
+        s += b->image->image_id;
+        s += " (" + std::to_string(b->image->image_size / 1024u) + " KB)";
+    }
+    return s.empty() ? std::string("(this build ships its own BIOS)") : s;
+}
+
+/* Identity-gate a player-chosen BIOS and activate its backend on success. */
+static bool validate_bios_for_launch(const std::filesystem::path& path) {
+    uint32_t crc = 0; uint64_t size = 0;
+    const PsxBiosBackend* b = bios_backend_for_file(path, &crc, &size);
+    if (b) return psx_bios_activate(b) != 0;
+
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+        "That BIOS (%llu bytes, CRC32 %08X) is not an image this build was "
+        "compiled from.\n\nThis build accepts: %s\n\nThe compiled-in code "
+        "would execute against mismatched data and crash.",
+        (unsigned long long)size, crc, bios_accepted_images().c_str());
+    launcher_warning("BIOS Mismatch", buf);
+    return false;
 }
 
 static std::filesystem::path resolve_bios_path(const char* requested, const char* argv0);
 
+/* Resolve which BIOS image file to load, and activate its backend.
+ *
+ * Policy (docs/BIOS_SELECTION.md):
+ *   no explicit player choice  -> bundled OpenBIOS, silently
+ *   explicit choice, matching  -> that image
+ *   explicit choice, mismatched-> explained; falls back to OpenBIOS if allowed
+ *   openbios disabled for this title -> a retail image is required
+ *
+ * "Explicit" means --bios or a remembered launcher/settings pick. Finding a
+ * file on disk deliberately does NOT count: discovery used to adopt whatever
+ * happened to sit near the executable, so two players with the same build
+ * could end up on different BIOSes.
+ */
 static std::filesystem::path resolve_bios_for_runtime(const char* requested,
-                                                      const char* argv0) {
-    std::filesystem::path resolved = resolve_bios_path(requested, argv0);
-    if (!resolved.empty() && std::filesystem::exists(resolved) &&
-        validate_bios_for_launch(resolved)) {
-        return resolved;
+                                                      const char* argv0,
+                                                      bool requested_is_explicit) {
+    const bool openbios_allowed = s_openbios_allowed;
+    const PsxBiosBackend* bundled = psx_bios_bundled();
+
+    /* 1. An explicit choice: --bios, else a remembered pick. */
+    std::filesystem::path chosen;
+    if (requested_is_explicit && requested && requested[0]) {
+        chosen = resolve_bios_path(requested, argv0);
+    } else {
+        std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
+        if (!cached.empty() && std::filesystem::exists(cached)) chosen = cached;
+    }
+    if (!chosen.empty() && std::filesystem::exists(chosen)) {
+        if (validate_bios_for_launch(chosen)) return chosen;   /* activates it */
+        if (!(openbios_allowed && bundled)) return {};
     }
 
-    std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
-    if (!cached.empty() && std::filesystem::exists(cached) &&
-        validate_bios_for_launch(cached)) {
-        return cached;
+    /* 2. No usable explicit choice -> bundled OpenBIOS, if this title allows it. */
+    if (openbios_allowed && bundled) {
+        std::filesystem::path img = resolve_bios_path(
+            s_bundled_bios_rel.empty() ? nullptr : s_bundled_bios_rel.c_str(), argv0);
+        if (!img.empty() && std::filesystem::exists(img) &&
+            bios_backend_for_file(img, nullptr, nullptr) == bundled &&
+            psx_bios_activate(bundled)) {
+            return img;
+        }
+        launcher_warning("Bundled BIOS Missing",
+            std::string("This build ships its own BIOS (") +
+            bundled->image->image_id + "), but the bundled image is missing "
+            "or does not match.\n\nExpected next to the executable:\n" +
+            (s_bundled_bios_rel.empty() ? "(default path)" : s_bundled_bios_rel) +
+            "\n\nReinstall or rebuild.");
+        return {};
     }
 
-    /* Interactive pick. Be explicit about WHICH of the two user-supplied
-     * files is being requested — first-time users see two pickers in a
-     * row and the difference between "BIOS" and "disc image" is not
-     * obvious to non-technical players. */
+    /* 3. This title requires a retail BIOS: ask for one. */
+    const std::string accepted = bios_accepted_images();
     launcher_info((s_picker_game_name + " — PlayStation BIOS needed").c_str(),
-        s_picker_game_name + " does not include any Sony or game files.\n\n"
+        s_picker_game_name + " requires a PlayStation BIOS.\n\n"
         "Step 1 of 2 — PlayStation BIOS\n\n"
-        "In the next window, select your PlayStation BIOS dump. The file is "
-        "usually named SCPH1001.BIN and is exactly 512 KB. You must dump it "
-        "from your own console or otherwise legally obtain it.\n\n"
+        "In the next window, select your PlayStation BIOS dump. This build "
+        "requires the exact image it was compiled from: " + accepted + ". "
+        "Usually named SCPH1001.BIN and exactly 512 KB. Dump from your own "
+        "console or otherwise legally obtain it.\n\n"
         "(This is NOT the game disc — that is asked for next.)");
     std::string bios_title =
-        s_picker_game_name + " — Step 1 of 2: select PlayStation BIOS (SCPH1001.BIN)";
+        s_picker_game_name + " — Step 1 of 2: select PlayStation BIOS (" +
+        accepted + ")";
     for (;;) {
         std::filesystem::path picked;
         if (!pick_runtime_file(
@@ -1508,6 +1605,7 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
 static std::filesystem::path resolve_bios_path(const char* requested, const char* argv0) {
     namespace fs = std::filesystem;
     std::error_code ec;
+    if (!requested || !requested[0]) return {};
     fs::path p(requested);
     if (fs::exists(p, ec)) {
         fs::path abs = fs::absolute(p, ec);
@@ -1591,8 +1689,8 @@ static void shutdown_runtime(void) {
     overlay_capture_wait_pending();
     overlay_capture_write_json();
     if (sdl_audio_device) {
-        SDL_ClearQueuedAudio(sdl_audio_device);
-        SDL_CloseAudioDevice(sdl_audio_device);   /* stops the pull callback */
+        psx_sdl_audio_clear(sdl_audio_device);
+        psx_sdl_audio_close(sdl_audio_device);   /* stops the pull callback */
         sdl_audio_device = 0;
     }
     if (s_drc_ready) { rab_free(&s_drc); s_drc_ready = false; }
@@ -1607,8 +1705,8 @@ static void teardown_game_session_keep_lobby(void) {
     psx_netplay_shutdown();
     memcard_flush_all();
     if (sdl_audio_device) {
-        SDL_ClearQueuedAudio(sdl_audio_device);
-        SDL_CloseAudioDevice(sdl_audio_device);
+        psx_sdl_audio_clear(sdl_audio_device);
+        psx_sdl_audio_close(sdl_audio_device);
         sdl_audio_device = 0;
     }
     if (s_drc_ready) { rab_free(&s_drc); s_drc_ready = false; }
@@ -1668,7 +1766,7 @@ static void sdl_audio_pump(bool discard_output = false) {
          * means the device was silence-filling since the last pump = a gap.
          * Only meaningful after the first audio has been queued. */
         const uint32_t max_queue_bytes = 44100u * bytes_per_frame / 5u;
-        queued = SDL_GetQueuedAudioSize(sdl_audio_device);
+        queued = psx_sdl_audio_queued_size(sdl_audio_device);
         if (queued == 0 && had_audio) {
             g_legacy_underruns++;
             audio_trace_event(AUDIO_EV_UNDERRUN, 0, 0);
@@ -1717,7 +1815,7 @@ static void sdl_audio_pump(bool discard_output = false) {
         cycle_carry = 0;
         g_audio_cycle_resync = 0;
         if (legacy)
-            SDL_ClearQueuedAudio(sdl_audio_device);
+            psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
         return;
@@ -1756,17 +1854,16 @@ static void sdl_audio_pump(bool discard_output = false) {
     if (legacy) {
         /* T3 tap: the exact post-fade bytes handed to the host audio queue. */
         audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, frames);
-        SDL_QueueAudio(sdl_audio_device, sdl_audio_buf,
-                       (uint32_t)frames * bytes_per_frame);
+        psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf, (uint32_t)frames * bytes_per_frame);
         had_audio = 1;
     } else {
         /* Hand to the bridge (band-limited resample + DRC) instead of
          * SDL_QueueAudio. Lock guards the SPSC ring against the pull callback.
          * The T3 tap moves to sdl_drc_callback: what the device actually
          * receives is the bridge's device-rate output, not this buffer. */
-        SDL_LockAudioDevice(sdl_audio_device);
+        psx_sdl_audio_lock(sdl_audio_device);
         rab_push(&s_drc, sdl_audio_buf, frames);
-        SDL_UnlockAudioDevice(sdl_audio_device);
+        psx_sdl_audio_unlock(sdl_audio_device);
     }
 }
 
@@ -1793,7 +1890,7 @@ extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
     *host_rate = g_audio_host_rate;
     if (*legacy || !s_drc_ready) {
         *fill_ms = sdl_audio_device
-                   ? (double)SDL_GetQueuedAudioSize(sdl_audio_device)
+                   ? (double)psx_sdl_audio_queued_size(sdl_audio_device)
                      / (44100.0 * 4.0) * 1000.0
                    : 0.0;
         *underruns = g_legacy_underruns;
@@ -2148,12 +2245,11 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             audio_trace_event(AUDIO_EV_MUTE, (uint32_t)tail, 0);
             if (audio_legacy_mode()) {
                 audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, tail);
-                SDL_QueueAudio(sdl_audio_device, sdl_audio_buf,
-                               (uint32_t)tail * sizeof(int16_t) * 2u);
+                psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf, (uint32_t)tail * sizeof(int16_t) * 2u);
             } else if (s_drc_ready) {
-                SDL_LockAudioDevice(sdl_audio_device);
+                psx_sdl_audio_lock(sdl_audio_device);
                 rab_push(&s_drc, sdl_audio_buf, tail);
-                SDL_UnlockAudioDevice(sdl_audio_device);
+                psx_sdl_audio_unlock(sdl_audio_device);
             }
             muted = 1;
         }
@@ -3252,16 +3348,23 @@ static void netplay_barrier_admit(int override) {
             netplay_soft_exit("netplay_peer_disconnect");
             if (psx_return_to_lobby_requested()) return;
         }
+        /* Staged .pst rejected (stale codegen / BIOS / missing) — do not wait
+         * out the 90s load barrier with stall=load_apply_done. */
+        if (psx_netplay_consume_load_apply_failed()) {
+            netplay_soft_exit("netplay_load_failed");
+            if (psx_return_to_lobby_requested()) return;
+        }
         /* Mutual INPUT/CONFIRM stall still refreshes last_peer_rx — detect
          * "no sim progress" separately (common rematch + TURN loss mode).
-         * Load probe/xfer/apply/ready uses a longer budget (TURN + 1.4MB). */
+         * Save/load/memcard probe+chunk xfer uses a longer budget (TURN +
+         * ~1.4MB .pst). The old 20s admit timeout killed SAVE mid-transfer. */
         if (psx_netplay_in_load_barrier() && now_ms - barrier_t0 >= 90000u) {
             char stall[96];
             uint32_t sim = 0;
             int lead = 0;
             psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
             std::fprintf(stderr,
-                         "psxrecomp: netplay load barrier timeout sim=%u "
+                         "psxrecomp: netplay state barrier timeout sim=%u "
                          "stall=%s lead=%d — returning to lobby\n",
                          (unsigned)sim, stall[0] ? stall : "?", lead);
             netplay_soft_exit("netplay_load_stall");
@@ -3337,9 +3440,16 @@ static void netplay_barrier_admit(int override) {
                     netplay_soft_exit("sdl_window_close");
                     if (psx_return_to_lobby_requested()) return;
                 }
-                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) {
-                    netplay_soft_exit("netplay_barrier_escape");
-                    if (psx_return_to_lobby_requested()) return;
+                if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                    const SDL_Keycode key = ev.key.key;
+#else
+                    const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                    if (key == SDLK_ESCAPE) {
+                        netplay_soft_exit("netplay_barrier_escape");
+                        if (psx_return_to_lobby_requested()) return;
+                    }
                 }
                 if (ev.type == SDL_CONTROLLERDEVICEADDED ||
                     ev.type == SDL_CONTROLLERDEVICEREMOVED) {
@@ -3587,18 +3697,20 @@ static void depth24_cutover_tick(int depth24) {
 }
 
 /* Depth24 FMV: CRTC width stays full (e.g. MotK 512) while MDEC uploads may
- * not cover the right side yet — cutover flashes a large colorful junk block
- * when leftover VRAM is read as RGB888. Present width is never shrunk
- * (cropping caused a flickering black pillar); black-fill uncovered columns.
+ * not cover the right side yet — leftover VRAM read as RGB888 flashes junk.
+ * Present width is never shrunk; black-fill only the trailing uncovered cols.
  *
- * 0) Cutover hold: full-frame black for the first presents after an MDEC gap
- * 1) Upload-span blank: [gpu_depth24_rgb_limit .. w)
- * 2) Chroma fringe: if span reports full, still black the last ~8 cols when
- *    dense chroma junk is present (MotK crawl). Do NOT replicate the last
- *    good column — that stretched a tinted edge into an 8-wide streak. */
+ * Match origin/master's span policy: when upload span is unknown (lim==0),
+ * only blank the last ~8 columns. Blanking [0..w) on lim==0 (an older tip
+ * path) turned MotK FMV into a permanent black screen after GP1(07h) hold
+ * reset the span — hold ticks skip Swap, then the next present saw lim=0
+ * and wiped the whole frame every vblank.
+ *
+ * Optional short cutover blank (tip): full-frame black for 1–2 presents when
+ * MDEC returns after an idle gap, hiding one-frame transitional junk. */
 static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
                                           uint32_t display_x) {
-    if (!buf || w == 0u || h == 0u) return;
+    if (!buf || w < 8u || h == 0u) return;
 
     if (s_d24_cutover_blank > 0) {
         s_d24_cutover_blank--;
@@ -3608,37 +3720,14 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
         return;
     }
 
-    uint32_t good = gpu_depth24_rgb_limit(display_x, w);
-    if (good > w) good = w;
-    if (good < w) {
-        for (uint32_t y = 0; y < h; y++) {
-            for (uint32_t x = good; x < w; x++)
-                buf[y * w + x] = 0xFF000000u;
-        }
-        return; /* span blank already covered the junk region */
-    }
-
-    if (w < 24u) return;
-    const uint32_t margin = 8u;
-    const uint32_t edge = w - margin;
-    const uint32_t total = margin * h;
-    uint32_t junk_px = 0;
-    for (uint32_t x = edge; x < w; x++) {
-        for (uint32_t y = 0; y < h; y++) {
-            uint32_t p = buf[y * w + x];
-            int r = (int)((p >> 16) & 255u);
-            int g = (int)((p >> 8) & 255u);
-            int b = (int)(p & 255u);
-            int m = (r + g + b) / 3;
-            int ch = (r > m ? r - m : m - r) + (g > m ? g - m : m - g) +
-                     (b > m ? b - m : m - b);
-            if (ch > 40) junk_px++;
-        }
-    }
-    /* ~12% of margin texels — sparse stars stay; dense chroma fringe cleans. */
-    if (total == 0u || junk_px * 100u < total * 12u) return;
+    /* Default: last 8 columns. If the upload span is known and ends earlier
+     * inside that margin, start blanking from the span edge instead. */
+    uint32_t start = w - 8u;
+    uint32_t lim = gpu_depth24_rgb_limit(display_x, w);
+    if (lim > 0u && lim < w && lim < start)
+        start = lim;
     for (uint32_t y = 0; y < h; y++) {
-        for (uint32_t x = edge; x < w; x++)
+        for (uint32_t x = start; x < w; x++)
             buf[y * w + x] = 0xFF000000u;
     }
 }
@@ -3766,23 +3855,33 @@ static void sdl_vblank_present(void) {
             } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
                 bool ours = false;
                 for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+#if defined(PSX_SDL3)
+                    if (ev.gdevice.which == g_players[s].instance) { ours = true; break; }
+#else
                     if (ev.cdevice.which == g_players[s].instance) { ours = true; break; }
+#endif
                 }
                 if (ours) {
                     close_controller();
                     refresh_player_devices();
                 }
             } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+#else
                 const Uint16 mod = ev.key.keysym.mod;
-                if (ev.key.keysym.sym == SDLK_ESCAPE && psx_netplay_active()) {
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (key == SDLK_ESCAPE && psx_netplay_active()) {
                     netplay_soft_exit("netplay_escape");
                     return;
                 }
                 /* Save states: Shift+F1-F12 = save slot 0-11, F1-F12 = load.
                  * (F11 is a save slot per the user's spec, so fullscreen is
                  * Alt+Enter / Cmd+Ctrl+F only — no F11.) */
-                if (ev.key.keysym.sym >= SDLK_F1 && ev.key.keysym.sym <= SDLK_F12) {
-                    int slot = (int)(ev.key.keysym.sym - SDLK_F1);   /* 0..11 */
+                if (key >= SDLK_F1 && key <= SDLK_F12) {
+                    int slot = (int)(key - SDLK_F1);   /* 0..11 */
                     if (psx_netplay_active()) {
                         /* Match host only — guest F-keys must not initiate. */
                         if (!psx_netplay_is_host()) {
@@ -3798,7 +3897,7 @@ static void sdl_vblank_present(void) {
                         savestate_request_load(slot);
                     }
                 }
-                else if (ev.key.keysym.sym == SDLK_c && (mod & KMOD_CTRL)) {
+                else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
                 }
@@ -3810,8 +3909,8 @@ static void sdl_vblank_present(void) {
                  * set in both SDL_WINDOW_FULLSCREEN and
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
-                else if ((ev.key.keysym.sym == SDLK_RETURN && (mod & KMOD_ALT)) ||
-                         (ev.key.keysym.sym == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
+                else if ((key == SDLK_RETURN && (mod & KMOD_ALT)) ||
+                         (key == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
@@ -4094,6 +4193,14 @@ static void sdl_vblank_present(void) {
 
     /* Mod hooks. Run after all normal input sampling. */
     mod_call_frame_hooks();
+
+    /* Depth24 GP1(07h) retarget (MotK intro→crawl): keep the prior Swap for a
+     * few vblanks so stale trailing VRAM never flashes on the right edge.
+     * Must tick every present — gpu.c arms s_d24_present_hold and also
+     * freezes upload-span tracking while hold > 0; without this call the hold
+     * sticks and depth24_fix_trailing_margin blanks the whole FMV forever. */
+    if (gpu_depth24_present_hold_tick())
+        return;
 
     /* Engage widescreen at game entry: BIOS boot stays authentic 4:3. */
     if (!g_ws_engaged) {
@@ -4436,8 +4543,20 @@ namespace {
     const char* g_lnch_argv0         = nullptr;
 
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
-        if (!bios_path || !bios_path[0] || !out) return 0;
+        if (!out) return 0;
         std::memset(out, 0, sizeof(*out));
+        /* Empty path = use bundled OpenBIOS when this title allows it. */
+        if (!bios_path || !bios_path[0]) {
+            if (s_openbios_allowed && psx_bios_bundled()) {
+                out->ok = 1;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "Using bundled OpenBIOS.");
+                return 1;
+            }
+            std::snprintf(out->detail, sizeof(out->detail),
+                          "PlayStation BIOS required (SCPH1001.BIN).");
+            return 1;
+        }
         std::ifstream f(bios_path, std::ios::binary | std::ios::ate);
         if (!f.is_open()) {
             std::snprintf(out->detail, sizeof(out->detail), "BIOS file not found.");
@@ -6639,6 +6758,10 @@ int main(int argc, char** argv) {
     const char* game_config_path = nullptr;
     const char* disc_override_path = nullptr;
     bool        bios_from_cli = false;  /* CLI --bios/positional wins over settings.toml */
+    /* Did the PLAYER choose this BIOS (CLI or settings), as opposed to it
+     * being the compile-time default? Only a real choice overrides the
+     * bundled OpenBIOS — see docs/BIOS_SELECTION.md. */
+    bool        bios_explicit = false;
     /* Launcher overrides (mirrors snesrecomp): --launcher forces the GUI back on
      * even when [launcher] skip_launcher = true is set; --no-launcher (and the
      * PSX_NO_LAUNCHER env) forces it off. --launcher wins if both are given. */
@@ -6679,6 +6802,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--bios") == 0 && i + 1 < argc) {
             bios_path = argv[++i];
             bios_from_cli = true;
+            bios_explicit = true;
         } else if (std::strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
             game_config_path = argv[++i];
         } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
@@ -6729,6 +6853,7 @@ int main(int argc, char** argv) {
             if (!bios_from_cli) {
                 bios_path = argv[i];
                 bios_from_cli = true;
+                bios_explicit = true;
             } else {
                 std::fprintf(stderr,
                     "psxrecomp: ignoring unexpected positional argument after BIOS selection: %s\n",
@@ -6832,6 +6957,7 @@ std::string player_device[PSX_MAX_PLAYERS];
     bool deferred_overlay_cache = false;
     std::filesystem::path deferred_overlay_project_root;
     std::vector<uint32_t> deferred_overlay_native_block;
+    uint32_t deferred_overlay_config_hash = 0;
     std::string deferred_overlay_backend;
     bool deferred_has_overlay_ac = false;
     std::string deferred_overlay_ac;
@@ -7038,6 +7164,9 @@ std::string player_device[PSX_MAX_PLAYERS];
             fast_boot     = gc.runtime.fast_boot;
             bios_hle      = gc.runtime.bios_hle;
             bios_hle_keep_intro = gc.runtime.bios_hle_keep_intro;
+            /* Developer compatibility finding, applied before BIOS selection.
+             * Not exposed to settings.toml on purpose — see BIOS_SELECTION.md. */
+            s_openbios_allowed  = gc.runtime.openbios;
             /* Let the dispatch layer distinguish "dirty because text was
              * loaded" from "diverged because runtime wrote different code over
              * the original EXE image". Packed/self-modifying games can rewrite
@@ -7073,6 +7202,8 @@ std::string player_device[PSX_MAX_PLAYERS];
                 deferred_overlay_cache = true;
                 deferred_overlay_project_root = gc.project_root;
                 deferred_overlay_native_block = gc.runtime.overlay_native_block;
+                deferred_overlay_config_hash =
+                    PSXRecompV4::overlay_codegen_config_hash(gc);
                 deferred_overlay_backend = gc.runtime.overlay_backend;
                 deferred_has_overlay_ac = gc.runtime.has_overlay_autocompile_cmd;
                 deferred_overlay_ac = gc.runtime.overlay_autocompile_cmd;
@@ -7166,9 +7297,10 @@ std::string player_device[PSX_MAX_PLAYERS];
             g_video_aspect_den = us.aspect_den;
         }
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
-        if (us.has_bios_path && !bios_from_cli) {
+        if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
             settings_bios_storage = us.bios_path.string();
             bios_path = settings_bios_storage.c_str();
+            bios_explicit = true;
         }
         if (us.has_disc_path && !disc_override_path)
             resolved_disc = normalize_disc_path_for_launch(us.disc_path);
@@ -7353,7 +7485,8 @@ std::string player_device[PSX_MAX_PLAYERS];
             capture_persist_dir.empty() ? nullptr :
                 capture_persist_dir.c_str(),
             game_id.c_str());
-        overlay_loader_init(cache_dir.c_str(), game_id.c_str());
+        overlay_loader_init(cache_dir.c_str(), game_id.c_str(),
+                            deferred_overlay_config_hash);
         for (uint32_t addr : deferred_overlay_native_block) {
             overlay_loader_native_block_add(addr);
         }
@@ -7499,7 +7632,10 @@ std::string player_device[PSX_MAX_PLAYERS];
                 seed.netplay_lobby_url = g_lnch_lobby_url;
                 seed.has_netplay_lobby_url = true;
             }
-            if (bios_path && bios_path[0]) { seed.bios_path = bios_path; seed.has_bios_path = true; }
+            if (bios_explicit && bios_path && bios_path[0]) {
+                seed.bios_path = bios_path;
+                seed.has_bios_path = true;
+            }
             if (!resolved_disc.empty())    { seed.disc_path = resolved_disc; seed.has_disc_path = true; }
             seed.memcard_dir = memcard_dir;          seed.has_memcard_dir = true;
             seed.memcard1_enabled = memcard1_enabled; seed.has_memcard1_enabled = true;
@@ -7701,10 +7837,13 @@ std::string player_device[PSX_MAX_PLAYERS];
              * the setup wizard inside recomp-ui (cross-platform file pickers). */
             {
                 bool bios_ok = false;
+                RecompLauncherCBiosVerify bv{};
                 if (ls.bios_path[0]) {
-                    RecompLauncherCBiosVerify bv{};
                     if (ae_bios_verify(ls.bios_path, &bv) && bv.ok) bios_ok = true;
                     else ls.bios_path[0] = '\0';
+                }
+                if (!bios_ok) {
+                    if (ae_bios_verify("", &bv) && bv.ok) bios_ok = true;
                 }
                 bool disc_ok = false;
                 if (!rui_initial_disc.empty()) {
@@ -7812,6 +7951,9 @@ std::string player_device[PSX_MAX_PLAYERS];
                 if (ls.bios_path[0]) {
                     seed.bios_path = ls.bios_path;
                     seed.has_bios_path = true;
+                } else {
+                    seed.bios_path.clear();
+                    seed.has_bios_path = false;
                 }
                 /* Memory-card slots: enable flags + any Browse/New paths. */
                 seed.memcard1_enabled = ls.memcard_enabled[0] != 0; seed.has_memcard1_enabled = true;
@@ -7901,7 +8043,13 @@ std::string player_device[PSX_MAX_PLAYERS];
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
                     bios_path = settings_bios_storage.c_str();
+                    bios_explicit = true;
                     write_cached_path(argv[0], "bios.cfg", seed.bios_path);
+                } else if (!bios_from_cli) {
+                    /* Cleared to bundled OpenBIOS — drop any cached retail pick. */
+                    bios_explicit = false;
+                    std::error_code ec;
+                    std::filesystem::remove(sidecar_cfg_path(argv[0], "bios.cfg"), ec);
                 }
                 if (seed.has_disc_path) {
                     seed.disc_path = normalize_disc_path_for_launch(seed.disc_path);
@@ -7966,7 +8114,8 @@ std::string player_device[PSX_MAX_PLAYERS];
         memcard2_path.clear();
     }
 
-    std::filesystem::path resolved_bios = resolve_bios_for_runtime(bios_path, argv[0]);
+    std::filesystem::path resolved_bios =
+        resolve_bios_for_runtime(bios_path, argv[0], bios_explicit);
     if (resolved_bios.empty()) {
         std::fprintf(stderr, "psxrecomp: no BIOS selected; exiting.\n");
         return 1;
@@ -8219,18 +8368,17 @@ session_reboot:
 #ifndef PSX_SDL_NO_AUDIO
     audio_trace_init();
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
-        SDL_AudioSpec want;
-        SDL_AudioSpec have;
-        SDL_zero(want);
+        PsxSdlAudioSpec want = {};
+        PsxSdlAudioSpec have = {};
         want.freq = 44100;
         want.format = AUDIO_S16SYS;
         want.channels = 2;
         want.samples = 1024;
         const bool legacy = audio_legacy_mode();
+        want.allow_frequency_change = legacy ? 0 : 1;
         if (!legacy)
             want.callback = sdl_drc_callback;  /* pull model: bridge resamples + DRC */
-        sdl_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have,
-                                               legacy ? 0 : SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+        sdl_audio_device = psx_sdl_audio_open(&want, &have);
         if (sdl_audio_device) {
             if (!legacy) {
                 rab_config cfg; rab_config_defaults(&cfg);
@@ -8241,7 +8389,7 @@ session_reboot:
             }
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
-            SDL_PauseAudioDevice(sdl_audio_device, 0);
+            (void)psx_sdl_audio_resume(sdl_audio_device);
         }
     }
 #endif
@@ -8314,7 +8462,8 @@ session_reboot:
          * undersized and the wide readback overflows it. */
         g_video_scale = gr_scale();
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
-                                      (double)g_frame_interpolation_fps);
+                                      (double)g_frame_interpolation_fps,
+                                      /*blend_mode*/ 0);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init

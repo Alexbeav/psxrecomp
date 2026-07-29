@@ -2139,6 +2139,28 @@ static int depth24_is_fb_transfer(int w, int h) {
     return 0;
 }
 
+/* Remember only the depth24 scanout band for clear-on-leave. Used after a
+ * full-VRAM savestate restage so texture pages stay in the FBO while the
+ * RGB888 movie band is still wiped when GP1 leaves 24-bit (avoids MotK
+ * rainbow/static from treating packed RGB as 1555). */
+static void depth24_mark_scanout_band(void) {
+    GpuDisplayInfo di;
+    int fb_w, fb_h, x0, y0, x1, y1;
+    if (!gpu_display_is_depth24()) return;
+    gpu_get_display_info(&di);
+    fb_w = (int)((di.width * 3u + 1u) / 2u);
+    fb_h = (int)di.height;
+    if (fb_w < 8) fb_w = 8;
+    if (fb_h < 1) fb_h = 1;
+    x0 = (int)(di.display_x & 1023u);
+    y0 = (int)(di.display_y & 511u);
+    x1 = x0 + fb_w - 1;
+    y1 = y0 + fb_h - 1;
+    if (x1 > VRAM_W - 1) x1 = VRAM_W - 1;
+    if (y1 > VRAM_H - 1) y1 = VRAM_H - 1;
+    rect_add(&s_d24_skip_fb, x0, y0, x1, y1);
+}
+
 static void depth24_clear_skipped_fb(void) {
     if (!s_raster_ok || !s_d24_skip_fb.set) return;
     flush_flat_batch();
@@ -2194,6 +2216,16 @@ static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     sw_vram_transfer_in(x,y,w,h,d);
     depth24_upload_policy();
     if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
+        /* Full-VRAM restore (boot_state): must stage into the FBO or every
+         * texture page outside the movie band is missing after FMV→menus.
+         * Only the scanout band is remembered for clear-on-leave. */
+        if (w >= VRAM_W && h >= VRAM_H) {
+            up_add_transfer(x, y, w, h);
+            rect_clear(&s_d24_skip_fb);
+            depth24_mark_scanout_band();
+            coh_record(GL_COH_UPLOAD, x, y, x + w - 1, y + h - 1);
+            return;
+        }
         int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
         rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
         coh_record(GL_COH_UPLOAD, x, y, x+w-1, y+h-1);
@@ -2654,6 +2686,22 @@ void gl_renderer_invalidate_present(void) {
     s_last_present_path = -1;
     s_force_present_remaining = 8;
     interp_reset_history();
+}
+
+void gl_renderer_restage_vram_after_savestate(void) {
+    if (!s_raster_ok || !s_vram) return;
+    /* Belt-and-suspenders after boot_state VRAM apply: force CPU mirror → FBO
+     * even if a depth24 skip swallowed the restore, then re-arm scanout-band
+     * clear so leaving FMV does not keep RGB888-as-1555 junk. */
+    s_up_nrects = 0;
+    rect_clear(&s_d24_skip_fb);
+    s_depth24_skip_up = 0;
+    up_add_transfer(0, 0, VRAM_W, VRAM_H);
+    flush_cpu_upload();
+    if (gpu_display_is_depth24()) {
+        s_depth24_skip_up = 1;
+        depth24_mark_scanout_band();
+    }
 }
 
 void gl_renderer_present_probe_reset(void) {

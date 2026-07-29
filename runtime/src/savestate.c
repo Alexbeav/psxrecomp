@@ -45,6 +45,7 @@ static int      s_configured   = 0;
 static int      s_save_pending = -1;   /* slot, or -1 */
 static int      s_load_pending = -1;
 static int      s_load_completed = 0;
+static int      s_load_failed = 0;
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
 
@@ -135,6 +136,28 @@ int savestate_slot_exists(int slot) {
     sz = ftell(f);
     fclose(f);
     return sz > 0;
+}
+
+int savestate_slot_compatible(int slot, char* reason, size_t reason_cap) {
+    uint8_t* data = NULL;
+    size_t size = 0;
+    int ok;
+    if (reason && reason_cap)
+        reason[0] = '\0';
+    if (!s_configured) {
+        if (reason && reason_cap)
+            snprintf(reason, reason_cap, "not_configured");
+        return 0;
+    }
+    if (!savestate_read_slot(slot, &data, &size) || !data) {
+        if (reason && reason_cap)
+            snprintf(reason, reason_cap, "missing");
+        return 0;
+    }
+    ok = boot_state_check_buffer(data, size, s_bios_checksum, s_entry_pc,
+                                 reason, reason_cap);
+    free(data);
+    return ok;
 }
 
 int savestate_read_slot(int slot, uint8_t** data_out, size_t* size_out) {
@@ -232,6 +255,8 @@ static int request_load_inner(int slot) {
                         "PSX_HLE_SCHEDULER=0 run cannot load states.\n");
         return 0;
     }
+    s_load_failed = 0;
+    s_load_completed = 0;
     s_load_pending = slot;
     return 1;
 }
@@ -278,6 +303,8 @@ int savestate_request_load_blob_protocol(const void* data, size_t size) {
     clear_load_blob();
     s_load_blob = copy;
     s_load_blob_len = size;
+    s_load_failed = 0;
+    s_load_completed = 0;
     s_load_pending = 0; /* non-negative: poll will prefer the blob */
     return 1;
 }
@@ -289,6 +316,12 @@ int savestate_pending(void) {
 int savestate_take_load_completed(void) {
     int v = s_load_completed;
     s_load_completed = 0;
+    return v;
+}
+
+int savestate_take_load_failed(void) {
+    int v = s_load_failed;
+    s_load_failed = 0;
     return v;
 }
 
@@ -328,16 +361,19 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 fprintf(stderr,
                         "savestate: LOAD FAILED blob (%zu bytes, entry=%08X)\n",
                         blob_len, (unsigned)s_entry_pc);
+                s_load_failed = 1;
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
             loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
             if (!loaded) {
                 fprintf(stderr,
-                        "savestate: LOAD FAILED slot %d (missing/mismatched) %s\n",
+                        "savestate: LOAD FAILED slot %d %s\n",
                         slot, path);
+                s_load_failed = 1;
             }
         } else {
             fprintf(stderr, "savestate: LOAD FAILED slot %d (no path)\n", slot);
+            s_load_failed = 1;
         }
         if (loaded) {
             t_after_boot = savestate_mono_ms();

@@ -69,6 +69,9 @@ extern int      dma_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t sio_snapshot_bytes(void);
 extern void     sio_snapshot_write(uint8_t* p);
 extern int      sio_snapshot_read(const uint8_t* p, uint32_t len);
+extern uint32_t mdec_snapshot_bytes(void);
+extern void     mdec_snapshot_write(uint8_t* p);
+extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
 
 /* CPU regs wire: 32+3+32+32+32 LE u32 = 131 * 4 = 524 bytes (no padding). */
 #define CPU_REGS_WIRE_BYTES (524u)
@@ -208,7 +211,7 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 14;
+    h.section_count = 15;
 
     int ok = write_header_le(f, &h);
 
@@ -257,6 +260,7 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
     if (ok) ok = write_module_section(f, BS_SEC_CDROM, cdrom_snapshot_bytes, cdrom_snapshot_write);
     if (ok) ok = write_module_section(f, BS_SEC_DMA,   dma_snapshot_bytes,   dma_snapshot_write);
     if (ok) ok = write_module_section(f, BS_SEC_SIO,   sio_snapshot_bytes,   sio_snapshot_write);
+    if (ok) ok = write_module_section(f, BS_SEC_MDEC,  mdec_snapshot_bytes,  mdec_snapshot_write);
     if (ok) {
         uint32_t wc = dirty_ram_get_bitmap_word_count();
         uint64_t nbytes = (uint64_t)wc * 4u;
@@ -393,6 +397,8 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return dma_snapshot_read(p, len);
     case BS_SEC_SIO:
         return sio_snapshot_read(p, len);
+    case BS_SEC_MDEC:
+        return mdec_snapshot_read(p, len);
     case BS_SEC_DIRTY: {
         uint32_t wc;
         uint32_t* words;
@@ -417,18 +423,121 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
     }
 }
 
+static int boot_state_parse_header(const uint8_t* file, size_t file_len,
+                                   BootStateHeader* h_out) {
+    PstR hr;
+    if (!file || !h_out || file_len < BOOT_STATE_HEADER_WIRE_BYTES ||
+        file_len > 64u * 1024u * 1024u) {
+        return 0;
+    }
+    pst_r_init(&hr, file, BOOT_STATE_HEADER_WIRE_BYTES);
+    memset(h_out, 0, sizeof(*h_out));
+    if (!pst_r_u32(&hr, &h_out->magic) ||
+        !pst_r_u32(&hr, &h_out->version) ||
+        !pst_r_u32(&hr, &h_out->bios_checksum) ||
+        !pst_r_u32(&hr, &h_out->entry_pc) ||
+        !pst_r_u32(&hr, &h_out->codegen_hash) ||
+        !pst_r_i32(&hr, &h_out->abi_tag) ||
+        !pst_r_u32(&hr, &h_out->codegen_ver) ||
+        !pst_r_u32(&hr, &h_out->section_count) ||
+        !pst_r_u32(&hr, &h_out->reserved)) {
+        return 0;
+    }
+    return 1;
+}
+
+static void boot_state_append_reason(char* reason, size_t reason_cap,
+                                     const char* part) {
+    size_t n;
+    if (!reason || reason_cap == 0 || !part || !part[0]) return;
+    n = strlen(reason);
+    if (n + 1 >= reason_cap) return;
+    if (n > 0) {
+        reason[n++] = ',';
+        reason[n] = '\0';
+        if (n + 1 >= reason_cap) return;
+    }
+    snprintf(reason + n, reason_cap - n, "%s", part);
+}
+
+int boot_state_check_buffer(const uint8_t* file, size_t file_len,
+                            uint32_t bios_checksum, uint32_t entry_pc,
+                            char* reason, size_t reason_cap) {
+    BootStateHeader h;
+    char part[96];
+
+    if (reason && reason_cap)
+        reason[0] = '\0';
+
+    if (!file || file_len < BOOT_STATE_HEADER_WIRE_BYTES) {
+        boot_state_append_reason(reason, reason_cap, "missing_or_truncated");
+        return 0;
+    }
+    if (file_len > 64u * 1024u * 1024u) {
+        boot_state_append_reason(reason, reason_cap, "too_large");
+        return 0;
+    }
+    if (!boot_state_parse_header(file, file_len, &h)) {
+        boot_state_append_reason(reason, reason_cap, "header_parse");
+        return 0;
+    }
+
+    if (h.magic != BOOT_STATE_MAGIC) {
+        snprintf(part, sizeof(part), "magic=%08X(want %08X)",
+                 (unsigned)h.magic, (unsigned)BOOT_STATE_MAGIC);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.version < BOOT_STATE_VERSION_MIN_READ ||
+        h.version > BOOT_STATE_VERSION) {
+        snprintf(part, sizeof(part), "version=%u(want %u..%u)",
+                 (unsigned)h.version, (unsigned)BOOT_STATE_VERSION_MIN_READ,
+                 (unsigned)BOOT_STATE_VERSION);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.bios_checksum != bios_checksum) {
+        snprintf(part, sizeof(part), "bios=%08X(want %08X)",
+                 (unsigned)h.bios_checksum, (unsigned)bios_checksum);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.entry_pc != entry_pc) {
+        snprintf(part, sizeof(part), "entry=%08X(want %08X)",
+                 (unsigned)h.entry_pc, (unsigned)entry_pc);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.codegen_hash != (uint32_t)PSX_OVERLAY_CODEGEN_HASH) {
+        snprintf(part, sizeof(part), "codegen_hash=%08X(want %08X)",
+                 (unsigned)h.codegen_hash,
+                 (unsigned)PSX_OVERLAY_CODEGEN_HASH);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.abi_tag != (int32_t)PSX_OVERLAY_ABI_TAG) {
+        snprintf(part, sizeof(part), "abi_tag=%d(want %d)",
+                 (int)h.abi_tag, (int)PSX_OVERLAY_ABI_TAG);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+    if (h.codegen_ver != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
+        snprintf(part, sizeof(part), "codegen_ver=%u(want %u)",
+                 (unsigned)h.codegen_ver, (unsigned)PSX_OVERLAY_CODEGEN_VER);
+        boot_state_append_reason(reason, reason_cap, part);
+    }
+
+    if (reason && reason_cap && reason[0])
+        return 0;
+    return 1;
+}
+
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {
     const uint8_t* cur;
     const uint8_t* end;
     BootStateHeader h;
-    PstR hr;
+    char reject[256];
     const uint32_t required =
         (1u<<BS_SEC_CPU)|(1u<<BS_SEC_RAM)|(1u<<BS_SEC_SPAD)|(1u<<BS_SEC_IRQ)|
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
-        (1u<<BS_SEC_SIO)|(1u<<BS_SEC_DIRTY);
+        (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY);
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();
@@ -438,36 +547,14 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
     double apply_spuram_ms = 0.0;
     double apply_other_ms = 0.0;
 
-    if (!file || file_len < BOOT_STATE_HEADER_WIRE_BYTES ||
-        file_len > 64u * 1024u * 1024u) {
+    if (!boot_state_check_buffer(file, file_len, bios_checksum, entry_pc,
+                                 reject, sizeof(reject))) {
+        fprintf(stderr, "boot_state: reject — %s\n",
+                reject[0] ? reject : "unknown");
         return 0;
     }
-
-    /* Parse header from the in-memory image (one I/O, then CPU-side inflate). */
-    pst_r_init(&hr, file, BOOT_STATE_HEADER_WIRE_BYTES);
-    memset(&h, 0, sizeof h);
-    if (!pst_r_u32(&hr, &h.magic) ||
-        !pst_r_u32(&hr, &h.version) ||
-        !pst_r_u32(&hr, &h.bios_checksum) ||
-        !pst_r_u32(&hr, &h.entry_pc) ||
-        !pst_r_u32(&hr, &h.codegen_hash) ||
-        !pst_r_i32(&hr, &h.abi_tag) ||
-        !pst_r_u32(&hr, &h.codegen_ver) ||
-        !pst_r_u32(&hr, &h.section_count) ||
-        !pst_r_u32(&hr, &h.reserved)) {
+    if (!boot_state_parse_header(file, file_len, &h))
         return 0;
-    }
-
-    if (h.magic         != BOOT_STATE_MAGIC               ||
-        h.version       < BOOT_STATE_VERSION_MIN_READ     ||
-        h.version       > BOOT_STATE_VERSION              ||
-        h.bios_checksum != bios_checksum                  ||
-        h.entry_pc      != entry_pc                       ||
-        h.codegen_hash  != (uint32_t)PSX_OVERLAY_CODEGEN_HASH ||
-        h.abi_tag       != (int32_t)PSX_OVERLAY_ABI_TAG   ||
-        h.codegen_ver   != (uint32_t)PSX_OVERLAY_CODEGEN_VER) {
-        return 0;
-    }
 
     cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
     end = file + file_len;
@@ -571,10 +658,16 @@ int boot_state_load(const char* path, uint32_t bios_checksum,
     const double t0 = boot_state_mono_ms();
     double t_after_read;
 
-    if (!f) return 0;
+    if (!f) {
+        fprintf(stderr, "boot_state: reject — missing %s\n",
+                path ? path : "(null)");
+        return 0;
+    }
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
     sz = ftell(f);
     if (sz < (long)BOOT_STATE_HEADER_WIRE_BYTES || sz > 64L * 1024L * 1024L) {
+        fprintf(stderr, "boot_state: reject — bad size %ld for %s\n",
+                sz, path ? path : "(null)");
         fclose(f);
         return 0;
     }

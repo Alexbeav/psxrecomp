@@ -196,6 +196,7 @@ int  psx_netplay_is_host(void) { return 0; }
 int  psx_netplay_request_save(int slot) { (void)slot; return 0; }
 int  psx_netplay_request_load(int slot) { (void)slot; return 0; }
 int  psx_netplay_in_load_barrier(void) { return 0; }
+int  psx_netplay_consume_load_apply_failed(void) { return 0; }
 void psx_netplay_pump(void) {}
 int  psx_netplay_poll_admit(void) { return 1; }
 void psx_netplay_finish_frame(void) {}
@@ -260,9 +261,12 @@ typedef struct {
     int          mc_sync_done;
     int          mc_sync_sent;
     int          local_save_staged;
+    int          local_save_acked;   /* guest: coord reply already sent */
+    uint32_t     save_target_tick;   /* both peers save during this sim_tick */
     int          load_applied_local;
     int          load_ready_replied; /* READY exchanged; synced; stay LOAD_READY until admit */
     int          load_sync_done;     /* hard_resync+prime once at mutual ready */
+    int          load_apply_failed;  /* sticky: staged apply rejected — soft-exit */
     /* Transport / ICE / diag (MotK online path). */
     int          use_ice;
     int          ice_has_turn;
@@ -322,6 +326,7 @@ static void np_enter_load_ready(int slot);
 static void np_commit_load_sync(void);
 static void np_begin_load_apply(int slot);
 static void np_starv_reset(void);
+static void np_maybe_stage_target_save(void);
 
 static int np_file_crc(const uint8_t *data, size_t size, uint32_t *crc_out)
 {
@@ -582,24 +587,30 @@ static void np_guest_handle_probe(void)
     }
 
     if (size == 0) {
-        /* SAVE coordinate local write (admit is not stalled for size==0). */
-        if (!g_np.local_save_staged) {
-            if (savestate_request_save_protocol((int)slot)) {
-                g_np.local_save_staged = 1;
-                printf("psxrecomp: netplay guest save slot=%u — writing sandbox…\n",
-                       (unsigned)slot);
-                fflush(stdout);
-            } else {
-                (void)rnet_session_state_probe_reply(g_np.session, 0);
-                return;
-            }
+        /* SAVE coord: crc carries the shared target sim_tick. Both peers
+         * stage the write when sim reaches that tick (see
+         * np_maybe_stage_target_save) so CRCs match and skip transfer. */
+        if (g_np.xfer != NP_XFER_SAVE_COORD) {
+            g_np.xfer = NP_XFER_SAVE_COORD;
+            g_np.xfer_slot = (int)slot;
+            g_np.save_target_tick = crc;
+            g_np.local_save_staged = 0;
+            g_np.local_save_acked = 0;
+            printf("psxrecomp: netplay guest save slot=%u — armed target "
+                   "sim=%u\n",
+                   (unsigned)slot, (unsigned)crc);
+            fflush(stdout);
         }
         if (savestate_pending()) return;
-        if (!savestate_slot_exists((int)slot)) return;
-        g_np.local_save_staged = 0;
-        (void)rnet_session_state_probe_reply(g_np.session, 1);
-        printf("psxrecomp: netplay guest save slot=%u — local write done\n", (unsigned)slot);
-        fflush(stdout);
+        if (!g_np.local_save_staged || !savestate_slot_exists((int)slot)) return;
+        if (!g_np.local_save_acked) {
+            g_np.local_save_acked = 1;
+            (void)rnet_session_state_probe_reply(g_np.session, 1);
+            printf("psxrecomp: netplay guest save slot=%u — local write done "
+                   "@ target sim (frozen until hash probe)\n",
+                   (unsigned)slot);
+            fflush(stdout);
+        }
         return;
     }
 
@@ -613,18 +624,53 @@ static void np_guest_handle_probe(void)
 
     {
         uint32_t local_sz = 0, local_crc = 0;
+        char reason[192];
         match = np_slot_crc((int)slot, &local_sz, &local_crc) && local_sz == size &&
                 local_crc == crc;
+        /* CRC match of a stale .pst (wrong codegen) is not loadable — ask the
+         * host to transfer. Host also refuses probe start if its own slot is
+         * stale, so this mainly covers guest-sandbox drift. */
+        if (match && op == RNET_STATE_OP_LOAD &&
+            !savestate_slot_compatible((int)slot, reason, sizeof(reason))) {
+            printf("psxrecomp: netplay guest load slot=%u — hash matched but "
+                   "unloadable (%s); requesting transfer\n",
+                   (unsigned)slot, reason[0] ? reason : "incompatible");
+            fflush(stdout);
+            match = 0;
+        }
         (void)rnet_session_state_probe_reply(g_np.session, match);
-        if (match && op == RNET_STATE_OP_LOAD) {
-            if (g_np.xfer != NP_XFER_LOAD_APPLYING && g_np.xfer != NP_XFER_LOAD_READY) {
-                (void)savestate_request_load_protocol((int)slot);
-                np_begin_load_apply((int)slot);
-                printf("psxrecomp: netplay guest load slot=%u — hashes match, applying…\n",
+        if (op == RNET_STATE_OP_SAVE) {
+            if (match) {
+                g_np.xfer = NP_XFER_NONE;
+                printf("psxrecomp: netplay guest save slot=%u — hashes match, "
+                       "skip transfer\n",
                        (unsigned)slot);
                 fflush(stdout);
             } else {
-                /* Retransmit of hash probe — already staging/applying. */
+                /* Host will chunk the authoritative .pst — stay parked. */
+                g_np.xfer = NP_XFER_SAVE_SEND;
+                g_np.xfer_slot = (int)slot;
+            }
+        } else if (op == RNET_STATE_OP_LOAD) {
+            if (match) {
+                if (g_np.xfer != NP_XFER_LOAD_APPLYING &&
+                    g_np.xfer != NP_XFER_LOAD_READY) {
+                    (void)savestate_request_load_protocol((int)slot);
+                    np_begin_load_apply((int)slot);
+                    printf("psxrecomp: netplay guest load slot=%u — hashes match, "
+                           "applying…\n",
+                           (unsigned)slot);
+                    fflush(stdout);
+                }
+            } else {
+                /* Must mark LOAD_SEND or guest keeps the 20s admit timeout and
+                 * BYEs the host mid-TURN transfer. */
+                g_np.xfer = NP_XFER_LOAD_SEND;
+                g_np.xfer_slot = (int)slot;
+                printf("psxrecomp: netplay guest load slot=%u — hash miss, "
+                       "waiting for transfer…\n",
+                       (unsigned)slot);
+                fflush(stdout);
             }
         }
     }
@@ -665,8 +711,11 @@ static void np_host_drive_xfer(void)
         return;
 
     case NP_XFER_SAVE_COORD:
+        /* Host + guest both stage at save_target_tick; wait for local write
+         * and guest ACK before hashing. */
         if (savestate_pending()) return;
-        if (!savestate_slot_exists(g_np.xfer_slot)) return;
+        if (!g_np.local_save_staged || !savestate_slot_exists(g_np.xfer_slot))
+            return;
         if (!rnet_session_state_probe_take_reply(g_np.session, &match))
             return;
         rnet_session_state_probe_finish(g_np.session);
@@ -874,6 +923,23 @@ static void np_drive_load_barrier(void)
         return;
     if (savestate_pending())
         return;
+    if (savestate_take_load_failed()) {
+        /* Stale/mismatched .pst: do not sit in load_apply_done forever. */
+        printf("psxrecomp: netplay load slot=%d — apply failed "
+               "(incompatible or missing .pst) — aborting barrier\n",
+               g_np.xfer_slot);
+        fflush(stdout);
+        if (g_np.session)
+            rnet_session_state_finish(g_np.session, 0);
+        g_np.xfer = NP_XFER_NONE;
+        g_np.load_applied_local = 0;
+        g_np.load_ready_replied = 0;
+        g_np.load_sync_done = 0;
+        g_np.load_apply_failed = 1;
+        if (g_np.session)
+            rnet_session_set_input_send_suppress(g_np.session, 0);
+        return;
+    }
     if (!g_np.load_applied_local && !savestate_take_load_completed())
         return;
 
@@ -1622,6 +1688,9 @@ int psx_netplay_is_host(void)
 
 int psx_netplay_request_save(int slot)
 {
+    uint32_t sim;
+    uint32_t delay;
+    uint32_t target;
     if (!psx_netplay_active() || !rnet_session_is_running(g_np.session))
         return 0;
     if (g_np.local_slot != 0)
@@ -1631,17 +1700,24 @@ int psx_netplay_request_save(int slot)
     if (slot < 0) slot = 0;
     if (slot >= SAVESTATE_SLOTS) slot = SAVESTATE_SLOTS - 1;
 
-    if (!savestate_request_save_protocol(slot))
-        return 1;
-    /* Coord probe (size=0) does not stall admit — both peers must keep
-     * running until savestate_poll writes the .pst, then hash-probe stalls.
-     * STATE_* rides the same UDP/relay path as inputs (LAN hub / server
-     * input relay fan-out). */
-    if (rnet_session_state_probe(g_np.session, RNET_STATE_OP_SAVE, (rnet_u8)slot, 0, 0) != 0)
+    /* Agree a future sim_tick so TURN/coord latency cannot make the host
+     * write tick T while the guest still writes T+k (CRC miss → transfer).
+     * crc field of size==0 probe carries the target tick. */
+    sim = rnet_session_sim_tick(g_np.session);
+    delay = (uint32_t)psx_netplay_input_delay();
+    if (delay < 1u) delay = 1u;
+    target = sim + delay + 2u;
+    if (rnet_session_state_probe(g_np.session, RNET_STATE_OP_SAVE, (rnet_u8)slot, 0,
+                                 target) != 0)
         return 1;
     g_np.xfer = NP_XFER_SAVE_COORD;
     g_np.xfer_slot = slot;
-    printf("psxrecomp: netplay save slot=%d — coordinating local writes…\n", slot);
+    g_np.save_target_tick = target;
+    g_np.local_save_staged = 0;
+    g_np.local_save_acked = 0;
+    printf("psxrecomp: netplay save slot=%d — coordinating local writes "
+           "(target sim=%u, now=%u)…\n",
+           slot, (unsigned)target, (unsigned)sim);
     fflush(stdout);
     return 1;
 }
@@ -1649,6 +1725,7 @@ int psx_netplay_request_save(int slot)
 int psx_netplay_request_load(int slot)
 {
     uint32_t size = 0, crc = 0;
+    char reason[192];
     if (!psx_netplay_active() || !rnet_session_is_running(g_np.session))
         return 0;
     if (g_np.local_slot != 0)
@@ -1657,6 +1734,13 @@ int psx_netplay_request_load(int slot)
         return 1;
     if (slot < 0) slot = 0;
     if (slot >= SAVESTATE_SLOTS) slot = SAVESTATE_SLOTS - 1;
+    if (!savestate_slot_compatible(slot, reason, sizeof(reason))) {
+        printf("psxrecomp: netplay load slot=%d refused — %s "
+               "(resave with this build: Shift+F%d)\n",
+               slot, reason[0] ? reason : "incompatible", slot + 1);
+        fflush(stdout);
+        return 1;
+    }
     if (!np_slot_crc(slot, &size, &crc))
         return 1;
     if (rnet_session_state_probe(g_np.session, RNET_STATE_OP_LOAD, (rnet_u8)slot, size, crc) != 0)
@@ -1664,6 +1748,7 @@ int psx_netplay_request_load(int slot)
     g_np.xfer = NP_XFER_LOAD_PROBE;
     g_np.xfer_slot = slot;
     g_np.load_applied_local = 0;
+    g_np.load_apply_failed = 0;
     printf("psxrecomp: netplay load slot=%d — hash probe (%u bytes)\n", slot, (unsigned)size);
     fflush(stdout);
     return 1;
@@ -1673,12 +1758,16 @@ int psx_netplay_in_load_barrier(void)
 {
     if (!psx_netplay_active())
         return 0;
-    /* Probe/SEND too: large ICE/TURN transfers can exceed the normal admit
-     * stall timeout, and FPS/present must stay frozen until mutual ready. */
-    return (g_np.xfer == NP_XFER_LOAD_PROBE || g_np.xfer == NP_XFER_LOAD_SEND ||
-            g_np.xfer == NP_XFER_LOAD_APPLYING || g_np.xfer == NP_XFER_LOAD_READY)
-               ? 1
-               : 0;
+    /* Any save/load/memcard sync phase — TURN chunk xfers of ~1.4MB need the
+     * 90s budget (20s admit stall was killing SAVE mid-transfer). */
+    return (g_np.xfer != NP_XFER_NONE) ? 1 : 0;
+}
+
+int psx_netplay_consume_load_apply_failed(void)
+{
+    int v = g_np.load_apply_failed;
+    g_np.load_apply_failed = 0;
+    return v;
 }
 
 
@@ -1936,6 +2025,26 @@ void psx_netplay_diag_tick(void)
     }
 }
 
+/* Stage the coord save once sim_tick reaches the agreed target. */
+static void np_maybe_stage_target_save(void)
+{
+    uint32_t sim;
+    if (g_np.xfer != NP_XFER_SAVE_COORD || g_np.local_save_staged)
+        return;
+    if (!g_np.session || !rnet_session_is_running(g_np.session))
+        return;
+    sim = rnet_session_sim_tick(g_np.session);
+    if (sim < g_np.save_target_tick)
+        return;
+    if (!savestate_request_save_protocol(g_np.xfer_slot))
+        return;
+    g_np.local_save_staged = 1;
+    printf("psxrecomp: netplay %s save slot=%d — staging @ sim=%u (target=%u)\n",
+           g_np.local_slot == 0 ? "host" : "guest", g_np.xfer_slot,
+           (unsigned)sim, (unsigned)g_np.save_target_tick);
+    fflush(stdout);
+}
+
 static void np_pump_session(void)
 {
 #if defined(PSX_HAS_LOBBY_CLIENT)
@@ -1945,6 +2054,7 @@ static void np_pump_session(void)
     drain_lobby_signals();
     rnet_session_pump(g_np.session);
     np_guest_handle_probe();
+    np_maybe_stage_target_save();
     np_apply_ready_state();
     np_drive_load_barrier();
     np_host_drive_xfer();
@@ -2038,11 +2148,29 @@ int psx_netplay_poll_admit(void)
     exit_need = np_starv_env_int("PSX_NET_STARVATION_EXIT_FRAMES",
                                  PSX_STARVATION_EXIT_DEFAULT);
 
-    /* Probe/SEND: state_xfer stalls are expected — do not latch starvation. */
+    /* SAVE coord: run admit until both reach save_target_tick and flush the
+     * staged write. After the local .pst exists, freeze (host also freezes
+     * unless the guest tip is behind and still needs catch-up admits). */
+    if (g_np.xfer == NP_XFER_SAVE_COORD) {
+        g_starv.enter_run = 0;
+        g_starv.exit_run = 0;
+        g_starv.latched = 0;
+        g_starv.just_cleared = 0;
+        np_maybe_stage_target_save();
+        if (!g_np.local_save_staged || savestate_pending())
+            return np_try_admit_gameplay();
+        if (g_np.local_slot != 0)
+            return 0; /* guest saved — wait for hash probe */
+        /* Host saved: freeze for same-tick match. If guest is still behind
+         * the target, keep admitting so it can catch up and write. */
+        if (psx_netplay_remote_lead() < 0)
+            return np_try_admit_gameplay();
+        return 0;
+    }
+
     if (g_np.xfer == NP_XFER_LOAD_PROBE || g_np.xfer == NP_XFER_LOAD_SEND ||
         g_np.xfer == NP_XFER_SAVE_PROBE || g_np.xfer == NP_XFER_SAVE_SEND ||
-        g_np.xfer == NP_XFER_SAVE_COORD || g_np.xfer == NP_XFER_MC_PROBE ||
-        g_np.xfer == NP_XFER_MC_SEND) {
+        g_np.xfer == NP_XFER_MC_PROBE || g_np.xfer == NP_XFER_MC_SEND) {
         g_starv.enter_run = 0;
         g_starv.exit_run = 0;
         g_starv.latched = 0;
@@ -2209,6 +2337,29 @@ void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
         /* LOAD_READY never calls try_admit, so last_stall stays "ok" — surface
          * the app barrier phase (+ transfer progress) instead. */
         switch (g_np.xfer) {
+        case NP_XFER_SAVE_COORD:
+            snprintf(phase, sizeof(phase), "save_coord");
+            break;
+        case NP_XFER_SAVE_PROBE:
+            snprintf(phase, sizeof(phase), "save_probe");
+            break;
+        case NP_XFER_SAVE_SEND:
+            if (st.state_bytes_total > 0)
+                snprintf(phase, sizeof(phase), "save_xfer_%u/%u",
+                         (unsigned)st.state_bytes_acked, (unsigned)st.state_bytes_total);
+            else
+                snprintf(phase, sizeof(phase), "save_xfer");
+            break;
+        case NP_XFER_MC_PROBE:
+            snprintf(phase, sizeof(phase), "mc_probe");
+            break;
+        case NP_XFER_MC_SEND:
+            if (st.state_bytes_total > 0)
+                snprintf(phase, sizeof(phase), "mc_xfer_%u/%u",
+                         (unsigned)st.state_bytes_acked, (unsigned)st.state_bytes_total);
+            else
+                snprintf(phase, sizeof(phase), "mc_xfer");
+            break;
         case NP_XFER_LOAD_PROBE:
             snprintf(phase, sizeof(phase), "load_probe");
             break;

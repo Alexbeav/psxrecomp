@@ -65,6 +65,12 @@ void gl_renderer_flush_cpu_uploads(void);
  * reloaded identical frame still reaches the window (double/triple buffer). */
 void gl_renderer_invalidate_present(void);
 
+/* After savestate restore: push the CPU VRAM mirror into the GL FBO. Needed
+ * when the load happened while GP1 depth24 was on — the normal path skips
+ * framebuffer-sized uploads, which also skipped the full-VRAM boot_state
+ * blit and left post-FMV menus without texture pages. */
+void gl_renderer_restage_vram_after_savestate(void);
+
 /* Post-savestate freeze probe: skip/swap/dirty-mark counters (GL present path).
  * take() returns deltas since the previous take/reset. Safe no-ops when GL is
  * inactive. rect_dirty tests the current present-tile dirty bits. */

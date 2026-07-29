@@ -2545,6 +2545,12 @@ int gpu_depth24_present_hold_tick(void) {
     return 1;
 }
 
+void gpu_depth24_on_savestate_loaded(void) {
+    /* Hold skips Swap — after restore we want the restored VRAM visible now.
+     * Upload span / prev_h were restored from the GPU snap. */
+    s_d24_present_hold = 0;
+}
+
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
  *
  * PRESENT-TIME ONLY. This sits on the 15-bit-scanout -> RGB888 conversion that
@@ -4999,6 +5005,8 @@ static int gpu_snap_emit(PstW *w) {
     WH(vram_write_col); WH(vram_write_row); WU(vram_write_remaining);
     WI(vram_read_active); WH(vram_read_x); WH(vram_read_y); WH(vram_read_w); WH(vram_read_h);
     WH(vram_read_col); WH(vram_read_row);
+    /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
+    WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
 #undef WU
 #undef WI
 #undef WH
@@ -5031,6 +5039,7 @@ static int gpu_snap_parse(PstR *r) {
     RH(vram_write_col); RH(vram_write_row); RU(vram_write_remaining);
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
+    RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
 #undef RU
 #undef RI
 #undef RH

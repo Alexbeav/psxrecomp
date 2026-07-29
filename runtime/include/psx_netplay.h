@@ -103,8 +103,13 @@ int  psx_netplay_is_host(void);
 int  psx_netplay_request_save(int slot);
 int  psx_netplay_request_load(int slot);
 
-/* 1 while load probe/transfer/apply/ready owns the clock (no FPS / no present). */
+/* 1 while a save/load/memcard probe, chunk transfer, or post-load ready owns
+ * the clock (long admit timeout, no peer-silence kick, FPS suppressed). */
 int  psx_netplay_in_load_barrier(void);
+
+/* 1 once after a staged netplay load apply failed (stale .pst / mismatch).
+ * Clears. Caller should soft-exit to lobby — do not keep waiting on the barrier. */
+int  psx_netplay_consume_load_apply_failed(void);
 
 /* Stage local pad for the current sim tick. Ignored once that tick is latched. */
 void psx_netplay_stage_local(const PsxNetPad *pad);
