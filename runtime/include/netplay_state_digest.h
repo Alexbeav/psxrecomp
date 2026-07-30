@@ -9,6 +9,8 @@
  * VRAM while core still matches; pin zlib sizes were the symptom).
  * CDROM digest: live dig audit + folded into baseline dig_c with aux
  * (matched core/av/aux with divergent CD was loading doomed Replay snaps).
+ * Baseline dig_c (ext) also folds scratchpad + DMA + SIO — pin zlib skew
+ * with matched core/av/aux/cd was ungated bus state.
  * Master = crc(core, cd) for combined logging only.
  */
 
@@ -40,7 +42,10 @@ uint32_t netplay_av_digest(void); /* GPU + VRAM */
 uint32_t netplay_spu_digest(void);
 uint32_t netplay_mdec_digest(void);
 uint32_t netplay_aux_digest(void); /* crc(spu, mdec) */
-/* Baseline dig_c: crc(aux, cd). Refuse Replay when CD FSM diverged. */
+uint32_t netplay_spad_digest(void); /* 1 KiB scratchpad */
+uint32_t netplay_dma_digest(void);
+uint32_t netplay_sio_digest(void);
+/* Baseline dig_c: crc(aux, cd, spad, dma, sio). Refuse doomed Replay. */
 uint32_t netplay_baseline_ext_digest(void);
 
 #ifdef __cplusplus

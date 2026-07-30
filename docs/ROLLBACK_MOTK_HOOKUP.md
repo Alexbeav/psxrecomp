@@ -107,11 +107,12 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] Diag: `rb live dig` every 32 ticks + `rb FIRST CORE DIVERGE` (FRAME_COMMIT
       mismatch) with core partitions (cpu/clk/tim/ram/dirty) + av/cd — find when
       peers fork before the first doomed baseline abort
-- [x] Baseline `dig_c` = **ext** = crc(aux, cd) — gate before Replay; matched
-      core/av/aux with divergent CD (pin zlib ~200KB) was doomed resim. Wire
-      still dig_c; logs print `ext=` + raw `cd=`/`aux=`. Zero host
-      `last_sector_frame` on CD snap wire. mid-Replay FRAME_COMMIT abort on
-      core mismatch (no false POST); `rb audit fin` logs parts + aux
+- [x] Baseline `dig_c` = **ext** = crc(aux, cd, spad, dma, sio) — gate before
+      Replay; matched core/av/aux with divergent CD/bus (pin zlib skew) was
+      doomed resim. Wire still dig_c; logs print `ext=` + raw
+      `cd=`/`aux=`/`spad=`/`dma=`/`sio=`. Zero host `last_sector_frame` on CD
+      snap wire. mid-Replay FRAME_COMMIT abort on core mismatch (no false
+      POST); `rb audit fin` + abort dump parts + bus digests + `cpu-split`
 - [x] Replay entry: `hc_prime_after(load-1)` drops live invent commits (false
       `resim core diverge`); first `ready=1` baseline burst bypasses rate limit
       (initiator was ready-timeout while follower solo-Replayed)

@@ -22,6 +22,13 @@ extern uint8_t* spu_get_ram_ptr(void);
 extern uint32_t spu_get_ram_bytes(void);
 extern uint32_t mdec_snapshot_bytes(void);
 extern void     mdec_snapshot_write(uint8_t *p);
+extern uint8_t *memory_get_scratchpad_ptr(void);
+extern uint32_t dma_snapshot_bytes(void);
+extern void     dma_snapshot_write(uint8_t *p);
+extern uint32_t sio_snapshot_bytes(void);
+extern void     sio_snapshot_write(uint8_t *p);
+
+#define NP_SPAD_SIZE 1024u
 
 static uint32_t digest_module(uint32_t (*bytes_fn)(void), void (*write_fn)(uint8_t *))
 {
@@ -204,13 +211,38 @@ uint32_t netplay_aux_digest(void)
     return crc ^ 0xFFFFFFFFu;
 }
 
+uint32_t netplay_spad_digest(void)
+{
+    const uint8_t *sp = memory_get_scratchpad_ptr();
+    uint32_t crc = 0xFFFFFFFFu;
+    if (sp)
+        crc = crc32_update(crc, sp, NP_SPAD_SIZE);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t netplay_dma_digest(void)
+{
+    return digest_module(dma_snapshot_bytes, dma_snapshot_write);
+}
+
+uint32_t netplay_sio_digest(void)
+{
+    return digest_module(sio_snapshot_bytes, sio_snapshot_write);
+}
+
 uint32_t netplay_baseline_ext_digest(void)
 {
     uint32_t crc = 0xFFFFFFFFu;
     uint32_t aux = netplay_aux_digest();
     uint32_t cd = netplay_cdrom_digest();
+    uint32_t spad = netplay_spad_digest();
+    uint32_t dma = netplay_dma_digest();
+    uint32_t sio = netplay_sio_digest();
     crc = crc32_update(crc, (const uint8_t *)&aux, sizeof(aux));
     crc = crc32_update(crc, (const uint8_t *)&cd, sizeof(cd));
+    crc = crc32_update(crc, (const uint8_t *)&spad, sizeof(spad));
+    crc = crc32_update(crc, (const uint8_t *)&dma, sizeof(dma));
+    crc = crc32_update(crc, (const uint8_t *)&sio, sizeof(sio));
     return crc ^ 0xFFFFFFFFu;
 }
 

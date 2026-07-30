@@ -108,7 +108,7 @@ static uint32_t snap_interval(void)
 static int g_local_baseline_sent;
 static uint32_t g_local_baseline_digest;
 static uint32_t g_local_baseline_av;
-static uint32_t g_local_baseline_aux; /* dig_c = crc(aux, cd) on wire */
+static uint32_t g_local_baseline_aux; /* dig_c = ext = crc(aux,cd,spad,dma,sio) */
 static int g_peer_baseline_ok;
 static uint32_t g_peer_baseline_digest;
 static uint32_t g_peer_baseline_av;
@@ -860,8 +860,8 @@ static void maybe_send_baseline(void)
         netplay_core_digest_parts(c, &parts);
         g_local_baseline_digest = parts.core;
         g_local_baseline_av = netplay_av_digest();
-        /* dig_c folds SPU+MDEC+CD — matched aux with divergent CD was the
-         * MotK post-FMV doomed-Replay pattern (pin zlib ~200KB apart). */
+        /* dig_c folds SPU+MDEC+CD+spad+DMA+SIO — matched core/av with
+         * divergent bus/scratch was doomed Replay (pin zlib skew). */
         g_local_baseline_aux = netplay_baseline_ext_digest();
         g_local_baseline_sent = 1;
         g_baseline_handshake_ms = rb_mono_ms();
@@ -870,7 +870,7 @@ static void maybe_send_baseline(void)
         fprintf(stderr,
                 "psxrecomp: rb baseline sent load=%u core=%08x av=%08x ext=%08x cd=%08x "
                 "(burst=%d) parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
-                "spu=%08x mdec=%08x aux=%08x\n",
+                "spu=%08x mdec=%08x aux=%08x spad=%08x dma=%08x sio=%08x\n",
                 (unsigned)rnet_rb_get_load_tick(g_rb),
                 (unsigned)g_local_baseline_digest,
                 (unsigned)g_local_baseline_av, (unsigned)g_local_baseline_aux,
@@ -879,7 +879,9 @@ static void maybe_send_baseline(void)
                 (unsigned)parts.timers, (unsigned)parts.ram,
                 (unsigned)parts.dirty, (unsigned)netplay_spu_digest(),
                 (unsigned)netplay_mdec_digest(),
-                (unsigned)netplay_aux_digest());
+                (unsigned)netplay_aux_digest(),
+                (unsigned)netplay_spad_digest(), (unsigned)netplay_dma_digest(),
+                (unsigned)netplay_sio_digest());
         fflush(stderr);
         return;
     }
@@ -915,6 +917,9 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     uint32_t av = netplay_av_digest();
     uint32_t cd = netplay_cdrom_digest();
     uint32_t aux = 0u;
+    uint32_t spad = 0u;
+    uint32_t dma = 0u;
+    uint32_t sio = 0u;
     int want_parts = (tag && tag[0] == 'f'); /* "fin" — partition breakdown */
     int present_edge = want_parts; /* fin is at vblank present */
     memset(&parts, 0, sizeof(parts));
@@ -934,6 +939,9 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
         if (want_parts) {
             netplay_core_digest_parts(&dig_cpu, &parts);
             aux = netplay_aux_digest();
+            spad = netplay_spad_digest();
+            dma = netplay_dma_digest();
+            sio = netplay_sio_digest();
             dig = netplay_master_digest(&dig_cpu);
         } else {
             parts.core = netplay_core_digest(&dig_cpu);
@@ -954,10 +962,12 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     }
     if (want_parts) {
         fprintf(stderr,
-                " | cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x aux=%08x",
+                " | cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x aux=%08x "
+                "spad=%08x dma=%08x sio=%08x",
                 (unsigned)parts.cpu, (unsigned)parts.clock_irq,
                 (unsigned)parts.timers, (unsigned)parts.ram,
-                (unsigned)parts.dirty, (unsigned)aux);
+                (unsigned)parts.dirty, (unsigned)aux, (unsigned)spad,
+                (unsigned)dma, (unsigned)sio);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
@@ -1005,13 +1015,14 @@ static void maybe_enter_replay(void)
         return;
     }
     if (g_peer_baseline_aux != g_local_baseline_aux) {
-        char why[192];
+        char why[256];
         snprintf(why, sizeof(why),
                  "baseline ext mismatch local=%08x peer=%08x "
-                 "(aux=%08x cd=%08x spu=%08x mdec=%08x)",
+                 "(aux=%08x cd=%08x spad=%08x dma=%08x sio=%08x)",
                  (unsigned)g_local_baseline_aux, (unsigned)g_peer_baseline_aux,
                  (unsigned)netplay_aux_digest(), (unsigned)netplay_cdrom_digest(),
-                 (unsigned)netplay_spu_digest(), (unsigned)netplay_mdec_digest());
+                 (unsigned)netplay_spad_digest(), (unsigned)netplay_dma_digest(),
+                 (unsigned)netplay_sio_digest());
         abort_episode_realign(why);
         return;
     }
@@ -1809,6 +1820,7 @@ int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
 {
     char why[128];
     uint32_t load;
+    CPUState *c;
     if (!g_rb || !rnet_rb_is_active(g_rb))
         return 0;
     if (rnet_rb_get_phase(g_rb) != nRNetRbPhaseReplay &&
@@ -1823,7 +1835,27 @@ int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
              "resim core diverge sim=%u local=%08x peer=%08x",
              (unsigned)tick, (unsigned)local_core, (unsigned)peer_core);
     fprintf(stderr, "psxrecomp: rb ABORT — %s (no false POST commit)\n", why);
-    fflush(stderr);
+    /* GPR-only forks with matched RAM: dump bus digests + cpu-split so logs
+     * show whether scratchpad/DMA/SIO already diverged before dig_cpu. */
+    c = cpu();
+    if (c) {
+        NetplayCoreParts parts;
+        CPUState dig_cpu;
+        log_cpu_digest_split(c, "abort");
+        psx_netplay_rb_cpu_for_present_digest(&dig_cpu, c);
+        netplay_core_digest_parts(&dig_cpu, &parts);
+        fprintf(stderr,
+                "psxrecomp: rb abort-parts sim=%u cpu=%08x clk=%08x tim=%08x "
+                "ram=%08x dirty=%08x spad=%08x dma=%08x sio=%08x aux=%08x "
+                "cd=%08x av=%08x\n",
+                (unsigned)tick, (unsigned)parts.cpu, (unsigned)parts.clock_irq,
+                (unsigned)parts.timers, (unsigned)parts.ram,
+                (unsigned)parts.dirty, (unsigned)netplay_spad_digest(),
+                (unsigned)netplay_dma_digest(), (unsigned)netplay_sio_digest(),
+                (unsigned)netplay_aux_digest(), (unsigned)netplay_cdrom_digest(),
+                (unsigned)netplay_av_digest());
+        fflush(stderr);
+    }
     rnet_rb_on_post_diverge(g_rb);
     abort_episode_realign(why);
     return 1;
