@@ -50,12 +50,14 @@ typedef struct PsxNetplayConfig {
     int         player_count;  /* seated players at launch (0 = use slot_count) */
     int         input_player;  /* host device index; -1 = auto */
     int         input_delay;
+    /* Rollback invent runway (phase_lock / P). Clamped 2..16. Unused in delay-sync. */
+    int         input_prediction;
     int         force_input_relay; /* 1 = lobby-server UDP input relay */
     int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
     /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
      * Env PSX_NET_TRANSPORT=lan|ice overrides. */
     int         transport;
-    /* 0 = delay-sync (default), 1 = rollback invent/contract.
+    /* 0 = delay-sync, 1 = rollback invent/contract (lobby default on).
      * Env PSX_NET_MODE=delay|rollback overrides. */
     int         rollback;
     uint32_t    session_id;

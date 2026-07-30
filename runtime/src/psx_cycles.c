@@ -409,6 +409,11 @@ static void idle_snapshot_regs(const CPUState *cpu) {
 }
 
 static int idle_skip_on(void) {
+    /* Cycle-skip is a host enhancement; under netplay it forks peers (detector
+     * streak / skip quanta are not part of the shared snap). */
+    extern int psx_netplay_active(void);
+    if (psx_netplay_active())
+        return 0;
     if (g_idle_skip_enabled < 0) {
         /* No game config reached this process (for example a BIOS-only
          * runtime). Keep the enhancement inert unless the environment opts in;

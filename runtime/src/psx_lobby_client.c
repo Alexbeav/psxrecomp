@@ -834,6 +834,7 @@ static void match_caps_clear(PsxLobbyMatchCaps *c)
     c->aspect_num = 4;
     c->aspect_den = 3;
     c->input_delay = 2;
+    c->input_prediction = 4;
 }
 
 static int json_extract_object(const char *json, const char *key, char *out, size_t out_cap);
@@ -1139,9 +1140,13 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     out->auto_skip_fmv = json_get_bool(obj, "auto_skip_fmv", 0);
     out->input_delay = json_get_int(obj, "input_delay", 2);
     if (out->input_delay < 0) out->input_delay = 0;
-    if (out->input_delay > 16) out->input_delay = 16;
+    if (out->input_delay > 20) out->input_delay = 20;
+    out->input_prediction = json_get_int(obj, "input_prediction", 4);
+    if (out->input_prediction < 2) out->input_prediction = 2;
+    if (out->input_prediction > 16) out->input_prediction = 16;
     out->force_input_relay = json_get_bool(obj, "force_input_relay", 0);
     out->force_turn = json_get_bool(obj, "force_turn", 0);
+    /* Absent field → delay-sync (older hosts). New hosts always publish explicit. */
     out->rollback = json_get_bool(obj, "rollback", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
     out->valid = 1;
@@ -1171,14 +1176,16 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
     return snprintf(dst, dst_cap,
                     ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
                     "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
-                    "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"force_input_relay\":%s,"
-                    "\"force_turn\":%s,\"rollback\":%s,\"language\":\"%s\"}",
+                    "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
+                    "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
+                    "\"language\":\"%s\"}",
                     caps->aspect_num, caps->aspect_den,
                     caps->turbo_loads ? "true" : "false",
                     caps->bios_hle ? "true" : "false",
                     caps->fast_boot ? "true" : "false",
                     caps->auto_skip_fmv ? "true" : "false",
                     caps->input_delay,
+                    caps->input_prediction,
                     caps->force_input_relay ? "true" : "false",
                     caps->force_turn ? "true" : "false",
                     caps->rollback ? "true" : "false",

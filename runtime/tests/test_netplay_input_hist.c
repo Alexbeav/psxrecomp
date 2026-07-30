@@ -65,31 +65,48 @@ int main(void)
     CHECK(f.buttons == 0xFDFFu, "buttons");
     CHECK(f.stick_x == 40, "stick_x");
     CHECK(f.stick_y == 0, "stick_y");
+    CHECK(f.analog == 1u, "analog flag from pad");
     CHECK(!f.is_predicted && f.is_valid, "local auth flags");
 
     netplay_ih_frame_to_pad(&f, &pad2);
     CHECK(pad2.buttons == 0xFDFFu, "roundtrip buttons");
     CHECK(pad2.lx == (uint8_t)(0x80 + 40), "roundtrip lx");
+    CHECK(pad2.analog == 1u, "roundtrip analog");
+
+    /* Digital MotK path must not become DualShock through hist. */
+    {
+        RNetRbFrame dig;
+        pad.analog = 0;
+        pad.lx = pad.ly = 0x80;
+        netplay_ih_pad_to_frame(&pad, 9, 0, &dig);
+        CHECK(dig.analog == 0u, "digital frame");
+        netplay_ih_frame_to_pad(&dig, &pad2);
+        CHECK(pad2.analog == 0u, "digital roundtrip");
+    }
 
     CHECK(netplay_ih_put(&h, 0, &f), "put local");
     CHECK(netplay_ih_get(&h, 0, 10, &got), "get local");
     CHECK(got.stick_x == 40, "get stick");
+    CHECK(got.analog == 1u, "get analog");
 
-    /* Invent remote at 11 with no history → neutral. */
+    /* Invent remote at 11 with no history → neutral digital. */
     CHECK(netplay_ih_invent_hold_last(&h, 1, 11, &got), "invent neutral");
     CHECK(got.is_predicted && got.buttons == 0xFFFFu, "invent predicted neutral");
     CHECK(got.stick_x == 0 && got.stick_y == 0, "invent sticks zero");
+    CHECK(got.analog == 0u, "invent neutral digital");
     CHECK(h.invent_count == 1u, "invent count");
 
-    /* Store auth remote at 11 then invent 12 → hold-last. */
+    /* Store auth remote at 11 then invent 12 → hold-last (incl. analog). */
     f = got;
     f.tick = 11;
     f.buttons = 0xFBFFu;
     f.stick_x = -20;
+    f.analog = 1u;
     f.is_predicted = 0;
     CHECK(netplay_ih_put(&h, 1, &f), "put auth remote");
     CHECK(netplay_ih_invent_hold_last(&h, 1, 12, &got), "invent hold-last");
     CHECK(got.buttons == 0xFBFFu && got.stick_x == -20, "held buttons/stick");
+    CHECK(got.analog == 1u, "held analog");
     CHECK(got.is_predicted, "hold-last predicted");
 
     /* Promote replaces predicted. */

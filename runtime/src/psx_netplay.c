@@ -33,6 +33,8 @@
 #include "netplay_state_digest.h"
 #include "psx_netplay_rb.h"
 #include "cpu_state.h"
+#include "interrupts.h"
+#include "psx_scheduler.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
 #include "psx_lobby_client.h"
 #endif
@@ -70,6 +72,7 @@ void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
     cfg->player_count = 0;
     cfg->input_player = -1;
     cfg->input_delay = 2;
+    cfg->input_prediction = 4;
     cfg->force_input_relay = 0;
     cfg->force_turn = 0;
     cfg->transport = 0;
@@ -99,6 +102,8 @@ void psx_netplay_apply_env(PsxNetplayConfig *cfg)
     if (v && v[0]) cfg->input_player = (int)strtol(v, NULL, 10);
     v = getenv("PSX_NET_DELAY");
     if (v && v[0]) cfg->input_delay = (int)strtol(v, NULL, 10);
+    v = getenv("PSX_NET_PREDICTION");
+    if (v && v[0]) cfg->input_prediction = (int)strtol(v, NULL, 10);
     cfg->session_id = env_u("PSX_NET_SESSION_ID", cfg->session_id);
     v = getenv("PSX_NET_BIND");
     if (v && v[0]) {
@@ -169,8 +174,9 @@ void psx_netplay_release_pads(void)
     for (i = 0; i < n; ++i) {
         sio_set_pad_state_slot(i, 0xFFFFu);
         sio_set_pad_sticks(i, 0x80, 0x80, 0x80, 0x80);
-        /* Tap slots stay digital; standalone port may request DualShock. */
-        sio_request_pad_type(i, sio_pad_on_multitap(i) ? 0 : 1);
+        /* Linking placeholder: digital until tip/hist publishes the real type.
+         * Forcing DualShock here broke MotK (game.toml default_mode=digital). */
+        sio_request_pad_type(i, 0);
     }
 }
 
@@ -296,6 +302,7 @@ typedef struct {
     int          force_input_relay;
     int          is_host;
     int          input_delay;
+    int          input_prediction; /* invent lead cap (P); rollback only */
     uint32_t     session_id;
     uint32_t     frames_finished;
     uint32_t     diag_session;
@@ -337,7 +344,7 @@ static void np_emit_frame_commit(uint32_t tick)
 {
     uint32_t digest;
     if (!g_np.cpu || !g_np.session) return;
-    digest = netplay_master_digest(g_np.cpu);
+    digest = netplay_core_digest(g_np.cpu);
     netplay_hc_note_local(&g_np.hc, tick, digest);
     (void)rnet_session_send_rb_frame_commit(g_np.session, tick, digest);
 }
@@ -1145,7 +1152,7 @@ static void np_publish_hist_sio(uint32_t tick)
 }
 
 static void np_rb_apply_frame_slot(int slot, uint32_t tick, uint16_t buttons,
-                                   int8_t sx, int8_t sy)
+                                   int8_t sx, int8_t sy, uint8_t analog)
 {
     RNetRbFrame row;
     PsxNetPad pad;
@@ -1155,6 +1162,7 @@ static void np_rb_apply_frame_slot(int slot, uint32_t tick, uint16_t buttons,
     row.buttons = buttons;
     row.stick_x = sx;
     row.stick_y = sy;
+    row.analog = analog ? 1u : 0u;
     row.is_valid = 1;
     netplay_ih_frame_to_pad(&row, &pad);
     force_session_pads_connected(g_np.slot_count);
@@ -1180,12 +1188,32 @@ static void np_rb_bind_and_start(void)
     psx_netplay_rb_start();
 }
 
+/* MotK digital (active-low): wire only releases buttons vs invent; sticks equal.
+ * Menu press/release thrash opened an episode every edge — soft-promote releases. */
+static int np_digital_release_only(const RNetInputContractFrame *pub,
+                                   const RNetInputContractFrame *wire)
+{
+    uint16_t newly_pressed;
+    uint16_t newly_released;
+    if (!pub || !wire)
+        return 0;
+    if (pub->stick_x != wire->stick_x || pub->stick_y != wire->stick_y)
+        return 0;
+    if (pub->buttons == wire->buttons)
+        return 0;
+    newly_pressed = (uint16_t)((uint16_t)(~wire->buttons) & pub->buttons);
+    newly_released = (uint16_t)((uint16_t)(~pub->buttons) & wire->buttons);
+    return newly_pressed == 0 && newly_released != 0;
+}
+
 /* Late authoritative wire vs published predicted rows → promote or queue rewind. */
 static void np_rollback_reconcile_wire(void)
 {
     rnet_u32 sim;
     rnet_u32 t;
     int slot;
+    int promote_sweep;
+    int cooldown;
     RNetInputContractParams params;
     NpHcGateCtx gate_ctx;
     RNetInputContractHostGates gates;
@@ -1199,6 +1227,8 @@ static void np_rollback_reconcile_wire(void)
     gates.ctx = &gate_ctx;
     gates.hash_confirm_promote = np_hash_confirm_promote_gate;
 
+    promote_sweep = psx_netplay_rb_take_promote_sweep();
+    cooldown = psx_netplay_rb_rewind_suppressed();
     sim = rnet_session_sim_tick(g_np.session);
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) continue;
@@ -1210,30 +1240,51 @@ static void np_rollback_reconcile_wire(void)
             RNetInputContractDecision d;
             uint8_t completed;
             PsxNetPad pad;
+            rnet_u32 wire;
+            rnet_u8 delay_u8;
 
             if (!netplay_ih_get(&g_np.ih, slot, t, &published))
                 continue;
             if (!published.is_predicted)
                 continue;
-            if (!rnet_session_peek_remote_input(g_np.session, slot, t, &sample))
+            /* Hist is sim-keyed; tip rings are wire-keyed (sim + D). */
+            delay_u8 = (rnet_u8)(g_np.input_delay < 0 ? 0
+                                : (g_np.input_delay > 255 ? 255 : g_np.input_delay));
+            wire = rnet_wire_tick_from_sim(t, delay_u8);
+            if (!rnet_session_peek_remote_input(g_np.session, slot, wire, &sample))
                 continue;
 
             decode_pad(&sample, &pad);
             netplay_ih_pad_to_frame(&pad, t, 0, &wire_frame);
             netplay_ih_frame_to_contract(&published, &pub_c);
             netplay_ih_frame_to_contract(&wire_frame, &wire_c);
+            /* After commit/realign: flush invent poison without another episode. */
+            if (promote_sweep || cooldown) {
+                (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                continue;
+            }
             gate_ctx.tick = t;
             completed = (sim > t) ? 1u : 0u;
             d = rnet_input_contract_stick_replace_decide(
                 &pub_c, &wire_c, completed, &params, &gates);
             if (rnet_input_contract_decision_is_rewind(d)) {
+                if (np_digital_release_only(&pub_c, &wire_c)) {
+                    (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                    continue;
+                }
                 if (!g_np.pending_rewind) {
                     g_np.pending_rewind = 1;
                     g_np.pending_rewind_tick = t;
                     g_np.pending_rewind_slot = slot;
                     g_np.ih.rewind_count++;
                     if (g_np.rollback) {
-                        psx_netplay_rb_begin_rewind(t, slot);
+                        /* Only park the guest when an episode actually opens. */
+                        if (psx_netplay_rb_begin_rewind(t, slot))
+                            g_np.needs_advance = 0;
+                        else {
+                            /* No snap / cooldown / already active — promote wire. */
+                            (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                        }
                         g_np.pending_rewind = 0;
                     }
                 }
@@ -1244,21 +1295,36 @@ static void np_rollback_reconcile_wire(void)
     }
 }
 
-/* Rollback admit: tip + invent remotes; never stall on missing remote. */
+/* Rollback admit: tip + invent remotes within P of remote tip; stall outside.
+ * BattleShip phase_lock: invent only when wire_need <= highest_remote + P. */
 static int np_try_admit_rollback(void)
 {
     rnet_u32 sim = rnet_session_sim_tick(g_np.session);
     RNetInputSample sample;
     RNetRbFrame row;
     PsxNetPad pad;
+    RNetSessionStats st;
+    rnet_u8 delay_u8;
+    rnet_u32 wire;
     int slot;
+    int pred;
 
     if (!rnet_session_prepare_local_tip(g_np.session, sim))
         return 0;
 
+    delay_u8 = (rnet_u8)(g_np.input_delay < 0 ? 0
+                        : (g_np.input_delay > 255 ? 255 : g_np.input_delay));
+    wire = rnet_wire_tick_from_sim(sim, delay_u8);
+    pred = g_np.input_prediction;
+    if (pred < 2) pred = 2;
+    if (pred > 16) pred = 16;
+
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(g_np.session, &st);
+
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) {
-            if (rnet_session_peek_input(g_np.session, slot, sim, &sample)) {
+            if (rnet_session_peek_input(g_np.session, slot, wire, &sample)) {
                 decode_pad(&sample, &pad);
                 netplay_ih_pad_to_frame(&pad, sim, 0, &row);
                 (void)netplay_ih_put(&g_np.ih, slot, &row);
@@ -1269,7 +1335,7 @@ static int np_try_admit_rollback(void)
                 memset(&pad, 0, sizeof(pad));
                 pad.buttons = 0xFFFFu;
                 pad.lx = pad.ly = pad.rx = pad.ry = 0x80u;
-                pad.analog = 1;
+                pad.analog = 0; /* MotK digital default; never invent DualShock */
                 pad.connected = 1;
                 netplay_ih_pad_to_frame(&pad, sim, 0, &row);
                 (void)netplay_ih_put(&g_np.ih, slot, &row);
@@ -1277,11 +1343,14 @@ static int np_try_admit_rollback(void)
             continue;
         }
 
-        if (rnet_session_peek_remote_input(g_np.session, slot, sim, &sample)) {
+        if (rnet_session_peek_remote_input(g_np.session, slot, wire, &sample)) {
             decode_pad(&sample, &pad);
             netplay_ih_pad_to_frame(&pad, sim, 0, &row);
             (void)netplay_ih_put(&g_np.ih, slot, &row);
         } else {
+            /* Stall when invent would run more than P ahead of remote tip. */
+            if (wire > st.highest_remote_wire + (rnet_u32)pred)
+                return 0;
             (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
         }
     }
@@ -1762,15 +1831,28 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     g_np.pending_rewind = 0;
     g_np.pending_rewind_tick = 0;
     g_np.pending_rewind_slot = 0;
-    if (g_np.rollback)
-        np_rb_bind_and_start();
+    /* Seat / delay / integrity MUST be live before rb_start — RNetRbSession
+     * freezes local_slot + slot_count at create. Starting with zeroed g_np made
+     * every peer seal as slot 0 and export the wrong seat (VS-select hang). */
     g_np.use_ice = use_ice ? 1 : 0;
     g_np.slot_count = (int)rcfg.slot_count;
     g_np_slot_count = g_np.slot_count;
     g_np.local_slot = (int)rcfg.local_slot;
     g_np.input_player = in_player;
+    g_np.input_delay = (int)rcfg.input_delay;
+    g_np.input_prediction = cfg->input_prediction;
+    if (g_np.input_prediction < 2) g_np.input_prediction = 2;
+    if (g_np.input_prediction > 16) g_np.input_prediction = 16;
+    {
+        uint32_t bios = 0, entry = 0;
+        savestate_get_integrity(&bios, &entry);
+        g_np.bios_checksum = bios;
+        g_np.entry_pc = entry;
+    }
     if (g_np.rollback) {
-        printf("psxrecomp: netplay mode=rollback (invent + input contract)\n");
+        np_rb_bind_and_start();
+        printf("psxrecomp: netplay mode=rollback (D=%d P=%d invent+contract)\n",
+               g_np.input_delay, g_np.input_prediction);
         fflush(stdout);
     }
     if (g_np.slot_count >= 3)
@@ -1789,7 +1871,6 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     g_np.load_applied_local = 0;
     g_np.guest_sandbox = 0;
     g_np.force_input_relay = cfg->force_input_relay ? 1 : 0;
-    g_np.input_delay = (int)rcfg.input_delay;
     g_np.session_id = rcfg.session_id;
     g_np.is_host = (g_np.local_slot == 0) ? 1 : 0;
     g_np.frames_finished = 0;
@@ -2386,17 +2467,25 @@ int psx_netplay_poll_admit(void)
         return 0;
     }
 
+    /* Rollback episode OR pending Live realign: the live needs_advance latch
+     * must not bypass rb_try_admit. Resim finish_frame never cleared
+     * g_np.needs_advance, so a follower that entered an episode mid-tick spun
+     * forever at uncapped FPS without ever arming rb finish_frame. Also stall
+     * while a post-abort realign load is queued (episode already inactive). */
+    if (g_np.rollback && g_np.xfer == NP_XFER_NONE &&
+        (psx_netplay_rb_active() || psx_netplay_rb_load_pending())) {
+        g_np.needs_advance = 0;
+        return psx_netplay_rb_try_admit();
+    }
+
     /* Already published this tick and waiting for finish_frame — do not
      * re-admit / re-sample (would desync the delay rings). */
     if (g_np.needs_advance) return 1;
 
     /* Rollback gameplay: invent missing remotes; skip delay-sync try_admit.
      * Save/load/memcard xfer paths above still use delay-sync admit. */
-    if (g_np.rollback && g_np.xfer == NP_XFER_NONE) {
-        if (psx_netplay_rb_active())
-            return psx_netplay_rb_try_admit();
+    if (g_np.rollback && g_np.xfer == NP_XFER_NONE)
         return np_try_admit_rollback();
-    }
 
     sim = rnet_session_sim_tick(g_np.session);
     enter_need = np_starv_env_int("PSX_NET_STARVATION_ENTER_FRAMES",
@@ -2514,6 +2603,7 @@ void psx_netplay_finish_frame(void)
     if (g_np.rollback && psx_netplay_rb_is_resimulating()) {
         psx_netplay_rb_finish_frame();
         g_np.latched_for_tick = 0;
+        g_np.needs_advance = 0; /* live latch must not outlive a resim vblank */
         g_np.frames_finished++;
         return;
     }
@@ -2522,8 +2612,21 @@ void psx_netplay_finish_frame(void)
     /* Digest the tick that just ran (sim_tick before advance). */
     done = rnet_session_sim_tick(g_np.session);
     np_emit_frame_commit(done);
-    if (g_np.rollback)
+    if (g_np.rollback) {
+        uint32_t resume_hint = 0;
         psx_netplay_rb_request_snap(done);
+        /* Flush at vblank: MotK IRQ fast/mid paths used to skip poll_snap, so
+         * deferred BB-edge saves never ran and the ring stayed empty. Prefer
+         * IRQ BB-edge PCs — cpu->pc is often 0 during present/finish_frame. */
+        if (g_np.cpu) {
+            resume_hint = psx_compiled_irq_resume_pc();
+            if (!psx_is_dispatchable(resume_hint))
+                resume_hint = psx_last_irq_check_pc();
+            if (!psx_is_dispatchable(resume_hint))
+                resume_hint = g_np.cpu->pc;
+            psx_netplay_rb_poll(g_np.cpu, resume_hint);
+        }
+    }
     rnet_session_advance(g_np.session);
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
@@ -2557,6 +2660,8 @@ void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc)
     if (!psx_netplay_active() || !g_np.rollback)
         return;
     psx_netplay_rb_poll(cpu, resume_pc);
+    /* BB-edge (interrupts.c): safe to longjmp like savestate_poll. */
+    psx_netplay_rb_flush_resume();
 }
 
 int psx_netplay_is_resimulating(void)
@@ -2694,6 +2799,19 @@ void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
             break;
         default:
             break;
+        }
+        /* Rollback episode: try_admit is skipped so last_stall stays "ok" —
+         * surface the RB FSM phase instead. */
+        if (!phase[0] && g_np.rollback && psx_netplay_rb_active()) {
+            static const char *const k_rb_phase[] = {
+                "rb_live", "rb_seal", "rb_baseline", "rb_replay",
+                "rb_verify", "rb_commit", "rb_abort"
+            };
+            int ph = psx_netplay_rb_phase();
+            if (ph >= 0 && ph < (int)(sizeof(k_rb_phase) / sizeof(k_rb_phase[0])))
+                snprintf(phase, sizeof(phase), "%s", k_rb_phase[ph]);
+            else
+                snprintf(phase, sizeof(phase), "rb_phase_%d", ph);
         }
     }
     if (stall_out && stall_cap) {

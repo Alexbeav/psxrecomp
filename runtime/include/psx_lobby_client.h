@@ -57,10 +57,11 @@ typedef struct PsxLobbyMatchCaps {
     int  bios_hle;         /* 0/1 */
     int  fast_boot;        /* 0/1 */
     int  auto_skip_fmv;    /* 0/1 */
-    int  input_delay;      /* recomp-net delay frames */
+    int  input_delay;      /* recomp-net delay frames (D) */
+    int  input_prediction; /* invent runway frames (P); rollback only */
     int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
     int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
-    int  rollback;         /* 0/1 — invent/rollback netplay (experimental) */
+    int  rollback;         /* 0/1 — invent/rollback netplay (default on) */
     char language[PSX_LOBBY_LANG_LEN];
 } PsxLobbyMatchCaps;
 

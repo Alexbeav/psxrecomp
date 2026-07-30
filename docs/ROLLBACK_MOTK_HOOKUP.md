@@ -1,15 +1,15 @@
 # MotK rollback hookup checklist
 
-Status: **plan** · branch `feat/rollback-netplay` · depends on `lib/recomp-net` @ `feat/rollback`
+Status: **hooked (experimental)** · branch `feat/rollback-netplay` · depends on
+`lib/recomp-net` @ `feat/rollback`
 
-Today MotK / psxrecomp netplay is **delay-sync only**:
-`stage_local → poll_admit (try_admit) → guest frame → finish_frame (advance)`.
-Missing remote inputs **stall**. `INPUT_CONFIRM` hashes the **pad blob**, not
-machine state. Rollback needs a second host path beside that loop.
-
-recomp-net already provides: input contract, `RNetRbSession` episode FSM,
-seal table, and `RNET_PKT_RB_*` wire. MotK must implement the host vtable,
-rings, digests, invent, and transport mapping.
+Today MotK / psxrecomp lobby netplay defaults to **rollback**:
+`stage_local → poll_admit (invent within P) → guest frame → finish_frame`.
+Missing remotes are invented (hold-last) only while
+`wire_need ≤ highest_remote + P`; outside that window admit stalls (BattleShip
+phase_lock). Late wire goes through the input contract; rewinds open an
+`RNetRbSession` episode. Host **Disable Rollback** (or `PSX_NET_MODE=delay`)
+forces classic delay-sync `try_admit`.
 
 ---
 
@@ -17,22 +17,19 @@ rings, digests, invent, and transport mapping.
 
 | Rule | Why |
 |------|-----|
-| Keep delay-sync `RNetSession` working behind a flag | Lobby / ICE / save-xfer stay useful; rollback opts in |
+| Keep delay-sync `RNetSession` working behind a flag | Lobby / ICE / save-xfer stay useful; Disable Rollback opts out |
 | Predicted rows promote only via `hash_confirm` (or host protect) | Library invariant; NULL `hash_confirm_promote` = always rewind |
 | Digests must be bit-identical across peers for the same sealed inputs | Otherwise every invent becomes an episode storm |
 | Snapshots must restore at the exact sim tick requested | Ring load is the only rewind mechanism |
 | Single-thread ownership of session + rings | Same as delay-sync |
 
-Env gate suggestion: `PSX_NET_MODE=delay|rollback` (default `delay`).
+Env gate: `PSX_NET_MODE=delay|rollback`. Lobby default publishes
+`match_caps.rollback=true`; **Disable Rollback** publishes false. Auto D/P from
+RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 
 ---
 
 ## 1. In-memory snapshot ring (host)
-
-**Gap:** `boot_state_save` writes a path; load-from-buffer exists
-(`boot_state_load_buffer`) but there is **no** `boot_state_save_buffer`.
-User `.pst` slots are ~1.3–3.6 MB and go through `savestate_poll` + disk — too
-slow / wrong API for per-frame GGPO.
 
 ### Tasks
 
@@ -41,12 +38,60 @@ slow / wrong API for per-frame GGPO.
   - depth `N` (≥ `RNET_RB_SEAL_MAX_SPAN` = 128; start with 64 for soak)
   - keyed by `sim_tick`
   - `ring_save(tick)`, `ring_load(tick)`, `ring_has(tick)`, drop oldest
-- [ ] Capture at a **safe** boundary (same constraints as `savestate_poll`:
-      block leader, `in_exception == 0`) — next: wire from netplay frame loop
-- [ ] On load: call existing frontend restage (`psx_frontend_on_savestate_loaded`
-      / VRAM path) so present does not show a half-restored frame
-- [ ] Memory budget: `N × ~1.5MB` → plan ~100MB; optional strip CDROM/MDEC
-      sections later if MotK match path allows a thinner snap
+- [x] Capture at a **safe** boundary — `psx_netplay_poll_snap` beside
+      `savestate_poll` on slow + MotK IRQ fast/mid paths (`interrupts.c`);
+      also flush pending snap in `finish_frame` (FMV mid-path used to skip it)
+- [x] On load: `psx_cycles_resync_after_restore` / `interrupts_resync_after_restore`
+      / `cdrom_accelerate_after_savestate` / `psx_frontend_on_savestate_loaded`
+      / deferred `psx_scheduler_resume_at` via `psx_netplay_rb_flush_resume`
+- [x] **Resume safety:** never `longjmp` from `rb_pump` under C++ vblank RAII —
+      apply without resume, then `flush_resume` on BB-edge (`poll_snap`) or
+      inside the admit wait loop (after present-body RAII destroyed)
+- [x] **Admit/resume split:** `try_admit` never arms `needs_advance` while a
+      resume is pending or while still in `AwaitingBaseline`
+- [x] **Baseline gate:** send/enter Replay only after `g_episode_snap_applied`
+      (peer BASELINE can arrive during SealInputs — must not skip restore)
+- [x] Live snap rate-limit: every `PSX_NET_SNAP_INTERVAL` ticks (default **4**);
+      resim still snaps every tick. Full `boot_state` ~1.3MB still dominates FPS
+- [x] Snap PC must be `psx_is_dispatchable` — pick IRQ/BB-edge resume PC (not
+      `cpu->pc` at present, often 0); defer save / abort episode instead of
+      `resume_at(0)` → `trap_crash`
+- [x] `flush_resume` only in **Replay** (after both baselines); SealInputs
+      retransmits SEAL_ROWS; seal `get_input_row` invents hold-last so rows
+      are `is_valid` (peer mask never completes on empty exports)
+- [x] Live `g_np.needs_advance` must not bypass `rb_try_admit` during an
+      episode (follower spun uncapped with zero `finish_frame`); arm load_tick
+      at Replay entry so the post-`flush_resume` quantum is committed
+- [x] Retransmit BASELINE while AwaitingBaseline (TURN drops one-shots);
+      follower marks `digest_a=READY` once it has the peer digest; initiator
+      waits for that ready-ACK before Replay (no solo resim)
+- [x] Retransmit POST while Verify; admit stalls until peer POST / commit
+- [x] `load_tick` tip slack (one `snap_interval` behind newest) so lagging
+      peer still has the snap; follow refuse → SYNC `initiator=0` NACK;
+      initiator aborts SealInputs (plus 4s seal timeout)
+- [x] BASELINE: stash if episode not open yet; burst rexmit on TURN; initiator
+      ready-timeout → Replay (Verify still waits for peer POST)
+- [x] Resume PC: reject low/vector junk (`0xB0` etc.); prefer function entries;
+      rewrite on load; 5s replay stall + 4s verify POST timeout → abort
+- [x] Seal from `load_tick` (not only mismatch); hist then sealed SIO publish;
+      sticky BB PC; skip CD accelerate + audio pump on resim; POST digest
+      canonicalizes parked PC; POST diverge aborts episode (lobby stays)
+- [x] Master digest folds CDROM controller FSM; per-tick resim audit logs
+      dig/cd/sealed pads; idle_skip + auto_skip_fmv forced off under netplay;
+      POST/baseline diverge → Live realign to matched load (or last commit)
+- [x] Never apply baseline/realign snaps from mid-guest `psx_netplay_pump`
+      (cycle watchdog) — only admit-wait / poll+immediate `flush_resume`;
+      initiator waits for ready-ACK (no solo Replay); ready timeout → realign
+- [x] Pin episode baseline snap (resim must not overwrite load_tick); realign
+      loads the pin; audit logs `core=` vs `cd=`; skip CD boost + reset SPU CD
+      FIFO on RB restore
+- [x] Baseline/POST/hash_confirm agree on **core** digest only (`cd=` audit);
+      CD-only forks were aborting good title/menu Start corrections
+- [x] Storm calm: 12-tick rewind cooldown + promote-sweep after commit/realign;
+      MotK digital release-only → promote (no episode); freeze `cdrom_advance`
+      during Replay (CD IRQ timing was forking POST cores)
+- [ ] Memory budget / thinner snap: optional strip CDROM/MDEC if MotK match
+      path allows (further FPS headroom)
 - [x] Standalone ring bookkeeping test: `runtime/tests/test_netplay_snap_ring.c`
 
 **Vtable:** `save_state` / `load_state` → ring only (never disk slots).
@@ -55,48 +100,29 @@ slow / wrong API for per-frame GGPO.
 
 ## 2. Master state digest + frame-commit watermark
 
-**Gap:** delay-sync `INPUT_CONFIRM` is pad-checksum agreement, not state
-agreement. Rollback `hash_confirm_through(tick)` needs a **state** watermark.
-
 ### Tasks
 
-- [x] Define MotK master digest (start minimal, expand when soaks demand):
-  - `netplay_master_digest`: CRC32 of CPU GPRs/PC/hi/lo + COP0 SR/Cause/EPC,
-    cycle count, IRQ, timers, full RAM, dirty bitmap (VRAM/SPU/CD omitted)
+- [x] Define MotK master digest (`netplay_master_digest` + CDROM partition)
 - [x] After each committed sim tick, compute `digest[tick]` into a small ring
-      (`netplay_hash_confirm` + `psx_netplay_finish_frame`)
-- [x] Exchange `RNET_PKT_RB_FRAME_COMMIT` (opcode 24) via
-      `rnet_session_send_rb_frame_commit` / `take_rb_frame_commit`
+- [x] Exchange `RNET_PKT_RB_FRAME_COMMIT` via session send/take (queued)
 - [x] Advance local `resolved_through` only when digests match through `T`
 - [x] Implement `psx_netplay_hash_confirm_through(tick)`
-- [x] Wire `RNetInputContractHostGates.hash_confirm_promote` to that helper;
-      leave other gates NULL initially (step 3 invent/contract)
+- [x] Wire `hash_confirm_promote` in invent/contract + episode stick gates
 - [x] Unit test: `runtime/tests/test_netplay_hash_confirm.c`
 
 ---
 
 ## 3. Input history + invent / prediction
 
-**Gap:** `psx_netplay_poll_admit` waits for remote authority; no invent path.
-
 ### Tasks
 
-- [x] Keep per-slot input history ring: tick → `RNetRbFrame`
-      (`netplay_input_hist`, depth 128)
-- [x] Local path: stage human pad as today (`PsxNetPad` → frame), mark
-      `is_predicted = 0`
-- [x] Remote path when authority missing for tick `T`:
-  - invent = **hold-last** (neutral if no prior row)
-  - mark `is_predicted = 1`
-  - **do not stall** the guest (`np_try_admit_rollback`)
-- [x] When remote INPUT arrives for `T`:
-  - build published vs wire frames
-  - `rnet_input_contract_stick_replace_decide` + `hash_confirm_promote`
-  - promote → replace history row, no episode
-  - rewind → set `pending_rewind_*` (episode begin is step 5)
-- [ ] `get_input_row` vtable reads this history (local seal + self-seal fallback)
-- [x] Map `PsxNetPad` ↔ `RNetRbFrame` once; SIO publish from history rows
-      in rollback (`np_publish_hist_sio`)
+- [x] Per-slot input history ring (`netplay_input_hist`)
+- [x] Local path: `is_predicted = 0`
+- [x] Remote invent = **hold-last** (neutral if no prior); stall when ahead of remote tip by > P
+- [x] Late wire → `rnet_input_contract_stick_replace_decide` + `hash_confirm_promote`
+- [x] Rewind → `psx_netplay_rb_begin_rewind` (episode)
+- [x] `get_input_row` vtable → `netplay_ih_get`
+- [x] `PsxNetPad` ↔ `RNetRbFrame` (incl. `analog` → SIO pad type; seal wire `source`); SIO from history / sealed rows
 - [x] Unit test: `runtime/tests/test_netplay_input_hist.c`
 - [x] Env: `PSX_NET_MODE=delay|rollback` → `psx_netplay_rollback_mode()`
 
@@ -104,133 +130,91 @@ agreement. Rollback `hash_confirm_through(tick)` needs a **state** watermark.
 
 ## 4. Live frame loop (replace admit barrier when rollback on)
 
-Current (`main.cpp` `netplay_barrier_admit` / vblank):
-
-```
-stage_local → poll_admit (block) → run guest → finish_frame
-```
-
-Rollback live loop:
-
-```
-pump transport
-stage local for T
-invent remotes for T if needed
-publish SIO from resolved+predicted rows
-save_state(T) into ring          # after guest completes T, or at admit edge
-advance_sim / finish guest tick T
-state_digest(T); send FRAME_COMMIT
-on late remote: contract → maybe begin_episode
-```
-
 ### Tasks
 
-- [x] Branch `poll_admit` on `PSX_NET_MODE=rollback` (gameplay invent path)
+- [x] Branch `poll_admit` on rollback (invent; episode admit while active)
 - [x] Never call delay-sync `try_admit` wait for missing remotes in rollback mode
 - [x] Still use `RNetSession` for pad tip transport + ICE
-      (`prepare_local_tip` / `peek_*_input`)
 - [x] Keep load-barrier / save-xfer / soft-exit paths on delay-sync semantics
-      for lobby rematch
-- [ ] `finish_frame` snap-ring save at safe boundary (step 1 leftover + step 4)
+- [x] `finish_frame` requests snap; episode path uses `psx_netplay_rb_finish_frame`
+- [x] Skip wall pacer while `psx_netplay_is_resimulating()`
 
 ---
 
 ## 5. Episode path (resim)
 
-Library-owned FSM; host drives phases (see `docs/rollback.md`):
-
-```
-begin_episode → seal_inputs → exchange RB_SEAL_ROWS
-→ AwaitingBaseline: load_state(load_tick), send RB_BASELINE digests
-→ Replay: advance_sim(t) for t in [load..target] reading sealed rows
-→ Verify: compare digests / RB_POST → on_post_match | on_post_diverge
-```
-
 ### Tasks
 
-- [ ] Create `RNetRbSession` beside (or instead of) delay admit when mode=rollback
-- [ ] Fill `RNetRollbackVTable` completely
-- [ ] On rewind decision: choose `load_tick` = oldest ring tick ≤ mismatch
-      (clamp to ring depth; if too deep → abort / hard resync)
-- [ ] Implement seal export/apply over `RNET_PKT_RB_SEAL_ROWS`
-- [ ] During `rnet_rb_is_resimulating()`: mute audio present / skip wall pacer /
-      do not push predicted SIO from live humans
-- [ ] After commit: discard ring entries before `resolved_through`; resume live
+- [x] Create `RNetRbSession` in `psx_netplay_rb.c` when mode=rollback
+- [x] Fill `RNetRollbackVTable` (snap save/load, digest, hist get_input_row)
+- [x] On rewind: `load_tick` = newest ring tick ≤ mismatch (refuse if ring empty)
+- [x] `g_np.local_slot` / `slot_count` / delay set **before** `rb_start` (frozen into `RNetRbConfig`)
+- [x] Peer seal apply ignores `is_valid=0` rows (wrong-seat export must not complete)
+- [x] Seal export/apply over `RNET_PKT_RB_SEAL_ROWS` (+ SYNC/BASELINE/POST/RESOLVED)
+- [x] During resim: skip wall pacer; publish sealed SIO (not live invent)
+- [x] After commit: `rnet_rb_on_post_match` + session sim clock to `target+1`
+- [ ] Soak: forced stick mismatch → one episode; digests match post-commit
 
 ---
 
 ## 6. Wire / transport mapping
 
-| Opcode | Use |
-|--------|-----|
-| 20 `RB_SYNC` | Correction tuple |
-| 21 `RB_SEAL_ROWS` | Peer sealed inputs |
-| 22 `RB_BASELINE` | Post-load digests |
-| 23 `RB_POST` | Post-replay digests + match |
-| 24 `RB_FRAME_COMMIT` | Master-hash watermark |
-| 25 `RB_RESOLVED` | Shared frontier advertise |
-
 ### Tasks
 
-- [ ] Encode/decode helpers already in `rnet_protocol.*` — call from
-      `psx_netplay` ingress next to existing INPUT handling
-- [ ] Delay-sync peers must ignore opcodes 20–25 (library claim); verify MotK
-      build only emits them when both sides negotiated rollback
-- [ ] Negotiation: lobby match_caps or session hello flag `rollback=1`
+- [x] Session send/take for SYNC / SEAL_ROWS / BASELINE / POST / RESOLVED /
+      FRAME_COMMIT
+- [x] Delay-sync peers ignore opcodes 20–25 (session queues only when MotK drains)
+- [x] Negotiation: `match_caps.rollback` + launch.`rollback` / `PSX_NET_MODE`
 
 ---
 
 ## 7. Determinism prerequisites (MotK-specific)
 
-Rollback only works if the same sealed pads produce the same digest.
-
 ### Tasks
 
-- [ ] Confirm netplay clears mods (`commit_netplay` / `mod_runtime_clear_for_netplay`)
-- [ ] Same BIOS stem + disc identity on both peers (existing verify)
-- [ ] Audit non-deterministic host clocks in sim path (wall-time RNG, unsorted
-      iteration) — fix or exclude from digest
-- [ ] FMV / depth24: either pause invent (force delay) during FMV, or prove
-      digests stay stable — MotK FMV was historically fragile under catch-up
-- [ ] Multitap / N-slot: history + seal tables sized to `slot_count`
+- [x] Netplay clears mods (`mod_runtime_clear_for_netplay` / launcher hook)
+- [x] Same BIOS stem + disc identity on both peers (existing verify)
+- [ ] Audit non-deterministic host clocks in sim path — soak-driven
+- [ ] FMV / depth24: pause invent or prove digest stability during movies
+- [x] Multitap / N-slot: history + seal tables sized to `slot_count`
 
 ---
 
 ## 8. recomp-ui (branch `feat/rollback-netplay`)
 
-Minimal for first soak; UI is not the blocker.
-
 ### Tasks
 
-- [ ] Optional Host Lobby checkbox / advanced: “Rollback (experimental)”
-- [ ] Plumb into `RecompLauncherCNetplayLaunch` or match_caps so
-      `psx_netplay_start` sees the mode
-- [ ] HUD/diag: show `resolved_through`, episode phase, invent count, ring
-      occupancy (stderr or ImGui overlay)
+- [x] Host Lobby Settings: **Disable Rollback** (off by default → rollback on)
+- [x] Manual Input Delay + Manual Input Prediction (P locked when rollback off)
+- [x] Auto D (RB tiers / delay-sync pad) + auto P at Play from max peer RTT
+- [x] Plumb `launch.rollback` / `input_prediction` + match_caps + `net_cfg`
+- [x] Diag: stderr episode begin/commit/load; invent/promote/rewind counters on hist
 
 ---
 
 ## 9. Suggested implementation order
 
-1. **`boot_state_save_buffer` + snap ring** — unit-test save/load tick roundtrip offline  
-2. **Master digest + FRAME_COMMIT** — two peers, no invent yet; watermark advances in lockstep  
-3. **Invent + input contract** — allow missing remotes; measure promote vs rewind  
-4. **Episode resim** — force a stick mismatch; verify ring load + sealed replay  
-5. **Lobby flag + UI** — MotK dual-instance soak  
-6. **Thin snaps / FMV policy** — performance and movie stability  
+1. ~~`boot_state_save_buffer` + snap ring~~  
+2. ~~Master digest + FRAME_COMMIT~~  
+3. ~~Invent + input contract~~  
+4. ~~Episode resim wiring~~  
+5. ~~Lobby flag + UI~~  
+6. ~~Rate-limit live snaps (`PSX_NET_SNAP_INTERVAL`) + safe episode resume~~  
+7. **Thinner snap / FMV policy** — further FPS + movie digest stability  
+8. **Dual-instance soak** — prove Done-when items  
 
 ---
 
-## 10. File touch map (expected)
+## 10. File touch map
 
 | Area | Files |
 |------|--------|
-| Snap ring | `boot_state.{c,h}`, new `netplay_snap_ring.{c,h}`, `savestate` only if sharing helpers |
-| Digests / RB host | `psx_netplay.c`, `netplay_hash_confirm.*`, `netplay_state_digest.*` |
-| Invent / contract | `netplay_input_hist.*`, `psx_netplay.c` (`np_try_admit_rollback`) |
-| Frame loop | `main.cpp` (`netplay_barrier_admit`, vblank `finish_frame`) |
-| Wire | `psx_netplay.c` ingress + `lib/recomp-net` peek/tip + FRAME_COMMIT |
-| Caps / UI | MotK lobby callbacks, `recomp-ui` launch struct |
+| Snap ring | `boot_state.*`, `netplay_snap_ring.*`, `psx_netplay_rb.*`, `interrupts.c` |
+| Digests | `netplay_hash_confirm.*`, `netplay_state_digest.*`, `psx_netplay.c` |
+| Invent / contract | `netplay_input_hist.*`, `psx_netplay.c` |
+| Episode | `psx_netplay_rb.*`, `lib/recomp-net` session RB send/take |
+| Frame loop | `main.cpp` (`sdl_vblank_present` epilogue), `psx_netplay.c` |
+| Caps / UI | `psx_lobby_client.*`, `recomp_launcher.h`, `launcher_imgui.cpp`, `main.cpp` |
 
 ---
 
@@ -242,7 +226,7 @@ Minimal for first soak; UI is not the blocker.
       post-commit
 - [ ] `hash_confirm` invent path shows promotes in diag without opening episodes
       when master hashes still agree
-- [ ] Delay-sync path (`PSX_NET_MODE=delay`) unchanged for lobby rematch / save xfer
+- [x] Delay-sync path (`PSX_NET_MODE=delay`) unchanged for lobby rematch / save xfer
 
 Reference: `lib/recomp-net/docs/rollback.md`,
 `include/recomp_net/rollback.h`, `include/recomp_net/input_contract.h`,

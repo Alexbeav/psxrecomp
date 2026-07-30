@@ -795,7 +795,10 @@ void psx_check_interrupts(CPUState* cpu) {
             s_irq_path_fast_sr++;
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
+                /* MotK FMV/VLC live here — must flush pending RB snaps too. */
+                psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
             return;
@@ -842,7 +845,9 @@ void psx_check_interrupts(CPUState* cpu) {
             s_irq_path_fast_none++;
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
+                psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
             return;
@@ -864,7 +869,11 @@ void psx_check_interrupts(CPUState* cpu) {
         total_checks++;
         if ((total_checks & 0x3FFFu) == 0) {
             extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+            extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
             savestate_poll(cpu, check_pc);
+            /* Sticky CD/VBlank mid-path is MotK's FMV hot edge — without this
+             * the RB snap ring never fills (pending save never polled). */
+            psx_netplay_poll_snap(cpu, check_pc);
             debug_server_poll();
         }
         goto irq_deliver_eval;

@@ -41,6 +41,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #define PSX_MAX_PLAYERS 2
 #endif
 #include "psx_netplay.h"
+#include "psx_netplay_rb.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
 #include "audio_trace.h"
@@ -63,6 +64,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "disc_identity.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
+
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
@@ -3430,6 +3432,10 @@ static void netplay_barrier_admit(int override) {
             }
             return;
         }
+        /* Episode snap may have been applied during pump/try_admit without
+         * longjmp — flush here (no present-body C++ RAII) before spinning.
+         * try_admit refuses to arm needs_advance while resume is pending. */
+        psx_netplay_rb_flush_resume();
 #ifndef PSX_NO_DEBUG_TOOLS
         debug_server_poll();
 #endif
@@ -3732,8 +3738,18 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
     }
 }
 
+/* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
+ * is destroyed — episode snap load longjmps via psx_netplay_rb_flush_resume and
+ * must not cross non-trivial destructors (UB / guest crash). */
+struct NetplayVblankEpilogue {
+    int do_epilogue = 0;
+    int skip_pace = 0;
+    int override = -1;
+};
+
 /* Called from gpu_vblank_tick() at each simulated vblank. */
-static void sdl_vblank_present(void) {
+static NetplayVblankEpilogue sdl_vblank_present_body(void) {
+    NetplayVblankEpilogue ep{};
     int probe_turbo = 0;
     int probe_reached = 0;
     struct PostLoadProbeScope {
@@ -3845,7 +3861,7 @@ static void sdl_vblank_present(void) {
             if (ev.type == SDL_QUIT) {
                 if (psx_netplay_active()) {
                     netplay_soft_exit("sdl_window_close");
-                    return;
+                    return ep;
                 }
                 psx_crash_trace_set_exit_origin("sdl_window_close");
                 shutdown_runtime();
@@ -3875,7 +3891,7 @@ static void sdl_vblank_present(void) {
 #endif
                 if (key == SDLK_ESCAPE && psx_netplay_active()) {
                     netplay_soft_exit("netplay_escape");
-                    return;
+                    return ep;
                 }
                 /* Save states: Shift+F1-F12 = save slot 0-11, F1-F12 = load.
                  * (F11 is a save slot per the user's spec, so fullscreen is
@@ -3935,39 +3951,13 @@ static void sdl_vblank_present(void) {
      * FMV-skip paths that early-return before pacing.
      *
      * Delay-sync netplay host FPS (MotK FMV): finish → present → admit/pace.
-     * Local Swap overlaps the peer's guest quantum; admit still runs every
-     * tick via the RAII tail (including early returns that skip present).
+     * Admit/pace run in sdl_vblank_present() AFTER this body returns so episode
+     * resume longjmp does not cross C++ destructors. Early returns still set
+     * ep.do_epilogue so admit runs every tick (including skip-present paths).
      * Offline keeps pace-before-present. Barrier wait stays UDP poll — do
      * not pair this order with SDL_Delay(0) busy-spin (tick-0 hang). */
-    struct NetplayVblankTail {
-        int  override_ = -1;
-        bool active_ = false;
-        bool skip_pace_ = false;
-        explicit NetplayVblankTail(int ov)
-            : override_(ov), active_(psx_netplay_active() != 0) {}
-        void skip_pace() { skip_pace_ = true; }
-        ~NetplayVblankTail() {
-            if (!active_) return;
-            if (psx_return_to_lobby_requested()) return;
-            netplay_barrier_admit(override_);
-            if (skip_pace_ || psx_return_to_lobby_requested()) return;
-            /* Rollback resim: no wall pacing (same as catch-up). */
-            if (psx_netplay_is_resimulating())
-                return;
-            /* Post-starvation / behind-peer catch-up: skip wall pace so admits
-             * can burn down remote tip (mirrors snes_host_catchup_budget).
-             * Never unpace during depth24 FMV — catch-up would race XA/video
-             * ahead of wall clock (~90fps) and make movies play too fast. */
-            if (!gpu_display_is_depth24() && psx_netplay_catchup_budget() > 0) {
-                psx_netplay_catchup_consume_frame();
-                return;
-            }
-            uint64_t perf_start = runtime_perf_section_begin();
-            frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
-            runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
-            latency_ring_mark(LAT_PACED);
-        }
-    } netplay_tail(override);
+    ep.do_epilogue = psx_netplay_active() != 0 ? 1 : 0;
+    ep.override = override;
 
     /* Turbo-active / multitap arming share game-started detection. */
     extern int fntrace_is_game_started(void);
@@ -4003,8 +3993,10 @@ static void sdl_vblank_present(void) {
      * sampled into SIO.  Always-on; queried via the debug server "latency". */
     latency_ring_frame_begin();
 
-    /* Post-savestate CD delay boost (ReadTOC/seek clamp window). */
-    cdrom_savestate_boost_vblank();
+    /* Post-savestate CD delay boost (ReadTOC/seek clamp window).
+     * Skip during rollback resim — boost is host-local and not in the CD snap. */
+    if (!psx_netplay_is_resimulating())
+        cdrom_savestate_boost_vblank();
 
     /* Turbo-active test shared by the pacing/present gate below. */
     int turbo_loads_active = 0;
@@ -4060,7 +4052,9 @@ static void sdl_vblank_present(void) {
      *  - no table configured (generic): hold START so a movie whose handler polls
      *    the pad aborts itself (can't reach unskippable movies). */
     int fmv_skip_active = 0;
-    if (g_auto_skip_fmv) {
+    /* Never inject START / poke movie totals under netplay — host-side skip
+     * forks peers (and stomps SIO after sealed publish during resim). */
+    if (g_auto_skip_fmv && !psx_netplay_active()) {
         uint32_t mc = mdec_get_decode_count();
         int mdec_decoding = (mc != s_fmv_skip_last_mdec);
         s_fmv_skip_last_mdec = mc;
@@ -4091,14 +4085,18 @@ static void sdl_vblank_present(void) {
     /* Optional turbo host sink advances the canonical SPU on the exact guest
      * sample budget but drops accelerated output before SDL. This is distinct
      * from the old mute/freeze model: voice and CD state never pause. FMV skip
-     * retains the hard mute because it deliberately fast-forwards a movie. */
-    sdl_audio_update(fmv_skip_active,
-                     turbo_loads_active && g_turbo_audio_sink_enabled);
+     * retains the hard mute because it deliberately fast-forwards a movie.
+     * Rollback resim: skip host audio pump (uncapped frames) so SPU/CD audio
+     * paths cannot fork peers during the episode window. */
+    if (!psx_netplay_is_resimulating()) {
+        sdl_audio_update(fmv_skip_active,
+                         turbo_loads_active && g_turbo_audio_sink_enabled);
+    }
 #endif
 
     if (g_headless) {
-        netplay_tail.skip_pace();
-        return;
+        ep.skip_pace = 1;
+        return ep;
     }
 
     /* TCP turbo is for automated validation and trace capture. It keeps the
@@ -4106,8 +4104,8 @@ static void sdl_vblank_present(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
-        netplay_tail.skip_pace();
-        return;
+        ep.skip_pace = 1;
+        return ep;
     }
 #endif
 
@@ -4123,8 +4121,8 @@ static void sdl_vblank_present(void) {
         if (keys[SDL_SCANCODE_TAB]) {
             turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
             if (turbo_skip != 0) {
-                netplay_tail.skip_pace();
-                return;  /* skip render this frame */
+                ep.skip_pace = 1;
+                return ep;  /* skip render this frame */
             }
         } else {
             turbo_skip = 0;
@@ -4144,8 +4142,8 @@ static void sdl_vblank_present(void) {
         const int TL_PRESENT_EVERY = 30;
         s_turbo_present_skip = (s_turbo_present_skip + 1) % TL_PRESENT_EVERY;
         if (s_turbo_present_skip != 0) {
-            netplay_tail.skip_pace();
-            return;
+            ep.skip_pace = 1;
+            return ep;
         }
     }
 
@@ -4156,25 +4154,25 @@ static void sdl_vblank_present(void) {
         const int FMV_PRESENT_EVERY = 30;
         s_fmv_skip_present_skip = (s_fmv_skip_present_skip + 1) % FMV_PRESENT_EVERY;
         if (s_fmv_skip_present_skip != 0) {
-            netplay_tail.skip_pace();
-            return;
+            ep.skip_pace = 1;
+            return ep;
         }
     }
 
     /* Netplay FMV: skip present every other depth24 vblank to cut GPU cost
-     * (admit + wall pace still run in the RAII tail every tick). Do NOT skip
+     * (admit + wall pace still run in the epilogue every tick). Do NOT skip
      * pace here — that let MotK movies run ~90fps once decode was fast enough. */
     if (psx_netplay_active() && gpu_display_is_depth24()) {
         if (s_netplay_depth24_present_skip) {
             s_netplay_depth24_present_skip = 0;
-            return;
+            return ep;
         }
         s_netplay_depth24_present_skip = 1;
     } else {
         s_netplay_depth24_present_skip = 0;
     }
 
-    /* Offline wall-clock pacing before present. Netplay paces in NetplayVblankTail
+    /* Offline wall-clock pacing before present. Netplay paces in the epilogue
      * AFTER present so Swap overlaps the peer's guest quantum. */
     if (!psx_netplay_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
@@ -4203,8 +4201,7 @@ static void sdl_vblank_present(void) {
      * freezes upload-span tracking while hold > 0; without this call the hold
      * sticks and depth24_fix_trailing_margin blanks the whole FMV forever. */
     if (gpu_depth24_present_hold_tick())
-        return;
-
+        return ep;
     /* Engage widescreen at game entry: BIOS boot stays authentic 4:3. */
     if (!g_ws_engaged) {
         extern int fntrace_is_game_started(void);
@@ -4258,7 +4255,7 @@ static void sdl_vblank_present(void) {
                 }
             }
 #endif
-            return;
+            return ep;
         }
         s_disabled_frame_presented = false;
         s_force_present_after_load = false;
@@ -4325,12 +4322,12 @@ static void sdl_vblank_present(void) {
                  * the wide surface for this buffer doesn't exist yet. */
                 if (gl_renderer_present_wide_fbo((int)di.display_x, (int)di.display_y,
                                                  (int)h, g_video_aa ? 1 : 0))
-                    return;
+                    return ep;
             } else {
                 gl_renderer_present_vram((int)di.display_x, (int)di.display_y,
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
-                return;
+                return ep;
             }
         }
         if (g_gl_active && !di.depth24) gl_renderer_sync_cpu();
@@ -4361,7 +4358,7 @@ static void sdl_vblank_present(void) {
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
             }
-            return;
+            return ep;
         }
 #endif
 
@@ -4531,6 +4528,30 @@ static void sdl_vblank_present(void) {
     }
     }
 #endif
+    return ep;
+}
+
+static void sdl_vblank_present(void) {
+    NetplayVblankEpilogue ep = sdl_vblank_present_body();
+    if (!ep.do_epilogue)
+        return;
+    if (!psx_return_to_lobby_requested())
+        netplay_barrier_admit(ep.override);
+    /* Episode baseline applied during admit without longjmp — resume now that
+     * present-body C++ destructors have run (mirrors savestate BB-edge path). */
+    psx_netplay_rb_flush_resume();
+    if (ep.skip_pace || psx_return_to_lobby_requested())
+        return;
+    if (psx_netplay_is_resimulating())
+        return;
+    if (!gpu_display_is_depth24() && psx_netplay_catchup_budget() > 0) {
+        psx_netplay_catchup_consume_frame();
+        return;
+    }
+    uint64_t perf_start = runtime_perf_section_begin();
+    frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+    runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
+    latency_ring_mark(LAT_PACED);
 }
 
 #if defined(RECOMP_LAUNCHER)
@@ -4691,10 +4712,12 @@ namespace {
     std::string g_lnch_lobby_url;
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
+    int g_lnch_lobby_input_prediction = 4;
     int g_lnch_force_input_relay = 0;
     /* Default on: CGNAT-safe relay-only ICE (BattleShip-style online path). */
     int g_lnch_force_turn = 1;
-    int g_lnch_rollback = 0;
+    /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
+    int g_lnch_rollback = 1;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -5510,6 +5533,9 @@ namespace {
         caps.input_delay   = g_lnch_lobby_input_delay;
         if (caps.input_delay < 2) caps.input_delay = 2;
         if (caps.input_delay > 20) caps.input_delay = 20;
+        caps.input_prediction = g_lnch_lobby_input_prediction;
+        if (caps.input_prediction < 2) caps.input_prediction = 2;
+        if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
@@ -5526,6 +5552,9 @@ namespace {
         caps.input_delay = g_lnch_lobby_input_delay;
         if (caps.input_delay < 2) caps.input_delay = 2;
         if (caps.input_delay > 20) caps.input_delay = 20;
+        caps.input_prediction = g_lnch_lobby_input_prediction;
+        if (caps.input_prediction < 2) caps.input_prediction = 2;
+        if (caps.input_prediction > 16) caps.input_prediction = 16;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
@@ -5590,6 +5619,25 @@ namespace {
     }
     int ae_np_rollback_set(void*, int enable) {
         g_lnch_rollback = enable ? 1 : 0;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+    int ae_np_input_prediction_get(void*) {
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid) {
+                int p = caps->input_prediction;
+                if (p < 2) p = 2;
+                if (p > 16) p = 16;
+                return p;
+            }
+        }
+        return g_lnch_lobby_input_prediction;
+    }
+    int ae_np_input_prediction_set(void*, int prediction_frames) {
+        if (prediction_frames < 2) prediction_frames = 2;
+        if (prediction_frames > 16) prediction_frames = 16;
+        g_lnch_lobby_input_prediction = prediction_frames;
         ae_np_push_match_caps(nullptr);
         return 0;
     }
@@ -6602,6 +6650,8 @@ namespace {
                 g_lnch_pending_direct_launch.input_player = -1;
                 g_lnch_pending_direct_launch.session_id = g_lnch_lan_session_id;
                 g_lnch_pending_direct_launch.input_delay = g_lnch_lobby_input_delay;
+                g_lnch_pending_direct_launch.input_prediction =
+                    g_lnch_lobby_input_prediction;
                 g_lnch_pending_direct_launch.max_slots =
                     state.max_slots >= 2 ? state.max_slots
                     : (g_lnch_host_max_slots >= 2 ? g_lnch_host_max_slots
@@ -6612,6 +6662,7 @@ namespace {
                     g_lnch_pending_direct_launch.max_slots = kAeLanMaxSlots;
                 g_lnch_pending_direct_launch.force_input_relay = 0;
                 g_lnch_pending_direct_launch.force_turn = 0;
+                g_lnch_pending_direct_launch.rollback = g_lnch_rollback ? 1 : 0;
                 g_lnch_pending_direct_launch.player_count = ae_np_lan_occupied(state);
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
@@ -6686,6 +6737,9 @@ namespace {
         std::snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s", ji->peer_hostport);
         out->session_id = ji->session_id;
         out->input_delay = caps->input_delay;
+        out->input_prediction = caps->input_prediction;
+        if (out->input_prediction < 2) out->input_prediction = 2;
+        if (out->input_prediction > 16) out->input_prediction = 16;
         out->max_slots = ji->max_slots >= 2 ? ji->max_slots
                          : (g_lnch_game_players >= 2 ? g_lnch_game_players : 2);
         if (out->max_slots > PSX_MAX_PLAYERS) out->max_slots = PSX_MAX_PLAYERS;
@@ -6756,6 +6810,8 @@ namespace {
         ae_np_force_turn_set,
         ae_np_rollback_get,
         ae_np_rollback_set,
+        ae_np_input_prediction_get,
+        ae_np_input_prediction_set,
     };
 }  // namespace
 #endif
@@ -8026,6 +8082,7 @@ std::string player_device[PSX_MAX_PLAYERS];
                     net_cfg.input_player = ls.netplay_launch.input_player;
                     net_cfg.session_id = ls.netplay_launch.session_id;
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
+                    net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
                     net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                     net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
@@ -8996,6 +9053,28 @@ soft_return_lobby:
         std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
                       psx_lobby_display_name());
         std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s", bios_path_str.c_str());
+        /* Preserve input devices across soft-return. A zeroed ls left every
+         * player_src at None, so the rematch UI (and a subsequent writeback)
+         * looked like netplay had wiped the pad assignment. */
+        {
+            const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
+            for (int i = 0; i < n; ++i) {
+                const std::string& d = player_device[i];
+                ls.player_src[i] = (d == "keyboard") ? 1
+                                   : (d == "none" || d.empty()) ? 0 : 2;
+                ls.deadzone[i] = (player_deadzone[i] * 100 + 16383) / 32767;
+                ls.pad_mode[i] = (ls.player_src[i] == 1)
+                                    ? PSXRecompV4::PAD_MODE_DIGITAL
+                                    : player_mode[i];
+                ls.player_gamepad_guid[i][0] = '\0';
+                if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
+                    d != "gamepad" && d != "controller") {
+                    std::snprintf(ls.player_gamepad_guid[i],
+                                  sizeof(ls.player_gamepad_guid[i]), "%s",
+                                  d.c_str());
+                }
+            }
+        }
 
         RecompLauncherCGameInfo gi{};
         launcher_profile_apply("psx", &gi);
@@ -9010,6 +9089,10 @@ soft_return_lobby:
         gi.resume_netplay_endpoint = ae_np_lan_endpoint_cstr();
         gi.disc_verify = ae_disc_verify;
         gi.memcard_inspect = ae_memcard_inspect;
+        gi.pad_mode_selectable = ctrl_lock_mode ? 0 : 1;
+        gi.allow_hybrid = ctrl_allow_hybrid ? 1 : 0;
+        gi.locked_pad_mode = ctrl_locked_mode[0];
+        gi.lock_device = ctrl_lock_device ? 1 : 0;
 
         char rui_out_disc[1024] = {0};
         recomp_launcher_set_preserve_sdl(1);
@@ -9040,6 +9123,7 @@ soft_return_lobby:
                 net_cfg.input_player = ls.netplay_launch.input_player;
                 net_cfg.session_id = ls.netplay_launch.session_id;
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
+                net_cfg.input_prediction = ls.netplay_launch.input_prediction;
                 net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
                 net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
                 net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
@@ -9057,6 +9141,81 @@ soft_return_lobby:
             } else {
                 net_cfg = {};
                 g_netplay_from_lobby = 0;
+            }
+            /* Same player_src → player_device writeback as the first launcher
+             * exit path, so rematch honors (or keeps) the card selections. */
+            {
+                const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
+                for (int i = 0; i < n; ++i) {
+                    if (ls.player_src[i] == 1) {
+                        player_device[i] = "keyboard";
+                        player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
+                    } else if (ls.player_src[i] == 0) {
+                        player_device[i] = "none";
+                        player_mode[i] = ls.pad_mode[i];
+                    } else if (ls.player_gamepad_guid[i][0]) {
+                        player_device[i] = ls.player_gamepad_guid[i];
+                        player_mode[i] = ls.pad_mode[i];
+                    } else if (player_device[i] == "none" ||
+                               player_device[i] == "keyboard") {
+                        player_device[i] = "gamepad";
+                        player_mode[i] = ls.pad_mode[i];
+                    } else {
+                        player_mode[i] = ls.pad_mode[i];
+                    }
+                    player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
+                }
+            }
+            /* Persist controller (and rematch video) choices without wiping
+             * the rest of settings.toml — merge into the on-disk file. */
+            {
+                const auto settings_path =
+                    exe_dir_from_argv(argv[0]) / "settings.toml";
+                PSXRecompV4::UserSettings us =
+                    PSXRecompV4::load_user_settings(settings_path);
+                const int un = std::min(PSX_MAX_PLAYERS,
+                                        PSXRecompV4::UserSettings::kMaxControllerPlayers);
+                for (int i = 0; i < un; ++i) {
+                    us.p_device[i] = player_device[i];
+                    us.has_p_device[i] = true;
+                    us.p_mode[i] = player_mode[i];
+                    us.has_p_mode[i] = true;
+                    us.p_deadzone[i] = player_deadzone[i];
+                    us.has_p_deadzone[i] = true;
+                }
+                us.deadzone = player_deadzone[0];
+                us.has_deadzone = true;
+                us.renderer = ls.renderer;
+                us.has_renderer = true;
+                us.supersampling = ls.supersampling;
+                us.has_supersampling = true;
+                us.antialiasing = ls.antialiasing != 0;
+                us.has_antialiasing = true;
+                us.texture_filter = ls.texture_filter;
+                us.has_texture_filter = true;
+                us.screen_kind = ls.screen_kind;
+                us.has_screen_kind = true;
+                us.frame_interpolation = ls.frame_interp != 0;
+                us.has_frame_interpolation = true;
+                us.frame_interpolation_fps = ls.frame_interp_fps;
+                us.has_frame_interpolation_fps = true;
+                us.spu_hq = ls.spu_hq != 0;
+                us.has_spu_hq = true;
+                us.auto_skip_fmv = ls.auto_skip_fmv != 0;
+                us.has_auto_skip_fmv = true;
+                us.turbo_loads = ls.turbo_loads != 0;
+                us.has_turbo_loads = true;
+                us.fullscreen = ls.fullscreen != 0;
+                us.has_fullscreen = true;
+                us.window_width = ls.window_width > 0 ? ls.window_width : g_video_win_w;
+                us.has_window_width = true;
+                switch (ls.aspect_index) {
+                    case 2:  us.aspect_num = 21; us.aspect_den = 9; break;
+                    case 1:  us.aspect_num = 16; us.aspect_den = 9; break;
+                    default: us.aspect_num = 4;  us.aspect_den = 3; break;
+                }
+                us.has_aspect_ratio = true;
+                (void)PSXRecompV4::save_user_settings(settings_path, us);
             }
             g_video_renderer = ls.renderer;
             g_video_scale = ls.supersampling;

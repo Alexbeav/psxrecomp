@@ -38,6 +38,7 @@ void netplay_ih_pad_to_frame(const PsxNetPad *pad, uint32_t tick, uint8_t predic
     out->tick = tick;
     out->is_predicted = predicted ? 1u : 0u;
     out->is_valid = 1u;
+    out->analog = 0u; /* MotK default digital; tip/capture may override */
     if (!pad) {
         out->buttons = 0xFFFFu;
         return;
@@ -47,6 +48,7 @@ void netplay_ih_pad_to_frame(const PsxNetPad *pad, uint32_t tick, uint8_t predic
     out->buttons = n.buttons;
     out->stick_x = u8_to_i8_stick(n.lx);
     out->stick_y = u8_to_i8_stick(n.ly);
+    out->analog = n.analog ? 1u : 0u;
 }
 
 void netplay_ih_frame_to_pad(const RNetRbFrame *frame, PsxNetPad *pad)
@@ -55,12 +57,13 @@ void netplay_ih_frame_to_pad(const RNetRbFrame *frame, PsxNetPad *pad)
     memset(pad, 0, sizeof(*pad));
     pad->buttons = 0xFFFFu;
     pad->lx = pad->ly = pad->rx = pad->ry = 0x80u;
-    pad->analog = 1;
+    pad->analog = 0; /* digital until a valid frame says DualShock */
     pad->connected = 1;
     if (!frame || !frame->is_valid) return;
     pad->buttons = frame->buttons;
     pad->lx = i8_to_u8_stick(frame->stick_x);
     pad->ly = i8_to_u8_stick(frame->stick_y);
+    pad->analog = frame->analog ? 1u : 0u;
     psx_netplay_normalize_pad(pad);
 }
 
@@ -110,6 +113,7 @@ int netplay_ih_invent_hold_last(NetplayInputHist *h, int slot, uint32_t tick,
     memset(&invented, 0, sizeof(invented));
     invented.tick = tick;
     invented.buttons = 0xFFFFu;
+    invented.analog = 0u;
     invented.is_predicted = 1u;
     invented.is_valid = 1u;
 
@@ -119,6 +123,7 @@ int netplay_ih_invent_hold_last(NetplayInputHist *h, int slot, uint32_t tick,
             invented.buttons = prev.buttons;
             invented.stick_x = prev.stick_x;
             invented.stick_y = prev.stick_y;
+            invented.analog = prev.analog ? 1u : 0u;
             break;
         }
     }

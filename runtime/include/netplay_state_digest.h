@@ -2,12 +2,13 @@
 #define PSX_NETPLAY_STATE_DIGEST_H
 
 /*
- * Compact master state digest for rollback hash_confirm / FRAME_COMMIT.
+ * Compact state digests for rollback hash_confirm / FRAME_COMMIT / POST.
  *
- * Folds CPU + RAM + IRQ/timers/clock + dirty bitmap into a u32 CRC32.
- * Intentionally excludes VRAM/SPU/CDROM present-only state so the digest
- * stays cheap and tracks sim-affecting state first. Expand partitions later
- * when soaks demand it (see docs/ROLLBACK_MOTK_HOOKUP.md §2).
+ * Core = CPU + RAM + IRQ/timers/clock + dirty bitmap — invent hash_confirm.
+ * AV = GPU regs + VRAM — baseline/POST also require this (GL/VK readback forks
+ * VRAM while core still matches; pin zlib sizes were the symptom).
+ * CDROM digest stays audit-only until resim CD is bit-identical.
+ * Master = crc(core, cd) for combined logging only.
  */
 
 #include <stdint.h>
@@ -17,7 +18,9 @@
 extern "C" {
 #endif
 
+uint32_t netplay_core_digest(const CPUState* cpu);
 uint32_t netplay_master_digest(const CPUState* cpu);
+uint32_t netplay_cdrom_digest(void);
 
 #ifdef __cplusplus
 }

@@ -79,6 +79,11 @@ int cdrom_load_in_progress(void);
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
 
+/* boot_state / netplay digest — full controller FSM (sector FIFOs included). */
+uint32_t cdrom_snapshot_bytes(void);
+void     cdrom_snapshot_write(uint8_t *p);
+int      cdrom_snapshot_read(const uint8_t *p, uint32_t len);
+
 /* After savestate restore: clamp long CD second-response / read-start delays
  * and arm a short boost window so post-load ReadTOC/seek/Init waits do not
  * freeze the picture for ~1s+. Completions still fire (IRQs preserved). */
