@@ -1,0 +1,52 @@
+#ifndef PSX_NETPLAY_HASH_CONFIRM_H
+#define PSX_NETPLAY_HASH_CONFIRM_H
+
+/*
+ * Local digest ring + peer FRAME_COMMIT matching → resolved_through watermark.
+ *
+ * hash_confirm_through(T) is 1 iff every tick in (prev_resolved, T] has a
+ * local digest that matched a peer FRAME_COMMIT (contiguous from the prior
+ * watermark). Used as RNetInputContractHostGates.hash_confirm_promote /
+ * RNetRollbackVTable.hash_confirm_through.
+ */
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define NETPLAY_HC_RING 128u
+
+typedef struct NetplayHashConfirm {
+    uint32_t local_tick[NETPLAY_HC_RING];
+    uint32_t local_digest[NETPLAY_HC_RING];
+    uint8_t  local_valid[NETPLAY_HC_RING];
+    uint32_t peer_tick[NETPLAY_HC_RING];
+    uint32_t peer_digest[NETPLAY_HC_RING];
+    uint8_t  peer_valid[NETPLAY_HC_RING];
+    uint32_t resolved_through; /* inclusive; 0 = none yet (tick 0 may match) */
+    uint8_t  resolved_valid;   /* 0 until first match advances watermark */
+} NetplayHashConfirm;
+
+void netplay_hc_reset(NetplayHashConfirm* hc);
+
+/* Record our digest after sim tick T completes. */
+void netplay_hc_note_local(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest);
+
+/* Record peer RB_FRAME_COMMIT (through_tick, state_hash). Advances watermark
+ * when it matches our local digest for that tick. */
+void netplay_hc_note_peer(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest);
+
+uint32_t netplay_hc_resolved_through(const NetplayHashConfirm* hc);
+uint8_t  netplay_hc_confirm_through(const NetplayHashConfirm* hc, uint32_t tick);
+
+/* Peek local digest for tick; returns 0 if missing. */
+uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
+                                uint32_t* digest_out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PSX_NETPLAY_HASH_CONFIRM_H */

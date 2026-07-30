@@ -204,6 +204,11 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/parity_trace.c
     ${PSXRECOMP_ROOT}/runtime/src/device_trace.c
     ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_snap_ring.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_state_digest.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_hash_confirm.c
+    ${PSXRECOMP_ROOT}/runtime/src/netplay_input_hist.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_rb.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c

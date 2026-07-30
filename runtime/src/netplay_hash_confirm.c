@@ -1,0 +1,86 @@
+#include "netplay_hash_confirm.h"
+
+#include <string.h>
+
+static uint32_t slot_of(uint32_t tick) {
+    return tick % NETPLAY_HC_RING;
+}
+
+void netplay_hc_reset(NetplayHashConfirm* hc) {
+    if (!hc) return;
+    memset(hc, 0, sizeof(*hc));
+}
+
+static void try_advance(NetplayHashConfirm* hc);
+
+void netplay_hc_note_local(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest) {
+    uint32_t i;
+    if (!hc) return;
+    i = slot_of(tick);
+    hc->local_tick[i] = tick;
+    hc->local_digest[i] = digest;
+    hc->local_valid[i] = 1u;
+    try_advance(hc);
+}
+
+static int local_at(const NetplayHashConfirm* hc, uint32_t tick, uint32_t* dig) {
+    uint32_t i = slot_of(tick);
+    if (!hc->local_valid[i] || hc->local_tick[i] != tick) return 0;
+    if (dig) *dig = hc->local_digest[i];
+    return 1;
+}
+
+static int peer_at(const NetplayHashConfirm* hc, uint32_t tick, uint32_t* dig) {
+    uint32_t i = slot_of(tick);
+    if (!hc->peer_valid[i] || hc->peer_tick[i] != tick) return 0;
+    if (dig) *dig = hc->peer_digest[i];
+    return 1;
+}
+
+static void try_advance(NetplayHashConfirm* hc) {
+    /* Advance contiguous matches starting just after current watermark. */
+    for (;;) {
+        uint32_t next;
+        uint32_t ld = 0, pd = 0;
+        if (!hc->resolved_valid)
+            next = 0u;
+        else {
+            if (hc->resolved_through == 0xffffffffu) return;
+            next = hc->resolved_through + 1u;
+        }
+        if (!local_at(hc, next, &ld) || !peer_at(hc, next, &pd))
+            return;
+        if (ld != pd)
+            return;
+        hc->resolved_through = next;
+        hc->resolved_valid = 1u;
+    }
+}
+
+void netplay_hc_note_peer(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest) {
+    uint32_t i;
+    if (!hc) return;
+    i = slot_of(tick);
+    hc->peer_tick[i] = tick;
+    hc->peer_digest[i] = digest;
+    hc->peer_valid[i] = 1u;
+    try_advance(hc);
+}
+
+uint32_t netplay_hc_resolved_through(const NetplayHashConfirm* hc) {
+    if (!hc || !hc->resolved_valid) return 0u;
+    return hc->resolved_through;
+}
+
+uint8_t netplay_hc_confirm_through(const NetplayHashConfirm* hc, uint32_t tick) {
+    if (!hc || !hc->resolved_valid) return 0u;
+    return (tick <= hc->resolved_through) ? 1u : 0u;
+}
+
+uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
+                                uint32_t* digest_out) {
+    uint32_t d = 0;
+    if (!hc || !local_at(hc, tick, &d)) return 0u;
+    if (digest_out) *digest_out = d;
+    return 1u;
+}

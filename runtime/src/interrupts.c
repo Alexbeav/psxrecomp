@@ -909,7 +909,9 @@ void psx_check_interrupts(CPUState* cpu) {
      * longjmps to the scheduler and never returns here. */
     if (!in_exception) {
         extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
         savestate_poll(cpu, s_last_interrupt_check_pc);
+        psx_netplay_poll_snap(cpu, s_last_interrupt_check_pc);
     }
 
     /* Deferred cooperative thread switch: honor at the next real thread-save

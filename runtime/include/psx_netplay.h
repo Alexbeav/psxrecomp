@@ -55,6 +55,9 @@ typedef struct PsxNetplayConfig {
     /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
      * Env PSX_NET_TRANSPORT=lan|ice overrides. */
     int         transport;
+    /* 0 = delay-sync (default), 1 = rollback invent/contract.
+     * Env PSX_NET_MODE=delay|rollback overrides. */
+    int         rollback;
     uint32_t    session_id;
     char        bind_hostport[64];
     char        peer_hostport[64];
@@ -169,6 +172,26 @@ void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
 void psx_netplay_normalize_pad(PsxNetPad *pad);
 
 void psx_netplay_release_pads(void);
+
+/*
+ * Bind the live CPUState for per-frame master digests (FRAME_COMMIT).
+ * Call once after CPU init (alongside debug_server_set_cpu).
+ */
+struct CPUState;
+void psx_netplay_bind_cpu(struct CPUState *cpu);
+
+/* Highest sim tick whose master digest matched the peer (0 if none). */
+uint32_t psx_netplay_resolved_through(void);
+/* 1 if peer master-hash watermark covers tick (hash_confirm_promote). */
+int  psx_netplay_hash_confirm_through(uint32_t tick);
+
+/* 1 when PSX_NET_MODE=rollback (invent + input contract path). */
+int  psx_netplay_rollback_mode(void);
+
+/* Safe BB-edge snap save/load (call beside savestate_poll when !in_exception). */
+void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc);
+/* 1 while a rollback episode is resimulating (mute audio / skip wall pacer). */
+int  psx_netplay_is_resimulating(void);
 
 #ifdef __cplusplus
 }

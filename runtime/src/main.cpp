@@ -3951,6 +3951,9 @@ static void sdl_vblank_present(void) {
             if (psx_return_to_lobby_requested()) return;
             netplay_barrier_admit(override_);
             if (skip_pace_ || psx_return_to_lobby_requested()) return;
+            /* Rollback resim: no wall pacing (same as catch-up). */
+            if (psx_netplay_is_resimulating())
+                return;
             /* Post-starvation / behind-peer catch-up: skip wall pace so admits
              * can burn down remote tip (mirrors snes_host_catchup_budget).
              * Never unpace during depth24 FMV — catch-up would race XA/video
@@ -4691,6 +4694,7 @@ namespace {
     int g_lnch_force_input_relay = 0;
     /* Default on: CGNAT-safe relay-only ICE (BattleShip-style online path). */
     int g_lnch_force_turn = 1;
+    int g_lnch_rollback = 0;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -5508,6 +5512,7 @@ namespace {
         if (caps.input_delay > 20) caps.input_delay = 20;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
+        caps.rollback = g_lnch_rollback != 0;
         return caps;
     }
 
@@ -5523,6 +5528,7 @@ namespace {
         if (caps.input_delay > 20) caps.input_delay = 20;
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
+        caps.rollback = g_lnch_rollback != 0;
         (void)psx_lobby_set_match_caps(&caps);
     }
 
@@ -5571,6 +5577,19 @@ namespace {
         if (g_lnch_hosting_lan || g_lnch_joined_lan)
             return 0; /* LAN/Direct IP does not use ICE TURN */
         g_lnch_force_turn = force ? 1 : 0;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+    int ae_np_rollback_get(void*) {
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid)
+                return caps->rollback ? 1 : 0;
+        }
+        return g_lnch_rollback;
+    }
+    int ae_np_rollback_set(void*, int enable) {
+        g_lnch_rollback = enable ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
     }
@@ -6690,6 +6709,8 @@ namespace {
             (caps && caps->valid && caps->force_input_relay) ? 1 : 0;
         out->force_turn =
             (caps && caps->valid && caps->force_turn) ? 1 : 0;
+        out->rollback =
+            (caps && caps->valid && caps->rollback) ? 1 : 0;
         return 1;
     }
 
@@ -6733,6 +6754,8 @@ namespace {
         ae_np_lobby_max_slots,
         ae_np_force_turn_get,
         ae_np_force_turn_set,
+        ae_np_rollback_get,
+        ae_np_rollback_set,
     };
 }  // namespace
 #endif
@@ -8005,6 +8028,7 @@ std::string player_device[PSX_MAX_PLAYERS];
                     net_cfg.input_delay = ls.netplay_launch.input_delay;
                     net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
                     net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
+                    net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                     net_cfg.player_count = ls.netplay_launch.player_count;
                     net_cfg.slot_count = ae_np_session_slot_count(
                         ls.netplay_launch.player_count, ls.netplay_launch.max_slots,
@@ -8699,6 +8723,8 @@ session_reboot:
 
     /* Wire debug server to CPU state for register queries. */
     debug_server_set_cpu(&cpu);
+    /* Master digests / FRAME_COMMIT for netplay hash_confirm watermark. */
+    psx_netplay_bind_cpu(&cpu);
 
     /* Execute. */
     std::fprintf(stdout, "psxrecomp runtime: executing from PC=0x%08X\n", cpu.pc);
@@ -9016,6 +9042,7 @@ soft_return_lobby:
                 net_cfg.input_delay = ls.netplay_launch.input_delay;
                 net_cfg.force_input_relay = ls.netplay_launch.force_input_relay ? 1 : 0;
                 net_cfg.force_turn = ls.netplay_launch.force_turn ? 1 : 0;
+                net_cfg.rollback = ls.netplay_launch.rollback ? 1 : 0;
                 net_cfg.player_count = ls.netplay_launch.player_count;
                 net_cfg.slot_count = ae_np_session_slot_count(
                     ls.netplay_launch.player_count, ls.netplay_launch.max_slots,

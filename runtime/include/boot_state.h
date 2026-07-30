@@ -98,6 +98,12 @@ enum {
 int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                      uint32_t entry_pc, const char* path);
 
+/* Same as boot_state_save, but into a malloc'd buffer (caller frees *out_data).
+ * Used by the netplay snap ring for per-tick in-memory snapshots. */
+int  boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
+                            uint32_t entry_pc, uint8_t** out_data,
+                            size_t* out_len);
+
 /* Load + validate (integrity key) + restore the full machine. On any mismatch
  * or incompleteness returns 0 (caller then boots normally and recaptures). */
 int  boot_state_load(const char* path, uint32_t bios_checksum,

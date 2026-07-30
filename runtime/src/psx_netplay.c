@@ -27,6 +27,12 @@
 
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/recomp_net.h"
+#include "recomp_net/input_contract.h"
+#include "netplay_hash_confirm.h"
+#include "netplay_input_hist.h"
+#include "netplay_state_digest.h"
+#include "psx_netplay_rb.h"
+#include "cpu_state.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
 #include "psx_lobby_client.h"
 #endif
@@ -114,6 +120,13 @@ void psx_netplay_apply_env(PsxNetplayConfig *cfg)
     v = getenv("PSX_NET_FORCE_TURN");
     if (v && v[0] && v[0] != '0')
         cfg->force_turn = 1;
+    v = getenv("PSX_NET_MODE");
+    if (v && v[0]) {
+        if (strcmp(v, "rollback") == 0 || strcmp(v, "rb") == 0)
+            cfg->rollback = 1;
+        else if (strcmp(v, "delay") == 0 || strcmp(v, "delay-sync") == 0)
+            cfg->rollback = 0;
+    }
 }
 
 void psx_netplay_normalize_pad(PsxNetPad *pad)
@@ -216,6 +229,16 @@ void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
     if (sim_tick_out) *sim_tick_out = 0;
     if (lead_out) *lead_out = 0;
 }
+void psx_netplay_bind_cpu(struct CPUState *cpu) { (void)cpu; }
+uint32_t psx_netplay_resolved_through(void) { return 0; }
+int psx_netplay_hash_confirm_through(uint32_t tick) { (void)tick; return 0; }
+int psx_netplay_rollback_mode(void) { return 0; }
+void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc)
+{
+    (void)cpu;
+    (void)resume_pc;
+}
+int psx_netplay_is_resimulating(void) { return 0; }
 
 #else /* PSX_HAS_RECOMP_NET */
 
@@ -288,9 +311,36 @@ typedef struct {
     char         match_mode[32];
     char         lobby_server[256];
     char         lobby_id[64];
+    /* Master digest / FRAME_COMMIT watermark (rollback hash_confirm). */
+    CPUState*          cpu;
+    NetplayHashConfirm hc;
+    /* Rollback invent / stick-replace contract (PSX_NET_MODE=rollback). */
+    int                rollback;
+    NetplayInputHist   ih;
+    /* Pending rewind from late wire (episode hookup is step 4). */
+    int                pending_rewind;
+    uint32_t           pending_rewind_tick;
+    int                pending_rewind_slot;
 } NetplayState;
 
 static NetplayState g_np;
+
+static void np_drain_peer_frame_commits(void)
+{
+    rnet_u32 through = 0, hash = 0;
+    if (!g_np.session) return;
+    while (rnet_session_take_rb_frame_commit(g_np.session, &through, &hash))
+        netplay_hc_note_peer(&g_np.hc, through, hash);
+}
+
+static void np_emit_frame_commit(uint32_t tick)
+{
+    uint32_t digest;
+    if (!g_np.cpu || !g_np.session) return;
+    digest = netplay_master_digest(g_np.cpu);
+    netplay_hc_note_local(&g_np.hc, tick, digest);
+    (void)rnet_session_send_rb_frame_commit(g_np.session, tick, digest);
+}
 
 static FILE *g_diag_file;
 static uint32_t g_diag_file_session;
@@ -893,6 +943,7 @@ static void np_commit_load_sync(void)
     rnet_session_set_input_send_suppress(g_np.session, 1);
     rnet_session_hard_resync(g_np.session);
     np_prime_after_hard_resync(); /* clears suppress + emits fresh tip */
+    netplay_hc_reset(&g_np.hc);
     g_np.load_sync_done = 1;
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
@@ -1065,6 +1116,179 @@ static void host_publish(rnet_u32 tick, const RNetInputSample *by_slot, int slot
         decode_pad(&by_slot[i], &pad);
         apply_pad_slot(i, &pad);
     }
+}
+
+typedef struct {
+    NetplayHashConfirm *hc;
+    uint32_t            tick;
+} NpHcGateCtx;
+
+static uint8_t np_hash_confirm_promote_gate(void *ctx)
+{
+    NpHcGateCtx *g = (NpHcGateCtx *)ctx;
+    if (!g || !g->hc) return 0;
+    return netplay_hc_confirm_through(g->hc, g->tick);
+}
+
+static void np_publish_hist_sio(uint32_t tick)
+{
+    int i;
+    force_session_pads_connected(g_np.slot_count);
+    for (i = 0; i < g_np.slot_count && i < PSX_MAX_PLAYERS; ++i) {
+        RNetRbFrame row;
+        PsxNetPad pad;
+        if (!netplay_ih_get(&g_np.ih, i, tick, &row))
+            continue;
+        netplay_ih_frame_to_pad(&row, &pad);
+        apply_pad_slot(i, &pad);
+    }
+}
+
+static void np_rb_apply_frame_slot(int slot, uint32_t tick, uint16_t buttons,
+                                   int8_t sx, int8_t sy)
+{
+    RNetRbFrame row;
+    PsxNetPad pad;
+    (void)tick;
+    memset(&row, 0, sizeof(row));
+    row.tick = tick;
+    row.buttons = buttons;
+    row.stick_x = sx;
+    row.stick_y = sy;
+    row.is_valid = 1;
+    netplay_ih_frame_to_pad(&row, &pad);
+    force_session_pads_connected(g_np.slot_count);
+    apply_pad_slot(slot, &pad);
+}
+
+static void np_rb_bind_and_start(void)
+{
+    PsxNetplayRbBindings b;
+    memset(&b, 0, sizeof(b));
+    b.session = &g_np.session;
+    b.cpu = &g_np.cpu;
+    b.ih = &g_np.ih;
+    b.hc = &g_np.hc;
+    b.bios_checksum = &g_np.bios_checksum;
+    b.entry_pc = &g_np.entry_pc;
+    b.slot_count = &g_np.slot_count;
+    b.local_slot = &g_np.local_slot;
+    b.input_delay = &g_np.input_delay;
+    b.publish_sio = np_publish_hist_sio;
+    b.apply_frame_slot = np_rb_apply_frame_slot;
+    psx_netplay_rb_bind(&b);
+    psx_netplay_rb_start();
+}
+
+/* Late authoritative wire vs published predicted rows → promote or queue rewind. */
+static void np_rollback_reconcile_wire(void)
+{
+    rnet_u32 sim;
+    rnet_u32 t;
+    int slot;
+    RNetInputContractParams params;
+    NpHcGateCtx gate_ctx;
+    RNetInputContractHostGates gates;
+
+    if (!g_np.rollback || !g_np.session) return;
+    if (!rnet_session_is_running(g_np.session)) return;
+
+    rnet_input_contract_params_init_defaults(&params);
+    memset(&gates, 0, sizeof(gates));
+    gate_ctx.hc = &g_np.hc;
+    gates.ctx = &gate_ctx;
+    gates.hash_confirm_promote = np_hash_confirm_promote_gate;
+
+    sim = rnet_session_sim_tick(g_np.session);
+    for (slot = 0; slot < g_np.slot_count; ++slot) {
+        if (slot == g_np.local_slot) continue;
+        for (t = (sim > 64u) ? (sim - 64u) : 0u; t <= sim; ++t) {
+            RNetRbFrame published;
+            RNetInputSample sample;
+            RNetRbFrame wire_frame;
+            RNetInputContractFrame pub_c, wire_c;
+            RNetInputContractDecision d;
+            uint8_t completed;
+            PsxNetPad pad;
+
+            if (!netplay_ih_get(&g_np.ih, slot, t, &published))
+                continue;
+            if (!published.is_predicted)
+                continue;
+            if (!rnet_session_peek_remote_input(g_np.session, slot, t, &sample))
+                continue;
+
+            decode_pad(&sample, &pad);
+            netplay_ih_pad_to_frame(&pad, t, 0, &wire_frame);
+            netplay_ih_frame_to_contract(&published, &pub_c);
+            netplay_ih_frame_to_contract(&wire_frame, &wire_c);
+            gate_ctx.tick = t;
+            completed = (sim > t) ? 1u : 0u;
+            d = rnet_input_contract_stick_replace_decide(
+                &pub_c, &wire_c, completed, &params, &gates);
+            if (rnet_input_contract_decision_is_rewind(d)) {
+                if (!g_np.pending_rewind) {
+                    g_np.pending_rewind = 1;
+                    g_np.pending_rewind_tick = t;
+                    g_np.pending_rewind_slot = slot;
+                    g_np.ih.rewind_count++;
+                    if (g_np.rollback) {
+                        psx_netplay_rb_begin_rewind(t, slot);
+                        g_np.pending_rewind = 0;
+                    }
+                }
+            } else {
+                (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+            }
+        }
+    }
+}
+
+/* Rollback admit: tip + invent remotes; never stall on missing remote. */
+static int np_try_admit_rollback(void)
+{
+    rnet_u32 sim = rnet_session_sim_tick(g_np.session);
+    RNetInputSample sample;
+    RNetRbFrame row;
+    PsxNetPad pad;
+    int slot;
+
+    if (!rnet_session_prepare_local_tip(g_np.session, sim))
+        return 0;
+
+    for (slot = 0; slot < g_np.slot_count; ++slot) {
+        if (slot == g_np.local_slot) {
+            if (rnet_session_peek_input(g_np.session, slot, sim, &sample)) {
+                decode_pad(&sample, &pad);
+                netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            } else if (g_np.staged_valid) {
+                netplay_ih_pad_to_frame(&g_np.staged, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            } else {
+                memset(&pad, 0, sizeof(pad));
+                pad.buttons = 0xFFFFu;
+                pad.lx = pad.ly = pad.rx = pad.ry = 0x80u;
+                pad.analog = 1;
+                pad.connected = 1;
+                netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            }
+            continue;
+        }
+
+        if (rnet_session_peek_remote_input(g_np.session, slot, sim, &sample)) {
+            decode_pad(&sample, &pad);
+            netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+            (void)netplay_ih_put(&g_np.ih, slot, &row);
+        } else {
+            (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
+        }
+    }
+
+    np_publish_hist_sio(sim);
+    g_np.needs_advance = 1;
+    return 1;
 }
 
 int psx_netplay_active(void)
@@ -1532,11 +1756,23 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     }
     np_diag_capture(cfg, slots);
     g_np.active = 1;
+    netplay_hc_reset(&g_np.hc);
+    g_np.rollback = cfg->rollback ? 1 : 0;
+    netplay_ih_reset(&g_np.ih, (int)rcfg.slot_count);
+    g_np.pending_rewind = 0;
+    g_np.pending_rewind_tick = 0;
+    g_np.pending_rewind_slot = 0;
+    if (g_np.rollback)
+        np_rb_bind_and_start();
     g_np.use_ice = use_ice ? 1 : 0;
     g_np.slot_count = (int)rcfg.slot_count;
     g_np_slot_count = g_np.slot_count;
     g_np.local_slot = (int)rcfg.local_slot;
     g_np.input_player = in_player;
+    if (g_np.rollback) {
+        printf("psxrecomp: netplay mode=rollback (invent + input contract)\n");
+        fflush(stdout);
+    }
     if (g_np.slot_count >= 3)
         sio_set_multitap(1);
     else
@@ -1676,8 +1912,15 @@ void psx_netplay_shutdown(void)
         rnet_session_destroy(g_np.session);
         g_np.session = NULL;
     }
+    psx_netplay_rb_shutdown();
+    psx_netplay_rb_bind(NULL);
     np_leave_guest_sandbox();
-    memset(&g_np, 0, sizeof(g_np));
+    {
+        CPUState *saved_cpu = g_np.cpu;
+        memset(&g_np, 0, sizeof(g_np));
+        g_np.cpu = saved_cpu;
+        netplay_hc_reset(&g_np.hc);
+    }
     np_starv_reset();
 }
 
@@ -2053,6 +2296,11 @@ static void np_pump_session(void)
 #endif
     drain_lobby_signals();
     rnet_session_pump(g_np.session);
+    np_drain_peer_frame_commits();
+    if (g_np.rollback) {
+        np_rollback_reconcile_wire();
+        psx_netplay_rb_pump();
+    }
     np_guest_handle_probe();
     np_maybe_stage_target_save();
     np_apply_ready_state();
@@ -2141,6 +2389,14 @@ int psx_netplay_poll_admit(void)
     /* Already published this tick and waiting for finish_frame — do not
      * re-admit / re-sample (would desync the delay rings). */
     if (g_np.needs_advance) return 1;
+
+    /* Rollback gameplay: invent missing remotes; skip delay-sync try_admit.
+     * Save/load/memcard xfer paths above still use delay-sync admit. */
+    if (g_np.rollback && g_np.xfer == NP_XFER_NONE) {
+        if (psx_netplay_rb_active())
+            return psx_netplay_rb_try_admit();
+        return np_try_admit_rollback();
+    }
 
     sim = rnet_session_sim_tick(g_np.session);
     enter_need = np_starv_env_int("PSX_NET_STARVATION_ENTER_FRAMES",
@@ -2252,12 +2508,60 @@ int psx_netplay_poll_admit(void)
 
 void psx_netplay_finish_frame(void)
 {
+    rnet_u32 done;
     if (!psx_netplay_active()) return;
+
+    if (g_np.rollback && psx_netplay_rb_is_resimulating()) {
+        psx_netplay_rb_finish_frame();
+        g_np.latched_for_tick = 0;
+        g_np.frames_finished++;
+        return;
+    }
+
     if (!g_np.needs_advance) return;
+    /* Digest the tick that just ran (sim_tick before advance). */
+    done = rnet_session_sim_tick(g_np.session);
+    np_emit_frame_commit(done);
+    if (g_np.rollback)
+        psx_netplay_rb_request_snap(done);
     rnet_session_advance(g_np.session);
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
     g_np.frames_finished++;
+}
+
+void psx_netplay_bind_cpu(struct CPUState *cpu)
+{
+    g_np.cpu = (CPUState*)cpu;
+}
+
+uint32_t psx_netplay_resolved_through(void)
+{
+    if (!psx_netplay_active()) return 0;
+    return netplay_hc_resolved_through(&g_np.hc);
+}
+
+int psx_netplay_hash_confirm_through(uint32_t tick)
+{
+    if (!psx_netplay_active()) return 0;
+    return netplay_hc_confirm_through(&g_np.hc, tick) ? 1 : 0;
+}
+
+int psx_netplay_rollback_mode(void)
+{
+    return psx_netplay_active() && g_np.rollback;
+}
+
+void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc)
+{
+    if (!psx_netplay_active() || !g_np.rollback)
+        return;
+    psx_netplay_rb_poll(cpu, resume_pc);
+}
+
+int psx_netplay_is_resimulating(void)
+{
+    return psx_netplay_active() && g_np.rollback && psx_netplay_rb_is_resimulating();
 }
 
 int psx_netplay_remote_lead(void)
