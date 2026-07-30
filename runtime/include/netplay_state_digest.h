@@ -21,6 +21,7 @@ extern "C" {
 uint32_t netplay_core_digest(const CPUState* cpu);
 uint32_t netplay_master_digest(const CPUState* cpu);
 uint32_t netplay_cdrom_digest(void);
+uint32_t netplay_av_digest(void); /* GPU + VRAM */
 
 #ifdef __cplusplus
 }

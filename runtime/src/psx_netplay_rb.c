@@ -85,8 +85,10 @@ static uint32_t snap_interval(void)
 }
 static int g_local_baseline_sent;
 static uint32_t g_local_baseline_digest;
+static uint32_t g_local_baseline_av;
 static int g_peer_baseline_ok;
 static uint32_t g_peer_baseline_digest;
+static uint32_t g_peer_baseline_av;
 static int g_peer_baseline_ready; /* dig_a flag: follower ACK after it has our baseline */
 static int g_local_baseline_ready_sent;
 static int g_local_post_sent;
@@ -94,6 +96,8 @@ static int g_peer_post_ok;
 static uint32_t g_peer_post_digest;
 static uint8_t g_peer_post_match;
 static uint32_t g_post_digest;
+static uint32_t g_post_av;
+static uint32_t g_peer_post_av;
 static int g_needs_advance;
 static int g_seal_export_logged;
 static int g_baseline_rexmit_logged;
@@ -115,6 +119,7 @@ static uint32_t g_stash_bl_epoch;
 static uint32_t g_stash_bl_load;
 static uint32_t g_stash_bl_dig_m;
 static uint32_t g_stash_bl_dig_a;
+static uint32_t g_stash_bl_dig_b;
 static int g_stash_bl_logged;
 static uint64_t g_baseline_handshake_ms; /* when local baseline first sent */
 static uint64_t g_last_baseline_burst_ms;
@@ -242,12 +247,16 @@ static void clear_episode_wire_state(void)
 {
     g_local_baseline_sent = 0;
     g_local_baseline_digest = 0;
+    g_local_baseline_av = 0;
     g_peer_baseline_ok = 0;
     g_peer_baseline_digest = 0;
+    g_peer_baseline_av = 0;
     g_peer_baseline_ready = 0;
     g_local_baseline_ready_sent = 0;
     g_local_post_sent = 0;
     g_peer_post_ok = 0;
+    g_post_av = 0;
+    g_peer_post_av = 0;
     g_baseline_rexmit_logged = 0;
     g_post_rexmit_logged = 0;
     g_seal_wait_ms = 0;
@@ -574,7 +583,8 @@ static void publish_sealed_sio(uint32_t tick)
 
 static void maybe_send_baseline(void);
 static void maybe_enter_replay(void);
-static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m, uint32_t dig_a);
+static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
+                                 uint32_t dig_a, uint32_t dig_b);
 static void apply_stashed_baseline(void);
 
 static void enter_awaiting_baseline(void)
@@ -596,18 +606,20 @@ static void enter_awaiting_baseline(void)
     apply_stashed_baseline();
 }
 
-static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m, uint32_t dig_a)
+static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
+                                 uint32_t dig_a, uint32_t dig_b)
 {
     (void)epoch;
     (void)load;
     g_peer_baseline_ok = 1;
     g_peer_baseline_digest = dig_m;
+    g_peer_baseline_av = dig_b;
     if (dig_a & RB_BL_FLAG_READY)
         g_peer_baseline_ready = 1;
     fprintf(stderr,
-            "psxrecomp: rb peer baseline epoch=%u load=%u core=%08x ready=%u "
+            "psxrecomp: rb peer baseline epoch=%u load=%u core=%08x av=%08x ready=%u "
             "(local_applied=%d phase=%d)\n",
-            (unsigned)epoch, (unsigned)load, (unsigned)dig_m,
+            (unsigned)epoch, (unsigned)load, (unsigned)dig_m, (unsigned)dig_b,
             (unsigned)(dig_a & RB_BL_FLAG_READY), g_episode_snap_applied,
             (int)rnet_rb_get_phase(g_rb));
     fflush(stderr);
@@ -626,13 +638,15 @@ static void apply_stashed_baseline(void)
             (unsigned)g_stash_bl_epoch, (unsigned)g_stash_bl_dig_m,
             (unsigned)(g_stash_bl_dig_a & RB_BL_FLAG_READY));
     fflush(stderr);
-    accept_peer_baseline(g_stash_bl_epoch, g_stash_bl_load, g_stash_bl_dig_m, g_stash_bl_dig_a);
+    accept_peer_baseline(g_stash_bl_epoch, g_stash_bl_load, g_stash_bl_dig_m,
+                         g_stash_bl_dig_a, g_stash_bl_dig_b);
 }
 
-static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m, uint32_t dig_a)
+static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
+                                     uint32_t dig_a, uint32_t dig_b)
 {
     if (g_rb && rnet_rb_is_active(g_rb) && epoch == rnet_rb_get_epoch_id(g_rb)) {
-        accept_peer_baseline(epoch, load, dig_m, dig_a);
+        accept_peer_baseline(epoch, load, dig_m, dig_a, dig_b);
         return;
     }
     /* Host often applies+sends before the follower has opened the episode —
@@ -642,6 +656,7 @@ static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig
     g_stash_bl_load = load;
     g_stash_bl_dig_m = dig_m;
     g_stash_bl_dig_a = dig_a;
+    g_stash_bl_dig_b = dig_b;
     if (!g_stash_bl_logged) {
         fprintf(stderr,
                 "psxrecomp: rb baseline stashed epoch=%u load=%u dig=%08x "
@@ -659,7 +674,7 @@ static void send_baseline_packet(int ready, int rexmit_log)
         return;
     (void)rnet_session_send_rb_baseline(s, rnet_rb_get_epoch_id(g_rb),
                                         rnet_rb_get_load_tick(g_rb), g_local_baseline_digest,
-                                        ready ? RB_BL_FLAG_READY : 0u, 0, 0);
+                                        ready ? RB_BL_FLAG_READY : 0u, g_local_baseline_av, 0);
     if (ready)
         g_local_baseline_ready_sent = 1;
     if (rexmit_log && !g_baseline_rexmit_logged) {
@@ -697,14 +712,16 @@ static void maybe_send_baseline(void)
     follower = rnet_rb_is_from_peer_notify(g_rb) ? 1 : 0;
     if (!g_local_baseline_sent) {
         g_local_baseline_digest = netplay_core_digest(c);
+        g_local_baseline_av = netplay_av_digest();
         g_local_baseline_sent = 1;
         g_baseline_handshake_ms = rb_mono_ms();
         g_last_baseline_burst_ms = 0; /* allow immediate burst */
         send_baseline_burst(0, RB_BASELINE_BURST, 0);
         fprintf(stderr,
-                "psxrecomp: rb baseline sent load=%u core=%08x cd=%08x (burst=%d)\n",
+                "psxrecomp: rb baseline sent load=%u core=%08x av=%08x cd=%08x (burst=%d)\n",
                 (unsigned)rnet_rb_get_load_tick(g_rb), (unsigned)g_local_baseline_digest,
-                (unsigned)netplay_cdrom_digest(), RB_BASELINE_BURST);
+                (unsigned)g_local_baseline_av, (unsigned)netplay_cdrom_digest(),
+                RB_BASELINE_BURST);
         fflush(stderr);
         return;
     }
@@ -737,6 +754,7 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     int n = g_b.slot_count ? *g_b.slot_count : 0;
     uint32_t dig = 0u;
     uint32_t core = 0u;
+    uint32_t av = netplay_av_digest();
     uint32_t cd = netplay_cdrom_digest();
     if (c) {
         CPUState dig_cpu = *c;
@@ -749,9 +767,9 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
         dig = netplay_master_digest(&dig_cpu);
     }
     fprintf(stderr,
-            "psxrecomp: rb audit %s sim=%u dig=%08x core=%08x cd=%08x cyc=%llu",
+            "psxrecomp: rb audit %s sim=%u dig=%08x core=%08x av=%08x cd=%08x cyc=%llu",
             tag ? tag : "?", (unsigned)sim, (unsigned)dig, (unsigned)core,
-            (unsigned)cd, (unsigned long long)psx_cycle_count);
+            (unsigned)av, (unsigned)cd, (unsigned long long)psx_cycle_count);
     for (slot = 0; slot < n; ++slot) {
         RNetRbFrame row;
         if (rnet_rb_get_sealed_frame(g_rb, slot, sim, &row) && row.is_valid)
@@ -795,6 +813,13 @@ static void maybe_enter_replay(void)
         char why[96];
         snprintf(why, sizeof(why), "baseline core mismatch local=%08x peer=%08x",
                  (unsigned)g_local_baseline_digest, (unsigned)g_peer_baseline_digest);
+        abort_episode_realign(why);
+        return;
+    }
+    if (g_peer_baseline_av != g_local_baseline_av) {
+        char why[112];
+        snprintf(why, sizeof(why), "baseline av mismatch local=%08x peer=%08x",
+                 (unsigned)g_local_baseline_av, (unsigned)g_peer_baseline_av);
         abort_episode_realign(why);
         return;
     }
@@ -1416,25 +1441,28 @@ void psx_netplay_rb_pump(void)
     }
 
     while (rnet_session_take_rb_baseline(s, &epoch, &load, &dig_m, &dig_a, &dig_b, &dig_c)) {
-        (void)dig_b;
         (void)dig_c;
-        stash_or_accept_baseline(epoch, load, dig_m, dig_a);
+        stash_or_accept_baseline(epoch, load, dig_m, dig_a, dig_b);
     }
 
     while (rnet_session_take_rb_post(s, &epoch, &target, &dig_m, &in_dig, &match)) {
-        (void)in_dig;
         if (!rnet_rb_is_active(g_rb) || epoch != rnet_rb_get_epoch_id(g_rb))
             continue;
         g_peer_post_ok = 1;
         g_peer_post_digest = dig_m;
+        g_peer_post_av = in_dig;
         g_peer_post_match = match;
         if (rnet_rb_get_phase(g_rb) == nRNetRbPhaseVerify && g_local_post_sent) {
-            if (dig_m == g_post_digest)
+            if (dig_m == g_post_digest && in_dig == g_post_av)
                 commit_episode();
             else {
-                char why[96];
-                snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
-                         (unsigned)g_post_digest, (unsigned)dig_m);
+                char why[128];
+                if (dig_m != g_post_digest)
+                    snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
+                             (unsigned)g_post_digest, (unsigned)dig_m);
+                else
+                    snprintf(why, sizeof(why), "post av diverge local=%08x peer=%08x",
+                             (unsigned)g_post_av, (unsigned)in_dig);
                 (void)g_peer_post_match;
                 rnet_rb_on_post_diverge(g_rb);
                 abort_episode_realign(why); /* lobby stays; Live rewinds to agreed tip */
@@ -1503,7 +1531,8 @@ void psx_netplay_rb_pump(void)
             g_post_rexmit_logged = 1;
         }
         (void)rnet_session_send_rb_post(s, rnet_rb_get_epoch_id(g_rb),
-                                        rnet_rb_get_target_tick(g_rb), g_post_digest, 0u, 1u);
+                                        rnet_rb_get_target_tick(g_rb), g_post_digest, g_post_av,
+                                        1u);
         if (g_verify_wait_ms == 0ull)
             g_verify_wait_ms = now;
         else if (now >= g_verify_wait_ms &&
@@ -1639,23 +1668,29 @@ void psx_netplay_rb_finish_frame(void)
         } else {
             g_post_digest = 0u;
         }
+        g_post_av = netplay_av_digest();
         rnet_rb_set_phase(g_rb, nRNetRbPhaseVerify);
         g_verify_wait_ms = rb_mono_ms();
-        (void)rnet_session_send_rb_post(s, rnet_rb_get_epoch_id(g_rb), done, g_post_digest, 0u,
-                                        1u);
+        (void)rnet_session_send_rb_post(s, rnet_rb_get_epoch_id(g_rb), done, g_post_digest,
+                                        g_post_av, 1u);
         g_local_post_sent = 1;
         g_post_rexmit_logged = 0;
         fprintf(stderr,
-                "psxrecomp: rb post sent core=%08x cd=%08x (peer_ok=%d)\n",
-                (unsigned)g_post_digest, (unsigned)netplay_cdrom_digest(), g_peer_post_ok);
+                "psxrecomp: rb post sent core=%08x av=%08x cd=%08x (peer_ok=%d)\n",
+                (unsigned)g_post_digest, (unsigned)g_post_av,
+                (unsigned)netplay_cdrom_digest(), g_peer_post_ok);
         fflush(stderr);
         if (g_peer_post_ok) {
-            if (g_peer_post_digest == g_post_digest)
+            if (g_peer_post_digest == g_post_digest && g_peer_post_av == g_post_av)
                 commit_episode();
             else {
-                char why[96];
-                snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
-                         (unsigned)g_post_digest, (unsigned)g_peer_post_digest);
+                char why[128];
+                if (g_peer_post_digest != g_post_digest)
+                    snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
+                             (unsigned)g_post_digest, (unsigned)g_peer_post_digest);
+                else
+                    snprintf(why, sizeof(why), "post av diverge local=%08x peer=%08x",
+                             (unsigned)g_post_av, (unsigned)g_peer_post_av);
                 rnet_rb_on_post_diverge(g_rb);
                 abort_episode_realign(why);
             }

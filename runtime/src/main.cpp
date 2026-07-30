@@ -1091,6 +1091,33 @@ static bool          g_vk_active = false;    /* Vulkan context live -> VK presen
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
 static int           g_gl_fbo_present = 1;
 
+/* Rollback/delay netplay: GL/VK keep FBO-authoritative VRAM and sync the CPU
+ * mirror via readback — host-GPU nondeterministic; forks peer snaps (core
+ * matched, VRAM zlib ~220KB apart) then mid-resim cores. SW is guest authority. */
+extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
+    static int s_locked;
+    if (s_locked)
+        return;
+    s_locked = 1;
+#ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active)
+        gl_renderer_sync_cpu();
+    if (g_vk_active)
+        vk_renderer_sync_cpu();
+#endif
+    gr_set_backend(GR_BACKEND_SOFTWARE);
+#ifndef PSX_SDL_NO_RENDER
+    g_gl_active = false;
+    g_vk_active = false;
+    g_gl_fbo_present = false;
+#endif
+    latency_ring_set_backend("software");
+    fprintf(stderr,
+            "psxrecomp: netplay forced software GPU "
+            "(GL/VK VRAM readback forks peers)\n");
+    fflush(stderr);
+}
+
 /* Vsync self-heal state (see SDL_RenderPresent wrapper in
  * sdl_vblank_present). C linkage: freeze_heartbeat.c includes both in
  * the freeze dump so a slow-frames wedge can be attributed to driver

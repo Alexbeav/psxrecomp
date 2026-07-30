@@ -1273,7 +1273,14 @@ static void flush_pack_if_sampling(int tpage_x, int tpage_y, int depth,
 
 /* ---- coherency: GPU -> CPU readback -------------------------------------- */
 static void ensure_cpu(void) {
+    extern int psx_netplay_active(void);
     if (!s_raster_ok || !s_gpu_dirty) return;
+    /* Netplay forces SW backend; if GL is still selected, never read back —
+     * glReadPixels forks peer VRAM (and therefore rollback snaps/resim). */
+    if (psx_netplay_active()) {
+        s_gpu_dirty = 0;
+        return;
+    }
     flush_flat_batch();
     flush_tex_batch();   /* realise queued textured draws before reading the FBO back */
     flush_cpu_upload();

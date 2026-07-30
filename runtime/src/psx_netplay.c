@@ -1825,6 +1825,8 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     }
     np_diag_capture(cfg, slots);
     g_np.active = 1;
+    /* Before any snap/resim: SW GPU so VRAM is bit-identical across peers. */
+    psx_frontend_netplay_force_sw_gpu();
     netplay_hc_reset(&g_np.hc);
     g_np.rollback = cfg->rollback ? 1 : 0;
     netplay_ih_reset(&g_np.ih, (int)rcfg.slot_count);

@@ -195,6 +195,10 @@ void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc);
 /* 1 while a rollback episode is resimulating (mute audio / skip wall pacer). */
 int  psx_netplay_is_resimulating(void);
 
+/* Force software GPU when netplay starts — GL/VK VRAM readback is host-GPU
+ * nondeterministic and forks rollback snaps/resim. Implemented in main.cpp. */
+void psx_frontend_netplay_force_sw_gpu(void);
+
 #ifdef __cplusplus
 }
 #endif

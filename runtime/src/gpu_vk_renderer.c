@@ -2173,7 +2173,12 @@ static void flush_cpu_upload(void) {
 
 /* GPU -> CPU mirror: drain batches, pack, copy the whole raw mirror down. */
 static void ensure_cpu(void) {
+    extern int psx_netplay_active(void);
     if (!s_ready || !s_gpu_dirty || !s_vram) return;
+    if (psx_netplay_active()) {
+        s_gpu_dirty = 0;
+        return;
+    }
     flush_cpu_upload();   /* readback overwrites s_vram: pending writes land first */
     flush_tex_batch(); flush_geometry();
     /* Readback must reflect ALL current hr content, not just the incremental

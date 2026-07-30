@@ -90,6 +90,9 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] Storm calm: 12-tick rewind cooldown + promote-sweep after commit/realign;
       MotK digital release-only → promote (no episode); freeze `cdrom_advance`
       during Replay (CD IRQ timing was forking POST cores)
+- [x] Netplay forces **software GPU** — GL/VK `glReadPixels` VRAM readback was
+      forking peer snaps (core matched, pin zlib ~220KB apart) and mid-resim
+      cores; baseline/POST also agree on `av=` (GPU+VRAM) via dig_b / POST input_digest
 - [ ] Memory budget / thinner snap: optional strip CDROM/MDEC if MotK match
       path allows (further FPS headroom)
 - [x] Standalone ring bookkeeping test: `runtime/tests/test_netplay_snap_ring.c`
