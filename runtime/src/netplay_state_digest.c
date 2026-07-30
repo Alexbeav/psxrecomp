@@ -16,6 +16,33 @@ extern void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
                                 uint32_t frac[3]);
 extern uint32_t gpu_snapshot_bytes(void);
 extern void     gpu_snapshot_write(uint8_t *p);
+extern uint32_t spu_snapshot_bytes(void);
+extern void     spu_snapshot_write(uint8_t *p);
+extern uint8_t* spu_get_ram_ptr(void);
+extern uint32_t spu_get_ram_bytes(void);
+extern uint32_t mdec_snapshot_bytes(void);
+extern void     mdec_snapshot_write(uint8_t *p);
+
+static uint32_t digest_module(uint32_t (*bytes_fn)(void), void (*write_fn)(uint8_t *))
+{
+    static uint8_t *buf;
+    static uint32_t cap;
+    uint32_t n;
+    if (!bytes_fn || !write_fn)
+        return 0u;
+    n = bytes_fn();
+    if (n == 0u)
+        return 0u;
+    if (n > cap) {
+        uint8_t *nbuf = (uint8_t *)realloc(buf, n);
+        if (!nbuf)
+            return 0u;
+        buf = nbuf;
+        cap = n;
+    }
+    write_fn(buf);
+    return crc32_compute(buf, n);
+}
 
 #define NP_RAM_SIZE (2u * 1024u * 1024u)
 
@@ -63,8 +90,13 @@ uint32_t netplay_av_digest(void)
     return crc ^ 0xFFFFFFFFu;
 }
 
-uint32_t netplay_core_digest(const CPUState* cpu)
+void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
 {
+    uint32_t crc_cpu = 0xFFFFFFFFu;
+    uint32_t crc_clk = 0xFFFFFFFFu;
+    uint32_t crc_tim = 0xFFFFFFFFu;
+    uint32_t crc_ram = 0xFFFFFFFFu;
+    uint32_t crc_drt = 0xFFFFFFFFu;
     uint32_t crc = 0xFFFFFFFFu;
     uint16_t counter[3], target[3];
     uint32_t mode[3], frac[3];
@@ -73,8 +105,18 @@ uint32_t netplay_core_digest(const CPUState* cpu)
     uint32_t i;
     uint8_t* ram;
 
-    if (!cpu) return 0;
+    if (out)
+        memset(out, 0, sizeof(*out));
+    if (!cpu)
+        return;
 
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->lo, sizeof(cpu->lo));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[12], sizeof(uint32_t));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[13], sizeof(uint32_t));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[14], sizeof(uint32_t));
     crc = crc32_update(crc, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
     crc = crc32_update(crc, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
     crc = crc32_update(crc, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
@@ -85,12 +127,20 @@ uint32_t netplay_core_digest(const CPUState* cpu)
 
     {
         uint64_t cyc = psx_cycle_count;
+        crc_clk = crc32_update(crc_clk, (const uint8_t*)&cyc, sizeof(cyc));
+        crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_stat, sizeof(i_stat));
+        crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_mask, sizeof(i_mask));
         crc = crc32_update(crc, (const uint8_t*)&cyc, sizeof(cyc));
+        crc = crc32_update(crc, (const uint8_t*)&i_stat, sizeof(i_stat));
+        crc = crc32_update(crc, (const uint8_t*)&i_mask, sizeof(i_mask));
     }
-    crc = crc32_update(crc, (const uint8_t*)&i_stat, sizeof(i_stat));
-    crc = crc32_update(crc, (const uint8_t*)&i_mask, sizeof(i_mask));
 
     timers_get_snapshot(counter, mode, target, irq_line, frac);
+    crc_tim = crc32_update(crc_tim, (const uint8_t*)counter, sizeof(counter));
+    crc_tim = crc32_update(crc_tim, (const uint8_t*)mode, sizeof(mode));
+    crc_tim = crc32_update(crc_tim, (const uint8_t*)target, sizeof(target));
+    crc_tim = crc32_update(crc_tim, (const uint8_t*)irq_line, sizeof(irq_line));
+    crc_tim = crc32_update(crc_tim, (const uint8_t*)frac, sizeof(frac));
     crc = crc32_update(crc, (const uint8_t*)counter, sizeof(counter));
     crc = crc32_update(crc, (const uint8_t*)mode, sizeof(mode));
     crc = crc32_update(crc, (const uint8_t*)target, sizeof(target));
@@ -98,15 +148,69 @@ uint32_t netplay_core_digest(const CPUState* cpu)
     crc = crc32_update(crc, (const uint8_t*)frac, sizeof(frac));
 
     ram = memory_get_ram_ptr();
-    if (ram)
+    if (ram) {
+        crc_ram = crc32_update(crc_ram, ram, NP_RAM_SIZE);
         crc = crc32_update(crc, ram, NP_RAM_SIZE);
+    }
 
     wc = dirty_ram_get_bitmap_word_count();
     for (i = 0; i < wc; i++) {
         uint32_t w = dirty_ram_get_bitmap_word(i);
+        crc_drt = crc32_update(crc_drt, (const uint8_t*)&w, sizeof(w));
         crc = crc32_update(crc, (const uint8_t*)&w, sizeof(w));
     }
 
+    if (out) {
+        out->cpu = crc_cpu ^ 0xFFFFFFFFu;
+        out->clock_irq = crc_clk ^ 0xFFFFFFFFu;
+        out->timers = crc_tim ^ 0xFFFFFFFFu;
+        out->ram = crc_ram ^ 0xFFFFFFFFu;
+        out->dirty = crc_drt ^ 0xFFFFFFFFu;
+        out->core = crc ^ 0xFFFFFFFFu;
+    }
+}
+
+uint32_t netplay_core_digest(const CPUState* cpu)
+{
+    NetplayCoreParts p;
+    netplay_core_digest_parts(cpu, &p);
+    return p.core;
+}
+
+uint32_t netplay_spu_digest(void)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t regs = digest_module(spu_snapshot_bytes, spu_snapshot_write);
+    const uint8_t *ram = spu_get_ram_ptr();
+    uint32_t ram_n = spu_get_ram_bytes();
+    crc = crc32_update(crc, (const uint8_t *)&regs, sizeof(regs));
+    if (ram && ram_n)
+        crc = crc32_update(crc, ram, ram_n);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t netplay_mdec_digest(void)
+{
+    return digest_module(mdec_snapshot_bytes, mdec_snapshot_write);
+}
+
+uint32_t netplay_aux_digest(void)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t spu = netplay_spu_digest();
+    uint32_t mdec = netplay_mdec_digest();
+    crc = crc32_update(crc, (const uint8_t *)&spu, sizeof(spu));
+    crc = crc32_update(crc, (const uint8_t *)&mdec, sizeof(mdec));
+    return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t netplay_baseline_ext_digest(void)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t aux = netplay_aux_digest();
+    uint32_t cd = netplay_cdrom_digest();
+    crc = crc32_update(crc, (const uint8_t *)&aux, sizeof(aux));
+    crc = crc32_update(crc, (const uint8_t *)&cd, sizeof(cd));
     return crc ^ 0xFFFFFFFFu;
 }
 

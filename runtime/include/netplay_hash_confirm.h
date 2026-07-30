@@ -31,6 +31,11 @@ typedef struct NetplayHashConfirm {
 
 void netplay_hc_reset(NetplayHashConfirm* hc);
 
+/* Clear the ring and set resolved_through = last_ok so the next compared tick
+ * is last_ok+1. Used at Replay entry to drop live invent FRAME_COMMITs that
+ * would false-trigger mid-resim diverge aborts. */
+void netplay_hc_prime_after(NetplayHashConfirm* hc, uint32_t last_ok);
+
 /* Record our digest after sim tick T completes. */
 void netplay_hc_note_local(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest);
 
@@ -44,6 +49,11 @@ uint8_t  netplay_hc_confirm_through(const NetplayHashConfirm* hc, uint32_t tick)
 /* Peek local digest for tick; returns 0 if missing. */
 uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
                                 uint32_t* digest_out);
+
+/* 1 if the next tick after resolved_through has both digests but they differ.
+ * Fills tick/local/peer when non-NULL. Used to log first live core fork. */
+uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_out,
+                                 uint32_t* local_out, uint32_t* peer_out);
 
 #ifdef __cplusplus
 }

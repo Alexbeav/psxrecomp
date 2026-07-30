@@ -134,6 +134,27 @@ int netplay_ih_invent_hold_last(NetplayInputHist *h, int slot, uint32_t tick,
     return 1;
 }
 
+int netplay_ih_invent_idle(NetplayInputHist *h, int slot, uint32_t tick,
+                           RNetRbFrame *out)
+{
+    RNetRbFrame invented;
+
+    if (!h || slot < 0 || slot >= h->slot_count) return 0;
+
+    memset(&invented, 0, sizeof(invented));
+    invented.tick = tick;
+    invented.buttons = 0xFFFFu;
+    invented.analog = 0u;
+    invented.is_predicted = 1u;
+    invented.is_valid = 1u;
+    /* stick_x/y = 0 → neutral 0x80 via frame_to_pad */
+
+    if (!netplay_ih_put(h, slot, &invented)) return 0;
+    h->invent_count++;
+    if (out) *out = invented;
+    return 1;
+}
+
 int netplay_ih_promote(NetplayInputHist *h, int slot, const RNetRbFrame *wire)
 {
     RNetRbFrame auth;

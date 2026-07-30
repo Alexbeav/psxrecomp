@@ -858,6 +858,18 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     post_load_probe_arm();
 }
 
+/* Rollback snap apply / realign — keep depth24 hold clear + restage, but do
+ * NOT run the full savestate present thrash (force_present, cutover gap reset,
+ * post_load_probe). That path is for one-shot disk loads; episode loads during
+ * MotK FMV were scrambling the movie. */
+extern "C" void psx_frontend_on_rb_snap_loaded(void) {
+    g_audio_cycle_resync = 1;
+    gpu_depth24_on_savestate_loaded();
+    s_d24_cutover_blank = 0;
+    gl_renderer_restage_vram_after_savestate();
+    vk_renderer_restage_vram_after_savestate();
+}
+
 static uint64_t smooth_60_frame_hash(const uint32_t* pixels, size_t count) {
     uint64_t hash = 1469598103934665603ull;
     const size_t step = std::max<size_t>(1, count / 4096u);
@@ -1091,25 +1103,94 @@ static bool          g_vk_active = false;    /* Vulkan context live -> VK presen
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
 static int           g_gl_fbo_present = 1;
 
+/* Cleared on lobby soft-return so rematch can re-arm SW GPU. */
+static int s_netplay_sw_gpu_locked;
+
+#ifndef PSX_SDL_NO_RENDER
+/* Create SDL_Renderer + streaming texture for software present. Used when
+ * netplay starts after a GL/VK window was already built (g_gl_active cleared
+ * without this → null renderer, black window, FPS still counting). */
+static int ensure_sw_sdl_present(void) {
+    if (!sdl_window)
+        return -1;
+    if (!sdl_renderer) {
+#ifdef _WIN32
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+#endif
+        Uint32 rflags = SDL_RENDERER_ACCELERATED |
+                        (g_video_vsync != 0 ? SDL_RENDERER_PRESENTVSYNC : 0u);
+        sdl_renderer = SDL_CreateRenderer(sdl_window, -1, rflags);
+        if (!sdl_renderer)
+            sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
+        if (!sdl_renderer) {
+            std::fprintf(stderr,
+                         "psxrecomp: netplay SW present: SDL_CreateRenderer failed: %s\n",
+                         SDL_GetError());
+            return -1;
+        }
+        g_logical_w = 480 * g_video_aspect_num * g_video_scale / g_video_aspect_den;
+        if (g_logical_w < 1) g_logical_w = 640;
+        SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
+    }
+    if (!sdl_texture) {
+        sdl_texture = SDL_CreateTexture(
+            sdl_renderer,
+            SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING,
+            640 * g_video_scale, 512 * g_video_scale);
+        if (!sdl_texture) {
+            std::fprintf(stderr,
+                         "psxrecomp: netplay SW present: SDL_CreateTexture failed: %s\n",
+                         SDL_GetError());
+            return -1;
+        }
+        SDL_SetTextureScaleMode(sdl_texture,
+                                g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    }
+    if (!sdl_pixel_buf) {
+        sdl_pixel_buf = (uint32_t*)std::malloc(
+            (size_t)640 * g_video_scale * 512 * g_video_scale * sizeof(uint32_t));
+        if (!sdl_pixel_buf) {
+            std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+#endif
+
 /* Rollback/delay netplay: GL/VK keep FBO-authoritative VRAM and sync the CPU
  * mirror via readback — host-GPU nondeterministic; forks peer snaps (core
  * matched, VRAM zlib ~220KB apart) then mid-resim cores. SW is guest authority. */
 extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
-    static int s_locked;
-    if (s_locked)
+    if (s_netplay_sw_gpu_locked)
         return;
-    s_locked = 1;
+    s_netplay_sw_gpu_locked = 1;
 #ifndef PSX_SDL_NO_RENDER
-    if (g_gl_active)
+    const int had_hw = g_gl_active || g_vk_active;
+    if (g_gl_active) {
         gl_renderer_sync_cpu();
-    if (g_vk_active)
+        gl_renderer_shutdown();
+        g_gl_active = false;
+    }
+    if (g_vk_active) {
         vk_renderer_sync_cpu();
+        vk_renderer_shutdown();
+        g_vk_active = false;
+    }
+    g_gl_fbo_present = false;
 #endif
     gr_set_backend(GR_BACKEND_SOFTWARE);
+    g_video_renderer = 0;
 #ifndef PSX_SDL_NO_RENDER
-    g_gl_active = false;
-    g_vk_active = false;
-    g_gl_fbo_present = false;
+    /* Late switch (window already OPENGL/VULKAN): build SDL present path. */
+    if (had_hw || !sdl_renderer) {
+        if (ensure_sw_sdl_present() != 0) {
+            std::fprintf(stderr,
+                         "psxrecomp: netplay SW GPU forced but present path failed "
+                         "(expect black frame)\n");
+        }
+    }
 #endif
     latency_ring_set_backend("software");
     fprintf(stderr,
@@ -1752,6 +1833,8 @@ static void teardown_game_session_keep_lobby(void) {
     if (sdl_renderer) { SDL_DestroyRenderer(sdl_renderer); sdl_renderer = nullptr; }
     if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
     if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; }
+    /* Rematch must re-run force_sw (and prefer SW at session_reboot). */
+    s_netplay_sw_gpu_locked = 0;
     psx_lobby_set_ready(0);
     psx_lobby_clear_launch_pending();
 #if defined(PSX_HAS_LOBBY_CLIENT)
@@ -4510,6 +4593,21 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_Rect src = { 0, 0, src_w, src_h };
     SDL_UpdateTexture(sdl_texture, &src, sdl_pixel_buf,
                       (int)(src_w * sizeof(uint32_t)));
+    /* Short FMV bands only update [0..src_h). Linear sampling at the bottom
+     * edge blends with uninitialized texels below (X11 SDL backends often
+     * show that as a thin white strip; Wayland may not). Pad one black row
+     * so any residual linear fringe is black, matching the letterbox. */
+    const int tex_h = 512 * g_video_scale;
+    if (src_w > 0 && src_h > 0 && src_h < tex_h) {
+        static uint32_t s_black_pad[640 * 4]; /* covers g_video_scale <= 4 */
+        const int pad_cap = (int)(sizeof(s_black_pad) / sizeof(s_black_pad[0]));
+        const int pad_w = (src_w <= pad_cap) ? src_w : pad_cap;
+        for (int i = 0; i < pad_w; i++)
+            s_black_pad[i] = 0xFF000000u;
+        SDL_Rect pad = { 0, src_h, pad_w, 1 };
+        SDL_UpdateTexture(sdl_texture, &pad, s_black_pad,
+                          (int)(pad_w * sizeof(uint32_t)));
+    }
 
     /* FMV (24-bit) frames are authored 4:3 with no GTE squash to compensate
      * the widescreen stretch — pillarbox them at native 4:3 instead. Same for
@@ -4525,6 +4623,22 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         dst.y = (dst_h - content_h) / 2;
         dst.h = content_h;
     }
+    /* Match GL depth24 nearest present — linear AA fringes short FMV bands
+     * into the pad/unwritten row. Restore AA scale mode for 15-bit frames. */
+    {
+        static int s_sw_scale_nearest = -1;
+        const int want_nearest = depth24_frame || !g_video_aa;
+        if (s_sw_scale_nearest != want_nearest) {
+            SDL_SetTextureScaleMode(sdl_texture,
+                                    want_nearest ? SDL_ScaleModeNearest
+                                                 : SDL_ScaleModeLinear);
+            s_sw_scale_nearest = want_nearest;
+        }
+    }
+    /* Always clear black: hot-path RenderClear used to inherit the backend
+     * default draw color (often white), so letterbox margins under short FMV
+     * bands flashed as a bright strip on some X11 SDL drivers. */
+    SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
 
@@ -8274,6 +8388,16 @@ session_reboot:
         g_video_renderer = 1;
     }
 #endif
+    /* Netplay: pick software before window/GL init so SDL_Renderer exists from
+     * the first present. Late force_sw after GL left g_gl_active=false with a
+     * null renderer → black first match (rematch recreated GL and "worked"). */
+    if (net_cfg.enabled && g_video_renderer != 0) {
+        std::fprintf(stdout,
+                     "psxrecomp: netplay — selecting software GPU before window "
+                     "(was %s; GL/VK VRAM readback forks peers)\n",
+                     g_video_renderer == 2 ? "vulkan" : "opengl");
+        g_video_renderer = 0;
+    }
     /* Select the renderer backend BEFORE gpu_init() (which runs gr_init ->
      * the backend's init on the VRAM buffer). Software is the default and the
      * fallback; an unavailable OpenGL backend reverts to software. */
@@ -8966,6 +9090,17 @@ session_reboot:
         if (psx_return_to_lobby_requested())
             goto soft_return_lobby;
         netplay_host_present_uncap();
+        /* Idle-skip advances guest cycles without CD/device aging in lockstep —
+         * force off so both peers share the same CD FSM (dig_c folds CD). */
+        {
+            extern int g_idle_skip_enabled;
+            if (g_idle_skip_enabled != 0) {
+                g_idle_skip_enabled = 0;
+                std::printf("psxrecomp: netplay — idle_skip forced off\n");
+                std::fflush(stdout);
+            }
+        }
+        g_auto_skip_fmv = 0;
         std::printf("psxrecomp: netplay lockstep armed (sim_tick=%u, vsync off)\n",
                     (unsigned)psx_netplay_sim_tick());
         std::fflush(stdout);

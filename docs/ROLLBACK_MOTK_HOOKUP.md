@@ -5,7 +5,7 @@ Status: **hooked (experimental)** · branch `feat/rollback-netplay` · depends o
 
 Today MotK / psxrecomp lobby netplay defaults to **rollback**:
 `stage_local → poll_admit (invent within P) → guest frame → finish_frame`.
-Missing remotes are invented (hold-last) only while
+Missing remotes are invented (**idle**, not hold-last — MotK digital) only while
 `wire_need ≤ highest_remote + P`; outside that window admit stalls (BattleShip
 phase_lock). Late wire goes through the input contract; rewinds open an
 `RNetRbSession` episode. Host **Disable Rollback** (or `PSX_NET_MODE=delay`)
@@ -88,11 +88,36 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] Baseline/POST/hash_confirm agree on **core** digest only (`cd=` audit);
       CD-only forks were aborting good title/menu Start corrections
 - [x] Storm calm: 12-tick rewind cooldown + promote-sweep after commit/realign;
-      MotK digital release-only → promote (no episode); freeze `cdrom_advance`
-      during Replay (CD IRQ timing was forking POST cores)
+      MotK digital release-only → promote (no episode) **only while cores still
+      match**; else open episode. Live/seal invent is **idle** (not hold-last).
+      Freeze `cdrom_advance` during Replay (CD IRQ timing was forking POST cores)
 - [x] Netplay forces **software GPU** — GL/VK `glReadPixels` VRAM readback was
       forking peer snaps (core matched, pin zlib ~220KB apart) and mid-resim
       cores; baseline/POST also agree on `av=` (GPU+VRAM) via dig_b / POST input_digest
+- [x] SW GPU **before window** + late `force_sw` builds `SDL_Renderer` after GL
+      teardown (first match was black: cleared `g_gl_active` with null present)
+- [x] No rollback episodes during depth24 / recent MDEC (FMV-defer); CD-frozen
+      Replay was scrambling movies — promote late wire until 15-bit gameplay
+- [x] FMV lockstep: stall admit (no invent) during movie + ~90-tick settle after
+      cutover; baseline-mismatch without agreed tip uses 60-tick cooldown
+- [x] MDEC snap `last_color_age` is guest-cycle relative (was host
+      `s_frame_count` → false baseline aux trips with matched FIFO/SPU)
+- [x] Diag: `rb wire promote-no-resim` / `rewind-request` — late wire into hist
+      without resim (cooldown/FMV/sweep) vs real episode open / begin refused
+- [x] Diag: `rb live dig` every 32 ticks + `rb FIRST CORE DIVERGE` (FRAME_COMMIT
+      mismatch) with core partitions (cpu/clk/tim/ram/dirty) + av/cd — find when
+      peers fork before the first doomed baseline abort
+- [x] Baseline `dig_c` = **ext** = crc(aux, cd) — gate before Replay; matched
+      core/av/aux with divergent CD (pin zlib ~200KB) was doomed resim. Wire
+      still dig_c; logs print `ext=` + raw `cd=`/`aux=`. Zero host
+      `last_sector_frame` on CD snap wire. mid-Replay FRAME_COMMIT abort on
+      core mismatch (no false POST); `rb audit fin` logs parts + aux
+- [x] Replay entry: `hc_prime_after(load-1)` drops live invent commits (false
+      `resim core diverge`); first `ready=1` baseline burst bypasses rate limit
+      (initiator was ready-timeout while follower solo-Replayed)
+- [x] Present-edge digests clear PC (FRAME_COMMIT / audit fin / POST) — parked
+      `cpu->pc=0` vs live BB + host-local sticky forked dig_cpu with matched
+      RAM/clk; `rb cpu-split` logs gpr/hi_lo/cop0 vs raw_pc
 - [ ] Memory budget / thinner snap: optional strip CDROM/MDEC if MotK match
       path allows (further FPS headroom)
 - [x] Standalone ring bookkeeping test: `runtime/tests/test_netplay_snap_ring.c`
@@ -178,7 +203,8 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] Netplay clears mods (`mod_runtime_clear_for_netplay` / launcher hook)
 - [x] Same BIOS stem + disc identity on both peers (existing verify)
 - [ ] Audit non-deterministic host clocks in sim path — soak-driven
-- [ ] FMV / depth24: pause invent or prove digest stability during movies
+- [x] FMV / depth24: defer rewind (promote wire only); follow NACKs; RB snap
+      load uses light frontend hook (no FMV cutover/present thrash)
 - [x] Multitap / N-slot: history + seal tables sized to `slot_count`
 
 ---

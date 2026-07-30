@@ -79,6 +79,8 @@ int savestate_take_load_failed(void);
 
 /* Frontend hook (main.cpp): restage VRAM present path after a successful load. */
 void psx_frontend_on_savestate_loaded(void);
+/* Rollback snap apply: depth24 hold clear + restage without FMV cutover thrash. */
+void psx_frontend_on_rb_snap_loaded(void);
 
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and

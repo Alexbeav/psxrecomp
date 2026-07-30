@@ -332,21 +332,132 @@ typedef struct {
 
 static NetplayState g_np;
 
+/* Local partition ring aligned with FRAME_COMMIT — explain first core fork. */
+#define NP_PART_RING 128u
+typedef struct NpPartSlot {
+    uint32_t tick;
+    NetplayCoreParts parts;
+    uint32_t av;
+    uint32_t cd;
+    uint32_t aux;
+    uint8_t  valid;
+} NpPartSlot;
+static NpPartSlot s_part_ring[NP_PART_RING];
+static int s_core_diverge_logged;
+static uint32_t s_live_dig_last_tick = 0xffffffffu;
+
+static void np_part_ring_reset(void)
+{
+    memset(s_part_ring, 0, sizeof(s_part_ring));
+    s_core_diverge_logged = 0;
+    s_live_dig_last_tick = 0xffffffffu;
+}
+
+static void np_part_ring_put(uint32_t tick, const NetplayCoreParts *parts,
+                             uint32_t av, uint32_t cd, uint32_t aux)
+{
+    NpPartSlot *s = &s_part_ring[tick % NP_PART_RING];
+    s->tick = tick;
+    s->parts = *parts;
+    s->av = av;
+    s->cd = cd;
+    s->aux = aux;
+    s->valid = 1u;
+}
+
+static const NpPartSlot *np_part_ring_get(uint32_t tick)
+{
+    const NpPartSlot *s = &s_part_ring[tick % NP_PART_RING];
+    if (!s->valid || s->tick != tick)
+        return NULL;
+    return s;
+}
+
+static void np_log_live_digest(uint32_t tick, const NetplayCoreParts *parts,
+                               uint32_t av, uint32_t cd, uint32_t aux,
+                               const char *tag)
+{
+    fprintf(stderr,
+            "psxrecomp: rb live dig %s sim=%u core=%08x cpu=%08x clk=%08x "
+            "tim=%08x ram=%08x dirty=%08x av=%08x cd=%08x aux=%08x\n",
+            tag ? tag : "tick", (unsigned)tick, (unsigned)parts->core,
+            (unsigned)parts->cpu, (unsigned)parts->clock_irq,
+            (unsigned)parts->timers, (unsigned)parts->ram,
+            (unsigned)parts->dirty, (unsigned)av, (unsigned)cd,
+            (unsigned)aux);
+    fflush(stderr);
+}
+
+static void np_check_core_diverge(void)
+{
+    uint32_t tick = 0, local_d = 0, peer_d = 0;
+    const NpPartSlot *slot;
+    if (!netplay_hc_peek_mismatch(&g_np.hc, &tick, &local_d, &peer_d))
+        return;
+    /* Replay/Verify: never allow a false POST commit after mid-resim fork. */
+    if (psx_netplay_rb_abort_resim_core_mismatch(tick, local_d, peer_d))
+        return;
+    if (s_core_diverge_logged)
+        return;
+    s_core_diverge_logged = 1;
+    slot = np_part_ring_get(tick);
+    if (slot) {
+        fprintf(stderr,
+                "psxrecomp: rb FIRST CORE DIVERGE sim=%u local=%08x peer=%08x "
+                "| local parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
+                "av=%08x cd=%08x aux=%08x (compare peer rb live dig at same sim)\n",
+                (unsigned)tick, (unsigned)local_d, (unsigned)peer_d,
+                (unsigned)slot->parts.cpu, (unsigned)slot->parts.clock_irq,
+                (unsigned)slot->parts.timers, (unsigned)slot->parts.ram,
+                (unsigned)slot->parts.dirty, (unsigned)slot->av,
+                (unsigned)slot->cd, (unsigned)slot->aux);
+    } else {
+        fprintf(stderr,
+                "psxrecomp: rb FIRST CORE DIVERGE sim=%u local=%08x peer=%08x "
+                "(local parts aged out of ring — see prior rb live dig lines)\n",
+                (unsigned)tick, (unsigned)local_d, (unsigned)peer_d);
+    }
+    fflush(stderr);
+}
+
 static void np_drain_peer_frame_commits(void)
 {
     rnet_u32 through = 0, hash = 0;
     if (!g_np.session) return;
     while (rnet_session_take_rb_frame_commit(g_np.session, &through, &hash))
         netplay_hc_note_peer(&g_np.hc, through, hash);
+    np_check_core_diverge();
 }
 
 static void np_emit_frame_commit(uint32_t tick)
 {
-    uint32_t digest;
+    NetplayCoreParts parts;
+    CPUState dig_cpu;
+    uint32_t av = 0u;
+    uint32_t cd = 0u;
+    uint32_t aux = 0u;
+    int crumb;
     if (!g_np.cpu || !g_np.session) return;
-    digest = netplay_core_digest(g_np.cpu);
-    netplay_hc_note_local(&g_np.hc, tick, digest);
-    (void)rnet_session_send_rb_frame_commit(g_np.session, tick, digest);
+    /* Present-edge: clear PC so parked-0 vs live-BB does not fork FRAME_COMMIT
+     * while GPRs/RAM/clk match (was aborting good Replay on dig_cpu alone). */
+    psx_netplay_rb_cpu_for_present_digest(&dig_cpu, g_np.cpu);
+    netplay_core_digest_parts(&dig_cpu, &parts);
+    /* av/cd/aux every 32 ticks — VRAM + SPU-RAM CRC every frame is too heavy. */
+    crumb = (tick == 0u || (tick % 32u) == 0u);
+    if (crumb) {
+        av = netplay_av_digest();
+        cd = netplay_cdrom_digest();
+        aux = netplay_aux_digest();
+    }
+    np_part_ring_put(tick, &parts, av, cd, aux);
+    netplay_hc_note_local(&g_np.hc, tick, parts.core);
+    (void)rnet_session_send_rb_frame_commit(g_np.session, tick, parts.core);
+    /* Breadcrumbs so both peers' logs line up by sim tick. */
+    if (crumb && s_live_dig_last_tick != tick) {
+        s_live_dig_last_tick = tick;
+        np_log_live_digest(tick, &parts, av, cd, aux, "ok");
+    }
+    np_check_core_diverge();
 }
 
 static FILE *g_diag_file;
@@ -951,6 +1062,7 @@ static void np_commit_load_sync(void)
     rnet_session_hard_resync(g_np.session);
     np_prime_after_hard_resync(); /* clears suppress + emits fresh tip */
     netplay_hc_reset(&g_np.hc);
+    np_part_ring_reset();
     g_np.load_sync_done = 1;
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
@@ -1189,7 +1301,8 @@ static void np_rb_bind_and_start(void)
 }
 
 /* MotK digital (active-low): wire only releases buttons vs invent; sticks equal.
- * Menu press/release thrash opened an episode every edge — soft-promote releases. */
+ * Menu press/release thrash opened an episode every edge — soft-promote releases
+ * only while cores still match (see reconcile). */
 static int np_digital_release_only(const RNetInputContractFrame *pub,
                                    const RNetInputContractFrame *wire)
 {
@@ -1206,7 +1319,9 @@ static int np_digital_release_only(const RNetInputContractFrame *pub,
     return newly_pressed == 0 && newly_released != 0;
 }
 
-/* Late authoritative wire vs published predicted rows → promote or queue rewind. */
+/* Late authoritative wire vs published predicted rows → promote or queue rewind.
+ * Diag: promote-no-resim means hist took the late pad but guest sim did not
+ * rewind — looks like "remote input rejected" when cadence already drifted. */
 static void np_rollback_reconcile_wire(void)
 {
     rnet_u32 sim;
@@ -1214,6 +1329,21 @@ static void np_rollback_reconcile_wire(void)
     int slot;
     int promote_sweep;
     int cooldown;
+    int fmv_defer;
+    int no_resim;
+    /* Per-pump counters (one summary line when anything interesting happens). */
+    unsigned n_no_resim = 0;
+    unsigned n_soft_release = 0;
+    unsigned n_contract_promote = 0;
+    unsigned n_episode_open = 0;
+    unsigned n_begin_refused = 0;
+    rnet_u32 first_no_resim_t = 0;
+    int first_no_resim_slot = -1;
+    uint16_t first_pub_btn = 0;
+    uint16_t first_wire_btn = 0;
+    rnet_u32 first_rewind_t = 0;
+    int first_rewind_slot = -1;
+    const char *no_resim_why = NULL;
     RNetInputContractParams params;
     NpHcGateCtx gate_ctx;
     RNetInputContractHostGates gates;
@@ -1229,6 +1359,15 @@ static void np_rollback_reconcile_wire(void)
 
     promote_sweep = psx_netplay_rb_take_promote_sweep();
     cooldown = psx_netplay_rb_rewind_suppressed();
+    fmv_defer = psx_netplay_rb_fmv_defer_rewind();
+    /* FMV: never open episodes — same promote path as cooldown. */
+    no_resim = promote_sweep || cooldown || fmv_defer;
+    if (fmv_defer)
+        no_resim_why = "fmv";
+    else if (promote_sweep)
+        no_resim_why = "sweep";
+    else if (cooldown)
+        no_resim_why = "cooldown";
     sim = rnet_session_sim_tick(g_np.session);
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) continue;
@@ -1242,6 +1381,7 @@ static void np_rollback_reconcile_wire(void)
             PsxNetPad pad;
             rnet_u32 wire;
             rnet_u8 delay_u8;
+            int pads_differ;
 
             if (!netplay_ih_get(&g_np.ih, slot, t, &published))
                 continue;
@@ -1258,9 +1398,21 @@ static void np_rollback_reconcile_wire(void)
             netplay_ih_pad_to_frame(&pad, t, 0, &wire_frame);
             netplay_ih_frame_to_contract(&published, &pub_c);
             netplay_ih_frame_to_contract(&wire_frame, &wire_c);
-            /* After commit/realign: flush invent poison without another episode. */
-            if (promote_sweep || cooldown) {
+            pads_differ = (pub_c.buttons != wire_c.buttons) ||
+                          (pub_c.stick_x != wire_c.stick_x) ||
+                          (pub_c.stick_y != wire_c.stick_y);
+            /* After commit/realign/FMV: flush invent poison without another episode. */
+            if (no_resim) {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                if (pads_differ) {
+                    if (n_no_resim == 0) {
+                        first_no_resim_t = t;
+                        first_no_resim_slot = slot;
+                        first_pub_btn = pub_c.buttons;
+                        first_wire_btn = wire_c.buttons;
+                    }
+                    n_no_resim++;
+                }
                 continue;
             }
             gate_ctx.tick = t;
@@ -1268,8 +1420,19 @@ static void np_rollback_reconcile_wire(void)
             d = rnet_input_contract_stick_replace_decide(
                 &pub_c, &wire_c, completed, &params, &gates);
             if (rnet_input_contract_decision_is_rewind(d)) {
-                if (np_digital_release_only(&pub_c, &wire_c)) {
+                /* Soft-promote releases only when peers still agree. After a
+                 * sticky invent forked RAM, promote-without-resim left cores
+                 * desynced until the next press aborted on baseline mismatch. */
+                if (np_digital_release_only(&pub_c, &wire_c) &&
+                    !netplay_hc_peek_mismatch(&g_np.hc, NULL, NULL, NULL)) {
                     (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                    if (n_soft_release == 0) {
+                        first_no_resim_t = t;
+                        first_no_resim_slot = slot;
+                        first_pub_btn = pub_c.buttons;
+                        first_wire_btn = wire_c.buttons;
+                    }
+                    n_soft_release++;
                     continue;
                 }
                 if (!g_np.pending_rewind) {
@@ -1278,19 +1441,74 @@ static void np_rollback_reconcile_wire(void)
                     g_np.pending_rewind_slot = slot;
                     g_np.ih.rewind_count++;
                     if (g_np.rollback) {
+                        if (first_rewind_slot < 0) {
+                            first_rewind_t = t;
+                            first_rewind_slot = slot;
+                            first_pub_btn = pub_c.buttons;
+                            first_wire_btn = wire_c.buttons;
+                        }
                         /* Only park the guest when an episode actually opens. */
-                        if (psx_netplay_rb_begin_rewind(t, slot))
+                        if (psx_netplay_rb_begin_rewind(t, slot)) {
                             g_np.needs_advance = 0;
-                        else {
+                            n_episode_open++;
+                        } else {
                             /* No snap / cooldown / already active — promote wire. */
                             (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                            n_begin_refused++;
                         }
                         g_np.pending_rewind = 0;
                     }
                 }
+            } else if (pads_differ) {
+                (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                n_contract_promote++;
             } else {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
             }
+        }
+    }
+
+    if (n_no_resim || n_soft_release || n_episode_open || n_begin_refused) {
+        static uint32_t s_log_sim;
+        static unsigned s_suppress;
+        if (s_log_sim == sim && !n_episode_open) {
+            s_suppress++;
+        } else {
+            if (s_suppress) {
+                fprintf(stderr,
+                        "psxrecomp: rb wire diag (+%u similar pumps suppressed)\n",
+                        s_suppress);
+                s_suppress = 0;
+            }
+            s_log_sim = sim;
+            if (n_no_resim) {
+                fprintf(stderr,
+                        "psxrecomp: rb wire promote-no-resim sim=%u n=%u reason=%s "
+                        "first_t=%u slot=%d pub=%04x wire=%04x "
+                        "(hist ok; sim NOT rolled back — remote feels rejected)\n",
+                        (unsigned)sim, n_no_resim,
+                        no_resim_why ? no_resim_why : "?",
+                        (unsigned)first_no_resim_t, first_no_resim_slot,
+                        (unsigned)first_pub_btn, (unsigned)first_wire_btn);
+            }
+            if (n_soft_release) {
+                fprintf(stderr,
+                        "psxrecomp: rb wire soft-promote release-only sim=%u n=%u "
+                        "first_t=%u slot=%d pub=%04x wire=%04x\n",
+                        (unsigned)sim, n_soft_release,
+                        (unsigned)first_no_resim_t, first_no_resim_slot,
+                        (unsigned)first_pub_btn, (unsigned)first_wire_btn);
+            }
+            if (n_episode_open || n_begin_refused) {
+                fprintf(stderr,
+                        "psxrecomp: rb wire rewind-request sim=%u t=%u slot=%d "
+                        "pub=%04x wire=%04x → episode_open=%u begin_refused=%u "
+                        "contract_promote=%u\n",
+                        (unsigned)sim, (unsigned)first_rewind_t, first_rewind_slot,
+                        (unsigned)first_pub_btn, (unsigned)first_wire_btn,
+                        n_episode_open, n_begin_refused, n_contract_promote);
+            }
+            fflush(stderr);
         }
     }
 }
@@ -1308,6 +1526,10 @@ static int np_try_admit_rollback(void)
     rnet_u32 wire;
     int slot;
     int pred;
+    int lockstep;
+
+    /* Tick FMV→settle tracker every admit (even when remotes are present). */
+    lockstep = psx_netplay_rb_lockstep_no_invent();
 
     if (!rnet_session_prepare_local_tip(g_np.session, sim))
         return 0;
@@ -1348,10 +1570,16 @@ static int np_try_admit_rollback(void)
             netplay_ih_pad_to_frame(&pad, sim, 0, &row);
             (void)netplay_ih_put(&g_np.ih, slot, &row);
         } else {
+            /* FMV + post-FMV settle: never invent — wait for wire (lockstep).
+             * Promote-only during movies left peers core-desynced at cutover. */
+            if (lockstep)
+                return 0;
             /* Stall when invent would run more than P ahead of remote tip. */
             if (wire > st.highest_remote_wire + (rnet_u32)pred)
                 return 0;
-            (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
+            /* MotK digital: invent idle, not hold-last. Hold-last sticky Up
+             * after settle forked menu RAM (soft-promote then skipped resim). */
+            (void)netplay_ih_invent_idle(&g_np.ih, slot, sim, &row);
         }
     }
 
@@ -1828,6 +2056,7 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     /* Before any snap/resim: SW GPU so VRAM is bit-identical across peers. */
     psx_frontend_netplay_force_sw_gpu();
     netplay_hc_reset(&g_np.hc);
+    np_part_ring_reset();
     g_np.rollback = cfg->rollback ? 1 : 0;
     netplay_ih_reset(&g_np.ih, (int)rcfg.slot_count);
     g_np.pending_rewind = 0;
@@ -2003,6 +2232,7 @@ void psx_netplay_shutdown(void)
         memset(&g_np, 0, sizeof(g_np));
         g_np.cpu = saved_cpu;
         netplay_hc_reset(&g_np.hc);
+        np_part_ring_reset();
     }
     np_starv_reset();
 }
@@ -2603,7 +2833,11 @@ void psx_netplay_finish_frame(void)
     if (!psx_netplay_active()) return;
 
     if (g_np.rollback && psx_netplay_rb_is_resimulating()) {
+        rnet_u32 done = rnet_session_sim_tick(g_np.session);
         psx_netplay_rb_finish_frame();
+        /* Exchange cores during Replay so mid-resim forks abort before POST. */
+        np_emit_frame_commit(done);
+        np_drain_peer_frame_commits();
         g_np.latched_for_tick = 0;
         g_np.needs_advance = 0; /* live latch must not outlive a resim vblank */
         g_np.frames_finished++;

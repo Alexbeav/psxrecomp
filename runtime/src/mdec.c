@@ -1,5 +1,6 @@
 #include "mdec.h"
 #include "pst_wire.h"
+#include "psx_cycles.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -7,10 +8,13 @@
 
 extern uint64_t s_frame_count;
 
-/* FMV-activity detector: frame stamp of the newest colour (15/24-bit) MDEC
- * decode. Streamed video decodes every frame; texture decompression uses the
- * 4/8-bit luma path and does not stamp. */
+/* FMV-activity detector: host display-frame stamp of the newest colour
+ * (15/24-bit) MDEC decode. Used only by mdec_recently_active() for local
+ * frontend / rewind policy — never folded into netplay digests. */
 static uint64_t mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
+/* Guest-cycle stamp of the same event — snap age is relative to this so
+ * peers with identical FIFO/tables but different present rates hash equal. */
+static uint64_t mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
 
 enum {
     MDEC_CMD_NOP = 0,
@@ -466,6 +470,7 @@ static void execute_decode(void) {
     /* FMV detector: stamp colour (15/24-bit) decodes only — streamed video.
      * The 4/8-bit luma path above is texture decompression, not video. */
     mdec_last_color_decode_frame = s_frame_count;
+    mdec_last_color_decode_cycle = psx_cycle_count;
     trace_event(MDEC_EVT_DECODE_DONE, mdec.output_size);
 }
 
@@ -556,6 +561,7 @@ void mdec_init(void) {
     /* Rematch resets s_frame_count; a stale stamp makes mdec_recently_active
      * wrap and lie for the whole next session. */
     mdec_last_color_decode_frame = (uint64_t)0 - 1000u;
+    mdec_last_color_decode_cycle = (uint64_t)0 - 1000u;
     for (int i = 0; i < 64; i++) {
         mdec.y_quant[i] = 1;
         mdec.uv_quant[i] = 1;
@@ -764,14 +770,14 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
 static uint32_t mdec_snap_fixed_bytes(void) {
-    /* ver + scalars + tables + counts + last_color_age */
+    /* ver + scalars + tables + counts + last_color_age (guest cycles) */
     return 4u + /* ver */
            4u * 14u + /* u32 scalars */
            1u * 8u +  /* u8 flags */
            64u + 64u + /* y/uv quant */
            64u * 2u + /* scale i16 */
            4u + 4u + /* input_count, output_size */
-           8u;       /* last_color_age */
+           8u;       /* last_color_age in guest cycles */
 }
 
 uint32_t mdec_snapshot_bytes(void) {
@@ -817,8 +823,9 @@ void mdec_snapshot_write(uint8_t *p) {
         (void)pst_w_i16(&w, mdec.scale[i]);
     (void)pst_w_u32(&w, mdec.input_count);
     (void)pst_w_u32(&w, mdec.output_size);
-    if (s_frame_count >= mdec_last_color_decode_frame)
-        age = s_frame_count - mdec_last_color_decode_frame;
+    /* Guest-cycle age (not host s_frame_count) — netplay aux digests this blob. */
+    if (psx_cycle_count >= mdec_last_color_decode_cycle)
+        age = psx_cycle_count - mdec_last_color_decode_cycle;
     else
         age = 1000ull;
     (void)pst_w_u64(&w, age);
@@ -887,10 +894,24 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
         return 0;
-    if (age > 100000ull) age = 100000ull;
-    if (age >= s_frame_count)
-        mdec_last_color_decode_frame = 0;
+    /* Age is guest cycles since last colour decode (SNAP_VER=1 payload). */
+    if (age > (1ull << 40))
+        age = (1ull << 40);
+    if (age >= psx_cycle_count)
+        mdec_last_color_decode_cycle = 0;
     else
-        mdec_last_color_decode_frame = s_frame_count - age;
+        mdec_last_color_decode_cycle = psx_cycle_count - age;
+    /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈
+     * 338688 cycles @ NTSC). Cap so recently_active stays meaningful. */
+    {
+        const uint64_t cycles_per_frame = 338688ull;
+        uint64_t frames_ago = age / cycles_per_frame;
+        if (frames_ago > 100000ull)
+            frames_ago = 100000ull;
+        if (frames_ago >= s_frame_count)
+            mdec_last_color_decode_frame = 0;
+        else
+            mdec_last_color_decode_frame = s_frame_count - frames_ago;
+    }
     return 1;
 }

@@ -40,6 +40,11 @@ int main(void) {
     netplay_hc_note_peer(&hc, 2, 0xDEADu);
     CHECK(netplay_hc_resolved_through(&hc) == 1u, "mismatch holds watermark");
     CHECK(!netplay_hc_confirm_through(&hc, 2), "tick 2 not confirmed");
+    {
+        uint32_t mt = 0, mld = 0, mpd = 0;
+        CHECK(netplay_hc_peek_mismatch(&hc, &mt, &mld, &mpd), "peek mismatch");
+        CHECK(mt == 2u && mld == 0x3333u && mpd == 0xDEADu, "peek mismatch vals");
+    }
 
     /* Late local after peer (reverse order) still advances. */
     netplay_hc_reset(&hc);
@@ -50,6 +55,17 @@ int main(void) {
     CHECK(netplay_hc_resolved_through(&hc) == 0u, "advance on late local 0");
     netplay_hc_note_local(&hc, 1, 0xBBBBu);
     CHECK(netplay_hc_resolved_through(&hc) == 1u, "advance on late local 1");
+
+    /* prime_after drops stale live mismatches (Replay entry). */
+    netplay_hc_prime_after(&hc, 819u);
+    netplay_hc_note_local(&hc, 820, 0x1111u);
+    netplay_hc_note_peer(&hc, 820, 0x2222u);
+    CHECK(netplay_hc_peek_mismatch(&hc, NULL, NULL, NULL), "stale mismatch present");
+    netplay_hc_prime_after(&hc, 819u);
+    CHECK(!netplay_hc_peek_mismatch(&hc, NULL, NULL, NULL), "prime clears stale");
+    netplay_hc_note_local(&hc, 820, 0xAAAAu);
+    netplay_hc_note_peer(&hc, 820, 0xAAAAu);
+    CHECK(netplay_hc_resolved_through(&hc) == 820u, "prime then match load tick");
 
     if (failures) {
         printf("%d failure(s)\n", failures);

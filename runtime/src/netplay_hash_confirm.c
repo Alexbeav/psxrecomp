@@ -11,6 +11,13 @@ void netplay_hc_reset(NetplayHashConfirm* hc) {
     memset(hc, 0, sizeof(*hc));
 }
 
+void netplay_hc_prime_after(NetplayHashConfirm* hc, uint32_t last_ok) {
+    if (!hc) return;
+    memset(hc, 0, sizeof(*hc));
+    hc->resolved_through = last_ok;
+    hc->resolved_valid = 1u;
+}
+
 static void try_advance(NetplayHashConfirm* hc);
 
 void netplay_hc_note_local(NetplayHashConfirm* hc, uint32_t tick, uint32_t digest) {
@@ -82,5 +89,26 @@ uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
     uint32_t d = 0;
     if (!hc || !local_at(hc, tick, &d)) return 0u;
     if (digest_out) *digest_out = d;
+    return 1u;
+}
+
+uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_out,
+                                 uint32_t* local_out, uint32_t* peer_out) {
+    uint32_t next;
+    uint32_t ld = 0, pd = 0;
+    if (!hc) return 0u;
+    if (!hc->resolved_valid)
+        next = 0u;
+    else {
+        if (hc->resolved_through == 0xffffffffu) return 0u;
+        next = hc->resolved_through + 1u;
+    }
+    if (!local_at(hc, next, &ld) || !peer_at(hc, next, &pd))
+        return 0u;
+    if (ld == pd)
+        return 0u;
+    if (tick_out) *tick_out = next;
+    if (local_out) *local_out = ld;
+    if (peer_out) *peer_out = pd;
     return 1u;
 }

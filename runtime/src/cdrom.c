@@ -2752,7 +2752,9 @@ static int cdrom_snap_emit(PstW *w) {
     WB(response_fifo); WI(response_read); WI(response_count);
     WB(sector_buffer); WI(sector_read_pos); WI(sector_available); WI(sector_size);
     WB(last_sector_buffer); WI(last_sector_lba); WI(last_sector_size);
-    WU(last_sector_frame); W8(last_sector_mode); W8(last_sector_have_raw);
+    /* last_sector_frame is host s_frame_count — zero on the wire so netplay
+     * digests/pins are not forked by present-skip / FPS skew. */
+    WU(0u); W8(last_sector_mode); W8(last_sector_have_raw);
     W8(last_sector_raw_mode); W8(last_sector_xa_file); W8(last_sector_xa_channel);
     W8(last_sector_xa_submode); W8(last_sector_xa_coding);
     W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba); WI(setloc_seek_far);

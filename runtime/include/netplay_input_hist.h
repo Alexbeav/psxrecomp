@@ -49,6 +49,11 @@ int  netplay_ih_get(const NetplayInputHist *h, int slot, uint32_t tick, RNetRbFr
 int  netplay_ih_invent_hold_last(NetplayInputHist *h, int slot, uint32_t tick,
                                  RNetRbFrame *out);
 
+/* MotK digital: invent neutral only (never hold-last). Sticky D-pad invent
+ * after FMV settle forked RAM while soft-promote release-only skipped resim. */
+int  netplay_ih_invent_idle(NetplayInputHist *h, int slot, uint32_t tick,
+                            RNetRbFrame *out);
+
 /* Replace a published predicted/auth row with authoritative wire (promote). */
 int  netplay_ih_promote(NetplayInputHist *h, int slot, const RNetRbFrame *wire);
 

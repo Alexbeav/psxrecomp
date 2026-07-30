@@ -57,6 +57,14 @@ int  psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot);
 /* 1 while begin_rewind is suppressed (cooldown after commit / realign). */
 int  psx_netplay_rb_rewind_suppressed(void);
 
+/* 1 during depth24 / recent MDEC / post-FMV settle — MotK FMV. Reconcile
+ * promotes wire; no episodes (CD-frozen Replay corrupts the movie). */
+int  psx_netplay_rb_fmv_defer_rewind(void);
+
+/* 1 in the same FMV/settle window: admit must stall for remote wire instead
+ * of inventing (promote-only during FMV left peers desynced at cutover). */
+int  psx_netplay_rb_lockstep_no_invent(void);
+
 /* 1 once after commit/abort/realign — reconcile should promote all late wire
  * without opening another episode (clears invent poison). */
 int  psx_netplay_rb_take_promote_sweep(void);
@@ -67,6 +75,11 @@ void psx_netplay_rb_pump(void);
 /* 1 while episode is active (seal/baseline/replay/verify). */
 int  psx_netplay_rb_active(void);
 int  psx_netplay_rb_is_resimulating(void);
+
+/* FRAME_COMMIT mismatch during Replay — abort before a false POST commit.
+ * Returns 1 if an episode was aborted. */
+int  psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
+                                              uint32_t peer_core);
 /* 1 while a baseline/realign snap load is queued or resume is deferred —
  * poll_admit must stall (do not run live invent). */
 int  psx_netplay_rb_load_pending(void);
@@ -79,6 +92,13 @@ int  psx_netplay_rb_try_admit(void);
 
 /* After guest frame during resim: advance episode clock; may commit. */
 void psx_netplay_rb_finish_frame(void);
+
+/* Present-edge digest prep: copy `in` → `out` and clear PC. At vblank
+ * finish_frame the host often parks cpu->pc=0 while a peer may still hold a
+ * live BB PC; sticky substitutes were host-local and forked dig_cpu with
+ * matched RAM/clk. GPRs/COP0/cycles remain. */
+void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
+                                           const struct CPUState *in);
 
 /* Diag */
 uint32_t psx_netplay_rb_episode_count(void);

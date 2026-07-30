@@ -109,12 +109,18 @@ int main(void)
     CHECK(got.analog == 1u, "held analog");
     CHECK(got.is_predicted, "hold-last predicted");
 
-    /* Promote replaces predicted. */
+    /* Idle invent ignores prior hold (MotK menu path). */
+    CHECK(netplay_ih_invent_idle(&h, 1, 13, &got), "invent idle");
+    CHECK(got.is_predicted && got.buttons == 0xFFFFu, "idle buttons");
+    CHECK(got.stick_x == 0 && got.stick_y == 0 && got.analog == 0u, "idle sticks");
+    CHECK(h.invent_count == 3u, "invent count after idle");
+
+    /* Promote replaces predicted (tick 13 idle row). */
     f = got;
     f.stick_x = -18;
     f.is_predicted = 0;
     CHECK(netplay_ih_promote(&h, 1, &f), "promote");
-    CHECK(netplay_ih_get(&h, 1, 12, &got), "get promoted");
+    CHECK(netplay_ih_get(&h, 1, 13, &got), "get promoted");
     CHECK(!got.is_predicted && got.stick_x == -18, "promoted flags/stick");
     CHECK(h.promote_count == 1u, "promote count");
 

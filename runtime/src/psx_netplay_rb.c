@@ -18,13 +18,31 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     return 0;
 }
 int psx_netplay_rb_rewind_suppressed(void) { return 0; }
+int psx_netplay_rb_fmv_defer_rewind(void) { return 0; }
+int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 void psx_netplay_rb_pump(void) {}
 int psx_netplay_rb_active(void) { return 0; }
 int psx_netplay_rb_is_resimulating(void) { return 0; }
+int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
+                                             uint32_t peer_core)
+{
+    (void)tick;
+    (void)local_core;
+    (void)peer_core;
+    return 0;
+}
 int psx_netplay_rb_load_pending(void) { return 0; }
 int psx_netplay_rb_try_admit(void) { return 0; }
 void psx_netplay_rb_finish_frame(void) {}
+void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
+                                           const struct CPUState *in)
+{
+    if (!out || !in)
+        return;
+    *out = *in;
+    out->pc = 0;
+}
 uint32_t psx_netplay_rb_episode_count(void) { return 0; }
 int psx_netplay_rb_phase(void) { return 0; }
 uint32_t psx_netplay_rb_snap_count(void) { return 0; }
@@ -36,7 +54,11 @@ uint32_t psx_netplay_rb_snap_count(void) { return 0; }
 #include "netplay_state_digest.h"
 #include "boot_state.h"
 #include "cdrom.h"
+#include "cpu_state.h"
+#include "crc32.h"
+#include "gpu.h"
 #include "interrupts.h"
+#include "mdec.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
 #include "savestate.h"
@@ -86,9 +108,11 @@ static uint32_t snap_interval(void)
 static int g_local_baseline_sent;
 static uint32_t g_local_baseline_digest;
 static uint32_t g_local_baseline_av;
+static uint32_t g_local_baseline_aux; /* dig_c = crc(aux, cd) on wire */
 static int g_peer_baseline_ok;
 static uint32_t g_peer_baseline_digest;
 static uint32_t g_peer_baseline_av;
+static uint32_t g_peer_baseline_aux;
 static int g_peer_baseline_ready; /* dig_a flag: follower ACK after it has our baseline */
 static int g_local_baseline_ready_sent;
 static int g_local_post_sent;
@@ -120,6 +144,7 @@ static uint32_t g_stash_bl_load;
 static uint32_t g_stash_bl_dig_m;
 static uint32_t g_stash_bl_dig_a;
 static uint32_t g_stash_bl_dig_b;
+static uint32_t g_stash_bl_dig_c;
 static int g_stash_bl_logged;
 static uint64_t g_baseline_handshake_ms; /* when local baseline first sent */
 static uint64_t g_last_baseline_burst_ms;
@@ -154,16 +179,70 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_READY_TIMEOUT_MS 4000u
 /* MotK title/menu: invent edges thrash every 1–3 ticks without this. */
 #define RB_REWIND_COOLDOWN_TICKS 12u
+/* Keep deferring a few frames after MDEC goes quiet (cutover / credits). */
+#define RB_FMV_MDEC_HYSTERESIS 8u
+/* After leaving FMV: stay lockstep (no invent / no rewind) so cutover heals. */
+#define RB_FMV_SETTLE_TICKS 90u
+/* Baseline mismatch with no agreed tip — don't reopen every few ticks. */
+#define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 60u
 
-static void arm_rewind_cooldown(uint32_t sim, const char *why)
+static int g_was_in_fmv;
+static uint32_t g_fmv_settle_until;
+static uint32_t g_bl_mismatch_streak;
+
+static RNetSession *sess(void); /* fwd — used by FMV lockstep window */
+
+static int rb_fmv_media_active(void)
 {
-    uint32_t until = sim + RB_REWIND_COOLDOWN_TICKS;
+    if (gpu_display_is_depth24())
+        return 1;
+    if (mdec_recently_active(RB_FMV_MDEC_HYSTERESIS))
+        return 1;
+    return 0;
+}
+
+/* Updates settle window; returns 1 during FMV or post-FMV settle. */
+static int rb_in_fmv_lockstep_window(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    int media = rb_fmv_media_active();
+
+    if (media) {
+        if (!g_was_in_fmv) {
+            g_was_in_fmv = 1;
+            fprintf(stderr, "psxrecomp: rb FMV lockstep ON (depth24/mdec)\n");
+            fflush(stderr);
+        }
+        return 1;
+    }
+    if (g_was_in_fmv) {
+        g_was_in_fmv = 0;
+        g_fmv_settle_until = sim + RB_FMV_SETTLE_TICKS;
+        fprintf(stderr,
+                "psxrecomp: rb FMV settle until sim=%u (no invent/rewind)\n",
+                (unsigned)g_fmv_settle_until);
+        fflush(stderr);
+    }
+    if (sim < g_fmv_settle_until)
+        return 1;
+    return 0;
+}
+
+static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *why)
+{
+    uint32_t until = sim + ticks;
     if (until > g_rewind_cooldown_until)
         g_rewind_cooldown_until = until;
     g_promote_sweep = 1;
     fprintf(stderr, "psxrecomp: rb rewind cooldown until sim=%u (%s)\n",
             (unsigned)g_rewind_cooldown_until, why ? why : "?");
     fflush(stderr);
+}
+
+static void arm_rewind_cooldown(uint32_t sim, const char *why)
+{
+    arm_rewind_cooldown_ticks(sim, RB_REWIND_COOLDOWN_TICKS, why);
 }
 
 #if defined(PSX_HAS_GAME_DISPATCH)
@@ -243,14 +322,49 @@ static void note_good_bb_pc(uint32_t pc)
         g_last_good_bb_pc = pc;
 }
 
+void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
+                                           const struct CPUState *in)
+{
+    if (!out || !in)
+        return;
+    *out = *in;
+    /* Drop host-parking / BB-edge PC noise from present-edge digests. */
+    out->pc = 0;
+}
+
+/* Split dig_cpu so logs tell PC-only forks from true GPR/COP0 forks. */
+static void log_cpu_digest_split(const CPUState *raw, const char *tag)
+{
+    uint32_t gpr = 0xFFFFFFFFu;
+    uint32_t hil = 0xFFFFFFFFu;
+    uint32_t c0 = 0xFFFFFFFFu;
+    if (!raw)
+        return;
+    gpr = crc32_update(gpr, (const uint8_t *)raw->gpr, sizeof(raw->gpr));
+    hil = crc32_update(hil, (const uint8_t *)&raw->hi, sizeof(raw->hi));
+    hil = crc32_update(hil, (const uint8_t *)&raw->lo, sizeof(raw->lo));
+    c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[12], sizeof(uint32_t));
+    c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[13], sizeof(uint32_t));
+    c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[14], sizeof(uint32_t));
+    fprintf(stderr,
+            "psxrecomp: rb cpu-split %s raw_pc=%08x sticky=%08x gpr=%08x "
+            "hi_lo=%08x cop0=%08x\n",
+            tag ? tag : "?", (unsigned)raw->pc, (unsigned)g_last_good_bb_pc,
+            (unsigned)(gpr ^ 0xFFFFFFFFu), (unsigned)(hil ^ 0xFFFFFFFFu),
+            (unsigned)(c0 ^ 0xFFFFFFFFu));
+    fflush(stderr);
+}
+
 static void clear_episode_wire_state(void)
 {
     g_local_baseline_sent = 0;
     g_local_baseline_digest = 0;
     g_local_baseline_av = 0;
+    g_local_baseline_aux = 0;
     g_peer_baseline_ok = 0;
     g_peer_baseline_digest = 0;
     g_peer_baseline_av = 0;
+    g_peer_baseline_aux = 0;
     g_peer_baseline_ready = 0;
     g_local_baseline_ready_sent = 0;
     g_local_post_sent = 0;
@@ -366,7 +480,16 @@ static void abort_episode_realign(const char *why)
     {
         RNetSession *s = sess();
         uint32_t sim = s ? rnet_session_sim_tick(s) : (have ? tick + 1u : 0u);
-        arm_rewind_cooldown(sim, why ? why : "realign");
+        /* Baseline mismatch before any commit: no tip to realign — long cooldown
+         * so cutover doesn't reopen doomed episodes every few ticks. */
+        if (!have) {
+            g_bl_mismatch_streak++;
+            arm_rewind_cooldown_ticks(sim, RB_BASELINE_MISMATCH_COOLDOWN_TICKS,
+                                      why ? why : "desync");
+        } else {
+            g_bl_mismatch_streak = 0;
+            arm_rewind_cooldown(sim, why ? why : "realign");
+        }
     }
 }
 
@@ -432,8 +555,9 @@ static uint8_t host_get_input_row(void *ctx, int32_t slot, uint32_t tick, RNetRb
     if (netplay_ih_get(g_b.ih, (int)slot, tick, out))
         return 1u;
     /* Seal path requires is_valid=1 rows or the peer never completes SealInputs
-     * (apply_peer_seal_rows ignores invalid). Hold-last invent fills gaps. */
-    return netplay_ih_invent_hold_last(g_b.ih, (int)slot, tick, out) ? 1u : 0u;
+     * (apply_peer_seal_rows ignores invalid). MotK: idle invent fills gaps —
+     * hold-last reintroduced sticky D-pad into Replay seals. */
+    return netplay_ih_invent_idle(g_b.ih, (int)slot, tick, out) ? 1u : 0u;
 }
 
 static uint8_t host_hash_confirm_promote(void *ctx)
@@ -584,7 +708,7 @@ static void publish_sealed_sio(uint32_t tick)
 static void maybe_send_baseline(void);
 static void maybe_enter_replay(void);
 static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
-                                 uint32_t dig_a, uint32_t dig_b);
+                                 uint32_t dig_a, uint32_t dig_b, uint32_t dig_c);
 static void apply_stashed_baseline(void);
 
 static void enter_awaiting_baseline(void)
@@ -607,21 +731,29 @@ static void enter_awaiting_baseline(void)
 }
 
 static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
-                                 uint32_t dig_a, uint32_t dig_b)
+                                 uint32_t dig_a, uint32_t dig_b, uint32_t dig_c)
 {
     (void)epoch;
     (void)load;
     g_peer_baseline_ok = 1;
     g_peer_baseline_digest = dig_m;
     g_peer_baseline_av = dig_b;
-    if (dig_a & RB_BL_FLAG_READY)
+    g_peer_baseline_aux = dig_c;
+    if (dig_a & RB_BL_FLAG_READY) {
+        if (!g_peer_baseline_ready) {
+            fprintf(stderr,
+                    "psxrecomp: rb peer baseline ready-ACK received load=%u\n",
+                    (unsigned)load);
+            fflush(stderr);
+        }
         g_peer_baseline_ready = 1;
+    }
     fprintf(stderr,
-            "psxrecomp: rb peer baseline epoch=%u load=%u core=%08x av=%08x ready=%u "
-            "(local_applied=%d phase=%d)\n",
+            "psxrecomp: rb peer baseline epoch=%u load=%u core=%08x av=%08x ext=%08x "
+            "ready=%u (local_applied=%d phase=%d)\n",
             (unsigned)epoch, (unsigned)load, (unsigned)dig_m, (unsigned)dig_b,
-            (unsigned)(dig_a & RB_BL_FLAG_READY), g_episode_snap_applied,
-            (int)rnet_rb_get_phase(g_rb));
+            (unsigned)dig_c, (unsigned)(dig_a & RB_BL_FLAG_READY),
+            g_episode_snap_applied, (int)rnet_rb_get_phase(g_rb));
     fflush(stderr);
     maybe_send_baseline();
     maybe_enter_replay();
@@ -639,14 +771,14 @@ static void apply_stashed_baseline(void)
             (unsigned)(g_stash_bl_dig_a & RB_BL_FLAG_READY));
     fflush(stderr);
     accept_peer_baseline(g_stash_bl_epoch, g_stash_bl_load, g_stash_bl_dig_m,
-                         g_stash_bl_dig_a, g_stash_bl_dig_b);
+                         g_stash_bl_dig_a, g_stash_bl_dig_b, g_stash_bl_dig_c);
 }
 
 static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
-                                     uint32_t dig_a, uint32_t dig_b)
+                                     uint32_t dig_a, uint32_t dig_b, uint32_t dig_c)
 {
     if (g_rb && rnet_rb_is_active(g_rb) && epoch == rnet_rb_get_epoch_id(g_rb)) {
-        accept_peer_baseline(epoch, load, dig_m, dig_a, dig_b);
+        accept_peer_baseline(epoch, load, dig_m, dig_a, dig_b, dig_c);
         return;
     }
     /* Host often applies+sends before the follower has opened the episode —
@@ -657,6 +789,7 @@ static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig
     g_stash_bl_dig_m = dig_m;
     g_stash_bl_dig_a = dig_a;
     g_stash_bl_dig_b = dig_b;
+    g_stash_bl_dig_c = dig_c;
     if (!g_stash_bl_logged) {
         fprintf(stderr,
                 "psxrecomp: rb baseline stashed epoch=%u load=%u dig=%08x "
@@ -674,7 +807,8 @@ static void send_baseline_packet(int ready, int rexmit_log)
         return;
     (void)rnet_session_send_rb_baseline(s, rnet_rb_get_epoch_id(g_rb),
                                         rnet_rb_get_load_tick(g_rb), g_local_baseline_digest,
-                                        ready ? RB_BL_FLAG_READY : 0u, g_local_baseline_av, 0);
+                                        ready ? RB_BL_FLAG_READY : 0u, g_local_baseline_av,
+                                        g_local_baseline_aux);
     if (ready)
         g_local_baseline_ready_sent = 1;
     if (rexmit_log && !g_baseline_rexmit_logged) {
@@ -692,10 +826,21 @@ static void send_baseline_burst(int ready, int n, int rexmit_log)
     uint64_t now = rb_mono_ms();
     if (n < 1)
         n = 1;
+    /* First ready=1 must not be swallowed by the rate limit after the initial
+     * ready=0 burst — initiator was timing out waiting for an ACK that never
+     * left (follower entered Replay with peer_ready=0 and no ready wire). */
+    if (ready && !g_local_baseline_ready_sent)
+        g_last_baseline_burst_ms = 0;
     if (g_last_baseline_burst_ms != 0ull && now >= g_last_baseline_burst_ms &&
         (now - g_last_baseline_burst_ms) < (uint64_t)RB_BASELINE_BURST_MS)
         return;
     g_last_baseline_burst_ms = now;
+    if (ready && !g_local_baseline_ready_sent) {
+        fprintf(stderr,
+                "psxrecomp: rb baseline ready-ACK sent load=%u (burst=%d)\n",
+                (unsigned)rnet_rb_get_load_tick(g_rb), n);
+        fflush(stderr);
+    }
     for (i = 0; i < n; ++i)
         send_baseline_packet(ready, rexmit_log && i == 0);
 }
@@ -711,17 +856,30 @@ static void maybe_send_baseline(void)
         return; /* must restore before hashing / advertising baseline */
     follower = rnet_rb_is_from_peer_notify(g_rb) ? 1 : 0;
     if (!g_local_baseline_sent) {
-        g_local_baseline_digest = netplay_core_digest(c);
+        NetplayCoreParts parts;
+        netplay_core_digest_parts(c, &parts);
+        g_local_baseline_digest = parts.core;
         g_local_baseline_av = netplay_av_digest();
+        /* dig_c folds SPU+MDEC+CD — matched aux with divergent CD was the
+         * MotK post-FMV doomed-Replay pattern (pin zlib ~200KB apart). */
+        g_local_baseline_aux = netplay_baseline_ext_digest();
         g_local_baseline_sent = 1;
         g_baseline_handshake_ms = rb_mono_ms();
         g_last_baseline_burst_ms = 0; /* allow immediate burst */
         send_baseline_burst(0, RB_BASELINE_BURST, 0);
         fprintf(stderr,
-                "psxrecomp: rb baseline sent load=%u core=%08x av=%08x cd=%08x (burst=%d)\n",
-                (unsigned)rnet_rb_get_load_tick(g_rb), (unsigned)g_local_baseline_digest,
-                (unsigned)g_local_baseline_av, (unsigned)netplay_cdrom_digest(),
-                RB_BASELINE_BURST);
+                "psxrecomp: rb baseline sent load=%u core=%08x av=%08x ext=%08x cd=%08x "
+                "(burst=%d) parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
+                "spu=%08x mdec=%08x aux=%08x\n",
+                (unsigned)rnet_rb_get_load_tick(g_rb),
+                (unsigned)g_local_baseline_digest,
+                (unsigned)g_local_baseline_av, (unsigned)g_local_baseline_aux,
+                (unsigned)netplay_cdrom_digest(), RB_BASELINE_BURST,
+                (unsigned)parts.cpu, (unsigned)parts.clock_irq,
+                (unsigned)parts.timers, (unsigned)parts.ram,
+                (unsigned)parts.dirty, (unsigned)netplay_spu_digest(),
+                (unsigned)netplay_mdec_digest(),
+                (unsigned)netplay_aux_digest());
         fflush(stderr);
         return;
     }
@@ -753,22 +911,38 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     int slot;
     int n = g_b.slot_count ? *g_b.slot_count : 0;
     uint32_t dig = 0u;
-    uint32_t core = 0u;
+    NetplayCoreParts parts;
     uint32_t av = netplay_av_digest();
     uint32_t cd = netplay_cdrom_digest();
+    uint32_t aux = 0u;
+    int want_parts = (tag && tag[0] == 'f'); /* "fin" — partition breakdown */
+    int present_edge = want_parts; /* fin is at vblank present */
+    memset(&parts, 0, sizeof(parts));
     if (c) {
-        CPUState dig_cpu = *c;
-        if (!rb_resume_pc_ok(dig_cpu.pc)) {
-            uint32_t alt = g_last_good_bb_pc;
-            if (rb_resume_pc_ok(alt))
-                dig_cpu.pc = alt;
+        CPUState dig_cpu;
+        if (present_edge) {
+            log_cpu_digest_split(c, tag);
+            psx_netplay_rb_cpu_for_present_digest(&dig_cpu, c);
+        } else {
+            dig_cpu = *c;
+            if (!rb_resume_pc_ok(dig_cpu.pc)) {
+                uint32_t alt = g_last_good_bb_pc;
+                if (rb_resume_pc_ok(alt))
+                    dig_cpu.pc = alt;
+            }
         }
-        core = netplay_core_digest(&dig_cpu);
-        dig = netplay_master_digest(&dig_cpu);
+        if (want_parts) {
+            netplay_core_digest_parts(&dig_cpu, &parts);
+            aux = netplay_aux_digest();
+            dig = netplay_master_digest(&dig_cpu);
+        } else {
+            parts.core = netplay_core_digest(&dig_cpu);
+            dig = netplay_master_digest(&dig_cpu);
+        }
     }
     fprintf(stderr,
             "psxrecomp: rb audit %s sim=%u dig=%08x core=%08x av=%08x cd=%08x cyc=%llu",
-            tag ? tag : "?", (unsigned)sim, (unsigned)dig, (unsigned)core,
+            tag ? tag : "?", (unsigned)sim, (unsigned)dig, (unsigned)parts.core,
             (unsigned)av, (unsigned)cd, (unsigned long long)psx_cycle_count);
     for (slot = 0; slot < n; ++slot) {
         RNetRbFrame row;
@@ -777,6 +951,13 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
                     row.analog ? "A" : "");
         else
             fprintf(stderr, " s%d=----", slot);
+    }
+    if (want_parts) {
+        fprintf(stderr,
+                " | cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x aux=%08x",
+                (unsigned)parts.cpu, (unsigned)parts.clock_irq,
+                (unsigned)parts.timers, (unsigned)parts.ram,
+                (unsigned)parts.dirty, (unsigned)aux);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
@@ -823,6 +1004,17 @@ static void maybe_enter_replay(void)
         abort_episode_realign(why);
         return;
     }
+    if (g_peer_baseline_aux != g_local_baseline_aux) {
+        char why[192];
+        snprintf(why, sizeof(why),
+                 "baseline ext mismatch local=%08x peer=%08x "
+                 "(aux=%08x cd=%08x spu=%08x mdec=%08x)",
+                 (unsigned)g_local_baseline_aux, (unsigned)g_peer_baseline_aux,
+                 (unsigned)netplay_aux_digest(), (unsigned)netplay_cdrom_digest(),
+                 (unsigned)netplay_spu_digest(), (unsigned)netplay_mdec_digest());
+        abort_episode_realign(why);
+        return;
+    }
     g_episode_baseline_matched = 1;
     g_episode_load_tick = rnet_rb_get_load_tick(g_rb);
     follower = rnet_rb_is_from_peer_notify(g_rb) ? 1 : 0;
@@ -847,6 +1039,14 @@ static void maybe_enter_replay(void)
         return;
     }
     load = rnet_rb_get_load_tick(g_rb);
+    /* Drop live invent FRAME_COMMITs so mid-resim diverge checks only see
+     * digests emitted during this Replay (was aborting on stale sim=mismatch). */
+    if (g_b.hc) {
+        if (load == 0u)
+            netplay_hc_reset(g_b.hc);
+        else
+            netplay_hc_prime_after(g_b.hc, load - 1u);
+    }
     rnet_session_set_sim_tick(s, load);
     rnet_rb_set_phase(g_rb, nRNetRbPhaseReplay);
     g_local_post_sent = 0;
@@ -856,9 +1056,11 @@ static void maybe_enter_replay(void)
      * next vblank, and finish_frame must see needs_advance. */
     arm_replay_tick(load);
     fprintf(stderr,
-            "psxrecomp: rb replay %u..%u (resume_pending=%d peer_ready=%d follower=%d)\n",
+            "psxrecomp: rb replay %u..%u (resume_pending=%d peer_ready=%d follower=%d "
+            "hc_primed_after=%u)\n",
             (unsigned)load, (unsigned)rnet_rb_get_target_tick(g_rb), g_pending_resume_valid,
-            g_peer_baseline_ready, follower);
+            g_peer_baseline_ready, follower,
+            (unsigned)(load == 0u ? 0u : load - 1u));
     fflush(stderr);
 }
 
@@ -888,6 +1090,7 @@ static void commit_episode(void)
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
     clear_episode_wire_state();
+    g_bl_mismatch_streak = 0;
     arm_rewind_cooldown(sim_after, "commit");
 }
 
@@ -987,6 +1190,9 @@ void psx_netplay_rb_shutdown(void)
     g_rewind_cooldown_until = 0;
     g_promote_sweep = 0;
     g_last_begin_mismatch = 0xffffffffu;
+    g_was_in_fmv = 0;
+    g_fmv_settle_until = 0;
+    g_bl_mismatch_streak = 0;
 }
 
 void psx_netplay_rb_request_snap(uint32_t tick)
@@ -1091,7 +1297,7 @@ static int try_apply_pending_load(CPUState *cpu_in)
              * forks peers. Normalize SPU CD FIFO so host audio drain asymmetry
              * left outside the digest cannot steer XA overflow differently. */
             spu_cd_audio_reset();
-            psx_frontend_on_savestate_loaded();
+            psx_frontend_on_rb_snap_loaded();
             g_pending_resume_pc = pc;
             g_pending_resume_valid = 1;
             if (live_realign) {
@@ -1229,6 +1435,16 @@ int psx_netplay_rb_rewind_suppressed(void)
     return sim < g_rewind_cooldown_until;
 }
 
+int psx_netplay_rb_fmv_defer_rewind(void)
+{
+    return rb_in_fmv_lockstep_window();
+}
+
+int psx_netplay_rb_lockstep_no_invent(void)
+{
+    return rb_in_fmv_lockstep_window();
+}
+
 int psx_netplay_rb_take_promote_sweep(void)
 {
     int v = g_promote_sweep;
@@ -1253,6 +1469,25 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         return 0;
 
     sim = rnet_session_sim_tick(s);
+
+    /* FMV + settle: CD-frozen Replay scrambles movies; cutover must stay lockstep. */
+    if (rb_in_fmv_lockstep_window()) {
+        static uint32_t s_fmv_log_sim;
+        if (s_fmv_log_sim != sim) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin FMV-defer mismatch=%u sim=%u "
+                    "(lockstep — promote only)\n",
+                    (unsigned)mismatch_tick, (unsigned)sim);
+            fflush(stderr);
+            s_fmv_log_sim = sim;
+        }
+        return 0;
+    }
+    /* No shared tip yet and baselines keep mismatching — wait out cooldown. */
+    if (!g_agreed_valid && g_bl_mismatch_streak >= 2u &&
+        sim < g_rewind_cooldown_until) {
+        return 0;
+    }
     /* Coalesce: refuse reopen storms after commit/realign; reconcile promotes. */
     if (sim < g_rewind_cooldown_until) {
         static uint32_t s_cd_log_sim;
@@ -1348,6 +1583,23 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     uint32_t snap_n;
     if (!g_rb || rnet_rb_is_active(g_rb))
         return;
+    if (rb_in_fmv_lockstep_window()) {
+        fprintf(stderr,
+                "psxrecomp: rb follow FMV-defer epoch=%u load=%u — NACK "
+                "(lockstep)\n",
+                (unsigned)epoch, (unsigned)load);
+        fflush(stderr);
+        g_follow_nack_pending = 1;
+        g_follow_nack_epoch = epoch;
+        g_follow_nack_mismatch = mismatch;
+        g_follow_nack_load = load;
+        g_follow_nack_target = target;
+        g_follow_nack_slot = slot;
+        g_follow_nack_sends = 0;
+        send_follow_nack(epoch, mismatch, load, target, slot, 1);
+        g_follow_nack_sends = 1;
+        return;
+    }
     snap_n = g_snaps ? netplay_snap_ring_count(g_snaps) : 0u;
     if (!g_snaps || !netplay_snap_ring_has(g_snaps, load)) {
         fprintf(stderr,
@@ -1441,8 +1693,7 @@ void psx_netplay_rb_pump(void)
     }
 
     while (rnet_session_take_rb_baseline(s, &epoch, &load, &dig_m, &dig_a, &dig_b, &dig_c)) {
-        (void)dig_c;
-        stash_or_accept_baseline(epoch, load, dig_m, dig_a, dig_b);
+        stash_or_accept_baseline(epoch, load, dig_m, dig_a, dig_b, dig_c);
     }
 
     while (rnet_session_take_rb_post(s, &epoch, &target, &dig_m, &in_dig, &match)) {
@@ -1458,7 +1709,8 @@ void psx_netplay_rb_pump(void)
             else {
                 char why[128];
                 if (dig_m != g_post_digest)
-                    snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
+                    snprintf(why, sizeof(why),
+                             "post core/aux diverge local=%08x peer=%08x",
                              (unsigned)g_post_digest, (unsigned)dig_m);
                 else
                     snprintf(why, sizeof(why), "post av diverge local=%08x peer=%08x",
@@ -1550,6 +1802,31 @@ int psx_netplay_rb_active(void)
 int psx_netplay_rb_is_resimulating(void)
 {
     return g_rb && rnet_rb_is_resimulating(g_rb);
+}
+
+int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
+                                             uint32_t peer_core)
+{
+    char why[128];
+    uint32_t load;
+    if (!g_rb || !rnet_rb_is_active(g_rb))
+        return 0;
+    if (rnet_rb_get_phase(g_rb) != nRNetRbPhaseReplay &&
+        rnet_rb_get_phase(g_rb) != nRNetRbPhaseVerify)
+        return 0;
+    /* Ignore stale live commits below the episode load (hc_prime_after should
+     * already have cleared them; belt-and-suspenders). */
+    load = rnet_rb_get_load_tick(g_rb);
+    if (tick < load)
+        return 0;
+    snprintf(why, sizeof(why),
+             "resim core diverge sim=%u local=%08x peer=%08x",
+             (unsigned)tick, (unsigned)local_core, (unsigned)peer_core);
+    fprintf(stderr, "psxrecomp: rb ABORT — %s (no false POST commit)\n", why);
+    fflush(stderr);
+    rnet_rb_on_post_diverge(g_rb);
+    abort_episode_realign(why);
+    return 1;
 }
 
 int psx_netplay_rb_load_pending(void)
@@ -1653,18 +1930,23 @@ void psx_netplay_rb_finish_frame(void)
     g_needs_advance = 0;
 
     if (done >= rnet_rb_get_target_tick(g_rb)) {
-        /* Present-edge cpu->pc is often 0/sentinel — canonicalize so POST
-         * doesn't false-diverge on parked PC while RAM/cycles agree. */
+        /* Present-edge: drop PC (not sticky — sticky is host-local). */
         if (c) {
-            CPUState dig_cpu = *c;
-            if (!rb_resume_pc_ok(dig_cpu.pc)) {
-                uint32_t alt = g_last_good_bb_pc;
-                if (!rb_resume_pc_ok(alt))
-                    alt = pick_snap_resume_pc(c, 0u);
-                if (rb_resume_pc_ok(alt))
-                    dig_cpu.pc = alt;
+            CPUState dig_cpu;
+            log_cpu_digest_split(c, "post");
+            psx_netplay_rb_cpu_for_present_digest(&dig_cpu, c);
+            {
+                uint32_t core = netplay_core_digest(&dig_cpu);
+                uint32_t aux = netplay_aux_digest();
+                /* Wire dig_m folds aux so SPU/MDEC reconverge-fakes can't commit. */
+                uint32_t fold = 0xFFFFFFFFu;
+                fold = crc32_update(fold, (const uint8_t *)&core, sizeof(core));
+                fold = crc32_update(fold, (const uint8_t *)&aux, sizeof(aux));
+                g_post_digest = fold ^ 0xFFFFFFFFu;
+                fprintf(stderr,
+                        "psxrecomp: rb post parts core=%08x aux=%08x (wire dig_m=%08x)\n",
+                        (unsigned)core, (unsigned)aux, (unsigned)g_post_digest);
             }
-            g_post_digest = netplay_core_digest(&dig_cpu);
         } else {
             g_post_digest = 0u;
         }
@@ -1676,7 +1958,7 @@ void psx_netplay_rb_finish_frame(void)
         g_local_post_sent = 1;
         g_post_rexmit_logged = 0;
         fprintf(stderr,
-                "psxrecomp: rb post sent core=%08x av=%08x cd=%08x (peer_ok=%d)\n",
+                "psxrecomp: rb post sent dig_m=%08x av=%08x cd=%08x (peer_ok=%d)\n",
                 (unsigned)g_post_digest, (unsigned)g_post_av,
                 (unsigned)netplay_cdrom_digest(), g_peer_post_ok);
         fflush(stderr);
@@ -1686,7 +1968,8 @@ void psx_netplay_rb_finish_frame(void)
             else {
                 char why[128];
                 if (g_peer_post_digest != g_post_digest)
-                    snprintf(why, sizeof(why), "post core diverge local=%08x peer=%08x",
+                    snprintf(why, sizeof(why),
+                             "post core/aux diverge local=%08x peer=%08x",
                              (unsigned)g_post_digest, (unsigned)g_peer_post_digest);
                 else
                     snprintf(why, sizeof(why), "post av diverge local=%08x peer=%08x",
