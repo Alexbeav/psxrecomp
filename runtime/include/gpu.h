@@ -111,9 +111,13 @@ uint32_t gpu_gp0_ring_max_words(void);
 int      gpu_gp0_ring_dump_frame(uint32_t frame, GpuGp0RingEntry *out, int max_out);
 void     gpu_gp0_ring_frame_span(uint32_t *out_oldest, uint32_t *out_newest);
 
-/* Vblank presentation callback — called from gpu_vblank_tick(). */
+/* Vblank presentation callback — called from gpu_vblank_tick().
+ * Under netplay the callback is deferred to gpu_vblank_flush_present() at
+ * BB / IRQ-check edges so finish_frame digests are not sampled mid-block. */
 typedef void (*gpu_vblank_cb)(void);
 void gpu_set_vblank_callback(gpu_vblank_cb cb);
+void gpu_vblank_flush_present(void);
+void gpu_vblank_clear_deferred_present(void);
 
 /* Present-time screen-colour model (see color_lut.h ScreenKind: 0=raw,
  * 1=crt, 2=composite, 3=trinitron). Config/launcher-driven; the PSX_SCREEN

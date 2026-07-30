@@ -6,8 +6,8 @@
  *
  * Depth defaults to 64 (enough for early soaks; raise toward
  * RNET_RB_SEAL_MAX_SPAN=128 when episodes deepen). Each slot owns a
- * boot_state_save_buffer blob. save/load call the full-machine serializer;
- * store/peek are for tests and for hosts that already hold a blob.
+ * boot_state_save_buffer_raw blob (uncompressed — FPS). save/load call the
+ * full-machine serializer; store/peek are for tests / pre-serialized blobs.
  */
 
 #include <stddef.h>

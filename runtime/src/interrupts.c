@@ -64,6 +64,8 @@ typedef struct {
     uint32_t exit_reason;  /* g_exc_escape_reason at exit */
     uint32_t same_thread;  /* same_thread_resume discriminator result */
     uint32_t restored;     /* saved_gpr restore fired */
+    uint32_t v0_exit;      /* cpu->gpr[2] at exit before restore decision */
+    uint32_t v0_saved;     /* saved_gpr[2] (interrupted code's v0) */
     uint32_t v1_exit;      /* cpu->gpr[3] at exit before restore decision */
     uint32_t v1_saved;     /* saved_gpr[3] (interrupted code's v1) */
     uint32_t ra_exit;      /* cpu->gpr[31] at exit before restore decision */
@@ -631,6 +633,36 @@ void interrupts_resync_after_restore(void) {
     s_defer_switch_pending = 0;
     s_defer_switch_target = 0;
     s_defer_switch_from = 0;
+    /* Drop mid-quantum present armed before the rewind — do not finish_frame
+     * against the restored tip with a stale pending count. */
+    gpu_vblank_clear_deferred_present();
+}
+
+void interrupts_log_last_vblank_irqctx(const char *tag)
+{
+    uint64_t i;
+    if (g_irqctx_seq == 0)
+        return;
+    /* Walk newest→oldest for the last completed VBLANK delivery. */
+    for (i = 0; i < g_irqctx_seq && i < IRQCTX_RING_CAP; i++) {
+        uint64_t idx = g_irqctx_seq - 1u - i;
+        const IrqCtxEntry *e = &g_irqctx_ring[idx & (IRQCTX_RING_CAP - 1u)];
+        if (!e->is_vblank)
+            continue;
+        fprintf(stderr,
+                "psxrecomp: rb irqctx %s vb seq=%llu cyc=%llu restored=%u "
+                "same_thr=%u reason=%u exit_pc=%08x epc=%08x "
+                "v0_exit=%08x v0_saved=%08x v1_exit=%08x v1_saved=%08x\n",
+                tag ? tag : "?",
+                (unsigned long long)e->seq, (unsigned long long)e->cycle,
+                (unsigned)e->restored, (unsigned)e->same_thread,
+                (unsigned)e->exit_reason, (unsigned)e->exit_pc,
+                (unsigned)e->real_epc, (unsigned)e->v0_exit,
+                (unsigned)e->v0_saved, (unsigned)e->v1_exit,
+                (unsigned)e->v1_saved);
+        fflush(stderr);
+        return;
+    }
 }
 
 /*
@@ -773,6 +805,9 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 
 void psx_check_interrupts(CPUState* cpu) {
     psx_cyc_batch_flush();
+    /* Netplay: run deferred sdl_vblank_present here (BB edge), not from
+     * mid-block fire_vblank_edge → gpu_vblank_tick. Offline presents immediately. */
+    gpu_vblank_flush_present();
     extern int g_ls_suppress_record;
 #define PSX_CHECK_INTERRUPTS_RETURN() do { if (g_ls_suppress_record > 0) g_ls_suppress_record--; return; } while (0)
 #ifdef PSX_COSIM
@@ -1465,18 +1500,26 @@ irq_deliver_eval:
      * the fix for Tomba's pause menu):
      *   PSX_SAME_THREAD_RESTORE=0  original Fix B (legacy-sentinel-only restore)
      *   PSX_SAME_THREAD_RESTORE=1  PC-equality heuristic (13c5e0c behavior)
-     *   PSX_SAME_THREAD_RESTORE=2  kernel current-TCB equality (default;
-     *                              structural same-thread test — a genuine
-     *                              ChangeThread moves PCB[0] even when the new
-     *                              thread resumes at the SAME guest PC) */
-    static int s_str_mode = -1;
-    if (s_str_mode < 0) {
+     *   PSX_SAME_THREAD_RESTORE=2  kernel current-TCB equality (+ PC match)
+     * Offline default remains mode 1. Netplay (env unset) uses mode 3:
+     * same-TCB RFE/SYSCALL always restores — MotK menu Replay forked only
+     * v0 when one peer's PC heuristic missed and left BIOS v0=1 while the
+     * other restored the wait-loop load (0x5bd2) with matched RAM/cycles. */
+    static int s_str_mode_env = -2; /* -2 unset; -1 = auto */
+    int s_str_mode;
+    if (s_str_mode_env == -2) {
         const char *e = getenv("PSX_SAME_THREAD_RESTORE");
-        s_str_mode = (e && *e) ? atoi(e) : 1;   /* default = 13c5e0c behavior;
-            mode 2 (TCB check) is the hardening candidate, pending a Tomba
-            pause-menu gate. The MMX6 "not found" this selector was built to
-            verify turned out to be a STALE GENERATED IMAGE artifact. */
-        if (s_str_mode < 0 || s_str_mode > 2) s_str_mode = 1;
+        s_str_mode_env = (e && *e) ? atoi(e) : -1;
+        if (s_str_mode_env < -1 || s_str_mode_env > 3) s_str_mode_env = -1;
+    }
+    {
+        extern int psx_netplay_active(void);
+        if (s_str_mode_env >= 0)
+            s_str_mode = s_str_mode_env;
+        else if (psx_netplay_active())
+            s_str_mode = 3; /* netplay auto: TCB-stable always restore */
+        else
+            s_str_mode = 1;
     }
     extern uint32_t psx_read_word(uint32_t addr);   /* memory.c (plain RAM read) */
     uint32_t exit_pcb = psx_read_word(0x108u);
@@ -1492,6 +1535,14 @@ irq_deliver_eval:
             (g_exc_escape_reason != PSX_EXC_ESCAPE_LEGACY_SENTINEL) &&
             g_exception_real_epc != 0u &&
             same_guest_pc(cpu->pc, g_exception_real_epc) &&
+            entry_tcb != 0u && entry_tcb == exit_tcb;
+    } else if (s_str_mode == 3) {
+        /* Netplay: PCB[0] unmoved ⇒ same thread. Ignore exit-PC noise that
+         * made mode-1 restore asymmetrically across peers (v0-only MotK
+         * Replay forks). Genuine ChangeThread still skips (TCB moved). */
+        same_thread_resume =
+            (g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN ||
+             g_exc_escape_reason == PSX_EXC_ESCAPE_SYSCALL_RETURN) &&
             entry_tcb != 0u && entry_tcb == exit_tcb;
     }
     /* Same-thread completion of a SENTINEL (legacy) delivery via an explicit
@@ -1524,6 +1575,8 @@ irq_deliver_eval:
         e->exit_reason = (uint32_t)g_exc_escape_reason;
         e->same_thread = (uint32_t)same_thread_resume;
         e->restored    = (uint32_t)do_restore;
+        e->v0_exit     = cpu->gpr[2];
+        e->v0_saved    = saved_gpr[2];
         e->v1_exit     = cpu->gpr[3];
         e->v1_saved    = saved_gpr[3];
         e->ra_exit     = cpu->gpr[31];

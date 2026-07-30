@@ -2084,6 +2084,44 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         np_rb_bind_and_start();
         printf("psxrecomp: netplay mode=rollback (D=%d P=%d invent+contract)\n",
                g_np.input_delay, g_np.input_prediction);
+        /* Peers MUST share one binary — mixed build-release vs packaged
+         * motk-* left matched digests for hundreds of ticks then GPR/tim
+         * forks in Replay, with pin zlib ~1.34M vs ~1.13M. */
+        {
+            char exe[512];
+            long long sz = -1;
+#if defined(_WIN32)
+            DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+            if (n == 0 || n >= sizeof(exe))
+                snprintf(exe, sizeof(exe), "(unknown)");
+            {
+                WIN32_FILE_ATTRIBUTE_DATA fad;
+                if (GetFileAttributesExA(exe, GetFileExInfoStandard, &fad)) {
+                    ULARGE_INTEGER u;
+                    u.HighPart = fad.nFileSizeHigh;
+                    u.LowPart = fad.nFileSizeLow;
+                    sz = (long long)u.QuadPart;
+                }
+            }
+#else
+            ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+            if (n < 0) {
+                snprintf(exe, sizeof(exe), "(unknown)");
+            } else {
+                exe[n] = '\0';
+                {
+                    struct stat st;
+                    if (stat(exe, &st) == 0)
+                        sz = (long long)st.st_size;
+                }
+            }
+#endif
+            fprintf(stderr,
+                    "psxrecomp: rb binary path=%s size=%lld "
+                    "(peers must match bit-identical)\n",
+                    exe, sz);
+            fflush(stderr);
+        }
         fflush(stdout);
     }
     if (g_np.slot_count >= 3)
@@ -2627,6 +2665,21 @@ void psx_netplay_pump(void)
 {
     if (!psx_netplay_active())
         return;
+    /* Mid-guest cycle-watchdog pump during Replay must not run reconcile /
+     * rb_pump (seal/baseline apply, hist promote) — that is host-asymmetric
+     * work and was a candidate for SIO fsm forks with matched guest cycles.
+     * Still drain transport + FRAME_COMMIT so mid-resim core aborts stay live.
+     * Full pump resumes at admit / present edges. */
+    if (g_np.rollback && psx_netplay_rb_is_resimulating()) {
+#if defined(PSX_HAS_LOBBY_CLIENT)
+        if (g_np.use_ice || psx_lobby_connected())
+            psx_lobby_pump();
+#endif
+        drain_lobby_signals();
+        rnet_session_pump(g_np.session);
+        np_drain_peer_frame_commits();
+        return;
+    }
     np_pump_session();
     psx_netplay_diag_tick();
 }

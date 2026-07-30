@@ -90,6 +90,7 @@ typedef struct BsOut {
     uint8_t* data;    /* memory sink (owned by caller / save_buffer) */
     size_t   len;
     size_t   cap;
+    int      no_zlib; /* 1 => always raw sections (netplay snap ring) */
 } BsOut;
 
 static int bs_write(BsOut* o, const void* p, size_t n) {
@@ -144,10 +145,11 @@ static int write_section_raw(BsOut* o, uint32_t tag, uint32_t flags,
 }
 
 /* Prefer zlib for large blobs (smaller disk + faster load on slow storage).
- * Falls back to raw if compressBound/compress fails. */
+ * Falls back to raw if compressBound/compress fails.
+ * o->no_zlib skips compress entirely (in-memory netplay ring). */
 static int write_section(BsOut* o, uint32_t tag, const void* data, uint64_t len) {
     if (!data && len) return 0;
-    if (len >= BOOT_STATE_ZLIB_MIN && len <= 0xffffffffu) {
+    if (!o->no_zlib && len >= BOOT_STATE_ZLIB_MIN && len <= 0xffffffffu) {
         uLong bound = compressBound((uLong)len);
         uint8_t* packed = (uint8_t*)malloc(4u + (size_t)bound);
         if (packed) {
@@ -266,16 +268,23 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         else {
             gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, vbuf);
             /* VRAM is uint16 LE guest pixels — emit as LE u16 stream.
-             * pst_w_pod is a memcpy on LE hosts (see pst_wire.h). */
-            uint8_t* wire = (uint8_t*)malloc(VRAM_SIZE);
-            if (!wire) ok = 0;
-            else {
-                PstW w;
-                pst_w_init(&w, wire, VRAM_SIZE);
-                ok = pst_w_pod(&w, vbuf, VRAM_SIZE, 2) &&
-                     write_section(o, BS_SEC_VRAM, wire, VRAM_SIZE);
-                free(wire);
+             * pst_w_pod is a memcpy on LE hosts (see pst_wire.h); skip the
+             * extra wire alloc there (netplay ring snaps every few ticks). */
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+            ok = write_section(o, BS_SEC_VRAM, vbuf, VRAM_SIZE);
+#else
+            {
+                uint8_t* wire = (uint8_t*)malloc(VRAM_SIZE);
+                if (!wire) ok = 0;
+                else {
+                    PstW w;
+                    pst_w_init(&w, wire, VRAM_SIZE);
+                    ok = pst_w_pod(&w, vbuf, VRAM_SIZE, 2) &&
+                         write_section(o, BS_SEC_VRAM, wire, VRAM_SIZE);
+                    free(wire);
+                }
             }
+#endif
             free(vbuf);
         }
     }
@@ -318,16 +327,17 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
     return ok;
 }
 
-int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
-                           uint32_t entry_pc, uint8_t** out_data,
-                           size_t* out_len) {
+static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum,
+                                     uint32_t entry_pc, uint8_t** out_data,
+                                     size_t* out_len, int no_zlib) {
     BsOut o;
     if (!out_data || !out_len) return 0;
     *out_data = NULL;
     *out_len = 0;
     memset(&o, 0, sizeof o);
-    /* Typical MotK .pst is ~1.3–1.5 MiB compressed; start with 2 MiB. */
-    o.cap = 2u * 1024u * 1024u;
+    o.no_zlib = no_zlib ? 1 : 0;
+    /* Compressed MotK ~1.3–1.5 MiB; raw ~3.5–4 MiB (RAM+VRAM+SPU). */
+    o.cap = no_zlib ? (5u * 1024u * 1024u) : (2u * 1024u * 1024u);
     o.data = (uint8_t*)malloc(o.cap);
     if (!o.data) return 0;
     if (!boot_state_save_to(&o, cpu, bios_checksum, entry_pc)) {
@@ -337,6 +347,20 @@ int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
     *out_data = o.data;
     *out_len = o.len;
     return 1;
+}
+
+int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
+                           uint32_t entry_pc, uint8_t** out_data,
+                           size_t* out_len) {
+    return boot_state_save_buffer_ex(cpu, bios_checksum, entry_pc, out_data,
+                                     out_len, 0);
+}
+
+int boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
+                               uint32_t entry_pc, uint8_t** out_data,
+                               size_t* out_len) {
+    return boot_state_save_buffer_ex(cpu, bios_checksum, entry_pc, out_data,
+                                     out_len, 1);
 }
 
 /* ============================ LOAD ============================ */

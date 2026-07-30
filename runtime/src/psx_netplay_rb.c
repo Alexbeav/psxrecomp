@@ -88,12 +88,14 @@ static uint32_t g_pending_resume_pc;
  * until restore (peer BASELINE can arrive while we are still sealing). */
 static int g_episode_snap_applied;
 
-/* Live-path snap every N ticks (full boot_state ~1.3MB). Resim still snaps
- * every tick so episode baselines stay dense. Override: PSX_NET_SNAP_INTERVAL. */
+/* Live-path snap every N ticks (raw boot_state ~3.5MB, no zlib). Resim still
+ * snaps every tick so episode baselines stay dense.
+ * Override: PSX_NET_SNAP_INTERVAL (default 8 — was 4; zlib removal + wider
+ * interval are the main FPS wins). */
 static uint32_t snap_interval(void)
 {
     static int latched;
-    static uint32_t iv = 4u;
+    static uint32_t iv = 8u;
     if (!latched) {
         const char *e = getenv("PSX_NET_SNAP_INTERVAL");
         if (e && e[0]) {
@@ -177,14 +179,18 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_BASELINE_BURST_MS 40u
 /* Initiator waits for follower ready-ACK; do NOT solo-enter Replay. */
 #define RB_READY_TIMEOUT_MS 4000u
-/* MotK title/menu: invent edges thrash every 1–3 ticks without this. */
+/* Clean commit: short promote-only window (invent edges thrash without this). */
 #define RB_REWIND_COOLDOWN_TICKS 12u
+/* Failed episode (resim/baseline/post): calm from *live* sim before realign. */
+#define RB_ABORT_COOLDOWN_TICKS 60u
+/* Repeated abort streak — longer promote-only (char-select storm). */
+#define RB_STORM_COOLDOWN_TICKS 120u
 /* Keep deferring a few frames after MDEC goes quiet (cutover / credits). */
 #define RB_FMV_MDEC_HYSTERESIS 8u
 /* After leaving FMV: stay lockstep (no invent / no rewind) so cutover heals. */
 #define RB_FMV_SETTLE_TICKS 90u
 /* Baseline mismatch with no agreed tip — don't reopen every few ticks. */
-#define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 60u
+#define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 90u
 
 static int g_was_in_fmv;
 static uint32_t g_fmv_settle_until;
@@ -332,12 +338,15 @@ void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
     out->pc = 0;
 }
 
-/* Split dig_cpu so logs tell PC-only forks from true GPR/COP0 forks. */
+/* Split dig_cpu so logs tell PC-only forks from true GPR/COP0/GTE forks. */
 static void log_cpu_digest_split(const CPUState *raw, const char *tag)
 {
     uint32_t gpr = 0xFFFFFFFFu;
     uint32_t hil = 0xFFFFFFFFu;
     uint32_t c0 = 0xFFFFFFFFu;
+    uint32_t gte = 0xFFFFFFFFu;
+    int dump_regs;
+    int i;
     if (!raw)
         return;
     gpr = crc32_update(gpr, (const uint8_t *)raw->gpr, sizeof(raw->gpr));
@@ -346,12 +355,25 @@ static void log_cpu_digest_split(const CPUState *raw, const char *tag)
     c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[12], sizeof(uint32_t));
     c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[13], sizeof(uint32_t));
     c0 = crc32_update(c0, (const uint8_t *)&raw->cop0[14], sizeof(uint32_t));
+    gte = crc32_update(gte, (const uint8_t *)raw->gte_data, sizeof(raw->gte_data));
+    gte = crc32_update(gte, (const uint8_t *)raw->gte_ctrl, sizeof(raw->gte_ctrl));
     fprintf(stderr,
             "psxrecomp: rb cpu-split %s raw_pc=%08x sticky=%08x gpr=%08x "
-            "hi_lo=%08x cop0=%08x\n",
+            "hi_lo=%08x cop0=%08x gte=%08x\n",
             tag ? tag : "?", (unsigned)raw->pc, (unsigned)g_last_good_bb_pc,
             (unsigned)(gpr ^ 0xFFFFFFFFu), (unsigned)(hil ^ 0xFFFFFFFFu),
-            (unsigned)(c0 ^ 0xFFFFFFFFu));
+            (unsigned)(c0 ^ 0xFFFFFFFFu), (unsigned)(gte ^ 0xFFFFFFFFu));
+    /* Full GPR words on fin/abort — peers can diff which regs forked. */
+    dump_regs = tag && (strcmp(tag, "fin") == 0 || strcmp(tag, "abort") == 0 ||
+                        strcmp(tag, "post") == 0);
+    if (dump_regs) {
+        fprintf(stderr, "psxrecomp: rb gpr-dump %s", tag);
+        for (i = 0; i < 32; i++)
+            fprintf(stderr, " r%02d=%08x", i, (unsigned)raw->gpr[i]);
+        fprintf(stderr, "\n");
+        /* Last VBLANK irq restore — peers diff restored/v0 on r2-only forks. */
+        interrupts_log_last_vblank_irqctx(tag);
+    }
     fflush(stderr);
 }
 
@@ -459,8 +481,17 @@ static void abort_episode(const char *why)
 /* After a failed episode: rewind Live to a tip both peers already agreed on. */
 static void abort_episode_realign(const char *why)
 {
+    RNetSession *s = sess();
+    /* Capture LIVE sim BEFORE schedule_live_realign rewinds the clock.
+     * Arming cooldown from the rewound tip let uncapped catch-up burn a
+     * 12-tick window in ms → char-select episode storms (stale until < live). */
+    uint32_t live_sim = s ? rnet_session_sim_tick(s) : 0u;
     uint32_t tick = 0;
     int have = 0;
+    uint32_t cool_n;
+    char cool_why[160];
+    int hard_fail;
+
     /* Prefer the frozen pre-resim baseline — ring load_tick was often overwritten. */
     if (g_episode_baseline_matched && g_pin_valid) {
         tick = g_pin_tick;
@@ -477,20 +508,30 @@ static void abort_episode_realign(const char *why)
     abort_episode(why);
     if (have)
         schedule_live_realign(tick, why);
-    {
-        RNetSession *s = sess();
-        uint32_t sim = s ? rnet_session_sim_tick(s) : (have ? tick + 1u : 0u);
-        /* Baseline mismatch before any commit: no tip to realign — long cooldown
-         * so cutover doesn't reopen doomed episodes every few ticks. */
-        if (!have) {
-            g_bl_mismatch_streak++;
-            arm_rewind_cooldown_ticks(sim, RB_BASELINE_MISMATCH_COOLDOWN_TICKS,
-                                      why ? why : "desync");
-        } else {
-            g_bl_mismatch_streak = 0;
-            arm_rewind_cooldown(sim, why ? why : "realign");
-        }
-    }
+
+    hard_fail = !have ||
+                (why && (strstr(why, "baseline") != NULL ||
+                         strstr(why, "resim core") != NULL ||
+                         strstr(why, "post ") != NULL ||
+                         strstr(why, "desync") != NULL));
+    if (hard_fail)
+        g_bl_mismatch_streak++;
+    else
+        g_bl_mismatch_streak = 0;
+
+    if (!have)
+        cool_n = RB_BASELINE_MISMATCH_COOLDOWN_TICKS;
+    else if (g_bl_mismatch_streak >= 2u)
+        cool_n = RB_STORM_COOLDOWN_TICKS;
+    else if (hard_fail)
+        cool_n = RB_ABORT_COOLDOWN_TICKS;
+    else
+        cool_n = RB_ABORT_COOLDOWN_TICKS;
+
+    snprintf(cool_why, sizeof(cool_why), "%s (live=%u streak=%u)",
+             why ? why : "realign", (unsigned)live_sim,
+             (unsigned)g_bl_mismatch_streak);
+    arm_rewind_cooldown_ticks(live_sim, cool_n, cool_why);
 }
 
 static int host_save_state(void *ctx, uint32_t tick)
@@ -867,21 +908,28 @@ static void maybe_send_baseline(void)
         g_baseline_handshake_ms = rb_mono_ms();
         g_last_baseline_burst_ms = 0; /* allow immediate burst */
         send_baseline_burst(0, RB_BASELINE_BURST, 0);
-        fprintf(stderr,
-                "psxrecomp: rb baseline sent load=%u core=%08x av=%08x ext=%08x cd=%08x "
-                "(burst=%d) parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
-                "spu=%08x mdec=%08x aux=%08x spad=%08x dma=%08x sio=%08x\n",
-                (unsigned)rnet_rb_get_load_tick(g_rb),
-                (unsigned)g_local_baseline_digest,
-                (unsigned)g_local_baseline_av, (unsigned)g_local_baseline_aux,
-                (unsigned)netplay_cdrom_digest(), RB_BASELINE_BURST,
-                (unsigned)parts.cpu, (unsigned)parts.clock_irq,
-                (unsigned)parts.timers, (unsigned)parts.ram,
-                (unsigned)parts.dirty, (unsigned)netplay_spu_digest(),
-                (unsigned)netplay_mdec_digest(),
-                (unsigned)netplay_aux_digest(),
-                (unsigned)netplay_spad_digest(), (unsigned)netplay_dma_digest(),
-                (unsigned)netplay_sio_digest());
+        {
+            NetplaySioParts sp;
+            netplay_sio_digest_parts(&sp);
+            fprintf(stderr,
+                    "psxrecomp: rb baseline sent load=%u core=%08x av=%08x ext=%08x cd=%08x "
+                    "(burst=%d) parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
+                    "spu=%08x mdec=%08x aux=%08x spad=%08x dma=%08x sio=%08x "
+                    "sioP=%08x/%08x/%08x/%08x/%08x\n",
+                    (unsigned)rnet_rb_get_load_tick(g_rb),
+                    (unsigned)g_local_baseline_digest,
+                    (unsigned)g_local_baseline_av, (unsigned)g_local_baseline_aux,
+                    (unsigned)netplay_cdrom_digest(), RB_BASELINE_BURST,
+                    (unsigned)parts.cpu, (unsigned)parts.clock_irq,
+                    (unsigned)parts.timers, (unsigned)parts.ram,
+                    (unsigned)parts.dirty, (unsigned)netplay_spu_digest(),
+                    (unsigned)netplay_mdec_digest(),
+                    (unsigned)netplay_aux_digest(),
+                    (unsigned)netplay_spad_digest(), (unsigned)netplay_dma_digest(),
+                    (unsigned)netplay_sio_digest(),
+                    (unsigned)sp.regs, (unsigned)sp.pads, (unsigned)sp.mc,
+                    (unsigned)sp.pace, (unsigned)sp.meta);
+        }
         fflush(stderr);
         return;
     }
@@ -914,8 +962,8 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     int n = g_b.slot_count ? *g_b.slot_count : 0;
     uint32_t dig = 0u;
     NetplayCoreParts parts;
-    uint32_t av = netplay_av_digest();
-    uint32_t cd = netplay_cdrom_digest();
+    uint32_t av = 0u;
+    uint32_t cd = 0u;
     uint32_t aux = 0u;
     uint32_t spad = 0u;
     uint32_t dma = 0u;
@@ -937,7 +985,10 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
             }
         }
         if (want_parts) {
+            /* fin only: full bus digests (av = full VRAM CRC — skip on arm). */
             netplay_core_digest_parts(&dig_cpu, &parts);
+            av = netplay_av_digest();
+            cd = netplay_cdrom_digest();
             aux = netplay_aux_digest();
             spad = netplay_spad_digest();
             dma = netplay_dma_digest();
@@ -945,7 +996,7 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
             dig = netplay_master_digest(&dig_cpu);
         } else {
             parts.core = netplay_core_digest(&dig_cpu);
-            dig = netplay_master_digest(&dig_cpu);
+            dig = parts.core; /* arm: skip master/cd/av — diag only */
         }
     }
     fprintf(stderr,
@@ -961,13 +1012,17 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
             fprintf(stderr, " s%d=----", slot);
     }
     if (want_parts) {
+        NetplaySioParts sp;
+        netplay_sio_digest_parts(&sp);
         fprintf(stderr,
                 " | cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x aux=%08x "
-                "spad=%08x dma=%08x sio=%08x",
+                "spad=%08x dma=%08x sio=%08x sioP=%08x/%08x/%08x/%08x/%08x",
                 (unsigned)parts.cpu, (unsigned)parts.clock_irq,
                 (unsigned)parts.timers, (unsigned)parts.ram,
                 (unsigned)parts.dirty, (unsigned)aux, (unsigned)spad,
-                (unsigned)dma, (unsigned)sio);
+                (unsigned)dma, (unsigned)sio,
+                (unsigned)sp.regs, (unsigned)sp.pads, (unsigned)sp.mc,
+                (unsigned)sp.pace, (unsigned)sp.meta);
     }
     fprintf(stderr, "\n");
     fflush(stderr);
@@ -1494,19 +1549,18 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         }
         return 0;
     }
-    /* No shared tip yet and baselines keep mismatching — wait out cooldown. */
-    if (!g_agreed_valid && g_bl_mismatch_streak >= 2u &&
-        sim < g_rewind_cooldown_until) {
-        return 0;
-    }
-    /* Coalesce: refuse reopen storms after commit/realign; reconcile promotes. */
+    /* Coalesce: refuse reopen after commit/abort; reconcile promotes wire.
+     * until is armed from live sim at failure (not rewound tip) so catch-up
+     * cannot burn a short window before the next d-pad edge. */
     if (sim < g_rewind_cooldown_until) {
         static uint32_t s_cd_log_sim;
         if (s_cd_log_sim != sim) {
             fprintf(stderr,
-                    "psxrecomp: rb begin COOLDOWN mismatch=%u sim=%u until=%u\n",
+                    "psxrecomp: rb begin COOLDOWN mismatch=%u sim=%u until=%u "
+                    "streak=%u\n",
                     (unsigned)mismatch_tick, (unsigned)sim,
-                    (unsigned)g_rewind_cooldown_until);
+                    (unsigned)g_rewind_cooldown_until,
+                    (unsigned)g_bl_mismatch_streak);
             fflush(stderr);
             s_cd_log_sim = sim;
         }
@@ -1840,18 +1894,22 @@ int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
     c = cpu();
     if (c) {
         NetplayCoreParts parts;
+        NetplaySioParts sp;
         CPUState dig_cpu;
         log_cpu_digest_split(c, "abort");
         psx_netplay_rb_cpu_for_present_digest(&dig_cpu, c);
         netplay_core_digest_parts(&dig_cpu, &parts);
+        netplay_sio_digest_parts(&sp);
         fprintf(stderr,
                 "psxrecomp: rb abort-parts sim=%u cpu=%08x clk=%08x tim=%08x "
-                "ram=%08x dirty=%08x spad=%08x dma=%08x sio=%08x aux=%08x "
-                "cd=%08x av=%08x\n",
+                "ram=%08x dirty=%08x spad=%08x dma=%08x sio=%08x "
+                "sioP=%08x/%08x/%08x/%08x/%08x aux=%08x cd=%08x av=%08x\n",
                 (unsigned)tick, (unsigned)parts.cpu, (unsigned)parts.clock_irq,
                 (unsigned)parts.timers, (unsigned)parts.ram,
                 (unsigned)parts.dirty, (unsigned)netplay_spad_digest(),
                 (unsigned)netplay_dma_digest(), (unsigned)netplay_sio_digest(),
+                (unsigned)sp.regs, (unsigned)sp.pads, (unsigned)sp.mc,
+                (unsigned)sp.pace, (unsigned)sp.meta,
                 (unsigned)netplay_aux_digest(), (unsigned)netplay_cdrom_digest(),
                 (unsigned)netplay_av_digest());
         fflush(stderr);

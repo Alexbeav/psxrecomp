@@ -23,7 +23,7 @@ extern "C" {
 
 /* Partition CRCs folded into netplay_core_digest — for first-diverge diags. */
 typedef struct NetplayCoreParts {
-    uint32_t cpu;       /* gpr + pc + hi/lo + status/cause/epc */
+    uint32_t cpu;       /* gpr + pc + hi/lo + status/cause/epc + GTE */
     uint32_t clock_irq; /* cycle count + i_stat/i_mask */
     uint32_t timers;    /* timer snapshot */
     uint32_t ram;       /* 2 MiB main RAM */
@@ -45,6 +45,18 @@ uint32_t netplay_aux_digest(void); /* crc(spu, mdec) */
 uint32_t netplay_spad_digest(void); /* 1 KiB scratchpad */
 uint32_t netplay_dma_digest(void);
 uint32_t netplay_sio_digest(void);
+
+/* SIO snapshot section CRCs — which subsystem forked a resim (a single SIO
+ * digest could not say). Sections mirror sio_snap_emit order.
+ * netplay_sio_digest / baseline_ext fold only through fsm_pace (not meta). */
+typedef struct NetplaySioParts {
+    uint32_t regs; /* tx/rx/stat/mode/ctrl/baud */
+    uint32_t pads; /* pad_analog/connected/state/response/config/type_req */
+    uint32_t mc;   /* memcard working vars + both slot FSMs + active_device */
+    uint32_t pace; /* shift/ack/irq countdown — guest-visible timing */
+    uint32_t meta; /* irq source/slot/delay/byte_seq (host audit only) */
+} NetplaySioParts;
+void netplay_sio_digest_parts(NetplaySioParts *out);
 /* Baseline dig_c: crc(aux, cd, spad, dma, sio). Refuse doomed Replay. */
 uint32_t netplay_baseline_ext_digest(void);
 

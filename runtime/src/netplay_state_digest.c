@@ -27,6 +27,7 @@ extern uint32_t dma_snapshot_bytes(void);
 extern void     dma_snapshot_write(uint8_t *p);
 extern uint32_t sio_snapshot_bytes(void);
 extern void     sio_snapshot_write(uint8_t *p);
+extern void     sio_snapshot_section_ends(uint32_t out[5]);
 
 #define NP_SPAD_SIZE 1024u
 
@@ -117,6 +118,8 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     if (!cpu)
         return;
 
+    /* GTE is in BS_SEC_CPU but was omitted here — MFC2 can fork GPRs with
+     * matched RAM/clk (menu resim). Keep snap + digest in lockstep. */
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
@@ -124,6 +127,8 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[12], sizeof(uint32_t));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[13], sizeof(uint32_t));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[14], sizeof(uint32_t));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gte_data, sizeof(cpu->gte_data));
+    crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gte_ctrl, sizeof(cpu->gte_ctrl));
     crc = crc32_update(crc, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
     crc = crc32_update(crc, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
     crc = crc32_update(crc, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
@@ -131,6 +136,8 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[12], sizeof(uint32_t));
     crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[13], sizeof(uint32_t));
     crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[14], sizeof(uint32_t));
+    crc = crc32_update(crc, (const uint8_t*)cpu->gte_data, sizeof(cpu->gte_data));
+    crc = crc32_update(crc, (const uint8_t*)cpu->gte_ctrl, sizeof(cpu->gte_ctrl));
 
     {
         uint64_t cyc = psx_cycle_count;
@@ -227,7 +234,68 @@ uint32_t netplay_dma_digest(void)
 
 uint32_t netplay_sio_digest(void)
 {
-    return digest_module(sio_snapshot_bytes, sio_snapshot_write);
+    /* Fold only through fsm_pace — exclude host-audit meta (byte_seq tracks
+     * unreseeded sio_trace_seq and was false-forking MotK Replay digests). */
+    static uint8_t *buf;
+    static uint32_t cap;
+    uint32_t n = sio_snapshot_bytes();
+    uint32_t ends[5];
+    uint32_t crc;
+
+    if (!n) return 0;
+    if (n > cap) {
+        uint8_t *nb = (uint8_t *)realloc(buf, n);
+        if (!nb) return 0;
+        buf = nb;
+        cap = n;
+    }
+    sio_snapshot_write(buf);
+    sio_snapshot_section_ends(ends);
+    if (ends[4] != n || ends[3] > ends[4])
+        return digest_module(sio_snapshot_bytes, sio_snapshot_write);
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf, ends[3]);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+void netplay_sio_digest_parts(NetplaySioParts *out)
+{
+    static uint8_t *buf;
+    static uint32_t cap;
+    uint32_t n = sio_snapshot_bytes();
+    uint32_t ends[5];
+    uint32_t crc;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!n) return;
+    if (n > cap) {
+        uint8_t *nb = (uint8_t *)realloc(buf, n);
+        if (!nb) return;
+        buf = nb;
+        cap = n;
+    }
+    sio_snapshot_write(buf);
+    sio_snapshot_section_ends(ends);
+    if (ends[4] != n || ends[0] > ends[1] || ends[1] > ends[2] ||
+        ends[2] > ends[3] || ends[3] > ends[4])
+        return; /* layout drifted — leave parts zero rather than lie */
+
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf, ends[0]);
+    out->regs = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + ends[0], ends[1] - ends[0]);
+    out->pads = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + ends[1], ends[2] - ends[1]);
+    out->mc = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + ends[2], ends[3] - ends[2]);
+    out->pace = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + ends[3], ends[4] - ends[3]);
+    out->meta = crc ^ 0xFFFFFFFFu;
 }
 
 uint32_t netplay_baseline_ext_digest(void)

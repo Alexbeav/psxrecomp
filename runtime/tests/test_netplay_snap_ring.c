@@ -27,6 +27,12 @@ int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
     *out_len = 4;
     return 1;
 }
+int boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
+                               uint32_t entry_pc, uint8_t** out_data,
+                               size_t* out_len) {
+    return boot_state_save_buffer(cpu, bios_checksum, entry_pc, out_data,
+                                  out_len);
+}
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {

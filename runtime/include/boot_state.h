@@ -99,10 +99,16 @@ int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                      uint32_t entry_pc, const char* path);
 
 /* Same as boot_state_save, but into a malloc'd buffer (caller frees *out_data).
- * Used by the netplay snap ring for per-tick in-memory snapshots. */
+ * Compresses large sections (disk-oriented). */
 int  boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
                             uint32_t entry_pc, uint8_t** out_data,
                             size_t* out_len);
+
+/* In-memory ring snaps: same sections, no zlib. Load accepts either form.
+ * Avoids compress2 on ~3.5 MiB RAM+VRAM+SPU every live/resim snap (FPS). */
+int  boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
+                                uint32_t entry_pc, uint8_t** out_data,
+                                size_t* out_len);
 
 /* Load + validate (integrity key) + restore the full machine. On any mismatch
  * or incompleteness returns 0 (caller then boots normally and recaptures). */

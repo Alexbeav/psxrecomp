@@ -2275,19 +2275,15 @@ static uint64_t s_sio_advance_with_work = 0;
 uint64_t sio_get_advance_called(void)    { return s_sio_advance_called; }
 uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 
-void sio_advance(uint32_t cycles) {
-    if (cycles == 0) return;
-    s_sio_advance_called++;
-    if (!g_sio_timing_active) return;
-    s_sio_advance_with_work++;
-
-    int remaining = (int)cycles;
-    int transitions = 0;
-    const int MAX_TRANSITIONS = 8;
-    while (transitions < MAX_TRANSITIONS &&
-           (remaining > 0 ||
-            (sio_shift_active && sio_shift_remaining <= 0) ||
-            (sio_pending_ack && sio_ack_remaining <= 0))) {
+/* Walk shift/ack deadlines for `cycles`. Never drop leftover time: a fixed
+ * transition cap used to exit with remaining>0, so peers that batched
+ * advances differently left divergent sio_shift_remaining / ack_remaining
+ * after the same guest cycle total (MotK menu Replay fsm-only fork). */
+static void sio_pace_walk(int cycles) {
+    int remaining = cycles;
+    while (remaining > 0 ||
+           (sio_shift_active && sio_shift_remaining <= 0) ||
+           (sio_pending_ack && sio_ack_remaining <= 0)) {
         int dt = remaining;
         int next_event = -1;
         if (sio_shift_active && sio_shift_remaining > 0
@@ -2311,15 +2307,21 @@ void sio_advance(uint32_t cycles) {
         remaining -= dt;
         if (next_event == 0) {
             sio_handle_shift_complete();
-            transitions++;
         } else if (next_event == 1) {
             sio_pending_ack = 0;
             sio_fire_ack_irq();
-            transitions++;
         } else {
             break;
         }
     }
+}
+
+void sio_advance(uint32_t cycles) {
+    if (cycles == 0) return;
+    s_sio_advance_called++;
+    if (!g_sio_timing_active) return;
+    s_sio_advance_with_work++;
+    sio_pace_walk((int)cycles);
 }
 #else
 /* Macro=0: stubs for ABI symmetry. */
@@ -2330,52 +2332,12 @@ uint64_t sio_get_advance_with_work(void) { return 0; }
 
 void sio_tick(int cycles) {
 #if SIO_MODEL_CYCLE_PACED
-    /* Cycle-paced advance. In 1.0c-v2 sio_shift_active and
-     * sio_pending_ack are never set (TX path still synchronous), so this
-     * loop finds no events and returns immediately. Plus, the dispatch
-     * caller is gated by g_sio_timing_active so this function isn't even
-     * called when nothing is pending. */
-    if (cycles > 0) {
-        int remaining = cycles;
-        int transitions = 0;
-        const int MAX_TRANSITIONS = 8;
-        while (transitions < MAX_TRANSITIONS &&
-               (remaining > 0 ||
-                (sio_shift_active && sio_shift_remaining <= 0) ||
-                (sio_pending_ack && sio_ack_remaining <= 0))) {
-            int dt = remaining;
-            int next_event = -1;
-            if (sio_shift_active && sio_shift_remaining > 0
-                && sio_shift_remaining <= dt) {
-                dt = sio_shift_remaining;
-                next_event = 0;
-            }
-            if (sio_pending_ack && sio_ack_remaining > 0
-                && (sio_ack_remaining < dt ||
-                    (sio_ack_remaining == dt && next_event < 0))) {
-                dt = sio_ack_remaining;
-                next_event = 1;
-            }
-            if (sio_shift_active && sio_shift_remaining <= 0) {
-                dt = 0; next_event = 0;
-            } else if (sio_pending_ack && sio_ack_remaining <= 0) {
-                dt = 0; next_event = 1;
-            }
-            if (sio_shift_active) sio_shift_remaining -= dt;
-            if (sio_pending_ack)  sio_ack_remaining   -= dt;
-            remaining -= dt;
-            if (next_event == 0) {
-                sio_handle_shift_complete();
-                transitions++;
-            } else if (next_event == 1) {
-                sio_pending_ack = 0;
-                sio_fire_ack_irq();
-                transitions++;
-            } else {
-                break;
-            }
-        }
-    }
+    /* Access-paced callers pass 0 (MMIO) — still flush overdue shift/ack.
+     * Quantum / tests pass a positive cycle budget. */
+    if (cycles > 0 ||
+        (sio_shift_active && sio_shift_remaining <= 0) ||
+        (sio_pending_ack && sio_ack_remaining <= 0))
+        sio_pace_walk(cycles > 0 ? cycles : 0);
 #else
     (void)cycles;
 #endif
@@ -2474,11 +2436,16 @@ static int sio_r_mcslot(PstR *r, McSlotState *s) {
     return 1;
 }
 
-static int sio_snap_emit(PstW *w) {
-    if (!pst_w_u8(w, sio_tx_data) || !pst_w_u8(w, sio_rx_data) ||
-        !pst_w_u16(w, sio_stat) || !pst_w_u16(w, sio_mode) ||
-        !pst_w_u16(w, sio_ctrl) || !pst_w_u16(w, sio_baud))
-        return 0;
+/* Snapshot wire is emitted in four sections so netplay diags can CRC each
+ * independently (regs / pads / memcard / shift+irq FSM) — a single SIO digest
+ * could not say WHICH subsystem forked a resim. Order and bytes unchanged. */
+static int sio_snap_emit_regs(PstW *w) {
+    return pst_w_u8(w, sio_tx_data) && pst_w_u8(w, sio_rx_data) &&
+           pst_w_u16(w, sio_stat) && pst_w_u16(w, sio_mode) &&
+           pst_w_u16(w, sio_ctrl) && pst_w_u16(w, sio_baud);
+}
+
+static int sio_snap_emit_pads(PstW *w) {
     /* Pad arrays sized by PSX_MAX_PLAYERS. Default MAX=2 keeps the historical
      * 2-pad snap layout byte-identical. pad_response runtime buffer is larger
      * for multitap bulk (34); snap still stores the first 8 bytes. */
@@ -2492,6 +2459,10 @@ static int sio_snap_emit(PstW *w) {
         if (!pst_w_i16(w, (int16_t)pad_type_req[s]))
             return 0;
     }
+    return 1;
+}
+
+static int sio_snap_emit_mc(PstW *w) {
     if (!pst_w_u32(w, (uint32_t)mc_state) || !pst_w_i32(w, (int32_t)mc_slot) ||
         !pst_w_u8(w, mc_cmd) || !pst_w_u16(w, mc_sector) ||
         !pst_w_u8(w, mc_sector_msb) || !pst_w_u8(w, mc_sector_lsb) ||
@@ -2500,8 +2471,11 @@ static int sio_snap_emit(PstW *w) {
         return 0;
     if (!sio_w_mcslot(w, &mc_slots[0]) || !sio_w_mcslot(w, &mc_slots[1]))
         return 0;
-    if (!pst_w_u32(w, (uint32_t)active_device))
-        return 0;
+    return pst_w_u32(w, (uint32_t)active_device);
+}
+
+/* Load-bearing pacing state (guest-visible IRQ timing). */
+static int sio_snap_emit_fsm_pace(PstW *w) {
 #if SIO_MODEL_CYCLE_PACED
     if (!pst_w_i32(w, (int32_t)g_sio_timing_active) ||
         !pst_w_i32(w, (int32_t)sio_shift_active) || !pst_w_u8(w, sio_shift_byte) ||
@@ -2515,14 +2489,44 @@ static int sio_snap_emit(PstW *w) {
         !pst_w_u32(w, (uint32_t)sio_bus_owner) || !pst_w_u32(w, sio_bus_byte_index))
         return 0;
 #endif
-    if (!pst_w_i32(w, (int32_t)sio_irq_pending) ||
-        !pst_w_i32(w, (int32_t)sio_irq_countdown) ||
-        !pst_w_i32(w, (int32_t)sio_ack_visible_reads) ||
-        !pst_w_u8(w, sio_irq_pending_source) || !pst_w_u8(w, sio_irq_pending_slot) ||
-        !pst_w_u8(w, sio_irq_pending_delay) || !pst_w_u8(w, sio_irq_pending_mc_state) ||
-        !pst_w_u32(w, sio_irq_pending_byte_seq))
-        return 0;
-    return 1;
+    return pst_w_i32(w, (int32_t)sio_irq_pending) &&
+           pst_w_i32(w, (int32_t)sio_irq_countdown) &&
+           pst_w_i32(w, (int32_t)sio_ack_visible_reads);
+}
+
+/* Audit/diag metadata — must not drive netplay digests (byte_seq tracks the
+ * host-local sio_trace_seq counter, which is not itself a guest register). */
+static int sio_snap_emit_fsm_meta(PstW *w) {
+    return pst_w_u8(w, sio_irq_pending_source) && pst_w_u8(w, sio_irq_pending_slot) &&
+           pst_w_u8(w, sio_irq_pending_delay) && pst_w_u8(w, sio_irq_pending_mc_state) &&
+           pst_w_u32(w, sio_irq_pending_byte_seq);
+}
+
+static int sio_snap_emit_fsm(PstW *w) {
+    return sio_snap_emit_fsm_pace(w) && sio_snap_emit_fsm_meta(w);
+}
+
+static int sio_snap_emit(PstW *w) {
+    return sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
+           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w);
+}
+
+/* Cumulative section end offsets in the snapshot wire:
+ * out[0]=regs, out[1]=pads, out[2]=memcard, out[3]=fsm_pace (netplay),
+ * out[4]=full including fsm_meta (== sio_snapshot_bytes()). */
+void sio_snapshot_section_ends(uint32_t out[5]) {
+    PstW w;
+    pst_w_init(&w, NULL, 0);
+    (void)sio_snap_emit_regs(&w);
+    out[0] = (uint32_t)w.written;
+    (void)sio_snap_emit_pads(&w);
+    out[1] = (uint32_t)w.written;
+    (void)sio_snap_emit_mc(&w);
+    out[2] = (uint32_t)w.written;
+    (void)sio_snap_emit_fsm_pace(&w);
+    out[3] = (uint32_t)w.written;
+    (void)sio_snap_emit_fsm_meta(&w);
+    out[4] = (uint32_t)w.written;
 }
 
 static int sio_snap_parse(PstR *r) {
@@ -2600,6 +2604,10 @@ static int sio_snap_parse(PstR *r) {
         !pst_r_u8(r, &sio_irq_pending_delay) || !pst_r_u8(r, &sio_irq_pending_mc_state) ||
         !pst_r_u32(r, &sio_irq_pending_byte_seq))
         return 0;
+    /* sio_trace_seq is host-local and not on the wire; reseat it from the
+     * restored byte_seq so the next TX does not stamp a peer-divergent
+     * seq into sio_irq_pending_byte_seq (was forking fsm digests alone). */
+    sio_trace_seq = sio_irq_pending_byte_seq;
     return 1;
 }
 

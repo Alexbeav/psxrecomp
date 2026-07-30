@@ -30,6 +30,9 @@ void interrupts_init(void);
  * catches up to the pre-load host timeline (warm-reload picture freeze). */
 void interrupts_resync_after_restore(void);
 
+/* Netplay diag: last VBLANK irqctx exit/restore (+ v0) for peer diff. */
+void interrupts_log_last_vblank_irqctx(const char *tag);
+
 /* Central IRQ-raise choke point: sets the I_STAT bit AND records the raise edge
  * into the always-on device-event ring (device_trace) with the guest cycle.
  * Every hardware source (VBLANK/GPU/CDROM/DMA/timers/SIO/SPU) funnels its raise

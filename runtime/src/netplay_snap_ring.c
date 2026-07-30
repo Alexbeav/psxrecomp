@@ -161,7 +161,9 @@ int netplay_snap_ring_save(NetplaySnapRing* r, uint32_t tick,
     uint8_t* data = NULL;
     size_t len = 0;
     if (!r || !cpu) return 0;
-    if (!boot_state_save_buffer(cpu, bios_checksum, entry_pc, &data, &len))
+    /* Raw (no zlib): compress2 on RAM+VRAM+SPU dominated live FPS. Load
+     * accepts uncompressed v4 sections. */
+    if (!boot_state_save_buffer_raw(cpu, bios_checksum, entry_pc, &data, &len))
         return 0;
     if (!netplay_snap_ring_store(r, tick, data, len))
         return 0; /* store frees data on hard failure */

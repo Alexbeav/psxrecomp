@@ -8838,8 +8838,8 @@ static void handle_irqctx_ring(int id, const char *json)
     typedef struct { uint64_t seq, cycle; uint32_t frame, istat, imask, sr, d44,
                      cdrom_active, is_vblank; int dma_depth;
                      uint32_t take_pc, real_epc, exit_pc, exit_reason, same_thread,
-                     restored, v1_exit, v1_saved, ra_exit, ra_saved, redirects,
-                     entry_sp, pump_site; } E;
+                     restored, v0_exit, v0_saved, v1_exit, v1_saved, ra_exit,
+                     ra_saved, redirects, entry_sp, pump_site; } E;
     extern E g_irqctx_ring[]; extern uint64_t g_irqctx_seq;
     /* Ring cap must track IRQCTX_RING_CAP in interrupts.c. */
     uint32_t cap = 4096u;
@@ -8871,6 +8871,7 @@ static void handle_irqctx_ring(int id, const char *json)
             "\"sr\":\"0x%08X\",\"istat\":\"0x%08X\",\"imask\":\"0x%08X\","
             "\"take_pc\":\"0x%08X\",\"real_epc\":\"0x%08X\",\"exit_pc\":\"0x%08X\","
             "\"exit_reason\":%u,\"same_thread\":%u,\"restored\":%u,"
+            "\"v0_exit\":\"0x%08X\",\"v0_saved\":\"0x%08X\","
             "\"v1_exit\":\"0x%08X\",\"v1_saved\":\"0x%08X\","
             "\"ra_exit\":\"0x%08X\",\"ra_saved\":\"0x%08X\",\"redirects\":%u,"
             "\"entry_sp\":\"0x%08X\",\"pump_site\":%u}",
@@ -8878,8 +8879,8 @@ static void handle_irqctx_ring(int id, const char *json)
             e->frame, e->is_vblank, e->d44, e->cdrom_active, e->dma_depth,
             e->sr, e->istat, e->imask,
             e->take_pc, e->real_epc, e->exit_pc, e->exit_reason, e->same_thread,
-            e->restored, e->v1_exit, e->v1_saved, e->ra_exit, e->ra_saved,
-            e->redirects, e->entry_sp, e->pump_site);
+            e->restored, e->v0_exit, e->v0_saved, e->v1_exit, e->v1_saved,
+            e->ra_exit, e->ra_saved, e->redirects, e->entry_sp, e->pump_site);
         emitted++;
     }
     pos += snprintf(buf + pos, BUF_SZ - pos, "],\"emitted\":%d}", emitted);

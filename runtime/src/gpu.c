@@ -2468,6 +2468,29 @@ static uint16_t rgb888_to_rgb555(uint32_t color24) {
 
 /* i_stat extern declared earlier in this file (above gpu_read_gpustat). */
 
+/* Netplay: present/finish_frame deferred from mid-psx_cyc_step to the next
+ * psx_check_interrupts BB edge. MotK menu wait-loop (0x8006CDA0) was digesting
+ * peers at different instr points (post-lw v0 vs post-slt v0=1) → cpu+ram fork
+ * on idle sealed resim. Guest VBlank raise / LCF stay immediate. */
+static int s_present_pending;
+static int s_flushing_present;
+
+void gpu_vblank_clear_deferred_present(void) {
+    s_present_pending = 0;
+}
+
+void gpu_vblank_flush_present(void) {
+    if (s_flushing_present || s_present_pending <= 0)
+        return;
+    s_flushing_present = 1;
+    while (s_present_pending > 0) {
+        s_present_pending--;
+        if (vblank_callback)
+            vblank_callback();
+    }
+    s_flushing_present = 0;
+}
+
 void gpu_vblank_tick(void) {
     lcf ^= 1;
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
@@ -2495,7 +2518,18 @@ void gpu_vblank_tick(void) {
      * host presentation, pacing, turbo, or skipped frames. */
     mod_runtime_on_vblank();
     psx_irq_raise(0, 0); /* IRQ_VBLANK (gpu_vblank_tick) */
-    if (vblank_callback) vblank_callback();
+    if (!vblank_callback)
+        return;
+    {
+        extern int psx_netplay_active(void);
+        if (psx_netplay_active()) {
+            /* Cap: a stuck defer must not queue unbounded presents. */
+            if (s_present_pending < 8)
+                s_present_pending++;
+        } else {
+            vblank_callback();
+        }
+    }
 }
 
 const uint16_t* gpu_get_vram(void) {

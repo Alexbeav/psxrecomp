@@ -20,6 +20,7 @@ forces classic delay-sync `try_admit`.
 | Keep delay-sync `RNetSession` working behind a flag | Lobby / ICE / save-xfer stay useful; Disable Rollback opts out |
 | Predicted rows promote only via `hash_confirm` (or host protect) | Library invariant; NULL `hash_confirm_promote` = always rewind |
 | Digests must be bit-identical across peers for the same sealed inputs | Otherwise every invent becomes an episode storm |
+| **Same bit-identical binary on both peers** | Mixed `build-release` vs packaged `motk-*` can match live digests for hundreds of ticks then fork GPRs/timers in Replay (pin zlib skew is the symptom) |
 | Snapshots must restore at the exact sim tick requested | Ring load is the only rewind mechanism |
 | Single-thread ownership of session + rings | Same as delay-sync |
 
@@ -51,8 +52,9 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       resume is pending or while still in `AwaitingBaseline`
 - [x] **Baseline gate:** send/enter Replay only after `g_episode_snap_applied`
       (peer BASELINE can arrive during SealInputs — must not skip restore)
-- [x] Live snap rate-limit: every `PSX_NET_SNAP_INTERVAL` ticks (default **4**);
-      resim still snaps every tick. Full `boot_state` ~1.3MB still dominates FPS
+- [x] Live snap rate-limit: every `PSX_NET_SNAP_INTERVAL` ticks (default **8**);
+      resim still snaps every tick. Ring uses **raw** `boot_state` (no zlib) —
+      `compress2` on RAM+VRAM+SPU was the live FPS tax; disk `.pst` still zlib
 - [x] Snap PC must be `psx_is_dispatchable` — pick IRQ/BB-edge resume PC (not
       `cpu->pc` at present, often 0); defer save / abort episode instead of
       `resume_at(0)` → `trap_crash`
@@ -87,10 +89,15 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       FIFO on RB restore
 - [x] Baseline/POST/hash_confirm agree on **core** digest only (`cd=` audit);
       CD-only forks were aborting good title/menu Start corrections
-- [x] Storm calm: 12-tick rewind cooldown + promote-sweep after commit/realign;
+- [x] Storm calm: 12-tick rewind cooldown + promote-sweep after **commit**;
       MotK digital release-only → promote (no episode) **only while cores still
       match**; else open episode. Live/seal invent is **idle** (not hold-last).
       Freeze `cdrom_advance` during Replay (CD IRQ timing was forking POST cores)
+- [x] **Abort cooldown from live sim** (before realign rewinds the clock).
+      Old path armed `until` from rewound tip → uncapped catch-up burned a
+      12-tick window in ms → char-select episode storms (`STALE COOLDOWN`).
+      Failed episode: 60 ticks from live (120 on streak≥2; 90 if no tip).
+      Reconcile promotes wire for the whole window (`promote-no-resim`)
 - [x] Netplay forces **software GPU** — GL/VK `glReadPixels` VRAM readback was
       forking peer snaps (core matched, pin zlib ~220KB apart) and mid-resim
       cores; baseline/POST also agree on `av=` (GPU+VRAM) via dig_b / POST input_digest
@@ -113,14 +120,47 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       `cd=`/`aux=`/`spad=`/`dma=`/`sio=`. Zero host `last_sector_frame` on CD
       snap wire. mid-Replay FRAME_COMMIT abort on core mismatch (no false
       POST); `rb audit fin` + abort dump parts + bus digests + `cpu-split`
+- [x] **SIO resim fork:** `sioP` showed **fsm-only** forks with matched
+      regs/pads/mc + bit-identical guest. Fixes: (1) `sio_pace_walk` no longer
+      drops leftover cycles after a transition cap (peers batching advances
+      differently left divergent shift/ack remainders); (2) reseat
+      `sio_trace_seq` on snap load; (3) netplay `sio=` / baseline_ext fold only
+      through fsm **pace** (exclude host-audit meta/byte_seq);
+      (4) mid-Replay cycle-watchdog pump drains FRAME_COMMIT only — no
+      reconcile/`rb_pump`. Logs: `sioP=regs/pads/mc/pace/meta`
 - [x] Replay entry: `hc_prime_after(load-1)` drops live invent commits (false
       `resim core diverge`); first `ready=1` baseline burst bypasses rate limit
       (initiator was ready-timeout while follower solo-Replayed)
 - [x] Present-edge digests clear PC (FRAME_COMMIT / audit fin / POST) — parked
       `cpu->pc=0` vs live BB + host-local sticky forked dig_cpu with matched
       RAM/clk; `rb cpu-split` logs gpr/hi_lo/cop0 vs raw_pc
+- [x] **Core digest folds GTE** (was snap-only) — MFC2 can fork GPRs with
+      matched RAM/clk/SIO; `rb cpu-split` adds `gte=` + `rb gpr-dump` on
+      fin/abort/post so peers can diff which regs forked
+- [x] Log `rb binary path=… size=…` at rollback start — **peers must run the
+      same bit-identical binary**. Diags showed host `build-release/` vs guest
+      `motk-0.1.0-linux-x64/` with pin zlib ~1.34M vs ~1.13M, matched baselines,
+      then Replay GPR-only (ep1) / cpu+tim+ram (ep2 tick after a good Up)
+- [x] FPS: raw in-memory snaps + default interval 8; resim audit skips AV/CD
+      on `arm` (VRAM CRC only on `fin` / baseline / POST). Still open: strip
+      CDROM/MDEC from MotK ring if match path allows (further RAM headroom —
+      raw ring ≈ 3.5 MiB × depth)
+- [x] **MotK menu v0-only Replay fork:** matched baseline + tick N (all GPRs),
+      tick N+1 only `r2` differs (host `1` / guest `0x5bd2`) with sticky
+      `0x8006CDA0` wait-loop, matched RAM/GTE/cycles. BIOS left `v0=1` when
+      same-thread GPR restore skipped (mode-1 PC heuristic miss) while peer
+      restored the post-`lw` countdown. Fix: netplay auto
+      `PSX_SAME_THREAD_RESTORE=3` — same-TCB RFE/SYSCALL always restores
+      (ChangeThread still skips). Diag: `rb irqctx` on fin/abort with
+      `restored`/`v0_exit`/`v0_saved`. Do **not** canonicalize v0 in digests.
+- [x] **Netplay BB-edge present:** after restore-3, idle sealed resim still
+      forked `cpu`+`ram` in one tick — `sdl_vblank_present`/`finish_frame` ran
+      nested from `fire_vblank_edge` mid-`psx_cyc_step` in the wait loop, so
+      peers digested different instr points. Fix: under netplay, queue the
+      GPU vblank callback and flush in `psx_check_interrupts` (BB edge);
+      clear deferred pending on snap resync. Offline still presents immediately.
 - [ ] Memory budget / thinner snap: optional strip CDROM/MDEC if MotK match
-      path allows (further FPS headroom)
+      path allows (further RAM headroom)
 - [x] Standalone ring bookkeeping test: `runtime/tests/test_netplay_snap_ring.c`
 
 **Vtable:** `save_state` / `load_state` → ring only (never disk slots).
@@ -230,7 +270,8 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 4. ~~Episode resim wiring~~  
 5. ~~Lobby flag + UI~~  
 6. ~~Rate-limit live snaps (`PSX_NET_SNAP_INTERVAL`) + safe episode resume~~  
-7. **Thinner snap / FMV policy** — further FPS + movie digest stability  
+7. **Thinner snap / FMV policy** — strip CDROM/MDEC + movie digest stability
+   (raw ring snaps + interval 8 already landed for FPS)  
 8. **Dual-instance soak** — prove Done-when items  
 
 ---
