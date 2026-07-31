@@ -235,9 +235,11 @@ struct RuntimeConfig {
     bool                  overlay_capture_history = false;
 
     // overlay_capture_persist_dir: optional DEV-only, project-relative safe
-    // directory for one immutable JSON file per changed snapshot. Absolute
-    // paths and `..` components are rejected. Production normally leaves this
-    // unset and retains only the addendum beside the executable.
+    // directory for one immutable JSON file per changed snapshot. Rooted,
+    // UNC, drive-qualified and drive-relative paths are rejected, as is any
+    // `..` component or an embedded NUL, under both `/` and `\` separators.
+    // Production normally leaves this unset and retains only the addendum
+    // beside the executable.
     std::string           overlay_capture_persist_dir;
 
     // turbo_loads: OPT-IN per game. While the game is loading (CD data

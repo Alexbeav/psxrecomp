@@ -230,6 +230,41 @@ static bool parse_aspect_ratio(const std::string& s, int* num, int* den) {
     return true;
 }
 
+// Reject a config path that is not confined to the project directory.
+//
+// A game.toml is checked in and read on every host, so a path in it must mean
+// the same thing everywhere; std::filesystem::path answers by the *host*
+// grammar, so a Windows-authored escape passes on POSIX. Scan the raw bytes
+// under both separator conventions instead. NUL is rejected outright because
+// the runtime hands this value on as a C string — anything past a NUL would
+// silently vanish between what is validated and what is used.
+static void validate_project_relative(const std::string& value,
+                                      const char* field) {
+    if (value.find('\0') != std::string::npos) {
+        throw std::runtime_error(
+            fmt::format("{} must not contain a NUL byte", field));
+    }
+    // Rooted ("/x", "\x"), UNC ("\\server\share"), drive-qualified ("C:/x",
+    // "C:\x") and drive-relative ("C:x") alike.
+    const bool rooted = !value.empty() && (value[0] == '/' || value[0] == '\\');
+    const bool drive  = value.size() >= 2 && value[1] == ':' &&
+                        std::isalpha(static_cast<unsigned char>(value[0]));
+    if (rooted || drive) {
+        throw std::runtime_error(
+            fmt::format("{} must be project-relative", field));
+    }
+    for (size_t start = 0;;) {
+        const size_t sep = value.find_first_of("/\\", start);
+        const size_t end = (sep == std::string::npos) ? value.size() : sep;
+        if (value.compare(start, end - start, "..") == 0) {
+            throw std::runtime_error(
+                fmt::format("{} must stay inside the project", field));
+        }
+        if (sep == std::string::npos) break;
+        start = sep + 1;
+    }
+}
+
 // Parse the optional [runtime] block. All fields optional; absent fields
 // leave has_* = false on the returned struct. Paths are resolved relative
 // to `root` (project root).
@@ -396,17 +431,8 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_capture_persist_dir")) {
         rt.overlay_capture_persist_dir =
             toml::find<std::string>(runtime, "overlay_capture_persist_dir");
-        const std::filesystem::path persist(rt.overlay_capture_persist_dir);
-        if (persist.is_absolute()) {
-            throw std::runtime_error(
-                "runtime.overlay_capture_persist_dir must be project-relative");
-        }
-        for (const auto& component : persist) {
-            if (component == "..") {
-                throw std::runtime_error(
-                    "runtime.overlay_capture_persist_dir must stay inside the project");
-            }
-        }
+        validate_project_relative(rt.overlay_capture_persist_dir,
+                                  "runtime.overlay_capture_persist_dir");
     }
     if (runtime.contains("turbo_loads")) {
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");

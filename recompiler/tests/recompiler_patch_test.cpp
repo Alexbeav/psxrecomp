@@ -506,6 +506,60 @@ overlay_capture_persist_dir = "C:/outside"
     check_throws([&] { (void)PSXRecompV4::load_game_config(absolute); },
                  "must be project-relative",
                  "parser rejects absolute capture history directory");
+
+    // A game.toml travels between hosts, so each of these must be rejected on
+    // every host, not only on the one whose path grammar it is written in.
+    // TOML literal strings ('...') are used because a backslash is an escape
+    // inside a TOML basic string. Cases marked POSIX-visible are the ones a
+    // host-native std::filesystem check silently accepted under POSIX.
+    struct RejectedDir {
+        const char* value;   // as written in game.toml
+        const char* needle;  // expected message fragment
+        const char* name;
+    };
+    static constexpr RejectedDir rejected[] = {
+        {"'/outside'", "must be project-relative",
+         "parser rejects rooted capture history directory"},
+        {R"('\outside')", "must be project-relative",
+         "parser rejects backslash-rooted capture history directory"},
+        {R"('C:\outside')", "must be project-relative",
+         "parser rejects backslash drive-qualified capture history directory"},
+        {"'C:outside'", "must be project-relative",
+         "parser rejects drive-relative capture history directory"},
+        {R"('\\server\share\outside')", "must be project-relative",
+         "parser rejects UNC capture history directory"},
+        {R"('..\outside')", "must stay inside the project",
+         "parser rejects backslash-escaping capture history directory"},
+        {R"('nested\..\..\outside')", "must stay inside the project",
+         "parser rejects nested backslash-escaping capture history directory"},
+        {"'nested/..'", "must stay inside the project",
+         "parser rejects a trailing .. component"},
+        // A basic string, not a literal one: TOML forbids a raw NUL byte but
+        // allows the \u0000 escape that produces it. The runtime passes this
+        // value on as a C string, so a NUL would truncate it after validation.
+        {R"("..\u0000keep")", "must not contain a NUL byte",
+         "parser rejects an embedded NUL escape"},
+    };
+    for (size_t i = 0; i < std::size(rejected); ++i) {
+        const auto& c = rejected[i];
+        const auto cfg_path = write_config(
+            root, fmt::format("capture-history-rejected-{}", i),
+            fmt::format("[runtime]\noverlay_capture_persist_dir = {}\n",
+                        c.value));
+        check_throws([&] { (void)PSXRecompV4::load_game_config(cfg_path); },
+                     c.needle, c.name);
+    }
+
+    // A dotfile is not a `..` component; the guard must not over-reject.
+    const auto dotted = write_config(root, "capture-history-dotted", R"toml(
+[runtime]
+overlay_capture_history = true
+overlay_capture_persist_dir = ".aot_capture_history/..keep/TEST-00000"
+)toml");
+    const auto dotted_cfg = PSXRecompV4::load_game_config(dotted);
+    check(dotted_cfg.runtime.overlay_capture_persist_dir ==
+              ".aot_capture_history/..keep/TEST-00000",
+          "parser accepts a capture history component that merely starts with dots");
 }
 
 void codegen_tests() {
