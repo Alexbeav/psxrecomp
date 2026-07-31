@@ -79,18 +79,6 @@ int cdrom_load_in_progress(void);
  * bridge used by cdrom_load_in_progress(). Diagnostics only. */
 int cdrom_data_read_active(void);
 
-/* After savestate restore: clamp long CD second-response / read-start delays
- * and arm a short boost window so post-load ReadTOC/seek/Init waits do not
- * freeze the picture for ~1s+. Completions still fire (IRQs preserved). */
-void cdrom_accelerate_after_savestate(void);
-/* Call once per host vblank while the boost window is armed. */
-void cdrom_savestate_boost_vblank(void);
-/* Non-zero while boost is armed AND a CD wait is outstanding (pending
- * second response or non-XA read). Lets turbo_loads unpace those waits. */
-int  cdrom_savestate_cd_wait_active(void);
-/* Remaining boost vblanks (0 when idle). Diagnostics / post-load probe. */
-int  cdrom_savestate_boost_vblanks_remaining(void);
-
 /* MMIO read/write (0x1F801800-0x1F801803) */
 uint32_t cdrom_read(uint32_t addr);
 void cdrom_write(uint32_t addr, uint32_t value);

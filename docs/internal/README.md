@@ -40,7 +40,3 @@ behind a specific subsystem.
 ## Overlay cache internals
 - [`SLJIT_PERSIST_CACHE.md`](SLJIT_PERSIST_CACHE.md) — persisted overlay-shard
   cache design.
-
-## Savestate / netplay
-- [`../SAVESTATE_LOAD_PERFORMANCE.md`](../SAVESTATE_LOAD_PERFORMANCE.md) —
-  solo restore hitch fixes and netplay load barrier / INPUT rules.

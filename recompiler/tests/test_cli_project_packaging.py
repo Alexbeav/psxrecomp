@@ -17,14 +17,6 @@ def main() -> int:
     cli = (ROOT / "recompiler/src/main_cli.cpp").read_text(encoding="utf-8")
     bios = (ROOT / "recompiler/src/main_bios.cpp").read_text(encoding="utf-8")
     package = (ROOT / "tools/build_cli.py").read_text(encoding="utf-8")
-    launcher = (ROOT / "recomp-ui/src/recomp_launcher.h").read_text(
-        encoding="utf-8")
-    launcher_cmake = (ROOT / "recomp-ui/recomp_ui.cmake").read_text(
-        encoding="utf-8")
-    boot_timing_header = (
-        ROOT / "recomp-ui/src/common/launcher_boot_timing.h")
-    boot_timing_source = (
-        ROOT / "recomp-ui/src/common/launcher_boot_timing.c")
 
     require(cli, 'bios_config = \\"psxrecomp/bios/{}\\"',
             "generated game.toml does not name its BIOS profile")
@@ -38,6 +30,9 @@ def main() -> int:
             "BIOS sources are not emitted where runtime.cmake discovers them")
     require(cli, 'set(PSXRECOMP_BIOS_STEMS \\"{}\\"',
             "generated CMake does not select the emitted BIOS backend")
+    require(cli, 'set(PSX_RECOMP_UI OFF CACHE BOOL \\"\\" FORCE)',
+            "self-contained CLI projects must not require a game-owned "
+            "recomp-ui checkout")
 
     copy_pos = cli.find('fmt::print("[1/4] Copying build framework')
     game_pos = cli.find('fmt::print("[2/4] Recompiling game executable')
@@ -61,20 +56,8 @@ def main() -> int:
             "psxrecomp-bios config mode lacks the ROM override")
     require(bios, 'a == "--out-dir"',
             "psxrecomp-bios config mode lacks the output override")
-    require(launcher, "RecompLauncherCModProvider",
-            "pinned recomp-ui predates the runtime Mods provider API")
-    require(launcher, "const RecompLauncherCModProvider* mods;",
-            "pinned recomp-ui GameInfo lacks the Mods provider field")
-    if not boot_timing_header.is_file():
-        raise AssertionError(
-            "pinned recomp-ui lacks launcher_boot_timing.h required by main.cpp")
-    if not boot_timing_source.is_file():
-        raise AssertionError(
-            "pinned recomp-ui lacks the launcher boot timing implementation")
-    require(launcher_cmake, "common/launcher_boot_timing.c",
-            "pinned recomp-ui does not compile launcher boot timing")
 
-    print("PASS: CLI profiles, stage order, BIOS overrides, and launcher API agree")
+    print("PASS: CLI profiles, stage order, BIOS overrides, and UI isolation agree")
     return 0
 
 

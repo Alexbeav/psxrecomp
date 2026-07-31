@@ -24,12 +24,6 @@ struct CPUState;
 
 void interrupts_init(void);
 
-/* Save-state restore: re-anchor host-only IRQ pacing after psx_cycle_count is
- * overwritten from a snapshot. Clears absolute-cycle cooldowns / deferred
- * switches that would otherwise strand delivery until the restored clock
- * catches up to the pre-load host timeline (warm-reload picture freeze). */
-void interrupts_resync_after_restore(void);
-
 /* Central IRQ-raise choke point: sets the I_STAT bit AND records the raise edge
  * into the always-on device-event ring (device_trace) with the guest cycle.
  * Every hardware source (VBLANK/GPU/CDROM/DMA/timers/SIO/SPU) funnels its raise
@@ -49,17 +43,6 @@ int psx_interrupt_delivery_needed(const struct CPUState* cpu);
 void psx_interrupt_delivery_diag(uint64_t *need_defer, uint64_t *need_irq,
                                  uint64_t *skip_none, uint64_t *skip_sr,
                                  uint64_t *skip_cooldown, uint64_t *skip_nested);
-
-/* Hot-path counters for psx_check_interrupts (monotonic). Any out_* may be NULL.
- * entry     = every call
- * fast_sr   = early return: pending I_STAT but IEc/IM2 clear
- * fast_none = early return: nothing pending
- * mid       = total_checks (past fast paths; toward / into deliver eval)
- * eval      = reached irq_deliver_eval label
- * irq_deliv = g_irq_deliver_count (any HW IRQ exception taken) */
-void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
-                                   uint64_t *fast_none, uint64_t *mid,
-                                   uint64_t *eval, uint64_t *irq_deliv);
 /* Interrupt check with the compiled guest PC to resume if a game-installed
  * handler later RFEs to the sentinel outside the synchronous host window. */
 void psx_check_interrupts_at(struct CPUState* cpu, uint32_t resume_pc);
@@ -86,11 +69,6 @@ uint32_t cycles_to_next_event(void);
 
 /* Query whether we are currently inside an exception handler dispatch. */
 int psx_get_in_exception(void);
-
-/* Most recent block-leader IRQ-check guest PC / compiled resume latch.
- * Used by the post-savestate freeze probe (vblank-time "where was the game"). */
-uint32_t psx_last_irq_check_pc(void);
-uint32_t psx_compiled_irq_resume_pc(void);
 
 /* Snapshot internal counters for the freeze_check diagnostic.  Any out_*
  * pointer may be NULL.  All counters are monotonically non-decreasing
