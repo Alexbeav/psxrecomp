@@ -403,17 +403,31 @@ if(_psxrt_bios_skipped)
         "descriptor): ${_psxrt_bios_skipped} -- regenerate with "
         "tools/regen_bios.sh --config bios/<stem>.toml")
 endif()
+# Setup hosts / CI may ship with zero BIOS backends; first-run Generate &
+# rebuild emits OpenBIOS (and optional retail) locally before a full link.
+option(PSXRECOMP_ALLOW_NO_BIOS
+    "Allow linking the runtime with no recompiled BIOS backends (setup host)"
+    OFF)
 if(NOT _psxrt_bios_linked)
-    message(FATAL_ERROR
-        "No recompiled BIOS backend available. Wanted: ${PSXRECOMP_BIOS_STEMS}, "
-        "but no matching generated/<stem>_full.c + <stem>_dispatch.c were found "
-        "under ${PSXRECOMP_ROOT}/generated.\n"
-        "Generate at least one before building the runtime:\n"
-        "    bash tools/regen_bios.sh --config bios/OpenBIOS.toml\n"
-        "(OpenBIOS is bundled and MIT-licensed, so this needs no BIOS dump.)")
+    if(PSXRECOMP_ALLOW_NO_BIOS)
+        message(STATUS
+            "BIOS backends linked: (none) — setup host; Generate & rebuild "
+            "will emit BIOS C locally")
+        set(_psxrt_bios_count 0)
+    else()
+        message(FATAL_ERROR
+            "No recompiled BIOS backend available. Wanted: ${PSXRECOMP_BIOS_STEMS}, "
+            "but no matching generated/<stem>_full.c + <stem>_dispatch.c were found "
+            "under ${PSXRECOMP_ROOT}/generated.\n"
+            "Generate at least one before building the runtime:\n"
+            "    bash tools/regen_bios.sh --config bios/OpenBIOS.toml\n"
+            "(OpenBIOS is bundled and MIT-licensed, so this needs no BIOS dump.)\n"
+            "Or configure a setup host with -DPSXRECOMP_ALLOW_NO_BIOS=ON.")
+    endif()
+else()
+    message(STATUS "BIOS backends linked: ${_psxrt_bios_linked}")
+    list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
 endif()
-message(STATUS "BIOS backends linked: ${_psxrt_bios_linked}")
-list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
 
 # Registry of the compiled-in backends, in preference order. Generated so the
 # stem list stays the single source of truth.
@@ -444,7 +458,7 @@ list(APPEND PSXRECOMP_BIOS_GENERATED "${_psxrt_registry_c}")
 # argument as regen_bios.sh passes) and WARN on a mismatch so the staleness is
 # impossible to miss. Non-fatal: a stale-but-consistent
 # BIOS still builds; opt out with -DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON.
-if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK)
+if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
     find_program(_psxrt_bash NAMES bash)
     set(_psxrt_stamp "${PSXRECOMP_ROOT}/generated/${PSXRECOMP_BIOS_STEM}.emitter.sha")
     if(_psxrt_bash AND EXISTS "${PSXRECOMP_ROOT}/tools/bios_emitter_fingerprint.sh")

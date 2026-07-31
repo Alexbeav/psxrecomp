@@ -4564,6 +4564,15 @@ namespace {
                               "Using bundled OpenBIOS.");
                 return 1;
             }
+            /* Setup host: no BIOS backends linked yet — Generate & rebuild
+             * will emit OpenBIOS C from the redistributable openbios.bin. */
+            if (s_openbios_allowed && psx_bios_registry_count == 0) {
+                out->ok = 1;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "OpenBIOS will be generated on first "
+                              "Generate & rebuild (optional: pick SCPH1001).");
+                return 1;
+            }
             std::snprintf(out->detail, sizeof(out->detail),
                           "PlayStation BIOS required (SCPH1001.BIN).");
             return 1;

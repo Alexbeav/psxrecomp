@@ -43,11 +43,15 @@ int g_psx_dispatch_depth = 0;
 
 void psx_dispatch(CPUState *cpu, uint32_t addr)
 {
+    if (!psx_bios_active || !psx_bios_active->dispatch)
+        return;
     psx_bios_active->dispatch(cpu, addr);
 }
 
 void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t return_addr)
 {
+    if (!psx_bios_active || !psx_bios_active->dispatch_call)
+        return;
     psx_bios_active->dispatch_call(cpu, addr, return_addr);
 }
 
