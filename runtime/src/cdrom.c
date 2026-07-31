@@ -1429,6 +1429,7 @@ static uint32_t cdda_track_end_lba(int track) {
 }
 
 static int start_cdda_playback(int requested_track) {
+    if (cdda_playing && requested_track == 0 && iso_handle && iso_track_count(iso_handle) > 1) return 1;
     uint32_t lba;
     int track;
     if (requested_track > 0) {
