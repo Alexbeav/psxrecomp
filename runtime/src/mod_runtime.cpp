@@ -550,8 +550,18 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     copy_text(out->version, sizeof(out->version), package->version);
     copy_text(out->name, sizeof(out->name), package->name);
     copy_text(out->author, sizeof(out->author), package->author);
+    out->author_link_count = std::min(
+        (int)package->author_links.size(), RECOMP_LAUNCHER_MOD_AUTHOR_LINK_MAX);
+    for (int i = 0; i < out->author_link_count; ++i) {
+        copy_text(out->author_links[i].name, sizeof(out->author_links[i].name),
+                  package->author_links[(size_t)i].name);
+        copy_text(out->author_links[i].url, sizeof(out->author_links[i].url),
+                  package->author_links[(size_t)i].url);
+    }
     copy_text(out->description, sizeof(out->description), package->description);
     copy_text(out->license, sizeof(out->license), package->license);
+    copy_text(out->source_name, sizeof(out->source_name), package->source_name);
+    copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     out->enabled = package_has_enabled_feature(*package);
     out->option_count = (int)package->options.size();
     out->removable = !out->enabled;
@@ -655,8 +665,19 @@ int provider_feature_get(void*, int index, RecompLauncherCModFeature* out) {
     copy_text(out->package_version, sizeof(out->package_version), package->version);
     copy_text(out->package_name, sizeof(out->package_name), package->name);
     copy_text(out->name, sizeof(out->name), feature->name);
-    copy_text(out->author, sizeof(out->author), package->author);
+    copy_text(out->author, sizeof(out->author),
+              feature->author.empty() ? package->author : feature->author);
+    out->author_link_count = std::min(
+        (int)package->author_links.size(), RECOMP_LAUNCHER_MOD_AUTHOR_LINK_MAX);
+    for (int i = 0; i < out->author_link_count; ++i) {
+        copy_text(out->author_links[i].name, sizeof(out->author_links[i].name),
+                  package->author_links[(size_t)i].name);
+        copy_text(out->author_links[i].url, sizeof(out->author_links[i].url),
+                  package->author_links[(size_t)i].url);
+    }
     copy_text(out->description, sizeof(out->description), feature->description);
+    copy_text(out->source_name, sizeof(out->source_name), package->source_name);
+    copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     copy_text(out->group, sizeof(out->group), feature->group);
     out->enabled =
         state().manager.feature_enabled(package->id, feature->id) ? 1 : 0;

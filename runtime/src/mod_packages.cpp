@@ -61,6 +61,10 @@ bool valid_sha256(const std::string& value) {
         });
 }
 
+bool valid_web_url(const std::string& value) {
+    return value.rfind("https://", 0) == 0 || value.rfind("http://", 0) == 0;
+}
+
 bool parse_hex_bytes(const std::string& text, std::vector<uint8_t>& out) {
     std::string compact;
     compact.reserve(text.size());
@@ -1430,9 +1434,30 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
         out.version = toml::find<std::string>(cfg, "version");
         out.name = toml::find<std::string>(cfg, "name");
         out.author = cfg.contains("author") ? toml::find<std::string>(cfg, "author") : "";
+        if (cfg.contains("author_link")) {
+            std::set<std::string> linked_authors;
+            for (const toml::value& v : toml::find(cfg, "author_link").as_array()) {
+                ModAuthorLink link;
+                link.name = toml::find<std::string>(v, "name");
+                link.url = toml::find<std::string>(v, "url");
+                if (link.name.empty() || !linked_authors.insert(link.name).second)
+                    throw std::runtime_error("empty or duplicate author link name");
+                if (!valid_web_url(link.url))
+                    throw std::runtime_error("author link URL must use http or https");
+                out.author_links.push_back(std::move(link));
+            }
+        }
         out.description =
             cfg.contains("description") ? toml::find<std::string>(cfg, "description") : "";
         out.license = cfg.contains("license") ? toml::find<std::string>(cfg, "license") : "";
+        out.source_name =
+            cfg.contains("source_name") ? toml::find<std::string>(cfg, "source_name") : "";
+        out.source_url =
+            cfg.contains("source_url") ? toml::find<std::string>(cfg, "source_url") : "";
+        if (!out.source_url.empty() && !valid_web_url(out.source_url))
+            throw std::runtime_error("source URL must use http or https");
+        if (!out.source_url.empty() && out.source_name.empty())
+            out.source_name = "Project page";
         out.resolver =
             cfg.contains("resolver") ? toml::find<std::string>(cfg, "resolver") : "declarative";
         out.save_compatibility = cfg.contains("save_compatibility")
@@ -1484,6 +1509,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 ModFeature feature;
                 feature.id = toml::find<std::string>(v, "id");
                 feature.name = toml::find<std::string>(v, "name");
+                feature.author = v.contains("author")
+                    ? toml::find<std::string>(v, "author") : "";
                 feature.description = v.contains("description")
                     ? toml::find<std::string>(v, "description") : "";
                 feature.group = v.contains("group")
@@ -1503,6 +1530,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
             ModFeature feature;
             feature.id = "legacy";
             feature.name = out.name;
+            feature.author = out.author;
             feature.description = out.description;
             feature.legacy = true;
             out.features.push_back(std::move(feature));

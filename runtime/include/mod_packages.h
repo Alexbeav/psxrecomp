@@ -42,6 +42,7 @@ struct ModOption {
 struct ModFeature {
     std::string id;
     std::string name;
+    std::string author;
     std::string description;
     std::string group = "General";
     bool default_enabled = false;
@@ -166,14 +167,22 @@ struct ModDerivedDisc {
     std::map<std::string, std::string> when;
 };
 
+struct ModAuthorLink {
+    std::string name;
+    std::string url;
+};
+
 struct ModPackage {
     uint32_t format_version = 0;
     std::string id;
     std::string version;
     std::string name;
     std::string author;
+    std::vector<ModAuthorLink> author_links;
     std::string description;
     std::string license;
+    std::string source_name;
+    std::string source_url;
     std::string resolver = "declarative";
     std::string save_compatibility = "shared";
     std::filesystem::path root;
