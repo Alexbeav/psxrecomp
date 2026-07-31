@@ -17,7 +17,6 @@
 #include "event_ring.h"
 #include "audio_trace.h"
 #include "psx_cycles.h"
-#include "psx_netplay.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -2473,18 +2472,14 @@ uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
 }
 
 void cdrom_advance(uint32_t cycles) {
-    /* Rollback Replay: freeze CD FSM aging. Uncapped resim + host CD timing
-     * forks peer POST cores even with identical seals/baseline; core digest
-     * excludes CD, but CD IRQs still steer guest execution. Both peers freeze
-     * identically from the restored snap. */
-    if (psx_netplay_is_resimulating()) {
-        refresh_cdrom_irq_line();
-        return;
-    }
     /* Age the response presentation latency. Once it elapses, the following
      * refresh_cdrom_irq_line() presents the held response to INTC — at this
      * cdrom_advance boundary, not synchronously inside the guest store that
-     * armed it. */
+     * armed it.
+     *
+     * Note: do NOT freeze CD during rollback Replay. MotK FMV skip resim
+     * resumes into VLC/sector waits; frozen IRQs → no finish_frame hang.
+     * Menu CD asymmetry is contained by no-invent during media + core POST. */
     if (cdrom_irq_present_delay > 0) {
         cdrom_irq_present_delay -= (int)cycles;
         if (cdrom_irq_present_delay < 0) cdrom_irq_present_delay = 0;

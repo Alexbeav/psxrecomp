@@ -431,6 +431,31 @@ static int cand_selected_for_diff(const Candidate *c) {
     return 0;
 }
 
+/* ---- Load freeze (rollback resim / selfcheck) --------------------------
+ * Overlay DLL registration is host-only and not part of boot_state. A lazy
+ * load mid-resim-pass#1 that is visible at the start of pass#2 changes
+ * native-vs-interp BB boundaries and forks MotK wait-loop GPRs at matched
+ * guest clocks. */
+static int s_load_freeze = 0;
+
+void overlay_loader_set_load_freeze(int freeze)
+{
+    s_load_freeze = freeze ? 1 : 0;
+}
+int overlay_loader_load_frozen(void) { return s_load_freeze; }
+
+static int overlay_loads_allowed(void)
+{
+    if (s_load_freeze)
+        return 0;
+    {
+        extern int psx_netplay_is_resimulating(void);
+        if (psx_netplay_is_resimulating())
+            return 0;
+    }
+    return 1;
+}
+
 /* ---- Counters (surfaced via overlay_loader_status) --------------------- */
 static int      s_ndlls          = 0;   /* DLLs LoadLibrary'd                 */
 static uint64_t s_load_total_us  = 0;
@@ -2797,12 +2822,33 @@ static void mark_checked(uint32_t region_start) {
     if (s_nchecked < MAX_CHECKED) s_checked[s_nchecked++] = region_start;
 }
 
+void overlay_loader_clear_lazy_miss(void)
+{
+    lazy_miss_invalidate_loader();
+    s_nchecked = 0;
+}
+
+void overlay_loader_resync_validation_after_restore(void)
+{
+    /* Host-only validation memos. Page gens were already bumped by
+     * overlay_watch_invalidate_after_ram_restore; force every candidate off
+     * the gen fast-path (including ENTRY_INVALID + gen==val_gen skips, and
+     * nranges==0 bodies whose gensum never moves). Static-match cache is the
+     * same class for AOT game/BIOS overlays. */
+    int i;
+    for (i = 0; i < s_cand_n; i++)
+        s_cand[i].val_gen ^= 0x80000000u;
+#ifdef PSX_HAS_OVERLAY_DISPATCH
+    memset(s_static_match_cache, 0, sizeof(s_static_match_cache));
+#endif
+}
+
 /* Re-scan the cache dir for DLLs compiled after init (step 2.8 autocompile)
  * and clear the checked-regions memo so the next dispatch into a window
  * region reconsiders the cache. Already-loaded DLLs stay loaded;
  * dll_already_loaded() makes the re-walk idempotent. */
 void overlay_loader_rescan(void) {
-    if (!s_active) return;
+    if (!s_active || !overlay_loads_allowed()) return;
     scan_cache_dir();
     load_bios_resident_shards();
     s_nchecked = 0;
@@ -3042,6 +3088,10 @@ OverlayPreparedImage *overlay_loader_prepare_published(const char *dll_path) {
 
 int overlay_loader_commit_published(OverlayPreparedImage *image) {
     if (!image) return 0;
+    if (!overlay_loads_allowed()) {
+        overlay_loader_discard_prepared(image);
+        return 0;
+    }
     OverlayLibraryHandle handle = image->handle;
     image->handle = NULL;
     int loaded = 0;
@@ -3208,6 +3258,9 @@ static int lazy_load_selected(int li) {
 
 static int try_load_region(uint32_t phys) {
     extern uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
+
+    if (!overlay_loads_allowed())
+        return 0;
 
     uint32_t page_sz = 4096u;
 

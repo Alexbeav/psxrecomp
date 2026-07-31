@@ -410,9 +410,11 @@ static void idle_snapshot_regs(const CPUState *cpu) {
 
 static int idle_skip_on(void) {
     /* Cycle-skip is a host enhancement; under netplay it forks peers (detector
-     * streak / skip quanta are not part of the shared snap). */
+     * streak / skip quanta are not part of the shared snap). Same for the
+     * solo resim self-check — keep the window on the faithful cycle path. */
     extern int psx_netplay_active(void);
-    if (psx_netplay_active())
+    extern int psx_selfcheck_enabled(void);
+    if (psx_netplay_active() || psx_selfcheck_enabled())
         return 0;
     if (g_idle_skip_enabled < 0) {
         /* No game config reached this process (for example a BIOS-only
@@ -579,6 +581,14 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
         cpu->read_fudge = 0x20u; /* no committed predecessor load */
         cpu->ld_which_t = 0x20u; /* no pending load dest */
         cpu->ld_absorb = 0;
+    }
+    /* Dirty-RAM interpreter load-delay writebacks live in host statics, not
+     * BS_SEC_CPU. Discard (do not flush): snap GPRs are already architectural.
+     * A stale pending v0 write from the pre-load timeline was forking MotK
+     * resim peers (countdown vs BIOS v0=1) at matched guest clocks. */
+    {
+        extern void dirty_ram_ld_delay_discard(void);
+        dirty_ram_ld_delay_discard();
     }
 }
 

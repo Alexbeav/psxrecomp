@@ -71,6 +71,7 @@ static uint32_t s_load_val;
 /* ---- Init ---- */
 
 void interp_init(CPUState* cpu) {
+    (void)cpu;
     s_hit_bp = 0;
     s_trace_on = 0;
     s_halted = 0;
@@ -81,6 +82,11 @@ void interp_init(CPUState* cpu) {
     s_load_val = 0;
     s_vblank_count = 0;
     memset(s_trace_ring, 0, sizeof(s_trace_ring));
+}
+
+void interp_ld_delay_discard(void) {
+    s_load_reg = 0;
+    s_load_val = 0;
 }
 
 /* ---- Breakpoints ---- */

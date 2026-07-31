@@ -42,6 +42,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #endif
 #include "psx_netplay.h"
 #include "psx_netplay_rb.h"
+#include "psx_selfcheck.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
 #include "audio_trace.h"
@@ -1252,7 +1253,9 @@ static uint64_t g_legacy_underruns = 0;
 int g_audio_unmute_resync = 0;
 /* Actual device rate the host opened at (bridge mode may differ from 44100;
  * the T3 tap ring runs at this rate and its WAV dump must say so). */
-extern "C" int g_audio_host_rate = 44100;
+extern "C" {
+int g_audio_host_rate = 44100;
+}
 
 static void sdl_drc_callback(void* /*user*/, Uint8* stream, int len) {
     if (!s_drc_ready) { std::memset(stream, 0, (size_t)len); return; }
@@ -1994,7 +1997,8 @@ static void sdl_audio_pump(bool discard_output = false) {
  *     across the first ~50 ms of samples (sdl_audio_pump above). */
 /* Bridge/legacy output health, surfaced through the audio_stats TCP command
  * (debug_server.c) — no stderr probe; rule 3. */
-extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
+extern "C" int psx_audio_out_stats(double *fill_ms, double *target_ms,
+                                   uint64_t *underruns,
                                    uint64_t *overflow_drops, double *correction,
                                    int *legacy, int *host_rate)
 {
@@ -2005,6 +2009,7 @@ extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
                    ? (double)psx_sdl_audio_queued_size(sdl_audio_device)
                      / (44100.0 * 4.0) * 1000.0
                    : 0.0;
+        *target_ms = 0.0; /* push queue — no DRC fill target */
         *underruns = g_legacy_underruns;
         *overflow_drops = 0;
         *correction = 0.0;
@@ -2013,6 +2018,7 @@ extern "C" int psx_audio_out_stats(double *fill_ms, uint64_t *underruns,
     rab_stats st;
     rab_get_stats(&s_drc, &st);
     *fill_ms = st.last_fill_ms;
+    *target_ms = s_drc.cfg.target_ms;
     *underruns = st.underrun_events;
     *overflow_drops = st.overflow_drops;
     *correction = st.last_correction;
@@ -2252,11 +2258,12 @@ static void runtime_perf_diag_tick() {
     RuntimePerfSnapshot current = runtime_perf_snapshot(now);
     AudioTraceStats audio;
     audio_trace_get_stats(&audio);
-    double fill_ms = 0.0, correction = 0.0;
+    double fill_ms = 0.0, target_ms = 0.0, correction = 0.0;
     uint64_t underruns = 0, overflows = 0;
     int legacy = 0, host_rate = 0;
-    psx_audio_out_stats(&fill_ms, &underruns, &overflows, &correction,
+    psx_audio_out_stats(&fill_ms, &target_ms, &underruns, &overflows, &correction,
                         &legacy, &host_rate);
+    (void)target_ms;
     uint64_t up[6] = {0};
     gl_renderer_runtime_diag(up);
     uint64_t overlay_load_us = 0, overlay_load_max_us = 0, overlay_load_last_us = 0;
@@ -3196,6 +3203,8 @@ static void apply_input_override_to_sio(int override_word) {
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
     sio_request_pad_type(0, eff_analog);
+    psx_selfcheck_note_pad(0, w, st[0], st[1], st[2], st[3],
+                           (uint8_t)(eff_analog ? 1 : 0));
 }
 
 /* Capture one SIO slot's host pad into a netplay/local blob. Returns 1 if a
@@ -3333,6 +3342,9 @@ static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
     sio_set_pad_state_slot(s, pad.buttons);
     sio_set_pad_sticks(s, pad.lx, pad.ly, pad.rx, pad.ry);
     sio_request_pad_type(s, pad.analog ? 1 : 0);
+    /* Solo resim self-check records exactly what was applied this boundary. */
+    psx_selfcheck_note_pad(s, pad.buttons, pad.lx, pad.ly, pad.rx, pad.ry,
+                           pad.analog);
 }
 
 /* Local human pad for delay-sync: sample the host PlayerInput selected for
@@ -3585,6 +3597,12 @@ static void netplay_barrier_admit(int override) {
 }
 
 static void sample_pad_into_sio(int override) {
+    /* Selfcheck fighter mash owns P1 when enabled (headless-safe). */
+    if (override < 0) {
+        uint16_t mash = 0xFFFFu;
+        if (psx_selfcheck_mash_override(&mash))
+            override = (int)mash;
+    }
     if (override >= 0) {
         apply_input_override_to_sio(override);
         return;
@@ -3607,6 +3625,11 @@ static void sample_pad_into_sio(int override) {
 }
 
 static void sample_headless_pad_into_sio(int override) {
+    if (override < 0) {
+        uint16_t mash = 0xFFFFu;
+        if (psx_selfcheck_mash_override(&mash))
+            override = (int)mash;
+    }
     if (override >= 0) {
         apply_input_override_to_sio(override);
         return;
@@ -3860,6 +3883,10 @@ struct NetplayVblankEpilogue {
 /* Called from gpu_vblank_tick() at each simulated vblank. */
 static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     NetplayVblankEpilogue ep{};
+    /* Guest quantum for this vblank is complete. Drop top-level-resume armed
+     * by any resume_at (savestate / selfcheck / RB) during that quantum — the
+     * next tick has a live native chain under its dispatch again. */
+    psx_scheduler_top_level_resume_clear();
     int probe_turbo = 0;
     int probe_reached = 0;
     struct PostLoadProbeScope {
@@ -4093,10 +4120,19 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                          "tap pads forced digital)\n",
                          sio_get_multitap_port() + 1);
         }
-        if (g_headless)
-            sample_headless_pad_into_sio(override);
-        else
-            sample_pad_into_sio(override);
+        /* Solo resim self-check replay republishes the recorded rows itself —
+         * live sampling must not touch SIO during the replay window. */
+        if (!psx_selfcheck_replay_input()) {
+            if (g_headless)
+                sample_headless_pad_into_sio(override);
+            else
+                sample_pad_into_sio(override);
+        }
+        /* Offline vblank boundary: record/replay/compare (PSX_RB_SELFCHECK).
+         * Defer opening a window while multitap arming is still pending —
+         * the arm writes SIO once, host-latched, and would not replay. */
+        psx_selfcheck_finish_frame(
+            (g_offline_pad_count >= 3 && !sio_get_multitap()) ? 1 : 0);
     }
 
     /* Latency ring: open this present cycle's slot, stamping when input was
@@ -4105,7 +4141,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     /* Post-savestate CD delay boost (ReadTOC/seek clamp window).
      * Skip during rollback resim — boost is host-local and not in the CD snap. */
-    if (!psx_netplay_is_resimulating())
+    if (!psx_netplay_is_resimulating() && !psx_selfcheck_resim_active())
         cdrom_savestate_boost_vblank();
 
     /* Turbo-active test shared by the pacing/present gate below. */
@@ -4115,9 +4151,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int load_run_value = 0;
     static int load_run = 0;
     static int release_run = 0;
-    if (g_turbo_loads_enabled && !psx_netplay_active()) {
+    if (g_turbo_loads_enabled && !psx_netplay_active() &&
+        !psx_selfcheck_resim_active()) {
         /* Require a short sustained predicate on entry, then retain turbo over
-         * a short false gap after it has engaged. Netplay keeps wall pacing. */
+         * a short false gap after it has engaged. Netplay / selfcheck keep
+         * wall-pacing off via their own gates; turbo engage hysteresis must
+         * not leak host ambient across resim passes. */
         if (logical_load_active) {
             if (load_run < (1 << 20)) load_run++;
             if (load_run >= TURBO_LOADS_ENGAGE_FRAMES || release_run > 0) {
@@ -4164,7 +4203,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int fmv_skip_active = 0;
     /* Never inject START / poke movie totals under netplay — host-side skip
      * forks peers (and stomps SIO after sealed publish during resim). */
-    if (g_auto_skip_fmv && !psx_netplay_active()) {
+    if (g_auto_skip_fmv && !psx_netplay_active() &&
+        !psx_selfcheck_resim_active()) {
         uint32_t mc = mdec_get_decode_count();
         int mdec_decoding = (mc != s_fmv_skip_last_mdec);
         s_fmv_skip_last_mdec = mc;
@@ -4198,7 +4238,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * retains the hard mute because it deliberately fast-forwards a movie.
      * Rollback resim: skip host audio pump (uncapped frames) so SPU/CD audio
      * paths cannot fork peers during the episode window. */
-    if (!psx_netplay_is_resimulating()) {
+    if (!psx_netplay_is_resimulating() && !psx_selfcheck_resim_active()) {
         sdl_audio_update(fmv_skip_active,
                          turbo_loads_active && g_turbo_audio_sink_enabled);
     }
@@ -4269,22 +4309,24 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
     }
 
-    /* Netplay FMV: skip present every other depth24 vblank to cut GPU cost
-     * (admit + wall pace still run in the epilogue every tick). Do NOT skip
-     * pace here — that let MotK movies run ~90fps once decode was fast enough. */
+    /* Netplay FMV: present 1 of every 4 depth24 vblanks. SW RGB888 scanout
+     * dominates guest ms; admit + wall pace still run every tick in the
+     * epilogue. Do NOT skip pace — MotK ran ~90fps when decode was fast and
+     * pace was skipped here. */
     if (psx_netplay_active() && gpu_display_is_depth24()) {
-        if (s_netplay_depth24_present_skip) {
-            s_netplay_depth24_present_skip = 0;
+        if (s_netplay_depth24_present_skip > 0) {
+            s_netplay_depth24_present_skip--;
             return ep;
         }
-        s_netplay_depth24_present_skip = 1;
+        s_netplay_depth24_present_skip = 3; /* skip next three presents */
     } else {
         s_netplay_depth24_present_skip = 0;
     }
 
     /* Offline wall-clock pacing before present. Netplay paces in the epilogue
-     * AFTER present so Swap overlaps the peer's guest quantum. */
-    if (!psx_netplay_active()) {
+     * AFTER present so Swap overlaps the peer's guest quantum. Self-check
+     * replay runs uncapped like netplay resim. */
+    if (!psx_netplay_active() && !psx_selfcheck_resim_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
         frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
@@ -4293,8 +4335,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         /* Low-latency input: the early sample above is now ~one pacer-wait old.
          * Refresh the device state and re-sample right before present so the next
          * CPU frame reads near-fresh input (the dominant input->photon cost on a
-         * vsync-light box). Re-stamp the ring's input mark to measure from here. */
-        if (g_low_latency_input) {
+         * vsync-light box). Re-stamp the ring's input mark to measure from here.
+         * Self-check record keeps pads boundary-latched (netplay tick
+         * semantics) — the mid-frame re-sample would fork the resim. */
+        if (g_low_latency_input && !psx_selfcheck_input_locked()) {
             SDL_GameControllerUpdate();  /* refresh pad state after the wait */
             SDL_PumpEvents();            /* refresh keyboard state */
             sample_pad_into_sio(override);
@@ -4674,6 +4718,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
 static void sdl_vblank_present(void) {
     NetplayVblankEpilogue ep = sdl_vblank_present_body();
+    /* Selfcheck span-end rewind: after present-body C++ RAII, before any
+     * further guest progress. Longjmps on success — keeps every resim load
+     * on the same VBlank boundary (BB fast-poll tails forked #2 vs #3). */
+    psx_selfcheck_flush_load();
     if (!ep.do_epilogue)
         return;
     if (!psx_return_to_lobby_requested())
@@ -8933,6 +8981,8 @@ session_reboot:
     debug_server_set_cpu(&cpu);
     /* Master digests / FRAME_COMMIT for netplay hash_confirm watermark. */
     psx_netplay_bind_cpu(&cpu);
+    /* Solo rollback resim self-check (PSX_RB_SELFCHECK=1, offline only). */
+    psx_selfcheck_init(&cpu, memory_get_bios_checksum(), game_entry_pc);
 
     /* Execute. */
     std::fprintf(stdout, "psxrecomp runtime: executing from PC=0x%08X\n", cpu.pc);

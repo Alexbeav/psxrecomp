@@ -80,6 +80,12 @@ void psx_check_interrupts_dispatch_entry(struct CPUState* cpu, uint32_t resume_p
 void interrupts_advance_cycles(uint32_t cycles);
 void interrupts_service_scheduled_events(void);
 uint32_t interrupts_cycles_to_vblank(void);
+/* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Self-check
+ * snaps save/restore this so resim keeps the snap's phase instead of the
+ * warm-load rebase to 0 (which is correct for UI savestates, wrong for
+ * bit-identical resim of a mid-frame tip). */
+uint32_t interrupts_get_cycles_since_vblank(void);
+void     interrupts_set_cycles_since_vblank(uint32_t v);
 
 /* Cycle-budgeted precise event slicing: minimum guest-CPU-cycle distance to the
  * next DELIVERABLE hardware interrupt (source raises its I_STAT bit AND that bit
@@ -94,6 +100,9 @@ int psx_get_in_exception(void);
  * Used by the post-savestate freeze probe (vblank-time "where was the game"). */
 uint32_t psx_last_irq_check_pc(void);
 uint32_t psx_compiled_irq_resume_pc(void);
+uint64_t psx_last_irq_check_cycle(void);
+uint64_t psx_interrupt_total_checks(void);
+uint32_t psx_interrupt_fast_maintenance(void);
 
 /* Snapshot internal counters for the freeze_check diagnostic.  Any out_*
  * pointer may be NULL.  All counters are monotonically non-decreasing

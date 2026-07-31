@@ -105,21 +105,23 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     uint32_t crc_tim = 0xFFFFFFFFu;
     uint32_t crc_ram = 0xFFFFFFFFu;
     uint32_t crc_drt = 0xFFFFFFFFu;
-    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t fold = 0xFFFFFFFFu;
     uint16_t counter[3], target[3];
     uint32_t mode[3], frac[3];
     int32_t irq_line[3];
     uint32_t wc;
     uint32_t i;
     uint8_t* ram;
+    uint32_t cpu_h, clk_h, tim_h, ram_h, drt_h;
 
     if (out)
         memset(out, 0, sizeof(*out));
     if (!cpu)
         return;
 
-    /* GTE is in BS_SEC_CPU but was omitted here — MFC2 can fork GPRs with
-     * matched RAM/clk (menu resim). Keep snap + digest in lockstep. */
+    /* Single pass per partition, then fold the five digests into core.
+     * Old path streamed every byte into BOTH part CRCs and a combined CRC —
+     * 2× full RDRAM (~4 MiB CRC/frame) and dominated rollback FPS. */
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
@@ -129,24 +131,12 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)&cpu->cop0[14], sizeof(uint32_t));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gte_data, sizeof(cpu->gte_data));
     crc_cpu = crc32_update(crc_cpu, (const uint8_t*)cpu->gte_ctrl, sizeof(cpu->gte_ctrl));
-    crc = crc32_update(crc, (const uint8_t*)cpu->gpr, sizeof(cpu->gpr));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->pc, sizeof(cpu->pc));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->hi, sizeof(cpu->hi));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->lo, sizeof(cpu->lo));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[12], sizeof(uint32_t));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[13], sizeof(uint32_t));
-    crc = crc32_update(crc, (const uint8_t*)&cpu->cop0[14], sizeof(uint32_t));
-    crc = crc32_update(crc, (const uint8_t*)cpu->gte_data, sizeof(cpu->gte_data));
-    crc = crc32_update(crc, (const uint8_t*)cpu->gte_ctrl, sizeof(cpu->gte_ctrl));
 
     {
         uint64_t cyc = psx_cycle_count;
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&cyc, sizeof(cyc));
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_stat, sizeof(i_stat));
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_mask, sizeof(i_mask));
-        crc = crc32_update(crc, (const uint8_t*)&cyc, sizeof(cyc));
-        crc = crc32_update(crc, (const uint8_t*)&i_stat, sizeof(i_stat));
-        crc = crc32_update(crc, (const uint8_t*)&i_mask, sizeof(i_mask));
     }
 
     timers_get_snapshot(counter, mode, target, irq_line, frac);
@@ -155,32 +145,35 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
     crc_tim = crc32_update(crc_tim, (const uint8_t*)target, sizeof(target));
     crc_tim = crc32_update(crc_tim, (const uint8_t*)irq_line, sizeof(irq_line));
     crc_tim = crc32_update(crc_tim, (const uint8_t*)frac, sizeof(frac));
-    crc = crc32_update(crc, (const uint8_t*)counter, sizeof(counter));
-    crc = crc32_update(crc, (const uint8_t*)mode, sizeof(mode));
-    crc = crc32_update(crc, (const uint8_t*)target, sizeof(target));
-    crc = crc32_update(crc, (const uint8_t*)irq_line, sizeof(irq_line));
-    crc = crc32_update(crc, (const uint8_t*)frac, sizeof(frac));
 
     ram = memory_get_ram_ptr();
-    if (ram) {
+    if (ram)
         crc_ram = crc32_update(crc_ram, ram, NP_RAM_SIZE);
-        crc = crc32_update(crc, ram, NP_RAM_SIZE);
-    }
 
     wc = dirty_ram_get_bitmap_word_count();
     for (i = 0; i < wc; i++) {
         uint32_t w = dirty_ram_get_bitmap_word(i);
         crc_drt = crc32_update(crc_drt, (const uint8_t*)&w, sizeof(w));
-        crc = crc32_update(crc, (const uint8_t*)&w, sizeof(w));
     }
 
+    cpu_h = crc_cpu ^ 0xFFFFFFFFu;
+    clk_h = crc_clk ^ 0xFFFFFFFFu;
+    tim_h = crc_tim ^ 0xFFFFFFFFu;
+    ram_h = crc_ram ^ 0xFFFFFFFFu;
+    drt_h = crc_drt ^ 0xFFFFFFFFu;
+    fold = crc32_update(fold, (const uint8_t*)&cpu_h, sizeof(cpu_h));
+    fold = crc32_update(fold, (const uint8_t*)&clk_h, sizeof(clk_h));
+    fold = crc32_update(fold, (const uint8_t*)&tim_h, sizeof(tim_h));
+    fold = crc32_update(fold, (const uint8_t*)&ram_h, sizeof(ram_h));
+    fold = crc32_update(fold, (const uint8_t*)&drt_h, sizeof(drt_h));
+
     if (out) {
-        out->cpu = crc_cpu ^ 0xFFFFFFFFu;
-        out->clock_irq = crc_clk ^ 0xFFFFFFFFu;
-        out->timers = crc_tim ^ 0xFFFFFFFFu;
-        out->ram = crc_ram ^ 0xFFFFFFFFu;
-        out->dirty = crc_drt ^ 0xFFFFFFFFu;
-        out->core = crc ^ 0xFFFFFFFFu;
+        out->cpu = cpu_h;
+        out->clock_irq = clk_h;
+        out->timers = tim_h;
+        out->ram = ram_h;
+        out->dirty = drt_h;
+        out->core = fold ^ 0xFFFFFFFFu;
     }
 }
 

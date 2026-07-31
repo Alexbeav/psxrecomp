@@ -695,6 +695,19 @@ static int psx_request_thread_switch(CPUState* cpu, uint32_t target_tcb)
  * on the old stack (safe: the restored state is complete in CPUState/RAM/devices
  * and every block leader is re-enterable). MUST be called on the scheduler fiber
  * (HLE mode, default) at a block-leader boundary with in_exception == 0. */
+/* Set by resume_at; cleared on first post-resume finish_frame (or abort). */
+static int g_sched_top_level_resume;
+
+int psx_scheduler_top_level_resume_active(void)
+{
+    return g_sched_top_level_resume;
+}
+
+void psx_scheduler_top_level_resume_clear(void)
+{
+    g_sched_top_level_resume = 0;
+}
+
 void psx_scheduler_resume_at(uint32_t resume_pc)
 {
     if (!psx_is_dispatchable(resume_pc)) {
@@ -707,6 +720,9 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
     g_sched_escape.target_tcb = 0;
     g_sched_escape.resume_pc  = resume_pc;
     g_sched_escape.reason     = PSX_RUN_RESUME_CURRENT;
+    /* longjmp abandons every mid-block CPS frame — sentinel RFE must not
+     * treat the new top-level dispatch as a continuable live chain. */
+    g_sched_top_level_resume = 1;
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
 }
 
@@ -796,6 +812,13 @@ void psx_scheduler_run(CPUState* cpu)
              * nested-unit gate so IRQ checks are not wedged-off after the escape
              * (backstop for the Ape memcard native<->interp fix). */
             { extern int g_call_unit_depth; g_call_unit_depth = 0; }
+            /* flush_resume / savestate longjmp skips generated bb_defer cleanup. */
+            {
+                extern int g_psx_cyc_bb_defer;
+                extern uint32_t g_psx_cyc_batch;
+                g_psx_cyc_bb_defer = 0;
+                g_psx_cyc_batch = 0;
+            }
         }
 
         switch (g_sched_escape.reason) {
@@ -843,7 +866,8 @@ void psx_scheduler_run(CPUState* cpu)
          * dispatch saw cpu->pc==0. If a thread yielded to us and then ran to
          * completion, hand control back to its yielder (one-level safety net)
          * instead of tearing down the whole run. Otherwise it's the legacy
-         * top-level abnormal exit. */
+         * top-level abnormal exit — unless an RB top-level resume can recover
+         * at $ra / sticky BB (returning-leaf snap after flush_resume). */
         if (psx_is_valid_tcb(cpu, g_sched_return_tcb) &&
             g_sched_return_tcb != psx_current_tcb_ptr(cpu)) {
             uint32_t yielder = g_sched_return_tcb;
@@ -853,6 +877,16 @@ void psx_scheduler_run(CPUState* cpu)
             sched_escape_ring_log(cpu, PSX_RUN_YIELD_TO_TCB,
                                   psx_current_tcb_ptr(cpu), yielder, 0);
             continue;
+        }
+        {
+            extern int psx_netplay_rb_recover_null_pc(CPUState *c, uint32_t *out_pc);
+            uint32_t recover_pc = 0;
+            if (psx_netplay_rb_recover_null_pc(cpu, &recover_pc) && recover_pc) {
+                g_sched_escape.target_tcb = 0;
+                g_sched_escape.resume_pc = recover_pc;
+                g_sched_escape.reason = PSX_RUN_RESUME_CURRENT;
+                continue;
+            }
         }
         g_sched_escape.reason = PSX_RUN_GUEST_EXIT;
         g_in_scheduler_run = 0;

@@ -49,8 +49,8 @@ int  netplay_ih_get(const NetplayInputHist *h, int slot, uint32_t tick, RNetRbFr
 int  netplay_ih_invent_hold_last(NetplayInputHist *h, int slot, uint32_t tick,
                                  RNetRbFrame *out);
 
-/* MotK digital: invent neutral only (never hold-last). Sticky D-pad invent
- * after FMV settle forked RAM while soft-promote release-only skipped resim. */
+/* Neutral invent (buttons 0xFFFF). Seal gap-fill only — live MotK admit uses
+ * hold-last so a held D-pad does not re-episode every tick. */
 int  netplay_ih_invent_idle(NetplayInputHist *h, int slot, uint32_t tick,
                             RNetRbFrame *out);
 

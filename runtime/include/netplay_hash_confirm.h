@@ -55,6 +55,13 @@ uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
 uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_out,
                                  uint32_t* local_out, uint32_t* peer_out);
 
+/* Heal a stuck watermark when the next tick after resolved_through has aged
+ * out of the ring (slot reused) and is no longer a live mismatch. Scans the
+ * ring for the highest tick where local==peer with no newer mismatch present,
+ * then advances resolved_through there (ring contents kept).
+ * Returns 1 if the watermark moved. Call from FRAME_COMMIT ingress. */
+uint8_t netplay_hc_heal_stale_gap(NetplayHashConfirm* hc);
+
 #ifdef __cplusplus
 }
 #endif

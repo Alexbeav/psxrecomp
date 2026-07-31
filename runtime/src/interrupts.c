@@ -346,6 +346,14 @@ uint32_t interrupts_cycles_to_vblank(void) {
     return VBLANK_CYCLES - cycles_since_vblank;
 }
 
+uint32_t interrupts_get_cycles_since_vblank(void) {
+    return cycles_since_vblank;
+}
+
+void interrupts_set_cycles_since_vblank(uint32_t v) {
+    cycles_since_vblank = v;
+}
+
 void interrupts_advance_cycles(uint32_t cycles) {
     cycles_since_vblank += cycles;
     interrupts_service_scheduled_events();
@@ -451,9 +459,15 @@ extern int g_psx_dispatch_depth;
 static uint32_t s_compiled_interrupt_resume_pc = 0;
 static uint32_t s_last_interrupt_check_pc = 0;
 static uint64_t s_last_interrupt_check_cycle = UINT64_MAX;
+/* Poll-throttle counter for fast IRQ paths — host-only; must not survive
+ * rewind or load#N can hit the 16K poll edge at a different guest point. */
+static uint32_t s_fast_maintenance = 0;
 
 uint32_t psx_last_irq_check_pc(void) { return s_last_interrupt_check_pc; }
 uint32_t psx_compiled_irq_resume_pc(void) { return s_compiled_interrupt_resume_pc; }
+uint64_t psx_last_irq_check_cycle(void) { return s_last_interrupt_check_cycle; }
+uint64_t psx_interrupt_total_checks(void) { return total_checks; }
+uint32_t psx_interrupt_fast_maintenance(void) { return s_fast_maintenance; }
 
 /* Deferred cooperative thread switch from nested exception delivery.
  *
@@ -633,6 +647,35 @@ void interrupts_resync_after_restore(void) {
     s_defer_switch_pending = 0;
     s_defer_switch_target = 0;
     s_defer_switch_from = 0;
+    /* Host-only IRQ/escape ambient — not in the snap. Stale RFE/SENTINEL
+     * escape flags from the pre-load timeline can bias the first same-thread
+     * restore decision after rewind. Also zero resume-PC latches: the poll
+     * that triggered this load left the PRE-LOAD timeline's BB PC in
+     * s_compiled_interrupt_resume_pc; if sticky I_STAT delivers before the
+     * first post-resume BB edge rewrites it, EPC/saved_gpr fork warm
+     * resim#2 vs #3 (selfcheck MotK attract win#70/#73, matched clocks). */
+    g_exception_real_epc = 0;
+    g_exc_escape_reason = PSX_EXC_ESCAPE_NONE;
+    g_rfe_escape_pending = 0;
+    g_pending_exception_longjmp = 0;
+    s_compiled_interrupt_resume_pc = 0;
+    s_last_interrupt_check_pc = 0;
+    /* De-dupe key for dispatch_entry: a stale absolute cycle from the pre-load
+     * timeline can equal the restored tip and skip the first post-resume IRQ
+     * check at that PC (warm selfcheck MotK #2≠#3 at matched clocks). */
+    s_last_interrupt_check_cycle = UINT64_MAX;
+    s_fast_maintenance = 0;
+    total_checks = 0;
+    {
+        extern uint32_t g_dirty_safe_resume_pc;
+        g_dirty_safe_resume_pc = 0;
+    }
+    /* Load longjmp from mid-path abandons PSX_CHECK_INTERRUPTS_RETURN's
+     * g_ls_suppress_record-- — clamp so suppress cannot accumulate. */
+    {
+        extern int g_ls_suppress_record;
+        g_ls_suppress_record = 0;
+    }
     /* Drop mid-quantum present armed before the rewind — do not finish_frame
      * against the restored tip with a stale pending count. */
     gpu_vblank_clear_deferred_present();
@@ -805,11 +848,23 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 
 void psx_check_interrupts(CPUState* cpu) {
     psx_cyc_batch_flush();
-    /* Netplay: run deferred sdl_vblank_present here (BB edge), not from
-     * mid-block fire_vblank_edge → gpu_vblank_tick. Offline presents immediately. */
-    gpu_vblank_flush_present();
+    /* Netplay: deferred sdl_vblank_present at BB edge (not mid-block
+     * fire_vblank_edge). When an IRQ is also deliverable, flush AFTER
+     * delivery so finish_frame digests post-RFE GPRs at the interrupted
+     * EPC — MotK menu CD54↔CDA0 was presenting pre-IRQ on opposite edges.
+     * Selfcheck stays on immediate present (see gpu.c). */
     extern int g_ls_suppress_record;
-#define PSX_CHECK_INTERRUPTS_RETURN() do { if (g_ls_suppress_record > 0) g_ls_suppress_record--; return; } while (0)
+    extern int psx_netplay_active(void);
+    int np_present_after_irq = 0;
+    if (psx_netplay_active() && psx_interrupt_delivery_needed(cpu))
+        np_present_after_irq = 1;
+    else
+        gpu_vblank_flush_present();
+#define PSX_CHECK_INTERRUPTS_RETURN() do { \
+        if (np_present_after_irq) gpu_vblank_flush_present(); \
+        if (g_ls_suppress_record > 0) g_ls_suppress_record--; \
+        return; \
+    } while (0)
 #ifdef PSX_COSIM
     extern uint32_t g_dirty_safe_resume_pc;
 #define COSIM_IRQ_TAKE_PC() (g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc : s_compiled_interrupt_resume_pc)
@@ -823,7 +878,6 @@ void psx_check_interrupts(CPUState* cpu) {
      * mid-path bookkeeping / irq_deliver_eval that used to run every BB.
      * Guest-visible timing unchanged (same non-delivery). LTO can collapse
      * this into the VLC call sites. */
-    static uint32_t s_fast_maintenance;
     if (!in_exception && !s_defer_switch_pending && (i_stat & i_mask) != 0) {
         uint32_t sr = cpu->cop0[COP0_SR];
         if (!(sr & 0x01u) || !(sr & (1u << 10))) {
@@ -831,12 +885,14 @@ void psx_check_interrupts(CPUState* cpu) {
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
                 /* MotK FMV/VLC live here — must flush pending RB snaps too. */
                 psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
+                psx_selfcheck_poll(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
-            return;
+            PSX_CHECK_INTERRUPTS_RETURN();
         }
     }
 
@@ -881,15 +937,18 @@ void psx_check_interrupts(CPUState* cpu) {
             if ((++s_fast_maintenance & 0x3FFFu) == 0) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
                 psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
+                psx_selfcheck_poll(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
-            return;
+            PSX_CHECK_INTERRUPTS_RETURN();
         }
         /* Idle skip advanced time and a device raised I_STAT — deliver below. */
     }
-    if (in_exception && !(cpu->cop0[COP0_SR] & 0x01u)) return;
+    if (in_exception && !(cpu->cop0[COP0_SR] & 0x01u))
+        PSX_CHECK_INTERRUPTS_RETURN();
 
     /* Mid path: unmasked IRQ already pending, ordinary compiled edge.
      * MotK VLC / FMV spend most BB edges here (sticky CD/VBlank bits).
@@ -905,10 +964,12 @@ void psx_check_interrupts(CPUState* cpu) {
         if ((total_checks & 0x3FFFu) == 0) {
             extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
             extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
+            extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
             savestate_poll(cpu, check_pc);
             /* Sticky CD/VBlank mid-path is MotK's FMV hot edge — without this
              * the RB snap ring never fills (pending save never polled). */
             psx_netplay_poll_snap(cpu, check_pc);
+            psx_selfcheck_poll(cpu, check_pc);
             debug_server_poll();
         }
         goto irq_deliver_eval;
@@ -954,8 +1015,10 @@ void psx_check_interrupts(CPUState* cpu) {
     if (!in_exception) {
         extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
         extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
         savestate_poll(cpu, s_last_interrupt_check_pc);
         psx_netplay_poll_snap(cpu, s_last_interrupt_check_pc);
+        psx_selfcheck_poll(cpu, s_last_interrupt_check_pc);
     }
 
     /* Deferred cooperative thread switch: honor at the next real thread-save
@@ -1514,10 +1577,11 @@ irq_deliver_eval:
     }
     {
         extern int psx_netplay_active(void);
+        extern int psx_selfcheck_enabled(void);
         if (s_str_mode_env >= 0)
             s_str_mode = s_str_mode_env;
-        else if (psx_netplay_active())
-            s_str_mode = 3; /* netplay auto: TCB-stable always restore */
+        else if (psx_netplay_active() || psx_selfcheck_enabled())
+            s_str_mode = 3; /* netplay/selfcheck: TCB-stable always restore */
         else
             s_str_mode = 1;
     }
@@ -1557,13 +1621,29 @@ irq_deliver_eval:
      * live chain, and one hop later lands on an un-re-enterable mid-function
      * PC — the top-level "execution completed, PC=0" abnormal exit (Tomba 2
      * splash, frame 1385). A GENUINE in-handler switch (PCB[0] moved) skips
-     * this and is honored/deferred by the scheduler block below. */
+     * this and is honored/deferred by the scheduler block below.
+     *
+     * Exception: after netplay RB flush_resume, dispatch is top-level — there
+     * is no live native chain. Publishing pc=0 there is GUEST_EXIT. Prefer the
+     * compiled IRQ resume PC (or keep the post-RFE guest PC). */
     if (g_exception_real_epc == (uint32_t)PSX_EXC_SENTINEL_PC &&
         entry_tcb != 0u && entry_tcb == exit_tcb &&
         (g_exc_escape_reason == PSX_EXC_ESCAPE_RFE_RETURN ||
          g_exc_escape_reason == PSX_EXC_ESCAPE_SYSCALL_RETURN)) {
         same_thread_resume = 1;
-        cpu->pc = 0;   /* continue the interrupted live chain */
+        {
+            extern int psx_scheduler_top_level_resume_active(void);
+            if (psx_scheduler_top_level_resume_active()) {
+                uint32_t resume = s_compiled_interrupt_resume_pc;
+                if (resume == 0u)
+                    resume = s_last_interrupt_check_pc;
+                if (resume != 0u)
+                    cpu->pc = resume;
+                /* else keep post-RFE cpu->pc — never publish 0 */
+            } else {
+                cpu->pc = 0;   /* continue the interrupted live chain */
+            }
+        }
     }
     int do_restore =
         (g_exc_escape_reason == PSX_EXC_ESCAPE_LEGACY_SENTINEL || same_thread_resume);
@@ -1748,6 +1828,8 @@ irq_deliver_eval:
 #undef COSIM_IRQ_NOTE
 #undef COSIM_IRQ_TAKE_PC
 #endif
+    if (np_present_after_irq)
+        gpu_vblank_flush_present();
 #undef PSX_CHECK_INTERRUPTS_RETURN
 }
 

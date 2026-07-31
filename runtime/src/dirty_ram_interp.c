@@ -315,6 +315,13 @@ void dirty_ram_ld_delay_flush(CPUState *cpu) {
     cpu->gpr[0] = 0;
 }
 
+void dirty_ram_ld_delay_discard(void) {
+    s_ld_pend_armed = 0;
+    s_ld_pend_age   = 0;
+    s_ld_pend_rt    = 0;
+    s_ld_pend_val   = 0;
+}
+
 uint32_t g_insn_gate_lo = 0;       /* extra always-log phys range [lo,hi)      */
 uint32_t g_insn_gate_hi = 0;       /* 0 = extra range disabled                 */
 uint32_t g_insn_freeze_addr  = 0;  /* candidate phys entry to watch            */

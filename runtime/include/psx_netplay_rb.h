@@ -46,27 +46,47 @@ void psx_netplay_rb_poll(struct CPUState *cpu, uint32_t resume_pc);
  * success. */
 void psx_netplay_rb_flush_resume(void);
 
+/* 1 after flush_resume longjmp until finish_frame / abort — top-level
+ * dispatch has no native call chain under the resume PC. */
+int  psx_netplay_rb_top_level_resume_active(void);
+
+/* After outermost psx_dispatch returns pc==0 following an RB resume: retry
+ * at $ra / sticky BB if safe. Returns 1 and arms RESUME_CURRENT via out_pc. */
+int  psx_netplay_rb_recover_null_pc(struct CPUState *cpu, uint32_t *out_pc);
+
 /* After a live tick completes: request snap at tick for next safe poll. */
 void psx_netplay_rb_request_snap(uint32_t tick);
 
 /* Initiator: start episode from invent/contract rewind.
  * Returns 1 if an episode opened, 0 if refused (no snap, already active,
- * post-commit/realign cooldown, …). On refuse, reconcile should promote wire. */
+ * abort/storm cooldown, FMV lockstep, …). On refuse, reconcile should promote
+ * wire (or tip-extend if active). Clean commit does not arm cooldown. */
 int  psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot);
 
-/* 1 while begin_rewind is suppressed (cooldown after commit / realign). */
+/* Active episode: grow target / resign sealed rows for a late wire edge
+ * (press+release coalesce). Host must promote wire into hist first.
+ * Returns 1 if the correction was absorbed into the current episode. */
+int  psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot);
+
+/* 1 while begin_rewind is suppressed (cooldown after abort / realign). */
 int  psx_netplay_rb_rewind_suppressed(void);
 
-/* 1 during depth24 / recent MDEC / post-FMV settle — MotK FMV. Reconcile
- * promotes wire; no episodes (CD-frozen Replay corrupts the movie). */
+/* 1 during depth24 / recent MDEC / post-FMV settle — MotK FMV. */
 int  psx_netplay_rb_fmv_defer_rewind(void);
 
-/* 1 in the same FMV/settle window: admit must stall for remote wire instead
- * of inventing (promote-only during FMV left peers desynced at cutover). */
+/* 1 while depth24 or recent MDEC (not settle). */
+int  psx_netplay_rb_fmv_media_active(void);
+
+/* 1 during FMV media + post-FMV lockstep (~90 ticks) — admit waits for remote
+ * wire (title Start / movie skip). Ticks the FMV→settle tracker. */
 int  psx_netplay_rb_lockstep_no_invent(void);
 
-/* 1 once after commit/abort/realign — reconcile should promote all late wire
- * without opening another episode (clears invent poison). */
+/* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
+ * Full rb_pump stays admit/present-edge only (host-asymmetric). */
+void psx_netplay_rb_poll_replay_stall(void);
+
+/* 1 once after abort/realign cooldown arm — reconcile should promote all late
+ * wire without opening another episode (clears invent poison). */
 int  psx_netplay_rb_take_promote_sweep(void);
 
 /* Drain peer RB_* + drive Seal/Baseline/Replay/Verify. Call from pump. */
@@ -75,6 +95,7 @@ void psx_netplay_rb_pump(void);
 /* 1 while episode is active (seal/baseline/replay/verify). */
 int  psx_netplay_rb_active(void);
 int  psx_netplay_rb_is_resimulating(void);
+int  psx_netplay_rb_tip_holding(void);
 
 /* FRAME_COMMIT mismatch during Replay — abort before a false POST commit.
  * Returns 1 if an episode was aborted. */

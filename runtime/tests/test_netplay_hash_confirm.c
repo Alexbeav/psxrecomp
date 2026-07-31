@@ -67,6 +67,31 @@ int main(void) {
     netplay_hc_note_peer(&hc, 820, 0xAAAAu);
     CHECK(netplay_hc_resolved_through(&hc) == 820u, "prime then match load tick");
 
+    /* Stale FIRST-CORE gap: mismatch tick ages out of the ring; later tip
+     * digests match — heal must advance past the stuck watermark. */
+    netplay_hc_reset(&hc);
+    netplay_hc_note_local(&hc, 0, 0x1u);
+    netplay_hc_note_peer(&hc, 0, 0x1u);
+    CHECK(netplay_hc_resolved_through(&hc) == 0u, "heal setup resolved 0");
+    netplay_hc_note_local(&hc, 1, 0xAAAAu);
+    netplay_hc_note_peer(&hc, 1, 0xBBBBu); /* FIRST CORE */
+    CHECK(netplay_hc_resolved_through(&hc) == 0u, "mismatch sticks at 0");
+    CHECK(netplay_hc_peek_mismatch(&hc, NULL, NULL, NULL), "mismatch visible");
+    /* Overwrite slot for tick 1 (1 % 128 == 1) with a far tip match. */
+    netplay_hc_note_local(&hc, 1u + NETPLAY_HC_RING, 0xCCCCu);
+    netplay_hc_note_peer(&hc, 1u + NETPLAY_HC_RING, 0xCCCCu);
+    netplay_hc_note_local(&hc, 50u + NETPLAY_HC_RING, 0xDDDDu);
+    netplay_hc_note_peer(&hc, 50u + NETPLAY_HC_RING, 0xDDDDu);
+    CHECK(!netplay_hc_peek_mismatch(&hc, NULL, NULL, NULL),
+          "aged mismatch no longer peekable");
+    CHECK(netplay_hc_heal_stale_gap(&hc), "heal advances over stale gap");
+    CHECK(netplay_hc_resolved_through(&hc) == 50u + NETPLAY_HC_RING,
+          "heal to highest matched tip");
+    /* Do not heal over a still-visible fork. */
+    netplay_hc_note_local(&hc, 60u + NETPLAY_HC_RING, 0x1111u);
+    netplay_hc_note_peer(&hc, 60u + NETPLAY_HC_RING, 0x2222u);
+    CHECK(!netplay_hc_heal_stale_gap(&hc), "heal refuses live fork in ring");
+
     if (failures) {
         printf("%d failure(s)\n", failures);
         return 1;

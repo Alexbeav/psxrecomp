@@ -5,11 +5,13 @@ Status: **hooked (experimental)** · branch `feat/rollback-netplay` · depends o
 
 Today MotK / psxrecomp lobby netplay defaults to **rollback**:
 `stage_local → poll_admit (invent within P) → guest frame → finish_frame`.
-Missing remotes are invented (**idle**, not hold-last — MotK digital) only while
+Missing remotes are invented (**hold-last**, MotK digital) only while
 `wire_need ≤ highest_remote + P`; outside that window admit stalls (BattleShip
-phase_lock). Late wire goes through the input contract; rewinds open an
-`RNetRbSession` episode. Host **Disable Rollback** (or `PSX_NET_MODE=delay`)
-forces classic delay-sync `try_admit`.
+phase_lock). Idle invent re-mismatched every held D-pad tick after commit
+(char-select episode storm). Seal gap-fill stays idle. Late wire goes through
+the input contract; rewinds open an `RNetRbSession` episode. Menu releases
+rewind (FMV soft-promote release-only only). Host **Disable Rollback** (or
+`PSX_NET_MODE=delay`) forces classic delay-sync `try_admit`.
 
 ---
 
@@ -52,9 +54,10 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       resume is pending or while still in `AwaitingBaseline`
 - [x] **Baseline gate:** send/enter Replay only after `g_episode_snap_applied`
       (peer BASELINE can arrive during SealInputs — must not skip restore)
-- [x] Live snap rate-limit: every `PSX_NET_SNAP_INTERVAL` ticks (default **8**);
-      resim still snaps every tick. Ring uses **raw** `boot_state` (no zlib) —
-      `compress2` on RAM+VRAM+SPU was the live FPS tax; disk `.pst` still zlib
+- [x] Live snap rate-limit: every `PSX_NET_SNAP_INTERVAL` ticks (default **16**,
+      max 32); resim still snaps every tick. Ring uses **raw** `boot_state`
+      (no zlib) — `compress2` on RAM+VRAM+SPU was the live FPS tax; disk `.pst`
+      still zlib. (Skipping VRAM on live snaps is unsafe for rewind.)
 - [x] Snap PC must be `psx_is_dispatchable` — pick IRQ/BB-edge resume PC (not
       `cpu->pc` at present, often 0); defer save / abort episode instead of
       `resume_at(0)` → `trap_crash`
@@ -89,24 +92,86 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       FIFO on RB restore
 - [x] Baseline/POST/hash_confirm agree on **core** digest only (`cd=` audit);
       CD-only forks were aborting good title/menu Start corrections
-- [x] Storm calm: 12-tick rewind cooldown + promote-sweep after **commit**;
-      MotK digital release-only → promote (no episode) **only while cores still
-      match**; else open episode. Live/seal invent is **idle** (not hold-last).
-      Freeze `cdrom_advance` during Replay (CD IRQ timing was forking POST cores)
+- [x] Storm calm: **abort/storm** cooldown + promote-sweep only (not after
+      clean commit). Post-commit promote-only made char-select D-pad feel
+      rejected (hist ok, sim not rolled). Live invent is **hold-last** (idle
+      invent → hold mismatch every tick = episode storm). Seal gap-fill idle.
+      Menu release soft-promote removed (forked sticky Up with hold-last);
+      FMV settle still soft-promotes releases. Press/release → episode; held
+      matching invent → no episode.
+      **Char-select “hang” with matched POST:** digital button edges always
+      rewind in `rnet_input_contract` (no `hash_confirm` promote for buttons).
+      A tap used to be two episodes (press + release). Fixed in recomp-net:
+      **tip-extend** (`rnet_rb_extend_target` / MotK `psx_netplay_rb_tip_extend`)
+      +       **TipHold** (`rnet_rb_enter_tip_hold` after POST match: Live continues,
+      `tip_runway` quiet window, late release tip-extends without a second
+      baseline) coalesce press+release into one episode. Tip-extend from
+      TipHold/Verify clears the POST handshake; follower FOLLOW mirrors
+      initiator rereplay; TipHold ignores stale rexmit POSTs.
+      Post-TipHold `choose_load_tick` must not pick Live tip snaps above
+      `agreed_through` unless `hash_confirm` confirms them (else follower
+      NACK past frontier).
+
+      `tip_seal_slack` (default 2) sets initial seal headroom;
+      `tip_runway` (default 12) caps TipHold + suggest slack;
+      **light tip**
+      (`RNET_RB_CORR_LIGHT_TIP`) skips ready-ACK RTT when load is at the
+      shared frontier and depth ≤ 8. Do **not** soft-promote releases.
+      **Resim depth (main-menu "back to title" hang):** `choose_load_tick`
+      always applied interval rounding + one-interval tip slack, so a mismatch
+      one tick after a commit (798) re-loaded 768 and every menu tap replayed
+      ~30 ticks twice. Fixed with a **shared-frontier fast path**: ticks the
+      peer provably holds need no slack — (a) `hash_confirm` resolved_through
+      (both simmed, core digests matched → same interval snaps) and (b) the
+      last committed replay span (both peers resim-save a snap at every
+      replayed tick). Release-after-press now loads at commit target, ~2-tick
+      replay. Peer eviction still covered by follower NACK (abort, not hang).
+      Do **not** freeze `cdrom_advance` during Replay (FMV skip resim hung).
+      Promote wire into hist **before** `begin_rewind` seal.
+      FMV media + **digest-gated post-FMV lockstep**: no invent + refuse
+      begin/follow for at least MIN=90 ticks (title Start was
+      invent→`0x8006CDA0` episode hang); hold until hash_confirm matched
+      CONFIRM=16 contiguous ticks or MAX=180 (cross-game cutover). Dense
+      tip snaps during media/lockstep/+32 after invent unlock so the first
+      invent-miss loads near the mismatch (was 954→944). Diag `FIRST CORE
+      DIVERGE` at first post-lockstep press is invent≠wire (e.g. `ffff`→
+      `ffbf` Cross), not residual FMV non-determinism — live digs matched
+      through lockstep.
+      Symmetric ready: follower ACK → initiator GO → both Replay.
+      **`flush_resume` releases `gpu_vblank_flush_present` reentrancy guard**
+      before longjmp (stuck `s_flushing_present` blocked all later presents /
+      `finish_frame` — MotK `0x8006CDA0` Replay hang). Mid-guest pump runs
+      `poll_replay_stall` (5s abort).
+      **Menu wait-loop resim (CD54↔CDA0):** do **not** arm deferred present on
+      flush_resume / do **not** re-finish `load_tick` (snap is already
+      post-present). Phantom fin@load before the latched VBlank IRQ put peers
+      on opposite ping-pong edges (`v0=1` vs countdown, ~5-cycle skew). First
+      arm is `load+1`; `hc` primed after load. Netplay flushes deferred present
+      **after** IRQ delivery when both are due (post-RFE digest).
+      **Returning-leaf flush_resume (`0x8006A9F8` → PC=0):** prefer IRQ/sticky/
+      `$ra` over bare function-entry snap PCs; `flush_resume` clears deferred
+      present + bb_defer nest; sentinel same-thread path must not publish
+      `pc=0` during top-level RB resume; scheduler recovers null-pc via `$ra`.
 - [x] **Abort cooldown from live sim** (before realign rewinds the clock).
       Old path armed `until` from rewound tip → uncapped catch-up burned a
-      12-tick window in ms → char-select episode storms (`STALE COOLDOWN`).
+      short window in ms → char-select episode storms (`STALE COOLDOWN`).
       Failed episode: 60 ticks from live (120 on streak≥2; 90 if no tip).
-      Reconcile promotes wire for the whole window (`promote-no-resim`)
+      Reconcile promotes wire for the whole abort window (`promote-no-resim`).
+      Clean commit does **not** arm cooldown.
 - [x] Netplay forces **software GPU** — GL/VK `glReadPixels` VRAM readback was
       forking peer snaps (core matched, pin zlib ~220KB apart) and mid-resim
       cores; baseline/POST also agree on `av=` (GPU+VRAM) via dig_b / POST input_digest
 - [x] SW GPU **before window** + late `force_sw` builds `SDL_Renderer` after GL
       teardown (first match was black: cleared `g_gl_active` with null present)
-- [x] No rollback episodes during depth24 / recent MDEC (FMV-defer); CD-frozen
-      Replay was scrambling movies — promote late wire until 15-bit gameplay
-- [x] FMV lockstep: stall admit (no invent) during movie + ~90-tick settle after
-      cutover; baseline-mismatch without agreed tip uses 60-tick cooldown
+- [x] `flush_resume` releases present-flush reentrancy guard (no latched-VBlank
+      re-arm — that phantom-finished load and forked menu wait resim).
+      Symmetric ready GO. Live snaps stay on during media. Replay arms
+      `load+1` with present-after-IRQ on netplay BB edges.
+- [x] Netplay depth24: present 1/4 vblanks; skip live FRAME_COMMIT
+      (full-RAM CRC) + prime `hash_confirm` when media ends
+- [x] MDEC SSE2 IDCT + 24bpp YCbCr row encode (Beetle-matching, bit-identical
+      to scalar; self-check at `mdec_init`) — raises offline/netplay FMV on
+      slow peers; remaining FMV FPS is mostly host CPU ceiling
 - [x] MDEC snap `last_color_age` is guest-cycle relative (was host
       `s_frame_count` → false baseline aux trips with matched FIFO/SPU)
 - [x] Diag: `rb wire promote-no-resim` / `rewind-request` — late wire into hist
@@ -137,6 +202,8 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] **Core digest folds GTE** (was snap-only) — MFC2 can fork GPRs with
       matched RAM/clk/SIO; `rb cpu-split` adds `gte=` + `rb gpr-dump` on
       fin/abort/post so peers can diff which regs forked
+- [x] **Core digest = fold of part digests** (one RAM CRC pass, not dual
+      stream); `core=` values change vs older binaries — peers must match
 - [x] Log `rb binary path=… size=…` at rollback start — **peers must run the
       same bit-identical binary**. Diags showed host `build-release/` vs guest
       `motk-0.1.0-linux-x64/` with pin zlib ~1.34M vs ~1.13M, matched baselines,
@@ -159,6 +226,16 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
       peers digested different instr points. Fix: under netplay, queue the
       GPU vblank callback and flush in `psx_check_interrupts` (BB edge);
       clear deferred pending on snap resync. Offline still presents immediately.
+- [x] **Menu wait resim phase (CD54↔CDA0):** after present-guard fix, ep1
+      matched fin@load then forked fin@load+1 (`r2=1` vs countdown, cyc±5).
+      Cause: flush_resume armed deferred present for latched I_STAT → phantom
+      finish_frame before latched VBlank IRQ. Fix: arm `load+1` only; no
+      latched re-arm; present-after-IRQ when delivery is due.
+- [x] **Returning-leaf resume crash:** after load+1 fix, Start-class episode
+      resumed at `0x8006A9F8` (`jr $ra` leaf) with IEc=0 → top-level
+      `execution completed, PC=0` (cps: `final_ra=0x8006CCA0`). Fix: resume
+      PC pick prefers IRQ/sticky/`$ra`; clear present+bb_defer on flush;
+      no sentinel `pc=0` while `top_level_resume`; scheduler null-pc recover.
 - [ ] Memory budget / thinner snap: optional strip CDROM/MDEC if MotK match
       path allows (further RAM headroom)
 - [x] Standalone ring bookkeeping test: `runtime/tests/test_netplay_snap_ring.c`
@@ -187,7 +264,8 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 
 - [x] Per-slot input history ring (`netplay_input_hist`)
 - [x] Local path: `is_predicted = 0`
-- [x] Remote invent = **hold-last** (neutral if no prior); stall when ahead of remote tip by > P
+- [x] Remote invent = **hold-last** (neutral if no prior); stall when ahead of
+      remote tip by > P. Seal `get_input_row` gap-fill remains **idle**.
 - [x] Late wire → `rnet_input_contract_stick_replace_decide` + `hash_confirm_promote`
 - [x] Rewind → `psx_netplay_rb_begin_rewind` (episode)
 - [x] `get_input_row` vtable → `netplay_ih_get`
@@ -243,7 +321,43 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 
 - [x] Netplay clears mods (`mod_runtime_clear_for_netplay` / launcher hook)
 - [x] Same BIOS stem + disc identity on both peers (existing verify)
-- [ ] Audit non-deterministic host clocks in sim path — soak-driven
+- [x] Audit non-deterministic host clocks in sim path — **selfcheck-driven**
+      (was soak-driven). `PSX_RB_SELFCHECK=1` (offline, single process,
+      `runtime/src/psx_selfcheck.c`): every INTERVAL boundaries snap the
+      machine at a savestate BB edge, record SPAN ticks of applied pad rows +
+      full digest partitions, then rewind and resim the window **twice** from
+      the same snap. Replay#1 vs replay#2 is the rollback invariant (both
+      peers resim in an episode) → PASS/FAIL with per-part DIVERGE lines;
+      live-vs-resim is reported as `restore-drift` (diagnostic; VBlank phase
+      re-applied from snap). Verdict = warm #2vs#3 after ambient-prime.
+      Fixes via selfcheck: VBlank-phase restore; overlay freeze; discard
+      dirty/interp load-delay on restore; pin host frame; RECORD=resim
+      host-skip profile; idle_skip off; turbo/FMV-skip gated; top-level
+      resume; IRQ escape + check-cycle/poll-throttle clear; sticky
+      `text_diverged` / kernel-bless / overlay validation memos cleared on
+      RAM restore; **span-end load** via `psx_selfcheck_flush_load` after
+      present-body RAII (BB fast-poll tails forked #2/#3 load sites);
+      snap PC uses RB `resume_pc_ok` (reject 0xB0). MotK attract soak
+      `/tmp/selfcheck_spanend2.log`: **316+ PASS / 0 FAIL** through the
+      classic win#70/#73/#118/#138/#139/#277/#279/#301 set. Re-verified after
+      hold-last invent (`/tmp/selfcheck_verify.log`): win#70/#73/#118/#139
+      PASS, **157+ PASS / 0 FAIL** and climbing. Post-FMV cutover soak
+      (`/tmp/selfcheck_fmvcut.log`, INTERVAL=120 SPAN=48): **52 PASS / 0
+      FAIL** through early attract/menu — confirms 954-class peer fork is
+      invent≠wire, not offline resim non-determinism. Tune:
+      `PSX_RB_SELFCHECK_INTERVAL/SPAN/FAULT/PRIME`.
+      **Mash:** `PSX_RB_SELFCHECK_MASH=1` (+ optional `MASH_SEED` /
+      `MASH_RATE`) synthesizes fighter-style face/D-pad/shoulder spam on
+      live boundaries so headless soaks stress invent edges / wait-loop
+      resim without a controller. Rows are recorded and replayed.
+      **Stuck hash_confirm / doomed tip loads:** a transient FIRST CORE
+      (e.g. sim 201) left `resolved_through` stuck; once that tick aged
+      out of the 128-slot dig ring, `choose_load_tick` fell through to
+      tip-slack (912) while confirmed snaps were gone — baseline then
+      aborted on cpu-only MotK wait-loop PC forks (`CD54`↔`CDA0`) despite
+      matched ram/clk. Fix: `netplay_hc_heal_stale_gap`, refuse loads past
+      the shared frontier, canonicalize wait-loop snap PC to `CDA0`.
+      `rb live dig local` is a breadcrumb (not peer match).
 - [x] FMV / depth24: defer rewind (promote wire only); follow NACKs; RB snap
       load uses light frontend hook (no FMV cutover/present thrash)
 - [x] Multitap / N-slot: history + seal tables sized to `slot_count`
@@ -270,8 +384,8 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 4. ~~Episode resim wiring~~  
 5. ~~Lobby flag + UI~~  
 6. ~~Rate-limit live snaps (`PSX_NET_SNAP_INTERVAL`) + safe episode resume~~  
-7. **Thinner snap / FMV policy** — strip CDROM/MDEC + movie digest stability
-   (raw ring snaps + interval 8 already landed for FPS)  
+7. ~~Thinner snap / FMV policy~~ — interval **16**, settle invent ok, digest
+   fold (skip-VRAM on live snaps unsafe for rewind; optional later)
 8. **Dual-instance soak** — prove Done-when items  
 
 ---
@@ -293,10 +407,12 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 
 - [ ] Two MotK instances with `PSX_NET_MODE=rollback` complete a match without
       admit-stall on one-frame remote loss
-- [ ] Forced remote stick correction triggers one episode and both digests match
-      post-commit
+- [x] Forced remote digital correction opens episode(s); POST digests match
+      (char-select L/R soak: 4 commits, live dig ok after). Tap = press+release
+      = two episodes by input-contract (button deltas always rewind).
 - [ ] `hash_confirm` invent path shows promotes in diag without opening episodes
-      when master hashes still agree
+      when master hashes still agree (stick/analog path; **not** MotK digital
+      buttons — contract always rewinds button deltas)
 - [x] Delay-sync path (`PSX_NET_MODE=delay`) unchanged for lobby rematch / save xfer
 
 Reference: `lib/recomp-net/docs/rollback.md`,

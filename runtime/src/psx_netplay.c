@@ -33,6 +33,7 @@
 #include "netplay_state_digest.h"
 #include "psx_netplay_rb.h"
 #include "cpu_state.h"
+#include "gpu.h"
 #include "interrupts.h"
 #include "psx_scheduler.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
@@ -426,6 +427,19 @@ static void np_drain_peer_frame_commits(void)
     if (!g_np.session) return;
     while (rnet_session_take_rb_frame_commit(g_np.session, &through, &hash))
         netplay_hc_note_peer(&g_np.hc, through, hash);
+    /* FIRST CORE can stick the watermark forever once that tick ages out of
+     * the 128-slot ring — heal so choose_load_tick sees a real frontier. */
+    if (netplay_hc_heal_stale_gap(&g_np.hc)) {
+        static uint32_t s_heal_log;
+        uint32_t rt = netplay_hc_resolved_through(&g_np.hc);
+        if (s_heal_log != rt) {
+            fprintf(stderr,
+                    "psxrecomp: rb hash_confirm heal stale gap → resolved=%u\n",
+                    (unsigned)rt);
+            fflush(stderr);
+            s_heal_log = rt;
+        }
+    }
     np_check_core_diverge();
 }
 
@@ -438,6 +452,12 @@ static void np_emit_frame_commit(uint32_t tick)
     uint32_t aux = 0u;
     int crumb;
     if (!g_np.cpu || !g_np.session) return;
+    /* Live depth24: skip full-RAM FRAME_COMMIT (rewind already deferred).
+     * Resim still commits every tick. Leaving FMV primes hash_confirm so the
+     * watermark is not stuck on missing movie slots. */
+    if (gpu_display_is_depth24() &&
+        !(g_np.rollback && psx_netplay_rb_is_resimulating()))
+        return;
     /* Present-edge: clear PC so parked-0 vs live-BB does not fork FRAME_COMMIT
      * while GPRs/RAM/clk match (was aborting good Replay on dig_cpu alone). */
     psx_netplay_rb_cpu_for_present_digest(&dig_cpu, g_np.cpu);
@@ -452,10 +472,12 @@ static void np_emit_frame_commit(uint32_t tick)
     np_part_ring_put(tick, &parts, av, cd, aux);
     netplay_hc_note_local(&g_np.hc, tick, parts.core);
     (void)rnet_session_send_rb_frame_commit(g_np.session, tick, parts.core);
-    /* Breadcrumbs so both peers' logs line up by sim tick. */
+    (void)netplay_hc_heal_stale_gap(&g_np.hc);
+    /* Breadcrumbs so both peers' logs line up by sim tick. Tag is local-only
+     * (not peer agreement — that is hash_confirm resolved_through). */
     if (crumb && s_live_dig_last_tick != tick) {
         s_live_dig_last_tick = tick;
-        np_log_live_digest(tick, &parts, av, cd, aux, "ok");
+        np_log_live_digest(tick, &parts, av, cd, aux, "local");
     }
     np_check_core_diverge();
 }
@@ -1301,8 +1323,7 @@ static void np_rb_bind_and_start(void)
 }
 
 /* MotK digital (active-low): wire only releases buttons vs invent; sticks equal.
- * Menu press/release thrash opened an episode every edge — soft-promote releases
- * only while cores still match (see reconcile). */
+ * Used for FMV soft-promote releases only (menu releases must rewind). */
 static int np_digital_release_only(const RNetInputContractFrame *pub,
                                    const RNetInputContractFrame *wire)
 {
@@ -1317,6 +1338,19 @@ static int np_digital_release_only(const RNetInputContractFrame *pub,
     newly_pressed = (uint16_t)((uint16_t)(~wire->buttons) & pub->buttons);
     newly_released = (uint16_t)((uint16_t)(~pub->buttons) & wire->buttons);
     return newly_pressed == 0 && newly_released != 0;
+}
+
+/* Wire has at least one newly pressed button vs published invent (active-low).
+ * FMV skip uses this — promote-without-resim left host mid-movie while peer
+ * already cut over. */
+static int np_digital_new_press(const RNetInputContractFrame *pub,
+                                const RNetInputContractFrame *wire)
+{
+    uint16_t newly_pressed;
+    if (!pub || !wire)
+        return 0;
+    newly_pressed = (uint16_t)((uint16_t)(~wire->buttons) & pub->buttons);
+    return newly_pressed != 0;
 }
 
 /* Late authoritative wire vs published predicted rows → promote or queue rewind.
@@ -1360,14 +1394,18 @@ static void np_rollback_reconcile_wire(void)
     promote_sweep = psx_netplay_rb_take_promote_sweep();
     cooldown = psx_netplay_rb_rewind_suppressed();
     fmv_defer = psx_netplay_rb_fmv_defer_rewind();
-    /* FMV: never open episodes — same promote path as cooldown. */
-    no_resim = promote_sweep || cooldown || fmv_defer;
-    if (fmv_defer)
-        no_resim_why = "fmv";
-    else if (promote_sweep)
-        no_resim_why = "sweep";
-    else if (cooldown)
-        no_resim_why = "cooldown";
+    {
+        /* Media + post-FMV lockstep (title Start): promote-only; admit waits
+         * for wire so presses never open 0x8006CDA0 / VLC tip episodes. */
+        int fmv_lock = psx_netplay_rb_lockstep_no_invent();
+        no_resim = promote_sweep || cooldown || fmv_lock;
+        if (promote_sweep)
+            no_resim_why = "sweep";
+        else if (cooldown)
+            no_resim_why = "cooldown";
+        else if (fmv_lock)
+            no_resim_why = "fmv-lockstep";
+    }
     sim = rnet_session_sim_tick(g_np.session);
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) continue;
@@ -1401,7 +1439,7 @@ static void np_rollback_reconcile_wire(void)
             pads_differ = (pub_c.buttons != wire_c.buttons) ||
                           (pub_c.stick_x != wire_c.stick_x) ||
                           (pub_c.stick_y != wire_c.stick_y);
-            /* After commit/realign/FMV: flush invent poison without another episode. */
+            /* After commit/realign: flush invent poison without another episode. */
             if (no_resim) {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
                 if (pads_differ) {
@@ -1420,11 +1458,11 @@ static void np_rollback_reconcile_wire(void)
             d = rnet_input_contract_stick_replace_decide(
                 &pub_c, &wire_c, completed, &params, &gates);
             if (rnet_input_contract_decision_is_rewind(d)) {
-                /* Soft-promote releases only when peers still agree. After a
-                 * sticky invent forked RAM, promote-without-resim left cores
-                 * desynced until the next press aborted on baseline mismatch. */
-                if (np_digital_release_only(&pub_c, &wire_c) &&
-                    !netplay_hc_peek_mismatch(&g_np.hc, NULL, NULL, NULL)) {
+                /* FMV/settle only: soft-promote releases (skip must rewind on
+                 * press). Menu soft-promote + hold-last invent forked RAM
+                 * (sticky Up skipped resim). Live invent is hold-last again —
+                 * menu releases open a real episode. */
+                if (fmv_defer && np_digital_release_only(&pub_c, &wire_c)) {
                     (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
                     if (n_soft_release == 0) {
                         first_no_resim_t = t;
@@ -1433,6 +1471,21 @@ static void np_rollback_reconcile_wire(void)
                         first_wire_btn = wire_c.buttons;
                     }
                     n_soft_release++;
+                    continue;
+                }
+                /* FMV: non-press pad noise → promote only (avoid CD thrash). */
+                if (fmv_defer && !np_digital_new_press(&pub_c, &wire_c)) {
+                    (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                    if (pads_differ) {
+                        if (n_no_resim == 0) {
+                            first_no_resim_t = t;
+                            first_no_resim_slot = slot;
+                            first_pub_btn = pub_c.buttons;
+                            first_wire_btn = wire_c.buttons;
+                            no_resim_why = "fmv-nopress";
+                        }
+                        n_no_resim++;
+                    }
                     continue;
                 }
                 if (!g_np.pending_rewind) {
@@ -1447,13 +1500,15 @@ static void np_rollback_reconcile_wire(void)
                             first_pub_btn = pub_c.buttons;
                             first_wire_btn = wire_c.buttons;
                         }
-                        /* Only park the guest when an episode actually opens. */
+                        /* Promote BEFORE begin — seal_inputs reads hist for the
+                         * local seat and publish_sio falls back to hist before
+                         * peer SEAL_ROWS land. Skipping promote left invent-idle
+                         * pads sealed/published across the skip press tick. */
+                        (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
                         if (psx_netplay_rb_begin_rewind(t, slot)) {
                             g_np.needs_advance = 0;
                             n_episode_open++;
                         } else {
-                            /* No snap / cooldown / already active — promote wire. */
-                            (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
                             n_begin_refused++;
                         }
                         g_np.pending_rewind = 0;
@@ -1526,10 +1581,9 @@ static int np_try_admit_rollback(void)
     rnet_u32 wire;
     int slot;
     int pred;
-    int lockstep;
 
     /* Tick FMV→settle tracker every admit (even when remotes are present). */
-    lockstep = psx_netplay_rb_lockstep_no_invent();
+    (void)psx_netplay_rb_lockstep_no_invent();
 
     if (!rnet_session_prepare_local_tip(g_np.session, sim))
         return 0;
@@ -1570,16 +1624,18 @@ static int np_try_admit_rollback(void)
             netplay_ih_pad_to_frame(&pad, sim, 0, &row);
             (void)netplay_ih_put(&g_np.ih, slot, &row);
         } else {
-            /* FMV + post-FMV settle: never invent — wait for wire (lockstep).
-             * Promote-only during movies left peers core-desynced at cutover. */
-            if (lockstep)
+            /* FMV media + post-FMV lockstep: wait for remote wire (skip /
+             * title Start). Invent idle opened tip episodes that hung. */
+            if (psx_netplay_rb_lockstep_no_invent())
                 return 0;
             /* Stall when invent would run more than P ahead of remote tip. */
             if (wire > st.highest_remote_wire + (rnet_u32)pred)
                 return 0;
-            /* MotK digital: invent idle, not hold-last. Hold-last sticky Up
-             * after settle forked menu RAM (soft-promote then skipped resim). */
-            (void)netplay_ih_invent_idle(&g_np.ih, slot, sim, &row);
+            /* MotK digital: hold-last. Idle invent re-mismatched every held
+             * D-pad tick after commit → episode storm / char-select freeze.
+             * Menu release soft-promote is off (see reconcile) so sticky Up
+             * cannot skip a needed resim. Seal gap-fill stays idle. */
+            (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
         }
     }
 
@@ -2678,6 +2734,8 @@ void psx_netplay_pump(void)
         drain_lobby_signals();
         rnet_session_pump(g_np.session);
         np_drain_peer_frame_commits();
+        /* Stall abort only — full rb_pump stays off mid-guest (asymmetric). */
+        psx_netplay_rb_poll_replay_stall();
         return;
     }
     np_pump_session();
@@ -2759,8 +2817,12 @@ int psx_netplay_poll_admit(void)
      * while a post-abort realign load is queued (episode already inactive). */
     if (g_np.rollback && g_np.xfer == NP_XFER_NONE &&
         (psx_netplay_rb_active() || psx_netplay_rb_load_pending())) {
-        g_np.needs_advance = 0;
-        return psx_netplay_rb_try_admit();
+        if (psx_netplay_rb_tip_holding() && !psx_netplay_rb_load_pending()) {
+            /* TipHold: Live invent continues; episode stays open for tip-extend. */
+        } else {
+            g_np.needs_advance = 0;
+            return psx_netplay_rb_try_admit();
+        }
     }
 
     /* Already published this tick and waiting for finish_frame — do not
@@ -2887,6 +2949,11 @@ void psx_netplay_finish_frame(void)
 
     if (g_np.rollback && psx_netplay_rb_is_resimulating()) {
         rnet_u32 done = rnet_session_sim_tick(g_np.session);
+        /* Present-edge only: mid-guest pump skips reconcile. Coalesce late
+         * wire into the active episode (tip-extend) before POST/Verify. */
+        rnet_session_pump(g_np.session);
+        np_rollback_reconcile_wire();
+        psx_netplay_rb_pump();
         psx_netplay_rb_finish_frame();
         /* Exchange cores during Replay so mid-resim forks abort before POST. */
         np_emit_frame_commit(done);
@@ -2903,6 +2970,10 @@ void psx_netplay_finish_frame(void)
     np_emit_frame_commit(done);
     if (g_np.rollback) {
         uint32_t resume_hint = 0;
+        /* TipHold Live: reconcile late wire so tip-extend can schedule rereplay. */
+        if (psx_netplay_rb_tip_holding())
+            np_rollback_reconcile_wire();
+        psx_netplay_rb_pump();
         psx_netplay_rb_request_snap(done);
         /* Flush at vblank: MotK IRQ fast/mid paths used to skip poll_snap, so
          * deferred BB-edge saves never ran and the ring stayed empty. Prefer

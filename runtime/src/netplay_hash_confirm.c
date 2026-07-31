@@ -112,3 +112,44 @@ uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_ou
     if (peer_out) *peer_out = pd;
     return 1u;
 }
+
+uint8_t netplay_hc_heal_stale_gap(NetplayHashConfirm* hc) {
+    uint32_t next;
+    uint32_t best = 0u;
+    uint8_t have_best = 0u;
+    uint32_t i;
+    uint32_t ld = 0, pd = 0;
+    if (!hc || !hc->resolved_valid)
+        return 0u;
+    if (hc->resolved_through == 0xffffffffu)
+        return 0u;
+    next = hc->resolved_through + 1u;
+    /* Still have both digests for next: let try_advance / peek_mismatch own it. */
+    if (local_at(hc, next, &ld) && peer_at(hc, next, &pd))
+        return 0u;
+    /* Incomplete (one side only) — wait; do not jump over a pending commit. */
+    if (local_at(hc, next, NULL) || peer_at(hc, next, NULL))
+        return 0u;
+    /* next aged out of the ring. Refuse heal if any ring slot above the
+     * watermark still records a local≠peer pair (live fork still visible). */
+    for (i = 0; i < NETPLAY_HC_RING; i++) {
+        uint32_t t;
+        if (!hc->local_valid[i] || !hc->peer_valid[i])
+            continue;
+        if (hc->local_tick[i] != hc->peer_tick[i])
+            continue;
+        t = hc->local_tick[i];
+        if (t <= hc->resolved_through)
+            continue;
+        if (hc->local_digest[i] != hc->peer_digest[i])
+            return 0u; /* known fork still in ring */
+        if (!have_best || t > best) {
+            best = t;
+            have_best = 1u;
+        }
+    }
+    if (!have_best || best <= hc->resolved_through)
+        return 0u;
+    hc->resolved_through = best;
+    return 1u;
+}

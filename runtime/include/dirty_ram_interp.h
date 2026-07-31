@@ -46,6 +46,12 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);
  * interpreter or an exception is delivered, so no register write is dropped. */
 void dirty_ram_ld_delay_flush(CPUState* cpu);
 
+/* Drop a deferred load-delay writeback WITHOUT applying it. Required on
+ * savestate/RB restore: the snap already has architectural GPRs, and a
+ * host-static pending load from the pre-load timeline must not stomp them
+ * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
+void dirty_ram_ld_delay_discard(void);
+
 /* Overlay-cache windows — the address ranges eligible for capture, offline
  * recompilation, and per-entry-validated native execution (Rule 18 code that
  * does not exist in any compile-time image):
@@ -102,6 +108,7 @@ int      dirty_ram_is_dirty(uint32_t phys);
 int      psx_kernel_bless_dispatchable(uint32_t phys);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[6]);
+void     psx_kernel_bless_resync_after_restore(void);
 
 /* Capture/candidate window membership. Kernel window and overlay region are
  * unconditional; main-EXE text [KERNEL_WINDOW_END, FLOOR) is included only
@@ -119,8 +126,10 @@ uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 uint32_t dirty_ram_get_bitmap_word_count(void);
 void     dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count);
 /* After bulk RAM restore (savestate): bump overlay page gens + lazy-miss epoch
- * so native overlays re-hash against restored bytes. */
+ * so native overlays re-hash against restored bytes; also drop sticky
+ * text_diverged/modified bitmaps (host-only — restored RAM may match ref). */
 void     overlay_watch_invalidate_after_ram_restore(void);
+void     dirty_ram_text_guard_resync_after_restore(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);

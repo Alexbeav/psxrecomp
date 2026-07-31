@@ -118,6 +118,11 @@ typedef void (*gpu_vblank_cb)(void);
 void gpu_set_vblank_callback(gpu_vblank_cb cb);
 void gpu_vblank_flush_present(void);
 void gpu_vblank_clear_deferred_present(void);
+/* Queue one deferred present (netplay RB resume when I_STAT already has
+ * VBlank — snap resync cleared the pending callback). */
+void gpu_vblank_arm_deferred_present(void);
+/* Clear flush_present reentrancy guard before longjmp (flush_resume). */
+void gpu_vblank_release_present_flush_guard(void);
 
 /* Present-time screen-colour model (see color_lut.h ScreenKind: 0=raw,
  * 1=crt, 2=composite, 3=trinitron). Config/launcher-driven; the PSX_SCREEN

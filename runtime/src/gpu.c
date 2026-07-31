@@ -2477,6 +2477,18 @@ static int s_flushing_present;
 
 void gpu_vblank_clear_deferred_present(void) {
     s_present_pending = 0;
+    /* longjmp from flush_resume abandons the flush_present stack frame —
+     * must drop the reentrancy guard or every later flush no-ops forever. */
+    s_flushing_present = 0;
+}
+
+void gpu_vblank_arm_deferred_present(void) {
+    if (s_present_pending < 8)
+        s_present_pending++;
+}
+
+void gpu_vblank_release_present_flush_guard(void) {
+    s_flushing_present = 0;
 }
 
 void gpu_vblank_flush_present(void) {
@@ -2522,6 +2534,10 @@ void gpu_vblank_tick(void) {
         return;
     {
         extern int psx_netplay_active(void);
+        /* Offline selfcheck keeps immediate present: BB-edge defer +
+         * post-IRQ flush reintroduces clk/tim/csv phase skew between warm
+         * resim peers (selfcheck soak: many FAILs with d_cyc≠0). Netplay
+         * defers — both peers share the same present contract from boot. */
         if (psx_netplay_active()) {
             /* Cap: a stuck defer must not queue unbounded presents. */
             if (s_present_pending < 8)

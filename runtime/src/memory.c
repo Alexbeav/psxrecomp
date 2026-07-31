@@ -267,6 +267,15 @@ void psx_kernel_bless_stats(uint64_t out[6]) {
     out[5] = kbless_invalidations;
 }
 
+void psx_kernel_bless_resync_after_restore(void) {
+    /* kbless_state is host-only. CLEAN/MISMATCH are sticky across guest
+     * stores only via kbless_note_write; savestate RAM memcpy never hits
+     * that path. Leaving MISMATCH blocks native forever against restored
+     * bytes that may match ROM again; leaving CLEAN skips re-verify against
+     * restored patches. Both fork RB/selfcheck peers. */
+    memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
+}
+
 static inline void dirty_ram_mark_kernel_write(uint32_t phys) {
     if (phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return;
     dirty_ram_mark_page(phys);
@@ -638,11 +647,30 @@ uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
  * bumps overlay_page_gen. Without this, ENTRY_VALID overlays keep the gen-gated
  * fast path and run native code against restored bytes they were not validated
  * for — hang / freeze after the restored frame presents. */
+void dirty_ram_text_guard_resync_after_restore(void) {
+    /* text_diverged_bitmap is sticky: once a page's entry bytes fail the
+     * reference compare, native stays blocked forever. That is correct for
+     * forward sim, but after a savestate/RB rewind the restored RAM may
+     * match the reference again — leaving the pre-load sticky bit forces
+     * dirty-interp where the peer (or the prior resim) still runs native,
+     * forking MotK selfcheck warm #2vs#3 at matched clocks (win#118 class:
+     * cold≡0, warm FAIL; post-span irq_resume also drifts). Drop both
+     * host-only text-guard bitmaps; live writes re-arm modified, and the
+     * next native_ok compare re-decides diverge against restored bytes. */
+    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));
+    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));
+    g_text_diverged_pages = 0;
+}
+
 void overlay_watch_invalidate_after_ram_restore(void) {
     for (uint32_t pg = 0; pg < DIRTY_RAM_PAGE_COUNT; pg++)
         overlay_page_gen[pg]++;
     extern void overlay_loader_note_code_write(void);
+    extern void overlay_loader_resync_validation_after_restore(void);
     overlay_loader_note_code_write();
+    dirty_ram_text_guard_resync_after_restore();
+    psx_kernel_bless_resync_after_restore();
+    overlay_loader_resync_validation_after_restore();
 }
 
 static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
