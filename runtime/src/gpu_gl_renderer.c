@@ -619,11 +619,6 @@ static int s_last_dx, s_last_dy, s_last_dw, s_last_dh;
  * (and FPS) keep advancing — especially on a 2nd+ load of the same slot. */
 static int s_force_present_remaining = 0;
 
-/* Post-load freeze probe (main.cpp): accumulate skip/swap/dirty marks. */
-static uint64_t s_probe_skip = 0;
-static uint64_t s_probe_swap = 0;
-static uint64_t s_probe_dirty_marks = 0;
-
 static void present_dirty_rect(int x0, int y0, int x1, int y1, int set) {
     if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
     if (x1 >= VRAM_W) x1 = VRAM_W - 1; if (y1 >= VRAM_H) y1 = VRAM_H - 1;
@@ -633,7 +628,6 @@ static void present_dirty_rect(int x0, int y0, int x1, int y1, int set) {
     for (int ty = y0 / PRES_TILE; ty <= y1 / PRES_TILE; ty++) {
         if (set) s_present_dirty[ty] |= mask; else s_present_dirty[ty] &= ~mask;
     }
-    if (set) s_probe_dirty_marks++;
 }
 
 static int present_dirty_test(int x0, int y0, int x1, int y1) {
@@ -2139,28 +2133,6 @@ static int depth24_is_fb_transfer(int w, int h) {
     return 0;
 }
 
-/* Remember only the depth24 scanout band for clear-on-leave. Used after a
- * full-VRAM savestate restage so texture pages stay in the FBO while the
- * RGB888 movie band is still wiped when GP1 leaves 24-bit (avoids MotK
- * rainbow/static from treating packed RGB as 1555). */
-static void depth24_mark_scanout_band(void) {
-    GpuDisplayInfo di;
-    int fb_w, fb_h, x0, y0, x1, y1;
-    if (!gpu_display_is_depth24()) return;
-    gpu_get_display_info(&di);
-    fb_w = (int)((di.width * 3u + 1u) / 2u);
-    fb_h = (int)di.height;
-    if (fb_w < 8) fb_w = 8;
-    if (fb_h < 1) fb_h = 1;
-    x0 = (int)(di.display_x & 1023u);
-    y0 = (int)(di.display_y & 511u);
-    x1 = x0 + fb_w - 1;
-    y1 = y0 + fb_h - 1;
-    if (x1 > VRAM_W - 1) x1 = VRAM_W - 1;
-    if (y1 > VRAM_H - 1) y1 = VRAM_H - 1;
-    rect_add(&s_d24_skip_fb, x0, y0, x1, y1);
-}
-
 static void depth24_clear_skipped_fb(void) {
     if (!s_raster_ok || !s_d24_skip_fb.set) return;
     flush_flat_batch();
@@ -2216,16 +2188,6 @@ static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     sw_vram_transfer_in(x,y,w,h,d);
     depth24_upload_policy();
     if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
-        /* Full-VRAM restore (boot_state): must stage into the FBO or every
-         * texture page outside the movie band is missing after FMV→menus.
-         * Only the scanout band is remembered for clear-on-leave. */
-        if (w >= VRAM_W && h >= VRAM_H) {
-            up_add_transfer(x, y, w, h);
-            rect_clear(&s_d24_skip_fb);
-            depth24_mark_scanout_band();
-            coh_record(GL_COH_UPLOAD, x, y, x + w - 1, y + h - 1);
-            return;
-        }
         int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
         rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
         coh_record(GL_COH_UPLOAD, x, y, x+w-1, y+h-1);
@@ -2634,16 +2596,10 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     upload_present_tex(pixels, src_w, src_h, linear);
     p_glUseProgram(s_present_prog); p_glUniform1i(s_present_uTex, 0);
     if (crop) {
-        /* Cropped present keeps left-aligned content; still inset so linear
-         * AA does not blend the cut column with undefined border texels. */
-        float u0 = (src_w > 0) ? (0.5f / (float)src_w) : 0.f;
-        float v0 = (src_h > 0) ? (0.5f / (float)src_h) : 0.f;
-        p_glUniform4f(s_present_uUvRect, u0, v0, uv_x1 - u0, 1.f - v0);
-    } else if (src_w > 0 && src_h > 0) {
-        /* Half-texel UV inset for both nearest and linear. Corner-mapped
-         * UV=1.0 grazes past the last texel (driver-dependent border sample);
-         * with GL_LINEAR that also blends an edge stripe into the image.
-         * Matches present_target_quad / MotK present UV edge-bleed fix. */
+        p_glUniform4f(s_present_uUvRect, 0.f, 0.f, uv_x1, 1.f);
+    } else if (!linear && src_w > 0 && src_h > 0) {
+        /* Nearest: half-texel UV inset so UV=1.0 never grazes past the last
+         * column into undefined border samples on some drivers. */
         float u0 = 0.5f / (float)src_w, v0 = 0.5f / (float)src_h;
         p_glUniform4f(s_present_uUvRect, u0, v0, 1.f - u0, 1.f - v0);
     } else {
@@ -2655,7 +2611,6 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
-    s_probe_swap++;
     present_force_consumed();
     s_last_present_path = GL_PRES_CPU;
 }
@@ -2670,7 +2625,6 @@ void gl_renderer_present_blank(void) {
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
-    s_probe_swap++;
     present_force_consumed();
     s_last_present_path = GL_PRES_BLANK;
 }
@@ -2686,45 +2640,6 @@ void gl_renderer_invalidate_present(void) {
     s_last_present_path = -1;
     s_force_present_remaining = 8;
     interp_reset_history();
-}
-
-void gl_renderer_restage_vram_after_savestate(void) {
-    if (!s_raster_ok || !s_vram) return;
-    /* Belt-and-suspenders after boot_state VRAM apply: force CPU mirror → FBO
-     * even if a depth24 skip swallowed the restore, then re-arm scanout-band
-     * clear so leaving FMV does not keep RGB888-as-1555 junk. */
-    s_up_nrects = 0;
-    rect_clear(&s_d24_skip_fb);
-    s_depth24_skip_up = 0;
-    up_add_transfer(0, 0, VRAM_W, VRAM_H);
-    flush_cpu_upload();
-    if (gpu_display_is_depth24()) {
-        s_depth24_skip_up = 1;
-        depth24_mark_scanout_band();
-    }
-}
-
-void gl_renderer_present_probe_reset(void) {
-    s_probe_skip = 0;
-    s_probe_swap = 0;
-    s_probe_dirty_marks = 0;
-}
-
-void gl_renderer_present_probe_take(uint64_t *skip_delta, uint64_t *swap_delta,
-                                    uint64_t *dirty_mark_delta,
-                                    int *force_remaining) {
-    if (skip_delta) { *skip_delta = s_probe_skip; s_probe_skip = 0; }
-    if (swap_delta) { *swap_delta = s_probe_swap; s_probe_swap = 0; }
-    if (dirty_mark_delta) {
-        *dirty_mark_delta = s_probe_dirty_marks;
-        s_probe_dirty_marks = 0;
-    }
-    if (force_remaining) *force_remaining = s_force_present_remaining;
-}
-
-int gl_renderer_present_rect_dirty(int disp_x, int disp_y, int w, int h) {
-    if (!s_raster_ok || w <= 0 || h <= 0) return 0;
-    return present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1);
 }
 
 void gl_renderer_flush_cpu_uploads(void) {
@@ -3639,7 +3554,6 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == w && s_last_dh == h &&
         !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1)) {
-        s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(0);
         return;
@@ -3677,7 +3591,6 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
-    s_probe_swap++;
     gl_perf_present_exit(0);
     present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
     present_force_consumed();
@@ -3741,7 +3654,6 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == g_wide_w && s_last_dh == disp_h &&
         !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1)) {
-        s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(1);
         return 1;
@@ -3775,7 +3687,6 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
-    s_probe_swap++;
     gl_perf_present_exit(1);
     present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
     present_force_consumed();

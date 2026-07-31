@@ -617,21 +617,6 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
         }
-        if (ct.contains("multitap_port")) {
-            const auto n = toml::find<int64_t>(ct, "multitap_port");
-            if (n != 1 && n != 2)
-                throw std::runtime_error(fmt::format(
-                    "[controller] multitap_port must be 1 or 2, got {}", n));
-            rt.multitap_port = static_cast<int>(n);
-            rt.has_multitap_port = true;
-        }
-        // LEGACY per-game pad-config opt-in (default modern). Tomba sets this so
-        // its launcher Hybrid mode's analog<->digital type flip doesn't make libpad
-        // manufacture a disconnect; no other title is affected. Full history and
-        // the removal plan live in psxrecomp runtime/src/sio.c (g_pad_legacy_cfg).
-        if (ct.contains("legacy_pad_config")) {
-            rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
-        }
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
             if (n < 0 || n > 32767)
@@ -2092,56 +2077,39 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("controller")) {
         const toml::value& ct = toml::find(doc, "controller");
-        static const char* kDevKeys[] = {
-            "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
-        static const char* kModeKeys[] = {
-            "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
-        static const char* kDzKeys[] = {
-            "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
-            "p5_deadzone"};
-        static const char* kAnalogKeys[] = {
-            "p1_analog", "p2_analog", "p3_analog", "p4_analog", "p5_analog"};
-        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-            if (ct.contains(kDevKeys[i])) try_get([&]{
-                const auto v = toml::find<std::string>(ct, kDevKeys[i]);
-                if (!v.empty()) {
-                    s.p_device[i] = v;
-                    s.has_p_device[i] = true;
-                }
-            });
-            // Legacy boolean form first (true->analog, false->digital); the
-            // string `*_mode` keys override when present.
-            if (ct.contains(kAnalogKeys[i])) try_get([&]{
-                s.p_mode[i] = toml::find<bool>(ct, kAnalogKeys[i])
-                                  ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-                s.has_p_mode[i] = true;
-            });
-            if (ct.contains(kModeKeys[i])) try_get([&]{
-                s.p_mode[i] = pad_mode_from_string(
-                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_HYBRID);
-                s.has_p_mode[i] = true;
-            });
-            if (ct.contains(kDzKeys[i])) try_get([&]{
-                const auto n = toml::find<int64_t>(ct, kDzKeys[i]);
-                if (n >= 0 && n <= 32767) {
-                    s.p_deadzone[i] = (int)n;
-                    s.has_p_deadzone[i] = true;
-                }
-            });
-        }
+        if (ct.contains("p1_device")) try_get([&]{
+            const auto v = toml::find<std::string>(ct, "p1_device");
+            if (!v.empty()) { s.p1_device = v; s.has_p1_device = true; }
+        });
+        if (ct.contains("p2_device")) try_get([&]{
+            const auto v = toml::find<std::string>(ct, "p2_device");
+            if (!v.empty()) { s.p2_device = v; s.has_p2_device = true; }
+        });
+        // Legacy boolean form first (true->analog, false->digital); the new
+        // string `*_mode` keys override when present.
+        if (ct.contains("p1_analog")) try_get([&]{
+            s.p1_mode = toml::find<bool>(ct, "p1_analog")
+                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+            s.has_p1_mode = true;
+        });
+        if (ct.contains("p2_analog")) try_get([&]{
+            s.p2_mode = toml::find<bool>(ct, "p2_analog")
+                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+            s.has_p2_mode = true;
+        });
+        if (ct.contains("p1_mode")) try_get([&]{
+            s.p1_mode = pad_mode_from_string(
+                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
+            s.has_p1_mode = true;
+        });
+        if (ct.contains("p2_mode")) try_get([&]{
+            s.p2_mode = pad_mode_from_string(
+                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
+            s.has_p2_mode = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
-            if (n >= 0 && n <= 32767) {
-                s.deadzone = (int)n;
-                s.has_deadzone = true;
-                /* Legacy global: fill any slot that was not given pN_deadzone. */
-                for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-                    if (!s.has_p_deadzone[i]) {
-                        s.p_deadzone[i] = s.deadzone;
-                        s.has_p_deadzone[i] = true;
-                    }
-                }
-            }
+            if (n >= 0 && n <= 32767) { s.deadzone = (int)n; s.has_deadzone = true; }
         });
     }
     return s;
@@ -2237,36 +2205,19 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "enable2 = " << (s.memcard2_enabled ? "true" : "false") << "\n";
     }
 
-    {
-        bool any_ctrl = s.has_deadzone;
-        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-            if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
-                any_ctrl = true;
-        }
-        if (any_ctrl) {
-            static const char* kDevKeys[] = {
-                "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
-            static const char* kModeKeys[] = {
-                "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
-            static const char* kDzKeys[] = {
-                "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
-                "p5_deadzone"};
-            f << "\n[controller]\n";
-            for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-                if (s.has_p_device[i])
-                    f << kDevKeys[i] << " = \"" << s.p_device[i] << "\"\n";
-                if (s.has_p_mode[i])
-                    f << kModeKeys[i] << "   = \""
-                      << pad_mode_to_string(s.p_mode[i]) << "\"\n";
-                if (s.has_p_deadzone[i])
-                    f << kDzKeys[i] << " = " << s.p_deadzone[i] << "\n";
-            }
-            /* Keep a global deadzone= for older readers (mirrors P1). */
-            if (s.has_deadzone || s.has_p_deadzone[0])
-                f << "deadzone  = "
-                  << (s.has_p_deadzone[0] ? s.p_deadzone[0] : s.deadzone)
-                  << "\n";
-        }
+    if (s.has_p1_device || s.has_p2_device || s.has_p1_mode || s.has_p2_mode ||
+        s.has_deadzone) {
+        f << "\n[controller]\n";
+        if (s.has_p1_device)
+            f << "p1_device = \"" << s.p1_device << "\"\n";
+        if (s.has_p1_mode)
+            f << "p1_mode   = \"" << pad_mode_to_string(s.p1_mode) << "\"\n";
+        if (s.has_p2_device)
+            f << "p2_device = \"" << s.p2_device << "\"\n";
+        if (s.has_p2_mode)
+            f << "p2_mode   = \"" << pad_mode_to_string(s.p2_mode) << "\"\n";
+        if (s.has_deadzone)
+            f << "deadzone  = " << s.deadzone << "\n";
     }
 
     if (s.has_language) {

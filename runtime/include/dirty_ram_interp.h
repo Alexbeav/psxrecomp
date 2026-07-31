@@ -117,20 +117,10 @@ static inline int overlay_cache_window_contains(uint32_t phys) {
 uint32_t dirty_ram_get_bitmap(void);
 uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 uint32_t dirty_ram_get_bitmap_word_count(void);
-void     dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count);
-/* After bulk RAM restore (savestate): bump overlay page gens + lazy-miss epoch
- * so native overlays re-hash against restored bytes. */
-void     overlay_watch_invalidate_after_ram_restore(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);
 int      dirty_ram_text_native_ok(uint32_t phys);
-/* Exact CFG ranges; exec_pc clips ranges that end before the resume PC. */
-int      dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
-                                             uint32_t count,
-                                             uint32_t exec_pc);
-int      dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
-                                        uint32_t count);
 int      dirty_ram_text_image_registered(void);
 /* Bless an intentional runtime data patch (e.g. text_xlate string/glyph tables)
  * into the text reference image so it is not mistaken for self-modifying code. */

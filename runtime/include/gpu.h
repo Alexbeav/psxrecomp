@@ -47,18 +47,14 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
- * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
- * else the covered RGB width. Present black-fills [limit, crtc_w) without
- * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
+ * Returns crtc_w when unknown / full coverage. Present uses this to blank a
+ * trailing margin without shrinking the CRTC-derived width globally. */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
 /* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip
  * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
  * per vblank; returns non-zero while the hold is still active after tick. */
 int      gpu_depth24_present_hold_tick(void);
-/* After savestate restore: clear ephemeral hold so the restored depth24
- * frame can present immediately (span/prev_h come from the GPU snap). */
-void     gpu_depth24_on_savestate_loaded(void);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);

@@ -1,7 +1,6 @@
 #ifndef PSX_BOOT_STATE_H
 #define PSX_BOOT_STATE_H
 
-#include <stddef.h>
 #include <stdint.h>
 #include "cpu_state.h"
 
@@ -37,13 +36,8 @@ extern "C" {
 
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
- * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
- * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed). */
-#define BOOT_STATE_VERSION 4u
-/* Older readers reject v4; load still accepts v3 uncompressed blobs. */
-#define BOOT_STATE_VERSION_MIN_READ 3u
-/* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
-#define BOOT_STATE_SEC_ZLIB 1u
+ * v3 = little-endian field wire (portable Win/Linux/macOS ARM). */
+#define BOOT_STATE_VERSION 3u
 
 /*
  * On-disk header (v3): nine little-endian uint32 fields at offset 0 (36 bytes),
@@ -67,12 +61,11 @@ typedef struct {
 #define BOOT_STATE_HEADER_WIRE_BYTES 36u
 
 /*
- * Section stream (v3/v4): section_count records, each laid out as
+ * Section stream (v3): section_count records, each laid out as
  *     uint32_t tag;        LE (one of BS_SEC_*)
- *     uint32_t pad;        LE flags (v3: 0; v4: BOOT_STATE_SEC_ZLIB optional)
+ *     uint32_t pad;        LE 0
  *     uint64_t len;        LE payload byte count
  *     uint8_t  payload[len];   (module payloads are LE field wires too)
- * When BOOT_STATE_SEC_ZLIB is set, payload = u32 LE raw_len + zlib(raw).
  * An unknown tag, a length mismatch, or a missing required section on load is a
  * hard reject (incomplete restore is never allowed) -> normal boot + recapture.
  */
@@ -91,7 +84,6 @@ enum {
     BS_SEC_DMA    = 0x0C,  /* DMA channels[7] + dpcr/dicr + async-transfer state  */
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
-    BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */
@@ -102,17 +94,6 @@ int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
  * or incompleteness returns 0 (caller then boots normally and recaptures). */
 int  boot_state_load(const char* path, uint32_t bios_checksum,
                      uint32_t entry_pc, CPUState* cpu);
-
-/* Same as boot_state_load, but from an already-buffered .pst image (netplay). */
-int  boot_state_load_buffer(const uint8_t* file, size_t file_len,
-                            uint32_t bios_checksum, uint32_t entry_pc,
-                            CPUState* cpu);
-
-/* Header-only integrity check (no section inflate/apply). Returns 1 if this
- * build can load the image; 0 and fills reason (when non-NULL) on reject. */
-int  boot_state_check_buffer(const uint8_t* file, size_t file_len,
-                             uint32_t bios_checksum, uint32_t entry_pc,
-                             char* reason, size_t reason_cap);
 
 /* Register a deferred capture: when boot_state_trigger_capture() fires (from
  * fntrace at game-start), serialize to path. One-shot. */
