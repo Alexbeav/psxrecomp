@@ -638,7 +638,11 @@ void interrupts_resync_after_restore(void) {
      * delivery — including VBlank — until the restored clock catches up,
      * freezing the picture for those N seconds while host FPS stays at 60. */
     post_exception_cooldown_until = 0;
-    cycles_since_vblank = 0;
+    /* Do NOT zero cycles_since_vblank: boot_state restores it from the snap
+     * (BS_SEC_IRQ +4). Zeroing rebased every warm tip to phase 0 while timers /
+     * LCF stayed at the snap's mid-frame phase — MotK wait-loop resim then
+     * delivered VBlank on opposite CD54↔CDA0 edges (cyc±3 / core fork). Legacy
+     * 8-byte IRQ sections still set csv=0 in boot_state_load. */
     dispatch_count = 0;
     in_exception = 0;
     exception_nest_depth = 0;
@@ -848,18 +852,43 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 
 void psx_check_interrupts(CPUState* cpu) {
     psx_cyc_batch_flush();
+    /* Publish this edge's resume PC BEFORE deferred present flush. The MotK
+     * CDA0 gate reads s_last_interrupt_check_pc; leaving it at the previous
+     * BB (CD54) made every CDA0 entry flush look like CD54 and no-op. Present
+     * then only drained on post-IRQ at a CDA0 delivery — if the first post-arm
+     * VBlank was taken at CD54, peers waited a full extra VB (soak ep9: arm+2
+     * vs arm+1). */
+    {
+        uint32_t edge_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
+                                                  : s_compiled_interrupt_resume_pc;
+        if (edge_pc != 0u)
+            s_last_interrupt_check_pc = edge_pc;
+    }
     /* Netplay: deferred sdl_vblank_present at BB edge (not mid-block
-     * fire_vblank_edge). When an IRQ is also deliverable, flush AFTER
-     * delivery so finish_frame digests post-RFE GPRs at the interrupted
-     * EPC — MotK menu CD54↔CDA0 was presenting pre-IRQ on opposite edges.
-     * Selfcheck stays on immediate present (see gpu.c). */
+     * fire_vblank_edge). Prefer flush AFTER delivery so finish_frame digests
+     * post-RFE GPRs — but also attempt flush at entry when delivery is due.
+     * MotK's CDA0 gate no-ops the entry attempt on CD54; without it, sticky
+     * I_STAT kept skipping entry flush while post-IRQ also skipped on CD54,
+     * stacking multiple VBlanks into one drain (double finish_frame @ same
+     * guest cyc → clk/tim ±9 on the next IRQ). Post-IRQ retry still runs.
+     * Selfcheck stays on immediate present (see gpu.c).
+     *
+     * Never flush while in_exception: handler BB edges see IEc clear so
+     * delivery_needed is false and the old else-branch called finish_frame
+     * mid-BIOS-handler. Soak: irqctx left restored=0/reason=0, peers forked
+     * dig_cpu at v0=1 vs countdown (cyc±14) on sealed Cross resim. Outer
+     * delivery keeps np_present_after_irq and flushes on its RETURN. */
     extern int g_ls_suppress_record;
     extern int psx_netplay_active(void);
     int np_present_after_irq = 0;
-    if (psx_netplay_active() && psx_interrupt_delivery_needed(cpu))
+    if (in_exception) {
+        np_present_after_irq = 0;
+    } else if (psx_netplay_active() && psx_interrupt_delivery_needed(cpu)) {
+        gpu_vblank_flush_present(); /* CDA0 only; CD54 no-ops inside gate */
         np_present_after_irq = 1;
-    else
+    } else {
         gpu_vblank_flush_present();
+    }
 #define PSX_CHECK_INTERRUPTS_RETURN() do { \
         if (np_present_after_irq) gpu_vblank_flush_present(); \
         if (g_ls_suppress_record > 0) g_ls_suppress_record--; \
@@ -870,6 +899,25 @@ void psx_check_interrupts(CPUState* cpu) {
 #define COSIM_IRQ_TAKE_PC() (g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc : s_compiled_interrupt_resume_pc)
 #define COSIM_IRQ_NOTE(kind_) cosim_irq_note(cpu, (kind_), COSIM_IRQ_TAKE_PC(), g_dirty_safe_resume_pc, s_compiled_interrupt_resume_pc, cpu->cop0[COP0_SR])
 #endif
+
+    /* MotK wait CD54 + VBlank-only I_STAT: never deliver at the CD54 edge in
+     * netplay — hold until CDA0. Delivering at CD54 leaves v0=slt(1) while a
+     * peer that hit CDA0 first delivers with countdown in v0 (soak: non-det
+     * fin@946/@902 CD54 vs CDA0, cyc ±1 VB, on identical baseline+pads).
+     * UNCONDITIONAL on the edge PC — the earlier gate also required
+     * gpu_vblank_present_pending(), but s_present_pending is host-only state
+     * (not in the snap), so replay delivery timing forked across peers.
+     * Edge PC + I_STAT are guest-deterministic; the wait ping-pong reaches
+     * CDA0 a few instructions later, so no starvation. */
+    if (!in_exception && psx_netplay_active()) {
+        const uint32_t wait_a = 0x8006CD54u;
+        uint32_t edge = s_last_interrupt_check_pc;
+        uint32_t pend = i_stat & i_mask;
+        if (edge == wait_a && pend != 0u &&
+            (pend & ~(1u << IRQ_VBLANK)) == 0u) {
+            PSX_CHECK_INTERRUPTS_RETURN();
+        }
+    }
 
     s_irq_path_entry++;
 

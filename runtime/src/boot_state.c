@@ -3,7 +3,9 @@
 #include "dirty_ram_interp.h"
 #include "gpu_render.h"    /* gr_vram_transfer_in / gr_vram_transfer_out          */
 #include "cpu_state.h"     /* gte_canonicalize_cpu_state after CPU wire restore   */
+#include "interrupts.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"    /* g_psx_icache_tv — fetch-cost tags in BS_SEC_ICACHE */
 #include "pst_wire.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -237,7 +239,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 15;
+    h.section_count = 16;
 
     ok = write_header_le(o, &h);
 
@@ -245,11 +247,15 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     if (ok) ok = write_section(o, BS_SEC_RAM,  memory_get_ram_ptr(),        RAM_SIZE);
     if (ok) ok = write_section(o, BS_SEC_SPAD, memory_get_scratchpad_ptr(), SPAD_SIZE);
     if (ok) {
-        uint8_t irq[8];
+        /* 12B: i_stat, i_mask, cycles_since_vblank. Zeroing csv on warm load
+         * rebased every tip to phase 0 and forked MotK wait-loop resim
+         * (IRQ at CD54 vs CDA0). Selfcheck already restored csv out-of-band. */
+        uint8_t irq[12];
         PstW w;
         pst_w_init(&w, irq, sizeof irq);
         ok = pst_w_u32(&w, i_stat) && pst_w_u32(&w, i_mask) &&
-             write_section(o, BS_SEC_IRQ, irq, 8);
+             pst_w_u32(&w, interrupts_get_cycles_since_vblank()) &&
+             write_section(o, BS_SEC_IRQ, irq, 12);
     }
     if (ok) ok = write_timer_section(o);
     if (ok) {
@@ -294,6 +300,18 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     if (ok) ok = write_module_section(o, BS_SEC_DMA,   dma_snapshot_bytes,   dma_snapshot_write);
     if (ok) ok = write_module_section(o, BS_SEC_SIO,   sio_snapshot_bytes,   sio_snapshot_write);
     if (ok) ok = write_module_section(o, BS_SEC_MDEC,  mdec_snapshot_bytes,  mdec_snapshot_write);
+    if (ok) {
+        /* I-cache tags: warm loads must replay with the fetch-cost state the
+         * live timeline had, or miss cycles differ per peer/retry and IRQ
+         * delivery forks a few wait-loop iterations (MotK abort@940). */
+        uint8_t ib[1024u * 4u];
+        PstW w;
+        pst_w_init(&w, ib, sizeof ib);
+        ok = 1;
+        for (uint32_t i = 0; ok && i < 1024u; i++)
+            ok = pst_w_u32(&w, g_psx_icache_tv[i]);
+        if (ok) ok = write_section(o, BS_SEC_ICACHE, ib, sizeof ib);
+    }
     if (ok) {
         uint32_t wc = dirty_ram_get_bitmap_word_count();
         uint64_t nbytes = (uint64_t)wc * 4u;
@@ -403,12 +421,19 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return 1;
     case BS_SEC_IRQ: {
         PstR r;
-        uint32_t st, mk;
-        if (len != 8) return 0;
+        uint32_t st, mk, csv;
+        if (len != 8 && len != 12) return 0;
         pst_r_init(&r, p, len);
         if (!pst_r_u32(&r, &st) || !pst_r_u32(&r, &mk)) return 0;
         i_stat = st;
         i_mask = mk;
+        if (len == 12) {
+            if (!pst_r_u32(&r, &csv)) return 0;
+            interrupts_set_cycles_since_vblank(csv);
+        } else {
+            /* Legacy UI/disk snaps: no phase — rebase like pre-csv saves. */
+            interrupts_set_cycles_since_vblank(0);
+        }
         return 1;
     }
     case BS_SEC_TIMER: {
@@ -496,6 +521,14 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         }
         dirty_ram_set_bitmap_words(words, wc);
         free(words);
+        return 1;
+    }
+    case BS_SEC_ICACHE: {
+        PstR r;
+        if (len != 1024u * 4u) return 0;
+        pst_r_init(&r, p, len);
+        for (uint32_t i = 0; i < 1024u; i++)
+            if (!pst_r_u32(&r, &g_psx_icache_tv[i])) return 0;
         return 1;
     }
     default:

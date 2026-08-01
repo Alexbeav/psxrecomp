@@ -57,6 +57,14 @@ void debug_force_cd_reinsert(void);
  * frontend via uncapped pacing (it does NOT alter CD timing — flooding XA
  * sectors desyncs and hangs the player). */
 int  cdrom_xa_stream_active(void);
+/* True while a CD read is armed with XA/FMV mode bits (or XA already
+ * streaming). Netplay uses this to arm no-invent / refuse tip episodes
+ * before the first MDEC colour decode — MotK intro invent≠Start at FMV
+ * entry opened a tip episode into a matched black wait. */
+int  cdrom_fmv_stream_pending(void);
+/* Re-arm host absolute CD deadlines from restored relative delays after
+ * boot_state / RB snap load. Does NOT clamp delays (unlike accelerate). */
+void cdrom_resync_deadlines_after_restore(void);
 
 /* CD load-burst ring (always-on). One record per gap-separated run of
  * delivered data sectors. `out` receives up to `max` records, newest first

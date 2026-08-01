@@ -3,7 +3,9 @@
 #include "crc32.h"
 #include "dirty_ram_interp.h"
 #include "gpu.h"
+#include "interrupts.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -134,9 +136,17 @@ void netplay_core_digest_parts(const CPUState* cpu, NetplayCoreParts* out)
 
     {
         uint64_t cyc = psx_cycle_count;
+        uint32_t csv = interrupts_get_cycles_since_vblank();
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&cyc, sizeof(cyc));
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_stat, sizeof(i_stat));
         crc_clk = crc32_update(crc_clk, (const uint8_t*)&i_mask, sizeof(i_mask));
+        /* VBlank phase was invisible to FRAME_COMMIT — peers could agree on
+         * core while holding different csv, then resim from zeroed phase. */
+        crc_clk = crc32_update(crc_clk, (const uint8_t*)&csv, sizeof(csv));
+        /* I-cache tags travel in BS_SEC_ICACHE; fold them so cache asymmetry
+         * (fetch-cost fork) surfaces at compare time, not as a resim abort. */
+        crc_clk = crc32_update(crc_clk, (const uint8_t*)g_psx_icache_tv,
+                               sizeof(g_psx_icache_tv));
     }
 
     timers_get_snapshot(counter, mode, target, irq_line, frac);

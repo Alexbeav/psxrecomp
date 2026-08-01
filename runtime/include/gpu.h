@@ -46,6 +46,11 @@ int  gpu_display_is_depth24(void);
 void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y);
+/* Batch equivalent of calling gpu_display_pixel_argb(di, x, y) for x in
+ * [0, count) on a depth24 (FMV) scanline — same output, far less per-pixel
+ * overhead. `out` must hold at least `count` uint32_t ARGB entries. */
+void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
+                             uint32_t count);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
  * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
  * else the covered RGB width. Present black-fills [limit, crtc_w) without
@@ -121,6 +126,8 @@ void gpu_vblank_clear_deferred_present(void);
 /* Queue one deferred present (netplay RB resume when I_STAT already has
  * VBlank — snap resync cleared the pending callback). */
 void gpu_vblank_arm_deferred_present(void);
+/* 1 while a netplay deferred present is armed (MotK CD54 VBlank hold). */
+int  gpu_vblank_present_pending(void);
 /* Clear flush_present reentrancy guard before longjmp (flush_resume). */
 void gpu_vblank_release_present_flush_guard(void);
 

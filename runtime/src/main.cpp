@@ -459,6 +459,9 @@ static void present_session_reset(void) {
     s_d24_prev_mdec = 0;
     s_d24_saw_gap = 0;
     s_d24_cutover_blank = 0;
+    /* Soft-exit can leave deferred present / flush reentrancy armed; gpu_init
+     * does not clear them. Rematch then no-ops every flush → black window. */
+    gpu_vblank_clear_deferred_present();
     smooth_60_reset();
 }
 
@@ -859,14 +862,22 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     post_load_probe_arm();
 }
 
-/* Rollback snap apply / realign — keep depth24 hold clear + restage, but do
- * NOT run the full savestate present thrash (force_present, cutover gap reset,
- * post_load_probe). That path is for one-shot disk loads; episode loads during
- * MotK FMV were scrambling the movie. */
+/* Rollback snap apply / realign — keep depth24 hold clear + restage. Full
+ * savestate present thrash (post_load_probe) stays disk-only. When the tip
+ * is already in FMV/media, mirror the disk cutover reset so resume into
+ * FMV entry does not treat the tip as a fresh gap (permanent black blank). */
 extern "C" void psx_frontend_on_rb_snap_loaded(void) {
+    const int media = gpu_display_is_depth24() || mdec_recently_active(8) ||
+                      cdrom_fmv_stream_pending() || cdrom_xa_stream_active();
     g_audio_cycle_resync = 1;
     gpu_depth24_on_savestate_loaded();
     s_d24_cutover_blank = 0;
+    if (media) {
+        s_d24_saw_gap = 0;
+        s_d24_prev_mdec = (gpu_display_is_depth24() || mdec_recently_active(8)) ? 1 : 0;
+        s_disabled_frame_presented = false;
+        s_force_present_after_load = true;
+    }
     gl_renderer_restage_vram_after_savestate();
     vk_renderer_restage_vram_after_savestate();
 }
@@ -1164,11 +1175,13 @@ static int ensure_sw_sdl_present(void) {
  * mirror via readback — host-GPU nondeterministic; forks peer snaps (core
  * matched, VRAM zlib ~220KB apart) then mid-resim cores. SW is guest authority. */
 extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
-    if (s_netplay_sw_gpu_locked)
-        return;
-    s_netplay_sw_gpu_locked = 1;
 #ifndef PSX_SDL_NO_RENDER
-    const int had_hw = g_gl_active || g_vk_active;
+    /* Retry ensure even if a prior attempt locked after GL teardown with a
+     * null SDL_Renderer (rematch empty window). */
+    if (s_netplay_sw_gpu_locked && sdl_renderer && sdl_texture && sdl_pixel_buf)
+        return;
+#endif
+#ifndef PSX_SDL_NO_RENDER
     if (g_gl_active) {
         gl_renderer_sync_cpu();
         gl_renderer_shutdown();
@@ -1184,14 +1197,17 @@ extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
     gr_set_backend(GR_BACKEND_SOFTWARE);
     g_video_renderer = 0;
 #ifndef PSX_SDL_NO_RENDER
-    /* Late switch (window already OPENGL/VULKAN): build SDL present path. */
-    if (had_hw || !sdl_renderer) {
-        if (ensure_sw_sdl_present() != 0) {
-            std::fprintf(stderr,
-                         "psxrecomp: netplay SW GPU forced but present path failed "
-                         "(expect black frame)\n");
-        }
+    if (ensure_sw_sdl_present() != 0) {
+        s_netplay_sw_gpu_locked = 0;
+        std::fprintf(stderr,
+                     "psxrecomp: netplay SW GPU forced but present path failed "
+                     "(expect black/empty window — will retry)\n");
+        fflush(stderr);
+        return;
     }
+    s_netplay_sw_gpu_locked = 1;
+#else
+    s_netplay_sw_gpu_locked = 1;
 #endif
     latency_ring_set_backend("software");
     fprintf(stderr,
@@ -3950,11 +3966,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     (double)s_np_admit_ticks * invf / (double)s_np_timing_frames;
                 const double guest_ms =
                     (double)s_np_guest_ticks * invf / (double)s_np_timing_frames;
+                /* Fraction of this window's ticks spent resimulating (Replay)
+                 * vs running forward normally (Live). Lets a soak confirm
+                 * "the game was chain-episoding almost the whole time" (near
+                 * 100%) instead of inferring it from raw episode density in
+                 * the log — see docs/ROLLBACK_MOTK_HOOKUP.md 2026-08-01. */
+                const uint64_t replay_ticks = psx_netplay_rb_take_replay_ticks();
+                const double replay_pct =
+                    100.0 * (double)replay_ticks / (double)s_np_timing_frames;
                 std::fprintf(stderr,
                     "[FPS] game: %.1f fps (%.2fx) | frames: %llu | "
-                    "guest=%.2f ms/f admit=%.2f ms/f (n=%llu)\n",
+                    "guest=%.2f ms/f admit=%.2f ms/f replay=%.0f%% (n=%llu)\n",
                     fps, speed, (unsigned long long)s_frame_count,
-                    guest_ms, admit_ms, (unsigned long long)s_np_timing_frames);
+                    guest_ms, admit_ms, replay_pct,
+                    (unsigned long long)s_np_timing_frames);
                 s_np_admit_ticks = 0;
                 s_np_guest_ticks = 0;
                 s_np_timing_frames = 0;
@@ -4309,11 +4334,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
     }
 
-    /* Netplay FMV: present 1 of every 4 depth24 vblanks. SW RGB888 scanout
-     * dominates guest ms; admit + wall pace still run every tick in the
-     * epilogue. Do NOT skip pace — MotK ran ~90fps when decode was fast and
-     * pace was skipped here. */
-    if (psx_netplay_active() && gpu_display_is_depth24()) {
+    /* Netplay FMV: present 1 of every 4 depth24 vblanks while MDEC is hot.
+     * SW RGB888 scanout dominates guest ms; admit + wall pace still run every
+     * tick in the epilogue. Do NOT skip pace — MotK ran ~90fps when decode was
+     * fast and pace was skipped here. During MDEC-idle cutover (FMV1→FMV2)
+     * present every frame so the next stream can handshake (1/4 skip left the
+     * gap looking frozen with cheap guest + TURN admit wait). */
+    if (psx_netplay_active() && gpu_display_is_depth24() &&
+        mdec_recently_active(8)) {
         if (s_netplay_depth24_present_skip > 0) {
             s_netplay_depth24_present_skip--;
             return ep;
@@ -4403,9 +4431,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 } else if (g_vk_active) {
                     vk_renderer_present_blank();
                 } else {
-                    SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
-                    SDL_RenderClear(sdl_renderer);
-                    SDL_RenderPresent(sdl_renderer);
+                    if (!sdl_renderer && ensure_sw_sdl_present() != 0)
+                        return ep;
+                    if (sdl_renderer) {
+                        SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
+                        SDL_RenderClear(sdl_renderer);
+                        SDL_RenderPresent(sdl_renderer);
+                    }
                 }
             }
 #endif
@@ -4492,11 +4524,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (g_vk_active) {
             if (di.depth24) {
                 /* 24-bit (FMV): packed RGB lives in the CPU mirror — do NOT
-                 * sync_cpu (FBO readback clobbers RGB888). */
+                 * sync_cpu (FBO readback clobbers RGB888). Batch per-scanline
+                 * (see gpu_depth24_present_row) instead of a per-pixel call
+                 * chain — this loop was the FMV present-side cost. */
                 for (uint32_t y = 0; y < h; y++)
-                    for (uint32_t x = 0; x < present_w; x++)
-                        sdl_pixel_buf[y * present_w + x] =
-                            gpu_display_pixel_argb(&di, x, y);
+                    gpu_depth24_present_row(&di, y, sdl_pixel_buf + (size_t)y * present_w,
+                                            present_w);
                 /* Trailing / cutover blank: black-fill uncovered RGB cols
                  * inside the full-width buffer — never shrink present width. */
                 depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
@@ -4553,6 +4586,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 gr_render_display_hires(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
                                         (int)di.display_x, (int)di.display_y,
                                         (int)present_w, (int)h);
+            } else if (di.depth24) {
+                /* Batch per-scanline (see gpu_depth24_present_row) — the
+                 * per-pixel call chain was the dominant FMV present cost
+                 * (3x the VRAM touches of the 16-bit path below). */
+                for (uint32_t y = 0; y < h; y++)
+                    gpu_depth24_present_row(&di, y, sdl_pixel_buf + (size_t)y * present_w,
+                                            present_w);
             } else {
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < present_w; x++) {
@@ -4634,6 +4674,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                             (g_video_aa && !depth24_frame) ? 1 : 0,
                             pin_43 ? 1 : 0, 0 /* full width */);
     } else {
+    if ((!sdl_renderer || !sdl_texture) && ensure_sw_sdl_present() != 0)
+        return ep;
+    if (!sdl_renderer || !sdl_texture)
+        return ep;
     SDL_Rect src = { 0, 0, src_w, src_h };
     SDL_UpdateTexture(sdl_texture, &src, sdl_pixel_buf,
                       (int)(src_w * sizeof(uint32_t)));

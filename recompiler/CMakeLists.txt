@@ -203,13 +203,19 @@ elseif(MSVC)
     target_link_options(psxrecomp-bios PRIVATE /STACK:16777216)
 endif()
 
-# Released Windows CLI archives must run without a separate MinGW install.
-# Keep this opt-in so ordinary developer/debug builds retain their normal
-# linker behavior on every platform.
-option(PSXRECOMP_STATIC_CLI "Statically link MinGW runtime libraries into CLI tools" OFF)
-if(PSXRECOMP_STATIC_CLI AND MINGW)
+# Released Windows CLI archives must run without a separate MinGW/MSYS2
+# install. Prefer llvm-mingw (+ -static) in CI so emitters do not need
+# libgcc/libstdc++ harvested from MSYS2. Keep opt-in for local debug builds.
+option(PSXRECOMP_STATIC_CLI "Statically link Windows runtime into CLI tools" OFF)
+if(PSXRECOMP_STATIC_CLI AND WIN32 AND (MINGW OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     foreach(_cli_target psxrecomp psxrecomp-game psxrecomp-toml psxrecomp-bios)
-        target_link_options(${_cli_target} PRIVATE -static -static-libgcc -static-libstdc++)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_link_options(${_cli_target} PRIVATE
+                -static -static-libgcc -static-libstdc++)
+        else()
+            # llvm-mingw / Clang: fully static CRT + libc++ / libunwind / pthread.
+            target_link_options(${_cli_target} PRIVATE -static)
+        endif()
     endforeach()
 endif()
 

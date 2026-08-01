@@ -281,6 +281,25 @@ int cdrom_get_setloc_lba(void) { return s_setloc_lba; }
 /* Frontend XA-stream probe (FMV auto-skip / turbo-load gating in main.cpp). */
 int cdrom_xa_stream_active(void) { return xa_stream_active; }
 
+int cdrom_fmv_stream_pending(void)
+{
+    if (xa_stream_active)
+        return 1;
+    /* mode 0x40 = XA-ADPCM enable; 0x08 = sector size / related FMV setup.
+     * Match warm-route consumer (mode & 0x48). */
+    if (reading && (mode_reg & 0x48u))
+        return 1;
+    return 0;
+}
+
+void cdrom_resync_deadlines_after_restore(void)
+{
+    if (reading && read_delay > 0)
+        s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
+    else if (!reading)
+        s_cd_timing_next_due = 0;
+}
+
 /* Response-overwrite diagnostics consumed by debug_server.c. master's CD
  * response arbiter tracks how often an undelivered response was overwritten;
  * this CD model (forwarded from the Ape bring-up branch) delivers responses
@@ -2831,7 +2850,12 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     if (len != cdrom_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
-    return cdrom_snap_parse(&r);
+    if (!cdrom_snap_parse(&r))
+        return 0;
+    /* Absolute host deadlines are not on the wire — rebuild from restored
+     * relative read_delay (psx_cycle_count is resynced by the load caller). */
+    cdrom_resync_deadlines_after_restore();
+    return 1;
 }
 
 void debug_force_cd_reinsert(void) {

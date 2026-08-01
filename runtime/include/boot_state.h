@@ -80,7 +80,7 @@ enum {
     BS_SEC_CPU    = 0x01,  /* CPUState: gpr/pc/hi/lo/cop0/gte_data/gte_ctrl       */
     BS_SEC_RAM    = 0x02,  /* 2 MB main RAM                                       */
     BS_SEC_SPAD   = 0x03,  /* 1 KB scratchpad                                     */
-    BS_SEC_IRQ    = 0x04,  /* i_stat / i_mask                                     */
+    BS_SEC_IRQ    = 0x04,  /* i_stat / i_mask / cycles_since_vblank (12B; 8B ok)  */
     BS_SEC_TIMER  = 0x05,  /* 3 root counters (counter/mode/target/irq/frac)      */
     BS_SEC_CLOCK  = 0x06,  /* psx_cycle_count                                     */
     BS_SEC_GPU    = 0x07,  /* GPU regs: display/draw-area/offset/mask/texpage/xfer*/
@@ -92,6 +92,14 @@ enum {
     BS_SEC_SIO    = 0x0D,  /* SIO regs + pad-config FSM + memcard FSM             */
     BS_SEC_DIRTY  = 0x0E,  /* dirty-RAM page bitmap (guest-written code pages)    */
     BS_SEC_MDEC   = 0x0F,  /* MDEC command/FIFOs/quant/scale (FMV decode resume)  */
+    BS_SEC_ICACHE = 0x10,  /* R3000A I-cache tag/valid words (1024 u32) — fetch
+                              cost model. Host-persistent otherwise: a warm load
+                              without it replays with the pre-load timeline's
+                              cache, so fetch-miss cycles differ per peer/retry
+                              and IRQ delivery lands a few wait-loop iterations
+                              apart (MotK abort@940: fin cyc Δ8, v0 5c83/5c86
+                              from identical baselines). Optional on load for
+                              old blobs (left untouched when absent).          */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */

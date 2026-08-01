@@ -77,8 +77,8 @@ int  psx_netplay_rb_fmv_defer_rewind(void);
 /* 1 while depth24 or recent MDEC (not settle). */
 int  psx_netplay_rb_fmv_media_active(void);
 
-/* 1 during FMV media + post-FMV lockstep (~90 ticks) — admit waits for remote
- * wire (title Start / movie skip). Ticks the FMV→settle tracker. */
+/* 1 during FMV media + post-FMV lockstep (+ unlock grace) — admit waits for
+ * remote wire (title Start / movie skip). Ticks the FMV→settle tracker. */
 int  psx_netplay_rb_lockstep_no_invent(void);
 
 /* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
@@ -96,6 +96,20 @@ void psx_netplay_rb_pump(void);
 int  psx_netplay_rb_active(void);
 int  psx_netplay_rb_is_resimulating(void);
 int  psx_netplay_rb_tip_holding(void);
+
+/* Episode tip (target_tick) while an episode is active; 0 if none. */
+uint32_t psx_netplay_rb_episode_target(void);
+
+/* TipHold Live invent slack past tip (tip_seal_slack). Stall invent beyond. */
+uint32_t psx_netplay_rb_tip_hold_invent_slack(void);
+
+/* TipHold coalesce runway (tip_runway). Host scans wire tip+1..tip+runway for
+ * release edges when Live is stalled at invent-cap. */
+uint32_t psx_netplay_rb_tip_runway(void);
+
+/* 1 if a peer FRAME_COMMIT should be dropped (TipHold invent still on the
+ * wire after tip-extend hc_prime). Call from FRAME_COMMIT drain. */
+int  psx_netplay_rb_ignore_peer_frame_commit(uint32_t tick, uint32_t hash);
 
 /* FRAME_COMMIT mismatch during Replay — abort before a false POST commit.
  * Returns 1 if an episode was aborted. */
@@ -125,6 +139,23 @@ void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
 uint32_t psx_netplay_rb_episode_count(void);
 int      psx_netplay_rb_phase(void); /* RNetRbPhase cast to int */
 uint32_t psx_netplay_rb_snap_count(void);
+
+/* Ticks armed into Replay since the last call (counter resets on read). Used
+ * by the host [FPS] line (PSX_NETPLAY_TIMING=1) to report what fraction of
+ * the window was spent resimulating vs running Live. */
+uint64_t psx_netplay_rb_take_replay_ticks(void);
+
+/* Live network-latency estimate (ms), EMA'd from the POST handshake's own
+ * send/receive timestamps each episode commit; 0 = no episode has round-
+ * tripped yet this session. Used by np_invent_grace_stall() (psx_netplay.c)
+ * to size its "wait before hold-last invent" budget from actual measured
+ * link latency instead of the local sim's own tick-to-tick cadence — see
+ * docs/ROLLBACK_MOTK_HOOKUP.md section 12. */
+uint32_t psx_netplay_rb_rtt_estimate_ms(void);
+
+/* Sticky BB-edge resume PC (MotK wait-loop canonicalize). Used by
+ * gpu_vblank_flush_present when IRQ resume latches are 0. */
+uint32_t psx_netplay_rb_sticky_bb_pc(void);
 
 #ifdef __cplusplus
 }

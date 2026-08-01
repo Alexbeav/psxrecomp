@@ -80,10 +80,9 @@ void psx_check_interrupts_dispatch_entry(struct CPUState* cpu, uint32_t resume_p
 void interrupts_advance_cycles(uint32_t cycles);
 void interrupts_service_scheduled_events(void);
 uint32_t interrupts_cycles_to_vblank(void);
-/* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Self-check
- * snaps save/restore this so resim keeps the snap's phase instead of the
- * warm-load rebase to 0 (which is correct for UI savestates, wrong for
- * bit-identical resim of a mid-frame tip). */
+/* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Persisted in
+ * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
+ * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */
 uint32_t interrupts_get_cycles_since_vblank(void);
 void     interrupts_set_cycles_since_vblank(uint32_t v);
 

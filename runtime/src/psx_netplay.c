@@ -35,6 +35,7 @@
 #include "cpu_state.h"
 #include "gpu.h"
 #include "interrupts.h"
+#include "mdec.h"
 #include "psx_scheduler.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
 #include "psx_lobby_client.h"
@@ -425,8 +426,14 @@ static void np_drain_peer_frame_commits(void)
 {
     rnet_u32 through = 0, hash = 0;
     if (!g_np.session) return;
-    while (rnet_session_take_rb_frame_commit(g_np.session, &through, &hash))
+    while (rnet_session_take_rb_frame_commit(g_np.session, &through, &hash)) {
+        /* Tip-extend rereplay: TipHold Live invent FCs may still be queued
+         * after hc_prime — drop until peer's sealed resim matches. */
+        if (g_np.rollback &&
+            psx_netplay_rb_ignore_peer_frame_commit(through, hash))
+            continue;
         netplay_hc_note_peer(&g_np.hc, through, hash);
+    }
     /* FIRST CORE can stick the watermark forever once that tick ages out of
      * the 128-slot ring — heal so choose_load_tick sees a real frontier. */
     if (netplay_hc_heal_stale_gap(&g_np.hc)) {
@@ -452,10 +459,17 @@ static void np_emit_frame_commit(uint32_t tick)
     uint32_t aux = 0u;
     int crumb;
     if (!g_np.cpu || !g_np.session) return;
-    /* Live depth24: skip full-RAM FRAME_COMMIT (rewind already deferred).
-     * Resim still commits every tick. Leaving FMV primes hash_confirm so the
-     * watermark is not stuck on missing movie slots. */
-    if (gpu_display_is_depth24() &&
+    /* TipHold Live invents are not sealed-input truth — emitting them poisoned
+     * tip-extend Replay (stale peer digests → false resim core diverge). */
+    if (g_np.rollback && psx_netplay_rb_tip_holding() &&
+        !psx_netplay_rb_is_resimulating())
+        return;
+    /* Live depth24 + hot MDEC: skip full-RAM FRAME_COMMIT (rewind already
+     * deferred). Resim still commits every tick. MDEC-idle cutover still
+     * commits so FMV1→FMV2 forks are visible (digs used to go dark for the
+     * whole movie). Leaving FMV primes hash_confirm so the watermark is not
+     * stuck on missing movie slots. */
+    if (gpu_display_is_depth24() && mdec_recently_active(8) &&
         !(g_np.rollback && psx_netplay_rb_is_resimulating()))
         return;
     /* Present-edge: clear PC so parked-0 vs live-BB does not fork FRAME_COMMIT
@@ -1353,6 +1367,144 @@ static int np_digital_new_press(const RNetInputContractFrame *pub,
     return newly_pressed != 0;
 }
 
+/* After promoting a digital release at `release_tick`, rewrite predicted hist
+ * rows release_tick+1..sim to the released pad. Hold-last invent ahead of the
+ * release tip left `pub` still held → ghost second-release episodes (soak:
+ * RIGHT release@1607 then another `pub=ffdf wire=ffff` @1634). */
+static void np_scrub_ahead_predicted(int slot, rnet_u32 release_tick,
+                                     const RNetRbFrame *released)
+{
+    rnet_u32 sim;
+    rnet_u32 t;
+    unsigned n = 0;
+    if (!released || !g_np.session)
+        return;
+    sim = rnet_session_sim_tick(g_np.session);
+    if (sim <= release_tick)
+        return;
+    for (t = release_tick + 1u; t <= sim; ++t) {
+        RNetRbFrame row;
+        RNetRbFrame scrub;
+        if (!netplay_ih_get(&g_np.ih, slot, t, &row))
+            continue;
+        if (!row.is_predicted)
+            continue;
+        if (row.buttons == released->buttons &&
+            row.stick_x == released->stick_x &&
+            row.stick_y == released->stick_y)
+            continue;
+        scrub = *released;
+        scrub.tick = t;
+        scrub.is_predicted = 0u;
+        scrub.is_valid = 1u;
+        if (netplay_ih_promote(&g_np.ih, slot, &scrub))
+            n++;
+    }
+    if (n) {
+        fprintf(stderr,
+                "psxrecomp: rb scrub-ahead release slot=%d from=%u sim=%u n=%u "
+                "btn=%04x\n",
+                slot, (unsigned)release_tick, (unsigned)sim, n,
+                (unsigned)released->buttons);
+        fflush(stderr);
+    }
+}
+
+/* TipHold Live is stalled at invent-cap while digital is held — predicted hist
+ * rows past tip may not exist yet, so ordinary reconcile never sees the
+ * release. Peek wire tip+1..tip+runway; on the first pad delta vs tip hist,
+ * promote the span and tip-extend (real coalesce). */
+static void np_tip_hold_coalesce_ahead(void)
+{
+    uint32_t tip;
+    uint32_t runway;
+    rnet_u8 delay_u8;
+    int slot;
+
+    if (!g_np.rollback || !g_np.session)
+        return;
+    if (!psx_netplay_rb_tip_holding())
+        return;
+    if (psx_netplay_rb_load_pending() || psx_netplay_rb_is_resimulating())
+        return;
+
+    tip = psx_netplay_rb_episode_target();
+    runway = psx_netplay_rb_tip_runway();
+    if (tip == 0u || runway == 0u)
+        return;
+
+    delay_u8 = (rnet_u8)(g_np.input_delay < 0 ? 0
+                        : (g_np.input_delay > 255 ? 255 : g_np.input_delay));
+
+    for (slot = 0; slot < g_np.slot_count; ++slot) {
+        RNetRbFrame tip_row;
+        rnet_u32 edge = 0;
+        rnet_u32 t;
+        if (slot == g_np.local_slot)
+            continue;
+        if (!netplay_ih_get(&g_np.ih, slot, tip, &tip_row) || !tip_row.is_valid)
+            continue;
+
+        for (t = tip + 1u; t <= tip + runway; ++t) {
+            RNetInputSample sample;
+            PsxNetPad pad;
+            RNetRbFrame wire_frame;
+            rnet_u32 wire = rnet_wire_tick_from_sim(t, delay_u8);
+            if (!rnet_session_peek_remote_input(g_np.session, slot, wire, &sample))
+                break;
+            decode_pad(&sample, &pad);
+            netplay_ih_pad_to_frame(&pad, t, 0, &wire_frame);
+            if (wire_frame.buttons == tip_row.buttons &&
+                wire_frame.stick_x == tip_row.stick_x &&
+                wire_frame.stick_y == tip_row.stick_y)
+                continue;
+            edge = t;
+            break;
+        }
+        if (!edge)
+            continue;
+
+        for (t = tip + 1u; t <= edge; ++t) {
+            RNetInputSample sample;
+            PsxNetPad pad;
+            RNetRbFrame wire_frame;
+            rnet_u32 wire = rnet_wire_tick_from_sim(t, delay_u8);
+            if (!rnet_session_peek_remote_input(g_np.session, slot, wire, &sample))
+                break;
+            decode_pad(&sample, &pad);
+            netplay_ih_pad_to_frame(&pad, t, 0, &wire_frame);
+            (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+        }
+        {
+            RNetInputSample sample;
+            PsxNetPad pad;
+            RNetRbFrame edge_frame;
+            RNetInputContractFrame tip_c, edge_c;
+            rnet_u32 wire = rnet_wire_tick_from_sim(edge, delay_u8);
+            if (rnet_session_peek_remote_input(g_np.session, slot, wire, &sample)) {
+                decode_pad(&sample, &pad);
+                netplay_ih_pad_to_frame(&pad, edge, 0, &edge_frame);
+                netplay_ih_frame_to_contract(&tip_row, &tip_c);
+                netplay_ih_frame_to_contract(&edge_frame, &edge_c);
+                if (np_digital_release_only(&tip_c, &edge_c))
+                    np_scrub_ahead_predicted(slot, edge, &edge_frame);
+            }
+        }
+        fprintf(stderr,
+                "psxrecomp: rb tip-hold coalesce-ahead tip=%u edge=%u slot=%d "
+                "tip_btn=%04x\n",
+                (unsigned)tip, (unsigned)edge, slot, (unsigned)tip_row.buttons);
+        fflush(stderr);
+        if (psx_netplay_rb_tip_extend(edge, slot))
+            return;
+        /* tip-extend refused (span cap / different seat) — open via begin. */
+        if (psx_netplay_rb_begin_rewind(edge, slot))
+            return;
+    }
+}
+
+static void np_timesync_note_late(void);
+
 /* Late authoritative wire vs published predicted rows → promote or queue rewind.
  * Diag: promote-no-resim means hist took the late pad but guest sim did not
  * rewind — looks like "remote input rejected" when cadence already drifted. */
@@ -1439,6 +1591,16 @@ static void np_rollback_reconcile_wire(void)
             pads_differ = (pub_c.buttons != wire_c.buttons) ||
                           (pub_c.stick_x != wire_c.stick_x) ||
                           (pub_c.stick_y != wire_c.stick_y);
+            /* Feed the timesync pacer ONLY on a genuine mispredict (the
+             * invented value was wrong). Firing on every predicted-row
+             * resolution — the prior cut — meant EVERY normally-delayed
+             * prediction counted as "late" (that is simply how input delay
+             * works), drowning the one signal that actually identifies the
+             * ahead peer. 2026-08-01 soak: gated correctly, the peer that
+             * initiates corrections is unambiguous (28 vs 12 rewind-requests
+             * split across the two sides in one session). */
+            if (pads_differ)
+                np_timesync_note_late();
             /* After commit/realign: flush invent poison without another episode. */
             if (no_resim) {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
@@ -1464,6 +1626,7 @@ static void np_rollback_reconcile_wire(void)
                  * menu releases open a real episode. */
                 if (fmv_defer && np_digital_release_only(&pub_c, &wire_c)) {
                     (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                    np_scrub_ahead_predicted(slot, t, &wire_frame);
                     if (n_soft_release == 0) {
                         first_no_resim_t = t;
                         first_no_resim_slot = slot;
@@ -1505,6 +1668,8 @@ static void np_rollback_reconcile_wire(void)
                          * peer SEAL_ROWS land. Skipping promote left invent-idle
                          * pads sealed/published across the skip press tick. */
                         (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                        if (np_digital_release_only(&pub_c, &wire_c))
+                            np_scrub_ahead_predicted(slot, t, &wire_frame);
                         if (psx_netplay_rb_begin_rewind(t, slot)) {
                             g_np.needs_advance = 0;
                             n_episode_open++;
@@ -1516,12 +1681,19 @@ static void np_rollback_reconcile_wire(void)
                 }
             } else if (pads_differ) {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                if (np_digital_release_only(&pub_c, &wire_c))
+                    np_scrub_ahead_predicted(slot, t, &wire_frame);
                 n_contract_promote++;
             } else {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
             }
         }
     }
+
+    /* TipHold invent-cap stall: peek wire past tip for release/press edges that
+     * have no predicted hist row yet (Live never invented them). */
+    if (!g_np.pending_rewind)
+        np_tip_hold_coalesce_ahead();
 
     if (n_no_resim || n_soft_release || n_episode_open || n_begin_refused) {
         static uint32_t s_log_sim;
@@ -1568,6 +1740,276 @@ static void np_rollback_reconcile_wire(void)
     }
 }
 
+/* Stall-before-invent grace. Soaks showed every menu episode was a real
+ * press/release edge whose wire row landed only 1–2 ticks after the seal
+ * point (LAN, admit skew — not link latency): invent-on-first-miss then
+ * mispredicted the edge and opened a paired episode every few ticks
+ * (resim storm, 0.44–0.8x). Before inventing a missing remote row, stall
+ * the admit up to PSX_RB_INVENT_GRACE_MS (default 30) measured from the
+ * first miss of that wire tick. This is a rate governor, not just packet
+ * wait: the lateness is sim skew (soak: ALL late edges were on the peer
+ * running 1–2 ticks ahead; the other side had zero) — while the ahead
+ * peer stalls here, the behind peer keeps simulating and catches up, so
+ * in steady state the sims stay aligned and inputs arrive before the
+ * seal with no stall at all. The first cut (8 ms) was shorter than one
+ * tick of skew, expired on every edge and tripped the adaptive-off —
+ * worst of both. The budget scales with the observed tick period: at
+ * fight-scene rates (~35-45 fps) a tick lasts ~25 ms, so a fixed 30 ms
+ * no longer covers 2 ticks of skew and gameplay stormed again; the
+ * effective budget is max(base, 2.5x tick-period EMA), capped at 100 ms.
+ * The caller only invokes this when >=2 ticks ahead of the remote sealed
+ * tip: stalling on a 1-tick gap (normal pipeline phase offset) serialized
+ * the two sims — each peer's admit waited out the other's guest frame and
+ * throughput fell to 1/(g1+g2) even with zero episodes.
+ * Adaptive off: if the grace keeps expiring (peer
+ * genuinely lagging beyond the budget — real WAN latency), disable it
+ * for 2s so we don't add a per-tick stall on top of real lag.
+ * Host-side pacing only — the invented value is unchanged (hold-last), so
+ * guest determinism is unaffected. 0 disables. */
+/* Budget policy (2026-08-01, see docs/ROLLBACK_MOTK_HOOKUP.md section 12):
+ * this used to scale purely off the local sim's own tick-to-tick cadence
+ * (s_tick_ema_ms), which is the wrong signal — tick period gets *longer*
+ * precisely when the engine is already struggling (an active resim burst,
+ * a heavy scene), none of which means the network needs more patience. That
+ * let a slowdown balloon the very stall reacting to it: a soak on a genuine
+ * sub-ms-RTT direct-LAN connection measured this landing at 70-90ms per
+ * occurrence. Now sized primarily from psx_netplay_rb_rtt_estimate_ms() — a
+ * live measurement of actual POST-handshake round-trip latency — with the
+ * old tick-cadence term kept only as a *fallback* for the brief window
+ * before the first episode has round-tripped this session (no RTT sample
+ * yet), and tightened since it's no longer the primary mechanism. */
+static int np_invent_grace_stall(int slot, rnet_u32 wire)
+{
+    static int      s_grace_ms = -1;
+    static rnet_u32 s_wire[PSX_MAX_PLAYERS];
+    static uint32_t s_t0[PSX_MAX_PLAYERS];
+    static uint8_t  s_expired[PSX_MAX_PLAYERS];
+    static uint8_t  s_budget_logged[PSX_MAX_PLAYERS];
+    static uint32_t s_expire_streak;
+    static uint32_t s_off_until;
+    static uint32_t s_tick_ema_ms; /* fallback-only EMA of inter-tick period, ms */
+    uint32_t now;
+    uint32_t budget;
+    uint32_t rtt;
+
+    if (s_grace_ms < 0) {
+        const char *e = getenv("PSX_RB_INVENT_GRACE_MS");
+        s_grace_ms = (e && e[0]) ? atoi(e) : 8;
+        if (s_grace_ms < 0) s_grace_ms = 0;
+        if (s_grace_ms > 200) s_grace_ms = 200;
+        fprintf(stderr,
+                "psxrecomp: rb invent grace floor=%d ms (minimum stall before "
+                "hold-last invent; PSX_RB_INVENT_GRACE_MS — actual per-stall "
+                "budget scales up from measured RTT, see 'rb invent grace "
+                "budget' lines)\n",
+                s_grace_ms);
+        fflush(stderr);
+    }
+    if (s_grace_ms == 0 || slot < 0 || slot >= PSX_MAX_PLAYERS)
+        return 0;
+    now = np_mono_ms();
+    if (s_off_until != 0u && (int32_t)(now - s_off_until) < 0)
+        return 0;
+    s_off_until = 0u;
+    if (s_wire[slot] != wire) {
+        /* Previous tracked tick arrived before its grace expired (we moved
+         * on without hitting the expiry path) — the link is keeping up. */
+        if (s_wire[slot] != 0u && !s_expired[slot])
+            s_expire_streak = 0;
+        /* Consecutive tracked ticks give the live tick period — fallback
+         * signal only now (see policy note above); real budget sizing
+         * prefers psx_netplay_rb_rtt_estimate_ms() below. */
+        if (s_wire[slot] != 0u && wire == s_wire[slot] + 1u) {
+            uint32_t dt = now - s_t0[slot];
+            if (dt >= 1u && dt <= 250u)
+                s_tick_ema_ms = s_tick_ema_ms
+                                    ? (3u * s_tick_ema_ms + dt) / 4u
+                                    : dt;
+        }
+        s_wire[slot] = wire;
+        s_t0[slot] = now;
+        s_expired[slot] = 0;
+        s_budget_logged[slot] = 0;
+        return 1;
+    }
+    budget = (uint32_t)s_grace_ms;
+    rtt = psx_netplay_rb_rtt_estimate_ms();
+    if (rtt) {
+        /* 1.5x measured RTT: slack for jitter without inheriting the old
+         * formula's habit of ballooning under local slowdown, since network
+         * transit time does not degrade just because guest/replay cost did. */
+        uint32_t scaled = rtt + rtt / 2u;
+        if (scaled > budget)
+            budget = scaled;
+        if (budget > 60u) /* hard ceiling regardless of measured RTT */
+            budget = 60u;
+    } else if (s_tick_ema_ms) {
+        /* No RTT sample yet this session (before the first episode has
+         * round-tripped) — narrower and lower-ceiling than before, since
+         * this is a brief startup fallback, not the steady-state mechanism. */
+        uint32_t scaled = (s_tick_ema_ms * 3u) / 2u; /* 1.5 ticks, was 2.5 */
+        if (scaled > budget)
+            budget = scaled;
+        if (budget > 40u) /* was 100 */
+            budget = 40u;
+    }
+    if (!s_budget_logged[slot]) {
+        s_budget_logged[slot] = 1;
+        fprintf(stderr,
+                "psxrecomp: rb invent grace budget=%u ms (floor=%d rtt=%u "
+                "tick_ema=%u) slot=%d wire=%u\n",
+                (unsigned)budget, s_grace_ms, (unsigned)rtt,
+                (unsigned)s_tick_ema_ms, slot, (unsigned)wire);
+        fflush(stderr);
+    }
+    if ((uint32_t)(now - s_t0[slot]) < budget)
+        return 1;
+    if (!s_expired[slot]) {
+        s_expired[slot] = 1;
+        if (++s_expire_streak >= 45u) {
+            s_expire_streak = 0;
+            s_off_until = now + 2000u;
+            fprintf(stderr,
+                    "psxrecomp: rb invent grace OFF 2s (remote input "
+                    "consistently later than %u ms)\n",
+                    (unsigned)budget);
+            fflush(stderr);
+        }
+    }
+    return 0;
+}
+
+/* Mispredict-driven timesync pacing. The first cut used a GGPO-style
+ * advantage metric (wire_need - highest received remote row) with an
+ * absolute +0.5 tick threshold — soak showed BOTH peers measure ~+0.6
+ * ticks at the natural operating point (each side samples at the start
+ * of its own tick), so both throttled, neither "closed", and both
+ * tripped the off-guard while the mispredicts continued. The ground
+ * truth for "I am the ahead peer" is the mispredict itself: only the
+ * ahead side promotes real rows that arrived AFTER it already invented
+ * them WRONG — note_late() is gated on pads_differ in the reconcile
+ * caller (an earlier cut fired on every predicted-row resolution, which
+ * is just normal input-delay operation and swamped the signal). Each
+ * genuine mispredict adds ~half a tick of pacing debt (capped at 2
+ * ticks); the admit path shaves the debt off at <=3 ms per tick. Zero
+ * cost in steady state (aligned phase -> no mispredicts -> no debt).
+ * Adaptive off: on real WAN transit every edge mispredicts no matter the
+ * phase, so debt keeps landing back at the cap — a streak of 12
+ * consecutive cap-hits (no room to have drained between them) disables
+ * for 10 s. Earlier cut used "debt continuously nonzero for 5s", but an
+ * active mispredict burst legitimately keeps debt elevated while pacing
+ * is working exactly as intended — soak: 24/36 commits and 19/28
+ * rewind-requests on the busier peer landed AFTER that off-guard fired,
+ * i.e. it disabled pacing precisely when the storm needed it most. Host
+ * pacing only — guest determinism unaffected. PSX_RB_TIMESYNC=0
+ * disables. */
+static int      g_ts_enabled = -1;
+static uint32_t g_ts_tick_ema_ms;
+static uint32_t g_ts_debt_ms;
+static uint32_t g_ts_pegged_streak; /* consecutive mispredicts landing at/above cap */
+static uint32_t g_ts_off_until_ms;
+
+static void np_timesync_check_enabled(void)
+{
+    if (g_ts_enabled < 0) {
+        const char *e = getenv("PSX_RB_TIMESYNC");
+        g_ts_enabled = (e && e[0]) ? (atoi(e) != 0) : 1;
+    }
+}
+
+/* Reconcile saw a real remote row that contradicted what we invented for
+ * this tick — i.e. we are (locally) the mispredicting/ahead peer for this
+ * edge. Add pacing debt.
+ * Adaptive off (2026-08-01 soak): the first cut disabled after debt sat
+ * "continuously nonzero" for 5s — but during an active mispredict burst,
+ * debt SHOULD stay elevated for a while (each edge tops it back up before
+ * the previous slice fully drains); that isn't pacing failing, it's pacing
+ * doing its job under sustained load. Soak evidence: 24/36 episode commits
+ * and 19/28 rewind-requests on the busier peer landed AFTER that off-guard
+ * fired — it was disabling exactly when it was needed most. The real "this
+ * is transit latency, not phase skew" signal is debt landing AT THE CAP
+ * repeatedly with no room to have drained in between — track a streak of
+ * cap-hits instead of wall-clock nonzero time. */
+static void np_timesync_note_late(void)
+{
+    uint32_t now;
+    uint32_t add;
+    uint32_t cap;
+
+    np_timesync_check_enabled();
+    if (!g_ts_enabled)
+        return;
+    now = np_mono_ms();
+    if (g_ts_off_until_ms != 0u && (int32_t)(now - g_ts_off_until_ms) < 0)
+        return;
+    g_ts_off_until_ms = 0u;
+    add = g_ts_tick_ema_ms ? g_ts_tick_ema_ms / 2u : 8u;
+    cap = g_ts_tick_ema_ms ? g_ts_tick_ema_ms * 2u : 34u;
+    if (g_ts_debt_ms >= cap) {
+        if (++g_ts_pegged_streak >= 12u) {
+            g_ts_pegged_streak = 0u;
+            g_ts_debt_ms = 0u;
+            g_ts_off_until_ms = now + 10000u;
+            fprintf(stderr,
+                    "psxrecomp: rb timesync OFF 10s (mispredicts keep landing "
+                    "at the pacing cap — transit latency, not phase skew)\n");
+            fflush(stderr);
+            return;
+        }
+    } else {
+        g_ts_pegged_streak = 0u;
+    }
+    g_ts_debt_ms += add;
+    if (g_ts_debt_ms > cap)
+        g_ts_debt_ms = cap;
+}
+
+/* Admit-side: shave pacing debt off at <=3 ms per tick. */
+static int np_timesync_throttle(uint32_t wire)
+{
+    static uint32_t s_last_wire;
+    static uint32_t s_last_wire_ms;
+    static uint32_t s_stall_until;
+    static uint8_t  s_logged;
+    uint32_t now;
+
+    np_timesync_check_enabled();
+    if (!g_ts_enabled)
+        return 0;
+    now = np_mono_ms();
+    if (wire != s_last_wire) {
+        if (s_last_wire != 0u && wire == s_last_wire + 1u) {
+            uint32_t dt = now - s_last_wire_ms;
+            if (dt >= 1u && dt <= 250u)
+                g_ts_tick_ema_ms = g_ts_tick_ema_ms
+                                       ? (7u * g_ts_tick_ema_ms + dt) / 8u
+                                       : dt;
+        }
+        s_last_wire = wire;
+        s_last_wire_ms = now;
+        if (g_ts_debt_ms > 0u) {
+            uint32_t slice = g_ts_debt_ms > 3u ? 3u : g_ts_debt_ms;
+            g_ts_debt_ms -= slice;
+            if (g_ts_debt_ms == 0u)
+                s_logged = 0;
+            s_stall_until = now + slice;
+            if (!s_logged) {
+                fprintf(stderr,
+                        "psxrecomp: rb timesync pacing (debt=%u ms tick=%u ms — "
+                        "shaving <=3 ms/tick)\n",
+                        (unsigned)(g_ts_debt_ms + slice),
+                        (unsigned)g_ts_tick_ema_ms);
+                fflush(stderr);
+                s_logged = 1;
+            }
+        }
+    }
+    if (s_stall_until != 0u && (int32_t)(now - s_stall_until) < 0)
+        return 1;
+    s_stall_until = 0u;
+    return 0;
+}
+
 /* Rollback admit: tip + invent remotes within P of remote tip; stall outside.
  * BattleShip phase_lock: invent only when wire_need <= highest_remote + P. */
 static int np_try_admit_rollback(void)
@@ -1597,6 +2039,54 @@ static int np_try_admit_rollback(void)
 
     memset(&st, 0, sizeof(st));
     rnet_session_get_stats(g_np.session, &st);
+
+    /* TipHold past invent-cap: never invent (that caused tip-extend rereplay
+     * cliffs). Advance only when every remote wire row is present *and* all
+     * pads (local + remote) are idle (0xFFFF). Live-walking held digital
+     * through the runway fed MotK menu key-repeat (~24 extra navigations per
+     * press) and burned the coalesce window before tip-extend could absorb
+     * the release (soak: tip-extend=0, tip-hold→commit adjacent). Missing
+     * remotes or any held button → stall; wall-clock quiet / coalesce-ahead
+     * owns the runway. */
+    if (psx_netplay_rb_tip_holding()) {
+        uint32_t tip = psx_netplay_rb_episode_target();
+        uint32_t slack = psx_netplay_rb_tip_hold_invent_slack();
+        if (tip > 0u && sim > tip + slack) {
+            int missing = 0;
+            int held = 0;
+            for (slot = 0; slot < g_np.slot_count; ++slot) {
+                if (slot == g_np.local_slot) {
+                    if (rnet_session_peek_input(g_np.session, slot, wire,
+                                                &sample)) {
+                        decode_pad(&sample, &pad);
+                        if (pad.buttons != 0xFFFFu)
+                            held = 1;
+                    } else if (g_np.staged_valid &&
+                               g_np.staged.buttons != 0xFFFFu) {
+                        held = 1;
+                    }
+                    continue;
+                }
+                if (!rnet_session_peek_remote_input(g_np.session, slot, wire,
+                                                    &sample)) {
+                    missing = 1;
+                    break;
+                }
+                decode_pad(&sample, &pad);
+                if (pad.buttons != 0xFFFFu)
+                    held = 1;
+            }
+            if (missing || held)
+                return 0;
+        }
+    }
+
+    /* Phase alignment: the ahead peer paces down a few ms/tick so remote
+     * rows arrive before the seal (kills invent-mispredict episodes at the
+     * source). Never engages during episodes/lockstep — only live admits. */
+    if (!psx_netplay_rb_active() &&
+        np_timesync_throttle(wire))
+        return 0;
 
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) {
@@ -1630,6 +2120,17 @@ static int np_try_admit_rollback(void)
                 return 0;
             /* Stall when invent would run more than P ahead of remote tip. */
             if (wire > st.highest_remote_wire + (rnet_u32)pred)
+                return 0;
+            /* Brief stall before inventing — but ONLY when genuinely >=2
+             * ticks ahead of the remote's sealed tip. A 1-tick gap is the
+             * normal phase offset of two pipelined sims: stalling on it
+             * serialized the peers (each admit waited out the other's
+             * guest frame; throughput fell to 1/(g1+g2) ~ 40-50 fps with
+             * zero episodes). Invent freely at gap<=1 — hold-last only
+             * mispredicts on real edges and episodes are cheap now that
+             * the agreed watermark tracks live. */
+            if (wire > st.highest_remote_wire + 1u &&
+                np_invent_grace_stall(slot, wire))
                 return 0;
             /* MotK digital: hold-last. Idle invent re-mismatched every held
              * D-pad tick after commit → episode storm / char-select freeze.

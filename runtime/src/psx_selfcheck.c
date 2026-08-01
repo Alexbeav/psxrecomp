@@ -786,7 +786,9 @@ static void sc_do_load(struct CPUState *cpu, const char *via)
     }
     psx_cycles_resync_after_restore(cpu);
     interrupts_resync_after_restore();
-    /* Keep the snap's VBlank phase (resync zeroed it for UI savestate safety). */
+    /* Keep the snap's VBlank phase (boot_state also restores csv from IRQ
+     * section; re-apply the latched value so ambient-prime / legacy 8B snaps
+     * stay bit-identical across replay#1/#2). */
     interrupts_set_cycles_since_vblank(s_snap_csv);
     /* Pin host frame counter so present/GPU hysteresis that keys on
      * s_frame_count cannot fork resim#1 vs resim#2 (+span otherwise). */

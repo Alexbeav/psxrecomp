@@ -55,8 +55,10 @@ standalone BIOS runtime supporting OpenBIOS and a compatible retail BIOS** —
 see [Release Package](#release-package) below.
 
 Bringing up a title of your own? Start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md) and open an issue — community projects are
-listed here alongside the rest.
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (submodules,
+setup-host CI template, release checklist), then
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Community projects are listed here
+alongside the rest.
 
 ## What It Is
 
@@ -95,15 +97,22 @@ Three things sit on that foundation:
   execution.
 
 PSXRecomp is a **framework**. Game-specific projects live in their own
-repositories and link this one in as a **git submodule** to build a game binary.
+repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
+and game code (`game.toml`, seeds, CMake) at the repo root. See
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
 **New here?** The fastest way in:
-[`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) (how a game actually
-runs — static / native-overlay / interpreter), then
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/BUILDING.md`](docs/BUILDING.md),
-[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) (versioned runtime mods),
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+| Path | Doc |
+|------|-----|
+| How a game runs | [`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) |
+| Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
+| **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
+| Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
+| Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
+| Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
+| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Which PlayStation BIOS does it use?
 
@@ -180,9 +189,169 @@ turned off as easily as it was turned on.
   <img src="docs/assets/ui/mod-launcher.png" alt="The mods panel in the launcher" width="820">
 </p>
 
-Tomba! ships three today — widescreen, skip-FMV, and a warp debug menu that
-re-enables the developers' own hidden menu. Full format in
+### Add a mod
+
+Start with a source directory containing a manifest and, when needed, payload
+files:
+
+```text
+my-mod/
+├── manifest.toml
+├── README.txt
+└── assets/
+    └── replacement.bin
+```
+
+A minimal guarded executable patch looks like this:
+
+```toml
+format_version = 1
+id = "example.quick-start"
+version = "1.0.0"
+name = "Quick-start example"
+author = "Your name"
+description = "One independently toggleable gameplay change."
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "SLUS-00000"
+# Replace this with the SHA-256 of the exact supported stock disc image.
+disc_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[feature]]
+id = "quick-start"
+name = "Quick Start"
+description = "Skips the game's startup delay."
+group = "Gameplay"
+default_enabled = false
+
+[[patch]]
+feature = "quick-start"
+target = "main_exe"
+address = 0x80041234
+expected = "2a 00 02 24"
+replace = "00 00 02 24"
+```
+
+`main_exe` addresses are PSX guest virtual addresses. The complete `expected`
+bytes are checked after the BIOS loads the executable and before any write is
+made, so a package fails closed on the wrong revision. For disc changes use
+`disc_raw` or `disc_user`; for a larger asset use a file-backed `[[overlay]]`
+with payload and expected-range SHA-256 hashes.
+
+From a PSXRecomp checkout, pack the directory into a deterministic archive:
+
+```sh
+python tools/psxmod_pack.py my-mod my-mod-1.0.0.psxmod
+```
+
+Install the resulting `.psxmod` through the launcher's Mods manager. A game can
+also ship reviewed, default-disabled packages by placing unpacked sources at
+`mods/preloaded/packages/<package-id>/<version>/` and copying
+`mods/preloaded` beside the game executable as `mods`; see Tomba's build wiring
+below.
+
+Choose the narrowest mechanism that describes the change:
+
+| Change | Package mechanism |
+|---|---|
+| Fixed code or data bytes | Guarded `[[patch]]` on `main_exe`, `disc_raw`, or `disc_user` |
+| A player-selectable boolean, choice, or number | Feature-local `[[option]]` plus `when`, `replace_from`, sparse `fields`, or `when_integer` |
+| Artwork, script, audio, or another large disc asset | Hashed file-backed `[[overlay]]`; do not rebuild the player's stock image |
+| Host setting or live game behavior | Trusted static `[[plugin]]`, compiled into the game and selected by a stable id |
+| Several features composing one shared table, bitfield, routine, or allocation | Game-owned `resolver = "builtin:<id>"`, only when declarative operations cannot express the composition |
+
+Format versions 2–4 add bounded integers, ordered constraints, linked MIPS
+`LUI`/`ORI` values, sparse owned fields, and integer predicates. Format 5 adds
+trusted static plugins. The full schemas and resolution rules are in
 [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md).
+
+The enabled feature set is resolved before boot. Changing it may require a
+relaunch, but never asks the player to patch a disc or compile the game.
+
+### Trusted game code
+
+A `.psxmod` never supplies or loads native code. If a feature needs a per-VBlank
+callback or must configure a host-side facility, the game registers an
+implementation that is already linked into its executable:
+
+```c
+#include "mod_plugins.h"
+
+static void example_vblank(void) {
+    if (psx_mod_game_started())
+        psx_mod_write_byte(0x1F8001B4u, 1u);
+}
+
+PSX_MOD_CONSTRUCTOR(register_example_mod) {
+    (void)psx_mod_register_vblank_plugin(
+        "example.quick-start", example_vblank);
+}
+```
+
+The manifest activates it with:
+
+```toml
+format_version = 5
+
+[[plugin]]
+feature = "quick-start"
+id = "example.quick-start"
+```
+
+Activation callbacks are for one-time pre-renderer configuration; VBlank
+callbacks are deterministic guest-time work. Plugins receive only the narrow
+services in
+[`runtime/include/mod_plugins.h`](runtime/include/mod_plugins.h), can read
+validated feature options, and are selected by registry id—not by a library
+path or symbol supplied by an archive. Prefer ordinary patches and overlays
+whenever they are enough.
+
+### Converting an existing patch or patcher
+
+Large legacy mod suites should be converted feature by feature:
+
+1. Pin the exact clean disc revision and keep the original patcher or patched
+   output as a byte-for-byte **test oracle**, not as the runtime payload.
+2. Split its UI into independent features and typed, feature-local options.
+   Enabling one feature must not silently select another.
+3. Map each owned change back to the stock image: executable writes become
+   guarded `main_exe` patches, small disc writes become guarded disc patches,
+   and large assets become content-addressed overlays.
+4. Use sparse fields when features own adjacent bytes in one record. Introduce
+   a trusted built-in resolver only when independent selections must synthesize
+   one shared semantic object.
+5. Test every feature alone, representative combinations, all-off identity,
+   wrong-revision rejection, collision diagnostics, and byte parity with the
+   oracle. Record authorship and redistribution permission for every imported
+   asset.
+
+Do not ship a prepatched disc or use the legacy `derived_disc`/VCDIFF path for
+new packages. It remains conversion scaffolding only.
+
+### Real examples
+
+- [Tomba's merged catalog](https://github.com/mstan/TombaRecomp/tree/master/mods/preloaded/packages)
+  is the compact starting point. Its
+  [trusted plugins](https://github.com/mstan/TombaRecomp/tree/master/src/mods)
+  show activation callbacks, guest-VBlank behavior, launcher options, display
+  features, controller policy, and skip-FMV behavior; its
+  [CMake file](https://github.com/mstan/TombaRecomp/blob/master/CMakeLists.txt)
+  shows how to compile the plugin sources and preload the package catalog.
+- [Mega Man X6's unmerged Tweaks package branch](https://github.com/mstan/MegaManX6Recomp/tree/integrate/mmx6-mod-packages-current)
+  is the large conversion example. The
+  [package generators](https://github.com/mstan/MegaManX6Recomp/tree/integrate/mmx6-mod-packages-current/tools)
+  preserve patcher parity while producing guarded stock-targeted operations and
+  content-addressed assets; the
+  [trusted resolvers](https://github.com/mstan/MegaManX6Recomp/tree/integrate/mmx6-mod-packages-current/src/mods)
+  demonstrate deterministic composition of shared records and injected code.
+  The earlier
+  [`feature/mmx6-tweaks`](https://github.com/mstan/MegaManX6Recomp/tree/feature/mmx6-tweaks)
+  branch records the patcher-parity and write-classification work that feeds
+  this conversion; its patched-disc/pre-bake experiments are history, not the
+  recommended package delivery model. Both branches are review material rather
+  than a released compatibility promise.
 
 ## Swap language on the fly
 
@@ -549,13 +718,16 @@ the selected faithfully recompiled BIOS — OpenBIOS or retail BIOS — is the
 baseline and oracle, generated code is never hand-edited (fix the recompiler and
 regenerate), and a change proves itself against the Beetle oracle / on screen
 rather than by assertion. Game-specific work lives in the game repos, which pin
-an exact framework commit as a submodule.
+exact framework and UI commits as root-level submodules.
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the core
-rules, how to verify a change, the regression checklist across the known games,
-and how a framework fix reaches a game through its pin. Bugs and build problems go
-to GitHub issues (include `gcc -v` / OS / generator for build failures); design
-discussion happens in the **R.A.I.D.** Discord (invite below).
+- New title / setup-host release:
+  [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md)
+- Framework PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md) (rules, verification,
+  regression checklist, how a fix reaches a game through its pin)
+
+Bugs and build problems go to GitHub issues (include `gcc -v` / OS / generator
+for build failures); design discussion happens in the **R.A.I.D.** Discord
+(invite below).
 
 ## License
 

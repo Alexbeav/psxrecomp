@@ -2483,8 +2483,15 @@ void gpu_vblank_clear_deferred_present(void) {
 }
 
 void gpu_vblank_arm_deferred_present(void) {
-    if (s_present_pending < 8)
-        s_present_pending++;
+    /* Coalesce: at most one deferred present. Stacking (≥2) drained in one
+     * flush as double finish_frame at the same guest cycle (MotK soak:
+     * fin@N and fin@N+1 share dig/cyc → episode skew + clk/tim ±9). */
+    if (s_present_pending < 1)
+        s_present_pending = 1;
+}
+
+int gpu_vblank_present_pending(void) {
+    return s_present_pending > 0;
 }
 
 void gpu_vblank_release_present_flush_guard(void) {
@@ -2494,6 +2501,40 @@ void gpu_vblank_release_present_flush_guard(void) {
 void gpu_vblank_flush_present(void) {
     if (s_flushing_present || s_present_pending <= 0)
         return;
+    /* Belt-and-suspenders with interrupts.c: never finish_frame inside the
+     * exception handler (IEc-clear BB edges used to drain present_pending). */
+    {
+        extern int psx_get_in_exception(void);
+        if (psx_get_in_exception())
+            return;
+    }
+    /* MotK menu wait (0x8006CD54↔0x8006CDA0): present ONLY at an explicit
+     * CDA0 edge. Never present on a CD54 edge (sticky CDA0 must not allow
+     * that — soak ep3 non-det fin@946). Non-wait edges (FMV / cutover) must
+     * present even if sticky still names the wait loop — treating sticky as
+     * in_wait blocked deferred present for the whole FMV1→FMV2 gap. */
+    {
+        extern int psx_netplay_active(void);
+        extern uint32_t psx_compiled_irq_resume_pc(void);
+        extern uint32_t psx_last_irq_check_pc(void);
+        extern uint32_t psx_netplay_rb_sticky_bb_pc(void);
+        if (psx_netplay_active()) {
+            const uint32_t wait_a = 0x8006CD54u;
+            const uint32_t wait_b = 0x8006CDA0u;
+            uint32_t pc = psx_compiled_irq_resume_pc();
+            uint32_t last = psx_last_irq_check_pc();
+            uint32_t sticky = psx_netplay_rb_sticky_bb_pc();
+            uint32_t edge = pc ? pc : last;
+            if (edge == wait_a)
+                return;
+            if (edge == wait_b || edge != 0u) {
+                /* CDA0, or non-wait (FMV/cutover) — present; ignore sticky */
+            } else if (sticky == wait_a) {
+                return; /* latch cleared, sticky CD54 — defer */
+            }
+            /* sticky CDA0 or unrelated/0 — present */
+        }
+    }
     s_flushing_present = 1;
     while (s_present_pending > 0) {
         s_present_pending--;
@@ -2539,9 +2580,9 @@ void gpu_vblank_tick(void) {
          * resim peers (selfcheck soak: many FAILs with d_cyc≠0). Netplay
          * defers — both peers share the same present contract from boot. */
         if (psx_netplay_active()) {
-            /* Cap: a stuck defer must not queue unbounded presents. */
-            if (s_present_pending < 8)
-                s_present_pending++;
+            /* Coalesce to one deferred present (see arm_deferred_present). */
+            if (s_present_pending < 1)
+                s_present_pending = 1;
         } else {
             vblank_callback();
         }
@@ -2689,6 +2730,45 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
     uint8_t r, g, b;
     gpu_display_pixel_rgb(di, x, y, &r, &g, &b);
     return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+/* Batch depth24 (FMV) scanline → ARGB. Same semantics as calling
+ * gpu_display_pixel_argb(di, x, y) for x in [0, count) (byte-identical
+ * output, including the black-fill past the 2048-byte VRAM row), but hoists
+ * the per-row invariants (vy, base_byte_x, the "how many pixels are past the
+ * row edge" test) out of the per-pixel path instead of recomputing them
+ * `count` times and paying three gpu_vram_byte() calls per pixel. The
+ * per-pixel path was the dominant present-side cost of FMV frames (3x the
+ * VRAM touches of the 16-bit path, done as a function-call chain instead of
+ * a straight-line loop). Still scalar C — no host-endianness assumptions,
+ * same byte-order shifts as gpu_vram_byte. */
+void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
+                             uint32_t count) {
+    uint32_t vy = (di->display_y + y) & 511u;
+    uint32_t base_byte_x = (di->display_x & 1023u) * 2u;
+    const uint16_t* row = vram + (size_t)vy * 1024u;
+    uint32_t valid = 0u;
+    uint32_t x;
+
+    if (base_byte_x <= 2045u)
+        valid = (2045u - base_byte_x) / 3u + 1u;
+    if (valid > count)
+        valid = count;
+
+    for (x = 0; x < valid; x++) {
+        uint32_t byte_x = base_byte_x + x * 3u;
+        uint32_t bx1 = byte_x + 1u;
+        uint32_t bx2 = byte_x + 2u;
+        uint32_t hw0 = row[byte_x >> 1];
+        uint32_t hw1 = row[bx1 >> 1];
+        uint32_t hw2 = row[bx2 >> 1];
+        uint8_t r = (byte_x & 1u) ? (uint8_t)(hw0 >> 8) : (uint8_t)hw0;
+        uint8_t g = (bx1 & 1u) ? (uint8_t)(hw1 >> 8) : (uint8_t)hw1;
+        uint8_t b = (bx2 & 1u) ? (uint8_t)(hw2 >> 8) : (uint8_t)hw2;
+        out[x] = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
+    for (; x < count; x++)
+        out[x] = 0xFF000000u;
 }
 
 int gpu_display_is_depth24(void) {

@@ -771,7 +771,15 @@ static void write_data(uint32_t value) {
 }
 
 int mdec_recently_active(uint32_t within_frames) {
-    return (uint64_t)(s_frame_count - mdec_last_color_decode_frame) <= within_frames;
+    /* Guest-cycle hysteresis (not host s_frame_count). Present-skip / Replay
+     * leave s_frame_count stale so a single decode looked "recent" forever
+     * (false FMV lockstep on rematch; tip episodes into MotK FMV entry). */
+    const uint64_t cycles_per_frame = 338688ull;
+    const uint64_t window =
+        (uint64_t)within_frames * cycles_per_frame + (cycles_per_frame / 2ull);
+    if (psx_cycle_count < mdec_last_color_decode_cycle)
+        return 0;
+    return (psx_cycle_count - mdec_last_color_decode_cycle) <= window;
 }
 
 void mdec_init(void) {
