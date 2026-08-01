@@ -1,0 +1,270 @@
+# Setup-host multi-platform release template for a PSXRecomp *game* repository.
+#
+# Install:
+#   mkdir -p .github/workflows
+#   cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
+# Then replace every YOUR_* token. See docs/GAME_PROJECT_SETUP.md.
+#
+# Shared (do not fork these into the title):
+#   ./psxrecomp/.github/actions/fetch-toolchain
+#   ./psxrecomp/.github/actions/stage-setup-sdk
+#   psxrecomp/tools/{fetch_toolchain,stage_setup_sdk,bundle_mingw_dlls}.sh
+#
+# Title-owned:
+#   CMake setup-host flags, exe basename, zip prefix, package_setup_release.sh
+
+name: Release builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0 or v0.1.0)'
+        required: true
+        type: string
+      publish:
+        description: 'Create git tag vX.Y.Z and GitHub Release'
+        required: true
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: yourgame-release-${{ github.event_name }}-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CMAKE_BUILD_TYPE: Release
+
+jobs:
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - name: Normalize version / tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            RAW="${{ github.event.inputs.version }}"
+            PUBLISH="${{ github.event.inputs.publish }}"
+          else
+            RAW="${{ github.ref_name }}"
+            PUBLISH="true"
+          fi
+          RAW="$(printf '%s' "${RAW}" | tr -d '[:space:]')"
+          VER="${RAW#v}"
+          if [[ ! "${VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]*)?$ ]]; then
+            echo "::error::invalid version '${RAW}' (want X.Y.Z or vX.Y.Z)"
+            exit 1
+          fi
+          echo "version=${VER}" >>"$GITHUB_OUTPUT"
+          echo "tag=v${VER}" >>"$GITHUB_OUTPUT"
+          echo "publish=${PUBLISH}" >>"$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.artifact }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: linux-x64
+            shell: bash
+          - os: windows-2022
+            artifact: windows-x64
+            shell: 'msys2 {0}'
+          - os: macos-15
+            artifact: macos-arm64
+            shell: bash
+            deployment_target: '11.0'
+          - os: macos-15-intel
+            artifact: macos-x64
+            shell: bash
+            deployment_target: '11.0'
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      # Rename to match your packager (e.g. BPE_RELEASE_VERSION).
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Pin VERSION
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${RELEASE_VERSION}" >VERSION
+          echo "VERSION=$(cat VERSION)"
+
+      - name: Setup host mode (no game C / BIOS backends in CI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf generated psxrecomp/generated
+          echo "Cleared generated/ — CI builds a BIOS-free setup host."
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-pkgconf
+            curl
+            zip
+
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libsdl2-dev libgl1-mesa-dev zip
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja pkg-config sdl3 || brew install cmake ninja pkg-config sdl2
+
+      - name: Build recompiler tools (emitters)
+        run: |
+          set -euo pipefail
+          JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          if [[ -d /mingw64/bin ]]; then
+            export PATH="/mingw64/bin:${PATH}"
+          fi
+          cmake -S psxrecomp/recompiler -B build-recompiler -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-recompiler \
+            --target psxrecomp-game psxrecomp-bios -j"${JOBS}"
+          for bin in psxrecomp-bios psxrecomp-game; do
+            if [[ -f "build-recompiler/${bin}.exe" ]]; then
+              chmod +x "build-recompiler/${bin}.exe"
+            elif [[ -f "build-recompiler/${bin}" ]]; then
+              chmod +x "build-recompiler/${bin}"
+            else
+              echo "::error::${bin} missing after recompiler build"
+              exit 1
+            fi
+          done
+
+      - name: Configure & build setup host
+        env:
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target || '' }}
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [[ -n "${CMAKE_OSX_DEPLOYMENT_TARGET:-}" ]]; then
+            EXTRA+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+          fi
+          JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          # YOUR_SETUP_CMAKE_FLAGS: title-specific. Example from BPE:
+          #   -DYOURGAME_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPSXRECOMP_ALLOW_NO_BIOS=ON \
+            -DYOURGAME_FORCE_SETUP_HOST=ON \
+            -DPSX_GAME_VERSION="${RELEASE_VERSION}" \
+            "${EXTRA[@]}"
+          cmake --build build-ci --target psx-runtime -j"${JOBS}"
+
+      - name: Fetch portable toolchain pack
+        uses: ./psxrecomp/.github/actions/fetch-toolchain
+        with:
+          artifact: ${{ matrix.artifact }}
+
+      - name: Package setup zip
+        run: |
+          set -euo pipefail
+          chmod +x scripts/package_setup_release.sh
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export PSXRECOMP_RUNTIME_BIN_DIR=/mingw64/bin
+            export BPE_RUNTIME_BIN_DIR=/mingw64/bin
+          fi
+          export RELEASE_VERSION
+          # Packager stages title files, then calls stage_setup_sdk.sh.
+          if [[ -z "${PSXRECOMP_TOOLCHAIN_DIR:-${TOOLCHAIN_DIR:-${BPE_TOOLCHAIN_DIR:-}}}" ]]; then
+            echo "::error::toolchain dir not set — fetch-toolchain failed?"
+            exit 1
+          fi
+          scripts/package_setup_release.sh build-ci "${{ matrix.artifact }}" build-recompiler
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # YOUR_ZIP_PREFIX e.g. bpe, motk, yourgame
+          name: YOUR_ZIP_PREFIX-${{ matrix.artifact }}
+          path: dist/YOUR_ZIP_PREFIX-*-${{ matrix.artifact }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: GitHub Release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten zips
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f -name 'YOUR_ZIP_PREFIX-*.zip' -exec cp -v {} dist/ \;
+          ls -la dist/
+
+      - name: Ensure release tag exists
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            git tag -a "${TAG}" -m "YOUR_GAME_TITLE ${TAG}"
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git push origin "refs/tags/${TAG}"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: YOUR_GAME_TITLE ${{ needs.prepare.outputs.tag }}
+          files: |
+            dist/YOUR_ZIP_PREFIX-*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          target_commitish: ${{ github.sha }}

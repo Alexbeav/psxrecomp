@@ -20,7 +20,12 @@ then game C, then rebuild links everything.
 |-------|------|
 | Setup exe | `recomp-ui` + codegen host; opens Generate & rebuild |
 | Game zip `psxrecomp/` | `psxrecomp_cli.py`, `tools/`, `psxrecomp-game` + `psxrecomp-bios` |
+| `tools/fetch_toolchain.sh` | CI: download/unpack portable `cmake-clang-v1` |
+| `tools/stage_setup_sdk.sh` | CI/pack: emitters, OpenBIOS checks, embed `toolchain/`, MinGW DLLs |
+| `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
 | Game zip `toolchain/` | Portable `cmake-clang-v1` (cmake/ninja/clang); pruned after rebuild |
+| `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
+| `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt`, `psxrecomp/`, `recomp-ui/` |
 
 RetComM harvests emitters + toolchain into shared caches (no separate tools

@@ -55,8 +55,10 @@ standalone BIOS runtime supporting OpenBIOS and a compatible retail BIOS** —
 see [Release Package](#release-package) below.
 
 Bringing up a title of your own? Start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md) and open an issue — community projects are
-listed here alongside the rest.
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (submodules,
+setup-host CI template, release checklist), then
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Community projects are listed here
+alongside the rest.
 
 ## What It Is
 
@@ -95,15 +97,22 @@ Three things sit on that foundation:
   execution.
 
 PSXRecomp is a **framework**. Game-specific projects live in their own
-repositories and link this one in as a **git submodule** to build a game binary.
+repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
+and game code (`game.toml`, seeds, CMake) at the repo root. See
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
 **New here?** The fastest way in:
-[`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) (how a game actually
-runs — static / native-overlay / interpreter), then
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/BUILDING.md`](docs/BUILDING.md),
-[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) (versioned runtime mods),
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+| Path | Doc |
+|------|-----|
+| How a game runs | [`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) |
+| Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
+| **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
+| Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
+| Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
+| Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
+| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Which PlayStation BIOS does it use?
 
@@ -709,13 +718,16 @@ the selected faithfully recompiled BIOS — OpenBIOS or retail BIOS — is the
 baseline and oracle, generated code is never hand-edited (fix the recompiler and
 regenerate), and a change proves itself against the Beetle oracle / on screen
 rather than by assertion. Game-specific work lives in the game repos, which pin
-an exact framework commit as a submodule.
+exact framework and UI commits as root-level submodules.
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the core
-rules, how to verify a change, the regression checklist across the known games,
-and how a framework fix reaches a game through its pin. Bugs and build problems go
-to GitHub issues (include `gcc -v` / OS / generator for build failures); design
-discussion happens in the **R.A.I.D.** Discord (invite below).
+- New title / setup-host release:
+  [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md)
+- Framework PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md) (rules, verification,
+  regression checklist, how a fix reaches a game through its pin)
+
+Bugs and build problems go to GitHub issues (include `gcc -v` / OS / generator
+for build failures); design discussion happens in the **R.A.I.D.** Discord
+(invite below).
 
 ## License
 
