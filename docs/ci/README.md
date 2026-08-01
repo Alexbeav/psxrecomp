@@ -23,10 +23,10 @@ Template: [`templates/setup-release.yml`](templates/setup-release.yml)
 | `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
 | `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs |
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
-| `fetch_toolchain.sh` | Download/unpack `cmake-clang-v1` |
-| `stage_setup_sdk.sh` | Emitters, OpenBIOS, `toolchain/`, MinGW DLLs |
+| `fetch_toolchain.sh` | Optional download/unpack (only if embedding) |
+| `stage_setup_sdk.sh` | Emitters, OpenBIOS, optional `toolchain/`, MinGW DLLs |
 | `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
-| `package_setup_host.sh` | Full setup-host zip (title passes exe/prefix/files) |
+| `package_setup_host.sh` | Lean setup-host zip (optional `--embed-toolchain`) |
 | `../cmake/toolchain-mingw-w64.cmake` | Linux→Windows MinGW cross toolchain |
 | `../host/psxrecomp_codegen_host.*` | Portable Generate & rebuild host (via CMake helper) |
 | `templates/game.gitignore` | Suggested gitignore for title repos |
@@ -40,14 +40,13 @@ submodule — there is no separate `psxrecomp-sdk/` overlay.
 ```yaml
 - uses: ./psxrecomp/.github/actions/build-emitters
 
-- uses: ./psxrecomp/.github/actions/fetch-toolchain
-  with:
-    artifact: ${{ matrix.artifact }}
-
+# Prefer package_setup_host.sh (allow-no-toolchain by default).
+# fetch-toolchain + --embed-toolchain only for offline-first packs.
 - uses: ./psxrecomp/.github/actions/stage-setup-sdk
   with:
     stage: dist/stage-setup-${{ matrix.artifact }}
     recompiler-build: build-recompiler
+    allow-no-toolchain: 'true'
     runtime-bin: /mingw64/bin   # Windows / MSYS2
 ```
 

@@ -2,6 +2,8 @@
 
 #include "psxrecomp_codegen_host.h"
 
+#include "common/launcher_files.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -151,29 +153,29 @@ static int find_python(char* out, size_t cap) {
     return 0;
 }
 
-static int resolve_toolchain_bin(char* out, size_t cap) {
-    char cand[1100], cmake[1200];
-    if (!g_project_root[0])
-        return 0;
-    if (!join_path(cand, sizeof(cand), g_project_root, "toolchain/bin"))
-        return 0;
+static int toolchain_bin_has_cmake(const char* bin, char* out, size_t cap) {
+    char cmake[1200];
 #if defined(_WIN32)
-    if (join_path(cmake, sizeof(cmake), cand, "cmake.exe") && path_is_file(cmake)) {
-        snprintf(out, cap, "%s", cand);
+    if (join_path(cmake, sizeof(cmake), bin, "cmake.exe") && path_is_file(cmake)) {
+        snprintf(out, cap, "%s", bin);
         return 1;
     }
 #else
-    if (join_path(cmake, sizeof(cmake), cand, "cmake") && path_is_file(cmake)) {
-        snprintf(out, cap, "%s", cand);
+    if (join_path(cmake, sizeof(cmake), bin, "cmake") && path_is_file(cmake)) {
+        snprintf(out, cap, "%s", bin);
         return 1;
     }
 #endif
-    /* Nested pack root: toolchain/<name>/bin */
-    char wrap[1100];
-    if (!join_path(wrap, sizeof(wrap), g_project_root, "toolchain"))
+    return 0;
+}
+
+static int resolve_toolchain_bin_under(const char* wrap, char* out, size_t cap) {
+    char cand[1100], cmake[1200];
+    if (!wrap || !wrap[0] || !path_is_dir(wrap))
         return 0;
-    if (!path_is_dir(wrap))
-        return 0;
+    if (join_path(cand, sizeof(cand), wrap, "bin") &&
+        toolchain_bin_has_cmake(cand, out, cap))
+        return 1;
 #if defined(_WIN32)
     WIN32_FIND_DATAA fd;
     char pattern[1200];
@@ -225,6 +227,24 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
     closedir(dir);
     return found;
 #endif
+}
+
+static int resolve_toolchain_bin(char* out, size_t cap) {
+    const char* env_keys[] = {
+        "PSXRECOMP_TOOLCHAIN_DIR", "RETCOMM_TOOLCHAIN_DIR", "TOOLCHAIN_DIR",
+        "BPE_TOOLCHAIN_DIR", NULL};
+    for (int i = 0; env_keys[i]; ++i) {
+        const char* e = getenv(env_keys[i]);
+        if (e && e[0] && resolve_toolchain_bin_under(e, out, cap))
+            return 1;
+    }
+    if (!g_project_root[0])
+        return 0;
+    char wrap[1100];
+    if (join_path(wrap, sizeof(wrap), g_project_root, "toolchain") &&
+        resolve_toolchain_bin_under(wrap, out, cap))
+        return 1;
+    return 0;
 }
 
 static void activate_toolchain_path(void) {
@@ -596,6 +616,105 @@ static int run_cli_posix(char* const argv[],
 }
 #endif
 
+/* Download or offline-install cmake-clang-v1 when no pack / system cmake. */
+static int host_ensure_toolchain(RecompLauncherCPrepareProgressFn on_progress,
+                                 void* progress_ctx, char* err_msg,
+                                 size_t err_cap) {
+#if defined(_WIN32)
+    char cmdline[4096];
+#else
+    char* argv[12];
+    int argc = 0;
+#endif
+    activate_toolchain_path();
+    if (find_cmake(g_cmake, sizeof(g_cmake)))
+        return 1;
+
+    if (on_progress)
+        on_progress(progress_ctx, 0.03f,
+                    "Ensuring portable cmake/clang toolchain…");
+
+#if defined(_WIN32)
+    snprintf(cmdline, sizeof(cmdline),
+             "\"%s\" \"%s\" ensure-toolchain --project-root \"%s\" "
+             "--json-progress",
+             g_python, g_cli_path, g_project_root);
+    if (run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
+                    "ensure-toolchain")) {
+        activate_toolchain_path();
+        if (find_cmake(g_cmake, sizeof(g_cmake)))
+            return 1;
+    }
+#else
+    argc = 0;
+    argv[argc++] = g_python;
+    argv[argc++] = g_cli_path;
+    argv[argc++] = "ensure-toolchain";
+    argv[argc++] = "--project-root";
+    argv[argc++] = g_project_root;
+    argv[argc++] = "--json-progress";
+    argv[argc] = NULL;
+    if (run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
+                      "ensure-toolchain")) {
+        activate_toolchain_path();
+        if (find_cmake(g_cmake, sizeof(g_cmake)))
+            return 1;
+    }
+#endif
+
+    /* Offline / download failure: let the user pick a local pack zip. */
+    if (on_progress)
+        on_progress(progress_ctx, 0.04f,
+                    "Select cmake-clang-v1-*.zip (offline toolchain)…");
+    {
+        static const char* pats[] = {"*.zip"};
+        char zip_path[1100];
+        if (!launcher_pick_file("Select cmake-clang-v1 toolchain zip", pats, 1,
+                                "Toolchain zip archives", zip_path,
+                                sizeof(zip_path))) {
+            snprintf(err_msg, err_cap,
+                     "No portable toolchain. Connect to download "
+                     "cmake-clang-v1, pick a local zip, set "
+                     "PSXRECOMP_TOOLCHAIN_DIR / RETCOMM_TOOLCHAIN_DIR, "
+                     "or install cmake on PATH.");
+            return 0;
+        }
+#if defined(_WIN32)
+        snprintf(cmdline, sizeof(cmdline),
+                 "\"%s\" \"%s\" ensure-toolchain --project-root \"%s\" "
+                 "--from-zip \"%s\" --json-progress",
+                 g_python, g_cli_path, g_project_root, zip_path);
+        if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
+                         "ensure-toolchain --from-zip"))
+            return 0;
+#else
+        char zip_storage[1100];
+        snprintf(zip_storage, sizeof(zip_storage), "%s", zip_path);
+        argc = 0;
+        argv[argc++] = g_python;
+        argv[argc++] = g_cli_path;
+        argv[argc++] = "ensure-toolchain";
+        argv[argc++] = "--project-root";
+        argv[argc++] = g_project_root;
+        argv[argc++] = "--from-zip";
+        argv[argc++] = zip_storage;
+        argv[argc++] = "--json-progress";
+        argv[argc] = NULL;
+        if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
+                           "ensure-toolchain --from-zip"))
+            return 0;
+#endif
+        activate_toolchain_path();
+        if (find_cmake(g_cmake, sizeof(g_cmake)))
+            return 1;
+    }
+
+    snprintf(err_msg, err_cap,
+             "Toolchain zip installed but cmake was not found. "
+             "Expected a cmake-clang-v1 pack with bin/cmake.");
+    return 0;
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -711,13 +830,22 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
             "  ping -n 2 127.0.0.1 >NUL\r\n"
             "  goto waitloop\r\n"
             ")\r\n"
-            "echo Building...\r\n"
+            "echo Ensuring toolchain...\r\n"
             "cd /d \"%%ROOT%%\"\r\n"
             "if defined TC_BIN set \"PATH=%%TC_BIN%%;%%PATH%%\"\r\n"
+            "\"%%PYTHON%%\" \"%%CLI%%\" ensure-toolchain --project-root \"%%ROOT%%\"\r\n"
+            "if errorlevel 1 (\r\n"
+            "  echo.\r\n"
+            "  echo Toolchain missing. Download cmake-clang-v1 or set\r\n"
+            "  echo PSXRECOMP_TOOLCHAIN_DIR / pass --toolchain-zip on rebuild.\r\n"
+            "  pause\r\n"
+            "  exit /b 1\r\n"
+            ")\r\n"
+            "echo Building...\r\n"
             "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
             "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
             "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-            "--no-pgo --prune-after toolchain,build-intermediates\r\n"
+            "--no-pgo --prune-after build-intermediates\r\n"
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"
             "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
@@ -742,9 +870,11 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
         return 0;
     }
 
+    if (!host_ensure_toolchain(on_progress, progress_ctx, err_msg, err_cap))
+        return 0;
+
 #if defined(_WIN32)
     (void)disc_path;
-    (void)g_cmake;
     activate_toolchain_path();
     if (on_progress)
         on_progress(progress_ctx, 0.4f,
@@ -786,7 +916,7 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
     }
     argv[argc++] = "--no-pgo";
     argv[argc++] = "--prune-after";
-    argv[argc++] = "toolchain,build-intermediates";
+    argv[argc++] = "build-intermediates";
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
 
@@ -923,8 +1053,9 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     gi->prepare_busy_status = "Generating BIOS + game sources…";
     gi->prepare_success_status = "Sources ready — building…";
 
-    const int can_rebuild = find_cmake(g_cmake, sizeof(g_cmake)) &&
-                            resolve_build_paths();
+    /* Rebuild is offered whenever the build tree can be formed; cmake may be
+     * downloaded (or an offline zip picked) at rebuild time. */
+    const int can_rebuild = resolve_build_paths();
     if (can_rebuild) {
         gi->prepare_disc_label = "Generate & rebuild…";
 #if defined(_WIN32)
@@ -932,8 +1063,8 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
             cfg->prepare_note_windows
                 ? cfg->prepare_note_windows
                 : "Uses your disc with the local psxrecomp SDK to regenerate "
-                  "generated/, then quits and rebuilds via a helper so the "
-                  "running .exe is not locked.";
+                  "generated/, then downloads cmake-clang-v1 if needed (or "
+                  "asks for an offline zip), quits, and rebuilds via a helper.";
         gi->rebuild_busy_status = "Scheduling rebuild…";
         gi->rebuild_success_status =
             "Exiting for Windows rebuild — a console will finish the build…";
@@ -942,7 +1073,8 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
             cfg->prepare_note
                 ? cfg->prepare_note
                 : "Uses your disc with the local psxrecomp SDK to regenerate "
-                  "generated/, then runs cmake --build and restarts.";
+                  "generated/, ensures cmake-clang-v1 (download or offline "
+                  "zip), then runs cmake --build and restarts.";
         gi->rebuild_busy_status = "Building…";
         gi->rebuild_success_status = "Build complete — restarting…";
 #endif
@@ -955,7 +1087,8 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
             cfg->prepare_note_no_cmake
                 ? cfg->prepare_note_no_cmake
                 : "Regenerates generated/ with the local psxrecomp SDK. "
-                  "CMake/build dir not found — rebuild manually, then relaunch.";
+                  "Build dir could not be resolved — rebuild manually, then "
+                  "relaunch.";
         gi->prepare_success_status =
             "Sources generated. Rebuild manually, then relaunch.";
     }

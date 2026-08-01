@@ -2,7 +2,9 @@
 # Universal setup-host zip packager for PSXRecomp game repos.
 #
 # Stages the host exe, title sources, filtered psxrecomp/ + recomp-ui/, then
-# finishes with stage_setup_sdk.sh (emitters, OpenBIOS, toolchain/, MinGW DLLs).
+# finishes with stage_setup_sdk.sh (emitters, OpenBIOS, MinGW DLLs).
+# Portable cmake/clang is NOT embedded by default — RetComM / the setup wizard
+# download cmake-clang-v1 from retcomm-toolchains (or accept an offline zip).
 #
 # Usage (from game repo root):
 #   psxrecomp/tools/package_setup_host.sh \
@@ -14,11 +16,13 @@
 #     --recompiler-build build-recompiler \
 #     [--project-file REL]... [--project-dir REL]... \
 #     [--disc-hint "your legally owned disc"] \
-#     [--version-env BPE_RELEASE_VERSION]
+#     [--version-env BPE_RELEASE_VERSION] \
+#     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
 # Env:
 #   RELEASE_VERSION / <version-env> / VERSION file
-#   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR
+#   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR  (only with --embed-toolchain)
+#   PSXRECOMP_EMBED_TOOLCHAIN=1  same as --embed-toolchain
 #   PSXRECOMP_RUNTIME_BIN_DIR | BPE_RUNTIME_BIN_DIR  (Windows MinGW DLL search)
 set -euo pipefail
 
@@ -36,9 +40,13 @@ DISC_HINT="your legally owned game disc"
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
+EMBED_TOOLCHAIN=0
+if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
+  EMBED_TOOLCHAIN=1
+fi
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -53,10 +61,12 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
-    --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
-    --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
+    --project-file) PROJECT_FILES+=("${2:?}"; shift 2 ;;
+    --project-dir) PROJECT_DIRS+=("${2:?}"; shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
+    --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
+    --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage
@@ -233,8 +243,14 @@ stage_args=(
   --host-exe "${STAGE}/${EXE_BASENAME}"
   --recompiler-build "${RECOMPILER_BUILD}"
 )
-if [[ -n "${PSXRECOMP_TOOLCHAIN_DIR:-${TOOLCHAIN_DIR:-${BPE_TOOLCHAIN_DIR:-}}}" ]]; then
+if [[ "${EMBED_TOOLCHAIN}" -eq 1 ]]; then
+  if [[ -z "${PSXRECOMP_TOOLCHAIN_DIR:-${TOOLCHAIN_DIR:-${BPE_TOOLCHAIN_DIR:-}}}" ]]; then
+    echo "error: --embed-toolchain requires PSXRECOMP_TOOLCHAIN_DIR (or TOOLCHAIN_DIR)" >&2
+    exit 1
+  fi
   stage_args+=(--toolchain-dir "${PSXRECOMP_TOOLCHAIN_DIR:-${TOOLCHAIN_DIR:-${BPE_TOOLCHAIN_DIR}}}")
+else
+  stage_args+=(--allow-no-toolchain)
 fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
@@ -244,19 +260,22 @@ ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}
 
 One zip for first install and updates. Does NOT include disc images, retail
-BIOS dumps, or pre-generated game C. Emitters (psxrecomp-game / psxrecomp-bios)
-and the CLI are inside psxrecomp/. A portable cmake/clang pack is under
-toolchain/ (removed automatically after a successful Generate & rebuild).
+BIOS dumps, pre-generated game C, or a portable cmake/clang pack. Emitters
+(psxrecomp-game / psxrecomp-bios) and the CLI are inside psxrecomp/.
 
 Standalone:
 1. Install Python 3.
-2. Run ${EXE_BASENAME} (uses ./toolchain when present; else system cmake).
+2. Run ${EXE_BASENAME}.
 3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
    OpenBIOS is regenerated locally).
-4. Follow the Generate & rebuild wizard.
+4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
+   cmake-clang-v1 from TechnicallyComputers/retcomm-toolchains (or you can
+   pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
+   also works if already on PATH.
 
-RetComM uses this same zip: it promotes tools + toolchain into shared caches,
-prunes per-title copies after build, and preserves saves/user config.
+RetComM uses this same zip: it harvests emitters into a shared SDK cache,
+downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
+saves/user config across updates.
 EOF
 
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +

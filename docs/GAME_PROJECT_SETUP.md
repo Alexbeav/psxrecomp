@@ -110,20 +110,22 @@ Details: [`LOCAL_CODEGEN_SDK.md`](LOCAL_CODEGEN_SDK.md), [`BUILDING.md`](BUILDIN
 
 ## Setup-host releases (self-build zip)
 
-CI ships a zip **without** `generated/` game C and **without** retail BIOS
-dumps. The zip includes:
+CI ships a zip **without** `generated/` game C, retail BIOS dumps, or an
+embedded `toolchain/`. The zip includes:
 
 - Setup host exe (`recomp-ui` + generate/rebuild wizard)
 - Your game sources (`game.toml`, seeds, CMake, host glue, …)
 - `psxrecomp/` (runtime + CLI + OpenBIOS profiles + emitters)
 - `recomp-ui/` sources (needed to rebuild)
-- `toolchain/` — portable `cmake-clang-v1` from
-  [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
-run Generate & rebuild locally. After a successful rebuild the CLI can prune
-`toolchain/` and build intermediates.
+run Generate & rebuild locally. RetComM / the wizard download
+`cmake-clang-v1` from
+[retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
+(or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
+`--embed-toolchain` to `package_setup_host.sh` only for special offline-first
+packs.
 
 Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`.
 
@@ -137,8 +139,8 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 | `tools/ci/clear_generated.sh` | Wipe `generated/` for setup-host CI |
 | `tools/ci/record_pins.sh` | Log submodule SHAs |
 | `tools/ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
-| `tools/fetch_toolchain.sh` | Download/unpack portable cmake/clang |
-| `tools/stage_setup_sdk.sh` | Emitters + OpenBIOS + `toolchain/` + MinGW DLLs |
+| `tools/fetch_toolchain.sh` | Optional download/unpack (embed packs only) |
+| `tools/stage_setup_sdk.sh` | Emitters + OpenBIOS + optional `toolchain/` + MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows runtime DLL copy |
 | `tools/package_setup_host.sh` | Full setup-host zip (title args) |
 
@@ -146,13 +148,15 @@ Composite actions (from the game repo after checkout):
 
 ```yaml
 - uses: ./psxrecomp/.github/actions/build-emitters
-- uses: ./psxrecomp/.github/actions/fetch-toolchain
-  with:
-    artifact: ${{ matrix.artifact }}
+# Optional — only when packaging with --embed-toolchain:
+# - uses: ./psxrecomp/.github/actions/fetch-toolchain
+#   with:
+#     artifact: ${{ matrix.artifact }}
 - uses: ./psxrecomp/.github/actions/stage-setup-sdk
   with:
     stage: dist/stage-setup-${{ matrix.artifact }}
     recompiler-build: build-recompiler
+    allow-no-toolchain: 'true'
 ```
 
 ---
@@ -196,9 +200,9 @@ Use this before tagging a setup-host release that matches other titles
 ### Packaging (shared helpers)
 
 - [ ] CI uses `./psxrecomp/.github/actions/build-emitters`
-- [ ] CI uses `./psxrecomp/.github/actions/fetch-toolchain`
-- [ ] Packager calls `psxrecomp/tools/package_setup_host.sh` (or
-      `stage_setup_sdk.sh` after a custom stage)
+- [ ] Packager calls `psxrecomp/tools/package_setup_host.sh` (lean zip by
+      default; optional `--embed-toolchain`) or `stage_setup_sdk.sh` after a
+      custom stage
 - [ ] Staged tree includes `psxrecomp/psxrecomp_cli.py`
 - [ ] Staged `psxrecomp/bios/` has `OpenBIOS.toml`, `openbios.bin`,
       `OpenBIOS.LICENSE`, `SCPH1001.toml` — and **no** retail `.BIN`

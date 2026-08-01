@@ -23,17 +23,19 @@ rebuild links everything.
 | `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
 | `tools/package_setup_host.sh` | Universal setup-host zip packager |
 | `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
-| `tools/fetch_toolchain.sh` | CI: download/unpack portable `cmake-clang-v1` |
-| `tools/stage_setup_sdk.sh` | CI/pack: emitters, OpenBIOS checks, embed `toolchain/`, MinGW DLLs |
+| `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
+| `tools/toolchain_pack.py` | CLI: resolve / download / offline-unpack into shared cache |
+| `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
-| Game zip `toolchain/` | Portable `cmake-clang-v1` (cmake/ninja/clang); pruned after rebuild |
+| Shared toolchain cache | `~/.local/share/psxrecomp/toolchains/cmake-clang-v1/` (or RetComM’s) |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
-RetComM harvests emitters + toolchain into shared caches (no separate tools
-zip required). Wizard rebuild uses `--prune-after toolchain,build-intermediates`.
-Needs Python 3; cmake comes from `toolchain/` when bundled.
+RetComM harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
+(no separate tools zip; game zips stay lean). The wizard / CLI
+`ensure-toolchain` use the same packs; offline builds accept
+`--from-zip` / a file picker. Needs Python 3.
 
 ## Commands
 
@@ -46,11 +48,15 @@ python psxrecomp/psxrecomp_cli.py generate \
   [--bios path/to/SCPH1001.BIN] [--force-bios] \
   [--skip-hash-check] [--force-prepare] [--json-progress]
 
+python psxrecomp/psxrecomp_cli.py ensure-toolchain \
+  [--project-root .] [--from-zip cmake-clang-v1-linux-x64.zip] [--no-download]
+
 python psxrecomp/psxrecomp_cli.py rebuild \
   --config game.toml --project-root . \
   --build-dir build-release --target psx-runtime \
   --exe-basename Bomberman_Party_Edition_Recompiled \
-  [--disc path/to/game.cue] [--no-pgo] [--force-pgo] [--json-progress]
+  [--disc path/to/game.cue] [--toolchain-zip path/to/pack.zip] \
+  [--no-toolchain-download] [--no-pgo] [--force-pgo] [--json-progress]
 
 python psxrecomp/psxrecomp_cli.py pgo-train \
   --config game.toml --build-dir build-release \
