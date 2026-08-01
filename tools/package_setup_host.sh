@@ -61,8 +61,8 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
-    --project-file) PROJECT_FILES+=("${2:?}"; shift 2 ;;
-    --project-dir) PROJECT_DIRS+=("${2:?}"; shift 2 ;;
+    --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
+    --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
