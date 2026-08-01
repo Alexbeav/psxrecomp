@@ -135,7 +135,7 @@ After step 1 above — no BIOS or disc needed — verify the tree is sane:
 cd recompiler/build && ctest --output-on-failure
 ```
 
-36 tests, under five seconds. See [`TESTING.md`](TESTING.md).
+38 tests, under five seconds. See [`TESTING.md`](TESTING.md).
 
 On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generator
 (e.g. `-G "Unix Makefiles"`); everything else is identical.

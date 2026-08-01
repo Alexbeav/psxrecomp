@@ -8,7 +8,7 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-That is the whole thing. 36 tests, under 5 seconds, and it needs **no BIOS dump,
+That is the whole thing. 38 tests, under 5 seconds, and it needs **no BIOS dump,
 no disc image, and no generated code** — a plain recompiler build is enough. This
 is the check to run before opening a PR.
 
