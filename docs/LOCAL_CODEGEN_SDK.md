@@ -10,23 +10,26 @@ PGO (optional) runs **only on the user’s machine** during local rebuild when
 ## Setup host (CI without game/BIOS generated C)
 
 Games can ship a **setup host**: `psx-runtime` linked **without** game C and
-**without** BIOS backends (`-DBPE_FORCE_SETUP_HOST=ON` /
-`-DPSXRECOMP_ALLOW_NO_BIOS=ON`), plus `PSX_HAS_GAME_CODEGEN` and the codegen
-host. CI never needs BIOS dumps or private assets. First-run Generate emits
-OpenBIOS (from bundled `openbios.bin`) and optional SCPH1001 (player dump),
-then game C, then rebuild links everything.
+**without** BIOS backends (`-DPSXRECOMP_FORCE_SETUP_HOST=ON`, or legacy
+`-DBPE_FORCE_SETUP_HOST=ON`) via `psxrecomp_add_game_runtime(...)`. CI never
+needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
+bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
+rebuild links everything.
 
 | Piece | Role |
 |-------|------|
 | Setup exe | `recomp-ui` + codegen host; opens Generate & rebuild |
-| Game zip `psxrecomp/` | `psxrecomp_cli.py`, `tools/`, `psxrecomp-game` + `psxrecomp-bios` |
+| Game zip `psxrecomp/` | submodule tree: CLI, tools, emitters, OpenBIOS profiles |
+| `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
+| `tools/package_setup_host.sh` | Universal setup-host zip packager |
+| `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
 | `tools/fetch_toolchain.sh` | CI: download/unpack portable `cmake-clang-v1` |
 | `tools/stage_setup_sdk.sh` | CI/pack: emitters, OpenBIOS checks, embed `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
 | Game zip `toolchain/` | Portable `cmake-clang-v1` (cmake/ninja/clang); pruned after rebuild |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
-| Game sources | `game.toml`, seeds, `CMakeLists.txt`, `psxrecomp/`, `recomp-ui/` |
+| Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
 RetComM harvests emitters + toolchain into shared caches (no separate tools
 zip required). Wizard rebuild uses `--prune-after toolchain,build-intermediates`.
@@ -82,14 +85,13 @@ Stdout is reserved for one JSON object per line. Useful events:
 | `result` | final payload |
 | `error` | `message`, `code` |
 
-## Portable recomp-ui host (`host/`)
+## Portable recomp-ui host (`psxrecomp/host/`)
 
-Compile:
+Prefer `psxrecomp_add_game_runtime(...)` — it compiles
+`psxrecomp/host/psxrecomp_codegen_host.c` and sets `PSX_HAS_GAME_CODEGEN`.
 
-- `host/psxrecomp_codegen_host.c`
-- `host/psxrecomp_codegen_host.h`
-
-Fill a `PsxrecompCodegenHostConfig`, then:
+Titles keep a thin root `codegen_setup.c` that fills
+`PsxrecompCodegenHostConfig` and exposes apply/relaunch hooks:
 
 ```c
 psxrecomp_codegen_host_apply(&gi, &my_cfg);

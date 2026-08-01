@@ -1109,3 +1109,198 @@ endfunction()
 function(psxrecomp_v4_add_runtime_target target)
     psxrecomp_add_runtime_target(${target} ${ARGN})
 endfunction()
+
+# ---------------------------------------------------------------------------
+# High-level helper for title repos (setup-host + optional generated game C).
+#
+# Typical game CMakeLists.txt:
+#   set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp")
+#   include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+#   psxrecomp_add_game_runtime(psx-runtime
+#     WINDOW_TITLE "My Game Recompiled"
+#     GEN_MARKER "generated/SLUS_01234_dispatch.c"
+#     GEN_FULL_GLOB "generated/SLUS_01234_full_*.c"
+#     CODEGEN_SETUP_SOURCES codegen_setup.c
+#     DEFAULT_GAME_CONFIG_PATH "game.toml"
+#     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
+#     MAX_PLAYERS 2
+#     ENABLE_NETPLAY_IF_PRESENT
+#   )
+#
+# Remaining args are forwarded to psxrecomp_add_runtime_target.
+# ---------------------------------------------------------------------------
+function(psxrecomp_add_game_runtime target)
+    set(options ENABLE_NETPLAY_IF_PRESENT)
+    set(oneValueArgs
+        GEN_MARKER
+        GEN_FULL_FALLBACK
+        VERSION_FILE
+        CODEGEN_SETUP_INCLUDE_DIR
+    )
+    set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES)
+    cmake_parse_arguments(PSXG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(NOT PSXRECOMP_ROOT)
+        message(FATAL_ERROR
+            "psxrecomp_add_game_runtime: PSXRECOMP_ROOT is not set. "
+            "Set it to the psxrecomp submodule path before including runtime.cmake.")
+    endif()
+
+    option(PSXRECOMP_FORCE_SETUP_HOST
+        "Build without linking game C even if generated/ exists" OFF)
+    option(PSXRECOMP_REQUIRE_GAME_C
+        "Fail configure if generated game C is missing" OFF)
+
+    # Legacy BPE option name (CI / docs may still pass -DBPE_FORCE_SETUP_HOST=ON).
+    if(BPE_FORCE_SETUP_HOST)
+        set(PSXRECOMP_FORCE_SETUP_HOST ON CACHE BOOL
+            "Build without linking game C even if generated/ exists" FORCE)
+    endif()
+    if(BPE_REQUIRE_GAME_C)
+        set(PSXRECOMP_REQUIRE_GAME_C ON CACHE BOOL
+            "Fail configure if generated game C is missing" FORCE)
+    endif()
+
+    if(NOT PSXG_VERSION_FILE)
+        set(PSXG_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    endif()
+    if(NOT IS_ABSOLUTE "${PSXG_VERSION_FILE}")
+        set(PSXG_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${PSXG_VERSION_FILE}")
+    endif()
+
+    # Lobby / release pin from VERSION when PSX_GAME_VERSION is unset.
+    if(EXISTS "${PSXG_VERSION_FILE}")
+        file(READ "${PSXG_VERSION_FILE}" _psxg_ver_raw)
+        string(STRIP "${_psxg_ver_raw}" _psxg_release_version)
+    else()
+        set(_psxg_release_version "0.0.0")
+    endif()
+    set(PSX_GAME_VERSION "" CACHE STRING
+        "Lobby release pin (empty = Release uses VERSION file, else dev)")
+    if(PSX_GAME_VERSION STREQUAL "")
+        get_property(_psxg_is_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        if(_psxg_is_multi)
+            set(PSX_GAME_VERSION
+                "$<IF:$<CONFIG:Release>,${_psxg_release_version},dev>")
+        elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+            set(PSX_GAME_VERSION "${_psxg_release_version}")
+        else()
+            set(PSX_GAME_VERSION "dev")
+        endif()
+    endif()
+    message(STATUS
+        "psxrecomp game_version: ${PSX_GAME_VERSION} "
+        "(from VERSION=${_psxg_release_version})")
+
+    # Prefer game-root recomp-ui (runtime.cmake also auto-discovers this).
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
+        set(RECOMP_UI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui" CACHE PATH
+            "Path to recomp-ui launcher" FORCE)
+    endif()
+
+    # Optional: enable netplay when recomp-net is present.
+    if(PSXG_ENABLE_NETPLAY_IF_PRESENT)
+        if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
+            if(NOT RECOMP_NET_ROOT)
+                set(RECOMP_NET_ROOT "${PSXRECOMP_ROOT}/lib/recomp-net" CACHE PATH
+                    "Path to recomp-net; empty = auto-discover" FORCE)
+            endif()
+            if(NOT DEFINED PSX_NETPLAY)
+                set(PSX_NETPLAY ON)
+            endif()
+        endif()
+    endif()
+
+    if(NOT PSXG_GEN_MARKER)
+        message(FATAL_ERROR
+            "psxrecomp_add_game_runtime: GEN_MARKER is required "
+            "(e.g. generated/SLUS_01234_dispatch.c)")
+    endif()
+    if(NOT IS_ABSOLUTE "${PSXG_GEN_MARKER}")
+        set(_psxg_marker "${CMAKE_CURRENT_SOURCE_DIR}/${PSXG_GEN_MARKER}")
+    else()
+        set(_psxg_marker "${PSXG_GEN_MARKER}")
+    endif()
+
+    set(_psxg_has_game_c FALSE)
+    if(EXISTS "${_psxg_marker}" AND NOT PSXRECOMP_FORCE_SETUP_HOST)
+        set(_psxg_has_game_c TRUE)
+    endif()
+
+    if(NOT _psxg_has_game_c)
+        set(PSXRECOMP_ALLOW_NO_BIOS ON CACHE BOOL
+            "Allow runtime with no BIOS backends (setup host)" FORCE)
+    endif()
+
+    if(PSXRECOMP_REQUIRE_GAME_C AND NOT _psxg_has_game_c)
+        message(FATAL_ERROR
+            "PSXRECOMP_REQUIRE_GAME_C=ON but ${_psxg_marker} is missing. "
+            "Generate with psxrecomp-game, or leave REQUIRE_GAME_C off to "
+            "build the setup host.")
+    endif()
+
+    set(_psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
+    list(APPEND _psxg_extras
+        "${PSXRECOMP_ROOT}/host/psxrecomp_codegen_host.c")
+
+    set(_psxg_rt_args
+        GAME_VERSION "${PSX_GAME_VERSION}"
+        EXTRAS_SOURCES ${_psxg_extras}
+        ${PSXG_UNPARSED_ARGUMENTS}
+    )
+
+    if(_psxg_has_game_c)
+        message(STATUS
+            "psxrecomp: linking generated game C (full runtime) — ${_psxg_marker}")
+        set(_psxg_full_list "")
+        foreach(_glob IN LISTS PSXG_GEN_FULL_GLOB)
+            if(NOT IS_ABSOLUTE "${_glob}")
+                set(_glob "${CMAKE_CURRENT_SOURCE_DIR}/${_glob}")
+            endif()
+            file(GLOB _hits "${_glob}")
+            list(APPEND _psxg_full_list ${_hits})
+        endforeach()
+        if(NOT _psxg_full_list)
+            if(PSXG_GEN_FULL_FALLBACK)
+                if(NOT IS_ABSOLUTE "${PSXG_GEN_FULL_FALLBACK}")
+                    set(_psxg_full_list
+                        "${CMAKE_CURRENT_SOURCE_DIR}/${PSXG_GEN_FULL_FALLBACK}")
+                else()
+                    set(_psxg_full_list "${PSXG_GEN_FULL_FALLBACK}")
+                endif()
+            else()
+                # Derive SLUS_*_full.c next to the dispatch marker.
+                get_filename_component(_psxg_marker_dir "${_psxg_marker}" DIRECTORY)
+                get_filename_component(_psxg_marker_name "${_psxg_marker}" NAME)
+                string(REPLACE "_dispatch.c" "_full.c" _psxg_full_name
+                    "${_psxg_marker_name}")
+                set(_psxg_full_list "${_psxg_marker_dir}/${_psxg_full_name}")
+            endif()
+        endif()
+        psxrecomp_add_runtime_target(${target}
+            GAME_GENERATED_FULL_C ${_psxg_full_list}
+            GAME_GENERATED_DISPATCH_C "${_psxg_marker}"
+            ${_psxg_rt_args}
+        )
+    else()
+        message(STATUS
+            "psxrecomp: setup host (no game C, no BIOS backends) — "
+            "first-run Generate & rebuild")
+        psxrecomp_add_runtime_target(${target} ${_psxg_rt_args})
+    endif()
+
+    target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_CODEGEN=1)
+
+    # Include the portable codegen host. Do NOT add CMAKE_CURRENT_SOURCE_DIR
+    # wholesale to -I: on case-insensitive macOS, #include <version> can pick
+    # up the repo VERSION pin file. Title codegen_setup.h is found via
+    # quote-include next to codegen_setup.c.
+    set(_psxg_inc "${PSXRECOMP_ROOT}/host")
+    if(PSXG_CODEGEN_SETUP_INCLUDE_DIR)
+        list(APPEND _psxg_inc "${PSXG_CODEGEN_SETUP_INCLUDE_DIR}")
+    endif()
+    if(RECOMP_UI_ROOT)
+        list(APPEND _psxg_inc "${RECOMP_UI_ROOT}/src")
+    endif()
+    target_include_directories(${target} PRIVATE ${_psxg_inc})
+endfunction()

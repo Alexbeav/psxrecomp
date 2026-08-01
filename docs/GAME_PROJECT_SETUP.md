@@ -21,36 +21,51 @@ Related docs:
 Everything game-specific lives at the **root** of *your* title repo. Framework
 and UI are submodules next to that code — not nested under each other.
 
+The RetComM / Generate & rebuild CLI (`psxrecomp_cli.py`, `tools/prepare_disc.py`,
+pack helpers) ships **inside** the `psxrecomp` submodule. There is no separate
+`psxrecomp-sdk/` tree.
+
 ```text
 YourGameRecomp/                 # your git repo
 ├── .gitmodules
-├── CMakeLists.txt              # game target + setup-host options
+├── CMakeLists.txt              # thin: psxrecomp_add_game_runtime(...)
 ├── game.toml                   # disc / recompiler / runtime config
 ├── VERSION                     # release pin (e.g. 0.1.0)
 ├── seeds/                      # function-start seeds for psxrecomp-game
-├── host/                       # optional: codegen host glue for the wizard
-├── codegen_setup.c / .h        # optional: PSX_HAS_GAME_CODEGEN wiring
+├── codegen_setup.c / .h        # title PsxrecompCodegenHostConfig (+ apply hooks)
 ├── launcher_assets/            # boxart / fonts / brand (recomp-ui)
 ├── scripts/
-│   └── package_setup_release.sh   # title packager (thin; calls psxrecomp tools)
+│   └── package_setup_release.sh   # thin wrapper → package_setup_host.sh
 ├── .github/workflows/
-│   └── release.yml             # copied from docs/ci/templates/setup-release.yml
-├── psxrecomp/                  # submodule → mstan/psxrecomp (pinned commit)
-├── recomp-ui/                  # submodule → TechnicallyComputers/recomp-ui
-├── psxrecomp-sdk/              # optional: CLI / prepare_disc overlay for zips
+│   └── release.yml             # from docs/ci/templates/setup-release.yml
+├── psxrecomp/                  # submodule → framework + CLI + codegen host + CI tools
+│   └── host/psxrecomp_codegen_host.*
+├── recomp-ui/                  # submodule → launcher UI
 ├── generated/                  # local only — gitignore (not in CI setup zip)
 └── prepared_disc/ / disc/      # local disc working tree — gitignore
 ```
 
+Minimal `CMakeLists.txt` shape:
+
+```cmake
+set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp")
+include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+psxrecomp_add_game_runtime(psx-runtime
+  ENABLE_NETPLAY_IF_PRESENT
+  WINDOW_TITLE "My Game Recompiled"
+  GEN_MARKER "generated/SLUS_01234_dispatch.c"
+  GEN_FULL_GLOB "generated/SLUS_01234_full_*.c"
+  CODEGEN_SETUP_SOURCES codegen_setup.c
+  DEFAULT_GAME_CONFIG_PATH "game.toml"
+  LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
+)
+```
 ### Add the submodules
 
 ```bash
 cd YourGameRecomp
 git submodule add https://github.com/mstan/psxrecomp.git psxrecomp
 git submodule add https://github.com/TechnicallyComputers/recomp-ui.git recomp-ui
-# optional SDK surface used by RetComM / setup zips:
-# git submodule add <your-sdk-url> psxrecomp-sdk
-
 git submodule update --init --recursive
 ```
 
@@ -72,9 +87,7 @@ git clone --recurse-submodules https://github.com/you/YourGameRecomp.git
 2. **Build emitters** (once per machine / after recompiler changes):
 
    ```bash
-   cmake -S psxrecomp/recompiler -B build-recompiler -G Ninja \
-     -DCMAKE_BUILD_TYPE=Release
-   cmake --build build-recompiler --target psxrecomp-game psxrecomp-bios -j"$(nproc)"
+   ./psxrecomp/tools/ci/build_emitters.sh
    ```
 
 3. **Generate game (+ OpenBIOS) C** — either the setup wizard, or:
@@ -116,31 +129,47 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 
 ---
 
+## Shared tools (use these; do not reimplement)
+
+| Tool | Role |
+|------|------|
+| `tools/ci/normalize_version.sh` | `vX.Y.Z` → `VERSION` / `TAG` |
+| `tools/ci/clear_generated.sh` | Wipe `generated/` for setup-host CI |
+| `tools/ci/record_pins.sh` | Log submodule SHAs |
+| `tools/ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
+| `tools/fetch_toolchain.sh` | Download/unpack portable cmake/clang |
+| `tools/stage_setup_sdk.sh` | Emitters + OpenBIOS + `toolchain/` + MinGW DLLs |
+| `tools/bundle_mingw_dlls.sh` | Windows runtime DLL copy |
+| `tools/package_setup_host.sh` | Full setup-host zip (title args) |
+
+Composite actions (from the game repo after checkout):
+
+```yaml
+- uses: ./psxrecomp/.github/actions/build-emitters
+- uses: ./psxrecomp/.github/actions/fetch-toolchain
+  with:
+    artifact: ${{ matrix.artifact }}
+- uses: ./psxrecomp/.github/actions/stage-setup-sdk
+  with:
+    stage: dist/stage-setup-${{ matrix.artifact }}
+    recompiler-build: build-recompiler
+```
+
+---
+
 ## CI workflow template
 
 1. Copy the template into your title repo:
 
    ```bash
-   mkdir -p .github/workflows
+   mkdir -p .github/workflows scripts
    cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
    ```
 
-2. Replace every `YOUR_*` placeholder (exe name, zip prefix, cmake setup flag,
-   release title, package script path).
-3. Keep using the shared actions — do not reimplement toolchain fetch or DLL
-   bundling:
-
-   ```yaml
-   - uses: ./psxrecomp/.github/actions/fetch-toolchain
-     with:
-       artifact: ${{ matrix.artifact }}
-   ```
-
-4. Your `scripts/package_setup_release.sh` should:
-   - Stage the host exe, assets, and game sources
-   - Copy filtered `psxrecomp/` + `recomp-ui/`
-   - Call `psxrecomp/tools/stage_setup_sdk.sh` (emitters, OpenBIOS checks,
-     `toolchain/`, MinGW DLLs)
+2. Replace every `YOUR_*` placeholder.
+3. Add a thin `scripts/package_setup_release.sh` that calls
+   `psxrecomp/tools/package_setup_host.sh` with your exe name / zip prefix
+   (see Bomberman Party Edition for an example).
 
 Full action reference: [`ci/README.md`](ci/README.md).
 
@@ -154,21 +183,23 @@ Use this before tagging a setup-host release that matches other titles
 ### Repository
 
 - [ ] `psxrecomp/` and `recomp-ui/` are root-level submodules on pinned commits
+- [ ] CLI lives in the submodule (`psxrecomp/psxrecomp_cli.py`) — no sibling sdk
 - [ ] `game.toml` has disc identity (`[prepare_disc]` hashes/sizes) and boot EXE
 - [ ] Seeds cover the boot path; `VERSION` matches the release you will tag
 - [ ] Disc images, `generated/`, and `SCPH1001.BIN` are gitignored
 - [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends
       (e.g. `-DPSXRECOMP_ALLOW_NO_BIOS=ON` + your title’s force-setup option)
-- [ ] Codegen host / `PSX_HAS_GAME_CODEGEN` wired so the wizard can regenerate
+- [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in
+      `psxrecomp/host/`; CI may use `-DPSXRECOMP_FORCE_SETUP_HOST=ON`)
+- [ ] Optional: start from `docs/ci/templates/game.gitignore`
 
 ### Packaging (shared helpers)
 
-- [ ] CI builds `psxrecomp-game` and `psxrecomp-bios` into `build-recompiler/`
-- [ ] CI uses `./psxrecomp/.github/actions/fetch-toolchain` for the matrix OS
-- [ ] Packager calls `psxrecomp/tools/stage_setup_sdk.sh` with
-      `--recompiler-build`, `--toolchain-dir` (or env from fetch), and on
-      Windows `--runtime-bin /mingw64/bin` + `--host-exe`
-- [ ] Staged tree includes `psxrecomp/psxrecomp_cli.py` (sdk overlay if needed)
+- [ ] CI uses `./psxrecomp/.github/actions/build-emitters`
+- [ ] CI uses `./psxrecomp/.github/actions/fetch-toolchain`
+- [ ] Packager calls `psxrecomp/tools/package_setup_host.sh` (or
+      `stage_setup_sdk.sh` after a custom stage)
+- [ ] Staged tree includes `psxrecomp/psxrecomp_cli.py`
 - [ ] Staged `psxrecomp/bios/` has `OpenBIOS.toml`, `openbios.bin`,
       `OpenBIOS.LICENSE`, `SCPH1001.toml` — and **no** retail `.BIN`
 - [ ] Windows zip has `libstdc++-6.dll` + `libgcc_s_seh-1.dll` next to both

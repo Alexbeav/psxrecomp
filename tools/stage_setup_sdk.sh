@@ -10,7 +10,8 @@
 #
 # Options:
 #   --framework DIR         psxrecomp source tree (default: <cwd>/psxrecomp)
-#   --sdk-overlay DIR       Overlay (e.g. psxrecomp-sdk) onto stage/psxrecomp
+#   --sdk-overlay DIR       Legacy optional overlay onto stage/psxrecomp
+#                           (prefer shipping CLI/tools inside the submodule)
 #   --recompiler-build DIR  Where psxrecomp-game/bios were built (repeatable)
 #   --toolchain-dir DIR     Pack root with bin/; embedded as stage/toolchain/
 #   --allow-no-toolchain    Warn instead of failing when toolchain unset
@@ -161,7 +162,7 @@ for f in OpenBIOS.toml openbios.bin OpenBIOS.LICENSE SCPH1001.toml; do
 done
 
 if [[ "${REQUIRE_CLI}" -eq 1 && ! -f "${STAGE}/psxrecomp/psxrecomp_cli.py" ]]; then
-  echo "error: missing psxrecomp/psxrecomp_cli.py (pass --sdk-overlay or copy CLI into stage)" >&2
+  echo "error: missing psxrecomp/psxrecomp_cli.py in staged tree" >&2
   exit 1
 fi
 

@@ -1,14 +1,11 @@
 # CI helpers for setup-host releases
 
-Shared scripts and GitHub Actions so new PSXRecomp titles do not reimplement
-toolchain fetch, emitter staging, or Windows MinGW DLL bundling.
+Shared scripts and GitHub Actions so every PSXRecomp title uses one
+standardized release flow.
 
-**Start here for a new game repo:**
-[`../GAME_PROJECT_SETUP.md`](../GAME_PROJECT_SETUP.md)
+**Start here:** [`../GAME_PROJECT_SETUP.md`](../GAME_PROJECT_SETUP.md)
 
 ## Workflow template
-
-Copy into the **game** repository (not into this framework alone):
 
 ```bash
 mkdir -p .github/workflows
@@ -16,50 +13,53 @@ cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
 # edit YOUR_* placeholders
 ```
 
-Template path: [`templates/setup-release.yml`](templates/setup-release.yml)
+Template: [`templates/setup-release.yml`](templates/setup-release.yml)
 
-A shorter stub also lives at [`setup-release.yml.example`](setup-release.yml.example)
-(points at the full template).
-
-## Tools
+## Tools under `psxrecomp/tools/`
 
 | Script | Role |
 |--------|------|
-| `tools/fetch_toolchain.sh` | Download/unpack `cmake-clang-v1` from retcomm-toolchains |
-| `tools/stage_setup_sdk.sh` | Stage emitters, OpenBIOS checks, `toolchain/`, MinGW DLLs |
-| `tools/bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
+| `ci/normalize_version.sh` | Normalize / write `VERSION` + `TAG` |
+| `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
+| `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs |
+| `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
+| `fetch_toolchain.sh` | Download/unpack `cmake-clang-v1` |
+| `stage_setup_sdk.sh` | Emitters, OpenBIOS, `toolchain/`, MinGW DLLs |
+| `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
+| `package_setup_host.sh` | Full setup-host zip (title passes exe/prefix/files) |
+| `../cmake/toolchain-mingw-w64.cmake` | Linux→Windows MinGW cross toolchain |
+| `../host/psxrecomp_codegen_host.*` | Portable Generate & rebuild host (via CMake helper) |
+| `templates/game.gitignore` | Suggested gitignore for title repos |
+
+Also use `psxrecomp_add_game_runtime(...)` in `runtime/runtime.cmake` for
+setup-host / full-game wiring. The CLI (`psxrecomp_cli.py`) lives in this
+submodule — there is no separate `psxrecomp-sdk/` overlay.
 
 ## Composite actions
 
-Use from a game repo after `actions/checkout` with `submodules: recursive`:
-
 ```yaml
+- uses: ./psxrecomp/.github/actions/build-emitters
+
 - uses: ./psxrecomp/.github/actions/fetch-toolchain
   with:
-    artifact: ${{ matrix.artifact }}   # linux-x64 | windows-x64 | macos-arm64 | macos-x64
+    artifact: ${{ matrix.artifact }}
 
 - uses: ./psxrecomp/.github/actions/stage-setup-sdk
   with:
     stage: dist/stage-setup-${{ matrix.artifact }}
-    sdk-overlay: psxrecomp-sdk
     recompiler-build: build-recompiler
-    runtime-bin: /mingw64/bin          # Windows / MSYS2 only
+    runtime-bin: /mingw64/bin   # Windows / MSYS2
 ```
-
-`fetch-toolchain` exports `TOOLCHAIN_DIR`, `PSXRECOMP_TOOLCHAIN_DIR`, and
-`BPE_TOOLCHAIN_DIR` via `GITHUB_ENV` for later steps.
 
 ## Title responsibilities
 
-Keep in the game repo:
+Keep only this in the game repo:
 
 - Setup-host CMake flags and exe basename
-- Copying game sources / assets into the stage
-- Zip naming and release notes
-- Thin `scripts/package_setup_release.sh` that stages title files then calls
-  `psxrecomp/tools/stage_setup_sdk.sh`
+- Thin `scripts/package_setup_release.sh` wrapping `package_setup_host.sh`
+- Zip prefix / display name / disc hint in that wrapper
+- Release notes / GitHub Release job naming
 
 ## Release checklist
 
-See the **Bundled release checklist** in
-[`../GAME_PROJECT_SETUP.md`](../GAME_PROJECT_SETUP.md#bundled-release-checklist).
+See [`../GAME_PROJECT_SETUP.md`](../GAME_PROJECT_SETUP.md#bundled-release-checklist).

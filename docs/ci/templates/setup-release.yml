@@ -6,12 +6,13 @@
 # Then replace every YOUR_* token. See docs/GAME_PROJECT_SETUP.md.
 #
 # Shared (do not fork these into the title):
-#   ./psxrecomp/.github/actions/fetch-toolchain
-#   ./psxrecomp/.github/actions/stage-setup-sdk
-#   psxrecomp/tools/{fetch_toolchain,stage_setup_sdk,bundle_mingw_dlls}.sh
+#   ./psxrecomp/.github/actions/{build-emitters,fetch-toolchain,stage-setup-sdk}
+#   psxrecomp/tools/ci/*.sh
+#   psxrecomp/tools/{fetch_toolchain,stage_setup_sdk,bundle_mingw_dlls,package_setup_host}.sh
+#   psxrecomp/psxrecomp_cli.py  (CLI lives in the submodule — no psxrecomp-sdk/)
 #
 # Title-owned:
-#   CMake setup-host flags, exe basename, zip prefix, package_setup_release.sh
+#   CMake setup-host flags, thin scripts/package_setup_release.sh wrapper
 
 name: Release builds
 
@@ -114,12 +115,13 @@ jobs:
           printf '%s\n' "${RELEASE_VERSION}" >VERSION
           echo "VERSION=$(cat VERSION)"
 
+      - name: Record pinned framework revisions
+        shell: bash
+        run: bash psxrecomp/tools/ci/record_pins.sh
+
       - name: Setup host mode (no game C / BIOS backends in CI)
         shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf generated psxrecomp/generated
-          echo "Cleared generated/ — CI builds a BIOS-free setup host."
+        run: bash psxrecomp/tools/ci/clear_generated.sh
 
       - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
@@ -150,26 +152,7 @@ jobs:
           brew install cmake ninja pkg-config sdl3 || brew install cmake ninja pkg-config sdl2
 
       - name: Build recompiler tools (emitters)
-        run: |
-          set -euo pipefail
-          JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-          if [[ -d /mingw64/bin ]]; then
-            export PATH="/mingw64/bin:${PATH}"
-          fi
-          cmake -S psxrecomp/recompiler -B build-recompiler -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-recompiler \
-            --target psxrecomp-game psxrecomp-bios -j"${JOBS}"
-          for bin in psxrecomp-bios psxrecomp-game; do
-            if [[ -f "build-recompiler/${bin}.exe" ]]; then
-              chmod +x "build-recompiler/${bin}.exe"
-            elif [[ -f "build-recompiler/${bin}" ]]; then
-              chmod +x "build-recompiler/${bin}"
-            else
-              echo "::error::${bin} missing after recompiler build"
-              exit 1
-            fi
-          done
+        uses: ./psxrecomp/.github/actions/build-emitters
 
       - name: Configure & build setup host
         env:
@@ -181,12 +164,11 @@ jobs:
             EXTRA+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
           fi
           JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-          # YOUR_SETUP_CMAKE_FLAGS: title-specific. Example from BPE:
-          #   -DYOURGAME_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON
+          # Prefer -DPSXRECOMP_FORCE_SETUP_HOST=ON (psxrecomp_add_game_runtime).
+          # Legacy -DYOURGAME_FORCE_SETUP_HOST=ON still works if the title wires it.
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPSXRECOMP_ALLOW_NO_BIOS=ON \
-            -DYOURGAME_FORCE_SETUP_HOST=ON \
+            -DPSXRECOMP_FORCE_SETUP_HOST=ON \
             -DPSX_GAME_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]}"
           cmake --build build-ci --target psx-runtime -j"${JOBS}"

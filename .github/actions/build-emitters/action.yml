@@ -1,0 +1,28 @@
+name: Build psxrecomp emitters
+description: Configure and build psxrecomp-game + psxrecomp-bios via tools/ci/build_emitters.sh
+
+inputs:
+  framework:
+    description: Path to the psxrecomp checkout
+    required: false
+    default: psxrecomp
+  build-dir:
+    description: Out-of-tree build directory for the emitters
+    required: false
+    default: build-recompiler
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        SCRIPT="${{ inputs.framework }}/tools/ci/build_emitters.sh"
+        if [[ ! -f "${SCRIPT}" ]]; then
+          echo "::error::missing ${SCRIPT}"
+          exit 1
+        fi
+        chmod +x "${SCRIPT}"
+        bash "${SCRIPT}" \
+          --framework "${{ inputs.framework }}" \
+          --build-dir "${{ inputs.build-dir }}"

@@ -12,7 +12,7 @@ inputs:
     required: false
     default: psxrecomp
   sdk-overlay:
-    description: Optional overlay directory (e.g. psxrecomp-sdk)
+    description: Legacy optional overlay (prefer CLI/tools inside the submodule)
     required: false
     default: ''
   recompiler-build:
