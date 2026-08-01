@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bundle imported non-system DLLs next to Windows PE executables.
 #
-# Title packagers (BPE/MotK setup zips) call this so MSYS2 MinGW emitters
-# (psxrecomp-game / psxrecomp-bios) ship with libstdc++/libgcc — the portable
-# llvm-mingw toolchain does not provide those GCC runtimes.
+# Title packagers (BPE/MotK setup zips) call this for Windows PEs that still
+# import non-system DLLs (typically the MSYS2-built setup host + SDL2).
+# Emitters built with llvm-mingw + PSXRECOMP_STATIC_CLI should import none of
+# the GCC runtimes; this script only copies DLLs each exe actually imports.
 #
 # Usage:
 #   bundle_mingw_dlls.sh [options] --exe <path> [--dest <dir>] [--label <name>] ...
@@ -111,6 +112,8 @@ PROBE_DLLS=(
   zlib1.dll
   libgcc_s_seh-1.dll
   libstdc++-6.dll
+  libc++.dll
+  libunwind.dll
   libwinpthread-1.dll
   libssp-0.dll
 )
@@ -196,6 +199,18 @@ bundle_one() {
         echo "  runtime-bins: ${RUNTIME_BINS[*]}" >&2
       fi
       exit 1
+    fi
+    dest_file="${dest_dir}/${dll}"
+    # MSYS2/Windows cp fails when source and dest are the same file.
+    if [[ -f "${dest_file}" ]] && [[ "${src}" -ef "${dest_file}" ]]; then
+      echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
+      continue
+    fi
+    src_res="$(cd "$(dirname "${src}")" && pwd)/$(basename "${src}")"
+    dest_res="$(cd "${dest_dir}" && pwd)/${dll}"
+    if [[ "${src_res}" == "${dest_res}" ]]; then
+      echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
+      continue
     fi
     cp -f "${src}" "${dest_dir}/"
     echo "bundled ${dll} → ${dest_dir}/ (${label})"

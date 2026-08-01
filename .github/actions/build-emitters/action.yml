@@ -10,6 +10,12 @@ inputs:
     description: Out-of-tree build directory for the emitters
     required: false
     default: build-recompiler
+  toolchain-dir:
+    description: >
+      Portable cmake-clang-v1 root (llvm-mingw on Windows). Empty uses
+      PSXRECOMP_TOOLCHAIN_DIR / TOOLCHAIN_DIR from the environment.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -23,6 +29,11 @@ runs:
           exit 1
         fi
         chmod +x "${SCRIPT}"
-        bash "${SCRIPT}" \
-          --framework "${{ inputs.framework }}" \
+        args=(
+          --framework "${{ inputs.framework }}"
           --build-dir "${{ inputs.build-dir }}"
+        )
+        if [[ -n "${{ inputs.toolchain-dir }}" ]]; then
+          args+=(--toolchain-dir "${{ inputs.toolchain-dir }}")
+        fi
+        bash "${SCRIPT}" "${args[@]}"

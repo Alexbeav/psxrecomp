@@ -251,9 +251,15 @@ if [[ "${need_dlls}" -eq 1 ]]; then
     --exe "${STAGE}/psxrecomp/recompiler/build/psxrecomp-bios.exe"
     --dest "${STAGE}/psxrecomp/recompiler/build"
     --label "psxrecomp-bios.exe"
-    --require libgcc_s_seh-1.dll
-    --require libstdc++-6.dll
   )
+  # Host (MSYS2 GCC) still needs these when imported. llvm-mingw static
+  # emitters typically import neither — --require is skipped per-exe then.
+  if [[ -n "${HOST_EXE}" && -f "${HOST_EXE}" ]]; then
+    args+=(
+      --require libgcc_s_seh-1.dll
+      --require libstdc++-6.dll
+    )
+  fi
   bash "${BUNDLE}" "${args[@]}"
 fi
 

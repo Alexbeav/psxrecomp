@@ -23,7 +23,7 @@ Template: [`templates/setup-release.yml`](templates/setup-release.yml)
 | `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
 | `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs |
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
-| `fetch_toolchain.sh` | Optional download/unpack (only if embedding) |
+| `fetch_toolchain.sh` | Download/unpack cmake-clang-v1 (Windows emitter builds; optional embed) |
 | `stage_setup_sdk.sh` | Emitters, OpenBIOS, optional `toolchain/`, MinGW DLLs |
 | `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
 | `package_setup_host.sh` | Lean setup-host zip (optional `--embed-toolchain`) |
