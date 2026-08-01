@@ -59,6 +59,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "game_options.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
+#include "dirty_ram_interp.h"
 #include "crc32.h"
 #include "disc_identity.h"
 #include "disc_path.h"
@@ -521,6 +522,56 @@ static int           g_video_win_w    = 1280; /* window width (height follows as
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+
+static void parappa_apply_timing_setting(const std::string& mode_in,
+                                         int extra_early_override,
+                                         int extra_late_override,
+                                         const char *source) {
+    std::string mode = mode_in;
+    for (char& c : mode) c = (char)std::tolower((unsigned char)c);
+
+    int next_mode = 0;
+    int next_early = 0;
+    int next_late = 0;
+    if (mode == "stock" || mode == "off" || mode.empty()) {
+        next_mode = 0;
+    } else if (mode == "medium") {
+        next_mode = 1;
+        next_early = 2;
+        next_late = 2;
+    } else if (mode == "permissive") {
+        next_mode = 2;
+        next_early = 6;
+        next_late = 6;
+    } else if (mode == "easy") {
+        next_mode = 4;
+        next_early = 10;
+        next_late = 10;
+    } else if (mode == "custom") {
+        next_mode = 3;
+    } else {
+        std::fprintf(stderr,
+            "psxrecomp: ignoring unknown PaRappa timing mode '%s' from %s\n",
+            mode_in.c_str(), source ? source : "config");
+        return;
+    }
+
+    if (extra_early_override >= 0) next_early = std::min(extra_early_override, 60);
+    if (extra_late_override >= 0) next_late = std::min(extra_late_override, 60);
+    if ((extra_early_override >= 0 || extra_late_override >= 0) && next_mode == 0)
+        next_mode = 3;
+
+    g_parappa_timing_mode = next_mode;
+    g_parappa_timing_extra_early = next_early;
+    g_parappa_timing_extra_late = next_late;
+    parappa_timing_window_reset();
+    std::fprintf(stdout,
+        "psxrecomp: PaRappa timing mode %s (early=%d late=%d, source=%s)\n",
+        next_mode == 1 ? "medium" : next_mode == 2 ? "permissive" :
+        next_mode == 3 ? "custom" : next_mode == 4 ? "easy" : "stock",
+        g_parappa_timing_extra_early, g_parappa_timing_extra_late,
+        source ? source : "config");
+}
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
  * movie's per-movie total minus 3; writing the current movie's total down to
@@ -5208,6 +5259,13 @@ int main(int argc, char** argv) {
             g_audio_spu_hq     = gc.runtime.audio_spu_hq;
             g_audio_buffer_ms  = (double)gc.runtime.audio_buffer_ms;
             g_auto_skip_fmv    = gc.runtime.video_auto_skip_fmv ? 1 : 0;
+            if (gc.runtime.has_parappa_timing) {
+                parappa_apply_timing_setting(
+                    gc.runtime.parappa_timing_mode,
+                    gc.runtime.parappa_timing_extra_early,
+                    gc.runtime.parappa_timing_extra_late,
+                    "game.toml");
+            }
             /* [controller] game-declared input defaults (settings.toml/launcher
              * still override below). */
             if (gc.runtime.has_default_mode) {
@@ -5564,6 +5622,14 @@ int main(int argc, char** argv) {
             g_frame_interpolation = us.frame_interpolation ? 1 : 0;
         if (us.has_frame_interpolation_fps)
             g_frame_interpolation_fps = us.frame_interpolation_fps;
+        if (us.has_parappa_timing_mode || us.has_parappa_timing_extra_early ||
+            us.has_parappa_timing_extra_late) {
+            parappa_apply_timing_setting(
+                us.has_parappa_timing_mode ? us.parappa_timing_mode : "custom",
+                us.has_parappa_timing_extra_early ? us.parappa_timing_extra_early : -1,
+                us.has_parappa_timing_extra_late ? us.parappa_timing_extra_late : -1,
+                "settings.toml");
+        }
     }
 
     /* The launcher must inspect the same explicit disc override that the
@@ -5670,6 +5736,18 @@ int main(int argc, char** argv) {
                 PSX_MOD_FRAME_INTERPOLATION_LINEAR;
         }
         g_frame_interpolation_blend = g_frame_interpolation_blend_default;
+    }
+    {
+        const char *mode_env = std::getenv("PSX_PARAPPA_TIMING_MODE");
+        const char *early_env = std::getenv("PSX_PARAPPA_TIMING_EXTRA_EARLY");
+        const char *late_env = std::getenv("PSX_PARAPPA_TIMING_EXTRA_LATE");
+        if ((mode_env && mode_env[0]) || early_env || late_env) {
+            parappa_apply_timing_setting(
+                (mode_env && mode_env[0]) ? std::string(mode_env) : std::string("custom"),
+                early_env ? atoi(early_env) : -1,
+                late_env ? atoi(late_env) : -1,
+                "environment");
+        }
     }
 
     /* Apply writable-state isolation before game-options and launcher setup,
@@ -5811,6 +5889,16 @@ int main(int argc, char** argv) {
             seed.deadzone = resolved_deadzone >= 0 ? resolved_deadzone : 12000;
             seed.has_deadzone = true;
             seed.window_width = g_video_win_w; seed.has_window_width = true;
+            seed.parappa_timing_mode =
+                g_parappa_timing_mode == 1 ? "medium" :
+                g_parappa_timing_mode == 2 ? "permissive" :
+                g_parappa_timing_mode == 3 ? "custom" :
+                g_parappa_timing_mode == 4 ? "easy" : "stock";
+            seed.has_parappa_timing_mode = true;
+            seed.parappa_timing_extra_early = g_parappa_timing_extra_early;
+            seed.has_parappa_timing_extra_early = true;
+            seed.parappa_timing_extra_late = g_parappa_timing_extra_late;
+            seed.has_parappa_timing_extra_late = true;
 
             /* recomp-ui creates + owns its SDL/GL window internally, so there
              * is no launcher window/context to manage here. */
@@ -6076,6 +6164,16 @@ int main(int argc, char** argv) {
                 seed.deadzone = ls.deadzone[0] * 32767 / 100; seed.has_deadzone = true;
                 seed.p1_mode = ls.pad_mode[0]; seed.has_p1_mode = true;
                 seed.p2_mode = ls.pad_mode[1]; seed.has_p2_mode = true;
+                seed.parappa_timing_mode =
+                    g_parappa_timing_mode == 1 ? "medium" :
+                    g_parappa_timing_mode == 2 ? "permissive" :
+                    g_parappa_timing_mode == 3 ? "custom" :
+                    g_parappa_timing_mode == 4 ? "easy" : "stock";
+                seed.has_parappa_timing_mode = true;
+                seed.parappa_timing_extra_early = g_parappa_timing_extra_early;
+                seed.has_parappa_timing_extra_early = true;
+                seed.parappa_timing_extra_late = g_parappa_timing_extra_late;
+                seed.has_parappa_timing_extra_late = true;
 
                 /* ---- deeper PSX-style settings write-back (mirrors the seed
                  * fields above), all gated on by the "psx" launcher_profile caps. */

@@ -462,6 +462,28 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
     }
 
+    if (cfg.contains("parappa_timing")) {
+        const toml::value& timing = toml::find(cfg, "parappa_timing");
+        rt.has_parappa_timing = true;
+        if (timing.contains("mode")) {
+            rt.parappa_timing_mode = toml::find<std::string>(timing, "mode");
+            for (char& c : rt.parappa_timing_mode)
+                c = (char)std::tolower((unsigned char)c);
+        }
+        auto parse_window = [&](const char *key) -> int {
+            const auto n = toml::find<int64_t>(timing, key);
+            if (n < 0 || n > 60) {
+                throw std::runtime_error(fmt::format(
+                    "[parappa_timing] {} out of range (0..60): {}", key, n));
+            }
+            return (int)n;
+        };
+        if (timing.contains("extra_early"))
+            rt.parappa_timing_extra_early = parse_window("extra_early");
+        if (timing.contains("extra_late"))
+            rt.parappa_timing_extra_late = parse_window("extra_late");
+    }
+
     // Optional [video] block — visual enhancement options. Kept on the same
     // RuntimeConfig so main.cpp consumes them alongside the other knobs.
     if (cfg.contains("video")) {
@@ -2101,6 +2123,32 @@ UserSettings load_user_settings(const fs::path& path) {
             if (!v.empty()) { s.language = v; s.has_language = true; }
         });
     }
+    if (doc.contains("parappa_timing")) {
+        const toml::value& timing = toml::find(doc, "parappa_timing");
+        if (timing.contains("mode")) try_get([&]{
+            auto mode = toml::find<std::string>(timing, "mode");
+            for (char& c : mode) c = (char)std::tolower((unsigned char)c);
+            if (mode == "stock" || mode == "off" || mode == "medium" ||
+                mode == "permissive" || mode == "easy" || mode == "custom") {
+                s.parappa_timing_mode = mode;
+                s.has_parappa_timing_mode = true;
+            }
+        });
+        if (timing.contains("extra_early")) try_get([&]{
+            const auto n = toml::find<int64_t>(timing, "extra_early");
+            if (n >= 0 && n <= 60) {
+                s.parappa_timing_extra_early = (int)n;
+                s.has_parappa_timing_extra_early = true;
+            }
+        });
+        if (timing.contains("extra_late")) try_get([&]{
+            const auto n = toml::find<int64_t>(timing, "extra_late");
+            if (n >= 0 && n <= 60) {
+                s.parappa_timing_extra_late = (int)n;
+                s.has_parappa_timing_extra_late = true;
+            }
+        });
+    }
     if (doc.contains("controller")) {
         const toml::value& ct = toml::find(doc, "controller");
         if (ct.contains("p1_device")) try_get([&]{
@@ -2249,6 +2297,16 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (s.has_language) {
         f << "\n[localization]\n";
         f << "language = \"" << s.language << "\"\n";
+    }
+    if (s.has_parappa_timing_mode || s.has_parappa_timing_extra_early ||
+        s.has_parappa_timing_extra_late) {
+        f << "\n[parappa_timing]\n";
+        if (s.has_parappa_timing_mode)
+            f << "mode = \"" << s.parappa_timing_mode << "\"\n";
+        if (s.has_parappa_timing_extra_early)
+            f << "extra_early = " << s.parappa_timing_extra_early << "\n";
+        if (s.has_parappa_timing_extra_late)
+            f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
     return f.good();

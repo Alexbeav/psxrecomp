@@ -295,6 +295,11 @@ struct RuntimeConfig {
     // overlay runs native.
     std::vector<uint32_t> overlay_native_block;
 
+    bool                  has_parappa_timing = false;
+    std::string           parappa_timing_mode = "stock";
+    int                   parappa_timing_extra_early = 0;
+    int                   parappa_timing_extra_late = 0;
+
     // ---- [video] block — visual enhancement options ----
     // supersampling: internal-resolution SSAA factor (per axis). 1 = native
     // (default, behaves exactly as before). 2..4 render geometry/shading into
@@ -1013,6 +1018,10 @@ struct UserSettings {
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
     bool has_language = false; std::string language = "en";
+
+    bool has_parappa_timing_mode = false; std::string parappa_timing_mode = "stock";
+    bool has_parappa_timing_extra_early = false; int parappa_timing_extra_early = 0;
+    bool has_parappa_timing_extra_late = false; int parappa_timing_extra_late = 0;
 };
 
 // GameOptions — the game's OWN native OPTION-screen settings, declared in a
