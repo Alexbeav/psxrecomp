@@ -929,88 +929,607 @@ static int run_cli_posix(char* const argv[],
 }
 #endif
 
-static int host_toolchain_is_ready(void) {
-    if (!g_ready)
+/* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
+
+static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
+
+static const char* toolchain_zip_asset_name(void) {
+#if defined(_WIN32)
+    return "cmake-clang-v1-windows-x64.zip";
+#elif defined(__APPLE__)
+    return "cmake-clang-v1-macos-universal.zip";
+#else
+    return "cmake-clang-v1-linux-x64.zip";
+#endif
+}
+
+static int mkdir_p(const char* path) {
+    char tmp[1400];
+    size_t n;
+    if (!path || !path[0])
         return 0;
+    n = strlen(path);
+    if (n >= sizeof(tmp))
+        return 0;
+    memcpy(tmp, path, n + 1);
+#if defined(_WIN32)
+    {
+        char* p = tmp;
+        if (n >= 2 && tmp[1] == ':')
+            p = tmp + 2;
+        while (*p == '\\' || *p == '/')
+            ++p;
+        for (; *p; ++p) {
+            if (*p == '\\' || *p == '/') {
+                char save = *p;
+                *p = '\0';
+                if (tmp[0])
+                    CreateDirectoryA(tmp, NULL);
+                *p = save;
+            }
+        }
+        return CreateDirectoryA(tmp, NULL) ||
+               GetLastError() == ERROR_ALREADY_EXISTS || path_is_dir(tmp);
+    }
+#else
+    {
+        char* p = tmp;
+        if (*p == '/')
+            ++p;
+        for (; *p; ++p) {
+            if (*p == '/') {
+                *p = '\0';
+                if (mkdir(tmp, 0755) != 0 && errno != EEXIST && !path_is_dir(tmp))
+                    return 0;
+                *p = '/';
+            }
+        }
+        return mkdir(tmp, 0755) == 0 || errno == EEXIST || path_is_dir(tmp);
+    }
+#endif
+}
+
+static int rmtree_path(const char* path) {
+    char cmd[1600];
+    if (!path || !path[0] || !path_is_dir(path))
+        return 1;
+#if defined(_WIN32)
+    snprintf(cmd, sizeof(cmd), "cmd.exe /c rmdir /s /q \"%s\"", path);
+#else
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", path);
+#endif
+    return system(cmd) == 0 || !path_is_dir(path);
+}
+
+#if defined(_WIN32)
+static int run_cmdline_wait(const char* cmdline, DWORD* out_code) {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char mutable_cmd[8192];
+    DWORD code = 1;
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    snprintf(mutable_cmd, sizeof(mutable_cmd), "%s", cmdline);
+    if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi))
+        return 0;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (out_code)
+        *out_code = code;
+    return 1;
+}
+#endif
+
+static int shared_toolchain_latest_dir(char* out, size_t cap) {
+#if defined(_WIN32)
+    const char* local = getenv("LOCALAPPDATA");
+    if (!local || !local[0])
+        return 0;
+    return join_path(out, cap, local, "psxrecomp/toolchains/cmake-clang-v1/latest");
+#else
+    const char* xdg = getenv("XDG_DATA_HOME");
+    const char* home = getenv("HOME");
+    char base[1100];
+    if (xdg && xdg[0]) {
+        if (!join_path(base, sizeof(base), xdg,
+                       "psxrecomp/toolchains/cmake-clang-v1/latest"))
+            return 0;
+    } else if (home && home[0]) {
+        if (!join_path(base, sizeof(base), home,
+                       ".local/share/psxrecomp/toolchains/cmake-clang-v1/latest"))
+            return 0;
+    } else {
+        return 0;
+    }
+    snprintf(out, cap, "%s", base);
+    return 1;
+#endif
+}
+
+static int pack_root_has_cmake(const char* root) {
+    char bin[1400], cmake[1400];
+    if (!root || !root[0])
+        return 0;
+    if (!join_path(bin, sizeof(bin), root, "bin"))
+        return 0;
+#if defined(_WIN32)
+    return join_path(cmake, sizeof(cmake), bin, "cmake.exe") && path_is_file(cmake);
+#else
+    return join_path(cmake, sizeof(cmake), bin, "cmake") && path_is_file(cmake);
+#endif
+}
+
+static int write_project_toolchain_stamp(const char* bin_dir) {
+    char tc_dir[1200], stamp[1200];
+    FILE* f;
+    if (!g_project_root[0] || !bin_dir || !bin_dir[0])
+        return 0;
+    if (!join_path(tc_dir, sizeof(tc_dir), g_project_root, "toolchain"))
+        return 0;
+    mkdir_p(tc_dir);
+    if (!join_path(stamp, sizeof(stamp), tc_dir, ".psxrecomp-bin"))
+        return 0;
+    f = fopen(stamp, "w");
+    if (!f)
+        return 0;
+    fprintf(f, "%s\n", bin_dir);
+    fclose(f);
+    return 1;
+}
+
+static int activate_installed_pack_root(const char* pack_root) {
+    char bin[1400];
+    if (!pack_root_has_cmake(pack_root))
+        return 0;
+    if (!join_path(bin, sizeof(bin), pack_root, "bin"))
+        return 0;
+    snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s", bin);
+#if defined(_WIN32)
+    _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", pack_root);
+#else
+    setenv("PSXRECOMP_TOOLCHAIN_DIR", pack_root, 1);
+#endif
+    write_project_toolchain_stamp(bin);
     activate_toolchain_path();
     return find_cmake(g_cmake, sizeof(g_cmake)) ? 1 : 0;
 }
 
-/* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback). */
+#if defined(_WIN32)
+/* Point a real LocalAppData path at a Store-Python LocalCache pack (no copy). */
+static int junction_dir(const char* link_path, const char* target_path) {
+    char cmd[3200];
+    DWORD code = 1;
+    char parent[1400];
+    if (!link_path || !target_path || !path_is_dir(target_path))
+        return 0;
+    if (path_is_dir(link_path) || path_is_file(link_path)) {
+        /* Replace broken/empty dir; keep a usable pack. */
+        if (pack_root_has_cmake(link_path))
+            return 1;
+        rmtree_path(link_path);
+    }
+    if (!dirname_copy(parent, sizeof(parent), link_path))
+        return 0;
+    mkdir_p(parent);
+    snprintf(cmd, sizeof(cmd), "cmd.exe /c mklink /J \"%s\" \"%s\"", link_path,
+             target_path);
+    if (!run_cmdline_wait(cmd, &code))
+        return 0;
+    return code == 0 && path_is_dir(link_path);
+}
+
+static int find_store_localcache_pack_root(char* out, size_t cap) {
+    const char* local = getenv("LOCALAPPDATA");
+    char packages[1100], pattern[1200];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    if (!local || !local[0])
+        return 0;
+    if (!join_path(packages, sizeof(packages), local, "Packages"))
+        return 0;
+    snprintf(pattern, sizeof(pattern),
+             "%s\\PythonSoftwareFoundation.Python.*", packages);
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    do {
+        const char* suffixes[] = {
+            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\latest",
+            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\offline",
+            "LocalCache\\Local\\retcomm\\toolchains\\cmake-clang-v1\\latest",
+            "LocalCache\\Local\\retcomm\\toolchains\\cmake-clang-v1\\offline",
+            NULL};
+        int i;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            continue;
+        for (i = 0; suffixes[i]; ++i) {
+            char cand[1400], nested[1400];
+            snprintf(cand, sizeof(cand), "%s\\%s\\%s", packages, fd.cFileName,
+                     suffixes[i]);
+            if (pack_root_has_cmake(cand)) {
+                snprintf(out, cap, "%s", cand);
+                FindClose(h);
+                return 1;
+            }
+            /* Nested single child with bin/cmake.exe */
+            if (path_is_dir(cand)) {
+                WIN32_FIND_DATAA kd;
+                char kp[1400];
+                HANDLE hk;
+                snprintf(kp, sizeof(kp), "%s\\*", cand);
+                hk = FindFirstFileA(kp, &kd);
+                if (hk == INVALID_HANDLE_VALUE)
+                    continue;
+                do {
+                    if (!(kd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                        continue;
+                    if (kd.cFileName[0] == '.')
+                        continue;
+                    if (!join_path(nested, sizeof(nested), cand, kd.cFileName))
+                        continue;
+                    if (pack_root_has_cmake(nested)) {
+                        snprintf(out, cap, "%s", nested);
+                        FindClose(hk);
+                        FindClose(h);
+                        return 1;
+                    }
+                } while (FindNextFileA(hk, &kd));
+                FindClose(hk);
+            }
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return 0;
+}
+
+/* allow_copy=0: point this process at LocalCache (cheap).
+ * allow_copy=1: also junction/robocopy into real %LOCALAPPDATA% (ensure). */
+static int harvest_store_python_toolchain(int allow_copy) {
+    char cache_root[1400], real_latest[1400], proj_tc[1200];
+    if (!find_store_localcache_pack_root(cache_root, sizeof(cache_root)))
+        return 0;
+    if (!allow_copy)
+        return activate_installed_pack_root(cache_root);
+    if (!shared_toolchain_latest_dir(real_latest, sizeof(real_latest)))
+        return activate_installed_pack_root(cache_root);
+    if (!junction_dir(real_latest, cache_root) &&
+        !pack_root_has_cmake(real_latest)) {
+        /* Junction failed — robocopy into the real tree. */
+        char parent[1400], cmd[3200];
+        DWORD code = 1;
+        if (!dirname_copy(parent, sizeof(parent), real_latest))
+            return activate_installed_pack_root(cache_root);
+        mkdir_p(parent);
+        rmtree_path(real_latest);
+        mkdir_p(real_latest);
+        snprintf(cmd, sizeof(cmd),
+                 "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
+                 "/ns /np",
+                 cache_root, real_latest);
+        if (!run_cmdline_wait(cmd, &code) || code > 7 ||
+            !pack_root_has_cmake(real_latest))
+            return activate_installed_pack_root(cache_root);
+    }
+    if (g_project_root[0] &&
+        join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
+        if (!pack_root_has_cmake(proj_tc))
+            junction_dir(proj_tc, pack_root_has_cmake(real_latest)
+                                      ? real_latest
+                                      : cache_root);
+    }
+    return activate_installed_pack_root(
+        pack_root_has_cmake(real_latest) ? real_latest : cache_root);
+}
+
+static int host_download_url_to_file(const char* url, const char* dest,
+                                     char* err_msg, size_t err_cap) {
+    char cmd[4096];
+    DWORD code = 1;
+    char parent[1400];
+    if (!dirname_copy(parent, sizeof(parent), dest)) {
+        snprintf(err_msg, err_cap, "Bad download destination.");
+        return 0;
+    }
+    mkdir_p(parent);
+    DeleteFileA(dest);
+    /* Windows 10+ ships curl.exe. -L follows GitHub release redirects. */
+    snprintf(cmd, sizeof(cmd),
+             "curl.exe -fsSL --retry 3 --retry-delay 2 -o \"%s\" \"%s\"", dest,
+             url);
+    if (!run_cmdline_wait(cmd, &code) || code != 0) {
+        snprintf(err_msg, err_cap,
+                 "Toolchain download failed (curl exit %lu). Check network / "
+                 "curl.exe.",
+                 (unsigned long)code);
+        return 0;
+    }
+    return path_is_file(dest);
+}
+
+static int host_extract_zip(const char* zip_path, const char* dest_dir,
+                            char* err_msg, size_t err_cap) {
+    char cmd[3200];
+    DWORD code = 1;
+    char parent[1400];
+    if (!path_is_file(zip_path)) {
+        snprintf(err_msg, err_cap, "Toolchain zip not found: %s", zip_path);
+        return 0;
+    }
+    if (!dirname_copy(parent, sizeof(parent), dest_dir)) {
+        snprintf(err_msg, err_cap, "Bad extract destination.");
+        return 0;
+    }
+    mkdir_p(parent);
+    rmtree_path(dest_dir);
+    mkdir_p(dest_dir);
+    /* tar.exe on Windows 10+ extracts .zip */
+    snprintf(cmd, sizeof(cmd), "tar.exe -xf \"%s\" -C \"%s\"", zip_path,
+             dest_dir);
+    if (!run_cmdline_wait(cmd, &code) || code != 0) {
+        snprintf(err_msg, err_cap, "Failed to extract toolchain zip (tar exit %lu).",
+                 (unsigned long)code);
+        return 0;
+    }
+    if (pack_root_has_cmake(dest_dir))
+        return 1;
+    /* Single nested directory layout — resolve_toolchain_bin_under handles it. */
+    {
+        WIN32_FIND_DATAA fd;
+        char pattern[1400], child[1400];
+        HANDLE h;
+        snprintf(pattern, sizeof(pattern), "%s\\*", dest_dir);
+        h = FindFirstFileA(pattern, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                    continue;
+                if (fd.cFileName[0] == '.')
+                    continue;
+                if (!join_path(child, sizeof(child), dest_dir, fd.cFileName))
+                    continue;
+                if (pack_root_has_cmake(child)) {
+                    FindClose(h);
+                    return 1;
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+    }
+    snprintf(err_msg, err_cap, "Toolchain zip missing bin/cmake.exe.");
+    return 0;
+}
+#else
+static int host_download_url_to_file(const char* url, const char* dest,
+                                     char* err_msg, size_t err_cap) {
+    char cmd[4096];
+    char parent[1400];
+    if (!dirname_copy(parent, sizeof(parent), dest)) {
+        snprintf(err_msg, err_cap, "Bad download destination.");
+        return 0;
+    }
+    mkdir_p(parent);
+    unlink(dest);
+    snprintf(cmd, sizeof(cmd),
+             "curl -fsSL --retry 3 --retry-delay 2 -o \"%s\" \"%s\"", dest, url);
+    if (system(cmd) != 0) {
+        snprintf(err_msg, err_cap, "Toolchain download failed (curl).");
+        return 0;
+    }
+    return path_is_file(dest);
+}
+
+static int host_extract_zip(const char* zip_path, const char* dest_dir,
+                            char* err_msg, size_t err_cap) {
+    char cmd[3200];
+    char parent[1400];
+    if (!path_is_file(zip_path)) {
+        snprintf(err_msg, err_cap, "Toolchain zip not found: %s", zip_path);
+        return 0;
+    }
+    if (!dirname_copy(parent, sizeof(parent), dest_dir)) {
+        snprintf(err_msg, err_cap, "Bad extract destination.");
+        return 0;
+    }
+    mkdir_p(parent);
+    rmtree_path(dest_dir);
+    mkdir_p(dest_dir);
+    snprintf(cmd, sizeof(cmd), "unzip -q \"%s\" -d \"%s\"", zip_path, dest_dir);
+    if (system(cmd) != 0) {
+        snprintf(cmd, sizeof(cmd), "tar -xf \"%s\" -C \"%s\"", zip_path,
+                 dest_dir);
+        if (system(cmd) != 0) {
+            snprintf(err_msg, err_cap, "Failed to extract toolchain zip.");
+            return 0;
+        }
+    }
+    if (pack_root_has_cmake(dest_dir))
+        return 1;
+    /* Nested child with bin/ is fine — resolve_toolchain_bin_under handles it. */
+    {
+        DIR* dir = opendir(dest_dir);
+        struct dirent* ent;
+        if (!dir) {
+            snprintf(err_msg, err_cap, "Toolchain zip missing bin/cmake.");
+            return 0;
+        }
+        while ((ent = readdir(dir)) != NULL) {
+            char child[1400];
+            if (ent->d_name[0] == '.')
+                continue;
+            if (!join_path(child, sizeof(child), dest_dir, ent->d_name))
+                continue;
+            if (path_is_dir(child) && pack_root_has_cmake(child)) {
+                closedir(dir);
+                return 1;
+            }
+        }
+        closedir(dir);
+    }
+    snprintf(err_msg, err_cap, "Toolchain zip missing bin/cmake.");
+    return 0;
+}
+#endif
+
+static int link_or_stamp_project_toolchain(const char* pack_root) {
+    char proj_tc[1200], bin[1400];
+    if (!pack_root_has_cmake(pack_root))
+        return 0;
+    if (!join_path(bin, sizeof(bin), pack_root, "bin"))
+        return 0;
+#if defined(_WIN32)
+    if (g_project_root[0] &&
+        join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
+        if (!pack_root_has_cmake(proj_tc))
+            junction_dir(proj_tc, pack_root);
+    }
+#else
+    if (g_project_root[0] &&
+        join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
+        if (!pack_root_has_cmake(proj_tc) && !path_is_dir(proj_tc)) {
+            char cmd[2800];
+            snprintf(cmd, sizeof(cmd), "ln -s \"%s\" \"%s\"", pack_root,
+                     proj_tc);
+            (void)system(cmd);
+        }
+    }
+#endif
+    write_project_toolchain_stamp(bin);
+    return 1;
+}
+
+static int host_install_toolchain_from_zip(
+    const char* zip_path, RecompLauncherCPrepareProgressFn on_progress,
+    void* progress_ctx, char* err_msg, size_t err_cap) {
+    char dest[1400];
+    if (!shared_toolchain_latest_dir(dest, sizeof(dest))) {
+        snprintf(err_msg, err_cap, "Cannot resolve shared toolchain directory.");
+        return 0;
+    }
+    if (on_progress)
+        on_progress(progress_ctx, 0.45f, "Extracting portable cmake/clang…");
+    if (!host_extract_zip(zip_path, dest, err_msg, err_cap))
+        return 0;
+    if (on_progress)
+        on_progress(progress_ctx, 0.85f, "Activating toolchain…");
+    link_or_stamp_project_toolchain(dest);
+    if (activate_installed_pack_root(dest))
+        return 1;
+    /* Nested layout under dest/ */
+    if (resolve_toolchain_bin_under(dest, g_cli_toolchain_bin,
+                                    sizeof(g_cli_toolchain_bin))) {
+        char pack[1400];
+        if (dirname_copy(pack, sizeof(pack), g_cli_toolchain_bin))
+            return activate_installed_pack_root(pack);
+    }
+    snprintf(err_msg, err_cap, "Extracted toolchain but cmake was not found.");
+    return 0;
+}
+
+static int host_download_and_install_toolchain(
+    RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx,
+    char* err_msg, size_t err_cap) {
+    char url[512], zip_path[1400], tmp_dir[1100];
+    const char* asset = toolchain_zip_asset_name();
+    snprintf(url, sizeof(url),
+             "https://github.com/%s/releases/latest/download/%s", k_tc_repo,
+             asset);
+#if defined(_WIN32)
+    {
+        char tmp[512];
+        DWORD n = GetTempPathA(sizeof(tmp), tmp);
+        if (n == 0 || n >= sizeof(tmp)) {
+            snprintf(err_msg, err_cap, "GetTempPath failed.");
+            return 0;
+        }
+        snprintf(tmp_dir, sizeof(tmp_dir), "%spsxrecomp-tc-%lu", tmp,
+                 (unsigned long)GetCurrentProcessId());
+    }
+#else
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/psxrecomp-tc-%d", (int)getpid());
+#endif
+    mkdir_p(tmp_dir);
+    if (!join_path(zip_path, sizeof(zip_path), tmp_dir, asset)) {
+        snprintf(err_msg, err_cap, "Temp path too long.");
+        return 0;
+    }
+    if (on_progress)
+        on_progress(progress_ctx, 0.1f, "Downloading portable cmake/clang…");
+    if (!host_download_url_to_file(url, zip_path, err_msg, err_cap)) {
+        rmtree_path(tmp_dir);
+        return 0;
+    }
+    if (!host_install_toolchain_from_zip(zip_path, on_progress, progress_ctx,
+                                         err_msg, err_cap)) {
+        rmtree_path(tmp_dir);
+        return 0;
+    }
+    rmtree_path(tmp_dir);
+    return 1;
+}
+
+static int host_toolchain_is_ready(void) {
+    if (!g_project_root[0])
+        return 0;
+    activate_toolchain_path();
+    if (find_cmake(g_cmake, sizeof(g_cmake)))
+        return 1;
+#if defined(_WIN32)
+    /* Reuse a Store-Python LocalCache install without copying. */
+    if (harvest_store_python_toolchain(0))
+        return 1;
+#endif
+    return 0;
+}
+
+/* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback).
+ * Prefer host-native curl/tar so Microsoft Store Python cannot redirect the
+ * unpack into Packages\\...\\LocalCache. */
 static int host_ensure_toolchain_with_progress(
     int download, const char* zip_path, char* err_msg, size_t err_cap,
     RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx) {
-#if defined(_WIN32)
-    char cmdline[4096];
-#else
-    char* argv[16];
-    int argc = 0;
-    char zip_storage[1100];
-#endif
-    if (!g_ready) {
-        snprintf(err_msg, err_cap, "Local codegen tools are not available.");
+    if (!g_project_root[0]) {
+        snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
     activate_toolchain_path();
     if (find_cmake(g_cmake, sizeof(g_cmake)))
         return 1;
 
+#if defined(_WIN32)
     if (on_progress)
-        on_progress(progress_ctx, 0.05f,
-                    zip_path && zip_path[0]
-                        ? "Installing toolchain from zip…"
-                        : (download ? "Downloading portable cmake/clang…"
-                                    : "Looking for portable toolchain…"));
-
-#if defined(_WIN32)
-    if (zip_path && zip_path[0]) {
-        snprintf(cmdline, sizeof(cmdline),
-                 "\"%s\" \"%s\" ensure-toolchain --project-root \"%s\" "
-                 "--from-zip \"%s\" --json-progress",
-                 g_python, g_cli_path, g_project_root, zip_path);
-    } else if (download) {
-        snprintf(cmdline, sizeof(cmdline),
-                 "\"%s\" \"%s\" ensure-toolchain --project-root \"%s\" "
-                 "--json-progress",
-                 g_python, g_cli_path, g_project_root);
-    } else {
-        snprintf(cmdline, sizeof(cmdline),
-                 "\"%s\" \"%s\" ensure-toolchain --project-root \"%s\" "
-                 "--no-download --json-progress",
-                 g_python, g_cli_path, g_project_root);
-    }
-    if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
-                     "ensure-toolchain"))
-        return 0;
-#else
-    argc = 0;
-    argv[argc++] = g_python;
-    argv[argc++] = g_cli_path;
-    argv[argc++] = "ensure-toolchain";
-    argv[argc++] = "--project-root";
-    argv[argc++] = g_project_root;
-    if (zip_path && zip_path[0]) {
-        snprintf(zip_storage, sizeof(zip_storage), "%s", zip_path);
-        argv[argc++] = "--from-zip";
-        argv[argc++] = zip_storage;
-    } else if (!download) {
-        argv[argc++] = "--no-download";
-    }
-    argv[argc++] = "--json-progress";
-    argv[argc] = NULL;
-    if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
-                       "ensure-toolchain"))
-        return 0;
+        on_progress(progress_ctx, 0.02f,
+                    "Checking for an existing portable toolchain…");
+    if (harvest_store_python_toolchain(1))
+        return 1;
 #endif
 
-    activate_toolchain_path();
-    if (find_cmake(g_cmake, sizeof(g_cmake)))
-        return 1;
+    if (zip_path && zip_path[0]) {
+        if (on_progress)
+            on_progress(progress_ctx, 0.05f, "Installing toolchain from zip…");
+        if (host_install_toolchain_from_zip(zip_path, on_progress, progress_ctx,
+                                            err_msg, err_cap))
+            return 1;
+        return 0;
+    }
+
+    if (download) {
+        if (host_download_and_install_toolchain(on_progress, progress_ctx,
+                                                err_msg, err_cap))
+            return 1;
+        return 0;
+    }
+
     snprintf(err_msg, err_cap,
-             "Toolchain install finished but cmake was not found. "
-             "Use a cmake-clang-v1 pack, set PSXRECOMP_TOOLCHAIN_DIR, "
-             "install cmake on PATH, or use python.org Python (not the "
-             "Microsoft Store build).");
+             "No portable toolchain found. Enable automatic download, pick a "
+             "cmake-clang-v1 zip, or set PSXRECOMP_TOOLCHAIN_DIR.");
     return 0;
 }
 

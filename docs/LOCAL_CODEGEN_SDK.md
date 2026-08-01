@@ -34,11 +34,12 @@ rebuild links everything.
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
 RetComM harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
-(no separate tools zip; game zips stay lean). The wizard / CLI
-`ensure-toolchain` use the same packs; offline builds accept
-`--from-zip` / a file picker. Needs Python 3 — on Windows prefer a
-[python.org](https://www.python.org/downloads/) install (the Microsoft Store
-build redirects `%LOCALAPPDATA%` writes so the setup host may not see cmake).
+(no separate tools zip; game zips stay lean). The setup host installs the
+portable pack with **host-native** `curl` + `tar`/`unzip` into
+`%LOCALAPPDATA%/psxrecomp/toolchains/…` (or XDG), not through Python — so
+Microsoft Store Python AppData redirection cannot hide cmake. Offline builds
+accept a zip via the wizard file picker. Generate/rebuild still need Python 3
+for `psxrecomp_cli.py`.
 
 ## Commands
 
