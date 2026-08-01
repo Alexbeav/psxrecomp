@@ -32,6 +32,8 @@ static char g_cmake_target[256];
 static char g_exe_basename[256];
 static char g_display[128];
 static char g_toolchain_bin[1100];
+/* Last ensure-toolchain JSONL result path (bin/); shared-cache fallback. */
+static char g_cli_toolchain_bin[1100];
 static int g_ready;
 static int g_relaunch_is_helper;
 
@@ -227,7 +229,69 @@ static int resolve_toolchain_bin_under(const char* wrap, char* out, size_t cap) 
 #endif
 }
 
+/* Prefer tagged installs (CLI writes latest/ / offline/) then any child. */
+static int resolve_toolchain_cache_base(const char* base, char* out, size_t cap) {
+    static const char* prefer[] = {"latest", "offline", NULL};
+    char cand[1100];
+    if (!base || !base[0])
+        return 0;
+    for (int i = 0; prefer[i]; ++i) {
+        if (join_path(cand, sizeof(cand), base, prefer[i]) &&
+            resolve_toolchain_bin_under(cand, out, cap))
+            return 1;
+    }
+    return resolve_toolchain_bin_under(base, out, cap);
+}
+
+/* Same layout as psxrecomp/tools/toolchain_pack.py shared_cache_roots(). */
+static int resolve_shared_toolchain_cache(char* out, size_t cap) {
+    char bases[4][1100];
+    int n = 0;
+#if defined(_WIN32)
+    const char* local = getenv("LOCALAPPDATA");
+    if (local && local[0]) {
+        if (join_path(bases[n], sizeof(bases[n]), local,
+                      "psxrecomp/toolchains/cmake-clang-v1"))
+            ++n;
+        if (n < 4 &&
+            join_path(bases[n], sizeof(bases[n]), local,
+                      "retcomm/toolchains/cmake-clang-v1"))
+            ++n;
+    }
+#else
+    const char* xdg = getenv("XDG_DATA_HOME");
+    const char* home = getenv("HOME");
+    if (xdg && xdg[0]) {
+        if (join_path(bases[n], sizeof(bases[n]), xdg,
+                      "psxrecomp/toolchains/cmake-clang-v1"))
+            ++n;
+        if (n < 4 &&
+            join_path(bases[n], sizeof(bases[n]), xdg,
+                      "retcomm/toolchains/cmake-clang-v1"))
+            ++n;
+    } else if (home && home[0]) {
+        if (join_path(bases[n], sizeof(bases[n]), home,
+                      ".local/share/psxrecomp/toolchains/cmake-clang-v1"))
+            ++n;
+        if (n < 4 &&
+            join_path(bases[n], sizeof(bases[n]), home,
+                      ".local/share/retcomm/toolchains/cmake-clang-v1"))
+            ++n;
+    }
+#endif
+    for (int i = 0; i < n; ++i) {
+        if (resolve_toolchain_cache_base(bases[i], out, cap))
+            return 1;
+    }
+    return 0;
+}
+
 static int resolve_toolchain_bin(char* out, size_t cap) {
+    /* Fresh ensure-toolchain result (bin directory). */
+    if (g_cli_toolchain_bin[0] &&
+        toolchain_bin_has_cmake(g_cli_toolchain_bin, out, cap))
+        return 1;
+
     const char* env_keys[] = {
         "PSXRECOMP_TOOLCHAIN_DIR", "RETCOMM_TOOLCHAIN_DIR", "TOOLCHAIN_DIR",
         "BPE_TOOLCHAIN_DIR", NULL};
@@ -236,11 +300,14 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
         if (e && e[0] && resolve_toolchain_bin_under(e, out, cap))
             return 1;
     }
-    if (!g_project_root[0])
-        return 0;
-    char wrap[1100];
-    if (join_path(wrap, sizeof(wrap), g_project_root, "toolchain") &&
-        resolve_toolchain_bin_under(wrap, out, cap))
+    if (g_project_root[0]) {
+        char wrap[1100];
+        if (join_path(wrap, sizeof(wrap), g_project_root, "toolchain") &&
+            resolve_toolchain_bin_under(wrap, out, cap))
+            return 1;
+    }
+    /* CLI downloads land here — must match toolchain_pack.py. */
+    if (resolve_shared_toolchain_cache(out, cap))
         return 1;
     return 0;
 }
@@ -461,9 +528,29 @@ static int json_get_number(const char* line, const char* key, double* out) {
 static void handle_progress_line(const char* line,
                                  RecompLauncherCPrepareProgressFn on_progress,
                                  void* progress_ctx) {
-    if (!line || line[0] != '{' || !on_progress) return;
+    if (!line || line[0] != '{')
+        return;
     char event[64] = "";
     json_get_string(line, "event", event, sizeof(event));
+    /* Capture ensure-toolchain result even when UI progress is absent. */
+    if (strcmp(event, "result") == 0) {
+        char tb[1100];
+        if (json_get_string(line, "toolchain_bin", tb, sizeof(tb)) && tb[0] &&
+            path_is_dir(tb)) {
+            snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s", tb);
+            /* Env expects pack root (parent of bin/), not bin/ itself. */
+            char pack_root[1100];
+            if (dirname_copy(pack_root, sizeof(pack_root), tb) && pack_root[0]) {
+#if defined(_WIN32)
+                _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", pack_root);
+#else
+                setenv("PSXRECOMP_TOOLCHAIN_DIR", pack_root, 1);
+#endif
+            }
+        }
+    }
+    if (!on_progress)
+        return;
     if (strcmp(event, "phase") == 0) {
         char message[240] = "";
         char phase[64] = "";
@@ -995,6 +1082,7 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     g_exe_path[0] = '\0';
     g_helper_path[0] = '\0';
     g_toolchain_bin[0] = '\0';
+    g_cli_toolchain_bin[0] = '\0';
 
     snprintf(g_display, sizeof(g_display), "%s",
              cfg_or(cfg->display_name, "Game"));
