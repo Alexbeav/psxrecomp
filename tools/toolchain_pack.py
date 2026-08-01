@@ -136,6 +136,63 @@ def preferred_install_root() -> Path:
     return r
 
 
+STAMP_NAME = ".psxrecomp-bin"
+
+
+def is_windows_store_python() -> bool:
+    """Microsoft Store Python redirects %LOCALAPPDATA% writes into LocalCache."""
+    if not sys_platform_is_windows():
+        return False
+    try:
+        exe = str(Path(sys.executable).resolve()).lower()
+    except OSError:
+        exe = str(sys.executable).lower()
+    return "windowsapps" in exe or "pythonsoftwarefoundation" in exe
+
+
+def write_toolchain_stamp(project_root: Path, bin_dir: Path) -> None:
+    """Write project_root/toolchain/.psxrecomp-bin for the C host to read."""
+    stamp_dir = project_root / "toolchain"
+    try:
+        stamp_dir.mkdir(parents=True, exist_ok=True)
+        (stamp_dir / STAMP_NAME).write_text(
+            str(bin_dir.resolve()) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def materialize_into_project(
+    project_root: Path, pack_root: Path, log=None
+) -> Path:
+    """Copy a usable pack into project_root/toolchain/ (bin/ at top level).
+
+    The setup host resolves this path first; installing here keeps cmake
+    visible even when the shared-cache path is long or Store-redirected.
+    """
+    src = unwrap_pack_root(pack_root)
+    if not pack_root_looks_usable(src):
+        raise RuntimeError(f"toolchain pack unusable: {pack_root}")
+    dest = project_root / "toolchain"
+    # Already have a usable tree with the same cmake — keep it.
+    existing = resolve_embedded_bin(project_root)
+    if existing:
+        try:
+            if (existing / cmake_name()).resolve() == (src / "bin" / cmake_name()).resolve():
+                write_toolchain_stamp(project_root, existing)
+                return unwrap_pack_root(dest) if pack_root_looks_usable(dest) else src
+        except OSError:
+            pass
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(src, dest)
+    if log:
+        log(f"Installed project toolchain at {dest}")
+    root = unwrap_pack_root(dest)
+    write_toolchain_stamp(project_root, root / "bin")
+    return root
+
+
 def find_cached_pack() -> Optional[Path]:
     for base in shared_cache_roots():
         if not base.is_dir():
@@ -209,12 +266,21 @@ def unpack_zip_to(zip_path: Path, dest: Path) -> Path:
     return root
 
 
-def install_from_zip(zip_path: Path, tag: str = "offline") -> Path:
+def install_from_zip(
+    zip_path: Path,
+    tag: str = "offline",
+    *,
+    project_root: Optional[Path] = None,
+    log=None,
+) -> Path:
     zip_path = zip_path.expanduser().resolve()
     if not zip_path.is_file():
         raise FileNotFoundError(f"toolchain zip not found: {zip_path}")
     dest = preferred_install_root() / tag
-    return unpack_zip_to(zip_path, dest)
+    root = unpack_zip_to(zip_path, dest)
+    if project_root is not None:
+        return materialize_into_project(project_root, root, log=log)
+    return root
 
 
 def download_url(url: str, dest: Path, token: Optional[str] = None) -> None:
@@ -230,6 +296,8 @@ def download_latest_pack(
     artifact: Optional[str] = None,
     repo: str = DEFAULT_REPO,
     log=None,
+    *,
+    project_root: Optional[Path] = None,
 ) -> Path:
     art = artifact or host_artifact()
     asset = _ASSET.get(art)
@@ -251,6 +319,8 @@ def download_latest_pack(
         root = unpack_zip_to(zpath, dest)
         if log:
             log(f"Installed toolchain pack at {root}")
+        if project_root is not None:
+            return materialize_into_project(project_root, root, log=log)
         return root
 
 
@@ -266,23 +336,55 @@ def ensure_toolchain(
 
     Resolution order: env override → project toolchain/ → shared cache →
     optional --from-zip → optional download.
+
+    New installs also land in project_root/toolchain/ when project_root is set
+    (plus the shared cache), and write toolchain/.psxrecomp-bin for the host.
     """
+    if is_windows_store_python() and log:
+        log(
+            "Warning: Microsoft Store Python redirects AppData writes. "
+            "Prefer python.org Python if toolchain setup fails to find cmake."
+        )
+
     if from_zip is not None:
-        root = install_from_zip(Path(from_zip))
-        bin_dir = root / "bin"
+        root = install_from_zip(
+            Path(from_zip), project_root=project_root, log=log
+        )
+        bin_dir = unwrap_pack_root(root) / "bin"
+        if not bin_looks_usable(bin_dir):
+            bin_dir = root / "bin"
+        if project_root is not None:
+            write_toolchain_stamp(project_root, bin_dir)
         activate_toolchain_bin(bin_dir, log=log)
         return bin_dir
 
     existing = resolve_toolchain_bin(project_root)
     if existing:
+        # Prefer a project-local copy so the C host always sees the same tree.
+        if project_root is not None and not resolve_embedded_bin(project_root):
+            try:
+                root = materialize_into_project(
+                    project_root, existing.parent, log=log
+                )
+                existing = root / "bin"
+            except OSError as exc:
+                if log:
+                    log(f"Could not copy toolchain into project: {exc}")
+                write_toolchain_stamp(project_root, existing)
+        elif project_root is not None:
+            write_toolchain_stamp(project_root, existing)
         activate_toolchain_bin(existing, log=log)
         return existing
 
     if download:
-        root = download_latest_pack(repo=repo, log=log)
+        root = download_latest_pack(
+            repo=repo, log=log, project_root=project_root
+        )
         bin_dir = unwrap_pack_root(root) / "bin"
         if not bin_looks_usable(bin_dir):
             bin_dir = root / "bin"
+        if project_root is not None:
+            write_toolchain_stamp(project_root, bin_dir)
         activate_toolchain_bin(bin_dir, log=log)
         return bin_dir
 

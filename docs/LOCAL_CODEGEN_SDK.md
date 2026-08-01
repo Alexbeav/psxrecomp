@@ -24,9 +24,10 @@ rebuild links everything.
 | `tools/package_setup_host.sh` | Universal setup-host zip packager |
 | `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
-| `tools/toolchain_pack.py` | CLI: resolve / download / offline-unpack into shared cache |
+| `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
+| Project `toolchain/` | Wizard/CLI install target (`bin/cmake`, stamp `.psxrecomp-bin`) |
 | Shared toolchain cache | `~/.local/share/psxrecomp/toolchains/cmake-clang-v1/` (or RetComM’s) |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
@@ -35,7 +36,9 @@ rebuild links everything.
 RetComM harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
 (no separate tools zip; game zips stay lean). The wizard / CLI
 `ensure-toolchain` use the same packs; offline builds accept
-`--from-zip` / a file picker. Needs Python 3.
+`--from-zip` / a file picker. Needs Python 3 — on Windows prefer a
+[python.org](https://www.python.org/downloads/) install (the Microsoft Store
+build redirects `%LOCALAPPDATA%` writes so the setup host may not see cmake).
 
 ## Commands
 

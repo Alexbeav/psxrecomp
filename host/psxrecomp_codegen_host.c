@@ -31,9 +31,9 @@ static char g_helper_path[1100];
 static char g_cmake_target[256];
 static char g_exe_basename[256];
 static char g_display[128];
-static char g_toolchain_bin[1100];
+static char g_toolchain_bin[1400];
 /* Last ensure-toolchain JSONL result path (bin/); shared-cache fallback. */
-static char g_cli_toolchain_bin[1100];
+static char g_cli_toolchain_bin[1400];
 static int g_ready;
 static int g_relaunch_is_helper;
 
@@ -69,6 +69,158 @@ static int join_path(char* out, size_t cap, const char* a, const char* b) {
     int n = snprintf(out, cap, "%s%s%s", a, need_slash ? "/" : "", b);
     return n > 0 && (size_t)n < cap;
 }
+
+#if defined(_WIN32)
+/* Microsoft Store Python redirects %LOCALAPPDATA% writes into
+ * Packages\PythonSoftwareFoundation.Python.*\LocalCache\Local\...
+ * Map a virtual LocalAppData path to those on-disk mirrors. */
+static int store_python_localcache_mirror(const char* virtual_path, char* out,
+                                          size_t cap) {
+    const char* local = getenv("LOCALAPPDATA");
+    if (!local || !local[0] || !virtual_path || !virtual_path[0])
+        return 0;
+    size_t llen = strlen(local);
+    if (_strnicmp(virtual_path, local, (int)llen) != 0)
+        return 0;
+    const char* suffix = virtual_path + llen;
+    if (*suffix != '\\' && *suffix != '/')
+        return 0;
+    while (*suffix == '\\' || *suffix == '/')
+        ++suffix;
+    if (!suffix[0])
+        return 0;
+
+    char packages[1100];
+    if (!join_path(packages, sizeof(packages), local, "Packages"))
+        return 0;
+    char pattern[1200];
+    snprintf(pattern, sizeof(pattern),
+             "%s\\PythonSoftwareFoundation.Python.*", packages);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    int found = 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            continue;
+        char mirror[1400];
+        int n = snprintf(mirror, sizeof(mirror),
+                         "%s\\%s\\LocalCache\\Local\\%s", packages,
+                         fd.cFileName, suffix);
+        if (n <= 0 || (size_t)n >= sizeof(mirror))
+            continue;
+        DWORD attr = GetFileAttributesA(mirror);
+        if (attr != INVALID_FILE_ATTRIBUTES) {
+            snprintf(out, cap, "%s", mirror);
+            found = 1;
+            break;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return found;
+}
+
+/* Prefer the real on-disk directory (handles Store Python redirection). */
+static int resolve_existing_dir(const char* path, char* out, size_t cap) {
+    if (path && path[0] && path_is_dir(path)) {
+        snprintf(out, cap, "%s", path);
+        return 1;
+    }
+    char alt[1400];
+    if (path && store_python_localcache_mirror(path, alt, sizeof(alt)) &&
+        path_is_dir(alt)) {
+        snprintf(out, cap, "%s", alt);
+        return 1;
+    }
+    return 0;
+}
+
+static int python_path_is_store(const char* path) {
+    if (!path || !path[0])
+        return 0;
+    char lower[1100];
+    size_t n = strlen(path);
+    if (n >= sizeof(lower))
+        n = sizeof(lower) - 1;
+    for (size_t i = 0; i < n; ++i) {
+        char c = path[i];
+        lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    lower[n] = '\0';
+    return strstr(lower, "windowsapps") != NULL ||
+           strstr(lower, "pythonsoftwarefoundation") != NULL;
+}
+
+/* Run a short cmdline and capture the first stdout line (trimmed). */
+static int capture_cmd_first_line(const char* cmdline, char* out, size_t cap) {
+    SECURITY_ATTRIBUTES sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE rd = NULL, wr = NULL;
+    if (!CreatePipe(&rd, &wr, &sa, 0))
+        return 0;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = wr;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    char mutable_cmd[1024];
+    snprintf(mutable_cmd, sizeof(mutable_cmd), "%s", cmdline);
+    if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(rd);
+        CloseHandle(wr);
+        return 0;
+    }
+    CloseHandle(wr);
+
+    char buf[512];
+    size_t got = 0;
+    DWORD n = 0;
+    out[0] = '\0';
+    while (ReadFile(rd, buf, sizeof(buf), &n, NULL) && n > 0) {
+        for (DWORD i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\r')
+                continue;
+            if (c == '\n') {
+                out[got] = '\0';
+                got = cap; /* mark complete */
+                break;
+            }
+            if (got + 1 < cap)
+                out[got++] = c;
+        }
+        if (got >= cap)
+            break;
+    }
+    if (got > 0 && got < cap)
+        out[got] = '\0';
+    CloseHandle(rd);
+    WaitForSingleObject(pi.hProcess, 8000);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return out[0] != '\0';
+}
+#else
+static int resolve_existing_dir(const char* path, char* out, size_t cap) {
+    if (path && path[0] && path_is_dir(path)) {
+        snprintf(out, cap, "%s", path);
+        return 1;
+    }
+    return 0;
+}
+
+#endif
 
 static int dirname_copy(char* out, size_t cap, const char* path) {
     size_t n = strlen(path);
@@ -142,6 +294,23 @@ static int find_python(char* out, size_t cap) {
         return 1;
     }
 #if defined(_WIN32)
+    /* Prefer python.org / py-launcher installs over the Microsoft Store
+     * stub: Store Python redirects LocalAppData writes into LocalCache. */
+    char resolved[1100];
+    if (capture_cmd_first_line(
+            "py -3 -c \"import sys; print(sys.executable)\"", resolved,
+            sizeof(resolved)) &&
+        path_is_file(resolved) && !python_path_is_store(resolved)) {
+        snprintf(out, cap, "%s", resolved);
+        return 1;
+    }
+    if (capture_cmd_first_line(
+            "python -c \"import sys; print(sys.executable)\"", resolved,
+            sizeof(resolved)) &&
+        path_is_file(resolved)) {
+        snprintf(out, cap, "%s", resolved);
+        return 1;
+    }
     const char* candidates[] = {"python.exe", "python3.exe", "py.exe"};
 #else
     const char* candidates[] = {"python3", "python"};
@@ -170,9 +339,12 @@ static int toolchain_bin_has_cmake(const char* bin, char* out, size_t cap) {
 }
 
 static int resolve_toolchain_bin_under(const char* wrap, char* out, size_t cap) {
-    char cand[1100], cmake[1200];
-    if (!wrap || !wrap[0] || !path_is_dir(wrap))
+    char cand[1100], cmake[1200], root[1400];
+    if (!wrap || !wrap[0])
         return 0;
+    if (!resolve_existing_dir(wrap, root, sizeof(root)))
+        return 0;
+    wrap = root;
     if (join_path(cand, sizeof(cand), wrap, "bin") &&
         toolchain_bin_has_cmake(cand, out, cap))
         return 1;
@@ -245,7 +417,7 @@ static int resolve_toolchain_cache_base(const char* base, char* out, size_t cap)
 
 /* Same layout as psxrecomp/tools/toolchain_pack.py shared_cache_roots(). */
 static int resolve_shared_toolchain_cache(char* out, size_t cap) {
-    char bases[4][1100];
+    char bases[8][1400];
     int n = 0;
 #if defined(_WIN32)
     const char* local = getenv("LOCALAPPDATA");
@@ -253,10 +425,17 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
         if (join_path(bases[n], sizeof(bases[n]), local,
                       "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 4 &&
+        if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), local,
                       "retcomm/toolchains/cmake-clang-v1"))
             ++n;
+        /* Store Python may have written only into LocalCache mirrors. */
+        for (int i = 0, lim = n; i < lim && n < 8; ++i) {
+            char mirror[1400];
+            if (store_python_localcache_mirror(bases[i], mirror,
+                                              sizeof(mirror)))
+                snprintf(bases[n++], sizeof(bases[0]), "%s", mirror);
+        }
     }
 #else
     const char* xdg = getenv("XDG_DATA_HOME");
@@ -265,7 +444,7 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
         if (join_path(bases[n], sizeof(bases[n]), xdg,
                       "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 4 &&
+        if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), xdg,
                       "retcomm/toolchains/cmake-clang-v1"))
             ++n;
@@ -273,7 +452,7 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
         if (join_path(bases[n], sizeof(bases[n]), home,
                       ".local/share/psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 4 &&
+        if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), home,
                       ".local/share/retcomm/toolchains/cmake-clang-v1"))
             ++n;
@@ -286,11 +465,55 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
     return 0;
 }
 
+/* CLI writes project_root/toolchain/.psxrecomp-bin with the bin path. */
+static int resolve_toolchain_stamp(char* out, size_t cap) {
+    char stamp[1200], line[1400], resolved[1400];
+    FILE* f;
+    if (!g_project_root[0])
+        return 0;
+    if (!join_path(stamp, sizeof(stamp), g_project_root,
+                   "toolchain/.psxrecomp-bin"))
+        return 0;
+#if defined(_WIN32)
+    {
+        char alt[1400];
+        if (!path_is_file(stamp) &&
+            store_python_localcache_mirror(stamp, alt, sizeof(alt)) &&
+            path_is_file(alt))
+            snprintf(stamp, sizeof(stamp), "%s", alt);
+    }
+#endif
+    if (!path_is_file(stamp))
+        return 0;
+    f = fopen(stamp, "r");
+    if (!f)
+        return 0;
+    if (!fgets(line, sizeof(line), f)) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    size_t n = strlen(line);
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' ||
+                 line[n - 1] == ' '))
+        line[--n] = '\0';
+    if (!line[0])
+        return 0;
+    if (resolve_existing_dir(line, resolved, sizeof(resolved)) &&
+        toolchain_bin_has_cmake(resolved, out, cap))
+        return 1;
+    return 0;
+}
+
 static int resolve_toolchain_bin(char* out, size_t cap) {
     /* Fresh ensure-toolchain result (bin directory). */
-    if (g_cli_toolchain_bin[0] &&
-        toolchain_bin_has_cmake(g_cli_toolchain_bin, out, cap))
-        return 1;
+    if (g_cli_toolchain_bin[0]) {
+        char resolved[1400];
+        if (resolve_existing_dir(g_cli_toolchain_bin, resolved,
+                                 sizeof(resolved)) &&
+            toolchain_bin_has_cmake(resolved, out, cap))
+            return 1;
+    }
 
     const char* env_keys[] = {
         "PSXRECOMP_TOOLCHAIN_DIR", "RETCOMM_TOOLCHAIN_DIR", "TOOLCHAIN_DIR",
@@ -300,6 +523,8 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
         if (e && e[0] && resolve_toolchain_bin_under(e, out, cap))
             return 1;
     }
+    if (resolve_toolchain_stamp(out, cap))
+        return 1;
     if (g_project_root[0]) {
         char wrap[1100];
         if (join_path(wrap, sizeof(wrap), g_project_root, "toolchain") &&
@@ -534,13 +759,15 @@ static void handle_progress_line(const char* line,
     json_get_string(line, "event", event, sizeof(event));
     /* Capture ensure-toolchain result even when UI progress is absent. */
     if (strcmp(event, "result") == 0) {
-        char tb[1100];
+        char tb[1400], resolved[1400];
         if (json_get_string(line, "toolchain_bin", tb, sizeof(tb)) && tb[0] &&
-            path_is_dir(tb)) {
-            snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s", tb);
+            resolve_existing_dir(tb, resolved, sizeof(resolved))) {
+            snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s",
+                     resolved);
             /* Env expects pack root (parent of bin/), not bin/ itself. */
-            char pack_root[1100];
-            if (dirname_copy(pack_root, sizeof(pack_root), tb) && pack_root[0]) {
+            char pack_root[1400];
+            if (dirname_copy(pack_root, sizeof(pack_root), resolved) &&
+                pack_root[0]) {
 #if defined(_WIN32)
                 _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", pack_root);
 #else
@@ -607,7 +834,8 @@ static int run_cli_win(const char* cmdline,
     CloseHandle(wr);
 
     char buf[512];
-    char line[1024];
+    /* Long JSONL rows (toolchain paths under LocalAppData) need headroom. */
+    char line[16384];
     size_t line_len = 0;
     DWORD n = 0;
     while (ReadFile(rd, buf, sizeof(buf), &n, NULL) && n > 0) {
@@ -677,7 +905,7 @@ static int run_cli_posix(char* const argv[],
         snprintf(err_msg, err_cap, "fdopen failed.");
         return 0;
     }
-    char line[1024];
+    char line[16384];
     while (fgets(line, sizeof(line), out)) {
         size_t n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
@@ -781,7 +1009,8 @@ static int host_ensure_toolchain_with_progress(
     snprintf(err_msg, err_cap,
              "Toolchain install finished but cmake was not found. "
              "Use a cmake-clang-v1 pack, set PSXRECOMP_TOOLCHAIN_DIR, "
-             "or install cmake on PATH.");
+             "install cmake on PATH, or use python.org Python (not the "
+             "Microsoft Store build).");
     return 0;
 }
 

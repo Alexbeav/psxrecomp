@@ -1141,7 +1141,7 @@ def cmd_pgo_train(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
 
 def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -> int:
-    """Resolve / download / unpack cmake-clang-v1 into the shared cache."""
+    """Resolve / download / unpack cmake-clang-v1 into project toolchain/ + cache."""
     project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root
