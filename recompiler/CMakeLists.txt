@@ -264,6 +264,14 @@ target_include_directories(l2_structural_test PRIVATE
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(debug_trace_ranges_test
+        ../runtime/tests/test_debug_trace_ranges.c
+        ../runtime/src/debug_trace_ranges.c
+    )
+    target_include_directories(debug_trace_ranges_test PRIVATE
+        ../runtime/include)
+    add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp

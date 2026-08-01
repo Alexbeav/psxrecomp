@@ -41,6 +41,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "lockstep.h"
+#include "debug_trace_ranges.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -385,8 +386,8 @@ static uint32_t s_wtrace_head = 0;
 static WriteTraceEntry *s_wtrace_boot = NULL;
 static uint64_t s_wtrace_boot_total = 0;  /* matching writes ever seen */
 static uint32_t s_wtrace_boot_count = 0;  /* entries retained */
-#define WTRACE_BOOT_MAX_RANGES 12
-static struct { uint32_t lo, hi; } s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
+#define WTRACE_BOOT_MAX_RANGES 32
+static PSXDebugTraceRange s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
 static int s_wtrace_boot_range_count = 0;
 
 /* Multi-range filter: up to 64 [lo, hi) address ranges. Boot defaults
@@ -13017,6 +13018,40 @@ void debug_server_init(int port)
     s_wtrace_trans_ranges[9].hi = 0x00097430u;
     s_wtrace_trans_range_count = 10;
 #endif
+
+    /*
+     * Generic extraction of NyperYuhgard's Crash Bash write watcher: arm
+     * caller-selected ranges before guest execution and retain their first
+     * writes in the existing register-rich boot trace. Unlike the original
+     * hard-coded stderr trap, this works for any title and is queryable over
+     * TCP after the event.
+     */
+    {
+        const char *spec = getenv("PSX_WTRACE_BOOT");
+        PSXDebugTraceRange parsed[16];
+        int count = (spec && *spec)
+            ? psx_debug_parse_trace_ranges(
+                  spec, parsed, (int)(sizeof(parsed) / sizeof(parsed[0])))
+            : 0;
+
+        if (count < 0) {
+            fprintf(stderr,
+                    "psxrecomp: ignoring invalid PSX_WTRACE_BOOT='%s' "
+                    "(expected lo,hi[;lo,hi...])\n",
+                    spec ? spec : "");
+        } else if (count > WTRACE_BOOT_MAX_RANGES -
+                               s_wtrace_boot_range_count) {
+            fprintf(stderr,
+                    "psxrecomp: ignoring PSX_WTRACE_BOOT: too many ranges "
+                    "(%d configured, %d available)\n",
+                    count, WTRACE_BOOT_MAX_RANGES -
+                               s_wtrace_boot_range_count);
+        } else {
+            for (int i = 0; i < count; ++i) {
+                s_wtrace_boot_ranges[s_wtrace_boot_range_count++] = parsed[i];
+            }
+        }
+    }
 
     /* Tier 1: heap-allocate MMIO trace ring buffer (2 MB). */
     if (!s_mmio_trace) {
