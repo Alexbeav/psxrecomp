@@ -33,6 +33,17 @@ USER_OFF = 24
 SYNC = bytes([0x00] + [0xFF] * 10 + [0x00])
 
 
+def _configure_stdio() -> None:
+    """Avoid UnicodeEncodeError on Windows consoles (cp1252 / Store Python)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(errors="replace")
+            except Exception:  # noqa: BLE001 — best-effort stdio harden
+                pass
+
+
 def _build_edc_table() -> list[int]:
     table = []
     for i in range(256):
@@ -388,7 +399,7 @@ def raw2448_to_bin(src: Path) -> bytes:
                 raise SystemExit(f"truncated 2448 sector {n}: got {len(sec)} bytes")
             out += sec[:DST_SEC]
             n += 1
-    print(f"  trimmed {n} sectors 2448 → 2352")
+    print(f"  trimmed {n} sectors 2448 -> 2352")
     return bytes(out)
 
 
@@ -408,8 +419,9 @@ def matches_known(cfg: PrepareConfig, size: int, md5: str, sha1: str) -> bool:
 
 
 def main() -> int:
+    _configure_stdio()
     here = Path(__file__).resolve().parent
-    # tools/ → psxrecomp/ → often game root is parent of psxrecomp
+    # tools/ -> psxrecomp/ -> often game root is parent of psxrecomp
     fw_root = here.parent
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("source", nargs="?", default="", help="path to .iso / .cue / .bin")
@@ -489,7 +501,7 @@ def main() -> int:
     if kind == "cue":
         src = resolve_cue_bin(src)
         src_md5, src_sha1, src_size = file_hashes(src)
-        print(f"cue → bin: {src}")
+        print(f"cue -> bin: {src}")
         print(f"  size  {src_size}")
         print(f"  md5   {src_md5}")
         print(f"  sha1  {src_sha1}")
@@ -512,7 +524,7 @@ def main() -> int:
                 "verifying boot EXE only."
             )
     elif not cfg.known and not cfg.skip_hash_check and kind == "bin2352":
-        print("  no prepare_disc.known_* configured — verifying boot EXE only")
+        print("  no prepare_disc.known_* configured - verifying boot EXE only")
 
     if kind == "bin2352":
         bin_data = src.read_bytes()
@@ -520,11 +532,11 @@ def main() -> int:
     elif kind == "iso":
         iso_data = src.read_bytes()
         entries, files = extract_via(read_user_iso, iso_data, cfg.boot_exe)
-        print(f"  converting {len(iso_data) // USER} sectors ISO → MODE2/2352…")
+        print(f"  converting {len(iso_data) // USER} sectors ISO -> MODE2/2352...")
         bin_data = iso_to_bin(iso_data)
         extract_via(read_user_bin, bin_data, cfg.boot_exe)
     elif kind == "raw2448":
-        print("  converting 2448 → 2352…")
+        print("  converting 2448 -> 2352...")
         bin_data = raw2448_to_bin(src)
         entries, files = extract_via(read_user_bin, bin_data, cfg.boot_exe)
     else:
@@ -563,7 +575,7 @@ def main() -> int:
     print(f"  md5   {out_md5}")
     print(f"  sha1  {out_sha1}")
     if kind == "iso":
-        print("  rebuilt from ISO (EDC set; ECC zeroed — fine for software readers)")
+        print("  rebuilt from ISO (EDC set; ECC zeroed - fine for software readers)")
     elif kind == "raw2448":
         print("  trimmed from 2448-byte/sector dump")
 

@@ -231,10 +231,19 @@ def resolve_toolchain_bin(project_root: Optional[Path] = None) -> Optional[Path]
 
 def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
     prefix = str(bin_dir)
+    pack_root = bin_dir.parent
     cur = os.environ.get("PATH", "")
     parts = cur.split(os.pathsep) if cur else []
     if not parts or Path(parts[0]) != bin_dir:
         os.environ["PATH"] = prefix + (os.pathsep + cur if cur else "")
+    # Windows cmake-clang-v1 ships zlib under the pack root; help FindZLIB.
+    pack_s = str(pack_root)
+    os.environ["ZLIB_ROOT"] = pack_s
+    prev_prefix = os.environ.get("CMAKE_PREFIX_PATH", "")
+    if not prev_prefix:
+        os.environ["CMAKE_PREFIX_PATH"] = pack_s
+    elif pack_s not in prev_prefix.split(os.pathsep):
+        os.environ["CMAKE_PREFIX_PATH"] = pack_s + os.pathsep + prev_prefix
     for name, env_key in (
         ("clang", "CC"),
         ("clang++", "CXX"),
@@ -306,7 +315,7 @@ def download_latest_pack(
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     url = f"https://github.com/{repo}/releases/latest/download/{asset}"
     if log:
-        log(f"Downloading {asset} from {repo}…")
+        log(f"Downloading {asset} from {repo}...")
     with tempfile.TemporaryDirectory(prefix="psxrecomp-tc-") as tmp:
         zpath = Path(tmp) / asset
         try:

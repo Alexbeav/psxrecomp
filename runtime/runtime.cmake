@@ -488,6 +488,60 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
     endif()
 endif()
 
+# zlib for boot_state v4. System packages first; otherwise FetchContent a pinned
+# release so portable Windows cmake-clang-v1 setups can configure without MSYS2.
+option(PSX_ZLIB_FETCH
+    "Fetch zlib when no system ZLIB package is found"
+    ON)
+function(psxrecomp_ensure_zlib)
+    if(TARGET ZLIB::ZLIB)
+        return()
+    endif()
+    find_package(ZLIB QUIET)
+    if(TARGET ZLIB::ZLIB)
+        return()
+    endif()
+    if(NOT PSX_ZLIB_FETCH)
+        message(FATAL_ERROR
+            "ZLIB was not found. On Windows, use a cmake-clang-v1 pack that "
+            "ships include/zlib.h + lib/libz.a (sets ZLIB_ROOT), or install "
+            "zlib-devel / mingw-w64-zlib, or configure with -DPSX_ZLIB_FETCH=ON.")
+    endif()
+    message(STATUS
+        "psxrecomp: ZLIB not in CMAKE_PREFIX_PATH/ZLIB_ROOT; "
+        "fetching zlib 1.3.1 (prefer a toolchain pack that bundles it)")
+    include(FetchContent)
+    set(_psx_zlib_timestamp_args "")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        list(APPEND _psx_zlib_timestamp_args DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+    FetchContent_Declare(psx_zlib
+        URL
+            "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
+        URL_HASH
+            "SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+        ${_psx_zlib_timestamp_args})
+    FetchContent_MakeAvailable(psx_zlib)
+    if(TARGET ZLIB::ZLIB)
+        message(STATUS "psxrecomp: ZLIB via FetchContent (ZLIB::ZLIB)")
+        return()
+    endif()
+    # madler/zlib builds zlibstatic even when a shared zlib target exists.
+    if(TARGET zlibstatic)
+        add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        message(STATUS "psxrecomp: ZLIB via FetchContent (zlibstatic)")
+        return()
+    endif()
+    if(TARGET zlib)
+        add_library(ZLIB::ZLIB ALIAS zlib)
+        message(STATUS "psxrecomp: ZLIB via FetchContent (zlib)")
+        return()
+    endif()
+    message(FATAL_ERROR
+        "Fetched zlib but no linkable target was produced "
+        "(expected zlibstatic or zlib).")
+endfunction()
+
 function(psxrecomp_add_runtime_target target)
     set(options ORACLE COSIM)
     set(oneValueArgs
@@ -732,7 +786,9 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     # zlib: boot_state v4 savestate compression (RAM/VRAM/SPU blobs).
-    find_package(ZLIB REQUIRED)
+    # Portable Windows toolchains (cmake-clang-v1) have no system zlib —
+    # fetch a pinned release when find_package fails (same pattern as SDL3).
+    psxrecomp_ensure_zlib()
     target_link_libraries(${target} PRIVATE ZLIB::ZLIB)
 
     # Build identity: stamp the psxrecomp commit into the binary so a crash report

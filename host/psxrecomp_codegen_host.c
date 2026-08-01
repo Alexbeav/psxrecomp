@@ -538,6 +538,7 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 }
 
 static void activate_toolchain_path(void) {
+    char pack_root[1400];
     g_toolchain_bin[0] = '\0';
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
@@ -553,6 +554,39 @@ static void activate_toolchain_path(void) {
              old ? old : "");
     setenv("PATH", neu, 1);
 #endif
+    /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
+    if (dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin) &&
+        pack_root[0]) {
+#if defined(_WIN32)
+        _putenv_s("ZLIB_ROOT", pack_root);
+        {
+            const char* prev = getenv("CMAKE_PREFIX_PATH");
+            char pref[8192];
+            if (prev && prev[0] && !strstr(prev, pack_root))
+                snprintf(pref, sizeof(pref), "%s;%s", pack_root, prev);
+            else if (!prev || !prev[0])
+                snprintf(pref, sizeof(pref), "%s", pack_root);
+            else
+                pref[0] = '\0';
+            if (pref[0])
+                _putenv_s("CMAKE_PREFIX_PATH", pref);
+        }
+#else
+        setenv("ZLIB_ROOT", pack_root, 1);
+        {
+            const char* prev = getenv("CMAKE_PREFIX_PATH");
+            char pref[8192];
+            if (prev && prev[0] && !strstr(prev, pack_root))
+                snprintf(pref, sizeof(pref), "%s:%s", pack_root, prev);
+            else if (!prev || !prev[0])
+                snprintf(pref, sizeof(pref), "%s", pack_root);
+            else
+                pref[0] = '\0';
+            if (pref[0])
+                setenv("CMAKE_PREFIX_PATH", pref, 1);
+        }
+#endif
+    }
 }
 
 static int find_cmake(char* out, size_t cap) {
@@ -1621,6 +1655,12 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
     if (!join_path(g_helper_path, sizeof(g_helper_path), g_build_dir,
                    "recomp_deferred_rebuild.cmd")) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
+        return 0;
+    }
+    /* Setup zips omit build-release/; create it before writing the .cmd. */
+    if (!mkdir_p(g_build_dir)) {
+        snprintf(err_msg, err_cap, "Failed to create build dir: %s",
+                 g_build_dir);
         return 0;
     }
     FILE* f = fopen(g_helper_path, "wb");

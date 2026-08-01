@@ -375,7 +375,7 @@ def ensure_framework(
     if need_seed and (ROOT / "bios").is_dir():
         if progress:
             progress.log(
-                f"Seeding psxrecomp BIOS profiles from SDK → {fw}"
+                f"Seeding psxrecomp BIOS profiles from SDK -> {fw}"
             )
         fw.mkdir(parents=True, exist_ok=True)
         _copy_missing(ROOT / "bios", fw / "bios")
@@ -533,7 +533,7 @@ def run_prepare_disc(
     script = ROOT / "tools" / "prepare_disc.py"
     if not script.is_file():
         raise RuntimeError(f"missing {script}")
-    progress.phase("prepare_disc", pct=0.15, message="Normalizing disc image…")
+    progress.phase("prepare_disc", pct=0.15, message="Normalizing disc image...")
     cmd = [
         sys.executable,
         str(script),
@@ -633,7 +633,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error(f"BIOS not found: {bios_path}", code=EXIT_USAGE)
             return EXIT_USAGE
         dest = fw / "bios" / "SCPH1001.BIN"
-        progress.phase("bios", pct=0.15, message="Staging retail BIOS dump…")
+        progress.phase("bios", pct=0.15, message="Staging retail BIOS dump...")
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.resolve() != bios_path.resolve():
@@ -642,7 +642,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error(f"failed to stage BIOS: {exc}", code=EXIT_ERROR)
             return EXIT_ERROR
         try:
-            progress.phase("bios", pct=0.2, message="Generating SCPH1001 BIOS C…")
+            progress.phase("bios", pct=0.2, message="Generating SCPH1001 BIOS C...")
             regen_bios_profile(project_root, "bios/SCPH1001.toml", progress=progress)
             staged_retail = True
         except Exception as exc:  # noqa: BLE001
@@ -661,7 +661,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     ):
         try:
             progress.phase(
-                "bios", pct=0.25, message="Generating OpenBIOS backend C…"
+                "bios", pct=0.25, message="Generating OpenBIOS backend C..."
             )
             regen_bios_profile(project_root, "bios/OpenBIOS.toml", progress=progress)
         except Exception as exc:  # noqa: BLE001
@@ -682,7 +682,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     progress.phase(
         "emit",
         pct=0.35,
-        message=f"Running psxrecomp-game → {out_dir}",
+        message=f"Running psxrecomp-game -> {out_dir}",
     )
     cmd = [str(game_tool), "--config", str(config)]
     proc = subprocess.run(
@@ -1060,7 +1060,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
     try:
         if not pgo_enabled:
-            progress.phase("build", pct=0.2, message="cmake Release build…")
+            progress.phase("build", pct=0.2, message="cmake Release build...")
             _cmake_configure(
                 project_root, build_dir, pgo="", extra=cmake_extra, progress=progress
             )
@@ -1076,7 +1076,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.phase(
                 "pgo_instrument",
                 pct=0.1,
-                message="PGO instrumented build…",
+                message="PGO instrumented build...",
             )
             _cmake_configure(
                 project_root,
@@ -1103,7 +1103,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 hide_video=hide_video,
                 progress=progress,
             )
-            progress.phase("pgo_use", pct=0.85, message="PGO optimized rebuild…")
+            progress.phase("pgo_use", pct=0.85, message="PGO optimized rebuild...")
             _cmake_configure(
                 project_root,
                 build_dir,
@@ -1126,7 +1126,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
     prune_raw = (getattr(args, "prune_after", None) or "").strip()
     if prune_raw:
         modes = {m.strip() for m in prune_raw.split(",") if m.strip()}
-        progress.phase("prune", pct=0.97, message="Pruning toolchain / build bulk…")
+        progress.phase("prune", pct=0.97, message="Pruning toolchain / build bulk...")
         prune_after_rebuild(project_root, build_dir, modes, progress)
 
     progress.phase("done", pct=1.0, message="Rebuild complete")
@@ -1314,7 +1314,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _configure_stdio() -> None:
+    """Best-effort: don't crash on Windows cp1252 when logging Unicode."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def main() -> int:
+    _configure_stdio()
     args = build_parser().parse_args()
     progress = ProgressReporter(json_progress=bool(getattr(args, "json_progress", False)))
     try:
