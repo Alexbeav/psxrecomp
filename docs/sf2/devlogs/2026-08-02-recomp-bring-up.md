@@ -629,3 +629,46 @@ behavior for the exercised route, including real-device audio, save, and load.
 This is accepted as a functional feasibility milestone, but the comparison
 protocol still requires two clean deterministic checkpoint runs before the
 route is called reproducible.
+
+## Portfolio corpus consultation
+
+The private `Alexbeav/PSX-Ports` knowledge corpus at aggregate commit
+`534097e` was consulted under its mandatory consult-test-return workflow. The
+search covered the stable findings registry, implementation candidates,
+failure catalog, CPU/device/GPU/validation contracts, regression ledger, and
+the SF2 hybrid, SF2 recomp, SF3, and Tenchu normalized project reports. Search
+terms included the visible symptom, depth-24 scanout, stale bands, CPU/FBO VRAM
+mirrors, fill/copy coherence, and split representations.
+
+Lead dispositions:
+
+- Candidate `PSX-GPU-002` and `FAIL-009` exactly match the normalized symptom
+  and likely owner, but both derive from this lab's evidence. They confirm the
+  corpus classification; they do not supply an independent implementation or
+  fix.
+- Stable `PSX-GPU-001` is a relevant constraint rather than the direct cause:
+  PS1 VRAM and display pages persist until retail overwrites them. A blanket
+  rule that blackens every uncovered 24-bit band would hide the coherency bug
+  and could destroy valid authored persistence.
+- `PSX-MDEC-004` is not applicable to this failure. The identical retail input
+  and executable decode/present correctly under the software renderer, so the
+  quantization/container path is not the first divergence.
+- The SF3 caller-qualified capture and same-tick composition findings are
+  useful future validation patterns but do not explain this CPU/FBO mismatch.
+- The regression ledger confirms that no title-neutral fill/copy/15-to-24-bit
+  coherency fixture exists yet.
+
+The next falsifiable check remains narrow: capture the exact GP0 fill/copy and
+GP1 depth transition immediately before the first affected movie strips, then
+test whether mirroring only the demonstrated authoritative operation into CPU
+VRAM makes OpenGL agree with the already-correct software control. Do not import
+an SF2 dimension, movie identity, or unconditional black-band policy.
+
+Tenchu is the first proposed independent consumer because its private
+PSXRecomp lane already runs a retail intro FMV and can repeat the OpenGL versus
+software check on a different title. SF3 is the next presentation-contract
+consumer as its renderer composition matures. A confirmed generic fix,
+source-owned regression, project report update, candidate update, failure
+disposition, and next-consumer result must be returned to the corpus; stable
+promotion remains blocked on the portfolio-wide 27-candidate classification
+pass.
