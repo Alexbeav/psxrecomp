@@ -75,6 +75,21 @@ movie-request boundaries without adding SF2-specific substitutes.
   state 8: one invalidation, one stale dispatch blocked, and one revalidation
   CRC miss. This is measured replacement behavior, not an inferred initial
   load.
+- State-8 fallback attribution is bounded and complete for the measured run.
+  Of 268,338 attributed interpreter block dispatches, 44.79% were in
+  `0x80141000..0x8014AFFF`, 26.95% in `0x80010000..0x800CFFFF`, 26.75% in
+  `0x800D0000..0x8013DFFF`, 1.50% in `0x80158000..0x801DFFFF`, and 0.01% in
+  `0x8014B000..0x80157FFF`. The leading uncovered entries are
+  `0x80142AE4`, `0x80142BD4`, `0x80142B84`, `0x800F928C`, and
+  `0x80022584`; none is covered by a cached code-range manifest. Successful
+  shard builds report zero unsupported instructions, so this is missing seed
+  coverage rather than unsupported-opcode fallback.
+- The invalidated candidate is now identified precisely: old
+  `0x8014C0F0/1FC7107E` sees live CRC `4FCFFE46`. A state-8 capture compiled as
+  region `0x8014B000/81E32E21` with 360 candidates, plus bounded exact-demand
+  fragment `0C2EF971` for the observed stale entry. A fresh process loaded the
+  fragment and exposed a valid matching `0x8014C0F0/FF46C59F` candidate beside
+  the rejected old candidate, then reached state 8 with zero lost CD INT1.
 - Presentation boundaries observed on the continuous route include the
   `320x240x15` title/menu, `512x240x24` opening movie, and `384x240x15`
   mission briefing. CD retains `int1_lost=0`; bounded SPU telemetry records
@@ -90,21 +105,15 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Attribute interpreter fallbacks across the complete TITLE -> MOVIE -> state-8
-   route by address range and execution share, separating unseen code from
-   unsupported code.
-2. Name the invalidated candidate/range and verify whether the newly compiled
-   variants cover the replacement or correctly fall back after the CRC miss.
-3. Record bounded XA delivery/output evidence; SPU key activity and raw STR
+1. Record bounded XA delivery/output evidence; SPU key activity and raw STR
    sector traffic are already proven.
-4. Repeat the state-8 route with fixed input/state checkpoints and compare
+2. Repeat the state-8 route with fixed input/state checkpoints and compare
    stable guest state separately from host/query-timing values.
-5. Use only retail menu ownership to select the representative Mission 3 route;
+3. Use only retail menu ownership to select the representative Mission 3 route;
    do not substitute the oracle's direct diagnostic bootstrap.
 
 ## R2 remaining target
 
-- Quantified interpreter fallback by relevant frontend address range and share.
 - Bounded XA-audio delivery evidence to complement the verified SPU voice and
   raw movie-sector activity.
 - A second fixed-checkpoint state-8 comparison after the new cache variants are

@@ -354,5 +354,50 @@ The framework suite passes 38/38 with `PYTHONUTF8=1`; without that required
 environment setting, three Python tests fail only on `cp1253` decoding. The
 ignored local experiment footprint is 4.032 GiB, below the 20 GiB cap. The R2
 frontend, capture/rebuild, cache reuse, and actual invalidation gates are now
-demonstrated. Remaining R2 work is fallback attribution by range, XA evidence,
-and a fixed-checkpoint repeat before selecting Mission 3 through retail state.
+demonstrated. The next section completes fallback attribution and replacement
+coverage; XA evidence and a fixed-checkpoint repeat remain before selecting
+Mission 3 through retail state.
+
+## R2 fallback attribution and stale-entry replacement
+
+A third clean hidden/headless route reached the same retail mission briefing at
+application depth/state `2/8`. At the bounded state-8 query, `dirty_ram_stats`
+reported 268,338 attributed interpreter block dispatches. Grouped by physical
+address band, the fallback share was:
+
+| Physical band | Dispatches | Share |
+|---|---:|---:|
+| `0x141000..0x14AFFF` | 120,179 | 44.79% |
+| `0x010000..0x0CFFFF` | 72,310 | 26.95% |
+| `0x0D0000..0x13DFFF` | 71,775 | 26.75% |
+| `0x158000..0x1DFFFF` | 4,035 | 1.50% |
+| `0x14B000..0x157FFF` | 39 | 0.01% |
+
+The dominant exact entries were `0x80142AE4`, `0x80142BD4`,
+`0x80142B84`, `0x800F928C`, and `0x80022584`. None lies in a code range in
+the six cached `.ranges` manifests. All relevant capture builds continue to
+report zero unsupported-instruction TODOs and zero unknown/bad targets. The
+measured fallback is therefore overwhelmingly unseeded/uncovered code, not a
+recompiler opcode limitation. The interpreter recorded no aborts.
+
+An unfiltered candidate-table query named the one real invalidation. Cached
+candidate `0x8014C0F0` from the `979FB883` region expected code CRC
+`1FC7107E`; state-8 RAM produced `4FCFFE46`, so the loader invalidated it and
+blocked its stale dispatch. The current state-8 capture produced region CRC
+`81E32E21` (663,556 bytes, 360 candidates). Focused preflight and real GCC/CPS
+builds both succeeded with no failed shards, unsupported instructions, or bad
+targets.
+
+The stale address was an observed dispatch but was absent from the later
+capture's promoted roots. The compiler's bounded `--force-interior 0x8014C0F0`
+recovery path therefore built exact-demand fragment `0C2EF971`; generated C
+and captures were not edited. A fresh clean process loaded seven region DLLs
+plus that fragment. At state 8, the candidate table contained both the rejected
+old entry and a valid replacement at `0x8014C0F0` whose stored and live code CRC
+both equal `FF46C59F`. The route remained retail-owned and reached the
+`384x240x15` briefing with 41,315,186 native-overlay dispatches, 149,119
+interpreter fallbacks, and CD `int1_lost=0` at the first checkpoint query.
+
+This completes fallback attribution and replacement-coverage evidence. XA
+delivery/output evidence and a fixed-checkpoint guest-state comparison remain
+before retail Mission 3 selection.
