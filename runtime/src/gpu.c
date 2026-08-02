@@ -4876,6 +4876,7 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
+    uint32_t old_display_depth = display_depth & 1u;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
     video_mode = (val >> 3) & 1;
@@ -4888,6 +4889,8 @@ static void gp1_display_mode(uint32_t val) {
         interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
+    if (old_display_depth != display_depth)
+        gr_display_depth_changed((int)old_display_depth, (int)display_depth);
 }
 
 static void gp1_get_info(uint32_t val) {

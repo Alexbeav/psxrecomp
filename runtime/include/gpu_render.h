@@ -32,6 +32,10 @@ void gr_set_scale(int scale);
 int  gr_scale(void);
 void gr_set_texture_filter(int bilinear);
 int  gr_texture_filter(void);
+/* Notify a backend when GP1(08h) changes scanout ownership.  Hardware
+ * backends use the 15->24 transition to hand authoritative VRAM from their
+ * render target to the packed-RGB CPU representation before movie uploads. */
+void gr_display_depth_changed(int old_depth24, int new_depth24);
 
 /* Per-primitive draw state */
 void gr_set_semi_transparency(int enabled, int mode);
@@ -115,6 +119,7 @@ typedef struct GpuRenderBackend {
     int  (*scale)(void);
     void (*set_texture_filter)(int bilinear);
     int  (*texture_filter)(void);
+    void (*display_depth_changed)(int old_depth24, int new_depth24);
     void (*set_semi_transparency)(int enabled, int mode);
     void (*set_mask_bits)(int set_bit, int check_bit);
     void (*set_texture_window)(uint32_t raw);

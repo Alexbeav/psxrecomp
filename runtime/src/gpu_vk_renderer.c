@@ -3054,6 +3054,7 @@ static const GpuRenderBackend VK_BACKEND = {
     .scale                         = vkb_scale,
     .set_texture_filter            = vkb_set_texture_filter,
     .texture_filter                = vkb_texture_filter,
+    .display_depth_changed         = NULL,
     .set_semi_transparency         = vkb_set_semi_transparency,
     .set_mask_bits                 = vkb_set_mask_bits,
     .set_texture_window            = vkb_set_texture_window,

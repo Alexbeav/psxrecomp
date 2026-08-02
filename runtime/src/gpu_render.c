@@ -21,6 +21,7 @@ static const GpuRenderBackend SW_BACKEND = {
     .scale                         = sw_renderer_scale,
     .set_texture_filter            = sw_set_texture_filter,
     .texture_filter                = sw_texture_filter,
+    .display_depth_changed         = NULL,
     .set_semi_transparency         = sw_set_semi_transparency,
     .set_mask_bits                 = sw_set_mask_bits,
     .set_texture_window            = sw_set_texture_window,
@@ -97,6 +98,10 @@ void gr_set_scale(int scale)                         { g_b->set_scale(scale); }
 int  gr_scale(void)                                  { return g_b->scale(); }
 void gr_set_texture_filter(int bilinear)             { g_b->set_texture_filter(bilinear); }
 int  gr_texture_filter(void)                         { return g_b->texture_filter(); }
+void gr_display_depth_changed(int old_depth24, int new_depth24) {
+    if (g_b->display_depth_changed)
+        g_b->display_depth_changed(old_depth24, new_depth24);
+}
 void gr_set_semi_transparency(int e, int m)          { g_b->set_semi_transparency(e, m); }
 void gr_set_mask_bits(int s, int c)                  { g_b->set_mask_bits(s, c); }
 void gr_set_texture_window(uint32_t raw)             { g_b->set_texture_window(raw); }

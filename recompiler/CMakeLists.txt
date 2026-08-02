@@ -404,6 +404,7 @@ if(BUILD_TESTING)
                 fmv_quiet_guards
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
+                gl_depth24_coherency
                 hybrid_dev_any_input
                 jalr_link_register_guards
                 launcher_vulkan_option

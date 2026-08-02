@@ -522,6 +522,7 @@ static int           g_video_win_w    = 1280; /* window width (height follows as
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+static int           g_hidden_window  = 0;   /* CI GPU frontend: SDL/GL without a visible window */
 
 static void parappa_apply_timing_setting(const std::string& mode_in,
                                          int extra_early_override,
@@ -4856,6 +4857,7 @@ int main(int argc, char** argv) {
      *   --launcher          force the GUI launcher (overrides skip_launcher)
      *   --no-launcher       skip the GUI launcher (boot straight in)
      *   --headless          skip SDL window/audio; use TCP screenshots/state
+     *   --hidden-window     create the selected GPU backend without showing its window
      *   --netplay           enable delay-sync LAN (also PSX_NETPLAY=1)
      *   --net-slot N        local player slot (0|1)
      *   --net-input-player N  host device to sample (0=P1, 1=P2; default auto)
@@ -4891,6 +4893,9 @@ int main(int argc, char** argv) {
             force_no_launcher = true;
         } else if (std::strcmp(argv[i], "--headless") == 0) {
             g_headless = 1;
+            force_no_launcher = true;
+        } else if (std::strcmp(argv[i], "--hidden-window") == 0) {
+            g_hidden_window = 1;
             force_no_launcher = true;
         } else if (std::strcmp(argv[i], "--netplay") == 0) {
             net_cfg.enabled = 1;
@@ -6644,7 +6649,8 @@ session_reboot:
     }
 #endif
 
-    Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+    Uint32 win_flags = (g_hidden_window ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN)
+                     | SDL_WINDOW_RESIZABLE;
     if (g_video_renderer == 1) {
         configure_core_gl_context_attributes();
         win_flags |= SDL_WINDOW_OPENGL;

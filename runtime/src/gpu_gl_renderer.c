@@ -2068,6 +2068,10 @@ static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,ui
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
     if (!s_raster_ok) { sw_fill_rect(x,y,w,h,c); return; }
     gpu_fill(x,y,w,h,c);
+    /* Packed 24-bit scanout is CPU-owned.  A GP0 fill issued after the mode
+     * switch must therefore update that representation as well as the FBO;
+     * otherwise uncovered movie rows retain arbitrary pre-movie CPU data. */
+    if (gpu_display_is_depth24()) sw_fill_rect(x,y,w,h,c);
 }
 static void glb_copy_rect(int sx,int sy,int dx,int dy,int w,int h){
     if (!s_raster_ok) { sw_copy_rect(sx,sy,dx,dy,w,h); return; }
@@ -2164,9 +2168,13 @@ static void depth24_clear_skipped_fb(void) {
     rect_clear(&s_d24_skip_fb);
 }
 
-static void depth24_upload_policy(void) {
-    int d24 = gpu_display_is_depth24();
+static void depth24_set_mode(int d24) {
+    d24 = d24 ? 1 : 0;
     if (d24 && !s_depth24_skip_up) {
+        /* Finish all 15-bit FBO work (draw/fill/copy/upload) before packed
+         * RGB888 uploads make CPU VRAM authoritative.  This must precede the
+         * first CPU upload or readback would overwrite part of that movie. */
+        ensure_cpu();
         s_up_nrects = 0;
         rect_clear(&s_d24_skip_fb);
     } else if (!d24 && s_depth24_skip_up) {
@@ -2177,16 +2185,25 @@ static void depth24_upload_policy(void) {
     s_depth24_skip_up = d24;
 }
 
+static void glb_display_depth_changed(int old_depth24, int new_depth24) {
+    (void)old_depth24;
+    depth24_set_mode(new_depth24);
+}
+
+static void depth24_upload_policy(void) {
+    depth24_set_mode(gpu_display_is_depth24());
+}
+
 static void glb_vram_write(int x,int y,uint16_t px){
-    sw_vram_write(x,y,px);
     depth24_upload_policy();
+    sw_vram_write(x,y,px);
     /* Point pokes are never MDEC frames — always stage to FBO. */
     up_add(x & (VRAM_W-1), y & (VRAM_H-1), x & (VRAM_W-1), y & (VRAM_H-1));
 }
 static uint16_t glb_vram_read(int x,int y){ ensure_cpu(); return sw_vram_read(x,y); }
 static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
-    sw_vram_transfer_in(x,y,w,h,d);
     depth24_upload_policy();
+    sw_vram_transfer_in(x,y,w,h,d);
     if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
         int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
         rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
@@ -3700,6 +3717,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .name = "opengl",
     .init = glb_init, .set_scale = glb_set_scale, .scale = glb_scale,
     .set_texture_filter = glb_set_texture_filter, .texture_filter = glb_texture_filter,
+    .display_depth_changed = glb_display_depth_changed,
     .set_semi_transparency = glb_set_semi_transparency, .set_mask_bits = glb_set_mask_bits,
     .set_texture_window = glb_set_texture_window, .set_color_modulation = glb_set_color_modulation,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
