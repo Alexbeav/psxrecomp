@@ -25,6 +25,7 @@ Read these files completely at the start of each Codex session:
 5. `docs/sf2/REFERENCE_MAP.md`
 6. `lab/sf2/reference-manifest.toml`
 7. `CLAUDE.md`
+8. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
 
 `CLAUDE.md` is inherited upstream context. Preserve its hardware-faithfulness,
 no-stubs, no-generated-code-edits, evidence, and bounded-diagnostics rules.
@@ -130,3 +131,6 @@ The verified baseline is 38/38 passing tests. The CLI package is ignored under
   and ask only for its local path; never ask the user to upload or commit it.
 - At the end of a work session, update `docs/sf2/CURRENT_OBJECTIVE.md` and the
   chronological devlog so another Codex session can resume without rediscovery.
+- When the lab produces a generic fix, test, tool, or verified documentation
+  correction useful to PSXRecomp or another reference project, follow the
+  community contribution policy and prepare an upstream-ready contribution.
