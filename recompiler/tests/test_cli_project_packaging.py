@@ -51,6 +51,8 @@ def main() -> int:
             "packaged framework omits the redistributable OpenBIOS image")
     require(package, 'ROOT / "bios" / "OpenBIOS.LICENSE"',
             "packaged framework omits the OpenBIOS license")
+    require(package, 'ROOT / "tools" / "embed_spirv.py"',
+            "packaged framework omits the Vulkan shader embedding tool")
 
     require(bios, 'a == "--rom"',
             "psxrecomp-bios config mode lacks the ROM override")

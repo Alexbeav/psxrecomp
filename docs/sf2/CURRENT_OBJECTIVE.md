@@ -1,89 +1,70 @@
-# Current objective — R0 reproducible SF2 project generation
+# Current objective — R1 deterministic TITLE boundary
 
 Updated: 2026-08-02
 
 ## Objective
 
-Complete feasibility gate R0: generate two clean SF2 Disc 1 projects from the
-same pinned inputs, build both, compare their manifests and source trees, and
-either demonstrate reproducibility or localize every difference.
+Continue feasibility gate R1 from the now-proven resident bootstrap to a
+deterministic TITLE boundary. Localize why runtime-loaded resident code is
+currently interpreter-owned, establish the correct overlay capture/native-cache
+route without editing generated code, and report native resident, native
+overlay, and interpreter dispatch separately.
 
-After R0 passes, continue directly into the non-visual portion of R1: identify
-the resident executable entry/segments and establish a deterministic bounded
-boot trace toward CRT and `Game_Main`. Do not wait for user playtesting merely
-because R0 completed.
-
-## Verified starting state
+## Verified state
 
 - Branch: `experiment/sf2-recomp-feasibility`
 - Scaffold commit: `83e0d70`
 - PSXRecomp baseline: `0cfa9fe0a8da944e9f694a24361b4973c57131ea`
-- CLI package builds successfully.
+- R0 passes: two corrected-package generations contain 992 identical
+  non-build files after exact output-root normalization and both build.
+- Final PE products differ only in documented PE/build-ID timestamps and the
+  derived checksum; normalized product hashes match.
+- CLI packaging now includes the Vulkan shader embedder required by generated
+  projects, with regression coverage.
 - Complete framework suite passes 38/38 with `PYTHONUTF8=1`.
-- Bundled OpenBIOS exists at `bios/openbios.bin` and is 524,288 bytes.
-- SF2 Disc 1 local path is recorded in `.local-context/SF2.md`.
-- No retail BIOS path is configured.
-- No generated SF2 project exists yet.
+- Bundled OpenBIOS LLE identity and loaded checksum match.
+- Two clean headless runs reproduce the same boot call chain:
+  `0x800F8598` at frame 727, `0x80029624` at frame 727, and
+  `0x80029700` at frame 728.
+- Frames 1–8, 593–600, and 727–730 have identical structured fingerprints
+  across clean processes.
+- Dispatch misses are zero through the measured bootstrap.
+- TITLE is not proven. Near frame 755, native overlay dispatch is zero and
+  interpreter fallback is about 2.95 million; at frame 1,806 it exceeds
+  41 million with no registered overlay region.
+- No retail BIOS path is configured; OpenBIOS is sufficient for the measured
+  resident handoff.
 
-## First execution sequence
+## Next execution sequence
 
-1. Read all files required by `AGENTS.md`.
-2. Verify branch/status/remotes and that sibling repositories are untouched.
-3. Verify the CUE and every referenced track exist without printing or copying
-   their contents.
-4. Hash the CUE and referenced track files. Store hashes only in ignored local
-   context until provenance/publication policy is reviewed.
-5. First attempt generation with the bundled, redistributable OpenBIOS:
+1. Reproduce the headless LLE bootstrap with the three boot candidates armed
+   from process initialization.
+2. Use bounded overlay status/candidate/capture rings to identify the first
+   resident overlay write/load boundary after the application loop.
+3. Determine whether the lack of overlay registration is configuration,
+   capture discovery, invalidation, or loader behavior. Produce a manifest or
+   reproducible proof before changing code.
+4. Fix only a generic framework defect if evidence supports one. Never patch
+   generated C or substitute an SF2-native frontend.
+5. Run twice from clean processes and compare fixed-frame fingerprints plus
+   stable guest/application state.
+6. Do not claim TITLE until state 4 ownership, the TITLE overlay, and stable
+   presentation/input boundaries are observed together.
+7. Record native resident, native-overlay, and interpreter counts separately.
 
-```powershell
-$env:PYTHONUTF8 = "1"
-$disc1 = "Z:\Emulators\PS1 Games\Syphon Filter 2 (USA) (Disc 1).cue"
-$bios = "I:\Projects\SF2-Recomp-Lab\bios\openbios.bin"
+## R0 verdict
 
-.\recompiler\build-cli\psxrecomp.exe build `
-  --disc $disc1 `
-  --bios $bios `
-  --output ".\lab\sf2\local\generated-disc1-a" `
-  --name "Syphon Filter 2 Recomp Lab"
-```
+- Passed on 2026-08-02. See
+  `docs/sf2/devlogs/2026-08-02-recomp-bring-up.md`.
 
-6. If the CLI requires a distinct retail BIOS backend and rejects OpenBIOS,
-   stop that command path cleanly and ask the user only for a local retail BIOS
-   path. Do not search broadly for BIOS files.
-7. Generate a second clean project at
-   `lab/sf2/local/generated-disc1-b` using identical inputs.
-8. Build both using their generated build instructions.
-9. Compare file lists, sizes, hashes, generated manifests, and build products.
-   Normalize only output-root paths and documented host-variant metadata.
-10. Create `docs/sf2/devlogs/2026-08-02-recomp-bring-up.md` containing commands,
-    tool/input hashes, summarized differences, and the R0 verdict. Do not include
-    generated code, disc contents, or large trace excerpts.
-11. Add a small reusable comparison script only if manual comparison would be
-    error-prone. The script must operate on user-supplied paths and must not
-    embed retail data.
+## R1 remaining target
 
-## R0 acceptance gate
-
-- Both generations complete from clean output directories.
-- Both generated projects build successfully.
-- A committed, source-owned comparison method proves reproducibility or lists
-  precisely explained nondeterministic fields.
-- No proprietary/generated file is tracked by Git.
-- Framework tests remain 38/38.
-- The devlog records elapsed work, game-specific configuration added, blockers,
-  and whether proceeding to R1 is justified.
-
-## R1 initial target
-
-Once R0 passes:
-
-- run the generated project in faithful/LLE mode first;
-- keep execution bounded and diagnostics structured;
-- identify executable entry, CRT completion, `Game_Main`, and application-loop
-  state from independent evidence;
-- compare those boundaries with the read-only hybrid oracle;
-- quantify native resident, native-overlay, and interpreter dispatch;
-- do not begin Mission 3 presentation work before the TITLE boundary is
+- Preserve faithful/LLE mode and structured bounded diagnostics.
+- Treat the deterministic entry/`Game_Main`/application-loop chain as the
+  resident starting boundary, not as proof of TITLE.
+- Reach and reproduce retail application state 4 with the TITLE overlay active.
+- Quantify native resident, native-overlay, and interpreter dispatch.
+- Do not begin Mission 3 presentation work before the TITLE boundary is
   deterministic.
 
 ## Known environmental detail

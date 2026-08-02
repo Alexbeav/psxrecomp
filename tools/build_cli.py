@@ -113,6 +113,8 @@ def main() -> int:
         "*.exe", "*.obj", "*.pdb", "*.lib")
     shutil.copytree(ROOT / "runtime", framework / "runtime", ignore=source_ignore)
     shutil.copytree(ROOT / "recompiler", framework / "recompiler", ignore=source_ignore)
+    (framework / "tools").mkdir()
+    shutil.copy2(ROOT / "tools" / "embed_spirv.py", framework / "tools")
     bios_profiles = {
         "OpenBIOS.toml": ROOT / "bios" / "OpenBIOS.toml",
         "SCPH1001.toml": ROOT / "bios" / "SCPH1001.toml",
