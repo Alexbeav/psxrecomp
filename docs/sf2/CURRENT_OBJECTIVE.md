@@ -56,6 +56,10 @@ movie-request boundaries without adding SF2-specific substitutes.
   immediate successor. A focused regression uses the exact instruction pair.
   The regenerated cache namespace is `cg9_9713afe3_gccd77ebe4`; the four-shard
   preflight and real build both pass.
+- The generic two-file fix and regression were extracted onto current upstream
+  `master`, passed the 38/38 framework suite, and were submitted upstream as
+  [PSXRecomp PR #93](https://github.com/mstan/psxrecomp/pull/93). SF2 lab
+  diagnostics, documentation, and private artifacts are not part of the PR.
 - Two clean all-native runs passed the former freeze boundary with zero lost
   CD INT1 events. They reached frames 3,861 and 4,055 with 22,085,066 and
   23,973,334 GP0 writes respectively, versus the broken fixed ceiling of

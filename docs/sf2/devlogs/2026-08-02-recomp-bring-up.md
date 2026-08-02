@@ -438,3 +438,17 @@ nonzero canonical SPU output, and bytes reaching the host API. It does not claim
 physical-speaker audibility because the host sink was deliberately silent.
 The remaining R2 gate before Mission 3 selection is the fixed-checkpoint
 state-8 guest-state comparison.
+
+## Upstream submission
+
+With user authorization, the load-delay correction was extracted onto current
+upstream `master` (`0cfa9fe`) in a separate ignored worktree. The submission
+contains only `recompiler/src/code_generator.cpp` and the focused regression in
+`recompiler/tests/recompiler_patch_test.cpp`; SF2 documentation, runtime
+diagnostic environment hooks, captures, and generated artifacts were excluded.
+
+The minimal commit is `5834990`. The prescribed recompiler build and complete
+CTest suite passed 38/38 before publication. It was pushed through the user's
+GitHub fork and opened as
+[PSXRecomp PR #93](https://github.com/mstan/psxrecomp/pull/93). The PR is open;
+GitHub checks had not started at the time of this handoff.
