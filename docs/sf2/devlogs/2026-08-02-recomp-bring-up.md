@@ -592,3 +592,40 @@ were not captured while the affected frame was live, so no correction is yet
 claimed. The next run must record exact GP1 display coordinates and bounded
 CPU-to-VRAM upload rectangles at the affected movie before changing the generic
 present rule.
+
+That capture is now complete. A bounded 128-entry depth-24 upload ring was added
+because SF2 assembles movie frames from strips rather than one framebuffer-sized
+upload. The diagnostic build passed the 40/40 framework suite, linked in a clean
+private build directory, and reached the retail frontend headlessly before the
+visible test.
+
+On affected aircraft-movie frame 31,447, the CRTC scanned `512x240x24` from
+display base `(0,0)`, horizontal range `615..3175`, vertical range `16..256`.
+The retained uploads showed each decoded buffer built from 32 adjacent
+`24x160`-halfword strips. The displayed buffer covered `x=0..767`,
+`y=40..199`; the alternate covered `x=0..767`, `y=280..439`. Thus the correct
+160-line movie payload is centered in a 240-line scanout and the visible junk is
+exactly the unrefreshed 40-line band above and below.
+
+An identical executable and copied save were then launched with
+`--renderer software`. The user confirmed that the same FMV was correct. This
+A/B excludes retail coordinates, MDEC decode, disc data, and the general
+depth-24 byte unpacker. The remaining lead is OpenGL representation coherency:
+`gpu_fill()` updates only the FBO, `sw_fill_rect()` updates CPU VRAM, and
+depth-24 presentation intentionally reads CPU VRAM without a blanket FBO sync
+because the packed RGB888 movie strips already live there. A pre-movie black
+clear can therefore be correct in the FBO but stale in the CPU mirror outside
+the 160 uploaded lines.
+
+The generic correction is not yet implemented. A narrow GP0 transition capture
+must first prove the exact retail fill/copy operation. An attempted broad scan
+of historical GP0 frames requested too much data, tripped the debug-server
+starvation guard, and exited the diagnostic process after the affected frame
+and upload ring were safely captured. This is recorded as a tooling/query
+failure, not a game crash. The bounded upload telemetry is commit `4b5edc7`.
+
+The user reports one complete end-to-end Mission 1 playthrough with correct
+behavior for the exercised route, including real-device audio, save, and load.
+This is accepted as a functional feasibility milestone, but the comparison
+protocol still requires two clean deterministic checkpoint runs before the
+route is called reproducible.

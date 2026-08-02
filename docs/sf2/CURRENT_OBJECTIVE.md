@@ -162,8 +162,14 @@ movie-request boundaries without adding SF2-specific substitutes.
 - The successful load exposed a separate presentation defect in 24-bit FMVs:
   the decoded movie rectangle is correct, but stale/corrupted VRAM is visible
   in the bands behind it. Treat this as a display/upload-coverage issue, not
-  MDEC stream corruption. It remains open and must be compared at exact live
-  GP1 display/upload bounds before any fix.
+  MDEC stream corruption. Bounded telemetry now proves a `512x240` depth-24
+  scanout at `(0,0)` while each movie buffer is assembled from 32 `24x160`
+  strips covering `x=0..767`, centered at `y=40..199` or alternate-buffer
+  `y=280..439`. The identical executable/save is correct under the software
+  renderer, isolating the defect to OpenGL CPU/FBO VRAM coherency. OpenGL fills
+  update only its authoritative FBO, while depth-24 presentation reads packed
+  RGB888 from the CPU mirror and cannot blanket-sync after the movie upload.
+  The generic correction remains open.
 
 ## R1 verdict
 
@@ -174,9 +180,10 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Capture an affected 24-bit FMV at exact live GP1 display coordinates and
-   bounded CPU-to-VRAM upload bounds, then compare the exposed bands against an
-   accurate reference. Fix only the demonstrated generic display/upload rule.
+1. Capture the narrow GP0 transition into the affected movie, prove the exact
+   pre-movie black fill/copy operation, then fix only the demonstrated generic
+   OpenGL CPU/FBO coherency rule. Revalidate OpenGL against the already-correct
+   software control.
 2. Replace the ambiguous TITLE word-only trigger with a compound presentation
    and state checkpoint, then repeat startup without pre-title input to verify
    the Eidetic and `z_intro` sequence.
