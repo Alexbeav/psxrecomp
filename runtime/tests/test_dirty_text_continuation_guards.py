@@ -28,6 +28,15 @@ def main() -> int:
     if "dirty_ram_text_native_ok_ranges_from(lo_len_pairs, count, 0u)" not in memory:
         raise AssertionError("legacy generated-code ABI is not preserved")
 
+    write_start = memory.index("static inline void text_guard_note_write(")
+    write_end = memory.index("\n}\n\nint dirty_ram_text_native_ok", write_start)
+    text_write_guard = memory[write_start:write_end]
+    mismatch = text_write_guard.index("if (memcmp(ref, buf, (size_t)size) != 0)")
+    if "dirty_ram_mark_page(phys);" not in text_write_guard[mismatch:]:
+        raise AssertionError(
+            "CPU-installed text overlays are not admitted to dirty-page capture"
+        )
+
     handoff = "clean_game_text_miss && interp_enter_compiled(cpu, "
     if interp.count(handoff) != 2:
         raise AssertionError("expected transfer and call-return continuation handoffs")

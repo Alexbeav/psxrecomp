@@ -357,6 +357,16 @@ static inline void text_guard_note_write(uint32_t phys, uint32_t val, int size) 
     if (memcmp(ref, buf, (size_t)size) != 0) {
         uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;
         text_modified_bitmap[page >> 5] |= (1u << (page & 31u));
+        /* A runtime overlay may be copied into the original EXE text window
+         * with ordinary CPU stores rather than CD DMA.  The text guard already
+         * diverts mismatched entries to the live-RAM interpreter, but overlay
+         * capture enumerates dirty pages.  Mark the page here as the common
+         * executable-write fact so interpreted code in a CPU-installed image
+         * is eligible for capture and native-cache compilation.  Data-only
+         * writes remain harmless: capture still requires execution evidence,
+         * and exact-range validation can keep unaffected static functions
+         * native on a dirty page. */
+        dirty_ram_mark_page(phys);
     }
 }
 

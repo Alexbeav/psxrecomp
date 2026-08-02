@@ -166,3 +166,88 @@ failed-package quarantines and the R1 instrumentation build. The next action is
 to localize why runtime-loaded resident code remains entirely interpreter-owned,
 then establish a deterministic TITLE boundary with native-overlay/cache and
 interpreter shares reported separately.
+
+## R1 overlay ownership investigation
+
+The first post-bootstrap probe reached frame 5,607 with no registered overlay
+candidate and 187,589,545 interpreter fallbacks. `Game_Main` received
+`0x80142158`, inside the shared MENU/MOVIE resident-overlay window. Bounded CPU
+write watches then localized the installation path:
+
+- at frame 727 the BIOS handoff wrote the resident image pointer/size near
+  `0x80142158`;
+- at frame 729 the retail copy loop at `0x8001076C..0x80010778`, returning to
+  `0x8002B494`, wrote the resident overlay near `0x80142150`;
+- at frame 898 the same loop installed TITLE bytes near `0x8014B950`.
+
+These are ordinary CPU stores from an embedded archive into addresses that
+also belong to the original PS-X executable text range. They are not direct CD
+DMA overlay loads. The original capture manifest contained only `0x80000000`
+and `0x8000D000`, while the loader checked only physical bases `0x0` and
+`0xD000`. Nevertheless, live state at `0x8011EE8C` became depth 2, state 4,
+transition 0. TITLE was executing faithfully through the interpreter, but its
+pages were structurally absent from capture.
+
+The generic defect was in `text_guard_note_write`. A CPU write differing from
+the registered static executable image marked `text_modified_bitmap`, which
+correctly diverted live code to the interpreter, but did not mark the page in
+`dirty_ram_bitmap`. Overlay capture serializes dirty-page runs, so CPU-installed
+code inside the original text window could never enter capture-and-compile.
+The fix marks that page dirty at the already-proven mismatching executable
+write. Capture still requires execution evidence, and exact-range validation
+continues to admit unaffected static functions, so data-only writes do not
+become overlay candidates merely by touching the page. A structural regression
+test protects this handoff. No SF2 address was added to framework code, and no
+generated C or captured output was edited.
+
+## Corrected capture and native cache
+
+The CLI package was rebuilt, and a new ignored project was generated from the
+same user-owned Disc 1 input at
+`lab/sf2/local/generated-disc1-r1-text-capture`. Its Release instrumentation
+build completed all 578 Ninja actions. A fresh capture at retail state 4
+produced:
+
+| Base | Bytes | Executed PCs | Dispatch targets | Seed targets |
+|---:|---:|---:|---:|---:|
+| `0x80000000` | 49,156 | 191 | 23 | 23 |
+| `0x8000D000` | 4,100 | 15 | 3 | 3 |
+| `0x8013E000` | 40,964 | 1,453 | 58 | 58 |
+| `0x8014B000` | 180,228 | 1,656 | 25 | 25 |
+
+The loader now checked the SF2 physical bases `0x141000`, `0x158000`,
+`0x14B000`, and `0x13E000` in addition to the low-memory regions. Offline
+compilation verified codegen hash `8d349ec4` and config hash `cd77ebe4`; all
+four GCC shards built, with zero failed shards, unsupported-instruction TODOs,
+or unknown/bad targets.
+
+Clean cached runs loaded all four regions and registered 117 candidates. One
+representative query reported 13,995,933 native-overlay dispatches and 17,416
+interpreter fallbacks; another reported 14,224,275 and the same 17,416. Both
+had zero stale blocks, zero CRC revalidation misses, and 132 range links. Live
+CRC checks at `0x80143160` and `0x8014CCDC` matched their candidates. Static
+resident dispatch reported zero misses. Retail state was depth 2, state 4,
+transition 0 in every native run.
+
+## R1 fixed-frame comparison
+
+Two additional clean headless processes, each with an isolated memory-card
+directory, returned identical frame-2500 records. The complete GPR array,
+`COP0_SR=0x40000401`, `COP0_CAUSE=0x00000400`, `EPC=0x800F4950`,
+`I_STAT=I_MASK=0xCD`, pad buttons `0xFFFF`, SIO status/control, and the enabled
+`320x240`, 15-bit display at page Y=240 all matched. At the bounded
+presentation query, both runs also reported exactly 7,573,945 GP0 writes, 983
+draw commands, 4,196 environment commands, 3,738 copies, and draw area
+`0,0..319,239` with offset `160,120`.
+
+A live GPU-status query made much later in one process differed only in a
+transient high status bit (`0xD6020200` versus `0x56020200`). It was not treated
+as stable guest divergence: the fixed-frame record and bounded GP0 state match,
+while the live queries occurred at different host/query times.
+
+R1 therefore passes. The retail application reaches state 4 with the TITLE
+region active in the native cache, the native resident/native overlay/
+interpreter tiers are reported separately, and the guest/input/presentation
+boundary reproduces across clean processes. The next gate is R2: drive the
+retail frontend, exercise MENU/INIT overlays, prove reuse plus actual
+invalidation, and measure remaining fallback by range.
