@@ -216,6 +216,18 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       Local tip production continues during Replay (protocol peer).
       POST match → chain next SPAN or Final Verify→Live (no TipHold invent-cap
       mid catch-up). Long catch-up periodically presents live Replay VRAM.
+- [x] **§49 WAN chain/GO/realign:** ownership chain only if `frontier > tip+8`
+      (`PSX_RB_CHAIN_MIN_AHEAD`); initiator keeps GO until peer POST; ready
+      timeout RTT-scaled; INPUT resends from peer ACK when behind tip-redundancy.
+      (§49b: do **not** clear remote tips on Live realign — tip=0 pcap freeze.)
+- [x] **§50 FMV tip-extend gate:** do not tip-extend / FOLLOW-raise through
+      FMV media or settle (same window as begin/follow refuse). TipHold + FMV
+      → commit sealed tip; mid-FMV TipHold entry also commits. Stops host
+      rereplay past guest ownership-final Live → ABANDON `bfc03c04` core/CD fork.
+- [x] **§51 choose_load / Replay layers:** (1) newest provably-safe snap —
+      peer RESOLVED must not clamp below HC floor; (2) inclusive commit-tip
+      span over `%iv` fallback; (3) ownership SPAN continue skip-snap (no
+      reload); (4) catchup present ~150ms cadence, not every resim frame.
 - [x] **Present only at MotK wait CDA0:** netplay `gpu_vblank_flush_present`
       skips while resume/check PC is `0x8006CD54` (leave pending until
       `0x8006CDA0`) so sealed idle resim cannot digest opposite ping-pong
@@ -2787,3 +2799,116 @@ the Up stretch — menu ownership thrash / dual-init abort loop.
 **Re-soak watch:** after FMV into menu, `soft-promote … unlock-grace-release`
 or no `rewind-request pub=ffef`; no `tie-break YIELD` / `ownership chain
 tip=N frontier=N+1` storm; D-pad navigation stays single-step.
+
+## 49. WAN ownership micro-chains + GO loss + realign tip cliff (2026-08-02)
+
+**WAN soak (FORCE_TURN / hotspot):** FMV settle hang fixed (no invent-hold
+deadlock). Session played ~60 fps until ~sim 1231, then ownership chained
+SPAN every few ticks (epochs 16→64), guest `ready timeout (no initiator GO)`
+while host sat in Verify, dual realign to ~1264 with stale `remote_tip≈1544`
+→ `WIRE_HOLE` + `cushion KEEP (absurd lead=279)`.
+
+**Fix:**
+1. **Ownership chain floor** `frontier > tip + 8` (env `PSX_RB_CHAIN_MIN_AHEAD`);
+   micro catch-ups stay Live.
+2. **Initiator GO rexmit** until peer POST (TURN dropped the one-shot burst);
+   ready timeout scales with RTT (4s…12s).
+3. **INPUT ACK resend** when peer ack lags the tip-redundancy window.
+
+**§49b (same day):** Live realign must **not** `clear_remote_inputs`. Full wipe
+→ `remote_tip=0` → mutual `pcap FREEZE` (wire≫P; neither advances). Selective
+invalidate also fails after ring wrap (only far tips remain). Pre-clear soak
+already recovered: peer post-realign production fills `need` while
+`prepare_local_tip` keeps emitting; §45 cushion refuses invent across holes
+until real rows land. API kept for hard_resync-style paths only.
+
+**Re-soak watch:** no `ready timeout (no initiator GO)` under TURN; no
+`ownership chain tip=N frontier=N+2..N+7` storms; after abort realign no
+`pcap FREEZE … remote_tip=0` / `remote tips cleared`.
+
+## 50. FMV tip-extend through lockstep → BIOS realign / CD fork (2026-08-02)
+
+**WAN soak (§49b binary):** handshake + GO healthy; ~55–60 fps; death was a
+permanent core+CD fork after the second FMV (locked at tick 1136
+`ea3971ce` vs `fbb8c8aa`, CD `7ac33b56` vs `ac7c89e4`). First fork was earlier:
+
+1. Episode opens pre-FMV (`begin epoch=8 mismatch=112 load=96`).
+2. FMV media/settle arms mid-Replay — begin/follow refuse *new* episodes, but
+   **tip-extend still raised** the tip (`116→122`) and TipHold-rereplayed.
+3. Guest `ownership final tip=119 → Live`; host tip-extends `119→122` with
+   rereplay; guest `follow REFUSED — FMV lockstep` on the post-commit BEGIN.
+4. Host `tip-extend ABANDON` realigns to snap `pc=0xbfc03c04` (BIOS sticky);
+   `FIRST CORE DIVERGE sim=121`; CD digests split and never fully heal.
+
+**Fix:** Gate `psx_netplay_rb_tip_extend` and tip-extend FOLLOW on the same
+`rb_in_fmv_lockstep_window()` as begin/follow. TipHold + FMV →
+`finalize_tip_hold` (commit sealed tip). Replay + FMV → keep current target
+(no raise). Entering FMV while TipHolding also commits immediately.
+
+**Re-soak watch:** no `tip-extend …` / `tip-extend FOLLOW` during
+`FMV rewind-defer` / settle; no `tip-extend ABANDON` → `pc=0xbfc03c04` after
+first movie; no early `FIRST CORE DIVERGE` ~121; cores/CD stay matched through
+menu + second FMV.
+## 51. choose_load vs Replay ownership vs present (2026-08-02)
+
+Independent layers (do not fix load bugs by changing Replay behavior):
+
+```text
+Layer 1  choose_load     Where do I start?
+Layer 2  commit-tip snap Prefer newest safe snap that exists
+Layer 3  Replay ownership How do I reach the frontier? (no restart)
+Layer 4  Presentation    How does the player see it?
+Layer 5  SPAN size       Last — only if depth still justifies it
+```
+
+**Invariant (Layer 1):** `choose_load` returns the **newest snapshot both peers
+can prove is safe** to replay from. Proof sources: commit/ADVANCE watermark,
+hash_confirm, peer RESOLVED. Peer RESOLVED must **not** lower the load below
+an HC-proven floor (soak: `ADVANCE 1189→1248` then `clamp→1189` → interval
+`load=1184` → 65-tick SPAN storm / visual twitch).
+
+**Layer 2:** Inclusive dense span `[span_lo, through]` so the commit tip itself
+is preferred over `%iv` fallback when `span_lo == tip`.
+
+**Layer 3:** Ownership SPAN chain continues Replay at the verified tip with
+`skip-snap` (baseline from current state) — SPAN is bookkeeping, not a
+semantic restart (`snap applied` every chunk was the twitch).
+
+**Layer 4:** Catchup live present gated at ~150 ms (not ~frame period).
+
+**Re-soak watch:** after menu mispredict, `choose_load` near mismatch (depth
+≲ iv); no `clamp … peer RESOLVED` that drops below `hc_floor`; chain logs
+`ownership continue skip-snap`; `replay%` / present flashes much lower;
+`RB_MAX_RESIM_SPAN` unchanged.
+
+## 52. Seal rows had no rexmit → silent AwaitingBaseline deadlock (2026-08-02)
+
+**WAN soak (§51 binary):** late-session 4s freeze. Host tip-extended
+`2598→2599` right after entering Replay (light tip), reached POST, then
+`verify timeout` → `episode ABORT` → both realign to 2576. Guest never
+entered Replay: baselines matched (`9bf062ce` both), ready=1, phase stuck at
+AwaitingBaseline with **zero log output** — the only silent early return in
+`maybe_enter_replay`'s gate chain is `!rnet_rb_all_peer_seal_rows_complete`.
+
+**Root cause:** `export_local_seals()` fired only on discrete events
+(begin / tip-extend / FOLLOW) with no retransmit. The guest's FOLLOW
+extension grew its `sealed_span` to include 2599, but the host's post-extend
+re-export carrying the slot-0 row for 2599 was a single unacknowledged UDP
+burst — one WAN drop (hotspot, RTT 72ms) parked the guest forever. Baseline
+and GO already had keepalive rexmit (§49); seals did not. The receive-side
+stash comment even assumed "the sender's normal chunk retransmit cadence
+re-delivers it" — that cadence never existed.
+
+**Fix:**
+1. **Seal keepalive** `maybe_rexmit_seals()` — rides `maybe_send_baseline`'s
+   call path, re-runs `export_local_seals()` on the `RB_BASELINE_BURST_MS`
+   cadence until the peer's POST arrives (POST proves a complete seal table).
+   Idempotent receive (rows OR into `peer_seal_mask`), ≤3 chunks per send.
+2. **Named stall diag** — `!all_peer_seal_rows_complete` in
+   `maybe_enter_replay` now logs once per episode after 500ms:
+   `rb waiting peer seal rows base=… span=… slotN=0`.
+
+**Re-soak watch:** no verify-timeout abort where the peer log shows matched
+baselines + ready but no `rb replay`; if `rb waiting peer seal rows` appears
+it should be followed by `rb seal rexmit` and a normal Replay entry, not an
+abort.

@@ -3767,16 +3767,15 @@ static void netplay_hold_last_present_tick(void) {
     }
 }
 
-/* §47: long Replay catch-up — wall-clock gate for a real VRAM present.
- * Returns 1 if this guest vblank should fall through to a live present. */
+/* §47/§51 Layer 4: long Replay catch-up — wall-clock gate for a real VRAM
+ * present. Independent of SPAN chunk boundaries (those are bookkeeping, not
+ * present events). Returns 1 if this guest vblank should fall through. */
 static int netplay_replay_catchup_should_live_present(uint32_t remaining) {
     static uint64_t s_catchup_present_ms;
     uint64_t now = SDL_GetTicks64();
-    uint32_t period = (uint32_t)(g_frame_period_ms + 0.5);
-    if (period < 8u)
-        period = 8u;
-    if (period > 33u)
-        period = 33u;
+    /* ~6–7 Hz: enough to show progress without flashing every resim frame
+     * (old period≈frame_ms presented nearly every tick when rem>8). */
+    uint32_t period = 150u;
     if (remaining <= 8u)
         return 0;
     if (s_catchup_present_ms != 0ull && now >= s_catchup_present_ms &&

@@ -180,6 +180,13 @@ static int g_needs_advance;
 static int g_seal_export_logged;
 static int g_baseline_rexmit_logged;
 static int g_post_rexmit_logged;
+/* §52: seal-row keepalive — export_local_seals() fired only on discrete
+ * events (begin / tip-extend / FOLLOW); one lost UDP chunk left the peer
+ * silently stuck in AwaitingBaseline (all_peer_seal_rows_complete never
+ * true) until the initiator's verify timeout aborted the episode. */
+static uint64_t g_last_seal_rexmit_ms;
+static int g_seal_rexmit_logged;
+static int g_seal_wait_logged;
 static uint64_t g_seal_wait_ms; /* CLOCK_MONOTONIC ms when SealInputs began */
 static uint64_t g_verify_wait_ms;
 /* Live network-latency estimate, EMA'd from the POST handshake's own
@@ -291,6 +298,12 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_POST_BURST 8
 /* Initiator waits for follower ready-ACK; do NOT solo-enter Replay. */
 #define RB_READY_TIMEOUT_MS 4000u
+/* §49: WAN/TURN baseline GO can take multiple RTT; floor stays 4s. */
+#define RB_READY_TIMEOUT_MAX_MS 12000u
+/* §49: ownership chain min confirmed ticks ahead of tip. tip+1 (§48) still
+ * opened SPAN every Verify on WAN (epochs 16→64 in ~40 ticks). tip+8 lets
+ * Live absorb micro catch-ups; larger frontiers still Replay-own. */
+#define RB_OWNERSHIP_CHAIN_MIN_AHEAD 8u
 /* Failed episode (resim/baseline/post): calm from *live* sim before realign.
  * Was 60/120 — after abort, choose_load stuck at agreed tip so the next begin
  * resimmed the whole cooldown (depth 63→128) = "pushing further back". */
@@ -432,6 +445,9 @@ static int seat_tick_confirmed(int slot, uint32_t tick);
 /* §47: begin_rewind is an ownership SPAN chain (skip cooldown; force target). */
 static int g_ownership_chain;
 static uint32_t g_ownership_chain_frontier;
+/* §51 Layer 3: SPAN chunk continue — state already at tip after Verify; do
+ * not snap-reload (Replay ownership is one continuous recovery). */
+static int g_ownership_skip_snap;
 
 static int rb_fmv_media_active(void)
 {
@@ -529,6 +545,18 @@ static void rb_fmv_tick_settle(void)
             fprintf(stderr,
                     "psxrecomp: rb FMV rewind-defer ON (depth24/mdec; no invent)\n");
             fflush(stderr);
+            /* §50: TipHold through FMV is doomed — initiator tip-extends /
+             * rereplays while the peer ownership-finals → Live, then follow
+             * REFUSED (FMV lockstep) and tip-extend ABANDON realigns to a
+             * BIOS sticky PC snap. Commit the sealed tip before media runs. */
+            if (g_rb && rnet_rb_is_tip_holding(g_rb)) {
+                fprintf(stderr,
+                        "psxrecomp: rb FMV mid TipHold — tip-hold commit "
+                        "through=%u\n",
+                        (unsigned)rnet_rb_get_target_tick(g_rb));
+                fflush(stderr);
+                finalize_tip_hold();
+            }
         }
         /* Heartbeat through the movie — digs are sparse while MDEC is hot. */
         {
@@ -895,6 +923,9 @@ static void clear_episode_wire_state(void)
     g_last_baseline_burst_ms = 0;
     g_ready_timeout_logged = 0;
     g_wait_peer_bl_logged = 0;
+    g_last_seal_rexmit_ms = 0;
+    g_seal_rexmit_logged = 0;
+    g_seal_wait_logged = 0;
 }
 
 static void clear_baseline_pin(void)
@@ -1032,6 +1063,7 @@ static void abort_episode(const char *why)
     clear_tip_extend_prime();
     psx_scheduler_top_level_resume_clear();
     clear_episode_wire_state();
+    g_ownership_skip_snap = 0;
     if (g_rb && rnet_rb_is_active(g_rb)) {
         rnet_rb_set_phase(g_rb, nRNetRbPhaseAbort);
         rnet_rb_session_reset(g_rb);
@@ -1864,20 +1896,34 @@ static void advance_agreed_watermark_from_hc(void)
 /* Pick a load snap ≤ mismatch that the lagging peer is likely to have.
  * Live snaps only land on snap_interval ticks; never invent a phantom tick.
  *
- * Shared-frontier fast path: ticks the peer PROVABLY holds need no tip slack.
- *  - hc resolved_through: both peers simmed those ticks and core digests
- *    matched, so both saved the same interval snaps.
- *  - last committed span (g_agreed_span_lo, g_agreed_through]: both peers
- *    replayed it and resim saves a snap at every replayed tick (dense).
- * Without this, mismatch one tick after a commit re-loaded a full interval +
- * slack deep (798 → 768) and each menu tap replayed ~30 ticks twice — the
- * main-menu "resim back to title" hang. Peer eviction is still covered by the
- * follower NACK path (abort, not hang).
+ * Layer 1 invariant (§51):
+ *   choose_load returns the newest snapshot both peers can prove is safe
+ *   to replay from — independent of how Replay later reaches the frontier.
+ *
+ * Provably-safe sources (any establishes the floor):
+ *  - tip-hold / episode commit watermark (g_agreed_through + dense span)
+ *  - hash_confirm resolved_through (both simmed, cores matched → same snaps)
+ *  - peer RESOLVED advertise (soft; must NOT lower below HC-proven ticks)
+ *
+ * Without the shared-frontier path, mismatch one tick after a commit re-loaded
+ * a full interval + slack deep (798 → 768) — main-menu "resim back to title".
+ * Peer eviction is still covered by follower NACK (abort, not hang).
  *
  * Fallback (no proven frontier below mismatch): interval ticks with one-
  * interval tip slack — ONLY when there is no shared frontier yet. Once
  * hash_confirm / a commit exists, never load an unconfirmed tip (those snaps
  * can fork dig_cpu while PC-cleared FRAME_COMMITs still matched). */
+static uint32_t hc_provable_through(void)
+{
+    uint32_t rt;
+    if (!g_b.hc)
+        return 0u;
+    rt = netplay_hc_resolved_through(g_b.hc);
+    if (rt == 0u || !netplay_hc_confirm_through(g_b.hc, rt))
+        return 0u;
+    return rt;
+}
+
 static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
 {
     uint32_t t;
@@ -1885,6 +1931,7 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
     uint32_t newest;
     uint32_t cap;
     uint32_t shared = 0;
+    uint32_t hc_floor = 0;
     int have_shared = 0;
     if (!out_load || !g_snaps || netplay_snap_ring_count(g_snaps) == 0)
         return 0;
@@ -1897,20 +1944,17 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
         (void)netplay_hc_heal_stale_gap(g_b.hc);
     heal_agreed_watermark_if_aged_out();
     advance_agreed_watermark_from_hc();
+    hc_floor = hc_provable_through();
 
     if (g_agreed_valid) {
-        /* Hard watermark: tip-hold / episode commit tip. TipHold Live invent
-         * + PC-cleared FRAME_COMMIT can false-confirm tip snaps (848) that
-         * still fork baseline cores/av — never load above this via hc while
-         * the agreed snap is still in the ring (heal raises it when aged out). */
+        /* Commit / ADVANCE watermark. Do not raise above agreed via HC here —
+         * ADVANCE already promotes interval HC ticks; TipHold invent historically
+         * false-confirmed tip snaps above the commit frontier. */
         shared = g_agreed_through;
         have_shared = 1;
-    } else if (g_b.hc) {
-        uint32_t rt = netplay_hc_resolved_through(g_b.hc);
-        if (netplay_hc_confirm_through(g_b.hc, rt)) {
-            shared = rt;
-            have_shared = 1;
-        }
+    } else if (hc_floor > 0u) {
+        shared = hc_floor;
+        have_shared = 1;
     }
     /* §38/§39: clamp ADVANCE→commit-frontier ONLY during post–tip-hold
      * holdoff. The always-on ≤runway+4 clamp (holdoff=0) undid healthy
@@ -1931,21 +1975,26 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
             shared = tip_rt;
         }
     }
-    /* §40/§41: clamp to peer RESOLVED while the bounded gate is active.
-     * After GATE_MS, peer_resolved_gate_blocks sticky-expires so HEAL-FORCE
-     * cannot forever-DEFER begin (2026-08-02 post-§40 soak). */
-    if (have_shared &&
-        peer_resolved_gate_blocks(shared)) {
-        static uint32_t s_peer_clamp_log_to;
-        if (s_peer_clamp_log_to != g_peer_resolved_through) {
-            fprintf(stderr,
-                    "psxrecomp: rb choose_load clamp %u→%u "
-                    "(peer RESOLVED frontier)\n",
-                    (unsigned)shared, (unsigned)g_peer_resolved_through);
-            fflush(stderr);
-            s_peer_clamp_log_to = g_peer_resolved_through;
+    /* §40/§41/§51: peer RESOLVED may limit unconfirmed tips above HC, but must
+     * never lower the load below HC-proven ticks (soak: ADVANCE 1189→1248 then
+     * clamp→1189 → interval load=1184 → 65-tick SPAN storm). */
+    if (have_shared && peer_resolved_gate_blocks(shared)) {
+        uint32_t clamped = g_peer_resolved_through;
+        if (hc_floor > clamped)
+            clamped = hc_floor;
+        if (clamped < shared) {
+            static uint32_t s_peer_clamp_log_to;
+            if (s_peer_clamp_log_to != clamped) {
+                fprintf(stderr,
+                        "psxrecomp: rb choose_load clamp %u→%u "
+                        "(peer RESOLVED; hc_floor=%u)\n",
+                        (unsigned)shared, (unsigned)clamped,
+                        (unsigned)hc_floor);
+                fflush(stderr);
+                s_peer_clamp_log_to = clamped;
+            }
+            shared = clamped;
         }
-        shared = g_peer_resolved_through;
     }
     /* Snap at T = state after tick T; replaying the mismatch needs load < mismatch. */
     if (have_shared && mismatch > 0u) {
@@ -1967,9 +2016,12 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
             for (t = hi;; --t) {
                 int mutual = 0;
                 if (g_agreed_valid) {
-                    /* Only committed / tip-hold POST tip and its dense resim span. */
-                    if (t <= g_agreed_through &&
-                        (t > g_agreed_span_lo || (iv <= 1u) || ((t % iv) == 0u)))
+                    /* §51 Layer 2: inclusive dense span [span_lo, through] so
+                     * the commit tip itself is preferred over %iv fallback
+                     * (1189 tip with span_lo=tip used to miss → load 1184). */
+                    if (t <= g_agreed_through && t >= g_agreed_span_lo)
+                        mutual = 1;
+                    else if ((iv <= 1u) || ((t % iv) == 0u))
                         mutual = 1;
                 } else if (g_b.hc && netplay_hc_confirm_through(g_b.hc, t)) {
                     mutual = 1;
@@ -1979,6 +2031,10 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
                            t >= g_fmv_media_end_sim) {
                     mutual = 1;
                 }
+                /* HC-proven ticks are mutual even outside the commit span. */
+                if (!mutual && hc_floor > 0u && t <= hc_floor &&
+                    netplay_hc_confirm_through(g_b.hc, t))
+                    mutual = 1;
                 if (mutual && netplay_snap_ring_has(g_snaps, t)) {
                     *out_load = t;
                     return 1;
@@ -2108,6 +2164,38 @@ static void export_local_seals(void)
         fflush(stderr);
         g_seal_export_logged = 1;
     }
+}
+
+/* §52: keep re-exporting our seal rows on the baseline-rexmit cadence until
+ * the peer's POST proves it entered Replay (it can only do that once its
+ * seal table is complete). Baseline/GO already had keepalive rexmit; seal
+ * rows were a single unacknowledged burst per discrete event, so one WAN
+ * drop of e.g. the post-tip-extend chunk deadlocked the follower in
+ * AwaitingBaseline until verify timeout. Receiver side is idempotent
+ * (rows OR into peer_seal_mask), and the export is at most a few 24-row
+ * chunks, so the cost is negligible. */
+static void maybe_rexmit_seals(void)
+{
+    uint64_t now;
+    if (!g_rb || !rnet_rb_is_active(g_rb) || !rnet_rb_inputs_sealed(g_rb))
+        return;
+    if (g_peer_post_ok)
+        return; /* peer verified with complete seals — nothing left to heal */
+    now = rb_mono_ms();
+    if (g_last_seal_rexmit_ms != 0ull && now >= g_last_seal_rexmit_ms &&
+        (now - g_last_seal_rexmit_ms) < (uint64_t)RB_BASELINE_BURST_MS)
+        return;
+    /* First call per episode is the begin-time export itself; only log once
+     * an actual re-send happens. */
+    if (g_last_seal_rexmit_ms != 0ull && !g_seal_rexmit_logged) {
+        fprintf(stderr, "psxrecomp: rb seal rexmit base=%u span=%u\n",
+                (unsigned)rnet_rb_get_seal_base_tick(g_rb),
+                (unsigned)rnet_rb_get_seal_span(g_rb));
+        fflush(stderr);
+        g_seal_rexmit_logged = 1;
+    }
+    g_last_seal_rexmit_ms = now;
+    export_local_seals();
 }
 
 static void publish_sealed_sio(uint32_t tick)
@@ -2325,6 +2413,21 @@ static void stash_seal_rows_chunk(uint32_t epoch, uint32_t mismatch, uint32_t ta
     }
 }
 
+/* §49: ready budget scales with measured RTT (TURN/hotspot). */
+static uint32_t rb_ready_timeout_ms(void)
+{
+    uint32_t rtt = psx_netplay_rb_rtt_estimate_ms();
+    uint32_t ms = RB_READY_TIMEOUT_MS;
+    if (rtt >= 4u) {
+        uint32_t scaled = rtt * 10u; /* ~5 RTT round-trips of headroom */
+        if (scaled > ms)
+            ms = scaled;
+    }
+    if (ms > RB_READY_TIMEOUT_MAX_MS)
+        ms = RB_READY_TIMEOUT_MAX_MS;
+    return ms;
+}
+
 static void send_baseline_packet(int ready, int rexmit_log)
 {
     RNetSession *s = sess();
@@ -2379,6 +2482,10 @@ static void maybe_send_baseline(void)
         return;
     if (!g_episode_snap_applied || g_pending_load_valid)
         return; /* must restore before hashing / advertising baseline */
+    /* §52: seal-row keepalive rides the same call cadence as baseline/GO
+     * rexmit — runs through SealInputs/AwaitingBaseline/Replay/Verify until
+     * the peer POSTs. */
+    maybe_rexmit_seals();
     follower = rnet_rb_is_from_peer_notify(g_rb) ? 1 : 0;
     if (!g_local_baseline_sent) {
         NetplayCoreParts parts;
@@ -2438,6 +2545,16 @@ static void maybe_send_baseline(void)
             send_baseline_burst(1, RB_BASELINE_BURST, 1);
     } else if (!g_peer_baseline_ready) {
         send_baseline_burst(0, RB_BASELINE_BURST, 1);
+    } else {
+        /* §49: initiator already saw follower ACK and emitted GO once in
+         * maybe_enter_replay, then stopped advertising. TURN drops that
+         * burst → follower ready-timeout while initiator is in Replay/Verify
+         * waiting for peer POST. Keep GO alive until peer POST arrives. */
+        RNetRbPhase ph = rnet_rb_get_phase(g_rb);
+        if (!g_peer_post_ok &&
+            (ph == nRNetRbPhaseAwaitingBaseline || ph == nRNetRbPhaseReplay ||
+             ph == nRNetRbPhaseVerify))
+            send_baseline_burst(1, RB_BASELINE_BURST, 1);
     }
 }
 
@@ -2619,8 +2736,39 @@ static void maybe_enter_replay(void)
     if (rnet_rb_get_phase(g_rb) == nRNetRbPhaseReplay)
         return; /* already armed */
     /* Never leave SealInputs with incomplete peer pads — hist invent would fork. */
-    if (!rnet_rb_all_peer_seal_rows_complete(g_rb))
+    if (!rnet_rb_all_peer_seal_rows_complete(g_rb)) {
+        /* §52: this was the only *silent* early return in the gate chain —
+         * a lost seal chunk parked us here until the peer's verify timeout
+         * with zero log evidence. Name the incomplete seats once we've been
+         * waiting long enough that keepalive rexmit should have healed it. */
+        if (!g_seal_wait_logged && g_baseline_handshake_ms != 0ull) {
+            uint64_t now = rb_mono_ms();
+            if (now >= g_baseline_handshake_ms &&
+                (now - g_baseline_handshake_ms) >= 500ull) {
+                char seats[64];
+                int pos = 0;
+                int slot;
+                int n = g_b.slot_count ? *g_b.slot_count : 0;
+                int local = g_b.local_slot ? *g_b.local_slot : 0;
+                seats[0] = '\0';
+                for (slot = 0; slot < n && pos < (int)sizeof(seats) - 12; ++slot) {
+                    if (slot == local)
+                        continue;
+                    pos += snprintf(seats + pos, sizeof(seats) - (size_t)pos,
+                                    " slot%d=%u", slot,
+                                    (unsigned)rnet_rb_peer_seal_rows_complete(
+                                        g_rb, (int32_t)slot));
+                }
+                fprintf(stderr,
+                        "psxrecomp: rb waiting peer seal rows base=%u span=%u%s\n",
+                        (unsigned)rnet_rb_get_seal_base_tick(g_rb),
+                        (unsigned)rnet_rb_get_seal_span(g_rb), seats);
+                fflush(stderr);
+                g_seal_wait_logged = 1;
+            }
+        }
         return;
+    }
     if (rnet_rb_get_phase(g_rb) != nRNetRbPhaseAwaitingBaseline)
         return;
     if (g_peer_baseline_digest != g_local_baseline_digest) {
@@ -2656,15 +2804,18 @@ static void maybe_enter_replay(void)
      * ready-ACK RTT (both peers enter Replay on digest match). Full episodes
      * keep symmetric ready (follower ACK → initiator GO). */
     if (!rnet_rb_recommend_light_tip(g_rb)) {
+        uint32_t ready_ms = rb_ready_timeout_ms();
         if (follower) {
             send_baseline_burst(1, RB_BASELINE_BURST, 0);
             if (!g_peer_baseline_ready) {
                 uint64_t now = rb_mono_ms();
                 uint64_t t0 = g_baseline_handshake_ms ? g_baseline_handshake_ms : now;
-                if (now >= t0 && (now - t0) >= (uint64_t)RB_READY_TIMEOUT_MS) {
+                if (now >= t0 && (now - t0) >= (uint64_t)ready_ms) {
                     if (!g_ready_timeout_logged) {
                         fprintf(stderr,
-                                "psxrecomp: rb ready timeout — abort (no initiator GO)\n");
+                                "psxrecomp: rb ready timeout — abort (no initiator GO) "
+                                "waited=%ums budget=%u\n",
+                                (unsigned)(now - t0), (unsigned)ready_ms);
                         fflush(stderr);
                         g_ready_timeout_logged = 1;
                     }
@@ -2676,10 +2827,12 @@ static void maybe_enter_replay(void)
             uint64_t now = rb_mono_ms();
             uint64_t t0 = g_baseline_handshake_ms ? g_baseline_handshake_ms : now;
             send_baseline_burst(0, RB_BASELINE_BURST, 1);
-            if (now >= t0 && (now - t0) >= (uint64_t)RB_READY_TIMEOUT_MS) {
+            if (now >= t0 && (now - t0) >= (uint64_t)ready_ms) {
                 if (!g_ready_timeout_logged) {
                     fprintf(stderr,
-                            "psxrecomp: rb ready timeout — abort (no peer ready-ACK)\n");
+                            "psxrecomp: rb ready timeout — abort (no peer ready-ACK) "
+                            "waited=%ums budget=%u\n",
+                            (unsigned)(now - t0), (unsigned)ready_ms);
                     fflush(stderr);
                     g_ready_timeout_logged = 1;
                 }
@@ -2921,6 +3074,8 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     g_tip_extend_from_tick = 0;
     clear_tip_extend_prime();
     g_needs_advance = 0;
+    /* §51 Layer 3: keep sim at tip — next SPAN is extend/continue, not restart. */
+    g_ownership_skip_snap = 1;
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
     g_episode_baseline_matched = 0;
@@ -2938,7 +3093,7 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     if (local != 0) {
         fprintf(stderr,
                 "psxrecomp: rb ownership chain tip=%u frontier=%u — wait FOLLOW "
-                "(slot %d; peer initiates)\n",
+                "(slot %d; peer initiates; skip-snap)\n",
                 (unsigned)tip, (unsigned)frontier, local);
         fflush(stderr);
         return;
@@ -2951,7 +3106,7 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     g_ownership_chain = 1;
     fprintf(stderr,
             "psxrecomp: rb ownership chain tip=%u frontier=%u mismatch=%u "
-            "(Replay owns catch-up — no TipHold)\n",
+            "(Replay owns catch-up — no TipHold; skip-snap)\n",
             (unsigned)tip, (unsigned)frontier, (unsigned)mismatch);
     fflush(stderr);
     if (!psx_netplay_rb_begin_rewind(mismatch, slot)) {
@@ -2959,6 +3114,7 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
                 "psxrecomp: rb ownership chain FAILED tip=%u frontier=%u — Live\n",
                 (unsigned)tip, (unsigned)frontier);
         fflush(stderr);
+        g_ownership_skip_snap = 0;
         enter_tip_hold(tip);
         finalize_tip_hold();
     }
@@ -2972,11 +3128,20 @@ static void ownership_on_post_match(uint32_t tip)
 
     /* Contiguous frontier from the tick after the verified tip. */
     frontier = psx_netplay_rb_confirmed_frontier(tip + 1u);
-    /* §48: a single confirmed tick ahead is Live work — chaining SPAN for
-     * frontier=tip+1 dual-initiated every Verify and thrashed menus. */
-    if (frontier > tip + 1u) {
-        ownership_chain_next_span(tip, frontier);
-        return;
+    /* §48/§49: micro frontiers are Live work. §48 blocked tip+1; §49 raises
+     * the floor so WAN SPAN handshakes are not opened for 2–7 tick gaps. */
+    {
+        uint32_t min_ahead = RB_OWNERSHIP_CHAIN_MIN_AHEAD;
+        const char *e = getenv("PSX_RB_CHAIN_MIN_AHEAD");
+        if (e && e[0]) {
+            int v = atoi(e);
+            if (v >= 1 && v <= 64)
+                min_ahead = (uint32_t)v;
+        }
+        if (frontier > tip + min_ahead) {
+            ownership_chain_next_span(tip, frontier);
+            return;
+        }
     }
     /* Exhausted contiguous confirmed work → Live (immediate tip-hold commit). */
     fprintf(stderr,
@@ -3491,6 +3656,7 @@ void psx_netplay_rb_start(void)
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
     g_tip_extend_from_tick = 0;
+    g_ownership_skip_snap = 0;
     g_last_commit_epoch = 0xffffffffu;
     g_peer_commit_epoch = 0xffffffffu;
     g_peer_commit_tick = 0;
@@ -3539,6 +3705,7 @@ void psx_netplay_rb_shutdown(void)
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
     g_tip_extend_from_tick = 0;
+    g_ownership_skip_snap = 0;
     g_last_commit_epoch = 0xffffffffu;
     g_peer_commit_epoch = 0xffffffffu;
     g_peer_commit_tick = 0;
@@ -3627,6 +3794,31 @@ static int try_apply_pending_load(CPUState *cpu_in)
     if (!g_b.bios_checksum || !g_b.entry_pc)
         return 0;
     live_realign = g_live_realign_pending;
+    /* §51 Layer 3: ownership SPAN continue — already at tip after Verify POST.
+     * Snap reload is a semantic restart; skip it and baseline from current state.
+     * Only when load equals the tip we just watermarked (not a fresh deep begin). */
+    if (!live_realign && g_ownership_skip_snap &&
+        g_agreed_valid && g_pending_load_tick == g_agreed_through) {
+        uint32_t loaded_tick = g_pending_load_tick;
+        g_ownership_skip_snap = 0;
+        g_pending_load_valid = 0;
+        g_pending_resume_valid = 0;
+        g_episode_snap_applied = 1;
+        g_episode_load_tick = loaded_tick;
+        pin_baseline_from_ring(loaded_tick);
+        fprintf(stderr,
+                "psxrecomp: rb ownership continue skip-snap load=%u "
+                "(no reload; Replay ownership)\n",
+                (unsigned)loaded_tick);
+        fflush(stderr);
+        maybe_send_baseline();
+        return 1;
+    }
+    if (g_ownership_skip_snap &&
+        !(g_agreed_valid && g_pending_load_tick == g_agreed_through)) {
+        /* Stale continue flag vs a fresh deep begin — fall through to load. */
+        g_ownership_skip_snap = 0;
+    }
     {
         int loaded = 0;
         uint32_t loaded_tick = g_pending_load_tick;
@@ -3702,6 +3894,13 @@ static int try_apply_pending_load(CPUState *cpu_in)
             g_pending_resume_pc = pc;
             g_pending_resume_valid = 1;
             if (live_realign) {
+                /* Do NOT clear remote tip rings here (§49b). Full clear left
+                 * tip=0 → mutual pcap FREEZE (wire≫P, neither advances).
+                 * Selective clear also fails after ring wrap (only far tips
+                 * remain). Prior soak recovered without clear: peer
+                 * post-realign production fills need; prepare_local_tip still
+                 * emits. Keep absurd tip in the ring — cushion refuses invent
+                 * on miss (§45) until real rows land. */
                 fprintf(stderr,
                         "psxrecomp: rb realign applied tick=%u pc=0x%08x core=%08x "
                         "cd=%08x\n",
@@ -3947,6 +4146,37 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
         phase != nRNetRbPhaseReplay && phase != nRNetRbPhaseVerify &&
         phase != nRNetRbPhaseTipHold)
         return 0;
+    /* §50: begin/follow already refuse NEW episodes in FMV lockstep, but
+     * tip-extend on an open episode still raised the tip through media /
+     * settle. Host rereplayed past guest ownership-final → Live, guest
+     * FMV-refused the follow BEGIN, host ABANDON-realigned to bfc03c04 —
+     * FIRST CORE + lasting CD fork. Same gate as begin: no tip raise. */
+    (void)rb_in_fmv_defer_rewind_window();
+    if (rb_in_fmv_lockstep_window()) {
+        if (phase_at_entry == nRNetRbPhaseTipHold) {
+            fprintf(stderr,
+                    "psxrecomp: rb tip-extend REFUSED mismatch=%u — FMV "
+                    "lockstep (tip-hold commit)\n",
+                    (unsigned)mismatch_tick);
+            fflush(stderr);
+            finalize_tip_hold();
+            return 1; /* absorbed: episode closed at sealed tip */
+        }
+        {
+            static uint32_t s_fmv_ext_refuse_sim;
+            uint32_t sim_now = rnet_session_sim_tick(s);
+            if (s_fmv_ext_refuse_sim != sim_now) {
+                fprintf(stderr,
+                        "psxrecomp: rb tip-extend REFUSED mismatch=%u — FMV "
+                        "lockstep (keep target=%u; no raise through media)\n",
+                        (unsigned)mismatch_tick,
+                        (unsigned)rnet_rb_get_target_tick(g_rb));
+                fflush(stderr);
+                s_fmv_ext_refuse_sim = sim_now;
+            }
+        }
+        return 0;
+    }
     load = rnet_rb_get_load_tick(g_rb);
     if (mismatch_tick < load)
         return 0;
@@ -4192,6 +4422,21 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         }
         return 0;
     }
+    /* §51 Layer 3: chain continue must load exactly at the verified tip. */
+    if (g_ownership_chain && mismatch_tick > 0u) {
+        uint32_t tip = mismatch_tick - 1u;
+        if (g_ownership_skip_snap ||
+            (g_snaps && netplay_snap_ring_has(g_snaps, tip))) {
+            if (load != tip) {
+                fprintf(stderr,
+                        "psxrecomp: rb ownership force load %u→%u "
+                        "(chain tip; skip-snap=%d)\n",
+                        (unsigned)load, (unsigned)tip, g_ownership_skip_snap);
+                fflush(stderr);
+                load = tip;
+            }
+        }
+    }
     /* §38/§39: during tip-hold agreed holdoff, do not open load above the
      * commit frontier (peer may still tip-hold). Clamp in choose_load should
      * already pin load; this is belt-and-suspenders. */
@@ -4211,19 +4456,23 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
             return 0;
         }
     }
-    /* §40/§41: defer above peer RESOLVED only while the bounded gate holds. */
+    /* §40/§41/§51: defer above peer RESOLVED only while the gate holds — but
+     * HC-proven loads are mutually safe (do not DEFER below hc_floor). */
     if (peer_resolved_gate_blocks(load)) {
-        static uint32_t s_peer_defer_sim;
-        if (s_peer_defer_sim != sim) {
-            fprintf(stderr,
-                    "psxrecomp: rb begin DEFER mismatch=%u load=%u "
-                    "frontier=%u — peer RESOLVED\n",
-                    (unsigned)mismatch_tick, (unsigned)load,
-                    (unsigned)g_peer_resolved_through);
-            fflush(stderr);
-            s_peer_defer_sim = sim;
+        uint32_t floor = hc_provable_through();
+        if (load > floor) {
+            static uint32_t s_peer_defer_sim;
+            if (s_peer_defer_sim != sim) {
+                fprintf(stderr,
+                        "psxrecomp: rb begin DEFER mismatch=%u load=%u "
+                        "frontier=%u hc_floor=%u — peer RESOLVED\n",
+                        (unsigned)mismatch_tick, (unsigned)load,
+                        (unsigned)g_peer_resolved_through, (unsigned)floor);
+                fflush(stderr);
+                s_peer_defer_sim = sim;
+            }
+            return 0;
         }
-        return 0;
     }
     if (s_refuse_suppressed > 0u) {
         fprintf(stderr,
@@ -4334,6 +4583,25 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
          * forks history regardless of what the initiator saw). Verify always
          * rereplays. */
         int need_rereplay = (wire_flags & RNET_RB_SYNC_FLAG_REREPLAY) ? 1 : 0;
+        /* §50: mirror initiator — do not absorb tip raises through FMV. */
+        (void)rb_in_fmv_defer_rewind_window();
+        if (rb_in_fmv_lockstep_window()) {
+            if (phase_at_entry == nRNetRbPhaseTipHold) {
+                fprintf(stderr,
+                        "psxrecomp: rb tip-extend FOLLOW REFUSED epoch=%u "
+                        "%u→%u — FMV lockstep (tip-hold commit)\n",
+                        (unsigned)epoch, (unsigned)old_t, (unsigned)target);
+                fflush(stderr);
+                finalize_tip_hold();
+            } else {
+                fprintf(stderr,
+                        "psxrecomp: rb tip-extend FOLLOW REFUSED epoch=%u "
+                        "%u→%u — FMV lockstep (keep target)\n",
+                        (unsigned)epoch, (unsigned)old_t, (unsigned)target);
+                fflush(stderr);
+            }
+            return;
+        }
         if (phase_at_entry == nRNetRbPhaseTipHold)
             need_rereplay |= (sim_now > old_t) ? 1 : 0;
         else if (phase_at_entry == nRNetRbPhaseVerify)
