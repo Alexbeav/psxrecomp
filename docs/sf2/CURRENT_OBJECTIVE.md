@@ -93,8 +93,15 @@ movie-request boundaries without adding SF2-specific substitutes.
 - Presentation boundaries observed on the continuous route include the
   `320x240x15` title/menu, `512x240x24` opening movie, and `384x240x15`
   mission briefing. CD retains `int1_lost=0`; bounded SPU telemetry records
-  4,135 key-ons and active retail voice traffic. Raw 2,340-byte movie/briefing
-  sector traffic is proven, but XA-audio delivery is not yet proven.
+  4,135 key-ons and active retail voice traffic.
+- XA delivery and output are now proven on the retail aircraft movie with a
+  non-headless process using SDL's silent dummy host backend. The sector ring
+  records realtime audio sectors with submode `0x64`, coding `0x01`, and
+  `xa_audio_delivered=1`; the CD-input tap produced 1,481,760 frames, including
+  1,238,507 nonzero and 1,206,329 audible-threshold frames. SPU-output and
+  host-output taps were nonzero, the audio event ring recorded `CD_PUSH` and
+  subsequent `RENDER` events, and CD `int1_lost` remained zero. No audio payload
+  was dumped or persisted.
 
 ## R1 verdict
 
@@ -105,17 +112,13 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Record bounded XA delivery/output evidence; SPU key activity and raw STR
-   sector traffic are already proven.
-2. Repeat the state-8 route with fixed input/state checkpoints and compare
+1. Repeat the state-8 route with fixed input/state checkpoints and compare
    stable guest state separately from host/query-timing values.
-3. Use only retail menu ownership to select the representative Mission 3 route;
+2. Use only retail menu ownership to select the representative Mission 3 route;
    do not substitute the oracle's direct diagnostic bootstrap.
 
 ## R2 remaining target
 
-- Bounded XA-audio delivery evidence to complement the verified SPU voice and
-  raw movie-sector activity.
 - A second fixed-checkpoint state-8 comparison after the new cache variants are
   present.
 - Then select the representative Mission 3 route through retail-owned frontend

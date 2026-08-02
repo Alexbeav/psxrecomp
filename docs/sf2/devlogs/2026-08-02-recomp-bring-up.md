@@ -401,3 +401,40 @@ interpreter fallbacks, and CD `int1_lost=0` at the first checkpoint query.
 This completes fallback attribution and replacement-coverage evidence. XA
 delivery/output evidence and a fixed-checkpoint guest-state comparison remain
 before retail Mission 3 selection.
+
+## R2 bounded XA delivery and output
+
+Headless mode intentionally creates no SDL audio device and therefore never
+calls the canonical SPU renderer. A fourth clean process was launched without
+`--headless`, after announcing the visible runtime window, with
+`SDL_AUDIODRIVER=dummy`. This preserves the full guest CD/XA, SPU render, and
+host-output pipeline while sending host samples to a silent SDL sink. No WAV or
+other audio payload was written.
+
+The same retail-owned START, New Game, and One Player inputs reached application
+depth/state `3/3` and the `512x240x24` aircraft movie. During that movie, the
+bounded CD sector ring contained realtime XA audio sectors with file/channel
+metadata, submode `0x64`, coding `0x01`, `data_delivered=0`, and
+`xa_audio_delivered=1`. Adjacent video/data sectors remained separately tagged
+with `xa_audio_delivered=0`, demonstrating that this is the decoder's delivery
+classification rather than a generic streaming counter.
+
+At the first movie query, the always-on PCM taps reported:
+
+| Tap | Frames | Nonzero | Audible-threshold | Peak |
+|---|---:|---:|---:|---:|
+| SPU output | 2,925,300 | 1,463,014 | 1,393,808 | 24,623 |
+| CD/XA input | 1,481,760 | 1,238,507 | 1,206,329 | 31,945 |
+| Host output | 2,929,664 | 1,442,381 | 1,373,744 | 24,628 |
+
+The host bridge was active at 44.1 kHz. A later bounded snapshot reported
+3,305,295 SPU-rendered frames, 1,809,141 nonzero frames, 56,448 frames pushed
+into the current CD FIFO accounting window, zero CD overflow frames, and a
+`CD_PUSH` event followed by `RENDER` events in the sample-clocked ring. CD
+streaming remained active with filter file/channel `1/11` and `int1_lost=0`.
+
+This proves XA sector recognition, decoded nonzero PCM delivery into the SPU,
+nonzero canonical SPU output, and bytes reaching the host API. It does not claim
+physical-speaker audibility because the host sink was deliberately silent.
+The remaining R2 gate before Mission 3 selection is the fixed-checkpoint
+state-8 guest-state comparison.
