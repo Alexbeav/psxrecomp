@@ -4938,6 +4938,25 @@ static void handle_gpu_state(int id, const char *json)
              ws.angle_max_vanilla, ws.angle_max_widened);
 }
 
+static void handle_depth24_uploads(int id, const char *json)
+{
+    int requested = json_get_int(json, "count", 32);
+    if (requested < 1) requested = 1;
+    if (requested > 128) requested = 128;
+    GpuDepth24UploadDebug entries[128];
+    int count = gpu_get_depth24_upload_debug(entries, requested);
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d,\"uploads\":[", id, count);
+    for (int i = 0; i < count; i++) {
+        const GpuDepth24UploadDebug *e = &entries[i];
+        if (i) send_fmt(",");
+        send_fmt("{\"seq\":%llu,\"frame\":%u,\"x\":%u,\"y\":%u,"
+                 "\"w\":%u,\"h\":%u}",
+                 (unsigned long long)e->seq, e->frame,
+                 e->x, e->y, e->w, e->h);
+    }
+    send_fmt("]}\n");
+}
+
 static void handle_ws_aspect_cone_site(int id, const char *json)
 {
     char addr_str[32];
@@ -12694,6 +12713,7 @@ static const CmdEntry s_commands[] = {
     { "gpu_ring_stats",    handle_gpu_ring_stats },
     { "gpu_frame_dump",    handle_gpu_frame_dump },
     { "a0_history",        handle_a0_history },
+    { "depth24_uploads",   handle_depth24_uploads },
     { "c0_history",        handle_c0_history },
     { "capture_quads",     handle_capture_quads },
     { "get_quads",         handle_get_quads },

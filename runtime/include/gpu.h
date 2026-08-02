@@ -55,6 +55,14 @@ void     gpu_depth24_upload_span_reset(void);
  * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
  * per vblank; returns non-zero while the hold is still active after tick. */
 int      gpu_depth24_present_hold_tick(void);
+typedef struct {
+    uint64_t seq;
+    uint32_t frame;
+    uint16_t x, y, w, h;
+} GpuDepth24UploadDebug;
+/* Copy up to cap most-recent CPU->VRAM transfers observed while depth24 was
+ * active, oldest first. Bounded diagnostic data; returns the copied count. */
+int gpu_get_depth24_upload_debug(GpuDepth24UploadDebug *out, int cap);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);

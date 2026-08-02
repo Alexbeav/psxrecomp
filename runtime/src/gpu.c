@@ -2062,7 +2062,11 @@ static uint16_t vram_write_pixels[1024 * 512];
 static uint32_t s_d24_upload_x1 = 0;
 static int      s_d24_present_hold = 0; /* vblanks to skip Swap after GP1(07h) */
 static uint32_t s_d24_prev_disp_h = 0;  /* last GP1(07h) band height */
-static void depth24_note_upload(uint32_t x, uint32_t w);
+#define D24_UPLOAD_DEBUG_CAP 128
+static GpuDepth24UploadDebug s_d24_upload_debug[D24_UPLOAD_DEBUG_CAP];
+static uint64_t s_d24_upload_debug_seq = 0;
+static void depth24_note_upload(uint32_t x, uint32_t y,
+                                uint32_t w, uint32_t h);
 
 static void gp0_commit_cpu_to_vram(void) {
     for (uint32_t row = 0; row < vram_write_h; row++)
@@ -2072,7 +2076,8 @@ static void gp0_commit_cpu_to_vram(void) {
                      ((vram_write_x + col) & 1023u)];
     gr_vram_transfer_in(vram_write_x, vram_write_y,
                         vram_write_w, vram_write_h, vram_write_pixels);
-    depth24_note_upload(vram_write_x, vram_write_w);
+    depth24_note_upload(vram_write_x, vram_write_y,
+                        vram_write_w, vram_write_h);
     gp0_state = GP0_IDLE;
     vram_write_remaining = 0;
     text_xlate_vram_upload(vram_write_x, vram_write_y,
@@ -2315,6 +2320,8 @@ static void gpu_reset_state(int clear_vram) {
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
     s_d24_prev_disp_h = 0;
+    s_d24_upload_debug_seq = 0;
+    memset(s_d24_upload_debug, 0, sizeof(s_d24_upload_debug));
 }
 
 void gpu_init(void) {
@@ -2512,12 +2519,33 @@ static uint8_t gpu_vram_byte(uint32_t byte_x, uint32_t y) {
  * width — MotK's Star Wars crawl leaves ~8px of stale VRAM on the right.
  * Only FB-class A0s (w >= 256 halfwords) grow the span; texture uploads must
  * not collapse it. During present-hold, ignore updates entirely. */
-static void depth24_note_upload(uint32_t x, uint32_t w) {
-    if (!(display_depth & 1u) || w < 256u) return;
+static void depth24_note_upload(uint32_t x, uint32_t y,
+                                uint32_t w, uint32_t h) {
+    if (!(display_depth & 1u)) return;
+    uint64_t seq = s_d24_upload_debug_seq++;
+    GpuDepth24UploadDebug *e =
+        &s_d24_upload_debug[seq % D24_UPLOAD_DEBUG_CAP];
+    e->seq = seq;
+    e->frame = (uint32_t)s_frame_count;
+    e->x = (uint16_t)x; e->y = (uint16_t)y;
+    e->w = (uint16_t)w; e->h = (uint16_t)h;
+
+    if (w < 256u) return;
     if (s_d24_present_hold > 0) return;
     uint32_t x1 = x + w;
     if (x1 > 1024u) x1 = 1024u;
     if (x1 > s_d24_upload_x1) s_d24_upload_x1 = x1;
+}
+
+int gpu_get_depth24_upload_debug(GpuDepth24UploadDebug *out, int cap) {
+    if (!out || cap <= 0) return 0;
+    uint64_t avail = s_d24_upload_debug_seq;
+    if (avail > D24_UPLOAD_DEBUG_CAP) avail = D24_UPLOAD_DEBUG_CAP;
+    if (avail > (uint64_t)cap) avail = (uint64_t)cap;
+    uint64_t start = s_d24_upload_debug_seq - avail;
+    for (uint64_t i = 0; i < avail; i++)
+        out[i] = s_d24_upload_debug[(start + i) % D24_UPLOAD_DEBUG_CAP];
+    return (int)avail;
 }
 
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
