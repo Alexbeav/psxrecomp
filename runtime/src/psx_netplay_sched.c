@@ -991,6 +991,98 @@ static void np_auto_delay_tick(uint32_t now)
 }
 
 /* ------------------------------------------------------------------ */
+/* MotK admit stall tag (barrier logs; rnet last_stall stays "ok")      */
+/* ------------------------------------------------------------------ */
+
+static char g_admit_stall_tag[80];
+
+void np_sched_set_admit_stall(const char *tag)
+{
+    if (!tag || !tag[0]) {
+        g_admit_stall_tag[0] = '\0';
+        return;
+    }
+    snprintf(g_admit_stall_tag, sizeof(g_admit_stall_tag), "%s", tag);
+}
+
+void np_sched_clear_admit_stall(void)
+{
+    g_admit_stall_tag[0] = '\0';
+}
+
+const char *np_sched_admit_stall_tag(void)
+{
+    return g_admit_stall_tag;
+}
+
+/* Tip ahead of need but consumption wire missing: sliding retransmit window
+ * no longer covers the hole (WAN/TURN loss). Rate-limited + stall tag. */
+static void np_diag_wire_hole(int slot, uint32_t sim, uint32_t wire,
+                              const RNetSessionStats *st, const char *stall_why)
+{
+    RNetSession *s = sched_session();
+    RNetInputSample sample;
+    rnet_u32 tip;
+    rnet_u32 t;
+    rnet_u32 hole_end;
+    rnet_u32 first_present = 0;
+    int have_present = 0;
+    int red;
+    int d;
+    static rnet_u32 s_last_need;
+    static rnet_u32 s_last_tip;
+    static uint32_t s_last_log_ms;
+
+    if (!st || !s)
+        return;
+    tip = st->highest_remote_wire;
+    if (tip <= wire)
+        return; /* behind tip — ordinary wait, not a hole-under-tip */
+
+    hole_end = wire;
+    for (t = wire + 1u; t <= tip; ++t) {
+        if (rnet_session_peek_remote_input(s, slot, t, &sample)) {
+            first_present = t;
+            have_present = 1;
+            break;
+        }
+        hole_end = t;
+        if (t == 0xffffffffu)
+            break;
+    }
+
+    d = sched_delay();
+    red = d + 1;
+    if (red < (int)RNET_DEFAULT_BUNDLE_REDUNDANCY)
+        red = (int)RNET_DEFAULT_BUNDLE_REDUNDANCY;
+    {
+        rnet_u32 red_lo =
+            (tip + 1u > (rnet_u32)red) ? (tip + 1u - (rnet_u32)red) : 0u;
+        uint32_t now = sched_mono_ms();
+        int same = (s_last_need == wire && s_last_tip == tip);
+        if (!same || s_last_log_ms == 0u ||
+            (uint32_t)(now - s_last_log_ms) >= 1000u) {
+            s_last_need = wire;
+            s_last_tip = tip;
+            s_last_log_ms = now ? now : 1u;
+            fprintf(stderr,
+                    "psxrecomp: rb WIRE_HOLE slot=%d sim=%u need=%u tip=%u "
+                    "hole_end=%u hole_span=%u first_present=%d lead=%d "
+                    "red_win_lo≈%u need_in_red_win=%d stall=%s "
+                    "(tip-window retransmit may no longer cover need)\n",
+                    slot, (unsigned)sim, (unsigned)wire, (unsigned)tip,
+                    (unsigned)hole_end,
+                    (unsigned)(hole_end >= wire ? (hole_end - wire + 1u) : 1u),
+                    have_present ? (int)first_present : -1, st->remote_lead,
+                    (unsigned)red_lo, (wire >= red_lo) ? 1 : 0,
+                    stall_why ? stall_why : "?");
+            fflush(stderr);
+        }
+    }
+    np_sched_set_admit_stall("wire_hole");
+}
+
+/* ------------------------------------------------------------------ */
 /* Admit entry points                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1007,8 +1099,10 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
     /* Phase alignment: the ahead peer paces down a few ms/tick so remote
      * rows arrive before the seal (kills invent-mispredict episodes at the
      * source). Never engages during episodes/lockstep — only live admits. */
-    if (!psx_netplay_rb_active() && np_timesync_throttle(wire))
+    if (!psx_netplay_rb_active() && np_timesync_throttle(wire)) {
+        np_sched_set_admit_stall("timesync_pace");
         return 1;
+    }
 
     now = sched_mono_ms();
     np_timesync_sample_lead(st->remote_lead);
@@ -1072,19 +1166,39 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
     if (!st)
         return 1;
 
-    /* FMV media + post-FMV lockstep: wait for remote wire (skip / title
-     * Start). Invent idle opened tip episodes that hung. */
-    if (psx_netplay_rb_lockstep_no_invent())
+    /* FMV media + post-FMV settle: wait for remote wire (skip / title
+     * Start). Invent idle opened tip episodes that hung. Tip-ahead with a
+     * missing consumption wire is a ring hole — log before stalling. */
+    if (psx_netplay_rb_lockstep_no_invent()) {
+        const char *why = psx_netplay_rb_fmv_media_active() ? "fmv_media"
+                                                            : "fmv_settle";
+        if (st->highest_remote_wire > wire)
+            np_diag_wire_hole(slot, sim, wire, st, why);
+        else
+            np_sched_set_admit_stall(why);
+        if (reason_out)
+            *reason_out = why;
         return 1;
+    }
     /* Stall when invent would run more than P ahead of remote tip (freeze +
      * refill; adaptive delay may bump D on sustained freeze enters — §22). */
     if (wire > st->highest_remote_wire + (rnet_u32)pred) {
         np_pcap_freeze_enter(wire, st->highest_remote_wire, pred);
+        np_sched_set_admit_stall("pcap_freeze");
+        if (reason_out)
+            *reason_out = "pcap_freeze";
         return 1;
     }
     /* Cushion rebuild: wait for real remote rows (no invent). */
-    if (g_cushion_rebuild && !psx_netplay_rb_active())
+    if (g_cushion_rebuild && !psx_netplay_rb_active()) {
+        if (st->highest_remote_wire > wire)
+            np_diag_wire_hole(slot, sim, wire, st, "cushion_rebuild");
+        else
+            np_sched_set_admit_stall("cushion_rebuild");
+        if (reason_out)
+            *reason_out = "cushion_rebuild";
         return 1;
+    }
 
     if (s_gap1_legacy < 0) {
         const char *e = getenv("PSX_RB_GAP1_INVENT");
@@ -1137,6 +1251,12 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
                     np_admit_maybe_log_stats(now_miss);
                 }
             }
+            if (st->highest_remote_wire > wire)
+                np_diag_wire_hole(slot, sim, wire, st, "tip_stale_wait");
+            else
+                np_sched_set_admit_stall("tip_stale_wait");
+            if (reason_out)
+                *reason_out = "tip_stale_wait";
             return 1;
         }
         invent_reason = "TIP_STALE";
@@ -1194,6 +1314,9 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
                     g_admit_gap1_grace++;
                     np_admit_maybe_log_stats(sched_mono_ms());
                 }
+                np_sched_set_admit_stall("gap1_grace");
+                if (reason_out)
+                    *reason_out = "gap1_grace";
                 return 1;
             }
             np_gap1_note_expire_invent();
@@ -1210,11 +1333,21 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
             tip_stale_ms = RB_INVENT_DEPTH_STALE_FLOOR_MS;
         if (pred_depth >= 2u &&
             (uint32_t)(now_miss - s_miss_t0) < tip_stale_ms) {
+            np_sched_set_admit_stall("depth_stale_wait");
+            if (reason_out)
+                *reason_out = "depth_stale_wait";
             return 1;
         }
         if (np_invent_grace_stall_ex(slot, wire,
-                                     RB_INVENT_RUNWAY_GRACE_CAP_MS, 1))
+                                     RB_INVENT_RUNWAY_GRACE_CAP_MS, 1)) {
+            if (st->highest_remote_wire > wire)
+                np_diag_wire_hole(slot, sim, wire, st, "runway_grace");
+            else
+                np_sched_set_admit_stall("runway_grace");
+            if (reason_out)
+                *reason_out = "runway_grace";
             return 1;
+        }
         invent_reason = "RUNWAY_EMPTY";
         g_admit_invent_runway_empty++;
     }
@@ -1224,11 +1357,13 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
                         st->remote_lead, invent_reason);
     if (reason_out)
         *reason_out = invent_reason;
+    np_sched_clear_admit_stall(); /* inventing — not a barrier stall */
     return 0;
 }
 
 void np_sched_post_admit(int any_invent)
 {
+    np_sched_clear_admit_stall();
     /* Remote caught up or we invented inside P — leave freeze if armed. */
     np_pcap_freeze_exit();
     if (any_invent)

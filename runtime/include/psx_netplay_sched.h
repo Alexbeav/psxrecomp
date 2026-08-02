@@ -69,6 +69,13 @@ void np_sched_note_remote_hit(void);
 /* End of a successful admit: leave pcap freeze, flush periodic stats. */
 void np_sched_post_admit(int any_invent);
 
+/* MotK-side admit stall tag for barrier logs. Rollback never calls
+ * rnet_session_try_admit, so rnet last_stall stays "ok" while MotK invent /
+ * FMV lockstep / wire-hole stalls. Cleared on successful admit. */
+void np_sched_set_admit_stall(const char *tag);
+void np_sched_clear_admit_stall(void);
+const char *np_sched_admit_stall_tag(void); /* "" if none */
+
 /* Reconcile caught a genuine mispredict (published != wire) that rode `age`
  * ticks before being caught — feeds the pacing debt of the ahead peer. */
 void np_sched_note_mispredict(uint32_t age);

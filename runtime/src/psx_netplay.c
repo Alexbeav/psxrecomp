@@ -1940,8 +1940,10 @@ static int np_try_admit_rollback(void)
     /* Mid-session DELAY_SYNC may have committed on the last advance. */
     np_sched_sync_delay_from_session();
 
-    if (!rnet_session_prepare_local_tip(g_np.session, sim))
+    if (!rnet_session_prepare_local_tip(g_np.session, sim)) {
+        np_sched_set_admit_stall("prepare_tip");
         return 0;
+    }
 
     /* §44: consume at wire = sim (real delay); production runs at sim + D. */
     wire = np_sched_wire_for_sim(sim);
@@ -1993,8 +1995,11 @@ static int np_try_admit_rollback(void)
                 if (pad.buttons != 0xFFFFu)
                     held = 1;
             }
-            if (missing || held)
+            if (missing || held) {
+                np_sched_set_admit_stall(missing ? "tip_hold_remote"
+                                                 : "tip_hold_buttons");
                 return 0;
+            }
         }
     }
 
@@ -3664,6 +3669,13 @@ void psx_netplay_admit_wait_info(char *stall_out, size_t stall_cap,
                 snprintf(phase, sizeof(phase), "%s", k_rb_phase[ph]);
             else
                 snprintf(phase, sizeof(phase), "rb_phase_%d", ph);
+        }
+        /* Live rollback invent/lockstep never touches rnet try_admit — MotK
+         * stall tag (wire_hole / fmv_settle / …) replaces the useless "ok". */
+        if (!phase[0] && g_np.rollback && g_np.xfer == NP_XFER_NONE) {
+            const char *motk = np_sched_admit_stall_tag();
+            if (motk && motk[0])
+                snprintf(phase, sizeof(phase), "%s", motk);
         }
     }
     if (stall_out && stall_cap) {
