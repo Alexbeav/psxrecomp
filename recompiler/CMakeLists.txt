@@ -405,6 +405,7 @@ if(BUILD_TESTING)
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
                 hybrid_dev_any_input
+                jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
                 overlay_candidate_capacity

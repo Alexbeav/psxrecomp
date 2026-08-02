@@ -452,3 +452,69 @@ CTest suite passed 38/38 before publication. It was pushed through the user's
 GitHub fork and opened as
 [PSXRecomp PR #93](https://github.com/mstan/psxrecomp/pull/93). The PR is open;
 GitHub checks had not started at the time of this handoff.
+
+## Mission 1 dialogue-boundary JALR contract
+
+A visible fixed-route attempt corrected an earlier overstatement about startup
+coverage. After the 989 logo, the user observed no Eidetic logo, legal did play,
+and `z_intro` did not play before the menu. The automation had armed START from
+the first observation of `0x80156BDC == 3`. A later no-input trace proved that
+word is not a globally unique TITLE gate: it also equals 3 around frame 945
+while the display remains in a 24-bit startup-movie phase. Early injected input
+can therefore skip or propagate across startup presentation. The missing clips
+remain an observation to retest with a compound gate; they are not currently
+attributed to the runtime.
+
+The same visible route then halted at the Mission 1 post-FMV intro precisely
+where dialogue should begin. The halt was active rather than a silent audio
+wait. At frame 4,828 the recursion guard reported dispatch depth 257, with the
+recent function tail alternating resident dispatcher `0x8002A094` and overlay
+callback `0x801C63B4`. CD remained active on file/channel 1/11 with
+`int1_lost=0`; SPU, decoded CD input, and host output all contained nonzero
+samples. The active `0x8014B000/81E32E21` candidate matched its live code CRC.
+
+A clean visible control with `PSX_OVERLAY_NATIVE_OFF=1` reproduced the same
+failure at frame 10,145. Its dirty-block tail made the control-flow contract
+explicit:
+
+```text
+0x80108BEC: jalr $a1,$t0  ($t0 = 0x80010000, $a1 = 0x80108BF4)
+0x80010000..08: runtime-installed tail stub -> 0x8002A094
+0x8002A094: consume descriptor at $a1 -> callback 0x801C63B4
+callback returns through the pre-existing $ra
+```
+
+The dirty-RAM JALR path wrote `pc+8` to `rd ? rd : $ra`, so `rd=0` was already
+architecturally wrong. It then ran all nonlocal targets through
+`psx_dispatch_call(..., pc+8)`, whose call-unit contract requires `$ra ==
+pc+8`. For SF2's nonstandard `$a1` link, `$ra` correctly remains the outer
+return address. The runtime consequently fabricated a failed continuation on
+each descriptor crossing and accumulated nested dispatch frames until the
+guard fired.
+
+The fix writes the encoded nonzero `rd` exactly and limits call-unit
+optimization to `rd == $ra`. Other JALR link registers use the faithful flat
+pc-chain, allowing the callee's eventual JR to choose the real continuation. A
+registered source regression protects both `rd=0` and the non-`$ra` handoff.
+The complete recompiler suite now passes 39/39.
+
+The rebuilt private executable required a semantic, not frame-number, retest.
+An interpreter-only automation run remained live beyond the old fatal frame,
+but the ambiguous startup input gate meant that observation could not prove it
+had crossed the same retail boundary. A native-overlay-on run likewise advanced
+past frame 4,828 while still at the main menu; that initial inference was
+explicitly rejected when the user identified the visible state.
+
+The user then controlled that same patched native process through `New Game`,
+`One Player`, and Mission 1. It crossed the exact post-FMV dialogue boundary
+that had frozen before and entered live `384x240x15` gameplay. A bounded
+post-boundary snapshot at frame 18,191 recorded 137,030,044 GP0 writes with
+current world-3D activity, 98,979,844 native-overlay dispatches, 313,042
+interpreter fallbacks, one real invalidation/stale block, and CD `int1_lost=0`.
+This is the accepted fix validation.
+
+The process used `SDL_AUDIODRIVER=dummy`, so it was intentionally silent at the
+physical output; the user confirmed hearing no sound. Nonzero CD/XA, SPU, and
+host-buffer taps prove only internal sample flow, not audible output. Real-device
+sound remains a separate validation item. No generated C or captures were
+edited. The ignored local footprint is 4.351 GiB.

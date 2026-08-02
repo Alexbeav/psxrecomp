@@ -106,6 +106,37 @@ movie-request boundaries without adding SF2-specific substitutes.
   host-output taps were nonzero, the audio event ring recorded `CD_PUSH` and
   subsequent `RENDER` events, and CD `int1_lost` remained zero. No audio payload
   was dumped or persisted.
+- A visible native-overlay run exposed a reproducible Mission 1 intro failure
+  at the first dialogue boundary. It was not an audio wait: frame 4,828 halted
+  on the dispatch-recursion guard at depth 257 while the retail descriptor
+  trampoline at `0x80108BEC` repeatedly crossed through `0x80010000` to
+  `0x8002A094` and overlay callback `0x801C63B4`. A clean
+  `PSX_OVERLAY_NATIVE_OFF=1` control reproduced the identical cycle at frame
+  10,145, excluding the native overlay DLL/cache as the cause.
+- The generic dirty-RAM JALR implementation incorrectly treated every encoded
+  link register as a conventional `$ra` call contract and also rewrote `rd=0`
+  as `$ra`. SF2 uses `jalr $a1,$t0` for a data-bearing descriptor trampoline:
+  `$a1=pc+8` points at the descriptor while the target ultimately returns via
+  the pre-existing `$ra`. Non-`$ra` JALR now preserves that architectural
+  pc-chain instead of fabricating a `pc+8` continuation. The framework suite
+  passes 39/39 with the new source guard.
+- With the fix, an interpreter-only automation run remained live beyond the old
+  fatal frame, but that frame-number comparison is not counted as a semantic
+  dialogue-boundary pass because the startup input gate was ambiguous. The
+  decisive validation came from the user controlling a fresh native-overlay-on
+  process through `New Game` and Mission 1: the retail intro crossed the exact
+  former dialogue boundary and entered live `384x240x15` gameplay. The bounded
+  post-boundary query at frame 18,191 reported 98,979,844 native-overlay
+  dispatches, 313,042 interpreter fallbacks, one real invalidation/stale block,
+  ongoing world rendering, and CD `int1_lost=0`.
+- That validation process intentionally used SDL's dummy audio driver. Internal
+  CD/XA, SPU, and host-buffer taps were nonzero, but the user correctly observed
+  no physical sound. Audible real-device output remains separately unvalidated.
+- The first TITLE-state probe was not globally unique: `0x80156BDC == 3` also
+  appeared around frame 945 while startup presentation was still in a 24-bit
+  movie phase. Injecting START there can explain the observed missing Eidetic
+  and `z_intro` presentation. Those omissions are therefore recorded as an
+  input-harness confound, not yet as a retail/framework presentation defect.
 
 ## R1 verdict
 
@@ -116,15 +147,20 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Repeat the state-8 route with fixed input/state checkpoints and compare
-   stable guest state separately from host/query-timing values.
-2. Use only retail menu ownership to select the representative Mission 3 route;
+1. Replace the ambiguous TITLE word-only trigger with a compound presentation
+   and state checkpoint, then repeat startup without pre-title input to verify
+   the Eidetic and `z_intro` sequence.
+2. Repeat the state-8/Mission 1 route twice with fixed compound checkpoints and
+   compare stable guest state separately from host/query-timing values.
+3. Repeat the validated dialogue route on the real host audio device and check
+   audible FMV/dialogue output; do not infer audibility from dummy-sink taps.
+4. Use only retail menu ownership to select the representative Mission 3 route;
    do not substitute the oracle's direct diagnostic bootstrap.
 
 ## R2 remaining target
 
 - A second fixed-checkpoint state-8 comparison after the new cache variants are
-  present.
+  present, using the corrected non-ambiguous input gate.
 - Then select the representative Mission 3 route through retail-owned frontend
   state without modernization or native gameplay substitutes.
 
