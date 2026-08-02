@@ -3185,3 +3185,51 @@ provisioning — investigate `rb wire hole` lines before raising D further.
 Trade-off to feel for in play: each +1 D adds ~17 ms of local input latency;
 if the WAN session feels laggy but smooth, that's the controller working —
 step 3 (dense snapshots) then attacks replay cost so D can ride lower.
+
+## 58. Dense tip snapshots + Start debounce in replay produce (2026-08-02)
+
+**§57 soak verdict (healthiest yet — committed):** the arrival-driven
+controller worked with evidence on every move (`5→6` at 153‰ miss / 11 ms
+lateness, later `6→5` at 0‰ sustained). Scorecard trend across windows:
+miss_need 198→150→32 (host) / 72→19→17 (guest), gap1 +116→+24 / +50→+8,
+episodes ~1–2 per 30 s (was 6–8), `lead avg` sitting on the achievable
+`D−1−transit_est`, `cushion rebuilt ACH` replacing the NEAR parks. One abort
+per side, zero baseline mismatch / desync. Two items remained: replay
+`depth_avg` 14–41 with pred_depth 1–2 (snap granularity dominates episode
+cost), and one user-visible bug — a Start press opened TWO overlapping pause
+menus (online only).
+
+**1. Start doubling root cause — §47 replay produce bypassed the §34
+debounce.** `np_rb_produce_local_tip_for_sim` copied the raw live snapshot
+(`staged = live`) without `np_digital_debounce_staged()`, so a press
+overlapping an episode could publish press/idle/press across consecutive tip
+rows (SDL snapshot bounce mid-resim); MotK's pause is edge-triggered → two
+menus. This soak had an episode every ~30 s, which is exactly the exposure
+window. Fix: the replay producer now runs the same debounce, keeping the
+sticky release state coherent across live↔replay transitions.
+
+**2. Dense tip snapshots (`PSX_NET_SNAP_DENSE`, default 8, 0=off, max 24).**
+Live path now saves EVERY tick; non-interval ticks are tracked in a sliding
+FIFO and evicted from the ring once they age past the window (pinned
+baseline / episode load / commit-span snaps are never dense-evicted), so
+interval history is untouched. Ring depth 64→80 to absorb the extra
+occupancy. Cost: one raw boot_state save per frame instead of per 16 —
+watch the [FPS] guest ms/f; PSX_NET_SNAP_DENSE=0 restores §57 behavior.
+
+**3. choose_load can now raise to the raw HC-proven tick** when a local
+snap exists there (`hc_dense=` in the raise log). The §53b interval-only
+raise rule predates dense snaps; with both peers keeping the same window the
+snap is normally present on the follower too, and when it is not, follower
+NACK → demote already covers it (one extra round trip, rare). Together with
+the walk's existing HC-confirmed acceptance, a near-tip mispredict should
+now load at (or within a tick of) the mismatch.
+
+**Re-soak watch:** `rb snap ring ready … tip_dense=8`; scorecard
+`depth_avg` should drop from 14–41 toward `pred_depth + handshake span`
+(single digits); watch `[FPS]` guest ms/f for the per-frame save tax (if
+Live drops below 60, set PSX_NET_SNAP_DENSE=4 or 0 and re-evaluate);
+occasional `choose_load raise … hc_dense=…` lines are the new path working —
+a burst of follower NACK/demotes right after them would mean the peer's
+dense window is out of phase and the raise should be narrowed. For the Start
+fix: pausing near resim activity should be single-menu; if a double recurs,
+enable the pad edge log and capture the row sequence.

@@ -163,6 +163,40 @@ static uint32_t snap_interval(void)
     }
     return iv;
 }
+/* §58 dense tip snaps: live saves every tick inside a sliding window so a
+ * near-tip mispredict loads at (or within a tick of) the mismatch instead of
+ * up to snap_interval-1 ticks below it (§57 soak: depth_avg 14–41 with
+ * pred_depth 1–2 — replay work was dominated by snap granularity). The
+ * window is bounded: non-interval ticks older than the window are dropped
+ * from the ring so interval history is not evicted. PSX_NET_SNAP_DENSE
+ * overrides the window size (0 disables, max 24). */
+#define NP_DENSE_SNAP_MAX 24u
+static uint32_t g_tip_dense_fifo[NP_DENSE_SNAP_MAX];
+static uint32_t g_tip_dense_fifo_n;
+static uint32_t g_tip_dense_fifo_head;
+
+static uint32_t tip_dense_window(void)
+{
+    static int latched;
+    static uint32_t win = 8u;
+    if (!latched) {
+        const char *e = getenv("PSX_NET_SNAP_DENSE");
+        if (e && e[0]) {
+            unsigned v = 0;
+            if (sscanf(e, "%u", &v) == 1 && v <= NP_DENSE_SNAP_MAX)
+                win = v;
+        }
+        latched = 1;
+    }
+    return win;
+}
+
+static void tip_dense_reset(void)
+{
+    g_tip_dense_fifo_n = 0;
+    g_tip_dense_fifo_head = 0;
+}
+
 static int g_local_baseline_sent;
 static uint32_t g_local_baseline_digest;
 static uint32_t g_local_baseline_av;
@@ -383,6 +417,32 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_MOTK_PEER_RESOLVED_HB_MS 100u
 /* Baseline mismatch with no agreed tip — don't reopen every few ticks. */
 #define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 90u
+
+/* §58: track a live non-interval snap tick; evict the oldest dense snap once
+ * the window is full (never the pinned baseline / episode load / commit
+ * span — those stay until normal oldest-tick eviction). */
+static void tip_dense_push(uint32_t tick)
+{
+    uint32_t win = tip_dense_window();
+    if (win == 0u)
+        return;
+    if (g_tip_dense_fifo_n >= win) {
+        uint32_t victim =
+            g_tip_dense_fifo[(g_tip_dense_fifo_head + NP_DENSE_SNAP_MAX -
+                          g_tip_dense_fifo_n) % NP_DENSE_SNAP_MAX];
+        g_tip_dense_fifo_n--;
+        if (!(g_pin_valid && victim == g_pin_tick) &&
+            !(g_rb && rnet_rb_is_active(g_rb) &&
+              victim == rnet_rb_get_load_tick(g_rb)) &&
+            !(g_agreed_valid && victim >= g_agreed_span_lo &&
+              victim <= g_agreed_through)) {
+            (void)netplay_snap_ring_drop_tick(g_snaps, victim);
+        }
+    }
+    g_tip_dense_fifo[g_tip_dense_fifo_head] = tick;
+    g_tip_dense_fifo_head = (g_tip_dense_fifo_head + 1u) % NP_DENSE_SNAP_MAX;
+    g_tip_dense_fifo_n++;
+}
 
 static int g_was_in_fmv;
 static uint32_t g_fmv_settle_until;
@@ -2054,8 +2114,18 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
      * (ADVANCE/HC-HEAL/commit advertise; never HEAL-FORCE). */
     if (!post_tip_hold_holdoff_active()) {
         uint32_t raised = have_shared ? shared : 0u;
+        uint32_t hc_dense = 0u;
         if (hc_iv > raised)
             raised = hc_iv;
+        /* §58: dense tip snaps — the raw HC-proven tick is raise-safe when a
+         * snap exists locally (both peers keep the same dense window; a
+         * missing peer snap is recoverable via follower NACK → demote,
+         * unlike the §53b interval-only rule which predates dense snaps). */
+        if (tip_dense_window() > 0u && hc_floor > raised &&
+            netplay_snap_ring_has(g_snaps, hc_floor)) {
+            raised = hc_floor;
+            hc_dense = hc_floor;
+        }
         if (g_peer_resolved_through > raised)
             raised = g_peer_resolved_through;
         if (raised > 0u && (!have_shared || raised > shared)) {
@@ -2064,10 +2134,10 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
                 if (s_raise_log != raised) {
                     fprintf(stderr,
                             "psxrecomp: rb choose_load raise %u→%u "
-                            "(agreed=%u hc_iv=%u peer_resolved=%u)\n",
+                            "(agreed=%u hc_iv=%u hc_dense=%u peer_resolved=%u)\n",
                             (unsigned)shared, (unsigned)raised,
                             (unsigned)(g_agreed_valid ? g_agreed_through : 0u),
-                            (unsigned)hc_iv,
+                            (unsigned)hc_iv, (unsigned)hc_dense,
                             (unsigned)g_peer_resolved_through);
                     fflush(stderr);
                     s_raise_log = raised;
@@ -3776,6 +3846,7 @@ void psx_netplay_rb_start(void)
         return;
 
     g_snaps = netplay_snap_ring_create(NETPLAY_SNAP_RING_DEFAULT_DEPTH);
+    tip_dense_reset();
     if (!g_snaps) {
         fprintf(stderr, "psxrecomp: rb snap ring create FAILED — rewind disabled\n");
         return;
@@ -3863,8 +3934,11 @@ void psx_netplay_rb_start(void)
     g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
     clear_baseline_pin();
     clear_episode_wire_state();
-    fprintf(stderr, "psxrecomp: rb snap ring ready depth=%u snap_interval=%u\n",
-            (unsigned)netplay_snap_ring_depth(g_snaps), (unsigned)snap_interval());
+    fprintf(stderr,
+            "psxrecomp: rb snap ring ready depth=%u snap_interval=%u "
+            "tip_dense=%u\n",
+            (unsigned)netplay_snap_ring_depth(g_snaps),
+            (unsigned)snap_interval(), (unsigned)tip_dense_window());
 }
 
 void psx_netplay_rb_shutdown(void)
@@ -3931,7 +4005,7 @@ void psx_netplay_rb_shutdown(void)
 /* Dense tip snaps: media/settle, plus the digest lockstep/+tip window even
  * after invent is allowed again (§26) — first Cross/Start after FMV still
  * wants a near-tip load. */
-static int rb_dense_snap_window(void)
+static int rb_fmv_dense_snap_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
@@ -3962,10 +4036,16 @@ void psx_netplay_rb_request_snap(uint32_t tick)
      * invent-miss loads near the mismatch (954→944 was a ~10-tick hitch;
      * with tip snaps + shared frontier → load≈953). */
     if (!(g_rb && rnet_rb_is_resimulating(g_rb))) {
-        if (!rb_dense_snap_window()) {
+        if (!rb_fmv_dense_snap_window()) {
             iv = snap_interval();
-            if (iv > 1u && (tick % iv) != 0u)
-                return;
+            if (iv > 1u && (tick % iv) != 0u) {
+                /* §58: dense tip window — save every live tick and keep the
+                 * last N non-interval snaps so a near-tip mispredict loads
+                 * at the mismatch, not an interval boundary. */
+                if (tip_dense_window() == 0u)
+                    return;
+                tip_dense_push(tick);
+            }
         } else if (tick >= g_fmv_dense_through) {
             g_fmv_dense_through = tick;
         }

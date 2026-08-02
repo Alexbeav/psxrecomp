@@ -2009,6 +2009,8 @@ static void np_rollback_reconcile_wire(void)
 }
 
 
+static void np_digital_debounce_staged(void);
+
 /* §47: Replay participates in the protocol like Live — produce local tip
  * from the live physical pad while consuming remote confirmed rows. */
 static void np_rb_produce_local_tip_for_sim(rnet_u32 sim)
@@ -2023,6 +2025,12 @@ static void np_rb_produce_local_tip_for_sim(rnet_u32 sim)
         g_np.staged = g_np.live;
         psx_netplay_normalize_pad(&g_np.staged);
         g_np.staged_valid = 1;
+        /* §58: this producer bypassed the §34 release debounce — a Start
+         * press overlapping an episode could publish press/idle/press across
+         * consecutive tip rows (SDL snapshot bounce mid-resim) and MotK's
+         * edge-triggered pause opened twice. Same debounce as stage_local so
+         * the sticky state stays coherent across live↔replay transitions. */
+        np_digital_debounce_staged();
     }
     g_np.latched_for_tick = 0;
     (void)rnet_session_prepare_local_tip(g_np.session, sim);

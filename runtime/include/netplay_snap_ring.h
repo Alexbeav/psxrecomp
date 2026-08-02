@@ -18,7 +18,10 @@
 extern "C" {
 #endif
 
-#define NETPLAY_SNAP_RING_DEFAULT_DEPTH 64u
+/* §58: 64 → 80 — dense tip snaps (PSX_NET_SNAP_DENSE window) occupy up to
+ * ~24 extra slots alongside the interval snaps; keep the interval history
+ * span (~1024 ticks at iv=16) from shrinking under dense pressure. */
+#define NETPLAY_SNAP_RING_DEFAULT_DEPTH 80u
 
 typedef struct NetplaySnapRing NetplaySnapRing;
 
@@ -53,6 +56,8 @@ const uint8_t* netplay_snap_ring_peek(const NetplaySnapRing* r, uint32_t tick,
 /* Invalidate every snapshot with tick > tick (dead-timeline snaps after an
  * abort realign). Returns the number of slots dropped. */
 uint32_t netplay_snap_ring_drop_after(NetplaySnapRing* r, uint32_t tick);
+/* Drop the single snap at tick (dense-window eviction). 1 if dropped. */
+int netplay_snap_ring_drop_tick(NetplaySnapRing* r, uint32_t tick);
 uint32_t netplay_snap_ring_oldest_tick(const NetplaySnapRing* r);
 uint32_t netplay_snap_ring_newest_tick(const NetplaySnapRing* r);
 

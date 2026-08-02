@@ -178,6 +178,14 @@ int netplay_snap_ring_load(NetplaySnapRing* r, uint32_t tick, CPUState* cpu,
     return boot_state_load_buffer(data, size, bios_checksum, entry_pc, cpu);
 }
 
+int netplay_snap_ring_drop_tick(NetplaySnapRing* r, uint32_t tick) {
+    int idx = find_slot(r, tick);
+    if (idx < 0) return 0;
+    slot_clear(&r->slots[idx]);
+    if (r->count) r->count--;
+    return 1;
+}
+
 uint32_t netplay_snap_ring_drop_after(NetplaySnapRing* r, uint32_t tick) {
     uint32_t i, n = 0;
     if (!r) return 0;
