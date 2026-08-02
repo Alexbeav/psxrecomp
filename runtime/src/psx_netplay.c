@@ -358,12 +358,34 @@ typedef struct NpPartSlot {
 static NpPartSlot s_part_ring[NP_PART_RING];
 static int s_core_diverge_logged;
 static uint32_t s_live_dig_last_tick = 0xffffffffu;
+/* §54: HC-fork recovery — a live core fork with no pad mispredict never
+ * opened an episode (FIRST CORE DIVERGE was log-only), so a swallowed
+ * correction desynced the rest of the session silently at 60fps. Track how
+ * long the hash_confirm peek mismatch has persisted and open a recovery
+ * episode at the fork tick. */
+static uint32_t s_fork_tick = 0xffffffffu;
+static uint32_t s_fork_first_sim;
+static uint32_t s_fork_last_attempt_sim;
+/* §54: completed-tick mispredict promoted during cooldown/sweep — the state
+ * already simmed with the wrong pad and nothing re-opens an episode after
+ * cooldown expires. Defer the rewind instead of dropping it. */
+static int s_deferred_rw_valid;
+static uint32_t s_deferred_rw_tick;
+static int s_deferred_rw_slot;
+static int s_deferred_rw_logged;
 
 static void np_part_ring_reset(void)
 {
     memset(s_part_ring, 0, sizeof(s_part_ring));
     s_core_diverge_logged = 0;
     s_live_dig_last_tick = 0xffffffffu;
+    s_fork_tick = 0xffffffffu;
+    s_fork_first_sim = 0;
+    s_fork_last_attempt_sim = 0;
+    s_deferred_rw_valid = 0;
+    s_deferred_rw_tick = 0;
+    s_deferred_rw_slot = -1;
+    s_deferred_rw_logged = 0;
 }
 
 static void np_part_ring_put(uint32_t tick, const NetplayCoreParts *parts,
@@ -401,15 +423,63 @@ static void np_log_live_digest(uint32_t tick, const NetplayCoreParts *parts,
     fflush(stderr);
 }
 
+/* §54: persistent live core fork with no pad mispredict → open a recovery
+ * episode at the fork tick. Only the slot-0 host initiates (avoids a dual
+ * simultaneous-BEGIN collision); the guest follows via the wire SYNC. The
+ * episode reloads from the newest provably-safe snap (≤ fork tick — HC is
+ * confirmed through fork-1 by definition) and reseals both seats from
+ * wire-authoritative history, converging the states. */
+static void np_try_hc_fork_recovery(uint32_t fork_tick)
+{
+    uint32_t sim;
+    int remote;
+    /* Fire before the 128-slot hc ring wraps and peek goes quiet. */
+    const uint32_t persist_ticks = 16u;
+    const uint32_t retry_ticks = 32u;
+
+    if (!g_np.rollback || !g_np.session)
+        return;
+    if (g_np.local_slot != 0)
+        return; /* initiator side only */
+    sim = rnet_session_sim_tick(g_np.session);
+    if (fork_tick != s_fork_tick) {
+        s_fork_tick = fork_tick;
+        s_fork_first_sim = sim;
+        return;
+    }
+    if (sim < s_fork_first_sim || (sim - s_fork_first_sim) < persist_ticks)
+        return;
+    if (s_fork_last_attempt_sim != 0u && sim >= s_fork_last_attempt_sim &&
+        (sim - s_fork_last_attempt_sim) < retry_ticks)
+        return;
+    if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
+        psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
+        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent())
+        return;
+    s_fork_last_attempt_sim = sim;
+    remote = (g_np.local_slot == 0) ? 1 : 0;
+    if (g_np.slot_count < 2)
+        remote = g_np.local_slot;
+    fprintf(stderr,
+            "psxrecomp: rb hc-fork recovery begin t=%u (persisted %u ticks, "
+            "no pad mispredict — state resync episode)\n",
+            (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim));
+    fflush(stderr);
+    (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
+}
+
 static void np_check_core_diverge(void)
 {
     uint32_t tick = 0, local_d = 0, peer_d = 0;
     const NpPartSlot *slot;
-    if (!netplay_hc_peek_mismatch(&g_np.hc, &tick, &local_d, &peer_d))
+    if (!netplay_hc_peek_mismatch(&g_np.hc, &tick, &local_d, &peer_d)) {
+        s_fork_tick = 0xffffffffu; /* resolved / no complete pair pending */
         return;
+    }
     /* Replay/Verify: never allow a false POST commit after mid-resim fork. */
     if (psx_netplay_rb_abort_resim_core_mismatch(tick, local_d, peer_d))
         return;
+    np_try_hc_fork_recovery(tick);
     if (s_core_diverge_logged)
         return;
     s_core_diverge_logged = 1;
@@ -1669,6 +1739,34 @@ static void np_rollback_reconcile_wire(void)
             no_resim_why = "fmv-lockstep";
     }
     sim = rnet_session_sim_tick(g_np.session);
+
+    /* §54: deferred rewind for a completed-tick correction swallowed by
+     * cooldown/sweep. HC confirm through the tick proves both peers matched
+     * after it (mispredict was cosmetic / already healed) — drop. Otherwise
+     * open the episode the cooldown suppressed. */
+    if (s_deferred_rw_valid && !no_resim && !fmv_defer &&
+        !g_np.pending_rewind && g_np.rollback) {
+        if (netplay_hc_confirm_through(&g_np.hc, s_deferred_rw_tick)) {
+            s_deferred_rw_valid = 0;
+        } else if (!psx_netplay_rb_active() && !psx_netplay_rb_tip_holding() &&
+                   !psx_netplay_rb_load_pending()) {
+            if (!s_deferred_rw_logged) {
+                fprintf(stderr,
+                        "psxrecomp: rb deferred rewind t=%u slot=%d "
+                        "(completed-tick correction was promote-only in "
+                        "cooldown)\n",
+                        (unsigned)s_deferred_rw_tick, s_deferred_rw_slot);
+                fflush(stderr);
+                s_deferred_rw_logged = 1;
+            }
+            if (psx_netplay_rb_begin_rewind(s_deferred_rw_tick,
+                                            s_deferred_rw_slot)) {
+                g_np.needs_advance = 0;
+                s_deferred_rw_valid = 0;
+            }
+            /* refused (transient gate) — keep pending, retry next pump */
+        }
+    }
     for (slot = 0; slot < g_np.slot_count; ++slot) {
         if (slot == g_np.local_slot) continue;
         for (t = (sim > 64u) ? (sim - 64u) : 0u; t <= sim; ++t) {
@@ -1732,6 +1830,18 @@ static void np_rollback_reconcile_wire(void)
             if (no_resim) {
                 (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
                 if (pads_differ) {
+                    /* §54: a COMPLETED tick was simmed with the wrong pad and
+                     * this promote repairs only history — the live state is
+                     * now forked. Remember the earliest such tick and re-open
+                     * an episode once the cooldown/sweep window ends (unless
+                     * HC proves both peers matched through it anyway). */
+                    if (completed &&
+                        (!s_deferred_rw_valid || t < s_deferred_rw_tick)) {
+                        s_deferred_rw_valid = 1;
+                        s_deferred_rw_tick = t;
+                        s_deferred_rw_slot = slot;
+                        s_deferred_rw_logged = 0;
+                    }
                     if (n_no_resim == 0) {
                         first_no_resim_t = t;
                         first_no_resim_slot = slot;

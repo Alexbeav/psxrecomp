@@ -178,6 +178,20 @@ int netplay_snap_ring_load(NetplaySnapRing* r, uint32_t tick, CPUState* cpu,
     return boot_state_load_buffer(data, size, bios_checksum, entry_pc, cpu);
 }
 
+uint32_t netplay_snap_ring_drop_after(NetplaySnapRing* r, uint32_t tick) {
+    uint32_t i, n = 0;
+    if (!r) return 0;
+    for (i = 0; i < r->depth; i++) {
+        if (!r->slots[i].valid) continue;
+        if (r->slots[i].tick > tick) {
+            slot_clear(&r->slots[i]);
+            if (r->count) r->count--;
+            n++;
+        }
+    }
+    return n;
+}
+
 uint32_t netplay_snap_ring_oldest_tick(const NetplaySnapRing* r) {
     uint32_t i, oldest = 0xffffffffu;
     int any = 0;

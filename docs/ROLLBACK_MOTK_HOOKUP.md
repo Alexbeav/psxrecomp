@@ -2912,3 +2912,276 @@ re-delivers it" — that cadence never existed.
 baselines + ready but no `rb replay`; if `rb waiting peer seal rows` appears
 it should be followed by `rb seal rexmit` and a normal Replay entry, not an
 abort.
+
+## 53. Live ADVANCE cadence + choose_load max floor (2026-08-02)
+
+**WAN soak (§52 binary):** match-start countdown mispredict felt like a deep
+rewind into the intro. Logs:
+
+```text
+host:  agreed HEAL 1069→2336 (hc=2347) → begin load=2336 mismatch=2461
+guest: agreed HEAL 1069→2448 (hc=2460) → follow load=2336  (host BEGIN)
+```
+
+Depth 125 with snaps through 2448 and guest HC at the mismatch — Layer 1
+violated again. Seal keepalive (§52) was healthy (`seal rexmit` → Replay).
+
+**Root cause:**
+1. `advance_agreed_watermark_from_hc` / aged HEAL only ran at begin/follow, so
+   `agreed` froze at tip-hold commit **1069** for ~1400 Live ticks until the
+   snap aged out (`oldest=1440`), then emergency HEAL jumped to each peer's
+   *local* HC interval (asymmetric: 2336 vs 2448).
+2. `choose_load` set `shared = agreed` and refused to raise via HC ("ADVANCE
+   already promotes") — so initiator BEGIN locked both peers to the worse
+   HEAL. Host HC itself lagged (~2347 vs guest ~2460) from invent-fork stalls
+   in the 128-slot ring; peer RESOLVED from a Live-ADVANCE'd guest would have
+   proven 2448, but raise-via-peer was not allowed.
+
+**Fix:**
+1. **Live cadence** — every `psx_netplay_rb_pump`: `hc_heal_stale_gap` +
+   `advance_agreed_watermark_from_hc` (existing guards skip episodes /
+   TipHold / post-tip-hold holdoff). Agreed tracks HC through countdown.
+2. **`choose_load` raise** — outside tip-hold holdoff,
+   `shared = max(agreed, hc_interval_floor, peer_resolved)`.
+
+**§53b (same day — regression from first cut):** Live pump also ran aged
+`heal_agreed_watermark_if_aged_out`, and raise used raw `hc_floor`. Soak:
+
+```text
+choose_load raise 752→765 → follow NACK (frontier=752 unconfirmed tip)
+HEAL-FORCE 752→816→880→944→1008 (hc stuck) → baseline core mismatch forever
+```
+
+HEAL-FORCE does not advertise; under a live HC stall it invented unconfirmed
+agreed tips every pump. Raw hc tip (765) is not mutual with follower's
+ADVANCE'd interval frontier (752).
+
+**Corrected:**
+1. Live pump: **ADVANCE only** — aged HEAL / HEAL-FORCE stay at begin/follow.
+2. Raise / peer-RESOLVED clamp floor: **HC-confirmed interval snaps only**
+   (`hc_interval_floor`), plus peer RESOLVED — never raw tip `hc_floor`.
+
+**Re-soak watch:** periodic `agreed ADVANCE …` through Live; no Live
+`HEAL-FORCE` cascades; no `choose_load raise …→` non-interval tip; no
+follow NACK on load just above agreed interval; no repeating
+`baseline core mismatch` after first menu edge. Countdown mispredict still
+loads near mismatch when peer RESOLVED / HC interval is current.
+
+
+## 54. Silent permanent fork: cooldown-swallowed correction + no HC recovery (2026-08-02)
+
+**WAN soak (§53b binary):** resim-purity abort at sim≈1363 (local pad edge
+sampled mid-resim on the guest corrupted the sealed tip) → episode ABORT →
+cooldown. At sim=1370 a *completed-tick* pad mispredict arrived during the
+cooldown window; reconcile's `no_resim` branch promoted the wire row into
+history and moved on. The live state had already simmed the wrong pad — both
+peers then ran ~1000 ticks at a smooth 60 fps with permanently diverged
+cores. No new pad mispredicts occurred, so no episode ever opened again;
+`FIRST CORE DIVERGE` was log-only.
+
+**Two gaps, two fixes (both in `psx_netplay.c`):**
+
+1. **Deferred rewind for cooldown promotes.** The `no_resim`
+   (sweep / cooldown / fmv-lockstep) branch now records the earliest
+   `pads_differ && completed` tick it promote-only'd
+   (`s_deferred_rw_{valid,tick,slot}`). Once the window ends
+   (`!no_resim && !fmv_defer`), reconcile either drops it — if
+   `hc_confirm_through(t)` proves both peers matched after the tick anyway —
+   or opens the episode the cooldown suppressed
+   (`rb deferred rewind t=… slot=…`). Refusals retry next pump.
+2. **HC-fork recovery episode.** `np_check_core_diverge` no longer stops at
+   logging: if the `hc_peek_mismatch` fork persists ≥16 ticks (well before
+   the 128-slot hc ring wraps and peek goes quiet) with no episode / TipHold /
+   pending load / cooldown / FMV window, the **slot-0 host** (single-initiator,
+   avoids dual-BEGIN collision) opens a recovery episode at the fork tick
+   (`rb hc-fork recovery begin t=…`), correction seat = remote slot. Retries
+   every 32 ticks while the fork persists; guest follows via the normal wire
+   SYNC. `choose_load` starts it at the newest provably-safe snap (HC is
+   confirmed through fork−1 by definition).
+
+Fix 1 should catch the divergence at its source; fix 2 is the backstop for
+*any* fork that slips past pad-level reconciliation (invent races, purity
+bugs, CD timing).
+
+**Re-soak watch:** after any `episode ABORT` + cooldown, a mispredict inside
+the window should be followed by `rb deferred rewind …` → normal Replay (or
+silence if HC confirmed through it); no repeat of the smooth-60fps silent
+fork — if cores split without a pad edge, expect `rb hc-fork recovery begin`
+within ~16 ticks and digests re-matching after the episode.
+
+## 55. Resim purity + dead-timeline evidence + fork bisect (2026-08-02)
+
+**WAN soak (§54 binary):** §54's hc-fork recovery healed two real silent forks
+(t=2627 after a seal-timeout abort, t=4049 after a tip-extend abandon) —
+matched baselines, clean replay, session continued. The session still died at
+sim≈4160 to a three-stage failure:
+
+1. **Purity leak (root):** during the epoch=145 tip-extend chain the host
+   armed tick 4179 with the guest seat unsealed — `audit arm sim=4179 …
+   s1=----`. `rnet_rb_extend_target` zeroes remote-seat rows (peer SEAL_ROWS
+   fill them later) and `publish_sealed_sio` silently falls back to live hist
+   for any missing seat. The per-tick audit digest is CPU-only, so the RAM
+   fork was invisible until the FRAME_COMMIT abort at 4180
+   (`resim core diverge`).
+2. **Dead-timeline evidence:** both peers realigned to the matched 4160 snap,
+   then the guest ran `agreed ADVANCE 4160→4176 (hc=4179 live confirm)` — hash
+   confirms from the *aborted* timeline. Each peer re-simmed 4161..4176 with
+   its own history → permanently diverged 4176 snaps (`4ced9093` vs
+   `accdaaec`) that choose_load kept certifying as provably safe.
+3. **Same-snap retry loop:** four recovery episodes all loaded 4176, all died
+   on `baseline core mismatch`, cooldowns escalated to the DESYNC
+   storm-breaker, the fork tick aged out of the 128-slot hc ring, peek went
+   quiet, and both sides ran silently forked at 60 fps until disconnect.
+
+**Fixes (one per stage):**
+
+1. **Seal authority (lib `rnet_rollback.c` + runtime arm gate).**
+   - `rnet_rb_fill_local_row`: remote seats now pre-seal from host history
+     when the row is wire-confirmed (`!is_predicted`) — that is the owner's
+     transmitted pad, byte-identical to what the owner seals, so it is
+     authoritative without waiting for SEAL_ROWS. Predicted rows stay
+     unsealed.
+   - `rnet_rb_resign_slot_range`: the peer-seal mask bit is only credited for
+     wire-confirmed rows on remote seats — invented pads no longer count as
+     authority (they used to satisfy `all_peer_seal_rows_complete`).
+   - New `rnet_rb_seat_row_authoritative()` + runtime `rb_arm_rows_ready()`:
+     Replay may not arm a sealed-span tick until every seat's row is
+     authoritative (local / peer-delivered / wire-confirmed). Stall sites:
+     `try_admit`, the `finish_frame` chain-arm, and `arm_rereplay_after_load`
+     (`rb arm wait rows sim=… slot=…`). Seal keepalive (§52) redelivers rows;
+     `RB_REPLAY_STALL_MS` aborts a genuinely dead episode.
+2. **Realign evidence clamp** (`realign_invalidate_evidence`, at realign
+   queue AND apply): hash_confirm primed after the realign tick, agreed /
+   peer-RESOLVED / local-advertised watermarks clamped to it, and ring snaps
+   above it dropped (`netplay_snap_ring_drop_after`). Post-realign live
+   FRAME_COMMITs then re-prove (or immediately re-flag) the timeline from the
+   realign point instead of inheriting confirms for states that no longer
+   exist. Log: `rb realign evidence clamp tick=… (snaps_dropped=…)`.
+3. **Fork bisect cap** (`g_bl_fork_cap`): a baseline core mismatch at load L
+   proves the fork predates L. choose_load now forces the next load strictly
+   below the failed one (`rb fork cap`, `rb choose_load bisect load=…`),
+   refusing episodes when nothing provably safe remains below. Cleared on any
+   verified commit or session reset.
+
+**Re-soak watch:** no `arm … s?=----` audits inside a sealed span (grep
+`s0=----|s1=----` between `rb replay` and POST); occasional
+`rb arm wait rows` immediately healed by `rb seal rexmit` is fine; after any
+abort expect `rb realign evidence clamp` and NO `agreed ADVANCE` above the
+realign tick until fresh live confirms; if a baseline mismatch does occur,
+the next attempt should log `choose_load bisect` at a lower load instead of
+retrying the same snap 4×.
+
+## 56. Scheduler equilibrium: cushion-rebuild exit, pipeline slack, scorecard (2026-08-02)
+
+**Post-§55 soak:** correctness held (no baseline mismatches, no desync, one
+self-healed aux diverge) but the scheduler never reached its own contract.
+`lead_avg` sat at 0…−1 the whole session instead of ≈ D=2, `invent_gap1`
+climbed continuously (~225 by session end), and `cushion rebuilt` fired at
+`remote_lead=1` with D=2 — one tick short of full. The user-reported symptom
+is the consequence: episodes fire back-to-back because live play permanently
+runs at the edge of the cushion, so every arrival wobble becomes an invent →
+mispredict → episode.
+
+Reordered roadmap (user, 2026-08-02): 1) scheduler equilibrium, 2) continuous
+replay ownership, 3) dense live snapshots, 4) jitter-driven adaptive D,
+5) episode extension/reuse. This section is step 1's first slice: fix the one
+provable exit bug and instrument the pipeline so the remaining phase loss is
+measured, not guessed.
+
+**Changes:**
+
+1. **Cushion-rebuild exit (`np_sched_pre_admit`).** The old exit cleared at
+   `remote_lead >= D-1` — the rebuild "completed" one tick short and the next
+   miss invented into the missing tick. Now: `lead >= D` clears immediately
+   (`rb cushion rebuilt FULL`); `lead == D-1` only clears after holding
+   400 ms (`rb cushion rebuilt NEAR … held=…ms`), giving the pipeline a real
+   chance to top up while still never deadlocking a link that genuinely
+   plateaus at D−1. Below D−1 the behavior is unchanged (wait; absurd-lead
+   guard intact). Rebuild-window start is stamped at
+   `np_sched_note_episode_boundary`.
+2. **Pipeline slack instrumentation (lib + sched).** New
+   `rnet_session_remote_arrival_age_ms(s, slot, wire)`: every remote wire row
+   gets a monotonic arrival stamp at `store_remote_frame` (first-wins,
+   128-deep, mirrors the ring); the scheduler samples, once per sim at
+   pre-admit, how long the row for the consumption wire had been sitting
+   there. That is the *time-domain* cushion the tick-domain `remote_lead`
+   quantizes away: healthy ≈ D·16 ms − transit; ≈0 ms means rows arrive
+   just-in-time and the cushion exists on paper only. Misses at need are
+   counted via `on_remote_miss` (`miss_need`).
+3. **Equilibrium scorecard (~30 s cadence, both peers).**
+   `rb scorecard dt=… ep=+N depth_avg=… gap1=+… tip_stale=+… miss_need=…
+   lead avg/min/max slack avg/min/max n=… D=… cushion=…` — per-window deltas
+   (episode count from `psx_netplay_rb_episode_count`, replay depth from the
+   new cumulative `psx_netplay_rb_replay_ticks_total`, which is independent
+   of the FPS logger's take-and-reset counter). Scheduler changes should move
+   `ep`/`gap1`; snapshot changes should move `depth_avg` — the two are now
+   separable per soak window.
+
+**Re-soak watch:** compare `rb scorecard` lines across the session and
+between peers. Expect `cushion rebuilt FULL` (or NEAR with held≈400ms) after
+episodes instead of instant lead=1 exits. The `slack avg` value is the key
+new datum: if it reads near zero while `lead avg` looks healthy, the produce
+→consume pipeline is consuming the whole cushion in phase (production or
+send timing), and that — not invent policy — is the next equilibrium fix; if
+slack is healthy but `miss_need`/`gap1` still climb, the losses are arrival
+jitter and step 4 (jitter-driven adaptive D) moves up.
+
+## 57. Arrival-driven adaptive D + transit-aware targets (2026-08-02)
+
+**§56 soak verdict:** the scorecard closed the "where did the cushion go?"
+question. Slack was NOT near zero (24–36 ms of buffered arrival age), lead
+matched the equilibrium the delay budget permits once transport is counted
+(`lead ≈ D−1−transit`: predicted 0.6/2.1 for the two peers, measured
+0.24/0.91), yet `miss_need` stayed at ~25% of ticks and episodes scaled with
+`miss_need`, not with scheduler instability. Conclusion: the scheduler
+converges to the equilibrium permitted by the current delay budget and the
+measured transport latency — the budget itself is what's short. D=4 minus
+1 pipeline tick minus ~2.5 ticks of one-way transit leaves ~0.5 ticks of
+margin; every jitter excursion becomes a miss → invent → mispredict lottery.
+Correctness layer held throughout (§54 hc-fork recovery healed the early
+fork; two resim-diverge aborts realigned cleanly under the §55 evidence
+clamp; zero baseline mismatches / desyncs).
+
+Roadmap consequence (user-confirmed): adaptive provisioning moves to the
+front — it reduces how OFTEN rollback happens; dense snapshots then reduce
+how MUCH each one costs; replay ownership the efficiency of the remainder.
+
+**Changes:**
+
+1. **Auto-delay signal replaced: RTT → arrival stream** (`np_auto_delay_tick`
+   §57 rewrite). The POST RTT EMA measured 80 ms on the host and 12 ms on the
+   guest for the same link — unusable. The controller now consumes exactly
+   what the scheduler consumes, per 5 s eval window of LIVE ticks only
+   (episode / tip-hold / |lead|≥32 samples excluded):
+   - `miss_rate` — rows absent at need (from `on_remote_miss`, once/wire);
+   - `lateness` — first-miss → arrival delta for misses we waited out
+     (timer armed in `note_miss`, resolved in `note_remote_hit`, invalidated
+     if the miss was invented instead; >2 s artifacts discarded);
+   - `transit_est` — EMA of `D−1−lead_avg` in 1/16-tick units, maintained on
+     BOTH peers (drives local targets; host alone proposes DELAY_SYNC).
+   Raise: `miss_rate > 2%` → `D += ceil(late_avg/tick)` (1..2/step), confirm
+   on 2 evals (10 s). Lower: `miss_rate < 0.2%` AND ≥2 spare ticks of lead,
+   confirm on 3 evals + 30 s cooldown + no pcap freeze in 30 s. Asymmetric
+   on purpose: a raise costs only input latency, a miss costs determinism.
+   Log: `rb auto delay X → Y (arrival: miss=… late avg/max … lead_avg=…
+   transit_est=…)`. The §22 reactive pcap-storm bump is unchanged.
+2. **Cushion-rebuild target is now the achievable lead** (`FULL` unchanged at
+   `lead ≥ D`; the D−1 NEAR exit is replaced by
+   `achievable = clamp(D−1−round(transit_est), 1, D−1)` with the 400 ms
+   hold → `rb cushion rebuilt ACH …`). §56's NEAR exit spent 12.6 s parked
+   against a target the link physically cannot reach.
+3. **Scorecard gains `transit_est=…`** so soak logs show the controller's
+   view of the link next to the raw lead/slack numbers.
+
+**Re-soak watch:** expect `rb auto delay ON (§57 …)` at session start and,
+on the WAN link, a stepped climb (4→5/6 within ~20 s of fight start) with
+each step logging its arrival evidence; after it settles, `rb scorecard`
+should show `miss_need` collapsing toward zero, `gap1` deltas an order of
+magnitude down, `ep=+N` per window dropping toward low single digits, and
+`lead avg` rising to ≈ `D−1−transit_est`. `cushion rebuilt ACH` should
+replace the long NEAR holds. If `miss_need` stays high at D=6–7 with
+`transit_est` stable, the residue is loss/retransmit (wire holes), not
+provisioning — investigate `rb wire hole` lines before raising D further.
+Trade-off to feel for in play: each +1 D adds ~17 ms of local input latency;
+if the WAN session feels laggy but smooth, that's the controller working —
+step 3 (dense snapshots) then attacks replay cost so D can ride lower.

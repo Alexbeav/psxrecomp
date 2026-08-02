@@ -79,6 +79,7 @@ void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
 }
 uint32_t psx_netplay_rb_episode_count(void) { return 0; }
 uint64_t psx_netplay_rb_take_replay_ticks(void) { return 0; }
+uint64_t psx_netplay_rb_replay_ticks_total(void) { return 0; }
 int psx_netplay_rb_phase(void) { return 0; }
 uint32_t psx_netplay_rb_snap_count(void) { return 0; }
 uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
@@ -128,6 +129,10 @@ static uint32_t g_episode_count;
  * "we spent NN% of this window resimulating" instead of inferring it from
  * episode density in the raw log. */
 static uint64_t g_stat_replay_ticks;
+/* §56 scorecard: cumulative (never reset on read) replay-tick counter so the
+ * scheduler scorecard can compute per-window deltas independently of the FPS
+ * logger's take-and-reset counter above. */
+static uint64_t g_stat_replay_ticks_total;
 static int g_pending_save_valid;
 static uint32_t g_pending_save_tick;
 static int g_pending_load_valid;
@@ -430,6 +435,10 @@ static uint32_t g_peer_commit_tick;
  * keep Live running (no more rubber-band rewinds) and arm a long cooldown. */
 static uint32_t g_fork_streak_tick;
 static uint32_t g_fork_streak;
+/* §55: a baseline core mismatch at load L proves the fork predates L. Retrying
+ * L (2026-08-02 soak: 4× at 4176) can never heal — the next episode load must
+ * be strictly below it. 0 = no cap; cleared on verified commit / session reset. */
+static uint32_t g_bl_fork_cap;
 
 static RNetSession *sess(void); /* fwd — used by FMV lockstep window */
 static void commit_episode(void); /* fwd — legacy immediate commit */
@@ -961,6 +970,35 @@ static void pin_baseline_from_ring(uint32_t tick)
     fflush(stderr);
 }
 
+/* §55: an abort realign rewinds the state to `tick`, but every piece of sync
+ * evidence above it (hash confirms, agreed watermark, peer RESOLVED, ring
+ * snaps) describes the DISCARDED timeline. 2026-08-02 soak: right after
+ * realigning to 4160 the guest ran `agreed ADVANCE 4160→4176 (hc=4179)` on
+ * dead-timeline confirms; both peers then re-simmed 4161..4176 differently,
+ * and choose_load kept certifying the forked 4176 snap as provably safe —
+ * every recovery episode died on baseline core mismatch. Clamp it all. */
+static void realign_invalidate_evidence(uint32_t tick)
+{
+    uint32_t dropped = 0;
+    if (g_b.hc)
+        netplay_hc_prime_after(g_b.hc, tick);
+    if (g_agreed_valid && g_agreed_through > tick) {
+        g_agreed_through = tick;
+        if (g_agreed_span_lo > tick)
+            g_agreed_span_lo = tick;
+    }
+    if (g_peer_resolved_through > tick)
+        g_peer_resolved_through = tick;
+    if (g_local_advertised_through > tick)
+        g_local_advertised_through = tick;
+    if (g_snaps)
+        dropped = netplay_snap_ring_drop_after(g_snaps, tick);
+    fprintf(stderr,
+            "psxrecomp: rb realign evidence clamp tick=%u (snaps_dropped=%u)\n",
+            (unsigned)tick, (unsigned)dropped);
+    fflush(stderr);
+}
+
 static void schedule_live_realign(uint32_t tick, const char *why)
 {
     RNetSession *s = sess();
@@ -976,6 +1014,10 @@ static void schedule_live_realign(uint32_t tick, const char *why)
     g_pending_load_tick = tick;
     g_pending_load_valid = 1;
     g_pending_resume_valid = 0;
+    /* §55: clamp immediately (not only at apply) — the pump's Live ADVANCE
+     * runs between queue and apply and would promote agreed from the dead
+     * timeline's hash confirms. */
+    realign_invalidate_evidence(tick);
     /* Snap is post-tick state; continue Live at tick+1 (same as episode commit). */
     if (s)
         rnet_session_set_sim_tick(s, tick + 1u);
@@ -1164,6 +1206,19 @@ static void abort_episode_realign(const char *why)
      * reopening into the doomed baseline (2026-08-02 soak: 986/944 fork,
      * ~40 abort-realign cycles). Any commit resets the streak. */
     if (why && strstr(why, "baseline") != NULL && have) {
+        /* §55: remember the mismatched load — next choose_load bisects below. */
+        {
+            uint32_t failed_load = g_rb ? rnet_rb_get_load_tick(g_rb) : 0u;
+            if (failed_load > 0u &&
+                (g_bl_fork_cap == 0u || failed_load < g_bl_fork_cap)) {
+                g_bl_fork_cap = failed_load;
+                fprintf(stderr,
+                        "psxrecomp: rb fork cap — next load must be < %u "
+                        "(baseline mismatch there)\n",
+                        (unsigned)g_bl_fork_cap);
+                fflush(stderr);
+            }
+        }
         if (tick == g_fork_streak_tick)
             g_fork_streak++;
         else {
@@ -1900,10 +1955,15 @@ static void advance_agreed_watermark_from_hc(void)
  *   choose_load returns the newest snapshot both peers can prove is safe
  *   to replay from — independent of how Replay later reaches the frontier.
  *
- * Provably-safe sources (any establishes the floor):
+ * Provably-safe sources (any establishes the floor — take the newest):
  *  - tip-hold / episode commit watermark (g_agreed_through + dense span)
  *  - hash_confirm resolved_through (both simmed, cores matched → same snaps)
- *  - peer RESOLVED advertise (soft; must NOT lower below HC-proven ticks)
+ *  - peer RESOLVED advertise (raise-safe when advertised from HC ADVANCE/HEAL;
+ *    must NOT lower below HC-proven ticks — §51)
+ *
+ * §53/§53b: Live ADVANCE (HC-confirmed interval only) runs every pump.
+ * choose_load may raise to max(agreed, hc_interval_floor, peer_resolved) —
+ * never raw hc tip ticks (soak: raise 752→765 → follow NACK).
  *
  * Without the shared-frontier path, mismatch one tick after a commit re-loaded
  * a full interval + slack deep (798 → 768) — main-menu "resim back to title".
@@ -1924,7 +1984,37 @@ static uint32_t hc_provable_through(void)
     return rt;
 }
 
-static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
+/* Highest HC-confirmed *interval* snap in-ring at or below hc_floor.
+ * Follower frontiers / RESOLVED adverts are ADVANCE'd interval ticks only —
+ * raising choose_load to a raw tip (e.g. 765 with agreed=752) NACKs. */
+static uint32_t hc_interval_floor(uint32_t hc_floor, uint32_t iv)
+{
+    uint32_t t;
+    uint32_t oldest;
+    uint32_t newest;
+    if (hc_floor == 0u || !g_snaps || !g_b.hc)
+        return 0u;
+    if (iv < 1u)
+        iv = 1u;
+    oldest = netplay_snap_ring_oldest_tick(g_snaps);
+    newest = netplay_snap_ring_newest_tick(g_snaps);
+    t = hc_floor;
+    if (t > newest)
+        t = newest;
+    for (;;) {
+        if (t < oldest)
+            return 0u;
+        if (netplay_snap_ring_has(g_snaps, t) &&
+            ((iv <= 1u) || ((t % iv) == 0u)) &&
+            netplay_hc_confirm_through(g_b.hc, t))
+            return t;
+        if (t == 0u)
+            return 0u;
+        t--;
+    }
+}
+
+static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
 {
     uint32_t t;
     uint32_t iv;
@@ -1932,6 +2022,7 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
     uint32_t cap;
     uint32_t shared = 0;
     uint32_t hc_floor = 0;
+    uint32_t hc_iv = 0;
     int have_shared = 0;
     if (!out_load || !g_snaps || netplay_snap_ring_count(g_snaps) == 0)
         return 0;
@@ -1945,16 +2036,46 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
     heal_agreed_watermark_if_aged_out();
     advance_agreed_watermark_from_hc();
     hc_floor = hc_provable_through();
+    hc_iv = hc_interval_floor(hc_floor, iv);
 
     if (g_agreed_valid) {
-        /* Commit / ADVANCE watermark. Do not raise above agreed via HC here —
-         * ADVANCE already promotes interval HC ticks; TipHold invent historically
-         * false-confirmed tip snaps above the commit frontier. */
         shared = g_agreed_through;
         have_shared = 1;
+    } else if (hc_iv > 0u) {
+        shared = hc_iv;
+        have_shared = 1;
     } else if (hc_floor > 0u) {
+        /* No interval snap yet — soft floor only when nothing else exists. */
         shared = hc_floor;
         have_shared = 1;
+    }
+    /* §53b: raise only to HC-confirmed interval snaps or peer-advertised
+     * RESOLVED — never raw hc tip (752→765 NACK). Peer RESOLVED is raise-safe
+     * (ADVANCE/HC-HEAL/commit advertise; never HEAL-FORCE). */
+    if (!post_tip_hold_holdoff_active()) {
+        uint32_t raised = have_shared ? shared : 0u;
+        if (hc_iv > raised)
+            raised = hc_iv;
+        if (g_peer_resolved_through > raised)
+            raised = g_peer_resolved_through;
+        if (raised > 0u && (!have_shared || raised > shared)) {
+            if (have_shared && raised > shared) {
+                static uint32_t s_raise_log;
+                if (s_raise_log != raised) {
+                    fprintf(stderr,
+                            "psxrecomp: rb choose_load raise %u→%u "
+                            "(agreed=%u hc_iv=%u peer_resolved=%u)\n",
+                            (unsigned)shared, (unsigned)raised,
+                            (unsigned)(g_agreed_valid ? g_agreed_through : 0u),
+                            (unsigned)hc_iv,
+                            (unsigned)g_peer_resolved_through);
+                    fflush(stderr);
+                    s_raise_log = raised;
+                }
+            }
+            shared = raised;
+            have_shared = 1;
+        }
     }
     /* §38/§39: clamp ADVANCE→commit-frontier ONLY during post–tip-hold
      * holdoff. The always-on ≤runway+4 clamp (holdoff=0) undid healthy
@@ -1975,21 +2096,20 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
             shared = tip_rt;
         }
     }
-    /* §40/§41/§51: peer RESOLVED may limit unconfirmed tips above HC, but must
-     * never lower the load below HC-proven ticks (soak: ADVANCE 1189→1248 then
-     * clamp→1189 → interval load=1184 → 65-tick SPAN storm). */
+    /* §40/§41/§51/§53b: peer RESOLVED may limit unconfirmed tips above HC,
+     * but must never lower the load below HC-proven *interval* ticks. */
     if (have_shared && peer_resolved_gate_blocks(shared)) {
         uint32_t clamped = g_peer_resolved_through;
-        if (hc_floor > clamped)
-            clamped = hc_floor;
+        if (hc_iv > clamped)
+            clamped = hc_iv;
         if (clamped < shared) {
             static uint32_t s_peer_clamp_log_to;
             if (s_peer_clamp_log_to != clamped) {
                 fprintf(stderr,
                         "psxrecomp: rb choose_load clamp %u→%u "
-                        "(peer RESOLVED; hc_floor=%u)\n",
+                        "(peer RESOLVED; hc_iv=%u)\n",
                         (unsigned)shared, (unsigned)clamped,
-                        (unsigned)hc_floor);
+                        (unsigned)hc_iv);
                 fflush(stderr);
                 s_peer_clamp_log_to = clamped;
             }
@@ -2083,6 +2203,44 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
         return 1;
     }
     return 0;
+}
+
+static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
+{
+    /* §55: after a baseline core mismatch at load L the fork provably predates
+     * L — retrying the same snap can never heal (soak: 4 consecutive aborts at
+     * 4176). Bisect: force the next load strictly below the failed one. */
+    if (g_bl_fork_cap > 0u) {
+        uint32_t m = mismatch;
+        if (m > g_bl_fork_cap)
+            m = g_bl_fork_cap; /* inner's shared walk returns load < m */
+        if (!choose_load_tick_inner(m, out_load))
+            return 0;
+        if (*out_load >= g_bl_fork_cap) {
+            static uint32_t s_refuse_log;
+            if (s_refuse_log != g_bl_fork_cap) {
+                fprintf(stderr,
+                        "psxrecomp: rb choose_load refuse load=%u ≥ fork cap %u "
+                        "(no provably-safe snap below the mismatched baseline)\n",
+                        (unsigned)*out_load, (unsigned)g_bl_fork_cap);
+                fflush(stderr);
+                s_refuse_log = g_bl_fork_cap;
+            }
+            return 0;
+        }
+        {
+            static uint32_t s_bisect_log;
+            if (s_bisect_log != *out_load) {
+                fprintf(stderr,
+                        "psxrecomp: rb choose_load bisect load=%u (< fork cap %u)\n",
+                        (unsigned)*out_load, (unsigned)g_bl_fork_cap);
+                fflush(stderr);
+                s_bisect_log = *out_load;
+            }
+        }
+        return 1;
+    }
+    return choose_load_tick_inner(mismatch, out_load);
 }
 
 /* Follower's confirmed frontier for the NACK wire hint: the deepest tick this
@@ -2605,10 +2763,44 @@ static void log_resim_tick_audit(uint32_t sim, const char *tag)
     fflush(stderr);
 }
 
+/* §55: resim purity — a sealed-span tick may only be armed once every seat's
+ * row is authoritative (local, peer-delivered, or wire-confirmed). The
+ * 2026-08-02 soak forked when the host armed 4179 with the guest seat
+ * unsealed (s1=----): publish fell back to live hist, RAM forked silently
+ * (per-tick audit digest is CPU-only), and the FRAME_COMMIT abort at 4180
+ * cascaded into an unrecoverable baseline-mismatch spiral. Stalling here is
+ * safe: seal keepalive (§52) redelivers rows and the RB_REPLAY_STALL_MS
+ * watchdog aborts a genuinely dead episode. */
+static int rb_arm_rows_ready(uint32_t sim)
+{
+    static uint32_t s_wait_log_sim;
+    int slot;
+    int n = g_b.slot_count ? *g_b.slot_count : 0;
+    if (!g_rb || !rnet_rb_inputs_sealed(g_rb))
+        return 1;
+    if (!rnet_rb_tick_in_sealed_span(g_rb, sim))
+        return 1;
+    for (slot = 0; slot < n; ++slot) {
+        if (rnet_rb_seat_row_authoritative(g_rb, (int32_t)slot, sim))
+            continue;
+        if (s_wait_log_sim != sim) {
+            fprintf(stderr,
+                    "psxrecomp: rb arm wait rows sim=%u slot=%d (seat row not "
+                    "authoritative — waiting for peer seals)\n",
+                    (unsigned)sim, slot);
+            fflush(stderr);
+            s_wait_log_sim = sim;
+        }
+        return 0;
+    }
+    return 1;
+}
+
 static void arm_replay_tick(uint32_t sim)
 {
     publish_sealed_sio(sim);
     g_stat_replay_ticks++;
+    g_stat_replay_ticks_total++;
     g_needs_advance = 1;
     g_replay_progress_ms = rb_mono_ms();
     fprintf(stderr, "psxrecomp: rb arm sim=%u (target=%u)\n", (unsigned)sim,
@@ -2643,7 +2835,10 @@ static void arm_rereplay_after_load(uint32_t reload_tick)
      * that tip skipped the sealed span (870 snap → arm 873) and compared
      * against stale peer invent digests. */
     rnet_session_set_sim_tick(s, first);
-    arm_replay_tick(first);
+    /* §55: rereplay first tick must also carry authoritative rows; if the
+     * peer's extend seals are still in flight, try_admit arms it later. */
+    if (rb_arm_rows_ready(first))
+        arm_replay_tick(first);
 }
 
 /* Enter Verify/POST at the restored tip (empty resim span, or finish_frame
@@ -3085,6 +3280,7 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     g_bl_mismatch_streak = 0;
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
+    g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
 
     /* §48: only the lower seat initiates chain BEGINs. Both peers calling
      * begin_rewind every chunk caused dual-init → tie-break abort → reload
@@ -3328,6 +3524,7 @@ static void finalize_tip_hold(void)
     g_bl_mismatch_streak = 0;
     g_fork_streak = 0u; /* §42 P4: clean commit ends any fork suspicion */
     g_fork_streak_tick = 0u;
+    g_bl_fork_cap = 0u; /* §55 */
     /* §38: hold agreed at tip until peer tip-hold (SAFETY ~250ms) can exit. */
     g_post_tip_hold_holdoff_t0_ms = rb_mono_ms();
     if (g_post_tip_hold_holdoff_t0_ms == 0ull)
@@ -3550,6 +3747,7 @@ static void commit_episode(void)
     g_bl_mismatch_streak = 0;
     g_fork_streak = 0u; /* §42 P4 */
     g_fork_streak_tick = 0u;
+    g_bl_fork_cap = 0u; /* §55 */
     /* No post-commit cooldown: promote-only after commit made char-select
      * D-pad feel rejected (hist updated, live sim not rolled). Abort/storm
      * cooldown still arms from live sim on failed episodes. */
@@ -3662,6 +3860,7 @@ void psx_netplay_rb_start(void)
     g_peer_commit_tick = 0;
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
+    g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
     clear_baseline_pin();
     clear_episode_wire_state();
     fprintf(stderr, "psxrecomp: rb snap ring ready depth=%u snap_interval=%u\n",
@@ -3711,6 +3910,7 @@ void psx_netplay_rb_shutdown(void)
     g_peer_commit_tick = 0;
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
+    g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
     g_last_good_bb_pc = 0;
     g_agreed_valid = 0;
     g_agreed_through = 0;
@@ -3901,6 +4101,7 @@ static int try_apply_pending_load(CPUState *cpu_in)
                  * post-realign production fills need; prepare_local_tip still
                  * emits. Keep absurd tip in the ring — cushion refuses invent
                  * on miss (§45) until real rows land. */
+                realign_invalidate_evidence(loaded_tick);
                 fprintf(stderr,
                         "psxrecomp: rb realign applied tick=%u pc=0x%08x core=%08x "
                         "cd=%08x\n",
@@ -4864,6 +5065,13 @@ void psx_netplay_rb_pump(void)
         while (rnet_session_take_rb_resolved(s, &resolved))
             apply_peer_resolved(resolved);
     }
+    /* §53b: Live cadence — only HC-confirmed ADVANCE. Aged HEAL / HEAL-FORCE
+     * stay at begin/follow: running them every pump under a live HC stall
+     * invented unconfirmed agreed tips (752→816→…→1008 with hc stuck) and
+     * baseline-forked the session. */ 
+    if (g_b.hc)
+        (void)netplay_hc_heal_stale_gap(g_b.hc);
+    advance_agreed_watermark_from_hc();
     /* §41: retransmit confirmed RESOLVED while peer lagging. */
     maybe_heartbeat_agreed_resolved();
 
@@ -5400,6 +5608,8 @@ int psx_netplay_rb_try_admit(void)
         }
         return 0;
     }
+    if (!rb_arm_rows_ready(sim))
+        return 0; /* §55: stall until every seat row is authoritative */
     arm_replay_tick(sim);
     s_stall_logged = 0;
     return 1;
@@ -5442,7 +5652,11 @@ void psx_netplay_rb_finish_frame(void)
         uint32_t next = done + 1u;
         if (next <= rnet_rb_get_target_tick(g_rb)) {
             rnet_session_set_sim_tick(s, next);
-            arm_replay_tick(next);
+            /* §55: if the next tick's seat rows aren't authoritative yet,
+             * leave it un-armed — try_admit re-checks and arms once the
+             * peer's seal rows land (keepalive redelivers). */
+            if (rb_arm_rows_ready(next))
+                arm_replay_tick(next);
         }
     }
 }
@@ -5457,6 +5671,11 @@ uint64_t psx_netplay_rb_take_replay_ticks(void)
     uint64_t n = g_stat_replay_ticks;
     g_stat_replay_ticks = 0;
     return n;
+}
+
+uint64_t psx_netplay_rb_replay_ticks_total(void)
+{
+    return g_stat_replay_ticks_total;
 }
 
 /* Live POST-handshake latency EMA (ms), 0 = no episode has round-tripped

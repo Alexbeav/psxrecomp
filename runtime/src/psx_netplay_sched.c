@@ -129,6 +129,36 @@ void np_sched_sync_delay_from_session(void)
 
 /* After episode commit: refuse invent until remote tip rebuilds most of D. */
 static int g_cushion_rebuild;
+/* §56: when the current rebuild window opened (episode boundary). A full
+ * cushion (lead >= D) clears immediately; a near-cushion lead (D-1) only
+ * clears after a hold-off so the rebuild actually reaches equilibrium
+ * instead of declaring victory one tick short and inventing into the gap. */
+static uint32_t g_cushion_rebuild_since_ms;
+
+/* ------------------------------------------------------------------ */
+/* §57: arrival-driven delay controller state                          */
+/*                                                                      */
+/* The §56 soak proved the scheduler converges to the equilibrium the   */
+/* delay budget permits: lead ≈ D − 1 − transit_ticks (measured 0.24 /  */
+/* 0.91 with D=4 and ~2.1–2.8 ticks of transit), with ~25% of ticks     */
+/* missing their row at need. D must therefore be provisioned from the  */
+/* ARRIVAL stream (what the scheduler actually consumes), not from the  */
+/* POST RTT EMA — the two peers' RTT estimates disagreed 80 vs 12 ms on */
+/* the same link. Accumulators reset each controller eval window.       */
+/* ------------------------------------------------------------------ */
+
+static uint32_t g_ad_ticks;       /* live lead samples this window */
+static int64_t  g_ad_lead_sum;
+static uint32_t g_ad_miss;        /* rows absent at need (once per wire) */
+static uint32_t g_ad_late_n;      /* misses that later arrived (waited out) */
+static uint32_t g_ad_late_sum_ms; /* how late those rows were vs need */
+static uint32_t g_ad_late_max_ms;
+static int      g_ad_miss_pending; /* waiting to time the current miss */
+static uint32_t g_ad_miss_t0_ms;
+/* Transit estimate EMA in 1/16-tick units: transit ≈ D − 1 − lead_avg.
+ * Also feeds the cushion-rebuild achievable-lead target (§57). */
+static uint32_t g_transit_x16;
+static int      g_transit_have;
 
 /* Invent-grace RTT: POST-handshake EMA is asymmetric (often 0 on the peer
  * that receives POST first / light-tip skips). Always keep a D-scaled synth
@@ -434,6 +464,18 @@ static void np_gap1_note_expire_invent(void)
 void np_sched_note_remote_hit(void)
 {
     g_gap1_expire_invent_streak = 0u;
+    /* §57: a miss we chose to wait out just paid off — the row's lateness
+     * (first-miss → hit) is exactly the extra runway D was short by. */
+    if (g_ad_miss_pending) {
+        uint32_t late = (uint32_t)(sched_mono_ms() - g_ad_miss_t0_ms);
+        g_ad_miss_pending = 0;
+        if (late < 2000u) { /* discard episode/pause artifacts */
+            g_ad_late_sum_ms += late;
+            if (late > g_ad_late_max_ms)
+                g_ad_late_max_ms = late;
+            g_ad_late_n++;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -485,6 +527,10 @@ void np_sched_note_episode_boundary(void)
      * off-guard so the next live mispredicts can re-arm pacing. Keep debt —
      * the ahead peer may still need a few ms/tick shaves after TipHold. */
     g_ts_pegged_streak = 0u;
+    if (!g_cushion_rebuild) {
+        uint32_t now = sched_mono_ms();
+        g_cushion_rebuild_since_ms = now ? now : 1u;
+    }
     g_cushion_rebuild = 1;
 }
 
@@ -813,6 +859,156 @@ static void np_admit_maybe_log_stats(uint32_t now)
     fflush(stderr);
 }
 
+/* ------------------------------------------------------------------ */
+/* §56 equilibrium scorecard (per-window deltas, ~30 s)                 */
+/*                                                                      */
+/* One line answers "is the scheduler converging?": episode rate and    */
+/* replay depth move with scheduler changes; slack (ms between a remote */
+/* row ARRIVING and being NEEDED at admit) exposes the produce→consume  */
+/* pipeline phase that the tick-domain lead quantizes away. Healthy     */
+/* real-delay steady state: lead ≈ D, slack ≈ D·16ms − transit,         */
+/* miss_need ≈ 0. slack ≈ 0 with "healthy" lead means rows arrive just  */
+/* in time — the cushion exists on paper only.                          */
+/* ------------------------------------------------------------------ */
+
+static uint32_t g_sc_window_t0_ms;
+static uint32_t g_sc_ep0;
+static uint64_t g_sc_rt0;
+static uint32_t g_sc_gap1_0;
+static uint32_t g_sc_tip_stale0;
+static int64_t  g_sc_lead_sum;
+static uint32_t g_sc_lead_n;
+static int      g_sc_lead_min;
+static int      g_sc_lead_max;
+static uint64_t g_sc_slack_sum;
+static uint32_t g_sc_slack_n;
+static uint32_t g_sc_slack_min;
+static uint32_t g_sc_slack_max;
+static uint32_t g_sc_miss_at_need;
+
+static void np_scorecard_window_reset(uint32_t now)
+{
+    g_sc_window_t0_ms = now ? now : 1u;
+    g_sc_ep0 = psx_netplay_rb_episode_count();
+    g_sc_rt0 = psx_netplay_rb_replay_ticks_total();
+    g_sc_gap1_0 = g_admit_invent_gap1;
+    g_sc_tip_stale0 = g_admit_invent_tip_stale;
+    g_sc_lead_sum = 0;
+    g_sc_lead_n = 0;
+    g_sc_lead_min = 0;
+    g_sc_lead_max = 0;
+    g_sc_slack_sum = 0;
+    g_sc_slack_n = 0;
+    g_sc_slack_min = 0;
+    g_sc_slack_max = 0;
+    g_sc_miss_at_need = 0;
+}
+
+/* on_remote_miss: the row for `wire` was not there when needed. */
+static void np_scorecard_note_miss(rnet_u32 wire)
+{
+    static rnet_u32 s_counted_wire = 0xffffffffu;
+    if (s_counted_wire != wire) {
+        s_counted_wire = wire;
+        g_sc_miss_at_need++;
+        /* §57: feed the delay controller and arm the lateness timer — if we
+         * end up waiting this miss out, note_remote_hit measures how late
+         * the row was; if we invent instead, the pending flag is cleared at
+         * the invent exit (lateness then shows up as a mispredict age, not
+         * an arrival stat). */
+        g_ad_miss++;
+        g_ad_miss_pending = 1;
+        g_ad_miss_t0_ms = sched_mono_ms();
+    }
+}
+
+static void np_scorecard_sample(uint32_t now, rnet_u32 sim, rnet_u32 wire,
+                                const RNetSessionStats *st)
+{
+    static rnet_u32 s_last_sim = 0xffffffffu;
+    RNetSession *s = sched_session();
+
+    if (g_sc_window_t0_ms == 0u)
+        np_scorecard_window_reset(now);
+
+    if (s_last_sim != sim) {
+        int slot;
+        s_last_sim = sim;
+        /* §57: controller lead samples — live steady state only. Episode /
+         * tip-hold leads (parked sim, lead 10+) and ring-age absurdities
+         * would poison the transit estimate. */
+        if (!psx_netplay_rb_active() && !psx_netplay_rb_tip_holding() &&
+            st->remote_lead > -32 && st->remote_lead < 32) {
+            g_ad_ticks++;
+            g_ad_lead_sum += st->remote_lead;
+        }
+        if (!g_sc_lead_n) {
+            g_sc_lead_min = st->remote_lead;
+            g_sc_lead_max = st->remote_lead;
+        } else {
+            if (st->remote_lead < g_sc_lead_min)
+                g_sc_lead_min = st->remote_lead;
+            if (st->remote_lead > g_sc_lead_max)
+                g_sc_lead_max = st->remote_lead;
+        }
+        g_sc_lead_sum += st->remote_lead;
+        g_sc_lead_n++;
+        if (s) {
+            for (slot = 0; slot < RNET_MAX_SLOTS; ++slot) {
+                uint32_t age =
+                    rnet_session_remote_arrival_age_ms(s, slot, wire);
+                if (age == 0xffffffffu)
+                    continue;
+                if (!g_sc_slack_n) {
+                    g_sc_slack_min = age;
+                    g_sc_slack_max = age;
+                } else {
+                    if (age < g_sc_slack_min)
+                        g_sc_slack_min = age;
+                    if (age > g_sc_slack_max)
+                        g_sc_slack_max = age;
+                }
+                g_sc_slack_sum += age;
+                g_sc_slack_n++;
+            }
+        }
+    }
+
+    if ((uint32_t)(now - g_sc_window_t0_ms) >= 30000u) {
+        uint32_t ep = psx_netplay_rb_episode_count();
+        uint64_t rt = psx_netplay_rb_replay_ticks_total();
+        uint32_t d_ep = (ep >= g_sc_ep0) ? (ep - g_sc_ep0) : ep;
+        uint64_t d_rt = (rt >= g_sc_rt0) ? (rt - g_sc_rt0) : rt;
+        uint32_t d_gap1 = (g_admit_invent_gap1 >= g_sc_gap1_0)
+                              ? (g_admit_invent_gap1 - g_sc_gap1_0)
+                              : g_admit_invent_gap1;
+        uint32_t d_ts = (g_admit_invent_tip_stale >= g_sc_tip_stale0)
+                            ? (g_admit_invent_tip_stale - g_sc_tip_stale0)
+                            : g_admit_invent_tip_stale;
+        double dt_s = (double)(uint32_t)(now - g_sc_window_t0_ms) / 1000.0;
+        double lead_avg =
+            g_sc_lead_n ? (double)g_sc_lead_sum / (double)g_sc_lead_n : 0.0;
+        double depth_avg = d_ep ? (double)d_rt / (double)d_ep : 0.0;
+        double slack_avg =
+            g_sc_slack_n ? (double)g_sc_slack_sum / (double)g_sc_slack_n : 0.0;
+        fprintf(stderr,
+                "psxrecomp: rb scorecard dt=%.1fs ep=+%u depth_avg=%.1f "
+                "gap1=+%u tip_stale=+%u miss_need=%u "
+                "lead avg=%.2f min=%d max=%d "
+                "slack avg=%.0fms min=%u max=%u n=%u "
+                "transit_est=%.2f D=%d cushion=%d\n",
+                dt_s, (unsigned)d_ep, depth_avg, (unsigned)d_gap1,
+                (unsigned)d_ts, (unsigned)g_sc_miss_at_need, lead_avg,
+                g_sc_lead_min, g_sc_lead_max, slack_avg,
+                (unsigned)g_sc_slack_min, (unsigned)g_sc_slack_max,
+                (unsigned)g_sc_slack_n,
+                g_transit_have ? (double)g_transit_x16 / 16.0 : -1.0,
+                sched_delay(), g_cushion_rebuild);
+        fflush(stderr);
+        np_scorecard_window_reset(now);
+    }
+}
+
 static void np_adapt_delay_on_pcap_enter(uint32_t now)
 {
     const char *e;
@@ -899,16 +1095,21 @@ static void np_pcap_freeze_exit(void)
 /* ------------------------------------------------------------------ */
 
 /* Under real delay, D IS the cushion: a press costs D ticks of local
- * latency and buys D ticks of transit budget. Resolve it from the measured
- * link instead of paying phase error with prediction:
- *   target = ceil(one_way / tick) + 1, clamped [2 .. RB_ADAPT_DELAY_MAX].
- * Conservative by construction: only trusted POST RTT samples (>=4ms) are
- * used; the target must repeat on 3 consecutive 5s evaluations before a
- * change is proposed; 30s cooldown between changes; lowering additionally
- * requires no pcap freeze in the last 30s (a freeze means prediction was
- * needed at the CURRENT D — do not shrink the cushion). The reactive §22
- * bump (np_adapt_delay_on_pcap_enter) still raises D on freeze storms when
- * RTT is untrusted. PSX_RB_AUTO_DELAY=0 disables. */
+ * latency and buys D ticks of transit budget.
+ *
+ * §57 rewrite: D is resolved from the ARRIVAL stream — how the remote rows
+ * actually reach the consumption point — instead of the POST RTT EMA, which
+ * measured 80 ms on one peer and 12 ms on the other for the same link. Per
+ * 5 s eval window (live samples only, both peers accumulate, host decides):
+ *   miss_rate  = rows absent at need / live ticks;
+ *   lateness   = first-miss → arrival for misses we waited out;
+ *   transit    ≈ D − 1 − lead_avg (EMA'd; also drives the cushion-rebuild
+ *                achievable-lead target).
+ * Raise: miss_rate > 2% → D += ceil(late_avg/tick) (1..2 per step).
+ * Lower: miss_rate < 0.2% AND ≥2 ticks of spare lead, must repeat on 3
+ * consecutive evals + 30 s cooldown + no pcap freeze in the last 30 s.
+ * The reactive §22 bump (np_adapt_delay_on_pcap_enter) still catches freeze
+ * storms between eval windows. PSX_RB_AUTO_DELAY=0 disables. */
 #define RB_AUTO_DELAY_EVAL_MS     5000u
 #define RB_AUTO_DELAY_AGREE       3u
 #define RB_AUTO_DELAY_COOLDOWN_MS 30000u
@@ -921,9 +1122,12 @@ static void np_auto_delay_tick(uint32_t now)
     static uint32_t s_agree_streak;
     static int      s_last_target = -1;
     RNetSession *s = sched_session();
-    uint32_t rtt_raw = 0;
     uint32_t tick_ms = g_ts_tick_ema_ms ? g_ts_tick_ema_ms : 17u;
-    uint32_t one_way;
+    uint32_t ticks, miss, late_n, late_sum, late_max;
+    int64_t  lead_sum;
+    int32_t  lead_avg_x16;
+    int32_t  transit_x16;
+    uint32_t miss_per_mille;
     int target;
     int d;
 
@@ -932,33 +1136,73 @@ static void np_auto_delay_tick(uint32_t now)
         s_enabled = (e && e[0]) ? (atoi(e) != 0) : 1;
         if (s_enabled)
             fprintf(stderr,
-                    "psxrecomp: rb auto delay ON (§44: D = ceil(one_way/tick)+1 "
-                    "from trusted RTT, host-proposed; PSX_RB_AUTO_DELAY=0 off)\n");
+                    "psxrecomp: rb auto delay ON (§57: D provisioned from "
+                    "arrival misses/lateness, host-proposed; "
+                    "PSX_RB_AUTO_DELAY=0 off)\n");
         fflush(stderr);
     }
     if (!s_enabled || !s)
         return;
-    if (sched_local_slot() != 0)
-        return; /* host proposes; guests follow DELAY_SYNC */
     if (!np_sched_real_delay_enabled())
         return; /* D is not a latency budget in legacy zero-delay mode */
     if (s_last_eval_ms != 0u && (uint32_t)(now - s_last_eval_ms) < RB_AUTO_DELAY_EVAL_MS)
         return;
     s_last_eval_ms = now ? now : 1u;
 
-    (void)np_invent_rtt_ms(&rtt_raw);
-    if (rtt_raw < 4u) {
-        s_agree_streak = 0u; /* untrusted sample — keep current D */
+    /* Harvest + reset the window (both peers, so guest transit stays live). */
+    ticks = g_ad_ticks;
+    lead_sum = g_ad_lead_sum;
+    miss = g_ad_miss;
+    late_n = g_ad_late_n;
+    late_sum = g_ad_late_sum_ms;
+    late_max = g_ad_late_max_ms;
+    g_ad_ticks = 0;
+    g_ad_lead_sum = 0;
+    g_ad_miss = 0;
+    g_ad_late_n = 0;
+    g_ad_late_sum_ms = 0;
+    g_ad_late_max_ms = 0;
+
+    d = sched_delay();
+    if (ticks < 120u) {
+        s_agree_streak = 0u; /* <~2 s of live samples — episode/FMV window */
         return;
     }
-    one_way = (rtt_raw + 1u) / 2u;
-    target = (int)((one_way + tick_ms - 1u) / tick_ms) + 1;
+
+    lead_avg_x16 = (int32_t)((lead_sum * 16) / (int64_t)ticks);
+    transit_x16 = (int32_t)(d - 1) * 16 - lead_avg_x16;
+    if (transit_x16 < 0)
+        transit_x16 = 0;
+    if (transit_x16 > 12 * 16)
+        transit_x16 = 12 * 16;
+    if (g_transit_have)
+        g_transit_x16 = (g_transit_x16 * 7u + (uint32_t)transit_x16) / 8u;
+    else
+        g_transit_x16 = (uint32_t)transit_x16;
+    g_transit_have = 1;
+
+    if (sched_local_slot() != 0)
+        return; /* host proposes; guests follow DELAY_SYNC */
+
+    miss_per_mille = (uint32_t)(((uint64_t)miss * 1000u) / ticks);
+    if (miss_per_mille > 20u) {
+        uint32_t late_avg = late_n ? (late_sum / late_n) : 0u;
+        int bump = (int)((late_avg + tick_ms - 1u) / tick_ms);
+        if (bump < 1)
+            bump = 1;
+        if (bump > 2)
+            bump = 2;
+        target = d + bump;
+    } else if (miss_per_mille < 2u && lead_avg_x16 >= 2 * 16) {
+        target = d - 1; /* ≥2 spare ticks sustained — cushion oversized */
+    } else {
+        target = d;
+    }
     if (target < 2)
         target = 2;
     if (target > RB_ADAPT_DELAY_MAX)
         target = RB_ADAPT_DELAY_MAX;
 
-    d = sched_delay();
     if (target == d) {
         s_agree_streak = 0u;
         s_last_target = target;
@@ -969,7 +1213,9 @@ static void np_auto_delay_tick(uint32_t now)
         s_agree_streak = 1u;
         return;
     }
-    if (++s_agree_streak < RB_AUTO_DELAY_AGREE)
+    /* Asymmetric hysteresis: raises hurt only input latency, misses hurt
+     * determinism — confirm a raise on 2 evals (10 s), a lower on 3 (15 s). */
+    if (++s_agree_streak < ((target > d) ? 2u : RB_AUTO_DELAY_AGREE))
         return;
     if (s_last_change_ms != 0u &&
         (uint32_t)(now - s_last_change_ms) < RB_AUTO_DELAY_COOLDOWN_MS)
@@ -982,10 +1228,15 @@ static void np_auto_delay_tick(uint32_t now)
         s_last_change_ms = now ? now : 1u;
         s_agree_streak = 0u;
         fprintf(stderr,
-                "psxrecomp: rb auto delay %d → %d (rtt_raw=%u one_way=%u "
-                "tick=%u)\n",
-                d, target, (unsigned)rtt_raw, (unsigned)one_way,
-                (unsigned)tick_ms);
+                "psxrecomp: rb auto delay %d → %d (arrival: miss=%u/%u "
+                "(%u‰) late avg=%ums max=%ums n=%u lead_avg=%.2f "
+                "transit_est=%.2f ticks)\n",
+                d, target, (unsigned)miss, (unsigned)ticks,
+                (unsigned)miss_per_mille,
+                (unsigned)(late_n ? late_sum / late_n : 0u),
+                (unsigned)late_max, (unsigned)late_n,
+                (double)lead_avg_x16 / 16.0,
+                (double)g_transit_x16 / 16.0);
         fflush(stderr);
     }
 }
@@ -1110,6 +1361,7 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
                         st->remote_lead);
     np_phase_ctrl_maybe_log(now, sim, st->remote_lead);
     np_auto_delay_tick(now);
+    np_scorecard_sample(now, sim, wire, st);
 
     /* Rebuild D cushion after episode: do not invent until the remote tip
      * is nearly back at a full cushion (remote_lead >= D-1; §44: lead is
@@ -1122,16 +1374,45 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
     if (g_cushion_rebuild && !psx_netplay_rb_active()) {
         int d = sched_delay();
         int pred = g_sb.input_prediction ? *g_sb.input_prediction : 0;
-        int need = d > 0 ? d - 1 : 0;
+        int full = d > 0 ? d : 0;
+        int achievable;
         int max_ok = d + (pred > 0 ? pred : 4);
-        if (max_ok < need + 2)
-            max_ok = need + 2;
-        if (st->remote_lead >= need && st->remote_lead <= max_ok) {
+        if (max_ok < full + 2)
+            max_ok = full + 2;
+        /* §56: FULL cushion (lead >= D) clears immediately.
+         * §57: the physical steady-state ceiling is lead ≈ D−1−transit, so
+         * demanding D−1 on a WAN link just parked the rebuild against the
+         * timeout (soak: held=12665ms). Clear at the ACHIEVABLE lead for the
+         * measured transit, after a short hold so the rebuild really settles
+         * there rather than clipping through it. */
+        achievable = d - 1;
+        if (g_transit_have) {
+            achievable = d - 1 - (int)((g_transit_x16 + 8u) / 16u);
+            if (achievable < 1)
+                achievable = 1;
+            if (achievable > d - 1)
+                achievable = d - 1;
+        }
+        if (st->remote_lead >= full && st->remote_lead <= max_ok) {
             g_cushion_rebuild = 0;
             fprintf(stderr,
-                    "psxrecomp: rb cushion rebuilt remote_lead=%d D=%d\n",
+                    "psxrecomp: rb cushion rebuilt FULL remote_lead=%d D=%d\n",
                     st->remote_lead, d);
             fflush(stderr);
+        } else if (st->remote_lead >= achievable && st->remote_lead <= max_ok) {
+            uint32_t held = g_cushion_rebuild_since_ms
+                                ? (uint32_t)(now - g_cushion_rebuild_since_ms)
+                                : 0u;
+            if (held >= 400u) {
+                g_cushion_rebuild = 0;
+                fprintf(stderr,
+                        "psxrecomp: rb cushion rebuilt ACH remote_lead=%d "
+                        "achievable=%d D=%d transit_est=%.2f held=%ums\n",
+                        st->remote_lead, achievable, d,
+                        g_transit_have ? (double)g_transit_x16 / 16.0 : 0.0,
+                        (unsigned)held);
+                fflush(stderr);
+            }
         } else if (st->remote_lead > max_ok) {
             static uint32_t s_last_absurd_ms;
             uint32_t now_a = sched_mono_ms();
@@ -1165,6 +1446,8 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
         *reason_out = NULL;
     if (!st)
         return 1;
+
+    np_scorecard_note_miss(wire);
 
     /* FMV media + post-FMV settle: wait for remote wire (skip / title
      * Start). Invent idle opened tip episodes that hung. Tip-ahead with a
@@ -1355,6 +1638,7 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
     np_admit_note_invent_gap(wire, st->highest_remote_wire);
     np_admit_log_invent(sim, wire, st->highest_remote_wire,
                         st->remote_lead, invent_reason);
+    g_ad_miss_pending = 0; /* §57: invented — lateness timer no longer valid */
     if (reason_out)
         *reason_out = invent_reason;
     np_sched_clear_admit_stall(); /* inventing — not a barrier stall */

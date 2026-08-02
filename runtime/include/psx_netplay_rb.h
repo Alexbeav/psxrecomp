@@ -168,6 +168,8 @@ uint32_t psx_netplay_rb_snap_count(void);
  * by the host [FPS] line (PSX_NETPLAY_TIMING=1) to report what fraction of
  * the window was spent resimulating vs running Live. */
 uint64_t psx_netplay_rb_take_replay_ticks(void);
+/* §56: cumulative replay ticks (never reset) — scheduler scorecard deltas. */
+uint64_t psx_netplay_rb_replay_ticks_total(void);
 
 /* Live network-latency estimate (ms), EMA'd from the POST handshake's own
  * send/receive timestamps each episode commit; 0 = no episode has round-
