@@ -209,6 +209,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/netplay_hash_confirm.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_input_hist.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_rb.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_sched.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_selfcheck.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c

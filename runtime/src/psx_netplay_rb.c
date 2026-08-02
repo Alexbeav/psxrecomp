@@ -82,6 +82,7 @@ uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
 #include "netplay_snap_ring.h"
 #include "netplay_state_digest.h"
 #include "psx_netplay.h"
+#include "psx_netplay_sched.h"
 #include "boot_state.h"
 #include "cdrom.h"
 #include "cpu_state.h"
@@ -233,6 +234,22 @@ static uint32_t g_agreed_through;
  * [span_lo+1 .. agreed_through] and resim saves a snap at every replayed tick,
  * so any ring snap inside that span is guaranteed to exist on the peer too. */
 static uint32_t g_agreed_span_lo;
+/* Highest tick the peer advertised via RNET_RB_RESOLVED (tip-hold enter/commit,
+ * episode commit, or §40 ADVANCE advertise). Distinct from
+ * rnet_rb_resolved_through(), which also rises on *local* tip-hold/commit.
+ * Initiator begin must not open load above this until the peer has caught up —
+ * otherwise ADVANCE→begin races the follower's agreed and NACK-storms
+ * (2026-08-02 post-§39 soak). */
+static uint32_t g_peer_resolved_through;
+/* §41: wall-clock when choose_load/begin first blocked on peer RESOLVED
+ * (0 = not waiting). After RB_MOTK_PEER_RESOLVED_GATE_MS, force-open —
+ * unbounded defer silently desynced Live (2026-08-02 post-§40 soak). */
+static uint64_t g_peer_resolved_wait_t0_ms;
+/* Sticky: gate timed out; stay open until peer RESOLVED advances. */
+static int g_peer_resolved_gate_expired;
+/* Last HC-confirmed / tip-hold watermark we burst on the wire (heartbeat). */
+static uint32_t g_local_advertised_through;
+static uint64_t g_peer_resolved_hb_last_ms;
 /* 1: pending load is a Live realign (not an episode baseline). */
 static int g_live_realign_pending;
 static uint32_t g_episode_load_tick; /* captured for post-diverge realign */
@@ -271,6 +288,10 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_ABORT_COOLDOWN_TICKS 24u
 /* Repeated abort streak — longer promote-only (char-select storm). */
 #define RB_STORM_COOLDOWN_TICKS 48u
+/* §42 P4: consecutive same-tick baseline-mismatch aborts before declaring
+ * an unrecoverable fork (loud DESYNC log, keep-live, long cooldown). */
+#define RB_FORK_STORM_LIMIT 4u
+#define RB_FORK_STORM_COOLDOWN_TICKS 600u
 /* After a genuine POST diverge where Live successfully realigned, do not
  * promote-only-block the next edges — cooldown was preventing the fork from
  * self-correcting (2026-08-01 §17 soak: tip=9203 abort → promote-no-resim
@@ -314,6 +335,25 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 /* §35: SAFETY must not commit while digital still held (MotK key-repeat).
  * Absolute wall is the stuck-pad escape only. */
 #define RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS 2000u
+/* §45: while SAFETY-deferred (digital held), if the peer tip races this many
+ * ticks past our sealed tip, commit immediately. 2026-08-02 soak: slot1
+ * SAFETY-committed ~250ms and kept Live while slot0 sat ABSOLUTE 2000ms on
+ * stale held_remote at the sealed tip — remote_lead climbed to ~280, the
+ * 128-entry wire ring aged out, then SPAN CAP / invent cliffs. One runway
+ * of peer advance is enough proof they left TipHold. */
+#define RB_MOTK_TIP_HOLD_RACE_MARGIN 24u
+/* §45: held_remote-only (we released; sealed tip still shows peer held)
+ * Absolute escape — far shorter than the stuck-local-pad 2000ms wall.
+ * Coalesce/tip-extend still owns the first SAFETY window. */
+#define RB_MOTK_TIP_HOLD_REMOTE_HELD_WALL_MS 500u
+/* §38: after tip-hold commit, suppress agreed ADVANCE so a still-tip-holding
+ * peer (SAFETY deferred ~250ms) is not raced with load > frontier NACKs. */
+#define RB_MOTK_POST_TIP_HOLD_AGREED_HOLDOFF_MS 300u
+/* §41: max wait for peer RESOLVED before force-opening begin (NACK is
+ * recoverable; silent forever-DEFER is not). */
+#define RB_MOTK_PEER_RESOLVED_GATE_MS 500u
+/* §41: retransmit last confirmed RESOLVED while peer lags. */
+#define RB_MOTK_PEER_RESOLVED_HB_MS 100u
 /* Baseline mismatch with no agreed tip — don't reopen every few ticks. */
 #define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 90u
 
@@ -335,6 +375,8 @@ static uint64_t g_tip_hold_quiet_t0_ms;
 static int g_tip_hold_block_quiet;
 /* Wall-clock enter time for TipHold deadlines (0 = inactive). */
 static uint64_t g_tip_hold_enter_ms;
+/* §38: wall-clock when tip-hold last committed (0 = none). ADVANCE holdoff. */
+static uint64_t g_post_tip_hold_holdoff_t0_ms;
 /* TipHold coalesce/tip-extend count this episode (thrash WALL trigger). */
 static uint32_t g_tip_hold_coalesce_n;
 /* Mid-span tip-extend rereplay: reload snap without replacing episode pin. */
@@ -342,6 +384,30 @@ static int g_tip_extend_rereplay;
 /* Inclusive tip of last tip-extend hc_prime; drop stale TipHold invent
  * FRAME_COMMITs above this until Verify/TipHold. 0 = inactive. */
 static uint32_t g_tip_extend_prime_tick;
+/* §42 P2: matched tip we extended FROM (TipHold/Verify coalesce-ahead).
+ * If the peer's RESOLVED lands exactly here while we sit in Verify at the
+ * extended tip, the peer committed at the old tip and left the episode —
+ * our extension can never verify. Abandon it and realign to this tick
+ * (both cores matched there) instead of riding into verify timeout and a
+ * forked realign (2026-08-02 soak: 986 vs 944 permanent fork). 0 = none. */
+static uint32_t g_tip_extend_from_tick;
+/* §42 P1: epoch of the last episode we committed (tip-hold or legacy).
+ * A peer ABORT for this epoch after our unilateral commit means the peer
+ * rewound while we kept the tip — honor its wire realign tick. */
+static uint32_t g_last_commit_epoch = 0xffffffffu;
+/* §42c: peer's OP_COMMIT (epoch, tick) — the unambiguous "I committed and
+ * left the episode" signal. The RESOLVED watermark cannot serve here: it
+ * also rises on live-play HC interval confirms, and feeding it into the
+ * tip-extend abandon fired on a stale watermark (768), aborted a HEALTHY
+ * converging episode and forked the cores (2026-08-02 soak #4). */
+static uint32_t g_peer_commit_epoch = 0xffffffffu;
+static uint32_t g_peer_commit_tick;
+/* §42 P4: consecutive baseline-mismatch aborts realigned to the same tick.
+ * The 2026-08-02 fork soak repeated abort→realign→reopen at one tick
+ * forever; after RB_FORK_STORM_LIMIT repeats, declare DESYNC loudly,
+ * keep Live running (no more rubber-band rewinds) and arm a long cooldown. */
+static uint32_t g_fork_streak_tick;
+static uint32_t g_fork_streak;
 
 static RNetSession *sess(void); /* fwd — used by FMV lockstep window */
 static void commit_episode(void); /* fwd — legacy immediate commit */
@@ -896,6 +962,20 @@ static void send_abort_notice(uint32_t epoch, uint32_t cls, uint32_t realign_tic
                                         RNET_RB_SYNC_OP_ABORT, 0u);
 }
 
+/* §42c: episode commit notice — the unambiguous "committed tick T, left
+ * epoch E" signal the tip-extend abandon needs (RESOLVED is a watermark
+ * and cannot prove a commit; see g_peer_commit_epoch). */
+static void send_commit_notice(uint32_t epoch, uint32_t tick)
+{
+    RNetSession *s = sess();
+    int i;
+    if (!s || tick == 0u)
+        return;
+    for (i = 0; i < RB_ABORT_NOTICE_BURST; ++i)
+        (void)rnet_session_send_rb_sync(s, epoch, 0u, tick, 0u, 0u,
+                                        RNET_RB_SYNC_OP_COMMIT, 0u);
+}
+
 static uint32_t abort_class_cooldown_ticks(uint32_t cls)
 {
     switch (cls) {
@@ -932,6 +1012,7 @@ static void abort_episode(const char *why)
     g_tip_hold_enter_ms = 0ull;
     g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
+    g_tip_extend_from_tick = 0;
     clear_tip_extend_prime();
     psx_scheduler_top_level_resume_clear();
     clear_episode_wire_state();
@@ -1028,6 +1109,39 @@ static void abort_episode_realign(const char *why)
     if (post_fail)
         dump_post_diverge_diag(why);
 
+    /* §42 P4: same-tick baseline-mismatch abort loop = unrecoverable fork.
+     * Every reopen loads the same snap on both sides, both resim their own
+     * forked histories, digests never re-match. Stop rubber-banding: declare
+     * DESYNC loudly, keep Live running, arm a long cooldown so episodes stop
+     * reopening into the doomed baseline (2026-08-02 soak: 986/944 fork,
+     * ~40 abort-realign cycles). Any commit resets the streak. */
+    if (why && strstr(why, "baseline") != NULL && have) {
+        if (tick == g_fork_streak_tick)
+            g_fork_streak++;
+        else {
+            g_fork_streak_tick = tick;
+            g_fork_streak = 1u;
+        }
+        if (g_fork_streak >= RB_FORK_STORM_LIMIT) {
+            fprintf(stderr,
+                    "psxrecomp: rb DESYNC — unrecoverable fork at tick=%u "
+                    "(%u consecutive baseline mismatches: %s) — keep-live, "
+                    "cooldown %u ticks\n",
+                    (unsigned)tick, (unsigned)g_fork_streak, why,
+                    (unsigned)RB_FORK_STORM_COOLDOWN_TICKS);
+            fflush(stderr);
+            g_abort_wire_class = RNET_RB_ABORT_CLASS_STORM;
+            g_abort_wire_realign_tick = 0u;
+            abort_episode(why);
+            arm_rewind_cooldown_ticks(live_sim, RB_FORK_STORM_COOLDOWN_TICKS,
+                                      "DESYNC fork storm");
+            return;
+        }
+    } else {
+        g_fork_streak_tick = 0u;
+        g_fork_streak = 0u;
+    }
+
     /* Classify BEFORE abort_episode so the wire ABORT carries the shared
      * cooldown class and both peers re-arm on the same schedule. */
     if (post_fail && have) {
@@ -1069,6 +1183,67 @@ static void abort_episode_realign(const char *why)
         clear_rewind_cooldown(cool_why);
     else
         arm_rewind_cooldown_ticks(live_sim, cool_n, cool_why);
+}
+
+/* §42 P1: honor the realign tick carried on a peer OP_ABORT.
+ *
+ * The 2026-08-02 fork: slot0 hit verify timeout at the extended tip and
+ * realigned to its pre-episode pin (944); slot1 had already unilaterally
+ * committed the old tip (986), received the ABORT, and realigned to its OWN
+ * pick (986). Both sides then lived on different bases forever ("baseline
+ * core mismatch" storm). The wire ABORT already carries the sender's realign
+ * tick — when we sit AHEAD of it (agreed/committed past it), demote to it
+ * and rewind there so both peers land on the same tick.
+ *
+ * Returns 1 when it demoted+realigned (caller skips its own realign pick).
+ * `snap_was_applied`: when set, also realign to the wire tick even if we are
+ * not ahead of it, so the two peers pick the same tick instead of each
+ * realigning to their own local evidence. */
+static int honor_peer_abort_realign(uint32_t wire_tick, int snap_was_applied,
+                                    const char *why)
+{
+    uint32_t t;
+
+    if (!g_rb || wire_tick == 0u || !g_snaps)
+        return 0;
+    /* Nearest held snap at/below the peer's realign tick. */
+    t = wire_tick;
+    for (;;) {
+        if (netplay_snap_ring_has(g_snaps, t))
+            break;
+        if (t == 0u)
+            return 0;
+        t--;
+    }
+    if (g_agreed_valid && g_agreed_through > wire_tick) {
+        /* Unilateral commit past the peer's rewind point — roll it back. */
+        fprintf(stderr,
+                "psxrecomp: rb peer abort realign honor %u (snap=%u, "
+                "agreed was %u — unilateral tip rolled back)\n",
+                (unsigned)wire_tick, (unsigned)t, (unsigned)g_agreed_through);
+        fflush(stderr);
+        g_agreed_through = wire_tick;
+        g_agreed_span_lo = (t < wire_tick) ? t : wire_tick;
+        rnet_rb_demote_resolved_through(g_rb, wire_tick);
+        if (g_b.hc)
+            netplay_hc_prime_after(g_b.hc, wire_tick);
+        if (g_pin_valid && g_pin_tick > wire_tick)
+            clear_baseline_pin();
+        g_episode_baseline_matched = 0;
+        schedule_live_realign(t, why);
+        return 1;
+    }
+    if (snap_was_applied) {
+        /* Not ahead, but Live left the pre-episode tip — rewind to the
+         * peer's tick (not our own pick) so both sides converge. */
+        fprintf(stderr,
+                "psxrecomp: rb peer abort realign follow %u (snap=%u)\n",
+                (unsigned)wire_tick, (unsigned)t);
+        fflush(stderr);
+        schedule_live_realign(t, why);
+        return 1;
+    }
+    return 0;
 }
 
 static int host_save_state(void *ctx, uint32_t tick)
@@ -1127,27 +1302,20 @@ static uint8_t host_hash_confirm_through(void *ctx, uint32_t tick)
 
 /* Session delay-ring → hist (authoritative). Tip-hold invent-cap stalls Live
  * so hist often lacks tip+N local rows even though the pad was sampled into
- * the wire ring at sim+delay earlier — seal must read that ring, not invent. */
+ * the wire ring at sim+delay earlier — seal must read that ring, not invent.
+ * §44: the sim→wire consumption mapping is owned by the scheduler. */
 static int host_promote_from_session(int slot, uint32_t tick, RNetRbFrame *out)
 {
     RNetSession *s = sess();
     RNetInputSample sample;
     PsxNetPad pad;
     RNetRbFrame frame;
-    int delay;
-    rnet_u8 delay_u8;
     rnet_u32 wire;
     int local;
 
     if (!s || !g_b.ih || slot < 0)
         return 0;
-    delay = g_b.input_delay ? *g_b.input_delay : 0;
-    if (delay < 0)
-        delay = 0;
-    if (delay > 255)
-        delay = 255;
-    delay_u8 = (rnet_u8)delay;
-    wire = rnet_wire_tick_from_sim(tick, delay_u8);
+    wire = np_sched_wire_for_sim(tick);
     local = (g_b.local_slot && slot == *g_b.local_slot) ? 1 : 0;
     if (local) {
         if (!rnet_session_peek_input(s, slot, wire, &sample))
@@ -1215,12 +1383,208 @@ static uint64_t rb_mono_ms(void)
     return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
 }
 
+/* 1 for ~300ms after tip-hold commit — covers peer SAFETY-deferred tip-hold. */
+static int post_tip_hold_holdoff_active(void)
+{
+    uint64_t now;
+    if (g_post_tip_hold_holdoff_t0_ms == 0ull)
+        return 0;
+    now = rb_mono_ms();
+    if (now < g_post_tip_hold_holdoff_t0_ms)
+        return 1;
+    return (now - g_post_tip_hold_holdoff_t0_ms) <
+           (uint64_t)RB_MOTK_POST_TIP_HOLD_AGREED_HOLDOFF_MS;
+}
+
+/* §40/§41: tell the peer our HC-confirmed agreed watermark advanced so their
+ * follow frontier (max(agreed, resolved_through)) can accept begin load.
+ * Do NOT call for unconfirmed HEAL-FORCE / BOOTSTRAP (§41 soak deadlock). */
+static void advertise_agreed_resolved(uint32_t through)
+{
+    RNetSession *s;
+    int i;
+    int fresh;
+    uint64_t now;
+
+    if (!g_rb || through == 0u)
+        return;
+    fresh = (through > g_local_advertised_through);
+    rnet_rb_set_peer_convergence(g_rb, through);
+    s = sess();
+    if (!s)
+        return;
+    for (i = 0; i < RB_ABORT_NOTICE_BURST; ++i)
+        (void)rnet_session_send_rb_resolved(s, through);
+    g_local_advertised_through = through;
+    now = rb_mono_ms();
+    g_peer_resolved_hb_last_ms = (now != 0ull) ? now : 1ull;
+    /* Fresh confirmed raise past peer: re-arm the bounded wait (not heartbeat). */
+    if (fresh && through > g_peer_resolved_through) {
+        g_peer_resolved_gate_expired = 0;
+        g_peer_resolved_wait_t0_ms = 0ull;
+    }
+}
+
+/* §41: 1 while choose_load/begin should clamp to g_peer_resolved_through.
+ * After GATE_MS of waiting, sticky-expire until peer RESOLVED advances. */
+static int peer_resolved_gate_blocks(uint32_t want_through)
+{
+    uint64_t now;
+
+    if (g_peer_resolved_through == 0u)
+        return 0;
+    if (want_through <= g_peer_resolved_through)
+        return 0;
+    if (g_peer_resolved_gate_expired)
+        return 0;
+    now = rb_mono_ms();
+    if (g_peer_resolved_wait_t0_ms == 0ull) {
+        g_peer_resolved_wait_t0_ms = (now != 0ull) ? now : 1ull;
+        return 1;
+    }
+    if (now < g_peer_resolved_wait_t0_ms)
+        return 1;
+    if ((now - g_peer_resolved_wait_t0_ms) <
+        (uint64_t)RB_MOTK_PEER_RESOLVED_GATE_MS)
+        return 1;
+    fprintf(stderr,
+            "psxrecomp: rb peer RESOLVED stall force — waited %u ms "
+            "want=%u peer=%u (open begin; NACK recoverable)\n",
+            (unsigned)RB_MOTK_PEER_RESOLVED_GATE_MS,
+            (unsigned)want_through, (unsigned)g_peer_resolved_through);
+    fflush(stderr);
+    g_peer_resolved_gate_expired = 1;
+    g_peer_resolved_wait_t0_ms = 0ull;
+    return 0;
+}
+
+/* §41: while peer lags our last confirmed advertise, retransmit RESOLVED. */
+static void maybe_heartbeat_agreed_resolved(void)
+{
+    uint64_t now;
+
+    if (!g_rb || g_local_advertised_through == 0u)
+        return;
+    if (g_peer_resolved_through >= g_local_advertised_through)
+        return;
+    now = rb_mono_ms();
+    if (g_peer_resolved_hb_last_ms != 0ull &&
+        now >= g_peer_resolved_hb_last_ms &&
+        (now - g_peer_resolved_hb_last_ms) <
+            (uint64_t)RB_MOTK_PEER_RESOLVED_HB_MS)
+        return;
+    advertise_agreed_resolved(g_local_advertised_through);
+}
+
+/* §42c: tip-extend abandon, driven by the peer's OP_COMMIT — never by the
+ * RESOLVED watermark. We extended a matched/POSTed tip and sit in Verify
+ * (or are resimming toward it); the peer COMMITTED this same epoch at a
+ * tick below our extended target and left the episode. Our extension can
+ * never verify — riding into verify timeout realigned each peer to
+ * different ticks and forked the cores (2026-08-02 soak: 986 vs 944).
+ * Abandon: commit the peer's tick (its commit proves the POST pair
+ * matched there — our snap at that tick IS the matched state, because
+ * tip-extend rereplay reloads FROM the old tip and never overwrites it),
+ * realign there, and let the extension edge re-arrive as a fresh wire
+ * mismatch.
+ *
+ * History: the first cut keyed on RESOLVED arriving while in Verify and
+ * missed the race (burst landed mid-rereplay); the second cut fed the
+ * sticky RESOLVED watermark from the pump and false-fired on a stale
+ * live-play HC ADVANCE (768), aborting a HEALTHY episode and creating
+ * the very fork it was meant to prevent (soak #4). OP_COMMIT is
+ * epoch-scoped and means exactly one thing, so the pump poll is safe.
+ *
+ * The realign snap must exist at EXACTLY the commit tick — walking down
+ * would realign us to a state the peer never proved (tick equality is
+ * not state equality). Missing snap → let verify timeout + peer-abort
+ * honor (§42 P1) heal it. Returns 1 when the episode was abandoned. */
+static int maybe_abandon_tip_extend(void)
+{
+    uint32_t tick;
+
+    if (!g_rb || !rnet_rb_is_active(g_rb) ||
+        rnet_rb_get_phase(g_rb) != nRNetRbPhaseVerify)
+        return 0;
+    if (!g_local_post_sent || g_post_target == 0u)
+        return 0;
+    if (g_tip_extend_from_tick == 0u)
+        return 0; /* not a tip-extension — plain Verify wait */
+    if (g_peer_commit_epoch != rnet_rb_get_epoch_id(g_rb))
+        return 0; /* no commit for THIS episode */
+    tick = g_peer_commit_tick;
+    if (tick == 0u || tick >= g_post_target)
+        return 0; /* peer committed our tip (or later) — normal verify */
+    /* Only the tip the CURRENT rereplay reloaded from is provably the
+     * POST-matched state (its snap was just loaded, so no later resim can
+     * have overwritten it). A commit at an older chain tip could alias a
+     * resim-overwritten snap — skip; verify timeout + §42 P1 heal that. */
+    if (tick != g_tip_extend_from_tick)
+        return 0;
+    if (!g_snaps || !netplay_snap_ring_has(g_snaps, tick))
+        return 0; /* no exact matched-state snap — verify timeout heals */
+    fprintf(stderr,
+            "psxrecomp: rb tip-extend ABANDON — peer COMMIT epoch=%u "
+            "tick=%u (extend_from=%u post_target=%u) — commit there\n",
+            (unsigned)g_peer_commit_epoch, (unsigned)tick,
+            (unsigned)g_tip_extend_from_tick, (unsigned)g_post_target);
+    fflush(stderr);
+    /* Both cores matched at `tick` (peer tip-hold committed the POST pair). */
+    g_agreed_through = tick;
+    g_agreed_span_lo = tick;
+    g_agreed_valid = 1;
+    if (g_b.hc)
+        netplay_hc_prime_after(g_b.hc, tick);
+    advertise_agreed_resolved(tick);
+    g_bl_mismatch_streak = 0;
+    g_abort_wire_class = RNET_RB_ABORT_CLASS_REALIGN;
+    g_abort_wire_realign_tick = tick;
+    abort_episode("tip-extend abandon (peer committed below extension)");
+    schedule_live_realign(tick, "tip-extend abandon");
+    clear_rewind_cooldown("tip-extend abandon");
+    return 1;
+}
+
+/* Apply inbound peer RESOLVED: raise g_peer_resolved_through + library
+ * convergence, and complete Verify if POST was lost. */
+static void apply_peer_resolved(uint32_t resolved)
+{
+    if (!g_rb || resolved == 0u)
+        return;
+    if (resolved > g_peer_resolved_through) {
+        g_peer_resolved_through = resolved;
+        g_peer_resolved_gate_expired = 0;
+        g_peer_resolved_wait_t0_ms = 0ull;
+    }
+    rnet_rb_set_peer_convergence(g_rb, resolved);
+    /* Peer already POST-matched and tip-held this tip (or later). If we are
+     * still stuck in Verify waiting for their POST, trust RESOLVED as the
+     * missing half of the handshake — otherwise a single lost POST leaves us
+     * here until verify timeout while they advance Live on the same tip
+     * (2026-08-01 soak). */
+    if (rnet_rb_is_active(g_rb) &&
+        rnet_rb_get_phase(g_rb) == nRNetRbPhaseVerify &&
+        g_local_post_sent && g_post_target > 0u &&
+        resolved >= g_post_target) {
+        fprintf(stderr,
+                "psxrecomp: rb verify accept peer RESOLVED tip=%u "
+                "(local_post=%u — POST may have been lost)\n",
+                (unsigned)resolved, (unsigned)g_post_target);
+        fflush(stderr);
+        enter_tip_hold(g_post_target);
+    }
+    /* §42c: NO abandon here — RESOLVED is a watermark, not a commit proof.
+     * The tip-extend abandon keys on OP_COMMIT only (see
+     * maybe_abandon_tip_extend). */
+}
+
 /* Raise agreed_through to the newest interval snap still in the ring.
  * Used when hc cannot confirm anything in-ring (live core forks block
- * heal_stale_gap) so begin/follow are not stuck REFUSED forever. */
+ * heal_stale_gap) so begin/follow are not stuck REFUSED forever.
+ * do_advertise: only for HC-confirmed paths — never HEAL-FORCE/BOOTSTRAP. */
 static int raise_agreed_to_newest_interval_snap(uint32_t oldest, uint32_t newest,
                                                uint32_t iv, const char *why,
-                                               uint32_t hc_rt)
+                                               uint32_t hc_rt, int do_advertise)
 {
     uint32_t t;
     uint32_t old;
@@ -1241,6 +1605,8 @@ static int raise_agreed_to_newest_interval_snap(uint32_t oldest, uint32_t newest
                     why, (unsigned)old, (unsigned)t, (unsigned)hc_rt,
                     (unsigned)oldest);
             fflush(stderr);
+            if (do_advertise)
+                advertise_agreed_resolved(t);
             return 1;
         }
         if (t <= oldest)
@@ -1293,7 +1659,7 @@ static void heal_agreed_watermark_if_aged_out(void)
         }
         if (rt < oldest || !netplay_hc_confirm_through(g_b.hc, rt)) {
             (void)raise_agreed_to_newest_interval_snap(
-                oldest, newest, iv, "BOOTSTRAP", rt);
+                oldest, newest, iv, "BOOTSTRAP", rt, 0);
         }
         return;
     }
@@ -1334,6 +1700,7 @@ static void heal_agreed_watermark_if_aged_out(void)
                         (unsigned)old, (unsigned)t, (unsigned)rt,
                         (unsigned)oldest);
                 fflush(stderr);
+                advertise_agreed_resolved(t);
                 return;
             }
             if (t == 0u)
@@ -1342,10 +1709,11 @@ static void heal_agreed_watermark_if_aged_out(void)
         }
     }
 
-    /* Agreed tip gone and hc cannot confirm in-ring (live forks) — force. */
+    /* Agreed tip gone and hc cannot confirm in-ring (live forks) — force.
+     * §41: do NOT advertise RESOLVED — peer never confirmed this watermark. */
     if (g_agreed_through < oldest)
         (void)raise_agreed_to_newest_interval_snap(
-            oldest, newest, iv, "HEAL-FORCE", rt);
+            oldest, newest, iv, "HEAL-FORCE", rt, 0);
 }
 
 /* Advance agreed_through along hash-confirmed clean Live play. The hard
@@ -1374,6 +1742,10 @@ static void advance_agreed_watermark_from_hc(void)
     if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
         psx_netplay_rb_load_pending())
         return;
+    /* §38: tip-hold commit just set agreed=tip; do not HC-ADVANCE past it
+     * while the peer may still be tip-holding (follow NACK load>frontier). */
+    if (post_tip_hold_holdoff_active())
+        return;
     if (netplay_snap_ring_count(g_snaps) == 0)
         return;
     rt = netplay_hc_resolved_through(g_b.hc);
@@ -1400,6 +1772,8 @@ static void advance_agreed_watermark_from_hc(void)
                     "psxrecomp: rb agreed ADVANCE %u→%u (hc=%u live confirm)\n",
                     (unsigned)old, (unsigned)t, (unsigned)rt);
             fflush(stderr);
+            /* §40: peer follow frontier lags local agreed until RESOLVED lands. */
+            advertise_agreed_resolved(t);
             return;
         }
         if (t <= oldest)
@@ -1458,6 +1832,41 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
             shared = rt;
             have_shared = 1;
         }
+    }
+    /* §38/§39: clamp ADVANCE→commit-frontier ONLY during post–tip-hold
+     * holdoff. The always-on ≤runway+4 clamp (holdoff=0) undid healthy
+     * ADVANCE 757→784 and forced SPAN CAP load=752 → tip-extend/verify
+     * timeout hang (soak present_gap≈4s). */
+    if (have_shared && g_rb && post_tip_hold_holdoff_active()) {
+        uint32_t tip_rt = rnet_rb_resolved_through(g_rb);
+        if (tip_rt > 0u && shared > tip_rt) {
+            static uint32_t s_clamp_log_to;
+            if (s_clamp_log_to != tip_rt) {
+                fprintf(stderr,
+                        "psxrecomp: rb choose_load clamp %u→%u "
+                        "(commit frontier; tip-hold agreed holdoff)\n",
+                        (unsigned)shared, (unsigned)tip_rt);
+                fflush(stderr);
+                s_clamp_log_to = tip_rt;
+            }
+            shared = tip_rt;
+        }
+    }
+    /* §40/§41: clamp to peer RESOLVED while the bounded gate is active.
+     * After GATE_MS, peer_resolved_gate_blocks sticky-expires so HEAL-FORCE
+     * cannot forever-DEFER begin (2026-08-02 post-§40 soak). */
+    if (have_shared &&
+        peer_resolved_gate_blocks(shared)) {
+        static uint32_t s_peer_clamp_log_to;
+        if (s_peer_clamp_log_to != g_peer_resolved_through) {
+            fprintf(stderr,
+                    "psxrecomp: rb choose_load clamp %u→%u "
+                    "(peer RESOLVED frontier)\n",
+                    (unsigned)shared, (unsigned)g_peer_resolved_through);
+            fflush(stderr);
+            s_peer_clamp_log_to = g_peer_resolved_through;
+        }
+        shared = g_peer_resolved_through;
     }
     /* Snap at T = state after tick T; replaying the mismatch needs load < mismatch. */
     if (have_shared && mismatch > 0u) {
@@ -2285,19 +2694,11 @@ static uint16_t tip_hold_peek_buttons(int slot, uint32_t tick)
 {
     RNetSession *s = sess();
     RNetInputSample sample;
-    int delay;
-    rnet_u8 delay_u8;
     rnet_u32 wire;
     int local;
     if (!s || slot < 0)
         return 0xFFFFu;
-    delay = g_b.input_delay ? *g_b.input_delay : 0;
-    if (delay < 0)
-        delay = 0;
-    if (delay > 255)
-        delay = 255;
-    delay_u8 = (rnet_u8)delay;
-    wire = rnet_wire_tick_from_sim(tick, delay_u8);
+    wire = np_sched_wire_for_sim(tick);
     local = (g_b.local_slot && slot == *g_b.local_slot) ? 1 : 0;
     if (local) {
         if (!rnet_session_peek_input(s, slot, wire, &sample))
@@ -2310,59 +2711,45 @@ static uint16_t tip_hold_peek_buttons(int slot, uint32_t tick)
     return (uint16_t)sample.bytes[0] | ((uint16_t)sample.bytes[1] << 8);
 }
 
-/* 1 if any seat currently shows a held digital button.
- * Local: live physical pad (sim/staged stay frozen under invent-cap).
- * Remote: latest arrived row in tip..tip+runway (not the parked sim tick). */
-static int tip_hold_any_pad_held(uint32_t tip)
+/* TipHold SAFETY/quiet "held" split (§36/§37):
+ * - Local: live physical pad (sim/staged stay frozen under invent-cap).
+ * - Remote: sealed *tip* row only — do NOT walk tip+1..runway. A post-tip
+ *   press while tip is idle must tip-extend / open a fresh episode after
+ *   quiet (§35); treating latest-ahead as held forced ABSOLUTE 2000ms on the
+ *   lagging peer (soak tip=1187: slot0 quiet, slot1 ABSOLUTE + lead cliff).
+ *   §45: RACE CAP + REMOTE-HELD 500ms wall cut that park short when the peer
+ *   tip has already left TipHold. */
+static void tip_hold_held_split(uint32_t tip, int *held_local_out, int *held_remote_out)
 {
     int slots = g_b.slot_count ? *g_b.slot_count : 0;
     int local = g_b.local_slot ? *g_b.local_slot : -1;
     int slot;
-    uint32_t runway = g_rb ? rnet_rb_get_tip_runway(g_rb) : 0u;
+    int held_local = 0;
+    int held_remote = 0;
     if (slots < 1)
         slots = 2;
     for (slot = 0; slot < slots; ++slot) {
         if (slot == local) {
             uint16_t live = 0xFFFFu;
             if (psx_netplay_live_pad_buttons(&live) && live != 0xFFFFu)
-                return 1;
+                held_local = 1;
             continue;
         }
         {
-            uint16_t latest = tip_hold_peek_buttons(slot, tip);
-            uint32_t t;
+            uint16_t tip_btn = tip_hold_peek_buttons(slot, tip);
             if (g_b.ih) {
                 RNetRbFrame tip_row;
                 if (netplay_ih_get(g_b.ih, slot, tip, &tip_row) && tip_row.is_valid)
-                    latest = tip_row.buttons;
+                    tip_btn = tip_row.buttons;
             }
-            for (t = tip + 1u; runway > 0u && t <= tip + runway; ++t) {
-                uint16_t b = tip_hold_peek_buttons(slot, t);
-                RNetSession *s = sess();
-                RNetInputSample sample;
-                int delay = g_b.input_delay ? *g_b.input_delay : 0;
-                rnet_u8 delay_u8;
-                rnet_u32 wire;
-                if (delay < 0)
-                    delay = 0;
-                if (delay > 255)
-                    delay = 255;
-                delay_u8 = (rnet_u8)delay;
-                wire = rnet_wire_tick_from_sim(t, delay_u8);
-                if (!s || !rnet_session_peek_remote_input(s, slot, wire, &sample))
-                    break;
-                if (g_b.ih) {
-                    RNetRbFrame row;
-                    if (netplay_ih_get(g_b.ih, slot, t, &row) && row.is_valid)
-                        b = row.buttons;
-                }
-                latest = b;
-            }
-            if (latest != 0xFFFFu)
-                return 1;
+            if (tip_btn != 0xFFFFu)
+                held_remote = 1;
         }
     }
-    return 0;
+    if (held_local_out)
+        *held_local_out = held_local;
+    if (held_remote_out)
+        *held_remote_out = held_remote;
 }
 
 /* 1 if wire tip+1..tip+runway has an unabsorbed RELEASE vs tip for a remote
@@ -2402,15 +2789,7 @@ static int tip_hold_wire_pending_release(uint32_t tip)
             uint16_t b;
             RNetSession *s = sess();
             RNetInputSample sample;
-            int delay = g_b.input_delay ? *g_b.input_delay : 0;
-            rnet_u8 delay_u8;
-            rnet_u32 wire;
-            if (delay < 0)
-                delay = 0;
-            if (delay > 255)
-                delay = 255;
-            delay_u8 = (rnet_u8)delay;
-            wire = rnet_wire_tick_from_sim(t, delay_u8);
+            rnet_u32 wire = np_sched_wire_for_sim(t);
             if (!s || !rnet_session_peek_remote_input(s, slot, wire, &sample))
                 break;
             b = tip_hold_peek_buttons(slot, t);
@@ -2460,6 +2839,12 @@ static void enter_tip_hold(uint32_t target)
                 (void)rnet_session_send_rb_post(s, rnet_rb_get_epoch_id(g_rb),
                                                 post_tip, post_dig, post_av, 1u);
         }
+        /* §41: tip-hold enter is a confirmed RESOLVED — track for heartbeat. */
+        if (target > g_local_advertised_through)
+            g_local_advertised_through = target;
+        g_peer_resolved_hb_last_ms = rb_mono_ms();
+        if (g_peer_resolved_hb_last_ms == 0ull)
+            g_peer_resolved_hb_last_ms = 1ull;
     }
     runway = rnet_rb_get_tip_runway(g_rb);
     sim = s ? rnet_session_sim_tick(s) : target;
@@ -2495,9 +2880,7 @@ static void enter_tip_hold(uint32_t target)
 
 static void finalize_tip_hold(void)
 {
-    RNetSession *s = sess();
     uint32_t target;
-    int i;
     if (!g_rb || !rnet_rb_is_tip_holding(g_rb))
         return;
     target = rnet_rb_get_target_tick(g_rb);
@@ -2507,16 +2890,12 @@ static void finalize_tip_hold(void)
     g_agreed_valid = 1;
     if (g_b.hc)
         netplay_hc_prime_after(g_b.hc, target);
-    rnet_rb_set_peer_convergence(g_rb, target);
-    /* Shared frontier: advertise the committed tip. Without this the peer's
-     * library watermark lagged our agreed_through and its next follow REFUSE
-     * / light-tip classification disagreed with ours (burst on loss). */
-    if (s) {
-        for (i = 0; i < RB_ABORT_NOTICE_BURST; ++i)
-            (void)rnet_session_send_rb_resolved(s, target);
-    }
+    /* Shared frontier: advertise the committed tip (§40/§41 heartbeat track). */
+    advertise_agreed_resolved(target);
     fprintf(stderr, "psxrecomp: rb episode commit through=%u (tip-hold)\n", (unsigned)target);
     fflush(stderr);
+    g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb); /* §42 P1 */
+    send_commit_notice(g_last_commit_epoch, target);  /* §42c */
     rnet_rb_session_reset(g_rb);
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
@@ -2524,6 +2903,7 @@ static void finalize_tip_hold(void)
     g_tip_hold_enter_ms = 0ull;
     g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
+    g_tip_extend_from_tick = 0;
     clear_tip_extend_prime();
     g_needs_advance = 0;
     g_episode_snap_applied = 0;
@@ -2534,6 +2914,12 @@ static void finalize_tip_hold(void)
     /* Matched tip-hold is a clean commit — clear abort streak so a later
      * POST realign is not storm-cooled by a stale ready-timeout. */
     g_bl_mismatch_streak = 0;
+    g_fork_streak = 0u; /* §42 P4: clean commit ends any fork suspicion */
+    g_fork_streak_tick = 0u;
+    /* §38: hold agreed at tip until peer tip-hold (SAFETY ~250ms) can exit. */
+    g_post_tip_hold_holdoff_t0_ms = rb_mono_ms();
+    if (g_post_tip_hold_holdoff_t0_ms == 0ull)
+        g_post_tip_hold_holdoff_t0_ms = 1ull;
     /* Live invent must rebuild the delay cushion (see psx_netplay.c). */
     psx_netplay_timesync_on_episode_boundary();
 }
@@ -2541,15 +2927,21 @@ static void finalize_tip_hold(void)
 static void poll_tip_hold_finalize(void)
 {
     RNetSession *s = sess();
+    RNetSessionStats st;
     uint32_t sim;
     uint32_t tip;
     uint32_t slack;
     uint32_t invent_cap;
     uint32_t runway;
+    uint32_t remote_tip;
     uint64_t now;
     uint64_t need_ms;
+    uint64_t absolute_ms;
     int held;
+    int held_local;
+    int held_remote;
     int pending;
+    int raced;
     if (!g_rb || !rnet_rb_is_tip_holding(g_rb) || !s)
         return;
     sim = rnet_session_sim_tick(s);
@@ -2558,15 +2950,24 @@ static void poll_tip_hold_finalize(void)
     invent_cap = tip + slack;
     runway = rnet_rb_get_tip_runway(g_rb);
     now = rb_mono_ms();
-    held = tip_hold_any_pad_held(tip);
+    tip_hold_held_split(tip, &held_local, &held_remote);
+    held = held_local || held_remote;
     pending = tip_hold_wire_pending_release(tip) || g_tip_hold_block_quiet;
     /* Drop stale block_quiet once pads are idle and tip has no release ahead —
      * otherwise a failed tip-extend parked quiet for the whole SAFETY window. */
     if (g_tip_hold_block_quiet && !held && !tip_hold_wire_pending_release(tip))
         g_tip_hold_block_quiet = 0;
     pending = tip_hold_wire_pending_release(tip) || g_tip_hold_block_quiet;
+
+    /* §45: peer tip vs sealed tip — race-ahead ends SAFETY defer early. */
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(s, &st);
+    remote_tip = st.highest_remote_wire;
+    raced = (remote_tip > tip + RB_MOTK_TIP_HOLD_RACE_MARGIN) ? 1 : 0;
+
     /* §25/§35: thrash WALL only when coalesce is busy *and* idle (no held /
-     * pending release). SAFETY never commits while digital held. */
+     * pending release). SAFETY never commits while digital held — unless
+     * §45 race-ahead / remote-held wall says the peer already left. */
     if (g_tip_hold_enter_ms != 0ull) {
         uint64_t elapsed = now - g_tip_hold_enter_ms;
         if (!held && !pending &&
@@ -2581,29 +2982,53 @@ static void poll_tip_hold_finalize(void)
             finalize_tip_hold();
             return;
         }
+        /* held_remote-only: peer tip row still shows pressed, but we have
+         * released. Cap Absolute far below the stuck-local-pad wall so a
+         * stale sealed tip cannot park us for 2s while Live tip ages the
+         * wire ring. Local-held keeps the full ABSOLUTE wall. */
+        absolute_ms = (!held_local && held_remote)
+                          ? (uint64_t)RB_MOTK_TIP_HOLD_REMOTE_HELD_WALL_MS
+                          : (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS;
         if (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_SAFETY_WALL_MS) {
-            if (held &&
-                elapsed < (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS) {
+            if (held && elapsed < absolute_ms && !raced) {
                 static uint32_t s_held_defer_tip;
                 if (s_held_defer_tip != tip) {
                     fprintf(stderr,
                             "psxrecomp: rb tip-hold SAFETY deferred "
-                            "(digital held) through=%u elapsed=%u ms\n",
-                            (unsigned)tip, (unsigned)elapsed);
+                            "(digital held) through=%u elapsed=%u ms "
+                            "held_local=%d held_remote=%d remote_tip=%u\n",
+                            (unsigned)tip, (unsigned)elapsed,
+                            held_local, held_remote, (unsigned)remote_tip);
                     fflush(stderr);
                     s_held_defer_tip = tip;
                 }
             } else {
+                const char *cap;
+                unsigned cap_ms;
+                if (raced && held && elapsed < absolute_ms) {
+                    cap = "RACE";
+                    cap_ms = (unsigned)RB_MOTK_TIP_HOLD_RACE_MARGIN;
+                } else if (elapsed >= absolute_ms &&
+                           absolute_ms <
+                               (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS) {
+                    cap = "REMOTE-HELD";
+                    cap_ms = (unsigned)RB_MOTK_TIP_HOLD_REMOTE_HELD_WALL_MS;
+                } else if (elapsed >=
+                           (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS) {
+                    cap = "ABSOLUTE";
+                    cap_ms = (unsigned)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS;
+                } else {
+                    cap = "SAFETY";
+                    cap_ms = (unsigned)RB_MOTK_TIP_HOLD_SAFETY_WALL_MS;
+                }
                 fprintf(stderr,
-                        "psxrecomp: rb tip-hold %s CAP %u ms — commit "
-                        "through=%u held=%d pending=%d\n",
-                        (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS)
-                            ? "ABSOLUTE"
-                            : "SAFETY",
-                        (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS)
-                            ? (unsigned)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS
-                            : (unsigned)RB_MOTK_TIP_HOLD_SAFETY_WALL_MS,
-                        (unsigned)tip, held, pending);
+                        "psxrecomp: rb tip-hold %s CAP %u — commit "
+                        "through=%u held=%d pending=%d "
+                        "held_local=%d held_remote=%d "
+                        "remote_tip=%u sim=%u\n",
+                        cap, cap_ms, (unsigned)tip, held, pending,
+                        held_local, held_remote, (unsigned)remote_tip,
+                        (unsigned)sim);
                 fflush(stderr);
                 finalize_tip_hold();
                 return;
@@ -2700,14 +3125,19 @@ static void commit_episode(void)
     fprintf(stderr, "psxrecomp: rb episode commit through=%u (count=%u)\n", (unsigned)target,
             (unsigned)g_episode_count);
     fflush(stderr);
+    g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb); /* §42 P1 */
+    send_commit_notice(g_last_commit_epoch, target);  /* §42c */
     rnet_rb_session_reset(g_rb);
     g_tip_extend_rereplay = 0;
+    g_tip_extend_from_tick = 0;
     clear_tip_extend_prime();
     g_needs_advance = 0;
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
     clear_episode_wire_state();
     g_bl_mismatch_streak = 0;
+    g_fork_streak = 0u; /* §42 P4 */
+    g_fork_streak_tick = 0u;
     /* No post-commit cooldown: promote-only after commit made char-select
      * D-pad feel rejected (hist updated, live sim not rolled). Abort/storm
      * cooldown still arms from live sim on failed episodes. */
@@ -2797,6 +3227,11 @@ void psx_netplay_rb_start(void)
     g_agreed_valid = 0;
     g_agreed_through = 0;
     g_agreed_span_lo = 0;
+    g_peer_resolved_through = 0;
+    g_peer_resolved_wait_t0_ms = 0ull;
+    g_peer_resolved_gate_expired = 0;
+    g_local_advertised_through = 0;
+    g_peer_resolved_hb_last_ms = 0ull;
     g_live_realign_pending = 0;
     g_episode_baseline_matched = 0;
     g_episode_load_tick = 0;
@@ -2804,9 +3239,16 @@ void psx_netplay_rb_start(void)
     g_tip_hold_quiet_t0_ms = 0ull;
     g_tip_hold_block_quiet = 0;
     g_tip_hold_enter_ms = 0ull;
+    g_post_tip_hold_holdoff_t0_ms = 0ull;
     g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
+    g_tip_extend_from_tick = 0;
+    g_last_commit_epoch = 0xffffffffu;
+    g_peer_commit_epoch = 0xffffffffu;
+    g_peer_commit_tick = 0;
+    g_fork_streak = 0u;
+    g_fork_streak_tick = 0u;
     clear_baseline_pin();
     clear_episode_wire_state();
     fprintf(stderr, "psxrecomp: rb snap ring ready depth=%u snap_interval=%u\n",
@@ -2845,13 +3287,25 @@ void psx_netplay_rb_shutdown(void)
     g_tip_hold_quiet_t0_ms = 0ull;
     g_tip_hold_block_quiet = 0;
     g_tip_hold_enter_ms = 0ull;
+    g_post_tip_hold_holdoff_t0_ms = 0ull;
     g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
+    g_tip_extend_from_tick = 0;
+    g_last_commit_epoch = 0xffffffffu;
+    g_peer_commit_epoch = 0xffffffffu;
+    g_peer_commit_tick = 0;
+    g_fork_streak = 0u;
+    g_fork_streak_tick = 0u;
     g_last_good_bb_pc = 0;
     g_agreed_valid = 0;
     g_agreed_through = 0;
     g_agreed_span_lo = 0;
+    g_peer_resolved_through = 0;
+    g_peer_resolved_wait_t0_ms = 0ull;
+    g_peer_resolved_gate_expired = 0;
+    g_local_advertised_through = 0;
+    g_peer_resolved_hb_last_ms = 0ull;
     g_epoch = 0;
     g_peer_abort_last_epoch = 0xffffffffu;
     g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
@@ -3279,8 +3733,17 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
         return 0;
     }
     /* TipHold/Verify leave invalidates the prior POST pair. */
-    if (phase_at_entry == nRNetRbPhaseTipHold || phase_at_entry == nRNetRbPhaseVerify)
+    if (phase_at_entry == nRNetRbPhaseTipHold || phase_at_entry == nRNetRbPhaseVerify) {
         clear_post_handshake();
+        /* §42c: remember the matched/POSTed tip we are extending away from —
+         * updated on EVERY TipHold/Verify extend so it always names the tip
+         * the current rereplay reloads from (the one provably-preserved
+         * matched snap). If the peer's OP_COMMIT lands there while we sit in
+         * Verify at the extended tip, the extension is doomed — abandon and
+         * realign there instead of verify-timeout forking. */
+        if (new_target > old_target)
+            g_tip_extend_from_tick = old_target;
+    }
     /* Prefill hist from the delay ring before resign/extend so local seat
      * (FOLLOW) and correction seat (initiator wire peek) seal auth pads —
      * not invent-idle — while Live is invent-cap stalled at the prior tip. */
@@ -3469,6 +3932,39 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
             s_refuse_last_mismatch = mismatch_tick;
         } else {
             s_refuse_suppressed++;
+        }
+        return 0;
+    }
+    /* §38/§39: during tip-hold agreed holdoff, do not open load above the
+     * commit frontier (peer may still tip-hold). Clamp in choose_load should
+     * already pin load; this is belt-and-suspenders. */
+    if (g_rb && post_tip_hold_holdoff_active()) {
+        uint32_t tip_rt = rnet_rb_resolved_through(g_rb);
+        if (tip_rt > 0u && load > tip_rt) {
+            static uint32_t s_holdoff_refuse_sim;
+            if (s_holdoff_refuse_sim != sim) {
+                fprintf(stderr,
+                        "psxrecomp: rb begin DEFER mismatch=%u load=%u "
+                        "frontier=%u — tip-hold agreed holdoff\n",
+                        (unsigned)mismatch_tick, (unsigned)load,
+                        (unsigned)tip_rt);
+                fflush(stderr);
+                s_holdoff_refuse_sim = sim;
+            }
+            return 0;
+        }
+    }
+    /* §40/§41: defer above peer RESOLVED only while the bounded gate holds. */
+    if (peer_resolved_gate_blocks(load)) {
+        static uint32_t s_peer_defer_sim;
+        if (s_peer_defer_sim != sim) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin DEFER mismatch=%u load=%u "
+                    "frontier=%u — peer RESOLVED\n",
+                    (unsigned)mismatch_tick, (unsigned)load,
+                    (unsigned)g_peer_resolved_through);
+            fflush(stderr);
+            s_peer_defer_sim = sim;
         }
         return 0;
     }
@@ -3832,8 +4328,31 @@ void psx_netplay_rb_pump(void)
     if (!g_rb || !s)
         return;
 
+    /* §40: drain RESOLVED before SYNC so follow BEGIN in the same poll
+     * sees an updated frontier (max(agreed, resolved_through)). */
+    {
+        rnet_u32 resolved = 0;
+        while (rnet_session_take_rb_resolved(s, &resolved))
+            apply_peer_resolved(resolved);
+    }
+    /* §41: retransmit confirmed RESOLVED while peer lagging. */
+    maybe_heartbeat_agreed_resolved();
+
     while (rnet_session_take_rb_sync(s, &epoch, &mismatch, &load, &target, &cslot, &op,
                                      &wire_flags)) {
+        if (op == RNET_RB_SYNC_OP_COMMIT) {
+            /* §42c: peer committed epoch at tick (load field) and left it.
+             * Record for the tip-extend abandon; also fold into the RESOLVED
+             * watermark (a commit is by definition resolved through tick). */
+            if (load > 0u &&
+                (g_peer_commit_epoch != epoch || load > g_peer_commit_tick)) {
+                g_peer_commit_epoch = epoch;
+                g_peer_commit_tick = load;
+                apply_peer_resolved(load);
+                (void)maybe_abandon_tip_extend();
+            }
+            continue;
+        }
         if (op == RNET_RB_SYNC_OP_ABORT) {
             /* Peer tore its episode down. Mirror teardown + the shared
              * cooldown class (mismatch field) so both peers re-arm on the
@@ -3854,7 +4373,11 @@ void psx_netplay_rb_pump(void)
                 g_abort_from_peer = 1;
                 abort_episode(why);
                 g_abort_from_peer = 0;
-                if (snap_was_applied && have)
+                /* §42 P1: prefer the sender's wire realign tick (load field)
+                 * so both peers rewind to the SAME tick; fall back to the
+                 * local pick only when the wire carried none / no snap. */
+                if (!honor_peer_abort_realign(load, snap_was_applied, why) &&
+                    snap_was_applied && have)
                     schedule_live_realign(tick, why);
                 /* Shared cooldown class → same re-arm schedule as the peer. */
                 if (cls == RNET_RB_ABORT_CLASS_REALIGN) {
@@ -3873,6 +4396,20 @@ void psx_netplay_rb_pump(void)
                         arm_rewind_cooldown_ticks(live_sim, cool_n, why);
                 }
             } else {
+                /* §42 P1: peer aborted the episode we just unilaterally
+                 * committed (tip-hold SAFETY while its verify timed out) —
+                 * the epoch no longer matches anything active here, but the
+                 * commit rode a tip the peer is now rewinding away from.
+                 * Honor the wire realign tick or the fork is permanent
+                 * (2026-08-02 soak: slot1 committed 986, slot0 aborted to
+                 * 944 → baseline mismatch storm forever). */
+                if (epoch == g_last_commit_epoch && load > 0u) {
+                    char why[96];
+                    snprintf(why, sizeof(why),
+                             "peer abort (post-commit) epoch=%u class=%u",
+                             (unsigned)epoch, (unsigned)cls);
+                    (void)honor_peer_abort_realign(load, 0, why);
+                }
                 /* Not (or no longer) in that episode — still honor hard
                  * cooldown classes so we don't instantly re-initiate into a
                  * peer that just declared a storm/no-snap failure. */
@@ -4056,29 +4593,6 @@ void psx_netplay_rb_pump(void)
         }
     }
 
-    {
-        rnet_u32 resolved = 0;
-        while (rnet_session_take_rb_resolved(s, &resolved)) {
-            rnet_rb_set_peer_convergence(g_rb, resolved);
-            /* Peer already POST-matched and tip-held this tip (or later). If
-             * we are still stuck in Verify waiting for their POST, trust
-             * RESOLVED as the missing half of the handshake — otherwise a
-             * single lost POST leaves us here until verify timeout while
-             * they advance Live on the same tip (2026-08-01 soak). */
-            if (rnet_rb_is_active(g_rb) &&
-                rnet_rb_get_phase(g_rb) == nRNetRbPhaseVerify &&
-                g_local_post_sent && g_post_target > 0u &&
-                resolved >= g_post_target) {
-                fprintf(stderr,
-                        "psxrecomp: rb verify accept peer RESOLVED tip=%u "
-                        "(local_post=%u — POST may have been lost)\n",
-                        (unsigned)resolved, (unsigned)g_post_target);
-                fflush(stderr);
-                enter_tip_hold(g_post_target);
-            }
-        }
-    }
-
     /* Retransmit follow-NACK while initiator may still be sealing. */
     if (g_follow_nack_pending && g_follow_nack_sends < RB_FOLLOW_NACK_REXMIT) {
         send_follow_nack(g_follow_nack_epoch, g_follow_nack_mismatch, g_follow_nack_load,
@@ -4124,6 +4638,12 @@ void psx_netplay_rb_pump(void)
     if (rnet_rb_is_active(g_rb) && rnet_rb_get_phase(g_rb) == nRNetRbPhaseVerify &&
         g_local_post_sent && !g_peer_post_ok) {
         uint64_t now = rb_mono_ms();
+        /* §42c: the peer's SAFETY-commit notice usually landed while we
+         * were still in the tip-extend rereplay (Replay phase) — re-check
+         * the recorded OP_COMMIT now that we are in Verify, or we ride the
+         * full verify timeout for nothing. */
+        if (maybe_abandon_tip_extend())
+            return;
         if (!g_post_rexmit_logged) {
             fprintf(stderr, "psxrecomp: rb verify wait peer POST core=%08x\n",
                     (unsigned)g_post_digest);

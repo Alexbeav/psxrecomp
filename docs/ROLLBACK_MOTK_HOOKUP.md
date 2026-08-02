@@ -2248,8 +2248,8 @@ and ABSOLUTE was guaranteed.
       (even when latched). Admit spin captures while
       `psx_netplay_rb_tip_holding()` so live keeps updating.
 - [x] `psx_netplay_live_pad_buttons()` + `tip_hold_any_pad_held(tip)`:
-      local uses live buttons; remote uses latest arrived row in
-      `tip..tip+runway` (not parked `sim`).
+      local uses live buttons; remote initially walked latest-ahead
+      (revised in §37 to sealed tip only).
 - [x] Invent-cap stall in `try_admit` still keys off wire/staged (do not
       invent-walk while the published tip pad is held — that was the
       key-repeat class). Only wall-clock finalize uses live.
@@ -2257,3 +2257,436 @@ and ABSOLUTE was guaranteed.
 **Re-soak:** `SAFETY deferred` then quiet/commit soon after release
 (not ~2s ABSOLUTE); ABSOLUTE only for truly stuck pads; menu fps not
 collapsing to ~1 on held tip-holds.
+
+---
+
+## 37. TipHold remote held = sealed tip only (2026-08-02)
+
+**Post-§36 soak:** local live worked (`SAFETY deferred` → `held=0` commit
+common) but **2–3 ABSOLUTE 2000ms** remained with tip pads idle
+(`s0=ffff s1=ffff`, `pending=0`). Tip **1187** was asymmetric: slot0
+quiet-committed immediately; slot1 deferred then ABSOLUTE while slot0
+invent-raced (`lead=-5`, `pcap FREEZE`). Cause: §36 remote `held` walked
+`tip..tip+runway` and treated a **post-tip press** as held — reintroducing
+the §35 over-block, but only on the peer still tip-holding.
+
+**Fixes:**
+
+- [x] Remote held = sealed **tip** row only (same rule as pending-release:
+      tip idle → not held for finalize). Future presses tip-extend / fresh
+      episode after quiet.
+- [x] SAFETY/ABSOLUTE logs include `held_local=` / `held_remote=` for soak
+      attribution.
+
+**Re-soak:** no ABSOLUTE on idle-tip + pending=0; quiet/SAFETY after local
+release; asymmetric tip-hold lead cliffs gone.
+
+---
+
+## 38. Post–tip-hold agreed holdoff + load clamp (2026-08-02)
+
+**Post-§37 soak:** ABSOLUTE gone, but a **follow-NACK resim storm** hit
+after dense menu tip-holds. Tip **860**: slot0 quiet-committed then
+`agreed ADVANCE 860→864` and `begin load=864`; slot1 still tip-holding
+(`SAFETY deferred held_local=1`, frontier=860) → `follow REFUSED past
+frontier` → NACK → demote/cooldown → invent fork → baseline mismatch
+ABORT chain (`mispredict=24`, `lead` spikes to 75+).
+
+**Cause:** HC ADVANCE after tip-hold commit races a peer that has not
+left tip-hold yet. Follower frontier stays at the sealed tip while
+initiator opens with load > tip.
+
+**Fixes:**
+
+- [x] **300ms agreed ADVANCE holdoff** after tip-hold commit
+      (`RB_MOTK_POST_TIP_HOLD_AGREED_HOLDOFF_MS`) — covers peer SAFETY
+      deferred (~250ms).
+- [x] **choose_load clamp** to commit frontier **only while holdoff is
+      active** (revised §39 — always-on ≤runway+4 was harmful).
+- [x] **begin DEFER** during holdoff if load still above frontier
+      (promote wire; no NACK-bait episode).
+
+**Re-soak:** no `follow REFUSED … past frontier` right after tip-hold
+commit; no NACK demote storm; look for `choose_load clamp` /
+`begin DEFER … tip-hold agreed holdoff` only inside the holdoff window.
+
+---
+
+## 39. Gate choose_load clamp on holdoff only (2026-08-02)
+
+**Post-§38 soak:** NACK storm gone, but hangs arrived **sooner**. After
+tip-hold 757, holdoff expired and HC ADVANCEd `757→784`; the always-on
+`≤runway+4` clamp (gap=27) forced `choose_load clamp 784→757
+(holdoff=0)` → `SPAN CAP load=752 target=776` while mismatch=792 →
+tip-extend cliffs → peer tip-hold-committed while local tip-extended →
+`verify timeout (peer POST missing)` → realign to 752 with
+`lead=47` / `present_gap≈4s`.
+
+**Fix:**
+
+- [x] choose_load clamp runs **only** when `post_tip_hold_holdoff_active()`;
+      post-holdoff ADVANCE is left alone.
+- [x] begin DEFER likewise holdoff-only (no runway+4 gate).
+
+**Re-soak:** no `choose_load clamp … holdoff=0`; no SPAN CAP from clamping
+a healthy ADVANCE; holdoff may still log clamp/DEFER in the first ~300ms
+after tip-hold commit.
+
+---
+
+## 40. Advertise RESOLVED on ADVANCE + gate begin on peer frontier (2026-08-02)
+
+**Post-§39 soak:** holdoff clamp gone, but NACK returned. Tip-hold 769 →
+slot0 HC `ADVANCE 769→784` → `begin load=784`; slot1 frontier still 769
+→ `follow REFUSED … past frontier` → NACK → demote → cooldown →
+`promote-no-resim` → SPAN CAP → tip-extend ladder → POST/baseline desync.
+
+**Cause:** agreed ADVANCE is **local-only**. RESOLVED was only burst on
+tip-hold/episode commit, so the follower's
+`frontier = max(agreed, resolved_through)` stayed at the tip while the
+initiator opened past it. Holdoff only covers the first ~300ms; after
+that the race is back.
+
+**Fixes:**
+
+- [x] Track **`g_peer_resolved_through`** from inbound `RNET_RB_RESOLVED`
+      only (not local tip-hold `set_peer_convergence`, which would let the
+      initiator self-authorize).
+- [x] On HC **ADVANCE** / HEAL / BOOTSTRAP agreed raise: burst RESOLVED at
+      the new watermark (`advertise_agreed_resolved`) so the follower's
+      library `resolved_through` can accept the load.
+- [x] **choose_load clamp** + **begin DEFER** when `load > g_peer_resolved_through`
+      (logs: `peer RESOLVED frontier` / `peer RESOLVED`).
+- [x] Drain RESOLVED **before** SYNC in `psx_netplay_rb_pump` so BEGIN in
+      the same poll sees the updated frontier.
+
+**Re-soak:** no immediate `follow REFUSED … past frontier` after tip-hold
++ ADVANCE; look for `agreed ADVANCE` paired with peer `choose_load clamp
+… (peer RESOLVED frontier)` until both sides exchange RESOLVED, then
+healthy begin at the shared watermark.
+
+---
+
+## 41. Bound peer-RESOLVED gate + no HEAL-FORCE advertise (2026-08-02)
+
+**Post-§40 soak (2/2):** NACK storm gone, but `slot=1` permanently
+`begin DEFER … peer RESOLVED` after `HEAL-FORCE` raised local agreed past
+a stuck `g_peer_resolved_through` (tip-hold tip). Peer never ADVANCEd
+(still tip-holding / forked HC), so inbound RESOLVED never rose —
+unbounded gate silently blocked every invent≠wire correction for the
+rest of the session. FPS stayed 60; Live desynced with no episode open.
+
+**Cause:** §40 gated begin forever on peer RESOLVED with no timeout, and
+advertised unconfirmed `HEAL-FORCE`/`BOOTSTRAP` watermarks as if they
+were mutual.
+
+**Fixes:**
+
+- [x] **500ms gate** (`RB_MOTK_PEER_RESOLVED_GATE_MS`): after waiting,
+      sticky-expire and force-open (`peer RESOLVED stall force`); NACK
+      remains recoverable. Re-arm only when peer RESOLVED advances or a
+      fresh HC-confirmed advertise raises past peer.
+- [x] **Heartbeat** (`RB_MOTK_PEER_RESOLVED_HB_MS=100`): retransmit last
+      *confirmed* RESOLVED while peer lags.
+- [x] **HEAL-FORCE / BOOTSTRAP do not advertise** RESOLVED (unconfirmed).
+- [x] Tip-hold enter/commit still track `g_local_advertised_through` for
+      the heartbeat.
+
+**Re-soak:** after HEAL-FORCE, expect at most ~500ms of
+`begin DEFER … peer RESOLVED`, then `peer RESOLVED stall force` and an
+episode open (or follow NACK→demote, not forever-DEFER). No unbounded
+`frontier=<tip>` DEFER ladder.
+
+## 42. Mutual abort realign + tip-extend abandon + fork-storm guard (2026-08-02)
+
+**Post-§41 soak (3/3):** DEFER deadlock gone, but a *permanent core fork*
+appeared. Sequence: both peers tip-hold and POST-match tip 986; slot0
+absorbs a coalesce-ahead edge → tip-extend 986→996 → rereplay → Verify@996;
+slot1 meanwhile SAFETY-CAP commits at 986 and leaves the episode (its
+RESOLVED=986 arrives at slot0 but was ignored — below `g_post_target`).
+Slot0 sits in Verify until `verify timeout (peer POST missing)` and
+realigns to its pre-episode pin (**944**); slot1, receiving the ABORT
+after its commit, realigns to its own pick (**986**). The two Lives then
+run from different bases; every subsequent episode dies with
+`baseline core mismatch local=… peer=…` in an infinite abort→realign→
+reopen loop (~40 cycles until disconnect).
+
+**Causes:**
+
+1. **Tip-extend race:** extension from a matched tip while the peer
+   commits at the old tip can never verify — but we rode it into a
+   4-second verify timeout instead of abandoning.
+2. **Asymmetric realign:** the wire `OP_ABORT` already carries the
+   sender's realign tick (`load` field), but the receiver ignored it and
+   realigned to its own local evidence — different ticks, permanent fork.
+   Worse, a peer that had already committed and left the episode
+   (epoch no longer active) skipped realign entirely.
+3. **No fork backstop:** same-tick baseline-mismatch aborts repeated
+   forever, rubber-banding Live on every reopen.
+
+**Fixes:**
+
+- [x] **P2 — tip-extend abandon** (`g_tip_extend_from_tick`): extension
+      from TipHold/Verify records the matched tip it extended from. If
+      peer RESOLVED lands in `[from, post_target)` while we sit in
+      Verify at the extended tip, the peer committed at the old tip —
+      abandon: set agreed=from (both cores matched there), prime HC,
+      advertise, `abort_episode` with wire class REALIGN +
+      realign_tick=from, realign Live to the nearest snap ≤ from, clear
+      cooldown. The extension edge re-arrives as a fresh wire mismatch.
+- [x] **P1 — honor wire realign tick** (`honor_peer_abort_realign`): on
+      peer ABORT, prefer the sender's realign tick over the local pick.
+      If we are *ahead* of it (unilateral tip-hold commit past it),
+      demote agreed/resolved/HC to it and rewind — even when no episode
+      snap was applied. Also honored when the abort's epoch matches
+      `g_last_commit_epoch` (we committed and left before the ABORT
+      arrived — exactly the soak case).
+- [x] **P4 — fork-storm guard** (`RB_FORK_STORM_LIMIT=4`,
+      `RB_FORK_STORM_COOLDOWN_TICKS=600`): ≥4 consecutive
+      baseline-mismatch aborts realigning to the same tick → loud
+      `rb DESYNC — unrecoverable fork` log, keep-live (no more
+      rubber-band rewinds), STORM class on the wire, 600-tick cooldown.
+      Any commit resets the streak. Backstop only — P1/P2 should prevent
+      the fork from forming.
+
+**Re-soak:** on a tip-extend race expect
+`rb tip-extend ABANDON — peer RESOLVED=…` (or
+`rb peer abort realign honor …` on the committed side) and both peers
+realigning to the SAME tick; no `baseline core mismatch` storm; the
+`DESYNC — unrecoverable fork` line should never appear.
+
+**Re-soak result (2026-08-02, 4/4):** fork storm GONE. Two tip-extend
+races occurred (757→762 and 936→944-ish); both resolved cleanly via P1 —
+the committed side logged `peer abort realign honor 720/912 … unilateral
+tip rolled back` and both peers landed on the same tick. No baseline
+mismatch, no NACK, no DESYNC. Remaining cost: P2 ABANDON never fired —
+the SAFETY commit's RESOLVED burst arrived while the extender was still
+mid tip-extend *rereplay* (Replay phase, e.g. slot1 commit@757 landed
+during slot0's 758..762 resim), so `apply_peer_resolved`'s Verify-phase
+check missed it and no further RESOLVED ever came. The extender rode the
+full 4s verify timeout (4000ms present-gap freeze) before P1 healed it.
+
+**§42b follow-up (SUPERSEDED by §42c — caused the soak-4 fork):**
+
+- [x] Extracted the abandon into `maybe_abandon_tip_extend()` and also
+      call it from the Verify wait poll in `psx_netplay_rb_pump` with the
+      stored `g_peer_resolved_through` — the check no longer depends on
+      RESOLVED arriving while already in Verify. Expected effect: the 4s
+      freeze becomes an immediate ABANDON on the first Verify poll.
+- [x] Abandon commits at the peer's RESOLVED tick itself, not
+      `g_tip_extend_from_tick` — with chained extends (744→751→754→757)
+      from_tick is only the FIRST matched tip; the peer committed at the
+      latest one, and its commit proves our POST there matched.
+
+## 42c. OP_COMMIT wire signal — abandon keyed on commits only (2026-08-02)
+
+**Soak 4 (low-latency, auto D/P):** §42b's abandon FALSE-FIRED and created
+the fork it was meant to prevent. Both peers were in epoch 24, extended
+760→773, resimming IDENTICAL states (audit digests match tick-for-tick
+through 766) — a healthy episode that would have verified at 773. On the
+first Verify poll the abandon saw sticky `g_peer_resolved_through=768`
+and treated it as "peer committed and left". But 768 was a stale §40
+HC-ADVANCE watermark from earlier live play (interval-aligned, 96×8) —
+the peer never committed anything; it was mid-FOLLOW at tick 767. The
+abandon committed agreed=768 using our own resim snap (`828285e2`, never
+POSTed by anyone), aborted, and told the peer to realign to 768 — whose
+ring snap there was its PRE-rereplay live state (`6cafabd5`). Same tick,
+two states → baseline mismatch → fork storm at 992 → P4 DESYNC guard
+fired (mechanically correct) but the fork persisted to disconnect.
+
+**Two root errors in §42/§42b:**
+
+1. **RESOLVED conflates two meanings** — "HC watermark advanced" (§40
+   live-play interval confirms) and "I committed the episode and left"
+   (SAFETY-commit burst). Only the latter justifies abandoning.
+2. **Tick equality ≠ state equality** — a ring snap at tick T is only
+   the mutual state if T's state was PROVEN mutual (POST pair matched /
+   baseline digest-checked) and never overwritten by a later resim.
+
+**Fixes:**
+
+- [x] **`RNET_RB_SYNC_OP_COMMIT` (=3)** in recomp-net session.h: episode
+      commit notice carrying (epoch, committed tick in the load field).
+      Burst (×3) from `finalize_tip_hold` and `commit_episode` alongside
+      RESOLVED. Receiver records `g_peer_commit_epoch/tick` and folds the
+      tick into the RESOLVED watermark.
+- [x] **Abandon keys on OP_COMMIT only**: same epoch, commit tick <
+      post_target, and tick == `g_tip_extend_from_tick` (now updated on
+      EVERY TipHold/Verify extend, so it names the tip the current
+      rereplay reloaded from — the one snap provably preserved as the
+      POST-matched state). Exact snap required; no walk-down. Checked on
+      OP_COMMIT arrival and on every Verify wait poll (commit usually
+      lands mid-rereplay). RESOLVED no longer triggers abandon at all.
+- [x] Missing conditions fall back to verify timeout + §42 P1 honor,
+      which soak 3 proved converges both peers at the sender's pin tick.
+
+## 43. LAN micro-grace before gap-1 invent (2026-08-02)
+
+**Soak 4 scheduler audit:** with `rtt_raw` 0–1ms the admit path still ran
+~100% of admissions 1 tick ahead of the confirmed wire —
+`invent_gap1=578/483`, ALL case A ("tip healthy/advancing"),
+`invent_runway_empty` 4/0, `tip_ema≈period`. That is a sub-frame PHASE
+offset between the two peers' frame boundaries, not latency; D=2 covers
+the transit easily. §29's immediate-invent policy is correct for WAN (a
+fixed transit delay cannot be waited out) but on LAN the needed row is
+in flight and lands a few ms later; inventing instead cost slot0 96
+mispredict correction episodes (vs 6 on slot1) — a large share of the
+session's episode churn.
+
+**Fix:** in the §28 adaptive split (no `PSX_RB_GAP1_GRACE_MS` override),
+case A now takes a bounded micro-grace instead of `cap=0` when either:
+
+- the link is provably fast (`rtt_raw <= 12ms`), or
+- the next tip is due imminently by cadence (`tip_age + 6ms >= period`
+  — case A already bounds `tip_age < 1.5×period`).
+
+Cap = `rtt_raw/2 + 3ms`, max 6ms. Expiry still invents (§29 behavior,
+worst-case 6ms tax), `np_gap1_note_expire_invent` unchanged, and the
+existing `gap1_grace` counter in `rb admit stats` shows how often the
+wait converted an invent into a real row.
+
+**Re-soak watch:** `invent_gap1` should collapse toward 0 on LAN with
+`gap1_grace` rising instead; mispredict counts should drop accordingly.
+On the tip-extend race expect `rb tip-extend ABANDON — peer COMMIT` (or
+the §42 P1 `realign honor` fallback) with both peers on the same tick
+and NO `baseline core mismatch` follow-up.
+
+## 44. Real-delay consumption + scheduler extraction (2026-08-02)
+
+**Root cause behind §27–§29/§43's permanent `remote_lead=D-1`:** the
+rollback admit consumed the wire at `sim + D` — the SAME row the local
+pad was sampled into on that very admit. Local input latency was zero
+and D was only a numbering offset, so by construction the peer's row
+for the consumption wire was still in flight on every tick: the
+steady state was `pred_depth=1`, hundreds of GAP1_PHASE invents per
+match, and the entire §21–§43 grace/pacing stack existed to manage a
+cushion that never existed. Notably, recomp-net's own LOCKSTEP path
+(`rnet_session_try_admit`) always did this correctly — "simulate wire
+T while sampling local input for wire T+D" with a primed neutral
+prefix — only MotK's rollback admit diverged.
+
+**§44 real delay (default ON, `PSX_RB_ZERO_DELAY=1` restores legacy):**
+
+- **Consumption**: guest tick T plays wire row T. All sim→wire mapping
+  now goes through ONE helper, `np_sched_wire_for_sim()` (admit, seal
+  promote, reconcile, tip-hold peeks, coalesce-ahead, pending-release
+  walk — 8 former `rnet_wire_tick_from_sim` call sites).
+- **Production**: unchanged — `rnet_session_prepare_local_tip` samples
+  the pad at admit(T) into wire T+D. A press costs D ticks of local
+  latency and buys D ticks of transit budget; the peer's row for T
+  arrives ~D·period − transit BEFORE it is needed. Healthy steady
+  state: `remote_lead ≈ D`, `pred_depth = 0`, zero invents. The §21–§43
+  stack still exists but is now the RECOVERY path (lag spikes that
+  actually drain the cushion), not the per-tick norm.
+- **Startup / delay changes**: the mutual-ready `hard_resync + prime`
+  already fills wires [0..D) (each peer primes its own hold);
+  `prepare_local_tip` (recomp-net, both copies) now back-fills EVERY
+  missing wire in [sim..sim+D] instead of storing only the tip, so a
+  mid-session DELAY_SYNC increase no longer leaves an unproduced gap
+  the peer must invent across. Also unifies rollback with lockstep
+  consumption (both wire=sim), removing a mapping discontinuity at
+  FMV-lockstep ↔ rollback transitions.
+- **`cushion rebuilt`** (post-episode invent refusal until
+  `remote_lead >= D-1`) now literally means the cushion is refilled —
+  lead is measured against sim, so D-1 is "one in flight".
+
+**Auto D resolution (`PSX_RB_AUTO_DELAY=0` disables):** with a real
+cushion, D IS the latency/robustness tradeoff, so the host resolves it
+from the link: `target = ceil(one_way/tick) + 1`, clamped [2..16],
+trusted POST RTT only (>=4ms), 3 consecutive 5s evaluations must agree,
+30s cooldown, and lowering additionally requires 30s freeze-free (a
+pcap freeze means prediction was needed at the CURRENT D). Proposed via
+the existing DELAY_SYNC path; the reactive §22 bump still covers
+untrusted-RTT freeze storms. LAN: rtt untrusted/low → D stays at the
+configured 2 (33ms latency, 33ms cushion).
+
+**Scheduler extraction:** all admission POLICY moved to
+`runtime/src/psx_netplay_sched.c` + `runtime/include/psx_netplay_sched.h`
+(~850 lines out of psx_netplay.c): invent RTT synth, §21 grace, §27/§28/
+§29/§43 gap1 policy, tip-arrival cadence, §29–§32 timesync pacing +
+phase-ctrl telemetry, pcap freeze + §22 adaptive bump, admit stats, §44
+wire mapping + auto delay. psx_netplay.c keeps the MECHANICS (ring
+peeks, hist puts, tip-hold invent-cap, publish) and calls:
+`np_sched_pre_admit` (throttle/cushion/telemetry gate) →
+`np_sched_on_remote_miss` (stall vs invent decision) →
+`np_sched_note_remote_hit` / `np_sched_post_admit`;
+reconcile feeds `np_sched_note_mispredict`; episode boundaries call
+`psx_netplay_timesync_on_episode_boundary` (unchanged name, now a
+wrapper over `np_sched_note_episode_boundary`). State is bridged via
+`np_sched_bind` (pointers to session/D/P/local_slot) at netplay start.
+Everything in the file is host-side pacing — no guest-visible values,
+so determinism is unaffected by tuning it.
+
+**Re-soak watch:** `rb runway` lines should show `remote_lead ≈ D` and
+`pred_depth=0` in steady state; `invent_gap1`/`gap1_case_a` ≈ 0 (§43's
+micro-grace should almost never even arm); mispredict correction
+episodes near zero outside real lag spikes; local input latency D ticks
+(feel check: menu cursor). A/B against the old pipeline via
+`PSX_RB_ZERO_DELAY=1` on BOTH peers (consumption mapping must match or
+the sims interpret wire rows D apart — instant desync).
+
+## 45. Tip-hold race-ahead + cushion absurd-lead guard (2026-08-02)
+
+**Soak (post-§44):** real-delay confirmed (`wire=sim`, auto D 2→3, steady
+`pred_depth=0`, no DESYNC/NACK), but a fight/menu exchange still felt like
+"long rewind that doesn't play forward." Logs:
+
+1. Slot0 tip-hold at 5078 hit **ABSOLUTE CAP 2000 ms** (`held_remote=1` on
+   the sealed tip) while slot1 SAFETY-committed ~250 ms and kept Live.
+2. Slot0 parked at invent-cap; peer tip raced to ~5379 → `remote_lead≈280`.
+3. `RNET_HISTORY_LENGTH=128` (~2.1 s) aged out the wires slot0 needed;
+   post-commit invent `RUNWAY_EMPTY` across the gap, then SPAN CAP
+   `mismatch=5375 load=5072/5120` (visual snap-back ~250 ticks, chunked
+   24) with `replay%=30–67%`. Hold-last present (§33) made it look like
+   rewind→freeze→jump, not corrected forward play.
+4. Cushion rebuild cleared at `lead=11` then **`lead=280`** — treating a
+   park cliff as a refilled cushion, then inventing into the aged gap.
+
+**Fixes:**
+
+- [x] **RACE CAP** — while SAFETY-deferred (digital held), if
+      `highest_remote_wire > tip + 24` (one tip runway), commit
+      immediately. Peer tip that far ahead means they left TipHold; sitting
+      for the rest of ABSOLUTE only ages the ring.
+- [x] **REMOTE-HELD wall 500 ms** — when `!held_local && held_remote`
+      (we released; sealed tip still shows peer pressed), Absolute escape
+      is 500 ms instead of 2000 ms. Stuck local pad keeps the full 2000 ms
+      wall. Coalesce/tip-extend still own the first SAFETY window.
+- [x] **Cushion absurd-lead guard** — clear `cushion_rebuild` only when
+      `D-1 <= lead <= D+P`. Leads above that log `cushion KEEP (absurd
+      lead=…)` and keep invent refused so catch-up consumes real rows
+      instead of inventing across a cliff.
+
+**Re-soak watch:** no more `ABSOLUTE CAP 2000` on held_remote-only while
+peer tip advances; expect `RACE CAP` / `REMOTE-HELD CAP` instead. No
+`cushion rebuilt remote_lead=2xx`. SPAN CAP / `replay%` spikes after
+tip-hold should collapse. Presentation still hold-last during resim (§33)
+— that is intentional; the goal here is to stop *needing* deep catch-up.
+
+## 46. HC-silent promote for button mispredicts (2026-08-02)
+
+**Problem:** MotK is digital — the portable input contract always
+**rewinds** when `buttons` differ, and only uses `hash_confirm_promote`
+for small stick deltas. Soak: loading-screen clicks produced
+`rewind-request … pub=ffff wire=bfff → episode_open=1` even though the
+game wasn't reading pads (digests would match). Ungated menu soft-promote
+was tried earlier and forked RAM (sticky hold-last Up skipped a needed
+resim); that path stays off.
+
+**Fix:** before the contract rewind path, if:
+- published buttons ≠ wire buttons,
+- the tick is completed (`sim > t`),
+- and `netplay_hc_confirm_through(t)` (both peers' FRAME_COMMIT digests
+  matched through t),
+
+then promote the wire into hist (scrub-ahead on release-only) and
+**do not** open an episode or feed timesync mispredict debt. Fail-closed:
+if digests did not match, behavior is unchanged (real press that affected
+state still resims). `PSX_RB_HC_SILENT=0` disables.
+
+Log: `rb wire hc-silent-promote … (digests matched through t — hist only,
+no resim)`.
+
+**Re-soak watch:** loading-screen / ignored-pad clicks should log
+`hc-silent-promote` with `episode_open=0`; menu/fight presses that change
+state still `rewind-request`. No new baseline forks from silent promote.
