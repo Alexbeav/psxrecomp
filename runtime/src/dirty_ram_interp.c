@@ -498,6 +498,27 @@ uint32_t g_freeze_snap_pc    = 0;
 uint32_t g_freeze_snap_insn  = 0;
 uint32_t g_freeze_snap_tcb   = 0;
 uint32_t g_freeze_snap_gpr[32] = {0};
+
+/* Boot-time seeds for startup-only dirty-code diagnostics.  Some kernel and
+ * overlay routines finish all interesting work before the TCP debug server can
+ * accept a command, so the existing bounded gate/freeze probes also need an
+ * environment path.  These switches only select ring-buffer instrumentation;
+ * they do not alter dispatch or guest execution. */
+static void dirty_diag_env_init(void) {
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+    const char *lo = getenv("PSX_DIRTY_INSN_GATE_LO");
+    const char *hi = getenv("PSX_DIRTY_INSN_GATE_HI");
+    const char *fa = getenv("PSX_INSN_FREEZE_ADDR");
+    const char *fn = getenv("PSX_INSN_FREEZE_NTH");
+    const char *ft = getenv("PSX_INSN_FREEZE_TARGET");
+    if (lo && *lo) g_insn_gate_lo = (uint32_t)strtoul(lo, NULL, 0);
+    if (hi && *hi) g_insn_gate_hi = (uint32_t)strtoul(hi, NULL, 0);
+    if (fa && *fa) g_insn_freeze_addr = (uint32_t)strtoul(fa, NULL, 0) & 0x1FFFFFFFu;
+    if (fn && *fn) g_insn_freeze_nth = (uint32_t)strtoul(fn, NULL, 0);
+    if (ft && *ft) g_insn_freeze_on_target = (uint32_t)strtoul(ft, NULL, 0);
+}
 /* ra-load watch (Confirm-(b)): capture the instruction that sets $ra to this
  * value. 0 = disabled. */
 uint32_t g_ra_load_watch        = 0;
@@ -2293,6 +2314,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
 int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
     extern int g_psx_dispatch_depth;
     extern void psx_fatal_halt(const char *reason);
+    dirty_diag_env_init();
 #ifndef PSX_NO_DEBUG_TOOLS
     /* A0/B0/C0 kernel-vector stubs are runtime-written, so calls to them
      * land HERE, not in the static dispatcher — which meant the bioscall

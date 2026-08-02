@@ -251,3 +251,108 @@ interpreter tiers are reported separately, and the guest/input/presentation
 boundary reproduces across clean processes. The next gate is R2: drive the
 retail frontend, exercise MENU/INIT overlays, prove reuse plus actual
 invalidation, and measure remaining fallback by range.
+
+## R2 native fasttrack divergence
+
+The first retail START campaign proved that the pad word reached retail code,
+but the all-native process stopped making useful progress after TITLE startup.
+The GPU counter froze at exactly 7,573,945 GP0 writes while the CD controller
+lost thousands of pending INT1 events and retried `Setmode`. With
+`PSX_OVERLAY_NATIVE_OFF=1`, GPU and CD activity remained healthy.
+
+A deterministic native-candidate rank bisection found rank 14 healthy and rank
+15 broken. Rank 15 was owner `0x00003590`, CRC `0xBC0AD72A`, in cached shard
+`00000000_CB2A51E3.dll`; it first executed at frame 732. The same compiled body
+also exported aliases `0x35AC`, `0x35B4`, `0x3620`, `0x3628`, and `0x3694`, so
+blocking only the owner address was insufficient. Rank 15 with the owner body
+blocked was healthy.
+
+Bounded interpreter instruction capture resolved the first semantic mismatch.
+At `0x362C`, the OpenBIOS fasttrack handler executes:
+
+```text
+lw    k0,0x4c38(k0)
+move  at,k0
+```
+
+On MIPS-I the `move` observes old `k0`; the loaded value becomes visible only
+after that successor. The interpreter therefore preserves the old pointer in
+`at` before storing the new queue pointer. Captured-overlay CFG emission instead
+wrote `k0` immediately, so `at` received the new pointer and a later store
+corrupted the CD fasttrack queue. The repository's separate full-function
+emitter already documents and implements this exact OpenBIOS load-delay idiom;
+only the CFG emitter used by captured overlays lacked the value semantics.
+
+`CodeGenerator::translate_basic_block` now recognizes ordinary in-block
+`LB/LBU/LH/LHU/LW` pairs whose immediate non-control-flow successor reads the
+destination. It emits the load into a temporary, runs the successor against the
+old register value, then commits the deferred value unless the successor itself
+writes that register. Label/control-flow boundaries remain conservative. The
+regression fixture uses the exact `lw k0; move at,k0; sw` sequence and verifies
+the generated ordering.
+
+The CLI package and a fresh ignored project were generated without editing
+generated C. Its 578-action Release/debug-tools build completed. The original
+four-region capture remained available in the immutable private capture
+history even though later probes had replaced the canonical manifest. Both the
+four-shard preflight and real rebuild succeeded under codegen hash `9713afe3`
+and config hash `cd77ebe4`.
+
+Two clean all-native processes passed the old ceiling:
+
+| Run | Observed frame | GP0 writes | CD INT1 lost |
+|---|---:|---:|---:|
+| A | 3,861 | 22,085,066 | 0 |
+| B | 4,055 | 23,973,334 | 0 |
+
+Both continued rendering and reading sectors. The first representative tier
+query loaded four regions and 117 candidates and reported 15,596,367 native
+overlay dispatches plus 25,029 interpreter fallbacks. The old GPU ceiling and
+CD-loss signature did not recur.
+
+## R2 operable frontend and replacement lifecycle
+
+The retail TITLE input window is its internal state 3 at `0x80156BDC`.
+Synchronizing the existing debug-server pad override to that state and holding
+active-low START (`0xFFF7`) produced the authentic `New Game` screen. Holding
+active-low Cross (`0xBFFF`) selected `New Game`, then `One Player`. No state
+write, skipped transition, or native frontend substitute was used.
+
+The continuous retail route then showed the opening aircraft movie at
+`512x240x24`, changed the application stack from depth/state `2/4` to `3/3`,
+and eventually reached depth/state `2/8` with the `384x240x15` mission briefing
+and its retail “Press X to continue” prompt. The title/menu itself remained
+`320x240x15`. CD `int1_lost` stayed zero throughout.
+
+An on-demand bounded capture at the movie boundary preserved two updated
+regions. Offline preflight and real compilation both succeeded:
+
+| Base / CRC | Bytes | Candidate definitions |
+|---|---:|---:|
+| `0x8013E000 / BA003DC3` | 40,964 | 84 |
+| `0x8014B000 / 979FB883` | 663,556 | 61 |
+
+Both had zero failed shards, unsupported-instruction TODOs, or unknown/bad
+targets. A clean process then loaded all six cached region variants and
+registered 242 candidates. Live candidate queries matched MOVIE entry
+`0x80143A10` and TITLE entries `0x801538C4` and `0x801501F0`; the clean route
+again reached state 8.
+
+This second route also supplied the required non-inferred replacement evidence:
+the loader reported one invalidation, one stale dispatch blocked, and one
+revalidation CRC miss, reducing the valid candidate count from 242 to 241 while
+execution continued safely. Aggregate state-8 tier counts were 46,643,785
+native-overlay dispatches and 186,261 interpreter fallbacks.
+
+Bounded hardware evidence at state 8 recorded 4,135 SPU key-ons and an 8,294
+entry key-on/off event total, with active retail voices. CD history contained
+2,340-byte raw sectors from the movie/briefing path. Headless audio rendering
+was disabled and the sampled sectors reported no XA-audio delivery, so XA
+output is not claimed yet.
+
+The framework suite passes 38/38 with `PYTHONUTF8=1`; without that required
+environment setting, three Python tests fail only on `cp1253` decoding. The
+ignored local experiment footprint is 4.032 GiB, below the 20 GiB cap. The R2
+frontend, capture/rebuild, cache reuse, and actual invalidation gates are now
+demonstrated. Remaining R2 work is fallback attribution by range, XA evidence,
+and a fixed-checkpoint repeat before selecting Mission 3 through retail state.

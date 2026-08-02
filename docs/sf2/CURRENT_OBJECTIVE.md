@@ -45,6 +45,41 @@ movie-request boundaries without adding SF2-specific substitutes.
   `0xFFFF`, and SIO state all match. Bounded GP0 counters also match exactly.
 - No retail BIOS path is configured; OpenBIOS LLE is sufficient for the
   measured resident and TITLE boundaries.
+- R2 initially exposed a generic CFG-emitter defect, not an SF2 lifecycle
+  defect. The captured low-RAM OpenBIOS fasttrack handler uses the MIPS-I
+  dependent pair `lw k0,0x4c38(k0); move at,k0`; the successor must observe old
+  `k0`. Captured-overlay CFG emission wrote the load result immediately and
+  corrupted the kernel CD queue pointer. Candidate-rank bisection isolated
+  owner `0x00003590`; interpreter instruction evidence and the existing
+  full-function emitter contract independently confirmed the load delay.
+- CFG emission now defers ordinary dependent load writeback through the
+  immediate successor. A focused regression uses the exact instruction pair.
+  The regenerated cache namespace is `cg9_9713afe3_gccd77ebe4`; the four-shard
+  preflight and real build both pass.
+- Two clean all-native runs passed the former freeze boundary with zero lost
+  CD INT1 events. They reached frames 3,861 and 4,055 with 22,085,066 and
+  23,973,334 GP0 writes respectively, versus the broken fixed ceiling of
+  7,573,945 writes. Native-overlay and interpreter dispatch remain reported
+  separately.
+- Retail pad injection is now operable when synchronized to TITLE internal
+  state 3 at `0x80156BDC`. Active-low START (`0xFFF7`) reaches the retail
+  `New Game` menu; Cross (`0xBFFF`) selects `New Game`, then `One Player`.
+  The unmodified application stack advances through movie state depth/state
+  `3/3` and reaches the state-8 mission briefing at depth 2.
+- The first frontend traversal captured and compiled two additional variants:
+  `0x8013E000/BA003DC3` and `0x8014B000/979FB883`, with zero failed shards,
+  unsupported-instruction TODOs, or unknown/bad targets. A clean reuse run
+  loaded six regions and registered 242 candidates. Live candidate CRCs match
+  at MOVIE `0x80143A10` and TITLE `0x801538C4`/`0x801501F0`.
+- The clean reuse route records an actual replacement lifecycle event before
+  state 8: one invalidation, one stale dispatch blocked, and one revalidation
+  CRC miss. This is measured replacement behavior, not an inferred initial
+  load.
+- Presentation boundaries observed on the continuous route include the
+  `320x240x15` title/menu, `512x240x24` opening movie, and `384x240x15`
+  mission briefing. CD retains `int1_lost=0`; bounded SPU telemetry records
+  4,135 key-ons and active retail voice traffic. Raw 2,340-byte movie/briefing
+  sector traffic is proven, but XA-audio delivery is not yet proven.
 
 ## R1 verdict
 
@@ -55,29 +90,27 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Establish deterministic controller injection at the state-4 TITLE boundary
-   and drive only retail transitions into MENU/INIT.
-2. Capture and compile any newly executed frontend overlays, then repeat from a
-   clean process to prove cache reuse.
-3. Exercise a real overlay replacement and record invalidation/revalidation
-   evidence; do not infer it from initial cache loads.
-4. Attribute the remaining 17,416 interpreter fallbacks by address range and
-   execution share, separating unseen code from unsupported code.
-5. Record both display pages, controller state, SPU/XA activity, and STR
-   requests with bounded diagnostics.
-6. Repeat milestone comparisons twice from clean processes and distinguish
-   stable guest state from transient host/query-timing status bits.
+1. Attribute interpreter fallbacks across the complete TITLE -> MOVIE -> state-8
+   route by address range and execution share, separating unseen code from
+   unsupported code.
+2. Name the invalidated candidate/range and verify whether the newly compiled
+   variants cover the replacement or correctly fall back after the CRC miss.
+3. Record bounded XA delivery/output evidence; SPU key activity and raw STR
+   sector traffic are already proven.
+4. Repeat the state-8 route with fixed input/state checkpoints and compare
+   stable guest state separately from host/query-timing values.
+5. Use only retail menu ownership to select the representative Mission 3 route;
+   do not substitute the oracle's direct diagnostic bootstrap.
 
 ## R2 remaining target
 
-- An operable retail frontend reached through retail-owned input and state
-  transitions.
-- Demonstrated overlay capture, compilation, reuse, and invalidation across the
-  TITLE/MENU/INIT family.
-- Measured native resident, native overlay, and interpreter shares by relevant
-  address range.
-- Verified two-page GPU presentation, controller input, SPU/XA activity, and
-  STR requests without modernization or native gameplay substitutes.
+- Quantified interpreter fallback by relevant frontend address range and share.
+- Bounded XA-audio delivery evidence to complement the verified SPU voice and
+  raw movie-sector activity.
+- A second fixed-checkpoint state-8 comparison after the new cache variants are
+  present.
+- Then select the representative Mission 3 route through retail-owned frontend
+  state without modernization or native gameplay substitutes.
 
 ## Known environmental detail
 
