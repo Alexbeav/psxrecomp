@@ -200,6 +200,8 @@ int  psx_netplay_start(const PsxNetplayConfig *cfg)
 }
 void psx_netplay_shutdown(void) {}
 void psx_netplay_stage_local(const PsxNetPad *pad) { (void)pad; }
+void psx_netplay_on_rb_snap_loaded(void) {}
+void psx_netplay_hc_fork_recovery_restart(void) {}
 int  psx_netplay_needs_local_sample(void) { return 0; }
 int  psx_netplay_live_pad_buttons(uint16_t *out)
 {
@@ -441,6 +443,15 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         return;
     if (g_np.local_slot != 0)
         return; /* initiator side only */
+    /* §64: do not bookkeep persist while an episode / tip-hold / load is
+     * in flight. Previously fork_tick advances during tip-extend rereplay
+     * started the persist clock, so tip-extend abandon → Live opened a
+     * second hc-fork recovery with zero Live gap (soak: epoch 8 → 16,
+     * "persisted 39 ticks"). */
+    if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
+        psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
+        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent())
+        return;
     sim = rnet_session_sim_tick(g_np.session);
     if (fork_tick != s_fork_tick) {
         s_fork_tick = fork_tick;
@@ -452,10 +463,6 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
     if (s_fork_last_attempt_sim != 0u && sim >= s_fork_last_attempt_sim &&
         (sim - s_fork_last_attempt_sim) < retry_ticks)
         return;
-    if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
-        psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
-        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent())
-        return;
     s_fork_last_attempt_sim = sim;
     remote = (g_np.local_slot == 0) ? 1 : 0;
     if (g_np.slot_count < 2)
@@ -466,6 +473,21 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
             (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim));
     fflush(stderr);
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
+}
+
+void psx_netplay_hc_fork_recovery_restart(void)
+{
+    uint32_t sim;
+    if (!g_np.session)
+        return;
+    sim = rnet_session_sim_tick(g_np.session);
+    /* Force a fresh Live persist window + retry gap after abandon/realign. */
+    s_fork_first_sim = sim;
+    s_fork_last_attempt_sim = sim;
+    fprintf(stderr,
+            "psxrecomp: rb hc-fork recovery restart (sim=%u — fresh persist)\n",
+            (unsigned)sim);
+    fflush(stderr);
 }
 
 static void np_check_core_diverge(void)
@@ -1346,18 +1368,39 @@ static void np_pad_log_edge(const char *tag, int slot, uint32_t sim, uint16_t pr
     fflush(stderr);
 }
 
+/* §63: snap load restores guest SIO from the savestate; host-side edge
+ * trackers must not keep Live's post-tip buttons or resim logs (and invent
+ * edge state) false-edge against a stale prev. */
+static uint16_t g_sio_pad_prev[PSX_MAX_PLAYERS];
+static uint8_t g_sio_pad_have[PSX_MAX_PLAYERS];
+static uint16_t g_inv_pad_prev[PSX_MAX_PLAYERS];
+static uint8_t g_inv_pad_have[PSX_MAX_PLAYERS];
+static uint16_t g_local_pad_prev = 0xFFFFu;
+static int g_local_pad_have;
+
+void psx_netplay_on_rb_snap_loaded(void)
+{
+    int i;
+    for (i = 0; i < PSX_MAX_PLAYERS; ++i) {
+        g_sio_pad_prev[i] = 0xFFFFu;
+        g_sio_pad_have[i] = 0u;
+        g_inv_pad_prev[i] = 0xFFFFu;
+        g_inv_pad_have[i] = 0u;
+    }
+    g_local_pad_prev = 0xFFFFu;
+    g_local_pad_have = 0;
+}
+
 static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
     if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
     const int on_tap = sio_pad_on_multitap(slot);
     if (np_pad_log_enabled()) {
-        static uint16_t s_sio_prev[PSX_MAX_PLAYERS];
-        static uint8_t s_sio_have[PSX_MAX_PLAYERS];
-        uint16_t prev = s_sio_have[slot] ? s_sio_prev[slot] : 0xFFFFu;
+        uint16_t prev = g_sio_pad_have[slot] ? g_sio_pad_prev[slot] : 0xFFFFu;
         uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
         np_pad_log_edge("sio", slot, sim, prev, pad->buttons);
-        s_sio_prev[slot] = pad->buttons;
-        s_sio_have[slot] = 1u;
+        g_sio_pad_prev[slot] = pad->buttons;
+        g_sio_pad_have[slot] = 1u;
     }
     sio_set_pad_connected(slot, 1);
     sio_set_pad_config_capable(slot, on_tap ? 0 : 1);
@@ -1501,7 +1544,10 @@ static int np_digital_new_press(const RNetInputContractFrame *pub,
  * RIGHT release@1607 then another `pub=ffdf wire=ffff` @1634).
  *
  * §34: TipHold stalls sim at tip while coalesce promotes release at tip+N —
- * end must reach tip+runway, not only sim (sim <= release_tick was a no-op). */
+ * end must reach tip+runway, not only sim (sim <= release_tick was a no-op).
+ * §63: outside TipHold, also scrub sim..sim+P so gap1 invent poison past the
+ * current tip cannot re-hold Start/dpad before wire catches up (soak: sio
+ * Start↓@5861 then invent Start↓@5868 while auth was release). */
 static void np_scrub_ahead_predicted(int slot, rnet_u32 release_tick,
                                      const RNetRbFrame *released)
 {
@@ -1519,6 +1565,12 @@ static void np_scrub_ahead_predicted(int slot, rnet_u32 release_tick,
         uint32_t tip_end = tip + runway;
         if (tip_end > end)
             end = tip_end;
+    } else {
+        /* Pred depth default matches sched P=9; scrub invent rows Live will
+         * admit before the next remote burst. */
+        rnet_u32 ahead = sim + 9u;
+        if (ahead > end)
+            end = ahead;
     }
     if (end <= release_tick)
         return;
@@ -2165,13 +2217,11 @@ static int np_try_admit_rollback(void)
             any_invent = 1;
             (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
             if (np_pad_log_enabled() && row.is_valid) {
-                static uint16_t s_inv_prev[PSX_MAX_PLAYERS];
-                static uint8_t s_inv_have[PSX_MAX_PLAYERS];
-                uint16_t prev = s_inv_have[slot] ? s_inv_prev[slot] : 0xFFFFu;
+                uint16_t prev = g_inv_pad_have[slot] ? g_inv_pad_prev[slot] : 0xFFFFu;
                 if (slot >= 0 && slot < PSX_MAX_PLAYERS) {
                     np_pad_log_edge("invent", slot, sim, prev, row.buttons);
-                    s_inv_prev[slot] = row.buttons;
-                    s_inv_have[slot] = 1u;
+                    g_inv_pad_prev[slot] = row.buttons;
+                    g_inv_pad_have[slot] = 1u;
                 }
             }
         }
@@ -2277,12 +2327,10 @@ void psx_netplay_stage_local(const PsxNetPad *pad)
         psx_netplay_normalize_pad(&g_np.staged);
         np_digital_debounce_staged();
         if (np_pad_log_enabled()) {
-            static uint16_t s_local_prev = 0xFFFFu;
-            static int s_local_have;
-            uint16_t prev = s_local_have ? s_local_prev : 0xFFFFu;
+            uint16_t prev = g_local_pad_have ? g_local_pad_prev : 0xFFFFu;
             np_pad_log_edge("local", g_np.local_slot, t, prev, g_np.staged.buttons);
-            s_local_prev = g_np.staged.buttons;
-            s_local_have = 1;
+            g_local_pad_prev = g_np.staged.buttons;
+            g_local_pad_have = 1;
         }
         g_np.staged_valid = 1;
         g_np.latched_for_tick = 1;

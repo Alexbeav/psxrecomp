@@ -204,6 +204,13 @@ void psx_netplay_poll_snap(struct CPUState *cpu, uint32_t resume_pc);
 /* 1 while a rollback episode is resimulating (mute audio / skip wall pacer). */
 int  psx_netplay_is_resimulating(void);
 
+/* §63: reset host pad-edge trackers after snap load (guest SIO restored). */
+void psx_netplay_on_rb_snap_loaded(void);
+
+/* §64: restart hc-fork persist/retry clocks after tip-extend abandon so a
+ * second recovery episode cannot open on the same Live tick. */
+void psx_netplay_hc_fork_recovery_restart(void);
+
 /* Force software GPU when netplay starts — GL/VK VRAM readback is host-GPU
  * nondeterministic and forks rollback snaps/resim. Implemented in main.cpp. */
 void psx_frontend_netplay_force_sw_gpu(void);

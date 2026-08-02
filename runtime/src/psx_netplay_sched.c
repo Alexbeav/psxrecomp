@@ -1208,15 +1208,26 @@ static void np_auto_delay_tick(uint32_t now)
         s_last_target = target;
         return;
     }
-    if (target != s_last_target) {
-        s_last_target = target;
-        s_agree_streak = 1u;
-        return;
+    /* §59: first raise of the session (never changed yet) confirms on 1 eval
+     * (~5 s) so a badly under-provisioned lobby D does not invent-storm for
+     * a full 10 s. Later raises keep 2-eval confirm; lowers stay at 3. */
+    {
+        uint32_t need_agree;
+        if (target < d)
+            need_agree = RB_AUTO_DELAY_AGREE;
+        else if (s_last_change_ms == 0u)
+            need_agree = 1u;
+        else
+            need_agree = 2u;
+        if (target != s_last_target) {
+            s_last_target = target;
+            s_agree_streak = 1u;
+            if (s_agree_streak < need_agree)
+                return;
+        } else if (++s_agree_streak < need_agree) {
+            return;
+        }
     }
-    /* Asymmetric hysteresis: raises hurt only input latency, misses hurt
-     * determinism — confirm a raise on 2 evals (10 s), a lower on 3 (15 s). */
-    if (++s_agree_streak < ((target > d) ? 2u : RB_AUTO_DELAY_AGREE))
-        return;
     if (s_last_change_ms != 0u &&
         (uint32_t)(now - s_last_change_ms) < RB_AUTO_DELAY_COOLDOWN_MS)
         return;

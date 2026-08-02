@@ -3233,3 +3233,210 @@ a burst of follower NACK/demotes right after them would mean the peer's
 dense window is out of phase and the raise should be narrowed. For the Start
 fix: pausing near resim activity should be single-menu; if a double recurs,
 enable the pad edge log and capture the row sequence.
+
+## 59. Lobby RTT→D table bump + TURN floor + faster first raise (2026-08-02)
+
+**§58 soak:** dense tip snaps worked; after auto-delay reached D=6 the
+scorecard hit `ep=+0` windows. Early minute still invent-stormed because
+Play started at **D=3** with `force_turn=1` — lobby UDP RTT underestimates
+the TURN game path.
+
+**Changes:** rollback RTT→D table +1..+2 per band (floor 3); forced-TURN
+floors D at 5; first auto-delay raise of a session confirms on 1 eval (~5 s).
+
+## 60. Ownership-chain BEGIN stash + rexmit (FOLLOW deadlock) (2026-08-02)
+
+**§59 soak hang:** early D=5 was healthy (`ep=+1`, depth_avg=10). Mid/late
+cascade (core diverge → tip-extend abandon → baseline mismatch) ended in:
+
+* host: `sim=3320 stall=rb_baseline` forever after `begin epoch=72`
+* guest: `wait FOLLOW` then Live-ahead → permanent `pcap_freeze`
+
+**Root cause:** pump drains SYNC before POST. Initiator finishes Verify+POST,
+opens the next ownership-chain BEGIN, and sends it while the follower is
+still in Verify for the prior epoch. `begin_follower` hit
+`if (rnet_rb_is_active) return;` with **no log** — BEGIN dropped. BEGIN was
+fire-and-forget (unlike seal/baseline keepalive), so the follower parked on
+`wait FOLLOW` forever and the initiator sat in `rb_baseline`.
+
+**Fixes:**
+
+1. **Stash peer BEGIN** when a new-epoch BEGIN arrives while locally active
+   (tip-extend same-epoch still absorbed in place). Log:
+   `rb BEGIN stashed …`.
+2. **Apply stash** when idle — at the follower's ownership-chain
+   `wait FOLLOW` return, and at end of pump when `!active`. Log:
+   `rb BEGIN unstash …`.
+3. **BEGIN rexmit** from initiator while SealInputs/AwaitingBaseline and
+   peer baseline not yet seen (`rb BEGIN rexmit …`), same cadence as
+   seal/baseline keepalive.
+4. **Skip-snap follow** at the ownership tip: follower may join a chain
+   BEGIN at `load == agreed_through` without a ring snap (mirrors
+   initiator skip-snap), instead of NACK → storm.
+
+**Re-soak watch:** after ownership-chain lines, expect either immediate
+`follow epoch=…` or `BEGIN stashed` → `BEGIN unstash` → `follow`; initiator
+may log `BEGIN rexmit` on TURN. Must not see host `rb_baseline` + guest
+`wait FOLLOW` with no follow for >1–2 s. Residual mid-session core forks
+remain a separate correctness track.
+
+## 61. Same-epoch BEGIN stash reopen + hc_dense peer clamp (2026-08-02)
+
+**§60 soak regression:** FOLLOW deadlock was fixed, but sessions felt like
+“finish resim → immediately redo.” Guest log pattern:
+
+1. `follow epoch=16` (good)
+2. while still active, host `BEGIN rexmit` for epoch 16 → **stashed**
+3. `ownership final → Live`
+4. `BEGIN unstash epoch=16` → re-open the episode just committed
+5. host already past that work → guest `verify timeout` → both realign
+   and churn into the next epoch (FPS 3–11, long `present_gap`)
+
+Also: host `choose_load` raised via `hc_dense` above peer RESOLVED
+(e.g. 1180 vs 1168) → `follow REFUSED` / NACK / demote storm.
+
+**Fixes:**
+
+1. **Do not stash same-epoch BEGIN** while active (keepalive rexmit only).
+2. **Refuse stash / unstash** for `g_last_commit_epoch`.
+3. **Clear same-epoch stash** on ownership final and every episode commit
+   path (tip-hold, ownership tip commit, POST match).
+4. **`hc_dense` raise only if** `peer_resolved_through >= hc_floor`
+   (otherwise stay on interval floor / agreed / peer_resolved).
+
+**Re-soak watch:** after `ownership final` / `episode commit`, must **not**
+see `BEGIN unstash` of that same epoch. `hc_dense` raises only when peer
+RESOLVED already covers the tip. Legitimate *new*-epoch `BEGIN stashed` →
+`unstash` still expected across ownership-chain handoffs.
+
+## 62. NACK deep-demote WIRE_HOLE hang + peer NACK floor (2026-08-02)
+
+**§61 soak:** stash fix held (zero `BEGIN stashed`/`unstash`), but the run
+ended in an asymmetric permanent hang:
+
+1. Ownership continue skip-snap at load=10232 → baseline core mismatch
+   (`f795b460` vs `a6e2e2a6`) → fork cap 10232, both sides realign to the
+   **same** snap (`core=07993348`).
+2. Host bisects to load=10231, opens epoch 112 spanning back from live
+   ≈10359.
+3. Guest `follow REFUSED … snap missing` (ring newest ≈10364, oldest ≈10284
+   — 10231 evicted) → NACK with `frontier=10352` (**ahead** of the load, so
+   the existing "demote to peer frontier" clamp did nothing).
+4. Host `NACK realign demote=10230 live_was=10359` (~129 ticks,
+   `snaps_dropped=70`). Remote wire rows 10231..10243 were already past the
+   tip-window retransmit → permanent `WIRE_HOLE need=10231` stall; guest ran
+   ahead to 10376 then froze on `pcap_freeze lead=-10`.
+
+Also confirmed: the mid-session "jumped back far" feel (epoch 65, ~21 ticks
+to the episode pin 7952 after `resim core diverge sim=7973`) is **correct**
+behavior — the fork lies inside the episode span, so rewinding to a later
+tip-extend snap would preserve the forked state. Not changed.
+
+**Fixes:**
+
+1. **Peer NACK floor** (`g_peer_nack_floor`): a NACK whose frontier is at or
+   ahead of the refused load means the peer's ring evicted that tick.
+   `choose_load` refuses any load ≤ floor (both fork-cap and plain paths);
+   log `choose_load refuse load=… ≤ peer NACK floor`. Cleared with the fork
+   cap on every verified commit / session reset.
+2. **Wire-hole guard on NACK realign**: before rewinding Live to the demote
+   tick, scan remote wire rows (demote, live]. A missing tick followed by a
+   later present tick is a dead hole (retransmit window has moved on);
+   realign instead to the first snap past the hole
+   (`rb NACK hole-guard realign_to=…`). Watermarks still demote — only the
+   Live rewind depth is capped.
+
+**Residual:** with fork cap forcing load < 10232 and NACK floor forcing
+load > 10231, the bisect window can be empty — no episode opens and the fork
+persists (live continues, no hang). True mid-session fork healing below both
+snap rings needs full-state transfer — separate track. The skip-snap
+baseline mismatch that *started* the cascade (same realign snap, different
+skip-snap baselines) is also still open.
+
+**Re-soak watch:** no minutes-long `WIRE_HOLE` / `admit waiting` stalls; on
+follow NACK expect `peer NACK floor=…` then either a followable reopen or
+`choose_load refuse` + cooldown; `NACK realign` lines now print
+`demote=… realign=…` and realign must stay above any logged wire hole.
+
+## 63. Double menu inputs — tip-hold after ownership final + resim present (2026-08-02)
+
+**§62 soak:** protocol healthy (no WIRE_HOLE / stash reopen; scorecards
+`ep≥0`, D≈5–6, clean lobby exit). UX regression: **dpad/Start felt
+doubled** again. With `PSX_RB_PAD_LOG=1`, every menu episode re-applied
+SIO edges Live had already applied (`DUP_SIO` at the same slot+sim):
+
+* after `ownership final tip=3533 → Live`, Live walked 3536/3543/3548,
+  then epoch 16 loaded 3533 and resim'd those edges;
+* Start↓ @5861 Live, invent hold-last Start↓ @5868 while auth was
+  release → episode load=5856 → Start↓ @5861 again on resim;
+* `scrub-ahead` fired **0** times; catchup live-present (`rem>8`) could
+  flash those resim edges on screen.
+
+**Root causes:**
+
+1. Ownership final called `enter_tip_hold` then **immediate**
+   `finalize_tip_hold` → straight Live; next taps presented then got
+   rewound by the following episode.
+2. Resim catchup live-presented when `remaining > 8` — tip episodes
+   (~15–24 ticks) re-showed edge-trigger outcomes.
+3. Scrub-ahead end bound outside TipHold was only `sim`, so invent
+   poison past the tip was not cleared when a release promoted.
+4. Host pad-edge trackers survived snap load (diag noise).
+
+**Fixes:**
+
+1. **Ownership final → tip-hold only** (quiet/coalesce/SAFETY own the
+   commit). Log: `ownership final … → tip-hold`. Same for chain-begin
+   failure fallback.
+2. **Hold-last present through rem≤24** (full tip SPAN); only deeper
+   ownership-chain catch-up live-presents.
+3. **Scrub-ahead** outside TipHold extends to `sim+9` (pred depth) so
+   release promote clears invent hold-last ahead of Live.
+4. **`psx_netplay_on_rb_snap_loaded`** resets sio/invent/local pad-edge
+   trackers from `psx_frontend_on_rb_snap_loaded`.
+
+**Re-soak watch:** `ownership final … → tip-hold` then
+`tip-hold through=…` / quiet or coalesce commit (not immediate Live);
+`scrub-ahead release` should appear on digital releases; tip episodes
+should not log `catchup … present=live` unless rem>24; one physical
+Start/dpad → one menu action. Pad-log may still show resim SIO edges
+(correct for sim) — the feel test is presentation, not DUP_SIO count.
+
+## 64. Catchup rem tip-cap + hc-fork persist not across episodes (2026-08-02)
+
+**§63 short soak:** user saw **two resims back-to-back** and stopped.
+
+1. `hc-fork recovery begin t=1023` (post-FMV unlock, core diverge, no pad
+   mispredict) → epoch 8 `1008..1032` with `catchup present=live rem=37`.
+2. Tip-hold @1032, coalesce tip-extend →1046, peer COMMIT @1032 →
+   `tip-extend ABANDON` → realign 1032.
+3. Immediate `hc-fork recovery begin t=1033 (persisted 39 ticks)` →
+   epoch 16. Then ownership-chain skip-snap @1056 → baseline mismatch.
+
+**Confirmed in code:**
+
+* `psx_netplay_rb_confirmed_remaining` returned `frontier−sim`, so tip
+  SPAN episodes reported rem=37/47 whenever confirmed work ran past the
+  tip — §63's `rem≤24` hold-last never engaged.
+* `np_try_hc_fork_recovery` updated `s_fork_first_sim` / accumulated
+  persist **while the episode was still active**, then the active guard
+  only blocked the open. On tip-extend abandon → Live, persist was
+  already satisfied → second recovery with zero Live gap.
+
+**Fixes:**
+
+1. **Confirmed remaining** capped by `target−sim` while an episode is
+   active (catchup present keys off tip depth).
+2. **hc-fork recovery** returns early on active/tip-hold/load **before**
+   persist bookkeeping — persist only counts Live ticks.
+3. **`psx_netplay_hc_fork_recovery_restart`** on tip-extend abandon
+   (fresh first_sim + last_attempt) even though rewind cooldown clears.
+
+**Residual:** post-FMV core fork itself and skip-snap baseline mismatch
+remain separate correctness tracks — this only stops the immediate
+double-resim feel and tip-episode live-present flash.
+
+**Re-soak watch:** tip SPAN episodes should hold-last (`catchup
+present=live` only when tip rem>24, e.g. deep ownership catch-up); after
+`tip-extend ABANDON` expect `hc-fork recovery restart` then ≥16 Live
+ticks before another `hc-fork recovery begin` (not same-tick reopen).

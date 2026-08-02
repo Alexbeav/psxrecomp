@@ -887,6 +887,8 @@ extern "C" void psx_frontend_on_rb_snap_loaded(void) {
     }
     gl_renderer_restage_vram_after_savestate();
     vk_renderer_restage_vram_after_savestate();
+    /* §63: guest SIO came from the snap — drop Live pad-edge trackers. */
+    psx_netplay_on_rb_snap_loaded();
 }
 
 static uint64_t smooth_60_frame_hash(const uint32_t* pixels, size_t count) {
@@ -3767,16 +3769,20 @@ static void netplay_hold_last_present_tick(void) {
     }
 }
 
-/* §47/§51 Layer 4: long Replay catch-up — wall-clock gate for a real VRAM
+/* §47/§51/§63 Layer 4: long Replay catch-up — wall-clock gate for a real VRAM
  * present. Independent of SPAN chunk boundaries (those are bookkeeping, not
- * present events). Returns 1 if this guest vblank should fall through. */
+ * present events). Returns 1 if this guest vblank should fall through.
+ *
+ * §63: tip episodes are ≤ tip_runway (24). Live-presenting those frames
+ * re-showed edge-trigger menu inputs that Live had already displayed before
+ * the rewind (pad-log DUP_SIO Start/dpad). Hold-last through a full SPAN;
+ * only ownership-chain catch-up deeper than that shows live progress. */
 static int netplay_replay_catchup_should_live_present(uint32_t remaining) {
     static uint64_t s_catchup_present_ms;
     uint64_t now = SDL_GetTicks64();
-    /* ~6–7 Hz: enough to show progress without flashing every resim frame
-     * (old period≈frame_ms presented nearly every tick when rem>8). */
+    /* ~6–7 Hz: enough to show progress without flashing every resim frame. */
     uint32_t period = 150u;
-    if (remaining <= 8u)
+    if (remaining <= 24u)
         return 0;
     if (s_catchup_present_ms != 0ull && now >= s_catchup_present_ms &&
         (uint32_t)(now - s_catchup_present_ms) < period)

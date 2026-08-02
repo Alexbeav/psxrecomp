@@ -278,6 +278,20 @@ static struct {
     uint16_t row_count;
 } g_stash_seal_rows[RB_STASH_SEAL_ROWS_MAX];
 static int g_stash_seal_rows_logged;
+/* §60: SYNC BEGIN that arrived while we were still in an active episode
+ * (ownership-chain race — initiator finishes Verify+POST and emits the next
+ * BEGIN before our POST drain runs). Was silently dropped; follower then
+ * waited forever for FOLLOW. Latest-wins stash; applied once idle. */
+static int g_stash_begin_valid;
+static uint32_t g_stash_begin_epoch;
+static uint32_t g_stash_begin_mismatch;
+static uint32_t g_stash_begin_load;
+static uint32_t g_stash_begin_target;
+static int g_stash_begin_slot;
+static uint8_t g_stash_begin_flags;
+static int g_stash_begin_logged;
+static uint64_t g_last_begin_rexmit_ms;
+static int g_begin_rexmit_logged;
 static uint64_t g_baseline_handshake_ms; /* when local baseline first sent */
 static uint64_t g_last_baseline_burst_ms;
 static int g_ready_timeout_logged;
@@ -499,6 +513,12 @@ static uint32_t g_fork_streak;
  * L (2026-08-02 soak: 4× at 4176) can never heal — the next episode load must
  * be strictly below it. 0 = no cap; cleared on verified commit / session reset. */
 static uint32_t g_bl_fork_cap;
+/* §62: a follow NACK with the peer's frontier AHEAD of the refused load means
+ * the peer's snap ring has evicted that tick — reopening at or below it can
+ * only NACK again (2026-08-02 soak: bisect 10231 vs peer ring oldest ≈10284
+ * → NACK → 129-tick demote → permanent WIRE_HOLE). Loads ≤ this floor are
+ * refused; cleared on verified commit / session reset. */
+static uint32_t g_peer_nack_floor;
 
 static RNetSession *sess(void); /* fwd — used by FMV lockstep window */
 static void commit_episode(void); /* fwd — legacy immediate commit */
@@ -995,6 +1015,8 @@ static void clear_episode_wire_state(void)
     g_last_seal_rexmit_ms = 0;
     g_seal_rexmit_logged = 0;
     g_seal_wait_logged = 0;
+    g_last_begin_rexmit_ms = 0;
+    g_begin_rexmit_logged = 0;
 }
 
 static void clear_baseline_pin(void)
@@ -1556,6 +1578,7 @@ uint32_t psx_netplay_rb_confirmed_remaining(void)
     RNetSession *s = sess();
     uint32_t sim;
     uint32_t frontier;
+    uint32_t rem;
     if (!s || !g_rb)
         return 0;
     if (!rnet_rb_is_resimulating(g_rb) && !rnet_rb_is_active(g_rb))
@@ -1564,7 +1587,18 @@ uint32_t psx_netplay_rb_confirmed_remaining(void)
     if (sim == 0xffffffffu)
         return 0;
     frontier = psx_netplay_rb_confirmed_frontier(sim + 1u);
-    return (frontier > sim) ? (frontier - sim) : 0u;
+    rem = (frontier > sim) ? (frontier - sim) : 0u;
+    /* §64: catchup present keys off the *episode tip*, not confirmed work
+     * past tip. Tip SPAN episodes (≤24) were reporting rem=37+ whenever the
+     * contiguous frontier ran ahead, so §63's rem≤24 hold-last never engaged
+     * (soak: catchup present=live on 1008..1032). Cap by target−sim. */
+    if (rnet_rb_is_active(g_rb)) {
+        uint32_t tip = rnet_rb_get_target_tick(g_rb);
+        uint32_t tip_rem = (tip > sim) ? (tip - sim) : 0u;
+        if (tip_rem < rem)
+            rem = tip_rem;
+    }
+    return rem;
 }
 
 static void host_prefresh_seal_range(int slot, uint32_t lo, uint32_t hi)
@@ -1768,6 +1802,10 @@ static int maybe_abandon_tip_extend(void)
     abort_episode("tip-extend abandon (peer committed below extension)");
     schedule_live_realign(tick, "tip-extend abandon");
     clear_rewind_cooldown("tip-extend abandon");
+    /* §64: tip-extend abandon clears rewind cooldown (extension edge may
+     * re-arrive as a pad mismatch). Also restart hc-fork persist so a
+     * state-resync episode cannot reopen on this same Live tick. */
+    psx_netplay_hc_fork_recovery_restart();
     return 1;
 }
 
@@ -2117,11 +2155,14 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
         uint32_t hc_dense = 0u;
         if (hc_iv > raised)
             raised = hc_iv;
-        /* §58: dense tip snaps — the raw HC-proven tick is raise-safe when a
-         * snap exists locally (both peers keep the same dense window; a
-         * missing peer snap is recoverable via follower NACK → demote,
-         * unlike the §53b interval-only rule which predates dense snaps). */
+        /* §58/§61: dense tip snaps — raise to raw HC-proven tick only when
+         * the peer has advertised RESOLVED at least that far. Otherwise both
+         * peers keep the dense window, but open can still land above the
+         * follower's frontier (soak: host 1180 vs peer_resolved 1168 →
+         * REFUSED / NACK / demote storm). Missing peer_resolved stays on
+         * interval floor (§53b); follower NACK remains the backstop. */
         if (tip_dense_window() > 0u && hc_floor > raised &&
+            g_peer_resolved_through >= hc_floor &&
             netplay_snap_ring_has(g_snaps, hc_floor)) {
             raised = hc_floor;
             hc_dense = hc_floor;
@@ -2286,6 +2327,23 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
             m = g_bl_fork_cap; /* inner's shared walk returns load < m */
         if (!choose_load_tick_inner(m, out_load))
             return 0;
+        /* §62: peer proved it cannot follow ≤ floor (snap evicted). If the
+         * bisect window (must be < fork cap AND > peer floor) is empty, no
+         * mutually-loadable snap covers the fork — refuse to open rather
+         * than NACK-cycle into a deep demote. */
+        if (g_peer_nack_floor > 0u && *out_load <= g_peer_nack_floor) {
+            static uint32_t s_floor_log;
+            if (s_floor_log != *out_load) {
+                fprintf(stderr,
+                        "psxrecomp: rb choose_load refuse load=%u ≤ peer NACK "
+                        "floor %u (fork cap %u — no mutually-loadable snap)\n",
+                        (unsigned)*out_load, (unsigned)g_peer_nack_floor,
+                        (unsigned)g_bl_fork_cap);
+                fflush(stderr);
+                s_floor_log = *out_load;
+            }
+            return 0;
+        }
         if (*out_load >= g_bl_fork_cap) {
             static uint32_t s_refuse_log;
             if (s_refuse_log != g_bl_fork_cap) {
@@ -2310,7 +2368,23 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
         }
         return 1;
     }
-    return choose_load_tick_inner(mismatch, out_load);
+    if (!choose_load_tick_inner(mismatch, out_load))
+        return 0;
+    /* §62: same floor without a fork cap — do not reopen at a load the peer
+     * just proved unfollowable. */
+    if (g_peer_nack_floor > 0u && *out_load <= g_peer_nack_floor) {
+        static uint32_t s_floor_log2;
+        if (s_floor_log2 != *out_load) {
+            fprintf(stderr,
+                    "psxrecomp: rb choose_load refuse load=%u ≤ peer NACK "
+                    "floor %u\n",
+                    (unsigned)*out_load, (unsigned)g_peer_nack_floor);
+            fflush(stderr);
+            s_floor_log2 = *out_load;
+        }
+        return 0;
+    }
+    return 1;
 }
 
 /* Follower's confirmed frontier for the NACK wire hint: the deepest tick this
@@ -2328,6 +2402,54 @@ static uint32_t follower_frontier_hint(void)
             return rt;
     }
     return 0u;
+}
+
+/* §62: realigning Live to `demote` requires remote wire inputs for every tick
+ * after it. A missing tick that is followed by a later PRESENT tick is a true
+ * hole — the peer's tip-window retransmit has already moved past it and it
+ * will never refill (2026-08-02 soak: demote 10359→10230, remote rows
+ * 10231..10243 evicted, 10244+ present → permanent WIRE_HOLE stall). A
+ * missing tail with nothing after it is just in flight and fine. */
+static uint32_t remote_wire_hole_end_after(uint32_t demote, uint32_t live_sim)
+{
+    RNetSession *s = sess();
+    int local, slot;
+    uint32_t t;
+    uint32_t first_missing = 0u;
+    uint32_t hole_start = 0u;
+    uint32_t hole_end = 0u;
+    int have_missing = 0;
+    if (!s || demote >= live_sim)
+        return 0u;
+    local = g_b.local_slot ? *g_b.local_slot : 0;
+    slot = (local == 0) ? 1 : 0;
+    if (g_b.slot_count && *g_b.slot_count < 2)
+        return 0u;
+    for (t = demote + 1u; t <= live_sim; ++t) {
+        RNetInputSample sample;
+        rnet_u32 wire = np_sched_wire_for_sim(t);
+        int present = rnet_session_peek_remote_input(s, slot, wire, &sample) &&
+                      sample.valid;
+        if (!present) {
+            if (!have_missing) {
+                first_missing = t;
+                have_missing = 1;
+            }
+        } else if (have_missing) {
+            /* keep scanning — report the LAST closed hole */
+            hole_start = first_missing;
+            hole_end = t - 1u;
+            have_missing = 0;
+        }
+    }
+    if (hole_end > 0u) {
+        fprintf(stderr,
+                "psxrecomp: rb wire hole %u..%u after demote=%u — "
+                "realign there would stall\n",
+                (unsigned)hole_start, (unsigned)hole_end, (unsigned)demote);
+        fflush(stderr);
+    }
+    return hole_end;
 }
 
 /* MotK convention: SYNC op=NACK = follower cannot open episode (missing load
@@ -2450,6 +2572,12 @@ static void maybe_enter_replay(void);
 static void accept_peer_baseline(uint32_t epoch, uint32_t load, uint32_t dig_m,
                                  uint32_t dig_a, uint32_t dig_b, uint32_t dig_c);
 static void apply_stashed_baseline(void);
+static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load,
+                           uint32_t target, int slot, uint8_t wire_flags);
+static void stash_peer_begin(uint32_t epoch, uint32_t mismatch, uint32_t load,
+                             uint32_t target, int slot, uint8_t wire_flags);
+static void apply_stashed_begin(void);
+static void maybe_rexmit_begin(void);
 
 static void enter_awaiting_baseline(void)
 {
@@ -2714,6 +2842,8 @@ static void maybe_send_baseline(void)
      * rexmit — runs through SealInputs/AwaitingBaseline/Replay/Verify until
      * the peer POSTs. */
     maybe_rexmit_seals();
+    /* §60: BEGIN keepalive until the follower joins (peer baseline seen). */
+    maybe_rexmit_begin();
     follower = rnet_rb_is_from_peer_notify(g_rb) ? 1 : 0;
     if (!g_local_baseline_sent) {
         NetplayCoreParts parts;
@@ -3326,7 +3456,11 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     if (g_b.hc)
         netplay_hc_prime_after(g_b.hc, tip);
     advertise_agreed_resolved(tip);
-    g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb);
+    g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb); /* §42 P1 */
+    if (g_stash_begin_valid && g_stash_begin_epoch == g_last_commit_epoch) {
+        g_stash_begin_valid = 0;
+        g_stash_begin_logged = 0;
+    }
     send_commit_notice(g_last_commit_epoch, tip);
 
     rnet_rb_session_reset(g_rb);
@@ -3351,6 +3485,7 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
     g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
+    g_peer_nack_floor = 0u; /* §62 */
 
     /* §48: only the lower seat initiates chain BEGINs. Both peers calling
      * begin_rewind every chunk caused dual-init → tie-break abort → reload
@@ -3362,6 +3497,9 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
                 "(slot %d; peer initiates; skip-snap)\n",
                 (unsigned)tip, (unsigned)frontier, local);
         fflush(stderr);
+        /* §60: initiator's next BEGIN often arrived (and was stashed) while we
+         * were still in Verify — apply it now that we are idle. */
+        apply_stashed_begin();
         return;
     }
 
@@ -3377,12 +3515,12 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     fflush(stderr);
     if (!psx_netplay_rb_begin_rewind(mismatch, slot)) {
         fprintf(stderr,
-                "psxrecomp: rb ownership chain FAILED tip=%u frontier=%u — Live\n",
+                "psxrecomp: rb ownership chain FAILED tip=%u frontier=%u — "
+                "tip-hold\n",
                 (unsigned)tip, (unsigned)frontier);
         fflush(stderr);
         g_ownership_skip_snap = 0;
         enter_tip_hold(tip);
-        finalize_tip_hold();
     }
     g_ownership_chain = 0;
     g_ownership_chain_frontier = 0;
@@ -3409,13 +3547,23 @@ static void ownership_on_post_match(uint32_t tip)
             return;
         }
     }
-    /* Exhausted contiguous confirmed work → Live (immediate tip-hold commit). */
+    /* Exhausted contiguous confirmed work → tip-hold until pads quiet.
+     * §63: immediate finalize_tip_hold() Live-walked the next dpad/Start
+     * edges, then the following episode rewound and re-applied them
+     * (pad-log DUP_SIO / felt doubled). Tip-hold invent-cap + quiet/coalesce
+     * owns those edges instead. */
     fprintf(stderr,
-            "psxrecomp: rb ownership final tip=%u frontier=%u → Live\n",
+            "psxrecomp: rb ownership final tip=%u frontier=%u → tip-hold\n",
             (unsigned)tip, (unsigned)frontier);
     fflush(stderr);
+    /* §61: discard any stashed BEGIN for this episode (rexmit) so Live does
+     * not reopen it. */
+    if (g_stash_begin_valid && g_rb &&
+        g_stash_begin_epoch == rnet_rb_get_epoch_id(g_rb)) {
+        g_stash_begin_valid = 0;
+        g_stash_begin_logged = 0;
+    }
     enter_tip_hold(tip);
-    finalize_tip_hold();
 }
 
 void psx_netplay_rb_ownership_step(void)
@@ -3573,6 +3721,11 @@ static void finalize_tip_hold(void)
     fprintf(stderr, "psxrecomp: rb episode commit through=%u (tip-hold)\n", (unsigned)target);
     fflush(stderr);
     g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb); /* §42 P1 */
+    /* §61: drop same-epoch BEGIN stash so Live does not reopen it. */
+    if (g_stash_begin_valid && g_stash_begin_epoch == g_last_commit_epoch) {
+        g_stash_begin_valid = 0;
+        g_stash_begin_logged = 0;
+    }
     send_commit_notice(g_last_commit_epoch, target);  /* §42c */
     rnet_rb_session_reset(g_rb);
     g_tip_hold_until = 0;
@@ -3595,6 +3748,7 @@ static void finalize_tip_hold(void)
     g_fork_streak = 0u; /* §42 P4: clean commit ends any fork suspicion */
     g_fork_streak_tick = 0u;
     g_bl_fork_cap = 0u; /* §55 */
+    g_peer_nack_floor = 0u; /* §62 */
     /* §38: hold agreed at tip until peer tip-hold (SAFETY ~250ms) can exit. */
     g_post_tip_hold_holdoff_t0_ms = rb_mono_ms();
     if (g_post_tip_hold_holdoff_t0_ms == 0ull)
@@ -3805,6 +3959,10 @@ static void commit_episode(void)
             (unsigned)g_episode_count);
     fflush(stderr);
     g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb); /* §42 P1 */
+    if (g_stash_begin_valid && g_stash_begin_epoch == g_last_commit_epoch) {
+        g_stash_begin_valid = 0;
+        g_stash_begin_logged = 0;
+    }
     send_commit_notice(g_last_commit_epoch, target);  /* §42c */
     rnet_rb_session_reset(g_rb);
     g_tip_extend_rereplay = 0;
@@ -3818,6 +3976,7 @@ static void commit_episode(void)
     g_fork_streak = 0u; /* §42 P4 */
     g_fork_streak_tick = 0u;
     g_bl_fork_cap = 0u; /* §55 */
+    g_peer_nack_floor = 0u; /* §62 */
     /* No post-commit cooldown: promote-only after commit made char-select
      * D-pad feel rejected (hist updated, live sim not rolled). Abort/storm
      * cooldown still arms from live sim on failed episodes. */
@@ -3926,12 +4085,15 @@ void psx_netplay_rb_start(void)
     g_tip_extend_prime_tick = 0;
     g_tip_extend_from_tick = 0;
     g_ownership_skip_snap = 0;
+    g_stash_begin_valid = 0;
+    g_stash_begin_logged = 0;
     g_last_commit_epoch = 0xffffffffu;
     g_peer_commit_epoch = 0xffffffffu;
     g_peer_commit_tick = 0;
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
     g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
+    g_peer_nack_floor = 0u; /* §62 */
     clear_baseline_pin();
     clear_episode_wire_state();
     fprintf(stderr,
@@ -3979,12 +4141,17 @@ void psx_netplay_rb_shutdown(void)
     g_tip_extend_prime_tick = 0;
     g_tip_extend_from_tick = 0;
     g_ownership_skip_snap = 0;
+    g_stash_begin_valid = 0;
+    g_stash_begin_logged = 0;
+    g_last_begin_rexmit_ms = 0;
+    g_begin_rexmit_logged = 0;
     g_last_commit_epoch = 0xffffffffu;
     g_peer_commit_epoch = 0xffffffffu;
     g_peer_commit_tick = 0;
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
     g_bl_fork_cap = 0u; /* §55: commit/reset clears the bisect cap */
+    g_peer_nack_floor = 0u; /* §62 */
     g_last_good_bb_pc = 0;
     g_agreed_valid = 0;
     g_agreed_through = 0;
@@ -4844,6 +5011,104 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     return 1;
 }
 
+static void stash_peer_begin(uint32_t epoch, uint32_t mismatch, uint32_t load,
+                             uint32_t target, int slot, uint8_t wire_flags)
+{
+    /* §61: never stash a BEGIN for the episode we are already in — that is a
+     * keepalive rexmit. Stashing it and unstashing after Live re-opened the
+     * same epoch (soak: follow 16 → final → unstash 16 → verify timeout). */
+    if (g_rb && rnet_rb_is_active(g_rb) &&
+        epoch == rnet_rb_get_epoch_id(g_rb))
+        return;
+    /* Also ignore BEGINs for an epoch we already committed. */
+    if (epoch == g_last_commit_epoch)
+        return;
+    g_stash_begin_valid = 1;
+    g_stash_begin_epoch = epoch;
+    g_stash_begin_mismatch = mismatch;
+    g_stash_begin_load = load;
+    g_stash_begin_target = target;
+    g_stash_begin_slot = slot;
+    g_stash_begin_flags = wire_flags;
+    if (!g_stash_begin_logged) {
+        fprintf(stderr,
+                "psxrecomp: rb BEGIN stashed epoch=%u load=%u target=%u "
+                "(local episode still active — apply when idle)\n",
+                (unsigned)epoch, (unsigned)load, (unsigned)target);
+        fflush(stderr);
+        g_stash_begin_logged = 1;
+    }
+}
+
+static void apply_stashed_begin(void)
+{
+    uint32_t epoch, mismatch, load, target;
+    int slot;
+    uint8_t flags;
+    if (!g_stash_begin_valid || !g_rb || rnet_rb_is_active(g_rb))
+        return;
+    /* §61: drop stashes for epochs already committed / completed. */
+    if (g_stash_begin_epoch == g_last_commit_epoch) {
+        g_stash_begin_valid = 0;
+        g_stash_begin_logged = 0;
+        return;
+    }
+    epoch = g_stash_begin_epoch;
+    mismatch = g_stash_begin_mismatch;
+    load = g_stash_begin_load;
+    target = g_stash_begin_target;
+    slot = g_stash_begin_slot;
+    flags = g_stash_begin_flags;
+    g_stash_begin_valid = 0;
+    g_stash_begin_logged = 0;
+    fprintf(stderr,
+            "psxrecomp: rb BEGIN unstash epoch=%u load=%u target=%u\n",
+            (unsigned)epoch, (unsigned)load, (unsigned)target);
+    fflush(stderr);
+    begin_follower(epoch, mismatch, load, target, slot, flags);
+}
+
+/* §60: BEGIN was fire-and-forget; on TURN a single drop left the follower
+ * parked on "wait FOLLOW" while the initiator sat in rb_baseline forever.
+ * Retransmit on the same cadence as seal/baseline keepalive. */
+static void maybe_rexmit_begin(void)
+{
+    RNetSession *s = sess();
+    RNetRbPhase ph;
+    uint64_t now;
+    rnet_u8 wire_flags;
+    int32_t slot;
+    if (!g_rb || !s || !rnet_rb_is_active(g_rb) || rnet_rb_is_from_peer_notify(g_rb))
+        return;
+    ph = rnet_rb_get_phase(g_rb);
+    if (ph != nRNetRbPhaseSealInputs && ph != nRNetRbPhaseAwaitingBaseline)
+        return;
+    if (g_peer_baseline_ok)
+        return; /* follower has joined the episode */
+    now = rb_mono_ms();
+    if (g_last_begin_rexmit_ms != 0ull && now >= g_last_begin_rexmit_ms &&
+        (now - g_last_begin_rexmit_ms) < (uint64_t)RB_BASELINE_BURST_MS)
+        return;
+    if (g_last_begin_rexmit_ms != 0ull && !g_begin_rexmit_logged) {
+        fprintf(stderr,
+                "psxrecomp: rb BEGIN rexmit epoch=%u load=%u target=%u\n",
+                (unsigned)rnet_rb_get_epoch_id(g_rb),
+                (unsigned)rnet_rb_get_load_tick(g_rb),
+                (unsigned)rnet_rb_get_target_tick(g_rb));
+        fflush(stderr);
+        g_begin_rexmit_logged = 1;
+    }
+    g_last_begin_rexmit_ms = now;
+    wire_flags = (rnet_u8)(
+        (rnet_rb_get_corr_flags(g_rb) & RNET_RB_CORR_LIGHT_TIP)
+            ? RNET_RB_SYNC_FLAG_LIGHT_TIP : 0u);
+    slot = rnet_rb_get_corrected_slot(g_rb);
+    (void)rnet_session_send_rb_sync(
+        s, rnet_rb_get_epoch_id(g_rb), rnet_rb_get_mismatch_tick(g_rb),
+        rnet_rb_get_load_tick(g_rb), rnet_rb_get_target_tick(g_rb),
+        (rnet_u8)(slot < 0 ? 0 : slot), RNET_RB_SYNC_OP_BEGIN, wire_flags);
+}
+
 static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uint32_t target,
                            int slot, uint8_t wire_flags)
 {
@@ -4987,8 +5252,17 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
             return;
         }
     }
-    if (!g_rb || rnet_rb_is_active(g_rb))
+    if (!g_rb)
         return;
+    if (rnet_rb_is_active(g_rb)) {
+        /* §60/§61: tip-extend same-epoch is handled above. Same-epoch BEGIN
+         * rexmit must not be stashed (keepalive). Only stash a *new* epoch
+         * that arrived while we are still Verify/Replay on the prior one. */
+        if (epoch == rnet_rb_get_epoch_id(g_rb))
+            return;
+        stash_peer_begin(epoch, mismatch, load, target, slot, wire_flags);
+        return;
+    }
     (void)rb_in_fmv_defer_rewind_window();
     /* Same policy as begin: do not follow into media/lockstep tip episodes. */
     if (rb_in_fmv_lockstep_window()) {
@@ -5008,24 +5282,35 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
         return;
     }
     snap_n = g_snaps ? netplay_snap_ring_count(g_snaps) : 0u;
+    /* §60: ownership-chain continue uses skip-snap at the verified tip — the
+     * initiator does not require a ring snap there; neither may the follower,
+     * or we NACK a legitimate chain BEGIN and storm. */
     if (!g_snaps || !netplay_snap_ring_has(g_snaps, load)) {
+        int skip_ok = (g_ownership_skip_snap && g_agreed_valid &&
+                       load == g_agreed_through);
+        if (!skip_ok) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED epoch=%u load=%u — snap missing "
+                    "(ring count=%u newest=%u)\n",
+                    (unsigned)epoch, (unsigned)load, (unsigned)snap_n,
+                    (unsigned)(g_snaps ? netplay_snap_ring_newest_tick(g_snaps)
+                                       : 0u));
+            fflush(stderr);
+            g_follow_nack_pending = 1;
+            g_follow_nack_epoch = epoch;
+            g_follow_nack_mismatch = mismatch;
+            g_follow_nack_load = load;
+            g_follow_nack_target = target;
+            g_follow_nack_slot = slot;
+            g_follow_nack_sends = 0;
+            send_follow_nack(epoch, mismatch, load, target, slot, 1);
+            g_follow_nack_sends = 1;
+            return;
+        }
         fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u — snap missing "
-                "(ring count=%u newest=%u)\n",
-                (unsigned)epoch, (unsigned)load, (unsigned)snap_n,
-                (unsigned)(g_snaps ? netplay_snap_ring_newest_tick(g_snaps) : 0u));
+                "psxrecomp: rb follow skip-snap load=%u (ownership chain tip)\n",
+                (unsigned)load);
         fflush(stderr);
-        /* Tell initiator to abort SealInputs; rexmit on TURN. */
-        g_follow_nack_pending = 1;
-        g_follow_nack_epoch = epoch;
-        g_follow_nack_mismatch = mismatch;
-        g_follow_nack_load = load;
-        g_follow_nack_target = target;
-        g_follow_nack_slot = slot;
-        g_follow_nack_sends = 0;
-        send_follow_nack(epoch, mismatch, load, target, slot, 1);
-        g_follow_nack_sends = 1;
-        return;
     }
     /* NACK loads past our shared frontier — initiator tip-slack beyond
      * hash_confirm is a doomed baseline (cpu-only tip snap fork). */
@@ -5104,6 +5389,10 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     g_needs_advance = 0;
     g_seal_export_logged = 0;
     g_follow_nack_pending = 0;
+    /* Consumed — don't re-apply a stashed copy of this BEGIN next pump. */
+    if (g_stash_begin_valid && g_stash_begin_epoch == epoch)
+        g_stash_begin_valid = 0;
+    g_stash_begin_logged = 0;
     rnet_rb_seal_inputs(g_rb, load, target, slot);
     g_seal_wait_ms = rb_mono_ms();
     export_local_seals();
@@ -5258,6 +5547,18 @@ void psx_netplay_rb_pump(void)
                  * load is followable instead of NACK-cycling. */
                 if (peer_frontier > 0u && peer_frontier < demote)
                     demote = peer_frontier;
+                /* §62: frontier AHEAD of the refused load = the peer's snap
+                 * ring evicted that tick (not "peer behind"). Remember the
+                 * floor so choose_load never reopens at/below it. */
+                if (peer_frontier >= load && load > g_peer_nack_floor) {
+                    g_peer_nack_floor = load;
+                    fprintf(stderr,
+                            "psxrecomp: rb peer NACK floor=%u "
+                            "(peer frontier=%u ahead — snap evicted)\n",
+                            (unsigned)g_peer_nack_floor,
+                            (unsigned)peer_frontier);
+                    fflush(stderr);
+                }
                 /* Capture before abort_episode clears it — decides whether Live
                  * must rewind (snap already applied) or can stay put. */
                 int snap_was_applied = g_episode_snap_applied;
@@ -5302,12 +5603,41 @@ void psx_netplay_rb_pump(void)
                 abort_episode(why);
                 if (snap_was_applied && g_snaps &&
                     netplay_snap_ring_has(g_snaps, demote)) {
+                    /* §62: never realign below a remote-input wire hole the
+                     * tip-window retransmit no longer covers — Live would
+                     * stall on WIRE_HOLE forever. Raise the realign target
+                     * to the first snap past the hole (watermarks stay
+                     * demoted; only the Live rewind depth is capped). */
+                    uint32_t realign_to = demote;
+                    uint32_t hole_end =
+                        remote_wire_hole_end_after(demote, live_sim);
+                    if (hole_end > 0u) {
+                        uint32_t t;
+                        uint32_t newest =
+                            netplay_snap_ring_newest_tick(g_snaps);
+                        realign_to = 0u;
+                        for (t = hole_end; t <= newest; ++t) {
+                            if (netplay_snap_ring_has(g_snaps, t)) {
+                                realign_to = t;
+                                break;
+                            }
+                        }
+                        if (realign_to == 0u)
+                            realign_to = newest;
+                        fprintf(stderr,
+                                "psxrecomp: rb NACK hole-guard realign_to=%u "
+                                "(demote=%u hole_end=%u)\n",
+                                (unsigned)realign_to, (unsigned)demote,
+                                (unsigned)hole_end);
+                        fflush(stderr);
+                    }
                     fprintf(stderr,
                             "psxrecomp: rb NACK realign (snap was applied) "
-                            "demote=%u live_was=%u\n",
-                            (unsigned)demote, (unsigned)live_sim);
+                            "demote=%u realign=%u live_was=%u\n",
+                            (unsigned)demote, (unsigned)realign_to,
+                            (unsigned)live_sim);
                     fflush(stderr);
-                    schedule_live_realign(demote, why);
+                    schedule_live_realign(realign_to, why);
                 } else {
                     fprintf(stderr,
                             "psxrecomp: rb NACK keep-live demote=%u "
@@ -5423,6 +5753,7 @@ void psx_netplay_rb_pump(void)
     if (rnet_rb_is_active(g_rb) && rnet_rb_get_phase(g_rb) == nRNetRbPhaseSealInputs) {
         uint64_t now = rb_mono_ms();
         export_local_seals();
+        maybe_rexmit_begin();
         if (g_seal_wait_ms != 0ull && now >= g_seal_wait_ms &&
             (now - g_seal_wait_ms) >= (uint64_t)RB_SEAL_TIMEOUT_MS) {
             abort_episode("seal timeout (peer missing snap / NACK lost)");
@@ -5437,6 +5768,11 @@ void psx_netplay_rb_pump(void)
         maybe_send_baseline();
         maybe_enter_replay();
     }
+
+    /* §60: idle follower with a stashed ownership-chain BEGIN (POST drain
+     * ordered after SYNC in this pump, or BEGIN arrived while Verify-active). */
+    if (!rnet_rb_is_active(g_rb))
+        apply_stashed_begin();
 
     /* Keep BASELINE on the wire through Replay until the peer is clearly in. */
     if (rnet_rb_is_active(g_rb) && rnet_rb_get_phase(g_rb) == nRNetRbPhaseReplay) {
