@@ -1,6 +1,6 @@
 # Current objective — R2 operable retail frontend
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 ## Objective
 
@@ -137,6 +137,33 @@ movie-request boundaries without adding SF2-specific substitutes.
   movie phase. Injecting START there can explain the observed missing Eidetic
   and `z_intro` presentation. Those omissions are therefore recorded as an
   input-harness confound, not yet as a retail/framework presentation defect.
+- A real-device run confirmed audible retail FMV/dialogue output. The same run
+  reproducibly hung in `Save and Quit` before the first memory-card write even
+  though complete card reads, BIOS events, and SIO IRQ acknowledgement were
+  healthy. The apparent callback target `0x80145360` was rejected as the cause:
+  it is an exact compiled candidate, executes natively, and returns normally.
+- The save hang was a generic scheduler invariant violation. A native call unit
+  incremented `g_call_unit_depth`, and both overlay cycle-interrupt wrappers
+  suppressed every IRQ while that depth was nonzero. Retail's event pump can
+  wait inside such a call for the next IRQ-backed BIOS event, so the call could
+  not return until an IRQ that the call itself permanently suppressed.
+  Nested call units now deliver IRQs; the existing interrupt layer continues to
+  preserve atomicity by restoring the interrupted thread and deferring only a
+  requested cooperative cross-thread switch to the clean outer boundary.
+- The focused source regression and complete framework suite pass 40/40. A
+  rebuilt clean executable reached the retail frontend headlessly, then the
+  user repeated the exact visible save route with native overlays and real
+  audio. `Save and Quit` completed, returned normally, and the resulting save
+  loaded successfully. The retained SIO transaction ring contains 849 closed
+  transactions, including 120 successful `0x57` writes; the resulting card is
+  a valid 128 KiB image with active directory entries. This closes the save
+  deadlock without changing SIO timing, card formatting, persistence, retail
+  state, generated C, or captured overlays.
+- The successful load exposed a separate presentation defect in 24-bit FMVs:
+  the decoded movie rectangle is correct, but stale/corrupted VRAM is visible
+  in the bands behind it. Treat this as a display/upload-coverage issue, not
+  MDEC stream corruption. It remains open and must be compared at exact live
+  GP1 display/upload bounds before any fix.
 
 ## R1 verdict
 
@@ -147,13 +174,14 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Replace the ambiguous TITLE word-only trigger with a compound presentation
+1. Capture an affected 24-bit FMV at exact live GP1 display coordinates and
+   bounded CPU-to-VRAM upload bounds, then compare the exposed bands against an
+   accurate reference. Fix only the demonstrated generic display/upload rule.
+2. Replace the ambiguous TITLE word-only trigger with a compound presentation
    and state checkpoint, then repeat startup without pre-title input to verify
    the Eidetic and `z_intro` sequence.
-2. Repeat the state-8/Mission 1 route twice with fixed compound checkpoints and
+3. Repeat the state-8/Mission 1 route twice with fixed compound checkpoints and
    compare stable guest state separately from host/query-timing values.
-3. Repeat the validated dialogue route on the real host audio device and check
-   audible FMV/dialogue output; do not infer audibility from dummy-sink taps.
 4. Use only retail menu ownership to select the representative Mission 3 route;
    do not substitute the oracle's direct diagnostic bootstrap.
 

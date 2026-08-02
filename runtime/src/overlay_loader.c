@@ -2001,18 +2001,18 @@ extern uint32_t i_mask;
  * that callee must be ATOMIC w.r.t. the cooperative thread switch, exactly like
  * statically-compiled code (psx_dispatch_impl checks interrupts ONLY at the
  * outermost dispatch return; a nested callee never interrupts before its caller
- * runs the post-call continuation). Both the overlay CI wrappers AND the dirty
- * per-transfer IRQ pumps, however, checked interrupts at EVERY block/transfer
- * regardless of nesting; an IRQ + cooperative ChangeThread landing inside such a
- * nested unit suspended the interrupted thread with an INCONSISTENT snapshot
+ * runs the post-call continuation). An IRQ + cooperative ChangeThread landing
+ * inside such a nested unit used to suspend the interrupted thread with an
+ * INCONSISTENT snapshot
  * (resume PC at the caller's post-call point, sp still mid-callee) -> a leaked
  * stack frame that compounded across cooperative cycles into a smeared jumptable
- * index (the Ape "Checking MEMORY CARD" softlock/fatal). While this depth is >0
- * both backends defer the IRQ check; the callee runs to completion, then the
- * enclosing top-level dirty pump / outermost dispatch return delivers the IRQ at
- * a consistent (pc, sp) boundary. The TOP-LEVEL flow (depth 0) still pumps IRQs,
- * so the consumer's poll loop and long overlay game-loops keep their
- * responsiveness. Incremented only when the A/B toggle is on (below). */
+ * index (the Ape "Checking MEMORY CARD" softlock/fatal). While this depth is >0,
+ * interrupts.c may still run the guest handler, but it restores the interrupted
+ * thread and defers a requested cross-thread switch until a clean outer boundary.
+ * Interrupt delivery itself MUST remain enabled: a callee can legitimately wait
+ * for an IRQ-backed BIOS event before returning (SF2's memory-card event pump),
+ * and suppressing the IRQ for the whole call unit deadlocks that wait. Incremented
+ * only when the A/B toggle is on (below). */
 int g_call_unit_depth = 0;
 
 /* A/B toggle for the nested-unit IRQ deferral (PSX_OVERLAY_UNIT_DEFER, default
@@ -2070,9 +2070,8 @@ static int overlay_irq_suppressed_now(void) {
 }
 
 static void overlay_ci_wrapper(CPUState *cpu) {
-    /* Defer while inside a nested call unit — a callee must not interrupt
-     * mid-call (static-call atomicity). See g_call_unit_depth. */
-    if (g_call_unit_depth > 0) return;
+    /* Nested call units still take IRQs. interrupts.c uses g_call_unit_depth to
+     * defer only a cooperative cross-thread switch until a clean boundary. */
     if (overlay_irq_suppressed_now()) return;
     /* psx_advance_cycles() has already raised every device edge due at this
      * block. Avoid entering the full scheduler/diagnostic path when COP0 could
@@ -2105,10 +2104,8 @@ static int overlay_idle_note_is_internal_or_return(const CPUState *cpu,
 }
 
 static void overlay_ci_at_wrapper(CPUState *cpu, uint32_t resume_pc) {
-    /* Defer while inside a nested call unit (see g_call_unit_depth): suspending
-     * here would save resume_pc at the callee's block leader while the enclosing
-     * dirty caller expects an atomic unit — the resume-desync bug. */
-    if (g_call_unit_depth > 0) return;
+    /* Do not suppress the IRQ merely because this is a nested call unit. The
+     * interrupt layer preserves call-unit atomicity by deferring thread switches. */
     if (overlay_irq_suppressed_now()) return;
     if ((i_stat & i_mask) == 0) return;
     if ((cpu->cop0[12] & ((1u << 10) | 1u)) != ((1u << 10) | 1u)) return;
@@ -4528,12 +4525,12 @@ int overlay_loader_call_native(CPUState *cpu, uint32_t addr) {
     uint32_t in_regs[34];
     int fp = overlay_fp_enabled();
     if (fp) overlay_regs_snap(in_regs, cpu);
-    /* Run the callee as an atomic UNIT: IRQ delivery is deferred inside it (both
-     * the overlay CI wrappers and the dirty IRQ pumps check g_call_unit_depth) so
-     * a cooperative ChangeThread cannot suspend the interrupted thread mid-callee
-     * with an inconsistent (resume_pc, sp) snapshot. Restore (not just decrement)
-     * so a bail/longjmp-out unwinds the depth correctly; the scheduler landing
-     * also resets it to 0 as a backstop. Gated by the A/B toggle. */
+    /* Run the callee as an atomic UNIT with respect to cooperative thread changes.
+     * IRQ handlers still run, because the callee may wait for an IRQ-backed event;
+     * interrupts.c uses this depth to restore the interrupted thread and defer a
+     * requested cross-thread switch until a clean outer boundary. Restore (not
+     * just decrement) so a bail/longjmp-out unwinds the depth correctly; the
+     * scheduler landing also resets it to 0 as a backstop. Gated by the A/B toggle. */
     int prev_unit_depth = g_call_unit_depth;
     if (overlay_unit_defer_enabled()) g_call_unit_depth = prev_unit_depth + 1;
     int ran = overlay_loader_dispatch(cpu, addr);

@@ -518,3 +518,77 @@ physical output; the user confirmed hearing no sound. Nonzero CD/XA, SPU, and
 host-buffer taps prove only internal sample flow, not audible output. Real-device
 sound remains a separate validation item. No generated C or captures were
 edited. The ignored local footprint is 4.351 GiB.
+
+## Save deadlock: nested call-unit IRQ suppression
+
+A subsequent visible run on the real audio device confirmed audible retail
+output, crossed the Mission 1 dialogue boundary, and entered gameplay. Twice,
+`Save and Quit` reached the memory-card UI but froze before returning to the
+menu. The second run used `PSX_SAME_THREAD_RESTORE=2` and reproduced the same
+boundary. Both 128 KiB card images retained valid `MC` headers and empty
+formatted directory state.
+
+The hardware path before the freeze was healthy: sequential reads completed
+through sectors 0--31, BIOS events were delivered, SIO IRQ bit 7 had balanced
+sets/clears, and no retail `0x57` write command occurred. This excluded card
+formatting, persistence, and SIO write timing as the immediate blocker.
+
+An initial callback-entry hypothesis was also rejected by direct evidence.
+`0x80145360` is an exact manifest candidate (`F 80145360 F99BB31E`, size
+`0x14`), not an unregistered interior entry. The native-call ring showed it
+executing and returning repeatedly, including at the frozen frame. Dirty
+interpreter records independently showed the paired hardware-event callback at
+`0x80145310`. Retail `0x80145820` consumed those event flags, completed one
+invocation, then began another and waited for the next event.
+
+At frozen frame 4,500, the guest had an enabled pending IRQ (`I_STAT=0x41`,
+`I_MASK=0x4D`, COP0 interrupt enable set), but the frame could not advance. The
+runtime cause was generic: `overlay_loader_call_native()` increments
+`g_call_unit_depth`, while both `overlay_ci_wrapper()` and
+`overlay_ci_at_wrapper()` returned immediately whenever that depth was nonzero.
+The outer native call was therefore treated as atomic against IRQ delivery even
+when its retail callee legitimately waited for an IRQ-backed BIOS event. It
+could not return until an IRQ that its own call scope suppressed indefinitely.
+
+The correct invariant already existed one layer lower. `interrupts.c` permits
+the guest IRQ handler to run inside a nested call unit; if the handler requests
+a cooperative cross-thread switch, it restores the interrupted thread and sets
+`s_defer_switch_pending`, applying the switch at the clean outer boundary. The
+fix therefore removes only the two call-depth IRQ-suppression guards. Native
+call units remain atomic with respect to thread changes, not interrupt delivery.
+A registered source regression protects both wrapper delivery sites and the
+deferred-switch machinery. The complete suite passes 40/40.
+
+After the user closed the two old windows, the canonical private executable and
+an independent clean build both linked. A clean headless process reached the
+real `New Game` frontend before visible testing. The user then repeated the
+retail Mission 1 route in a fresh visible native-overlay process with the real
+audio device and an isolated memory-card directory. `Save and Quit` completed,
+returned normally, and the resulting save loaded successfully.
+
+The bounded post-load snapshot at frame 7,180 was live with no pending masked
+device state (`I_STAT=0`, `I_MASK=0x4D`), 849 card probes/commands, 849 ACKs,
+zero transaction aborts, and continued native-overlay IRQ delivery. The full
+retained card transaction ring contained 849 closed transactions, including
+120 successful `0x57` writes; representative directory-sector and data-sector
+writes each reached terminal state 18 with 138 transferred bytes. `card1.mcd`
+is 131,072 bytes, has a valid `MC` header and active directory entries, and has
+SHA-256 `F3969716841AF868443FD6EDD7F1E14C02ACB5D9884CC47B45D7DEBB5AE27414`.
+The user successfully loading the save is the semantic persistence check.
+
+No SIO timing, card format, callback address, retail state, generated C, or
+capture was changed. The ignored local footprint after the clean build and
+validation evidence is 4.635 GiB.
+
+## Open 24-bit FMV band corruption
+
+The successful load exposed a separate presentation defect. During an FMV, the
+decoded central movie rectangle was correct but unrelated colourful VRAM was
+visible in the upper and lower bands. The user's screenshot demonstrates that
+the stream itself is not corrupt; the presentation path is scanning uncovered
+24-bit VRAM around the movie payload. Existing code only tracks and blackens a
+trailing horizontal depth-24 upload margin. The vertical upload/display bounds
+were not captured while the affected frame was live, so no correction is yet
+claimed. The next run must record exact GP1 display coordinates and bounded
+CPU-to-VRAM upload rectangles at the affected movie before changing the generic
+present rule.

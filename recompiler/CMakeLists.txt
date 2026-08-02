@@ -408,6 +408,7 @@ if(BUILD_TESTING)
                 jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
+                overlay_call_unit_irq_guards
                 overlay_candidate_capacity
                 overlay_decodable_fallback
                 overlay_init_guard
