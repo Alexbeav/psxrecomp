@@ -43,6 +43,7 @@ int psx_netplay_rb_tip_holding(void) { return 0; }
 uint32_t psx_netplay_rb_episode_target(void) { return 0; }
 uint32_t psx_netplay_rb_tip_hold_invent_slack(void) { return 0; }
 uint32_t psx_netplay_rb_tip_runway(void) { return 0; }
+void psx_netplay_rb_tip_hold_block_quiet(int block) { (void)block; }
 int psx_netplay_rb_ignore_peer_frame_commit(uint32_t tick, uint32_t hash)
 {
     (void)tick;
@@ -80,6 +81,7 @@ uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
 #include "netplay_rb_post.h"
 #include "netplay_snap_ring.h"
 #include "netplay_state_digest.h"
+#include "psx_netplay.h"
 #include "boot_state.h"
 #include "cdrom.h"
 #include "cpu_state.h"
@@ -103,7 +105,13 @@ static PsxNetplayRbBindings g_b;
 static int g_bound;
 static RNetRbSession *g_rb;
 static NetplaySnapRing *g_snaps;
+/* Episode counter (NOT the wire epoch). Wire epoch ids are partitioned by
+ * initiator slot — epoch = (counter << RB_EPOCH_SLOT_BITS) | initiator_slot —
+ * so concurrent dual-initiation can never collide on an id and any epoch's
+ * initiator is derivable for the tie-break. See rb_epoch_alloc(). */
 static uint32_t g_epoch;
+#define RB_EPOCH_SLOT_BITS 3u
+#define RB_EPOCH_SLOT_MASK 7u
 static uint32_t g_episode_count;
 /* Ticks armed into Replay, accumulated for the host's periodic [FPS] line
  * (psx_netplay_rb_take_replay_ticks resets on read). Lets a soak confirm
@@ -195,6 +203,25 @@ static uint32_t g_stash_bl_dig_a;
 static uint32_t g_stash_bl_dig_b;
 static uint32_t g_stash_bl_dig_c;
 static int g_stash_bl_logged;
+/* SEAL_ROWS that arrived before the local episode opened (same TURN/UDP
+ * reordering race as the baseline stash above — the initiator calls
+ * export_local_seals() immediately after sending SYNC BEGIN, and a burst of
+ * chunk packets can beat a delayed/reordered SYNC through NAT relay). Small
+ * ring since export_local_seals() only ever emits a handful of chunks per
+ * episode open; entries not consumed by the matching begin_follower/tip
+ * extend are just dropped on the next episode (epoch mismatch). */
+#define RB_STASH_SEAL_ROWS_MAX 8
+static struct {
+    int valid;
+    uint32_t epoch;
+    uint32_t mismatch;
+    uint32_t target;
+    uint8_t slot;
+    uint32_t row_begin;
+    RNetRbFrame rows[24];
+    uint16_t row_count;
+} g_stash_seal_rows[RB_STASH_SEAL_ROWS_MAX];
+static int g_stash_seal_rows_logged;
 static uint64_t g_baseline_handshake_ms; /* when local baseline first sent */
 static uint64_t g_last_baseline_burst_ms;
 static int g_ready_timeout_logged;
@@ -244,6 +271,11 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_ABORT_COOLDOWN_TICKS 24u
 /* Repeated abort streak — longer promote-only (char-select storm). */
 #define RB_STORM_COOLDOWN_TICKS 48u
+/* After a genuine POST diverge where Live successfully realigned, do not
+ * promote-only-block the next edges — cooldown was preventing the fork from
+ * self-correcting (2026-08-01 §17 soak: tip=9203 abort → promote-no-resim
+ * until 9228 while live digs stayed forked). Storm streak still cools. */
+#define RB_POST_REALIGN_COOLDOWN_TICKS 0u
 /* Cap initiator begin/follow-open resim span. Deep catch-up after abort is
  * chunked (commit → next episode) instead of one 120-tick Replay. */
 #define RB_MAX_RESIM_SPAN 24u
@@ -266,12 +298,22 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
  * at invent_at+1 (896) — bump to 64. */
 #define RB_FMV_UNLOCK_GRACE 64u
 /* MotK TipHold: quiet window so press→release→D-pad coalesce in one episode.
- * invent slack 0 (UINT32_MAX sentinel) so Live never *invents* past tip
- * (tip-extend rereplay was the menu FPS cliff). Runway is wall-clock frames
- * at 60 Hz (not admit-pump spins — those finalized in ms and killed coalesce;
- * 2026-08-01 soak: 0 tip-extends, 351 fresh light episodes). */
+ * §27: seal slack uses library default (2) so Live may invent tip+1..tip+2
+ * during tip-hold — FORCE0 parked presentation at the tip (mini delay-sync).
+ * Runway is wall-clock frames at 60 Hz. */
 #define RB_MOTK_TIP_RUNWAY 24u
-#define RB_MOTK_TIP_SEAL_SLACK_FORCE0 0xffffffffu
+/* TipHold deadlines (§27): brief coalesce, not a multi-hundred-ms park.
+ * Quiet 80ms; thrash sooner when coalesce is busy; safety above quiet. */
+/* §34: quiet must outlast micro-chatter idle holes (~2–5 ticks) without
+ * approaching SAFETY; 80ms was committing between bounce pulses. */
+#define RB_MOTK_TIP_HOLD_QUIET_MAX_MS 150u
+#define RB_MOTK_TIP_HOLD_QUIET_MIN_MS 100u
+#define RB_MOTK_TIP_HOLD_THRASH_COUNT 2u
+#define RB_MOTK_TIP_HOLD_THRASH_WALL_MS 100u
+#define RB_MOTK_TIP_HOLD_SAFETY_WALL_MS 250u
+/* §35: SAFETY must not commit while digital still held (MotK key-repeat).
+ * Absolute wall is the stuck-pad escape only. */
+#define RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS 2000u
 /* Baseline mismatch with no agreed tip — don't reopen every few ticks. */
 #define RB_BASELINE_MISMATCH_COOLDOWN_TICKS 90u
 
@@ -286,8 +328,15 @@ static uint32_t g_fmv_dense_through;
 static uint32_t g_bl_mismatch_streak;
 static uint32_t g_tip_hold_until;
 /* TipHold invent-cap quiet: wall-clock ms when we first stalled at tip+slack
- * (0 = not armed). Replaces the old pump-frame counter. */
+ * with pads idle and no pending wire edge (0 = not armed). */
 static uint64_t g_tip_hold_quiet_t0_ms;
+/* §34: coalesce/begin saw a wire edge TipHold could not absorb yet — do not
+ * quiet-commit (was dropping releases → ghost re-press episodes). */
+static int g_tip_hold_block_quiet;
+/* Wall-clock enter time for TipHold deadlines (0 = inactive). */
+static uint64_t g_tip_hold_enter_ms;
+/* TipHold coalesce/tip-extend count this episode (thrash WALL trigger). */
+static uint32_t g_tip_hold_coalesce_n;
 /* Mid-span tip-extend rereplay: reload snap without replacing episode pin. */
 static int g_tip_extend_rereplay;
 /* Inclusive tip of last tip-extend hc_prime; drop stale TipHold invent
@@ -353,7 +402,8 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
         g_promote_sweep = 1;
         fprintf(stderr,
                 "psxrecomp: rb FMV lockstep RELEASE sim=%u streak=%u "
-                "cap=%u invent_at=%u (grace=%u; promote_sweep%s)\n",
+                "cap=%u dense_until=%u (unlock_grace=%u; promote_sweep%s; "
+                "invent already on after settle §26)\n",
                 (unsigned)sim, (unsigned)g_fmv_core_match_streak,
                 (unsigned)cap, (unsigned)g_fmv_lockstep_until,
                 (unsigned)RB_FMV_UNLOCK_GRACE,
@@ -435,8 +485,10 @@ static void rb_fmv_tick_settle(void)
         if (g_b.hc)
             netplay_hc_prime_after(g_b.hc, sim);
         fprintf(stderr,
-                "psxrecomp: rb FMV settle until sim=%u lockstep min=%u "
-                "max=%u confirm=%u (no invent; hc primed)\n",
+                "psxrecomp: rb FMV settle until sim=%u invent_hold=%u "
+                "dense_lockstep min=%u max=%u confirm=%u "
+                "(no invent through settle; then invent+resim §26; hc primed)\n",
+                (unsigned)g_fmv_settle_until,
                 (unsigned)g_fmv_settle_until,
                 (unsigned)g_fmv_lockstep_until,
                 (unsigned)(sim + RB_FMV_LOCKSTEP_MAX),
@@ -457,7 +509,13 @@ static int rb_in_fmv_defer_rewind_window(void)
     return sim < g_fmv_settle_until;
 }
 
-/* Media + post-FMV lockstep: admit waits for remote wire (title Start safe). */
+/* Admit no-invent gate (§26): media + short settle only.
+ * Pre-§26 also blocked invent through g_fmv_lockstep_until (MIN 180 +
+ * UNLOCK_GRACE 64 ≈ 4s of title-menu delay-sync). On TURN/CGNAT that
+ * re-serialized presentation to ~packet rate (~30 fps) even with
+ * PSX_RB_GAP1_INVENT — invent count was 0 from FMV-on through invent_at.
+ * Digest-gated lockstep (g_fmv_lockstep_until) still runs for dense snaps
+ * / RELEASE logs; it no longer stalls admit. */
 static int rb_in_fmv_lockstep_window(void)
 {
     RNetSession *s = sess();
@@ -465,7 +523,7 @@ static int rb_in_fmv_lockstep_window(void)
     rb_fmv_tick_settle();
     if (rb_fmv_media_active())
         return 1;
-    return sim < g_fmv_lockstep_until;
+    return sim < g_fmv_settle_until;
 }
 
 static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *why)
@@ -476,6 +534,126 @@ static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *
     g_promote_sweep = 1;
     fprintf(stderr, "psxrecomp: rb rewind cooldown until sim=%u (%s)\n",
             (unsigned)g_rewind_cooldown_until, why ? why : "?");
+    fflush(stderr);
+}
+
+static void clear_rewind_cooldown(const char *why)
+{
+    g_rewind_cooldown_until = 0;
+    g_promote_sweep = 0;
+    fprintf(stderr, "psxrecomp: rb rewind cooldown cleared (%s)\n",
+            why ? why : "?");
+    fflush(stderr);
+}
+
+/* Dump sealed pads + hist + FRAME_COMMIT digests for the failed episode span
+ * BEFORE abort_episode clears the seal table. Cross-peer: both sides print
+ * the same shape — compare tip_btn / FC first_mismatch to find the fork. */
+static void dump_post_diverge_diag(const char *why)
+{
+    uint32_t load;
+    uint32_t tip;
+    uint32_t t;
+    uint32_t first_fc_mis = 0;
+    uint32_t first_fc_loc = 0;
+    uint32_t first_fc_peer = 0;
+    int n;
+    int slot;
+    int sealed_ok;
+
+    if (!g_rb || !rnet_rb_is_active(g_rb))
+        return;
+    load = rnet_rb_get_load_tick(g_rb);
+    tip = rnet_rb_get_target_tick(g_rb);
+    sealed_ok = rnet_rb_inputs_sealed(g_rb) ? 1 : 0;
+    n = g_b.slot_count ? *g_b.slot_count : 0;
+    if (n < 1)
+        n = 2;
+    if (n > (int)RNET_RB_MAX_SLOTS)
+        n = (int)RNET_RB_MAX_SLOTS;
+
+    fprintf(stderr,
+            "psxrecomp: rb POST-DIVERGE diag epoch=%u load=%u tip=%u "
+            "seal_base=%u span=%u sealed=%d why=%s\n",
+            (unsigned)rnet_rb_get_epoch_id(g_rb), (unsigned)load, (unsigned)tip,
+            (unsigned)rnet_rb_get_seal_base_tick(g_rb),
+            (unsigned)rnet_rb_get_seal_span(g_rb), sealed_ok,
+            why ? why : "?");
+
+    if (sealed_ok && tip >= load) {
+        fprintf(stderr, "psxrecomp: rb POST-DIVERGE seals (btn; P=predicted):\n");
+        for (t = load; t <= tip; ++t) {
+            fprintf(stderr, "  t=%u", (unsigned)t);
+            for (slot = 0; slot < n; ++slot) {
+                RNetRbFrame seal;
+                RNetRbFrame hist;
+                int have_s = rnet_rb_get_sealed_frame(g_rb, slot, t, &seal) &&
+                             seal.is_valid;
+                int have_h = g_b.ih &&
+                             netplay_ih_get(g_b.ih, slot, t, &hist) &&
+                             hist.is_valid;
+                if (have_s)
+                    fprintf(stderr, " s%d=%04x%s", slot, (unsigned)seal.buttons,
+                            seal.is_predicted ? "P" : "");
+                else
+                    fprintf(stderr, " s%d=----", slot);
+                if (have_h) {
+                    fprintf(stderr, "/h=%04x%s", (unsigned)hist.buttons,
+                            hist.is_predicted ? "P" : "");
+                    if (have_s && (seal.buttons != hist.buttons ||
+                                   seal.stick_x != hist.stick_x ||
+                                   seal.stick_y != hist.stick_y))
+                        fprintf(stderr, "!");
+                } else {
+                    fprintf(stderr, "/h=----");
+                }
+            }
+            fprintf(stderr, "\n");
+        }
+    } else {
+        fprintf(stderr,
+                "psxrecomp: rb POST-DIVERGE seals: (none — inputs not sealed "
+                "or empty span)\n");
+    }
+
+    /* FRAME_COMMIT local vs peer across the span — first mismatch is the
+     * earliest visible sim fork (often earlier than POST tip). */
+    if (g_b.hc && tip >= load) {
+        fprintf(stderr, "psxrecomp: rb POST-DIVERGE fc (local/peer core):\n");
+        for (t = load; t <= tip; ++t) {
+            uint32_t ld = 0, pd = 0;
+            int have_l = netplay_hc_local_digest(g_b.hc, t, &ld);
+            int have_p = netplay_hc_peer_digest(g_b.hc, t, &pd);
+            fprintf(stderr, "  t=%u L=%08x%s P=%08x%s", (unsigned)t,
+                    have_l ? (unsigned)ld : 0u, have_l ? "" : "?",
+                    have_p ? (unsigned)pd : 0u, have_p ? "" : "?");
+            if (have_l && have_p && ld != pd) {
+                fprintf(stderr, " MISMATCH");
+                if (!first_fc_mis) {
+                    first_fc_mis = t;
+                    first_fc_loc = ld;
+                    first_fc_peer = pd;
+                }
+            } else if (have_l && have_p) {
+                fprintf(stderr, " ok");
+            }
+            fprintf(stderr, "\n");
+        }
+        if (first_fc_mis) {
+            fprintf(stderr,
+                    "psxrecomp: rb POST-DIVERGE fc FIRST_MISMATCH t=%u "
+                    "local=%08x peer=%08x (POST tip=%u — fork was %u ticks "
+                    "earlier)\n",
+                    (unsigned)first_fc_mis, (unsigned)first_fc_loc,
+                    (unsigned)first_fc_peer, (unsigned)tip,
+                    (unsigned)(tip - first_fc_mis));
+        } else {
+            fprintf(stderr,
+                    "psxrecomp: rb POST-DIVERGE fc FIRST_MISMATCH: none in "
+                    "ring for load..tip (fork may be outside HC window or "
+                    "only in POST fold)\n");
+        }
+    }
     fflush(stderr);
 }
 
@@ -693,10 +871,54 @@ static void schedule_live_realign(uint32_t tick, const char *why)
     fflush(stderr);
 }
 
+/* ---- Abort propagation (shared cooldown class) ----
+ * Local aborts used to tear down silently: the peer kept sealing/verifying
+ * until its own (skewed) timeout, then armed a cooldown computed from
+ * different local evidence — the two peers re-armed on different schedules
+ * and re-initiated into each other (abort storms). Now every wire-visible
+ * abort sends OP_ABORT carrying the RNET_RB_ABORT_CLASS_* cooldown class so
+ * the peer mirrors teardown + cooldown from the same class. */
+static uint32_t g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+static uint32_t g_abort_wire_realign_tick;
+static int g_abort_from_peer;          /* applying a peer ABORT — no echo */
+static uint32_t g_peer_abort_last_epoch = 0xffffffffu; /* rexmit dedupe */
+
+#define RB_ABORT_NOTICE_BURST 3
+
+static void send_abort_notice(uint32_t epoch, uint32_t cls, uint32_t realign_tick)
+{
+    RNetSession *s = sess();
+    int i;
+    if (!s || g_abort_from_peer)
+        return;
+    for (i = 0; i < RB_ABORT_NOTICE_BURST; ++i)
+        (void)rnet_session_send_rb_sync(s, epoch, cls, realign_tick, 0u, 0u,
+                                        RNET_RB_SYNC_OP_ABORT, 0u);
+}
+
+static uint32_t abort_class_cooldown_ticks(uint32_t cls)
+{
+    switch (cls) {
+    case RNET_RB_ABORT_CLASS_REALIGN: return RB_POST_REALIGN_COOLDOWN_TICKS;
+    case RNET_RB_ABORT_CLASS_STORM: return RB_STORM_COOLDOWN_TICKS;
+    case RNET_RB_ABORT_CLASS_NO_SNAP: return RB_BASELINE_MISMATCH_COOLDOWN_TICKS;
+    case RNET_RB_ABORT_CLASS_ABORT:
+    default: return RB_ABORT_COOLDOWN_TICKS;
+    }
+}
+
 static void abort_episode(const char *why)
 {
     fprintf(stderr, "psxrecomp: rb episode ABORT — %s\n", why ? why : "?");
     fflush(stderr);
+    /* Propagate before the session reset clears the epoch. Class defaults to
+     * ABORT; abort_episode_realign pre-stages a more specific class. */
+    if (g_rb && rnet_rb_is_active(g_rb))
+        send_abort_notice(rnet_rb_get_epoch_id(g_rb), g_abort_wire_class,
+                          g_abort_wire_realign_tick);
+    g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+    g_abort_wire_realign_tick = 0u;
+    psx_netplay_timesync_on_episode_boundary();
     /* Preserve a queued Live realign load; clear only episode baseline loads. */
     if (!g_live_realign_pending)
         g_pending_load_valid = 0;
@@ -706,6 +928,9 @@ static void abort_episode(const char *why)
     g_episode_baseline_matched = 0;
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = 0ull;
+    g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     clear_tip_extend_prime();
     psx_scheduler_top_level_resume_clear();
@@ -760,6 +985,28 @@ int psx_netplay_rb_recover_null_pc(struct CPUState *cpu_in, uint32_t *out_pc)
     return 0;
 }
 
+/* Realign tip both peers already agreed on (pin > episode load > agreed).
+ * Shared with the peer-ABORT handler so both sides pick the same policy. */
+static int pick_realign_tip(uint32_t *out_tick)
+{
+    /* Prefer the frozen pre-resim baseline — ring load_tick was often overwritten. */
+    if (g_episode_baseline_matched && g_pin_valid) {
+        *out_tick = g_pin_tick;
+        return 1;
+    }
+    if (g_episode_baseline_matched && g_snaps &&
+        netplay_snap_ring_has(g_snaps, g_episode_load_tick)) {
+        *out_tick = g_episode_load_tick;
+        return 1;
+    }
+    if (g_agreed_valid && g_snaps &&
+        netplay_snap_ring_has(g_snaps, g_agreed_through)) {
+        *out_tick = g_agreed_through;
+        return 1;
+    }
+    return 0;
+}
+
 /* After a failed episode: rewind Live to a tip both peers already agreed on. */
 static void abort_episode_realign(const char *why)
 {
@@ -770,50 +1017,58 @@ static void abort_episode_realign(const char *why)
     uint32_t live_sim = s ? rnet_session_sim_tick(s) : 0u;
     uint32_t tick = 0;
     int have = 0;
+    uint32_t cls;
     uint32_t cool_n;
     char cool_why[160];
     int hard_fail;
+    int post_fail = why && strstr(why, "post ") != NULL;
 
-    /* Prefer the frozen pre-resim baseline — ring load_tick was often overwritten. */
-    if (g_episode_baseline_matched && g_pin_valid) {
-        tick = g_pin_tick;
-        have = 1;
-    } else if (g_episode_baseline_matched && g_snaps &&
-               netplay_snap_ring_has(g_snaps, g_episode_load_tick)) {
-        tick = g_episode_load_tick;
-        have = 1;
-    } else if (g_agreed_valid && g_snaps &&
-               netplay_snap_ring_has(g_snaps, g_agreed_through)) {
-        tick = g_agreed_through;
-        have = 1;
+    have = pick_realign_tip(&tick);
+    /* Sealed table dies in abort_episode — dump first on POST diverge. */
+    if (post_fail)
+        dump_post_diverge_diag(why);
+
+    /* Classify BEFORE abort_episode so the wire ABORT carries the shared
+     * cooldown class and both peers re-arm on the same schedule. */
+    if (post_fail && have) {
+        /* POST diverge with a realign tip is a heal path, not a storm seed —
+         * prior ready-timeout streak must not force STORM cooldown (soak §18:
+         * streak=2 → promote-no-resim while Live stayed forked at the pin). */
+        g_bl_mismatch_streak = 0;
+        cls = RNET_RB_ABORT_CLASS_REALIGN;
+    } else {
+        hard_fail = !have ||
+                    (why && (strstr(why, "baseline") != NULL ||
+                             strstr(why, "resim core") != NULL ||
+                             post_fail ||
+                             strstr(why, "desync") != NULL));
+        if (hard_fail)
+            g_bl_mismatch_streak++;
+        else
+            g_bl_mismatch_streak = 0;
+
+        if (!have)
+            cls = RNET_RB_ABORT_CLASS_NO_SNAP;
+        else if (g_bl_mismatch_streak >= 2u)
+            cls = RNET_RB_ABORT_CLASS_STORM;
+        else
+            cls = RNET_RB_ABORT_CLASS_ABORT;
     }
+    cool_n = abort_class_cooldown_ticks(cls);
+
+    g_abort_wire_class = cls;
+    g_abort_wire_realign_tick = have ? tick : 0u;
     abort_episode(why);
     if (have)
         schedule_live_realign(tick, why);
 
-    hard_fail = !have ||
-                (why && (strstr(why, "baseline") != NULL ||
-                         strstr(why, "resim core") != NULL ||
-                         strstr(why, "post ") != NULL ||
-                         strstr(why, "desync") != NULL));
-    if (hard_fail)
-        g_bl_mismatch_streak++;
-    else
-        g_bl_mismatch_streak = 0;
-
-    if (!have)
-        cool_n = RB_BASELINE_MISMATCH_COOLDOWN_TICKS;
-    else if (g_bl_mismatch_streak >= 2u)
-        cool_n = RB_STORM_COOLDOWN_TICKS;
-    else if (hard_fail)
-        cool_n = RB_ABORT_COOLDOWN_TICKS;
-    else
-        cool_n = RB_ABORT_COOLDOWN_TICKS;
-
-    snprintf(cool_why, sizeof(cool_why), "%s (live=%u streak=%u)",
+    snprintf(cool_why, sizeof(cool_why), "%s (live=%u streak=%u class=%u)",
              why ? why : "realign", (unsigned)live_sim,
-             (unsigned)g_bl_mismatch_streak);
-    arm_rewind_cooldown_ticks(live_sim, cool_n, cool_why);
+             (unsigned)g_bl_mismatch_streak, (unsigned)cls);
+    if (cool_n == 0u)
+        clear_rewind_cooldown(cool_why);
+    else
+        arm_rewind_cooldown_ticks(live_sim, cool_n, cool_why);
 }
 
 static int host_save_state(void *ctx, uint32_t tick)
@@ -870,11 +1125,72 @@ static uint8_t host_hash_confirm_through(void *ctx, uint32_t tick)
     return netplay_hc_confirm_through(g_b.hc, tick);
 }
 
+/* Session delay-ring → hist (authoritative). Tip-hold invent-cap stalls Live
+ * so hist often lacks tip+N local rows even though the pad was sampled into
+ * the wire ring at sim+delay earlier — seal must read that ring, not invent. */
+static int host_promote_from_session(int slot, uint32_t tick, RNetRbFrame *out)
+{
+    RNetSession *s = sess();
+    RNetInputSample sample;
+    PsxNetPad pad;
+    RNetRbFrame frame;
+    int delay;
+    rnet_u8 delay_u8;
+    rnet_u32 wire;
+    int local;
+
+    if (!s || !g_b.ih || slot < 0)
+        return 0;
+    delay = g_b.input_delay ? *g_b.input_delay : 0;
+    if (delay < 0)
+        delay = 0;
+    if (delay > 255)
+        delay = 255;
+    delay_u8 = (rnet_u8)delay;
+    wire = rnet_wire_tick_from_sim(tick, delay_u8);
+    local = (g_b.local_slot && slot == *g_b.local_slot) ? 1 : 0;
+    if (local) {
+        if (!rnet_session_peek_input(s, slot, wire, &sample))
+            return 0;
+    } else if (!rnet_session_peek_remote_input(s, slot, wire, &sample)) {
+        return 0;
+    }
+    if (!sample.valid || sample.size < PSX_NETPLAY_PAD_BYTES)
+        return 0;
+    memset(&pad, 0, sizeof(pad));
+    pad.buttons = (uint16_t)sample.bytes[0] | ((uint16_t)sample.bytes[1] << 8);
+    pad.lx = sample.bytes[2];
+    pad.ly = sample.bytes[3];
+    pad.rx = sample.bytes[4];
+    pad.ry = sample.bytes[5];
+    pad.analog = sample.bytes[6] ? 1u : 0u;
+    pad.connected = 1;
+    netplay_ih_pad_to_frame(&pad, tick, 0, &frame);
+    if (!netplay_ih_promote(g_b.ih, slot, &frame))
+        return 0;
+    if (out)
+        *out = frame;
+    return 1;
+}
+
+static void host_prefresh_seal_range(int slot, uint32_t lo, uint32_t hi)
+{
+    uint32_t t;
+    if (slot < 0 || hi < lo)
+        return;
+    for (t = lo; t <= hi; ++t)
+        (void)host_promote_from_session(slot, t, NULL);
+}
+
 static uint8_t host_get_input_row(void *ctx, int32_t slot, uint32_t tick, RNetRbFrame *out)
 {
     (void)ctx;
     if (!g_b.ih || !out)
         return 0;
+    /* Prefer delay-ring (auth) over hist — invent-idle may have poisoned hist
+     * while Live was invent-cap stalled during tip-hold. */
+    if (host_promote_from_session((int)slot, tick, out))
+        return 1u;
     if (netplay_ih_get(g_b.ih, (int)slot, tick, out))
         return 1u;
     /* Seal path requires is_valid=1 rows or the peer never completes SealInputs
@@ -1225,19 +1541,41 @@ static int choose_load_tick(uint32_t mismatch, uint32_t *out_load)
     return 0;
 }
 
-/* MotK convention: SYNC with initiator=0 = follower cannot open episode
- * (missing load snap). Initiator aborts SealInputs instead of hanging. */
+/* Follower's confirmed frontier for the NACK wire hint: the deepest tick this
+ * peer can prove agreement through (agreed watermark, else mutually
+ * hash-confirmed). 0 = unknown. The initiator demotes to this instead of
+ * guessing load-1, so both watermarks converge on a mutually provable tick. */
+static uint32_t follower_frontier_hint(void)
+{
+    uint32_t oldest = g_snaps ? netplay_snap_ring_oldest_tick(g_snaps) : 0u;
+    if (g_agreed_valid && g_agreed_through >= oldest)
+        return g_agreed_through;
+    if (g_b.hc) {
+        uint32_t rt = netplay_hc_resolved_through(g_b.hc);
+        if (rt >= oldest && netplay_hc_confirm_through(g_b.hc, rt))
+            return rt;
+    }
+    return 0u;
+}
+
+/* MotK convention: SYNC op=NACK = follower cannot open episode (missing load
+ * snap / past frontier). Initiator aborts SealInputs instead of hanging.
+ * target field carries this follower's frontier (recomputed every send). */
 static void send_follow_nack(uint32_t epoch, uint32_t mismatch, uint32_t load,
                              uint32_t target, int slot, int log_line)
 {
     RNetSession *s = sess();
+    uint32_t frontier = follower_frontier_hint();
+    (void)target; /* episode target is not useful to the initiator; send frontier */
     if (!s)
         return;
-    (void)rnet_session_send_rb_sync(s, epoch, mismatch, load, target,
-                                    (rnet_u8)(slot < 0 ? 0 : slot), 0u);
+    (void)rnet_session_send_rb_sync(s, epoch, mismatch, load, frontier,
+                                    (rnet_u8)(slot < 0 ? 0 : slot),
+                                    RNET_RB_SYNC_OP_NACK, 0u);
     if (log_line) {
-        fprintf(stderr, "psxrecomp: rb follow NACK epoch=%u load=%u (snap missing)\n",
-                (unsigned)epoch, (unsigned)load);
+        fprintf(stderr,
+                "psxrecomp: rb follow NACK epoch=%u load=%u frontier=%u\n",
+                (unsigned)epoch, (unsigned)load, (unsigned)frontier);
         fflush(stderr);
     }
 }
@@ -1422,6 +1760,80 @@ static void stash_or_accept_baseline(uint32_t epoch, uint32_t load, uint32_t dig
                 (unsigned)epoch, (unsigned)load, (unsigned)dig_m);
         fflush(stderr);
         g_stash_bl_logged = 1;
+    }
+}
+
+/* Apply any SEAL_ROWS chunks stashed while the episode wasn't open yet.
+ * Mirrors apply_stashed_baseline(); call at every point an episode becomes
+ * active for a given epoch (begin_follower open, tip-extend absorb). */
+static void apply_stashed_seal_rows(void)
+{
+    int i;
+    if (!g_rb || !rnet_rb_is_active(g_rb))
+        return;
+    for (i = 0; i < RB_STASH_SEAL_ROWS_MAX; ++i) {
+        if (!g_stash_seal_rows[i].valid)
+            continue;
+        if (g_stash_seal_rows[i].epoch != rnet_rb_get_epoch_id(g_rb)) {
+            /* Stale — belongs to an epoch we've since moved past. */
+            g_stash_seal_rows[i].valid = 0;
+            continue;
+        }
+        g_stash_seal_rows[i].valid = 0;
+        (void)rnet_rb_apply_peer_seal_rows(
+            g_rb, g_stash_seal_rows[i].epoch, g_stash_seal_rows[i].mismatch,
+            g_stash_seal_rows[i].target, (int32_t)g_stash_seal_rows[i].slot,
+            g_stash_seal_rows[i].row_begin, g_stash_seal_rows[i].rows,
+            g_stash_seal_rows[i].row_count);
+        fprintf(stderr,
+                "psxrecomp: rb seal_rows unstash epoch=%u slot=%u row_begin=%u "
+                "n=%u\n",
+                (unsigned)g_stash_seal_rows[i].epoch,
+                (unsigned)g_stash_seal_rows[i].slot,
+                (unsigned)g_stash_seal_rows[i].row_begin,
+                (unsigned)g_stash_seal_rows[i].row_count);
+        fflush(stderr);
+    }
+    if (rnet_rb_get_phase(g_rb) == nRNetRbPhaseSealInputs &&
+        rnet_rb_all_peer_seal_rows_complete(g_rb))
+        enter_awaiting_baseline();
+}
+
+/* Stash a SEAL_ROWS chunk that arrived for an episode not open yet (or for a
+ * different epoch than the active one). Overwrites the oldest/invalid slot
+ * once full — losing a stale stash entry just means the sender's normal
+ * chunk retransmit cadence re-delivers it, same as a plain drop today. */
+static void stash_seal_rows_chunk(uint32_t epoch, uint32_t mismatch, uint32_t target,
+                                  uint8_t slot, uint32_t row_begin,
+                                  const RNetRbFrame *rows, uint16_t row_count)
+{
+    int i;
+    int victim = 0;
+    if (row_count > 24)
+        row_count = 24;
+    for (i = 0; i < RB_STASH_SEAL_ROWS_MAX; ++i) {
+        if (!g_stash_seal_rows[i].valid) {
+            victim = i;
+            break;
+        }
+        victim = i; /* full: keep evicting forward, favors newest chunks */
+    }
+    g_stash_seal_rows[victim].valid = 1;
+    g_stash_seal_rows[victim].epoch = epoch;
+    g_stash_seal_rows[victim].mismatch = mismatch;
+    g_stash_seal_rows[victim].target = target;
+    g_stash_seal_rows[victim].slot = slot;
+    g_stash_seal_rows[victim].row_begin = row_begin;
+    memcpy(g_stash_seal_rows[victim].rows, rows, row_count * sizeof(RNetRbFrame));
+    g_stash_seal_rows[victim].row_count = row_count;
+    if (!g_stash_seal_rows_logged) {
+        fprintf(stderr,
+                "psxrecomp: rb seal_rows stashed epoch=%u slot=%u row_begin=%u "
+                "n=%u (episode not active yet)\n",
+                (unsigned)epoch, (unsigned)slot, (unsigned)row_begin,
+                (unsigned)row_count);
+        fflush(stderr);
+        g_stash_seal_rows_logged = 1;
     }
 }
 
@@ -1868,6 +2280,148 @@ static void clear_tip_extend_prime(void)
     g_tip_extend_prime_tick = 0;
 }
 
+/* Peek pad buttons from the delay ring at sim-keyed `tick` (0xFFFF if missing). */
+static uint16_t tip_hold_peek_buttons(int slot, uint32_t tick)
+{
+    RNetSession *s = sess();
+    RNetInputSample sample;
+    int delay;
+    rnet_u8 delay_u8;
+    rnet_u32 wire;
+    int local;
+    if (!s || slot < 0)
+        return 0xFFFFu;
+    delay = g_b.input_delay ? *g_b.input_delay : 0;
+    if (delay < 0)
+        delay = 0;
+    if (delay > 255)
+        delay = 255;
+    delay_u8 = (rnet_u8)delay;
+    wire = rnet_wire_tick_from_sim(tick, delay_u8);
+    local = (g_b.local_slot && slot == *g_b.local_slot) ? 1 : 0;
+    if (local) {
+        if (!rnet_session_peek_input(s, slot, wire, &sample))
+            return 0xFFFFu;
+    } else if (!rnet_session_peek_remote_input(s, slot, wire, &sample)) {
+        return 0xFFFFu;
+    }
+    if (!sample.valid || sample.size < 2u)
+        return 0xFFFFu;
+    return (uint16_t)sample.bytes[0] | ((uint16_t)sample.bytes[1] << 8);
+}
+
+/* 1 if any seat currently shows a held digital button.
+ * Local: live physical pad (sim/staged stay frozen under invent-cap).
+ * Remote: latest arrived row in tip..tip+runway (not the parked sim tick). */
+static int tip_hold_any_pad_held(uint32_t tip)
+{
+    int slots = g_b.slot_count ? *g_b.slot_count : 0;
+    int local = g_b.local_slot ? *g_b.local_slot : -1;
+    int slot;
+    uint32_t runway = g_rb ? rnet_rb_get_tip_runway(g_rb) : 0u;
+    if (slots < 1)
+        slots = 2;
+    for (slot = 0; slot < slots; ++slot) {
+        if (slot == local) {
+            uint16_t live = 0xFFFFu;
+            if (psx_netplay_live_pad_buttons(&live) && live != 0xFFFFu)
+                return 1;
+            continue;
+        }
+        {
+            uint16_t latest = tip_hold_peek_buttons(slot, tip);
+            uint32_t t;
+            if (g_b.ih) {
+                RNetRbFrame tip_row;
+                if (netplay_ih_get(g_b.ih, slot, tip, &tip_row) && tip_row.is_valid)
+                    latest = tip_row.buttons;
+            }
+            for (t = tip + 1u; runway > 0u && t <= tip + runway; ++t) {
+                uint16_t b = tip_hold_peek_buttons(slot, t);
+                RNetSession *s = sess();
+                RNetInputSample sample;
+                int delay = g_b.input_delay ? *g_b.input_delay : 0;
+                rnet_u8 delay_u8;
+                rnet_u32 wire;
+                if (delay < 0)
+                    delay = 0;
+                if (delay > 255)
+                    delay = 255;
+                delay_u8 = (rnet_u8)delay;
+                wire = rnet_wire_tick_from_sim(t, delay_u8);
+                if (!s || !rnet_session_peek_remote_input(s, slot, wire, &sample))
+                    break;
+                if (g_b.ih) {
+                    RNetRbFrame row;
+                    if (netplay_ih_get(g_b.ih, slot, t, &row) && row.is_valid)
+                        b = row.buttons;
+                }
+                latest = b;
+            }
+            if (latest != 0xFFFFu)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/* 1 if wire tip+1..tip+runway has an unabsorbed RELEASE vs tip for a remote
+ * seat. §35: do NOT treat a future press (tip already idle) as pending —
+ * that over-blocked quiet for the full SAFETY window (soak: 21/30 SAFETY).
+ * Future presses tip-extend or open a fresh episode after quiet commit. */
+static int tip_hold_wire_pending_release(uint32_t tip)
+{
+    uint32_t runway;
+    int slots;
+    int slot;
+    int local;
+    if (!g_rb || tip == 0u)
+        return 0;
+    runway = rnet_rb_get_tip_runway(g_rb);
+    if (runway == 0u)
+        return 0;
+    slots = g_b.slot_count ? *g_b.slot_count : 0;
+    local = g_b.local_slot ? *g_b.local_slot : -1;
+    if (slots < 1)
+        slots = 2;
+    for (slot = 0; slot < slots; ++slot) {
+        uint16_t tip_btn;
+        uint32_t t;
+        if (slot == local)
+            continue;
+        tip_btn = tip_hold_peek_buttons(slot, tip);
+        if (g_b.ih) {
+            RNetRbFrame tip_row;
+            if (netplay_ih_get(g_b.ih, slot, tip, &tip_row) && tip_row.is_valid)
+                tip_btn = tip_row.buttons;
+        }
+        /* Tip already idle — nothing to coalesce-release. */
+        if (tip_btn == 0xFFFFu)
+            continue;
+        for (t = tip + 1u; t <= tip + runway; ++t) {
+            uint16_t b;
+            RNetSession *s = sess();
+            RNetInputSample sample;
+            int delay = g_b.input_delay ? *g_b.input_delay : 0;
+            rnet_u8 delay_u8;
+            rnet_u32 wire;
+            if (delay < 0)
+                delay = 0;
+            if (delay > 255)
+                delay = 255;
+            delay_u8 = (rnet_u8)delay;
+            wire = rnet_wire_tick_from_sim(t, delay_u8);
+            if (!s || !rnet_session_peek_remote_input(s, slot, wire, &sample))
+                break;
+            b = tip_hold_peek_buttons(slot, t);
+            /* Any delta while tip is held (usually release) needs coalesce. */
+            if (b != tip_btn)
+                return 1;
+        }
+    }
+    return 0;
+}
+
 static void enter_tip_hold(uint32_t target)
 {
     RNetSession *s = sess();
@@ -1883,6 +2437,8 @@ static void enter_tip_hold(uint32_t target)
     int had_local_post = g_local_post_sent;
     if (!g_rb || !rnet_rb_enter_tip_hold(g_rb))
         return;
+    /* Episode boundary: don't let resim cost trip timesync adaptive-off. */
+    psx_netplay_timesync_on_episode_boundary();
     g_agreed_through = target;
     g_agreed_span_lo = g_episode_load_tick;
     g_agreed_valid = 1;
@@ -1911,8 +2467,24 @@ static void enter_tip_hold(uint32_t target)
      * sit past target when tip-extend rereplay returns to TipHold. */
     base = (sim > target) ? sim : target;
     g_tip_hold_until = base + runway;
-    g_tip_hold_quiet_t0_ms = 0ull; /* arm on first stalled poll */
+    g_tip_hold_quiet_t0_ms = 0ull; /* arm on first stalled idle poll */
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = rb_mono_ms();
+    if (g_tip_hold_enter_ms == 0ull)
+        g_tip_hold_enter_ms = 1ull;
+    g_tip_hold_coalesce_n = 0u;
     g_needs_advance = 0;
+    /* If we never sampled RTT in the peer-POST path (common for the peer
+     * that receives POST first / light-tip skips), take one here from
+     * POST-send → tip-hold when the wait was meaningful. */
+    if (had_local_post && g_verify_wait_ms != 0ull && g_rb_rtt_ema_ms < 4u) {
+        uint64_t now = rb_mono_ms();
+        if (now >= g_verify_wait_ms) {
+            uint64_t sample = now - g_verify_wait_ms;
+            if (sample >= 4ull && sample <= 2000ull)
+                g_rb_rtt_ema_ms = (uint32_t)sample;
+        }
+    }
     clear_post_handshake();
     clear_tip_extend_prime();
     fprintf(stderr, "psxrecomp: rb tip-hold through=%u until=%u invent_slack=%u\n",
@@ -1923,7 +2495,9 @@ static void enter_tip_hold(uint32_t target)
 
 static void finalize_tip_hold(void)
 {
+    RNetSession *s = sess();
     uint32_t target;
+    int i;
     if (!g_rb || !rnet_rb_is_tip_holding(g_rb))
         return;
     target = rnet_rb_get_target_tick(g_rb);
@@ -1934,11 +2508,21 @@ static void finalize_tip_hold(void)
     if (g_b.hc)
         netplay_hc_prime_after(g_b.hc, target);
     rnet_rb_set_peer_convergence(g_rb, target);
+    /* Shared frontier: advertise the committed tip. Without this the peer's
+     * library watermark lagged our agreed_through and its next follow REFUSE
+     * / light-tip classification disagreed with ours (burst on loss). */
+    if (s) {
+        for (i = 0; i < RB_ABORT_NOTICE_BURST; ++i)
+            (void)rnet_session_send_rb_resolved(s, target);
+    }
     fprintf(stderr, "psxrecomp: rb episode commit through=%u (tip-hold)\n", (unsigned)target);
     fflush(stderr);
     rnet_rb_session_reset(g_rb);
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = 0ull;
+    g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     clear_tip_extend_prime();
     g_needs_advance = 0;
@@ -1947,6 +2531,11 @@ static void finalize_tip_hold(void)
     g_episode_baseline_matched = 0;
     clear_episode_wire_state();
     clear_baseline_pin();
+    /* Matched tip-hold is a clean commit — clear abort streak so a later
+     * POST realign is not storm-cooled by a stale ready-timeout. */
+    g_bl_mismatch_streak = 0;
+    /* Live invent must rebuild the delay cushion (see psx_netplay.c). */
+    psx_netplay_timesync_on_episode_boundary();
 }
 
 static void poll_tip_hold_finalize(void)
@@ -1959,6 +2548,8 @@ static void poll_tip_hold_finalize(void)
     uint32_t runway;
     uint64_t now;
     uint64_t need_ms;
+    int held;
+    int pending;
     if (!g_rb || !rnet_rb_is_tip_holding(g_rb) || !s)
         return;
     sim = rnet_session_sim_tick(s);
@@ -1966,26 +2557,76 @@ static void poll_tip_hold_finalize(void)
     slack = rnet_rb_get_tip_seal_slack(g_rb);
     invent_cap = tip + slack;
     runway = rnet_rb_get_tip_runway(g_rb);
+    now = rb_mono_ms();
+    held = tip_hold_any_pad_held(tip);
+    pending = tip_hold_wire_pending_release(tip) || g_tip_hold_block_quiet;
+    /* Drop stale block_quiet once pads are idle and tip has no release ahead —
+     * otherwise a failed tip-extend parked quiet for the whole SAFETY window. */
+    if (g_tip_hold_block_quiet && !held && !tip_hold_wire_pending_release(tip))
+        g_tip_hold_block_quiet = 0;
+    pending = tip_hold_wire_pending_release(tip) || g_tip_hold_block_quiet;
+    /* §25/§35: thrash WALL only when coalesce is busy *and* idle (no held /
+     * pending release). SAFETY never commits while digital held. */
+    if (g_tip_hold_enter_ms != 0ull) {
+        uint64_t elapsed = now - g_tip_hold_enter_ms;
+        if (!held && !pending &&
+            g_tip_hold_coalesce_n >= RB_MOTK_TIP_HOLD_THRASH_COUNT &&
+            elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_THRASH_WALL_MS) {
+            fprintf(stderr,
+                    "psxrecomp: rb tip-hold THRASH CAP %u ms "
+                    "(coalesce_n=%u) — commit through=%u\n",
+                    (unsigned)RB_MOTK_TIP_HOLD_THRASH_WALL_MS,
+                    (unsigned)g_tip_hold_coalesce_n, (unsigned)tip);
+            fflush(stderr);
+            finalize_tip_hold();
+            return;
+        }
+        if (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_SAFETY_WALL_MS) {
+            if (held &&
+                elapsed < (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS) {
+                static uint32_t s_held_defer_tip;
+                if (s_held_defer_tip != tip) {
+                    fprintf(stderr,
+                            "psxrecomp: rb tip-hold SAFETY deferred "
+                            "(digital held) through=%u elapsed=%u ms\n",
+                            (unsigned)tip, (unsigned)elapsed);
+                    fflush(stderr);
+                    s_held_defer_tip = tip;
+                }
+            } else {
+                fprintf(stderr,
+                        "psxrecomp: rb tip-hold %s CAP %u ms — commit "
+                        "through=%u held=%d pending=%d\n",
+                        (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS)
+                            ? "ABSOLUTE"
+                            : "SAFETY",
+                        (elapsed >= (uint64_t)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS)
+                            ? (unsigned)RB_MOTK_TIP_HOLD_ABSOLUTE_WALL_MS
+                            : (unsigned)RB_MOTK_TIP_HOLD_SAFETY_WALL_MS,
+                        (unsigned)tip, held, pending);
+                fflush(stderr);
+                finalize_tip_hold();
+                return;
+            }
+        }
+    }
     /* Confirmed Live walked past the coalesce window (wire present during
-     * tip-hold — see np_try_admit_rollback). */
-    if (g_tip_hold_until > 0u && sim > g_tip_hold_until) {
+     * tip-hold — see np_try_admit_rollback). Do not walk past while held —
+     * same key-repeat class as SAFETY-while-held. */
+    if (g_tip_hold_until > 0u && sim > g_tip_hold_until && !held) {
         finalize_tip_hold();
         return;
     }
-    /* Invent-cap stall (MotK slack=0 ⇒ sim stuck at tip waiting for wire):
-     * wait runway frames of *wall clock* at 60 Hz. The old pump-frame counter
-     * hit "24" in a few ms of admit spinning and committed before the paired
-     * release edge could tip-extend (soak: 0 tip-extends). Tip-extend resets
-     * quiet_t0 so an active coalesce keeps the episode open. */
-    if (sim >= invent_cap) {
-        now = rb_mono_ms();
+    /* §34/§35: quiet only while invent-capped, pads idle, and no pending
+     * release. Held button or unreabsorbed release resets the timer. */
+    if (sim >= invent_cap && !held && !pending) {
         if (g_tip_hold_quiet_t0_ms == 0ull)
             g_tip_hold_quiet_t0_ms = now;
         need_ms = (uint64_t)runway * 1000ull / 60ull;
-        if (need_ms < 80ull)
-            need_ms = 80ull;
-        if (need_ms > 500ull)
-            need_ms = 500ull;
+        if (need_ms < (uint64_t)RB_MOTK_TIP_HOLD_QUIET_MIN_MS)
+            need_ms = (uint64_t)RB_MOTK_TIP_HOLD_QUIET_MIN_MS;
+        if (need_ms > (uint64_t)RB_MOTK_TIP_HOLD_QUIET_MAX_MS)
+            need_ms = (uint64_t)RB_MOTK_TIP_HOLD_QUIET_MAX_MS;
         if (runway > 0u && now >= g_tip_hold_quiet_t0_ms + need_ms)
             finalize_tip_hold();
     } else {
@@ -2107,7 +2748,9 @@ void psx_netplay_rb_start(void)
     cfg.local_slot = (uint32_t)(g_b.local_slot ? *g_b.local_slot : 0);
     cfg.delay = (uint32_t)delay;
     cfg.tip_runway = RB_MOTK_TIP_RUNWAY;
-    cfg.tip_seal_slack = RB_MOTK_TIP_SEAL_SLACK_FORCE0;
+    /* §27: 0 → RNET_RB_TIP_SEAL_SLACK_DEFAULT (2). Live invents past tip
+     * during TipHold so presentation keeps moving; tip-extend repairs edges. */
+    cfg.tip_seal_slack = 0u;
     /* Keep the light-tip depth ceiling matched to tip_runway. A coalesced
      * TipHold episode's eventual depth (load..target after tip-extend) can
      * approach tip_runway ticks — with the library default of 16 that
@@ -2141,7 +2784,11 @@ void psx_netplay_rb_start(void)
         g_snaps = NULL;
         return;
     }
-    g_epoch = 1;
+    g_epoch = 0; /* counter — wire ids are (counter << slot_bits) | slot */
+    g_peer_abort_last_epoch = 0xffffffffu;
+    g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+    g_abort_wire_realign_tick = 0u;
+    g_abort_from_peer = 0;
     g_episode_count = 0;
     g_pending_save_valid = 0;
     g_pending_load_valid = 0;
@@ -2155,6 +2802,9 @@ void psx_netplay_rb_start(void)
     g_episode_load_tick = 0;
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = 0ull;
+    g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
     clear_baseline_pin();
@@ -2193,23 +2843,33 @@ void psx_netplay_rb_shutdown(void)
     g_bl_mismatch_streak = 0;
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = 0ull;
+    g_tip_hold_coalesce_n = 0u;
     g_tip_extend_rereplay = 0;
     g_tip_extend_prime_tick = 0;
     g_last_good_bb_pc = 0;
     g_agreed_valid = 0;
     g_agreed_through = 0;
     g_agreed_span_lo = 0;
-    g_epoch = 1;
+    g_epoch = 0;
+    g_peer_abort_last_epoch = 0xffffffffu;
+    g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+    g_abort_wire_realign_tick = 0u;
+    g_abort_from_peer = 0;
     g_rb_rtt_ema_ms = 0;
 }
 
-/* Dense tip snaps: media/lockstep, plus a short window after invent unlock
- * (first Cross/Start after FMV often lands in the next ~0.5s). */
+/* Dense tip snaps: media/settle, plus the digest lockstep/+tip window even
+ * after invent is allowed again (§26) — first Cross/Start after FMV still
+ * wants a near-tip load. */
 static int rb_dense_snap_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
-    if (rb_in_fmv_lockstep_window())
+    if (rb_fmv_media_active())
+        return 1;
+    if (sim < g_fmv_settle_until)
         return 1;
     if (g_fmv_media_end_sim &&
         sim < g_fmv_lockstep_until + 32u &&
@@ -2530,7 +3190,7 @@ int psx_netplay_rb_fmv_media_active(void)
 
 int psx_netplay_rb_lockstep_no_invent(void)
 {
-    /* Media + post-FMV lockstep: wait for remote wire (title Start / skip). */
+    /* Media + settle only (§26). Post-FMV title menus invent+resim. */
     return rb_in_fmv_lockstep_window();
 }
 
@@ -2621,6 +3281,17 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
     /* TipHold/Verify leave invalidates the prior POST pair. */
     if (phase_at_entry == nRNetRbPhaseTipHold || phase_at_entry == nRNetRbPhaseVerify)
         clear_post_handshake();
+    /* Prefill hist from the delay ring before resign/extend so local seat
+     * (FOLLOW) and correction seat (initiator wire peek) seal auth pads —
+     * not invent-idle — while Live is invent-cap stalled at the prior tip. */
+    {
+        uint32_t pref_lo = mismatch_tick;
+        uint32_t pref_hi = (new_target > mismatch_tick) ? new_target : mismatch_tick;
+        int local = g_b.local_slot ? *g_b.local_slot : -1;
+        host_prefresh_seal_range(slot, pref_lo, pref_hi);
+        if (local >= 0 && local != slot)
+            host_prefresh_seal_range(local, pref_lo, pref_hi);
+    }
     (void)rnet_rb_resign_slot_range(g_rb, slot, mismatch_tick, mismatch_tick);
     export_local_seals();
     if (new_target > old_target) {
@@ -2628,9 +3299,15 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
             return 0;
         (void)rnet_rb_resign_slot_range(g_rb, slot, old_target + 1u, new_target);
         if (!rnet_rb_is_from_peer_notify(g_rb)) {
+            /* Shared rereplay decision: the follower mirrors this flag instead
+             * of re-deriving from its own (possibly different) live tip. */
+            rnet_u8 wire_flags = (rnet_u8)(need_rereplay ? RNET_RB_SYNC_FLAG_REREPLAY : 0u);
+            if (rnet_rb_recommend_light_tip(g_rb))
+                wire_flags |= RNET_RB_SYNC_FLAG_LIGHT_TIP;
             (void)rnet_session_send_rb_sync(
                 s, rnet_rb_get_epoch_id(g_rb), rnet_rb_get_mismatch_tick(g_rb),
-                load, new_target, (rnet_u8)(slot < 0 ? 0 : slot), 1u);
+                load, new_target, (rnet_u8)(slot < 0 ? 0 : slot),
+                RNET_RB_SYNC_OP_BEGIN, wire_flags);
         }
         export_local_seals();
         fprintf(stderr,
@@ -2660,7 +3337,10 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
             if (cap > g_tip_hold_until)
                 g_tip_hold_until = cap;
         }
-        g_tip_hold_quiet_t0_ms = 0ull; /* restart coalesce window */
+        /* Rereplay needs a fresh quiet window after the resim settles. */
+        g_tip_hold_quiet_t0_ms = 0ull;
+        if (phase_at_entry == nRNetRbPhaseTipHold)
+            g_tip_hold_coalesce_n++;
         fprintf(stderr,
                 "psxrecomp: rb tip-extend rereplay epoch=%u mismatch=%u "
                 "prior_tip=%u slot=%d until=%u\n",
@@ -2672,8 +3352,12 @@ int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)
         uint32_t cap = new_target + runway;
         if (cap > g_tip_hold_until)
             g_tip_hold_until = cap;
-        g_tip_hold_quiet_t0_ms = 0ull; /* restart coalesce window */
+        /* §24: do NOT reset quiet_t0 on pure TipHold coalesce — extending
+         * tip_hold_until still absorbs the edge into this episode, but the
+         * wall-clock quiet / thrash deadline can still commit. */
+        g_tip_hold_coalesce_n++;
     }
+    g_tip_hold_block_quiet = 0;
     return 1;
 }
 
@@ -2698,8 +3382,25 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     if (rnet_rb_is_active(g_rb)) {
         if (psx_netplay_rb_tip_extend(mismatch_tick, slot))
             return 1;
-        if (rnet_rb_is_active(g_rb))
+        if (rnet_rb_is_tip_holding(g_rb)) {
+            int32_t corr = rnet_rb_get_corrected_slot(g_rb);
+            if (corr >= 0 && slot >= 0 && corr != (int32_t)slot) {
+                /* Different seat cannot tip-extend — commit and reopen so the
+                 * release/press is not begin_refused then quiet-dropped (§34). */
+                fprintf(stderr,
+                        "psxrecomp: rb tip-hold yield different seat "
+                        "corr=%d edge_slot=%d mismatch=%u — tip-hold commit\n",
+                        (int)corr, slot, (unsigned)mismatch_tick);
+                fflush(stderr);
+                finalize_tip_hold();
+            } else {
+                g_tip_hold_block_quiet = 1;
+                g_tip_hold_quiet_t0_ms = 0ull;
+                return 0;
+            }
+        } else if (rnet_rb_is_active(g_rb)) {
             return 0;
+        }
         fprintf(stderr,
                 "psxrecomp: rb tip-hold yielded — begin fresh episode "
                 "mismatch=%u slot=%d\n",
@@ -2796,7 +3497,12 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     }
 
     memset(&corr, 0, sizeof(corr));
-    corr.epoch_id = g_epoch++;
+    /* Slot-partitioned epoch id: (counter << bits) | initiator_slot. Dual
+     * initiation can never collide, and the tie-break can derive any epoch's
+     * initiator from the id alone. */
+    g_epoch++;
+    corr.epoch_id = (g_epoch << RB_EPOCH_SLOT_BITS) |
+                    ((uint32_t)(g_b.local_slot ? *g_b.local_slot : 0) & RB_EPOCH_SLOT_MASK);
     corr.mismatch_tick = mismatch_tick;
     corr.load_tick = load;
     corr.target_tick = target;
@@ -2814,6 +3520,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
 
     g_last_begin_mismatch = mismatch_tick;
     rnet_rb_begin_episode(g_rb, &corr);
+    psx_netplay_timesync_on_episode_boundary();
     clear_episode_wire_state();
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
@@ -2823,8 +3530,16 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     rnet_rb_seal_inputs(g_rb, corr.load_tick, corr.target_tick, corr.slot);
     g_seal_wait_ms = rb_mono_ms();
     g_follow_nack_pending = 0;
-    (void)rnet_session_send_rb_sync(s, corr.epoch_id, corr.mismatch_tick, corr.load_tick,
-                                    corr.target_tick, (rnet_u8)(slot < 0 ? 0 : slot), 1u);
+    {
+        /* Initiator-authoritative episode attributes: light-tip class rides
+         * the wire so the follower classifies identically (burst symmetry). */
+        rnet_u8 wire_flags = (rnet_u8)(
+            (rnet_rb_get_corr_flags(g_rb) & RNET_RB_CORR_LIGHT_TIP)
+                ? RNET_RB_SYNC_FLAG_LIGHT_TIP : 0u);
+        (void)rnet_session_send_rb_sync(s, corr.epoch_id, corr.mismatch_tick, corr.load_tick,
+                                        corr.target_tick, (rnet_u8)(slot < 0 ? 0 : slot),
+                                        RNET_RB_SYNC_OP_BEGIN, wire_flags);
+    }
     export_local_seals();
     fprintf(stderr,
             "psxrecomp: rb begin epoch=%u mismatch=%u load=%u target=%u slot=%d "
@@ -2843,7 +3558,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
 }
 
 static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uint32_t target,
-                           int slot)
+                           int slot, uint8_t wire_flags)
 {
     RNetRbCorrection corr;
     uint32_t snap_n;
@@ -2857,11 +3572,13 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
         RNetRbPhase phase_at_entry = rnet_rb_get_phase(g_rb);
         RNetSession *fs = sess();
         uint32_t sim_now = fs ? rnet_session_sim_tick(fs) : 0u;
-        /* TipHold: rereplay only if Live invented past prior tip (mirror
-         * initiator). Verify always rereplays. */
-        int need_rereplay = 0;
+        /* Shared rereplay decision: the initiator's flag is authoritative;
+         * OR in the local invent check (our Live inventing past the prior tip
+         * forks history regardless of what the initiator saw). Verify always
+         * rereplays. */
+        int need_rereplay = (wire_flags & RNET_RB_SYNC_FLAG_REREPLAY) ? 1 : 0;
         if (phase_at_entry == nRNetRbPhaseTipHold)
-            need_rereplay = (sim_now > old_t) ? 1 : 0;
+            need_rereplay |= (sim_now > old_t) ? 1 : 0;
         else if (phase_at_entry == nRNetRbPhaseVerify)
             need_rereplay = 1;
         if (!rnet_rb_can_extend_target(g_rb, target)) {
@@ -2879,6 +3596,13 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
             return;
         }
         clear_post_handshake();
+        {
+            int local = g_b.local_slot ? *g_b.local_slot : -1;
+            host_prefresh_seal_range(slot, old_t + 1u, target);
+            host_prefresh_seal_range(slot, mismatch, mismatch);
+            if (local >= 0 && local != slot)
+                host_prefresh_seal_range(local, old_t + 1u, target);
+        }
         if (rnet_rb_extend_target(g_rb, target)) {
             (void)rnet_rb_resign_slot_range(g_rb, slot, old_t + 1u, target);
             (void)rnet_rb_resign_slot_range(g_rb, slot, mismatch, mismatch);
@@ -2898,7 +3622,13 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
                 uint32_t cap = target + runway;
                 if (cap > g_tip_hold_until)
                     g_tip_hold_until = cap;
-                g_tip_hold_quiet_t0_ms = 0ull; /* restart coalesce window */
+                /* §24: only rereplay restarts quiet; pure TipHold coalesce
+                 * keeps the quiet/thrash deadline running. */
+                if (need_rereplay)
+                    g_tip_hold_quiet_t0_ms = 0ull;
+                if (phase_at_entry == nRNetRbPhaseTipHold)
+                    g_tip_hold_coalesce_n++;
+                g_tip_hold_block_quiet = 0;
             }
         }
         return;
@@ -2913,6 +3643,43 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
                 (unsigned)epoch, (unsigned)rnet_rb_get_epoch_id(g_rb));
         fflush(stderr);
         finalize_tip_hold();
+    }
+    /* Dual-initiation tie-break: both peers opened concurrent episodes and
+     * each received the other's BEGIN while initiating. Deterministic winner:
+     * lower initiator slot (derived from the partitioned epoch id). The loser
+     * yields quietly — no cooldown, this is contention, not failure — and
+     * falls through to follow the winner. Only yield in the early handshake
+     * phases before our snap load mutated Live; deeper phases drop the SYNC
+     * and let the abort/NACK contract clean up. */
+    if (g_rb && rnet_rb_is_active(g_rb) && !rnet_rb_is_from_peer_notify(g_rb) &&
+        epoch != rnet_rb_get_epoch_id(g_rb)) {
+        uint32_t our_epoch = rnet_rb_get_epoch_id(g_rb);
+        uint32_t our_slot = our_epoch & RB_EPOCH_SLOT_MASK;
+        uint32_t their_slot = epoch & RB_EPOCH_SLOT_MASK;
+        RNetRbPhase ph = rnet_rb_get_phase(g_rb);
+        int early = (ph == nRNetRbPhaseSealInputs ||
+                     ph == nRNetRbPhaseAwaitingBaseline) &&
+                    !g_episode_snap_applied;
+        if (their_slot < our_slot && early) {
+            fprintf(stderr,
+                    "psxrecomp: rb tie-break YIELD our epoch=%u to peer "
+                    "epoch=%u (slot %u beats %u)\n",
+                    (unsigned)our_epoch, (unsigned)epoch,
+                    (unsigned)their_slot, (unsigned)our_slot);
+            fflush(stderr);
+            g_abort_wire_class = RNET_RB_ABORT_CLASS_REALIGN;
+            abort_episode("tie-break yield (dual initiation)");
+            clear_rewind_cooldown("tie-break yield");
+            /* fall through: follow the winner's episode below */
+        } else if (their_slot > our_slot) {
+            fprintf(stderr,
+                    "psxrecomp: rb tie-break WIN our epoch=%u over peer "
+                    "epoch=%u (slot %u beats %u) — drop\n",
+                    (unsigned)our_epoch, (unsigned)epoch,
+                    (unsigned)our_slot, (unsigned)their_slot);
+            fflush(stderr);
+            return;
+        }
     }
     if (!g_rb || rnet_rb_is_active(g_rb))
         return;
@@ -2980,6 +3747,12 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
          * should have raised agreed; mirror choose_load fall-through). */
         if (have_f && g_snaps && frontier < oldest)
             have_f = 0;
+        /* Shared frontier floor: the peer only advertises RESOLVED for ticks
+         * it committed (tip-hold/commit), so a load at-or-below the library's
+         * peer-advertised watermark is provably followable even when our own
+         * agreed/hc frontier lags (lost RESOLVED was a NACK-cycle seed). */
+        if (have_f && frontier < rnet_rb_resolved_through(g_rb))
+            frontier = rnet_rb_resolved_through(g_rb);
         /* Mirror choose_load hard cap: once tip-hold/commit set agreed_through,
          * refuse loads above it even if local hash_confirm matched TipHold Live
          * (heal raises agreed when that tip aged out of the ring). */
@@ -3009,13 +3782,16 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     corr.slot = slot;
     corr.initiator = 0u;
     corr.from_peer_notify = 1u;
-    if (g_agreed_valid &&
-        rnet_rb_is_light_tip_candidate_ex(load, target, g_agreed_through,
-                                          rnet_rb_get_light_tip_max_depth(g_rb)))
+    /* Light-tip is initiator-authoritative (wire flag) — never re-derived
+     * from this peer's watermarks, so both sides classify identically. */
+    if (wire_flags & RNET_RB_SYNC_FLAG_LIGHT_TIP)
         corr.flags = RNET_RB_CORR_LIGHT_TIP;
-    if (epoch >= g_epoch)
-        g_epoch = epoch + 1u;
+    /* Keep our epoch counter ahead of any seen counter (ids are
+     * slot-partitioned; this only keeps counters monotonic for logging). */
+    if ((epoch >> RB_EPOCH_SLOT_BITS) > g_epoch)
+        g_epoch = epoch >> RB_EPOCH_SLOT_BITS;
     rnet_rb_begin_episode(g_rb, &corr);
+    psx_netplay_timesync_on_episode_boundary();
     clear_episode_wire_state();
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
@@ -3031,17 +3807,23 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
             (unsigned)epoch, (unsigned)mismatch, (unsigned)load, (unsigned)target,
             (unsigned)snap_n, g_b.local_slot ? *g_b.local_slot : -1);
     fflush(stderr);
-    if (rnet_rb_all_peer_seal_rows_complete(g_rb))
-        enter_awaiting_baseline();
-    else
-        apply_stashed_baseline();
+    /* Initiator's export_local_seals() burst can have beaten this follower's
+     * own delayed SYNC through the relay — drain any stash for this epoch
+     * before checking completeness. */
+    apply_stashed_seal_rows();
+    if (rnet_rb_get_phase(g_rb) == nRNetRbPhaseSealInputs) {
+        if (rnet_rb_all_peer_seal_rows_complete(g_rb))
+            enter_awaiting_baseline();
+        else
+            apply_stashed_baseline();
+    }
 }
 
 void psx_netplay_rb_pump(void)
 {
     RNetSession *s = sess();
     rnet_u32 epoch, mismatch, load, target, row_begin;
-    rnet_u8 cslot, initiator, slot;
+    rnet_u8 cslot, op, wire_flags, slot;
     rnet_u32 dig_m, dig_a, dig_b, dig_c, in_dig;
     rnet_u8 match;
     RNetRbFrame rows[24];
@@ -3050,15 +3832,78 @@ void psx_netplay_rb_pump(void)
     if (!g_rb || !s)
         return;
 
-    while (rnet_session_take_rb_sync(s, &epoch, &mismatch, &load, &target, &cslot, &initiator)) {
-        if (!initiator) {
-            /* MotK: initiator=0 is follow-NACK (missing load snap), not an echo. */
+    while (rnet_session_take_rb_sync(s, &epoch, &mismatch, &load, &target, &cslot, &op,
+                                     &wire_flags)) {
+        if (op == RNET_RB_SYNC_OP_ABORT) {
+            /* Peer tore its episode down. Mirror teardown + the shared
+             * cooldown class (mismatch field) so both peers re-arm on the
+             * same schedule instead of drifting to skewed local timeouts. */
+            uint32_t cls = mismatch;
+            if (epoch == g_peer_abort_last_epoch)
+                continue; /* rexmit burst dedupe */
+            g_peer_abort_last_epoch = epoch;
+            if (rnet_rb_is_active(g_rb) && epoch == rnet_rb_get_epoch_id(g_rb)) {
+                char why[96];
+                uint32_t live_sim = rnet_session_sim_tick(s);
+                uint32_t tick = 0;
+                int have;
+                int snap_was_applied = g_episode_snap_applied;
+                snprintf(why, sizeof(why), "peer abort epoch=%u class=%u",
+                         (unsigned)epoch, (unsigned)cls);
+                have = pick_realign_tip(&tick);
+                g_abort_from_peer = 1;
+                abort_episode(why);
+                g_abort_from_peer = 0;
+                if (snap_was_applied && have)
+                    schedule_live_realign(tick, why);
+                /* Shared cooldown class → same re-arm schedule as the peer. */
+                if (cls == RNET_RB_ABORT_CLASS_REALIGN) {
+                    g_bl_mismatch_streak = 0;
+                } else {
+                    g_bl_mismatch_streak++;
+                    if (cls == RNET_RB_ABORT_CLASS_STORM &&
+                        g_bl_mismatch_streak < 2u)
+                        g_bl_mismatch_streak = 2u;
+                }
+                {
+                    uint32_t cool_n = abort_class_cooldown_ticks(cls);
+                    if (cool_n == 0u)
+                        clear_rewind_cooldown(why);
+                    else
+                        arm_rewind_cooldown_ticks(live_sim, cool_n, why);
+                }
+            } else {
+                /* Not (or no longer) in that episode — still honor hard
+                 * cooldown classes so we don't instantly re-initiate into a
+                 * peer that just declared a storm/no-snap failure. */
+                if (cls == RNET_RB_ABORT_CLASS_STORM ||
+                    cls == RNET_RB_ABORT_CLASS_NO_SNAP) {
+                    char why[96];
+                    snprintf(why, sizeof(why),
+                             "peer abort (idle) epoch=%u class=%u",
+                             (unsigned)epoch, (unsigned)cls);
+                    arm_rewind_cooldown_ticks(rnet_session_sim_tick(s),
+                                              abort_class_cooldown_ticks(cls), why);
+                }
+            }
+            continue;
+        }
+        if (op == RNET_RB_SYNC_OP_NACK) {
+            /* MotK: op=NACK is follow-NACK (missing load snap / past frontier),
+             * not an echo. target field carries the follower's frontier. */
             if (rnet_rb_is_active(g_rb) && epoch == rnet_rb_get_epoch_id(g_rb) &&
                 !rnet_rb_is_from_peer_notify(g_rb)) {
                 char why[96];
                 RNetSession *ns = sess();
                 uint32_t live_sim = ns ? rnet_session_sim_tick(ns) : 0u;
+                uint32_t peer_frontier = target;
                 uint32_t demote = (load > 0u) ? load - 1u : 0u;
+                /* Shared frontier: demote to the follower's advertised
+                 * frontier when it is deeper than load-1 — a tick the
+                 * follower can actually prove, so the reopened episode's
+                 * load is followable instead of NACK-cycling. */
+                if (peer_frontier > 0u && peer_frontier < demote)
+                    demote = peer_frontier;
                 /* Capture before abort_episode clears it — decides whether Live
                  * must rewind (snap already applied) or can stay put. */
                 int snap_was_applied = g_episode_snap_applied;
@@ -3120,15 +3965,20 @@ void psx_netplay_rb_pump(void)
             }
             continue;
         }
-        begin_follower(epoch, mismatch, load, target, (int)cslot);
+        begin_follower(epoch, mismatch, load, target, (int)cslot, wire_flags);
     }
 
     while (rnet_session_take_rb_seal_rows(s, &epoch, &mismatch, &target, &slot, &row_begin, rows,
                                          &row_count)) {
-        if (!rnet_rb_is_active(g_rb))
+        /* Same TURN/UDP reordering race as BASELINE: the initiator's
+         * export_local_seals() burst can beat a delayed SYNC BEGIN through
+         * the relay. Stash instead of dropping so the follower doesn't have
+         * to wait out a full chunk retransmit before completing seal rows
+         * (2026-08-01 gap review). */
+        if (!rnet_rb_is_active(g_rb) || epoch != rnet_rb_get_epoch_id(g_rb)) {
+            stash_seal_rows_chunk(epoch, mismatch, target, slot, row_begin, rows, row_count);
             continue;
-        if (epoch != rnet_rb_get_epoch_id(g_rb))
-            continue;
+        }
         (void)rnet_rb_apply_peer_seal_rows(g_rb, epoch, mismatch, target, (int32_t)slot,
                                            row_begin, rows, row_count);
         if (rnet_rb_get_phase(g_rb) == nRNetRbPhaseSealInputs &&
@@ -3328,6 +4178,18 @@ uint32_t psx_netplay_rb_tip_runway(void)
     if (!g_rb)
         return 0;
     return rnet_rb_get_tip_runway(g_rb);
+}
+
+void psx_netplay_rb_tip_hold_block_quiet(int block)
+{
+    if (!g_rb || !rnet_rb_is_tip_holding(g_rb))
+        return;
+    if (block) {
+        g_tip_hold_block_quiet = 1;
+        g_tip_hold_quiet_t0_ms = 0ull;
+    } else {
+        g_tip_hold_block_quiet = 0;
+    }
 }
 
 int psx_netplay_rb_ignore_peer_frame_commit(uint32_t tick, uint32_t hash)

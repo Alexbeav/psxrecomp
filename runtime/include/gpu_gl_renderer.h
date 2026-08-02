@@ -49,6 +49,12 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
 /* Clear to black + swap (display-disabled frame). */
 void gl_renderer_present_blank(void);
 
+/* §33: re-present the last Live frame captured before Swap (or from a VRAM
+ * snapshot when interpolation owned the last present). Used during rollback
+ * resim so the window keeps a wall-clock present cadence without reading
+ * mid-resim VRAM. Returns 1 if a Swap happened, 0 if no hold is available. */
+int gl_renderer_present_hold_last(void);
+
 /* Sync the authoritative FBO down to CPU VRAM if the GPU side is ahead (else
  * a no-op). Screenshots and the debug server call this before reading CPU
  * VRAM. Do NOT use before 24-bit (FMV) scanout — a full readback can clobber

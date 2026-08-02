@@ -50,6 +50,10 @@ uint8_t  netplay_hc_confirm_through(const NetplayHashConfirm* hc, uint32_t tick)
 uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
                                 uint32_t* digest_out);
 
+/* Peek peer FRAME_COMMIT digest for tick; returns 0 if missing. */
+uint8_t netplay_hc_peer_digest(const NetplayHashConfirm* hc, uint32_t tick,
+                               uint32_t* digest_out);
+
 /* 1 if the next tick after resolved_through has both digests but they differ.
  * Fills tick/local/peer when non-NULL. Used to log first live core fork. */
 uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_out,

@@ -71,14 +71,15 @@ int  psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot);
 /* 1 while begin_rewind is suppressed (cooldown after abort / realign). */
 int  psx_netplay_rb_rewind_suppressed(void);
 
-/* 1 during depth24 / recent MDEC / post-FMV settle — MotK FMV. */
+/* 1 during depth24 / recent MDEC / short post-FMV settle — MotK FMV.
+ * Post-FMV digest lockstep no longer blocks invent (§26). */
 int  psx_netplay_rb_fmv_defer_rewind(void);
 
 /* 1 while depth24 or recent MDEC (not settle). */
 int  psx_netplay_rb_fmv_media_active(void);
 
-/* 1 during FMV media + post-FMV lockstep (+ unlock grace) — admit waits for
- * remote wire (title Start / movie skip). Ticks the FMV→settle tracker. */
+/* 1 during FMV media + short settle (§26) — admit waits for remote wire.
+ * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle. */
 int  psx_netplay_rb_lockstep_no_invent(void);
 
 /* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
@@ -106,6 +107,10 @@ uint32_t psx_netplay_rb_tip_hold_invent_slack(void);
 /* TipHold coalesce runway (tip_runway). Host scans wire tip+1..tip+runway for
  * release edges when Live is stalled at invent-cap. */
 uint32_t psx_netplay_rb_tip_runway(void);
+
+/* §34: while TipHold cannot tip-extend/begin an already-seen wire edge,
+ * block wall-clock quiet finalize (release must not be dropped by commit). */
+void psx_netplay_rb_tip_hold_block_quiet(int block);
 
 /* 1 if a peer FRAME_COMMIT should be dropped (TipHold invent still on the
  * wire after tip-extend hc_prime). Call from FRAME_COMMIT drain. */

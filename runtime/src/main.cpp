@@ -361,6 +361,12 @@ static Smooth60State g_smooth_60_state;
  * survive soft-return and poison FMV/FPS after session_reboot). */
 static bool     s_disabled_frame_presented = false;
 static bool     s_force_present_after_load = false;
+/* §33 SW hold-last: sdl_texture is 640x512; Live only uploads the active
+ * display rect. Resim must reuse that src/dst — RenderCopy(NULL,NULL) sticks
+ * the image in the upper-left corner (user-confirmed). */
+static int s_sw_hold_valid = 0;
+static SDL_Rect s_sw_hold_src;
+static SDL_Rect s_sw_hold_dst;
 /* After LOADED: optional freeze probe (PSX_POST_LOAD_PROBE=1). Off by default. */
 static int      s_post_load_probe_enabled = -1; /* -1 = unread env */
 static int      s_post_load_probe_left = 0;
@@ -447,6 +453,7 @@ static void smooth_60_reset(void) {
 static void present_session_reset(void) {
     s_disabled_frame_presented = false;
     s_force_present_after_load = false;
+    s_sw_hold_valid = 0;
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
     s_fps_base_title.clear();
@@ -3448,13 +3455,47 @@ static uint64_t s_np_admit_ticks = 0;
 static uint64_t s_np_guest_ticks = 0;
 static uint64_t s_np_last_admit_end = 0;
 static uint64_t s_np_timing_frames = 0;
-
+/* §27: wall-clock gaps between successful presents (player-visible starvation). */
+static uint64_t s_present_last_ms = 0;
+static uint32_t s_present_gaps_ms[128];
+static unsigned s_present_gaps_n = 0;
 static int netplay_timing_on(void) {
     if (s_np_timing_enabled < 0) {
         const char *e = std::getenv("PSX_NETPLAY_TIMING");
         s_np_timing_enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
     }
     return s_np_timing_enabled;
+}
+
+static void netplay_note_present(void);
+static void netplay_hold_last_present_tick(void);
+
+static void netplay_note_present(void) {
+    uint64_t now;
+    uint32_t gap;
+    if (!psx_netplay_active() || !netplay_timing_on())
+        return;
+    now = SDL_GetTicks64();
+    if (s_present_last_ms != 0ull && now >= s_present_last_ms) {
+        gap = (uint32_t)(now - s_present_last_ms);
+        if (s_present_gaps_n < (unsigned)(sizeof(s_present_gaps_ms) / sizeof(s_present_gaps_ms[0])))
+            s_present_gaps_ms[s_present_gaps_n++] = gap;
+    }
+    s_present_last_ms = now ? now : 1ull;
+}
+
+static void netplay_present_gap_stats(uint32_t *p95_out, uint32_t *max_out) {
+    unsigned n = s_present_gaps_n;
+    unsigned idx;
+    if (p95_out) *p95_out = 0;
+    if (max_out) *max_out = 0;
+    if (n == 0)
+        return;
+    std::sort(s_present_gaps_ms, s_present_gaps_ms + n);
+    idx = (n > 1u) ? (unsigned)((95u * (n - 1u)) / 100u) : 0u;
+    if (p95_out) *p95_out = s_present_gaps_ms[idx];
+    if (max_out) *max_out = s_present_gaps_ms[n - 1u];
+    s_present_gaps_n = 0;
 }
 
 /* Stage local pad + poll admit until published. Parks the guest fiber when
@@ -3547,7 +3588,10 @@ static void netplay_barrier_admit(int override) {
 #endif
             continue;
         }
-        if (psx_netplay_needs_local_sample()) {
+        /* §36: TipHold parks sim, so needs_local_sample stays 0 after latch.
+         * Still capture every spin so live_pad_buttons can see a real release
+         * (SAFETY deferred must not ride ABSOLUTE 2000ms on a frozen peek). */
+        if (psx_netplay_needs_local_sample() || psx_netplay_rb_tip_holding()) {
             PsxNetPad local{};
             if (override >= 0 && !g_headless) {
                 capture_override_pad(override, &local);
@@ -3603,6 +3647,11 @@ static void netplay_barrier_admit(int override) {
             SDL_GameControllerUpdate();
         }
         if (psx_return_to_lobby_requested()) return;
+        /* §35: TipHold invent-cap stall freezes guest (no vblank present).
+         * Keep Swap alive on the last Live frame so SAFETY/held waits do not
+         * open a ~250ms present gap. */
+        if (psx_netplay_rb_tip_holding())
+            netplay_hold_last_present_tick();
         /* Wake on peer UDP (or 1ms timeout). SDL_Delay(1) under dual FMV load
          * often stretches multi-ms and cut MotK netplay intro ~59→~36; Delay(0)
          * busy-spins and can starve the peer (tick-0 hang). */
@@ -3682,6 +3731,41 @@ static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
  * two host refreshes. Left at the PSX rate on non-~60Hz panels to avoid running
  * the sim at the wrong speed. */
 static double g_frame_period_ms = PSX_FRAME_PERIOD_MS;
+
+/* §33/§35: re-present last Live frame on a wall-clock cadence while guest
+ * sim is frozen (resim) or TipHold invent-cap stall (admit spin). */
+static void netplay_hold_last_present_tick(void) {
+    static uint64_t s_hold_last_ms;
+    uint64_t now = SDL_GetTicks64();
+    uint32_t period = (uint32_t)(g_frame_period_ms + 0.5);
+    int did = 0;
+    if (period < 8u)
+        period = 8u;
+    if (period > 33u)
+        period = 33u;
+#ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active)
+        gl_renderer_set_interpolation_suspended(1);
+#endif
+    if (s_hold_last_ms != 0ull && now >= s_hold_last_ms &&
+        (uint32_t)(now - s_hold_last_ms) < period)
+        return;
+#ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active) {
+        did = gl_renderer_present_hold_last();
+    } else if (!g_vk_active && sdl_renderer && sdl_texture && s_sw_hold_valid) {
+        SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer);
+        SDL_RenderCopy(sdl_renderer, sdl_texture, &s_sw_hold_src, &s_sw_hold_dst);
+        SDL_RenderPresent(sdl_renderer);
+        did = 1;
+    }
+#endif
+    if (did) {
+        netplay_note_present();
+        s_hold_last_ms = now ? now : 1ull;
+    }
+}
 
 /* ── Host-stack-usage profile (RECURSION_BUG.md §17) ──────────────────────────
  * The decisive instrument for the long-run freeze. The guest call graph mirrors
@@ -3974,11 +4058,17 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 const uint64_t replay_ticks = psx_netplay_rb_take_replay_ticks();
                 const double replay_pct =
                     100.0 * (double)replay_ticks / (double)s_np_timing_frames;
+                uint32_t gap_p95 = 0, gap_max = 0;
+                /* §27: presentation starvation — eye cares about gaps more
+                 * than replay%. Pass: post-settle present_gap_p95 ≤ 33ms. */
+                netplay_present_gap_stats(&gap_p95, &gap_max);
                 std::fprintf(stderr,
                     "[FPS] game: %.1f fps (%.2fx) | frames: %llu | "
-                    "guest=%.2f ms/f admit=%.2f ms/f replay=%.0f%% (n=%llu)\n",
+                    "guest=%.2f ms/f admit=%.2f ms/f replay=%.0f%% "
+                    "present_gap_p95=%u ms max=%u ms (n=%llu)\n",
                     fps, speed, (unsigned long long)s_frame_count,
                     guest_ms, admit_ms, replay_pct,
+                    (unsigned)gap_p95, (unsigned)gap_max,
                     (unsigned long long)s_np_timing_frames);
                 s_np_admit_ticks = 0;
                 s_np_guest_ticks = 0;
@@ -4399,6 +4489,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
     }
 
+    /* Rollback resim / TipHold stall (§33/§35): presentation is host-only.
+     * Resim skips Swap; TipHold invent-cap stalls admit (no guest vblank) —
+     * both starved present_gap. Hold-last on wall-clock cadence. TipHold
+     * also presents from the admit spin (no vblank while stalled).
+     * Suspend GL interp so it cannot fight hold-last SwapWindow. */
+    if (psx_netplay_is_resimulating()) {
+        netplay_hold_last_present_tick();
+        return ep;
+    }
+
     /* ---- Display from our VRAM ---- */
     probe_reached = 1;
     uint32_t w = 0, h = 0;
@@ -4507,12 +4607,15 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * SW stayed smooth). Falls through to the CPU readout path only if
                  * the wide surface for this buffer doesn't exist yet. */
                 if (gl_renderer_present_wide_fbo((int)di.display_x, (int)di.display_y,
-                                                 (int)h, g_video_aa ? 1 : 0))
+                                                 (int)h, g_video_aa ? 1 : 0)) {
+                    netplay_note_present();
                     return ep;
+                }
             } else {
                 gl_renderer_present_vram((int)di.display_x, (int)di.display_y,
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
+                netplay_note_present();
                 return ep;
             }
         }
@@ -4545,6 +4648,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                          (int)present_w, (int)h, g_video_aa ? 1 : 0,
                                          (fmv_frame || nw_pin) ? 1 : 0);
             }
+            netplay_note_present();
             return ep;
         }
 #endif
@@ -4673,6 +4777,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         gl_renderer_present(sdl_pixel_buf, src_w, src_h,
                             (g_video_aa && !depth24_frame) ? 1 : 0,
                             pin_43 ? 1 : 0, 0 /* full width */);
+        netplay_note_present();
     } else {
     if ((!sdl_renderer || !sdl_texture) && ensure_sw_sdl_present() != 0)
         return ep;
@@ -4729,6 +4834,10 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
+    /* §33: remember active rect for resim hold-last (not full 640x512). */
+    s_sw_hold_src = src;
+    s_sw_hold_dst = dst;
+    s_sw_hold_valid = 1;
 
     /* Vsync self-heal. The renderer is created with PRESENTVSYNC for
      * tear-free output, but the wall-clock pacer above already holds
@@ -4745,6 +4854,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         SDL_RenderPresent(sdl_renderer);
         const Uint64 t1 = SDL_GetPerformanceCounter();
         latency_ring_mark(LAT_SWAP_END);
+        netplay_note_present();
         const Uint64 freq = SDL_GetPerformanceFrequency();
         const Uint64 present_ms = (t1 >= t0 && freq) ? ((t1 - t0) * 1000u) / freq : 0;
         if (!g_present_vsync_disabled && present_ms > 250) {
@@ -4775,7 +4885,7 @@ static void sdl_vblank_present(void) {
     psx_netplay_rb_flush_resume();
     if (ep.skip_pace || psx_return_to_lobby_requested())
         return;
-    if (psx_netplay_is_resimulating())
+    if (psx_netplay_is_resimulating() || psx_netplay_rb_tip_holding())
         return;
     if (!gpu_display_is_depth24() && psx_netplay_catchup_budget() > 0) {
         psx_netplay_catchup_consume_frame();
@@ -4992,6 +5102,9 @@ namespace {
     int g_lnch_lan_my_slot = -1;
     std::string g_lnch_lan_player_id; /* local process identity for LAN seats */
 
+    static int ae_np_lan_occupied(const AeLanLobbyState& state);
+    static int ae_np_lan_endpoint_port(const std::string& endpoint);
+
 #ifdef _WIN32
     using AeLanSock = SOCKET;
     static constexpr AeLanSock kAeLanSockInvalid = INVALID_SOCKET;
@@ -4999,6 +5112,8 @@ namespace {
     using AeLanSock = int;
     static constexpr AeLanSock kAeLanSockInvalid = -1;
 #endif
+    static void ae_np_lan_sock_close(AeLanSock* s);
+    static bool ae_np_lan_set_nonblock(AeLanSock s);
     AeLanSock g_lnch_lan_udp = kAeLanSockInvalid;
     sockaddr_in g_lnch_lan_peers[kAeLanMaxSlots]{};
     bool g_lnch_lan_peer_ok[kAeLanMaxSlots]{};
@@ -5006,8 +5121,260 @@ namespace {
     /* LAN list latency from last Refresh probe; -1 unknown. */
     int g_lnch_lan_latency_ms = -1;
 
+    /* Cross-machine LAN lobby discovery (UDP broadcast browse/beacon).
+     * The on-disk netplay_lan_lobby.txt registry only works for same-cwd /
+     * same-machine; remote peers discover hosts via MOTK1 BROWSE→BEACON. */
+    static constexpr int kAeLanDiscoverMax = 16;
+    static constexpr int kAeLanBrowsePortLo = 7777;
+    static constexpr int kAeLanBrowsePortHi = 7808; /* inclusive */
+    static constexpr uint32_t kAeLanDiscoverStaleMs = 8000u;
+    struct AeLanDiscovered {
+        char endpoint[64];
+        char name[64];
+        char game[64];
+        int player_count = 0;
+        int max_slots = 2;
+        int has_password = 0;
+        int latency_ms = -1;
+        int input_delay = 2;
+        int input_prediction = 4;
+        int rollback = 1;
+        uint32_t session_id = 1;
+        uint32_t last_seen_ms = 0;
+    };
+    static AeLanDiscovered g_lnch_lan_discovered[kAeLanDiscoverMax];
+    static int g_lnch_lan_discovered_n = 0;
+    static uint32_t g_lnch_lan_beacon_announce_ms = 0;
+
     std::filesystem::path ae_np_lan_file() {
         return std::filesystem::current_path() / "netplay_lan_lobby.txt";
+    }
+
+    static void ae_np_lan_sock_set_broadcast(AeLanSock s) {
+        if (s == kAeLanSockInvalid) return;
+#ifdef _WIN32
+        BOOL on = TRUE;
+        setsockopt(s, SOL_SOCKET, SO_BROADCAST, (const char*)&on, sizeof(on));
+#else
+        int on = 1;
+        setsockopt(s, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+#endif
+    }
+
+    static void ae_np_lan_prune_discovered(void) {
+        const uint32_t now = SDL_GetTicks();
+        int w = 0;
+        for (int i = 0; i < g_lnch_lan_discovered_n; ++i) {
+            if ((uint32_t)(now - g_lnch_lan_discovered[i].last_seen_ms) >
+                kAeLanDiscoverStaleMs)
+                continue;
+            if (w != i)
+                g_lnch_lan_discovered[w] = g_lnch_lan_discovered[i];
+            ++w;
+        }
+        g_lnch_lan_discovered_n = w;
+    }
+
+    static int ae_np_lan_discovered_find(const char* endpoint) {
+        if (!endpoint || !endpoint[0]) return -1;
+        for (int i = 0; i < g_lnch_lan_discovered_n; ++i) {
+            if (std::strcmp(g_lnch_lan_discovered[i].endpoint, endpoint) == 0)
+                return i;
+        }
+        return -1;
+    }
+
+    static void ae_np_lan_discovered_upsert(const AeLanDiscovered& in) {
+        if (!in.endpoint[0]) return;
+        const int idx = ae_np_lan_discovered_find(in.endpoint);
+        if (idx >= 0) {
+            AeLanDiscovered& e = g_lnch_lan_discovered[idx];
+            e = in;
+            return;
+        }
+        if (g_lnch_lan_discovered_n >= kAeLanDiscoverMax) {
+            /* Drop oldest. */
+            int oldest = 0;
+            for (int i = 1; i < g_lnch_lan_discovered_n; ++i) {
+                if (g_lnch_lan_discovered[i].last_seen_ms <
+                    g_lnch_lan_discovered[oldest].last_seen_ms)
+                    oldest = i;
+            }
+            g_lnch_lan_discovered[oldest] = in;
+            return;
+        }
+        g_lnch_lan_discovered[g_lnch_lan_discovered_n++] = in;
+    }
+
+    static int ae_np_lan_format_beacon(char* buf, size_t cap,
+                                      const AeLanLobbyState& st) {
+        if (!buf || cap < 32) return -1;
+        const int players = ae_np_lan_occupied(st);
+        const int max_slots = st.max_slots >= 2 ? st.max_slots : 2;
+        const int has_pw = st.password.empty() ? 0 : 1;
+        const uint32_t sid = st.session_id ? st.session_id : 1u;
+        int delay = g_lnch_lobby_input_delay;
+        int pred = g_lnch_lobby_input_prediction;
+        if (delay < 2) delay = 2;
+        if (delay > 20) delay = 20;
+        if (pred < 2) pred = 2;
+        if (pred > 16) pred = 16;
+        return std::snprintf(
+            buf, cap,
+            "MOTK1 BEACON\n%s\n%s\n%s\n%d\n%d\n%d\n%u\n%d\n%d\n%d\n",
+            st.name.empty() ? "LAN Lobby" : st.name.c_str(),
+            st.game.empty() ? "PSX" : st.game.c_str(),
+            st.endpoint.c_str(),
+            players, max_slots, has_pw, (unsigned)sid,
+            delay, pred, g_lnch_rollback ? 1 : 0);
+    }
+
+    /* Parse BEACON; prefer reply source IP + advertised port for joinability. */
+    static int ae_np_lan_parse_beacon(char* buf, const sockaddr_in* from,
+                                     int rtt_ms) {
+        if (!buf || std::strncmp(buf, "MOTK1 BEACON\n", 13) != 0) return -1;
+        char* p = buf + 13;
+        char* lines[10] = {};
+        for (int i = 0; i < 10; ++i) {
+            lines[i] = p;
+            char* nl = std::strchr(p, '\n');
+            if (!nl) {
+                if (i < 6) return -1;
+                break;
+            }
+            *nl = '\0';
+            p = nl + 1;
+        }
+        if (!lines[0] || !lines[1] || !lines[2]) return -1;
+
+        AeLanDiscovered d{};
+        std::snprintf(d.name, sizeof(d.name), "%s", lines[0]);
+        std::snprintf(d.game, sizeof(d.game), "%s", lines[1]);
+        const int adv_port = ae_np_lan_endpoint_port(lines[2]);
+        int port = adv_port > 0 ? adv_port : 7777;
+        if (from) {
+            char ip[64];
+            if (inet_ntop(AF_INET, &from->sin_addr, ip, sizeof(ip)))
+                std::snprintf(d.endpoint, sizeof(d.endpoint), "%s:%d", ip, port);
+            else
+                std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", lines[2]);
+        } else {
+            std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", lines[2]);
+        }
+        d.player_count = lines[3] ? std::atoi(lines[3]) : 0;
+        d.max_slots = lines[4] ? std::atoi(lines[4]) : 2;
+        if (d.max_slots < 2) d.max_slots = 2;
+        if (d.max_slots > kAeLanMaxSlots) d.max_slots = kAeLanMaxSlots;
+        d.has_password = lines[5] ? (std::atoi(lines[5]) != 0) : 0;
+        d.session_id = lines[6]
+            ? (uint32_t)std::strtoul(lines[6], nullptr, 10) : 1u;
+        if (!d.session_id) d.session_id = 1u;
+        d.input_delay = lines[7] ? std::atoi(lines[7]) : 2;
+        d.input_prediction = lines[8] ? std::atoi(lines[8]) : 4;
+        d.rollback = lines[9] ? (std::atoi(lines[9]) != 0) : 1;
+        if (d.input_delay < 2) d.input_delay = 2;
+        if (d.input_delay > 20) d.input_delay = 20;
+        if (d.input_prediction < 2) d.input_prediction = 2;
+        if (d.input_prediction > 16) d.input_prediction = 16;
+        d.latency_ms = rtt_ms;
+        d.last_seen_ms = SDL_GetTicks();
+        ae_np_lan_discovered_upsert(d);
+        return 0;
+    }
+
+    static void ae_np_lan_broadcast_msg(AeLanSock s, int port, const char* msg) {
+        if (s == kAeLanSockInvalid || !msg || port <= 0 || port > 65535) return;
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_port = htons((uint16_t)port);
+        to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+        const int n = (int)std::strlen(msg);
+#ifdef _WIN32
+        sendto(s, msg, n, 0, (const sockaddr*)&to, sizeof(to));
+#else
+        sendto(s, msg, (size_t)n, 0, (const sockaddr*)&to, sizeof(to));
+#endif
+    }
+
+    /* Sync browse: broadcast BROWSE across the common lobby port range and
+     * collect BEACON replies for wait_ms. */
+    static void ae_np_lan_browse(uint32_t wait_ms) {
+#ifdef _WIN32
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
+        AeLanSock s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s == kAeLanSockInvalid) return;
+        if (!ae_np_lan_set_nonblock(s)) {
+            ae_np_lan_sock_close(&s);
+            return;
+        }
+        ae_np_lan_sock_set_broadcast(s);
+        sockaddr_in bind_addr{};
+        bind_addr.sin_family = AF_INET;
+        bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        bind_addr.sin_port = htons(0);
+        if (bind(s, (sockaddr*)&bind_addr, sizeof(bind_addr)) != 0) {
+            ae_np_lan_sock_close(&s);
+            return;
+        }
+
+        const char browse[] = "MOTK1 BROWSE\n";
+        const uint32_t t0 = SDL_GetTicks();
+        for (int port = kAeLanBrowsePortLo; port <= kAeLanBrowsePortHi; ++port)
+            ae_np_lan_broadcast_msg(s, port, browse);
+
+        const uint32_t deadline = t0 + (wait_ms ? wait_ms : 250u);
+        while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
+            char buf[1024];
+            sockaddr_in from{};
+#ifdef _WIN32
+            int fromlen = (int)sizeof(from);
+            const int n = recvfrom(s, buf, (int)sizeof(buf) - 1, 0,
+                                   (sockaddr*)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            const int n = (int)recvfrom(s, buf, sizeof(buf) - 1, 0,
+                                        (sockaddr*)&from, &fromlen);
+#endif
+            if (n > 0) {
+                buf[n] = '\0';
+                const int rtt = (int)(SDL_GetTicks() - t0);
+                (void)ae_np_lan_parse_beacon(buf, &from, rtt);
+            } else {
+                SDL_Delay(5);
+            }
+        }
+        ae_np_lan_sock_close(&s);
+        ae_np_lan_prune_discovered();
+    }
+
+    static void ae_np_lan_apply_discovered_caps(const char* endpoint) {
+        const int idx = ae_np_lan_discovered_find(endpoint);
+        if (idx < 0) return;
+        const AeLanDiscovered& d = g_lnch_lan_discovered[idx];
+        g_lnch_lobby_input_delay = d.input_delay;
+        g_lnch_lobby_input_prediction = d.input_prediction;
+        g_lnch_rollback = d.rollback ? 1 : 0;
+    }
+
+    static int ae_np_lan_fill_lobby_from_discovered(
+        int discovered_index, RecompLauncherCNetplayLobby* out) {
+        if (!out || discovered_index < 0 ||
+            discovered_index >= g_lnch_lan_discovered_n)
+            return 0;
+        const AeLanDiscovered& d = g_lnch_lan_discovered[discovered_index];
+        std::snprintf(out->lobby_id, sizeof(out->lobby_id), "lan:%s", d.endpoint);
+        std::snprintf(out->name, sizeof(out->name), "LAN - %s",
+                      d.name[0] ? d.name : "Lobby");
+        std::snprintf(out->game_name, sizeof(out->game_name), "%s",
+                      d.game[0] ? d.game : "PSX");
+        out->game_version[0] = '\0';
+        out->player_count = d.player_count;
+        out->max_slots = d.max_slots;
+        out->has_password = d.has_password;
+        out->latency_ms = d.latency_ms;
+        return 1;
     }
 
     static void ae_np_lan_sock_close(AeLanSock* s) {
@@ -5727,9 +6094,36 @@ namespace {
     static void ae_np_lan_rescan(void) {
         if (g_lnch_hosting_lan) {
             g_lnch_lan_latency_ms = 0;
+            /* Still browse so the host list can show other LAN rooms. */
+            ae_np_lan_browse(200u);
+            AeLanLobbyState self{};
+            if (ae_np_read_lan_file_state(&self) && !self.started) {
+                AeLanDiscovered d{};
+                std::snprintf(d.endpoint, sizeof(d.endpoint), "%s",
+                              self.endpoint.c_str());
+                std::snprintf(d.name, sizeof(d.name), "%s",
+                              self.name.empty() ? "LAN Lobby" : self.name.c_str());
+                std::snprintf(d.game, sizeof(d.game), "%s",
+                              self.game.empty() ? "PSX" : self.game.c_str());
+                d.player_count = ae_np_lan_occupied(self);
+                d.max_slots = self.max_slots >= 2 ? self.max_slots : 2;
+                d.has_password = self.password.empty() ? 0 : 1;
+                d.latency_ms = 0;
+                d.input_delay = g_lnch_lobby_input_delay;
+                d.input_prediction = g_lnch_lobby_input_prediction;
+                d.rollback = g_lnch_rollback ? 1 : 0;
+                d.session_id = self.session_id ? self.session_id : 1u;
+                d.last_seen_ms = SDL_GetTicks();
+                ae_np_lan_discovered_upsert(d);
+            }
             return;
         }
         if (g_lnch_joined_lan) return;
+
+        /* Cross-machine discovery: broadcast BROWSE, collect BEACONs. */
+        ae_np_lan_browse(300u);
+
+        /* Legacy same-machine file registry (shared cwd). */
         AeLanLobbyState st;
         if (!ae_np_read_lan_file_state(&st)) {
             g_lnch_lan_latency_ms = -1;
@@ -5740,6 +6134,24 @@ namespace {
         if (g_lnch_lan_latency_ms < 0) {
             std::error_code ec;
             std::filesystem::remove(ae_np_lan_file(), ec);
+        } else if (ae_np_lan_discovered_find(st.endpoint.c_str()) < 0) {
+            /* Promote file row into the discovered table so list_get is uniform. */
+            AeLanDiscovered d{};
+            std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", st.endpoint.c_str());
+            std::snprintf(d.name, sizeof(d.name), "%s",
+                          st.name.empty() ? "LAN Lobby" : st.name.c_str());
+            std::snprintf(d.game, sizeof(d.game), "%s",
+                          st.game.empty() ? "PSX" : st.game.c_str());
+            d.player_count = ae_np_lan_occupied(st);
+            d.max_slots = st.max_slots >= 2 ? st.max_slots : 2;
+            d.has_password = st.password.empty() ? 0 : 1;
+            d.latency_ms = g_lnch_lan_latency_ms;
+            d.input_delay = g_lnch_lobby_input_delay;
+            d.input_prediction = g_lnch_lobby_input_prediction;
+            d.rollback = g_lnch_rollback ? 1 : 0;
+            d.session_id = st.session_id ? st.session_id : 1u;
+            d.last_seen_ms = SDL_GetTicks();
+            ae_np_lan_discovered_upsert(d);
         }
     }
 
@@ -5751,6 +6163,15 @@ namespace {
         AeLanLobbyState st;
         if (!ae_np_read_lan_file_state(&st) || st.started) return false;
         return true;
+    }
+
+    /* Extra LAN rows after the online server list. Prefer discovered table;
+     * fall back to a single file-backed row when hosting / same-machine. */
+    static int ae_np_lan_list_extra_count(void) {
+        ae_np_lan_prune_discovered();
+        if (g_lnch_lan_discovered_n > 0)
+            return g_lnch_lan_discovered_n;
+        return ae_np_lan_list_visible() ? 1 : 0;
     }
 
     PsxLobbyMatchCaps ae_netplay_caps_from_settings(const RecompLauncherCSettings* s) {
@@ -5933,8 +6354,22 @@ namespace {
         if (g_lnch_hosting_lan) {
             AeLanLobbyState st;
             if (!ae_np_read_lan_state(&st)) return;
+            const int lobby_port = ae_np_lan_endpoint_port(st.endpoint);
             if (g_lnch_lan_udp == kAeLanSockInvalid)
-                (void)ae_np_lan_udp_ensure(true, ae_np_lan_endpoint_port(st.endpoint));
+                (void)ae_np_lan_udp_ensure(true, lobby_port);
+            /* Periodic broadcast BEACON so Refresh can find us without a
+             * unicast target (and for guests that listen between browses). */
+            if (g_lnch_lan_udp != kAeLanSockInvalid && !st.started) {
+                const uint32_t now = SDL_GetTicks();
+                if (g_lnch_lan_beacon_announce_ms == 0u ||
+                    now - g_lnch_lan_beacon_announce_ms >= 2000u) {
+                    g_lnch_lan_beacon_announce_ms = now;
+                    ae_np_lan_sock_set_broadcast(g_lnch_lan_udp);
+                    char beacon[768];
+                    if (ae_np_lan_format_beacon(beacon, sizeof(beacon), st) > 0)
+                        ae_np_lan_broadcast_msg(g_lnch_lan_udp, lobby_port, beacon);
+                }
+            }
         } else if (g_lnch_remote_lan) {
             if (g_lnch_lan_udp == kAeLanSockInvalid)
                 (void)ae_np_lan_udp_ensure(false, 0);
@@ -5979,6 +6414,17 @@ namespace {
 
             if (std::strncmp(buf, "MOTK1 PING", 10) == 0 && g_lnch_hosting_lan) {
                 ae_np_lan_udp_sendto(from, "MOTK1 PONG\n");
+                continue;
+            }
+
+            /* LAN lobby discovery: answer browse with a BEACON (unicast). */
+            if (std::strncmp(buf, "MOTK1 BROWSE", 12) == 0 && g_lnch_hosting_lan) {
+                AeLanLobbyState st;
+                if (ae_np_read_lan_state(&st) && !st.started) {
+                    char beacon[768];
+                    if (ae_np_lan_format_beacon(beacon, sizeof(beacon), st) > 0)
+                        ae_np_lan_udp_sendto(from, beacon);
+                }
                 continue;
             }
 
@@ -6183,13 +6629,47 @@ namespace {
             }
             if (std::strncmp(buf, "MOTK1 START\n", 12) == 0) {
                 g_lnch_remote_lan_state.started = true;
-                const char* sid = buf + 12;
-                if (*sid) {
-                    const unsigned v = (unsigned)std::strtoul(sid, nullptr, 10);
+                /* MOTK1 START\n<session>\n[<delay>\n<prediction>\n<rollback>\n]
+                 * Trailing caps lines are host-authoritative (LAN had no
+                 * match_caps channel; guests used local UI defaults). */
+                char* p = buf + 12;
+                char* nl = std::strchr(p, '\n');
+                if (nl) *nl = '\0';
+                if (*p) {
+                    const unsigned v = (unsigned)std::strtoul(p, nullptr, 10);
                     if (v) {
                         g_lnch_lan_session_id = (uint32_t)v;
                         g_lnch_remote_lan_state.session_id = (uint32_t)v;
                     }
+                }
+                if (nl) {
+                    p = nl + 1;
+                    char* lines[3] = {};
+                    for (int i = 0; i < 3; ++i) {
+                        if (!p || !*p) break;
+                        lines[i] = p;
+                        char* n2 = std::strchr(p, '\n');
+                        if (n2) {
+                            *n2 = '\0';
+                            p = n2 + 1;
+                        } else {
+                            p = nullptr;
+                        }
+                    }
+                    if (lines[0] && lines[0][0]) {
+                        int d = std::atoi(lines[0]);
+                        if (d < 2) d = 2;
+                        if (d > 20) d = 20;
+                        g_lnch_lobby_input_delay = d;
+                    }
+                    if (lines[1] && lines[1][0]) {
+                        int pred = std::atoi(lines[1]);
+                        if (pred < 2) pred = 2;
+                        if (pred > 16) pred = 16;
+                        g_lnch_lobby_input_prediction = pred;
+                    }
+                    if (lines[2] && lines[2][0])
+                        g_lnch_rollback = (std::atoi(lines[2]) != 0) ? 1 : 0;
                 }
                 continue;
             }
@@ -6231,14 +6711,20 @@ namespace {
     }
 
     int ae_np_list_count(void*) {
-        return psx_lobby_list_count() + (ae_np_lan_list_visible() ? 1 : 0);
+        return psx_lobby_list_count() + ae_np_lan_list_extra_count();
     }
 
     int ae_np_list_get(void*, int index, RecompLauncherCNetplayLobby* out) {
         if (!out) return 0;
         const int remote_count = psx_lobby_list_count();
-        if (index >= remote_count)
-            return ae_np_lan_list_visible() ? ae_np_read_lan_lobby(out) : 0;
+        if (index >= remote_count) {
+            const int lan_i = index - remote_count;
+            ae_np_lan_prune_discovered();
+            if (g_lnch_lan_discovered_n > 0)
+                return ae_np_lan_fill_lobby_from_discovered(lan_i, out);
+            return (lan_i == 0 && ae_np_lan_list_visible())
+                ? ae_np_read_lan_lobby(out) : 0;
+        }
         PsxLobbyRow row{};
         if (!psx_lobby_list_get(index, &row)) return 0;
         std::snprintf(out->lobby_id, sizeof(out->lobby_id), "%s", row.lobby_id);
@@ -6564,6 +7050,10 @@ namespace {
             if (psx_lobby_in_lobby())
                 (void)psx_lobby_leave();
 
+            /* Adopt host D/P/rollback from the last BEACON (if any) before
+             * seating — START still re-asserts host-authoritative caps. */
+            ae_np_lan_apply_discovered_caps(endpoint);
+
             /* Must be a live LAN/Direct IP host (UDP PONG). Online-only hosts
              * never answer — refuse so we don't open a fake local room. */
             if (!ae_np_lan_probe_host_ms(endpoint, 750u))
@@ -6847,9 +7337,17 @@ namespace {
             g_lnch_lan_session_id = state.session_id;
             if (!ae_np_write_lan_state(state)) return -1;
             ae_np_lan_send_update_to_peers(state);
-            char start_msg[64];
-            std::snprintf(start_msg, sizeof(start_msg), "MOTK1 START\n%u\n",
-                          (unsigned)state.session_id);
+            char start_msg[96];
+            int delay = g_lnch_lobby_input_delay;
+            int pred = g_lnch_lobby_input_prediction;
+            if (delay < 2) delay = 2;
+            if (delay > 20) delay = 20;
+            if (pred < 2) pred = 2;
+            if (pred > 16) pred = 16;
+            std::snprintf(start_msg, sizeof(start_msg),
+                          "MOTK1 START\n%u\n%d\n%d\n%d\n",
+                          (unsigned)state.session_id, delay, pred,
+                          g_lnch_rollback ? 1 : 0);
             for (int i = 0; i < kAeLanMaxSlots; ++i) {
                 if (g_lnch_lan_peer_ok[i])
                     ae_np_lan_udp_sendto(g_lnch_lan_peers[i], start_msg);

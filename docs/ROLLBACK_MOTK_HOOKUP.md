@@ -7,11 +7,13 @@ Today MotK / psxrecomp lobby netplay defaults to **rollback**:
 `stage_local → poll_admit (invent within P) → guest frame → finish_frame`.
 Missing remotes are invented (**hold-last**, MotK digital) only while
 `wire_need ≤ highest_remote + P`; outside that window admit stalls (BattleShip
-phase_lock). Idle invent re-mismatched every held D-pad tick after commit
-(char-select episode storm). Seal gap-fill stays idle. Late wire goes through
-the input contract; rewinds open an `RNetRbSession` episode. Menu releases
-rewind (FMV soft-promote release-only only). Host **Disable Rollback** (or
-`PSX_NET_MODE=delay`) forces classic delay-sync `try_admit`.
+phase_lock). Gap=1 uses a **short** invent grace before hold-last (§23);
+gap≥2 uses the full §21 budget. Idle invent re-mismatched every held D-pad
+tick after commit (char-select episode storm). Seal gap-fill stays idle.
+Late wire goes through the input contract; rewinds open an `RNetRbSession`
+episode. Menu releases rewind (FMV soft-promote release-only only). Host
+**Disable Rollback** (or `PSX_NET_MODE=delay`) forces classic delay-sync
+`try_admit`.
 
 ---
 
@@ -28,7 +30,8 @@ rewind (FMV soft-promote release-only only). Host **Disable Rollback** (or
 
 Env gate: `PSX_NET_MODE=delay|rollback`. Lobby default publishes
 `match_caps.rollback=true`; **Disable Rollback** publishes false. Auto D/P from
-RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
+RTT (`P = 4 + D`, see §22); optional Manual Input Delay / Prediction.
+Adaptive mid-match delay bumps are always on (no lobby disable).
 
 ---
 
@@ -74,6 +77,11 @@ RTT (BattleShip tiers / phase_lock); optional Manual Input Delay / Prediction.
 - [x] `load_tick` tip slack (one `snap_interval` behind newest) so lagging
       peer still has the snap; follow refuse → SYNC `initiator=0` NACK;
       initiator aborts SealInputs (plus 4s seal timeout)
+- [x] SEAL_ROWS: stash if episode not open yet (same TURN/UDP reordering race
+      as BASELINE below — the initiator's `export_local_seals()` burst can
+      beat a delayed SYNC BEGIN through the relay); unstashed on
+      `begin_follower` open, keyed by epoch (2026-08-01 scheduler asymmetry
+      review gap-close).
 - [x] BASELINE: stash if episode not open yet; burst rexmit on TURN; initiator
       ready-timeout → Replay (Verify still waits for peer POST)
 - [x] Resume PC: reject low/vector junk (`0xB0` etc.); prefer function entries;
@@ -1405,3 +1413,847 @@ ghost `pub=held wire=ffff` release episodes; no
 `agreed ADVANCE tip→tip+N` immediately after tip-hold enter/commit from
 stale HC; tip-hold→commit should often be non-adjacent when a release
 extends the tip.
+
+---
+
+## 18. POST-diverge tooling + post-realign cooldown (2026-08-01)
+
+**Post-§17 soak:** coalesce worked (14 tip-extends, 15 coalesce-ahead,
+6/23 tip-holds extended by up to 24 ticks). One new failure mode: at tip
+9203 both peers POSTed different cores (`8a460717` vs `138700d6`),
+aborted, realigned to 9200 — then `RB_ABORT_COOLDOWN_TICKS=24` made every
+subsequent real dpad edge `promote-no-resim reason=cooldown`, so the
+fork never self-corrected (live digs still mismatched at 9216/9248 until
+disconnect). Also: POST only compared tip digests, so there was no
+visibility into *which earlier tick* in the sealed span actually forked.
+
+**Fixes landed:**
+
+- [x] **POST-DIVERGE diag dump** (before `abort_episode` clears seals):
+      for `load..tip`, print sealed buttons + hist overlay per seat, then
+      local/peer FRAME_COMMIT cores from the HC ring, highlighting
+      `FIRST_MISMATCH` when the fork is earlier than the POST tip.
+      Grep: `rb POST-DIVERGE`. Both peers print the same shape — diff the
+      two logs at the abort to see seal/FC asymmetry.
+- [x] **`netplay_hc_peer_digest`** getter (symmetric with `local_digest`)
+      for the FC scan; unit-tested in `test_netplay_hash_confirm`.
+- [x] **Skip rewind cooldown after a successful POST realign**
+      (`RB_POST_REALIGN_COOLDOWN_TICKS=0` + `clear_rewind_cooldown`).
+      Storm cooldown (`streak >= 2`) and "no realign tip" baseline
+      cooldown are unchanged. Log: `rb rewind cooldown cleared (...post...)`.
+
+**Re-soak checks:** on the next `post core/aux diverge`, expect a
+`POST-DIVERGE diag` / `seals` / `fc FIRST_MISMATCH` block immediately
+before `episode ABORT`; after realign, expect `rewind cooldown cleared`
+(not `cooldown until sim=…`); subsequent real edges should open episodes
+again instead of `promote-no-resim reason=cooldown`. If
+`FIRST_MISMATCH` is earlier than POST tip, that tick is the next
+investigation target (sealed-pad asymmetry vs. sim nondeterminism).
+
+---
+
+## 19. Tip-extend invent-idle seal + POST storm cooldown (2026-08-01)
+
+**Post-§18 soak:** tip-hold coalesce/tip-extend worked through a press→
+release→press chain (epoch 21, tip 1416→1425), then POST diverged at
+1425 (`310e567b` vs `dd8432b2`). Diag:
+
+- Host arm audit: `s1=ff7f` (LEFT — correct wire-promoted resign)
+- Host POST dump: `t=1425 s1=ffffP/h=ff7f!` (seal invent-idle vs hist LEFT)
+- Peer dump: `s1=ffffP/h=ffffP` (FOLLOW local seat never had the press in hist)
+- Prior `ready timeout` left `streak=1`; POST → `streak=2` → **storm
+  cooldown** (`until sim=1474`) → promote-no-resim while Live stayed
+  forked at pin 1392 (`baseline core mismatch` storm)
+
+**Root cause:**
+
+1. Tip-hold invent-cap stalls Live at the tip, so FOLLOW's local hist
+   lacks `tip+1..edge` even though the pad was already sampled into the
+   delay ring at `sim+delay`. Seal `get_input_row` fell through to
+   `invent_idle` → exported `ffffP` for the correction seat.
+2. Initiator had correctly resigned from wire peek (`ff7f`), then
+   `apply_peer_seal_rows` accepted the FOLLOW invent and overwrote it.
+3. §18's `POST_REALIGN_COOLDOWN=0` was skipped by the storm branch
+   (`streak >= 2`); tip-hold commit did not clear the abort streak.
+
+**Fixes landed:**
+
+- [x] **`host_get_input_row` / tip-extend prefresh:** promote from
+      `rnet_session_peek(_remote)_input` at `wire_tick_from_sim` before
+      hist/invent; tip-extend (initiator + FOLLOW) prefreshes the
+      correction + local seats over the new tip range.
+- [x] **`rnet_rb_apply_peer_seal_rows`:** reject predicted peer rows that
+      would clobber a non-predicted sealed row (still credit the mask).
+- [x] **POST realign never storm-cools** when a realign tip exists
+      (clears streak + `RB_POST_REALIGN_COOLDOWN_TICKS`); tip-hold
+      finalize also clears `g_bl_mismatch_streak`.
+
+**Re-soak checks:** tip-extend rereplay arm/fin should keep matching
+auth pads (`s1=ff7f` not `ffffP`); POST dump should not show
+`ffffP/h=ff7f!`; on POST diverge expect `rewind cooldown cleared
+(...post...)` even after a prior ready-timeout; no immediate baseline
+mismatch storm at the pin from promote-no-resim.
+
+---
+
+## 20. Skip presentation during resim ticks (2026-08-01)
+
+**Motivation:** with §17-19 landed, soaks were spending a large fraction
+of wall-clock time in `Replay` (the `[FPS] ... replay=NN% (n=…)` line).
+Every resimulated vblank still ran the *full* GL/VK/SW present path
+(`gl_renderer_present_vram` / `gl_renderer_sync_cpu` FBO readback,
+`vk_renderer_present_*`, or the software `SDL_UpdateTexture` +
+`SDL_RenderPresent` path) even though none of that pixel work is visible
+— it gets fully overwritten by the next resimulated (or the final Live)
+frame. Host audio pump was already skipped during resim (see the
+existing `!psx_netplay_is_resimulating()` guard around `sdl_audio_update`
+in `sdl_vblank_present_body`); presentation had no equivalent guard.
+
+**Fix:** added a `psx_netplay_is_resimulating()` early return in
+`sdl_vblank_present_body()` (`runtime/src/main.cpp`) immediately before
+the `---- Display from our VRAM ----` block, mirroring the existing
+audio-pump skip. This is presentation-only:
+
+- `psx_netplay_finish_frame()` (the digest/hash-confirm capture) and the
+  `ep.do_epilogue` / `ep.override` / `ep.skip_pace` epilogue flags used
+  by `sdl_vblank_present()` for netplay admit/pace are all latched
+  *before* this point in the function, so admit/pace timing is
+  unaffected.
+- `gpu_depth24_present_hold_tick()` and the widescreen-engage check
+  (which must tick every vblank per their own comments) run *before*
+  the new guard, so their bookkeeping is preserved.
+- Host-only presentation state (frame-blend `prev_buf`, disabled-frame-
+  presented latch, present ring) simply doesn't advance on resim ticks —
+  the same category of skip already used by the blank-display,
+  catchup-budget, and turbo-loads early returns elsewhere in this
+  function. Live's next real present after the episode settles still
+  draws the final, correct frame.
+- Digest content is unaffected: `host_state_digest()` never reads GPU/
+  VRAM/framebuffer state (core+aux hashing is CPU/RAM/IRQ/timers/CD/SPU
+  register state, not pixels), so skipping the pixel work cannot change
+  what gets hashed or sent over the wire.
+
+Debug and Release builds both compile clean after the change.
+
+**Re-soak checks:** `[FPS]` line's `replay=NN%` should be unaffected
+(same resim ratio, since this doesn't change *when* resim happens, only
+whether it presents), but wall-clock game FPS during heavy-resim spans
+(chain-episoding, tip-hold storms) should improve since the GL readback/
+present cost is no longer paid on non-terminal resim vblanks. No new
+divergence should appear — this change touches host presentation only,
+never digested/guest state.
+
+---
+
+## 21. Invent-grace ceiling scales with `input_delay` (2026-08-01)
+
+**Motivation:** a soak sweep across `PSX_NET_DELAY` values (`D=4` twice
+via the launcher's "default" and an explicit `d=4`, plus `D=6`) showed
+raising `D` did not reduce prediction — it made it *worse*. Normalized
+per 1000 sim ticks:
+
+| | D=4 | D=6 |
+|---|---|---|
+| `rb invent grace` events | 127.7 | 232.0 |
+| `tip-hold coalesce-ahead` | 18.9 | 73.0 |
+| `rb episode commit` | 23.9 | 28.4 |
+| `rb wire rewind-request` | 24.4 | 23.4 |
+
+Invent (predict) frequency roughly doubled and coalesce-ahead nearly
+quadrupled from D=4→D=6, while the actual correction/rewind rate barely
+moved — the opposite of what a bigger delay buffer should buy.
+
+**Root cause:** `np_try_admit_rollback()` computes `wire = sim + D`
+(`rnet_wire_tick_from_sim`) but the decision to invent vs. stall never
+used `D` at all. Any gap `wire > highest_remote_wire + 1` immediately
+falls into `np_invent_grace_stall()`, whose patience budget was
+`1.5x measured RTT`, hard-capped at **60ms regardless of `D`** (40ms in
+the pre-RTT startup fallback). So choosing `D=6` (100ms of nominal
+buffer) vs `D=4` (66.8ms) never changed how long the sim was willing to
+wait for a late remote sample before predicting — the configured delay
+only changed *which* wire tick was being requested, not the patience
+for it. With this soak's RTTs already well under the 60ms ceiling
+(17-53ms), the ceiling — not the delay — was the binding constraint the
+whole time, so the extra `D` bought nothing but longer predicted runs to
+later reconcile (more invents, more coalescing to absorb them, same
+rewind rate).
+
+**Fix landed:** `np_invent_grace_stall()`'s ceiling now scales with
+`g_np.input_delay`: `rtt_ceiling = clamp(delay_ms/2, 60, 150)` and
+`fallback_ceiling = clamp(delay_ms/3, 40, 100)`, where
+`delay_ms = input_delay_ticks * tick_ms` (tick_ms from the live
+tick-period EMA, nominal 17ms fallback). `D<=4` reproduces the old
+60/40ms ceilings unchanged (floors preserve historical behavior); larger
+`D` now actually grants more real wall-clock patience before falling
+back to prediction, in proportion to the extra buffer the user asked
+for. The RTT-based *scaling* of the budget itself (`1.5x RTT`) is
+unchanged — only the ceiling moves. The `rb invent grace budget` log
+line now also prints `delay_ms=` so a soak can confirm the ceiling in
+effect.
+
+**Re-soak checks:** re-run the same `D=4` vs `D=6` comparison; expect
+`rb invent grace budget=...delay_ms=...` to show a materially higher
+ceiling at `D=6` than `D=4`, and expect invent-events/1k-ticks to no
+longer scale up with `D` (ideally trend down, since more genuinely-late
+packets should now clear within the wait instead of triggering a
+predict). `D<=4` behavior should be bit-for-bit unchanged from prior
+soaks (floors match the old hard caps).
+
+---
+
+## 22. Delay-buffer admit + adaptive delay (2026-08-01)
+
+**Motivation:** Soaks with manual `D=4` / `P=2` still saw frequent small
+resims. Expectation mismatch: raising `D` alone does not widen the
+sim-vs-remote phase gap that gates invent — both peers shift `wire=sim+D`
+together, so the gap stays ~0–1. The product goal is delay-sync-like
+operation at the delay edge (buffer filled, invent rare), with the
+prediction runway as insurance for spikes, freeze+refill when `P` is
+exhausted, and adaptive `D` growth when freezes persist.
+
+**Preserved (do not regress):**
+- Gap gate: invent freely at `gap ≤ 1` (stalling every miss serialized
+  both sims to ~40–50 fps — §12).
+- Timesync micro-throttle remains the primary phase-lock tool.
+
+**Lobby / auto D/P (recomp-ui):**
+| Measured RTT | Input Delay | Prediction (`P = 4 + D`) |
+| ------------ | ----------: | -----------------------: |
+| 0–20 ms      |           2 |                        6 |
+| 20–50 ms     |           2 |                        6 |
+| 50–80 ms     |           3 |                        7 |
+| 80–120 ms    |           4 |                        8 |
+| 120–160 ms   |           5 |                        9 |
+| then steps up |         … |                   `4+D` |
+
+Manual defaults: **D=2**, **P=6**. Prediction tooltip: keep
+`prediction = 4 + delay`. No UI to disable adaptive delay — with
+`P=4+D` freezes should be rare; when they happen, growing `D` is the
+intended response. Soak-only: `PSX_RB_ADAPT_DELAY=0`.
+
+**Runtime changes:**
+1. **Timesync:** skip `note_late` during active episode / tip-hold (resim
+   cost ≠ transit latency). Pegged-streak off-guard raised 12→18.
+   `psx_netplay_timesync_on_episode_boundary()` clears pegged streak on
+   begin / tip-hold / abort (debt kept for post-episode pacing).
+2. **Admit telemetry:** `rb admit stats invent_gap1/gap2/gap3+
+   pcap_stalls/pcap_enters` every ~5s; invent path buckets by gap.
+3. **P-cap freeze:** `wire > highest_remote + P` logs
+   `rb pcap FREEZE enter/exit` and counts freeze enters in a 5s window.
+4. **Adaptive delay (always on):** host (`local_slot==0`) after ≥3 freeze
+   *enters* in 5s, with 10s cooldown, calls
+   `rnet_session_request_delay_change(D+1)` (max 16). `P` stays at the
+   lobby-committed value. Guests apply via DELAY_SYNC.
+5. **recomp-net DELAY_SYNC:** deferred apply queue
+   `(pending_delay, effective_tick)`; commit in `rnet_session_advance` /
+   `set_sim_tick` when `sim_tick >= effective_tick`. New
+   `rnet_session_request_delay_change`. Retransmit pending packets every
+   50ms while queued. MotK mirrors `g_np.input_delay` from
+   `rnet_session_committed_delay` on admit / after live advance.
+
+**Re-soak checklist:**
+- [ ] LAN with auto or manual **D=2 / P=6**: expect fewer invents than the
+      old D=4/P=2 soak; gap1 invents dominate over gap2/gap3+.
+- [ ] Log lines: `rb admit stats …`, rare/absent `rb pcap FREEZE enter`.
+- [ ] Induced latency spike: freeze enter → after 3 enters,
+      `rb adaptive delay bump` + both peers `rb delay committed`.
+- [ ] Timesync does not trip `OFF 10s` solely from tip-hold/resim load.
+- [ ] Fight scene: fps / episode density vs prior soak; no serialization
+      regression (still inventing at gap≤1).
+
+---
+
+## 23. Short invent grace at gap=1 (2026-08-01)
+
+**Soak evidence (same session pair, TURN):**
+| Setting | ep/1k ticks | host invent_gap1/1k | pcap freezes |
+| ------- | ----------: | ------------------: | -----------: |
+| D=2 P=6 | ~23 | ~260 | 0–1 |
+| D=4 P=8 | ~25 | ~297 | 0 |
+
+Raising D/P did nothing — invents were ~99% `gap1` (free path). Adaptive
+delay never armed (P=8 runway unused). Hitch source remains
+gap1 invent → edge mispredict → tip-hold/coalesce → resim.
+
+**Fix:** ahead-only **short** invent grace when
+`wire == highest_remote + 1`:
+- Cap = `max(8, min(16, RTT_ms))` (auto), or `PSX_RB_GAP1_GRACE_MS`
+  (0 = old invent-free gap1).
+- Must stay << one peer guest frame so we do **not** revive the
+  2026-07-31 serialization (full stall on every miss → 40–50 fps).
+- Gap1 grace expiries do **not** feed the invent-grace adaptive-off
+  streak (would trip constantly under normal phase stagger).
+- Gap≥2 keeps the full §21 budget unchanged.
+
+**Timesync:** mispredict debt add ~0.75 tick (was 0.5); admit shave
+≤4 ms/tick (was 3).
+
+**Telemetry:** `rb admit stats` now includes `gap1_grace=` (times the
+short stall returned before invent).
+
+**Re-soak checks:** compare to D=4/P=8 baseline (~25 ep/1k):
+- Expect `gap1_grace` rising and `invent_gap1` / ep/1k falling.
+- Steady FPS must not collapse to ~40–50 with zero episodes (that
+  would mean the short cap is too large / both peers serializing).
+- `PSX_RB_GAP1_GRACE_MS=0` restores prior gap1 invent-free behavior.
+
+---
+
+## 24. Admit-hitch cleanup after gap1 grace (2026-08-01)
+
+**§23 soak:** ep/1k ~25→14 and invent_gap1/1k ~297→188, but feel was still
+bad. FPS forensics: **17/53** host windows were admit-dominated hitch
+(`admit` 12–17 ms, `replay=0%`) — not resim. Causes:
+
+1. Gap1 grace spun the admit loop (~10k stall returns / ~2k ticks) and
+   often **expired into invent anyway** (stall tax without preventing
+   predict). Cap was up to 16 ms on measured RTT.
+2. TipHold **coalesce-ahead** reset the quiet timer on every edge
+   (1825 resets) so Live stayed parked in tip-hold with high admit cost.
+
+**Fixes:**
+- Gap1 auto cap → `max(4, min(10, RTT/2))`; count `gap1_grace` once per
+  wire tick; after 10 consecutive expire→invent, **OFF 1s**
+  (`rb gap1 invent grace OFF 1s`).
+- TipHold: **350 ms absolute wall cap** from enter (`rb tip-hold WALL CAP`);
+  pure TipHold coalesce extends `tip_hold_until` but **does not** reset
+  quiet_t0 (rereplay still does); coalesce-ahead log rate-limited.
+
+**Re-soak:** expect fewer admit-dominated `replay=0%` dips, lower
+`gap1_grace` counts (per-wire), occasional `gap1 invent grace OFF`,
+`tip-hold WALL CAP` when menus mash, ep/1k staying ≤§23 or better.
+
+---
+
+## 25. TipHold WALL vs quiet + gap1 shrink (2026-08-01)
+
+**§24 soak:** admit-spin fixed (`gap1_grace/1k` 4550→278, coalesce 1825→32)
+but feel regressed: **27/27** tip-hold commits were `WALL CAP 350ms`
+(quiet never won — quiet need ~400ms > WALL 350ms), and gap1 invent-free
+OFF climbed invent_gap1/1k 188→360 and ep/1k 14→19. Hitching returned as
+replay-dominated.
+
+**Fixes:**
+- TipHold: quiet max **180ms** (can finish); **THRASH CAP 150ms** only when
+  `coalesce_n ≥ 3`; **SAFETY CAP 500ms** last resort. Logs:
+  `tip-hold THRASH CAP` / `tip-hold SAFETY CAP`.
+- Gap1: on expire→invent streak, **SHRINK to 2ms for 1s** (not invent-free).
+  Log: `rb gap1 invent grace SHRINK 2ms for 1000ms`.
+
+**Re-soak:** expect mostly quiet tip-hold commits (not WALL), occasional
+THRASH on mash, invent_gap1 not jumping when SHRINK fires, ep/1k ≤§23.
+
+---
+
+## 26. FMV lockstep was re-serializing WAN (2026-08-01)
+
+**Clue:** `PSX_RB_GAP1_INVENT=1` still stayed ~30 fps on CGNAT/TURN. Early
+menu with invent free-ran at **~60 fps / admit≈0**; the cliff lined up with
+`FMV rewind-defer ON` and invent count **0** until `invent_at` (~4s of
+post-FMV MIN+UNLOCK delay-sync). Tip-hold/replay windows later recovered
+toward ~50 fps — so prediction *can* drive presentation; admit was still
+gated on confirmed tip.
+
+**Root causes:**
+1. `lockstep_no_invent` = media **and** `g_fmv_lockstep_until` (MIN 180 +
+   UNLOCK_GRACE 64). Correct for depth24 Start/skip; fatal for WAN title
+   menus (network paces every frame).
+2. Default admit refused invent while `remote_lead > 0` until TIP_STALE
+   (~150ms+) — delay-sync unless ENV forced gap1 invent.
+3. RUNWAY_EMPTY invent grace floored at 60ms ceiling → ~25ms tax/tick.
+
+**Fixes:**
+- No-invent gate = **media + settle (24 ticks) only**. Digest lockstep
+  still drives dense snaps / RELEASE logs, not admit.
+- Gap1 short-grace→invent is **default ON** (`PSX_RB_GAP1_INVENT=0` for
+  old cushion-wait).
+- Invent grace OFF after 15 expiries for **5s**; RUNWAY ceiling floor 20 /
+  cap 80 (was 60/150).
+
+**Re-soak (no ENV needed):** FMV itself may still track packet rate (no
+invent during media — intentional). Post-FMV menus should invent within
+~settle and climb toward 60 with rollbacks, not flat ~30. Look for
+`gap1 invent ON`, `invent grace OFF 5s`, settle log
+`no invent through settle; then invent+resim §26`.
+
+---
+
+## 27. Presentation continuity without resim storms (2026-08-01)
+
+**Problem:** §26 unlocked invent/resim, but the eye still saw stalls —
+tip-hold parked Live at tip (`invent_slack=0`), gap1/RUNWAY grace taxed
+every miss, and deep `RUNWAY_EMPTY` invents (`pred_depth` 4–5) chained
+episodes. Telemetry showed high `replay%` while `present` starved.
+
+**Policy pivot:** keep the display clock moving with **shallow** prediction;
+resim real edges; do not reintroduce delay-sync after invent commits.
+
+**Fixes:**
+- TipHold seal slack → library default **2** (was FORCE0); quiet **80ms**,
+  thrash **100ms @ coalesce≥2**, safety **250ms**.
+- Gap1 invent grace default **0** (`PSX_RB_GAP1_GRACE_MS` override kept).
+- Invent depth cap: `pred_depth ≥ 2` waits until tip stale (1× invent RTT,
+  floor 40ms); RUNWAY invent grace hard-capped at **8ms**.
+- FPS line: `present_gap_p95=… ms max=… ms` (primary soak metric).
+
+**Pass (WAN/TURN, post-settle):** `present_gap_p95 ≤ 33ms`, invent mostly
+`GAP1` with `pred_depth ≤ 2`, ep/1k moderate (not zero invents, not
+constant deep resim). FMV media may still be packet-paced (no invent).
+
+---
+
+## 28. Gap=1 phase-vs-starvation split — LAN resim storms (2026-08-01)
+
+**Problem:** §27's `gap1_grace=0` default fixed WAN 30fps delay-sync but
+regressed LAN. A 2-peer soak at `D=2 P=6` (one peer via TURN relay, one
+direct host-host) showed **~310 gap1 invents / ~2400 frames**, a first
+core diverge at sim=962, then a tip-hold commit storm (`ep/1k≈15`,
+`present_gap_p95` spiking to 3.4s once). The invent geometry was
+perfectly stable the whole soak:
+
+```
+wire = sim+2, remote_tip = sim+1, remote_lead = 1, pred_depth = 1
+```
+
+That is **not starvation** — the confirmed remote tip is still one row
+ahead of sim, i.e. there is real work already in flight. It is a
+one-tick **phase offset**: this peer is consistently sampling wire a
+tick before the matching remote row lands. §27 treated every gap=1 miss
+identically (`invent now`), converting each phase tick into a mispredict
+→ rewind-request → tip-hold episode.
+
+**Fix — Case A / Case B split at gap=1** (`np_gap1_grace_cap_ms`,
+`np_tip_track_advance`/`np_tip_age_ms`, gap1 branch of
+`np_try_admit_rollback` in `psx_netplay.c`):
+
+- Track the remote tip's own arrival cadence every admit tick (not just
+  on miss): `g_tip_arrival_ema_ms` = EMA of ms between
+  `highest_remote_wire` advances, `np_tip_age_ms()` = ms since the last
+  advance.
+- **Case A (healthy/advancing tip):** `remote_lead ≥ 1` and the tip
+  advanced within the last `1.5×` its own cadence. The newest row is
+  probably already in flight — wait `clamp(period − tip_age, 4, 10)` ms
+  before inventing, instead of 0. Logged as `reason=GAP1_PHASE`.
+- **Case B (stale/starved tip):** `remote_lead ≤ 0`, or the tip hasn't
+  advanced in over 1.5× its cadence (or cadence unknown). Invent
+  immediately — same as §27's default — so genuine WAN gaps stay
+  responsive and this never turns back into cushion-wait.
+- `PSX_RB_GAP1_GRACE_MS` still forces the old flat cap (bypasses the
+  Case A/B split entirely) for A/B testing or a manual operator override.
+
+**Telemetry:** `rb admit stats` gained `gap1_case_a=`, `gap1_case_b=`,
+`tip_ema=` (the learned arrival cadence in ms). Expect on LAN:
+`gap1_case_a` rising, `gap1_case_b`/`invent_gap1_legacy` mostly flat,
+`tip_ema` settling near the true tick period (~16–17ms at 60fps),
+`present_gap_p95` and ep/1k dropping back toward the pre-§27 LAN
+baseline (~60fps, near-zero episodes) without WAN regressing to 30fps.
+
+**Re-soak:** LAN pass = few-to-no `GAP1_LEGACY`/`RUNWAY_EMPTY` invents
+once `tip_ema` converges, `gap1_case_a` dominant, ep/1k near 0, fps back
+near 60. WAN pass = unchanged from §27 (Case B fires immediately on a
+genuinely stale/negative-lead tip, so high-RTT links don't gain a hidden
+per-tick stall).
+
+---
+
+## 29. §28 Case A wait was the hitch — scheduler needs pacing, not waiting
+(2026-08-01)
+
+**Problem:** the very next LAN soak after §28 showed *worse* hitching.
+`gap1_case_a`/`gap1_grace` climbed to **1000/1000** (every gap=1 miss took
+the Case A wait), but only ~12% of those waits actually found the row —
+88% expired into invent anyway (`invent_gap1_legacy` 883, `GAP1_PHASE`
+314 logged). `tip_ema` (the learned tip-advance cadence) drifted from
+15ms to **28-41ms** over the match — 2-3x the true ~16ms tick period —
+because the wait itself delays the next admit, which delays the next
+tip-advance observation, which makes the next miss look "fresher" than
+it is (self-reinforcing feedback loop). Net effect: `admit` cost rose
+from ~6ms/f to ~8ms/f baseline, first core diverge moved earlier
+(sim 279 vs 962), ep/1k rose (16→27), and `present_gap` spiked to
+**~4 seconds** during storm windows with fps dropping to single digits.
+
+**Root cause, reframed as a scheduler question, not an invent-policy
+question:** both soaks showed the exact same fixed point regardless of
+gap1 policy:
+
+```
+wire = sim+D, remote_tip = sim+(D-1), remote_lead = D-1, pred_depth = 1
+```
+
+This is **rock-stable**, not jittery — the signature of a fixed ~1-tick
+network transit/scheduling cost consuming one of the two delay frames,
+combined with a self-reinforcing rate effect: because gap=1 has always
+resolved via immediate invent (never a wait), the peer that structurally
+gets there first never has to slow down, so it keeps racing exactly one
+tick ahead of the other's publish rate indefinitely. A **per-miss wait**
+cannot fix either half of this: it cannot change a fixed transit delay,
+and by delaying every admit uniformly it does not reintroduce any
+asymmetry between the peers — so both soaks converged to the same
+useless (or actively harmful) place.
+
+**Fix:** the only mechanism in this codebase that is actually
+asymmetric-safe here is mispredict-driven `np_timesync_note_late`
+pacing (`psx_netplay.c`) — soak evidence already established that real
+mispredicts land almost entirely on one peer (the one racing ahead),
+so pacing *that* peer down a few ms/tick closes phase without both
+sides fighting each other or serializing. It was just too weak to
+matter: MotK's hold-last invent means most gap=1 misses never produce a
+mispredict (the invented value already matches), so genuine correction
+signals are rare, and the old debt sizing (add ~0.75 tick/mispredict,
+cap 2 ticks, shave <=4ms/tick) drained faster than it could accumulate
+enough to move a persistent D-1 phase.
+
+- **Reverted** §28's per-miss Case A wait. Gap=1 invents immediately
+  again (§27 behavior) — zero added admit latency. The Case A/B
+  classification is kept as **pure diagnostics** (`GAP1_PHASE` /
+  `GAP1_LEGACY` reason, `gap1_case_a`/`gap1_case_b` counters) computed
+  from the same tip-health signal, but nothing waits on it.
+  `PSX_RB_GAP1_GRACE_MS` still forces the old flat-cap wait for A/B
+  testing.
+- **Strengthened timesync pacing** (`np_timesync_note_late`,
+  `np_timesync_throttle`): per-mispredict debt add raised from ~0.75
+  tick to ~1.25 ticks, cap raised from 2 ticks to 3 ticks, admit-side
+  shave raised from <=4ms/tick to <=6ms/tick — so a small cluster of
+  real mispredicts (e.g. one fight exchange) can actually walk a stuck
+  D-1 phase back toward D within a handful of ticks instead of dozens.
+  Adaptive-off guards (18 consecutive cap-hits → OFF 10s) are unchanged.
+
+**What to watch in the next soak:** `gap1_case_a`/`gap1_case_b` should
+still climb (that's expected — LAN transit still eats ~1 tick most of
+the time) but `admit` ms/f and `present_gap_p95` should drop back near
+pre-§27/§28 baselines since no wait is added; `tip_ema` should hold near
+the true tick period instead of drifting; and `timesync pacing` log
+lines / `rb timesync OFF` should show whether the stronger debt actually
+narrows `remote_lead` back toward D over a match, or whether the
+transit-delay theory needs D raised instead (next lever if pacing alone
+doesn't move it).
+
+---
+
+## 30. Phase-control soak instrumentation — no algorithm change (2026-08-01)
+
+**Context:** Prior soak showed host (`slot=0`) opening ~91 rewind-requests
+against remote slot 1 while guest opened only ~29 against slot 0, with
+timesync pacing 72 vs 17. Hypothesis: the peer that starts ahead spends
+more time in `rb_active`/`tip_holding`, so `np_timesync_note_late()`
+suppresses the very debt that would slow it — a control-loop leak —
+rather than pure gameplay/transport asymmetry.
+
+**Change:** telemetry only (`psx_netplay.c`). No pacing constants, grace,
+or invent-policy edits.
+
+**~1 Hz line** (each peer, stderr):
+
+```
+psxrecomp: rb phase ctrl slot=N sim=… lead=… lead_avg=… lead_min=…
+lead_max=… debt_ms=… debt_added=… mispredict=… note_late=…
+suppressed_rb=… suppressed_off=… D=…
+```
+
+| Field | Meaning |
+|-------|---------|
+| `lead` / `lead_avg/min/max` | `remote_lead` now + window over the last ~1s of admits |
+| `debt_ms` | current timesync pacing debt (drains ≤6 ms/tick) |
+| `debt_added` | cumulative ms of debt ever added (never resets) |
+| `mispredict` | cumulative `pads_differ` resolves (true mispredicts) |
+| `note_late` | cumulative `note_late` calls that actually added debt |
+| `suppressed_rb` | cumulative `note_late` early-outs while `rb_active` or `tip_holding` |
+| `suppressed_off` | cumulative early-outs while timesync adaptive-OFF window |
+
+Same counters also appear on the 5s `rb admit stats` line.
+
+**How to read host vs guest:**
+
+1. **Supports control-loop instability:** one peer consistently has higher
+   `lead`/`lead_avg`, higher `mispredict`, *and* higher `suppressed_rb`
+   (especially `suppressed_rb` rising with `mispredict` while
+   `note_late` lags). That peer is losing correction signal during its
+   own resim/tip-hold windows.
+2. **Points elsewhere (gameplay/transport):** `suppressed_rb` rare or
+   balanced, but `mispredict` still skewed — edges/content or path RTT
+   dominate; do not change the suppress gate yet.
+3. **Secondary:** `suppressed_off` climbing on one side means adaptive-OFF
+   is also silencing pacing (different failure mode).
+
+**Do not** tweak pacing constants from this soak until the hypothesis is
+confirmed or rejected from these four signals.
+
+## 31. Protocol correctness track — distributed episode contract (2026-08-01)
+
+Work split into two tracks (protocol correctness first, scheduler feel
+second) so remaining rollback storms can be attributed to scheduler policy
+rather than peers disagreeing about control flow. This section is the
+protocol track. All six items landed together; the RB_SYNC wire format
+gained an op code (the old `initiator` byte) and a flags byte (the old pad
+byte, so packet size is unchanged). Constants live in
+`recomp_net/session.h` (`RNET_RB_SYNC_OP_*`, `RNET_RB_SYNC_FLAG_*`,
+`RNET_RB_ABORT_CLASS_*`).
+
+**1. Episode identity — slot-partitioned epoch ids.** Wire epoch =
+`(counter << 3) | initiator_slot` (`RB_EPOCH_SLOT_BITS`). Concurrent dual
+initiation can never collide on an id, and any epoch's initiator slot is
+derivable from the id alone (needed by the tie-break). `g_epoch` is now
+the counter, not the wire id; followers only raise their counter for log
+monotonicity.
+
+**2. Dual-initiation tie-break.** Both peers opening episodes
+concurrently used to deadlock (each dropped the other's SYNC as "already
+active") or cross-wire baselines. Now, on receiving a competing BEGIN
+while initiating: the lower initiator slot wins. The loser yields quietly
+— `abort_episode` with class REALIGN, cooldown cleared (contention is not
+failure) — and falls through to follow the winner's episode. Yield only
+happens in SealInputs/AwaitingBaseline before the snap load mutated Live;
+deeper phases drop the SYNC and rely on abort propagation to clean up.
+
+**3. Abort propagation.** Local aborts used to tear down silently; the
+peer kept sealing/verifying until its own skewed timeout. Every
+wire-visible abort now sends `RB_SYNC op=ABORT` (×3 burst, epoch-deduped
+on receive) with the cooldown class in the mismatch field and the sender's
+realign tick in the load field. The receiver mirrors teardown, realigns
+via the shared `pick_realign_tip()` policy (pin > episode load > agreed),
+and arms the same cooldown class.
+
+**4. Shared cooldown class.** `abort_episode_realign` classifies BEFORE
+aborting (REALIGN / ABORT / STORM / NO_SNAP → 0/24/48/90 ticks via
+`abort_class_cooldown_ticks`) and stages the class into the wire notice,
+so both peers re-arm on the same schedule instead of deriving different
+cooldowns from different local evidence. The receiver also syncs its
+`g_bl_mismatch_streak` from the class (REALIGN clears; STORM forces ≥2).
+An ABORT for an episode we never joined still arms STORM/NO_SNAP classes
+so we don't immediately initiate into a peer that just declared a hard
+failure.
+
+**5. Shared frontier.** Three parts: (a) follow-NACKs carry the
+follower's confirmed frontier (`follower_frontier_hint()`: agreed
+watermark, else mutually hash-confirmed tick) in the target field; the
+initiator demotes to `min(load-1, peer_frontier)` walked down to a real
+snap, so the reopened episode's load is provably followable instead of
+NACK-cycling. (b) `finalize_tip_hold` bursts RESOLVED (enter_tip_hold and
+commit already did) so a committed tip is never a local secret. (c) The
+follow REFUSE "past frontier" check treats the library's peer-advertised
+`rnet_rb_resolved_through` as a frontier floor — peers only advertise
+committed ticks, so a load at/below it is followable even when our own
+agreed/hc watermark lags from a lost packet.
+
+**6. Shared rereplay + light-tip decision.** BEGIN/tip-extend SYNCs carry
+initiator-authoritative flags: `FLAG_LIGHT_TIP` (follower adopts verbatim;
+`rnet_rb_begin_episode` no longer auto-classifies when `from_peer_notify`,
+and `rnet_rb_recommend_light_tip` reports `corr.flags` only — this was the
+asymmetric baseline-burst seed) and `FLAG_REREPLAY` (tip-extend: follower
+mirrors the initiator's rereplay decision, OR'd with its own
+"Live invented past the prior tip" check, which can only add correction,
+never skip one).
+
+Verified: MotK `psx-runtime` builds; all 11 recomp-net tests pass
+(rb_wire_test round-trips the op/flags byte and the ABORT shape;
+rollback_episode_test covers follower flag adoption). Standalone
+recomp-net repo synced with the same changes.
+
+---
+
+## 32. Scheduler-feel track kickoff — lead regulation (2026-08-01)
+
+Protocol correctness (§31) landed clean: the rb-diag1/rb-diag2 re-soak had
+no NACK cycles, no REFUSED, no SPAN CAP, tie-breaks resolved deterministically,
+and ABORT propagated even when only one side locally detected the divergence.
+Remaining asymmetry is scheduler *feel*, not protocol disagreement. Fable's
+review flagged four items in priority order; this section covers the first
+(highest-leverage) one: **lead regulation**.
+
+**Observed asymmetry (rb-diag soak):** host began ~3× as many rewind
+episodes as guest and owned almost all corrections against the guest's pad;
+pacing debt accumulated mostly on host (1428 ms vs 456 ms cumulative). The
+begin/mispredict ratio tracks almost 1:1 (host mispredict=124/begin=107,
+guest mispredict=50/begin=33) — `rnet_input_contract_stick_replace_decide`
+converts nearly every genuine mispredict into a rewind, so the real question
+is *why one peer mispredicts 2.5× more than the other*, not the contract's
+promote/rewind split.
+
+**Hypothesis:** an over-prediction feedback loop. The peer that falls behind
+wall-clock (more Replay/TipHold work from owning more corrections) still has
+to keep pace with the wire tick rate, so it ends up predicting the remote pad
+further into the future before the real row lands; deeper predictions are
+mechanically more likely to be wrong; each wrong deep prediction becomes
+another correction it initiates, which costs more Replay/TipHold time — the
+same peer digs itself deeper. `np_timesync_note_late` already exists to
+brake exactly this (pacing debt shaved off at admit), but until now every
+mispredict added the *same* flat debt regardless of how deep the guess was,
+so a peer running way ahead and a peer running barely ahead got identical
+correction pressure.
+
+**Change 1 — proportional debt (`psx_netplay.c`):** `np_timesync_note_late`
+now takes the mispredict's *age* (`sim - t`: how many ticks the wrong
+predicted row rode before the real one arrived and was caught). A row
+resolved right at the normal input-delay boundary (`age ≈ D`) is expected
+steady-state noise and gets the same flat debt as before — zero behavior
+change in the common case. A row that rode notably longer than `D` ticks
+means we were running unusually far ahead of the confirmed remote tip when
+we guessed it; extra debt scales `+25%` of the base add per tick past `D`,
+still capped by the existing 3-tick ceiling. This only activates additional
+braking specifically during the runaway-ahead pattern; it cannot make the
+aligned/steady-state case worse since `extra_age` is 0 there.
+
+**Change 2 — telemetry (`psx_netplay.c` phase-ctrl line):** added
+`mispredict_age_avg=` / `mispredict_age_max=` (match-lifetime, like the
+other cumulative counters on that line) so the next soak can directly
+confirm or reject the causal hypothesis by comparing host vs guest average
+prediction age — instead of the begin/mispredict-count archaeology used to
+produce the numbers above. If the hypothesis holds, host's
+`mispredict_age_avg` should sit measurably above guest's, and both peers'
+ratio should compress with change 1 applied vs a soak with it reverted.
+
+**Deliberately not done yet:** did not touch the tie-break weighting, the
+resim/tip-hold `note_late` suppression gate (already balanced — 17/17
+`suppressed_rb` in the §31 re-soak, so that specific §30 hypothesis is
+closed), or the admit-side throttle shave rate. Per this project's own
+established practice (§29: a guessed pacing fix regressed and had to be
+reverted after a soak), only one bounded, reversible, provably-no-worse-
+in-steady-state change plus matching telemetry landed per cut — the next
+soak's `mispredict_age_avg`/`lead_avg`/`debt_added` decide whether to push
+further (e.g. widen the +25%/tick coefficient) or whether the asymmetry is
+gameplay-driven (who's the aggressor) rather than scheduler-driven.
+
+**Still open (scheduler-feel track, unchanged priority from fable's
+review):**
+- Presentation cadence during Replay/TipHold — **landed in §33** (hold-last
+  present on wall-clock cadence during `is_resimulating`).
+- POST core/aux diverge (~0.8/1k ticks) — heal path (§31 ABORT propagation)
+  already handles it gracefully; root cause is a separate emulation
+  determinism gap (audit/cpu-split dumps already exist for that chase).
+- Gap1/grace — left as `invent-immediate` (§29's finding stands); revisit
+  only after lead regulation is confirmed closing the gap, so grace changes
+  aren't evaluated against a still-skewed baseline.
+
+---
+
+## 33. Hold-last present during resim (2026-08-01)
+
+**Problem:** `sdl_vblank_present_body` early-returned on
+`psx_netplay_is_resimulating()` (AwaitingBaseline | Replay | Verify) and
+skipped every Swap. Admit still advanced uncapped, so `replay%` windows
+produced `present_gap_p95` of 80–150ms — the metric tracked replay load
+because presents only resumed on Live ticks. Visually: frozen front buffer
+for the whole resim span, then a jump.
+
+**Fix (host presentation only — digests/wire unchanged):**
+
+1. **GL sticky hold** (`gpu_gl_renderer.c`): before each Live `SwapWindow`,
+   `hold_capture_drawable()` copies the drawn backbuffer into a hold
+   texture. When interpolation owns Swap, `hold_capture_native_fbo()`
+   blits the display band from the VRAM/wide FBO instead. Mid-resim must
+   not re-read `s_hr_tex` (it mutates during Replay). First NATIVE
+   hold-present letterboxes then re-captures as DRAWABLE (soak-proven path).
+2. **`gl_renderer_present_hold_last()`**: redraws the hold texture + Swap
+   (swap interval already 0 under netplay — no vsync tax on resim throughput).
+3. **`main.cpp` resim branch**: on a wall-clock period clamped to
+   `[8, 33] ms` (≈ `g_frame_period_ms`), call hold-last + `netplay_note_present()`.
+   Suspend GL interpolation for the episode (`set_interpolation_suspended(1)`)
+   so the interp thread cannot fight hold-last `SwapWindow` (A/B: GL+interp
+   buggy, GL without interp clean). Live restores FMV/game suspend policy.
+   SW path re-presents with the last Live `src`/`dst` rects (not `NULL,NULL`
+   on the full 640×512 texture — that produced the upper-left postage stamp).
+   VK left as no-op hold (status quo skip) for this cut.
+4. Epilogue still skips the frame pacer during resim — catch-up stays fast;
+   only the present starvation is fixed.
+
+**Pass:** post-settle high-`replay%` windows should show `present_gap_p95`
+near the frame period (~16–33ms) instead of tracking episode wall time.
+Quiet Live tail unchanged. Re-soak GL+interp and SW; TipHold admit-stall
+gaps (§32) are a separate follow-up.
+
+---
+
+## 34. Double menu inputs — tip-hold quiet + scrub + debounce (2026-08-01)
+
+**Post-§33 soak (`rb-diag1/2`, LAN, software GPU, menu nav):** protocol
+healthy enough (tip-extend live, quiet present gaps ~18ms) but **dpad taps
+felt doubled** again. Audit arms showed fragmented digital pulses on the
+wire (e.g. `ffbf` @1044, idle, `ffbf` @1048–50, idle, `ffbf` @1055,
+tip-extend @1059) and tip-hold committing immediately between them.
+`scrub-ahead` logged **0** times; releases during tip-hold hit
+`begin_refused=1` then quiet-commit dropped the edge.
+
+**Root causes:**
+
+1. **TipHold quiet armed whenever `sim >= invent_cap`**, including through
+   1-tick idle holes between controller bounce pulses (`QUIET_MAX=80ms`).
+2. **`np_scrub_ahead_predicted` no-op'd under TipHold** (`sim <= release_tick`
+   while coalesce promoted release at `tip+N`).
+3. **`begin_refused` while tip-holding** (tip-extend fail / different seat)
+   did not block quiet finalize — commit raced the unreabsorbed release.
+4. **1–2 tick idle holes** published as real press/release/press edges;
+   MotK menus edge-trigger → multiple navigations.
+
+**Fixes:**
+
+- [x] Digital release debounce (2 sim ticks) in `psx_netplay_stage_local`
+      while rollback is on — bridges micro-bounce without lagging real taps.
+- [x] Scrub-ahead end bound = `max(sim, tip+runway)` during TipHold.
+- [x] TipHold quiet only while pads idle **and** no pending wire delta
+      `tip+1..runway` / `block_quiet`; held or pending resets the timer.
+      Quiet window **100–150ms** (was min 80 / max 80).
+- [x] Thrash CAP suppressed while a wire edge is still pending (SAFETY
+      still wins).
+- [x] `psx_netplay_rb_tip_hold_block_quiet` from coalesce/begin_refused;
+      different-seat tip-extend fail → tip-hold commit then fresh begin.
+
+**Re-soak checks:** one physical dpad tap → one cursor move; look for
+`scrub-ahead release` during tip-hold coalesce; far fewer
+`begin_refused=1` → immediate tip-hold commit pairs; tip-hold→commit
+dwell should often exceed ~100ms on calm edges.
+
+---
+
+## 35. TipHold SAFETY-while-held + hold-last on admit stall (2026-08-01)
+
+**Post-§34 soak:** doubles improved (`begin_refused=0`, chatter pulses
+down) but **21/30 tip-holds hit SAFETY CAP 250ms**, driving
+`present_gap_p95≈240ms` during menu play. Quiet almost never won:
+`wire_pending_delta` treated future presses (tip already idle) as
+pending, and SAFETY committed **while digital still held** → Live
+key-repeat after the stall. TipHold invent-cap stalls admit with no
+guest vblank, so §33 hold-last never ran.
+
+**Fixes:**
+
+- [x] SAFETY deferred while any pad held (log `SAFETY deferred`); commit
+      only on quiet/thrash when idle, or **ABSOLUTE 2000ms** stuck-pad
+      escape. `sim > tip_hold_until` also refuses commit while held.
+- [x] Pending quiet-block = **unabsorbed release** only (tip held, wire
+      delta ahead). Future press while tip idle no longer parks quiet.
+      Stale `block_quiet` clears once idle + no pending release.
+- [x] `netplay_hold_last_present_tick()` shared by resim present path and
+      TipHold admit-spin (`netplay_barrier_admit`) so SAFETY/held waits
+      keep Swap alive. Skip frame pacer while tip-holding.
+
+**Re-soak:** expect mostly quiet tip-hold commits (not SAFETY); 
+`SAFETY deferred` while holding then quiet after release; 
+`present_gap_p95` during menu not glued to 250ms; ABSOLUTE rare.
+
+---
+
+## 36. TipHold held = live pad, not frozen sim peek (2026-08-02)
+
+**Post-§35 soak:** SAFETY deferred worked as coded — and every deferred
+episode then hit **ABSOLUTE CAP 2000ms** (`held=1 pending=0`, 6/6 both
+peers). Admit blew out (`admit≈988ms/f`, `1.0 fps`). Cause: invent-cap
+freezes `sim`, `stage_local` latch freezes `staged`, and
+`tip_hold_any_pad_held(sim)` peeked that one immutable delay-ring row —
+a real controller release could never clear `held`, so quiet never armed
+and ABSOLUTE was guaranteed.
+
+**Fixes:**
+
+- [x] `psx_netplay_stage_local` always refreshes a live physical snapshot
+      (even when latched). Admit spin captures while
+      `psx_netplay_rb_tip_holding()` so live keeps updating.
+- [x] `psx_netplay_live_pad_buttons()` + `tip_hold_any_pad_held(tip)`:
+      local uses live buttons; remote uses latest arrived row in
+      `tip..tip+runway` (not parked `sim`).
+- [x] Invent-cap stall in `try_admit` still keys off wire/staged (do not
+      invent-walk while the published tip pad is held — that was the
+      key-repeat class). Only wall-clock finalize uses live.
+
+**Re-soak:** `SAFETY deferred` then quiet/commit soon after release
+(not ~2s ABSOLUTE); ABSOLUTE only for truly stuck pads; menu fps not
+collapsing to ~1 on held tip-holds.

@@ -619,6 +619,20 @@ static int s_last_dx, s_last_dy, s_last_dw, s_last_dh;
  * (and FPS) keep advancing — especially on a 2nd+ load of the same slot. */
 static int s_force_present_remaining = 0;
 
+/* §33 rollback resim hold-last: sticky copy of the last Live present so
+ * mid-resim ticks can Swap a frozen frame without reading mutating VRAM.
+ * HOLD_DRAWABLE = full backbuffer copy taken just before SwapWindow.
+ * HOLD_NATIVE   = GPU blit of a display band (used when interp owns Swap). */
+#define HOLD_NONE     0
+#define HOLD_DRAWABLE 1
+#define HOLD_NATIVE   2
+static int    s_hold_kind = HOLD_NONE;
+static GLuint s_hold_tex = 0;
+static GLuint s_hold_fbo = 0;
+static int    s_hold_tw = 0, s_hold_th = 0; /* texture size in texels */
+static int    s_hold_force_4_3 = 0;
+static int    s_hold_linear = 0;
+
 /* Post-load freeze probe (main.cpp): accumulate skip/swap/dirty marks. */
 static uint64_t s_probe_skip = 0;
 static uint64_t s_probe_swap = 0;
@@ -651,6 +665,83 @@ static void present_force_consumed(void) {
     if (s_force_present_remaining > 0)
         s_force_present_remaining--;
 }
+
+static void hold_ensure_tex(int w, int h) {
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (!s_hold_tex) {
+        glGenTextures(1, &s_hold_tex);
+        if (!s_hold_fbo)
+            p_glGenFramebuffers(1, &s_hold_fbo);
+    }
+    if (s_hold_tw == w && s_hold_th == h)
+        return;
+    glBindTexture(GL_TEXTURE_2D, s_hold_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 NULL);
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, s_hold_fbo);
+    p_glFramebufferTexture2D(PSXGL_FRAMEBUFFER, PSXGL_COLOR_ATTACHMENT0,
+                             GL_TEXTURE_2D, s_hold_tex, 0);
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+    s_hold_tw = w;
+    s_hold_th = h;
+}
+
+/* Snapshot the just-drawn default backbuffer (letterbox + content) before Swap.
+ * Hold-last can then redraw this exact image without touching guest VRAM. */
+static void hold_capture_drawable(void) {
+    int ww = 0, wh = 0;
+    if (!s_ctx || !s_win)
+        return;
+    SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+    if (ww < 1 || wh < 1)
+        return;
+    hold_ensure_tex(ww, wh);
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, s_hold_tex);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, ww, wh);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    s_hold_kind = HOLD_DRAWABLE;
+    s_hold_force_4_3 = 0;
+    s_hold_linear = 0;
+}
+
+/* Snapshot a native display band from an FBO when the main thread will not
+ * Swap (interpolation owns the cadence). Scale-aware blit into hold tex. */
+static void hold_capture_native_fbo(GLuint src_fbo, int dx, int dy, int dw, int dh,
+                                    int force_4_3, int linear) {
+    int S = s_scale > 0 ? s_scale : 1;
+    if (!s_ctx || !src_fbo || dw < 1 || dh < 1)
+        return;
+    hold_ensure_tex(dw * S, dh * S);
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, src_fbo);
+    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, s_hold_fbo);
+    glDisable(GL_SCISSOR_TEST);
+    p_glBlitFramebuffer(dx * S, dy * S, (dx + dw) * S, (dy + dh) * S,
+                        0, 0, dw * S, dh * S,
+                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
+    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
+    s_hold_kind = HOLD_NATIVE;
+    s_hold_force_4_3 = force_4_3 ? 1 : 0;
+    s_hold_linear = linear ? 1 : 0;
+}
+
+static void hold_invalidate(void) {
+    s_hold_kind = HOLD_NONE;
+}
+
+/* Defined after present_target_quad / letterbox helpers. */
+static void letterbox_rect_aspect(int ww, int wh, int num, int den,
+                                  int *x, int *y, int *w, int *h);
+static void letterbox_rect(int ww, int wh, int *x, int *y, int *w, int *h);
+static void present_target_quad(GLuint tex, int tex_w, int tex_h,
+                                int x, int y, int w, int h, int linear,
+                                int lx, int ly, int lw, int lh);
 
 static void coh_record(int kind, int x0, int y0, int x1, int y1) {
     GlCohEvent *e = &s_coh_ring[s_coh_seq % GL_COH_RING_CAP];
@@ -2592,6 +2683,11 @@ void gl_renderer_shutdown(void) {
     s_present_h = 0;
     s_depth24_skip_up = 0;
     rect_clear(&s_d24_skip_fb);
+    hold_invalidate();
+    s_hold_tex = 0;
+    s_hold_fbo = 0;
+    s_hold_tw = 0;
+    s_hold_th = 0;
 }
 
 /* CPU-readout present (24-bit FMV frames and the PSX_GL_FORCE_CPU_PRESENT
@@ -2659,6 +2755,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     p_glBindVertexArray(s_present_vao); glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0); p_glUseProgram(0);
     pres_record(GL_PRES_CPU, 0, 0, src_w, src_h, lx, ly, lw, lh);
+    hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
@@ -2674,6 +2771,7 @@ void gl_renderer_present_blank(void) {
     glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, ww, wh); glClearColor(0.f,0.f,0.f,1.f); glClear(GL_COLOR_BUFFER_BIT);
     pres_record(GL_PRES_BLANK, 0, 0, 0, 0, 0, 0, ww, wh);
+    hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
@@ -2692,6 +2790,7 @@ void gl_renderer_invalidate_present(void) {
     for (int i = 0; i < PRES_ROWS; i++) s_present_dirty[i] = ~0ull;
     s_last_present_path = -1;
     s_force_present_remaining = 8;
+    hold_invalidate();
     interp_reset_history();
 }
 
@@ -3635,6 +3734,63 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     p_glUseProgram(0);
 }
 
+int gl_renderer_present_hold_last(void) {
+    int ww = 0, wh = 0;
+    int lx, ly, lw, lh;
+    if (!s_ctx || !s_win || s_hold_kind == HOLD_NONE || !s_hold_tex)
+        return 0;
+    SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+    if (ww < 1 || wh < 1)
+        return 0;
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, ww, wh);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (s_hold_kind == HOLD_DRAWABLE) {
+        /* Captured image already includes letterbox bars. Stretch 1:1, or
+         * letterbox to preserve aspect if the drawable resized mid-resim. */
+        lx = 0;
+        ly = 0;
+        lw = ww;
+        lh = wh;
+        if (s_hold_tw > 0 && s_hold_th > 0 &&
+            ((int64_t)s_hold_tw * wh != (int64_t)s_hold_th * ww)) {
+            if ((int64_t)ww * s_hold_th > (int64_t)wh * s_hold_tw) {
+                lw = (int)(((int64_t)wh * s_hold_tw) / s_hold_th);
+                if (lw < 1) lw = 1;
+                lx = (ww - lw) / 2;
+                lh = wh;
+                ly = 0;
+            } else {
+                lh = (int)(((int64_t)ww * s_hold_th) / s_hold_tw);
+                if (lh < 1) lh = 1;
+                ly = (wh - lh) / 2;
+                lw = ww;
+                lx = 0;
+            }
+        }
+        present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
+                            0, 0, s_hold_tw, s_hold_th, 0, lx, ly, lw, lh);
+    } else {
+        if (s_hold_force_4_3)
+            letterbox_rect_aspect(ww, wh, 4, 3, &lx, &ly, &lw, &lh);
+        else
+            letterbox_rect(ww, wh, &lx, &ly, &lw, &lh);
+        present_target_quad(s_hold_tex, s_hold_tw, s_hold_th,
+                            0, 0, s_hold_tw, s_hold_th, s_hold_linear,
+                            lx, ly, lw, lh);
+        /* Upgrade to drawable after letterboxing once. Live+interp leaves
+         * HOLD_NATIVE (no Swap on main); drawable path is the soak-proven
+         * full-window image (GL without interp). */
+        hold_capture_drawable();
+    }
+    latency_ring_mark(LAT_SWAP_BEGIN);
+    SDL_GL_SwapWindow(s_win);
+    latency_ring_mark(LAT_SWAP_END);
+    s_probe_swap++;
+    return 1;
+}
+
 void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
                               int force_4_3) {
     if (!s_ctx || !s_raster_ok) return;
@@ -3671,6 +3827,9 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     int interp_pair = interp_capture(s_hr_fbo, disp_x, disp_y, w, h,
                                      linear, force_4_3, GL_PRES_VRAM);
     if (interp_pair) {
+        /* Interp owns Swap — still snapshot the band so resim hold-last has
+         * a frozen frame if an episode opens before the next main-thread Swap. */
+        hold_capture_native_fbo(s_hr_fbo, disp_x, disp_y, w, h, force_4_3, linear);
         gl_perf_present_exit(0);
         present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
         present_force_consumed();
@@ -3681,6 +3840,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     present_target_quad(s_hr_tex, VRAM_W, VRAM_H,
                         disp_x, disp_y, w, h, linear, lx, ly, lw, lh);
     pres_record(GL_PRES_VRAM, disp_x, disp_y, w, h, lx, ly, lw, lh);
+    hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);
@@ -3768,6 +3928,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     int interp_pair = interp_capture(fbo, 0, disp_y, g_wide_w, disp_h,
                                      linear, 0, GL_PRES_WIDE);
     if (interp_pair) {
+        hold_capture_native_fbo(fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
         gl_perf_present_exit(1);
         present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
         present_force_consumed();
@@ -3779,6 +3940,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     present_target_quad(tex, g_wide_w, VRAM_H,
                         0, disp_y, g_wide_w, disp_h, linear, lx, ly, lw, lh);
     pres_record(GL_PRES_WIDE, disp_x, disp_y, g_wide_w, disp_h, lx, ly, lw, lh);
+    hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
     SDL_GL_SwapWindow(s_win);
     latency_ring_mark(LAT_SWAP_END);

@@ -92,6 +92,14 @@ uint8_t netplay_hc_local_digest(const NetplayHashConfirm* hc, uint32_t tick,
     return 1u;
 }
 
+uint8_t netplay_hc_peer_digest(const NetplayHashConfirm* hc, uint32_t tick,
+                               uint32_t* digest_out) {
+    uint32_t d = 0;
+    if (!hc || !peer_at(hc, tick, &d)) return 0u;
+    if (digest_out) *digest_out = d;
+    return 1u;
+}
+
 uint8_t netplay_hc_peek_mismatch(const NetplayHashConfirm* hc, uint32_t* tick_out,
                                  uint32_t* local_out, uint32_t* peer_out) {
     uint32_t next;

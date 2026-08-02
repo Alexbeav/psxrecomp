@@ -31,6 +31,12 @@ int main(void) {
     CHECK(netplay_hc_confirm_through(&hc, 0), "tick 0 matched");
     CHECK(netplay_hc_resolved_through(&hc) == 0u, "resolved at 0");
     CHECK(!netplay_hc_confirm_through(&hc, 1), "tick 1 not yet");
+    {
+        uint32_t pd = 0;
+        CHECK(netplay_hc_peer_digest(&hc, 0, &pd) && pd == 0x1111u,
+              "peer_digest peeks FRAME_COMMIT hash");
+        CHECK(!netplay_hc_peer_digest(&hc, 1, &pd), "peer_digest missing tick");
+    }
 
     netplay_hc_note_peer(&hc, 1, 0x2222u);
     CHECK(netplay_hc_confirm_through(&hc, 1), "tick 1 matched");

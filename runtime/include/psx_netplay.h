@@ -116,11 +116,16 @@ int  psx_netplay_in_load_barrier(void);
  * Clears. Caller should soft-exit to lobby — do not keep waiting on the barrier. */
 int  psx_netplay_consume_load_apply_failed(void);
 
-/* Stage local pad for the current sim tick. Ignored once that tick is latched. */
+/* Stage local pad for the current sim tick. Ignored once that tick is latched.
+ * Always refreshes the live physical snapshot (see live_pad_buttons). */
 void psx_netplay_stage_local(const PsxNetPad *pad);
 
 /* 1 while linking or before this sim tick's local pad is latched. */
 int  psx_netplay_needs_local_sample(void);
+
+/* Latest physical local buttons (0xFFFF idle). TipHold SAFETY/quiet must use
+ * this — staged/delay-ring peeks stay frozen while sim is invent-capped. */
+int  psx_netplay_live_pad_buttons(uint16_t *out);
 
 /* 1 if INPUT_CONFIRM hash disagreement stalled the session. */
 int  psx_netplay_input_desync(uint32_t *tick, uint32_t *local_hash, uint32_t *remote_hash);
@@ -153,6 +158,10 @@ void psx_netplay_finish_frame(void);
 int  psx_netplay_remote_lead(void);
 /* Session input delay frames (default 2 when inactive). */
 int  psx_netplay_input_delay(void);
+
+/* Clear timesync pegged-streak at episode/tip-hold boundaries so resim cost
+ * cannot look like WAN transit and trip adaptive-off (see §22). */
+void psx_netplay_timesync_on_episode_boundary(void);
 
 /*
  * Extra headroom for post-starvation / behind-peer catch-up
