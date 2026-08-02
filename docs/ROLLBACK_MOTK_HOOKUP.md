@@ -2743,8 +2743,9 @@ Helpers: `psx_netplay_rb_confirmed_frontier(from)`,
 While Replay is active (decision site: ownership_step + POST match):
 
 1. If `frontier > target` and within `RB_MAX_RESIM_SPAN` of seal_base → tip-extend.
-2. If chunk full but `frontier > tip` after Verify POST match → **chain** next
-   SPAN episode immediately (no TipHold invent-cap / quiet wall).
+2. If chunk full but `frontier > tip + 1` after Verify POST match → **chain**
+   next SPAN episode immediately (no TipHold invent-cap / quiet wall).
+   `frontier == tip + 1` returns to Live (§48 — avoid 1-tick chain thrash).
 3. If `frontier <= tip` after POST match → Final Verify → Live
    (`enter_tip_hold` + immediate `finalize_tip_hold`).
 
@@ -2764,3 +2765,25 @@ continues across chunk boundaries until contiguous confirmed work is exhausted.
 `ownership extend|chain` until frontier exhausted; no TipHold invent-cap mid
 confirmed catch-up; gap at T stops frontier at T−1; local tip advances during
 Replay; TipHold only when a remote row is actually missing.
+
+## 48. Sticky invent Up → ownership-chain thrash (2026-08-02)
+
+**Problem:** Post-FMV unlock, gap1 hold-last invent sticky D-pad
+(`pub=ffef` Up) vs wire release (`ffff`) opened a tip episode (~902). After
+Verify, both peers chained SPAN for `frontier=tip+1`, dual-initiated every
+chunk (tie-break WIN/YIELD), and `agreed_span_lo=tip` emptied the dense load
+span so the next begin walked back to `%iv` snaps (`904→896`) and re-replayed
+the Up stretch — menu ownership thrash / dual-init abort loop.
+
+**Fix:**
+1. **Unlock-grace soft-promote:** while `psx_netplay_rb_fmv_unlock_grace_active()`
+   (RELEASE…`dense_until`), invent→release-only mispredicts promote+scrub hist
+   without opening an episode (presses still rewind).
+2. **Ownership chain:** chain only when `frontier > tip + 1`; only seat 0
+   calls `begin_rewind` (seat 1 commits tip watermark and waits FOLLOW SYNC);
+   preserve `agreed_span_lo` from the prior episode load so choose_load keeps
+   the dense committed span.
+
+**Re-soak watch:** after FMV into menu, `soft-promote … unlock-grace-release`
+or no `rewind-request pub=ffef`; no `tie-break YIELD` / `ownership chain
+tip=N frontier=N+1` storm; D-pad navigation stays single-step.

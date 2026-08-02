@@ -90,6 +90,12 @@ void psx_netplay_rb_poll_replay_stall(void);
  * wire without opening another episode (clears invent poison). */
 int  psx_netplay_rb_take_promote_sweep(void);
 
+/* 1 after FMV lockstep RELEASE while sim < dense_until (UNLOCK_GRACE).
+ * Invent is already allowed (§26); reconcile should soft-promote invent→
+ * release mispredicts here so sticky hold-last D-pad does not open tip
+ * episodes into the title/menu. */
+int  psx_netplay_rb_fmv_unlock_grace_active(void);
+
 /* Drain peer RB_* + drive Seal/Baseline/Replay/Verify. Call from pump. */
 void psx_netplay_rb_pump(void);
 

@@ -36,6 +36,7 @@ int psx_netplay_rb_fmv_media_active(void) { return 0; }
 int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
 void psx_netplay_rb_poll_replay_stall(void) {}
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
+int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
 void psx_netplay_rb_pump(void) {}
 int psx_netplay_rb_active(void) { return 0; }
 int psx_netplay_rb_is_resimulating(void) { return 0; }
@@ -2879,13 +2880,14 @@ static int tip_hold_wire_pending_release(uint32_t tip)
     return 0;
 }
 
-/* §47: after chunk/final Verify POST match — stay in Replay ownership while
+/* §47/§48: after chunk/final Verify POST match — stay in Replay ownership while
  * contiguous confirmed work remains; otherwise Final Verify → Live. */
 static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
 {
     int slot;
     int local;
     uint32_t mismatch;
+    uint32_t prev_load;
 
     if (!g_rb)
         return;
@@ -2893,11 +2895,15 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     slot = (local == 0) ? 1 : 0;
     if (g_b.slot_count && *g_b.slot_count < 2)
         slot = local;
+    /* Preserve dense committed span for choose_load. Setting span_lo=tip
+     * emptied (lo, through] so the next chain walked back to %iv snaps
+     * (soak: tip=904 → load=896 → re-replay sticky Up). */
+    prev_load = rnet_rb_get_load_tick(g_rb);
 
     /* Commit tip agreement without TipHold invent-cap (Verify barrier only). */
     g_episode_count++;
     g_agreed_through = tip;
-    g_agreed_span_lo = tip;
+    g_agreed_span_lo = (prev_load < tip) ? prev_load : tip;
     g_agreed_valid = 1;
     if (g_b.hc)
         netplay_hc_prime_after(g_b.hc, tip);
@@ -2925,6 +2931,19 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     g_fork_streak = 0u;
     g_fork_streak_tick = 0u;
 
+    /* §48: only the lower seat initiates chain BEGINs. Both peers calling
+     * begin_rewind every chunk caused dual-init → tie-break abort → reload
+     * storm (host WIN / guest YIELD loop around sticky invent). Follower
+     * commits the tip watermark above and waits for peer SYNC BEGIN. */
+    if (local != 0) {
+        fprintf(stderr,
+                "psxrecomp: rb ownership chain tip=%u frontier=%u — wait FOLLOW "
+                "(slot %d; peer initiates)\n",
+                (unsigned)tip, (unsigned)frontier, local);
+        fflush(stderr);
+        return;
+    }
+
     mismatch = tip + 1u;
     if (mismatch > frontier)
         mismatch = frontier;
@@ -2940,6 +2959,8 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
                 "psxrecomp: rb ownership chain FAILED tip=%u frontier=%u — Live\n",
                 (unsigned)tip, (unsigned)frontier);
         fflush(stderr);
+        enter_tip_hold(tip);
+        finalize_tip_hold();
     }
     g_ownership_chain = 0;
     g_ownership_chain_frontier = 0;
@@ -2951,7 +2972,9 @@ static void ownership_on_post_match(uint32_t tip)
 
     /* Contiguous frontier from the tick after the verified tip. */
     frontier = psx_netplay_rb_confirmed_frontier(tip + 1u);
-    if (frontier > tip) {
+    /* §48: a single confirmed tick ahead is Live work — chaining SPAN for
+     * frontier=tip+1 dual-initiated every Verify and thrashed menus. */
+    if (frontier > tip + 1u) {
         ownership_chain_next_span(tip, frontier);
         return;
     }
@@ -3893,6 +3916,16 @@ int psx_netplay_rb_take_promote_sweep(void)
     int v = g_promote_sweep;
     g_promote_sweep = 0;
     return v;
+}
+
+int psx_netplay_rb_fmv_unlock_grace_active(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    /* RELEASE arms dense_until = sim+UNLOCK_GRACE; invent is already on
+     * after settle, so this window is reconcile-only (soft-promote). */
+    return g_fmv_lockstep_released && g_fmv_lockstep_until > 0u &&
+           sim < g_fmv_lockstep_until;
 }
 
 int psx_netplay_rb_tip_extend(uint32_t mismatch_tick, int slot)

@@ -1240,10 +1240,55 @@ static void decode_pad(const RNetInputSample *in, PsxNetPad *pad)
     psx_netplay_normalize_pad(pad);
 }
 
+/* PSX digital Start = bit 3 (active-low). Rising press: bit goes 1→0. */
+#define NP_PAD_BTN_START 0x0008u
+
+static int np_pad_log_enabled(void)
+{
+    static int s_on = -1;
+    if (s_on < 0) {
+        const char *e = getenv("PSX_RB_PAD_LOG");
+        s_on = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+        if (s_on)
+            fprintf(stderr,
+                    "psxrecomp: rb pad-log ON (PSX_RB_PAD_LOG=1 — local edges + "
+                    "SIO apply; Start = bit3 → buttons=fff7)\n");
+    }
+    return s_on;
+}
+
+static void np_pad_log_edge(const char *tag, int slot, uint32_t sim, uint16_t prev,
+                            uint16_t cur)
+{
+    uint16_t press;
+    uint16_t release;
+    if (prev == cur)
+        return;
+    press = (uint16_t)((uint16_t)(~cur) & prev);
+    release = (uint16_t)((uint16_t)(~prev) & cur);
+    fprintf(stderr,
+            "psxrecomp: rb pad-edge %s slot=%d sim=%u buttons=%04x→%04x "
+            "press=%04x release=%04x%s%s\n",
+            tag ? tag : "?", slot, (unsigned)sim, (unsigned)prev, (unsigned)cur,
+            (unsigned)press, (unsigned)release,
+            (press & NP_PAD_BTN_START) ? " START↓" : "",
+            (release & NP_PAD_BTN_START) ? " START↑" : "");
+    fflush(stderr);
+}
+
 static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
     if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
     const int on_tap = sio_pad_on_multitap(slot);
+    if (np_pad_log_enabled()) {
+        static uint16_t s_sio_prev[PSX_MAX_PLAYERS];
+        static uint8_t s_sio_have[PSX_MAX_PLAYERS];
+        uint16_t prev = s_sio_have[slot] ? s_sio_prev[slot] : 0xFFFFu;
+        uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+        np_pad_log_edge("sio", slot, sim, prev, pad->buttons);
+        s_sio_prev[slot] = pad->buttons;
+        s_sio_have[slot] = 1u;
+    }
     sio_set_pad_connected(slot, 1);
     sio_set_pad_config_capable(slot, on_tap ? 0 : 1);
     sio_set_pad_state_slot(slot, pad->buttons);
@@ -1717,6 +1762,24 @@ static void np_rollback_reconcile_wire(void)
                     n_soft_release++;
                     continue;
                 }
+                /* §48: post-FMV UNLOCK_GRACE — invent is on (§26) but sticky
+                 * hold-last D-pad vs wire release must not open tip episodes
+                 * into the title/menu (soak: pub=ffef wire=ffff @902). */
+                if (published.is_predicted &&
+                    np_digital_release_only(&pub_c, &wire_c) &&
+                    psx_netplay_rb_fmv_unlock_grace_active()) {
+                    (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
+                    np_scrub_ahead_predicted(slot, t, &wire_frame);
+                    if (n_soft_release == 0) {
+                        first_no_resim_t = t;
+                        first_no_resim_slot = slot;
+                        first_pub_btn = pub_c.buttons;
+                        first_wire_btn = wire_c.buttons;
+                        no_resim_why = "unlock-grace-release";
+                    }
+                    n_soft_release++;
+                    continue;
+                }
                 /* FMV: non-press pad noise → promote only (avoid CD thrash). */
                 if (fmv_defer && !np_digital_new_press(&pub_c, &wire_c)) {
                     (void)netplay_ih_promote(&g_np.ih, slot, &wire_frame);
@@ -1814,10 +1877,12 @@ static void np_rollback_reconcile_wire(void)
             if (n_soft_release) {
                 fprintf(stderr,
                         "psxrecomp: rb wire soft-promote release-only sim=%u n=%u "
-                        "first_t=%u slot=%d pub=%04x wire=%04x\n",
+                        "first_t=%u slot=%d pub=%04x wire=%04x%s%s\n",
                         (unsigned)sim, n_soft_release,
                         (unsigned)first_no_resim_t, first_no_resim_slot,
-                        (unsigned)first_pub_btn, (unsigned)first_wire_btn);
+                        (unsigned)first_pub_btn, (unsigned)first_wire_btn,
+                        no_resim_why ? " reason=" : "",
+                        no_resim_why ? no_resim_why : "");
             }
             if (n_episode_open || n_begin_refused) {
                 fprintf(stderr,
@@ -1976,6 +2041,16 @@ static int np_try_admit_rollback(void)
             (void)invent_reason;
             any_invent = 1;
             (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
+            if (np_pad_log_enabled() && row.is_valid) {
+                static uint16_t s_inv_prev[PSX_MAX_PLAYERS];
+                static uint8_t s_inv_have[PSX_MAX_PLAYERS];
+                uint16_t prev = s_inv_have[slot] ? s_inv_prev[slot] : 0xFFFFu;
+                if (slot >= 0 && slot < PSX_MAX_PLAYERS) {
+                    np_pad_log_edge("invent", slot, sim, prev, row.buttons);
+                    s_inv_prev[slot] = row.buttons;
+                    s_inv_have[slot] = 1u;
+                }
+            }
         }
     }
 
@@ -2078,6 +2153,14 @@ void psx_netplay_stage_local(const PsxNetPad *pad)
         g_np.staged = *pad;
         psx_netplay_normalize_pad(&g_np.staged);
         np_digital_debounce_staged();
+        if (np_pad_log_enabled()) {
+            static uint16_t s_local_prev = 0xFFFFu;
+            static int s_local_have;
+            uint16_t prev = s_local_have ? s_local_prev : 0xFFFFu;
+            np_pad_log_edge("local", g_np.local_slot, t, prev, g_np.staged.buttons);
+            s_local_prev = g_np.staged.buttons;
+            s_local_have = 1;
+        }
         g_np.staged_valid = 1;
         g_np.latched_for_tick = 1;
         g_np.latched_sim_tick = t;
