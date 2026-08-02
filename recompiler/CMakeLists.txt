@@ -697,6 +697,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
+                jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration
