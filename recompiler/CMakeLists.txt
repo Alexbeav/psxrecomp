@@ -400,6 +400,7 @@ if(BUILD_TESTING)
         #       built; not a source-only guard
         foreach(_t IN ITEMS
                 capture_history
+                cdrom_seek_retarget
                 default_renderer_guards
                 fmv_quiet_guards
                 fps_telemetry_opt_in

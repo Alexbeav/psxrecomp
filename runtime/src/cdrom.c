@@ -1951,9 +1951,18 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        /* A seek is a drive-state change, not a side operation alongside an
+         * existing ReadN/ReadS stream.  Leaving `reading` armed lets the old
+         * stream continue to produce sectors throughout the seek; software
+         * which waits for SeekL completion and observes the READ status then
+         * has no reason to issue a new Read command, so the SetLoc target is
+         * never consumed.  Cancel the old stream and its pending INT1 before
+         * acknowledging SEEK, just as Pause/Stop and the ClearAIP contract do. */
+        stop_read_stream();
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
         stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
