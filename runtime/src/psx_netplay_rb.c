@@ -61,6 +61,13 @@ int psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core,
 int psx_netplay_rb_load_pending(void) { return 0; }
 int psx_netplay_rb_try_admit(void) { return 0; }
 void psx_netplay_rb_finish_frame(void) {}
+uint32_t psx_netplay_rb_confirmed_frontier(uint32_t from_tick)
+{
+    (void)from_tick;
+    return 0;
+}
+uint32_t psx_netplay_rb_confirmed_remaining(void) { return 0; }
+void psx_netplay_rb_ownership_step(void) {}
 void psx_netplay_rb_cpu_for_present_digest(struct CPUState *out,
                                            const struct CPUState *in)
 {
@@ -74,6 +81,7 @@ uint64_t psx_netplay_rb_take_replay_ticks(void) { return 0; }
 int psx_netplay_rb_phase(void) { return 0; }
 uint32_t psx_netplay_rb_snap_count(void) { return 0; }
 uint32_t psx_netplay_rb_sticky_bb_pc(void) { return 0; }
+uint32_t psx_netplay_rb_rtt_estimate_ms(void) { return 0; }
 #else
 
 #include "netplay_hash_confirm.h"
@@ -416,6 +424,13 @@ static void enter_verify_at_tip(uint32_t done);
 static void finalize_tip_hold(void);
 static void poll_tip_hold_finalize(void);
 static void clear_tip_extend_prime(void);
+static void ownership_on_post_match(uint32_t tip);
+static void ownership_chain_next_span(uint32_t tip, uint32_t frontier);
+static int seat_tick_confirmed(int slot, uint32_t tick);
+
+/* §47: begin_rewind is an ownership SPAN chain (skip cooldown; force target). */
+static int g_ownership_chain;
+static uint32_t g_ownership_chain_frontier;
 
 static int rb_fmv_media_active(void)
 {
@@ -1339,6 +1354,69 @@ static int host_promote_from_session(int slot, uint32_t tick, RNetRbFrame *out)
     if (out)
         *out = frame;
     return 1;
+}
+
+/* §47: confirmed = delay-ring auth or hist with !is_predicted. Invent-idle
+ * and hold-last predicted rows do not advance the contiguous frontier. */
+static int seat_tick_confirmed(int slot, uint32_t tick)
+{
+    RNetRbFrame row;
+    if (slot < 0 || !g_b.ih)
+        return 0;
+    if (host_promote_from_session(slot, tick, &row))
+        return 1;
+    if (!netplay_ih_get(g_b.ih, slot, tick, &row) || !row.is_valid)
+        return 0;
+    return row.is_predicted ? 0 : 1;
+}
+
+uint32_t psx_netplay_rb_confirmed_frontier(uint32_t from_tick)
+{
+    uint32_t t;
+    uint32_t last;
+    uint32_t walk;
+    int slots;
+    int slot;
+
+    if (!g_b.ih)
+        return (from_tick > 0u) ? (from_tick - 1u) : 0u;
+    slots = g_b.slot_count ? *g_b.slot_count : 0;
+    if (slots < 1)
+        slots = 2;
+    /* from incomplete → frontier = from-1 (no further confirmed sim). */
+    last = (from_tick > 0u) ? (from_tick - 1u) : 0u;
+    /* Bound walk to hist/ring depth so a missing tip cannot spin forever. */
+    for (walk = 0u, t = from_tick; walk < NETPLAY_INPUT_HIST_DEPTH; ++walk, ++t) {
+        int ok = 1;
+        for (slot = 0; slot < slots; ++slot) {
+            if (!seat_tick_confirmed(slot, t)) {
+                ok = 0;
+                break;
+            }
+        }
+        if (!ok)
+            break;
+        last = t;
+        if (t == 0xffffffffu)
+            break;
+    }
+    return last;
+}
+
+uint32_t psx_netplay_rb_confirmed_remaining(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim;
+    uint32_t frontier;
+    if (!s || !g_rb)
+        return 0;
+    if (!rnet_rb_is_resimulating(g_rb) && !rnet_rb_is_active(g_rb))
+        return 0;
+    sim = rnet_session_sim_tick(s);
+    if (sim == 0xffffffffu)
+        return 0;
+    frontier = psx_netplay_rb_confirmed_frontier(sim + 1u);
+    return (frontier > sim) ? (frontier - sim) : 0u;
 }
 
 static void host_prefresh_seal_range(int slot, uint32_t lo, uint32_t hi)
@@ -2512,7 +2590,7 @@ static void enter_verify_at_tip(uint32_t done)
     fflush(stderr);
     if (g_peer_post_ok) {
         if (g_peer_post_digest == g_post_digest && g_peer_post_av == g_post_av)
-            enter_tip_hold(rnet_rb_get_target_tick(g_rb));
+            ownership_on_post_match(rnet_rb_get_target_tick(g_rb));
         else {
             char why[128];
             if (g_peer_post_digest != g_post_digest)
@@ -2799,6 +2877,152 @@ static int tip_hold_wire_pending_release(uint32_t tip)
         }
     }
     return 0;
+}
+
+/* §47: after chunk/final Verify POST match — stay in Replay ownership while
+ * contiguous confirmed work remains; otherwise Final Verify → Live. */
+static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
+{
+    int slot;
+    int local;
+    uint32_t mismatch;
+
+    if (!g_rb)
+        return;
+    local = g_b.local_slot ? *g_b.local_slot : 0;
+    slot = (local == 0) ? 1 : 0;
+    if (g_b.slot_count && *g_b.slot_count < 2)
+        slot = local;
+
+    /* Commit tip agreement without TipHold invent-cap (Verify barrier only). */
+    g_episode_count++;
+    g_agreed_through = tip;
+    g_agreed_span_lo = tip;
+    g_agreed_valid = 1;
+    if (g_b.hc)
+        netplay_hc_prime_after(g_b.hc, tip);
+    advertise_agreed_resolved(tip);
+    g_last_commit_epoch = rnet_rb_get_epoch_id(g_rb);
+    send_commit_notice(g_last_commit_epoch, tip);
+
+    rnet_rb_session_reset(g_rb);
+    g_tip_hold_until = 0;
+    g_tip_hold_quiet_t0_ms = 0ull;
+    g_tip_hold_block_quiet = 0;
+    g_tip_hold_enter_ms = 0ull;
+    g_tip_hold_coalesce_n = 0u;
+    g_tip_extend_rereplay = 0;
+    g_tip_extend_from_tick = 0;
+    clear_tip_extend_prime();
+    g_needs_advance = 0;
+    g_episode_snap_applied = 0;
+    g_pending_resume_valid = 0;
+    g_episode_baseline_matched = 0;
+    clear_episode_wire_state();
+    clear_baseline_pin();
+    clear_post_handshake();
+    g_bl_mismatch_streak = 0;
+    g_fork_streak = 0u;
+    g_fork_streak_tick = 0u;
+
+    mismatch = tip + 1u;
+    if (mismatch > frontier)
+        mismatch = frontier;
+    g_ownership_chain_frontier = frontier;
+    g_ownership_chain = 1;
+    fprintf(stderr,
+            "psxrecomp: rb ownership chain tip=%u frontier=%u mismatch=%u "
+            "(Replay owns catch-up — no TipHold)\n",
+            (unsigned)tip, (unsigned)frontier, (unsigned)mismatch);
+    fflush(stderr);
+    if (!psx_netplay_rb_begin_rewind(mismatch, slot)) {
+        fprintf(stderr,
+                "psxrecomp: rb ownership chain FAILED tip=%u frontier=%u — Live\n",
+                (unsigned)tip, (unsigned)frontier);
+        fflush(stderr);
+    }
+    g_ownership_chain = 0;
+    g_ownership_chain_frontier = 0;
+}
+
+static void ownership_on_post_match(uint32_t tip)
+{
+    uint32_t frontier;
+
+    /* Contiguous frontier from the tick after the verified tip. */
+    frontier = psx_netplay_rb_confirmed_frontier(tip + 1u);
+    if (frontier > tip) {
+        ownership_chain_next_span(tip, frontier);
+        return;
+    }
+    /* Exhausted contiguous confirmed work → Live (immediate tip-hold commit). */
+    fprintf(stderr,
+            "psxrecomp: rb ownership final tip=%u frontier=%u → Live\n",
+            (unsigned)tip, (unsigned)frontier);
+    fflush(stderr);
+    enter_tip_hold(tip);
+    finalize_tip_hold();
+}
+
+void psx_netplay_rb_ownership_step(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim;
+    uint32_t target;
+    uint32_t frontier;
+    uint32_t want;
+    uint32_t seal_base;
+    uint32_t chunk_cap;
+    int slot;
+    int local;
+
+    if (!g_rb || !s || !rnet_rb_is_active(g_rb))
+        return;
+    if (rnet_rb_get_phase(g_rb) != nRNetRbPhaseReplay)
+        return;
+
+    sim = rnet_session_sim_tick(s);
+    target = rnet_rb_get_target_tick(g_rb);
+    frontier = psx_netplay_rb_confirmed_frontier(sim + 1u);
+
+    /* Exhausted relative to cursor — finish_frame will Verify at tip. */
+    if (frontier <= sim)
+        return;
+    /* More confirmed work than sealed tip — extend within SPAN chunk. */
+    if (frontier <= target)
+        return;
+
+    seal_base = rnet_rb_get_seal_base_tick(g_rb);
+    chunk_cap = seal_base + RB_MAX_RESIM_SPAN - 1u;
+    want = frontier;
+    if (want > chunk_cap)
+        want = chunk_cap;
+    if (want <= target)
+        return; /* span full for this chunk — Verify then chain on POST match */
+
+    local = g_b.local_slot ? *g_b.local_slot : 0;
+    slot = (local == 0) ? 1 : 0;
+    if (g_b.slot_count && *g_b.slot_count < 2)
+        slot = local;
+
+    host_prefresh_seal_range(slot, target + 1u, want);
+    if (local >= 0 && local != slot)
+        host_prefresh_seal_range(local, target + 1u, want);
+
+    if (!rnet_rb_can_extend_target(g_rb, want)) {
+        fprintf(stderr,
+                "psxrecomp: rb ownership extend blocked sim=%u target=%u "
+                "want=%u frontier=%u (chunk Verify will chain)\n",
+                (unsigned)sim, (unsigned)target, (unsigned)want,
+                (unsigned)frontier);
+        fflush(stderr);
+        return;
+    }
+    fprintf(stderr,
+            "psxrecomp: rb ownership extend sim=%u target %u→%u frontier=%u\n",
+            (unsigned)sim, (unsigned)target, (unsigned)want, (unsigned)frontier);
+    fflush(stderr);
+    (void)psx_netplay_rb_tip_extend(want, slot);
 }
 
 static void enter_tip_hold(uint32_t target)
@@ -3893,7 +4117,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
      * until is armed from live sim at failure (not rewound tip) so catch-up
      * cannot burn the window before the next d-pad edge. Clean commit does
      * not arm this. */
-    if (sim < g_rewind_cooldown_until) {
+    if (sim < g_rewind_cooldown_until && !g_ownership_chain) {
         static uint32_t s_cd_log_sim;
         if (s_cd_log_sim != sim) {
             fprintf(stderr,
@@ -3979,15 +4203,19 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     target = rnet_rb_suggest_target(g_rb, mismatch_tick, sim);
     if (target < load)
         target = load;
+    /* §47 ownership chain: aim at contiguous frontier, still SPAN-chunked. */
+    if (g_ownership_chain && g_ownership_chain_frontier > target)
+        target = g_ownership_chain_frontier;
     /* Chunk deep catch-up (post-abort agreed tip << live) so Replay never
      * walks the whole cooldown window in one episode. */
     if (target > load + RB_MAX_RESIM_SPAN) {
         fprintf(stderr,
                 "psxrecomp: rb begin SPAN CAP mismatch=%u load=%u "
-                "target %u→%u (max_span=%u)\n",
+                "target %u→%u (max_span=%u)%s\n",
                 (unsigned)mismatch_tick, (unsigned)load, (unsigned)target,
                 (unsigned)(load + RB_MAX_RESIM_SPAN),
-                (unsigned)RB_MAX_RESIM_SPAN);
+                (unsigned)RB_MAX_RESIM_SPAN,
+                g_ownership_chain ? " ownership-chain" : "");
         fflush(stderr);
         target = load + RB_MAX_RESIM_SPAN;
     }
@@ -4576,7 +4804,7 @@ void psx_netplay_rb_pump(void)
                 }
             }
             if (dig_m == g_post_digest && in_dig == g_post_av)
-                enter_tip_hold(tip);
+                ownership_on_post_match(tip);
             else {
                 char why[128];
                 if (dig_m != g_post_digest)
@@ -4901,7 +5129,10 @@ void psx_netplay_rb_finish_frame(void)
     rnet_session_advance(s);
     g_needs_advance = 0;
 
-    /* Host may have tip-extended (via reconcile before this call) — if the
+    /* §47: deepen sealed tip from contiguous confirmed frontier before POST. */
+    psx_netplay_rb_ownership_step();
+
+    /* Host may have tip-extended (via reconcile / ownership) — if the
      * tip grew past done, keep Replay instead of POST. */
     target_before = rnet_rb_get_target_tick(g_rb);
     if (done >= target_before)

@@ -1834,6 +1834,27 @@ static void np_rollback_reconcile_wire(void)
 }
 
 
+/* §47: Replay participates in the protocol like Live — produce local tip
+ * from the live physical pad while consuming remote confirmed rows. */
+static void np_rb_produce_local_tip_for_sim(rnet_u32 sim)
+{
+    if (!g_np.session || !psx_netplay_active())
+        return;
+    if (!rnet_session_is_running(g_np.session))
+        return;
+    if (sim != rnet_session_sim_tick(g_np.session))
+        return;
+    if (g_np.live_valid) {
+        g_np.staged = g_np.live;
+        psx_netplay_normalize_pad(&g_np.staged);
+        g_np.staged_valid = 1;
+    }
+    g_np.latched_for_tick = 0;
+    (void)rnet_session_prepare_local_tip(g_np.session, sim);
+    g_np.latched_for_tick = 1;
+    g_np.latched_sim_tick = (uint32_t)sim;
+}
+
 /* Rollback admit: tip + invent remotes within P of remote tip; stall outside.
  * BattleShip phase_lock: invent only when wire_need <= highest_remote + P. */
 static int np_try_admit_rollback(void)
@@ -3198,8 +3219,13 @@ int psx_netplay_poll_admit(void)
         if (psx_netplay_rb_tip_holding() && !psx_netplay_rb_load_pending()) {
             /* TipHold: Live invent continues; episode stays open for tip-extend. */
         } else {
+            int admit;
             g_np.needs_advance = 0;
-            return psx_netplay_rb_try_admit();
+            admit = psx_netplay_rb_try_admit();
+            /* §47: each Replay admit produces local tip like Live. */
+            if (admit)
+                np_rb_produce_local_tip_for_sim(rnet_session_sim_tick(g_np.session));
+            return admit;
         }
     }
 
@@ -3331,7 +3357,10 @@ void psx_netplay_finish_frame(void)
          * wire into the active episode (tip-extend) before POST/Verify. */
         rnet_session_pump(g_np.session);
         np_rollback_reconcile_wire();
+        /* §47: refill local tip while Replay consumes confirmed remotes. */
+        np_rb_produce_local_tip_for_sim(done);
         psx_netplay_rb_pump();
+        psx_netplay_rb_ownership_step();
         psx_netplay_rb_finish_frame();
         /* Exchange cores during Replay so mid-resim forks abort before POST. */
         np_emit_frame_commit(done);

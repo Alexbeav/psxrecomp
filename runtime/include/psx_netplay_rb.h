@@ -133,6 +133,19 @@ int  psx_netplay_rb_try_admit(void);
 /* After guest frame during resim: advance episode clock; may commit. */
 void psx_netplay_rb_finish_frame(void);
 
+/* §47: greatest contiguous confirmed tick T such that every seat has a
+ * confirmed (non-predicted) row for every tick from `from_tick` through T.
+ * If `from_tick` itself is incomplete, returns from_tick-1 (or 0).
+ * Pass from_tick = replay_sim + 1. */
+uint32_t psx_netplay_rb_confirmed_frontier(uint32_t from_tick);
+
+/* Contiguous confirmed ticks still ahead of current sim (0 = exhausted). */
+uint32_t psx_netplay_rb_confirmed_remaining(void);
+
+/* §47 ownership step: tip-extend toward contiguous frontier while Replay
+ * owns progress. Call after reconcile during resim (before finish_frame). */
+void psx_netplay_rb_ownership_step(void);
+
 /* Present-edge digest prep: copy `in` → `out` and clear PC. At vblank
  * finish_frame the host often parks cpu->pc=0 while a peer may still hold a
  * live BB PC; sticky substitutes were host-local and forked dig_cpu with

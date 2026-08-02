@@ -3732,8 +3732,8 @@ static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
  * the sim at the wrong speed. */
 static double g_frame_period_ms = PSX_FRAME_PERIOD_MS;
 
-/* §33/§35: re-present last Live frame on a wall-clock cadence while guest
- * sim is frozen (resim) or TipHold invent-cap stall (admit spin). */
+/* §33/§35/§47: re-present last Live frame on a wall-clock cadence while guest
+ * sim is frozen (short resim) or TipHold invent-cap stall (admit spin). */
 static void netplay_hold_last_present_tick(void) {
     static uint64_t s_hold_last_ms;
     uint64_t now = SDL_GetTicks64();
@@ -3765,6 +3765,38 @@ static void netplay_hold_last_present_tick(void) {
         netplay_note_present();
         s_hold_last_ms = now ? now : 1ull;
     }
+}
+
+/* §47: long Replay catch-up — wall-clock gate for a real VRAM present.
+ * Returns 1 if this guest vblank should fall through to a live present. */
+static int netplay_replay_catchup_should_live_present(uint32_t remaining) {
+    static uint64_t s_catchup_present_ms;
+    uint64_t now = SDL_GetTicks64();
+    uint32_t period = (uint32_t)(g_frame_period_ms + 0.5);
+    if (period < 8u)
+        period = 8u;
+    if (period > 33u)
+        period = 33u;
+    if (remaining <= 8u)
+        return 0;
+    if (s_catchup_present_ms != 0ull && now >= s_catchup_present_ms &&
+        (uint32_t)(now - s_catchup_present_ms) < period)
+        return 0;
+    s_catchup_present_ms = now ? now : 1ull;
+    {
+        static uint32_t s_log_sim;
+        uint32_t sim = psx_netplay_sim_tick();
+        if (s_log_sim != sim) {
+            fprintf(stderr,
+                    "psxrecomp: rb catchup frontier_rem=%u sim=%u target=%u "
+                    "present=live\n",
+                    (unsigned)remaining, (unsigned)sim,
+                    (unsigned)psx_netplay_rb_episode_target());
+            fflush(stderr);
+            s_log_sim = sim;
+        }
+    }
+    return 1;
 }
 
 /* ── Host-stack-usage profile (RECURSION_BUG.md §17) ──────────────────────────
@@ -4489,14 +4521,17 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
     }
 
-    /* Rollback resim / TipHold stall (§33/§35): presentation is host-only.
-     * Resim skips Swap; TipHold invent-cap stalls admit (no guest vblank) —
-     * both starved present_gap. Hold-last on wall-clock cadence. TipHold
-     * also presents from the admit spin (no vblank while stalled).
-     * Suspend GL interp so it cannot fight hold-last SwapWindow. */
+    /* Rollback resim (§33/§47): short catch-up keeps hold-last; long catch-up
+     * periodically presents live Replay VRAM so the display shows progress
+     * while sim stays uncapped. TipHold invent-cap stall uses hold-last from
+     * the admit spin (no guest vblank). */
     if (psx_netplay_is_resimulating()) {
-        netplay_hold_last_present_tick();
-        return ep;
+        uint32_t rem = psx_netplay_rb_confirmed_remaining();
+        if (!netplay_replay_catchup_should_live_present(rem)) {
+            netplay_hold_last_present_tick();
+            return ep;
+        }
+        /* Fall through to real VRAM present (wall-clock gated above). */
     }
 
     /* ---- Display from our VRAM ---- */

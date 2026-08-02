@@ -206,8 +206,16 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       Begin **SPAN CAP=24**: deep post-abort catch-up is chunked (commit →
       next episode) instead of one Replay across the whole cooldown
       (soak depths 63→128 felt like "pushing further back").
+      **§47:** SPAN chunks stay under Replay ownership — Verify is a digest
+      barrier between chunks; TipHold is not part of confirmed catch-up.
       Reconcile promotes wire for the whole abort window (`promote-no-resim`).
       Clean commit does **not** arm cooldown.
+- [x] **§47 Replay ownership contract** (contiguous confirmed frontier):
+      Replay owns forward progress until no further contiguous confirmed
+      simulation is possible; must never wait on already-confirmed inputs.
+      Local tip production continues during Replay (protocol peer).
+      POST match → chain next SPAN or Final Verify→Live (no TipHold invent-cap
+      mid catch-up). Long catch-up periodically presents live Replay VRAM.
 - [x] **Present only at MotK wait CDA0:** netplay `gpu_vblank_flush_present`
       skips while resume/check PC is `0x8006CD54` (leave pending until
       `0x8006CDA0`) so sealed idle resim cannot digest opposite ping-pong
@@ -2690,3 +2698,69 @@ no resim)`.
 **Re-soak watch:** loading-screen / ignored-pad clicks should log
 `hc-silent-promote` with `episode_open=0`; menu/fight presses that change
 state still `rewind-request`. No new baseline forks from silent promote.
+
+## 47. Replay ownership — contiguous confirmed catch-up (2026-08-02)
+
+**One-sentence scheduler invariant:**
+
+> **Replay owns the simulation until it has exhausted every contiguous confirmed tick; only then does control return to Live, and TipHold is entered only when the next tick cannot yet be confirmed.**
+
+Expanded:
+
+- **Replay owns forward progress until no further confirmed simulation is possible.**
+- **Replay must never wait for information that is already confirmed.**
+- **Replay participates in the protocol exactly like Live** — produces local confirmed tip rows while consuming remote confirmed rows (not an isolated repair loop).
+
+### Roles (non-overlapping)
+
+| Phase | Responsibility |
+|-------|----------------|
+| **Live** | Predict only beyond the confirmed frontier |
+| **Replay** | Consume all contiguous confirmed work as fast as possible |
+| **Verify** | Digest/protocol sync between Replay SPAN chunks (barrier, not owner) |
+| **TipHold** | Wait only for genuinely unavailable inputs |
+
+Not: `Replay → Verify → TipHold → Replay` as ordinary catch-up.
+
+### Contiguous frontier
+
+```text
+from = replay_sim + 1
+
+confirmed_frontier = greatest contiguous tick T such that every seat has a
+                     confirmed (non-predicted) row for every tick from `from`
+                     through T. If `from` is incomplete → frontier = replay_sim.
+
+Example (replay_sim=99 → from=100):
+  100 ✓  101 ✓  102 missing  103 ✓  104 ✓  → frontier = 101 (not 104)
+```
+
+Helpers: `psx_netplay_rb_confirmed_frontier(from)`,
+`psx_netplay_rb_confirmed_remaining()`, `psx_netplay_rb_ownership_step()`.
+
+### Ownership loop
+
+While Replay is active (decision site: ownership_step + POST match):
+
+1. If `frontier > target` and within `RB_MAX_RESIM_SPAN` of seal_base → tip-extend.
+2. If chunk full but `frontier > tip` after Verify POST match → **chain** next
+   SPAN episode immediately (no TipHold invent-cap / quiet wall).
+3. If `frontier <= tip` after POST match → Final Verify → Live
+   (`enter_tip_hold` + immediate `finalize_tip_hold`).
+
+Verify remains the digest agreement point between chunks; Replay ownership
+continues across chunk boundaries until contiguous confirmed work is exhausted.
+
+### Tip refill + present cadence
+
+- Each Replay admit / resim `finish_frame` calls `prepare_local_tip` from the
+  live physical pad (`np_rb_produce_local_tip_for_sim`).
+- Sim stays uncapped (pacer skipped during resim).
+- Remaining contiguous span ≤ 8: §33 hold-last present.
+- Longer catch-up: wall-clock period presents **live** Replay VRAM
+  (`rb catchup … present=live`); otherwise skip present and keep draining.
+
+**Re-soak watch:** mispredict → continuous `rb arm`/`finish_frame` / 
+`ownership extend|chain` until frontier exhausted; no TipHold invent-cap mid
+confirmed catch-up; gap at T stops frontier at T−1; local tip advances during
+Replay; TipHold only when a remote row is actually missing.
