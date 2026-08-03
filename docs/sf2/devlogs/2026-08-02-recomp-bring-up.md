@@ -910,6 +910,31 @@ unconfigured merely because its legacy squash ratio remains identity.
 
 `python -m py_compile tools/sf2_mission1_route.py`, the direct mouse unit, the
 Release regeneration/link and the complete registered 48/48 suite pass.
-`git diff --check` passes. The ignored footprint is 7.719 GiB. Campaign culling,
+`git diff --check` passes. The ignored footprint is 7.721 GiB. Campaign culling,
 scope/NVG/fade/matte behavior and mouse feel across Missions 1--8 remain human
 acceptance gates; the frozen 4:3 launcher remains available for A/B.
+
+The objective audit after checkpoint `65e3c49` rejected treating the Mission 1
+renderer gate as campaign-wide proof. Existing rings establish wide versus 4:3
+ownership, but did not say whether an authored fade/filter rectangle actually
+covered the revealed margins. Generic cumulative `fullscreen_rect` checks and
+expanded counters were added to `gpu_state`; no SF2 address or effect identity
+is encoded.
+
+`sf2_disc1_validation_monitor.py` drains the bounded present rings at two-second
+intervals, detects sequence gaps, records only state/classification transitions
+and ten-second semantic samples, and finalizes exact executable/config/BIOS/
+settings and PAD-timeline identities after endpoint closure. It captures no
+pixels, guest payload, RAM/audio, movie data or overlay bodies and never writes
+guest state. The companion launcher creates blank isolated cards and records a
+natural Missions 1--8 run. A separate frozen-baseline A/B launcher copies card
+files out of a closed enhanced session into a new writable directory rather
+than sharing or modifying evidence.
+
+The focused monitor model verifies ring de-duplication, missed-sequence
+accounting, transition compression, GL target classification and PAD structure.
+An invisible OpenGL/dummy-audio smoke ran 483 frames, drained both rings,
+quit cleanly and finalized a structurally valid 483-sample timeline plus all
+four configuration hashes. All three PowerShell launchers parse, full pass-2
+regeneration/link succeeds, and the registered suite is 49/49. Human Disc 1
+acceptance remains open; see `../DISC1_VALIDATION.md`.

@@ -53,9 +53,17 @@ must not obstruct either follow-up.
 - Generic automatic cull discovery emits no SF2 site, including with the
   observed 240-line vertical signature. This remains an honest human edge-
   visibility gate, not a hardcoded address.
-- Framework tests pass 48/48 and the focused direct-mouse unit passes. The
+- Framework tests pass 49/49 and the focused direct-mouse unit passes. The
   enhanced build is ready for the user-controlled Missions 1--8 validation;
   compatibility remains isolated for A/B reproduction.
+- The Disc 1 launcher now records a payload-free semantic session: exact PAD
+  timeline identity, build/configuration hashes, bounded presentation and
+  application transitions, player/camera samples, and cumulative fullscreen-
+  rectangle expansions. A separate launcher clones its cards into new frozen-
+  baseline state for practical later-mission A/B without sharing writes.
+- The monitor's unit and invisible lifecycle smoke pass; the registered suite
+  is 49/49. Human Missions 1--8 visual/input acceptance remains required and
+  is not replaced by these counters.
 
 ## 2026-08-03 modernization pass 1
 

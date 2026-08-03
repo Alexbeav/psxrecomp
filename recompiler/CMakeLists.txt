@@ -432,6 +432,7 @@ if(BUILD_TESTING)
                 overlay_init_guard
                 pad_timeline_final_sample
                 sf2_mission1_route_schedule
+                sf2_disc1_validation_monitor
                 sdl3_main_single_include
                 vk_build_default
                 vk_color_self_barrier

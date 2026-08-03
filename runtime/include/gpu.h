@@ -370,8 +370,8 @@ int  psx_ws_is_backdrop_site(uint32_t pc);
 /* Live widescreen state for diagnostics (TCP gpu_state). All pointers
  * optional. last_tag_frame/cur_frame let the caller see game_mode freshness. */
 typedef struct {
-    int      configured;        /* ws_xnum != ws_xden */
-    int      active;            /* squash currently applied this frame */
+    int      configured;        /* any widescreen mode engaged */
+    int      active;            /* selected wide mode active this frame */
     int      game_mode;         /* tagged char/billboard prim within 2 frames */
     int      present_native_43; /* frame presents pillarboxed 4:3 (FMV/full-2D) */
     int      x_margin;          /* psx_ws_x_margin() right now */
@@ -392,6 +392,8 @@ typedef struct {
     uint32_t auto_ui_ot_rank;    /* highest populated UI rank in current list */
     uint64_t auto_ui_candidates;
     uint64_t auto_ui_transforms;
+    uint64_t fullscreen_rect_checks;  /* native-wide rects classified */
+    uint64_t fullscreen_rect_expands; /* full-display rects widened */
     uint64_t aspect_cone_calls;
     uint64_t aspect_cone_43_identity;
     uint64_t aspect_cone_vanilla_keep;

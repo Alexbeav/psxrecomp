@@ -107,14 +107,28 @@ not enter committed configuration until their local checks pass.
   and still emits zero after adding the locally observed 240-line vertical
   signature. No address or width was guessed. Campaign edge visibility remains
   a human acceptance item, starting with Missions 1--8.
-- Framework validation passes 48/48, the focused mouse unit passes, generated
-  retail C remains ignored/unmodified, and the complete footprint is 7.719 GiB.
+- Framework validation passes 49/49, the focused mouse unit passes, generated
+  retail C remains ignored/unmodified, and the complete footprint is 7.721 GiB.
 
 ## Human Disc 1 acceptance focus
 
-Use `tools/start_sf2_modernized_pass2.ps1` for the enhanced build and
-`tools/start_sf2_baseline.ps1` for immediate 4:3 compatibility A/B. During the
-Missions 1--8 run, record the first reproducible issue in these categories:
+Use `tools/start_sf2_disc1_validation.ps1` for the recorded enhanced run and
+`tools/start_sf2_baseline.ps1` for a fresh 4:3 compatibility run. The separate
+`tools/start_sf2_baseline_ab.ps1` clones a completed enhanced session's retail
+cards into new baseline-only writable state for a later-mission A/B without
+modifying the evidence. Full instructions are in `DISC1_VALIDATION.md`.
+
+The bounded monitor drains the software/OpenGL present rings, records
+configuration hashes, application/widescreen transitions, low-rate
+player/camera samples and the exact final SIO PAD timeline. A new generic GPU
+counter distinguishes fullscreen rectangles merely checked during native-wide
+gameplay from those actually expanded across the reveal margins. It records no
+pixels, RAM/audio dumps or overlay payloads and never writes guest state. Its
+unit regression, PowerShell parsing, 49/49 framework suite and an invisible
+483-frame lifecycle/finalization smoke test pass.
+
+During the Missions 1--8 run, record the first reproducible issue in these
+categories:
 
 - actors or world geometry disappearing only near a 16:9 edge;
 - HUD, pause/map, scope/NVG, fade or cinematic matte stretching or failing to

@@ -4902,6 +4902,7 @@ static void handle_gpu_state(int id, const char *json)
              "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
              "\"auto_ui\":{\"configured\":%d,\"dense\":%d,\"ot_rank\":%u,"
              "\"candidates\":%llu,\"transforms\":%llu},"
+             "\"fullscreen_rect\":{\"checks\":%llu,\"expanded\":%llu},"
              "\"aspect_cone\":{\"calls\":%llu,\"identity_43\":%llu,"
              "\"vanilla_keep\":%llu,\"visible_keep\":%llu,"
              "\"guard_keep\":%llu,\"hysteresis_keep\":%llu,"
@@ -4931,6 +4932,8 @@ static void handle_gpu_state(int id, const char *json)
               ws.auto_ui_squash, ws.auto_ui_dense, ws.auto_ui_ot_rank,
               (unsigned long long)ws.auto_ui_candidates,
               (unsigned long long)ws.auto_ui_transforms,
+              (unsigned long long)ws.fullscreen_rect_checks,
+              (unsigned long long)ws.fullscreen_rect_expands,
               (unsigned long long)ws.aspect_cone_calls,
              (unsigned long long)ws.aspect_cone_43_identity,
              (unsigned long long)ws.aspect_cone_vanilla_keep,

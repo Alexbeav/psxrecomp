@@ -112,6 +112,8 @@ typedef struct { uint32_t key; uint32_t stamp; int32_t anchor_x; } WsTag;
 static WsTag    ws_tags[WS_TAG_BUCKETS];
 static uint32_t ws_last_tag_stamp = (uint32_t)-1000; /* frame of newest tag */
 static uint32_t ws_last_3d_stamp  = (uint32_t)-1000; /* frame of newest shaded prim (diagnostic) */
+static uint64_t ws_fullscreen_rect_checks;
+static uint64_t ws_fullscreen_rect_expands;
 extern uint64_t s_frame_count;               /* defined in debug_server.c */
 extern int      mdec_recently_active(uint32_t within_frames);  /* mdec.c */
 
@@ -1515,6 +1517,8 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
         ws_ui_prepass_rank != 0xFFFFu ? ws_ui_prepass_rank : UINT32_MAX;
     out->auto_ui_candidates = ws_auto_ui_candidate_count;
     out->auto_ui_transforms = ws_auto_ui_transform_count;
+    out->fullscreen_rect_checks = ws_fullscreen_rect_checks;
+    out->fullscreen_rect_expands = ws_fullscreen_rect_expands;
     out->aspect_cone_calls = ws_aspect_cone_calls;
     out->aspect_cone_43_identity = ws_aspect_cone_43_identity;
     out->aspect_cone_vanilla_keep = ws_aspect_cone_vanilla_keep;
@@ -1785,11 +1789,13 @@ static int32_t ws_disp_h(void) {
  * display; ordinary world-space rectangles remain untouched. */
 static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
     if (!ws_native_wide_active()) return;
+    ++ws_fullscreen_rect_checks;
     int W = (int)ws_disp_w(), H = (int)ws_disp_h();
     if (*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) {
         int off = ws_nw_offset();
         *x -= off;
         *w += 2 * off;
+        ++ws_fullscreen_rect_expands;
     }
 }
 
