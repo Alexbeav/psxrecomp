@@ -711,6 +711,8 @@ std::string make_unsupported_json_discovery(const PSXRecompV4::DiscoveryResult& 
 
 int run_boot_slice(const fs::path& bios_path, const fs::path& out_dir,
                    const std::optional<std::string>& cc_override) {
+    fs::create_directories(out_dir);
+
     // 1. Load + validate BIOS file.
     const auto rom = load_file_strict(bios_path, kBiosSize);
     const std::string sha = sha256_hex(rom);
@@ -779,6 +781,9 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
                   const std::string& declared_sha = {},
                   const std::vector<PSXRecompV4::BiosVectorTable>& bios_vectors = {},
                   const std::vector<PSXRecompV4::BiosAlias>& bios_aliases = {}) {
+    // Setup zips omit generated/; ensure the out_dir exists before emit.
+    fs::create_directories(out_dir);
+
     // 0. Activate the profile's address model — the single source of truth
     // for every relocation window discovery and the emitter use.
     PSXRecompV4::FullFunctionEmitter::set_address_model(&model);
@@ -877,6 +882,8 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
 int run_discover(const fs::path& bios_path, const fs::path& out_dir,
                  const fs::path& seed_path,
                  const PSXRecompV4::BiosAddressModel& model) {
+    fs::create_directories(out_dir);
+
     // 0. Activate the profile's address model (discovery follows J/JAL
     // targets through its relocation windows).
     PSXRecompV4::FunctionDiscovery::set_address_model(&model);

@@ -63,6 +63,7 @@ def ensure_toolchain_for_rebuild(
     *,
     from_zip: str = "",
     download: bool = True,
+    min_version: str = "",
 ) -> bool:
     """Ensure cmake is available via cache / download / offline zip."""
     try:
@@ -70,6 +71,7 @@ def ensure_toolchain_for_rebuild(
             project_root,
             from_zip=Path(from_zip) if from_zip else None,
             download=download and not from_zip,
+            min_version=min_version,
             log=progress.log,
         )
         return True
@@ -619,6 +621,34 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         progress.error(f"boot EXE missing after prepare: {boot_path}", code=EXIT_ERROR)
         return EXIT_ERROR
 
+    # psxrecomp-game reads [game].exe from game.toml only — it does not take
+    # the wizard/CLI disc directory. If prepare_disc.out_dir and game.exe
+    # disagree (legacy default out_dir=prepared_disc), stage the boot EXE
+    # to the path the emitter will open.
+    game_exe_rel = str(game.get("exe") or "").strip()
+    if game_exe_rel:
+        game_exe_path = Path(game_exe_rel).expanduser()
+        if not game_exe_path.is_absolute():
+            game_exe_path = project_root / game_exe_path
+        game_exe_path = game_exe_path.resolve()
+        try:
+            if game_exe_path != boot_path.resolve():
+                game_exe_path.parent.mkdir(parents=True, exist_ok=True)
+                if (not game_exe_path.is_file()) or (
+                    game_exe_path.stat().st_mtime_ns < boot_path.stat().st_mtime_ns
+                ):
+                    shutil.copy2(boot_path, game_exe_path)
+                    progress.log(
+                        f"Staged boot EXE for emitter: {game_exe_path}"
+                    )
+        except OSError as exc:
+            progress.error(
+                f"boot EXE ready at {boot_path} but cannot stage to "
+                f"game.exe path {game_exe_path}: {exc}",
+                code=EXIT_ERROR,
+            )
+            return EXIT_ERROR
+
     # ---- BIOS backends (local only; CI ships none) ----
     fw = ensure_framework(project_root, progress=progress)
     bios_arg = (getattr(args, "bios", None) or "").strip()
@@ -1141,7 +1171,7 @@ def cmd_pgo_train(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
 
 def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -> int:
-    """Resolve / download / unpack cmake-clang-v1 into project toolchain/ + cache."""
+    """Resolve / download / unpack cmake-clang-v1 into the shared RetComM cache."""
     project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root
@@ -1152,11 +1182,13 @@ def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -
     want_download = (not zip_arg) and not bool(getattr(args, "no_download", False))
     if getattr(args, "download", False):
         want_download = not zip_arg
+    min_version = (getattr(args, "min_version", None) or "").strip()
     try:
         bin_dir = _ensure_toolchain_pack(
             project_root,
             from_zip=Path(zip_arg) if zip_arg else None,
             download=want_download,
+            min_version=min_version,
             log=progress.log,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1291,6 +1323,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-download",
         action="store_true",
         help="only resolve env/cache/project toolchain/ (no network)",
+    )
+    e.add_argument(
+        "--min-version",
+        default="",
+        help="require retcomm-toolchain.json version >= this (semver)",
     )
     e.set_defaults(handler=cmd_ensure_toolchain)
 

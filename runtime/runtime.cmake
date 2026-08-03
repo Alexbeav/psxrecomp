@@ -197,6 +197,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
     ${PSXRECOMP_ROOT}/runtime/src/memcard.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_server.c
+    ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c
     ${PSXRECOMP_ROOT}/runtime/src/dirty_ram_interp.c
     ${PSXRECOMP_ROOT}/runtime/src/game_dispatch_compat.c
     ${PSXRECOMP_ROOT}/runtime/src/fntrace.c
@@ -287,10 +288,6 @@ if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
 endif()
 if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt")
     if(NOT TARGET recomp_net)
-        option(PSX_NET_ICE "Build recomp-net with ICE/libjuice for MotK online" ON)
-        if(PSX_NET_ICE)
-            set(RNET_ENABLE_ICE ON CACHE BOOL "Build libjuice ICE transport" FORCE)
-        endif()
         set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
@@ -1019,7 +1016,7 @@ function(psxrecomp_add_runtime_target target)
     if(WIN32 OR MINGW)
         # opengl32: GL backend (gpu_gl_renderer.c). GL 1.x is exported directly
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
-        target_link_libraries(${target} PRIVATE ws2_32 iphlpapi dbghelp comdlg32 opengl32)
+        target_link_libraries(${target} PRIVATE ws2_32 dbghelp comdlg32 opengl32)
     else()
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})

@@ -5,12 +5,15 @@ Framework tool — game identity comes from ``game.toml`` (``[game]`` + optional
 ``[prepare_disc]``) or CLI flags.
 
 Accepted inputs:
-  * Redump / raw MODE2/2352 ``.bin`` (+ ``.cue``)
+  * Redump / raw MODE2/2352 ``.bin`` (+ ``.cue``), including multi-track
+    Redump sets (data Track 01 + AUDIO tracks) — the full cue/bin set is
+    preserved so CDDA survives into ``out_dir``
   * Cooked 2048-byte/sector ``.iso`` (RomM-style libraries)
-  * 2448-byte/sector raw dumps (MotK-style): trim to 2352
+  * 2448-byte/sector raw dumps (legacy MotK ISO conversion): trim to 2352
 
-Writes working ``.bin`` + ``.cue``, extracts ``SYSTEM.CNF`` + boot EXE, and
-prints ``RESULT_CUE=<abs path>`` for the first-run wizard / RetComM.
+Writes working ``.bin`` + ``.cue`` (or copies a multi-track Redump set),
+extracts ``SYSTEM.CNF`` + boot EXE, and prints ``RESULT_CUE=<abs path>``
+for the first-run wizard / RetComM.
 
 ISO→2352 sets Mode2 Form1 sync/header/subheader/EDC (ECC zeroed — fine for
 software readers). Rebuilt images are not bit-identical to Redump.
@@ -21,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import shutil
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -248,19 +252,57 @@ def load_config(project_root: Path, config_path: Path | None, out_dir_cli: str |
     )
 
 
-def resolve_cue_bin(cue_path: Path) -> Path:
+def list_cue_bins(cue_path: Path) -> list[Path]:
+    """Return every BINARY FILE referenced by a cue, in order."""
     text = cue_path.read_text(encoding="utf-8", errors="replace")
-    m = re.search(r'FILE\s+"([^"]+)"\s+BINARY', text, re.I)
-    if not m:
-        m = re.search(r"FILE\s+(\S+)\s+BINARY", text, re.I)
-    if not m:
+    names = re.findall(r'FILE\s+"([^"]+)"\s+BINARY', text, flags=re.I)
+    if not names:
+        names = re.findall(r"FILE\s+(\S+)\s+BINARY", text, flags=re.I)
+    if not names:
         raise SystemExit(f"no BINARY FILE in cue: {cue_path}")
-    cand = Path(m.group(1))
-    if not cand.is_absolute():
-        cand = cue_path.parent / cand
-    if not cand.is_file():
-        raise SystemExit(f"cue references missing bin: {cand}")
-    return cand
+    out: list[Path] = []
+    for name in names:
+        cand = Path(name)
+        if not cand.is_absolute():
+            cand = cue_path.parent / cand
+        if not cand.is_file():
+            raise SystemExit(f"cue references missing bin: {cand}")
+        out.append(cand.resolve())
+    return out
+
+
+def resolve_cue_bin(cue_path: Path) -> Path:
+    """First BINARY file in the cue (data track for Redump multi-track sets)."""
+    return list_cue_bins(cue_path)[0]
+
+
+def stage_multitrack_cue(
+    cue_src: Path, bins: list[Path], out_dir: Path, cue_name: str
+) -> Path:
+    """Copy a multi-track Redump cue + all bin files into out_dir unchanged."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for bin_src in bins:
+        dest = out_dir / bin_src.name
+        if dest.resolve() == bin_src.resolve():
+            print(f"source already at {dest}")
+            continue
+        print(f"copying {bin_src.name} -> {dest}")
+        shutil.copy2(bin_src, dest)
+    cue_dest = out_dir / cue_name
+    if cue_dest.resolve() != cue_src.resolve():
+        # Rewrite FILE lines to basenames so the cue stays portable if the
+        # source used absolute/relative paths with directories.
+        text = cue_src.read_text(encoding="utf-8", errors="replace")
+        def _basename_file(m: re.Match[str]) -> str:
+            return f'FILE "{Path(m.group(1)).name}" BINARY'
+        text = re.sub(
+            r'FILE\s+"([^"]+)"\s+BINARY', _basename_file, text, flags=re.I
+        )
+        cue_dest.write_text(text, encoding="utf-8", newline="\n")
+        print(f"wrote {cue_dest}")
+    else:
+        print(f"source cue already at {cue_dest}")
+    return cue_dest.resolve()
 
 
 def detect_kind(path: Path, size: int) -> str:
@@ -489,6 +531,15 @@ def main() -> int:
 
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
+    cue_src: Path | None = None
+    cue_bins: list[Path] = []
+    if src.suffix.lower() == ".cue":
+        cue_src = src.resolve()
+        cue_bins = list_cue_bins(cue_src)
+        print(f"source cue: {cue_src} ({len(cue_bins)} BINARY file(s))")
+        src = cue_bins[0]
+        print(f"data track: {src.name}")
+
     src_md5, src_sha1, src_size = file_hashes(src)
     print(f"source: {src}")
     print(f"  size  {src_size}")
@@ -498,14 +549,6 @@ def main() -> int:
         print(f"  game  {cfg.serial} boot={cfg.boot_exe}")
 
     kind = detect_kind(src, src_size)
-    if kind == "cue":
-        src = resolve_cue_bin(src)
-        src_md5, src_sha1, src_size = file_hashes(src)
-        print(f"cue -> bin: {src}")
-        print(f"  size  {src_size}")
-        print(f"  md5   {src_md5}")
-        print(f"  sha1  {src_sha1}")
-        kind = detect_kind(src, src_size)
 
     known_hit = matches_known(cfg, src_size, src_md5, src_sha1)
     if cfg.known and not cfg.skip_hash_check:
@@ -525,6 +568,29 @@ def main() -> int:
             )
     elif not cfg.known and not cfg.skip_hash_check and kind == "bin2352":
         print("  no prepare_disc.known_* configured - verifying boot EXE only")
+
+    # Multi-track Redump: keep the cue + every track bin so CDDA works.
+    if cue_src is not None and len(cue_bins) > 1 and kind == "bin2352":
+        print(f"  preserving multi-track Redump set ({len(cue_bins)} files)")
+        bin_data = src.read_bytes()
+        entries, files = extract_via(read_user_bin, bin_data, cfg.boot_exe)
+        print(f"  root entries: {sorted(entries)[:24]}")
+        pc0 = struct.unpack_from("<I", files[cfg.boot_exe], 0x10)[0]
+        print(f"  {cfg.boot_exe} PC0={pc0:#010x} ({len(files[cfg.boot_exe])} bytes)")
+        for name, blob in files.items():
+            out_path = cfg.out_dir / name
+            out_path.write_bytes(blob)
+            print(f"wrote {out_path} ({len(blob)} bytes)")
+        cue_path = stage_multitrack_cue(
+            cue_src, cue_bins, cfg.out_dir, cfg.cue_name
+        )
+        out_md5, out_sha1, out_size = file_hashes(cfg.out_dir / src.name)
+        print("working data track:")
+        print(f"  size  {out_size}")
+        print(f"  md5   {out_md5}")
+        print(f"  sha1  {out_sha1}")
+        print(f"RESULT_CUE={cue_path}")
+        return 0
 
     if kind == "bin2352":
         bin_data = src.read_bytes()

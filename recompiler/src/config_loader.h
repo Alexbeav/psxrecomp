@@ -235,9 +235,11 @@ struct RuntimeConfig {
     bool                  overlay_capture_history = false;
 
     // overlay_capture_persist_dir: optional DEV-only, project-relative safe
-    // directory for one immutable JSON file per changed snapshot. Absolute
-    // paths and `..` components are rejected. Production normally leaves this
-    // unset and retains only the addendum beside the executable.
+    // directory for one immutable JSON file per changed snapshot. Rooted,
+    // UNC, drive-qualified and drive-relative paths are rejected, as is any
+    // `..` component or an embedded NUL, under both `/` and `\` separators.
+    // Production normally leaves this unset and retains only the addendum
+    // beside the executable.
     std::string           overlay_capture_persist_dir;
 
     // turbo_loads: OPT-IN per game. While the game is loading (CD data
@@ -292,6 +294,11 @@ struct RuntimeConfig {
     // for small timing-sensitive setup/task routines while the rest of the
     // overlay runs native.
     std::vector<uint32_t> overlay_native_block;
+
+    bool                  has_parappa_timing = false;
+    std::string           parappa_timing_mode = "stock";
+    int                   parappa_timing_extra_early = 0;
+    int                   parappa_timing_extra_late = 0;
 
     // ---- [video] block — visual enhancement options ----
     // supersampling: internal-resolution SSAA factor (per axis). 1 = native
@@ -1034,6 +1041,10 @@ struct UserSettings {
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
     bool has_language = false; std::string language = "en";
+
+    bool has_parappa_timing_mode = false; std::string parappa_timing_mode = "stock";
+    bool has_parappa_timing_extra_early = false; int parappa_timing_extra_early = 0;
+    bool has_parappa_timing_extra_late = false; int parappa_timing_extra_late = 0;
 };
 
 // GameOptions — the game's OWN native OPTION-screen settings, declared in a
