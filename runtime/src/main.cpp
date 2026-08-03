@@ -5162,7 +5162,14 @@ namespace {
                           "PlayStation BIOS required (SCPH1001.BIN).");
             return 1;
         }
-        std::ifstream f(bios_path, std::ios::binary | std::ios::ate);
+        /* Match runtime resolve: relative picks like bios/SCPH1001.BIN must not
+         * depend on process cwd (build/ vs project root). */
+        std::filesystem::path resolved =
+            resolve_bios_path(bios_path, g_lnch_argv0 ? g_lnch_argv0 : "");
+        const std::string open_path =
+            (!resolved.empty() ? resolved : std::filesystem::path(bios_path))
+                .string();
+        std::ifstream f(open_path, std::ios::binary | std::ios::ate);
         if (!f.is_open()) {
             std::snprintf(out->detail, sizeof(out->detail), "BIOS file not found.");
             return 1;
@@ -8702,6 +8709,30 @@ std::string player_device[PSX_MAX_PLAYERS];
                 seed.bios_path = bios_path;
                 seed.has_bios_path = true;
             }
+            /* Hydrate launcher BIOS from bios.cfg when settings.toml has none,
+             * and rewrite relative paths to absolute so reopen after generate
+             * does not depend on cwd. */
+            if (!seed.has_bios_path) {
+                std::filesystem::path cached =
+                    read_cached_path(argv[0], "bios.cfg");
+                if (!cached.empty()) {
+                    seed.bios_path = cached;
+                    seed.has_bios_path = true;
+                }
+            }
+            if (seed.has_bios_path) {
+                std::filesystem::path resolved =
+                    resolve_bios_path(seed.bios_path.string().c_str(), argv[0]);
+                std::error_code ec;
+                if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
+                    seed.bios_path = std::filesystem::weakly_canonical(resolved, ec);
+                    if (ec) seed.bios_path = std::filesystem::absolute(resolved, ec);
+                    seed.has_bios_path = true;
+                } else {
+                    seed.bios_path.clear();
+                    seed.has_bios_path = false;
+                }
+            }
             if (!resolved_disc.empty())    { seed.disc_path = resolved_disc; seed.has_disc_path = true; }
             seed.memcard_dir = memcard_dir;          seed.has_memcard_dir = true;
             seed.memcard1_enabled = memcard1_enabled; seed.has_memcard1_enabled = true;
@@ -8910,8 +8941,22 @@ std::string player_device[PSX_MAX_PLAYERS];
                 bool bios_ok = false;
                 RecompLauncherCBiosVerify bv{};
                 if (ls.bios_path[0]) {
-                    if (ae_bios_verify(ls.bios_path, &bv) && bv.ok) bios_ok = true;
-                    else ls.bios_path[0] = '\0';
+                    if (ae_bios_verify(ls.bios_path, &bv) && bv.ok) {
+                        bios_ok = true;
+                        /* Keep an absolute path in the model / settings writeback. */
+                        std::filesystem::path resolved =
+                            resolve_bios_path(ls.bios_path, argv[0]);
+                        std::error_code ec;
+                        if (!resolved.empty() &&
+                            std::filesystem::exists(resolved, ec)) {
+                            auto abs = std::filesystem::weakly_canonical(resolved, ec);
+                            if (ec) abs = std::filesystem::absolute(resolved, ec);
+                            std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
+                                          abs.string().c_str());
+                        }
+                    } else {
+                        ls.bios_path[0] = '\0';
+                    }
                 }
                 if (!bios_ok) {
                     if (ae_bios_verify("", &bv) && bv.ok) bios_ok = true;
@@ -9025,7 +9070,17 @@ std::string player_device[PSX_MAX_PLAYERS];
                 seed.auto_skip_fmv         = ls.auto_skip_fmv != 0;    seed.has_auto_skip_fmv         = true;
                 seed.turbo_loads           = ls.turbo_loads != 0;      seed.has_turbo_loads           = true;
                 if (ls.bios_path[0]) {
-                    seed.bios_path = ls.bios_path;
+                    std::filesystem::path resolved =
+                        resolve_bios_path(ls.bios_path, argv[0]);
+                    std::error_code ec;
+                    if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
+                        seed.bios_path =
+                            std::filesystem::weakly_canonical(resolved, ec);
+                        if (ec)
+                            seed.bios_path = std::filesystem::absolute(resolved, ec);
+                    } else {
+                        seed.bios_path = ls.bios_path;
+                    }
                     seed.has_bios_path = true;
                 } else {
                     seed.bios_path.clear();

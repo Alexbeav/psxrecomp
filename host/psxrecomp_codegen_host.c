@@ -54,6 +54,21 @@ static int path_is_file(const char* path) {
 #endif
 }
 
+static int path_is_absolute(const char* path) {
+    if (!path || !path[0]) return 0;
+#if defined(_WIN32)
+    if (path[0] == '/' || path[0] == '\\') return 1;
+    if (path[0] && path[1] == ':') return 1;
+    return 0;
+#else
+    return path[0] == '/';
+#endif
+}
+
+static int join_path(char* out, size_t cap, const char* a, const char* b);
+static int dirname_copy(char* out, size_t cap, const char* path);
+static int absolutize_existing_file(char* out, size_t cap, const char* path);
+
 static int path_is_dir(const char* path) {
 #if defined(_WIN32)
     DWORD attr = GetFileAttributesA(path);
@@ -242,6 +257,47 @@ static int dirname_copy(char* out, size_t cap, const char* path) {
     memcpy(out, path, n);
     out[n] = '\0';
     return 1;
+}
+
+/* Resolve an existing file to an absolute path. Tries the string as-is, then
+ * under g_project_root, then next to g_exe_path. Relative bios.cfg lines like
+ * "bios/SCPH1001.BIN" otherwise break after relaunch when cwd is build/. */
+static int absolutize_existing_file(char* out, size_t cap, const char* path) {
+    char cand[1100];
+    char absbuf[1100];
+    if (!out || cap < 2 || !path || !path[0]) return 0;
+    out[0] = '\0';
+
+    for (int pass = 0; pass < 3; ++pass) {
+        const char* candidate = NULL;
+        if (pass == 0) {
+            candidate = path;
+        } else if (pass == 1) {
+            if (path_is_absolute(path) || !g_project_root[0]) continue;
+            if (!join_path(cand, sizeof(cand), g_project_root, path)) continue;
+            candidate = cand;
+        } else {
+            char dir[1100];
+            if (path_is_absolute(path) || !g_exe_path[0]) continue;
+            if (!dirname_copy(dir, sizeof(dir), g_exe_path)) continue;
+            if (!join_path(cand, sizeof(cand), dir, path)) continue;
+            candidate = cand;
+        }
+        if (!candidate || !path_is_file(candidate)) continue;
+#if defined(_WIN32)
+        {
+            DWORD n = GetFullPathNameA(candidate, (DWORD)cap, out, NULL);
+            if (n > 0 && n < (DWORD)cap) return 1;
+        }
+#else
+        if (realpath(candidate, absbuf)) {
+            snprintf(out, cap, "%s", absbuf);
+            return 1;
+        }
+#endif
+        if ((size_t)snprintf(out, cap, "%s", candidate) < cap) return 1;
+    }
+    return 0;
 }
 
 static int resolve_cli_path(const char* root, char* out, size_t cap) {
@@ -795,23 +851,27 @@ static void write_sidecar_near_exe(const char* near_exe, const char* name,
 static int resolve_bios_arg(char* out, size_t cap) {
     char cand[1100];
     char line[1100];
-    if (g_wizard_bios[0] && path_is_file(g_wizard_bios)) {
-        snprintf(out, cap, "%s", g_wizard_bios);
+    char abs[1100];
+    if (g_wizard_bios[0] && absolutize_existing_file(abs, sizeof(abs),
+                                                     g_wizard_bios)) {
+        snprintf(out, cap, "%s", abs);
+        snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", abs);
         return 1;
     }
     if (join_path(cand, sizeof(cand), g_project_root, "bios.cfg") &&
-        read_line_file(cand, out, cap) && path_is_file(out))
+        read_line_file(cand, line, sizeof(line)) &&
+        absolutize_existing_file(out, cap, line))
         return 1;
     if (g_exe_path[0]) {
         char dir[1100];
         if (dirname_copy(dir, sizeof(dir), g_exe_path) &&
             join_path(cand, sizeof(cand), dir, "bios.cfg") &&
-            read_line_file(cand, line, sizeof(line)) && path_is_file(line)) {
-            snprintf(out, cap, "%s", line);
+            read_line_file(cand, line, sizeof(line)) &&
+            absolutize_existing_file(out, cap, line))
             return 1;
-        }
     }
-    if (read_line_file("bios.cfg", out, cap) && path_is_file(out))
+    if (read_line_file("bios.cfg", line, sizeof(line)) &&
+        absolutize_existing_file(out, cap, line))
         return 1;
     out[0] = '\0';
     return 0;
@@ -821,10 +881,12 @@ static int resolve_bios_arg(char* out, size_t cap) {
 static int host_persist_setup(void* ctx, const char* rom_path,
                               const char* bios_path) {
     char path[1200];
+    char abs_bios[1100];
     (void)ctx;
     if (bios_path) {
-        if (bios_path[0] && path_is_file(bios_path)) {
-            snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", bios_path);
+        if (bios_path[0] &&
+            absolutize_existing_file(abs_bios, sizeof(abs_bios), bios_path)) {
+            snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", abs_bios);
         } else {
             g_wizard_bios[0] = '\0';
         }
@@ -835,6 +897,13 @@ static int host_persist_setup(void* ctx, const char* rom_path,
         if (g_exe_path[0])
             write_sidecar_near_exe(g_exe_path, "bios.cfg",
                                    g_wizard_bios[0] ? g_wizard_bios : "");
+        if (g_build_dir[0]) {
+            char build_exe[1200];
+            if (join_path(build_exe, sizeof(build_exe), g_build_dir,
+                          g_exe_basename))
+                write_sidecar_near_exe(build_exe, "bios.cfg",
+                                       g_wizard_bios[0] ? g_wizard_bios : "");
+        }
     }
     if (rom_path && rom_path[0]) {
         if (g_project_root[0] &&
@@ -843,6 +912,12 @@ static int host_persist_setup(void* ctx, const char* rom_path,
         write_line_file("disc.cfg", rom_path);
         if (g_exe_path[0])
             write_sidecar_near_exe(g_exe_path, "disc.cfg", rom_path);
+        if (g_build_dir[0]) {
+            char build_exe[1200];
+            if (join_path(build_exe, sizeof(build_exe), g_build_dir,
+                          g_exe_basename))
+                write_sidecar_near_exe(build_exe, "disc.cfg", rom_path);
+        }
     }
     return 0;
 }
@@ -851,6 +926,7 @@ static void persist_relaunch_sidecars(const char* near_exe,
                                       const char* disc_path) {
     char bios_line[1100];
     char project_sidecar[1200];
+    char abs_bios[1100];
 
     if (disc_path && disc_path[0]) {
         write_sidecar_near_exe(near_exe, "disc.cfg", disc_path);
@@ -862,17 +938,22 @@ static void persist_relaunch_sidecars(const char* near_exe,
     }
 
     bios_line[0] = '\0';
-    if (g_wizard_bios[0] && path_is_file(g_wizard_bios)) {
-        snprintf(bios_line, sizeof(bios_line), "%s", g_wizard_bios);
-    } else if (!read_line_file("bios.cfg", bios_line, sizeof(bios_line)) &&
-               g_project_root[0] &&
-               join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
-                         "bios.cfg")) {
-        read_line_file(project_sidecar, bios_line, sizeof(bios_line));
+    if (g_wizard_bios[0] &&
+        absolutize_existing_file(abs_bios, sizeof(abs_bios), g_wizard_bios)) {
+        snprintf(bios_line, sizeof(bios_line), "%s", abs_bios);
+    } else {
+        char line[1100];
+        line[0] = '\0';
+        if (!read_line_file("bios.cfg", line, sizeof(line)) &&
+            g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "bios.cfg"))
+            read_line_file(project_sidecar, line, sizeof(line));
+        if (line[0])
+            absolutize_existing_file(bios_line, sizeof(bios_line), line);
     }
-    if (bios_line[0] && !path_is_file(bios_line))
-        bios_line[0] = '\0';
     if (bios_line[0]) {
+        snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", bios_line);
         write_sidecar_near_exe(near_exe, "bios.cfg", bios_line);
         write_line_file("bios.cfg", bios_line);
         if (g_project_root[0] &&
