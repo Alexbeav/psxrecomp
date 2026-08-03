@@ -1,7 +1,6 @@
 #ifndef PSX_LOBBY_CLIENT_H
 #define PSX_LOBBY_CLIENT_H
 
-#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -13,8 +12,7 @@ extern "C" {
 #define PSX_LOBBY_VERSION_LEN 32
 #define PSX_LOBBY_ENDPOINT_LEN 64
 #define PSX_LOBBY_MAX_LIST 32
-#define PSX_LOBBY_MAX_MEMBERS 8
-#define PSX_LOBBY_MAX_LAN_EPS 4
+#define PSX_LOBBY_MAX_MEMBERS 4
 #define PSX_LOBBY_LANG_LEN 16
 
 #ifndef PSX_GAME_VERSION
@@ -29,13 +27,6 @@ typedef struct PsxLobbyRow {
     int      player_count;
     int      max_slots;
     int      has_password;
-    /* Host UDP endpoint from the server list (for one-shot latency probes). */
-    char     host_endpoint[PSX_LOBBY_ENDPOINT_LEN];
-    /* Legacy hub lan_endpoints (compat). Prefer local UDP beacon by lobby_id. */
-    char     lan_endpoints[PSX_LOBBY_MAX_LAN_EPS][PSX_LOBBY_ENDPOINT_LEN];
-    int      lan_count;
-    /* Round-trip ms to a reachable candidate; -1 unknown / timed out. */
-    int      latency_ms;
 } PsxLobbyRow;
 
 typedef struct PsxLobbyMember {
@@ -58,8 +49,6 @@ typedef struct PsxLobbyMatchCaps {
     int  fast_boot;        /* 0/1 */
     int  auto_skip_fmv;    /* 0/1 */
     int  input_delay;      /* recomp-net delay frames */
-    int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
-    int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
     char language[PSX_LOBBY_LANG_LEN];
 } PsxLobbyMatchCaps;
 
@@ -101,9 +90,6 @@ void psx_lobby_pump(void);
 void psx_lobby_set_game_identity(const char *game_name, const char *game_version);
 const char *psx_lobby_game_version(void);
 
-/* Default max_slots for create (clamped 2..8, default 2). */
-void psx_lobby_set_max_slots(int max_slots);
-
 void psx_lobby_request_list(void);
 int  psx_lobby_list_count(void);
 int  psx_lobby_list_get(int index, PsxLobbyRow *out);
@@ -125,16 +111,8 @@ int  psx_lobby_join(const char *lobby_id, const char *password,
 
 int  psx_lobby_leave(void);
 
-/* Host-only: remove the player in `slot` (not the host / self). */
-int  psx_lobby_kick(int slot);
-
-/* Host-only: swap/move a seated player between slots (server broadcasts update). */
-int  psx_lobby_move_member(int from_slot, int to_slot);
-
 int  psx_lobby_in_lobby(void);
 int  psx_lobby_is_host(void);
-/* Host's player_id from the last create/lobby_update (empty if unknown). */
-const char *psx_lobby_host_player_id(void);
 /* Filled after create/join/lobby_update; peer endpoints for PsxNetplayConfig. */
 const PsxLobbyJoinInfo *psx_lobby_join_info(void);
 
@@ -147,52 +125,6 @@ int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
 /* Live member table from lobby_update (and create/join). */
 int  psx_lobby_member_count(void);
 int  psx_lobby_member_get(int index, PsxLobbyMember *out);
-
-/* Waiting-room peer RTT in ms for `slot`, or -1 if unknown.
- * Host's own seat is always -1. Measured over UDP (rnet_rtt_probe) on the
- * advertised game endpoints — not the lobby WebSocket. Guests also REPORT
- * so the host UI updates when it cannot dial the guest yet. */
-int  psx_lobby_member_latency_ms(int slot);
-
-/* True when member.player_id matches psx_lobby_host_player_id().
- * Prefer this over `slot == 0` — seats can move. */
-int  psx_lobby_member_is_host(const PsxLobbyMember *member);
-
-/*
- * ICE signaling relay (MotK WS op:signal). text is SDP/candidate (max 2047).
- * send returns 0 if queued/written; poll returns 1 when an inbound signal was
- * copied out (LOCAL_* types as emitted by the peer — remap to REMOTE_* before
- * rnet_session_push_signal).
- */
-int  psx_lobby_send_signal(int type, int flag, const char *text);
-int  psx_lobby_poll_signal(int *type, int *flag, char *text, size_t text_cap);
-/* Drop queued ICE SDP/candidates (soft-return / rematch hygiene). */
-void psx_lobby_clear_signals(void);
-/* When 0, inbound ICE op:signal is discarded (lobby / post-match). Launch
- * re-enables so early peer offers are kept until netplay drains them. */
-void psx_lobby_set_ice_signal_accept(int accept);
-
-/*
- * Coturn / ICE credentials minted by the WS lobby
- * (`get_turn_credentials` → `turn_credentials`). Valid until disconnect or TTL.
- * Strings are stable until the next successful mint or disconnect — safe to
- * pass into RNetIceConfig for juice_create.
- */
-typedef struct PsxLobbyTurnCredentials {
-    int      valid; /* 1 when ok mint cached and not expired */
-    char     stun_host[128];
-    int      stun_port;
-    char     turn_host[128];
-    int      turn_port;
-    char     username[192];
-    char     password[128];
-    uint32_t ttl_secs;
-} PsxLobbyTurnCredentials;
-
-/* Queue WS get_turn_credentials. Returns 0 if sent/queued. */
-int  psx_lobby_request_turn_credentials(void);
-/* Non-NULL; valid==0 when unavailable / expired / STUN-only. */
-const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void);
 
 /* Local ready flag (from last lobby_update matching our player_id). */
 int  psx_lobby_local_ready(void);

@@ -19,15 +19,18 @@ for symbol in (
     assert symbol in HEADER, f"missing trusted-plugin controller API: {symbol}"
 
 reset = """g_mod_controller_mode_override[0] = -1;
-    g_mod_controller_mode_override[1] = -1;
-    mod_runtime_activate_plugins();"""
+    g_mod_controller_mode_override[1] = -1;"""
+activate = "mod_runtime_activate_plugins();"
 apply = """if (g_mod_controller_mode_override[0] >= 0)
         p1_mode = g_mod_controller_mode_override[0];
     if (g_mod_controller_mode_override[1] >= 0)
         p2_mode = g_mod_controller_mode_override[1];"""
 
 assert reset in MAIN, "controller overrides must reset before every activation pass"
+assert activate in MAIN, "plugins must activate after controller overrides reset"
 assert apply in MAIN, "controller overrides must replace the resolved launch modes"
-assert MAIN.index(reset) < MAIN.index(apply), "reset/activate must precede application"
+assert MAIN.index(reset) < MAIN.index(activate) < MAIN.index(apply), (
+    "reset/activate must precede controller override application"
+)
 
 print("mod controller override lifecycle guard passed")

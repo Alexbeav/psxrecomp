@@ -41,6 +41,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "lockstep.h"
+#include "debug_trace_ranges.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -385,8 +386,8 @@ static uint32_t s_wtrace_head = 0;
 static WriteTraceEntry *s_wtrace_boot = NULL;
 static uint64_t s_wtrace_boot_total = 0;  /* matching writes ever seen */
 static uint32_t s_wtrace_boot_count = 0;  /* entries retained */
-#define WTRACE_BOOT_MAX_RANGES 12
-static struct { uint32_t lo, hi; } s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
+#define WTRACE_BOOT_MAX_RANGES 32
+static PSXDebugTraceRange s_wtrace_boot_ranges[WTRACE_BOOT_MAX_RANGES];
 static int s_wtrace_boot_range_count = 0;
 
 /* Multi-range filter: up to 64 [lo, hi) address ranges. Boot defaults
@@ -2520,6 +2521,169 @@ static void handle_dirty_ram_unsupported(int id, const char *json)
              (unsigned)g_dirty_ram_last_unsupported_pc,
              (unsigned)g_dirty_ram_last_unsupported_insn,
              reason);
+}
+
+static void handle_parappa_rhythm_reset(int id, const char *json)
+{
+    (void)json;
+    parappa_rhythm_events_reset();
+    send_ok(id);
+}
+
+static const char *parappa_timing_mode_name(void)
+{
+    switch (g_parappa_timing_mode) {
+    case 1: return "medium";
+    case 2: return "permissive";
+    case 3: return "custom";
+    case 4: return "easy";
+    default: return "stock";
+    }
+}
+
+static void handle_parappa_timing_mod(int id, const char *json)
+{
+    char mode[32];
+    if (json_get_str(json, "mode", mode, sizeof(mode))) {
+        if (strcmp(mode, "stock") == 0 || strcmp(mode, "off") == 0) {
+            g_parappa_timing_mode = 0;
+            g_parappa_timing_extra_early = 0;
+            g_parappa_timing_extra_late = 0;
+        } else if (strcmp(mode, "medium") == 0) {
+            g_parappa_timing_mode = 1;
+            g_parappa_timing_extra_early = 2;
+            g_parappa_timing_extra_late = 2;
+        } else if (strcmp(mode, "permissive") == 0) {
+            g_parappa_timing_mode = 2;
+            g_parappa_timing_extra_early = 6;
+            g_parappa_timing_extra_late = 6;
+        } else if (strcmp(mode, "easy") == 0) {
+            g_parappa_timing_mode = 4;
+            g_parappa_timing_extra_early = 10;
+            g_parappa_timing_extra_late = 10;
+        } else if (strcmp(mode, "custom") == 0) {
+            g_parappa_timing_mode = 3;
+        } else {
+            send_err(id, "unknown mode");
+            return;
+        }
+    }
+
+    int early = json_get_int(json, "early", -1);
+    if (early >= 0) {
+        if (early > 60) early = 60;
+        g_parappa_timing_extra_early = early;
+        if (g_parappa_timing_mode == 0) g_parappa_timing_mode = 3;
+    }
+
+    int late = json_get_int(json, "late", -1);
+    if (late >= 0) {
+        if (late > 60) late = 60;
+        g_parappa_timing_extra_late = late;
+        if (g_parappa_timing_mode == 0) g_parappa_timing_mode = 3;
+    }
+
+    parappa_timing_window_reset();
+
+    send_fmt("{\"id\":%d,\"ok\":true,\"mode\":\"%s\","
+             "\"early\":%d,\"late\":%d}",
+             id, parappa_timing_mode_name(),
+             g_parappa_timing_extra_early,
+             g_parappa_timing_extra_late);
+}
+
+static const char *parappa_rhythm_label(uint32_t pc)
+{
+    switch (pc & 0x1FFFFFFFu) {
+    case 0x001C7ACC: return "note_state_set_a";
+    case 0x001C7B24: return "note_state_set_b";
+    case 0x001C7B38: return "note_state_clear";
+    case 0x001C7CAC: return "object_half_60";
+    case 0x001C7CB0: return "object_half_64";
+    case 0x001C7CC4: return "global_window_d8";
+    case 0x001C7CE4: return "global_window_dc";
+    case 0x001C7CE8: return "object_half_54";
+    case 0x001C7D04: return "object_flags_clear";
+    case 0x001C7D1C: return "timeline_index_compare";
+    case 0x001C7D44: return "start_edge_compare";
+    case 0x001C7D6C: return "timing_index_advance";
+    case 0x001C7DD0: return "judge_bits_from_table";
+    case 0x001C7DD8: return "timing_value_from_table";
+    case 0x001C7DE0: return "object_flags_marked";
+    case 0x001C7DEC: return "object_word_10";
+    case 0x001C7E10: return "object_half_08";
+    case 0x001C7E58: return "object_byte_0A";
+    case 0x001C7EB4: return "object_byte_0B";
+    case 0x001C7ED0: return "judge_bits_late_or_miss";
+    case 0x001C7ED8: return "judge_bits_clear";
+    case 0x001C7F1C: return "final_window_branch";
+    case 0x001C7F20: return "judge_bits_final";
+    case 0x001C7F34: return "timing_value_final";
+    case 0x001C7F40: return "object_flags_final";
+    case 0x001C7F44: return "timing_value_clear";
+    case 0x001C80F0: return "aux_half_186";
+    case 0x001C8878: return "score_flags_marked";
+    case 0x001C8894: return "score_table_a";
+    case 0x001C88B0: return "score_table_b";
+    case 0x001C88B8: return "score_global_state";
+    case 0x001C91D8: return "score_countdown";
+    case 0x001C91F8: return "score_state_reset";
+    default: return "unknown";
+    }
+}
+
+static void handle_parappa_rhythm_events(int id, const char *json)
+{
+    int count = json_get_int(json, "count", 256);
+    if (count < 1) count = 1;
+    if (count > (int)PARAPPA_RHYTHM_EVENT_CAP)
+        count = (int)PARAPPA_RHYTHM_EVENT_CAP;
+    int newest_first = json_get_int(json, "newest", 1) != 0;
+
+    uint64_t total = g_parappa_rhythm_event_seq;
+    uint64_t avail = (total < PARAPPA_RHYTHM_EVENT_CAP)
+                     ? total : PARAPPA_RHYTHM_EVENT_CAP;
+    const size_t BUF_SZ = 2u * 1024u * 1024u;
+    char *out = (char *)malloc(BUF_SZ);
+    if (!out) { send_err(id, "oom"); return; }
+
+    size_t pos = 0;
+    pos += snprintf(out + pos, BUF_SZ - pos,
+                    "{\"id\":%d,\"ok\":true,\"total\":%llu,"
+                    "\"available\":%llu,\"entries\":[",
+                    id, (unsigned long long)total,
+                    (unsigned long long)avail);
+    int emitted = 0;
+    for (uint64_t i = 0; i < avail && emitted < count && pos < BUF_SZ - 512; i++) {
+        uint64_t seq = newest_first ? (total - 1u - i)
+                                    : (total - avail + i);
+        ParappaRhythmEvent *e =
+            &g_parappa_rhythm_events[seq & (PARAPPA_RHYTHM_EVENT_CAP - 1u)];
+        pos += snprintf(out + pos, BUF_SZ - pos,
+                        "%s{\"seq\":%llu,\"frame\":%u,"
+                        "\"pc\":\"0x%08X\",\"label\":\"%s\","
+                        "\"addr\":\"0x%08X\",\"value\":\"0x%08X\","
+                        "\"width\":%u,\"obj\":\"0x%08X\","
+                        "\"ra\":\"0x%08X\",\"a0\":\"0x%08X\","
+                        "\"a1\":\"0x%08X\",\"a2\":\"0x%08X\","
+                        "\"a3\":\"0x%08X\",\"s5\":\"0x%08X\","
+                        "\"s6\":\"0x%08X\",\"g800901bc\":\"0x%08X\","
+                        "\"g800901c0\":\"0x%08X\",\"g800916d0\":\"0x%08X\","
+                        "\"g800916d8\":\"0x%08X\",\"g800916da\":\"0x%08X\","
+                        "\"g800916dc\":\"0x%08X\",\"g801d3040\":\"0x%08X\"}",
+                        emitted == 0 ? "" : ",",
+                        (unsigned long long)e->seq, e->frame,
+                        e->pc, parappa_rhythm_label(e->pc),
+                        e->addr, e->value, e->width, e->obj,
+                        e->ra, e->a0, e->a1, e->a2, e->a3, e->s5, e->s6,
+                        e->g_800901bc, e->g_800901c0,
+                        e->g_800916d0, e->g_800916d8,
+                        e->g_800916da, e->g_800916dc, e->g_801d3040);
+        emitted++;
+    }
+    pos += snprintf(out + pos, BUF_SZ - pos, "],\"emitted\":%d}", emitted);
+    debug_server_send_line(out);
+    free(out);
 }
 
 /* ---- Dirty-RAM block-entry log: dump (target,ra,frame) tuples to find
@@ -12413,6 +12577,9 @@ static const CmdEntry s_commands[] = {
     { "probe_clear",       handle_probe_clear },
     { "dirty_ram_stats",   handle_dirty_ram_stats },
     { "dirty_ram_unsupported", handle_dirty_ram_unsupported },
+    { "parappa_rhythm_events", handle_parappa_rhythm_events },
+    { "parappa_rhythm_reset", handle_parappa_rhythm_reset },
+    { "parappa_timing_mod", handle_parappa_timing_mod },
     { "dirty_block_log",   handle_dirty_block_log },
     { "dirty_flow_log",    handle_dirty_flow_log },
     { "dirty_insn_log",    handle_dirty_insn_log },
@@ -13017,6 +13184,40 @@ void debug_server_init(int port)
     s_wtrace_trans_ranges[9].hi = 0x00097430u;
     s_wtrace_trans_range_count = 10;
 #endif
+
+    /*
+     * Generic extraction of NyperYuhgard's Crash Bash write watcher: arm
+     * caller-selected ranges before guest execution and retain their first
+     * writes in the existing register-rich boot trace. Unlike the original
+     * hard-coded stderr trap, this works for any title and is queryable over
+     * TCP after the event.
+     */
+    {
+        const char *spec = getenv("PSX_WTRACE_BOOT");
+        PSXDebugTraceRange parsed[16];
+        int count = (spec && *spec)
+            ? psx_debug_parse_trace_ranges(
+                  spec, parsed, (int)(sizeof(parsed) / sizeof(parsed[0])))
+            : 0;
+
+        if (count < 0) {
+            fprintf(stderr,
+                    "psxrecomp: ignoring invalid PSX_WTRACE_BOOT='%s' "
+                    "(expected lo,hi[;lo,hi...])\n",
+                    spec ? spec : "");
+        } else if (count > WTRACE_BOOT_MAX_RANGES -
+                               s_wtrace_boot_range_count) {
+            fprintf(stderr,
+                    "psxrecomp: ignoring PSX_WTRACE_BOOT: too many ranges "
+                    "(%d configured, %d available)\n",
+                    count, WTRACE_BOOT_MAX_RANGES -
+                               s_wtrace_boot_range_count);
+        } else {
+            for (int i = 0; i < count; ++i) {
+                s_wtrace_boot_ranges[s_wtrace_boot_range_count++] = parsed[i];
+            }
+        }
+    }
 
     /* Tier 1: heap-allocate MMIO trace ring buffer (2 MB). */
     if (!s_mmio_trace) {

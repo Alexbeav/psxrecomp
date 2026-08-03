@@ -2521,17 +2521,13 @@ static void depth24_note_upload(uint32_t x, uint32_t w) {
 }
 
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
-    if (!(display_depth & 1u) || crtc_w == 0u)
+    if (!(display_depth & 1u) || s_d24_upload_x1 == 0u || crtc_w == 0u)
         return crtc_w;
-    /* No uploads yet → treat as uncovered (present blanks until first blit). */
-    if (s_d24_upload_x1 == 0u)
-        return 0u;
     uint32_t dx = display_x & 1023u;
-    if (s_d24_upload_x1 <= dx) return 0u;
+    if (s_d24_upload_x1 <= dx) return crtc_w;
     uint32_t hw = s_d24_upload_x1 - dx;
     uint32_t rgb = (hw * 2u) / 3u;
-    if (rgb == 0u) return 0u;
-    if (rgb >= crtc_w) return crtc_w;
+    if (rgb == 0u || rgb >= crtc_w) return crtc_w;
     return rgb;
 }
 
@@ -4858,13 +4854,10 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
-    uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
     video_mode = (val >> 3) & 1;
-    if (new_depth != display_depth)
-        s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
-    display_depth = new_depth;
+    display_depth = (val >> 4) & 1;
     vertical_interlace = (val >> 5) & 1;
     /* GPUSTAT.13 holds the legacy constant 0 in progressive (see the vblank
      * field flip); clear it on the switch so a title that toggles interlace
@@ -5005,8 +4998,6 @@ static int gpu_snap_emit(PstW *w) {
     WH(vram_write_col); WH(vram_write_row); WU(vram_write_remaining);
     WI(vram_read_active); WH(vram_read_x); WH(vram_read_y); WH(vram_read_w); WH(vram_read_h);
     WH(vram_read_col); WH(vram_read_row);
-    /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
-    WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
 #undef WU
 #undef WI
 #undef WH
@@ -5039,7 +5030,6 @@ static int gpu_snap_parse(PstR *r) {
     RH(vram_write_col); RH(vram_write_row); RU(vram_write_remaining);
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
-    RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
 #undef RU
 #undef RI
 #undef RH

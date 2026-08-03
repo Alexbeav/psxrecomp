@@ -198,6 +198,28 @@ DirtyRamFlowLogEntry  g_dirty_ram_flow_log[DIRTY_RAM_FLOW_LOG_CAP] = {0};
 uint64_t              g_dirty_ram_flow_log_seq = 0;
 DirtyRamInsnLogEntry  g_dirty_ram_insn_log[DIRTY_RAM_INSN_LOG_CAP] = {0};
 uint64_t              g_dirty_ram_insn_log_seq = 0;
+ParappaRhythmEvent    g_parappa_rhythm_events[PARAPPA_RHYTHM_EVENT_CAP] = {0};
+uint64_t              g_parappa_rhythm_event_seq = 0;
+int                   g_parappa_timing_mode = 0;
+int                   g_parappa_timing_extra_early = 0;
+int                   g_parappa_timing_extra_late = 0;
+static uint32_t       s_parappa_recent_judge_obj = 0;
+static uint32_t       s_parappa_recent_judge_idx = 0;
+static uint32_t       s_parappa_recent_judge_mask = 0;
+static uint32_t       s_parappa_recent_judge_frame = 0;
+
+void parappa_timing_window_reset(void) {
+    s_parappa_recent_judge_obj = 0;
+    s_parappa_recent_judge_idx = 0;
+    s_parappa_recent_judge_mask = 0;
+    s_parappa_recent_judge_frame = 0;
+}
+
+void parappa_rhythm_events_reset(void) {
+    g_parappa_rhythm_event_seq = 0;
+    memset(g_parappa_rhythm_events, 0, sizeof(g_parappa_rhythm_events));
+    parappa_timing_window_reset();
+}
 
 /* Current frame counter, defined in debug_server.c. */
 extern uint64_t s_frame_count;
@@ -245,6 +267,146 @@ static inline void exec_pc_table_record(uint32_t pc) {
 /* From debug_server.c — keep our outer-frame attribution coherent. */
 extern uint32_t g_debug_current_func_addr;
 extern uint32_t g_debug_last_store_pc;
+
+static int parappa_rhythm_store_site(uint32_t pc) {
+    switch (pc & 0x1FFFFFFFu) {
+    case 0x001C7ACC: case 0x001C7B24: case 0x001C7B38:
+    case 0x001C7CAC: case 0x001C7CB0: case 0x001C7CC4:
+    case 0x001C7CE4: case 0x001C7CE8: case 0x001C7D04:
+    case 0x001C7D6C: case 0x001C7DD0: case 0x001C7DD8:
+    case 0x001C7DE0: case 0x001C7DEC: case 0x001C7E10:
+    case 0x001C7E58: case 0x001C7EB4: case 0x001C7ED0:
+    case 0x001C7ED8: case 0x001C7F20: case 0x001C7F34:
+    case 0x001C7F40: case 0x001C7F44: case 0x001C80F0:
+    case 0x001C8878: case 0x001C8894: case 0x001C88B0:
+    case 0x001C88B8: case 0x001C91D8: case 0x001C91F8:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t parappa_read_u32(CPUState *cpu, uint32_t addr) {
+    return cpu->read_word(addr);
+}
+
+static uint32_t parappa_read_i16(CPUState *cpu, uint32_t addr) {
+    return (uint32_t)(int32_t)(int16_t)cpu->read_half(addr);
+}
+
+static ParappaRhythmEvent *parappa_rhythm_next_event(CPUState *cpu,
+                                                     uint32_t pc) {
+    uint64_t s = g_parappa_rhythm_event_seq++;
+    ParappaRhythmEvent *e =
+        &g_parappa_rhythm_events[s & (PARAPPA_RHYTHM_EVENT_CAP - 1u)];
+    e->seq   = s;
+    e->frame = (uint32_t)s_frame_count;
+    e->pc    = pc & 0x1FFFFFFFu;
+    e->obj   = cpu->gpr[17];
+    e->ra    = cpu->gpr[31];
+    e->s5    = cpu->gpr[21];
+    e->s6    = cpu->gpr[22];
+    e->g_800901bc = parappa_read_u32(cpu, 0x800901BCu);
+    e->g_800901c0 = parappa_read_u32(cpu, 0x800901C0u);
+    e->g_800916d0 = parappa_read_i16(cpu, 0x800916D0u);
+    e->g_800916d8 = parappa_read_i16(cpu, 0x800916D8u);
+    e->g_800916da = parappa_read_i16(cpu, 0x800916DAu);
+    e->g_800916dc = parappa_read_i16(cpu, 0x800916DCu);
+    e->g_801d3040 = parappa_read_u32(cpu, 0x801D3040u);
+    return e;
+}
+
+static void parappa_rhythm_log_store(CPUState *cpu, uint32_t pc,
+                                     uint32_t addr, uint32_t value,
+                                     uint32_t width) {
+    if (!parappa_rhythm_store_site(pc)) return;
+    ParappaRhythmEvent *e = parappa_rhythm_next_event(cpu, pc);
+    e->addr  = addr;
+    e->value = value;
+    e->width = width;
+    e->a0    = cpu->gpr[4];
+    e->a1    = cpu->gpr[5];
+    e->a2    = cpu->gpr[6];
+    e->a3    = cpu->gpr[7];
+}
+
+static int parappa_rhythm_compare_site(uint32_t pc) {
+    switch (pc & 0x1FFFFFFFu) {
+    case 0x001C7D1C:
+    case 0x001C7D44:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int32_t parappa_timing_adjust_threshold(uint32_t pc, int32_t rhs) {
+    (void)pc;
+    /* Score assist must not change note/action cadence. Keep this compare
+     * observational until a score-only judgement write is identified. */
+    return rhs;
+}
+
+static void parappa_rhythm_log_compare(CPUState *cpu, uint32_t pc,
+                                       uint32_t lhs, uint32_t raw_rhs,
+                                       uint32_t adjusted_rhs,
+                                       uint32_t vanilla, uint32_t kept) {
+    if (!parappa_rhythm_compare_site(pc)) return;
+    ParappaRhythmEvent *e = parappa_rhythm_next_event(cpu, pc);
+    e->addr  = cpu->gpr[1];
+    e->value = adjusted_rhs;
+    e->width = 0;
+    e->a0    = lhs;
+    e->a1    = raw_rhs;
+    e->a2    = vanilla;
+    e->a3    = kept;
+}
+
+static void parappa_rhythm_log_final_window(CPUState *cpu,
+                                            uint32_t original_mask,
+                                            uint32_t result_mask,
+                                            uint32_t recent_mask,
+                                            uint32_t frame_delta,
+                                            int32_t idx_delta) {
+    ParappaRhythmEvent *e = parappa_rhythm_next_event(cpu, 0x001C7F1Cu);
+    e->addr  = s_parappa_recent_judge_obj;
+    e->value = result_mask;
+    e->width = 0;
+    e->a0    = original_mask;
+    e->a1    = recent_mask;
+    e->a2    = frame_delta;
+    e->a3    = (uint32_t)idx_delta;
+}
+
+static void parappa_timing_apply_final_window(CPUState *cpu, uint32_t pc) {
+    if ((pc & 0x1FFFFFFFu) != 0x001C7F1Cu) return;
+    if (g_parappa_timing_mode <= 0 || g_parappa_timing_extra_late <= 0) return;
+
+    uint32_t mask = cpu->gpr[2];
+    uint32_t obj = cpu->gpr[17];
+    uint32_t idx = parappa_read_u32(cpu, 0x800901C0u);
+    uint32_t frame = (uint32_t)s_frame_count;
+
+    if (mask != 0) {
+        s_parappa_recent_judge_obj = obj;
+        s_parappa_recent_judge_idx = idx;
+        s_parappa_recent_judge_mask = mask;
+        s_parappa_recent_judge_frame = frame;
+        parappa_rhythm_log_final_window(cpu, mask, mask, mask, 0, 0);
+        return;
+    }
+
+    if (s_parappa_recent_judge_mask == 0 || s_parappa_recent_judge_obj != obj) {
+        parappa_rhythm_log_final_window(cpu, mask, mask, s_parappa_recent_judge_mask, 0, 0);
+        return;
+    }
+
+    uint32_t frame_delta = frame - s_parappa_recent_judge_frame;
+    int32_t idx_delta = (int32_t)idx - (int32_t)s_parappa_recent_judge_idx;
+    parappa_rhythm_log_final_window(cpu, mask, mask,
+                                    s_parappa_recent_judge_mask,
+                                    frame_delta, idx_delta);
+}
 
 /* Execution-mode tag for the event-timeline ring: 1 while a dirty_ram_dispatch
  * call is on the stack. Cleared defensively at the psx_check_interrupts longjmp
@@ -1667,11 +1829,20 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             return 0;
         case 0x2A: /* SLT */
         {
+            int32_t lhs = (int32_t)cpu->gpr[rs];
+            int32_t rhs = (int32_t)cpu->gpr[rt];
+            int32_t adjusted_rhs = parappa_timing_adjust_threshold(pc, rhs);
             uint32_t vanilla =
-                ((int32_t)cpu->gpr[rs] < (int32_t)cpu->gpr[rt]) ? 1u : 0u;
+                (lhs < rhs) ? 1u : 0u;
             uint32_t kept = vanilla;
+            if (adjusted_rhs != rhs)
+                kept = (lhs < adjusted_rhs) ? 1u : 0u;
             if (!psx_ws_aspect_cone_site(cpu, pc, insn, vanilla, &kept))
                 (void)psx_ws_cull_keep_site(pc, insn, vanilla, &kept);
+            parappa_rhythm_log_compare(cpu, pc, (uint32_t)lhs,
+                                       (uint32_t)rhs,
+                                       (uint32_t)adjusted_rhs,
+                                       vanilla, kept);
             cpu->gpr[rd] = kept;
             cpu->gpr[0] = 0;
             return 0;
@@ -1756,6 +1927,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #undef XRES
     }
     case 0x04: { /* BEQ rs, rt, simm */
+        parappa_timing_apply_final_window(cpu, pc);
         int taken = (cpu->gpr[rs] == cpu->gpr[rt]);
         exec_delay_slot(cpu, pc + 4);
         cosim_exec_one_transfer_hook(pc + 4);
@@ -2031,6 +2203,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x28: { /* SB */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         g_debug_last_store_pc = pc;
+        parappa_rhythm_log_store(cpu, pc, addr, cpu->gpr[rt] & 0xFFu, 1u);
         cpu->write_byte(addr, (uint8_t)cpu->gpr[rt]);
         return 0;
     }
@@ -2045,6 +2218,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         if (psx_ws_is_backdrop_site(pc))
             val = (uint16_t)psx_ws_backdrop_x((int16_t)val);
         g_debug_last_store_pc = pc;
+        parappa_rhythm_log_store(cpu, pc, addr, (uint32_t)val, 2u);
         cpu->write_half(addr, val);
         return 0;
     }
@@ -2057,6 +2231,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
     case 0x2B: { /* SW */
         uint32_t addr = cpu->gpr[rs] + (uint32_t)simm;
         g_debug_last_store_pc = pc;
+        parappa_rhythm_log_store(cpu, pc, addr, cpu->gpr[rt], 4u);
         cpu->write_word(addr, cpu->gpr[rt]);
         return 0;
     }

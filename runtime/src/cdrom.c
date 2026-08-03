@@ -1429,6 +1429,7 @@ static uint32_t cdda_track_end_lba(int track) {
 }
 
 static int start_cdda_playback(int requested_track) {
+    if (cdda_playing && requested_track == 0 && iso_handle && iso_track_count(iso_handle) > 1) return 1;
     uint32_t lba;
     int track;
     if (requested_track > 0) {
@@ -2659,65 +2660,6 @@ int cdrom_load_in_progress(void) {
 
 int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
-}
-
-/* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M
- * cycles, Init ~1.1M, far seeks, etc.) leave the restored frame on screen
- * for up to ~1s+ of wall time. Clamp those timers so the next cdrom_advance
- * delivers the IRQ; keep XA/FMV cadence untouched. */
-#define CDROM_SAVESTATE_DELAY_CAP     4096
-#define CDROM_SAVESTATE_BOOST_VBLANKS 180  /* ~3s at 60Hz */
-
-static int s_savestate_cd_boost_vblanks = 0;
-
-static void cdrom_apply_savestate_delay_caps(int log_clamps) {
-    if (pending.pending && pending.delay > CDROM_SAVESTATE_DELAY_CAP) {
-        if (log_clamps)
-            fprintf(stderr,
-                    "cdrom: savestate clamped pending cmd=0x%02X delay %d -> %d\n",
-                    (unsigned)pending.cmd, pending.delay,
-                    CDROM_SAVESTATE_DELAY_CAP);
-        pending.delay = CDROM_SAVESTATE_DELAY_CAP;
-    }
-    if (reading && !xa_stream_active &&
-        read_delay > CDROM_SAVESTATE_DELAY_CAP) {
-        if (log_clamps)
-            fprintf(stderr,
-                    "cdrom: savestate clamped read_delay %d -> %d\n",
-                    read_delay, CDROM_SAVESTATE_DELAY_CAP);
-        read_delay = CDROM_SAVESTATE_DELAY_CAP;
-        s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
-    }
-    if (cdrom_irq_present_delay > CDROM_SAVESTATE_DELAY_CAP)
-        cdrom_irq_present_delay = CDROM_SAVESTATE_DELAY_CAP;
-}
-
-void cdrom_accelerate_after_savestate(void) {
-    const char *probe = getenv("PSX_POST_LOAD_PROBE");
-    const int log_probe = (probe && probe[0] == '1');
-    s_savestate_cd_boost_vblanks = CDROM_SAVESTATE_BOOST_VBLANKS;
-    cdrom_apply_savestate_delay_caps(/*log_clamps*/log_probe);
-    if (log_probe)
-        fprintf(stderr,
-                "cdrom: savestate boost armed for %d vblanks (delay cap %d)\n",
-                CDROM_SAVESTATE_BOOST_VBLANKS, CDROM_SAVESTATE_DELAY_CAP);
-}
-
-void cdrom_savestate_boost_vblank(void) {
-    if (s_savestate_cd_boost_vblanks <= 0) return;
-    cdrom_apply_savestate_delay_caps(/*log_clamps*/0);
-    s_savestate_cd_boost_vblanks--;
-}
-
-int cdrom_savestate_cd_wait_active(void) {
-    if (s_savestate_cd_boost_vblanks <= 0) return 0;
-    if (pending.pending && pending.delay > 0) return 1;
-    if (reading && !xa_stream_active) return 1;
-    return 0;
-}
-
-int cdrom_savestate_boost_vblanks_remaining(void) {
-    return s_savestate_cd_boost_vblanks;
 }
 
 /* ---- boot snapshot: complete CD-ROM controller FSM (see boot_state.h) ---- */

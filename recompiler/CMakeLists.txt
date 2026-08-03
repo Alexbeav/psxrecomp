@@ -270,6 +270,14 @@ target_include_directories(l2_structural_test PRIVATE
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(debug_trace_ranges_test
+        ../runtime/tests/test_debug_trace_ranges.c
+        ../runtime/src/debug_trace_ranges.c
+    )
+    target_include_directories(debug_trace_ranges_test PRIVATE
+        ../runtime/include)
+    add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp
@@ -316,6 +324,11 @@ if(BUILD_TESTING)
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+    # These targets were already built by every test build, but without
+    # add_test() entries ctest could neither run nor fail them.
+    add_test(NAME l2_structural_test COMMAND l2_structural_test)
+    add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
@@ -403,6 +416,7 @@ if(BUILD_TESTING)
                 overlay_candidate_capacity
                 overlay_decodable_fallback
                 overlay_init_guard
+                sdl3_main_single_include
                 vk_build_default
                 vk_color_self_barrier
                 vk_command_buffer_batching

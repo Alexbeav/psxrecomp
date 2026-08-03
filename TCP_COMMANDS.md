@@ -90,8 +90,26 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `pc_hit_clear` |   | ✓² | — | Clear the last-hit record |
 | `quit` | ✓ |   | — | Shutdown native runtime |
 
-¹ Native `vram_peek` is the legacy name; DS calls it `read_vram`. Same semantics.  
+¹ Native `vram_peek` is the legacy name; DS calls it `read_vram`. Same semantics.
 ² The `pc_*` family is specific to the DS oracle: DuckStation's CPU core honours `CPU::AddBreakpointWithCallback`, while our native runtime dispatches whole recompiled functions (no mid-function PC breaks).
+
+### Boot-time write ranges
+
+Set `PSX_WTRACE_BOOT=lo,hi[;lo,hi...]` before launching a debug-tools build to
+retain the first writes to one or more half-open RAM ranges from guest
+instruction zero. Addresses may be hexadecimal or decimal; KSEG addresses are
+normalized to physical addresses. For example, the Crash Bash investigation
+that motivated this option can be reproduced without title-specific code:
+
+```powershell
+$env:PSX_WTRACE_BOOT='0x000B3A80,0x000B3B00'
+.\CrashBashRecomp.exe
+```
+
+Connect at any later point and query `wtrace_boot_stats`,
+`wtrace_boot_summary`, or `wtrace_boot_dump`. Each retained entry includes the
+write address/value/width, guest PC and return address, register context, frame,
+and DMA channel. The option is ignored in builds made with debug tools disabled.
 
 ---
 

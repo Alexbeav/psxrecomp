@@ -39,7 +39,6 @@ int  vk_renderer_present_wide(int a,int b,int c,int d){(void)a;(void)b;(void)c;(
 void vk_renderer_present_cpu(const uint32_t*p,int w,int h,int l,int f){(void)p;(void)w;(void)h;(void)l;(void)f;}
 void vk_renderer_present_blank(void){}
 void vk_renderer_sync_cpu(void){}
-void vk_renderer_restage_vram_after_savestate(void){}
 void vk_renderer_set_present_mode(int m){(void)m;}
 int  vk_perf_json(char *out,int cap,int count){(void)count; return cap>2?snprintf(out,cap,"[]"):0;}
 const GpuRenderBackend *vk_backend_get(void) { return 0; }
@@ -1751,6 +1750,19 @@ void vk_renderer_sync_cpu(void) {
     ensure_cpu();   /* drain batches, pack hr->raw, copy raw->CPU mirror */
 }
 
+void vk_renderer_restage_vram_after_savestate(void) {
+    if (!s_ctx_ok || !s_vram) return;
+    s_up_nrects = 0;
+    rect_clear(&s_d24_skip_fb);
+    s_depth24_skip_up = 0;
+    up_add_transfer(0, 0, VRAM_W, VRAM_H);
+    flush_cpu_upload();
+    if (gpu_display_is_depth24()) {
+        s_depth24_skip_up = 1;
+        depth24_mark_scanout_band();
+    }
+}
+
 /* Dump the last `count` per-frame perf records as a JSON array (oldest..newest).
  * Always-on; the debug-server "vk_perf" command reads this to find which op
  * explodes during a transition stall (e.g. allocs jumping 10 -> thousands). */
@@ -2275,7 +2287,8 @@ static void depth24_mark_scanout_band(void) {
     y1 = y0 + fb_h - 1;
     if (x1 > VRAM_W - 1) x1 = VRAM_W - 1;
     if (y1 > VRAM_H - 1) y1 = VRAM_H - 1;
-    rect_add(&s_d24_skip_fb, x0, y0, x1, y1);
+    if (x1 >= x0 && y1 >= y0)
+        rect_add(&s_d24_skip_fb, x0, y0, x1, y1);
 }
 
 static void depth24_clear_skipped_fb(void) {
@@ -2315,19 +2328,6 @@ static void vkb_vram_transfer_in(int x, int y, int w, int h, const uint16_t *dat
         return;
     }
     up_add_transfer(x, y, w, h);   /* exact touched rects, incl. per-pixel wrap */
-}
-
-void vk_renderer_restage_vram_after_savestate(void) {
-    if (!s_ctx_ok || !s_vram) return;
-    s_up_nrects = 0;
-    rect_clear(&s_d24_skip_fb);
-    s_depth24_skip_up = 0;
-    up_add_transfer(0, 0, VRAM_W, VRAM_H);
-    flush_cpu_upload();
-    if (gpu_display_is_depth24()) {
-        s_depth24_skip_up = 1;
-        depth24_mark_scanout_band();
-    }
 }
 static void vkb_vram_transfer_out(int x, int y, int w, int h, uint16_t *data) {
     ensure_cpu();   /* sync GPU-rendered content down to the CPU mirror first */
