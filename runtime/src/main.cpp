@@ -95,6 +95,7 @@ extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -2557,33 +2558,57 @@ struct ControllerSource {
 };
 
 struct PsxButtonMap {
-    uint16_t bit;
+    uint16_t bit;               /* 0 = stick-direction slot (no digital bit alone) */
     const char* ini_name;
     std::vector<ControllerSource> sources;
+    /* When set, a pressed stick-direction source also contributes this d-pad
+     * bit in digital mode (ls_* -> Up/Down/Left/Right). */
+    uint16_t fold_bit = 0;
 };
 
 static int controller_device_index = 0;
 /* Default ~10% of SDL axis range (32767). Overridden per-player via settings. */
 static int controller_deadzone = 3277;
 static constexpr int kDefaultDeadzoneRaw = 3277;
-static std::array<PsxButtonMap, 16> controller_map = {{
-    { PAD_UP,       "up",       {} },
-    { PAD_DOWN,     "down",     {} },
-    { PAD_LEFT,     "left",     {} },
-    { PAD_RIGHT,    "right",    {} },
-    { PAD_CROSS,    "cross",    {} },
-    { PAD_CIRCLE,   "circle",   {} },
-    { PAD_SQUARE,   "square",   {} },
-    { PAD_TRIANGLE, "triangle", {} },
-    { PAD_L1,       "l1",       {} },
-    { PAD_R1,       "r1",       {} },
-    { PAD_L2,       "l2",       {} },
-    { PAD_R2,       "r2",       {} },
-    { PAD_L3,       "l3",       {} },
-    { PAD_R3,       "r3",       {} },
-    { PAD_START,    "start",    {} },
-    { PAD_SELECT,   "select",   {} },
+static constexpr int kControllerMapN = 24;
+using ControllerMap = std::array<PsxButtonMap, kControllerMapN>;
+static ControllerMap controller_map = {{
+    { PAD_UP,       "up",       {}, 0 },
+    { PAD_DOWN,     "down",     {}, 0 },
+    { PAD_LEFT,     "left",     {}, 0 },
+    { PAD_RIGHT,    "right",    {}, 0 },
+    { PAD_CROSS,    "cross",    {}, 0 },
+    { PAD_CIRCLE,   "circle",   {}, 0 },
+    { PAD_SQUARE,   "square",   {}, 0 },
+    { PAD_TRIANGLE, "triangle", {}, 0 },
+    { PAD_L1,       "l1",       {}, 0 },
+    { PAD_R1,       "r1",       {}, 0 },
+    { PAD_L2,       "l2",       {}, 0 },
+    { PAD_R2,       "r2",       {}, 0 },
+    { PAD_L3,       "l3",       {}, 0 },
+    { PAD_R3,       "r3",       {}, 0 },
+    { PAD_START,    "start",    {}, 0 },
+    { PAD_SELECT,   "select",   {}, 0 },
+    /* Stick directions (analog axes by default; fold onto d-pad digitally). */
+    { 0, "ls_up",    {}, PAD_UP },
+    { 0, "ls_down",  {}, PAD_DOWN },
+    { 0, "ls_left",  {}, PAD_LEFT },
+    { 0, "ls_right", {}, PAD_RIGHT },
+    { 0, "rs_up",    {}, 0 },
+    { 0, "rs_down",  {}, 0 },
+    { 0, "rs_left",  {}, 0 },
+    { 0, "rs_right", {}, 0 },
 }};
+/* Per-GUID overrides from input.ini [mapping.<guid>]. Absent GUID => global. */
+static std::unordered_map<std::string, ControllerMap> controller_maps_by_guid;
+
+static const ControllerMap& controller_map_for(const PlayerInput& p) {
+    if (p.guid[0]) {
+        auto it = controller_maps_by_guid.find(p.guid);
+        if (it != controller_maps_by_guid.end()) return it->second;
+    }
+    return controller_map;
+}
 
 static std::string trim_copy(const std::string& s) {
     size_t first = 0;
@@ -2776,34 +2801,49 @@ static std::vector<ControllerSource> parse_source_list(const std::string& value)
     return sources;
 }
 
-static void set_default_controller_mapping(void) {
-    for (auto& entry : controller_map) entry.sources.clear();
-
-    auto set_sources = [](const char* name, const char* sources) {
-        for (auto& entry : controller_map) {
-            if (std::strcmp(entry.ini_name, name) == 0) {
-                entry.sources = parse_source_list(sources);
-                return;
-            }
+static void apply_sources_to_map(ControllerMap& map, const char* name,
+                                 const char* sources) {
+    for (auto& entry : map) {
+        if (std::strcmp(entry.ini_name, name) == 0) {
+            entry.sources = parse_source_list(sources);
+            return;
         }
-    };
+    }
+}
 
-    set_sources("up",       "dpup,lefty-");
-    set_sources("down",     "dpdown,lefty+");
-    set_sources("left",     "dpleft,leftx-");
-    set_sources("right",    "dpright,leftx+");
-    set_sources("cross",    "a");
-    set_sources("circle",   "b");
-    set_sources("square",   "x");
-    set_sources("triangle", "y");
-    set_sources("l1",       "leftshoulder");
-    set_sources("r1",       "rightshoulder");
-    set_sources("l2",       "lefttrigger");
-    set_sources("r2",       "righttrigger");
-    set_sources("l3",       "leftstick");
-    set_sources("r3",       "rightstick");
-    set_sources("start",    "start");
-    set_sources("select",   "back");
+static void set_default_controller_mapping_into(ControllerMap& map) {
+    for (auto& entry : map) entry.sources.clear();
+    /* D-pad and sticks are separate (launcher Gamepad Bindings layout). Digital
+     * mode still folds ls_* onto d-pad bits via fold_bit. */
+    apply_sources_to_map(map, "up",       "dpup");
+    apply_sources_to_map(map, "down",     "dpdown");
+    apply_sources_to_map(map, "left",     "dpleft");
+    apply_sources_to_map(map, "right",    "dpright");
+    apply_sources_to_map(map, "cross",    "a");
+    apply_sources_to_map(map, "circle",   "b");
+    apply_sources_to_map(map, "square",   "x");
+    apply_sources_to_map(map, "triangle", "y");
+    apply_sources_to_map(map, "l1",       "leftshoulder");
+    apply_sources_to_map(map, "r1",       "rightshoulder");
+    apply_sources_to_map(map, "l2",       "lefttrigger");
+    apply_sources_to_map(map, "r2",       "righttrigger");
+    apply_sources_to_map(map, "l3",       "leftstick");
+    apply_sources_to_map(map, "r3",       "rightstick");
+    apply_sources_to_map(map, "start",    "start");
+    apply_sources_to_map(map, "select",   "back");
+    apply_sources_to_map(map, "ls_up",    "lefty-");
+    apply_sources_to_map(map, "ls_down",  "lefty+");
+    apply_sources_to_map(map, "ls_left",  "leftx-");
+    apply_sources_to_map(map, "ls_right", "leftx+");
+    apply_sources_to_map(map, "rs_up",    "righty-");
+    apply_sources_to_map(map, "rs_down",  "righty+");
+    apply_sources_to_map(map, "rs_left",  "rightx-");
+    apply_sources_to_map(map, "rs_right", "rightx+");
+}
+
+static void set_default_controller_mapping(void) {
+    set_default_controller_mapping_into(controller_map);
+    controller_maps_by_guid.clear();
 }
 
 static std::string default_input_ini_text(void) {
@@ -2812,6 +2852,7 @@ static std::string default_input_ini_text(void) {
         "; Sources use SDL/Xbox names: a,b,x,y,back,start,leftshoulder,rightshoulder,\n"
         "; lefttrigger,righttrigger,leftstick,rightstick (stick clicks -> L3/R3),\n"
         "; dpup,dpdown,dpleft,dpright,leftx-/leftx+/lefty-/lefty+.\n"
+        "; Optional per-device overrides: [mapping.<sdl-guid>].\n"
         "\n"
         "[controller]\n"
         "enabled = true\n"
@@ -2819,10 +2860,10 @@ static std::string default_input_ini_text(void) {
         "deadzone = 3277\n"
         "\n"
         "[mapping]\n"
-        "up = dpup,lefty-\n"
-        "down = dpdown,lefty+\n"
-        "left = dpleft,leftx-\n"
-        "right = dpright,leftx+\n"
+        "up = dpup\n"
+        "down = dpdown\n"
+        "left = dpleft\n"
+        "right = dpright\n"
         "cross = a\n"
         "circle = b\n"
         "square = x\n"
@@ -2834,7 +2875,15 @@ static std::string default_input_ini_text(void) {
         "l3 = leftstick\n"
         "r3 = rightstick\n"
         "start = start\n"
-        "select = back\n";
+        "select = back\n"
+        "ls_up = lefty-\n"
+        "ls_down = lefty+\n"
+        "ls_left = leftx-\n"
+        "ls_right = leftx+\n"
+        "rs_up = righty-\n"
+        "rs_down = righty+\n"
+        "rs_left = rightx-\n"
+        "rs_right = rightx+\n";
 }
 
 static void load_input_config(const char* argv0) {
@@ -2846,15 +2895,20 @@ static void load_input_config(const char* argv0) {
     if (!fs::exists(config_path, ec)) {
         std::ofstream out(config_path, std::ios::binary);
         if (out) out << default_input_ini_text();
+        psx_keybinds_init(argv0);
         return;
     }
 
     std::ifstream in(config_path);
-    if (!in) return;
+    if (!in) {
+        psx_keybinds_init(argv0);
+        return;
+    }
 
     bool controller_enabled = true;
     std::string section;
     std::string line;
+    ControllerMap* guid_target = nullptr;
     while (std::getline(in, line)) {
         size_t comment = line.find_first_of(";#");
         if (comment != std::string::npos) line.resize(comment);
@@ -2862,6 +2916,17 @@ static void load_input_config(const char* argv0) {
         if (line.empty()) continue;
         if (line.front() == '[' && line.back() == ']') {
             section = lower_copy(trim_copy(line.substr(1, line.size() - 2)));
+            guid_target = nullptr;
+            if (section.rfind("mapping.", 0) == 0) {
+                const std::string guid = section.substr(8);
+                if (!guid.empty()) {
+                    /* Seed from the current global map (defaults + any
+                     * [mapping] keys already parsed), then overlay GUID keys. */
+                    if (!controller_maps_by_guid.count(guid))
+                        controller_maps_by_guid[guid] = controller_map;
+                    guid_target = &controller_maps_by_guid[guid];
+                }
+            }
             continue;
         }
         size_t eq = line.find('=');
@@ -2884,11 +2949,20 @@ static void load_input_config(const char* argv0) {
                     break;
                 }
             }
+        } else if (guid_target) {
+            for (auto& entry : *guid_target) {
+                if (key == entry.ini_name) {
+                    entry.sources = parse_source_list(value);
+                    break;
+                }
+            }
         }
     }
 
     if (!controller_enabled) {
         for (auto& entry : controller_map) entry.sources.clear();
+        for (auto& kv : controller_maps_by_guid)
+            for (auto& entry : kv.second) entry.sources.clear();
     }
 
     /* Configurable KEYBOARD keybinds (keybinds.ini, next to the exe) — separate
@@ -2946,6 +3020,13 @@ static void open_player(PlayerInput& p, int self_slot) {
     if (p.handle) {
         SDL_Joystick* joy = SDL_GameControllerGetJoystick(p.handle);
         p.instance = joy ? SDL_JoystickInstanceID(joy) : -1;
+        /* Persist the GUID of the pad we actually opened so per-device
+         * [mapping.<guid>] lookups match the live hardware (including the
+         * first-available fallback when the saved GUID is offline). */
+        {
+            SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(chosen);
+            SDL_JoystickGetGUIDString(g, p.guid, (int)sizeof(p.guid));
+        }
         const char* name = SDL_GameControllerName(p.handle);
         std::fprintf(stdout, "psxrecomp runtime: opened controller for slot: %s\n",
                      name ? name : "(unnamed)");
@@ -3083,19 +3164,23 @@ static bool source_is_stick_axis(const ControllerSource& s) {
 /* Build the active-low PSX button word from a controller's input.ini map. When
  * suppress_stick_axes is set (the pad is presenting as analog this frame), the
  * left/right analog-stick axes do NOT contribute button bits — see
- * source_is_stick_axis above. Digital mode passes false, so the stick still
- * folds onto the D-pad (its only outlet there). */
-static uint16_t controller_pad_buttons(SDL_GameController* h, bool suppress_stick_axes,
+ * source_is_stick_axis above. Digital mode passes false, so ls_* stick
+ * directions still fold onto the D-pad via fold_bit. */
+static uint16_t controller_pad_buttons(const ControllerMap& map,
+                                       SDL_GameController* h,
+                                       bool suppress_stick_axes,
                                        int deadzone_raw) {
     uint16_t buttons = 0xFFFF;  /* all released */
     if (!h) return buttons;
-    for (const auto& entry : controller_map) {
+    for (const auto& entry : map) {
         for (const auto& source : entry.sources) {
             if (suppress_stick_axes && source_is_stick_axis(source)) continue;
-            if (controller_source_pressed_h(h, source, deadzone_raw)) {
+            if (!controller_source_pressed_h(h, source, deadzone_raw)) continue;
+            if (entry.bit)
                 buttons &= (uint16_t)~entry.bit;
-                break;
-            }
+            if (entry.fold_bit && !suppress_stick_axes)
+                buttons &= (uint16_t)~entry.fold_bit;
+            break;
         }
     }
     return buttons;
@@ -3135,7 +3220,9 @@ static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby,
  * 1..5 — selects which keybinds.ini section drives a keyboard port. */
 static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_stick_axes) {
     if (p.kind == 1) return pad_from_keyboard(player);
-    if (p.kind == 2) return controller_pad_buttons(p.handle, suppress_stick_axes, p.deadzone);
+    if (p.kind == 2)
+        return controller_pad_buttons(controller_map_for(p), p.handle,
+                                      suppress_stick_axes, p.deadzone);
     return 0xFFFF;
 }
 
@@ -3163,17 +3250,83 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
         return;
     }
     if (p.kind == 2 && p.handle) {
-        axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX),
-                         SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY),
-                         &out[0], &out[1], p.deadzone);
-        axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTX),
-                         SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTY),
-                         &out[2], &out[3], p.deadzone);
+        const ControllerMap& map = controller_map_for(p);
+        auto find_entry = [&](const char* name) -> const PsxButtonMap* {
+            for (const auto& e : map)
+                if (std::strcmp(e.ini_name, name) == 0) return &e;
+            return nullptr;
+        };
+        /* Default left/right stick axis layout → smooth radial deadzone path.
+         * Any remapped stick direction falls back to discrete full deflection. */
+        auto sticks_default_axes = [&](const char* up, const char* down,
+                                       const char* left, const char* right,
+                                       SDL_GameControllerAxis ax,
+                                       SDL_GameControllerAxis ay) -> bool {
+            auto is_axis = [&](const char* n, int axis_id, ControllerSource::Kind k) {
+                const PsxButtonMap* e = find_entry(n);
+                if (!e || e->sources.size() != 1) return false;
+                const auto& s = e->sources[0];
+                return s.kind == k && s.id == axis_id;
+            };
+            return is_axis(up, ay, ControllerSource::Kind::AxisNegative) &&
+                   is_axis(down, ay, ControllerSource::Kind::AxisPositive) &&
+                   is_axis(left, ax, ControllerSource::Kind::AxisNegative) &&
+                   is_axis(right, ax, ControllerSource::Kind::AxisPositive);
+        };
+        auto apply_discrete_stick = [&](const char* up, const char* down,
+                                        const char* left, const char* right,
+                                        uint8_t* bx, uint8_t* by) {
+            *bx = *by = 0x80;
+            auto pressed = [&](const char* n) {
+                const PsxButtonMap* e = find_entry(n);
+                if (!e) return false;
+                for (const auto& s : e->sources)
+                    if (controller_source_pressed_h(p.handle, s, p.deadzone))
+                        return true;
+                return false;
+            };
+            if (pressed(left))  *bx = 0x00;
+            if (pressed(right)) *bx = 0xFF;
+            if (pressed(up))    *by = 0x00;
+            if (pressed(down))  *by = 0xFF;
+        };
+
+        if (sticks_default_axes("ls_up", "ls_down", "ls_left", "ls_right",
+                                SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY)) {
+            axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX),
+                             SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY),
+                             &out[0], &out[1], p.deadzone);
+        } else {
+            apply_discrete_stick("ls_up", "ls_down", "ls_left", "ls_right",
+                                 &out[0], &out[1]);
+        }
+        if (sticks_default_axes("rs_up", "rs_down", "rs_left", "rs_right",
+                                SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY)) {
+            axes_to_pad_pair(SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTX),
+                             SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_RIGHTY),
+                             &out[2], &out[3], p.deadzone);
+        } else {
+            apply_discrete_stick("rs_up", "rs_down", "rs_left", "rs_right",
+                                 &out[2], &out[3]);
+        }
         if (fold_dpad) {
-            if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  out[0] = 0x00;
-            if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) out[0] = 0xFF;
-            if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_UP))    out[1] = 0x00;
-            if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  out[1] = 0xFF;
+            /* Fold physical D-pad (mapped "up"/etc. button sources that are
+             * d-pad buttons) — prefer the mapped sources over hardcoded buttons
+             * so a remapped d-pad still folds onto the left stick. */
+            auto dpad_pressed = [&](const char* n) {
+                const PsxButtonMap* e = find_entry(n);
+                if (!e) return false;
+                for (const auto& s : e->sources) {
+                    if (source_is_stick_axis(s)) continue;
+                    if (controller_source_pressed_h(p.handle, s, p.deadzone))
+                        return true;
+                }
+                return false;
+            };
+            if (dpad_pressed("left"))  out[0] = 0x00;
+            if (dpad_pressed("right")) out[0] = 0xFF;
+            if (dpad_pressed("up"))    out[1] = 0x00;
+            if (dpad_pressed("down"))  out[1] = 0xFF;
         }
     }
 }
@@ -3250,7 +3403,15 @@ static uint16_t dev_all_controllers_buttons(bool suppress_stick_axes) {
         SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
         SDL_GameController* h = SDL_GameControllerFromInstanceID(inst);
         if (!h) h = SDL_GameControllerOpen(i);   /* open once; SDL keeps it */
-        if (h) btn &= controller_pad_buttons(h, suppress_stick_axes, controller_deadzone);
+        if (!h) continue;
+        PlayerInput tmp;
+        tmp.kind = 2;
+        {
+            SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(i);
+            SDL_JoystickGetGUIDString(g, tmp.guid, (int)sizeof(tmp.guid));
+        }
+        btn &= controller_pad_buttons(controller_map_for(tmp), h,
+                                      suppress_stick_axes, controller_deadzone);
     }
     return btn;
 }
@@ -5150,21 +5311,24 @@ namespace {
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
         if (!out) return 0;
         std::memset(out, 0, sizeof(*out));
-        /* Empty path = use bundled OpenBIOS when this title allows it. */
+        /* Empty path = use bundled OpenBIOS when this title allows it.
+         * Never needs_regen: switching to OpenBIOS is always a hot-swap. */
         if (!bios_path || !bios_path[0]) {
+            out->needs_regen = 0;
             if (s_openbios_allowed && psx_bios_bundled()) {
                 out->ok = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
                               "Using bundled OpenBIOS.");
                 return 1;
             }
-            /* Setup host: no BIOS backends linked yet — Generate & rebuild
-             * will emit OpenBIOS C from the redistributable openbios.bin. */
+            /* Setup host: no BIOS backends linked yet — first Generate for
+             * game C will also emit OpenBIOS from redistributable openbios.bin.
+             * Selecting OpenBIOS itself still does not require a BIOS regen. */
             if (s_openbios_allowed && psx_bios_registry_count == 0) {
                 out->ok = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
-                              "OpenBIOS will be generated on first "
-                              "Generate & rebuild (optional: pick SCPH1001).");
+                              "Using OpenBIOS (emitted on first Generate & "
+                              "rebuild with game C; optional: pick SCPH1001).");
                 return 1;
             }
             std::snprintf(out->detail, sizeof(out->detail),

@@ -38,6 +38,9 @@ static int g_ready;
 static int g_relaunch_is_helper;
 /* Wizard BIOS pick (survives cwd-relative bios.cfg misses on Windows). */
 static char g_wizard_bios[1100];
+/* Set when host_persist_setup receives an explicit bios_path (including ""
+ * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
+static int g_wizard_bios_explicit;
 
 static const char* cfg_or(const char* v, const char* d) {
     return (v && v[0]) ? v : d;
@@ -884,6 +887,7 @@ static int host_persist_setup(void* ctx, const char* rom_path,
     char abs_bios[1100];
     (void)ctx;
     if (bios_path) {
+        g_wizard_bios_explicit = 1;
         if (bios_path[0] &&
             absolutize_existing_file(abs_bios, sizeof(abs_bios), bios_path)) {
             snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", abs_bios);
@@ -941,6 +945,22 @@ static void persist_relaunch_sidecars(const char* near_exe,
     if (g_wizard_bios[0] &&
         absolutize_existing_file(abs_bios, sizeof(abs_bios), g_wizard_bios)) {
         snprintf(bios_line, sizeof(bios_line), "%s", abs_bios);
+    } else if (g_wizard_bios_explicit) {
+        /* Intentional OpenBIOS: clear sidecars — do not revive a stale
+         * bios.cfg (e.g. root-owned file that remove() could not delete). */
+        write_sidecar_near_exe(near_exe, "bios.cfg", "");
+        write_line_file("bios.cfg", "");
+        if (g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "bios.cfg"))
+            write_line_file(project_sidecar, "");
+        if (g_build_dir[0]) {
+            char build_exe[1200];
+            if (join_path(build_exe, sizeof(build_exe), g_build_dir,
+                          g_exe_basename))
+                write_sidecar_near_exe(build_exe, "bios.cfg", "");
+        }
+        return;
     } else {
         char line[1100];
         line[0] = '\0';

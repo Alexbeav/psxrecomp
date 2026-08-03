@@ -1042,6 +1042,8 @@ function(psxrecomp_add_runtime_target target)
     # can still use -DPSX_ENABLE_VULKAN=OFF to produce the inert stub explicitly.
     option(PSX_ENABLE_VULKAN "Build the Vulkan renderer backend when SDK tools are available" ON)
     if(PSX_ENABLE_VULKAN)
+    # $VULKAN_SDK first; else find_path. Unset before find_path — an empty
+    # normal _vk_inc makes find_path a no-op on modern CMake (Homebrew miss).
     set(_vk_inc "")
     if(DEFINED ENV{VULKAN_SDK})
         if(EXISTS "$ENV{VULKAN_SDK}/Include/vulkan/vulkan.h")
@@ -1051,6 +1053,8 @@ function(psxrecomp_add_runtime_target target)
         endif()
     endif()
     if(NOT _vk_inc)
+        unset(_vk_inc CACHE)
+        unset(_vk_inc)
         find_path(_vk_inc vulkan/vulkan.h)
     endif()
     find_program(GLSLC_EXE NAMES glslc
