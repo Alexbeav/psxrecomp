@@ -672,3 +672,92 @@ source-owned regression, project report update, candidate update, failure
 disposition, and next-consumer result must be returned to the corpus; stable
 promotion remains blocked on the portfolio-wide 27-candidate classification
 pass.
+
+## OpenGL depth-24 ownership correction
+
+The bounded GP0/GP1 transition proved the generic split-representation defect.
+OpenGL made the FBO authoritative for 15-bit fill/draw/copy work, then retail
+switched to depth 24 and uploaded packed movie strips into CPU VRAM. Presentation
+read the CPU representation, so unuploaded rows exposed stale data even though
+the FBO contained the correct black fill.
+
+Commit `09be64b` adds a renderer depth-change hook. OpenGL performs `ensure_cpu()`
+at the 15-to-24 handoff before movie uploads, mirrors fills while packed depth-24
+CPU VRAM owns scanout, and applies ownership policy before CPU uploads. The fix
+does not encode movie dimensions, bands, SF2 addresses, or output presentation.
+`gl_depth24_coherency` covers fill/copy/upload ownership. The framework suite
+passed 41/41 at that milestone. Hidden OpenGL changed from 292 mismatches in the
+affected region to zero, while software remained correct. The user independently
+confirmed the formerly corrupt FMV presentation was correct.
+
+Corpus results were recorded as follows: `PSX-GPU-002`/`FAIL-009` confirmed;
+`PSX-GPU-001` narrowed to the persistence constraint; `PSX-MDEC-004` irrelevant;
+hardcoded clearing rejected. Tenchu remains the first independent consumer.
+
+## Authentic startup CD seek lifecycle
+
+A fully neutral no-input native run still skipped Eidetic and ZINTRO, so the
+earlier ambiguous TITLE trigger was not the root cause. Three bounded checks
+rejected input propagation, overlay-native generation, and movie/container
+identity. Exact command/sector history showed retail issuing SetLoc/SeekL for
+Eidetic at frame 1295, but the CD device continued delivering the old 989 read
+stream.
+
+SeekL/SeekP did not stop an active ReadN/ReadS generation. Commit `485b79b`
+calls `stop_read_stream()`, clears READ/PLAY state, and then enters SEEK. The
+title-neutral `cdrom_seek_retarget` regression proves that old-location sectors
+and pending data-ready ownership cannot survive the retarget. The framework
+suite passed 42/42.
+
+The corrected interpreter and native routes both produced the exact authentic
+sequence: 989 frame 925, Eidetic 1268, legal 1422, ZINTRO 1752, TITLE 18493.
+`PSX-HLE-001` was narrowed to a complete-device-state lesson; the confirmed
+owner is the LLE CD lifecycle. Early input and native overlay generation were
+contradicted.
+
+## Deterministic compound route and clean pair
+
+`tools/sf2_mission1_route.py` latches all five movie identities before using a
+compound TITLE predicate: retail application depth/state/transition 2/4/0,
+TITLE word zero, enabled 320x240x15 display, and neutral PAD stable for 60 guest
+frames. It then uses retail Cross presses to select New Game, One Player, and
+leave state 8. State-0 success additionally requires a live player instance,
+camera ownership, positive health, completed movie read, recorded PAD input,
+and authoritative matrix movement.
+
+The first two native routes passed semantically, but later input landed on
+different guest frames because the host socket issued `press` after polling a
+gate. Same-frame fingerprints matched through TITLE and diverged after the
+jittered input. This was a harness invariant, not accepted determinism.
+
+The generic debug command now accepts `at_frame`. The emulation-thread
+consumption point records first/last applied frame, value, and count. Four
+bounded harness failures were retained during refinement: endpoint readiness,
+a Python predicate binding error, live polling missing a short pulse, and frame
+history being ordered before override application. None was a retail failure.
+`debug_input_schedule` protects the final contract; commit `89804a7` also adds
+the route comparator. The complete suite passes 43/43.
+
+Two final clean native-enabled processes used identical scheduled intervals:
+Cross 19200--19219, Cross 19320--19339, Cross 24000--24019, and D-pad Up
+25800--25859. Both reached state 0 with the same player/camera owner and ended
+at XYZ `(-5606,2036,7529)`, health 150, armor 600. Both had zero lost CD INT1,
+nonzero GPU work, more than 1,200 SPU key-ons, and identical XA totals.
+
+The normalized comparison passed. Startup hash is
+`e044f13241a622bd02b465e9e68270c2753976b0f5a40f2beb607596ac8b32ce`;
+input hash is
+`c518cd5e1e597e70eebc0e82e8b305dcc56f6499f8672a52867cdc89bdefd650`.
+Exact intersecting-frame fingerprints match at TITLE, aircraft movie, state 8,
+player ownership, and post-movement. These fingerprints include RAM writes,
+store PCs, MMIO, scratchpad, and cycle clocks. Only host request timing and the
+equivalent Y=0/Y=240 double-buffer bank are normalized.
+
+Final ownership remains explicit. Run A/Run B report resident AOT
+15,829,452/15,828,754; compiled overlay 141,709,302/141,708,765; interpreter
+fallback 683,327/683,189. Fallback is 0.4799%/0.4798% of overlay-tier dispatch
+and is not called native coverage. Both runs have eight loaded regions and 573
+registered candidates at player control. The ignored footprint is 6.604 GiB.
+
+The full report is `../OVERNIGHT_REPORT_2026-08-03.md`; the payload-free corpus
+return is `../PSX_PORTS_RETURN_2026-08-03.md`.

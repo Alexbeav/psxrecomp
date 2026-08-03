@@ -1,14 +1,52 @@
-# Current objective — R2 operable retail frontend
+# Current objective — reproducible retail Mission 1 route
 
 Updated: 2026-08-03
 
 ## Objective
 
-Advance feasibility gate R2 from the deterministic native TITLE boundary to an
-operable retail frontend. Exercise the retail TITLE/MENU/INIT overlay family,
-prove cache reuse and invalidation, quantify remaining interpreter fallback by
-address range and share, and validate presentation, controller, audio, and
-movie-request boundaries without adding SF2-specific substitutes.
+Preserve the now-reproducible authentic startup and retail-selected Mission 1
+route, then advance the feasibility comparison to the representative Mission 3
+route. Continue measuring resident AOT, compiled-overlay, and interpreter
+fallback ownership separately. Do not add modernization or SF2-specific
+containment.
+
+## 2026-08-03 overnight closure
+
+- Generic OpenGL split-VRAM ownership is corrected at the 15-bit-to-24-bit
+  transition. The backend finishes FBO-owned work into CPU VRAM before packed
+  movie uploads, mirrors depth-24 fills into both representations, and orders
+  ownership before CPU uploads. The title-neutral regression passes.
+- The affected hidden-OpenGL acceptance route changed from 292 CPU/FBO mismatch
+  samples to zero; software remained the correct control. The user also
+  confirmed the formerly corrupt FMV bands render correctly.
+- Missing Eidetic and ZINTRO playback was not an input skip. Exact sector
+  history proved that retail issued the new SetLoc/SeekL sequence while the CD
+  device continued the old read stream. SeekL/SeekP now cancel ReadN/ReadS and
+  pending data-ready ownership before entering SEEK. The title-neutral
+  regression passes.
+- A clean no-input process now produces the complete authentic sequence at
+  deterministic frames: 989 logo 925, Eidetic 1268, legal 1422, ZINTRO 1752,
+  TITLE 18493. The compound TITLE predicate remains stable for 60 guest frames
+  before any input is armed.
+- Exact guest-frame PAD scheduling and emulation-thread applied-input telemetry
+  remove host socket timing from automation. The complete framework suite is
+  43/43.
+- Two final clean native-enabled processes passed the same retail route through
+  New Game, One Player, aircraft FMV, state 8, post-FMV dialogue, state-0
+  player/camera ownership, and D-pad movement. All scheduled input application
+  frames match. Same-frame RAM-write, store-PC, MMIO, scratchpad, and cycle
+  fingerprints match at all five semantic checkpoints.
+- Both runs load eight overlay regions and expose 573 compiled candidates at
+  player control. Final ownership is approximately 15.83 million resident-AOT
+  hits, 141.71 million compiled-overlay dispatches, and 0.683 million
+  interpreter fallbacks. Fallback is 0.480% of overlay-tier dispatches and is
+  not counted as native coverage.
+- Both runs finish with zero lost CD INT1 events, more than 1,200 SPU key-ons,
+  identical nonzero XA input totals, identical player/camera identity, health
+  150, and final XYZ `(-5606, 2036, 7529)` after input.
+- The ignored local footprint is 6.604 GiB, below the 20 GiB ceiling.
+- Full evidence and handoff: `docs/sf2/OVERNIGHT_REPORT_2026-08-03.md` and
+  `docs/sf2/PSX_PORTS_RETURN_2026-08-03.md`.
 
 ## Verified state
 
@@ -180,24 +218,23 @@ movie-request boundaries without adding SF2-specific substitutes.
 
 ## Next execution sequence
 
-1. Capture the narrow GP0 transition into the affected movie, prove the exact
-   pre-movie black fill/copy operation, then fix only the demonstrated generic
-   OpenGL CPU/FBO coherency rule. Revalidate OpenGL against the already-correct
-   software control.
-2. Replace the ambiguous TITLE word-only trigger with a compound presentation
-   and state checkpoint, then repeat startup without pre-title input to verify
-   the Eidetic and `z_intro` sequence.
-3. Repeat the state-8/Mission 1 route twice with fixed compound checkpoints and
-   compare stable guest state separately from host/query-timing values.
-4. Use only retail menu ownership to select the representative Mission 3 route;
-   do not substitute the oracle's direct diagnostic bootstrap.
+1. Perform the short user-visible OpenGL acceptance check on the retained r8
+   build: complete startup, clean FMV bands, and Mission 1 control. This is
+   presentation confirmation, not a substitute for the completed headless
+   semantic gates.
+2. Select Mission 3 only through retail-owned menus and add its semantic
+   checkpoints under the existing comparison protocol.
+3. Run Mission 3 twice from clean processes and report overlay convergence and
+   fallback separately.
+4. Prepare generic GPU, CD seek, and deterministic-input changes for upstream
+   review only with explicit user authorization.
 
 ## R2 remaining target
 
-- A second fixed-checkpoint state-8 comparison after the new cache variants are
-  present, using the corrected non-ambiguous input gate.
-- Then select the representative Mission 3 route through retail-owned frontend
-  state without modernization or native gameplay substitutes.
+- R2's reproducible Mission 1 route is closed.
+- The remaining feasibility-plan target is the representative Mission 3 route
+  through retail-owned frontend state, without modernization or native gameplay
+  substitutes.
 
 ## Known environmental detail
 

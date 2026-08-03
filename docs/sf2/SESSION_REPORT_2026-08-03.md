@@ -254,3 +254,29 @@ The most reusable lessons are:
   evidence, failed hypotheses, and accepted conclusions.
 - `docs/sf2/FEASIBILITY_PLAN.md` — R0–R4 gates and stop conditions.
 - `docs/sf2/COMPARISON_PROTOCOL.md` — deterministic comparison requirements.
+
+## Overnight addendum — deterministic closure
+
+The previously open OpenGL FMV, startup-flow, and two-run Mission 1 gates are
+now closed:
+
+- generic depth-24 CPU/FBO ownership fix and title-neutral regression;
+- generic CD SeekL/SeekP active-read cancellation and regression;
+- complete authentic 989/Eidetic/legal/ZINTRO/TITLE startup with no input;
+- compound stable TITLE gate before exact guest-frame input;
+- two clean native-enabled retail Mission 1 routes to verified player movement;
+- exact matching same-frame RAM/PC/MMIO/scratchpad/cycle fingerprints at all
+  semantic checkpoints;
+- separate resident AOT, compiled overlay, and interpreter fallback counts;
+- complete framework suite 43/43 and 6.604 GiB ignored footprint.
+
+Interpreter fallback is approximately 0.480% of overlay-tier dispatches in the
+final pair and remains required, visible, and excluded from native coverage.
+The next feasibility target is retail-selected Mission 3. A short visible
+OpenGL acceptance remains useful tomorrow but is not needed to establish the
+completed headless semantic route.
+
+Detailed records:
+
+- `OVERNIGHT_REPORT_2026-08-03.md`
+- `PSX_PORTS_RETURN_2026-08-03.md`
