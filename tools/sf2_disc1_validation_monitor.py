@@ -76,8 +76,15 @@ def process_alive(pid: int) -> bool:
         )
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            ):
+                return False
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -125,6 +132,56 @@ def player_state(client: DebugClient) -> dict[str, Any] | None:
         "wrapper": f"0x{wrapper:08X}",
         "owner": f"0x{owner:08X}",
         "player_owns_camera": owner == player,
+    }
+
+
+def runtime_health(client: DebugClient) -> dict[str, Any]:
+    """Return bounded cumulative ownership/device evidence without payloads."""
+    resident = client.call("dispatch_stats")
+    overlay = client.call("overlay_loader_status")
+    cdrom = client.call("cdrom_state")
+    spu = client.call("spu_status")
+    audio = client.call("audio_stats")
+    pad = client.call("pad_status")
+    return {
+        "dispatch": {
+            "resident_aot": int(resident["static_hits"]),
+            "resident_misses": int(resident["miss_total"]),
+            "overlay_native": int(overlay["dispatch_native"]),
+            "interpreter_fallback": int(overlay["dispatch_interp_fallback"]),
+            "regions": int(overlay["regions"]),
+            "loads": int(overlay["loads"]),
+            "invalidations": int(overlay["invalidations"]),
+            "revalidations": int(overlay["revalidations"]),
+            "stale_blocked": int(overlay["stale_blocked"]),
+            "candidate_overflow": int(overlay["candidate_overflow"]),
+        },
+        "cdrom": {
+            "seq": int(cdrom["seq"]),
+            "int1_lost": int(cdrom["int1_lost"]),
+            "last_lba": int(cdrom["last_sector"]["lba"]),
+            "last_size": int(cdrom["last_sector"]["size"]),
+        },
+        "spu": {
+            "key_on_count": int(spu["key_on_count"]),
+            "render_frames": int(spu["render_frames"]),
+            "nonzero_frames": int(spu["nonzero_frames"]),
+            "peak": int(spu["peak"]),
+        },
+        "audio": {
+            tap["name"]: {
+                "frames": int(tap["frames"]),
+                "nonzero": int(tap["nonzero"]),
+                "peak": int(tap["peak"]),
+            }
+            for tap in audio["taps"]
+        },
+        "pad": {
+            "word": str(pad["pad"]),
+            "connected": bool(pad["slot0"]["connected"]),
+            "analog": bool(pad["slot0"]["analog"]),
+            "sticks": [int(value) for value in pad["slot0"]["sticks"]],
+        },
     }
 
 
@@ -319,11 +376,16 @@ def main() -> int:
                     "gpu": ws_value,
                     "gte_verts": ws["gte_verts"],
                     "fullscreen_rect": fullscreen,
-                    "pad": client.call("pad_status")["pad"],
+                    "runtime": runtime_health(client),
                     "mouse": client.call("mouse_camera_stats"),
                 })
                 last_sample_frame = frame
-            last_snapshot = {"frame": frame, "app": app, "player": player, "gpu": gpu}
+            last_snapshot = {
+                "frame": frame,
+                "app": app,
+                "player": player,
+                "gpu": gpu,
+            }
             consecutive_failures = 0
         except (OSError, RuntimeError, json.JSONDecodeError, struct.error):
             consecutive_failures += 1
@@ -340,6 +402,14 @@ def main() -> int:
     evidence["present"]["shapes"] = dict(sorted(present_shapes.items()))
     evidence["gl_present"]["counts"] = dict(sorted(gl_counts.items()))
     evidence["gl_present"]["shapes"] = dict(sorted(gl_shapes.items()))
+    if last_snapshot:
+        try:
+            last_snapshot["runtime"] = runtime_health(client)
+            last_snapshot["mouse"] = client.call("mouse_camera_stats")
+        except (OSError, RuntimeError, json.JSONDecodeError, struct.error):
+            # The endpoint normally closes before finalization. The last
+            # periodic sample remains the authoritative bounded health sample.
+            pass
     evidence["last_snapshot"] = last_snapshot
     evidence["timeline"] = timeline_identity(args.timeline)
     args.out.parent.mkdir(parents=True, exist_ok=True)

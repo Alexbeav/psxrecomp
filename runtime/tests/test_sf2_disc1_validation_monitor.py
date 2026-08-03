@@ -3,7 +3,9 @@
 
 import importlib.util
 import os
+import subprocess
 import struct
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -24,6 +26,59 @@ def load_monitor():
 def main() -> int:
     monitor = load_monitor()
     assert monitor.process_alive(os.getpid())
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    # Popen intentionally retains its Windows process handle here. The monitor
+    # must inspect the exit code instead of equating an open handle with life.
+    assert not monitor.process_alive(exited.pid)
+
+    class FakeClient:
+        RESPONSES = {
+            "dispatch_stats": {"static_hits": 100, "miss_total": 0},
+            "overlay_loader_status": {
+                "dispatch_native": 200, "dispatch_interp_fallback": 3,
+                "regions": 4, "loads": 5, "invalidations": 1,
+                "revalidations": 1, "stale_blocked": 1,
+                "candidate_overflow": 0,
+            },
+            "cdrom_state": {
+                "seq": 9, "int1_lost": 0,
+                "last_sector": {"lba": 123, "size": 2048},
+            },
+            "spu_status": {
+                "key_on_count": 7, "render_frames": 8,
+                "nonzero_frames": 6, "peak": 99,
+            },
+            "audio_stats": {
+                "taps": [
+                    {"name": "spu_out", "frames": 8, "nonzero": 6,
+                     "peak": 99},
+                    {"name": "cd_in", "frames": 5, "nonzero": 4,
+                     "peak": 88},
+                ],
+            },
+            "pad_status": {
+                "pad": "0xFFFF",
+                "slot0": {"connected": True, "analog": False,
+                          "sticks": [128, 128, 128, 128]},
+            },
+        }
+
+        def call(self, command, **_fields):
+            return self.RESPONSES[command]
+
+    health = monitor.runtime_health(FakeClient())
+    assert health["dispatch"] == {
+        "resident_aot": 100, "resident_misses": 0,
+        "overlay_native": 200, "interpreter_fallback": 3,
+        "regions": 4, "loads": 5, "invalidations": 1,
+        "revalidations": 1, "stale_blocked": 1,
+        "candidate_overflow": 0,
+    }
+    assert health["cdrom"]["int1_lost"] == 0
+    assert health["audio"]["cd_in"]["nonzero"] == 4
+    assert health["pad"]["sticks"] == [128, 128, 128, 128]
+
     counts: Counter[str] = Counter()
     shapes: Counter[str] = Counter()
     transitions: list[dict] = []

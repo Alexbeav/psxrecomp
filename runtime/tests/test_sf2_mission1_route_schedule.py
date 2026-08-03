@@ -32,6 +32,13 @@ def main() -> int:
     for _host_poll_frame in (18596, 18612):
         assert route.deterministic_route_schedule(18492) == expected
 
+    # The ordinary native route retains its original exact frame. A slower
+    # interpreter/diagnostic route re-anchors only the pending semantic edge,
+    # and nearby host polling observations choose the same guest boundary.
+    assert route.semantic_future_frame(24000, 23999) == 24000
+    assert route.semantic_future_frame(24000, 24417) == 25200
+    assert route.semantic_future_frame(24000, 24435) == 25200
+
     print("sf2 mission1 route schedule regression: PASS")
     return 0
 

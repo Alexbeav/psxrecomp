@@ -245,6 +245,20 @@ def deterministic_route_schedule(title_movie_frame: int) -> dict[str, int]:
     }
 
 
+def semantic_future_frame(planned_frame: int, observed_frame: int) -> int:
+    """Keep the event-anchored plan, or deterministically re-anchor a late gate.
+
+    Slow interpreter/diagnostic runs can reach a later semantic gate after its
+    original TITLE-relative input frame.  Refusing to proceed turns host speed
+    into a false game failure.  Move only that pending edge to the next shared
+    600-frame boundary at least one quantum beyond the observed guest frame;
+    the actual emulation-thread consumption frame remains exact and comparable.
+    """
+    if planned_frame > observed_frame:
+        return planned_frame
+    return next_frame_boundary(observed_frame + 600)
+
+
 def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "schema": 1,
@@ -341,6 +355,9 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
 
     wait_for(client, "retail Mission 1 state-8 briefing", briefing, timeout)
     evidence["checkpoints"].append(checkpoint(client, "mission1_state8"))
+    schedule["leave_briefing"] = semantic_future_frame(
+        schedule["leave_briefing"], client.frame()
+    )
     evidence["input_schedule"].append(
         scheduled_press(client, 0xBFFF, schedule["leave_briefing"])
     )
@@ -366,7 +383,7 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         raise RuntimeError("player ownership did not remain stable")
     evidence["checkpoints"].append(checkpoint(client, "mission1_player_owned"))
 
-    move_start = schedule["move"]
+    move_start = semantic_future_frame(schedule["move"], client.frame())
     evidence["input_schedule"].append(
         scheduled_press(client, 0xFFEF, move_start, 60)
     )  # D-pad Up, active low.
