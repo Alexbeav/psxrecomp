@@ -184,10 +184,9 @@ def default_min_version() -> str:
     env = (os.environ.get("RETCOMM_TOOLCHAIN_MIN_VERSION") or "").strip()
     if env:
         return env
-    # Windows packs from 1.0.3 ship static zlib for find_package(ZLIB).
-    if sys_platform_is_windows():
-        return "1.0.3"
-    return ""
+    # 1.0.4+: Linux libxml2 + clang.cfg (-fuse-ld=lld) for IPO; Windows zlib
+    # since 1.0.3. Keep one floor so ensure-toolchain refreshes stale caches.
+    return "1.0.4"
 
 
 def pack_satisfies_min(root: Path, min_version: str = "") -> bool:
@@ -340,6 +339,15 @@ def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
         os.environ["CMAKE_PREFIX_PATH"] = pack_s
     elif pack_s not in prev_prefix.split(os.pathsep):
         os.environ["CMAKE_PREFIX_PATH"] = pack_s + os.pathsep + prev_prefix
+    lib_dir = pack_root / "lib"
+    if lib_dir.is_dir() and not sys_platform_is_windows():
+        lib_s = str(lib_dir)
+        prev_llp = os.environ.get("LD_LIBRARY_PATH", "")
+        parts = prev_llp.split(os.pathsep) if prev_llp else []
+        if lib_s not in parts:
+            os.environ["LD_LIBRARY_PATH"] = lib_s + (
+                os.pathsep + prev_llp if prev_llp else ""
+            )
     for name, env_key in (
         ("clang", "CC"),
         ("clang++", "CXX"),
@@ -351,7 +359,6 @@ def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
             os.environ[env_key] = str(cand)
     if log:
         log(f"Using toolchain: {bin_dir}")
-
 
 def unpack_zip_to(zip_path: Path, dest: Path) -> Path:
     """Extract *zip_path* into *dest* (replaced) and return usable pack root."""
