@@ -5201,17 +5201,34 @@ namespace {
                 return 1;
             }
             const uint32_t crc = crc32_compute(data.data(), data.size());
-            out->ok = 1;
             if (crc != 0x37157331u) {
                 out->warn = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
                               "CRC32 %08X (validated dump is SCPH1001 CRC32 "
-                              "37157331). Boot may still work.",
+                              "37157331).",
                               crc);
             } else {
                 std::snprintf(out->detail, sizeof(out->detail),
                               "SCPH1001.BIN (CRC OK).");
             }
+            /* Setup host (no backends yet): file is fine for first Generate. */
+            if (psx_bios_registry_count == 0) {
+                out->ok = 1;
+                return 1;
+            }
+            /* Built host: only accept images that have a linked backend.
+             * Otherwise Play would load mismatched dispatch and crash. */
+            uint32_t match_crc = 0;
+            uint64_t match_size = 0;
+            if (bios_backend_for_file(open_path, &match_crc, &match_size)) {
+                out->ok = 1;
+                return 1;
+            }
+            out->ok = 0;
+            out->needs_regen = 1;
+            std::snprintf(out->detail, sizeof(out->detail),
+                          "This BIOS is not compiled into the current build. "
+                          "Generate & rebuild to switch (or use OpenBIOS).");
             return 1;
         } catch (const std::exception& e) {
             std::snprintf(out->detail, sizeof(out->detail),
