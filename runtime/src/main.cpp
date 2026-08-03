@@ -5158,46 +5158,70 @@ namespace {
                               "Using bundled OpenBIOS.");
                 return 1;
             }
+            /* Setup host: no BIOS backends linked yet — Generate & rebuild
+             * will emit OpenBIOS C from the redistributable openbios.bin. */
+            if (s_openbios_allowed && psx_bios_registry_count == 0) {
+                out->ok = 1;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "OpenBIOS will be generated on first "
+                              "Generate & rebuild (optional: pick SCPH1001).");
+                return 1;
+            }
             std::snprintf(out->detail, sizeof(out->detail),
                           "PlayStation BIOS required (SCPH1001.BIN).");
             return 1;
         }
         /* Match runtime resolve: relative picks like bios/SCPH1001.BIN must not
-         * depend on process cwd (build/ vs project root). */
-        std::filesystem::path resolved =
-            resolve_bios_path(bios_path, g_lnch_argv0 ? g_lnch_argv0 : "");
-        const std::string open_path =
-            (!resolved.empty() ? resolved : std::filesystem::path(bios_path))
-                .string();
-        std::ifstream f(open_path, std::ios::binary | std::ios::ate);
-        if (!f.is_open()) {
-            std::snprintf(out->detail, sizeof(out->detail), "BIOS file not found.");
+         * depend on process cwd (build/ vs project root). Guard filesystem
+         * exceptions so a bad picker path cannot take down the setup wizard. */
+        try {
+            std::filesystem::path resolved =
+                resolve_bios_path(bios_path, g_lnch_argv0 ? g_lnch_argv0 : "");
+            const std::string open_path =
+                (!resolved.empty() ? resolved : std::filesystem::path(bios_path))
+                    .string();
+            std::ifstream f(open_path, std::ios::binary | std::ios::ate);
+            if (!f.is_open()) {
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "BIOS file not found.");
+                return 1;
+            }
+            const std::streamoff size = f.tellg();
+            if (size != 512 * 1024) {
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "BIOS must be exactly 512 KiB (got %lld). Use "
+                              "SCPH1001.BIN.",
+                              (long long)size);
+                return 1;
+            }
+            std::vector<uint8_t> data((size_t)size);
+            if (!read_at(f, 0, data.data(), data.size())) {
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "Failed to read BIOS file.");
+                return 1;
+            }
+            const uint32_t crc = crc32_compute(data.data(), data.size());
+            out->ok = 1;
+            if (crc != 0x37157331u) {
+                out->warn = 1;
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "CRC32 %08X (validated dump is SCPH1001 CRC32 "
+                              "37157331). Boot may still work.",
+                              crc);
+            } else {
+                std::snprintf(out->detail, sizeof(out->detail),
+                              "SCPH1001.BIN (CRC OK).");
+            }
             return 1;
-        }
-        const std::streamoff size = f.tellg();
-        if (size != 512 * 1024) {
+        } catch (const std::exception& e) {
             std::snprintf(out->detail, sizeof(out->detail),
-                          "BIOS must be exactly 512 KiB (got %lld). Use SCPH1001.BIN.",
-                          (long long)size);
+                          "BIOS check failed: %s", e.what());
             return 1;
-        }
-        std::vector<uint8_t> data((size_t)size);
-        if (!read_at(f, 0, data.data(), data.size())) {
-            std::snprintf(out->detail, sizeof(out->detail), "Failed to read BIOS file.");
-            return 1;
-        }
-        const uint32_t crc = crc32_compute(data.data(), data.size());
-        out->ok = 1;
-        if (crc != 0x37157331u) {
-            out->warn = 1;
+        } catch (...) {
             std::snprintf(out->detail, sizeof(out->detail),
-                          "CRC32 %08X (validated dump is SCPH1001 CRC32 37157331). "
-                          "Boot may still work.",
-                          crc);
-        } else {
-            std::snprintf(out->detail, sizeof(out->detail), "SCPH1001.BIN (CRC OK).");
+                          "BIOS check failed.");
+            return 1;
         }
-        return 1;
     }
 
     int ae_prepare_disc(const char* source_path, char* out_disc_path, size_t out_cap,
