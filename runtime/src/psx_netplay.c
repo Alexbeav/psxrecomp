@@ -837,14 +837,16 @@ static void np_sleep_ms(unsigned ms)
 
 static uint32_t np_mono_ms(void)
 {
-#if defined(CLOCK_MONOTONIC)
+    /* Prefer Win32 clocks: MinGW defines CLOCK_MONOTONIC and would otherwise
+     * emit a clock_gettime64 ref that static links without -lwinpthread miss. */
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#elif defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (uint32_t)((uint64_t)ts.tv_sec * 1000ull +
                           (uint64_t)ts.tv_nsec / 1000000ull);
-#endif
-#if defined(_WIN32)
-    return (uint32_t)GetTickCount64();
+    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #else
     return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #endif
@@ -1594,14 +1596,14 @@ static int np_pad_diag_enabled(void)
 
 static uint32_t np_pad_mono_ms(void)
 {
-#if defined(CLOCK_MONOTONIC)
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#elif defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (uint32_t)((uint64_t)ts.tv_sec * 1000ull +
                           (uint64_t)ts.tv_nsec / 1000000ull);
-#endif
-#if defined(_WIN32)
-    return (uint32_t)GetTickCount64();
+    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #else
     return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #endif
