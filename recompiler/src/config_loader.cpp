@@ -673,6 +673,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.anti_deadzone = static_cast<int>(n);
             rt.has_anti_deadzone = true;
         }
+        if (ct.contains("mouse_pad")) {
+            rt.controller_mouse_pad = toml::find<bool>(ct, "mouse_pad");
+        }
+        if (ct.contains("mouse_counts_per_frame")) {
+            const auto n = toml::find<int64_t>(ct, "mouse_counts_per_frame");
+            if (n < 1 || n > 256)
+                throw std::runtime_error(fmt::format(
+                    "[controller] mouse_counts_per_frame out of range (1..256): {}", n));
+            rt.controller_mouse_counts_per_frame = static_cast<int>(n);
+        }
     }
 
     return rt;

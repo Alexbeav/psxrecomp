@@ -39,6 +39,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "latency_ring.h"
 #include "sio.h"
 #include "pad_timeline.h"
+#include "mouse_pad_adapter.h"
 #include "psx_netplay.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
@@ -513,6 +514,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 
 /* [video] options, resolved from the game config (defaults: native + AA). */
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
+static int           g_mouse_pad_enabled = 0;
+static int           g_mouse_pad_counts_per_frame = 12;
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
@@ -2658,6 +2661,10 @@ static bool controller_source_pressed_h(SDL_GameController* h, const ControllerS
  * (arrows=d-pad, X/S/Z/A=Cross/Circle/Square/Triangle, Q/W/E/R=L1/R1/L2/R2,
  * Return=Start, RShift=Select) plus T/Y=L3/R3 stick clicks. */
 static uint16_t pad_from_keyboard(int player) {
+    if (g_headless || g_hidden_window || !sdl_window ||
+        !(SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+        return 0xFFFF;
+    }
     const Uint8* keys = SDL_GetKeyboardState(NULL);
     return psx_keybinds_pad_word(keys, player);
 }
@@ -2729,6 +2736,10 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
 static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], bool fold_dpad) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
+        if (g_headless || g_hidden_window || !sdl_window ||
+            !(SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
+            return;
+        }
         /* Keyboard analog: the configurable left/right stick-direction binds
          * (default = arrow keys on the LEFT stick; RIGHT stick unbound), so the
          * old keyboard analog behaviour is preserved unless the user rebinds. */
@@ -2800,7 +2811,9 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any) {
             if (controller_dpad_active(handle)) return true;
         }
     }
-    if (p.kind == 1 || dev_any) {
+    if ((p.kind == 1 || dev_any) && !g_headless && !g_hidden_window &&
+        sdl_window &&
+        (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }
@@ -2972,6 +2985,16 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         btn &= pad_from_keyboard(1);                        /* keyboard P1 binds  */
         btn &= dev_all_controllers_buttons(suppress_stick); /* any plugged-in pad */
     }
+    if (s == 0 && g_mouse_pad_enabled && sdl_window) {
+        const Uint32 mouse = SDL_GetMouseState(nullptr, nullptr);
+        uint32_t host = 0;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_LEFT))   host |= PSX_MOUSE_LEFT;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_RIGHT))  host |= PSX_MOUSE_RIGHT;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_MIDDLE)) host |= PSX_MOUSE_MIDDLE;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_X1))     host |= PSX_MOUSE_X1;
+        if (mouse & SDL_BUTTON(SDL_BUTTON_X2))     host |= PSX_MOUSE_X2;
+        btn = mouse_pad_merge(btn, host);
+    }
 
     /* Analog axes. Pinned-ANALOG folds the physical D-pad onto the left axes
      * (fold_dpad) so the D-pad still moves stick-only games; HYBRID feeds the
@@ -2986,7 +3009,9 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     /* Dev mode: fold the keyboard's stick binds AND any connected controller's
      * sticks onto the analog stick, so an analog-mode P1 steers from whatever
      * is plugged in (P1 binds). */
-    if (dev_here && eff_analog) {
+    if (dev_here && eff_analog && !g_headless && !g_hidden_window &&
+        sdl_window &&
+        (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS)) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         psx_keybinds_sticks(keys, 1, st);
         dev_any_controller_sticks(st);
@@ -3254,6 +3279,11 @@ static void sample_headless_pad_into_sio(int override) {
 #endif
     sio_set_pad_state_slot(0, 0xFFFFu);
     sio_set_pad_state_slot(1, 0xFFFFu);
+}
+
+static void finalize_host_input_frame(void) {
+    pad_timeline_capture(s_frame_count);
+    mouse_pad_commit_frame();
 }
 
 /* PSX native vblank cadence: NTSC ≈ 59.94 Hz. Wall-clock target keeps
@@ -3538,6 +3568,14 @@ static void sdl_vblank_present(void) {
     }
 
     if (!g_headless) {
+        const int mouse_focus = g_mouse_pad_enabled && sdl_window &&
+            (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS);
+        static int prior_mouse_focus = -1;
+        if (mouse_focus != prior_mouse_focus) {
+            mouse_pad_set_focus(mouse_focus);
+            (void)psx_sdl_set_relative_mouse_mode(sdl_window, mouse_focus);
+            prior_mouse_focus = mouse_focus;
+        }
         /* Pump SDL events to prevent window freeze. */
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -3562,6 +3600,8 @@ static void sdl_vblank_present(void) {
                     close_controller();
                     refresh_player_devices();
                 }
+            } else if (ev.type == SDL_MOUSEMOTION) {
+                mouse_pad_add_motion((int)ev.motion.xrel, (int)ev.motion.yrel);
             } else if (ev.type == SDL_KEYDOWN) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
@@ -3765,7 +3805,7 @@ static void sdl_vblank_present(void) {
 #endif
 
     if (g_headless) {
-        pad_timeline_capture(s_frame_count);
+        finalize_host_input_frame();
         netplay_tail.skip_pace();
         return;
     }
@@ -3775,7 +3815,7 @@ static void sdl_vblank_present(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
-        pad_timeline_capture(s_frame_count);
+        finalize_host_input_frame();
         netplay_tail.skip_pace();
         return;
     }
@@ -3790,10 +3830,13 @@ static void sdl_vblank_present(void) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         const int TURBO_PRESENT_EVERY = 30;
-        if (keys[SDL_SCANCODE_TAB]) {
+        const bool keyboard_focused = !g_headless && !g_hidden_window &&
+            sdl_window &&
+            (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS);
+        if (keyboard_focused && keys[SDL_SCANCODE_TAB]) {
             turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
             if (turbo_skip != 0) {
-                pad_timeline_capture(s_frame_count);
+                finalize_host_input_frame();
                 netplay_tail.skip_pace();
                 return;  /* skip render this frame */
             }
@@ -3815,7 +3858,7 @@ static void sdl_vblank_present(void) {
         const int TL_PRESENT_EVERY = 30;
         s_turbo_present_skip = (s_turbo_present_skip + 1) % TL_PRESENT_EVERY;
         if (s_turbo_present_skip != 0) {
-            pad_timeline_capture(s_frame_count);
+            finalize_host_input_frame();
             netplay_tail.skip_pace();
             return;
         }
@@ -3828,7 +3871,7 @@ static void sdl_vblank_present(void) {
         const int FMV_PRESENT_EVERY = 30;
         s_fmv_skip_present_skip = (s_fmv_skip_present_skip + 1) % FMV_PRESENT_EVERY;
         if (s_fmv_skip_present_skip != 0) {
-            pad_timeline_capture(s_frame_count);
+            finalize_host_input_frame();
             netplay_tail.skip_pace();
             return;
         }
@@ -3839,7 +3882,7 @@ static void sdl_vblank_present(void) {
     if (psx_netplay_active() && gpu_display_is_depth24()) {
         if (s_netplay_depth24_present_skip) {
             s_netplay_depth24_present_skip = 0;
-            pad_timeline_capture(s_frame_count);
+            finalize_host_input_frame();
             netplay_tail.skip_pace();
             return;
         }
@@ -3877,7 +3920,7 @@ static void sdl_vblank_present(void) {
 
     /* Mod hooks. Run after all normal input sampling. */
     mod_call_frame_hooks();
-    pad_timeline_capture(s_frame_count);
+    finalize_host_input_frame();
 
     /* Resize-driven mode updates the pending aspect during BIOS boot too, but
      * the actual wide compositor remains disengaged until game entry. */
@@ -5136,6 +5179,16 @@ int main(int argc, char** argv) {
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
             g_video_vsync       = gc.runtime.video_vsync;
+            g_mouse_pad_enabled = gc.runtime.controller_mouse_pad ? 1 : 0;
+            g_mouse_pad_counts_per_frame =
+                gc.runtime.controller_mouse_counts_per_frame;
+            mouse_pad_configure(g_mouse_pad_enabled,
+                                g_mouse_pad_counts_per_frame);
+            if (g_mouse_pad_enabled) {
+                std::fprintf(stdout,
+                    "psxrecomp: mouse PAD adapter enabled (%d counts/frame)\n",
+                    g_mouse_pad_counts_per_frame);
+            }
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;
             g_fmv_skip_total_table = gc.runtime.video_fmv_skip_total_table;

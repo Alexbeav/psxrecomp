@@ -467,6 +467,12 @@ struct RuntimeConfig {
     bool                  has_anti_deadzone = false;
     int                   anti_deadzone     = 0;
 
+    // Opt-in mouse translation through ordinary PAD state. Buttons use the
+    // Syphon layout; relative motion emits bounded D-pad pulses. This is a
+    // compatibility-first first pass, not a direct camera hook.
+    bool                  controller_mouse_pad = false;
+    int                   controller_mouse_counts_per_frame = 12;
+
 };
 
 // One entry from [[recompiler.bios_vectors]].

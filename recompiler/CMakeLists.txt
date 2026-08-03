@@ -264,6 +264,13 @@ target_include_directories(l2_structural_test PRIVATE
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(mouse_pad_adapter_test
+        ../runtime/tests/test_mouse_pad_adapter.c
+        ../runtime/src/mouse_pad_adapter.c
+    )
+    target_include_directories(mouse_pad_adapter_test PRIVATE ../runtime/include)
+    add_test(NAME mouse_pad_adapter_test COMMAND mouse_pad_adapter_test)
+
     add_executable(pad_timeline_test
         ../runtime/tests/test_pad_timeline.cpp
         ../runtime/src/pad_timeline.cpp
@@ -415,6 +422,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 gl_depth24_coherency
                 hybrid_dev_any_input
+                host_input_focus_guards
                 jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
@@ -423,6 +431,7 @@ if(BUILD_TESTING)
                 overlay_decodable_fallback
                 overlay_init_guard
                 pad_timeline_final_sample
+                sf2_mission1_route_schedule
                 sdl3_main_single_include
                 vk_build_default
                 vk_color_self_barrier

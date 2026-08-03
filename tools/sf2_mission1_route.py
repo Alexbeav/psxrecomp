@@ -232,6 +232,17 @@ def next_frame_boundary(frame: int, quantum: int = 600) -> int:
     return ((frame // quantum) + 1) * quantum
 
 
+def deterministic_route_schedule(title_movie_frame: int) -> dict[str, int]:
+    """Anchor all input to a guest event, never to host-polled gate timing."""
+    menu_anchor = next_frame_boundary(title_movie_frame + 600)
+    return {
+        "new_game": menu_anchor,
+        "one_player": menu_anchor + 120,
+        "leave_briefing": menu_anchor + 4800,
+        "move": menu_anchor + 6600,
+    }
+
+
 def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "schema": 1,
@@ -289,12 +300,14 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
 
     # Cross selects New Game, then One Player.  A neutral sample interval
     # separates the edges so the retail PAD consumer sees two distinct presses.
-    menu_anchor = next_frame_boundary(client.frame())
-    evidence["input_schedule"].append(
-        scheduled_press(client, 0xBFFF, menu_anchor)
+    schedule = deterministic_route_schedule(
+        evidence["startup_seen"]["TITLE.STR"]["frame"]
     )
     evidence["input_schedule"].append(
-        scheduled_press(client, 0xBFFF, menu_anchor + 120)
+        scheduled_press(client, 0xBFFF, schedule["new_game"])
+    )
+    evidence["input_schedule"].append(
+        scheduled_press(client, 0xBFFF, schedule["one_player"])
     )
 
     def aircraft_movie() -> bool:
@@ -326,9 +339,8 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
 
     wait_for(client, "retail Mission 1 state-8 briefing", briefing, timeout)
     evidence["checkpoints"].append(checkpoint(client, "mission1_state8"))
-    briefing_anchor = next_frame_boundary(client.frame())
     evidence["input_schedule"].append(
-        scheduled_press(client, 0xBFFF, briefing_anchor)
+        scheduled_press(client, 0xBFFF, schedule["leave_briefing"])
     )
 
     def player_control() -> dict[str, Any] | None:
@@ -352,7 +364,7 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         raise RuntimeError("player ownership did not remain stable")
     evidence["checkpoints"].append(checkpoint(client, "mission1_player_owned"))
 
-    move_start = next_frame_boundary(client.frame())
+    move_start = schedule["move"]
     evidence["input_schedule"].append(
         scheduled_press(client, 0xFFEF, move_start, 60)
     )  # D-pad Up, active low.
