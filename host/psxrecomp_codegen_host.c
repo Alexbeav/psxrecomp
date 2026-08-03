@@ -267,7 +267,6 @@ static int dirname_copy(char* out, size_t cap, const char* path) {
  * "bios/SCPH1001.BIN" otherwise break after relaunch when cwd is build/. */
 static int absolutize_existing_file(char* out, size_t cap, const char* path) {
     char cand[1100];
-    char absbuf[1100];
     if (!out || cap < 2 || !path || !path[0]) return 0;
     out[0] = '\0';
 
@@ -293,9 +292,15 @@ static int absolutize_existing_file(char* out, size_t cap, const char* path) {
             if (n > 0 && n < (DWORD)cap) return 1;
         }
 #else
-        if (realpath(candidate, absbuf)) {
-            snprintf(out, cap, "%s", absbuf);
-            return 1;
+        /* glibc _FORTIFY_SOURCE aborts if the realpath destination is smaller
+         * than PATH_MAX (4096), even when the resolved path fits. Allocate. */
+        {
+            char* rp = realpath(candidate, NULL);
+            if (rp) {
+                snprintf(out, cap, "%s", rp);
+                free(rp);
+                return 1;
+            }
         }
 #endif
         if ((size_t)snprintf(out, cap, "%s", candidate) < cap) return 1;
