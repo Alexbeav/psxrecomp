@@ -71,6 +71,10 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
+#if defined(PSX_HAS_GAME_CODEGEN)
+extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
+extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
+#endif
 #endif
 #include "psx_sdl.h"
 #include "psx_sdl_audio.h"
@@ -8924,6 +8928,11 @@ std::string player_device[PSX_MAX_PLAYERS];
                 }
                 gi.needs_setup = (!bios_ok || !disc_ok) ? 1 : 0;
             }
+#if defined(PSX_HAS_GAME_CODEGEN)
+            /* Local codegen: missing generated/ or MOTK_FORCE_SETUP opens the
+             * generate & rebuild wizard (may also set prepare_required). */
+            psx_game_codegen_setup_apply(&gi);
+#endif
             launcher_boot_timing_mark("host:setup_checks_done");
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
@@ -9063,6 +9072,23 @@ std::string player_device[PSX_MAX_PLAYERS];
                 SDL_Quit();
                 return 0;
             }
+#if defined(PSX_HAS_GAME_CODEGEN)
+            if (lr == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
+                const char* disc_for_relaunch =
+                    rui_out_disc[0] ? rui_out_disc
+                                    : (rui_initial_disc.empty()
+                                           ? ""
+                                           : rui_initial_disc.c_str());
+                std::fprintf(stdout,
+                             "psxrecomp: relaunch after generate/rebuild\n");
+                if (overlay_init_thread.joinable())
+                    overlay_init_thread.join();
+                psx_game_codegen_relaunch_or_exit(disc_for_relaunch);
+                /* Does not return on success. */
+                SDL_Quit();
+                return 1;
+            }
+#endif
             if (lr == 0) {
                 if (ls.netplay_launch.enabled) {
                     net_cfg.enabled = 1;
@@ -10173,6 +10199,9 @@ soft_return_lobby:
         gi.allow_hybrid = ctrl_allow_hybrid ? 1 : 0;
         gi.locked_pad_mode = ctrl_locked_mode[0];
         gi.lock_device = ctrl_lock_device ? 1 : 0;
+#if defined(PSX_HAS_GAME_CODEGEN)
+        psx_game_codegen_setup_apply(&gi);
+#endif
 
         char rui_out_disc[1024] = {0};
         recomp_launcher_set_preserve_sdl(1);
@@ -10190,6 +10219,20 @@ soft_return_lobby:
             SDL_Quit();
             return 0;
         }
+#if defined(PSX_HAS_GAME_CODEGEN)
+        if (rui_rc == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
+            const char* disc_for_relaunch =
+                rui_out_disc[0] ? rui_out_disc
+                                : (rui_initial_disc.empty()
+                                       ? ""
+                                       : rui_initial_disc.c_str());
+            std::fprintf(stdout,
+                         "psxrecomp: relaunch after generate/rebuild\n");
+            psx_game_codegen_relaunch_or_exit(disc_for_relaunch);
+            SDL_Quit();
+            return 1;
+        }
+#endif
 
         if (rui_rc == 0) {
             if (rui_out_disc[0]) {

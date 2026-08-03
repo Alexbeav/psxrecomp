@@ -52,8 +52,9 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
 void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
                              uint32_t count);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
- * Returns crtc_w when unknown / full coverage. Present uses this to blank a
- * trailing margin without shrinking the CRTC-derived width globally. */
+ * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
+ * else the covered RGB width. Present black-fills [limit, crtc_w) without
+ * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
 /* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip

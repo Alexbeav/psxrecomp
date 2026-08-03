@@ -461,6 +461,22 @@ struct RuntimeConfig {
     bool                  has_deadzone = false;
     int                   deadzone     = 0;
 
+    // multitap_port: console port that hosts the SCPH-1070 when offline/netplay
+    // arms multitap (players/slot_count >= 3). 1 = Port 1 (default, most games),
+    // 2 = Port 2 (Bomberman Party Edition, Jigsaw Madness, S.C.A.R.S., …).
+    bool                  has_multitap_port = false;
+    int                   multitap_port     = 1;
+
+    // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
+    // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
+    // 0xF3 only while in config) — required by MMX6 and the correct default for every
+    // title. true = the pre-98aa688 behaviour (config commands always answer 0xF3, no
+    // enter/exit tracking). Only Tomba opts in: its libpad re-detect — triggered by the
+    // launcher Hybrid mode's analog<->digital type flip — manufactures a 1-frame "pad
+    // unplugged" under the modern SM (menu unpause / phantom input). The legacy answers
+    // make that re-detect benign. Scoped per-game; no other title's behaviour changes.
+    // Wired to sio_set_legacy_cfg(); see sio.c g_pad_legacy_cfg.
+    bool                  legacy_pad_config = false;
     // anti_deadzone: minimum radial analog output after leaving deadzone, in
     // raw SDL axis units (0..32767). This is a game-owned response setting used
     // to compensate a title's own internal stick deadzone. Absent => 0.
@@ -998,22 +1014,29 @@ struct UserSettings {
     bool has_memcard1_enabled = false; bool memcard1_enabled = true;
     bool has_memcard2_enabled = false; bool memcard2_enabled = true;
 
-    // [controller] — per-player input device + pad type. device is one of:
+    // [controller] — per-player input device + pad type + deadzone.
+    // device is one of:
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
-    // p1_mode/p2_mode select the emulated pad behaviour (see PadMode):
-    // hybrid (default) / analog / digital. Defaults: P1 keyboard, P2 none.
-    bool has_p1_device = false; std::string p1_device = "keyboard";
-    bool has_p2_device = false; std::string p2_device = "none";
-    // Pad input mode per player (see PadMode): hybrid (default) / analog /
-    // digital. Persisted as p1_mode/p2_mode strings. Legacy p1_analog/p2_analog
-    // booleans are still read for back-compat (true->analog, false->digital).
-    bool has_p1_mode = false; int p1_mode = PAD_MODE_HYBRID;
-    bool has_p2_mode = false; int p2_mode = PAD_MODE_HYBRID;
-    // Analog-stick deadzone, raw SDL axis units (0..32767). The launcher edits
-    // this as 0-100% (raw = pct*32767/100), mirroring snesrecomp's GamepadDeadzone.
-    bool has_deadzone  = false; int  deadzone  = 12000;
+    // Modes (see PadMode): hybrid / analog / digital. Defaults: P1 keyboard,
+    // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
+    // pN_device / pN_mode / pN_deadzone (N=1..5). Legacy bare `deadzone`
+    // still fills any slot that lacks pN_deadzone.
+    static constexpr int kMaxControllerPlayers = 5;
+    bool        has_p_device[kMaxControllerPlayers] = {};
+    std::string p_device[kMaxControllerPlayers] = {
+        "keyboard", "none", "none", "none", "none"};
+    bool has_p_mode[kMaxControllerPlayers] = {};
+    int  p_mode[kMaxControllerPlayers] = {
+        PAD_MODE_HYBRID, PAD_MODE_HYBRID, PAD_MODE_HYBRID,
+        PAD_MODE_HYBRID, PAD_MODE_HYBRID};
+    bool has_p_deadzone[kMaxControllerPlayers] = {};
+    int  p_deadzone[kMaxControllerPlayers] = {
+        3277, 3277, 3277, 3277, 3277};  /* ~10% of 32767 */
+    // Legacy global deadzone (settings.toml `deadzone=`). Applied to slots
+    // that do not have an explicit pN_deadzone. Default 10%.
+    bool has_deadzone  = false; int  deadzone  = 3277;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
