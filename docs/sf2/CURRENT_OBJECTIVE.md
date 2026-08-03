@@ -48,6 +48,23 @@ containment.
 - Full evidence and handoff: `docs/sf2/OVERNIGHT_REPORT_2026-08-03.md` and
   `docs/sf2/PSX_PORTS_RETURN_2026-08-03.md`.
 
+## 2026-08-03 connected-slice recording follow-up
+
+- The user completed Mission 1 from cold boot through one death/checkpoint
+  reload, completion, retail save, and entry into Mission 2. This is retained
+  as human functional acceptance.
+- The 43,967-frame input artifact is structurally exact but is not accepted for
+  deterministic replay. A late low-latency host sample overwrote both the
+  recorder's early sample and replayed input. Hidden OpenGL proved the first
+  divergence at frame 20,552: timeline `0xFFEF`, SIO `0xFFFF`.
+- The generic recorder now owns the true final SIO sampling boundary, covers all
+  early-return paths, and keeps replay faults sticky. Unit and source-order
+  regressions pass; a rebuilt real two-process preflight records the exact
+  frames 240--259 pulse and observes it during replay.
+- A single corrected human recording is now required. It must then replay twice
+  under hidden OpenGL/dummy audio before the connected slice can graduate.
+- Detailed evidence: `PAD_TIMELINE_REPORT_2026-08-03.md`.
+
 ## Verified state
 
 - Branch: `experiment/sf2-recomp-feasibility`

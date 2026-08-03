@@ -264,6 +264,13 @@ target_include_directories(l2_structural_test PRIVATE
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(pad_timeline_test
+        ../runtime/tests/test_pad_timeline.cpp
+        ../runtime/src/pad_timeline.cpp
+    )
+    target_include_directories(pad_timeline_test PRIVATE ../runtime/include)
+    add_test(NAME pad_timeline_test COMMAND pad_timeline_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
@@ -415,6 +422,7 @@ if(BUILD_TESTING)
                 overlay_candidate_capacity
                 overlay_decodable_fallback
                 overlay_init_guard
+                pad_timeline_final_sample
                 sdl3_main_single_include
                 vk_build_default
                 vk_color_self_barrier

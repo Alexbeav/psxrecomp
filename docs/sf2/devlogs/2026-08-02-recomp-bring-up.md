@@ -761,3 +761,27 @@ registered candidates at player control. The ignored footprint is 6.604 GiB.
 
 The full report is `../OVERNIGHT_REPORT_2026-08-03.md`; the payload-free corpus
 return is `../PSX_PORTS_RETURN_2026-08-03.md`.
+
+## 2026-08-03 human connected slice and final-SIO recorder
+
+The user completed a visible OpenGL cold-boot route through all of Mission 1,
+one death/checkpoint reload, mission completion, retail save, and the beginning
+of Mission 2. The ignored recording contains exactly 43,967 input-only records
+and the memory card was written. This is accepted as human functional evidence.
+
+The initial deterministic replay gate failed honestly. A software/headless
+control consumed the file but did not reproduce the OpenGL route or card. A
+hidden-OpenGL replay exposed the decisive boundary error: frame 20,552 required
+PAD `0xFFEF`, while final SIO state was `0xFFFF`. `sdl_vblank_present()` sampled
+host input a second time after pacing, after the recorder/replayer had run.
+Thus the artifact was valid but represented the pre-pacer sample rather than
+what retail consumed.
+
+The title-neutral correction gives replay exclusive ownership over the late
+sample, records after the final sample and mod hooks, finalizes every early-
+return path, and makes replay exhaustion/mismatch sticky. `pad_timeline_test`
+and `pad_timeline_final_sample` cover the contract. The rebuilt two-process
+preflight passed with 320 samples, an exact 20-frame pulse at 240--259, and a
+replay observation at frame 242. The first recording is retained but rejected
+as deterministic evidence; one corrected human recording and two clean hidden-
+OpenGL replays remain. See `../PAD_TIMELINE_REPORT_2026-08-03.md`.

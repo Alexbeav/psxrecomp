@@ -38,6 +38,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "frame_pacing.h"
 #include "latency_ring.h"
 #include "sio.h"
+#include "pad_timeline.h"
 #include "psx_netplay.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
@@ -1553,6 +1554,7 @@ static void shutdown_runtime(void) {
     /* (sljit removed 2026-07-15: overlay_compile_worker_stop joined the
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
+    pad_timeline_close();
     memcard_flush_all();
     /* Stop and join the active external compiler before capture/debug teardown.
      * Otherwise closing the window can leave cmd/python/gcc running against
@@ -3654,14 +3656,21 @@ static void sdl_vblank_present(void) {
         }
     } netplay_tail(override);
 
-    if (psx_netplay_active()) {
+    if (pad_timeline_is_replay()) {
+        if (!pad_timeline_apply(s_frame_count)) {
+            /* A malformed/exhausted replay must never silently fall through to
+             * live host input. Neutralize both ports and keep the divergence
+             * visible in stderr. */
+            sio_set_pad_state_slot(0, 0xFFFFu);
+            sio_set_pad_state_slot(1, 0xFFFFu);
+        }
+    } else if (psx_netplay_active()) {
         psx_netplay_finish_frame();
     } else if (g_headless) {
         sample_headless_pad_into_sio(override);
     } else {
         sample_pad_into_sio(override);
     }
-
     /* Latency ring: open this present cycle's slot, stamping when input was
      * sampled into SIO.  Always-on; queried via the debug server "latency". */
     latency_ring_frame_begin();
@@ -3756,6 +3765,7 @@ static void sdl_vblank_present(void) {
 #endif
 
     if (g_headless) {
+        pad_timeline_capture(s_frame_count);
         netplay_tail.skip_pace();
         return;
     }
@@ -3765,6 +3775,7 @@ static void sdl_vblank_present(void) {
      * presentation and wall-clock pacing. */
 #ifndef PSX_NO_DEBUG_TOOLS
     if (debug_server_turbo_enabled()) {
+        pad_timeline_capture(s_frame_count);
         netplay_tail.skip_pace();
         return;
     }
@@ -3782,6 +3793,7 @@ static void sdl_vblank_present(void) {
         if (keys[SDL_SCANCODE_TAB]) {
             turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
             if (turbo_skip != 0) {
+                pad_timeline_capture(s_frame_count);
                 netplay_tail.skip_pace();
                 return;  /* skip render this frame */
             }
@@ -3803,6 +3815,7 @@ static void sdl_vblank_present(void) {
         const int TL_PRESENT_EVERY = 30;
         s_turbo_present_skip = (s_turbo_present_skip + 1) % TL_PRESENT_EVERY;
         if (s_turbo_present_skip != 0) {
+            pad_timeline_capture(s_frame_count);
             netplay_tail.skip_pace();
             return;
         }
@@ -3815,6 +3828,7 @@ static void sdl_vblank_present(void) {
         const int FMV_PRESENT_EVERY = 30;
         s_fmv_skip_present_skip = (s_fmv_skip_present_skip + 1) % FMV_PRESENT_EVERY;
         if (s_fmv_skip_present_skip != 0) {
+            pad_timeline_capture(s_frame_count);
             netplay_tail.skip_pace();
             return;
         }
@@ -3825,6 +3839,7 @@ static void sdl_vblank_present(void) {
     if (psx_netplay_active() && gpu_display_is_depth24()) {
         if (s_netplay_depth24_present_skip) {
             s_netplay_depth24_present_skip = 0;
+            pad_timeline_capture(s_frame_count);
             netplay_tail.skip_pace();
             return;
         }
@@ -3847,15 +3862,22 @@ static void sdl_vblank_present(void) {
          * CPU frame reads near-fresh input (the dominant input->photon cost on a
          * vsync-light box). Re-stamp the ring's input mark to measure from here. */
         if (g_low_latency_input) {
-            SDL_GameControllerUpdate();  /* refresh pad state after the wait */
-            SDL_PumpEvents();            /* refresh keyboard state */
-            sample_pad_into_sio(override);
+            /* Replay owns the final SIO state for this frame. Sampling a live
+             * host here would silently overwrite the deterministic record.
+             * Recording happens after this refresh so it captures what the
+             * guest actually consumes, not the earlier pre-pacer sample. */
+            if (!pad_timeline_is_replay()) {
+                SDL_GameControllerUpdate();  /* refresh pad state after wait */
+                SDL_PumpEvents();            /* refresh keyboard state */
+                sample_pad_into_sio(override);
+            }
             latency_ring_restamp_input();
         }
     }
 
     /* Mod hooks. Run after all normal input sampling. */
     mod_call_frame_hooks();
+    pad_timeline_capture(s_frame_count);
 
     /* Resize-driven mode updates the pending aspect during BIOS boot too, but
      * the actual wide compositor remains disengaged until game entry. */
@@ -4843,6 +4865,8 @@ int main(int argc, char** argv) {
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
+    const char* cli_pad_record = nullptr;    /* final SIO-visible input timeline */
+    const char* cli_pad_replay = nullptr;
     PsxNetplayConfig net_cfg;
     psx_netplay_config_defaults(&net_cfg);
     psx_netplay_apply_env(&net_cfg);  /* CLI flags below win over env */
@@ -4853,6 +4877,8 @@ int main(int argc, char** argv) {
      *   --disc <path>       override the game config disc path
      *   --debug-port <n>    override the TCP debug-server port (multi-instance)
      *   --memcard-dir <path> override card/save/options state (multi-instance)
+     *   --pad-record <path> record final SIO-visible pad state once per VBlank
+     *   --pad-replay <path> replay an exact pad timeline (exclusive with record)
      *   --renderer <name>   override the renderer: software|opengl|vulkan
      *   --launcher          force the GUI launcher (overrides skip_launcher)
      *   --no-launcher       skip the GUI launcher (boot straight in)
@@ -4880,6 +4906,10 @@ int main(int argc, char** argv) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
             cli_memcard_dir = argv[++i];
+        } else if (std::strcmp(argv[i], "--pad-record") == 0 && i + 1 < argc) {
+            cli_pad_record = argv[++i];
+        } else if (std::strcmp(argv[i], "--pad-replay") == 0 && i + 1 < argc) {
+            cli_pad_replay = argv[++i];
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
@@ -4932,6 +4962,20 @@ int main(int argc, char** argv) {
                     "psxrecomp: ignoring unexpected positional argument after BIOS selection: %s\n",
                     argv[i]);
             }
+        }
+    }
+    {
+        char pad_error[256]{};
+        if ((cli_pad_record || cli_pad_replay) && net_cfg.enabled) {
+            std::fprintf(stderr,
+                "psxrecomp: PAD timelines are not supported with netplay; "
+                "lockstep applies its final input in the VBlank tail\n");
+            return 1;
+        }
+        if (!pad_timeline_configure(cli_pad_record, cli_pad_replay,
+                                    pad_error, sizeof(pad_error))) {
+            std::fprintf(stderr, "psxrecomp: %s\n", pad_error);
+            return 1;
         }
     }
     if (const char *e = std::getenv("PSX_HEADLESS")) {
