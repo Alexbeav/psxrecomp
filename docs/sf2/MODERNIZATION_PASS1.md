@@ -157,3 +157,12 @@ retail state. Do not share or commit cards or captures.
    requires independently verified SF2 ownership and regressions.
 4. Consider widescreen only after high-resolution/input compatibility is
    stable. No widescreen work is part of this pass.
+
+## User tuning follow-up
+
+The first visible pass showed that aimed/first-person mouse movement was too
+slow and vertically inverted, and that Tab conflicted with a hardcoded runtime
+turbo shortcut. Aim now uses a 4-count threshold versus 12 in chase mode, the
+authored vertical PAD translation is reversed for non-inverted mouse look, and
+the Tab turbo shortcut is removed. Tab now serves only the configured retail
+R1/target action. Focused regressions pass; visible feel remains user-validated.

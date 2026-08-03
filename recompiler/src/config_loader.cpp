@@ -683,6 +683,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] mouse_counts_per_frame out of range (1..256): {}", n));
             rt.controller_mouse_counts_per_frame = static_cast<int>(n);
         }
+        if (ct.contains("mouse_aim_counts_per_frame")) {
+            const auto n = toml::find<int64_t>(ct, "mouse_aim_counts_per_frame");
+            if (n < 1 || n > 256)
+                throw std::runtime_error(fmt::format(
+                    "[controller] mouse_aim_counts_per_frame out of range (1..256): {}", n));
+            rt.controller_mouse_aim_counts_per_frame = static_cast<int>(n);
+        }
     }
 
     return rt;

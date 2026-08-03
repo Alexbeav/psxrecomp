@@ -18,7 +18,8 @@ enum PsxMouseHostButtons {
 /* Optional title-neutral mouse -> ordinary PS1 PAD adapter. It never writes
  * guest state: relative motion emits bounded D-pad pulses and buttons use the
  * established Syphon control layout. */
-void     mouse_pad_configure(int enabled, int counts_per_frame);
+void     mouse_pad_configure(int enabled, int counts_per_frame,
+                             int aim_counts_per_frame);
 int      mouse_pad_enabled(void);
 void     mouse_pad_set_focus(int focused);
 void     mouse_pad_add_motion(int dx, int dy);

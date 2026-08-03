@@ -825,3 +825,12 @@ resident AOT 15,830,035/15,829,527, compiled overlay
 (0.4738%/0.4737% of overlay-tier dispatch). Both runs have zero lost CD INT1
 events, 1,208 SPU key-ons, and identical nonzero XA totals. Full handoff:
 `../MODERNIZATION_PASS1.md`.
+
+The first user-controlled modernization pass requested three small input
+corrections. A separate aim threshold now makes RMB/manual aim three times more
+responsive (4 counts versus 12), vertical motion is translated non-inverted,
+and the hardcoded Tab turbo-present shortcut was deleted so Tab is exclusively
+the configured retail R1/target action. Focused adapter, focus, and final-PAD
+tests pass and the modern executable was rebuilt. Per user direction, further
+feel iterations use focused automated checks followed directly by visible user
+acceptance rather than repeating the complete seven-minute route each time.

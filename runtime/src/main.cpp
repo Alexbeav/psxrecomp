@@ -516,6 +516,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
 static int           g_mouse_pad_enabled = 0;
 static int           g_mouse_pad_counts_per_frame = 12;
+static int           g_mouse_pad_aim_counts_per_frame = 4;
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
@@ -3821,30 +3822,6 @@ static void sdl_vblank_present(void) {
     }
 #endif
 
-    /* Turbo mode: while TAB is held, skip both VRAM->ARGB conversion and
-     * SDL_RenderPresent. The recompiled BIOS still advances simulated
-     * cycles every vblank, so the BIOS proceeds at whatever rate the host
-     * CPU sustains without graphics-driver vsync overhead. Present once
-     * every TURBO_PRESENT_EVERY frames so the user sees visual progress. */
-    {
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
-        static int turbo_skip = 0;
-        const int TURBO_PRESENT_EVERY = 30;
-        const bool keyboard_focused = !g_headless && !g_hidden_window &&
-            sdl_window &&
-            (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS);
-        if (keyboard_focused && keys[SDL_SCANCODE_TAB]) {
-            turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
-            if (turbo_skip != 0) {
-                finalize_host_input_frame();
-                netplay_tail.skip_pace();
-                return;  /* skip render this frame */
-            }
-        } else {
-            turbo_skip = 0;
-        }
-    }
-
     /* Turbo-through-loads (step 4, OPT-IN via game.toml [runtime]
      * turbo_loads): while the game is loading — CD data stream active,
      * XA/FMV excluded, post-BIOS-handoff only — skip wall-clock pacing and
@@ -5182,12 +5159,17 @@ int main(int argc, char** argv) {
             g_mouse_pad_enabled = gc.runtime.controller_mouse_pad ? 1 : 0;
             g_mouse_pad_counts_per_frame =
                 gc.runtime.controller_mouse_counts_per_frame;
+            g_mouse_pad_aim_counts_per_frame =
+                gc.runtime.controller_mouse_aim_counts_per_frame;
             mouse_pad_configure(g_mouse_pad_enabled,
-                                g_mouse_pad_counts_per_frame);
+                                g_mouse_pad_counts_per_frame,
+                                g_mouse_pad_aim_counts_per_frame);
             if (g_mouse_pad_enabled) {
                 std::fprintf(stdout,
-                    "psxrecomp: mouse PAD adapter enabled (%d counts/frame)\n",
-                    g_mouse_pad_counts_per_frame);
+                    "psxrecomp: mouse PAD adapter enabled "
+                    "(%d chase, %d aim counts/frame)\n",
+                    g_mouse_pad_counts_per_frame,
+                    g_mouse_pad_aim_counts_per_frame);
             }
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;

@@ -28,6 +28,7 @@ if ($ConfigText -match '(?m)^\[controller\]\s*$') {
 [controller]
 mouse_pad = true
 mouse_counts_per_frame = 12
+mouse_aim_counts_per_frame = 4
 '@
     $ConfigText = [regex]::Replace($ConfigText, '(?m)^\[controller\]\s*$', $ControllerHeader)
 } else {
@@ -37,6 +38,7 @@ mouse_counts_per_frame = 12
 default_mode = "digital"
 mouse_pad = true
 mouse_counts_per_frame = 12
+mouse_aim_counts_per_frame = 4
 '@
 }
 Set-Content -LiteralPath $ModernConfig -Value $ConfigText -Encoding utf8

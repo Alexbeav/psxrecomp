@@ -472,6 +472,7 @@ struct RuntimeConfig {
     // compatibility-first first pass, not a direct camera hook.
     bool                  controller_mouse_pad = false;
     int                   controller_mouse_counts_per_frame = 12;
+    int                   controller_mouse_aim_counts_per_frame = 4;
 
 };
 
