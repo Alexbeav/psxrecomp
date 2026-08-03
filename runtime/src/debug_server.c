@@ -306,6 +306,14 @@ static uint64_t s_dirty_break_hits = 0;
 /* ---- Input override ---- */
 static int s_input_override = -1;
 static int s_input_frames   = 0;
+/* Optional guest-frame deadline for deterministic diagnostic input.  A host
+ * client can arm an override early and have the emulation thread expose it
+ * only once the named guest frame is reached. */
+static uint64_t s_input_start_frame = 0;
+static uint64_t s_input_first_applied_frame = UINT64_MAX;
+static uint64_t s_input_last_applied_frame = 0;
+static uint32_t s_input_applied_count = 0;
+static int s_input_applied_value = -1;
 /* Optional analog-stick override (set_input lx/ly/rx/ry, 0..255, 0x80 =
  * centre). Lets injected input drive analog-mode movement; consumed by the
  * pad sampler alongside the button word. */
@@ -7032,6 +7040,11 @@ static void handle_set_input(int id, const char *json)
     }
     s_input_override = (int)hex_to_u32(val_str);
     s_input_frames = 0;
+    s_input_start_frame = 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = -1;
     /* Optional stick override: any of lx/ly/rx/ry (0..255) arms it; omitted
      * axes centre. Absent entirely -> released (buttons-only injection). */
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
@@ -7048,9 +7061,15 @@ static void handle_press(int id, const char *json)
 {
     int buttons = json_get_int(json, "buttons", -1);
     int frames  = json_get_int(json, "frames", 2);
+    int at_frame = json_get_int(json, "at_frame", -1);
     if (buttons < 0) { send_err(id, "missing buttons"); return; }
     s_input_override = buttons;
     s_input_frames   = frames;
+    s_input_start_frame = at_frame >= 0 ? (uint64_t)(uint32_t)at_frame : 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = buttons;
     int ax[4] = { json_get_int(json, "lx", -1), json_get_int(json, "ly", -1),
                   json_get_int(json, "rx", -1), json_get_int(json, "ry", -1) };
     s_axis_override = (ax[0] >= 0 || ax[1] >= 0 || ax[2] >= 0 || ax[3] >= 0);
@@ -7079,7 +7098,10 @@ static void handle_pad_status(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"pad\":\"0x%04X\","
              "\"slot0\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
              "\"slot1\":{\"buttons\":\"0x%04X\",\"connected\":%s,\"analog\":%s,\"sticks\":[%u,%u,%u,%u]},"
-             "\"override\":%d,\"override_frames\":%d,"
+             "\"override\":%d,\"override_frames\":%d,\"override_start_frame\":%llu,"
+             "\"override_first_applied_frame\":%lld,"
+             "\"override_last_applied_frame\":%llu,"
+             "\"override_applied_count\":%u,\"override_applied_value\":%d,"
              "\"override_axes\":[%u,%u,%u,%u],\"override_axes_valid\":%s}\n",
              id, pad0,
              pad0, sio_get_pad_connected(0) ? "true" : "false", sio_get_pad_analog(0) ? "true" : "false",
@@ -7087,6 +7109,11 @@ static void handle_pad_status(int id, const char *json)
              pad1, sio_get_pad_connected(1) ? "true" : "false", sio_get_pad_analog(1) ? "true" : "false",
              sticks1[0], sticks1[1], sticks1[2], sticks1[3],
              s_input_override, s_input_frames,
+             (unsigned long long)s_input_start_frame,
+             s_input_first_applied_frame == UINT64_MAX
+                 ? -1LL : (long long)s_input_first_applied_frame,
+             (unsigned long long)s_input_last_applied_frame,
+             s_input_applied_count, s_input_applied_value,
              s_axis_st[0], s_axis_st[1], s_axis_st[2], s_axis_st[3],
              s_axis_override ? "true" : "false");
 }
@@ -7096,6 +7123,11 @@ static void handle_clear_input(int id, const char *json)
     (void)json;
     s_input_override = -1;
     s_input_frames   = 0;
+    s_input_start_frame = 0;
+    s_input_first_applied_frame = UINT64_MAX;
+    s_input_last_applied_frame = 0;
+    s_input_applied_count = 0;
+    s_input_applied_value = -1;
     s_axis_override  = 0;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     send_ok(id);
@@ -13530,10 +13562,18 @@ int debug_server_is_connected(void)
 
 int debug_server_get_input_override(void)
 {
+    if (s_input_override >= 0 && s_input_start_frame > s_frame_count)
+        return -1;
     int current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
-        if (--s_input_frames == 0)
+        if (s_input_first_applied_frame == UINT64_MAX)
+            s_input_first_applied_frame = s_frame_count;
+        s_input_last_applied_frame = s_frame_count;
+        s_input_applied_count++;
+        if (--s_input_frames == 0) {
             s_input_override = -1;
+            s_input_start_frame = 0;
+        }
     }
     return current;
 }

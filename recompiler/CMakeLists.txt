@@ -401,6 +401,7 @@ if(BUILD_TESTING)
         foreach(_t IN ITEMS
                 capture_history
                 cdrom_seek_retarget
+                debug_input_schedule
                 default_renderer_guards
                 fmv_quiet_guards
                 fps_telemetry_opt_in
