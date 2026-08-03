@@ -1,0 +1,14 @@
+# Isolated pass-2 presentation defaults. Compatibility remains 4:3 in its
+# existing build directory and settings profile.
+[video]
+renderer = "opengl"
+supersampling = 4
+window_width = 1920
+antialiasing = true
+texture_filtering = "nearest"
+fullscreen = 1
+aspect_ratio = "16:9"
+frame_interpolation = false
+
+[launcher]
+skip_launcher = true

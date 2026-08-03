@@ -197,6 +197,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
     ${PSXRECOMP_ROOT}/runtime/src/pad_timeline.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mouse_pad_adapter.c
+    ${PSXRECOMP_ROOT}/runtime/src/mouse_camera.c
     ${PSXRECOMP_ROOT}/runtime/src/memcard.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_server.c
     ${PSXRECOMP_ROOT}/runtime/src/debug_trace_ranges.c

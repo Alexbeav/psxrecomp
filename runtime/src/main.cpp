@@ -40,6 +40,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "sio.h"
 #include "pad_timeline.h"
 #include "mouse_pad_adapter.h"
+#include "mouse_camera.h"
 #include "psx_netplay.h"
 #include "psx_lobby_client.h"
 #include "spu.h"
@@ -517,6 +518,7 @@ static int           g_video_scale = 1;     /* internal-resolution SSAA factor *
 static int           g_mouse_pad_enabled = 0;
 static int           g_mouse_pad_counts_per_frame = 12;
 static int           g_mouse_pad_aim_counts_per_frame = 4;
+static int           g_mouse_camera_enabled = 0;
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
@@ -2994,6 +2996,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         if (mouse & SDL_BUTTON(SDL_BUTTON_MIDDLE)) host |= PSX_MOUSE_MIDDLE;
         if (mouse & SDL_BUTTON(SDL_BUTTON_X1))     host |= PSX_MOUSE_X1;
         if (mouse & SDL_BUTTON(SDL_BUTTON_X2))     host |= PSX_MOUSE_X2;
+        psx_mouse_camera_set_aim((host & PSX_MOUSE_RIGHT) != 0);
         btn = mouse_pad_merge(btn, host);
     }
 
@@ -3285,6 +3288,7 @@ static void sample_headless_pad_into_sio(int override) {
 static void finalize_host_input_frame(void) {
     pad_timeline_capture(s_frame_count);
     mouse_pad_commit_frame();
+    psx_mouse_camera_commit_frame();
 }
 
 /* PSX native vblank cadence: NTSC ≈ 59.94 Hz. Wall-clock target keeps
@@ -3569,11 +3573,13 @@ static void sdl_vblank_present(void) {
     }
 
     if (!g_headless) {
-        const int mouse_focus = g_mouse_pad_enabled && sdl_window &&
+        const int mouse_focus = (g_mouse_pad_enabled || g_mouse_camera_enabled) &&
+            sdl_window &&
             (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS);
         static int prior_mouse_focus = -1;
         if (mouse_focus != prior_mouse_focus) {
             mouse_pad_set_focus(mouse_focus);
+            psx_mouse_camera_set_focus(mouse_focus);
             (void)psx_sdl_set_relative_mouse_mode(sdl_window, mouse_focus);
             prior_mouse_focus = mouse_focus;
         }
@@ -3602,7 +3608,12 @@ static void sdl_vblank_present(void) {
                     refresh_player_devices();
                 }
             } else if (ev.type == SDL_MOUSEMOTION) {
-                mouse_pad_add_motion((int)ev.motion.xrel, (int)ev.motion.yrel);
+                if (g_mouse_camera_enabled)
+                    psx_mouse_camera_add_motion((int)ev.motion.xrel,
+                                                (int)ev.motion.yrel);
+                else
+                    mouse_pad_add_motion((int)ev.motion.xrel,
+                                         (int)ev.motion.yrel);
             } else if (ev.type == SDL_KEYDOWN) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
@@ -5164,12 +5175,62 @@ int main(int argc, char** argv) {
             mouse_pad_configure(g_mouse_pad_enabled,
                                 g_mouse_pad_counts_per_frame,
                                 g_mouse_pad_aim_counts_per_frame);
+            PsxMouseCameraConfig mouse_camera{};
+            mouse_camera.enabled =
+                gc.runtime.controller_mouse_camera_enabled ? 1 : 0;
+            mouse_camera.facing_site =
+                gc.runtime.controller_mouse_camera_facing_site;
+            mouse_camera.facing_expected =
+                gc.runtime.controller_mouse_camera_facing_expected;
+            mouse_camera.application_state_addr =
+                gc.runtime.controller_mouse_camera_application_state_addr;
+            mouse_camera.player_pointer_addr =
+                gc.runtime.controller_mouse_camera_player_pointer_addr;
+            mouse_camera.player_state_offset =
+                gc.runtime.controller_mouse_camera_player_state_offset;
+            mouse_camera.wrapper_offset =
+                gc.runtime.controller_mouse_camera_wrapper_offset;
+            mouse_camera.base_offset =
+                gc.runtime.controller_mouse_camera_base_offset;
+            mouse_camera.owner_offset =
+                gc.runtime.controller_mouse_camera_owner_offset;
+            mouse_camera.desired_pitch_offset =
+                gc.runtime.controller_mouse_camera_desired_pitch_offset;
+            mouse_camera.rendered_pitch_offset =
+                gc.runtime.controller_mouse_camera_rendered_pitch_offset;
+            mouse_camera.vector_x_offset =
+                gc.runtime.controller_mouse_camera_vector_x_offset;
+            mouse_camera.vector_y_offset =
+                gc.runtime.controller_mouse_camera_vector_y_offset;
+            mouse_camera.vector_z_offset =
+                gc.runtime.controller_mouse_camera_vector_z_offset;
+            mouse_camera.controller_reg =
+                gc.runtime.controller_mouse_camera_controller_reg;
+            mouse_camera.chase_yaw_sensitivity =
+                gc.runtime.controller_mouse_chase_yaw_sensitivity;
+            mouse_camera.chase_pitch_sensitivity =
+                gc.runtime.controller_mouse_chase_pitch_sensitivity;
+            mouse_camera.aim_yaw_sensitivity =
+                gc.runtime.controller_mouse_aim_yaw_sensitivity;
+            mouse_camera.aim_pitch_sensitivity =
+                gc.runtime.controller_mouse_aim_pitch_sensitivity;
+            mouse_camera.invert_y =
+                gc.runtime.controller_mouse_invert_y ? 1 : 0;
+            psx_mouse_camera_configure(&mouse_camera);
+            g_mouse_camera_enabled = mouse_camera.enabled;
             if (g_mouse_pad_enabled) {
                 std::fprintf(stdout,
                     "psxrecomp: mouse PAD adapter enabled "
                     "(%d chase, %d aim counts/frame)\n",
                     g_mouse_pad_counts_per_frame,
                     g_mouse_pad_aim_counts_per_frame);
+            }
+            if (g_mouse_camera_enabled) {
+                std::fprintf(stdout,
+                    "psxrecomp: direct relative-mouse camera enabled "
+                    "(site=0x%08X, non-inverted-y=%s)\n",
+                    mouse_camera.facing_site,
+                    mouse_camera.invert_y ? "no" : "yes");
             }
             g_frame_interpolation = gc.runtime.video_frame_interpolation ? 1 : 0;
             g_frame_interpolation_fps = gc.runtime.video_frame_interpolation_fps;

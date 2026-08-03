@@ -155,6 +155,8 @@ def checkpoint(client: DebugClient, name: str) -> dict[str, Any]:
         "app": app_state(client),
         "title_state": client.u32(TITLE_STATE),
         "gpu": client.call("gpu_state"),
+        "present": client.call("present_ring", n=16),
+        "gl_present": client.call("gl_present_ring", n=16),
         "pad": client.call("pad_status"),
         "cdrom": client.call("cdrom_state"),
         "spu": client.call("spu_status"),
@@ -386,6 +388,65 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         "pad_window": pad_window,
     }
     evidence["checkpoints"].append(checkpoint(client, "mission1_moved"))
+
+    # Modern builds expose a title-neutral semantic mouse seam.  Exercise it
+    # only when configured so this same retail route remains valid for the
+    # frozen 4:3 compatibility build.  Chase motion must reach the owned
+    # camera directly; aim motion must do so while retail L1 is consumed on
+    # the ordinary PAD path.
+    mouse_before = client.call("mouse_camera_stats")
+    if mouse_before["enabled"]:
+        client.call("mouse_camera_input", dx=40, dy=20, aim=0)
+        chase = wait_for(
+            client,
+            "direct chase-camera mouse mutation",
+            lambda: stats
+            if (stats := client.call("mouse_camera_stats"))["applied_chase"]
+            > mouse_before["applied_chase"]
+            else None,
+            10,
+            0.02,
+        )
+        if chase["last_yaw"] != 30 or chase["last_pitch"] != 20:
+            raise RuntimeError(f"unexpected chase mouse scaling: {chase}")
+
+        client.call("press", buttons=0xFBFF, frames=120)  # Retail L1.
+        wait_for(
+            client,
+            "retail first-person aim input",
+            lambda: status
+            if (status := client.call("pad_status"))["pad"] == "0xFBFF"
+            else None,
+            10,
+            0.02,
+        )
+        client.call("mouse_camera_input", dx=-24, dy=-12, aim=1)
+        aim = wait_for(
+            client,
+            "direct first-person mouse mutation",
+            lambda: stats
+            if (stats := client.call("mouse_camera_stats"))["applied_aim"]
+            > chase["applied_aim"]
+            else None,
+            10,
+            0.02,
+        )
+        if aim["last_yaw"] != -24 or aim["last_pitch"] != -12:
+            raise RuntimeError(f"unexpected aim mouse scaling: {aim}")
+        wait_for(
+            client,
+            "retail L1 release",
+            lambda: status
+            if (status := client.call("pad_status"))["pad"] == "0xFFFF"
+            else None,
+            10,
+            0.02,
+        )
+        evidence["semantic_mouse"] = {
+            "before": mouse_before,
+            "chase": chase,
+            "aim": aim,
+        }
 
     final = evidence["checkpoints"][-1]
     if final["cdrom"]["int1_lost"] != 0:

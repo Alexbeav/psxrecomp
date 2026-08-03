@@ -1596,6 +1596,19 @@ std::string CodeGenerator::translate_basic_block(
     ss << config_.indent
        << fmt::format("debug_server_cyc_observe(0x{:08X}u);\n", block.start_addr);
     ss << "#endif\n";
+    if (config_.mouse_camera_facing_site == block.start_addr) {
+        const auto word = exe_.read_word(block.start_addr);
+        if (!word || *word != config_.mouse_camera_facing_expected) {
+            throw std::runtime_error(fmt::format(
+                "[controller.mouse_camera] facing site 0x{:08X} expected "
+                "0x{:08X}, found {}",
+                block.start_addr, config_.mouse_camera_facing_expected,
+                word ? fmt::format("0x{:08X}", *word) : "no executable word"));
+        }
+        ss << config_.indent
+           << fmt::format("psx_mouse_camera_hook(cpu, 0x{:08X}u);\n",
+                          block.start_addr);
+    }
     // First-divergence co-sim oracle (COSIM_ORACLE.md): lean per-block-leader hook,
     // present only in the clean PSX_COSIM build (independent of the debug tools).
     ss << "#ifdef PSX_COSIM\n";
@@ -3060,6 +3073,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern void psx_datashard_ret(CPUState* cpu);                  /* data-shard capture finalize */\n";
     ss << "extern int  psx_vsync_query_hle_enter(CPUState* cpu, uint32_t func, uint32_t counter_addr, uint32_t gpustat_ptr_addr, uint32_t timer1_ptr_addr, uint32_t timer1_cache_addr);  /* load_accel.c */\n";
     ss << "extern void psx_ws_sprite_tag(CPUState* cpu);  /* widescreen prim tag (gpu.c) */\n";
+    ss << "extern void psx_mouse_camera_hook(CPUState* cpu, uint32_t site);  /* guarded direct relative-mouse semantic hook */\n";
     ss << "extern void psx_ws_mmx6_bg_stage_init(void);    /* ws 2D stage reveal invalidation (gpu.c) */\n";
     ss << "extern int  psx_ws_x_margin(void);  /* widescreen cull-margin term (gpu.c) */\n";
     ss << "extern int32_t psx_ws_player_x_bound(int32_t vanilla);  /* typed gameplay X bound */\n";

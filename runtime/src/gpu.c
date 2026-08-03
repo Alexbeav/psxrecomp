@@ -1487,8 +1487,13 @@ int psx_ws_is_backdrop_site(uint32_t pc) {
  * and the cull-margin are actually engaged (8C). */
 void gpu_ws_get_debug(GpuWsDebug* out) {
     if (!out) return;
-    out->configured        = ws_configured();
-    out->active            = ws_active();
+    /* Report the public widescreen state, not the legacy squash-only
+     * predicate.  Native-wide deliberately keeps xnum/xden at identity, so
+     * ws_configured()/ws_active() otherwise claim that mode 2 is disabled
+     * while its wider FBO is live. */
+    out->configured        = ws_engaged();
+    out->active            = ws_mode == 2 ? ws_native_wide_active()
+                                          : ws_active();
     out->game_mode         = ws_game_mode();
     out->present_native_43 = gpu_ws_present_native_43();
     out->x_margin          = psx_ws_x_margin();

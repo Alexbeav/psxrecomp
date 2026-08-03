@@ -37,6 +37,26 @@ must not obstruct either follow-up.
   checked against the user-owned SCUS-94451 executable and bounded live traces.
 - Initial ignored footprint is 7.196 GiB, below the 20 GiB ceiling.
 
+## 2026-08-03 modernization pass 2 automated gate
+
+- The opt-in build now uses 4x native-wide 16:9 with GTE-derived gameplay
+  classification. Clean hidden software and OpenGL routes preserve TITLE,
+  24-bit FMV and state-8 briefing as authored 4:3, then present Mission 1
+  gameplay from a 512x240 guest-wide surface to full 1920x1080.
+- Relative motion bypasses PAD and applies independently scaled, non-inverted
+  chase and held-L1 yaw/pitch at a locally verified resident boundary. Retail
+  mouse buttons and physical controllers remain PAD input; invalid state,
+  changed code and scripted camera ownership fail closed.
+- The OpenGL route automatically proves chase and aim mutations plus retail
+  state-0 player ownership and movement. The software route passes the same
+  authentic retail progression and wide presentation gates.
+- Generic automatic cull discovery emits no SF2 site, including with the
+  observed 240-line vertical signature. This remains an honest human edge-
+  visibility gate, not a hardcoded address.
+- Framework tests pass 48/48 and the focused direct-mouse unit passes. The
+  enhanced build is ready for the user-controlled Missions 1--8 validation;
+  compatibility remains isolated for A/B reproduction.
+
 ## 2026-08-03 modernization pass 1
 
 - A separate Release executable is built under ignored `build-modern-pass1`;

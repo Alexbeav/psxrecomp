@@ -474,6 +474,32 @@ struct RuntimeConfig {
     int                   controller_mouse_counts_per_frame = 12;
     int                   controller_mouse_aim_counts_per_frame = 4;
 
+    // Optional direct relative-mouse camera bridge. Unlike mouse_pad, motion
+    // never becomes PAD directions: a full-word-guarded resident block hook
+    // applies yaw/pitch only while the configured retail player owns the
+    // camera. All addresses and layouts are title configuration; the runtime
+    // implementation is otherwise title-neutral and fail-closed.
+    bool                  controller_mouse_camera_enabled = false;
+    uint32_t              controller_mouse_camera_facing_site = 0;
+    uint32_t              controller_mouse_camera_facing_expected = 0;
+    uint32_t              controller_mouse_camera_application_state_addr = 0;
+    uint32_t              controller_mouse_camera_player_pointer_addr = 0;
+    uint32_t              controller_mouse_camera_player_state_offset = 0;
+    uint32_t              controller_mouse_camera_wrapper_offset = 0;
+    uint32_t              controller_mouse_camera_base_offset = 0;
+    uint32_t              controller_mouse_camera_owner_offset = 0;
+    uint32_t              controller_mouse_camera_desired_pitch_offset = 0;
+    uint32_t              controller_mouse_camera_rendered_pitch_offset = 0;
+    uint32_t              controller_mouse_camera_vector_x_offset = 0;
+    uint32_t              controller_mouse_camera_vector_y_offset = 0;
+    uint32_t              controller_mouse_camera_vector_z_offset = 0;
+    int                   controller_mouse_camera_controller_reg = 0;
+    double                controller_mouse_chase_yaw_sensitivity = 0.75;
+    double                controller_mouse_chase_pitch_sensitivity = 1.0;
+    double                controller_mouse_aim_yaw_sensitivity = 1.0;
+    double                controller_mouse_aim_pitch_sensitivity = 1.0;
+    bool                  controller_mouse_invert_y = false;
+
 };
 
 // One entry from [[recompiler.bios_vectors]].

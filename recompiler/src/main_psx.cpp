@@ -160,6 +160,8 @@ int main(int argc, char** argv) {
     bool                  inspect_mode = false;
     bool                  overlay_mode = false;
     bool                  reachable_discovery = false;
+    uint32_t              mouse_camera_facing_site = 0;
+    uint32_t              mouse_camera_facing_expected = 0;
     std::set<uint32_t>    ws_tag_funcs;         // [widescreen] sprite_tag_funcs
     std::set<uint32_t>    ds_funcs;             // [data_shards] funcs
     std::set<uint32_t>    hot_funcs;            // [recompiler] hot_funcs
@@ -207,6 +209,12 @@ int main(int argc, char** argv) {
         bios_profile_path    = cfg.bios_config_path;
         out_dir              = cfg.out_dir;
         instruction_patches  = cfg.recompiler_patches;
+        if (cfg.runtime.controller_mouse_camera_enabled) {
+            mouse_camera_facing_site =
+                cfg.runtime.controller_mouse_camera_facing_site;
+            mouse_camera_facing_expected =
+                cfg.runtime.controller_mouse_camera_facing_expected;
+        }
         ws_tag_funcs.insert(cfg.ws_sprite_tag_funcs.begin(),
                             cfg.ws_sprite_tag_funcs.end());
         ds_funcs.insert(cfg.data_shard_funcs.begin(), cfg.data_shard_funcs.end());
@@ -1127,6 +1135,8 @@ int main(int argc, char** argv) {
     codegen_config.emit_line_numbers = true;
     codegen_config.split_mid_function_targets = !overlay_mode;
     codegen_config.overlay_mode = overlay_mode;
+    codegen_config.mouse_camera_facing_site = mouse_camera_facing_site;
+    codegen_config.mouse_camera_facing_expected = mouse_camera_facing_expected;
     codegen_config.ws_signed_x_bound_sites = ws_signed_x_bound_sites;
     codegen_config.ws_sprite_tag_funcs = ws_tag_funcs;
     codegen_config.data_shard_funcs = ds_funcs;

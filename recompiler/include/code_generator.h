@@ -49,6 +49,8 @@ struct CodeGenConfig {
     // mismatch is EXPECTED (apply the transform only where the bytes match, skip
     // it elsewhere) rather than a hard config error.
     bool overlay_mode = false;
+    uint32_t mouse_camera_facing_site = 0;
+    uint32_t mouse_camera_facing_expected = 0;
     std::vector<PSXRecompV4::WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     std::string indent;           // Indentation string (default: "    ")
     // Widescreen sprite-tag hooks ([widescreen] sprite_tag_funcs): functions

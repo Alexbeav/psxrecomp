@@ -42,6 +42,7 @@
 #include "gpu_gl_renderer.h"
 #include "lockstep.h"
 #include "debug_trace_ranges.h"
+#include "mouse_camera.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7531,6 +7532,46 @@ static void handle_savestate(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"op\":\"%s\",\"slot\":%d}", id, op, slot);
 }
 
+/* Bounded semantic-mouse test seam. This feeds the same accumulator as SDL
+ * relative motion; the retail hook still owns all validation and writes. */
+static void handle_mouse_camera_input(int id, const char *json)
+{
+    int dx = json_get_int(json, "dx", 0);
+    int dy = json_get_int(json, "dy", 0);
+    int aim = json_get_int(json, "aim", 0);
+    psx_mouse_camera_set_focus(1);
+    psx_mouse_camera_set_aim(aim);
+    psx_mouse_camera_add_motion(dx, dy);
+    send_fmt("{\"id\":%d,\"ok\":true,\"dx\":%d,\"dy\":%d,\"aim\":%d}",
+             id, dx, dy, aim ? 1 : 0);
+}
+
+static void handle_mouse_camera_stats(int id, const char *json)
+{
+    PsxMouseCameraStats s;
+    (void)json;
+    psx_mouse_camera_get_stats(&s);
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,"
+             "\"hook_calls\":%llu,\"applied_chase\":%llu,"
+             "\"applied_aim\":%llu,\"rejected_word\":%llu,"
+             "\"rejected_state\":%llu,\"rejected_owner\":%llu,"
+             "\"last_controller\":\"0x%08X\","
+             "\"last_player\":\"0x%08X\","
+             "\"last_wrapper\":\"0x%08X\","
+             "\"last_base\":\"0x%08X\","
+             "\"last_yaw\":%d,\"last_pitch\":%d,"
+             "\"last_chase_pitch\":%d}",
+             id, psx_mouse_camera_enabled(),
+             (unsigned long long)s.hook_calls,
+             (unsigned long long)s.applied_chase,
+             (unsigned long long)s.applied_aim,
+             (unsigned long long)s.rejected_word,
+             (unsigned long long)s.rejected_state,
+             (unsigned long long)s.rejected_owner,
+             s.last_controller, s.last_player, s.last_wrapper, s.last_base,
+             s.last_yaw, s.last_pitch, s.last_chase_pitch);
+}
+
 static void handle_turbo(int id, const char *json)
 {
     int enabled = json_get_int(json, "enabled", -1);
@@ -12715,6 +12756,8 @@ static const CmdEntry s_commands[] = {
     { "press",             handle_press },
     { "pad_status",        handle_pad_status },
     { "clear_input",       handle_clear_input },
+    { "mouse_camera_input", handle_mouse_camera_input },
+    { "mouse_camera_stats", handle_mouse_camera_stats },
     { "savestate",         handle_savestate },
     { "turbo",             handle_turbo },
     { "turbo_state",       handle_turbo_state },

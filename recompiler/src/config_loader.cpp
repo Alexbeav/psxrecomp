@@ -690,6 +690,84 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] mouse_aim_counts_per_frame out of range (1..256): {}", n));
             rt.controller_mouse_aim_counts_per_frame = static_cast<int>(n);
         }
+        if (ct.contains("mouse_camera")) {
+            const toml::value& mc = toml::find(ct, "mouse_camera");
+            const auto hex = [&](const char* key) -> uint32_t {
+                return parse_hex(toml::find<std::string>(mc, key),
+                                 fmt::format("controller.mouse_camera.{}", key));
+            };
+            const auto sensitivity = [&](const char* key, double fallback) {
+                if (!mc.contains(key)) return fallback;
+                const double value = toml::find<double>(mc, key);
+                if (value < 0.01 || value > 20.0)
+                    throw std::runtime_error(fmt::format(
+                        "[controller.mouse_camera] {} out of range (0.01..20): {}",
+                        key, value));
+                return value;
+            };
+            if (mc.contains("enabled"))
+                rt.controller_mouse_camera_enabled =
+                    toml::find<bool>(mc, "enabled");
+            if (mc.contains("facing_site"))
+                rt.controller_mouse_camera_facing_site = hex("facing_site");
+            if (mc.contains("facing_expected"))
+                rt.controller_mouse_camera_facing_expected = hex("facing_expected");
+            if (mc.contains("application_state_addr"))
+                rt.controller_mouse_camera_application_state_addr =
+                    hex("application_state_addr");
+            if (mc.contains("player_pointer_addr"))
+                rt.controller_mouse_camera_player_pointer_addr =
+                    hex("player_pointer_addr");
+            if (mc.contains("player_state_offset"))
+                rt.controller_mouse_camera_player_state_offset = hex("player_state_offset");
+            if (mc.contains("wrapper_offset"))
+                rt.controller_mouse_camera_wrapper_offset = hex("wrapper_offset");
+            if (mc.contains("base_offset"))
+                rt.controller_mouse_camera_base_offset = hex("base_offset");
+            if (mc.contains("owner_offset"))
+                rt.controller_mouse_camera_owner_offset = hex("owner_offset");
+            if (mc.contains("desired_pitch_offset"))
+                rt.controller_mouse_camera_desired_pitch_offset =
+                    hex("desired_pitch_offset");
+            if (mc.contains("rendered_pitch_offset"))
+                rt.controller_mouse_camera_rendered_pitch_offset =
+                    hex("rendered_pitch_offset");
+            if (mc.contains("vector_x_offset"))
+                rt.controller_mouse_camera_vector_x_offset = hex("vector_x_offset");
+            if (mc.contains("vector_y_offset"))
+                rt.controller_mouse_camera_vector_y_offset = hex("vector_y_offset");
+            if (mc.contains("vector_z_offset"))
+                rt.controller_mouse_camera_vector_z_offset = hex("vector_z_offset");
+            if (mc.contains("controller_reg")) {
+                const auto reg = toml::find<int64_t>(mc, "controller_reg");
+                if (reg < 1 || reg > 31)
+                    throw std::runtime_error(
+                        "[controller.mouse_camera] controller_reg must be 1..31");
+                rt.controller_mouse_camera_controller_reg = static_cast<int>(reg);
+            }
+            rt.controller_mouse_chase_yaw_sensitivity =
+                sensitivity("chase_yaw_sensitivity", 0.75);
+            rt.controller_mouse_chase_pitch_sensitivity =
+                sensitivity("chase_pitch_sensitivity", 1.0);
+            rt.controller_mouse_aim_yaw_sensitivity =
+                sensitivity("aim_yaw_sensitivity", 1.0);
+            rt.controller_mouse_aim_pitch_sensitivity =
+                sensitivity("aim_pitch_sensitivity", 1.0);
+            if (mc.contains("invert_y"))
+                rt.controller_mouse_invert_y = toml::find<bool>(mc, "invert_y");
+
+            if (rt.controller_mouse_camera_enabled &&
+                (!rt.controller_mouse_camera_facing_site ||
+                 !rt.controller_mouse_camera_facing_expected ||
+                 !rt.controller_mouse_camera_application_state_addr ||
+                 !rt.controller_mouse_camera_player_pointer_addr ||
+                 !rt.controller_mouse_camera_controller_reg)) {
+                throw std::runtime_error(
+                    "[controller.mouse_camera] enabled requires facing_site, "
+                    "facing_expected, application_state_addr, player_pointer_addr, "
+                    "and controller_reg");
+            }
+        }
     }
 
     return rt;

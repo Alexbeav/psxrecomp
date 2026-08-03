@@ -834,3 +834,82 @@ the configured retail R1/target action. Focused adapter, focus, and final-PAD
 tests pass and the modern executable was rebuilt. Per user direction, further
 feel iterations use focused automated checks followed directly by visible user
 acceptance rather than repeating the complete seven-minute route each time.
+
+## 2026-08-03 — modernization pass 2: direct mouse boundary proof
+
+Created `experiment/sf2-modernization-pass2` from compatibility checkpoint
+`5b64d86`; the frozen compatibility branch and executable remain available for
+4:3 A/B reproduction. The private corpus and both read-only SF2 presentation
+oracles were consulted before implementation. Their `0x80053464` and
+`0x800539D0` addresses remained leads until checked against the local
+SCUS-94451 input (SHA-256
+`75A360BF7465DFDEC85C14F9BA93862AAE2531B48D83FD8D82BA8C9FFFA13D33`).
+
+Local static proof found retail words `0x8EA30034` and `0x8FA20010`
+respectively, both as resident AOT block leaders. A clean bounded Mission 1
+route then recorded 32 hits at `0x80053464` after state-0 control. Its semantic
+checkpoint independently proved state 0, live player/camera ownership and
+authoritative movement. The initial attempt accidentally left more than one
+route driver attached after a shell timeout; that evidence was rejected, every
+owned process was stopped, and the proof was repeated with one runtime and one
+driver under `lab/sf2/local/pass2-mouse-proof-clean/`.
+
+Implemented a generic, configured direct-relative-mouse bridge. The recompiler
+emits its callback only at the configured resident leader and rejects a word
+mismatch during generation. The runtime rejects changed code, non-gameplay
+state, invalid RAM pointers and scripted camera ownership. Mouse buttons remain
+ordinary PAD actions; motion bypasses PAD and receives separate chase/aim yaw
+and pitch sensitivities with non-inverted Y by default. A bounded debug seam
+feeds the same accumulator for deterministic validation. Focused commands:
+
+```powershell
+cmake --build recompiler\build-cli --parallel
+gcc runtime\tests\test_mouse_camera.c runtime\src\mouse_camera.c `
+  -Iruntime\include -O2 -Wall -Wextra -Werror `
+  -o lab\sf2\local\mouse-camera-test.exe -lm
+lab\sf2\local\mouse-camera-test.exe
+powershell -ExecutionPolicy Bypass -File `
+  tools\build_sf2_modernized_pass2.ps1
+```
+
+The recompiler build, focused unit test, full SCUS-94451 regeneration and
+isolated pass-2 link succeeded. No generated retail source was hand-edited.
+
+The first live direct-input probe found valid state/player/wrapper/base
+pointers but no applied delta. The one-vblank lifetime was too narrow for
+SF2's nested callback cadence; a bounded four-callback lifetime retained input
+until the semantic block and still discarded it across scripted ownership.
+Chase `(40,20)` then applied as yaw/pitch `(30,20)`. Held retail L1 plus
+`(-24,-12)` applied once on the aim path as `(-24,-12)`. A live bounded watch
+also observed 16 executions of `0x800539D0` under L1, narrowing that external
+lead without adding a duplicate hook.
+
+Native-wide was enabled with the generic GTE gameplay classifier after a clean
+state-0 sample measured 2,497 projected vertices while TITLE, FMV and briefing
+measured zero. Automatic screen-cull discovery produced zero calls with its
+default 224/241-line signature and again after adding the locally observed
+240-line signature. Both hypotheses are recorded as contradicted; no address,
+movie geometry or presentation dimensions were hardcoded to manufacture a
+result.
+
+The first hidden-software attempt was rejected because a short-timeout shell
+left one route driver alive and a second driver observed its scheduled Cross
+press during the neutral-TITLE hold. All owned processes were stopped. The
+single-driver repeat passed under
+`lab/sf2/local/pass2-hidden-software-b/route.json`. It reports native-4:3 for
+TITLE, the depth-24 aircraft movie and state 8, then a 512x240 native-wide
+surface (`nw_extra=128`) at state-0 control and authoritative movement.
+
+The clean hidden-OpenGL acceptance route under
+`lab/sf2/local/pass2-hidden-opengl-a/route.json` passed the same retail gates
+and the newly automated chase/aim checks. GL final-present evidence records a
+centered 1440x1080 destination for TITLE/state8 and coherent depth-24 CPU movie
+scanout, then the full 1920x1080 destination from the wide FBO during gameplay.
+The native-wide debug report was corrected to stop labeling mode 2 as
+unconfigured merely because its legacy squash ratio remains identity.
+
+`python -m py_compile tools/sf2_mission1_route.py`, the direct mouse unit, the
+Release regeneration/link and the complete registered 48/48 suite pass.
+`git diff --check` passes. The ignored footprint is 7.719 GiB. Campaign culling,
+scope/NVG/fade/matte behavior and mouse feel across Missions 1--8 remain human
+acceptance gates; the frozen 4:3 launcher remains available for A/B.

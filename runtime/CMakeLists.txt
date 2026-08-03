@@ -76,6 +76,15 @@ if(BUILD_TESTING)
     target_include_directories(ws_ui_group_test PRIVATE include)
     add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
 
+    add_executable(mouse_camera_test
+        tests/test_mouse_camera.c
+        src/mouse_camera.c)
+    target_include_directories(mouse_camera_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(mouse_camera_test PRIVATE m)
+    endif()
+    add_test(NAME mouse_camera_test COMMAND mouse_camera_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)
