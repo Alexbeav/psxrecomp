@@ -737,14 +737,107 @@ static int read_line_file(const char* path, char* out, size_t cap) {
     }
     fclose(f);
     size_t n = strlen(out);
-    while (n && (out[n - 1] == '\n' || out[n - 1] == '\r'))
+    while (n && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                 out[n - 1] == ' ' || out[n - 1] == '\t'))
         out[--n] = '\0';
     return n > 0;
 }
 
+static int write_line_file(const char* path, const char* line) {
+    FILE* f;
+    if (!path || !path[0])
+        return 0;
+    if (!line || !line[0]) {
+        remove(path);
+        return 1;
+    }
+    f = fopen(path, "w");
+    if (!f)
+        return 0;
+    fprintf(f, "%s\n", line);
+    fclose(f);
+    return 1;
+}
+
+/* Sidecars are loaded next to argv[0]. Setup host is often zip-root while the
+ * rebuilt binary lives under build/ — write beside the game binary too. */
+static void write_sidecar_near_exe(const char* near_exe, const char* name,
+                                   const char* value) {
+    char dir[1100], path[1200];
+    if (!near_exe || !near_exe[0] || !name || !name[0])
+        return;
+    if (!dirname_copy(dir, sizeof(dir), near_exe))
+        return;
+    if (!join_path(path, sizeof(path), dir, name))
+        return;
+    write_line_file(path, value ? value : "");
+}
+
+/* bios_path NULL = leave bios.cfg untouched; "" = clear (OpenBIOS); else write. */
+static int host_persist_setup(void* ctx, const char* rom_path,
+                              const char* bios_path) {
+    char path[1200];
+    (void)ctx;
+    if (bios_path) {
+        if (g_project_root[0] &&
+            join_path(path, sizeof(path), g_project_root, "bios.cfg"))
+            write_line_file(path, bios_path[0] ? bios_path : "");
+        write_line_file("bios.cfg", bios_path[0] ? bios_path : "");
+        if (g_exe_path[0])
+            write_sidecar_near_exe(g_exe_path, "bios.cfg",
+                                   bios_path[0] ? bios_path : "");
+    }
+    if (rom_path && rom_path[0]) {
+        if (g_project_root[0] &&
+            join_path(path, sizeof(path), g_project_root, "disc.cfg"))
+            write_line_file(path, rom_path);
+        write_line_file("disc.cfg", rom_path);
+        if (g_exe_path[0])
+            write_sidecar_near_exe(g_exe_path, "disc.cfg", rom_path);
+    }
+    return 0;
+}
+
+static void persist_relaunch_sidecars(const char* near_exe,
+                                      const char* disc_path) {
+    char bios_line[1024];
+    char project_sidecar[1200];
+
+    if (disc_path && disc_path[0]) {
+        write_sidecar_near_exe(near_exe, "disc.cfg", disc_path);
+        write_line_file("disc.cfg", disc_path);
+        if (g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "disc.cfg"))
+            write_line_file(project_sidecar, disc_path);
+    }
+
+    bios_line[0] = '\0';
+    if (!read_line_file("bios.cfg", bios_line, sizeof(bios_line)) &&
+        g_project_root[0] &&
+        join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                  "bios.cfg"))
+        read_line_file(project_sidecar, bios_line, sizeof(bios_line));
+    if (bios_line[0] && !path_is_file(bios_line))
+        bios_line[0] = '\0';
+    if (bios_line[0]) {
+        write_sidecar_near_exe(near_exe, "bios.cfg", bios_line);
+        write_line_file("bios.cfg", bios_line);
+        if (g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "bios.cfg"))
+            write_line_file(project_sidecar, bios_line);
+    }
+}
+
 static int resolve_bios_arg(char* out, size_t cap) {
     char cand[1100];
+    char exe_dir[1100];
     if (join_path(cand, sizeof(cand), g_project_root, "bios.cfg") &&
+        read_line_file(cand, out, cap) && path_is_file(out))
+        return 1;
+    if (g_exe_path[0] && dirname_copy(exe_dir, sizeof(exe_dir), g_exe_path) &&
+        join_path(cand, sizeof(cand), exe_dir, "bios.cfg") &&
         read_line_file(cand, out, cap) && path_is_file(out))
         return 1;
     if (read_line_file("bios.cfg", out, cap) && path_is_file(out))
@@ -1796,6 +1889,14 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
 
+    /* Sync wizard disc/BIOS sidecars into project root + build/ before resolve. */
+    {
+        char bios_line[1100];
+        host_persist_setup(NULL, source_path, NULL); /* disc only */
+        if (resolve_bios_arg(bios_line, sizeof(bios_line)))
+            host_persist_setup(NULL, source_path, bios_line);
+    }
+
     char bios_path[1100];
     const int have_bios = resolve_bios_arg(bios_path, sizeof(bios_path));
 
@@ -2008,17 +2109,14 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
 
 void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     char exe[512];
+    const char* near_exe;
     if (!recomp_launcher_relaunch_exe(exe, sizeof(exe)) || !exe[0]) {
         fprintf(stderr, "psxrecomp-codegen: relaunch requested but no path\n");
         exit(1);
     }
-    if (disc_path && disc_path[0]) {
-        FILE* rc = fopen("disc.cfg", "w");
-        if (rc) {
-            fprintf(rc, "%s\n", disc_path);
-            fclose(rc);
-        }
-    }
+    /* Prefer the final game binary (build/<exe>) over a Windows helper bat. */
+    near_exe = g_exe_path[0] ? g_exe_path : exe;
+    persist_relaunch_sidecars(near_exe, disc_path);
 
 #if defined(_WIN32)
     {
@@ -2049,6 +2147,10 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     }
 #else
     {
+        if (g_project_root[0] && chdir(g_project_root) != 0) {
+            fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
+                    g_project_root, strerror(errno));
+        }
         fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
         char* args[] = {exe, "--launcher", NULL};
         execv(exe, args);
@@ -2166,6 +2268,8 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->prepare_success_status =
             "Sources generated. Rebuild manually, then relaunch.";
     }
+    gi->persist_setup = host_persist_setup;
+    gi->persist_setup_ctx = NULL;
 
     if (psxrecomp_codegen_host_sources_missing(cfg) || force_setup) {
         gi->needs_setup = 1;
