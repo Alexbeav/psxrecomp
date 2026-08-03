@@ -7,14 +7,14 @@
 extern "C" {
 #endif
 
-/* Logical pad count. Default 2 (port1=pad0, port2=pad1). With multitap
- * (sio_set_multitap) and PSX_MAX_PLAYERS>=5: port1 hosts SCPH-1070 pads
- * A–D as logical 0–3, port2 is logical pad 4. Absolute max for this pass. */
+/* Logical pad count. Default 2 (port1=pad0, port2=pad1).
+ * PSX_MAX_PLAYERS 5..7: one SCPH-1070 (sio_set_multitap_port) + opposite pad.
+ * PSX_MAX_PLAYERS 8: dual multitap (port1 pads 0–3, port2 pads 4–7). */
 #ifndef PSX_MAX_PLAYERS
 #define PSX_MAX_PLAYERS 2
 #endif
-#if PSX_MAX_PLAYERS < 1 || PSX_MAX_PLAYERS > 5
-#error "PSX_MAX_PLAYERS must be in 1..5"
+#if PSX_MAX_PLAYERS < 1 || PSX_MAX_PLAYERS > 8
+#error "PSX_MAX_PLAYERS must be in 1..8"
 #endif
 
 /* SIO0 register base: 0x1F801040 */

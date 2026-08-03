@@ -5506,7 +5506,8 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
     int g_lnch_lobby_input_prediction = 4;
-    int g_lnch_force_input_relay = 0;
+    /* Online default: lobby UDP SFU star (server always opens relay on start). */
+    int g_lnch_force_input_relay = 1;
     /* Default on: CGNAT-safe relay-only ICE (BattleShip-style online path). */
     int g_lnch_force_turn = 1;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
@@ -7737,6 +7738,8 @@ namespace {
 
     int ae_np_move_member(void*, int from_slot, int to_slot) {
         if (from_slot < 0 || to_slot < 0 || from_slot == to_slot) return -1;
+        /* Slot 0 = session host / sim authority; guests rearrange only. */
+        if (from_slot == 0 || to_slot == 0) return -1;
         if (g_lnch_hosting_lan) {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state)) return -1;
@@ -7956,8 +7959,9 @@ namespace {
             if (seated > out->max_slots) seated = out->max_slots;
             out->player_count = seated;
         }
+        /* Online WS lobbies always use lobby UDP SFU; LAN/direct stay local. */
         out->force_input_relay =
-            (caps && caps->valid && caps->force_input_relay) ? 1 : 0;
+            (g_lnch_hosting_lan || g_lnch_joined_lan) ? 0 : 1;
         out->force_turn =
             (caps && caps->valid && caps->force_turn) ? 1 : 0;
         out->rollback =

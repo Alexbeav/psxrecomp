@@ -52,7 +52,7 @@ typedef struct PsxNetplayConfig {
     int         input_delay;
     /* Rollback invent runway (phase_lock / P). Clamped 2..16. Unused in delay-sync. */
     int         input_prediction;
-    int         force_input_relay; /* 1 = lobby-server UDP input relay */
+    int         force_input_relay; /* 1 = lobby UDP SFU star (online default) */
     int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
     /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
      * Env PSX_NET_TRANSPORT=lan|ice overrides. */
