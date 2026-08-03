@@ -39,6 +39,8 @@ extern "C" void psx_write_half(uint32_t addr, uint16_t value);
 extern "C" uint32_t psx_read_word(uint32_t addr);
 extern "C" void psx_write_word(uint32_t addr, uint32_t value);
 extern "C" uint32_t psx_mod_memory_alloc(uint32_t size, uint32_t alignment);
+extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t size,
+                                                  uint32_t alignment);
 extern "C" int psx_ws_x_margin(void);
 extern "C" void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 extern "C" int fntrace_is_game_started(void);
@@ -1046,6 +1048,11 @@ extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
 extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,
                                                 uint32_t alignment) {
     return psx_mod_memory_alloc(size, alignment);
+}
+
+extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
+                                                  uint32_t alignment) {
+    return psx_mod_gpu_dma_memory_alloc(size, alignment);
 }
 
 extern "C" int32_t psx_mod_widescreen_x_margin(void) {

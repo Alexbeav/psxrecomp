@@ -18,6 +18,7 @@
 #include "dirty_ram_interp.h"
 #include "gpu.h"
 #include "mdec.h"
+#include "mod_memory.h"
 #include "overlay_capture.h"
 #include "spu.h"
 #include "audio_trace.h"
@@ -702,7 +703,8 @@ static uint32_t execute_ch2_gpu(void) {
          *            bits 0-23  = next node address (0xFFFFFF = end).
          * The words following the header are sent to GP0. */
         gpu_ws_begin_linked_list();
-        uint32_t addr = channels[2].madr & 0x1FFFFCu;
+        uint32_t addr =
+            psx_mod_gpu_dma_resolve_address(channels[2].madr);
         gpu_ws_prepass_linked_list(addr);
         uint32_t safety = 0;
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
@@ -716,7 +718,8 @@ static uint32_t execute_ch2_gpu(void) {
 
             uint32_t header = psx_read_word(addr);
             uint32_t num_words = (header >> 24) & 0xFF;
-            uint32_t word_addr = (addr + 4) & 0x1FFFFCu;
+            uint32_t word_addr =
+                psx_mod_gpu_dma_resolve_address(addr + 4u);
             gpu_set_gp0_linked_list_node(addr, num_words);
             actual_words += 1u;
 
@@ -724,7 +727,8 @@ static uint32_t execute_ch2_gpu(void) {
                 uint32_t word = psx_read_word(word_addr);
                 gpu_set_gp0_source(word_addr);
                 gpu_write_gp0(word);
-                word_addr = (word_addr + 4) & 0x1FFFFCu;
+                word_addr =
+                    psx_mod_gpu_dma_resolve_address(word_addr + 4u);
             }
             actual_words += num_words;
 
@@ -734,7 +738,7 @@ static uint32_t execute_ch2_gpu(void) {
                 channels[2].madr = 0x00FFFFFFu;
                 break; /* end of list */
             }
-            addr = next & 0x1FFFFCu;
+            addr = psx_mod_gpu_dma_resolve_address(next);
         }
         if (safety > MAX_NODES) {
             channels[2].madr = addr;

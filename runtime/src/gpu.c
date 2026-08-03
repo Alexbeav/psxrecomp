@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "mod_memory.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
@@ -4056,7 +4057,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
-    uint32_t addr = start_addr & 0x1FFFFCu;
+    uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
     uint32_t safety = 0;
     uint16_t rank = 0xFFFFu;
     const uint32_t max_nodes = 0x40000u;
@@ -4071,11 +4072,13 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
-            uint32_t word_addr = (addr + 4u) & 0x1FFFFCu;
+            uint32_t word_addr =
+                psx_mod_gpu_dma_resolve_address(addr + 4u);
             uint32_t offset = 0;
             while (offset < num_words) {
                 uint32_t first = psx_read_word(
-                    (word_addr + offset * 4u) & 0x1FFFFCu);
+                    psx_mod_gpu_dma_resolve_address(
+                        word_addr + offset * 4u));
                 uint8_t op = (uint8_t)(first >> 24);
                 int count = gp0_command_word_count(op);
                 if (count <= 0 || offset + (uint32_t)count > num_words)
@@ -4086,18 +4089,19 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                 uint32_t words[12] = {0};
                 for (int i = 0; i < count && i < 12; i++) {
                     words[i] = psx_read_word(
-                        (word_addr + (offset + (uint32_t)i) * 4u) &
-                        0x1FFFFCu);
+                        psx_mod_gpu_dma_resolve_address(
+                            word_addr + (offset + (uint32_t)i) * 4u));
                 }
                 ws_ui_prepass_add(words,
-                    (word_addr + offset * 4u) & 0x1FFFFCu, rank);
+                    psx_mod_gpu_dma_resolve_address(
+                        word_addr + offset * 4u), rank);
                 offset += (uint32_t)count;
             }
         }
 
         uint32_t next = header & 0xFFFFFFu;
         if (next == 0xFFFFFFu) break;
-        addr = next & 0x1FFFFCu;
+        addr = psx_mod_gpu_dma_resolve_address(next);
     }
     if (ws_ui_prepass_count == 0) {
         ws_ui_prepass_count = 0;

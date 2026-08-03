@@ -29,6 +29,8 @@ recompiler/build-cli/
 recompiler/build-t2/
 runtime/build/
 runtime/build-msvc/
+runtime/build-*/
+runtime/build-*.exe
 test_msvc/
 
 # Recompiler output (derivative of copyrighted Sony BIOS, regenerate locally)

@@ -76,6 +76,12 @@ if(BUILD_TESTING)
     target_include_directories(ws_ui_group_test PRIVATE include)
     add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
 
+    add_executable(mod_gpu_dma_aperture_test
+        tests/test_mod_gpu_dma_aperture.c)
+    target_include_directories(mod_gpu_dma_aperture_test PRIVATE include)
+    add_test(NAME mod_gpu_dma_aperture_test
+             COMMAND mod_gpu_dma_aperture_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)

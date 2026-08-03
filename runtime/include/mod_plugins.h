@@ -42,6 +42,13 @@ void psx_mod_write_word(uint32_t address, uint32_t value);
  */
 uint32_t psx_mod_alloc_guest_memory(uint32_t size, uint32_t alignment);
 
+/*
+ * Allocate guest memory that is also addressable by 24-bit GPU linked-list
+ * tags. This is intended for opt-in enhanced primitive/ordering-table arenas;
+ * without an allocation the aperture remains unmapped and DMA stays faithful.
+ */
+uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
+
 /* Current per-side widescreen reveal in native game pixels (zero at 4:3). */
 int32_t psx_mod_widescreen_x_margin(void);
 
