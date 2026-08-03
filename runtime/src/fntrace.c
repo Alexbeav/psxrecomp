@@ -40,6 +40,26 @@ void fntrace_set_game_range(uint32_t lo, uint32_t hi) {
     (void)hi;
     s_game_entry_phys = lo & 0x1FFFFFFFu;
     s_game_started = 0;
+    /* PSX_FORCE_GAME_STARTED: some titles reach their entry point through
+     * compiled code flow rather than a dispatcher round-trip, so
+     * fntrace_record() never sees the entry_pc dispatch and the game-start
+     * latch (which drives widescreen engagement, CD speed switch, and boot
+     * turbo exit) remains false forever.  This override latches immediately
+     * when a valid game entry is registered, before the first instruction.
+     *
+     * Tested with Tenchu 2 (SLUS-00939): the SCPH1001 BIOS dispatcher never
+     * targets the game entry point (0x8002E4BC), and the secondary latch
+     * path (text_image_registered + native_ok) has a chicken-and-egg
+     * dependency on the dirty baseline that is only cleared *after* the
+     * primary latch fires.  Without this override widescreen, 2x CD speed,
+     * and boot turbo exit never activate. */
+    {   const char *e = getenv("PSX_FORCE_GAME_STARTED");
+        if (e && e[0] && e[0] != '0') {
+            s_game_started = 1;
+            extern void cdrom_notify_game_started(void);
+            cdrom_notify_game_started();
+        }
+    }
 }
 
 int fntrace_is_game_started(void) { return s_game_started; }
