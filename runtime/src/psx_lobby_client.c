@@ -101,6 +101,7 @@ void psx_lobby_clear_launch_pending(void) {}
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h> /* GetTickCount64 for lobby_mono_ms */
 #define close closesocket
 #else
 #include <arpa/inet.h>
@@ -190,7 +191,10 @@ enum {
 
 static uint64_t lobby_mono_ms(void)
 {
-#if defined(CLOCK_MONOTONIC)
+    /* Win32 first: MinGW's CLOCK_MONOTONIC needs winpthread at link time. */
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64();
+#elif defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (uint64_t)ts.tv_sec * 1000ull +

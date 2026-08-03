@@ -1017,6 +1017,12 @@ function(psxrecomp_add_runtime_target target)
         # opengl32: GL backend (gpu_gl_renderer.c). GL 1.x is exported directly
         # by opengl32; Phase 2b will load modern GL via SDL_GL_GetProcAddress.
         target_link_libraries(${target} PRIVATE ws2_32 dbghelp comdlg32 opengl32)
+        # Newer mingw-w64 maps clock_gettime → clock_gettime64 in libwinpthread.
+        # Link it even when netplay code prefers Win32 clocks, so any residual
+        # POSIX time refs (third-party / debug tools) resolve under -static.
+        if(MINGW)
+            target_link_libraries(${target} PRIVATE winpthread)
+        endif()
     else()
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
@@ -1130,7 +1136,8 @@ function(psxrecomp_add_runtime_target target)
             # Fold the GCC / C++ / winpthread runtimes into the exe so it
             # imports only Windows system DLLs (no libgcc_s_seh-1.dll /
             # libstdc++-6.dll dependency). Pairs with the static SDL link
-            # above to make the exe fully self-contained.
+            # above to make the exe fully self-contained. winpthread is
+            # linked via target_link_libraries (see WIN32 block above).
             target_link_options(${target} PRIVATE -static -static-libgcc -static-libstdc++)
         endif()
     elseif(MSVC)

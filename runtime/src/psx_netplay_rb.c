@@ -115,6 +115,10 @@ uint32_t psx_netplay_rb_rtt_estimate_ms(void) { return 0; }
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 static PsxNetplayRbBindings g_b;
 static int g_bound;
 static RNetRbSession *g_rb;
@@ -2064,10 +2068,14 @@ static uint8_t host_hash_confirm_promote(void *ctx)
 
 static uint64_t rb_mono_ms(void)
 {
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64();
+#else
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
         return 0;
     return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+#endif
 }
 
 /* 1 for ~300ms after tip-hold commit — covers peer SAFETY-deferred tip-hold. */

@@ -57,14 +57,15 @@ static int sched_local_slot(void)
 
 static uint32_t sched_mono_ms(void)
 {
-#if defined(CLOCK_MONOTONIC)
+    /* Win32 first: MinGW advertises CLOCK_MONOTONIC via winpthread. */
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#elif defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (uint32_t)((uint64_t)ts.tv_sec * 1000ull +
                           (uint64_t)ts.tv_nsec / 1000000ull);
-#endif
-#if defined(_WIN32)
-    return (uint32_t)GetTickCount64();
+    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #else
     return (uint32_t)((uint64_t)time(NULL) * 1000ull);
 #endif
