@@ -137,12 +137,6 @@ uint64_t overlay_loader_candidate_overflow(void);
 uint64_t overlay_loader_pair_aliases(void);
 int      overlay_loader_dump_lazy_at(uint32_t addr, char *out, int cap);
 
-/* Overlay CI wrapper early-return attribution (PSX_POST_LOAD_PROBE). */
-void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
-                                     uint64_t *none, uint64_t *sr,
-                                     uint64_t *deliv, uint64_t *enter);
-int  overlay_loader_call_unit_depth(void);
-
 #ifdef __cplusplus
 }
 #endif

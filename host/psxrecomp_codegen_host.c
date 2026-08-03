@@ -415,7 +415,8 @@ static int resolve_toolchain_cache_base(const char* base, char* out, size_t cap)
     return resolve_toolchain_bin_under(base, out, cap);
 }
 
-/* Same layout as psxrecomp/tools/toolchain_pack.py shared_cache_roots(). */
+/* Same layout as psxrecomp/tools/toolchain_pack.py shared_cache_roots().
+ * RetComM (`retcomm`) is preferred; legacy `psxrecomp` is a fallback. */
 static int resolve_shared_toolchain_cache(char* out, size_t cap) {
     char bases[8][1400];
     int n = 0;
@@ -423,11 +424,11 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
     const char* local = getenv("LOCALAPPDATA");
     if (local && local[0]) {
         if (join_path(bases[n], sizeof(bases[n]), local,
-                      "psxrecomp/toolchains/cmake-clang-v1"))
+                      "retcomm/toolchains/cmake-clang-v1"))
             ++n;
         if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), local,
-                      "retcomm/toolchains/cmake-clang-v1"))
+                      "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
         /* Store Python may have written only into LocalCache mirrors. */
         for (int i = 0, lim = n; i < lim && n < 8; ++i) {
@@ -442,19 +443,19 @@ static int resolve_shared_toolchain_cache(char* out, size_t cap) {
     const char* home = getenv("HOME");
     if (xdg && xdg[0]) {
         if (join_path(bases[n], sizeof(bases[n]), xdg,
-                      "psxrecomp/toolchains/cmake-clang-v1"))
+                      "retcomm/toolchains/cmake-clang-v1"))
             ++n;
         if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), xdg,
-                      "retcomm/toolchains/cmake-clang-v1"))
+                      "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
     } else if (home && home[0]) {
         if (join_path(bases[n], sizeof(bases[n]), home,
-                      ".local/share/psxrecomp/toolchains/cmake-clang-v1"))
+                      ".local/share/retcomm/toolchains/cmake-clang-v1"))
             ++n;
         if (n < 8 &&
             join_path(bases[n], sizeof(bases[n]), home,
-                      ".local/share/retcomm/toolchains/cmake-clang-v1"))
+                      ".local/share/psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
     }
 #endif
@@ -516,7 +517,7 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
     }
 
     const char* env_keys[] = {
-        "PSXRECOMP_TOOLCHAIN_DIR", "RETCOMM_TOOLCHAIN_DIR", "TOOLCHAIN_DIR",
+        "RETCOMM_TOOLCHAIN_DIR", "PSXRECOMP_TOOLCHAIN_DIR", "TOOLCHAIN_DIR",
         "BPE_TOOLCHAIN_DIR", NULL};
     for (int i = 0; env_keys[i]; ++i) {
         const char* e = getenv(env_keys[i]);
@@ -558,6 +559,7 @@ static void activate_toolchain_path(void) {
     if (dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin) &&
         pack_root[0]) {
 #if defined(_WIN32)
+        _putenv_s("RETCOMM_TOOLCHAIN_DIR", pack_root);
         _putenv_s("ZLIB_ROOT", pack_root);
         {
             const char* prev = getenv("CMAKE_PREFIX_PATH");
@@ -572,6 +574,7 @@ static void activate_toolchain_path(void) {
                 _putenv_s("CMAKE_PREFIX_PATH", pref);
         }
 #else
+        setenv("RETCOMM_TOOLCHAIN_DIR", pack_root, 1);
         setenv("ZLIB_ROOT", pack_root, 1);
         {
             const char* prev = getenv("CMAKE_PREFIX_PATH");
@@ -966,6 +969,8 @@ static int run_cli_posix(char* const argv[],
 /* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
 
 static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
+/* Default floor for Windows zlib-in-pack; override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
+static const char* k_tc_min_version_default = "1.0.3";
 
 static const char* toolchain_zip_asset_name(void) {
 #if defined(_WIN32)
@@ -975,6 +980,96 @@ static const char* toolchain_zip_asset_name(void) {
 #else
     return "cmake-clang-v1-linux-x64.zip";
 #endif
+}
+
+static const char* toolchain_min_version(void) {
+    const char* env = getenv("RETCOMM_TOOLCHAIN_MIN_VERSION");
+    if (env && env[0])
+        return env;
+#if defined(_WIN32)
+    /* Windows packs from 1.0.3 ship static zlib for find_package(ZLIB). */
+    return k_tc_min_version_default;
+#else
+    (void)k_tc_min_version_default;
+    return "";
+#endif
+}
+
+/* Parse leading dotted integers from a version / tag (optional leading 'v'). */
+static int version_cmp(const char* a, const char* b) {
+    const char* pa = a ? a : "";
+    const char* pb = b ? b : "";
+    if ((pa[0] == 'v' || pa[0] == 'V') && pa[1] >= '0' && pa[1] <= '9')
+        ++pa;
+    if ((pb[0] == 'v' || pb[0] == 'V') && pb[1] >= '0' && pb[1] <= '9')
+        ++pb;
+    for (;;) {
+        long va = 0, vb = 0;
+        int ha = 0, hb = 0;
+        while (*pa >= '0' && *pa <= '9') {
+            va = va * 10 + (*pa - '0');
+            ++pa;
+            ha = 1;
+        }
+        while (*pb >= '0' && *pb <= '9') {
+            vb = vb * 10 + (*pb - '0');
+            ++pb;
+            hb = 1;
+        }
+        if (!ha && !hb)
+            return 0;
+        if (va != vb)
+            return va < vb ? -1 : 1;
+        if (*pa == '.')
+            ++pa;
+        if (*pb == '.')
+            ++pb;
+        if (!ha || !hb)
+            return ha ? 1 : (hb ? -1 : 0);
+    }
+}
+
+static int read_pack_version(const char* pack_root, char* out, size_t cap) {
+    char meta[1400], buf[4096];
+    FILE* f;
+    const char* p;
+    size_t n;
+    if (!pack_root || !pack_root[0] || !out || cap < 2)
+        return 0;
+    out[0] = '\0';
+    if (!join_path(meta, sizeof(meta), pack_root, "retcomm-toolchain.json"))
+        return 0;
+    f = fopen(meta, "rb");
+    if (!f)
+        return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    p = strstr(buf, "\"version\"");
+    if (!p)
+        return 0;
+    p = strchr(p + 9, '"');
+    if (!p)
+        return 0;
+    ++p;
+    {
+        size_t i = 0;
+        while (*p && *p != '"' && i + 1 < cap) {
+            out[i++] = *p++;
+        }
+        out[i] = '\0';
+        return i > 0;
+    }
+}
+
+static int pack_meets_min_version(const char* pack_root) {
+    char ver[64];
+    const char* need = toolchain_min_version();
+    if (!need || !need[0])
+        return 1;
+    if (!read_pack_version(pack_root, ver, sizeof(ver)))
+        return 0;
+    return version_cmp(ver, need) >= 0;
 }
 
 static int mkdir_p(const char* path) {
@@ -1067,18 +1162,18 @@ static int shared_toolchain_latest_dir(char* out, size_t cap) {
     const char* local = getenv("LOCALAPPDATA");
     if (!local || !local[0])
         return 0;
-    return join_path(out, cap, local, "psxrecomp/toolchains/cmake-clang-v1/latest");
+    return join_path(out, cap, local, "retcomm/toolchains/cmake-clang-v1/latest");
 #else
     const char* xdg = getenv("XDG_DATA_HOME");
     const char* home = getenv("HOME");
     char base[1100];
     if (xdg && xdg[0]) {
         if (!join_path(base, sizeof(base), xdg,
-                       "psxrecomp/toolchains/cmake-clang-v1/latest"))
+                       "retcomm/toolchains/cmake-clang-v1/latest"))
             return 0;
     } else if (home && home[0]) {
         if (!join_path(base, sizeof(base), home,
-                       ".local/share/psxrecomp/toolchains/cmake-clang-v1/latest"))
+                       ".local/share/retcomm/toolchains/cmake-clang-v1/latest"))
             return 0;
     } else {
         return 0;
@@ -1127,8 +1222,10 @@ static int activate_installed_pack_root(const char* pack_root) {
         return 0;
     snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s", bin);
 #if defined(_WIN32)
+    _putenv_s("RETCOMM_TOOLCHAIN_DIR", pack_root);
     _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", pack_root);
 #else
+    setenv("RETCOMM_TOOLCHAIN_DIR", pack_root, 1);
     setenv("PSXRECOMP_TOOLCHAIN_DIR", pack_root, 1);
 #endif
     write_project_toolchain_stamp(bin);
@@ -1176,10 +1273,10 @@ static int find_store_localcache_pack_root(char* out, size_t cap) {
         return 0;
     do {
         const char* suffixes[] = {
-            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\latest",
-            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\offline",
             "LocalCache\\Local\\retcomm\\toolchains\\cmake-clang-v1\\latest",
             "LocalCache\\Local\\retcomm\\toolchains\\cmake-clang-v1\\offline",
+            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\latest",
+            "LocalCache\\Local\\psxrecomp\\toolchains\\cmake-clang-v1\\offline",
             NULL};
         int i;
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
@@ -1509,23 +1606,107 @@ static int host_download_and_install_toolchain(
     return 1;
 }
 
+/* Promote a usable legacy psxrecomp cache into the shared retcomm tree. */
+static int migrate_legacy_psxrecomp_toolchain(void) {
+    char legacy[1400], dest[1400], parent[1400];
+#if defined(_WIN32)
+    const char* local = getenv("LOCALAPPDATA");
+    if (!local || !local[0])
+        return 0;
+    if (!join_path(legacy, sizeof(legacy), local,
+                   "psxrecomp/toolchains/cmake-clang-v1/latest"))
+        return 0;
+#else
+    const char* xdg = getenv("XDG_DATA_HOME");
+    const char* home = getenv("HOME");
+    if (xdg && xdg[0]) {
+        if (!join_path(legacy, sizeof(legacy), xdg,
+                       "psxrecomp/toolchains/cmake-clang-v1/latest"))
+            return 0;
+    } else if (home && home[0]) {
+        if (!join_path(legacy, sizeof(legacy), home,
+                       ".local/share/psxrecomp/toolchains/cmake-clang-v1/latest"))
+            return 0;
+    } else {
+        return 0;
+    }
+#endif
+    if (!pack_root_has_cmake(legacy))
+        return 0;
+    if (!shared_toolchain_latest_dir(dest, sizeof(dest)))
+        return 0;
+    if (pack_root_has_cmake(dest))
+        return 1;
+    if (!dirname_copy(parent, sizeof(parent), dest))
+        return 0;
+    mkdir_p(parent);
+#if defined(_WIN32)
+    if (junction_dir(dest, legacy))
+        return 1;
+    {
+        char cmd[3200];
+        DWORD code = 1;
+        mkdir_p(dest);
+        snprintf(cmd, sizeof(cmd),
+                 "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
+                 "/ns /np",
+                 legacy, dest);
+        if (run_cmdline_wait(cmd, &code) && code <= 7 && pack_root_has_cmake(dest))
+            return 1;
+    }
+#else
+    {
+        char cmd[2800];
+        snprintf(cmd, sizeof(cmd), "ln -sfn \"%s\" \"%s\"", legacy, dest);
+        if (system(cmd) == 0 && pack_root_has_cmake(dest))
+            return 1;
+        snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", legacy, dest);
+        if (system(cmd) == 0 && pack_root_has_cmake(dest))
+            return 1;
+    }
+#endif
+    return 0;
+}
+
+static int pack_root_from_bin(const char* bin, char* out, size_t cap) {
+    return bin && bin[0] && dirname_copy(out, cap, bin);
+}
+
+static int active_toolchain_meets_min(void) {
+    char pack[1400];
+    if (!g_toolchain_bin[0] && !resolve_toolchain_bin(g_toolchain_bin,
+                                                      sizeof(g_toolchain_bin)))
+        return 0;
+    if (!pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack)))
+        return 0;
+    return pack_meets_min_version(pack);
+}
+
 static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
+    migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
-    if (find_cmake(g_cmake, sizeof(g_cmake)))
+    if (find_cmake(g_cmake, sizeof(g_cmake)) && active_toolchain_meets_min())
         return 1;
 #if defined(_WIN32)
     /* Reuse a Store-Python LocalCache install without copying. */
-    if (harvest_store_python_toolchain(0))
-        return 1;
+    if (harvest_store_python_toolchain(0)) {
+        char pack[1400];
+        if (pack_root_from_bin(g_cli_toolchain_bin[0] ? g_cli_toolchain_bin
+                                                     : g_toolchain_bin,
+                               pack, sizeof(pack)) &&
+            pack_meets_min_version(pack))
+            return 1;
+    }
 #endif
     return 0;
 }
 
 /* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback).
  * Prefer host-native curl/tar so Microsoft Store Python cannot redirect the
- * unpack into Packages\\...\\LocalCache. */
+ * unpack into Packages\\...\\LocalCache. Installs into the shared RetComM
+ * cache: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/… */
 static int host_ensure_toolchain_with_progress(
     int download, const char* zip_path, char* err_msg, size_t err_cap,
     RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx) {
@@ -1533,37 +1714,61 @@ static int host_ensure_toolchain_with_progress(
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
+    migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
-    if (find_cmake(g_cmake, sizeof(g_cmake)))
+    if (find_cmake(g_cmake, sizeof(g_cmake)) && active_toolchain_meets_min())
         return 1;
 
 #if defined(_WIN32)
     if (on_progress)
         on_progress(progress_ctx, 0.02f,
                     "Checking for an existing portable toolchain…");
-    if (harvest_store_python_toolchain(1))
-        return 1;
+    if (harvest_store_python_toolchain(1)) {
+        char pack[1400];
+        if (pack_root_from_bin(g_cli_toolchain_bin[0] ? g_cli_toolchain_bin
+                                                     : g_toolchain_bin,
+                               pack, sizeof(pack)) &&
+            pack_meets_min_version(pack))
+            return 1;
+    }
 #endif
 
     if (zip_path && zip_path[0]) {
         if (on_progress)
             on_progress(progress_ctx, 0.05f, "Installing toolchain from zip…");
         if (host_install_toolchain_from_zip(zip_path, on_progress, progress_ctx,
-                                            err_msg, err_cap))
-            return 1;
+                                            err_msg, err_cap)) {
+            if (active_toolchain_meets_min())
+                return 1;
+            snprintf(err_msg, err_cap,
+                     "Toolchain zip does not meet min_version %s "
+                     "(set RETCOMM_TOOLCHAIN_MIN_VERSION or use a newer pack).",
+                     toolchain_min_version());
+            return 0;
+        }
         return 0;
     }
 
     if (download) {
+        if (on_progress && find_cmake(g_cmake, sizeof(g_cmake)) &&
+            !active_toolchain_meets_min())
+            on_progress(progress_ctx, 0.05f,
+                        "Updating portable toolchain to required version…");
         if (host_download_and_install_toolchain(on_progress, progress_ctx,
-                                                err_msg, err_cap))
-            return 1;
+                                                err_msg, err_cap)) {
+            if (active_toolchain_meets_min())
+                return 1;
+            snprintf(err_msg, err_cap,
+                     "Downloaded toolchain does not meet min_version %s.",
+                     toolchain_min_version());
+            return 0;
+        }
         return 0;
     }
 
     snprintf(err_msg, err_cap,
              "No portable toolchain found. Enable automatic download, pick a "
-             "cmake-clang-v1 zip, or set PSXRECOMP_TOOLCHAIN_DIR.");
+             "cmake-clang-v1 zip, or set RETCOMM_TOOLCHAIN_DIR.");
     return 0;
 }
 
@@ -1703,7 +1908,7 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"
             "  echo Toolchain missing. Download cmake-clang-v1 or set\r\n"
-            "  echo PSXRECOMP_TOOLCHAIN_DIR / pass --toolchain-zip on rebuild.\r\n"
+            "  echo RETCOMM_TOOLCHAIN_DIR / pass --toolchain-zip on rebuild.\r\n"
             "  pause\r\n"
             "  exit /b 1\r\n"
             ")\r\n"

@@ -27,18 +27,22 @@ rebuild links everything.
 | `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
 | `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
-| Project `toolchain/` | Wizard/CLI install target (`bin/cmake`, stamp `.psxrecomp-bin`) |
-| Shared toolchain cache | `~/.local/share/psxrecomp/toolchains/cmake-clang-v1/` (or RetComM’s) |
+| Project `toolchain/` | Stamp file `.psxrecomp-bin` pointing at the shared pack `bin/` |
+| Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — same tree RetComM uses |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |
 | `docs/GAME_PROJECT_SETUP.md` | Submodules, CI template usage, bundled-release checklist |
 | Game sources | `game.toml`, seeds, `CMakeLists.txt` at repo root; `psxrecomp/`, `recomp-ui/` submodules |
 
 RetComM harvests emitters into the SDK cache and **downloads** `cmake-clang-v1`
-(no separate tools zip; game zips stay lean). The setup host installs the
-portable pack with **host-native** `curl` + `tar`/`unzip` into
-`%LOCALAPPDATA%/psxrecomp/toolchains/…` (or XDG), not through Python — so
-Microsoft Store Python AppData redirection cannot hide cmake. Offline builds
-accept a zip via the wizard file picker. Generate/rebuild still need Python 3
+(no separate tools zip; game zips stay lean). The setup host and CLI install the
+portable pack into the **shared RetComM cache**
+(`%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/`, or XDG equivalent)
+with host-native `curl` + `tar`/`unzip` when possible — so Microsoft Store
+Python AppData redirection cannot hide cmake. Offline zips unpack to the same
+path. A legacy `%LOCALAPPDATA%/psxrecomp/…` cache is migrated automatically.
+Override with `RETCOMM_TOOLCHAIN_DIR`. Require a floor version via
+`RETCOMM_TOOLCHAIN_MIN_VERSION` / `ensure-toolchain --min-version` (Windows
+defaults to `1.0.3` for bundled zlib). Generate/rebuild still need Python 3
 for `psxrecomp_cli.py`.
 
 ## Commands

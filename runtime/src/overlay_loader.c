@@ -2067,28 +2067,6 @@ void overlay_loader_get_irq_suppress(int *mode, uint32_t *rl, uint64_t *supp) {
     if (supp) *supp = s_irq_suppressed;
 }
 
-/* Overlay CI-wrapper attribution (post-load freeze): early returns never enter
- * psx_check_interrupts, so s_irq_path_entry stays flat while cycles still
- * advance inside native overlay / call-unit regions. */
-static uint64_t s_ci_skip_unit;
-static uint64_t s_ci_skip_supp;
-static uint64_t s_ci_skip_none;
-static uint64_t s_ci_skip_sr;
-static uint64_t s_ci_skip_deliv;
-static uint64_t s_ci_enter;
-
-void overlay_loader_get_ci_skip_diag(uint64_t *unit, uint64_t *supp,
-                                     uint64_t *none, uint64_t *sr,
-                                     uint64_t *deliv, uint64_t *enter) {
-    if (unit)  *unit  = s_ci_skip_unit;
-    if (supp)  *supp  = s_ci_skip_supp;
-    if (none)  *none  = s_ci_skip_none;
-    if (sr)    *sr    = s_ci_skip_sr;
-    if (deliv) *deliv = s_ci_skip_deliv;
-    if (enter) *enter = s_ci_enter;
-}
-int overlay_loader_call_unit_depth(void) { return g_call_unit_depth; }
-
 static int overlay_irq_suppressed_now(void) {
     /* Differential replay (and its authoritative interpreter pass) is atomic.
      * Never let a previously armed rate-limit punch a real IRQ into a shadow. */
@@ -2119,19 +2097,15 @@ static int overlay_irq_suppressed_now(void) {
 static void overlay_ci_wrapper(CPUState *cpu) {
     /* Defer while inside a nested call unit — a callee must not interrupt
      * mid-call (static-call atomicity). See g_call_unit_depth. */
-    if (g_call_unit_depth > 0) { s_ci_skip_unit++; return; }
-    if (overlay_irq_suppressed_now()) { s_ci_skip_supp++; return; }
+    if (g_call_unit_depth > 0) return;
+    if (overlay_irq_suppressed_now()) return;
     /* psx_advance_cycles() has already raised every device edge due at this
      * block. Avoid entering the full scheduler/diagnostic path when COP0 could
      * not take the IRQ anyway. FMV polling loops can execute this edge millions
      * of times while an INTC bit is pending but IEc is deliberately clear. */
-    if ((i_stat & i_mask) == 0) { s_ci_skip_none++; return; }
-    if ((cpu->cop0[12] & ((1u << 10) | 1u)) != ((1u << 10) | 1u)) {
-        s_ci_skip_sr++;
-        return;
-    }
-    if (!psx_interrupt_delivery_needed(cpu)) { s_ci_skip_deliv++; return; }
-    s_ci_enter++;
+    if ((i_stat & i_mask) == 0) return;
+    if ((cpu->cop0[12] & ((1u << 10) | 1u)) != ((1u << 10) | 1u)) return;
+    if (!psx_interrupt_delivery_needed(cpu)) return;
     if (s_irq_defer_cdrom && (i_stat & (1u << IRQ_CDROM))) {
         uint32_t saved_cd = i_stat & (1u << IRQ_CDROM);
         i_stat &= ~(1u << IRQ_CDROM);
@@ -2159,15 +2133,11 @@ static void overlay_ci_at_wrapper(CPUState *cpu, uint32_t resume_pc) {
     /* Defer while inside a nested call unit (see g_call_unit_depth): suspending
      * here would save resume_pc at the callee's block leader while the enclosing
      * dirty caller expects an atomic unit — the resume-desync bug. */
-    if (g_call_unit_depth > 0) { s_ci_skip_unit++; return; }
-    if (overlay_irq_suppressed_now()) { s_ci_skip_supp++; return; }
-    if ((i_stat & i_mask) == 0) { s_ci_skip_none++; return; }
-    if ((cpu->cop0[12] & ((1u << 10) | 1u)) != ((1u << 10) | 1u)) {
-        s_ci_skip_sr++;
-        return;
-    }
-    if (!psx_interrupt_delivery_needed(cpu)) { s_ci_skip_deliv++; return; }
-    s_ci_enter++;
+    if (g_call_unit_depth > 0) return;
+    if (overlay_irq_suppressed_now()) return;
+    if ((i_stat & i_mask) == 0) return;
+    if ((cpu->cop0[12] & ((1u << 10) | 1u)) != ((1u << 10) | 1u)) return;
+    if (!psx_interrupt_delivery_needed(cpu)) return;
     extern int g_idle_note_suppress;
     int suppress_idle_note = overlay_idle_note_is_internal_or_return(cpu, resume_pc);
     if (suppress_idle_note) g_idle_note_suppress++;

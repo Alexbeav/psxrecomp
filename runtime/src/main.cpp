@@ -41,6 +41,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #define PSX_MAX_PLAYERS 2
 #endif
 #include "psx_netplay.h"
+#include "psx_stick.h"       /* radial SDL-stick -> DualShock response transform */
 #include "psx_netplay_rb.h"
 #include "psx_selfcheck.h"
 #include "psx_lobby_client.h"

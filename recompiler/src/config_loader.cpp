@@ -230,6 +230,41 @@ static bool parse_aspect_ratio(const std::string& s, int* num, int* den) {
     return true;
 }
 
+// Reject a config path that is not confined to the project directory.
+//
+// A game.toml is checked in and read on every host, so a path in it must mean
+// the same thing everywhere; std::filesystem::path answers by the *host*
+// grammar, so a Windows-authored escape passes on POSIX. Scan the raw bytes
+// under both separator conventions instead. NUL is rejected outright because
+// the runtime hands this value on as a C string — anything past a NUL would
+// silently vanish between what is validated and what is used.
+static void validate_project_relative(const std::string& value,
+                                      const char* field) {
+    if (value.find('\0') != std::string::npos) {
+        throw std::runtime_error(
+            fmt::format("{} must not contain a NUL byte", field));
+    }
+    // Rooted ("/x", "\x"), UNC ("\\server\share"), drive-qualified ("C:/x",
+    // "C:\x") and drive-relative ("C:x") alike.
+    const bool rooted = !value.empty() && (value[0] == '/' || value[0] == '\\');
+    const bool drive  = value.size() >= 2 && value[1] == ':' &&
+                        std::isalpha(static_cast<unsigned char>(value[0]));
+    if (rooted || drive) {
+        throw std::runtime_error(
+            fmt::format("{} must be project-relative", field));
+    }
+    for (size_t start = 0;;) {
+        const size_t sep = value.find_first_of("/\\", start);
+        const size_t end = (sep == std::string::npos) ? value.size() : sep;
+        if (value.compare(start, end - start, "..") == 0) {
+            throw std::runtime_error(
+                fmt::format("{} must stay inside the project", field));
+        }
+        if (sep == std::string::npos) break;
+        start = sep + 1;
+    }
+}
+
 // Parse the optional [runtime] block. All fields optional; absent fields
 // leave has_* = false on the returned struct. Paths are resolved relative
 // to `root` (project root).
@@ -396,17 +431,8 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_capture_persist_dir")) {
         rt.overlay_capture_persist_dir =
             toml::find<std::string>(runtime, "overlay_capture_persist_dir");
-        const std::filesystem::path persist(rt.overlay_capture_persist_dir);
-        if (persist.is_absolute()) {
-            throw std::runtime_error(
-                "runtime.overlay_capture_persist_dir must be project-relative");
-        }
-        for (const auto& component : persist) {
-            if (component == "..") {
-                throw std::runtime_error(
-                    "runtime.overlay_capture_persist_dir must stay inside the project");
-            }
-        }
+        validate_project_relative(rt.overlay_capture_persist_dir,
+                                  "runtime.overlay_capture_persist_dir");
     }
     if (runtime.contains("turbo_loads")) {
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");
@@ -434,6 +460,28 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
             rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
         }
+    }
+
+    if (cfg.contains("parappa_timing")) {
+        const toml::value& timing = toml::find(cfg, "parappa_timing");
+        rt.has_parappa_timing = true;
+        if (timing.contains("mode")) {
+            rt.parappa_timing_mode = toml::find<std::string>(timing, "mode");
+            for (char& c : rt.parappa_timing_mode)
+                c = (char)std::tolower((unsigned char)c);
+        }
+        auto parse_window = [&](const char *key) -> int {
+            const auto n = toml::find<int64_t>(timing, key);
+            if (n < 0 || n > 60) {
+                throw std::runtime_error(fmt::format(
+                    "[parappa_timing] {} out of range (0..60): {}", key, n));
+            }
+            return (int)n;
+        };
+        if (timing.contains("extra_early"))
+            rt.parappa_timing_extra_early = parse_window("extra_early");
+        if (timing.contains("extra_late"))
+            rt.parappa_timing_extra_late = parse_window("extra_late");
     }
 
     // Optional [video] block — visual enhancement options. Kept on the same
@@ -616,21 +664,6 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] deadzone out of range (0..32767): {}", n));
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
-        }
-        if (ct.contains("multitap_port")) {
-            const auto n = toml::find<int64_t>(ct, "multitap_port");
-            if (n != 1 && n != 2)
-                throw std::runtime_error(fmt::format(
-                    "[controller] multitap_port must be 1 or 2, got {}", n));
-            rt.multitap_port = static_cast<int>(n);
-            rt.has_multitap_port = true;
-        }
-        // LEGACY per-game pad-config opt-in (default modern). Tomba sets this so
-        // its launcher Hybrid mode's analog<->digital type flip doesn't make libpad
-        // manufacture a disconnect; no other title is affected. Full history and
-        // the removal plan live in psxrecomp runtime/src/sio.c (g_pad_legacy_cfg).
-        if (ct.contains("legacy_pad_config")) {
-            rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
         }
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
@@ -2090,58 +2123,67 @@ UserSettings load_user_settings(const fs::path& path) {
             if (!v.empty()) { s.language = v; s.has_language = true; }
         });
     }
+    if (doc.contains("parappa_timing")) {
+        const toml::value& timing = toml::find(doc, "parappa_timing");
+        if (timing.contains("mode")) try_get([&]{
+            auto mode = toml::find<std::string>(timing, "mode");
+            for (char& c : mode) c = (char)std::tolower((unsigned char)c);
+            if (mode == "stock" || mode == "off" || mode == "medium" ||
+                mode == "permissive" || mode == "easy" || mode == "custom") {
+                s.parappa_timing_mode = mode;
+                s.has_parappa_timing_mode = true;
+            }
+        });
+        if (timing.contains("extra_early")) try_get([&]{
+            const auto n = toml::find<int64_t>(timing, "extra_early");
+            if (n >= 0 && n <= 60) {
+                s.parappa_timing_extra_early = (int)n;
+                s.has_parappa_timing_extra_early = true;
+            }
+        });
+        if (timing.contains("extra_late")) try_get([&]{
+            const auto n = toml::find<int64_t>(timing, "extra_late");
+            if (n >= 0 && n <= 60) {
+                s.parappa_timing_extra_late = (int)n;
+                s.has_parappa_timing_extra_late = true;
+            }
+        });
+    }
     if (doc.contains("controller")) {
         const toml::value& ct = toml::find(doc, "controller");
-        static const char* kDevKeys[] = {
-            "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
-        static const char* kModeKeys[] = {
-            "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
-        static const char* kDzKeys[] = {
-            "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
-            "p5_deadzone"};
-        static const char* kAnalogKeys[] = {
-            "p1_analog", "p2_analog", "p3_analog", "p4_analog", "p5_analog"};
-        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-            if (ct.contains(kDevKeys[i])) try_get([&]{
-                const auto v = toml::find<std::string>(ct, kDevKeys[i]);
-                if (!v.empty()) {
-                    s.p_device[i] = v;
-                    s.has_p_device[i] = true;
-                }
-            });
-            // Legacy boolean form first (true->analog, false->digital); the
-            // string `*_mode` keys override when present.
-            if (ct.contains(kAnalogKeys[i])) try_get([&]{
-                s.p_mode[i] = toml::find<bool>(ct, kAnalogKeys[i])
-                                  ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-                s.has_p_mode[i] = true;
-            });
-            if (ct.contains(kModeKeys[i])) try_get([&]{
-                s.p_mode[i] = pad_mode_from_string(
-                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_HYBRID);
-                s.has_p_mode[i] = true;
-            });
-            if (ct.contains(kDzKeys[i])) try_get([&]{
-                const auto n = toml::find<int64_t>(ct, kDzKeys[i]);
-                if (n >= 0 && n <= 32767) {
-                    s.p_deadzone[i] = (int)n;
-                    s.has_p_deadzone[i] = true;
-                }
-            });
-        }
+        if (ct.contains("p1_device")) try_get([&]{
+            const auto v = toml::find<std::string>(ct, "p1_device");
+            if (!v.empty()) { s.p1_device = v; s.has_p1_device = true; }
+        });
+        if (ct.contains("p2_device")) try_get([&]{
+            const auto v = toml::find<std::string>(ct, "p2_device");
+            if (!v.empty()) { s.p2_device = v; s.has_p2_device = true; }
+        });
+        // Legacy boolean form first (true->analog, false->digital); the new
+        // string `*_mode` keys override when present.
+        if (ct.contains("p1_analog")) try_get([&]{
+            s.p1_mode = toml::find<bool>(ct, "p1_analog")
+                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+            s.has_p1_mode = true;
+        });
+        if (ct.contains("p2_analog")) try_get([&]{
+            s.p2_mode = toml::find<bool>(ct, "p2_analog")
+                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+            s.has_p2_mode = true;
+        });
+        if (ct.contains("p1_mode")) try_get([&]{
+            s.p1_mode = pad_mode_from_string(
+                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
+            s.has_p1_mode = true;
+        });
+        if (ct.contains("p2_mode")) try_get([&]{
+            s.p2_mode = pad_mode_from_string(
+                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
+            s.has_p2_mode = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
-            if (n >= 0 && n <= 32767) {
-                s.deadzone = (int)n;
-                s.has_deadzone = true;
-                /* Legacy global: fill any slot that was not given pN_deadzone. */
-                for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-                    if (!s.has_p_deadzone[i]) {
-                        s.p_deadzone[i] = s.deadzone;
-                        s.has_p_deadzone[i] = true;
-                    }
-                }
-            }
+            if (n >= 0 && n <= 32767) { s.deadzone = (int)n; s.has_deadzone = true; }
         });
     }
     return s;
@@ -2237,41 +2279,34 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "enable2 = " << (s.memcard2_enabled ? "true" : "false") << "\n";
     }
 
-    {
-        bool any_ctrl = s.has_deadzone;
-        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-            if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
-                any_ctrl = true;
-        }
-        if (any_ctrl) {
-            static const char* kDevKeys[] = {
-                "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
-            static const char* kModeKeys[] = {
-                "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
-            static const char* kDzKeys[] = {
-                "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
-                "p5_deadzone"};
-            f << "\n[controller]\n";
-            for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
-                if (s.has_p_device[i])
-                    f << kDevKeys[i] << " = \"" << s.p_device[i] << "\"\n";
-                if (s.has_p_mode[i])
-                    f << kModeKeys[i] << "   = \""
-                      << pad_mode_to_string(s.p_mode[i]) << "\"\n";
-                if (s.has_p_deadzone[i])
-                    f << kDzKeys[i] << " = " << s.p_deadzone[i] << "\n";
-            }
-            /* Keep a global deadzone= for older readers (mirrors P1). */
-            if (s.has_deadzone || s.has_p_deadzone[0])
-                f << "deadzone  = "
-                  << (s.has_p_deadzone[0] ? s.p_deadzone[0] : s.deadzone)
-                  << "\n";
-        }
+    if (s.has_p1_device || s.has_p2_device || s.has_p1_mode || s.has_p2_mode ||
+        s.has_deadzone) {
+        f << "\n[controller]\n";
+        if (s.has_p1_device)
+            f << "p1_device = \"" << s.p1_device << "\"\n";
+        if (s.has_p1_mode)
+            f << "p1_mode   = \"" << pad_mode_to_string(s.p1_mode) << "\"\n";
+        if (s.has_p2_device)
+            f << "p2_device = \"" << s.p2_device << "\"\n";
+        if (s.has_p2_mode)
+            f << "p2_mode   = \"" << pad_mode_to_string(s.p2_mode) << "\"\n";
+        if (s.has_deadzone)
+            f << "deadzone  = " << s.deadzone << "\n";
     }
 
     if (s.has_language) {
         f << "\n[localization]\n";
         f << "language = \"" << s.language << "\"\n";
+    }
+    if (s.has_parappa_timing_mode || s.has_parappa_timing_extra_early ||
+        s.has_parappa_timing_extra_late) {
+        f << "\n[parappa_timing]\n";
+        if (s.has_parappa_timing_mode)
+            f << "mode = \"" << s.parappa_timing_mode << "\"\n";
+        if (s.has_parappa_timing_extra_early)
+            f << "extra_early = " << s.parappa_timing_extra_early << "\n";
+        if (s.has_parappa_timing_extra_late)
+            f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
     return f.good();
