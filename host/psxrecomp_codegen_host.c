@@ -588,6 +588,23 @@ static void activate_toolchain_path(void) {
             if (pref[0])
                 setenv("CMAKE_PREFIX_PATH", pref, 1);
         }
+        /* Linux packs 1.0.4+: bundled libxml2.so.2 for lld / thin LTO. */
+        {
+            char libdir[1500];
+            if (join_path(libdir, sizeof(libdir), pack_root, "lib") &&
+                path_is_dir(libdir)) {
+                const char* prev = getenv("LD_LIBRARY_PATH");
+                char llp[8192];
+                if (prev && prev[0] && !strstr(prev, libdir))
+                    snprintf(llp, sizeof(llp), "%s:%s", libdir, prev);
+                else if (!prev || !prev[0])
+                    snprintf(llp, sizeof(llp), "%s", libdir);
+                else
+                    llp[0] = '\0';
+                if (llp[0])
+                    setenv("LD_LIBRARY_PATH", llp, 1);
+            }
+        }
 #endif
     }
 }
@@ -969,8 +986,9 @@ static int run_cli_posix(char* const argv[],
 /* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
 
 static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
-/* Default floor for Windows zlib-in-pack; override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
-static const char* k_tc_min_version_default = "1.0.3";
+/* Floor: Linux 1.0.4+ ships libxml2 + clang.cfg (-fuse-ld=lld) for IPO;
+ * Windows 1.0.3+ ships static zlib. Override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
+static const char* k_tc_min_version_default = "1.0.4";
 
 static const char* toolchain_zip_asset_name(void) {
 #if defined(_WIN32)
@@ -986,13 +1004,7 @@ static const char* toolchain_min_version(void) {
     const char* env = getenv("RETCOMM_TOOLCHAIN_MIN_VERSION");
     if (env && env[0])
         return env;
-#if defined(_WIN32)
-    /* Windows packs from 1.0.3 ship static zlib for find_package(ZLIB). */
     return k_tc_min_version_default;
-#else
-    (void)k_tc_min_version_default;
-    return "";
-#endif
 }
 
 /* Parse leading dotted integers from a version / tag (optional leading 'v'). */
