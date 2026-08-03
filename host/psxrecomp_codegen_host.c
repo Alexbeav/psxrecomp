@@ -2001,16 +2001,31 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
 
-    /* Sync wizard disc/BIOS sidecars into project root + build/ before resolve. */
+    /* Hand the CLI the launcher's staged disc + BIOS. Empty g_wizard_bios means
+     * OpenBIOS (clear sidecars — do not re-read a stale bios.cfg). */
     {
-        char bios_line[1100];
-        host_persist_setup(NULL, source_path, NULL); /* disc only */
-        if (resolve_bios_arg(bios_line, sizeof(bios_line)))
-            host_persist_setup(NULL, source_path, bios_line);
+        char abs_bios[1100];
+        if (g_wizard_bios[0] &&
+            absolutize_existing_file(abs_bios, sizeof(abs_bios), g_wizard_bios))
+            snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", abs_bios);
+        else if (!g_wizard_bios[0]) {
+            /* keep empty */
+        } else {
+            /* Staged path missing — fail clearly instead of silently OpenBIOS. */
+            snprintf(err_msg, err_cap, "Staged BIOS not found: %s", g_wizard_bios);
+            return 0;
+        }
+        host_persist_setup(NULL, source_path,
+                           g_wizard_bios[0] ? g_wizard_bios : "");
     }
 
     char bios_path[1100];
-    const int have_bios = resolve_bios_arg(bios_path, sizeof(bios_path));
+    bios_path[0] = '\0';
+    const int have_bios =
+        g_wizard_bios[0] &&
+        absolutize_existing_file(bios_path, sizeof(bios_path), g_wizard_bios);
+    fprintf(stderr, "psxrecomp-codegen: generate disc=%s bios=%s\n", source_path,
+            have_bios ? bios_path : "(OpenBIOS)");
 
 #if defined(_WIN32)
     char cmdline[4096];

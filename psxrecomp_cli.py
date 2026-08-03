@@ -592,6 +592,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     else:
         disc = disc.resolve()
 
+    progress.log(f"generate --disc {disc}")
     progress.phase("verify", pct=0.05, message=f"Checking disc {disc.name}")
     try:
         if disc.is_file():
@@ -664,6 +665,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             return EXIT_USAGE
         dest = fw / "bios" / "SCPH1001.BIN"
         progress.phase("bios", pct=0.15, message="Staging retail BIOS dump...")
+        progress.log(f"generate --bios {bios_path}")
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.resolve() != bios_path.resolve():
@@ -672,8 +674,18 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
             progress.error(f"failed to stage BIOS: {exc}", code=EXIT_ERROR)
             return EXIT_ERROR
         try:
-            progress.phase("bios", pct=0.2, message="Generating SCPH1001 BIOS C...")
-            regen_bios_profile(project_root, "bios/SCPH1001.toml", progress=progress)
+            if args.force_bios or not bios_backend_present(fw, "SCPH1001"):
+                progress.phase(
+                    "bios", pct=0.2, message="Generating SCPH1001 BIOS C..."
+                )
+                regen_bios_profile(
+                    project_root, "bios/SCPH1001.toml", progress=progress
+                )
+            else:
+                progress.log(
+                    "SCPH1001 backend already present — skipping bios regen "
+                    "(pass --force-bios to regenerate)"
+                )
             staged_retail = True
         except Exception as exc:  # noqa: BLE001
             progress.error(str(exc), code=EXIT_ERROR)
