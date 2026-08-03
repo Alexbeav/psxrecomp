@@ -1,15 +1,41 @@
-# Current objective — modernization pass 1 acceptance
+# Current objective — modernization pass 2 widescreen and direct mouse
 
 Updated: 2026-08-03
 
 ## Objective
 
 Preserve compatibility checkpoint `2009297` on
-`experiment/sf2-recomp-feasibility` while validating the explicitly authorized,
-isolated first high-resolution and keyboard/mouse pass on
-`experiment/sf2-modernization-pass1`. The modernization branch may change only
-generic presentation and host-input translation. Retail gameplay remains the
-owner, and the baseline executable/cards remain available for A/B diagnosis.
+`experiment/sf2-recomp-feasibility` and the accepted pass-1 checkpoint
+`5b64d86` while implementing the explicitly authorized production-quality
+16:9 and direct semantic mouse-control pass on
+`experiment/sf2-modernization-pass2`.
+
+Mouse motion must no longer emulate retail D-pad/stick input. Independently
+verified SCUS-94451 semantic boundaries must consume relative yaw/pitch for
+third-person camera control and first-person aiming while physical controllers
+remain on the retail PAD path and scripted cameras retain ownership. Native-wide
+16:9 must work under software and OpenGL at high internal resolution without
+hardcoded movie dimensions, presentation-only cropping, or copied addresses.
+
+The pass ends with an automated Mission 1 gate and a separate enhanced build
+ready for a human Missions 1--8 Disc 1 playthrough. The 4:3 compatibility build,
+cards, and launcher remain isolated for immediate A/B diagnosis. PGXP and
+high-refresh interpolation are outside this milestone, but the new interfaces
+must not obstruct either follow-up.
+
+## 2026-08-03 modernization pass 2 start
+
+- Branch: `experiment/sf2-modernization-pass2`, forked cleanly from pass-1
+  checkpoint `5b64d86`.
+- Compatibility remains frozen at `2009297`; pass 1 remains available at
+  `5b64d86` with its separate executable and cards.
+- The private corpus and hybrid handoff classify direct mouse camera ownership,
+  native-wide world projection, persistent pages, and fullscreen-effect policy
+  as confirmed behavioral leads. PGXP/high-refresh/settings parity are still
+  open in the hybrid project and are not part of this pass.
+- External mouse hook addresses and object offsets remain unverified leads until
+  checked against the user-owned SCUS-94451 executable and bounded live traces.
+- Initial ignored footprint is 7.196 GiB, below the 20 GiB ceiling.
 
 ## 2026-08-03 modernization pass 1
 
