@@ -785,3 +785,43 @@ preflight passed with 320 samples, an exact 20-frame pulse at 240--259, and a
 replay observation at frame 242. The first recording is retained but rejected
 as deterministic evidence; one corrected human recording and two clean hidden-
 OpenGL replays remain. See `../PAD_TIMELINE_REPORT_2026-08-03.md`.
+
+## 2026-08-03 isolated modernization pass 1
+
+The user explicitly authorized a separate modernization branch after accepting
+the compatibility checkpoint. `experiment/sf2-modernization-pass1` branches
+from `2009297`; the compatibility branch and executable remain untouched.
+
+Read-only comparison with SF1 and the other SF2 stream established two safe
+boundaries: enable the framework's existing 4x OpenGL supersampling without
+game code, and terminate mouse/keyboard actions at retail PAD semantics.
+Game-specific camera addresses and direct state writes were rejected.
+
+The new generic mouse adapter maps buttons and bounded relative movement into
+the active-low PAD word. Horizontal movement produces retail turn pulses;
+vertical movement is gated by retail L1/manual aim. Configuration parsing,
+SDL2/SDL3 relative-mode compatibility, focused unit coverage, and isolated
+build/launch profiles were added. The modern profile is 4x OpenGL, borderless
+desktop 4:3, nearest filtering, and no interpolation or widescreen.
+
+Validation retained three harness defects. First, the new Release build
+inherited `PSX_DEBUG_TOOLS=OFF`, so no route endpoint existed; the build now
+enables validation tools explicitly. Second, selecting a 600-frame boundary
+from a host-polled TITLE sample produced two successful but nonmatching input
+schedules. The route now derives all four inputs from the retained retail TITLE
+movie event; `sf2_mission1_route_schedule` covers it. Third, a hidden run
+entered app state 7 with unsolicited `0xFFEF` D-pad Up. Unfocused keyboard
+sampling was fixed generically, then a second neutral probe identified the
+remaining source as dev-any-input's intentional background-pad merge. The
+modern launcher now uses strict assigned-device routing for its lifetime. A
+clean hidden probe then reported `0xFFFF` and centered sticks.
+
+Final runs F and G passed authentic startup, TITLE, retail New Game/One Player,
+aircraft FMV, state 8, player ownership, and movement. The strict comparison
+passed with matching startup/input hashes and normalized fingerprints at all
+five checkpoints. Final XYZ is `(-5606,2036,7529)` in both. Ownership is
+resident AOT 15,830,035/15,829,527, compiled overlay
+143,524,201/143,523,764, and interpreter fallback 683,265/683,155
+(0.4738%/0.4737% of overlay-tier dispatch). Both runs have zero lost CD INT1
+events, 1,208 SPU key-ons, and identical nonzero XA totals. Full handoff:
+`../MODERNIZATION_PASS1.md`.

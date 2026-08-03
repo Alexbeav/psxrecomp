@@ -1,14 +1,40 @@
-# Current objective — reproducible retail Mission 1 route
+# Current objective — modernization pass 1 acceptance
 
 Updated: 2026-08-03
 
 ## Objective
 
-Preserve the now-reproducible authentic startup and retail-selected Mission 1
-route, then advance the feasibility comparison to the representative Mission 3
-route. Continue measuring resident AOT, compiled-overlay, and interpreter
-fallback ownership separately. Do not add modernization or SF2-specific
-containment.
+Preserve compatibility checkpoint `2009297` on
+`experiment/sf2-recomp-feasibility` while validating the explicitly authorized,
+isolated first high-resolution and keyboard/mouse pass on
+`experiment/sf2-modernization-pass1`. The modernization branch may change only
+generic presentation and host-input translation. Retail gameplay remains the
+owner, and the baseline executable/cards remain available for A/B diagnosis.
+
+## 2026-08-03 modernization pass 1
+
+- A separate Release executable is built under ignored `build-modern-pass1`;
+  the baseline `build-r8-scheduled-input` executable is untouched. Launchers
+  use distinct window titles and memory-card directories.
+- The modern profile uses OpenGL 4x internal supersampling, borderless desktop
+  4:3 output, nearest texture sampling, and no interpolation or widescreen.
+- Keyboard and bounded relative mouse motion translate only to the ordinary
+  active-low retail PAD word. There are no guest player/camera writes,
+  generated-code changes, callbacks, or state forcing.
+- Hidden/unfocused keyboard and mouse input is neutral. The modern launcher
+  also disables dev-any-input merging, so unrelated background controllers do
+  not perturb its assigned keyboard/mouse profile.
+- Two clean hidden OpenGL/dummy-audio runs passed complete authentic startup,
+  retail New Game/One Player, Mission 1 state 8, post-FMV dialogue, state-0
+  player ownership, and movement. Startup/input hashes and normalized
+  fingerprints match at all five checkpoints.
+- Final run F/G ownership is resident AOT 15,830,035/15,829,527; compiled
+  overlay 143,524,201/143,523,764; interpreter fallback 683,265/683,155.
+  Fallback is 0.4738%/0.4737% of overlay-tier dispatch and is not native.
+- Both runs have zero lost CD INT1 events, 1,208 SPU key-ons, identical
+  nonzero XA totals, and final XYZ `(-5606,2036,7529)`. The ignored footprint
+  is 7.137 GiB.
+- Detailed handoff: `docs/sf2/MODERNIZATION_PASS1.md`.
 
 ## 2026-08-03 overnight closure
 
@@ -67,7 +93,8 @@ containment.
 
 ## Verified state
 
-- Branch: `experiment/sf2-recomp-feasibility`
+- Compatibility branch: `experiment/sf2-recomp-feasibility` at `2009297`
+- Active opt-in branch: `experiment/sf2-modernization-pass1`
 - Scaffold commit: `83e0d70`
 - PSXRecomp baseline: `0cfa9fe0a8da944e9f694a24361b4973c57131ea`
 - R0 passes: two corrected-package generations contain 992 identical
