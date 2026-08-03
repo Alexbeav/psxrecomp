@@ -26,9 +26,10 @@ and input interfaces must remain suitable for those later stages.
 | Native-wide should use PSXRecomp's separate compositor surface | framework documentation | confirmed | software and OpenGL routes classify 4:3 surfaces separately and present gameplay from a 512x240 guest-wide surface |
 | The generic 320/224-or-241 cull signature applies to SF2 | framework detector | contradicted | zero emitted calls; adding SF2's observed 240-line vertical signature also emits zero calls, so no cull hook is claimed |
 | PGXP and high refresh can be copied as completed SF2 features | initial assumption | contradicted | hybrid handoff records both as remaining work; defer them from this pass |
-| Outdoor sky is a semantic background pass, not arbitrary far GTE geometry | hybrid SCRIM description plus bounded GP0/OT evidence | confirmed for Mission 1 | compare the first textured OT rank with global/exact GTE and raw texture-identity controls |
+| Outdoor sky/SCRIM needs ownership distinct from arbitrary far GTE geometry | hybrid SCRIM description plus bounded GP0/OT evidence | narrowed; owner still open | use topology and live invariance checks rather than OT rank or payload identity |
 | A far-depth or exact GTE caller owns the Mission 1 sky | local dome probes | contradicted | all bounded candidates either leave the gap or deform world/actors; ship no GTE site |
-| The first textured OT rank owns the finite outdoor backdrop | local packet census and live A/B | confirmed | require the black reveal wedge to return when disabled and disappear when enabled under both backends |
+| The first textured OT rank owns the finite outdoor backdrop | local packet census and live A/B | contradicted | human parachute-scene evidence proves the rank contains projected curved environment geometry; aspect stretching corrupts both reveal margins |
+| A horizontally complete auxiliary quad owns the complete output width even when it is not full-height | human cinematic-matte evidence plus hybrid fullscreen-effect contract | confirmed under hidden software/OpenGL; human pending | visually verify Mission 1 top/bottom mattes and later scope/NVG/fade transitions |
 | Software high-resolution polygon seams are caused by backdrop stretching | software live A/B | contradicted | seams are pixel-identical with ownership on/off; retain as a separate renderer-precision issue |
 
 No sibling repository is modified. External addresses and structure layouts do
@@ -113,18 +114,31 @@ not enter committed configuration until their local checks pass.
   a human acceptance item, starting with Missions 1--8.
 - Framework validation passes 49/49, the focused mouse unit passes, generated
   retail C remains ignored/unmodified, and the complete footprint is 7.721 GiB.
-- Mission 1 packet census places its authored textured background in the first
-  OT rank that submits textured polygons. A title-opted, frame-local owner now
-  stretches only that rank in the wide mirror. It contains no packet address,
-  palette, texture identity, movie dimension or SF2 code address.
+- The first origin-naive full-width candidate reached authentic state 0 with
+  native-wide active but counted 65,148 checks and zero expansions. The exact
+  divergence is that SF2 authors gameplay screen edges at `-192..+192` before
+  GP0 draw offset `+192`; comparing raw packet X with framebuffer `0..384` can
+  never match. The title-neutral helper now receives the authored origin
+  derived from `draw_area_left - draw_offset_x`, and a recognized effect cannot
+  subsequently be HUD-shifted. Centered-origin rectangle/quad regressions,
+  strict C99 compilation, Release link and 49/49 tests pass. Candidate SHA-256
+  is `6D618BC788D33E40ED57EC42D97658CC4BC6A5B28AB0EA30779B8FC7BF2F2568`;
+  clean hidden-window software and OpenGL routes pass TITLE, aircraft FMV,
+  state 8, state-0 ownership and movement; both advance to exactly 7,035
+  expansions at player ownership. Human visual acceptance remains open.
+- Mission 1 packet census initially correlated the finite reveal with the first
+  OT rank that submits textured polygons, but the bounded GP0 topology and
+  human parachute evidence contradict ownership: the rank contains connected
+  projected environment geometry. The production profile disables the rank
+  transform; semantic background/SCRIM ownership remains open.
 - Global far-depth projection and every bounded exact GTE caller were rejected:
   they either left the reveal wedge or deformed terrain, actors and foreground.
   Raw palette/source gates isolated the layer but remain diagnostic evidence,
   not production ownership.
-- OpenGL and hidden-window software A/B both show the same result: disabling
-  the owner restores the black outdoor reveal wedge; enabling it fills the
-  reveal without moving HUD/world geometry. Software's broader polygon-colour
-  seams are unchanged by the toggle and remain a separate open precision issue.
+- Earlier bounded OpenGL/software A/B showed the rank transform changed the
+  finite reveal, but that correlation was insufficient: later human evidence
+  proved it also corrupts world geometry in the margins. Software's broader
+  polygon-colour seams remain a separate open precision issue.
 - The exact final executable passed a blank-card OpenGL control route entirely
   through resident AOT plus interpreter fallback. Reusing older broad overlay
   captures then lost the endpoint at the state-8 exit and was rejected. Shards
@@ -132,8 +146,10 @@ not enter committed configuration until their local checks pass.
   route with 15,831,907 resident-AOT, 6,862,443 compiled-overlay and 542,932
   interpreter dispatches (7.3316% of the overlay tier), 25 image loads, zero
   lost CD INT1 events, 1,210 SPU key-ons and matching final player XYZ.
-- The focused backdrop-owner unit and registered 49/49 suite pass. Generated
-  retail C/captures/cache remain ignored and unmodified by hand.
+- The focused backdrop-owner unit remains a model test only and is not evidence
+  for the contradicted production rule. The origin-aware fullscreen-effect unit
+  and registered 49/49 suite pass. Generated retail C/captures/cache remain
+  ignored and unmodified by hand.
 
 ## Human Disc 1 acceptance focus
 

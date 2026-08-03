@@ -64,12 +64,25 @@ must not obstruct either follow-up.
 - The monitor's unit and invisible lifecycle smoke pass; the registered suite
   is 49/49. Human Missions 1--8 visual/input acceptance remains required and
   is not replaced by these counters.
-- The Mission 1 outdoor reveal wedge is closed by a title-opted, title-neutral
-  per-frame rule: the first OT rank that submits textured polygons owns the
-  finite background pass. Live OpenGL/software A/B proves the wedge returns
-  with the rule disabled and disappears when enabled; HUD/world geometry does
-  not move. Global/exact GTE, raw palette and packet-source hypotheses were
-  rejected as production ownership.
+- Human validation contradicted the provisional Mission 1 outdoor-backdrop
+  rule. The first textured OT rank includes projected curved environment
+  geometry, so stretching that rank independently corrupts the 16:9 margins
+  even though the canonical 4:3 centre remains correct. The production profile
+  now disables that transform while the original finite-edge reveal is
+  returned to the open-invariant queue.
+- The same human evidence showed cinematic top/bottom mattes ending at the
+  authored 4:3 edges. The generic effect predicate now treats an axis-aligned
+  rectangle or quad spanning both authored horizontal edges as full-output
+  width regardless of height. Flat, Gouraud and textured quad forms share the
+  rule. The first live software attempt then proved the packet coordinates are
+  pre-offset: gameplay authors `-192..+192` and GP0 draw offset maps that span
+  to framebuffer `0..384`. The corrected title-neutral predicate accepts the
+  authored origin derived from the live draw-area/draw-offset state and blocks
+  later HUD re-anchoring of matched effects. Focused centered- and zero-origin
+  regressions plus 49/49 framework tests pass. A fresh hidden-window software
+  route passed authentic state-0 ownership and movement with 7,035 effect
+  expansions at player ownership. The matching hidden OpenGL route passed the
+  same gates and expansion count; human visual confirmation remains pending.
 - A final-hash interpreter control passed the complete route. Legacy native
   shards failed at the state-8 exit and were discarded. Recompiling only the
   five images captured by that successful control produced a clean native

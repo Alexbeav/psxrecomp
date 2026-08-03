@@ -165,6 +165,7 @@ def checkpoint(client: DebugClient, name: str) -> dict[str, Any]:
         "irq": client.call("irq_state"),
         "resident_dispatch": client.call("dispatch_stats"),
         "overlay_dispatch": client.call("overlay_loader_status"),
+        "runtime": client.call("turbo_loads"),
         "player": player_state(client),
         "fingerprint": client.call(
             "frame_fingerprint", count=32, frame_lo=fp_lo, frame_hi=frame
@@ -268,6 +269,7 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         "input_schedule": [],
     }
     start_time = time.monotonic()
+    enhanced = bool(client.call("mouse_camera_stats")["enabled"])
 
     # Latch every movie when its first payload sector appears; the ring cannot
     # retain the early logos throughout the full ZINTRO duration.
@@ -344,6 +346,7 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     def briefing() -> bool:
         app = app_state(client)
         gpu = client.call("gpu_state")
+        ws = gpu["ws"]
         return (
             app["depth"] == 2
             and app["state"] == 8
@@ -351,6 +354,10 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
             and gpu["height"] == 240
             and gpu["depth"] == 15
             and not gpu["disabled"]
+            and (
+                not enhanced
+                or (ws["configured"] and ws["mode"] == 2 and not ws["active"])
+            )
         )
 
     wait_for(client, "retail Mission 1 state-8 briefing", briefing, timeout)
@@ -366,12 +373,24 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         app = app_state(client)
         player = player_state(client)
         cdrom = client.call("cdrom_state")
+        gpu = client.call("gpu_state")
+        ws = gpu["ws"]
         if (
             app["state"] == 0
             and player
             and player["player_owns_camera"]
             and player["health"] > 0
             and not cdrom["reading"]
+            and (
+                not enhanced
+                or (
+                    ws["configured"]
+                    and ws["active"]
+                    and ws["mode"] == 2
+                    and ws["nw_extra"] > 0
+                    and ws["fullscreen_rect"]["expanded"] > 0
+                )
+            )
         ):
             return player
         return None

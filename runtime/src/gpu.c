@@ -12,6 +12,7 @@
 
 #include "gpu.h"
 #include "ws_backdrop_owner.h"
+#include "ws_fullwidth_effect.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
@@ -1797,16 +1798,30 @@ static int32_t ws_disp_h(void) {
 /* Full-screen fades and environmental filters are authored as 320x240 TILEs.
  * In native-wide mode, grow only primitives that cover the complete native
  * display; ordinary world-space rectangles remain untouched. */
-static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
-    if (!ws_native_wide_active()) return;
+static int ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h,
+                                     int32_t authored_left) {
+    (void)y;
+    (void)h;
+    if (!ws_native_wide_active()) return 0;
     ++ws_fullscreen_rect_checks;
-    int W = (int)ws_disp_w(), H = (int)ws_disp_h();
-    if (*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) {
-        int off = ws_nw_offset();
-        *x -= off;
-        *w += 2 * off;
+    if (ws_fullwidth_effect_rect(1, (int)ws_disp_w(), ws_nw_offset(),
+                                authored_left, x, w)) {
         ++ws_fullscreen_rect_expands;
+        return 1;
     }
+    return 0;
+}
+
+static int ws_expand_fullwidth_quad(int32_t vx[4], const int32_t vy[4],
+                                    int32_t authored_left) {
+    if (!ws_native_wide_active()) return 0;
+    ++ws_fullscreen_rect_checks;
+    if (ws_fullwidth_effect_quad(1, (int)ws_disp_w(), ws_nw_offset(),
+                                authored_left, vx, vy)) {
+        ++ws_fullscreen_rect_expands;
+        return 1;
+    }
+    return 0;
 }
 
 /* In-game HUD pivot for an untagged screen-space SPRT spanning [x, x+w).
@@ -3032,16 +3047,17 @@ static void gp0_exec_mono_quad(void) {
      * diagonal twice; render the equivalent rectangle once to avoid that seam.
      * The full-screen helper also grows the native 320-wide filter across the
      * sidecar surface in native-wide mode. Ordinary world quads are unchanged. */
+    int32_t authored_left = (int32_t)draw_area_left - draw_offset_x;
     if (vx[0] == vx[2] && vx[1] == vx[3] &&
         vy[0] == vy[1] && vy[2] == vy[3] &&
         vx[1] > vx[0] && vy[2] > vy[0] &&
-        vx[0] <= 0 && vx[1] >= ws_disp_w() &&
-        vy[0] <= 0 && vy[2] >= ws_disp_h()) {
+        ((vx[0] <= authored_left && vx[1] >= authored_left + ws_disp_w()) ||
+         (vx[1] <= authored_left && vx[0] >= authored_left + ws_disp_w()))) {
         int32_t x = vx[0];
         int32_t y = vy[0];
         int w = (int)(vx[1] - vx[0]);
         int h = (int)(vy[2] - vy[0]);
-        ws_expand_fullscreen_rect(&x, y, &w, h);
+        ws_expand_fullscreen_rect(&x, y, &w, h, authored_left);
         x += draw_offset_x;
         y += draw_offset_y;
         gr_set_semi_transparency(semi_trans, (int)semi_transparency);
@@ -3118,7 +3134,9 @@ static void gp0_exec_shaded_quad(void) {
     int rej_b = psx_gpu_triangle_oversize(vx, vy, 2, 1, 3);
     if (rej_a && rej_b) return;
     ws_nw_backdrop_stretch_quad(vx, vy);   /* full-frame 2D backdrop stretch (sky gradient; no-op else) */
-    ws_nw_hud_shift_vertices(vx, 4);
+    int fullwidth = ws_expand_fullwidth_quad(
+        vx, vy, (int32_t)draw_area_left - draw_offset_x);
+    if (!fullwidth) ws_nw_hud_shift_vertices(vx, 4);
     for (int i = 0; i < 4; i++) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
@@ -3261,7 +3279,9 @@ static void gp0_exec_textured_quad(void) {
     }
     ws_auto_ui_transform_quad(vx, vy);
     ws_nw_backdrop_stretch_quad(vx, vy);   /* full-frame 2D backdrop image stretch (no-op else) */
-    ws_nw_hud_shift_vertices(vx, 4);
+    int fullwidth = ws_expand_fullwidth_quad(
+        vx, vy, (int32_t)draw_area_left - draw_offset_x);
+    if (!fullwidth) ws_nw_hud_shift_vertices(vx, 4);
 
     for (int i = 0; i < 4; i++) {
         vx[i] += draw_offset_x;
@@ -3393,7 +3413,9 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (rej_a && rej_b) return;
 
     ws_auto_ui_transform_quad(vx, vy);
-    ws_nw_hud_shift_vertices(vx, 4);
+    int fullwidth = ws_expand_fullwidth_quad(
+        vx, vy, (int32_t)draw_area_left - draw_offset_x);
+    if (!fullwidth) ws_nw_hud_shift_vertices(vx, 4);
     for (int i = 0; i < 4; i++) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
@@ -3478,8 +3500,10 @@ static void gp0_exec_mono_rect(void) {
     int h = (gp0_cmd_buf[2] >> 16) & 0xFFFFu;
     if (w > 1023) w = 1023;
     if (h > 511)  h = 511;
-    ws_expand_fullscreen_rect(&x0, y0, &w, h);
-    x0 += ws_nw_hud_shift(x0, w);   /* native-wide HUD corner re-anchor (no-op else) */
+    int fullwidth = ws_expand_fullscreen_rect(
+        &x0, y0, &w, h, (int32_t)draw_area_left - draw_offset_x);
+    if (!fullwidth)
+        x0 += ws_nw_hud_shift(x0, w); /* native-wide HUD corner re-anchor (no-op else) */
     x0 += draw_offset_x; y0 += draw_offset_y;
     if (draw_area_out_rect(x0, y0, w, h)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);

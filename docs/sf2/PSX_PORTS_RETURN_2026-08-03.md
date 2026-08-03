@@ -31,36 +31,62 @@ First independent consumer: **Tenchu**, because its recomp lane already reaches
 a retail intro FMV and can repeat the OpenGL/software transition check without
 sharing SF2 movie dimensions or addresses.
 
-## Finding 4 — finite textured backdrops need semantic OT ownership
+## Candidate 4 — first-textured OT rank is not backdrop ownership
 
-Status: confirmed in SF2 Mission 1; independent validation pending.
-Likely owner: native-wide GPU primitive classification.
+Status: contradicted in SF2 Mission 1. Do not promote.
+Likely owner: still-open native-wide background/SCRIM classification.
 
-A finite authored background mesh may leave newly revealed widescreen margins
-even when world projection is correct. Expanding far GTE geometry, every
-textured primitive, a palette, or a packet address either damages foreground
-geometry or encodes title payload. For an opted-in title whose draw ordering is
-stable, the first consumed ordering-table rank that submits textured polygons
-is a bounded semantic owner. Stretch only textured polygons from that rank in
-the wide mirror; preserve the canonical 4:3 framebuffer.
+The first consumed ordering-table rank that submits textured polygons is not a
+safe semantic backdrop owner. Human parachute-scene evidence showed correct
+canonical 4:3 rendering but enlarged, discontinuous world geometry in both
+revealed margins. The bounded GP0 dump proved that rank contains connected
+projected `0x3C`/`0x34` environment polygons, not an independent flat image.
+Aspect-stretching each primitive transforms real curved geometry twice.
+
+Reusable rejection test:
+
+1. Capture the affected rank's bounded GP0 topology, not only its texture or
+   ordering provenance.
+2. Reject the owner if adjacent polygons form a projected environment mesh or
+   if their edges/vertices extend beyond the authored display.
+3. Compare the canonical centre and both reveal margins under a live toggle.
+4. Remove the production opt-in when the rule changes real world geometry;
+   reopening a finite reveal is preferable to a presentation containment.
+
+SF2 result: `nw_phase_backdrop` is disabled in the production profile. Global
+far-depth GTE, exact GTE callers, raw palette/source identity and first-textured
+rank ownership are all rejected. Semantic background ownership remains open.
+
+## Candidate 5 — partial-height fullscreen effects use authored coordinates
+
+Status: confirmed by hidden software/OpenGL semantics; human and independent
+validation pending. Likely owner: native-wide GPU effect classification.
+
+Fades, cinematic mattes, scope/NVG bands and filters can own the complete
+horizontal output without covering its complete height. Recognize only an
+axis-aligned rectangle/quad spanning both authored horizontal edges; height is
+deliberately irrelevant and projected non-axis-aligned world geometry must not
+match. Perform the test in packet coordinate space: a title may author the
+screen around zero and apply GP0 draw offset later.
 
 Bounded check:
 
-1. Census GP0 polygon types by consumed OT rank for the affected frame.
-2. Falsify global and exact-call GTE expansion against world/actor geometry.
-3. Use raw texture/source identities only as temporary correlation probes.
-4. Toggle the semantic owner live under software and hardware renderers.
-5. Require the reveal gap to change while HUD, actors and foreground remain
-   unchanged; add a frame-reset unit regression.
+1. Derive the authored left edge from the live framebuffer/draw-area origin
+   minus GP0 draw offset; do not assume packet X begins at zero.
+2. Test rectangle and flat/Gouraud/textured quad families with the same pure
+   predicate and expand only their horizontal edges into reveal margins.
+3. Do not subsequently apply HUD corner re-anchoring to a recognized effect.
+4. Reject narrow and projected/non-axis-aligned quads in a title-neutral unit.
+5. Require zero expansions in 4:3-owned TITLE/FMV/briefing phases, then nonzero
+   expansions in the affected native-wide scene under both renderers.
 
-SF2 result: the outdoor black reveal wedge returns with the owner disabled and
-disappears when enabled under both backends. Software high-resolution polygon
-seams are unchanged by the toggle and remain a separate renderer issue.
-Production configuration contains no SF2 address, packet range, palette,
-texture identity, movie dimension or hardcoded band.
+SF2 result: the origin-naive implementation reached state 0 with 65,148 checks
+and zero expansions. With authored origin `-192` derived from draw offset
+`+192`, clean software and OpenGL routes passed state-0 movement with exactly
+7,035 expansions at player ownership. Regression: `ws_fullwidth_effect_test`.
 
-First independent consumer: **Tenchu**, which can classify its first outdoor
-background frame by OT provenance without importing SF2 identities.
+First independent consumer: **Tenchu**, whose fullscreen fades/mattes can test
+the same topology/origin rule without importing SF2 coordinates or effects.
 
 ## Finding 2 — SeekL/SeekP owns the CD drive state
 
@@ -120,6 +146,10 @@ state. Regression: `debug_input_schedule`.
 - `PSX-HLE-001`: **narrowed** to a useful complete-device-state lesson; the
   confirmed owner here is the LLE CD device's SeekL/SeekP lifecycle.
 - Hardcoded movie geometry or black bands: **irrelevant/rejected containment**.
+- First-textured OT-rank background ownership: **contradicted** by projected
+  environment topology and human margin corruption.
+- Full-width effects: **confirmed under software/OpenGL semantics** with the
+  authored coordinate origin included; human and independent-title checks remain.
 - Remaining independent status: GPU and CD findings are still open for a second
   title before stable cross-portfolio promotion.
 
@@ -127,6 +157,6 @@ state. Regression: `debug_input_schedule`.
 
 - Generic commits: `09be64b`, `485b79b`, `89804a7`.
 - Full local report: `OVERNIGHT_REPORT_2026-08-03.md`.
-- Complete framework suite: 43/43.
+- Complete framework suite: 49/49.
 - No BIOS, disc, executable, generated game code, captures, RAM, movies, audio,
   screenshots, cards, or other private artifacts are included.

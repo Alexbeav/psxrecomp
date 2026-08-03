@@ -976,3 +976,76 @@ dispatches (7.3316% of the overlay tier), 25 image loads, zero lost CD INT1,
 Registered tests pass 49/49 and `ws_backdrop_owner_test` passes directly. The
 exact Disc 1 candidate hashes are recorded in `../DISC1_VALIDATION.md`. Human
 Missions 1--8 acceptance is the next gate.
+
+## 2026-08-03 — human parachute scene contradicts textured-rank stretching
+
+The first human Disc 1 run exposed a deterministic visual divergence in the
+Mission 1 parachute opening. The canonical 4:3 centre remained correct, while
+both 16:9 reveal margins contained enlarged and discontinuous environment
+polygons. Two user screenshots establish the same failure during the scripted
+opening and player-owned parachute gameplay.
+
+The bounded GP0 capture resolves the ownership error. The first textured OT
+rank is a connected set of projected `0x3C`/`0x34` environment polygons with
+coordinates extending beyond the authored display, not an independent flat
+2D image. Applying the 4:3-to-16:9 ratio to each polygon therefore transforms
+real curved environment geometry a second time. The fast wide path then copies
+the authoritative canonical centre over that mirror, making the bad transform
+visible specifically in the margins.
+
+Corpus classification was updated as follows: semantic SCRIM/background
+ownership remains narrowed but open; first-textured-rank ownership is
+contradicted; global/exact GTE callers remain contradicted; raw palette/source
+identity remains diagnostic-only; and the hybrid project's coherent world-OT
+compensation is relevant behavior but not directly transferable to this
+renderer. The production profile disables `nw_phase_backdrop`. This removes
+the proven corruption and deliberately reopens the smaller finite-edge reveal
+instead of containing it with a presentation approximation.
+
+The screenshots also exposed a separate generic fullscreen-effect defect:
+cinematic top/bottom mattes covered the authored centre but not the reveal
+margins. `ws_expand_fullscreen_rect` required both complete width and complete
+height, which can recognize fades but cannot recognize a matte, letterbox band
+or partial-height scope mask. The replacement semantic predicate expands an
+axis-aligned rectangle or quad when it spans both authored horizontal edges;
+height is intentionally irrelevant. Mono rectangles/quads, Gouraud quads and
+textured/Gouraud-textured quads share the same pure helper. Projected curved
+geometry cannot match its axis-aligned topology.
+
+The focused `ws_fullwidth_effect` regression covers 4:3 identity, exact-width
+and reverse-winding partial-height mattes, narrow rejection and projected-quad
+rejection. It passes under strict C99 warnings, and the registered suite passes
+49/49 with `PYTHONUTF8=1`. Candidate executable
+`98CC6480F423505F1BA5C42481992E24CABC2F41173E8789270F11279A499441`
+is rebuilt for human parachute/matte validation; no visual acceptance is
+claimed yet.
+
+The first hidden-window software acceptance attempt reached authentic state 0
+with native-wide active (`384x240` authored display, `512`-pixel wide mirror),
+but reported 65,148 fullscreen checks and zero expansions. This is the exact
+first semantic divergence, not a rendered-frame inference. The remaining bug
+was coordinate space: SF2's gameplay packets author the horizontal display as
+`-192..+192` and GP0 draw offset `+192` maps it into framebuffer `0..384`.
+The initial predicate compared the pre-offset packet coordinates directly with
+`0..384`, so no genuine matte could match.
+
+The title-neutral helper now accepts the authored horizontal origin explicitly.
+GPU call sites derive it from `draw_area_left - draw_offset_x`, expand in the
+packet's own coordinate space, and suppress subsequent HUD re-anchoring for a
+recognized full-width effect. The regression now includes centered-origin
+rectangles and quads in addition to zero-origin, reverse-winding, narrow and
+projected cases. Strict C99 compilation, Release regeneration/link and the
+registered 49/49 suite pass. The resulting executable is
+`6D618BC788D33E40ED57EC42D97658CC4BC6A5B28AB0EA30779B8FC7BF2F2568`.
+A fresh hidden-window software route passed the complete authentic gate:
+stable TITLE at frame 18,616, aircraft FMV at 19,580, state 8 at 23,888,
+state-0 player ownership at 25,411 and verified movement at 25,904. Widescreen
+remained inactive with zero effect checks through TITLE/FMV/state 8, then
+reported 147,255 checks and 7,035 expansions at player ownership. Evidence is
+under ignored `lab/sf2/local/pass2-fullwidth-origin-sw-20260803-192740/`.
+The matching hidden OpenGL route also passed: stable TITLE at frame 18,603,
+aircraft FMV at 19,573, state 8 at 23,896, state-0 player ownership at 25,399
+and movement at 25,899. It likewise records zero checks/expansions through the
+4:3-owned phases and exactly 7,035 expansions at player ownership. Evidence is
+under ignored `lab/sf2/local/pass2-fullwidth-origin-gl-20260803-193605/`.
+Human visual acceptance is still pending.

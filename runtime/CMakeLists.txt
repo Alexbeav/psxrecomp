@@ -81,6 +81,11 @@ if(BUILD_TESTING)
     target_include_directories(ws_backdrop_owner_test PRIVATE include)
     add_test(NAME ws_backdrop_owner_test COMMAND ws_backdrop_owner_test)
 
+    add_executable(ws_fullwidth_effect_test
+        tests/test_ws_fullwidth_effect.c)
+    target_include_directories(ws_fullwidth_effect_test PRIVATE include)
+    add_test(NAME ws_fullwidth_effect_test COMMAND ws_fullwidth_effect_test)
+
     add_executable(mouse_camera_test
         tests/test_mouse_camera.c
         src/mouse_camera.c)
