@@ -31,10 +31,39 @@
 #define RAM_SIZE        (2 * 1024 * 1024)
 #define SCRATCHPAD_SIZE 1024
 #define BIOS_ROM_SIZE   (512 * 1024)
+#define MOD_MEMORY_BASE 0x1F000000u
+#define MOD_MEMORY_SIZE (1u * 1024u * 1024u)
 
 static uint8_t ram[RAM_SIZE];
 static uint8_t scratchpad[SCRATCHPAD_SIZE];
 static uint8_t bios_rom[BIOS_ROM_SIZE];
+static uint8_t mod_memory[MOD_MEMORY_SIZE];
+static uint32_t mod_memory_used;
+
+/*
+ * Trusted mods may opt into host-backed guest memory in Expansion 1. Before
+ * the first allocation this entire region retains hardware open-bus behavior.
+ */
+uint32_t psx_mod_memory_alloc(uint32_t size, uint32_t alignment) {
+    uint32_t start;
+    if (size == 0u) return 0u;
+    if (alignment == 0u) alignment = 1u;
+    if ((alignment & (alignment - 1u)) != 0u || alignment > 4096u) return 0u;
+    start = (mod_memory_used + alignment - 1u) & ~(alignment - 1u);
+    if (start > MOD_MEMORY_SIZE || size > MOD_MEMORY_SIZE - start) return 0u;
+    memset(mod_memory + start, 0, size);
+    mod_memory_used = start + size;
+    return 0x9F000000u + start;
+}
+
+static int mod_memory_offset(uint32_t phys, uint32_t width, uint32_t *offset) {
+    uint32_t off;
+    if (phys < MOD_MEMORY_BASE) return 0;
+    off = phys - MOD_MEMORY_BASE;
+    if (off > mod_memory_used || width > mod_memory_used - off) return 0;
+    if (offset) *offset = off;
+    return 1;
+}
 
 /* Exposed for inlined main-RAM load helpers in psx_cyc.h (VLC/decode hot path). */
 uint8_t *g_psx_ram = ram;
@@ -1326,6 +1355,14 @@ static uint32_t psx_read_word_raw(uint32_t addr) {
         return v;
     }
     /* Expansion 1: 0x1F000000..0x1F7FFFFF — no device, open bus */
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 4u, &off)) {
+            uint32_t v;
+            memcpy(&v, mod_memory + off, sizeof(v));
+            return v;
+        }
+    }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) {
         return 0xFFFFFFFFu;
     }
@@ -1484,6 +1521,13 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
         return;
     }
     /* Expansion 1: 0x1F000000..0x1F7FFFFF — ignore writes */
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 4u, &off)) {
+            memcpy(mod_memory + off, &val, sizeof(val));
+            return;
+        }
+    }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
@@ -1529,6 +1573,12 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
 
     if (phys < RAM_SIZE) {
         return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
+    }
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 2u, &off))
+            return (uint16_t)mod_memory[off] |
+                   ((uint16_t)mod_memory[off + 1u] << 8);
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
@@ -1584,6 +1634,14 @@ static void psx_write_half_raw(uint32_t addr, uint16_t val) {
         ram[phys + 1] = (uint8_t)(val >> 8);
         return;
     }
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 2u, &off)) {
+            mod_memory[off] = (uint8_t)val;
+            mod_memory[off + 1u] = (uint8_t)(val >> 8);
+            return;
+        }
+    }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         uint32_t off = phys - 0x1F800000u;
@@ -1621,6 +1679,10 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
 
     if (phys < RAM_SIZE) {
         return ram[phys];
+    }
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 1u, &off)) return mod_memory[off];
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return 0xFFu;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
@@ -1893,6 +1955,13 @@ static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
 #endif
         ram[phys] = val;
         return;
+    }
+    {
+        uint32_t off;
+        if (mod_memory_offset(phys, 1u, &off)) {
+            mod_memory[off] = val;
+            return;
+        }
     }
     if (phys >= 0x1F000000u && phys <= 0x1F7FFFFFu) return;
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {

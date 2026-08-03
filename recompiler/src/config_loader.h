@@ -634,6 +634,11 @@ struct GameConfig {
     // out to be impure only costs a poisoned capture, never a wrong replay.
     std::vector<uint32_t> data_shard_funcs;
 
+    // [recompiler] mod_function_entry_funcs: narrowly selected guest function
+    // entries that dispatch trusted, statically linked mod callbacks. Empty by
+    // default, so projects that do not opt in emit no callback overhead.
+    std::vector<uint32_t> mod_function_entry_funcs;
+
     // [recompiler] hot_funcs: guest addresses that get __attribute__((hot))
     // on their generated C bodies (profile/host locality; no guest semantics).
     std::vector<uint32_t> hot_funcs;
@@ -680,6 +685,9 @@ struct GameConfig {
     // auto-detector cannot qualify (e.g. an X-only test with no height compare
     // in the same function — Ape Escape 0x8004AB64). Empty by default; regen.
     std::vector<uint32_t> ws_cull_slti_sites;
+    // Explicit signed lower-bound sites (`slti rt, sx, -W`). The threshold is
+    // moved left by the live reveal margin. Empty by default; regen required.
+    std::vector<uint32_t> ws_cull_slti_lower_sites;
     // [widescreen.cull] bltz_sites — explicit signed LEFT-edge widen sites
     // (`bltz rs, reject` -> psx_ws_cull_bltz), the counterpart to slti_sites.
     // detect_cull_bltz_sites only classifies left-edge bltz for functions
@@ -799,6 +807,12 @@ struct GameConfig {
     // (native-wide engages); genuine full-2D screens (save/options) still
     // pillarbox 4:3. Runtime-only — no regen required. Off by default.
     bool ws_gte_game_mode = false;
+    // Optional authoritative game-state gate for titles whose menus also
+    // render enough 3D geometry to fool gte_game_mode. When configured,
+    // native-wide is active only while the guest word matches one listed
+    // value. Runtime-only; both fields must be supplied together.
+    uint32_t ws_gameplay_state_addr = 0;
+    std::vector<uint32_t> ws_gameplay_state_values;
 
     // [widescreen] native_wide — select the newer wide render-target path.
     // Defaults on for compatibility. Titles can keep the original GTE-squash

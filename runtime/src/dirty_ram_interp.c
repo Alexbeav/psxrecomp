@@ -2016,6 +2016,9 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
         /* Widescreen render-funnel RIGHT-edge widen (auto_screen_x) for the
          * signed min/max funnel idiom (`slti v, minSX, W`) — the paired left
          * edge is the bltz above. Identity at 4:3 (margin 0). */
+        else if (psx_ws_is_cull_slti_lower_site(pc))
+            cpu->gpr[rt] = (uint32_t)psx_ws_cull_slti_lower(
+                cpu->gpr[rs], imm);
         else if (psx_ws_is_cull_slti_site(pc) ||
             (psx_ws_auto_cull_on() && psx_ws_is_cull_w_imm(imm) && ws_cull_site(pc)))
             cpu->gpr[rt] = (uint32_t)psx_ws_cull_slti(cpu->gpr[rs], imm);

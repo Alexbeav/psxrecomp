@@ -3860,10 +3860,6 @@ static void sdl_vblank_present(void) {
      * the actual wide compositor remains disengaged until game entry. */
     update_adaptive_widescreen();
 
-    /* Resize-driven mode updates the pending aspect during BIOS boot too, but
-     * the actual wide compositor remains disengaged until game entry. */
-    update_adaptive_widescreen();
-
     /* Depth24 GP1(07h) retarget (MotK intro→crawl): keep the prior Swap for a
      * few vblanks so stale trailing VRAM never flashes on the right edge. */
     if (gpu_depth24_present_hold_tick())
@@ -5114,6 +5110,10 @@ int main(int argc, char** argv) {
                                   gc.ws_bg2d_packet_cap);
             /* [widescreen] gte_game_mode — 3D-title gameplay detector (Ape). */
             gpu_ws_set_gte_game_mode(gc.ws_gte_game_mode ? 1 : 0);
+            gpu_ws_set_gameplay_state_gate(
+                gc.ws_gameplay_state_addr,
+                gc.ws_gameplay_state_values.data(),
+                (int)gc.ws_gameplay_state_values.size());
             /* Keep titles with known native-wide regressions on the original
              * projection-squash + stretched-present widescreen path. */
             g_ws_native_wide = gc.ws_native_wide ? 1 : 0;
@@ -5154,6 +5154,9 @@ int main(int argc, char** argv) {
                 gc.ws_cull_bias_sites.data(), (int)gc.ws_cull_bias_sites.size(),
                 gc.ws_cull_slti_sites.data(), (int)gc.ws_cull_slti_sites.size(),
                 gc.ws_cull_range_sites.data(), (int)gc.ws_cull_range_sites.size());
+            gpu_ws_set_slti_lower_cull_sites(
+                gc.ws_cull_slti_lower_sites.data(),
+                (int)gc.ws_cull_slti_lower_sites.size());
             gpu_ws_set_negsub_cull_sites(
                 gc.ws_cull_negsub_sites.data(), (int)gc.ws_cull_negsub_sites.size());
             gpu_ws_set_vxrange_cull_sites(
