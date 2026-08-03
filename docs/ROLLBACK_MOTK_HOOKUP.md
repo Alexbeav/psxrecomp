@@ -216,10 +216,11 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       Local tip production continues during Replay (protocol peer).
       POST match → chain next SPAN or Final Verify→Live (no TipHold invent-cap
       mid catch-up). Long catch-up periodically presents live Replay VRAM.
-- [x] **§49 WAN chain/GO/realign:** ownership chain only if `frontier > tip+8`
-      (`PSX_RB_CHAIN_MIN_AHEAD`); initiator keeps GO until peer POST; ready
-      timeout RTT-scaled; INPUT resends from peer ACK when behind tip-redundancy.
-      (§49b: do **not** clear remote tips on Live realign — tip=0 pcap freeze.)
+- [x] **§49/§73 WAN chain/GO/realign:** ownership chain if `frontier > tip+4`
+      (`PSX_RB_CHAIN_MIN_AHEAD`; was tip+8 — §73 bisect); initiator keeps GO
+      until peer POST; ready timeout RTT-scaled; INPUT resends from peer ACK
+      when behind tip-redundancy. (§49b: do **not** clear remote tips on Live
+      realign — tip=0 pcap freeze.)
 - [x] **§50 FMV tip-extend gate:** do not tip-extend / FOLLOW-raise through
       FMV media or settle (same window as begin/follow refuse). TipHold + FMV
       → commit sealed tip; mid-FMV TipHold entry also commits. Stops host
@@ -232,13 +233,27 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       skips while resume/check PC is `0x8006CD54` (leave pending until
       `0x8006CDA0`) so sealed idle resim cannot digest opposite ping-pong
       edges (cyc±9 / v0 fork after mid-handler present fix).
-- [x] Netplay forces **software GPU** — GL/VK `glReadPixels` VRAM readback was
-      forking peer snaps (core matched, pin zlib ~220KB apart) and mid-resim
-      cores; baseline/POST also agree on `av=` (GPU+VRAM) via dig_b / POST input_digest
-- [x] SW GPU **before window** + late `force_sw` builds `SDL_Renderer` after GL
-      teardown (first match was black: cleared `g_gl_active` with null present).
-      Rematch: only lock SW after `ensure_sw_sdl_present` succeeds; retry if
-      prior force left a null renderer (empty window after lobby rematch).
+- [x] Netplay **CPU-authoritative VRAM** — software raster owns guest VRAM
+      (snaps/`av=`). OpenGL dual-raster keeps SW@1× authority + GL@Nx FBO
+      present (`g_gl_fbo_present=1`); never `glReadPixels`. Vulkan netplay
+      still uses a software window. baseline/POST agree on `av=` via dig_b /
+      POST input_digest
+- [x] Netplay GPU lock **before snaps** + late re-arm keeps GL present when
+      OpenGL was requested (no teardown → black first match). Rematch clears
+      the lock on lobby soft-return. Pure-software still builds `SDL_Renderer`
+      when no GL context exists.
+- [x] Netplay **SW sim scale 1** — dual-raster keeps SW@1×; GL hr FBO uses
+      launcher supersampling for present quality. SW-only netplay stays
+      native scanout + upscale (no `gr_render_display_hires`).
+- [x] **§92 dual-raster present quality** — GP0 fan-out SW+GL; restage FBO
+      after snap; digests CRC CPU VRAM only
+- [x] OpenGL resim **hold-last V-flip** — `HOLD_DRAWABLE` presents without
+      re-applying `PRESENT_VS` V-flip (was one upside-down frame on Replay
+      load until the next live CPU present).
+- [x] **§91 tip-extend / ownership Live asymmetry** — honor peer `OP_COMMIT`
+      while still TipHold/Replay (not only Verify); snap fallback if
+      SNAP-STALE dropped extend_from; refuse tip-extend once peer committed
+      this epoch (stops verify-timeout + peer `pcap_freeze` hang).
 - [x] Mid-FMV tip load: `cdrom_resync_deadlines_after_restore`; do not wipe SPU
       CD FIFO while XA/FMV pending; FMV media includes `cdrom_fmv_stream_pending`
       (XA mode+reading) so invent-off arms before first MDEC colour decode;
@@ -2206,8 +2221,9 @@ tip-extend @1059) and tip-hold committing immediately between them.
 
 **Fixes:**
 
-- [x] Digital release debounce (2 sim ticks) in `psx_netplay_stage_local`
-      while rollback is on — bridges micro-bounce without lagging real taps.
+- [x] Digital release debounce **removed** (2026-08-03): 2-tick whole-word
+      sticky merged intentional double-taps; Start sticky already removed
+      (taunt double-pause is in-game). Snap-load continuity remains.
 - [x] Scrub-ahead end bound = `max(sim, tip+runway)` during TipHold.
 - [x] TipHold quiet only while pads idle **and** no pending wire delta
       `tip+1..runway` / `block_quiet`; held or pending resets the timer.
@@ -2809,8 +2825,9 @@ while host sat in Verify, dual realign to ~1264 with stale `remote_tip≈1544`
 → `WIRE_HOLE` + `cushion KEEP (absurd lead=279)`.
 
 **Fix:**
-1. **Ownership chain floor** `frontier > tip + 8` (env `PSX_RB_CHAIN_MIN_AHEAD`);
-   micro catch-ups stay Live.
+1. **Ownership chain floor** `frontier > tip + N` (env `PSX_RB_CHAIN_MIN_AHEAD`;
+   §49 shipped N=8; **§73** lowers default to **4** after tip+8 tip-held every
+   POST). Micro catch-ups below the floor stay Live / tip-hold.
 2. **Initiator GO rexmit** until peer POST (TURN dropped the one-shot burst);
    ready timeout scales with RTT (4s…12s).
 3. **INPUT ACK resend** when peer ack lags the tip-redundancy window.
@@ -2823,8 +2840,8 @@ already recovered: peer post-realign production fills `need` while
 until real rows land. API kept for hard_resync-style paths only.
 
 **Re-soak watch:** no `ready timeout (no initiator GO)` under TURN; no
-`ownership chain tip=N frontier=N+2..N+7` storms; after abort realign no
-`pcap FREEZE … remote_tip=0` / `remote tips cleared`.
+`ownership chain tip=N frontier=N+1..N+3` storms (floor is tip+4); after abort
+realign no `pcap FREEZE … remote_tip=0` / `remote tips cleared`.
 
 ## 50. FMV tip-extend through lockstep → BIOS realign / CD fork (2026-08-02)
 
@@ -3199,14 +3216,11 @@ per side, zero baseline mismatch / desync. Two items remained: replay
 cost), and one user-visible bug — a Start press opened TWO overlapping pause
 menus (online only).
 
-**1. Start doubling root cause — §47 replay produce bypassed the §34
-debounce.** `np_rb_produce_local_tip_for_sim` copied the raw live snapshot
-(`staged = live`) without `np_digital_debounce_staged()`, so a press
-overlapping an episode could publish press/idle/press across consecutive tip
-rows (SDL snapshot bounce mid-resim); MotK's pause is edge-triggered → two
-menus. This soak had an episode every ~30 s, which is exactly the exposure
-window. Fix: the replay producer now runs the same debounce, keeping the
-sticky release state coherent across live↔replay transitions.
+**1. Start doubling (historical note):** initially blamed on §47 replay
+produce bypassing §34 dig sticky. Later soaks + DuckStation/keyboard
+isolation showed post-match **taunt** double-pause is in-game MotK; sticky
+filters were removed (2026-08-03). Snap-load continuity (§79) still covers
+Replay `tip_without_stage` false edges.
 
 **2. Dense tip snapshots (`PSX_NET_SNAP_DENSE`, default 8, 0=off, max 24).**
 Live path now saves EVERY tick; non-interval ticks are tracked in a sliding
@@ -3233,6 +3247,73 @@ a burst of follower NACK/demotes right after them would mean the peer's
 dense window is out of phase and the raise should be narrowed. For the Start
 fix: pausing near resim activity should be single-menu; if a double recurs,
 enable the pad edge log and capture the row sequence.
+
+**Pad-trace (2026-08-02):** for Start/menu doubles use
+`PSX_RB_PAD_TRACE=1` (implies richer pipeline logging; keep
+`PSX_RB_PAD_LOG=1` for classic `pad-edge` lines). Checkpoints:
+`dev` (capture card / raw SDL Start / fallback), `stage` (raw vs
+debounce / latch), `live-only` (SDL edges while sim latched),
+`tip-produce`, `sio` (`apply_n` + DUP). Automatic lines:
+`VERDICT pulse` (gap≤2), `multipress` (gap≤60), `dup_sio`,
+`sample_vs_apply` (stage↓ vs sio↓ at +D — not a bug),
+`tip_without_stage`. One deliberate Start → read the VERDICT.
+
+**Pad sticky removed (2026-08-03):** Start sticky (8 ticks) and dig sticky
+(2 ticks) both removed. Taunt double-pause is in-game (DuckStation too);
+dig sticky was merging intentional double-taps across 1–2 tick idle holes.
+
+### Start cadence bisect (2026-08-02)
+
+Do **not** raise debounce further until this answers where online first
+diverges from offline. Env `PSX_START_BISECT=1` logs every sample:
+
+```
+start-bisect n=… mode=offline|online path=offline|cap|stage|tip|sio|spin
+wall_ms=… sim=… sdl=… cap=… deb=… sio=… latch=… tip_hold=… resim=…
+```
+
+**Stage 1:** hold Start ~1s offline, then online (same pad). Compare
+`sdl=` streams. If they differ → scheduler/admit cadence. If identical →
+move downstream (`cap` → `deb`/`stage` → `sio`).
+
+**Stage 3 toggles** (one at a time, rebuild not required — env only):
+
+| Env | Effect |
+|-----|--------|
+| `PSX_START_BISECT_NO_GC_UPDATE_IN_ADMIT=1` | Skip `SDL_GameControllerUpdate` in admit spin |
+| `PSX_START_BISECT_NO_TIPHOLD_CAPTURE=1` | Only capture when latching a new tip (no TipHold live refresh) |
+| `PSX_START_BISECT_NO_CATCHUP=1` | Force catch-up budget 0 |
+| `PSX_START_BISECT_NO_REPLAY_PRODUCE=1` | Skip §47 replay tip produce |
+| `PSX_START_BISECT_SPIN=1` | Also log raw SDL on admit spins without capture (dense) |
+
+Strongest suspect: dense `GameControllerUpdate` + per-sim-tick capture
+while offline samples on the paced present loop.
+
+### Start consumer bisect (2026-08-02)
+
+SDL soaks showed dirty Start offline *and* online (different pulse shapes).
+Next question is **consumer equivalence**: given a long hold, does MotK's
+SIO reader see the same Start timeline offline vs online?
+
+Env `PSX_START_CONSUMER=1` logs once per sim frame at SIO apply
+(offline `sample_pad_into_sio`, online `host_publish` / snap-load merge):
+
+```
+start-consumer n=… mode=offline|online sim=… slot=… start=0|1
+edge=↓|↑|- buttons=…. wall_ms=… resim=0|1
+```
+
+**Procedure:** hold Start ~1s offline, then online (same pad, presser slot).
+Collapse `start=` into bitstrings. Cases:
+
+| Offline | Online | Meaning |
+|---------|--------|---------|
+| solid `1…1` | `1…0…1` | online pipeline changes game-visible Start |
+| `1…0…1` | `1…0…1` | consumers match → MotK pause/menu differs |
+| solid `1…1` | solid `1…1` | yet double pause → pause invoked without input edge |
+
+Invariant: same logical button timeline ⇒ same Start timeline at SIO.
+Remaining differences then belong to MotK pause handling, not netplay.
 
 ## 59. Lobby RTT→D table bump + TURN floor + faster first raise (2026-08-02)
 
@@ -3440,3 +3521,896 @@ double-resim feel and tip-episode live-present flash.
 present=live` only when tip rem>24, e.g. deep ownership catch-up); after
 `tip-extend ABANDON` expect `hc-fork recovery restart` then ≥16 Live
 ticks before another `hc-fork recovery begin` (not same-tick reopen).
+
+## 65. Tip-hold SAFETY defer when peer wire past tip (2026-08-02)
+
+**§64 soak:** protocol healthy (0 hc-fork begins, 0 WIRE_HOLE, clean exit,
+cores matched). Remaining quality hit: **4× tip-extend ABANDON** on host.
+
+Pattern (every case):
+
+1. Both peers ownership-final → tip-hold at tip T.
+2. Host coalesce tip-extends T→T+N and POSTs the extended tip.
+3. Guest `tip-hold SAFETY CAP 250 — commit through=T` with
+   `remote_tip=T+7` (peer wire already past sealed tip) → OP_COMMIT at T.
+4. Host `tip-extend ABANDON — peer COMMIT … tick=T` → realign.
+
+**Root cause:** SAFETY defer only covered *digital held*. Race-ahead
+(`remote_tip > tip+24`) forces commit when the peer left TipHold entirely.
+A moderate ahead (`remote_tip = tip+7`) meant the initiator was still
+tip-extending — SAFETY should **wait**, not commit.
+
+**Fix:** while `remote_tip > tip` and not yet race-margin, defer
+SAFETY / quiet / thrash / tip_hold_until commits (log
+`SAFETY deferred (peer wire past tip) … wait tip-extend`). Absolute /
+REMOTE-HELD / RACE walls still escape. Coalesce tip-extend FOLLOW then
+owns the edge.
+
+**Re-soak watch:** far fewer `tip-extend ABANDON`; expect
+`SAFETY deferred (peer wire past tip)` then `tip-extend FOLLOW` /
+coalesce instead of guest SAFETY CAP while host extends. ABSOLUTE CAP
+with `remote_tip > tip` should stay rare.
+
+## 66. TipHold tip-extend rereplay defer / coalesce batch (2026-08-02)
+
+**§65 soak:** 0 tip-extend ABANDON; early-match feel still abrasive.
+
+**Confirmed (logs + code):** fight-start ownership around sim **2449–2632**:
+
+1. `ownership final → tip-hold` at tip T.
+2. Immediate `tip-hold coalesce-ahead` edge T+N.
+3. TipHold `need_rereplay` because `mismatch_tick > old_target` (§17) →
+   **snap reload + short resim every 2–4 ticks**.
+4. Episode pin stuck at first load; FPS `54→10`, admit 20–40 ms, replay
+   59–83%, then invent ahead → `pcap FREEZE` → deeper episode.
+
+Root cause in `psx_netplay_rb_tip_extend`: TipHold always scheduled
+`schedule_episode_rereplay` on peek-ahead coalesce, defeating the MotK
+TipHold quiet window (docs: stay TipHold; rereplay only after Live
+invented past tip — and even then one batch, not per edge).
+
+**Fix:** TipHold tip-extend (initiator + FOLLOW) **raises tip + marks
+deferred rereplay** (`g_tip_hold_rereplay_pending` / earliest
+`g_tip_hold_rereplay_from`); stays TipHold; does **not** snap immediately.
+Quiet / thrash / SAFETY / tip_hold_until / span-cap / seat-yield call
+`tip_hold_try_finalize` → one `deferred rereplay flush` then commit.
+Verify/Replay tip-extend still rereplays immediately. FMV TipHold commit
+drops pending without flush.
+
+**Re-soak watch:** `tip-extend rereplay DEFER` / `FOLLOW rereplay DEFER`
+then a single `tip-hold deferred rereplay flush from=… tip=…`; far fewer
+`tip-extend snap applied` per fight-start burst; no 10 fps admit spike
+from per-edge rereplay cascade.
+
+## 67. Yield must not flush deferred extension + audit digest cache (2026-08-02)
+
+**§66 soak:** cascade fixed (DEFER→single flush works, 0 pcap FREEZE),
+but two new host failures, same root:
+
+1. **POST diverge epoch 16 @ tip 888** → realign 864 → hc-fork recovery.
+2. **tip-extend ABANDON epoch 24** (guest COMMIT 887 vs host POST 888).
+
+**Confirmed sequence (both):** host tip-holds with a *deferred* extension
+(from=884→888 / 887→888). Guest sees a **different-seat** edge, yield-commits
+at the matched tip, opens a new epoch. The peer's new-epoch BEGIN hits the
+host's `tip-hold yield FOLLOW new epoch` path, which (§66) called
+`tip_hold_try_finalize` → **flushed the rereplay instead of committing** —
+kept the stale epoch alive → `tie-break WIN … drop` → host POSTs extended
+tip against a peer that already left → diverge/ABANDON.
+
+**Fixes:**
+
+1. **`finalize_tip_hold` commit clamp:** with a deferred extension pending,
+   commit at the POST-matched `from` tip and drop the extension (log
+   `tip-hold commit clamp T→from`). Never commit an unresimmed raised tip —
+   that span still holds invent-predicted state.
+2. **Yield paths commit, don't flush:** new-epoch FOLLOW yield and
+   different-seat yield call `finalize_tip_hold` directly (clamped). The
+   successor episode (load ≤ from) repairs the extension span. FMV TipHold
+   commits also rely on the clamp (no silent pending drop). Wall paths
+   (quiet/thrash/SAFETY/until/span-cap) keep flush-first
+   `tip_hold_try_finalize`.
+3. **Resim audit digest cache (perf):** `log_resim_tick_audit` computed a
+   full core digest (2 MiB RAM CRC) **twice per resim tick** (arm+fin) —
+   the `admit=20–40 ms/f` catchup hitch. arm(N) now reuses the cached
+   fin(N−1) digest; invalidated on every snap apply / rereplay load.
+
+**Audit — remaining gaps (not fixed this pass):**
+
+* `schedule_episode_rereplay` can reload a Live-saved snap **above** the
+  agreed watermark (guest re-follow reloaded live snap 885 with invent
+  state; matched by luck). Rereplay base should be ≤ last verified tip or
+  a snap saved during this episode's resim.
+* POST-DIVERGE `fc` ring is mostly `00000000?` inside episode spans
+  (no FRAME_COMMIT cores during resim/tip-hold) — `FIRST_MISMATCH` cannot
+  localize forks precisely when they matter most.
+* Per-tick `host_save_state` during resim (~0.2–0.6 ms each) is acceptable
+  but stacks on deep spans; audit fin still pays one RAM CRC per tick.
+
+**Re-soak watch:** on peer new-epoch BEGIN during deferred TipHold expect
+`tip-hold commit clamp` then a normal `follow epoch=…` (no
+`tie-break WIN … drop` of the peer BEGIN, no POST diverge at the extended
+tip); catchup windows should show admit well below 20 ms/f.
+
+## 68. Tie-break YIELD after local snap apply (2026-08-02)
+
+**§67 soak hang:** dual begin at tip 846 / mismatch 848 / load 836 —
+
+* Host slot0 → epoch **16**, Guest slot1 → epoch **17**.
+* Both snap-applied and `waiting peer baseline`.
+* Host: `tie-break WIN … drop` ×404 (never follows 17).
+* Guest: `BEGIN stashed epoch=16` instead of YIELD — stay on 17 forever.
+* Both `admit … stall=rb_baseline` until disconnect (~16s).
+
+**Root cause:** tie-break YIELD required
+`handshake && !g_episode_snap_applied`. After the local baseline snap load,
+the loser (higher initiator slot) fell through to **stash** while the
+winner kept dropping the competing BEGIN. Mutual baseline wait = hang.
+
+**Fix:** YIELD for the full SealInputs / AwaitingBaseline handshake even
+when `g_episode_snap_applied` (log `post-snap`). Abort the local episode
+and fall through to follow the winner. WIN path unchanged; log
+rate-limited. Replay/Verify still refuse yield.
+
+**Re-soak watch:** concurrent dual begin → loser logs
+`tie-break YIELD … post-snap` then `follow epoch=<winner>`; no multi-second
+`stall=rb_baseline` storm; WIN drops at most one line per epoch pair.
+
+## 69. Stop double-fire tip-extend / RACE flush sandwich (2026-08-02)
+
+**§68 soak:** no hang; resims felt like they double-fired.
+
+Confirmed sandwich:
+
+1. Ownership episode resim (e.g. `4400..4409`).
+2. `ownership final → tip-hold` → DEFER coalesce.
+3. Guest **RACE CAP** flushed early at tip=4420 while host still deferred
+   toward 4443 → guest mid-Replay then FOLLOW `4420→4443 rereplay=1` →
+   **second snap** @4416.
+4. Host flush then often `ownership chain begin` for leftover frontier
+   (third hitch / skip-snap baseline fork).
+
+**Fixes:**
+
+1. **Replay tip-extend = raise-only:** initiator never sets need_rereplay
+   in Replay; FOLLOW with REREPLAY while already Replay logs
+   `FOLLOW raise-only … no snap` and only extends the tip.
+2. **RACE deferred while rereplay pending:** do not flush on RACE until
+   REMOTE-HELD/ABSOLUTE (log `RACE deferred (rereplay pending)`), giving
+   peer tip-extends time to land so one flush covers the full coalesce.
+3. **Absorb confirmed frontier before flush:** raise tip through
+   `confirmed_frontier` (span-capped, SYNC if initiator) so the deferred
+   rereplay spans the ownership-chain remainder in one pass.
+
+**Re-soak watch:** at most one `tip-extend snap applied` per deferred
+flush; `FOLLOW raise-only` / `RACE deferred (rereplay pending)` /
+`absorb frontier … before flush`; far fewer back-to-back
+`deferred rereplay flush` → `ownership chain begin` pairs.
+
+## 70. Race-pending wall + ownership skip-snap pin (2026-08-02)
+
+**§69 soak:** flush:snap 1:1, 0 POST-DIVERGE / ABANDON / tie-break, but:
+
+1. **ABSOLUTE mega-flush:** `RACE deferred (rereplay pending)` @~350ms
+   waited until `ABSOLUTE CAP 2000` → `absorb frontier 2562→2607` (45-tick
+   catchup, FPS ~11–13). Coalesce was stalled (`coalesce_n=1`); Live invent
+   walked to `sim=2610` while tip sat at 2562.
+2. **Ownership skip-snap baseline fork:** both peers POSTed matching
+   `dig_m=9b2fd78e` / core `342b04f6` at tip 2607, then ownership-chained.
+   Guest wait-FOLLOW Live-invented past tip (pad edges @2610); skip-snap
+   hashed drifted CPU (`fc7641e6`) while host still had POST state. Ring
+   pin at 2607 was tip-hold invent (`359bf24b` on realign) — not the
+   matched tip.
+
+**Fixes:**
+
+1. **`RB_MOTK_TIP_HOLD_RACE_PENDING_WALL_MS` (400):** RACE+deferred only
+   waits this long, then RACE-flush (no ABSOLUTE park).
+2. **Absorb cap `tip + RB_MAX_RESIM_SPAN` (24):** leftover frontier is
+   ownership-chain after POST, not one mega rereplay.
+3. **`pin_baseline_from_cpu(tip)`** in `ownership_chain_next_span` before
+   `session_reset` — capture POST-matched state, refresh ring, drop invent
+   snaps after tip. Keep pin (do not `clear_baseline_pin`).
+4. **Skip-snap restore:** load pin (or refreshed ring), resync, set
+   `sim=tip+1`, then baseline — never hash Live-drifted CPU after
+   wait-FOLLOW.
+
+**Re-soak watch:** RACE deferred logs `cap 400 ms` then `RACE CAP` (not
+`ABSOLUTE CAP 2000` after a long park); absorb spans ≤24; ownership chain
+logs `baseline pinned from CPU` + `skip-snap … pin restore`; no baseline
+core mismatch at the flush tip after matching POST.
+
+## 71. Post-FMV START NACK → promote-no-resim fork (2026-08-02)
+
+**Soak:** Live digests matched through FMV (17/17 before sim=864). After
+settle @867 guest START↓ @880 → host `begin epoch=8 load=880`. Guest
+`follow REFUSED … past frontier=843`. Host `NACK keep-live` + cooldown
+`promote-no-resim` for START → cores diverge from sim=896 forever.
+Lockstep EXTEND streak=0 then MAX-release. Later `hc-fork recovery`
+bisect storm (1808→1792→1776→…) all die on baseline mismatch — felt like
+“resims during loading while hashes should match.” Hashes already forked.
+
+**Root:**
+
+1. **`choose_load` / follow asymmetry:** with `agreed_valid`, interval
+   snaps *above* `agreed_through` were treated as mutual, so initiator
+   opened load=880 while follow hard-NACKs `load > frontier`.
+2. **NACK keep-live** when snap never applied but Live already past the
+   refused load → invent/promote-no-resim forks the press.
+3. **hc-fork** retried every 32 ticks into the bisect ladder.
+
+**Fixes:**
+
+1. **`choose_load`:** interval ticks above `agreed_through` require HC
+   confirm or peer RESOLVED (same hard cap as follow).
+2. **NACK realign** when `live_sim > load` even if snap was never applied
+   (`NACK realign (live past refused load)`).
+3. **hc-fork backoff 256 ticks** while `baseline_fork_cap > 0`.
+4. **Lockstep MAX unmatched:** longer dense/`promote_sweep` window when
+   RELEASE fires with streak below confirm.
+
+**Re-soak watch:** post-FMV START opens load ≤ agreed/hc frontier (no
+`past frontier=843` NACK on an interval tip); if NACK still happens with
+Live ahead, expect realign not keep-live; no rapid `hc-fork recovery`
+ladder of baseline mismatches during loading; live digs stay matched
+through title/menu when pads are idle.
+
+## 72. Ownership skip-snap must defer resume (2026-08-02)
+
+**§70/§71 soak crash:** guest (slot1) hard-exited right after ownership
+chain skip-snap:
+
+* `skip-snap load=1976 pc=0x8006cda0` then
+  `replay … resume_pending=0` → `execution completed, PC=0x00000000`.
+* Host saw `netplay_peer_disconnect` mid-replay @1977.
+
+**Root:** §70 pin-restore cleared `g_pending_resume_valid`. Normal snap
+apply arms resume-deferred + `flush_resume` longjmp into Replay; skip-snap
+replaced CPU state mid–wait-FOLLOW and continued the Live native stack,
+which returned PC=0.
+
+**Fix:** after pin/ring restore, set `g_pending_resume_pc` /
+`g_pending_resume_valid=1` (same as snap apply). `flush_resume` still
+waits for Replay phase.
+
+**Re-soak watch:** ownership skip-snap logs `resume deferred`; next line
+in Replay is `flush_resume pc=…` (not `execution completed`); no peer
+disconnect at chain begin.
+
+## 73. Ownership MIN_AHEAD tip-hold hang bisect (2026-08-02)
+
+**§72 soak felt “multiple hangs”** near endgame (~tip 4146→4296) with
+matched digests (0 POST-DIVERGE / ABANDON / WIRE_HOLE / PC=0). Hitch was
+tip-hold park + deferred flush, not desync.
+
+**Code+log bisect (rb-diag1 host / rb-diag2 guest):**
+
+| Gate | Observation |
+|------|-------------|
+| Entry | **0** `ownership chain` lines all session; **every** POST → `ownership final … → tip-hold` |
+| Ahead | Host endgame finals: ahead=5×8, ahead=4×1; guest: ahead=5×11. **Never** ahead≥9 |
+| Floor | `RB_OWNERSHIP_CHAIN_MIN_AHEAD=8` requires `frontier > tip+8` → tip+4/+5 **always** tip-hold |
+| Counterfactual | `MIN_AHEAD=4` would chain **8/9** host and **11/11** guest endgame finals |
+| Exit | Host: tip-hold → SAFETY → `REMOTE-HELD CAP 500` → absorb + `deferred rereplay flush` spans 4–21; guest often `ABSOLUTE CAP 2000` while `held_local=1` |
+| Sticky held | `tip_hold_held_split` uses **sealed tip** buttons; §66 DEFER tip-extends onto press rows → `held_remote=1 pending=0` until wall |
+
+Causal chain for tip=4199: POST tip+4 → tip-hold → DEFER coalesce tip→4208 → REMOTE-HELD → absorb to 4216 → flush from=4199 (17 ticks) → POST → tip-hold again.
+
+REMOTE-HELD/ABSOLUTE walls are working as designed **after** wrongly entering tip-hold on contiguous confirmed work. Shortening those walls without fixing entry would only trim parks; the structural bug is the §49 floor.
+
+**Fix:** default `RB_OWNERSHIP_CHAIN_MIN_AHEAD` **8→4** so observed tip+5 frontiers Replay-own (skip-snap SPAN) instead of tip-hold. tip+4 still tip-holds. Env override unchanged. Do **not** patch REMOTE-HELD ms in this step.
+
+**Re-soak watch:** endgame logs `ownership chain tip=N frontier=N+5` (not `ownership final → tip-hold` on every POST); far fewer `REMOTE-HELD CAP` / `deferred rereplay flush` mega-spans; digests stay matched; no return of §49 `frontier=N+1..N+3` epoch storms (raise floor via env if WAN regenerates them).
+
+## 74. Chain-Replay hold-last hitch + stale-snap diagnostic (2026-08-02)
+
+**§73 soak:** tip-hold loop gone (0 `ownership final`, 20 chains, 0
+REMOTE-HELD storms), but the user still felt "stalls then skips ahead"
+during fight clusters. Bisect:
+
+1. **Hitch = blanket hold-last during chain Replay.** Ownership chains fire
+   every ~11–15 ticks in fights; each episode's target extends per wire
+   arrival (`ownership extend sim=N target T→T+1`), so Replay **treadmills
+   at wire pace** and `confirmed_remaining` stays ≤ 24 forever. In
+   `main.cpp`, `netplay_replay_catchup_should_live_present` returns 0 for
+   remaining ≤ 24 → hold-last for the whole episode → 135–212 ms frozen
+   (`present_gap max` matches exactly), then the display snaps ~12 frames
+   forward. replay% 33–76 during clusters; idle stretches clean 60 fps.
+2. **Endgame diverge @3167 = stale interval snap.** Guest fin 3166 =
+   `089b276e` (== host arm 3167), then FOLLOW rereplay loaded snap
+   tick=3166 → re-arm 3167 = `f92756fb` ≠ the state it *just computed*.
+   The loaded snap forked the guest → POST diverge `497462cd` vs
+   `0cdb378f` + host resim-diverge abort. Matches the open audit item
+   (Live/invent snaps above watermark in `schedule_episode_rereplay`).
+
+**Fixes:**
+
+1. **§74 display watermark (main.cpp):** track the highest sim ever
+   presented. During resim, frames **above** the watermark are new forward
+   progress (treadmill chain) → present live every vblank; frames at/below
+   keep §63 hold-last (edge-input re-show / DUP_SIO stays impossible).
+   Watermark raised only on real presents; reset at netplay session start.
+2. **SNAP-STALE diagnostic (psx_netplay_rb.c, log-only):** when a snap
+   load targets the tick the audit-fin cache just recorded, compare the
+   loaded state's core digest against the just-simulated digest; log
+   `rb SNAP-STALE tick=… snap_core=… fin_core=…` on mismatch. This names
+   the fork source at the moment it happens instead of 12 ticks later at
+   POST. Fix for the snap-provenance bug itself is deferred until a soak
+   captures SNAP-STALE with context (which snap-record path wrote it).
+
+**Re-soak watch:** fight clusters keep `present_gap max` ≤ ~35 ms (no
+135–212 ms holds); no DUP_SIO / re-shown menu edges after aborts (frames
+below watermark still held); any episode diverge is preceded by a
+`SNAP-STALE` line identifying the stale snap tick.
+
+## 75. Tip-extend SNAP-STALE — keep-live + auth snap floor (2026-08-02)
+
+**§74 soak:** SNAP-STALE fired and named the fork. Every mid-fight abort
+and the final DESYNC were preceded by `tip-extend rereplay load=T` where
+the ring snap at T ≠ the just-finished sealed fin core at T:
+
+| Guest SNAP-STALE | Follow-on |
+|------------------|-----------|
+| 1953 | host `ABORT resim core diverge sim=1954` |
+| 2034 | host `ABORT … sim=2035` |
+| 4833 / 4843 / 4860 | tip-hold flush → baseline `b1be9e12` vs `d72cde06` → **DESYNC @4857** |
+
+Seals matched; the ring held a Live/invent snap that tip-extend reloaded
+over correct sealed CPU state (or after Live re-poisoned a Replay slot).
+
+**Fixes:**
+
+1. **`g_auth_snap_through`:** raised when Replay successfully saves a snap
+   (and on CPU pin). Live `request_snap` refuses `tick ≤ auth` so invent
+   cannot overwrite sealed slots.
+2. **`tip_extend_keep_live`:** if tip-extend rereplay asks for tick T and
+   the live CPU still matches sealed fin at T (`sim` is T or T+1), refresh
+   the ring from live and arm T+1 — log `tip-extend KEEP-LIVE` — never
+   reload the ring.
+3. **SNAP-STALE fallback:** if a tip-extend load still disagrees with fin,
+   drop the poison slot and reload the episode pin (keep tip-extend arm);
+   abort only when no fallback exists.
+
+**Re-soak watch:** `tip-extend KEEP-LIVE` on FOLLOW extends; **0**
+`SNAP-STALE` (or only with immediate `fallback load=`); no resim-core
+ABORT / DESYNC from tip-extend poison; digests stay matched through fight
+clusters.
+
+## 76. Verify raise-only + tip-hold entry pin (2026-08-02)
+
+**§75 soak:** DESYNC gone, but stalls remained. KEEP-LIVE never fired (0).
+Every hitch was `SNAP-STALE → fallback episode pin` → 15–30 tick resim
+(fps 5–16, admit 40–160 ms). Root causes (not KEEP-LIVE):
+
+1. **Verify always `need_rereplay=1`** — tip-extend at the POST tip reloaded
+   the prior tip (often invent-poisoned) instead of continuing into the new
+   span. FOLLOW mirrored that. Replay already raise-only (§69); Verify did not.
+2. **Tip-hold flush reloaded a poison ring slot at `from`** — tip-hold entry
+   never froze the POST tip into pin/ring, so deferred flush fell through to
+   SNAP-STALE → episode-pin fallback (deep hitch).
+
+**Fixes:**
+
+1. **Verify tip-extend = raise-only** (initiator + FOLLOW): leave Verify into
+   Replay for `old_tip+1..new_tip` with no snap reload. Log
+   `Verify→Replay raise-only` / `FOLLOW Verify→Replay`. Wire REREPLAY cleared
+   for Verify/Replay FOLLOW.
+2. **`pin_baseline_from_cpu(tip)` on tip-hold entry** — sealed POST tip into
+   pin+ring+auth before Live invent walks.
+3. **Tip-hold flush prefers that pin** when `from == pin_tick`; tip-extend
+   apply loads pin buffer (not invent ring) for that tick. Resim span is the
+   coalesce window only (~6–8 ticks), not episode-pin depth.
+
+KEEP-LIVE remains as a belt-and-suspenders path; it is not the stall cure.
+
+**Re-soak watch:** `Verify→Replay raise-only` / `tip-hold flush load pin=`;
+far fewer `SNAP-STALE` / `fallback load=`; tip-hold flush hitch ≤ coalesce
+span; fight clusters stay near 60 fps without pin-depth freezes.
+
+## 77. Verify-time tip pin + SIO edge seed after snap (2026-08-02)
+
+**§76 soak:** tip-hold flush used the pin (`flush load pin=` ×3) but every
+pin was still SNAP-STALE → episode-pin fallback → POST-DIVERGE. Cross↓
+doublets without ↑ all sat on skip-snap / flush_resume (mushy P1 dash).
+
+**Bisect — pin≠fin:**
+
+```
+audit fin sim=2257 dig=f4d9bd26
+post sent / verify wait peer POST …
+baseline pinned from CPU tick=2257   ← AFTER invent walk
+tip-hold through=2257 invent_slack=2
+… Live sim→2263 …
+flush load pin=2257 → SNAP-STALE snap≠fin → fallback 2236
+```
+
+`pin_baseline_from_cpu` on tip-hold *entry* runs after Verify wait, when
+Live has already invented past the tip (`sim=2258` on the next line). That
+overwrote the good finish_frame ring snap with invent state labeled as the
+tip. Flush then correctly detected pin≠audit-fin and fell back.
+
+**Bisect — Cross double↓:** every host slot0 Cross↓ pair without ↑ had an
+ownership skip-snap / snap apply between them. `psx_netplay_on_rb_snap_loaded`
+reset edge trackers to `0xFFFF` (all released); first republish of held Cross
+logged as a fresh press.
+
+**Fixes:**
+
+1. **`pin_baseline_from_cpu(done)` at `enter_verify_at_tip`** — freeze tip
+   while CPU still matches sealed fin (before peer-POST wait / invent).
+2. **Tip-hold entry + ownership chain keep verify pin** — do not re-pin from
+   drifted Live CPU; log `tip-hold keep verify pin` /
+   `ownership chain keep verify pin`.
+3. **Tip-extend load of verify pin: trust pin** — no episode-pin SNAP-STALE
+   fallback when the intentional sealed pin was the load source.
+4. **`psx_netplay_on_rb_snap_loaded`:** seed sio/local/invent edge `prev` from
+   `sio_get_pad_buttons_slot` (restored state), not `0xFFFF`.
+   **Superseded by §79** for the local tip pipeline: prefer live/staged
+   continuity + merge held bits into SIO (SIO-only seed still false-edged
+   Start across skip-snap when snap SIO was idle).
+
+**Re-soak watch:** `baseline pinned` / verify pin at POST tip *before*
+`tip-hold through`; `tip-hold keep verify pin`; flush pin without
+`fallback load=`; no Cross↓ doublet across skip-snap; tip-hold hitch ≈
+coalesce span only.
+
+## 78. Tip-hold flush = matched-prefix resim (no pin reload) (2026-08-02)
+
+**§77 soak:** verify-time pin + keep-verify-pin landed, but the one
+`trust verify pin` flush **forked immediately**. Epoch 200: both peers
+fin-matched tip 3078 (`7f4f24a4`); host flushed `load pin=3078` →
+SNAP-STALE `snap=fd199e8c` → trusted it; guest (§76 raise-only FOLLOW)
+never reloaded. Digests fork from 3082, POST diverge at 3093, then the
+recovery cascade (baseline mismatch → fork cap → NACK → 3 realigns,
+lead max 65, slack max 1.6 s).
+
+**Case law from three soaks:**
+
+- Reloads are safe only when **both** peers load digest-identical state
+  (episode baselines, ownership skip-snap — both verified).
+- **One-sided reload forks**: `load(save(S))` re-derives device timing
+  (cycles/IRQ/CD deadlines resync) ≠ live continuation of S. §76 made
+  Verify/Replay FOLLOW raise-only, so every initiator-side flush reload
+  is now asymmetric by construction.
+- The coalesce DEFER already names the first divergent row
+  (`mismatch=3084`): Live's hold-last invent **matched the seals** for
+  3079..3083 — the host was still on the verified timeline through 3083
+  and never needed state at 3078.
+
+**Fixes:**
+
+1. **`g_tip_hold_rereplay_mismatch`** — earliest coalesce mismatch across
+   deferred extends (initiator + FOLLOW mirror, min-tracked).
+2. **Flush resims from the matched prefix**: `schedule_episode_rereplay
+   (first_bad)` → walk-down lands on the §58 dense live snap at
+   `first_bad-1` (host's own live timeline == sealed timeline there).
+   No pin reload, no asymmetric state acquisition. Log:
+   `flush from=… first_bad=… tip=…`.
+3. **Late-wire guard**: before narrowing, verify every sealed remote row
+   in `(from, first_bad)` equals the sealed row at `from` (hold-last
+   assumption); lower `first_bad` on any difference/invalid row.
+4. **Trust-verify-pin reverted**: SNAP-STALE on a tip-extend load always
+   falls back to the peer-verified episode pin (logs `src=pin|ring`).
+5. **PIN-SKEW diag**: `pin_baseline_from_cpu` digests the pin at save
+   (canonical resume pc). `PIN-SKEW` when it differs from the audit fin
+   at the same tick — separates pc-substitution digest drift from real
+   load infidelity for the next soak.
+
+**Re-soak watch:** flush logs `first_bad` ≈ coalesce edge; loads land at
+`first_bad-1` (dense live snap), not the tip pin; no SNAP-STALE on flush
+loads; POST after flush matches (no epoch-200-style fork); PIN-SKEW
+presence/absence names the digest-delta layer.
+
+## 79. TipHold dense snaps survive until flush (2026-08-02)
+
+**§78 soak:** `first_bad` was correct (`from=3216 first_bad=3224`) but
+every flush still loaded the tip pin:
+
+```
+prefer=3223 → load=3216 (pin) → SNAP-STALE → fallback episode pin
+```
+
+KEEP-LIVE cannot help: at flush `sim≈3232`, audit stuck at tip, Live has
+walked past `prefer` — all three KEEP-LIVE gates fail (0 KEEP-LIVE in soak).
+
+**Cause:** §58 dense tip window defaults to **8** ticks. TipHold Live
+invent/wire-walks 16–30 ticks before REMOTE-HELD flush; `tip_dense_push`
+evicts `first_bad-1` before the flush can land there.
+
+**Fixes:**
+
+1. **While TipHold:** save **every** Live tick through the dense path
+   (not only non-interval).
+2. **`tip_dense_push` TipHold retention:** raise effective window to
+   `NP_DENSE_SNAP_MAX` (24) and **never drop** snaps with `tick > sealed
+   tip` (`g_tip_hold_rereplay_from` when deferred, else `g_agreed_through`).
+   Matched-prefix candidates survive until flush.
+3. **Schedule log:** `has_prefer=0|1` so the next soak names landing.
+
+**Re-soak watch:** `rereplay load=N prefer=N has_prefer=1` with
+`N=first_bad-1`; no `src=pin` SNAP-STALE on tip-hold flush; resim span ≈
+coalesce suffix only; no resim-core diverge from deep episode fallback.
+
+## 80. Late-wire rereplay + tip-hold flush symmetry (2026-08-02)
+
+**§79 soak:** dense prefer landing worked (`load=4022 prefer=4022
+has_prefer=1`), then POST-DIVERGE / DESYNC.
+
+**Bisect:**
+
+1. **Late wire below tip, raise-only ignore (root at 4012).** Host began
+   epoch 40 `load=4000 target=4012`, armed 4012 with `s1=ffff`, finished
+   `fin=fdd66fda`. At sim=4013 wire arrived `pub=ffff wire=fdff` →
+   `tip_extend` / ownership raise-only (§69/§76) — seals updated to fdff
+   but CPU never resimmed 4012. Guest later full-followed `target=4023`
+   with sealed fdff → `fin@4012=a7144f72`. Matched tip 4014 was built on
+   the wrong pad; tip-hold flush then amplified the fork.
+2. **Tip-hold flush local-only.** Initiator flushed invent-snap rereplay;
+   FOLLOW Verify/Replay forced `need_rereplay=0` and logged
+   `FOLLOW raise-only` / `Verify→Replay (no snap)`. FIRST_MISMATCH@4023.
+
+**Fixes:**
+
+1. **Replay/Verify tip-extend:** `need_rereplay=1` when the mismatch tick
+   is already inside the simulated tip (`mismatch < sim` in Replay;
+   `mismatch <= old_target` in Verify). Raise-only remains for pure tip
+   raises past the tip. Reload prefer = `mismatch` (arm at the bad tick).
+2. **Same-target REREPLAY SYNC** so FOLLOW hears late-wire repairs when
+   the tip does not rise.
+3. **FOLLOW honors wire REREPLAY** in Verify/Replay (and same-target
+   tip-extend absorb). `mismatch` on the wire is `prefer_plus` for
+   `schedule_episode_rereplay`.
+4. **Tip-hold park Live** while deferred rereplay is pending
+   (`invent_slack=0` + admit stall `tip_hold_deferred` when `sim > tip`).
+5. **Tip-hold flush notifies FOLLOW** with REREPLAY SYNC; when Live is
+   still at the POST tip (`parked=1`) prefer_plus = `from+1` (KEEP-LIVE),
+   else matched-prefix `first_bad` as §78/§79.
+
+**Re-soak watch:** `tip-extend same-target rereplay` / `FOLLOW rereplay`
+after `wire rewind-request` below tip; no arm with seals that later
+disagree with wire without a rereplay; tip-hold flush logs `parked=1`
+and FOLLOW `flush-rereplay` / `FOLLOW rereplay`; no DESYNC after tip-hold
+coalesce.
+
+## 81. Tip-hold hitch: DEFER-PEER flush + no double REREPLAY (2026-08-02)
+
+**§80 soak:** correctness held (no DESYNC/POST-DIVERGE) but a visible hitch
+near the end: FPS **11.2**, `admit≈73 ms` around sim 5012–5029.
+
+**Bisect:**
+
+1. **ABSOLUTE 2000 ms wall.** Tip-hold deferred at 5012, coalesce to 5023,
+   SAFETY deferred on `peer_past_tip` while `remote_tip=5029` (only +6 —
+   never hit RACE_MARGIN 24). Sat until ABSOLUTE CAP, then absorb+flush.
+2. **Double FOLLOW rereplay.** `absorb_frontier` sent REREPLAY with
+   episode-original mismatch, then flush sent prefer_plus=first_bad —
+   guest scheduled prefer 4990 then 5019 (mid-span snap thrash).
+3. **`parked=0` always.** §80 parked at *raised tip*, so Live walked with
+   coalesce; flush invent-snap path every time.
+
+**Fixes:**
+
+1. **DEFER-PEER:** once `g_tip_hold_rereplay_pending && peer_past_tip`,
+   only wait `RACE_PENDING_WALL` (400 ms) for more coalesce, then
+   `DEFER-PEER CAP` flush — do not sit to ABSOLUTE 2000.
+2. **Absorb sends no SYNC** — flush owns the single REREPLAY notify with
+   correct prefer_plus / tip.
+3. **FOLLOW same-target REREPLAY SKIP** when already tip-extend-repairing
+   the same tip (both-peer CAP / residual dupes).
+4. **Park Live at `from`** (`psx_netplay_rb_tip_hold_rereplay_from`), not
+   the raised tip; flush treats tip audit as parked for KEEP-LIVE.
+
+**Re-soak watch:** `DEFER-PEER CAP 400` instead of `ABSOLUTE CAP 2000` on
+deferred tip-holds with peer ahead; no back-to-back FOLLOW prefer_plus
+churn; flush `parked=1` + KEEP-LIVE / prefer=from; no 11 fps admit cliffs
+from 2 s tip-hold walls.
+
+## 79. Pad edge continuity across Replay/skip-snap (2026-08-02)
+
+**Invariant:** Replay, skip-snap, and ownership transitions must preserve
+logical button state. They may never synthesize a fresh edge for a button
+that remained continuously held across the transition. Every tip/publish
+Start↓ should have a corresponding staged Start↓ (`tip_without_stage` is
+a contract break).
+
+**Soak (hold Start, no release → double pause):** mid-Replay
+`ownership continue skip-snap` at sim 6082 between held samples. SDL and
+debounced Start stayed down (`cap/deb=1`), but §77 seeded edge `prev` from
+**restored SIO** (often idle under D / pre-press snap). Tip-produce then
+logged `START↓` + `tip_without_stage`; stage/local logged a second
+`START↓` at 6083 while the finger never moved.
+
+**§79 first fix (live-prefer):** Continuity = live → staged → SIO; merge
+SIO; seed sticky/edges. Killed `tip_without_stage`. Residual: skip-snap
+with `live=ff6f` (SDL chatter hole) preferred raw live → cleared sticky →
+next SDL↓ was a fresh edge.
+
+**Fix (continuity, no debounce rewrite):**
+
+1. Sample = `staged` if valid, else live, else SIO.
+2. Continuity = sample (no sticky rewrite).
+3. Merge into local SIO: `sio &= continuity` (active-low).
+4. Seed edge trackers from continuity; keep Start gesture "down" if held.
+
+**Instrument:** skip-snap logs `sdl= sample= seed= sio= merged=`.
+
+**Re-soak:** **no** `tip_without_stage`. Taunt double-pause is MotK game logic.
+
+## 82. Tip-hold bare peer-ahead flush wall (2026-08-02)
+
+**Symptom:** TipHold sat on ABSOLUTE 2000 ms when the remote was only a few
+ticks past tip (under RACE_MARGIN), hitching FPS.
+
+**Fix:** bare `peer_past_tip` (no deferred rereplay) flushes after
+`RACE_PENDING_WALL` (400 ms) — `PEER-AHEAD CAP`. Far-ahead Absolute still
+clamps (`DEFER-PEER` / absurd lead).
+
+## 83. Fork-cap realign + DESYNC streak + absurd invent catch-up (2026-08-02)
+
+**A:** Raise `g_bl_fork_cap` before `pick_realign_tip`; never realign to a tip
+≥ fork_cap; fallback snap below cap or keep-live; peer-abort honor clamps
+below fork_cap.
+
+**B:** Fork DESYNC streak keys on `fork_cap`; peer-abort does **not** clear
+the streak while fork_cap is set.
+
+**C:** `np_sched_arm_absurd_invent_catchup()` — brief invent through cushion
+rebuild when lead is absurd after a baseline-abort Live realign.
+
+## 84. Post-FMV follow-NACK asymmetric realign (2026-08-03)
+
+**Symptom (Force TURN soak):** live digs first diverge ~sim 768 after FMV
+exit; late "long rewind" at ~3056 is discovery of that early fork.
+
+**Bisect:**
+
+1. Post-FMV host `begin` load past guest frontier → `follow REFUSED` +
+   NACK (`frontier` < load).
+2. Host NACK path realigned Live locally but called `abort_episode` **without**
+   staging `g_abort_wire_realign_tick` → OP_ABORT carried realign=0.
+3. Guest never joined the refused epoch → idle ABORT only honored
+   post-commit; `honor_peer_abort_realign(0)` no-op. Guest invents while
+   host rewound → permanent fork. Cooldown also made late wire
+   `promote-no-resim`.
+
+**Fixes:**
+
+1. **NACK ABORT wire tip:** stage `RNET_RB_ABORT_CLASS_REALIGN` +
+   demote/realign tick **before** `abort_episode` (even on local keep-live
+   so FOLLOW can converge).
+2. **Idle ABORT honor:** always try `honor_peer_abort_realign` when the wire
+   carries a tip (not only `g_last_commit_epoch`).
+3. **Live-ahead honor:** if Live invent is past the wire tip and we never
+   applied the episode snap, still `schedule_live_realign` (+ absurd
+   catch-up when the gap is large).
+4. **Cooldown:** NACK with a wire tip uses REALIGN class (0 ticks) instead of
+   always arming `RB_ABORT_COOLDOWN_TICKS` promote-no-resim poison.
+
+**Re-soak watch:** after `follow REFUSED` / NACK, both sides log mutual
+realign (`NACK realign` / `peer abort realign live-ahead`); no solo host
+rewind + guest invent; live digs stay matched past FMV; no early
+`promote-no-resim reason=cooldown` storm on the NACK window.
+
+## 85. Ownership chain Replay treadmill (Force-TURN audio mute) (2026-08-03)
+
+**Symptom:** Mid-match audio cut out (worse under OBS). Host/guest logs showed
+`replay=80–100%` for ~800 sim ticks with continuous `ownership extend` /
+`ownership chain tip` / `tip-extend`.
+
+**Bisect (rb-diag1/2):**
+
+1. Chain tips advanced **+23** (one SPAN) every POST: 5799→5822→…→6580
+   (**35 hops**, **781 ticks**). Frontier gap stayed **tip+5..+8** the whole time
+   (Force TURN `D≈6–7` steady-state pipeline).
+2. `RB_OWNERSHIP_CHAIN_MIN_AHEAD=4` (§73) means `frontier > tip+4` → **always
+   chain** while the peer stays Live. §47 never "exhausts" confirmed work
+   because the peer keeps confirming during our Replay.
+3. Mid-episode `ownership_step` tip-extended at **wire pace** (§74 already
+   named this) so each SPAN filled to 24 even when the begin target was only
+   tip+6 — continuous resim → host audio pump skipped → silence.
+
+**Invariant refinement:** Replay owns the contiguous confirmed backlog that
+existed at **episode begin** (frozen catch-up cap), for a **bounded** number of
+chain hops / tip advance. Wire that arrives during Replay is TipHold/Live's
+job after commit — not an unbounded Replay chase.
+
+**Fixes:**
+
+1. **`g_replay_catchup_cap`:** set to begin/follow `target`; `ownership_step`
+   must not tip-extend past it.
+2. **Chain budget:** default max **2 hops** / **48 tip ticks** from the first
+   chain of a recovery (`PSX_RB_CHAIN_MAX_HOPS` / `PSX_RB_CHAIN_MAX_TICKS`).
+   Over budget → `ownership chain BUDGET … → tip-hold` (both seats).
+3. Clear budget on tip-hold / abort.
+
+**Re-soak watch:** no 30+ hop chain runs; `ownership chain BUDGET` when the
+peer keeps confirming; `ownership extend` rare inside an episode; `replay%`
+spikes short (tens of ticks, not ~800); audio should survive OBS capture.
+
+## 86. BUDGET→Live + min_ahead(D) + chain suppress (2026-08-03)
+
+**§85 soak:** hop cap stopped the ~800-tick mute, but fights still hitch:
+`BUDGET → tip-hold invent_slack` → coalesce-ahead yield → guest begin →
+host `tip-hold yield FOLLOW` → short Replay → chain again (~every 12 tips).
+
+**Invariant:** TipHold only when the next tick is unavailable. BUDGET with
+`frontier > tip` must not TipHold-park confirmed work.
+
+**Fixes:**
+
+- **A:** `ownership chain BUDGET → Live` via immediate enter+finalize (no
+  invent_slack park). Log: `ownership Live … (chain budget) — no TipHold`.
+- **B:** `min_ahead = max(4, D)` (env `PSX_RB_CHAIN_MIN_AHEAD` overrides).
+  Force-TURN delay cushion is not catch-up backlog.
+- **C:** after BUDGET Live, suppress re-chain for **+24 tips / 400 ms**
+  (`PSX_RB_CHAIN_SUPPRESS_TICKS` / `_MS`). Hits log
+  `ownership chain SUPPRESS … → Live` for residual hitch diagnosis.
+
+**Re-soak watch:** `BUDGET → Live` not `→ tip-hold`; few/no
+`tip-hold yield FOLLOW` right after budget; `SUPPRESS` lines name leftover
+hitches; fight `replay%` short; digests matched.
+
+## 87. Ownership tip-hold hang (zombie epoch follow) (2026-08-03)
+
+**§86 soak:** with Force TURN `D≈8–9`, `min_ahead=D` made every POST
+`frontier=tip+D` land on **tip-hold** (never BUDGET/SUPPRESS/Live). Tip-hold
+invent_slack thrash returned, then both seats hung until lobby:
+
+1. Guest tip-hold commit → begin epoch=17; host still tip-hold epoch=8,
+   tip-extends then `yield FOLLOW 17`.
+2. Guest **tie-break YIELD 17→8** → `follow epoch=8 load=1808` (already
+   committed tip-hold epoch; load behind agreed tip=1852) → stuck
+   `rb_baseline`.
+3. Host aborts 17, Live invent ahead → `pcap_freeze lead=-13` until peer
+   disconnect.
+
+**Invariant:** never reopen a committed tip-hold/ownership epoch; TipHold
+only when `frontier <= tip` (next tick unavailable). Delay cushion
+(`tip < frontier <= tip+min_ahead`) is Live, not invent park.
+
+**Fixes:**
+
+1. **Zombie follow refuse:** idle `begin_follower` rejects
+   `epoch == g_last_commit_epoch` and `load < g_agreed_through` (log
+   `already committed (zombie epoch)` / `behind agreed tip`).
+2. **ownership final:** `frontier > tip` → Live (`final confirmed ahead`)
+   + suppress; tip-hold only when `frontier <= tip`.
+3. **B soften:** `min_ahead = max(4, D-1)` so Force-TURN `frontier≈tip+D`
+   still chains once instead of tip-hold every POST.
+
+**Re-soak watch:** no `follow` of `g_last_commit_epoch` after tip-hold
+commit; `ownership … → Live (confirmed ahead)` when frontier>tip below
+chain threshold; `min_ahead` logs as D-1; no mutual `rb_baseline` /
+`pcap_freeze` hang.
+
+## 88. Netplay CPU-authoritative VRAM + OpenGL present (2026-08-03)
+
+**Motivation:** forcing a full software *window* when the user picked OpenGL
+was correct for determinism (FBO-auth + `glReadPixels` forked snaps) but a
+weak product compromise. Digests/snaps already CRC **CPU** VRAM; the missing
+piece was keeping GL for display without making the FBO guest authority.
+
+**Design (Option A):**
+
+- **Sim:** `gr_set_backend(SOFTWARE)` under netplay — all GP0 draws / fills /
+  copies / GPUREAD hit CPU VRAM (same as today’s forced-SW path).
+- **Present:** if an OpenGL context exists, leave it up with
+  `g_gl_fbo_present=0` so Live frames CPU-scanout → `gl_renderer_present`
+  (same path as 24-bit FMV / `PSX_GL_FORCE_CPU_PRESENT`).
+- **Never** `glReadPixels` while `psx_netplay_active()` (`ensure_cpu` early-out).
+- Vulkan: still software window until the same present-only path exists.
+- Call `psx_frontend_netplay_force_sw_gpu()` **before** `g_np.active=1` so a
+  one-shot FBO→CPU sync can still run if a session started on FBO-auth GL.
+
+**Logs to expect:**
+
+- `netplay — OpenGL present + software raster (CPU-authoritative VRAM; no FBO readback)`
+- `netplay CPU-authoritative VRAM + OpenGL present (no FBO readback)`
+- Not: `netplay forced software GPU (GL/VK VRAM readback forks peers)` with
+  GL torn down.
+
+**Re-soak watch:** OpenGL selected in launcher → GL window under netplay;
+matched `av=` / pin zlib across peers; no black first match; rematch keeps
+GL present after lobby soft-return.
+
+## 89. Netplay sim scale 1 — decouple SSAA from CPU-auth (2026-08-03)
+
+**Motivation:** hybrid CPU-auth + GL present still paid full SW supersampling
+cost when settings said 4× (`gr_set_scale(4)` + `gr_render_display_hires`).
+That is fill-rate CPU work, not GPU SSAA — mid-fight ~guest 20ms even with
+`replay≈0%`.
+
+**Design:**
+
+| Layer | Netplay CPU-auth | Offline |
+|--------|------------------|---------|
+| Sim / snaps / `av=` | `gr_set_scale(1)` always | `g_video_scale` SSAA |
+| Present | native scanout → GL/SDL upscale + filter | hires mirror when scale&gt;1 |
+| Settings | `g_video_scale` kept; not synced from `gr_scale()` | unchanged |
+
+- `s_netplay_sim_native_scale` + `netplay_cpu_auth_gpu()` gate present/tex sizing.
+- `psx_frontend_netplay_force_sw_gpu` / netplay startup force scale 1.
+- Launcher supersampling label notes "offline"; tooltip explains netplay 1× sim.
+- True ordered-grid SSAA remains offline-only (would need SW×N or FBO-auth).
+
+**Logs to expect:**
+
+- `netplay sim supersampling clamped to 1x (settings Nx kept for offline)`
+- `… (no FBO readback; sim scale 1)` / `… (CPU-authoritative VRAM; sim scale 1)`
+
+## 90. OpenGL hold-last drawable V-flip (2026-08-03)
+
+**Symptom:** first hold-last frame during Replay (menu resim) upside-down;
+next live CPU→GL present corrects orientation.
+
+**Cause:** `hold_capture_drawable` copies the already-presented backbuffer
+(screen-oriented). `gl_renderer_present_hold_last` redrew it through
+`present_target_quad` / `PRESENT_VS`, which always V-flips for PSX CPU/FBO
+bands → double flip.
+
+**Fix:** `present_target_quad(..., v_flip)`. `HOLD_DRAWABLE` passes
+`v_flip=0` (swap UV v ends so the shader flip cancels). `HOLD_NATIVE` /
+VRAM / wide keep `v_flip=1`.
+
+## 91. Tip-extend vs peer ownership Live → verify / pcap hang (2026-08-03)
+
+**Soak:** mid-match ownership POST @T; guest `ownership Live tip=T` (frontier
+in delay cushion) while host TipHold tip-extends `T→T+N`, then
+`verify wait peer POST` @T+N → timeout; guest invents into `pcap_freeze`;
+later `baseline ext` (SPU/aux) abort cascade.
+
+**Root:** `ownership_on_post_match` is local (frontier / min_ahead / hops).
+Peer Live emits `OP_COMMIT` @T; host abandon only ran in **Verify** and
+required an **exact** snap at `g_tip_extend_from_tick` — SNAP-STALE often
+drops that pin — so COMMIT was ignored and host sat 4s in verify.
+
+**Fix (`maybe_abandon_tip_extend` + tip-extend refuse):**
+
+1. Honor peer COMMIT in **TipHold / Replay / Verify** (TipHold → finalize
+   clamp; Verify/Replay → abort+realign).
+2. If exact snap missing, walk to nearest ring snap ≤ commit (or pin).
+3. Refuse further `tip_extend` when peer already COMMIT'd this epoch at
+   tick ≤ sealed tip; poll TipHold calls abandon before coalesce walls.
+
+**Re-soak watch:** `tip-extend ABANDON (TipHold)` / `tip-extend REFUSED …
+peer COMMIT` instead of `verify timeout` + peer `pcap_freeze`; no dual
+`lead=±12` park after ownership Live on one seat.
+
+## 92. Dual-raster OpenGL present quality (2026-08-03)
+
+**Motivation:** §88/§89 kept OpenGL for present but uploaded 1× CPU scanout
+and stretched — settings 4× SSAA never reached the hr FBO under netplay
+(`GL GPU pipeline ready (internal scale 1x)` while settings said 4×).
+
+**Design (dual raster):**
+
+```
+GP0 → Software @ 1× → CPU VRAM → snaps / av= / GPUREAD (authority)
+   └→ OpenGL @ N×   → hr FBO   → present_vram (cosmetics only)
+         never glReadPixels / ensure_cpu under dual or netplay
+```
+
+| Layer | Dual-raster (OpenGL) | SW-only netplay |
+|--------|----------------------|-----------------|
+| Authority | SW writes every GP0 @ 1× | SW backend @ 1× |
+| Present | `g_gl_fbo_present=1` @ `g_video_scale` | CPU scanout → SDL/GL upload |
+| Snap load | `restage_vram` + `invalidate_present` | N/A (no FBO) |
+| Digests | CRC CPU VRAM only | same |
+
+- `gl_renderer_set_cpu_auth_dual(1)` — `glb_draw_*` / fill / copy write SW
+  then GPU; `s_gpu_dirty` stays clear; `ensure_cpu` never readbacks.
+- `glb_set_scale(N)` already keeps `sw_renderer_set_scale(1)`.
+- Depth24 / FMV still CPU present (`gl_renderer_present`).
+- Soft-return clears dual flag.
+
+**Logs to expect:**
+
+- `netplay — dual-raster (SW@1x CPU-auth + OpenGL present quality; …)`
+- `netplay GL present supersampling Nx (SW authority stays 1x)`
+- `GL GPU pipeline ready (dual-raster, internal scale Nx, …)`
+- `netplay dual-raster (SW@1x CPU-auth + OpenGL@Nx present; …)` from
+  `force_sw_gpu`
+
+**Re-soak watch:** matched `av=` across peers; visible 4× GL quality in
+match; no black first present after tip load; rematch keeps dual after
+lobby soft-return.

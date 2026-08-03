@@ -107,8 +107,15 @@ int  psx_netplay_rb_tip_holding(void);
 /* Episode tip (target_tick) while an episode is active; 0 if none. */
 uint32_t psx_netplay_rb_episode_target(void);
 
-/* TipHold Live invent slack past tip (tip_seal_slack). Stall invent beyond. */
+/* TipHold Live invent slack past tip (tip_seal_slack). Stall invent beyond.
+ * Returns 0 while a deferred tip-hold rereplay is pending (§80 park Live). */
 uint32_t psx_netplay_rb_tip_hold_invent_slack(void);
+
+/* 1 while TipHold has batched tip-extend rereplay waiting for flush (§66/§80). */
+int psx_netplay_rb_tip_hold_rereplay_pending(void);
+
+/* POST tip we deferred from (0 if none). Admit parks Live here (§81). */
+uint32_t psx_netplay_rb_tip_hold_rereplay_from(void);
 
 /* TipHold coalesce runway (tip_runway). Host scans wire tip+1..tip+runway for
  * release edges when Live is stalled at invent-cap. */
@@ -129,6 +136,11 @@ int  psx_netplay_rb_abort_resim_core_mismatch(uint32_t tick, uint32_t local_core
 /* 1 while a baseline/realign snap load is queued or resume is deferred —
  * poll_admit must stall (do not run live invent). */
 int  psx_netplay_rb_load_pending(void);
+
+/* §71: nonzero while choose_load is bisecting below a failed baseline load
+ * (g_bl_fork_cap). hc-fork recovery must not reopen into the same doomed
+ * snap ladder every 32 ticks. */
+uint32_t psx_netplay_rb_baseline_fork_cap(void);
 
 /*
  * During resim: publish sealed inputs for current sim tick and admit.

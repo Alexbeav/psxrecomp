@@ -887,6 +887,8 @@ extern "C" void psx_frontend_on_rb_snap_loaded(void) {
     }
     gl_renderer_restage_vram_after_savestate();
     vk_renderer_restage_vram_after_savestate();
+    /* Dual-raster: restaged FBO must reach the window; drop hold-last. */
+    gl_renderer_invalidate_present();
     /* §63: guest SIO came from the snap — drop Live pad-edge trackers. */
     psx_netplay_on_rb_snap_loaded();
 }
@@ -1124,13 +1126,36 @@ static bool          g_vk_active = false;    /* Vulkan context live -> VK presen
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
 static int           g_gl_fbo_present = 1;
 
-/* Cleared on lobby soft-return so rematch can re-arm SW GPU. */
+/* Cleared on lobby soft-return so rematch can re-arm CPU-auth GPU lock. */
 static int s_netplay_sw_gpu_locked;
+/* Netplay + user OpenGL: dual-raster (SW@1× authority + GL@Nx present) or
+ * fallback SW-only + CPU→GL present when dual could not arm. */
+static int s_netplay_gl_present;
+/* Netplay SW-only path: sim at scale 1 (no SW SSAA hi-res mirror).
+ * Dual-raster OpenGL uses g_video_scale for the hr FBO; SW stays 1 via
+ * glb_set_scale. Cleared on lobby soft-return. */
+static int s_netplay_sim_native_scale;
+
+/* True while netplay owns the GPU path: CPU VRAM is digest/snap authority. */
+static int netplay_cpu_auth_gpu(void) {
+    return s_netplay_sw_gpu_locked || s_netplay_gl_present ||
+           s_netplay_sim_native_scale;
+}
+
+/* Dual-raster present quality: GL FBO at settings SSAA, SW@1× for snaps. */
+static int netplay_gl_dual_quality(void) {
+#ifndef PSX_SDL_NO_RENDER
+    return s_netplay_gl_present && g_gl_active && g_gl_fbo_present &&
+           gl_renderer_cpu_auth_dual();
+#else
+    return 0;
+#endif
+}
 
 #ifndef PSX_SDL_NO_RENDER
 /* Create SDL_Renderer + streaming texture for software present. Used when
- * netplay starts after a GL/VK window was already built (g_gl_active cleared
- * without this → null renderer, black window, FPS still counting). */
+ * netplay runs without a live GL context (software renderer selected, or GL
+ * init failed). CPU-auth + OpenGL present does not need this. */
 static int ensure_sw_sdl_present(void) {
     if (!sdl_window)
         return -1;
@@ -1149,16 +1174,20 @@ static int ensure_sw_sdl_present(void) {
                          SDL_GetError());
             return -1;
         }
-        g_logical_w = 480 * g_video_aspect_num * g_video_scale / g_video_aspect_den;
+        /* Netplay CPU-auth: size logical/texture at 1× (sim has no hi-res
+         * mirror). Offline SSAA preference stays in g_video_scale. */
+        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        g_logical_w = 480 * g_video_aspect_num * tex_scale / g_video_aspect_den;
         if (g_logical_w < 1) g_logical_w = 640;
-        SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
+        SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * tex_scale);
     }
     if (!sdl_texture) {
+        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_texture = SDL_CreateTexture(
             sdl_renderer,
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
-            640 * g_video_scale, 512 * g_video_scale);
+            640 * tex_scale, 512 * tex_scale);
         if (!sdl_texture) {
             std::fprintf(stderr,
                          "psxrecomp: netplay SW present: SDL_CreateTexture failed: %s\n",
@@ -1169,8 +1198,9 @@ static int ensure_sw_sdl_present(void) {
                                 g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     }
     if (!sdl_pixel_buf) {
+        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * g_video_scale * 512 * g_video_scale * sizeof(uint32_t));
+            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
             return -1;
@@ -1180,32 +1210,83 @@ static int ensure_sw_sdl_present(void) {
 }
 #endif
 
-/* Rollback/delay netplay: GL/VK keep FBO-authoritative VRAM and sync the CPU
- * mirror via readback — host-GPU nondeterministic; forks peer snaps (core
- * matched, VRAM zlib ~220KB apart) then mid-resim cores. SW is guest authority. */
+/* Rollback/delay netplay: guest VRAM must be CPU-authoritative. Prefer
+ * dual-raster OpenGL: SW@1× writes snaps/digests/GPUREAD; GL@settings-scale
+ * hr FBO is present-only (g_gl_fbo_present=1, never glReadPixels). Fallback
+ * when no GL context: pure software SDL present at scale 1. */
 extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
 #ifndef PSX_SDL_NO_RENDER
-    /* Retry ensure even if a prior attempt locked after GL teardown with a
-     * null SDL_Renderer (rematch empty window). */
-    if (s_netplay_sw_gpu_locked && sdl_renderer && sdl_texture && sdl_pixel_buf)
+    /* Already locked on dual-raster GL quality present. */
+    if (s_netplay_sw_gpu_locked && netplay_gl_dual_quality()) {
+        int want = g_video_scale < 1 ? 1 : g_video_scale;
+        if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;
+        gr_set_backend(GR_BACKEND_OPENGL);
+        gl_renderer_set_cpu_auth_dual(1);
+        /* FBO scale is fixed at context init — keep request in sync. */
+        gr_set_scale(want);
+        s_netplay_sim_native_scale = 1;
         return;
+    }
+    /* Already locked on legacy CPU→GL present (no dual). */
+    if (s_netplay_sw_gpu_locked && g_gl_active && !g_gl_fbo_present) {
+        gr_set_scale(1);
+        s_netplay_sim_native_scale = 1;
+        return;
+    }
+    /* Already locked on pure software SDL present. */
+    if (s_netplay_sw_gpu_locked && !g_gl_active && !g_vk_active &&
+        sdl_renderer && sdl_texture && sdl_pixel_buf) {
+        gr_set_scale(1);
+        s_netplay_sim_native_scale = 1;
+        return;
+    }
 #endif
 #ifndef PSX_SDL_NO_RENDER
-    if (g_gl_active) {
+    /* If we were on FBO-auth GL (offline), pull VRAM to CPU once before
+     * arming dual. Caller must invoke this before g_np.active (ensure_cpu
+     * no-ops while netplay is active). */
+    if (g_gl_active && gr_backend() == GR_BACKEND_OPENGL &&
+        !gl_renderer_cpu_auth_dual())
         gl_renderer_sync_cpu();
-        gl_renderer_shutdown();
-        g_gl_active = false;
-    }
     if (g_vk_active) {
+        /* Vulkan CPU-auth present not wired yet — tear down to SW SDL. */
         vk_renderer_sync_cpu();
         vk_renderer_shutdown();
         g_vk_active = false;
+        s_netplay_gl_present = 0;
     }
-    g_gl_fbo_present = false;
 #endif
-    gr_set_backend(GR_BACKEND_SOFTWARE);
-    g_video_renderer = 0;
 #ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active) {
+        /* Dual-raster: OPENGL backend, SW@1× + GPU@Nx, FBO present. */
+        int want = g_video_scale < 1 ? 1 : g_video_scale;
+        if (want > SW_MAX_INTERNAL_SCALE) want = SW_MAX_INTERNAL_SCALE;
+        gr_set_backend(GR_BACKEND_OPENGL);
+        gl_renderer_set_cpu_auth_dual(1);
+        gr_set_scale(want);
+        g_gl_fbo_present = true;
+        s_netplay_gl_present = 1;
+        s_netplay_sim_native_scale = 1;
+        gl_renderer_restage_vram_after_savestate();
+        gl_renderer_invalidate_present();
+        s_netplay_sw_gpu_locked = 1;
+        latency_ring_set_backend("opengl");
+        fprintf(stderr,
+                "psxrecomp: netplay dual-raster "
+                "(SW@1x CPU-auth + OpenGL@%dx present; no FBO readback)\n",
+                want);
+        fflush(stderr);
+        return;
+    }
+    /* Software present (user picked software, GL init failed, or Vulkan).
+     * Do not clear g_video_renderer — that preference must survive rematch /
+     * first settings.toml write so OpenGL stays the user's default. */
+    g_gl_fbo_present = false;
+    gl_renderer_set_cpu_auth_dual(0);
+    gr_set_backend(GR_BACKEND_SOFTWARE);
+    gr_set_scale(1);
+    s_netplay_sim_native_scale = 1;
+    s_netplay_gl_present = 0;
     if (ensure_sw_sdl_present() != 0) {
         s_netplay_sw_gpu_locked = 0;
         std::fprintf(stderr,
@@ -1216,12 +1297,15 @@ extern "C" void psx_frontend_netplay_force_sw_gpu(void) {
     }
     s_netplay_sw_gpu_locked = 1;
 #else
+    gr_set_backend(GR_BACKEND_SOFTWARE);
+    gr_set_scale(1);
+    s_netplay_sim_native_scale = 1;
     s_netplay_sw_gpu_locked = 1;
 #endif
     latency_ring_set_backend("software");
     fprintf(stderr,
-            "psxrecomp: netplay forced software GPU "
-            "(GL/VK VRAM readback forks peers)\n");
+            "psxrecomp: netplay software GPU "
+            "(CPU-authoritative VRAM; sim scale 1)\n");
     fflush(stderr);
 }
 
@@ -1861,8 +1945,11 @@ static void teardown_game_session_keep_lobby(void) {
     if (sdl_renderer) { SDL_DestroyRenderer(sdl_renderer); sdl_renderer = nullptr; }
     if (sdl_window) { SDL_DestroyWindow(sdl_window); sdl_window = nullptr; }
     if (sdl_pixel_buf) { std::free(sdl_pixel_buf); sdl_pixel_buf = nullptr; }
-    /* Rematch must re-run force_sw (and prefer SW at session_reboot). */
+    /* Rematch must re-run force_sw (and prefer CPU-auth GL present again). */
     s_netplay_sw_gpu_locked = 0;
+    s_netplay_gl_present = 0;
+    s_netplay_sim_native_scale = 0;
+    gl_renderer_set_cpu_auth_dual(0);
     psx_lobby_set_ready(0);
     psx_lobby_clear_launch_pending();
 #if defined(PSX_HAS_LOBBY_CLIENT)
@@ -3372,6 +3459,19 @@ static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
                            pad.analog);
 }
 
+/* Raw SDL Start face-button (ignores remaps) — pad-trace only. */
+static int netplay_sdl_start_held(int card) {
+    if (card < 0 || card >= PSX_MAX_PLAYERS) return 0;
+    const PlayerInput& p = g_players[card];
+    if (p.kind == 2 && p.handle)
+        return SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_START) != 0;
+    if (p.kind == 1) {
+        /* Keyboard: Start bit in keybinds pad word (active-low clear = pressed). */
+        return (pad_from_keyboard(card + 1) & 0x0008u) == 0;
+    }
+    return 0;
+}
+
 /* Local human pad for delay-sync: sample the host PlayerInput selected for
  * this peer (see --net-input-player / auto), then recomp-net maps that blob
  * onto local_slot (lobby seat → sim P1/P2/…). Never writes SIO. Exclusive
@@ -3382,21 +3482,45 @@ static void capture_local_human_pad(PsxNetPad* out) {
     /* Present as the lobby seat (multitap taps → digital), not the host card. */
     const int seat = psx_netplay_local_slot();
     const int present = (seat >= 0) ? seat : idx;
+    int card = idx;
+    int fallback = 0;
+    auto bisect_cap = [&](int c, int fb) {
+        if (!psx_start_bisect_enabled()) return;
+        const int sdl = netplay_sdl_start_held(c);
+        const int cap = ((uint16_t)(~out->buttons) & 0x0008u) != 0;
+        psx_start_bisect_log("cap", psx_netplay_sim_tick(), sdl, cap, -1, -1,
+                             0, psx_netplay_rb_tip_holding(),
+                             psx_netplay_is_resimulating());
+        (void)fb;
+    };
     if (capture_pad_slot_exclusive(idx, out, present)) {
         out->connected = 1;
         psx_netplay_normalize_pad(out);
+        psx_netplay_pad_trace_dev(card, fallback, netplay_sdl_start_held(card),
+                                  out->buttons);
+        bisect_cap(card, fallback);
         return;
     }
     /* Fallbacks: NETPLAY/P1 card, lobby seat card, then any assigned device. */
     if (idx != 0 && capture_pad_slot_exclusive(0, out, present)) {
         out->connected = 1;
         psx_netplay_normalize_pad(out);
+        card = 0;
+        fallback = 1;
+        psx_netplay_pad_trace_dev(card, fallback, netplay_sdl_start_held(card),
+                                  out->buttons);
+        bisect_cap(card, fallback);
         return;
     }
     if (seat >= 0 && seat < PSX_MAX_PLAYERS && seat != idx && seat != 0 &&
         capture_pad_slot_exclusive(seat, out, present)) {
         out->connected = 1;
         psx_netplay_normalize_pad(out);
+        card = seat;
+        fallback = 1;
+        psx_netplay_pad_trace_dev(card, fallback, netplay_sdl_start_held(card),
+                                  out->buttons);
+        bisect_cap(card, fallback);
         return;
     }
     for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
@@ -3404,6 +3528,11 @@ static void capture_local_human_pad(PsxNetPad* out) {
         if (capture_pad_slot_exclusive(s, out, present)) {
             out->connected = 1;
             psx_netplay_normalize_pad(out);
+            card = s;
+            fallback = 1;
+            psx_netplay_pad_trace_dev(card, fallback, netplay_sdl_start_held(card),
+                                      out->buttons);
+            bisect_cap(card, fallback);
             return;
         }
     }
@@ -3412,6 +3541,8 @@ static void capture_local_human_pad(PsxNetPad* out) {
     out->analog = 1;
     out->connected = 1;
     psx_netplay_normalize_pad(out);
+    psx_netplay_pad_trace_dev(idx, 1, netplay_sdl_start_held(idx), out->buttons);
+    bisect_cap(idx, 1);
 }
 
 /* Build a netplay pad blob from a debug-server override without writing SIO. */
@@ -3461,6 +3592,10 @@ static uint64_t s_np_timing_frames = 0;
 static uint64_t s_present_last_ms = 0;
 static uint32_t s_present_gaps_ms[128];
 static unsigned s_present_gaps_n = 0;
+/* §74: highest sim tick ever shown on screen. Resim frames above it are new
+ * forward progress (treadmill chain) and present live; at/below is a rewound
+ * re-play and keeps §63 hold-last. Reset when a netplay session starts. */
+static uint32_t s_netplay_present_sim_watermark = 0;
 static int netplay_timing_on(void) {
     if (s_np_timing_enabled < 0) {
         const char *e = std::getenv("PSX_NETPLAY_TIMING");
@@ -3592,8 +3727,14 @@ static void netplay_barrier_admit(int override) {
         }
         /* §36: TipHold parks sim, so needs_local_sample stays 0 after latch.
          * Still capture every spin so live_pad_buttons can see a real release
-         * (SAFETY deferred must not ride ABSOLUTE 2000ms on a frozen peek). */
-        if (psx_netplay_needs_local_sample() || psx_netplay_rb_tip_holding()) {
+         * (SAFETY deferred must not ride ABSOLUTE 2000ms on a frozen peek).
+         * PSX_START_BISECT_NO_TIPHOLD_CAPTURE=1: only sample when latching a
+         * new sim tip (Stage-3 isolate TipHold refresh). */
+        const int tip_hold = psx_netplay_rb_tip_holding();
+        const int need_sample =
+            psx_netplay_needs_local_sample() ||
+            (tip_hold && !psx_start_bisect_no_tiphold_capture());
+        if (need_sample) {
             PsxNetPad local{};
             if (override >= 0 && !g_headless) {
                 capture_override_pad(override, &local);
@@ -3606,6 +3747,13 @@ static void netplay_barrier_admit(int override) {
                 capture_local_human_pad(&local);
             }
             psx_netplay_stage_local(&local);
+        } else if (psx_start_bisect_spin_log() && !g_headless) {
+            /* Dense SDL-only samples while admit waits without capture. */
+            const int card = psx_netplay_input_player();
+            const int sdl = netplay_sdl_start_held(card >= 0 ? card : 0);
+            psx_start_bisect_log("spin", psx_netplay_sim_tick(), sdl, -1, -1,
+                                 -1, tip_hold ? 0 : 1, tip_hold,
+                                 psx_netplay_is_resimulating());
         }
         if (psx_netplay_poll_admit()) {
             desync_logged = 0;
@@ -3646,7 +3794,10 @@ static void netplay_barrier_admit(int override) {
                     refresh_player_devices();
                 }
             }
-            SDL_GameControllerUpdate();
+            /* Stage-3: PSX_START_BISECT_NO_GC_UPDATE_IN_ADMIT skips the dense
+             * Update that advances SDL pad state between sim publishes. */
+            if (!psx_start_bisect_no_gc_update_in_admit())
+                SDL_GameControllerUpdate();
         }
         if (psx_return_to_lobby_requested()) return;
         /* §35: TipHold invent-cap stall freezes guest (no vblank present).
@@ -3677,6 +3828,8 @@ static void sample_pad_into_sio(int override) {
     int n = g_offline_pad_count;
     if (n < 1) n = 1;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    const uint32_t consumer_sim =
+        psx_start_consumer_enabled() ? psx_start_consumer_offline_frame() : 0u;
     for (int s = 0; s < n; s++) {
         PsxNetPad pad;
         if (!capture_pad_slot(s, &pad)) continue;  /* no device in this port */
@@ -3688,6 +3841,16 @@ static void sample_pad_into_sio(int override) {
          * reads. eff_analog still reflects this frame's mode (digital / analog /
          * hybrid auto-switch). */
         apply_pad_slot_to_sio(s, pad);
+        if (psx_start_consumer_enabled())
+            psx_start_consumer_note(s, consumer_sim, pad.buttons);
+        if (psx_start_bisect_enabled() && s == 0) {
+            const int sdl = netplay_sdl_start_held(s);
+            const int cap = ((uint16_t)(~pad.buttons) & 0x0008u) != 0;
+            const int sio =
+                ((uint16_t)(~sio_get_pad_buttons_slot(s)) & 0x0008u) != 0;
+            psx_start_bisect_log("offline", consumer_sim, sdl, cap, cap, sio, 1,
+                                 0, 0);
+        }
     }
 }
 
@@ -4529,14 +4692,36 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     /* Rollback resim (§33/§47): short catch-up keeps hold-last; long catch-up
      * periodically presents live Replay VRAM so the display shows progress
      * while sim stays uncapped. TipHold invent-cap stall uses hold-last from
-     * the admit spin (no guest vblank). */
+     * the admit spin (no guest vblank).
+     *
+     * §74: ownership-chain Replay treadmills at wire pace during fights
+     * (target extends per wire arrival, remaining ≤ 24 forever), so the
+     * blanket hold-last froze the display 135–212 ms per ~12-tick episode
+     * and then skipped ahead ("delay-sync burst" feel). Split by a display
+     * watermark: frames the user has NEVER seen (resim sim beyond the
+     * highest sim ever presented) are new forward progress — present them
+     * live every vblank. Frames at/below the watermark are a rewound
+     * re-play; hold-last exactly as before so §63 edge-input re-show
+     * (pad-log DUP_SIO) stays impossible. */
     if (psx_netplay_is_resimulating()) {
         uint32_t rem = psx_netplay_rb_confirmed_remaining();
-        if (!netplay_replay_catchup_should_live_present(rem)) {
+        uint32_t sim = psx_netplay_sim_tick();
+        int beyond_shown = sim != 0u && sim != 0xffffffffu &&
+                           sim > s_netplay_present_sim_watermark;
+        if (!beyond_shown && !netplay_replay_catchup_should_live_present(rem)) {
             netplay_hold_last_present_tick();
             return ep;
         }
-        /* Fall through to real VRAM present (wall-clock gated above). */
+        /* Fall through to real VRAM present (new frame, or wall-clock gate). */
+    }
+    {
+        /* Raise the display watermark for any frame that falls through to a
+         * real present (live or Replay). Hold-last paths return above and
+         * never raise it. */
+        uint32_t sim = psx_netplay_sim_tick();
+        if (sim != 0u && sim != 0xffffffffu &&
+            sim > s_netplay_present_sim_watermark)
+            s_netplay_present_sim_watermark = sim;
     }
 
     /* ---- Display from our VRAM ---- */
@@ -4695,8 +4880,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
         /* The hi-res mirror is a 15-bit copy of VRAM; 24-bit display (FMV)
          * reads packed bytes the mirror can't represent, so fall back to the
-         * native path for those frames (the present filter still upscales). */
-        active_scale = (g_video_scale > 1 && !di.depth24) ? g_video_scale : 1;
+         * native path for those frames (the present filter still upscales).
+         * SW-only netplay present: native scanout. Dual-raster FBO present
+         * already returned above at GL SSAA. */
+        if (netplay_cpu_auth_gpu() && !netplay_gl_dual_quality())
+            active_scale = 1;
+        else
+            active_scale = (g_video_scale > 1 && !di.depth24) ? g_video_scale : 1;
 
         if (wide_present) {
             /* The wide compositor surface is at the renderer's REAL internal
@@ -4725,7 +4915,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * when fmv_frame is false on a plain 4:3 window (ws layer not engaged). */
         pin_43 = fmv_frame || di.depth24 || (nw_pin && !wide_present);
         if (!wide_present) {
-            if (active_scale > 1) {
+            /* Never hires-present under netplay CPU-auth (even if settings say
+             * 4× — that preference is offline-only). */
+            if (active_scale > 1 && !netplay_cpu_auth_gpu()) {
                 int sw = (int)present_w * active_scale;
                 gr_render_display_hires(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
                                         (int)di.display_x, (int)di.display_y,
@@ -4830,7 +5022,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * edge blends with uninitialized texels below (X11 SDL backends often
      * show that as a thin white strip; Wayland may not). Pad one black row
      * so any residual linear fringe is black, matching the letterbox. */
-    const int tex_h = 512 * g_video_scale;
+    const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+    const int tex_h = 512 * tex_scale;
     if (src_w > 0 && src_h > 0 && src_h < tex_h) {
         static uint32_t s_black_pad[640 * 4]; /* covers g_video_scale <= 4 */
         const int pad_cap = (int)(sizeof(s_black_pad) / sizeof(s_black_pad[0]));
@@ -4846,8 +5039,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * the widescreen stretch — pillarbox them at native 4:3 instead. Same for
      * native-wide game frames that could not present wide (pin_43): canonical
      * content is never stretched across the wide window. */
-    int dst_w = pin_43 ? 640 * g_video_scale : g_logical_w;
-    int dst_h = 480 * g_video_scale;
+    int dst_w = pin_43 ? 640 * tex_scale : g_logical_w;
+    int dst_h = 480 * tex_scale;
     SDL_Rect dst = { (g_logical_w - dst_w) / 2, 0, dst_w, dst_h };
     /* Match GL: short display bands letterbox inside the 4:3 rect. */
     if (pin_43 && h > 0 && h < 240) {
@@ -7274,6 +7467,13 @@ namespace {
                 out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
             else
                 out->is_host = (mem.slot == 0) ? 1 : 0;
+            {
+                const char* self_id = psx_lobby_player_id();
+                out->is_local = (self_id && self_id[0] && mem.player_id[0] &&
+                                 std::strcmp(self_id, mem.player_id) == 0)
+                                    ? 1
+                                    : 0;
+            }
             out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
             return 1;
         }
@@ -7289,6 +7489,7 @@ namespace {
                                   state.slot_name[slot].c_str());
                     out->ready = 1;
                     out->is_host = (slot == state.host_slot) ? 1 : 0;
+                    out->is_local = (slot == g_lnch_lan_my_slot) ? 1 : 0;
                     out->latency_ms = -1;
                     return 1;
                 }
@@ -7306,6 +7507,13 @@ namespace {
             out->is_host = (std::strcmp(host_id, mem.player_id) == 0) ? 1 : 0;
         else
             out->is_host = (mem.slot == 0) ? 1 : 0;
+        {
+            const char* self_id = psx_lobby_player_id();
+            out->is_local = (self_id && self_id[0] && mem.player_id[0] &&
+                             std::strcmp(self_id, mem.player_id) == 0)
+                                ? 1
+                                : 0;
+        }
         out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
         return 1;
     }
@@ -7467,6 +7675,7 @@ namespace {
         psx_lobby_clear_launch_pending();
         psx_lobby_clear_signals();
         psx_lobby_set_ice_signal_accept(0);
+        psx_lobby_resume_waiting_room_rtt();
         if (!(g_lnch_hosting_lan || g_lnch_joined_lan)) return;
         AeLanLobbyState st;
         if (ae_np_read_lan_state(&st)) {
@@ -8084,6 +8293,7 @@ std::string player_device[PSX_MAX_PLAYERS];
     std::string settings_bios_storage;  /* must outlive resolve_bios_for_runtime */
     std::string netplay_player_name;     /* [netplay] player_name from settings.toml */
     bool has_netplay_player_name = false;
+    bool user_settings_has_renderer = false;
     {
         std::filesystem::path settings_path =
             exe_dir_from_argv(argv[0]) / "settings.toml";
@@ -8092,6 +8302,7 @@ std::string player_device[PSX_MAX_PLAYERS];
 #endif
         const PSXRecompV4::UserSettings us =
             PSXRecompV4::load_user_settings(settings_path);
+        user_settings_has_renderer = us.has_renderer;
         if (us.parse_error) {
             /* The file exists but is not valid TOML: every setting in it (the
              * user's renderer choice, BIOS/disc paths, ...) is being ignored,
@@ -8563,8 +8774,13 @@ std::string player_device[PSX_MAX_PLAYERS];
              * below). Sourced 1:1 from PSXRecompV4::UserSettings (config_loader.h). */
             ls.window_width      = seed.window_width;
             ls.renderer           = seed.renderer;
+            /* Fresh / invalid seed → OpenGL (DEFAULT_VIDEO_RENDERER), never
+             * Software — unless the user explicitly saved software. */
             if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
-                ls.renderer = 1;
+                ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
+            if (ls.renderer == 0 && !user_settings_has_renderer &&
+                PSXRecompV4::DEFAULT_VIDEO_RENDERER != 0)
+                ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
             ls.supersampling      = seed.supersampling;
             ls.antialiasing       = seed.antialiasing ? 1 : 0;
             ls.texture_filter     = seed.texture_filter;
@@ -9018,32 +9234,77 @@ session_reboot:
         g_video_renderer = 1;
     }
 #endif
-    /* Netplay: pick software before window/GL init so SDL_Renderer exists from
-     * the first present. Late force_sw after GL left g_gl_active=false with a
-     * null renderer → black first match (rematch recreated GL and "worked"). */
-    if (net_cfg.enabled && g_video_renderer != 0) {
-        std::fprintf(stdout,
-                     "psxrecomp: netplay — selecting software GPU before window "
-                     "(was %s; GL/VK VRAM readback forks peers)\n",
-                     g_video_renderer == 2 ? "vulkan" : "opengl");
-        g_video_renderer = 0;
+    /* Netplay: CPU VRAM is digest/snap authority. Prefer dual-raster OpenGL
+     * (SW@1× + GL@settings SSAA FBO present, never glReadPixels). Vulkan
+     * present not yet cpu-auth — fall back to a software window. */
+    s_netplay_gl_present = 0;
+    s_netplay_sim_native_scale = 0;
+    gl_renderer_set_cpu_auth_dual(0);
+    if (net_cfg.enabled) {
+        s_netplay_sim_native_scale = 1;
+        if (g_video_renderer == 1) {
+            s_netplay_gl_present = 1;
+            g_gl_fbo_present = 1;
+            gl_renderer_set_cpu_auth_dual(1);
+            gr_set_backend(GR_BACKEND_OPENGL);
+            std::fprintf(stdout,
+                         "psxrecomp: netplay — dual-raster "
+                         "(SW@1x CPU-auth + OpenGL present quality; no FBO readback)\n");
+            std::fprintf(stdout,
+                         "psxrecomp: renderer backend requested: opengl "
+                         "(netplay dual-raster)\n");
+        } else if (g_video_renderer == 2) {
+            std::fprintf(stdout,
+                         "psxrecomp: netplay — Vulkan present not yet CPU-auth; "
+                         "using software window (was vulkan)\n");
+            g_video_renderer = 0;
+            gr_set_backend(GR_BACKEND_SOFTWARE);
+            std::fprintf(stdout,
+                         "psxrecomp: renderer backend requested: software "
+                         "(netplay sim)\n");
+        } else {
+            gr_set_backend(GR_BACKEND_SOFTWARE);
+            std::fprintf(stdout,
+                         "psxrecomp: renderer backend requested: software "
+                         "(netplay sim)\n");
+        }
+    } else {
+        /* Select the renderer backend BEFORE gpu_init() (which runs gr_init ->
+         * the backend's init on the VRAM buffer). Software is the default and
+         * the fallback; an unavailable OpenGL backend reverts to software. */
+        gr_set_backend(g_video_renderer == 2 ? GR_BACKEND_VULKAN :
+                       g_video_renderer == 1 ? GR_BACKEND_OPENGL :
+                                              GR_BACKEND_SOFTWARE);
+        std::fprintf(stdout, "psxrecomp: renderer backend requested: %s\n",
+                     g_video_renderer == 2 ? "vulkan" :
+                     g_video_renderer == 1 ? "opengl" : "software");
     }
-    /* Select the renderer backend BEFORE gpu_init() (which runs gr_init ->
-     * the backend's init on the VRAM buffer). Software is the default and the
-     * fallback; an unavailable OpenGL backend reverts to software. */
-    gr_set_backend(g_video_renderer == 2 ? GR_BACKEND_VULKAN :
-                   g_video_renderer == 1 ? GR_BACKEND_OPENGL : GR_BACKEND_SOFTWARE);
-    std::fprintf(stdout, "psxrecomp: renderer backend requested: %s\n",
-                 g_video_renderer == 2 ? "vulkan" :
-                 g_video_renderer == 1 ? "opengl" : "software");
     gpu_init();
-    /* Internal-resolution supersampling (SSAA). Must follow gpu_init (which
-     * runs sw_renderer_init). scale==1 is a no-op; >1 allocates the hi-res
-     * VRAM mirror. */
+    /* Internal-resolution supersampling (SSAA). Must follow gpu_init.
+     * Dual-raster: gr_set_scale(N) arms GL hr FBO @ N× while glb_set_scale
+     * keeps SW at 1×. SW-only netplay: force scale 1. Offline: full SSAA. */
     if (g_video_scale < 1) g_video_scale = 1;
     if (g_video_scale > SW_MAX_INTERNAL_SCALE) g_video_scale = SW_MAX_INTERNAL_SCALE;
-    gr_set_scale(g_video_scale);
-    g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
+    if (net_cfg.enabled && s_netplay_gl_present && gl_renderer_cpu_auth_dual()) {
+        gr_set_scale(g_video_scale);
+        if (g_video_scale > 1) {
+            std::fprintf(stdout,
+                         "psxrecomp: netplay GL present supersampling %dx "
+                         "(SW authority stays 1x)\n",
+                         g_video_scale);
+        }
+    } else if (net_cfg.enabled || s_netplay_sim_native_scale) {
+        gr_set_scale(1);
+        if (g_video_scale > 1) {
+            std::fprintf(stdout,
+                         "psxrecomp: netplay sim supersampling clamped to 1x "
+                         "(settings %dx kept for offline)\n",
+                         g_video_scale);
+        }
+    } else {
+        gr_set_scale(g_video_scale);
+        g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
+    }
     gr_set_texture_filter(g_video_texfilter);
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
      * this aspect; native-wide fills it with a genuinely wider frame (no
@@ -9315,14 +9576,29 @@ session_reboot:
     if (g_video_renderer == 1) {
         gl_renderer_set_swap_interval(g_video_vsync);   /* applied at context init */
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
-        if (!g_gl_active) gr_set_backend(GR_BACKEND_SOFTWARE);
+        if (!g_gl_active) {
+            gr_set_backend(GR_BACKEND_SOFTWARE);
+            gl_renderer_set_cpu_auth_dual(0);
+            g_gl_fbo_present = 0;
+            s_netplay_gl_present = 0;
+            if (net_cfg.enabled) {
+                gr_set_scale(1);
+                s_netplay_sim_native_scale = 1;
+            }
+        } else if (net_cfg.enabled || s_netplay_gl_present) {
+            /* Dual-raster: FBO present at settings SSAA; SW@1× authority.
+             * Scale was applied via s_req_scale before init_gpu_raster. */
+            gl_renderer_set_cpu_auth_dual(1);
+            g_gl_fbo_present = 1;
+            s_netplay_gl_present = 1;
+            s_netplay_sim_native_scale = 1;
+        }
         /* The GL backend establishes its real internal scale HERE (raster init),
-         * which is AFTER the earlier `g_video_scale = gr_scale()` sync (that ran
-         * before this and so saw the default scale 1). Re-sync now so the staging
-         * buffer below is sized for the true scale and the native-wide present
-         * (which uses gr_scale()) matches it — otherwise sdl_pixel_buf is
-         * undersized and the wide readback overflows it. */
-        g_video_scale = gr_scale();
+         * which is AFTER the earlier offline `g_video_scale = gr_scale()` sync.
+         * Re-sync offline so staging matches. Netplay keeps g_video_scale as
+         * the settings preference (equals gr_scale() under dual-raster). */
+        if (!netplay_cpu_auth_gpu())
+            g_video_scale = gr_scale();
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
                                       (double)g_frame_interpolation_fps,
                                       /*blend_mode*/ 0);
@@ -9334,7 +9610,8 @@ session_reboot:
         vk_renderer_set_present_mode(g_video_vsync);
         g_vk_active = (vk_renderer_init_context(sdl_window) != 0);
         if (!g_vk_active) gr_set_backend(GR_BACKEND_SOFTWARE);
-        g_video_scale = gr_scale();
+        if (!netplay_cpu_auth_gpu())
+            g_video_scale = gr_scale();
     }
     latency_ring_set_backend(g_vk_active ? "vulkan" : g_gl_active ? "opengl" : "software");
     latency_ring_set_present_mode(g_video_vsync);
@@ -9389,26 +9666,33 @@ session_reboot:
      * the full internal resolution reaches a large/fullscreen window; SDL
      * still scales and letterboxes to the real output). Identity in the
      * default window when supersampling is off, so native rendering is
-     * unchanged. */
-    g_logical_w = 480 * g_video_aspect_num * g_video_scale / g_video_aspect_den;
-    SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
+     * unchanged. Netplay CPU-auth: always 1× (sim has no hi-res mirror). */
+    {
+        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        g_logical_w = 480 * g_video_aspect_num * tex_scale / g_video_aspect_den;
+        SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * tex_scale);
+    }
   }
 
     /* Staging buffer + backing texture are sized for the internal resolution
-     * (640x512 native, times the supersampling factor). */
-    sdl_pixel_buf = (uint32_t*)std::malloc(
-        (size_t)640 * g_video_scale * 512 * g_video_scale * sizeof(uint32_t));
-    if (!sdl_pixel_buf) {
-        std::fprintf(stderr, "failed to allocate %dx staging buffer\n", g_video_scale);
-        return 1;
+     * (640x512 native, times the supersampling factor). Netplay: 1×. */
+    {
+        const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
+        sdl_pixel_buf = (uint32_t*)std::malloc(
+            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
+        if (!sdl_pixel_buf) {
+            std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
+            return 1;
+        }
     }
 
   if (!g_gl_active && !g_vk_active) {
+    const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
     sdl_texture = SDL_CreateTexture(
         sdl_renderer,
         SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
-        640 * g_video_scale, 512 * g_video_scale
+        640 * tex_scale, 512 * tex_scale
     );
     if (!sdl_texture) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
@@ -9462,6 +9746,7 @@ session_reboot:
             net_cfg.slot_count = game_players >= 2 ? game_players : 2;
         if (net_cfg.slot_count > PSX_MAX_PLAYERS)
             net_cfg.slot_count = PSX_MAX_PLAYERS;
+        s_netplay_present_sim_watermark = 0; /* §74: sim restarts per session */
         const int nrc = psx_netplay_start(&net_cfg);
         if (nrc != 0) {
             std::fprintf(stderr,

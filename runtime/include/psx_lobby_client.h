@@ -150,10 +150,11 @@ int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps);
 int  psx_lobby_member_count(void);
 int  psx_lobby_member_get(int index, PsxLobbyMember *out);
 
-/* Waiting-room peer RTT in ms for `slot`, or -1 if unknown.
- * Host's own seat is always -1. Measured over UDP (rnet_rtt_probe) on the
- * advertised game endpoints — not the lobby WebSocket. Guests also REPORT
- * so the host UI updates when it cannot dial the guest yet. */
+/* Waiting-room RTT in ms *to* `slot`, or -1 if unknown / local seat.
+ * Prefers ICE/TURN data-channel RTT when the lobby probe completes
+ * (CGNAT / Force TURN); else direct UDP rnet_rtt_probe. Stored as
+ * max(local, peer REPORT) so an optimistic guest sample cannot undercut
+ * delay. Not the lobby WebSocket RTT. */
 int  psx_lobby_member_latency_ms(int slot);
 
 /* True when member.player_id matches psx_lobby_host_player_id().
@@ -216,6 +217,10 @@ int  psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps);
  */
 int  psx_lobby_launch_pending(void);
 void psx_lobby_clear_launch_pending(void);
+
+/* After soft-return / rematch: allow waiting-room ICE/UDP RTT probes again.
+ * Launch suspends them so they cannot steal match ICE signaling. */
+void psx_lobby_resume_waiting_room_rtt(void);
 
 #ifdef __cplusplus
 }

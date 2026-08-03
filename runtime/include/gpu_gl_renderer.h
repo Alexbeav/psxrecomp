@@ -77,6 +77,12 @@ void gl_renderer_invalidate_present(void);
  * blit and left post-FMV menus without texture pages. */
 void gl_renderer_restage_vram_after_savestate(void);
 
+/* Netplay dual-raster: every GP0 also writes software VRAM @ 1× (snaps /
+ * digests / GPUREAD authority) while the OpenGL hr FBO keeps settings-scale
+ * SSAA for present-only. Never enables glReadPixels; CPU stays current. */
+void gl_renderer_set_cpu_auth_dual(int on);
+int  gl_renderer_cpu_auth_dual(void);
+
 /* Post-savestate freeze probe: skip/swap/dirty-mark counters (GL present path).
  * take() returns deltas since the previous take/reset. Safe no-ops when GL is
  * inactive. rect_dirty tests the current present-tile dirty bits. */

@@ -33,6 +33,8 @@ typedef struct PsxNpSchedBridge {
     int *input_delay;      /* committed D, ticks */
     int *input_prediction; /* P cap, ticks */
     int *local_slot;
+    /* Sticky for the session (from launch cfg / PSX_NET_FORCE_TURN). */
+    int force_turn;        /* 1 = ICE relay-only — auto-delay floor applies */
 } PsxNpSchedBridge;
 
 void np_sched_bind(const PsxNpSchedBridge *bridge);
@@ -83,6 +85,11 @@ void np_sched_note_mispredict(uint32_t age);
 /* Episode boundary (commit/abort): clear the pegged-streak off-guard and arm
  * cushion rebuild. (Public alias: psx_netplay_timesync_on_episode_boundary.) */
 void np_sched_note_episode_boundary(void);
+
+/* §83 C: after baseline-abort Live realign, allow invent despite absurd
+ * remote_lead for a short window so recovery can catch up (soak: lead=500
+ * refuse invent → crawl). Tip-hold ring-age absurd leads stay blocked. */
+void np_sched_arm_absurd_invent_catchup(void);
 
 #ifdef __cplusplus
 }

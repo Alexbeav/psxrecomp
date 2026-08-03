@@ -120,6 +120,43 @@ int  psx_netplay_consume_load_apply_failed(void);
  * Always refreshes the live physical snapshot (see live_pad_buttons). */
 void psx_netplay_stage_local(const PsxNetPad *pad);
 
+/* PSX_RB_PAD_TRACE=1: host capture checkpoint (card / SDL Start / fallback).
+ * Call from capture_local_human_pad each sample; no-op when trace off. */
+void psx_netplay_pad_trace_dev(int card, int fallback, int sdl_start,
+                               uint16_t buttons);
+
+/*
+ * Start cadence bisect (PSX_START_BISECT=1): every-sample pipeline log for
+ * offline vs online. Does not change debounce. Optional feature kills
+ * (one at a time) for Stage-3 isolation — see ROLLBACK_MOTK_HOOKUP.md.
+ *
+ *   PSX_START_BISECT_NO_GC_UPDATE_IN_ADMIT=1
+ *   PSX_START_BISECT_NO_TIPHOLD_CAPTURE=1
+ *   PSX_START_BISECT_NO_CATCHUP=1
+ *   PSX_START_BISECT_NO_REPLAY_PRODUCE=1
+ *   PSX_START_BISECT_SPIN=1  — also log raw SDL on admit spins (dense)
+ */
+int  psx_start_bisect_enabled(void);
+int  psx_start_bisect_no_gc_update_in_admit(void);
+int  psx_start_bisect_no_tiphold_capture(void);
+int  psx_start_bisect_no_catchup(void);
+int  psx_start_bisect_no_replay_produce(void);
+int  psx_start_bisect_spin_log(void);
+/* path: SDL|cap|stage|tip|sio|spin  — start bits are 1=pressed (active-low decoded). */
+void psx_start_bisect_log(const char *path, uint32_t sim, int sdl_start,
+                          int cap_start, int deb_start, int sio_start,
+                          int latched, int tip_hold, int resim);
+
+/*
+ * Start consumer bisect (PSX_START_CONSUMER=1): log the Start bit SIO presents
+ * to the guest each sim frame (offline present sample / online publish apply).
+ * Compare offline vs online timelines — not SDL. edge=↓|↑|- .
+ */
+int  psx_start_consumer_enabled(void);
+/* Offline: bump once per sample_pad_into_sio; returned value is the frame id. */
+uint32_t psx_start_consumer_offline_frame(void);
+void psx_start_consumer_note(int slot, uint32_t sim, uint16_t buttons);
+
 /* 1 while linking or before this sim tick's local pad is latched. */
 int  psx_netplay_needs_local_sample(void);
 
@@ -211,8 +248,12 @@ void psx_netplay_on_rb_snap_loaded(void);
  * second recovery episode cannot open on the same Live tick. */
 void psx_netplay_hc_fork_recovery_restart(void);
 
-/* Force software GPU when netplay starts — GL/VK VRAM readback is host-GPU
- * nondeterministic and forks rollback snaps/resim. Implemented in main.cpp. */
+/* Netplay GPU lock: CPU-authoritative VRAM (software raster) so snaps/digests
+ * are peer-identical. If OpenGL was requested, keep the GL context for
+ * present-only (CPU scanout → gl_renderer_present) — never glReadPixels.
+ * Sim is forced to internal scale 1 (no SW SSAA hi-res mirror); present may
+ * still upscale via GL/SDL filter. Vulkan still falls back to pure software
+ * present. Implemented in main.cpp. */
 void psx_frontend_netplay_force_sw_gpu(void);
 
 #ifdef __cplusplus

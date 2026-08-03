@@ -950,7 +950,7 @@ struct UserSettings {
     bool parse_error = false;
 
     // [video]
-    bool has_renderer       = false; int  renderer       = 0; // 0=software,1=opengl
+    bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
     bool has_supersampling  = false; int  supersampling  = 1; // 1..4
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.

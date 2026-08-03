@@ -52,6 +52,7 @@ int  psx_lobby_set_match_caps(const PsxLobbyMatchCaps *c) { (void)c; return -1; 
 int  psx_lobby_member_count(void) { return 0; }
 int  psx_lobby_member_get(int index, PsxLobbyMember *out) { (void)index; (void)out; return 0; }
 int  psx_lobby_member_latency_ms(int slot) { (void)slot; return -1; }
+void psx_lobby_resume_waiting_room_rtt(void) {}
 int  psx_lobby_member_is_host(const PsxLobbyMember *member)
 {
     (void)member;
@@ -92,6 +93,8 @@ void psx_lobby_clear_launch_pending(void) {}
 #include "rnet_ws.h"
 #include "rnet_sha1.h"
 #include "recomp_net/address.h"
+#include "recomp_net/ice.h"
+#include "recomp_net/ice_rtt.h"
 #include "recomp_net/lan_beacon.h"
 #include "recomp_net/rtt_probe.h"
 
@@ -159,8 +162,12 @@ typedef struct {
     int sig_head;
     int sig_tail;
     int sig_count;
-    /* 0 while in lobby / after soft-return — drop stale ICE; launch sets 1. */
+    /* 0 when idle / after leave — drop stale ICE. Set while lobby ICE RTT
+     * probe is active (2+ seated) and again on launch for match ICE. */
     int ice_signal_accept;
+    /* 1 from op:launch until rematch/leave — blocks waiting-room ICE/UDP RTT
+     * so clear_launch_pending cannot revive a probe that steals match signals. */
+    int ice_rtt_suspended;
     /* Coturn mint from WS get_turn_credentials. */
     PsxLobbyTurnCredentials turn;
     time_t turn_received_at;
@@ -199,8 +206,17 @@ static int using_server_input_relay(const PsxLobbyJoinInfo *j);
 static void queue_send(const char *msg);
 static void flush_pending(void);
 static void lobby_rtt_close(void);
+static void lobby_ice_rtt_close(void);
+static int  lobby_ice_rtt_peer_id(char *out, size_t cap);
+static void lobby_rtt_store_for_peer(const char *peer_id, int ms);
 
 static RNetRttProbe *g_rtt_probe;
+
+/* Waiting-room ICE/TURN RTT (CGNAT-safe). Prefer over direct UDP probe. */
+static RNetIceRttProbe *g_ice_rtt;
+static char g_ice_rtt_peer_id[PSX_LOBBY_ID_LEN];
+static int g_ice_rtt_force_relay;
+static uint64_t g_ice_rtt_last_log_ms;
 
 /* One-shot list latency: burst-ping LAN + public candidates after lobby_list. */
 #define PSX_LOBBY_MAX_PROBE_PEND (PSX_LOBBY_MAX_LIST * (PSX_LOBBY_MAX_LAN_EPS + 1))
@@ -1753,9 +1769,14 @@ static void handle_server_json(const char *json)
         }
         g_lc.join.last_error[0] = '\0';
         g_lc.launch_pending = 1;
-        /* Accept ICE for this match; queue was idle (accept=0) during lobby. */
+        /* Match owns WS ICE signals until rematch — clear_launch_pending must
+         * not revive the waiting-room probe (it was stealing match candidates). */
+        g_lc.ice_rtt_suspended = 1;
+        lobby_ice_rtt_close();
+        lobby_rtt_close();
+        psx_lobby_clear_signals();
+        /* Accept ICE for this match; lobby probe had accept=1 while seated. */
         g_lc.ice_signal_accept = 1;
-        lobby_rtt_close(); /* free game UDP port for the session bind */
         rnet_lan_beacon_close(&g_lan_beacon_pub);
         lobby_host_advertise_reset();
         return;
@@ -1776,8 +1797,14 @@ static void handle_server_json(const char *json)
         if (type == PSX_LOBBY_SIG_RTT_REPORT) {
             int slot = member_slot_for_player(from);
             int ms = (int)strtol(text_buf, NULL, 10);
-            if (slot >= 0 && slot < PSX_LOBBY_MAX_MEMBERS && ms >= 0 && ms <= 60000)
-                g_lc.member_rtt_ms[slot] = ms;
+            /* Max with local measure — never let an optimistic peer REPORT
+             * undercut delay provisioning (Force TURN / asymmetric ICE). */
+            if (slot >= 0 && slot < PSX_LOBBY_MAX_MEMBERS && ms >= 0 &&
+                ms <= 60000) {
+                if (g_lc.member_rtt_ms[slot] < 0 ||
+                    ms > g_lc.member_rtt_ms[slot])
+                    g_lc.member_rtt_ms[slot] = ms;
+            }
             return;
         }
         enqueue_signal(type, flag, text_buf);
@@ -1806,6 +1833,8 @@ static void handle_server_json(const char *json)
     }
     if (strcmp(op, "lobby_closed") == 0 || strcmp(op, "left") == 0 ||
         strcmp(op, "kicked") == 0) {
+        g_lc.ice_rtt_suspended = 0;
+        lobby_ice_rtt_close();
         lobby_rtt_close();
         lobby_host_advertise_reset();
         g_lc.in_lobby = 0;
@@ -1926,6 +1955,8 @@ int psx_lobby_connect(const char *ws_url)
 
 void psx_lobby_disconnect(void)
 {
+    g_lc.ice_rtt_suspended = 0;
+    lobby_ice_rtt_close();
     lobby_rtt_close();
     lobby_list_rtt_close();
     lobby_lan_beacon_close_all();
@@ -1984,7 +2015,8 @@ static void lobby_rtt_ensure(void)
     const char *bind;
     const char *peer;
 
-    if (!g_lc.in_lobby || g_lc.launch_pending || using_server_input_relay(&g_lc.join)) {
+    if (!g_lc.in_lobby || g_lc.launch_pending || g_lc.ice_rtt_suspended ||
+        using_server_input_relay(&g_lc.join)) {
         lobby_rtt_close();
         return;
     }
@@ -2013,7 +2045,7 @@ static void lobby_rtt_tick(void)
     int ms = 0;
     int got;
 
-    if (!g_lc.in_lobby || g_lc.launch_pending) {
+    if (!g_lc.in_lobby || g_lc.launch_pending || g_lc.ice_rtt_suspended) {
         lobby_rtt_close();
         return;
     }
@@ -2028,19 +2060,13 @@ static void lobby_rtt_tick(void)
 
     got = rnet_rtt_probe_pump(g_rtt_probe, &ms);
     if (got == 1) {
-        if (g_lc.is_host) {
-            int slot = first_guest_member_slot();
-            if (slot >= 0)
-                g_lc.member_rtt_ms[slot] = ms;
-        } else {
-            int slot = local_member_slot();
-            if (slot >= 0)
-                g_lc.member_rtt_ms[slot] = ms;
-            {
-                char report[32];
-                snprintf(report, sizeof(report), "%d", ms);
-                (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
-            }
+        char peer_id[PSX_LOBBY_ID_LEN];
+        if (lobby_ice_rtt_peer_id(peer_id, sizeof(peer_id)) == 0)
+            lobby_rtt_store_for_peer(peer_id, ms);
+        if (!g_lc.is_host) {
+            char report[32];
+            snprintf(report, sizeof(report), "%d", ms);
+            (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
         }
     }
 
@@ -2051,6 +2077,196 @@ static void lobby_rtt_tick(void)
             g_lc.rtt_next_ping_ms = now + 2500ull;
         }
     }
+}
+
+static void lobby_ice_rtt_close(void)
+{
+    rnet_ice_rtt_close(&g_ice_rtt);
+    g_ice_rtt_peer_id[0] = '\0';
+    g_ice_rtt_force_relay = 0;
+    g_ice_rtt_last_log_ms = 0;
+    /* Keep accept=1 through launch / match so match ICE can queue offers.
+     * Waiting-room resume clears accept until the probe restarts. */
+    if (!g_lc.launch_pending && !g_lc.ice_rtt_suspended)
+        g_lc.ice_signal_accept = 0;
+}
+
+/* Store RTT under the remote seat (not self). Keep the pessimistic sample:
+ * guest REPORT can undercut a higher host ICE measure and starve delay. */
+static void lobby_rtt_store_for_peer(const char *peer_id, int ms)
+{
+    int slot;
+    if (ms < 0 || !peer_id || !peer_id[0])
+        return;
+    slot = member_slot_for_player(peer_id);
+    if (slot < 0 || slot >= PSX_LOBBY_MAX_MEMBERS)
+        return;
+    if (g_lc.member_rtt_ms[slot] < 0 || ms > g_lc.member_rtt_ms[slot])
+        g_lc.member_rtt_ms[slot] = ms;
+}
+
+static void lobby_ice_rtt_emit(const RNetSignal *msg, void *user)
+{
+    (void)user;
+    if (!msg)
+        return;
+    (void)psx_lobby_send_signal((int)msg->type, (int)msg->flag, msg->text);
+}
+
+static int lobby_ice_rtt_peer_id(char *out, size_t cap)
+{
+    int i;
+    if (!out || cap == 0)
+        return -1;
+    out[0] = '\0';
+    for (i = 0; i < g_lc.member_count; ++i) {
+        if (!g_lc.members[i].player_id[0])
+            continue;
+        if (g_lc.player_id[0] &&
+            strcmp(g_lc.members[i].player_id, g_lc.player_id) == 0)
+            continue;
+        strncpy(out, g_lc.members[i].player_id, cap - 1);
+        out[cap - 1] = '\0';
+        return 0;
+    }
+    return -1;
+}
+
+static void lobby_ice_rtt_apply_ms(int ms)
+{
+    static int s_last_report = -1;
+    if (ms < 0)
+        return;
+    /* Attribute to the probed remote seat (host from guest, guest from host). */
+    if (g_ice_rtt_peer_id[0])
+        lobby_rtt_store_for_peer(g_ice_rtt_peer_id, ms);
+    if (!g_lc.is_host && ms != s_last_report) {
+        char report[32];
+        snprintf(report, sizeof(report), "%d", ms);
+        (void)psx_lobby_send_signal(PSX_LOBBY_SIG_RTT_REPORT, 0, report);
+        s_last_report = ms;
+    }
+}
+
+/* ICE/TURN waiting-room RTT — works on CGNAT when direct UDP probe cannot. */
+static void lobby_ice_rtt_tick(void)
+{
+    char peer_id[PSX_LOBBY_ID_LEN];
+    int want_force_relay;
+    int type = 0, flag = 0;
+    char text[2048];
+    int ms;
+    RNetIceState st;
+    char path[16];
+
+    if (!g_lc.in_lobby || g_lc.launch_pending || g_lc.ice_rtt_suspended ||
+        g_lc.member_count < 2) {
+        lobby_ice_rtt_close();
+        return;
+    }
+
+#if !defined(RNET_ENABLE_ICE)
+    return;
+#else
+    if (!g_lc.turn.valid) {
+        if (!g_lc.turn_request_pending)
+            (void)queue_turn_credentials_request();
+        return;
+    }
+
+    want_force_relay = (g_lc.match_caps.valid && g_lc.match_caps.force_turn) ? 1 : 0;
+    if (lobby_ice_rtt_peer_id(peer_id, sizeof(peer_id)) != 0) {
+        lobby_ice_rtt_close();
+        return;
+    }
+
+    /* Queue peer SDP/candidates even before the local agent exists. */
+    g_lc.ice_signal_accept = 1;
+
+    if (g_ice_rtt &&
+        (strcmp(peer_id, g_ice_rtt_peer_id) != 0 ||
+         want_force_relay != g_ice_rtt_force_relay)) {
+        lobby_ice_rtt_close();
+        psx_lobby_clear_signals();
+        g_lc.ice_signal_accept = 1;
+    }
+
+    if (!g_ice_rtt) {
+        RNetIceConfig ice;
+        RNetIpv4Address addrs[8];
+        int naddr;
+        char bind_addr[64];
+
+        rnet_ice_config_init_defaults(&ice);
+        ice.controlling = g_lc.is_host ? 1u : 0u;
+        ice.force_relay = want_force_relay ? 1u : 0u;
+        if (g_lc.turn.stun_host[0]) {
+            ice.stun_host = g_lc.turn.stun_host;
+            ice.stun_port = (rnet_u16)(g_lc.turn.stun_port > 0 ? g_lc.turn.stun_port
+                                                               : 3478);
+        }
+        if (g_lc.turn.turn_host[0] && g_lc.turn.username[0] &&
+            g_lc.turn.password[0]) {
+            ice.turn_host = g_lc.turn.turn_host;
+            ice.turn_user = g_lc.turn.username;
+            ice.turn_pass = g_lc.turn.password;
+            ice.turn_port = (rnet_u16)(g_lc.turn.turn_port > 0 ? g_lc.turn.turn_port
+                                                               : 3478);
+        } else if (want_force_relay) {
+            /* Force TURN without creds — wait for mint. */
+            return;
+        }
+        bind_addr[0] = '\0';
+        naddr = rnet_ipv4_enumerate(addrs, (int)(sizeof(addrs) / sizeof(addrs[0])));
+        if (naddr > 0 && addrs[0].address[0]) {
+            snprintf(bind_addr, sizeof(bind_addr), "%s", addrs[0].address);
+            ice.bind_address = bind_addr;
+        }
+        /* Ephemeral UDP — do not steal the game bind used by STUN advertise. */
+        ice.bind_port = 0;
+
+        if (rnet_ice_rtt_open(&g_ice_rtt, &ice, lobby_ice_rtt_emit, NULL) != 0)
+            return;
+        strncpy(g_ice_rtt_peer_id, peer_id, sizeof(g_ice_rtt_peer_id) - 1);
+        g_ice_rtt_peer_id[sizeof(g_ice_rtt_peer_id) - 1] = '\0';
+        g_ice_rtt_force_relay = want_force_relay;
+        fprintf(stderr,
+                "psx_lobby: ICE RTT probe start (controlling=%d force_relay=%d)\n",
+                g_lc.is_host ? 1 : 0, want_force_relay);
+        fflush(stderr);
+    }
+
+    while (psx_lobby_poll_signal(&type, &flag, text, sizeof(text))) {
+        RNetSignal sig;
+        memset(&sig, 0, sizeof(sig));
+        if (type == (int)RNET_SIGNAL_LOCAL_SDP)
+            type = (int)RNET_SIGNAL_REMOTE_SDP;
+        else if (type == (int)RNET_SIGNAL_LOCAL_CANDIDATE)
+            type = (int)RNET_SIGNAL_REMOTE_CANDIDATE;
+        sig.type = (RNetSignalType)type;
+        sig.flag = (rnet_u8)(flag & 0xFF);
+        strncpy(sig.text, text, sizeof(sig.text) - 1);
+        rnet_ice_rtt_push_signal(g_ice_rtt, &sig);
+    }
+
+    rnet_ice_rtt_pump(g_ice_rtt);
+    ms = rnet_ice_rtt_ms(g_ice_rtt);
+    if (ms >= 0)
+        lobby_ice_rtt_apply_ms(ms);
+
+    st = rnet_ice_rtt_state(g_ice_rtt);
+    rnet_ice_rtt_selected_path(g_ice_rtt, path, sizeof(path));
+    {
+        uint64_t now = lobby_mono_ms();
+        if (now - g_ice_rtt_last_log_ms >= 3000ull) {
+            g_ice_rtt_last_log_ms = now;
+            fprintf(stderr,
+                    "psx_lobby: ICE RTT state=%s path=%s rtt=%d\n",
+                    rnet_ice_state_name(st), path, ms);
+            fflush(stderr);
+        }
+    }
+#endif /* RNET_ENABLE_ICE */
 }
 
 void psx_lobby_pump(void)
@@ -2145,6 +2361,8 @@ void psx_lobby_pump(void)
     lobby_lan_beacon_tick();
     /* Peer-path UDP latency for the lobby seat table. */
     lobby_rtt_tick();
+    /* ICE/TURN data-channel RTT (CGNAT / Force TURN); overrides UDP when ready. */
+    lobby_ice_rtt_tick();
     /* One-shot list latency after Refresh / lobby_list. */
     lobby_list_rtt_tick();
 }
@@ -2259,6 +2477,8 @@ int psx_lobby_leave(void)
 {
     queue_send("{\"op\":\"leave\"}");
     flush_pending();
+    g_lc.ice_rtt_suspended = 0;
+    lobby_ice_rtt_close();
     lobby_rtt_close();
     lobby_host_advertise_reset();
     g_lc.in_lobby = 0;
@@ -2368,16 +2588,12 @@ int psx_lobby_member_get(int index, PsxLobbyMember *out)
 
 int psx_lobby_member_latency_ms(int slot)
 {
+    int local;
     if (slot < 0 || slot >= PSX_LOBBY_MAX_MEMBERS)
         return -1;
-    if (g_lc.host_player_id[0]) {
-        int i;
-        for (i = 0; i < g_lc.member_count; ++i) {
-            if (g_lc.members[i].slot == slot &&
-                strcmp(g_lc.members[i].player_id, g_lc.host_player_id) == 0)
-                return -1; /* host row */
-        }
-    }
+    local = local_member_slot();
+    if (local >= 0 && slot == local)
+        return -1; /* never show self-RTT */
     return g_lc.member_rtt_ms[slot];
 }
 
@@ -2440,6 +2656,16 @@ int psx_lobby_launch_pending(void)
 void psx_lobby_clear_launch_pending(void)
 {
     g_lc.launch_pending = 0;
+    /* Match may already own ICE — keep waiting-room probes dead. */
+    lobby_ice_rtt_close();
+    lobby_rtt_close();
+}
+
+void psx_lobby_resume_waiting_room_rtt(void)
+{
+    g_lc.ice_rtt_suspended = 0;
+    lobby_ice_rtt_close();
+    lobby_rtt_close();
 }
 
 int psx_lobby_send_signal(int type, int flag, const char *text)

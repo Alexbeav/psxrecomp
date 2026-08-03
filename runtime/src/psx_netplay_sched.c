@@ -134,6 +134,10 @@ static int g_cushion_rebuild;
  * clears after a hold-off so the rebuild actually reaches equilibrium
  * instead of declaring victory one tick short and inventing into the gap. */
 static uint32_t g_cushion_rebuild_since_ms;
+/* §83 C: invent through cushion_rebuild while remote_lead is absurd after a
+ * baseline-abort Live realign (soak: lead=500 refuse invent → crawl). 0 = off. */
+static uint32_t g_absurd_catchup_until_ms;
+#define RB_ABSURD_INVENT_CATCHUP_MS 2500u
 
 /* ------------------------------------------------------------------ */
 /* §57: arrival-driven delay controller state                          */
@@ -532,6 +536,30 @@ void np_sched_note_episode_boundary(void)
         g_cushion_rebuild_since_ms = now ? now : 1u;
     }
     g_cushion_rebuild = 1;
+}
+
+void np_sched_arm_absurd_invent_catchup(void)
+{
+    uint32_t now = sched_mono_ms();
+    g_absurd_catchup_until_ms = now + RB_ABSURD_INVENT_CATCHUP_MS;
+    if (g_absurd_catchup_until_ms == 0u)
+        g_absurd_catchup_until_ms = 1u;
+    fprintf(stderr,
+            "psxrecomp: rb absurd invent catchup armed %u ms "
+            "(baseline-abort realign — invent allowed despite absurd lead)\n",
+            (unsigned)RB_ABSURD_INVENT_CATCHUP_MS);
+    fflush(stderr);
+}
+
+static int absurd_invent_catchup_active(uint32_t now)
+{
+    if (g_absurd_catchup_until_ms == 0u)
+        return 0;
+    if ((int32_t)(now - g_absurd_catchup_until_ms) >= 0) {
+        g_absurd_catchup_until_ms = 0u;
+        return 0;
+    }
+    return 1;
 }
 
 void psx_netplay_timesync_on_episode_boundary(void)
@@ -1113,6 +1141,9 @@ static void np_pcap_freeze_exit(void)
 #define RB_AUTO_DELAY_EVAL_MS     5000u
 #define RB_AUTO_DELAY_AGREE       3u
 #define RB_AUTO_DELAY_COOLDOWN_MS 30000u
+/* Match launcher Force TURN Play floor — do not shrink below this mid-match
+ * when the session is relay-only (soak: auto delay 6→5 then invent/fork). */
+#define RB_FORCE_TURN_DELAY_FLOOR 6
 
 static void np_auto_delay_tick(uint32_t now)
 {
@@ -1198,8 +1229,13 @@ static void np_auto_delay_tick(uint32_t now)
     } else {
         target = d;
     }
-    if (target < 2)
-        target = 2;
+    {
+        int floor_d = 2;
+        if (g_sb.force_turn)
+            floor_d = RB_FORCE_TURN_DELAY_FLOOR;
+        if (target < floor_d)
+            target = floor_d;
+    }
     if (target > RB_ADAPT_DELAY_MAX)
         target = RB_ADAPT_DELAY_MAX;
 
@@ -1406,6 +1442,7 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
         }
         if (st->remote_lead >= full && st->remote_lead <= max_ok) {
             g_cushion_rebuild = 0;
+            g_absurd_catchup_until_ms = 0u;
             fprintf(stderr,
                     "psxrecomp: rb cushion rebuilt FULL remote_lead=%d D=%d\n",
                     st->remote_lead, d);
@@ -1416,6 +1453,7 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
                                 : 0u;
             if (held >= 400u) {
                 g_cushion_rebuild = 0;
+                g_absurd_catchup_until_ms = 0u;
                 fprintf(stderr,
                         "psxrecomp: rb cushion rebuilt ACH remote_lead=%d "
                         "achievable=%d D=%d transit_est=%.2f held=%ums\n",
@@ -1427,8 +1465,18 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
         } else if (st->remote_lead > max_ok) {
             static uint32_t s_last_absurd_ms;
             uint32_t now_a = sched_mono_ms();
-            if (s_last_absurd_ms == 0u ||
-                (uint32_t)(now_a - s_last_absurd_ms) >= 1000u) {
+            if (absurd_invent_catchup_active(now_a)) {
+                if (s_last_absurd_ms == 0u ||
+                    (uint32_t)(now_a - s_last_absurd_ms) >= 1000u) {
+                    s_last_absurd_ms = now_a ? now_a : 1u;
+                    fprintf(stderr,
+                            "psxrecomp: rb cushion CATCHUP (absurd lead=%d > %d "
+                            "— invent allowed until catchup expires)\n",
+                            st->remote_lead, max_ok);
+                    fflush(stderr);
+                }
+            } else if (s_last_absurd_ms == 0u ||
+                       (uint32_t)(now_a - s_last_absurd_ms) >= 1000u) {
                 s_last_absurd_ms = now_a ? now_a : 1u;
                 fprintf(stderr,
                         "psxrecomp: rb cushion KEEP (absurd lead=%d > %d — "
@@ -1483,15 +1531,27 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
             *reason_out = "pcap_freeze";
         return 1;
     }
-    /* Cushion rebuild: wait for real remote rows (no invent). */
+    /* Cushion rebuild: wait for real remote rows (no invent) — unless §83 C
+     * absurd catchup is armed after a baseline-abort Live realign. */
     if (g_cushion_rebuild && !psx_netplay_rb_active()) {
-        if (st->highest_remote_wire > wire)
-            np_diag_wire_hole(slot, sim, wire, st, "cushion_rebuild");
-        else
-            np_sched_set_admit_stall("cushion_rebuild");
-        if (reason_out)
-            *reason_out = "cushion_rebuild";
-        return 1;
+        int d = sched_delay();
+        int pred = g_sb.input_prediction ? *g_sb.input_prediction : 0;
+        int max_ok = d + (pred > 0 ? pred : 4);
+        uint32_t now_c = sched_mono_ms();
+        if (max_ok < d + 2)
+            max_ok = d + 2;
+        if (absurd_invent_catchup_active(now_c) && st->remote_lead > max_ok) {
+            /* Fall through to invent path — catch up the realign cliff. */
+            np_sched_set_admit_stall("absurd_catchup");
+        } else {
+            if (st->highest_remote_wire > wire)
+                np_diag_wire_hole(slot, sim, wire, st, "cushion_rebuild");
+            else
+                np_sched_set_admit_stall("cushion_rebuild");
+            if (reason_out)
+                *reason_out = "cushion_rebuild";
+            return 1;
+        }
     }
 
     if (s_gap1_legacy < 0) {

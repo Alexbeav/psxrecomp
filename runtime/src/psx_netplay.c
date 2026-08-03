@@ -183,6 +183,211 @@ void psx_netplay_release_pads(void)
     }
 }
 
+/* ---- Start cadence bisect (always linked; PSX_START_BISECT=1) ---- */
+
+static uint32_t psx_start_bisect_wall_ms(void)
+{
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount();
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0u;
+    return (uint32_t)(ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull);
+#endif
+}
+
+static int psx_start_bisect_env_flag(const char *name)
+{
+    const char *e = getenv(name);
+    return (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+}
+
+int psx_start_bisect_enabled(void)
+{
+    static int s_on = -1;
+    if (s_on < 0) {
+        s_on = psx_start_bisect_env_flag("PSX_START_BISECT");
+        if (s_on) {
+            fprintf(stderr,
+                    "psxrecomp: start-bisect ON (PSX_START_BISECT=1 — every "
+                    "SDL/cap/stage/sio Start sample; hold Start 1s offline + "
+                    "online; compare streams)\n");
+            fflush(stderr);
+        }
+    }
+    return s_on;
+}
+
+int psx_start_bisect_no_gc_update_in_admit(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        s = psx_start_bisect_env_flag("PSX_START_BISECT_NO_GC_UPDATE_IN_ADMIT");
+        if (s)
+            fprintf(stderr,
+                    "psxrecomp: start-bisect NO GameControllerUpdate in admit "
+                    "spin\n");
+    }
+    return s;
+}
+
+int psx_start_bisect_no_tiphold_capture(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        s = psx_start_bisect_env_flag("PSX_START_BISECT_NO_TIPHOLD_CAPTURE");
+        if (s)
+            fprintf(stderr,
+                    "psxrecomp: start-bisect NO TipHold capture refresh\n");
+    }
+    return s;
+}
+
+int psx_start_bisect_no_catchup(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        s = psx_start_bisect_env_flag("PSX_START_BISECT_NO_CATCHUP");
+        if (s)
+            fprintf(stderr, "psxrecomp: start-bisect NO catch-up budget\n");
+    }
+    return s;
+}
+
+int psx_start_bisect_no_replay_produce(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        s = psx_start_bisect_env_flag("PSX_START_BISECT_NO_REPLAY_PRODUCE");
+        if (s)
+            fprintf(stderr,
+                    "psxrecomp: start-bisect NO Replay tip produce\n");
+    }
+    return s;
+}
+
+int psx_start_bisect_spin_log(void)
+{
+    static int s = -1;
+    if (s < 0)
+        s = psx_start_bisect_env_flag("PSX_START_BISECT_SPIN");
+    return s;
+}
+
+void psx_start_bisect_log(const char *path, uint32_t sim, int sdl_start,
+                          int cap_start, int deb_start, int sio_start,
+                          int latched, int tip_hold, int resim)
+{
+    static uint32_t s_n;
+    const char *mode;
+    char sdl_buf[8];
+    char cap_buf[8];
+    char deb_buf[8];
+    char sio_buf[8];
+    if (!psx_start_bisect_enabled())
+        return;
+    mode = psx_netplay_active() ? "online" : "offline";
+    if (sdl_start < 0)
+        snprintf(sdl_buf, sizeof(sdl_buf), "na");
+    else
+        snprintf(sdl_buf, sizeof(sdl_buf), "%d", sdl_start ? 1 : 0);
+    if (cap_start < 0)
+        snprintf(cap_buf, sizeof(cap_buf), "na");
+    else
+        snprintf(cap_buf, sizeof(cap_buf), "%d", cap_start ? 1 : 0);
+    if (deb_start < 0)
+        snprintf(deb_buf, sizeof(deb_buf), "na");
+    else
+        snprintf(deb_buf, sizeof(deb_buf), "%d", deb_start ? 1 : 0);
+    if (sio_start < 0)
+        snprintf(sio_buf, sizeof(sio_buf), "na");
+    else
+        snprintf(sio_buf, sizeof(sio_buf), "%d", sio_start ? 1 : 0);
+    s_n++;
+    fprintf(stderr,
+            "psxrecomp: start-bisect n=%u mode=%s path=%s wall_ms=%u sim=%u "
+            "sdl=%s cap=%s deb=%s sio=%s latch=%d tip_hold=%d resim=%d\n",
+            (unsigned)s_n, mode, path ? path : "?",
+            (unsigned)psx_start_bisect_wall_ms(), (unsigned)sim, sdl_buf,
+            cap_buf, deb_buf, sio_buf, latched ? 1 : 0, tip_hold ? 1 : 0,
+            resim ? 1 : 0);
+    fflush(stderr);
+}
+
+/* ---- Start consumer bisect (PSX_START_CONSUMER=1) ----
+ * What MotK's SIO reader sees each sim frame — not raw SDL. */
+
+static uint32_t g_start_consumer_offline_frame;
+
+int psx_start_consumer_enabled(void)
+{
+    static int s_on = -1;
+    if (s_on < 0) {
+        s_on = psx_start_bisect_env_flag("PSX_START_CONSUMER");
+        if (s_on) {
+            fprintf(stderr,
+                    "psxrecomp: start-consumer ON (PSX_START_CONSUMER=1 — "
+                    "per-sim Start bit at SIO apply; hold Start offline + "
+                    "online; compare game-visible timelines)\n");
+            fflush(stderr);
+        }
+    }
+    return s_on;
+}
+
+uint32_t psx_start_consumer_offline_frame(void)
+{
+    if (!psx_start_consumer_enabled())
+        return 0u;
+    g_start_consumer_offline_frame++;
+    return g_start_consumer_offline_frame;
+}
+
+void psx_start_consumer_note(int slot, uint32_t sim, uint16_t buttons)
+{
+    static uint32_t s_n;
+    static uint32_t s_last_sim[PSX_MAX_PLAYERS];
+    static uint8_t s_last_start[PSX_MAX_PLAYERS];
+    static uint8_t s_have[PSX_MAX_PLAYERS];
+    int start;
+    const char *edge;
+    const char *mode;
+    int resim;
+
+    if (!psx_start_consumer_enabled())
+        return;
+    if (slot < 0 || slot >= PSX_MAX_PLAYERS)
+        return;
+
+    /* PSX digital Start = bit 3, active-low. */
+    start = ((buttons & 0x0008u) == 0u) ? 1 : 0;
+
+    /* Same sim + same Start: publish re-apply / multi-slot noise — skip. */
+    if (s_have[slot] && s_last_sim[slot] == sim && s_last_start[slot] == (uint8_t)start)
+        return;
+
+    if (s_have[slot] && s_last_start[slot] != (uint8_t)start)
+        edge = start ? "↓" : "↑";
+    else
+        edge = "-";
+
+    mode = psx_netplay_active() ? "online" : "offline";
+    resim = psx_netplay_is_resimulating();
+    s_n++;
+    fprintf(stderr,
+            "psxrecomp: start-consumer n=%u mode=%s sim=%u slot=%d start=%d "
+            "edge=%s buttons=%04x wall_ms=%u resim=%d\n",
+            (unsigned)s_n, mode, (unsigned)sim, slot, start, edge,
+            (unsigned)buttons, (unsigned)psx_start_bisect_wall_ms(),
+            resim ? 1 : 0);
+    fflush(stderr);
+
+    s_last_sim[slot] = sim;
+    s_last_start[slot] = (uint8_t)start;
+    s_have[slot] = 1u;
+}
+
 #if !defined(PSX_HAS_RECOMP_NET)
 
 int  psx_netplay_active(void) { return 0; }
@@ -200,6 +405,14 @@ int  psx_netplay_start(const PsxNetplayConfig *cfg)
 }
 void psx_netplay_shutdown(void) {}
 void psx_netplay_stage_local(const PsxNetPad *pad) { (void)pad; }
+void psx_netplay_pad_trace_dev(int card, int fallback, int sdl_start,
+                               uint16_t buttons)
+{
+    (void)card;
+    (void)fallback;
+    (void)sdl_start;
+    (void)buttons;
+}
 void psx_netplay_on_rb_snap_loaded(void) {}
 void psx_netplay_hc_fork_recovery_restart(void) {}
 int  psx_netplay_needs_local_sample(void) { return 0; }
@@ -435,9 +648,14 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
 {
     uint32_t sim;
     int remote;
+    uint32_t fork_cap;
+    uint32_t need_retry;
     /* Fire before the 128-slot hc ring wraps and peek goes quiet. */
     const uint32_t persist_ticks = 16u;
     const uint32_t retry_ticks = 32u;
+    /* §71: after baseline bisect failures, do not reopen every 32 ticks into
+     * the same doomed ladder (soak: load 1808→1792→1776→… baseline mismatch). */
+    const uint32_t retry_ticks_fork_cap = 256u;
 
     if (!g_np.rollback || !g_np.session)
         return;
@@ -453,6 +671,7 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent())
         return;
     sim = rnet_session_sim_tick(g_np.session);
+    fork_cap = psx_netplay_rb_baseline_fork_cap();
     if (fork_tick != s_fork_tick) {
         s_fork_tick = fork_tick;
         s_fork_first_sim = sim;
@@ -460,8 +679,9 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
     }
     if (sim < s_fork_first_sim || (sim - s_fork_first_sim) < persist_ticks)
         return;
+    need_retry = (fork_cap > 0u) ? retry_ticks_fork_cap : retry_ticks;
     if (s_fork_last_attempt_sim != 0u && sim >= s_fork_last_attempt_sim &&
-        (sim - s_fork_last_attempt_sim) < retry_ticks)
+        (sim - s_fork_last_attempt_sim) < need_retry)
         return;
     s_fork_last_attempt_sim = sim;
     remote = (g_np.local_slot == 0) ? 1 : 0;
@@ -469,8 +689,9 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         remote = g_np.local_slot;
     fprintf(stderr,
             "psxrecomp: rb hc-fork recovery begin t=%u (persisted %u ticks, "
-            "no pad mispredict — state resync episode)\n",
-            (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim));
+            "no pad mispredict — state resync episode%s)\n",
+            (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim),
+            fork_cap ? "; fork_cap backoff" : "");
     fflush(stderr);
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
 }
@@ -1334,6 +1555,8 @@ static void decode_pad(const RNetInputSample *in, PsxNetPad *pad)
 
 /* PSX digital Start = bit 3 (active-low). Rising press: bit goes 1→0. */
 #define NP_PAD_BTN_START 0x0008u
+/* §34 dig / Start sticky removed — intentional taps must not be merged.
+ * Post-match taunt double-pause is an in-game MotK bug (also DuckStation). */
 
 static int np_pad_log_enabled(void)
 {
@@ -1349,6 +1572,103 @@ static int np_pad_log_enabled(void)
     return s_on;
 }
 
+/* Pipeline + automatic Start verdicts. Implies edge logging when on. */
+static int np_pad_trace_enabled(void)
+{
+    static int s_on = -1;
+    if (s_on < 0) {
+        const char *e = getenv("PSX_RB_PAD_TRACE");
+        s_on = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+        if (s_on)
+            fprintf(stderr,
+                    "psxrecomp: rb pad-trace ON (PSX_RB_PAD_TRACE=1 — "
+                    "dev/stage/tip/sio + VERDICT tags for Start doubles)\n");
+    }
+    return s_on;
+}
+
+static int np_pad_diag_enabled(void)
+{
+    return np_pad_log_enabled() || np_pad_trace_enabled();
+}
+
+static uint32_t np_pad_mono_ms(void)
+{
+#if defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return (uint32_t)((uint64_t)ts.tv_sec * 1000ull +
+                          (uint64_t)ts.tv_nsec / 1000000ull);
+#endif
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#else
+    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
+#endif
+}
+
+static int np_pad_start_down(uint16_t buttons)
+{
+    return ((uint16_t)(~buttons) & NP_PAD_BTN_START) != 0;
+}
+
+static const char *np_pad_trace_ctx(void)
+{
+    static char buf[96];
+    int tip = 0, resim = 0, ep = 0;
+    if (g_np.rollback) {
+        tip = psx_netplay_rb_tip_holding();
+        resim = psx_netplay_rb_is_resimulating();
+        ep = psx_netplay_rb_active();
+    }
+    snprintf(buf, sizeof(buf), "tip_hold=%d resim=%d episode=%d D=%d",
+             tip, resim, ep, g_np.input_delay);
+    return buf;
+}
+
+/* Start gesture classifier (stage/dev edges). */
+static uint32_t g_start_gest_down_sim;
+static uint32_t g_start_gest_up_sim;
+static uint8_t g_start_gest_down_valid;
+static uint8_t g_start_gest_up_valid;
+static uint32_t g_start_gest_last_stage_down_sim = 0xFFFFFFFFu;
+
+static void np_pad_trace_start_down(const char *src, uint32_t sim)
+{
+    uint32_t gap;
+    if (!np_pad_trace_enabled())
+        return;
+    if (g_start_gest_up_valid) {
+        gap = sim - g_start_gest_up_sim;
+        if (gap <= 2u)
+            fprintf(stderr,
+                    "psxrecomp: rb pad-trace VERDICT pulse src=%s sim=%u "
+                    "gap_after_up=%u (bounce/debounce hole ≤2) %s\n",
+                    src, (unsigned)sim, (unsigned)gap, np_pad_trace_ctx());
+        else if (gap <= 60u)
+            fprintf(stderr,
+                    "psxrecomp: rb pad-trace VERDICT multipress src=%s sim=%u "
+                    "gap_after_up=%u (capture saw multiple Start periods) %s\n",
+                    src, (unsigned)sim, (unsigned)gap, np_pad_trace_ctx());
+        fflush(stderr);
+    }
+    g_start_gest_down_sim = sim;
+    g_start_gest_down_valid = 1;
+    g_start_gest_up_valid = 0;
+    if (src && strcmp(src, "stage") == 0)
+        g_start_gest_last_stage_down_sim = sim;
+}
+
+static void np_pad_trace_start_up(const char *src, uint32_t sim)
+{
+    (void)src;
+    if (!np_pad_trace_enabled())
+        return;
+    g_start_gest_up_sim = sim;
+    g_start_gest_up_valid = 1;
+    g_start_gest_down_valid = 0;
+}
+
 static void np_pad_log_edge(const char *tag, int slot, uint32_t sim, uint16_t prev,
                             uint16_t cur)
 {
@@ -1358,6 +1678,8 @@ static void np_pad_log_edge(const char *tag, int slot, uint32_t sim, uint16_t pr
         return;
     press = (uint16_t)((uint16_t)(~cur) & prev);
     release = (uint16_t)((uint16_t)(~prev) & cur);
+    if (!np_pad_diag_enabled())
+        return;
     fprintf(stderr,
             "psxrecomp: rb pad-edge %s slot=%d sim=%u buttons=%04x→%04x "
             "press=%04x release=%04x%s%s\n",
@@ -1366,39 +1688,214 @@ static void np_pad_log_edge(const char *tag, int slot, uint32_t sim, uint16_t pr
             (press & NP_PAD_BTN_START) ? " START↓" : "",
             (release & NP_PAD_BTN_START) ? " START↑" : "");
     fflush(stderr);
+    /* Gesture verdicts only on host sample path — not sio/invent (D-lag
+     * would false-trigger multipress after a real release). */
+    if (np_pad_trace_enabled() && slot == g_np.local_slot && tag &&
+        (strcmp(tag, "local") == 0 || strcmp(tag, "stage") == 0 ||
+         strcmp(tag, "dev") == 0)) {
+        if (press & NP_PAD_BTN_START)
+            np_pad_trace_start_down(tag, sim);
+        if (release & NP_PAD_BTN_START)
+            np_pad_trace_start_up(tag, sim);
+    }
 }
 
-/* §63: snap load restores guest SIO from the savestate; host-side edge
- * trackers must not keep Live's post-tip buttons or resim logs (and invent
- * edge state) false-edge against a stale prev. */
+/* §63/§77/§79: snap load restores guest SIO from the savestate. Host-side
+ * edge trackers and the local tip pipeline must preserve *logical* held
+ * buttons across Replay/skip-snap — never synthesize idle→held for a button
+ * the player kept down through the transition. */
 static uint16_t g_sio_pad_prev[PSX_MAX_PLAYERS];
 static uint8_t g_sio_pad_have[PSX_MAX_PLAYERS];
 static uint16_t g_inv_pad_prev[PSX_MAX_PLAYERS];
 static uint8_t g_inv_pad_have[PSX_MAX_PLAYERS];
 static uint16_t g_local_pad_prev = 0xFFFFu;
 static int g_local_pad_have;
+static uint16_t g_live_trace_prev = 0xFFFFu;
+static int g_live_trace_have;
+static uint16_t g_dev_trace_prev = 0xFFFFu;
+static int g_dev_trace_have;
+static uint16_t g_tip_trace_prev = 0xFFFFu;
+static int g_tip_trace_have;
+static uint32_t g_sio_apply_sim[PSX_MAX_PLAYERS];
+static uint16_t g_sio_apply_btn[PSX_MAX_PLAYERS];
+static uint8_t g_sio_apply_n[PSX_MAX_PLAYERS];
+static uint8_t g_sio_apply_have[PSX_MAX_PLAYERS];
 
 void psx_netplay_on_rb_snap_loaded(void)
 {
     int i;
+    int local;
+    uint16_t sample;
+    uint16_t sdl_raw;
+    uint16_t continuity;
+
     for (i = 0; i < PSX_MAX_PLAYERS; ++i) {
-        g_sio_pad_prev[i] = 0xFFFFu;
-        g_sio_pad_have[i] = 0u;
-        g_inv_pad_prev[i] = 0xFFFFu;
-        g_inv_pad_have[i] = 0u;
+        g_sio_pad_prev[i] = sio_get_pad_buttons_slot(i);
+        g_sio_pad_have[i] = 1u;
+        g_inv_pad_prev[i] = g_sio_pad_prev[i];
+        g_inv_pad_have[i] = 1u;
+        g_sio_apply_have[i] = 0;
+        g_sio_apply_n[i] = 0;
     }
-    g_local_pad_prev = 0xFFFFu;
-    g_local_pad_have = 0;
+
+    local = g_np.local_slot;
+    /* Continuity prefers last staged (what tip produce will sample), else
+     * live, else restored SIO — no debounce rewrite. */
+    sdl_raw = g_np.live_valid ? g_np.live.buttons : 0xFFFFu;
+    if (g_np.staged_valid)
+        sample = g_np.staged.buttons;
+    else if (g_np.live_valid)
+        sample = g_np.live.buttons;
+    else if (local >= 0 && local < PSX_MAX_PLAYERS)
+        sample = g_sio_pad_prev[local];
+    else
+        sample = 0xFFFFu;
+    continuity = sample;
+
+    if (local >= 0 && local < PSX_MAX_PLAYERS) {
+        uint16_t sio_b = g_sio_pad_prev[local];
+        /* Active-low: bit clear = held. Merge so any bit held in continuity
+         * stays held in guest SIO — next tip apply cannot idle→held. */
+        uint16_t merged = (uint16_t)(sio_b & continuity);
+        if (np_pad_log_enabled() || np_pad_trace_enabled()) {
+            fprintf(stderr,
+                    "psxrecomp: rb snap-load pad continuity slot=%d "
+                    "sdl=%04x sample=%04x seed=%04x sio=%04x merged=%04x\n",
+                    local, (unsigned)sdl_raw,
+                    (unsigned)sample, (unsigned)continuity,
+                    (unsigned)sio_b, (unsigned)merged);
+            fflush(stderr);
+        }
+        if (merged != sio_b)
+            sio_set_pad_state_slot(local, merged);
+        if (psx_start_consumer_enabled()) {
+            uint32_t sim =
+                g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+            psx_start_consumer_note(local, sim, merged);
+        }
+        g_sio_pad_prev[local] = merged;
+        g_local_pad_prev = continuity;
+        g_local_pad_have = 1;
+        g_live_trace_prev = continuity;
+        g_live_trace_have = 1;
+        g_dev_trace_prev = continuity;
+        g_dev_trace_have = 1;
+        g_tip_trace_prev = continuity;
+        g_tip_trace_have = 1;
+    } else {
+        g_local_pad_prev = 0xFFFFu;
+        g_local_pad_have = 0;
+        g_live_trace_have = 0;
+        g_dev_trace_have = 0;
+        g_tip_trace_have = 0;
+    }
+
+    if (np_pad_start_down(continuity)) {
+        /* Still held through the load — do not open a new Start gesture. */
+        g_start_gest_down_valid = 1;
+        g_start_gest_up_valid = 0;
+    } else {
+        g_start_gest_down_valid = 0;
+        g_start_gest_up_valid = 0;
+        g_start_gest_last_stage_down_sim = 0xFFFFFFFFu;
+    }
+}
+
+void psx_netplay_pad_trace_dev(int card, int fallback, int sdl_start,
+                               uint16_t buttons)
+{
+    uint32_t sim;
+    uint16_t prev;
+    int start_bit;
+    if (!np_pad_trace_enabled() || !psx_netplay_active())
+        return;
+    sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+    start_bit = np_pad_start_down(buttons);
+    prev = g_dev_trace_have ? g_dev_trace_prev : 0xFFFFu;
+    if (!g_dev_trace_have || prev != buttons ||
+        start_bit != np_pad_start_down(prev)) {
+        fprintf(stderr,
+                "psxrecomp: rb pad-trace dev sim=%u ms=%u card=%d fallback=%d "
+                "sdl_start=%d start_bit=%d buttons=%04x→%04x%s%s %s\n",
+                (unsigned)sim, (unsigned)np_pad_mono_ms(), card, fallback,
+                sdl_start ? 1 : 0, start_bit ? 1 : 0, (unsigned)prev,
+                (unsigned)buttons,
+                (!np_pad_start_down(prev) && start_bit) ? " START↓" : "",
+                (np_pad_start_down(prev) && !start_bit) ? " START↑" : "",
+                np_pad_trace_ctx());
+        fflush(stderr);
+        if (!np_pad_start_down(prev) && start_bit)
+            np_pad_trace_start_down("dev", sim);
+        if (np_pad_start_down(prev) && !start_bit)
+            np_pad_trace_start_up("dev", sim);
+        g_dev_trace_prev = buttons;
+        g_dev_trace_have = 1;
+    }
 }
 
 static void apply_pad_slot(int slot, const PsxNetPad *pad)
 {
     if (slot < 0 || slot >= g_np.slot_count || slot >= PSX_MAX_PLAYERS || !pad) return;
     const int on_tap = sio_pad_on_multitap(slot);
-    if (np_pad_log_enabled()) {
+    if (psx_start_bisect_enabled() && slot == g_np.local_slot) {
+        uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+        psx_start_bisect_log("sio", sim, -1, -1, -1,
+                             np_pad_start_down(pad->buttons) ? 1 : 0, 0,
+                             psx_netplay_rb_tip_holding(),
+                             psx_netplay_is_resimulating());
+    }
+    if (np_pad_diag_enabled()) {
         uint16_t prev = g_sio_pad_have[slot] ? g_sio_pad_prev[slot] : 0xFFFFu;
         uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+        uint16_t press = (uint16_t)((uint16_t)(~pad->buttons) & prev);
+        uint8_t apply_n = 1;
+        if (g_sio_apply_have[slot] && g_sio_apply_sim[slot] == sim &&
+            g_sio_apply_btn[slot] == pad->buttons) {
+            if (g_sio_apply_n[slot] < 255u)
+                g_sio_apply_n[slot]++;
+            apply_n = g_sio_apply_n[slot];
+        } else {
+            g_sio_apply_sim[slot] = sim;
+            g_sio_apply_btn[slot] = pad->buttons;
+            g_sio_apply_n[slot] = 1u;
+            g_sio_apply_have[slot] = 1u;
+            apply_n = 1u;
+        }
         np_pad_log_edge("sio", slot, sim, prev, pad->buttons);
+        if (np_pad_trace_enabled() &&
+            (prev != pad->buttons || apply_n > 1u)) {
+            fprintf(stderr,
+                    "psxrecomp: rb pad-trace sio sim=%u slot=%d buttons=%04x→%04x "
+                    "apply_n=%u%s%s %s\n",
+                    (unsigned)sim, slot, (unsigned)prev, (unsigned)pad->buttons,
+                    (unsigned)apply_n,
+                    (press & NP_PAD_BTN_START) ? " START↓" : "",
+                    (((uint16_t)(~prev) & pad->buttons) & NP_PAD_BTN_START)
+                        ? " START↑"
+                        : "",
+                    np_pad_trace_ctx());
+            if (apply_n >= 2u && (press & NP_PAD_BTN_START)) {
+                fprintf(stderr,
+                        "psxrecomp: rb pad-trace VERDICT dup_sio slot=%d sim=%u "
+                        "apply_n=%u (same sim Start↓ re-applied — §63 class) %s\n",
+                        slot, (unsigned)sim, (unsigned)apply_n, np_pad_trace_ctx());
+            }
+            if ((press & NP_PAD_BTN_START) &&
+                g_start_gest_last_stage_down_sim != 0xFFFFFFFFu) {
+                int d = g_np.input_delay;
+                uint32_t stage_sim = g_start_gest_last_stage_down_sim;
+                uint32_t delta = (sim >= stage_sim) ? (sim - stage_sim) : 0u;
+                if (delta == (uint32_t)(d < 0 ? 0 : d) || sim == stage_sim) {
+                    fprintf(stderr,
+                            "psxrecomp: rb pad-trace VERDICT sample_vs_apply "
+                            "stage_sim=%u sio_sim=%u delta=%u D=%d "
+                            "(real-delay pair — not a double press) %s\n",
+                            (unsigned)stage_sim, (unsigned)sim, (unsigned)delta,
+                            d, np_pad_trace_ctx());
+                }
+            }
+            fflush(stderr);
+        }
         g_sio_pad_prev[slot] = pad->buttons;
         g_sio_pad_have[slot] = 1u;
     }
@@ -1410,6 +1907,10 @@ static void apply_pad_slot(int slot, const PsxNetPad *pad)
     else
         sio_set_pad_sticks(slot, pad->lx, pad->ly, pad->rx, pad->ry);
     sio_request_pad_type(slot, (!on_tap && pad->analog) ? 1 : 0);
+    if (psx_start_consumer_enabled()) {
+        uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
+        psx_start_consumer_note(slot, sim, pad->buttons);
+    }
 }
 
 static void host_sample_local(rnet_u32 tick, RNetInputSample *out, void *ctx)
@@ -2061,8 +2562,6 @@ static void np_rollback_reconcile_wire(void)
 }
 
 
-static void np_digital_debounce_staged(void);
-
 /* §47: Replay participates in the protocol like Live — produce local tip
  * from the live physical pad while consuming remote confirmed rows. */
 static void np_rb_produce_local_tip_for_sim(rnet_u32 sim)
@@ -2073,16 +2572,50 @@ static void np_rb_produce_local_tip_for_sim(rnet_u32 sim)
         return;
     if (sim != rnet_session_sim_tick(g_np.session))
         return;
+    if (psx_start_bisect_no_replay_produce())
+        return;
     if (g_np.live_valid) {
+        uint16_t raw = g_np.live.buttons;
         g_np.staged = g_np.live;
         psx_netplay_normalize_pad(&g_np.staged);
         g_np.staged_valid = 1;
-        /* §58: this producer bypassed the §34 release debounce — a Start
-         * press overlapping an episode could publish press/idle/press across
-         * consecutive tip rows (SDL snapshot bounce mid-resim) and MotK's
-         * edge-triggered pause opened twice. Same debounce as stage_local so
-         * the sticky state stays coherent across live↔replay transitions. */
-        np_digital_debounce_staged();
+        if (psx_start_bisect_enabled()) {
+            psx_start_bisect_log(
+                "tip", (uint32_t)sim, -1,
+                np_pad_start_down(raw) ? 1 : 0,
+                np_pad_start_down(g_np.staged.buttons) ? 1 : 0, -1, 0,
+                psx_netplay_rb_tip_holding(), 1);
+        }
+        if (np_pad_trace_enabled()) {
+            uint16_t prev = g_tip_trace_have ? g_tip_trace_prev : 0xFFFFu;
+            uint16_t cur = g_np.staged.buttons;
+            uint32_t wire = np_sched_wire_for_sim((uint32_t)sim);
+            if (!g_tip_trace_have || prev != cur) {
+                fprintf(stderr,
+                        "psxrecomp: rb pad-trace tip-produce sim=%u wire=%u "
+                        "buttons=%04x→%04x%s%s path=replay/finish %s\n",
+                        (unsigned)sim, (unsigned)wire, (unsigned)prev,
+                        (unsigned)cur,
+                        (!np_pad_start_down(prev) && np_pad_start_down(cur))
+                            ? " START↓"
+                            : "",
+                        (np_pad_start_down(prev) && !np_pad_start_down(cur))
+                            ? " START↑"
+                            : "",
+                        np_pad_trace_ctx());
+                if (!np_pad_start_down(prev) && np_pad_start_down(cur) &&
+                    !(g_local_pad_have && np_pad_start_down(g_local_pad_prev))) {
+                    fprintf(stderr,
+                            "psxrecomp: rb pad-trace VERDICT tip_without_stage "
+                            "sim=%u (produce Start↓ with no staged Start — "
+                            "§58-class bypass) %s\n",
+                            (unsigned)sim, np_pad_trace_ctx());
+                }
+                fflush(stderr);
+                g_tip_trace_prev = cur;
+                g_tip_trace_have = 1;
+            }
+        }
     }
     g_np.latched_for_tick = 0;
     (void)rnet_session_prepare_local_tip(g_np.session, sim);
@@ -2140,6 +2673,14 @@ static int np_try_admit_rollback(void)
     if (psx_netplay_rb_tip_holding()) {
         uint32_t tip = psx_netplay_rb_episode_target();
         uint32_t slack = psx_netplay_rb_tip_hold_invent_slack();
+        uint32_t from = psx_netplay_rb_tip_hold_rereplay_from();
+        /* §81: park Live at the POST tip we deferred from — not the raised
+         * coalesce tip. §80 parked at tip, so Live walked with tip-extends
+         * and every flush logged parked=0 (invent-snap reload). */
+        if (from > 0u && sim > from) {
+            np_sched_set_admit_stall("tip_hold_deferred");
+            return 0;
+        }
         if (tip > 0u && sim > tip + slack) {
             int missing = 0;
             int held = 0;
@@ -2216,7 +2757,7 @@ static int np_try_admit_rollback(void)
             (void)invent_reason;
             any_invent = 1;
             (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
-            if (np_pad_log_enabled() && row.is_valid) {
+            if (np_pad_diag_enabled() && row.is_valid) {
                 uint16_t prev = g_inv_pad_have[slot] ? g_inv_pad_prev[slot] : 0xFFFFu;
                 if (slot >= 0 && slot < PSX_MAX_PLAYERS) {
                     np_pad_log_edge("invent", slot, sim, prev, row.buttons);
@@ -2277,33 +2818,6 @@ uint32_t psx_netplay_sim_tick(void)
     return rnet_session_sim_tick(g_np.session);
 }
 
-/* §34 MotK digital: bridge 1–2 tick idle holes so controller bounce does not
- * publish press/idle/press edges (menu edge-triggers → double navigations).
- * Longer gaps stay real releases; tip-hold idle-dwell covers the rest. */
-#define NP_DIGITAL_RELEASE_DEBOUNCE_TICKS 2u
-static uint16_t g_dig_sticky_buttons = 0xFFFFu;
-static uint32_t g_dig_sticky_idle_n;
-
-static void np_digital_debounce_staged(void)
-{
-    uint16_t b;
-    if (!g_np.rollback || !g_np.staged_valid)
-        return;
-    b = g_np.staged.buttons;
-    if (b == 0xFFFFu && g_dig_sticky_buttons != 0xFFFFu) {
-        if (g_dig_sticky_idle_n < NP_DIGITAL_RELEASE_DEBOUNCE_TICKS) {
-            g_np.staged.buttons = g_dig_sticky_buttons;
-            g_dig_sticky_idle_n++;
-        } else {
-            g_dig_sticky_buttons = 0xFFFFu;
-            g_dig_sticky_idle_n = 0u;
-        }
-    } else if (b != 0xFFFFu) {
-        g_dig_sticky_buttons = b;
-        g_dig_sticky_idle_n = 0u;
-    }
-}
-
 void psx_netplay_stage_local(const PsxNetPad *pad)
 {
     if (!pad) {
@@ -2321,21 +2835,87 @@ void psx_netplay_stage_local(const PsxNetPad *pad)
      * re-admits / barrier retries cannot change the INPUT_CONFIRM hash. */
     if (psx_netplay_active() && rnet_session_is_running(g_np.session)) {
         uint32_t t = rnet_session_sim_tick(g_np.session);
-        if (g_np.latched_for_tick && g_np.latched_sim_tick == t)
+        if (g_np.latched_for_tick && g_np.latched_sim_tick == t) {
+            /* Latched: still report live Start edges (SDL drop under TipHold
+             * / barrier spin) — staged frozen so pad-edge local stays quiet. */
+            if (np_pad_trace_enabled()) {
+                uint16_t prev = g_live_trace_have ? g_live_trace_prev : 0xFFFFu;
+                uint16_t cur = g_np.live.buttons;
+                if (!g_live_trace_have || prev != cur) {
+                    if ((np_pad_start_down(prev) != np_pad_start_down(cur)) ||
+                        prev != cur) {
+                        fprintf(stderr,
+                                "psxrecomp: rb pad-trace live-only sim=%u "
+                                "(latched) buttons=%04x→%04x%s%s %s\n",
+                                (unsigned)t, (unsigned)prev, (unsigned)cur,
+                                (!np_pad_start_down(prev) &&
+                                 np_pad_start_down(cur))
+                                    ? " START↓"
+                                    : "",
+                                (np_pad_start_down(prev) &&
+                                 !np_pad_start_down(cur))
+                                    ? " START↑"
+                                    : "",
+                                np_pad_trace_ctx());
+                        fflush(stderr);
+                        if (!np_pad_start_down(prev) && np_pad_start_down(cur))
+                            np_pad_trace_start_down("live", t);
+                        if (np_pad_start_down(prev) && !np_pad_start_down(cur))
+                            np_pad_trace_start_up("live", t);
+                    }
+                    g_live_trace_prev = cur;
+                    g_live_trace_have = 1;
+                }
+            }
             return;
-        g_np.staged = *pad;
-        psx_netplay_normalize_pad(&g_np.staged);
-        np_digital_debounce_staged();
-        if (np_pad_log_enabled()) {
-            uint16_t prev = g_local_pad_have ? g_local_pad_prev : 0xFFFFu;
-            np_pad_log_edge("local", g_np.local_slot, t, prev, g_np.staged.buttons);
-            g_local_pad_prev = g_np.staged.buttons;
-            g_local_pad_have = 1;
         }
-        g_np.staged_valid = 1;
-        g_np.latched_for_tick = 1;
-        g_np.latched_sim_tick = t;
-        return;
+        {
+            uint16_t raw;
+            g_np.staged = *pad;
+            psx_netplay_normalize_pad(&g_np.staged);
+            raw = g_np.staged.buttons;
+            if (psx_start_bisect_enabled()) {
+                int th = psx_netplay_rb_tip_holding();
+                int rs = psx_netplay_is_resimulating();
+                int slot = g_np.local_slot;
+                uint16_t sio_b = (slot >= 0 && slot < PSX_MAX_PLAYERS)
+                                     ? sio_get_pad_buttons_slot(slot)
+                                     : 0xFFFFu;
+                psx_start_bisect_log(
+                    "stage", t, -1,
+                    np_pad_start_down(raw) ? 1 : 0,
+                    np_pad_start_down(g_np.staged.buttons) ? 1 : 0,
+                    np_pad_start_down(sio_b) ? 1 : 0, 1, th, rs);
+            }
+            if (np_pad_diag_enabled()) {
+                uint16_t prev = g_local_pad_have ? g_local_pad_prev : 0xFFFFu;
+                uint16_t cur = g_np.staged.buttons;
+                np_pad_log_edge("local", g_np.local_slot, t, prev, cur);
+                if (np_pad_trace_enabled() &&
+                    (!g_local_pad_have || prev != cur)) {
+                    fprintf(stderr,
+                            "psxrecomp: rb pad-trace stage sim=%u "
+                            "buttons=%04x→%04x latch=new%s%s %s\n",
+                            (unsigned)t, (unsigned)prev, (unsigned)cur,
+                            (!np_pad_start_down(prev) && np_pad_start_down(cur))
+                                ? " START↓"
+                                : "",
+                            (np_pad_start_down(prev) && !np_pad_start_down(cur))
+                                ? " START↑"
+                                : "",
+                            np_pad_trace_ctx());
+                    fflush(stderr);
+                }
+                g_local_pad_prev = cur;
+                g_local_pad_have = 1;
+                g_live_trace_prev = g_np.live.buttons;
+                g_live_trace_have = 1;
+            }
+            g_np.staged_valid = 1;
+            g_np.latched_for_tick = 1;
+            g_np.latched_sim_tick = t;
+            return;
+        }
     }
     /* Linking: keep refreshing released/local pads until START. */
     g_np.staged = *pad;
@@ -2751,9 +3331,11 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         }
     }
     np_diag_capture(cfg, slots);
-    g_np.active = 1;
-    /* Before any snap/resim: SW GPU so VRAM is bit-identical across peers. */
+    /* Before any snap/resim: CPU-authoritative VRAM. Must run before
+     * g_np.active so a one-shot GL→CPU sync can still glReadPixels if we
+     * were on FBO-auth OpenGL (ensure_cpu no-ops once netplay is active). */
     psx_frontend_netplay_force_sw_gpu();
+    g_np.active = 1;
     netplay_hc_reset(&g_np.hc);
     np_part_ring_reset();
     g_np.rollback = cfg->rollback ? 1 : 0;
@@ -2780,6 +3362,16 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         sb.input_delay = &g_np.input_delay;
         sb.input_prediction = &g_np.input_prediction;
         sb.local_slot = &g_np.local_slot;
+        /* Same Force TURN bit used for ICE relay-only (env may override). */
+        {
+            int ft = cfg->force_turn ? 1 : 0;
+            const char *fte = getenv("PSX_NET_FORCE_TURN");
+            if (fte && fte[0] == '1')
+                ft = 1;
+            else if (fte && fte[0] == '0')
+                ft = 0;
+            sb.force_turn = ft;
+        }
         np_sched_bind(&sb);
     }
     {
@@ -3721,6 +4313,8 @@ int psx_netplay_catchup_budget(void)
     int cap;
 
     if (!psx_netplay_active())
+        return 0;
+    if (psx_start_bisect_no_catchup())
         return 0;
     cap = np_starv_env_int("PSX_NET_CATCHUP_CAP", PSX_CATCHUP_CAP_DEFAULT);
     if (cap <= 0 && g_starv.recovery_amount <= 0)
