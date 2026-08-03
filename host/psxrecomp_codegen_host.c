@@ -36,6 +36,8 @@ static char g_toolchain_bin[1400];
 static char g_cli_toolchain_bin[1400];
 static int g_ready;
 static int g_relaunch_is_helper;
+/* Wizard BIOS pick (survives cwd-relative bios.cfg misses on Windows). */
+static char g_wizard_bios[1100];
 
 static const char* cfg_or(const char* v, const char* d) {
     return (v && v[0]) ? v : d;
@@ -588,6 +590,23 @@ static void activate_toolchain_path(void) {
             if (pref[0])
                 setenv("CMAKE_PREFIX_PATH", pref, 1);
         }
+        /* Linux packs 1.0.4+: bundled libxml2.so.2 for lld / thin LTO. */
+        {
+            char libdir[1500];
+            if (join_path(libdir, sizeof(libdir), pack_root, "lib") &&
+                path_is_dir(libdir)) {
+                const char* prev = getenv("LD_LIBRARY_PATH");
+                char llp[8192];
+                if (prev && prev[0] && !strstr(prev, libdir))
+                    snprintf(llp, sizeof(llp), "%s:%s", libdir, prev);
+                else if (!prev || !prev[0])
+                    snprintf(llp, sizeof(llp), "%s", libdir);
+                else
+                    llp[0] = '\0';
+                if (llp[0])
+                    setenv("LD_LIBRARY_PATH", llp, 1);
+            }
+        }
 #endif
     }
 }
@@ -742,15 +761,119 @@ static int read_line_file(const char* path, char* out, size_t cap) {
     return n > 0;
 }
 
+static int write_line_file(const char* path, const char* line) {
+    FILE* f;
+    if (!path || !path[0])
+        return 0;
+    if (!line || !line[0]) {
+        remove(path);
+        return 1;
+    }
+    f = fopen(path, "w");
+    if (!f)
+        return 0;
+    fprintf(f, "%s\n", line);
+    fclose(f);
+    return 1;
+}
+
+static void write_sidecar_near_exe(const char* near_exe, const char* name,
+                                   const char* value) {
+    char dir[1100], path[1200];
+    if (!near_exe || !near_exe[0] || !name || !name[0])
+        return;
+    if (!dirname_copy(dir, sizeof(dir), near_exe))
+        return;
+    if (!join_path(path, sizeof(path), dir, name))
+        return;
+    write_line_file(path, value ? value : "");
+}
+
 static int resolve_bios_arg(char* out, size_t cap) {
     char cand[1100];
+    char line[1100];
+    if (g_wizard_bios[0] && path_is_file(g_wizard_bios)) {
+        snprintf(out, cap, "%s", g_wizard_bios);
+        return 1;
+    }
     if (join_path(cand, sizeof(cand), g_project_root, "bios.cfg") &&
         read_line_file(cand, out, cap) && path_is_file(out))
         return 1;
+    if (g_exe_path[0]) {
+        char dir[1100];
+        if (dirname_copy(dir, sizeof(dir), g_exe_path) &&
+            join_path(cand, sizeof(cand), dir, "bios.cfg") &&
+            read_line_file(cand, line, sizeof(line)) && path_is_file(line)) {
+            snprintf(out, cap, "%s", line);
+            return 1;
+        }
+    }
     if (read_line_file("bios.cfg", out, cap) && path_is_file(out))
         return 1;
     out[0] = '\0';
     return 0;
+}
+
+static int host_persist_setup(void* ctx, const char* rom_path,
+                              const char* bios_path) {
+    char path[1200];
+    (void)ctx;
+    if (bios_path && bios_path[0] && path_is_file(bios_path)) {
+        snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", bios_path);
+    } else {
+        g_wizard_bios[0] = '\0';
+    }
+    if (g_project_root[0] &&
+        join_path(path, sizeof(path), g_project_root, "bios.cfg"))
+        write_line_file(path, g_wizard_bios[0] ? g_wizard_bios : "");
+    write_line_file("bios.cfg", g_wizard_bios[0] ? g_wizard_bios : "");
+    if (g_exe_path[0])
+        write_sidecar_near_exe(g_exe_path, "bios.cfg",
+                               g_wizard_bios[0] ? g_wizard_bios : "");
+    if (rom_path && rom_path[0]) {
+        if (g_project_root[0] &&
+            join_path(path, sizeof(path), g_project_root, "disc.cfg"))
+            write_line_file(path, rom_path);
+        write_line_file("disc.cfg", rom_path);
+        if (g_exe_path[0])
+            write_sidecar_near_exe(g_exe_path, "disc.cfg", rom_path);
+    }
+    return 0;
+}
+
+static void persist_relaunch_sidecars(const char* near_exe,
+                                      const char* disc_path) {
+    char bios_line[1100];
+    char project_sidecar[1200];
+
+    if (disc_path && disc_path[0]) {
+        write_sidecar_near_exe(near_exe, "disc.cfg", disc_path);
+        write_line_file("disc.cfg", disc_path);
+        if (g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "disc.cfg"))
+            write_line_file(project_sidecar, disc_path);
+    }
+
+    bios_line[0] = '\0';
+    if (g_wizard_bios[0] && path_is_file(g_wizard_bios)) {
+        snprintf(bios_line, sizeof(bios_line), "%s", g_wizard_bios);
+    } else if (!read_line_file("bios.cfg", bios_line, sizeof(bios_line)) &&
+               g_project_root[0] &&
+               join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                         "bios.cfg")) {
+        read_line_file(project_sidecar, bios_line, sizeof(bios_line));
+    }
+    if (bios_line[0] && !path_is_file(bios_line))
+        bios_line[0] = '\0';
+    if (bios_line[0]) {
+        write_sidecar_near_exe(near_exe, "bios.cfg", bios_line);
+        write_line_file("bios.cfg", bios_line);
+        if (g_project_root[0] &&
+            join_path(project_sidecar, sizeof(project_sidecar), g_project_root,
+                      "bios.cfg"))
+            write_line_file(project_sidecar, bios_line);
+    }
 }
 
 static int json_get_string(const char* line, const char* key, char* out,
@@ -969,8 +1092,9 @@ static int run_cli_posix(char* const argv[],
 /* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
 
 static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
-/* Default floor for Windows zlib-in-pack; override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
-static const char* k_tc_min_version_default = "1.0.3";
+/* Floor: Linux 1.0.4+ ships libxml2 + clang.cfg (-fuse-ld=lld) for IPO;
+ * Windows 1.0.3+ ships static zlib. Override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
+static const char* k_tc_min_version_default = "1.0.4";
 
 static const char* toolchain_zip_asset_name(void) {
 #if defined(_WIN32)
@@ -986,13 +1110,7 @@ static const char* toolchain_min_version(void) {
     const char* env = getenv("RETCOMM_TOOLCHAIN_MIN_VERSION");
     if (env && env[0])
         return env;
-#if defined(_WIN32)
-    /* Windows packs from 1.0.3 ship static zlib for find_package(ZLIB). */
     return k_tc_min_version_default;
-#else
-    (void)k_tc_min_version_default;
-    return "";
-#endif
 }
 
 /* Parse leading dotted integers from a version / tag (optional leading 'v'). */
@@ -2008,17 +2126,13 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
 
 void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     char exe[512];
+    const char* near_exe;
     if (!recomp_launcher_relaunch_exe(exe, sizeof(exe)) || !exe[0]) {
         fprintf(stderr, "psxrecomp-codegen: relaunch requested but no path\n");
         exit(1);
     }
-    if (disc_path && disc_path[0]) {
-        FILE* rc = fopen("disc.cfg", "w");
-        if (rc) {
-            fprintf(rc, "%s\n", disc_path);
-            fclose(rc);
-        }
-    }
+    near_exe = g_exe_path[0] ? g_exe_path : exe;
+    persist_relaunch_sidecars(near_exe, disc_path);
 
 #if defined(_WIN32)
     {
@@ -2049,6 +2163,10 @@ void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     }
 #else
     {
+        if (g_project_root[0] && chdir(g_project_root) != 0) {
+            fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
+                    g_project_root, strerror(errno));
+        }
         fprintf(stderr, "psxrecomp-codegen: relaunching %s\n", exe);
         char* args[] = {exe, "--launcher", NULL};
         execv(exe, args);
@@ -2076,6 +2194,7 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     g_helper_path[0] = '\0';
     g_toolchain_bin[0] = '\0';
     g_cli_toolchain_bin[0] = '\0';
+    /* Keep g_wizard_bios across re-apply within the same process. */
 
     snprintf(g_display, sizeof(g_display), "%s",
              cfg_or(cfg->display_name, "Game"));
@@ -2118,6 +2237,8 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
 
     g_ready = 1;
     activate_toolchain_path();
+    gi->persist_setup = host_persist_setup;
+    gi->persist_setup_ctx = NULL;
     gi->prepare_with_progress = host_prepare_generate;
     gi->prepare_use_selected_rom = 1;
     /* Number prefix is applied in the setup UI (BIOS adds a step). */

@@ -41,8 +41,8 @@ with host-native `curl` + `tar`/`unzip` when possible — so Microsoft Store
 Python AppData redirection cannot hide cmake. Offline zips unpack to the same
 path. A legacy `%LOCALAPPDATA%/psxrecomp/…` cache is migrated automatically.
 Override with `RETCOMM_TOOLCHAIN_DIR`. Require a floor version via
-`RETCOMM_TOOLCHAIN_MIN_VERSION` / `ensure-toolchain --min-version` (Windows
-defaults to `1.0.3` for bundled zlib). Generate/rebuild still need Python 3
+`RETCOMM_TOOLCHAIN_MIN_VERSION` / `ensure-toolchain --min-version` (defaults to
+`1.0.4` for Linux LTO deps + Windows zlib). Generate/rebuild still need Python 3
 for `psxrecomp_cli.py`.
 
 ## Commands
