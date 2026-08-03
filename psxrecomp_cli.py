@@ -621,6 +621,34 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         progress.error(f"boot EXE missing after prepare: {boot_path}", code=EXIT_ERROR)
         return EXIT_ERROR
 
+    # psxrecomp-game reads [game].exe from game.toml only — it does not take
+    # the wizard/CLI disc directory. If prepare_disc.out_dir and game.exe
+    # disagree (legacy default out_dir=prepared_disc), stage the boot EXE
+    # to the path the emitter will open.
+    game_exe_rel = str(game.get("exe") or "").strip()
+    if game_exe_rel:
+        game_exe_path = Path(game_exe_rel).expanduser()
+        if not game_exe_path.is_absolute():
+            game_exe_path = project_root / game_exe_path
+        game_exe_path = game_exe_path.resolve()
+        try:
+            if game_exe_path != boot_path.resolve():
+                game_exe_path.parent.mkdir(parents=True, exist_ok=True)
+                if (not game_exe_path.is_file()) or (
+                    game_exe_path.stat().st_mtime_ns < boot_path.stat().st_mtime_ns
+                ):
+                    shutil.copy2(boot_path, game_exe_path)
+                    progress.log(
+                        f"Staged boot EXE for emitter: {game_exe_path}"
+                    )
+        except OSError as exc:
+            progress.error(
+                f"boot EXE ready at {boot_path} but cannot stage to "
+                f"game.exe path {game_exe_path}: {exc}",
+                code=EXIT_ERROR,
+            )
+            return EXIT_ERROR
+
     # ---- BIOS backends (local only; CI ships none) ----
     fw = ensure_framework(project_root, progress=progress)
     bios_arg = (getattr(args, "bios", None) or "").strip()
