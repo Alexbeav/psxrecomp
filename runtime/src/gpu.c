@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "ws_backdrop_owner.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
@@ -1638,7 +1639,9 @@ static int ws_tagged_anchor(int32_t *out_ax) {
  * so tag/narrow heuristics alone mis-stretch and tear it. */
 uint32_t g_ws_backdrop_lo = 0, g_ws_backdrop_hi = 0;
 static int ws_nw_phase_backdrop = 0;
+static WsBackdropOwner ws_nw_backdrop_owner = {0xFFFFFFFFu, 0xFFFFu, 0};
 void gpu_ws_set_nw_phase_backdrop(int on) { ws_nw_phase_backdrop = on ? 1 : 0; }
+int gpu_ws_get_nw_phase_backdrop(void) { return ws_nw_phase_backdrop; }
 static int ws_nw_textured_edges = 0;
 int g_ws_tex_edge_pct = 0;
 void gpu_ws_set_nw_textured_edges(int on, int scale_pct) {
@@ -1735,7 +1738,14 @@ int psx_ws_prim_in_backdrop(void) {
         if (op >= 0x20u && op <= 0x3Fu && (op & 0x04u))
             return 2; /* GL gate: expand only vertices beyond canonical edges */
     }
-    if (ws_nw_phase_backdrop && !ws_bg_phase_over()) return 1;
+    if (ws_nw_phase_backdrop) {
+        uint32_t op = (gp0_cmd_buf[0] >> 24) & 0xFFu;
+        int textured_polygon = op >= 0x20u && op <= 0x3Fu && (op & 0x04u);
+        if (ws_backdrop_owner_match(&ws_nw_backdrop_owner,
+                                    (uint32_t)s_frame_count,
+                                    gp0_ot_rank, textured_polygon))
+            return 1;
+    }
     /* Real gate: stretch the 2D backdrop = sprite-tagged prims drawn in the
      * background phase (before the 3D world). Fills the native-wide void for both
      * the flower grid and the sky band; HUD/characters (tagged but post-3D) and the

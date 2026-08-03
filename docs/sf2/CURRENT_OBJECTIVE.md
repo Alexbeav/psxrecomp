@@ -64,6 +64,20 @@ must not obstruct either follow-up.
 - The monitor's unit and invisible lifecycle smoke pass; the registered suite
   is 49/49. Human Missions 1--8 visual/input acceptance remains required and
   is not replaced by these counters.
+- The Mission 1 outdoor reveal wedge is closed by a title-opted, title-neutral
+  per-frame rule: the first OT rank that submits textured polygons owns the
+  finite background pass. Live OpenGL/software A/B proves the wedge returns
+  with the rule disabled and disappears when enabled; HUD/world geometry does
+  not move. Global/exact GTE, raw palette and packet-source hypotheses were
+  rejected as production ownership.
+- A final-hash interpreter control passed the complete route. Legacy native
+  shards failed at the state-8 exit and were discarded. Recompiling only the
+  five images captured by that successful control produced a clean native
+  repeat through state-0 movement and both mouse modes: 15,831,907 resident
+  AOT, 6,862,443 compiled-overlay and 542,932 interpreter dispatches. Fallback
+  is 7.3316% of the overlay tier and is not reported as native coverage.
+- Automated Mission 1 is therefore green for the exact candidate recorded in
+  `DISC1_VALIDATION.md`. Human Missions 1--8 acceptance is now the next gate.
 
 ## 2026-08-03 modernization pass 1
 

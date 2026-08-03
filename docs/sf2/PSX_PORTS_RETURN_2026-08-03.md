@@ -31,6 +31,37 @@ First independent consumer: **Tenchu**, because its recomp lane already reaches
 a retail intro FMV and can repeat the OpenGL/software transition check without
 sharing SF2 movie dimensions or addresses.
 
+## Finding 4 — finite textured backdrops need semantic OT ownership
+
+Status: confirmed in SF2 Mission 1; independent validation pending.
+Likely owner: native-wide GPU primitive classification.
+
+A finite authored background mesh may leave newly revealed widescreen margins
+even when world projection is correct. Expanding far GTE geometry, every
+textured primitive, a palette, or a packet address either damages foreground
+geometry or encodes title payload. For an opted-in title whose draw ordering is
+stable, the first consumed ordering-table rank that submits textured polygons
+is a bounded semantic owner. Stretch only textured polygons from that rank in
+the wide mirror; preserve the canonical 4:3 framebuffer.
+
+Bounded check:
+
+1. Census GP0 polygon types by consumed OT rank for the affected frame.
+2. Falsify global and exact-call GTE expansion against world/actor geometry.
+3. Use raw texture/source identities only as temporary correlation probes.
+4. Toggle the semantic owner live under software and hardware renderers.
+5. Require the reveal gap to change while HUD, actors and foreground remain
+   unchanged; add a frame-reset unit regression.
+
+SF2 result: the outdoor black reveal wedge returns with the owner disabled and
+disappears when enabled under both backends. Software high-resolution polygon
+seams are unchanged by the toggle and remain a separate renderer issue.
+Production configuration contains no SF2 address, packet range, palette,
+texture identity, movie dimension or hardcoded band.
+
+First independent consumer: **Tenchu**, which can classify its first outdoor
+background frame by OT provenance without importing SF2 identities.
+
 ## Finding 2 — SeekL/SeekP owns the CD drive state
 
 Status: confirmed in SF2; candidate for cross-title validation.  

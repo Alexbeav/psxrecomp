@@ -5272,8 +5272,8 @@ int main(int argc, char** argv) {
             /* [widescreen] nw_flat_backdrop — stretch flat sky/backdrop prims
              * in the native-wide mirror, preserving the canonical 4:3 image. */
             gpu_ws_set_nw_flat_backdrop(gc.ws_nw_flat_backdrop ? 1 : 0);
-            /* [widescreen] nw_phase_backdrop — stretch only the textured
-             * backdrop phase emitted before shaded 3D foreground geometry. */
+            /* [widescreen] nw_phase_backdrop — stretch only the first
+             * ordering-table rank which submits textured polygons. */
             gpu_ws_set_nw_phase_backdrop(gc.ws_nw_phase_backdrop ? 1 : 0);
             gpu_ws_set_nw_textured_edges(gc.ws_nw_textured_edges ? 1 : 0,
                                          gc.ws_nw_textured_edge_scale);

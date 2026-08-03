@@ -59,6 +59,7 @@ invert_y = false
 [widescreen]
 native_wide = true
 gte_game_mode = true
+nw_phase_backdrop = true
 
 [widescreen.cull]
 auto_screen_x = true

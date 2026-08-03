@@ -310,8 +310,9 @@ void gpu_ws_set_nw_backdrop(int on);
  * canonical 4:3 framebuffer. Intended for flat-colour sky/water backdrops. */
 void gpu_ws_set_nw_flat_backdrop(int on);
 int  gpu_ws_nw_flat_backdrop_enabled(void);
-/* Stretch the title-opted textured pre-3D backdrop phase in the wide mirror. */
+/* Stretch the title-opted first textured OT rank in the wide mirror. */
 void gpu_ws_set_nw_phase_backdrop(int on);
+int  gpu_ws_get_nw_phase_backdrop(void);
 
 /* Backdrop screen-X correction ([widescreen.backdrop] x_sites). The parallax
  * 2D backdrop layer computes screen-X without the GTE, so it misses the

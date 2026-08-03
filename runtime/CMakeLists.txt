@@ -76,6 +76,11 @@ if(BUILD_TESTING)
     target_include_directories(ws_ui_group_test PRIVATE include)
     add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
 
+    add_executable(ws_backdrop_owner_test
+        tests/test_ws_backdrop_owner.c)
+    target_include_directories(ws_backdrop_owner_test PRIVATE include)
+    add_test(NAME ws_backdrop_owner_test COMMAND ws_backdrop_owner_test)
+
     add_executable(mouse_camera_test
         tests/test_mouse_camera.c
         src/mouse_camera.c)

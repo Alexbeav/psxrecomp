@@ -7345,7 +7345,7 @@ static void handle_ws_backdrop_margin(int id, const char *json)
              g_ws_bd_margin < 0 ? "whole-row" : (g_ws_bd_margin == 0 ? "off" : "widen-cols"));
 }
 
-/* ws_backdrop_stretch [on=0/1] [pct=N] [thresh=N]: live-tune the native-wide
+/* ws_backdrop_stretch [on=0/1] [pct=N] [thresh=N] [phase=0/1]: live-tune the native-wide
  * 2D-backdrop x-stretch (GL renderer). on toggles the feature; pct=0 auto-fits
  * (g_wide_w/native_w), else pct/100 is the scale; thresh = px past 4:3 that ends
  * the per-frame backdrop phase. No args = report. */
@@ -7358,14 +7358,17 @@ static void handle_ws_backdrop_stretch(int id, const char *json)
     int pct = json_get_int(json, "pct", -1);
     int th  = json_get_int(json, "thresh", -1);
     int md  = json_get_int(json, "mode", -1);
+    int phase = json_get_int(json, "phase", -1);
     if (on  >= 0) g_ws_bd_stretch_on   = on;
     if (pct >= 0) g_ws_bd_stretch_pct  = pct;
     if (th  >= 0) g_ws_bd_phase_thresh = th;
     if (md  >= 0) g_ws_bd_phase_mode   = md;
-    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"pct\":%d,\"thresh\":%d,\"mode\":%d,"
+    if (phase >= 0) gpu_ws_set_nw_phase_backdrop(phase);
+    send_fmt("{\"id\":%d,\"ok\":true,\"on\":%d,\"pct\":%d,\"thresh\":%d,\"mode\":%d,\"phase\":%d,"
              "\"dbg\":{\"applied\":%d,\"prims\":%d,\"wide_cur\":%d,\"base\":%d,\"wide_w\":%d,\"off\":%d,"
              "\"bd_lo\":\"%08x\",\"bd_hi\":\"%08x\",\"src_lo\":\"%08x\",\"src_hi\":\"%08x\"}}",
              id, g_ws_bd_stretch_on, g_ws_bd_stretch_pct, g_ws_bd_phase_thresh, g_ws_bd_phase_mode,
+             gpu_ws_get_nw_phase_backdrop(),
              g_bdg_applied, g_bdg_prims, g_bdg_cur, g_bdg_base, g_bdg_w, g_bdg_off,
              g_ws_backdrop_lo, g_ws_backdrop_hi, g_bdg_src_lo, g_bdg_src_hi);
 }

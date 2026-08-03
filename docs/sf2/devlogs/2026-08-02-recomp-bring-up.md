@@ -938,3 +938,41 @@ quit cleanly and finalized a structurally valid 483-sample timeline plus all
 four configuration hashes. All three PowerShell launchers parse, full pass-2
 regeneration/link succeeds, and the registered suite is 49/49. Human Disc 1
 acceptance remains open; see `../DISC1_VALIDATION.md`.
+
+## 2026-08-03 — native-wide finite-backdrop ownership closure
+
+Mission 1 native-wide rendering exposed correct extra terrain and coherent HUD
+but a finite outdoor sky/SCRIM mesh ended at the authored 4:3 boundary. GP0
+census grouped draw submissions by consumed ordering-table rank: the first
+textured rank contained the background polygons, while later ranks owned
+terrain, actors, particles and HUD.
+
+Three production hypotheses were falsified. Global far-depth GTE expansion
+filled the margin while destroying world/character projection. Bounded exact
+GTE callers either left the gap or changed foreground geometry. Raw palette and
+packet-source gates isolated the sky but were rejected as payload identities.
+The retained generic rule is opt-in and frame-local: latch the first OT rank
+that submits textured polygons and stretch only textured polygons from that
+rank in the native-wide mirror. Rank `0xFFFF` cannot establish ownership. A
+focused unit covers discovery, same-rank matching, nontextured/unknown rejection
+and frame reset.
+
+Clean OpenGL and hidden-window software routes passed the complete authentic
+Mission 1 gate. Exact software live A/B proved the broad software polygon-colour
+seams are unchanged by the owner toggle; only the black reveal wedge changes.
+That precision issue remains separate and open.
+
+The final framework rebuild changed the overlay cache hash. An interpreter-only
+control passed, honestly measuring 15,841,809 resident-AOT and 13,410,471
+fallback dispatches. Reusing older broad captures lost the debug endpoint while
+leaving state 8, so those shards were discarded. The five images captured by
+the successful final executable were compiled under its exact codegen/config
+hash; seven unsupported isolated fragments remained fallback. A new blank-card
+OpenGL run passed through state-0 movement and semantic chase/aim with
+15,831,907 resident-AOT, 6,862,443 compiled-overlay and 542,932 interpreter
+dispatches (7.3316% of the overlay tier), 25 image loads, zero lost CD INT1,
+1,210 SPU key-ons and final XYZ `(-5606,2036,7529)`.
+
+Registered tests pass 49/49 and `ws_backdrop_owner_test` passes directly. The
+exact Disc 1 candidate hashes are recorded in `../DISC1_VALIDATION.md`. Human
+Missions 1--8 acceptance is the next gate.

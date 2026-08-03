@@ -870,10 +870,11 @@ struct GameConfig {
     // a recognizable full-frame textured quad. Runtime-only; off by default.
     bool ws_nw_flat_backdrop = false;
 
-    // [widescreen] nw_phase_backdrop — stretch textured primitives emitted
-    // before the frame's first shaded 3D primitive. This isolates an authored
-    // 2D sky/backdrop phase from the later textured foreground. Runtime-only;
-    // off by default because draw ordering is title-specific.
+    // [widescreen] nw_phase_backdrop — stretch textured polygons in the first
+    // ordering-table rank that submits them each frame. This gives an opted-in
+    // title a semantic background owner without packet addresses or texture
+    // identities. Runtime-only; off by default because draw ordering is
+    // title-specific.
     bool ws_nw_phase_backdrop = false;
 
     // Expand only textured polygon vertices that already lie beyond the
