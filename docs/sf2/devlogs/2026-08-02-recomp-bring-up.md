@@ -1049,3 +1049,18 @@ and movement at 25,899. It likewise records zero checks/expansions through the
 4:3-owned phases and exactly 7,035 expansions at player ownership. Evidence is
 under ignored `lab/sf2/local/pass2-fullwidth-origin-gl-20260803-193605/`.
 Human visual acceptance is still pending.
+
+## 2026-08-03 — enforceable Disc 1 candidate identity
+
+The completion audit found that `DISC1_VALIDATION.md` still named the candidate
+preceding the backdrop rejection and origin-aware fullscreen fix. The actual
+automated-pass executable and generated config are respectively
+`6D618BC788D33E40ED57EC42D97658CC4BC6A5B28AB0EA30779B8FC7BF2F2568`
+and `96DFC6A4FE1E036838E2D3274546832B21014F588690EBAFA100D4E6B9D2A180`.
+
+`lab/sf2/modernization/pass2-candidate.json` now records those identities plus
+settings, OpenBIOS and the frozen 4:3 executable. The recorded Disc 1 launcher
+hashes all five files and refuses to open a runtime on any mismatch. A focused
+source regression keeps the manifest, human guide and launcher synchronized;
+it and a direct local five-file verification pass. This records no retail
+payload and does not modify either build.

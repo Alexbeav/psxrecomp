@@ -28,14 +28,24 @@ The currently validated local candidate identities are:
 
 | Artifact | SHA-256 |
 |---|---|
-| Enhanced executable | `7E575D162B3E6622F8E2E8B2B40CC546D56C2A7576A9AB40073B2993A551492D` |
-| Generated pass-2 game configuration | `337B0D9F1E76A90C439D009BC14125865F10BD8D33F84E9EDB9B8C4EF2F15557` |
+| Enhanced executable | `6D618BC788D33E40ED57EC42D97658CC4BC6A5B28AB0EA30779B8FC7BF2F2568` |
+| Generated pass-2 game configuration | `96DFC6A4FE1E036838E2D3274546832B21014F588690EBAFA100D4E6B9D2A180` |
 | Pass-2 settings | `6AEB79B2EAD9C96AB13623320CC000856C4F83F74F93ADCA4D0ACA4933ADAFDA` |
 | OpenBIOS input | `FABE498FBF224E4721F12F31B6F5FE0659205E341DC4E5C5F91B9BD1A1011C57` |
 | Frozen 4:3 executable | `00C88921DEA3A28CC06E76876E7181909F0AF83A679F793D93CCDD6AA7915AB6` |
 
 The evidence file recomputes these identities at launch; do not accept a run
 whose hashes differ without rebuilding and recording the new candidate.
+The source-owned contract is
+`lab/sf2/modernization/pass2-candidate.json`; the recorded launcher verifies
+all five inputs against it before opening a runtime window.
+
+This exact enhanced identity passed clean hidden-window software and OpenGL
+routes through stable retail TITLE, Mission 1 aircraft FMV, state 8, state-0
+player ownership and authoritative movement. Both backends recorded zero
+fullscreen-effect expansion during the 4:3-owned phases and exactly 7,035
+expansions at player ownership. Those semantic gates do not replace the visual
+checks below.
 
 ## What to check
 

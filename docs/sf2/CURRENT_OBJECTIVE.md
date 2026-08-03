@@ -61,6 +61,10 @@ must not obstruct either follow-up.
   application transitions, player/camera samples, and cumulative fullscreen-
   rectangle expansions. A separate launcher clones its cards into new frozen-
   baseline state for practical later-mission A/B without sharing writes.
+- The recorded launcher now verifies the exact enhanced executable, generated
+  configuration, settings, OpenBIOS and frozen 4:3 control against the
+  source-owned pass-2 candidate manifest before opening a window. This closes
+  the stale-documentation gap that otherwise made a valid human run ambiguous.
 - The monitor's unit and invisible lifecycle smoke pass; the registered suite
   is 49/49. Human Missions 1--8 visual/input acceptance remains required and
   is not replaced by these counters.

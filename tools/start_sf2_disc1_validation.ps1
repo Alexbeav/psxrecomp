@@ -16,10 +16,33 @@ $Session = Join-Path $Repo ("lab\sf2\local\human-disc1-pass2-" + $SessionName)
 $Cards = Join-Path $Session 'cards'
 $Timeline = Join-Path $Session 'disc1.psxpad'
 $Evidence = Join-Path $Session 'evidence.json'
+$CandidateManifest = Join-Path $Repo 'lab\sf2\modernization\pass2-candidate.json'
 
-foreach ($Required in @($Exe, $Game, $Bios, $Settings, $Monitor)) {
+foreach ($Required in @($Exe, $Game, $Bios, $Settings, $Monitor, $CandidateManifest)) {
     if (-not (Test-Path -LiteralPath $Required -PathType Leaf)) {
         throw "Required input is missing: $Required"
+    }
+}
+$Candidate = Get-Content -LiteralPath $CandidateManifest -Raw | ConvertFrom-Json
+if ($Candidate.schema -ne 1) {
+    throw "Unsupported pass-2 candidate manifest schema: $($Candidate.schema)"
+}
+$CandidateFiles = [ordered]@{
+    enhanced_executable = $Exe
+    game_configuration = $Game
+    settings = $Settings
+    openbios = $Bios
+    frozen_4_3_executable = Join-Path $Project 'build-r8-scheduled-input\SCUS94451_Recompiled.exe'
+}
+foreach ($Name in $CandidateFiles.Keys) {
+    $Path = $CandidateFiles[$Name]
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Candidate identity input is missing: $Path"
+    }
+    $Expected = [string]$Candidate.identity.$Name
+    $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Expected.Length -ne 64 -or $Actual -ne $Expected.ToLowerInvariant()) {
+        throw "Pass-2 candidate identity mismatch for $Name; expected $Expected, observed $Actual"
     }
 }
 if (Test-Path -LiteralPath $Session) {
@@ -31,6 +54,7 @@ Write-Host 'Starting the isolated SF2 pass-2 Disc 1 validation build.'
 Write-Host 'Play Missions 1-8 naturally, then close the game at a stable post-Mission-8 state.'
 Write-Host 'If a visual/input defect appears, note the mission and circumstance; use the 4:3 baseline afterward for A/B.'
 Write-Host "Bounded evidence directory: $Session"
+Write-Host "Verified candidate manifest: $CandidateManifest"
 
 $Arguments = @(
     '--game', $Game,

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "source_checkpoint": "0752501",
+  "identity": {
+    "enhanced_executable": "6d618bc788d33e40ed57ec42d97658cc4bc6a5b28ab0ea30779b8fc7bf2f2568",
+    "game_configuration": "96dfc6a4fe1e036838e2d3274546832b21014f588690ebafa100d4e6b9d2a180",
+    "settings": "6aeb79b2ead9c96ab13623320cc000856c4f83f74f93adca4d0aca4933adafda",
+    "openbios": "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57",
+    "frozen_4_3_executable": "00c88921dea3a28cc06e76876e7181909f0af83a679f793d93ccdd6aa7915ab6"
+  }
+}
