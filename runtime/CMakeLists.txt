@@ -86,6 +86,16 @@ if(BUILD_TESTING)
     target_include_directories(ws_fullwidth_effect_test PRIVATE include)
     add_test(NAME ws_fullwidth_effect_test COMMAND ws_fullwidth_effect_test)
 
+    add_executable(ws_projection_compose_test
+        tests/test_ws_projection_compose.c)
+    target_include_directories(ws_projection_compose_test PRIVATE include)
+    add_test(NAME ws_projection_compose_test COMMAND ws_projection_compose_test)
+
+    add_executable(gpu_primitive_reject_test
+        tests/test_gpu_primitive_reject.c)
+    target_include_directories(gpu_primitive_reject_test PRIVATE include)
+    add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
+
     add_executable(mouse_camera_test
         tests/test_mouse_camera.c
         src/mouse_camera.c)

@@ -1,10 +1,18 @@
-param([int]$DebugPort = 19820)
+param(
+    [int]$DebugPort = 19820,
+    [string]$BuildName = 'build-modern-pass2'
+)
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Project = Join-Path $Repo 'lab\sf2\local\generated-disc1-r2-load-delay'
-$Build = Join-Path $Project 'build-modern-pass2'
+$Build = Join-Path $Project $BuildName
 $Exe = Join-Path $Build 'SCUS94451_Recompiled.exe'
-$Game = Join-Path $Project 'game-modern-pass2.toml'
+$ConfigName = if ($BuildName -eq 'build-modern-pass2') {
+    'game-modern-pass2.toml'
+} else {
+    "game-modern-pass2-$BuildName.toml"
+}
+$Game = Join-Path $Project $ConfigName
 $Bios = Join-Path $Build 'bios\openbios.bin'
 $Cards = Join-Path $Repo 'lab\sf2\local\modern-pass2-cards'
 if (-not (Test-Path -LiteralPath $Exe)) {

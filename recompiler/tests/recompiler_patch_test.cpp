@@ -142,6 +142,25 @@ buffer_ms = 60
     check(audio_config.runtime.audio_buffer_ms == 60,
           "parser preserves per-game audio buffer target");
 
+    const auto full_wide_mirror = write_config(root, "full-wide-mirror", R"toml(
+[widescreen]
+native_wide = true
+nw_textured_edges = true
+nw_textured_edge_scale = 0
+nw_full_mirror = true
+nw_guest_projection = true
+nw_world_min_polygons = 64
+)toml");
+    const auto full_wide_config =
+        PSXRecompV4::load_game_config(full_wide_mirror);
+    check(full_wide_config.ws_native_wide &&
+              full_wide_config.ws_nw_textured_edges &&
+              full_wide_config.ws_nw_textured_edge_scale == 0 &&
+              full_wide_config.ws_nw_full_mirror &&
+              full_wide_config.ws_nw_guest_projection &&
+              full_wide_config.ws_nw_world_min_polygons == 64,
+          "parser preserves guest-projected full native-wide ownership");
+
     const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
 [runtime]
 

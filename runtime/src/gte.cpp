@@ -1,5 +1,6 @@
 #include "gte.h"
 #include "cpu_state.h"
+#include "ws_projection_compose.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
@@ -766,13 +767,9 @@ extern "C" int gte_rtp_ring_dump_json(char* out, int outsz, int max_count,
 }
 
 extern "C" void gte_set_display_aspect(int num, int den) {
-    if (num <= 0 || den <= 0) { s_ws_xnum = s_ws_xden = 1; return; }
-    // squash = (4/3) / (num/den) = (4*den) / (3*num); identity for 4:3.
-    int32_t n = 4 * den, d = 3 * num;
-    int32_t a = n, b = d;
-    while (b) { int32_t t = a % b; a = b; b = t; }   // gcd
-    s_ws_xnum = n / a;
-    s_ws_xden = d / a;
+    const WsProjectionScale scale = ws_projection_scale(num, den);
+    s_ws_xnum = scale.num;
+    s_ws_xden = scale.den;
 }
 
 // ---------------------------------------------------------------------------

@@ -824,6 +824,8 @@ static bool          g_ws_hud_sprt = false;
  * units include that ABI header and do not need this frontend-only setter. */
 extern "C" void gpu_ws_set_clear_reveal(int on);
 extern "C" void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
+extern "C" void gpu_ws_set_nw_guest_projection(int on,
+                                                  uint32_t world_min_polygons);
 extern "C" void gpu_ws_set_signed_x_bound_sites(const uint32_t*, const uint32_t*, int);
 /* Widescreen engages at game entry (fntrace_is_game_started): the BIOS boot
  * — Sony logo, PS logo, shell — presents authentic 4:3 with no GTE squash.
@@ -833,6 +835,9 @@ static bool          g_ws_engaged = true;
  * present 1:1 — the GTE is NOT squashed) vs. the legacy squash hack. Default
  * native-wide; toggle live via the ws_nw TCP command for A/B comparison. */
 static int           g_ws_native_wide = 1;
+/* Title opt-in: aspect-scaled SXY remains guest-visible for retail culling;
+ * dense world DMA submissions restore unsquashed X at presentation. */
+static int           g_ws_nw_guest_projection = 0;
 /* Logical present width for the SDL_Renderer (software) path; 640*scale at
  * 4:3, wider for wide aspects. Height is always 480*scale. Set at window
  * creation alongside SDL_RenderSetLogicalSize. */
@@ -893,8 +898,10 @@ static void update_adaptive_widescreen() {
     if (g_ws_engaged) {
         const bool wide = num * 3 != den * 4;
         const int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
-        gte_set_display_aspect(mode == 1 ? num : 4,
-                               mode == 1 ? den : 3);
+        const bool guest_projection = mode == 1 ||
+            (mode == 2 && g_ws_nw_guest_projection);
+        gte_set_display_aspect(guest_projection ? num : 4,
+                               guest_projection ? den : 3);
         gpu_ws_configure(num, den, g_ws_anchor_addr,
                          g_ws_hud_sprt ? 1 : 0, mode);
     }
@@ -917,8 +924,10 @@ extern "C" void psx_ws_set_native_wide(int on) {
     g_ws_native_wide = on ? 1 : 0;
     if (g_ws_engaged && g_video_aspect_num * 3 != g_video_aspect_den * 4) {
         int mode = g_ws_native_wide ? 2 : 1;
-        gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                               mode == 1 ? g_video_aspect_den : 3);
+        const bool guest_projection = mode == 1 ||
+            (mode == 2 && g_ws_nw_guest_projection);
+        gte_set_display_aspect(guest_projection ? g_video_aspect_num : 4,
+                               guest_projection ? g_video_aspect_den : 3);
         gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
                          g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
     }
@@ -3932,8 +3941,10 @@ static void sdl_vblank_present(void) {
             int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
             /* Native-wide: GTE drawn un-squashed — feed it the 4:3 ratio
              * (identity squash). Squash mode: feed the real wide aspect. */
-            gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                                   mode == 1 ? g_video_aspect_den : 3);
+            const bool guest_projection = mode == 1 ||
+                (mode == 2 && g_ws_nw_guest_projection);
+            gte_set_display_aspect(guest_projection ? g_video_aspect_num : 4,
+                                   guest_projection ? g_video_aspect_den : 3);
             gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
                              g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
         }
@@ -5262,6 +5273,10 @@ int main(int argc, char** argv) {
             /* Keep titles with known native-wide regressions on the original
              * projection-squash + stretched-present widescreen path. */
             g_ws_native_wide = gc.ws_native_wide ? 1 : 0;
+            g_ws_nw_guest_projection = gc.ws_nw_guest_projection ? 1 : 0;
+            gpu_ws_set_nw_guest_projection(
+                g_ws_nw_guest_projection,
+                gc.ws_nw_world_min_polygons);
             /* [widescreen] nw_hud_corners — push HUD to the true wide corners. */
             gpu_ws_set_nw_hud_corners(gc.ws_nw_hud_corners ? 1 : 0);
             /* Targeted left-HUD packet range — avoids shifting 2D scenery. */

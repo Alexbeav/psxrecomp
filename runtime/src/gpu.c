@@ -26,6 +26,7 @@
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
+#include "ws_projection_compose.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,6 +106,9 @@ static uint16_t ws_ui_prepass_rank = 0xFFFFu;
  * in native-wide mode. */
 static int      ws_mode    = 0;
 static int      ws_cfg_num = 4, ws_cfg_den = 3;
+static int      ws_nw_guest_projection = 0;
+static WsProjectionScale ws_nw_guest_scale = {1, 1};
+static uint64_t ws_nw_guest_projection_restores = 0;
 static void ws_nw_sync_target(void);
 
 #define WS_TAG_BUCKETS 4096                  /* power of two */
@@ -1506,6 +1510,11 @@ void gpu_ws_get_debug(GpuWsDebug* out) {
     out->xden              = ws_xden;
     out->mode              = ws_mode;
     out->nw_extra          = ws_nw_extra();
+    out->nw_guest_projection = ws_nw_guest_projection;
+    out->nw_guest_projection_num = ws_nw_guest_scale.num;
+    out->nw_guest_projection_den = ws_nw_guest_scale.den;
+    out->nw_guest_projection_restores =
+        ws_nw_guest_projection_restores;
     out->cur_frame         = s_frame_count;
     out->last_tag_frame    = ws_last_tag_stamp;
     out->last_3d_frame     = ws_last_3d_stamp;
@@ -1561,13 +1570,11 @@ void gpu_ws_configure(int aspect_num, int aspect_den,
     ws_cfg_num = aspect_num > 0 ? aspect_num : 4;
     ws_cfg_den = aspect_den > 0 ? aspect_den : 3;
     ws_mode    = mode;
+    ws_nw_guest_scale = ws_projection_scale(ws_cfg_num, ws_cfg_den);
     if (mode == 1) {
         /* Squash factor = (4*den)/(3*num) — the same factor the GTE applies. */
-        int32_t n = 4 * ws_cfg_den, d = 3 * ws_cfg_num;
-        int32_t a = n, b = d;
-        while (b) { int32_t t = a % b; a = b; b = t; }
-        ws_xnum = n / a;
-        ws_xden = d / a;
+        ws_xnum = ws_nw_guest_scale.num;
+        ws_xden = ws_nw_guest_scale.den;
     } else {
         /* Native-wide (2) and off (0): the GTE is NOT squashed. */
         ws_xnum = ws_xden = 1;
@@ -2147,6 +2154,10 @@ static uint32_t draw_area_right, draw_area_bottom;
 
 /* Draw offset (set by GP0(E5h)) */
 static int32_t draw_offset_x, draw_offset_y;
+
+/* Native-wide guest projection lets retail visibility consume the widened
+ * horizontal cone.  Raster compensation is applied later per hardware
+ * triangle, and only with complete recent GTE value provenance. */
 /* Instrumentation: per-vblank range/count of GP0(E5) draw-offset-Y sets. If a
  * single frame sets offsets in BOTH the top (y<128) and bottom (y>=128) buffer
  * bands, the game is drawing different parts of the scene into different display
@@ -2231,7 +2242,21 @@ static void ws_clear_all_reveal_margins(void) {
  * a guessed finite-map side here: MMX6's authored layers enter the reveal at
  * different times, so the side guess produced a moving black trim over valid
  * stage art. A stale reveal tile is safer than deleting submitted content. */
-void gpu_ws_begin_linked_list(void) {
+static uint64_t gp0_ll_frame = UINT64_MAX;
+static uint16_t gp0_ll_index = 0xFFFFu;
+static uint32_t gp0_ll_root = 0;
+static int gp0_ll_world = 0;
+static uint32_t ws_nw_world_min_polygons = 0;
+
+void gpu_ws_begin_linked_list(uint32_t start_addr) {
+    if (gp0_ll_frame != s_frame_count) {
+        gp0_ll_frame = s_frame_count;
+        gp0_ll_index = 0;
+    } else if (gp0_ll_index != 0xFFFFu) {
+        gp0_ll_index++;
+    }
+    gp0_ll_root = start_addr & 0x1FFFFCu;
+    gp0_ll_world = 0;
     gp0_ot_rank = 0xFFFFu;
 }
 
@@ -2784,11 +2809,37 @@ extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
 
 void gpu_texture_correction_set(int enabled) {
     s_texture_correction_enabled = enabled ? 1 : 0;
-    gte_precision_tracking_set(enabled);
+    gte_precision_tracking_set(s_texture_correction_enabled);
+}
+
+void gpu_ws_set_nw_guest_projection(int enabled,
+                                    uint32_t world_min_polygons) {
+    ws_nw_guest_projection = enabled ? 1 : 0;
+    ws_nw_world_min_polygons = world_min_polygons;
+    ws_nw_guest_projection_restores = 0;
+    gte_precision_tracking_set(s_texture_correction_enabled);
 }
 
 uint32_t gpu_texture_correction_hits(void) {
     return sw_perspective_triangle_count();
+}
+
+/* Restore the pre-squash horizontal projection only inside a dense polygon
+ * linked-list submission. DMA boundaries retain ownership that packed vertex
+ * values cannot: repeated world coordinates and CPU-authored UI may be equal. */
+static int ws_nw_compensate_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
+                                     int32_t vx[3]) {
+    if (!ws_nw_guest_projection || !ws_native_wide_active() ||
+        !gp0_ll_world) return 0;
+    const uint32_t words[3] = { w0, w1, w2 };
+    for (int i = 0; i < 3; ++i) {
+        int32_t raw_x;
+        int32_t ignored_y;
+        parse_vertex(words[i], &raw_x, &ignored_y);
+        vx[i] += ws_projection_inverse_x(raw_x, 0, ws_nw_guest_scale) - raw_x;
+    }
+    ws_nw_guest_projection_restores += 3;
+    return 1;
 }
 
 /* Match all three GP0 positions to recent GTE projections. Requiring a full
@@ -3024,6 +3075,8 @@ static void gp0_exec_mono_tri(void) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
     }
+    ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
+                              gp0_cmd_buf[3], vx);
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_buf[3],
@@ -3075,16 +3128,20 @@ static void gp0_exec_mono_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
+                                  gp0_cmd_buf[3], tx);
         prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
                                  gp0_cmd_buf[3], tx, ty);
-        gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
+        gr_draw_flat_triangle(tx[0], ty[0], tx[1], ty[1], tx[2], ty[2], color);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[3], gp0_cmd_buf[2],
+                                  gp0_cmd_buf[4], tx);
         prepare_precise_triangle(gp0_cmd_buf[3], gp0_cmd_buf[2],
                                  gp0_cmd_buf[4], tx, ty);
-        gr_draw_flat_triangle(vx[2], vy[2], vx[1], vy[1], vx[3], vy[3], color);
+        gr_draw_flat_triangle(tx[0], ty[0], tx[1], ty[1], tx[2], ty[2], color);
     }
 }
 
@@ -3104,6 +3161,8 @@ static void gp0_exec_shaded_tri(void) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
     }
+    ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+                              gp0_cmd_buf[5], vx);
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
@@ -3154,20 +3213,24 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+                                  gp0_cmd_buf[5], tx);
         prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
                                  gp0_cmd_buf[5], tx, ty);
-        gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
-                                 vx[1], vy[1], c[1],
-                                 vx[2], vy[2], c[2]);
+        gr_draw_gouraud_triangle(tx[0], ty[0], c[0],
+                                 tx[1], ty[1], c[1],
+                                 tx[2], ty[2], c[2]);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
+                                  gp0_cmd_buf[7], tx);
         prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
                                  gp0_cmd_buf[7], tx, ty);
-        gr_draw_gouraud_triangle(vx[2], vy[2], c[2],
-                                 vx[1], vy[1], c[1],
-                                 vx[3], vy[3], c[3]);
+        gr_draw_gouraud_triangle(tx[0], ty[0], c[2],
+                                 tx[1], ty[1], c[1],
+                                 tx[2], ty[2], c[3]);
     }
 }
 
@@ -3232,6 +3295,8 @@ static void gp0_exec_textured_tri(void) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
     }
+    ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+                              gp0_cmd_buf[5], vx);
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     setup_textured_draw(color24, semi_trans, raw_texture);
@@ -3319,23 +3384,27 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+                                  gp0_cmd_buf[5], tx);
         prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
                                  gp0_cmd_buf[5], tx, ty);
         prepare_texture_triangle(1, 3, 5);
-        gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
-                                  vx[1], vy[1], u[1], v[1],
-                                  vx[2], vy[2], u[2], v[2],
+        gr_draw_textured_triangle(tx[0], ty[0], u[0], v[0],
+                                  tx[1], ty[1], u[1], v[1],
+                                  tx[2], ty[2], u[2], v[2],
                                   clut_x, clut_y, tpage);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
+                                  gp0_cmd_buf[7], tx);
         prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
                                  gp0_cmd_buf[7], tx, ty);
         prepare_texture_triangle(5, 3, 7);
-        gr_draw_textured_triangle(vx[2], vy[2], u[2], v[2],
-                                  vx[1], vy[1], u[1], v[1],
-                                  vx[3], vy[3], u[3], v[3],
+        gr_draw_textured_triangle(tx[0], ty[0], u[2], v[2],
+                                  tx[1], ty[1], u[1], v[1],
+                                  tx[2], ty[2], u[3], v[3],
                                   clut_x, clut_y, tpage);
     }
 }
@@ -3370,6 +3439,8 @@ static void gp0_exec_shaded_textured_tri(void) {
         vx[i] += draw_offset_x;
         vy[i] += draw_offset_y;
     }
+    ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
+                              gp0_cmd_buf[7], vx);
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
@@ -3426,23 +3497,27 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
+                                  gp0_cmd_buf[7], tx);
         prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
                                  gp0_cmd_buf[7], tx, ty);
         prepare_texture_triangle(1, 4, 7);
-        gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
-                                         vx[1], vy[1], u[1], v[1], c[1],
-                                         vx[2], vy[2], u[2], v[2], c[2],
+        gr_draw_shaded_textured_triangle(tx[0], ty[0], u[0], v[0], c[0],
+                                         tx[1], ty[1], u[1], v[1], c[1],
+                                         tx[2], ty[2], u[2], v[2], c[2],
                                          clut_x, clut_y, tpage, raw_texture);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
+        ws_nw_compensate_triangle(gp0_cmd_buf[7], gp0_cmd_buf[4],
+                                  gp0_cmd_buf[10], tx);
         prepare_precise_triangle(gp0_cmd_buf[7], gp0_cmd_buf[4],
                                  gp0_cmd_buf[10], tx, ty);
         prepare_texture_triangle(7, 4, 10);
-        gr_draw_shaded_textured_triangle(vx[2], vy[2], u[2], v[2], c[2],
-                                         vx[1], vy[1], u[1], v[1], c[1],
-                                         vx[3], vy[3], u[3], v[3], c[3],
+        gr_draw_shaded_textured_triangle(tx[0], ty[0], u[2], v[2], c[2],
+                                         tx[1], ty[1], u[1], v[1], c[1],
+                                         tx[2], ty[2], u[3], v[3], c[3],
                                          clut_x, clut_y, tpage, raw_texture);
     }
 }
@@ -4081,10 +4156,13 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_ui_prepass_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
     ws_auto_ui_dense = 0;
-    if (!ws_auto_ui_squash || !ws_active()) return;
+    if ((!ws_auto_ui_squash && !ws_nw_guest_projection) ||
+        (!ws_active() && !ws_native_wide_active()))
+        return;
 
     uint32_t addr = start_addr & 0x1FFFFCu;
     uint32_t safety = 0;
+    uint32_t polygon_count = 0;
     uint16_t rank = 0xFFFFu;
     const uint32_t max_nodes = 0x40000u;
 
@@ -4110,6 +4188,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                 /* CPU->VRAM data follows its 3-word header and is not a command
                  * stream. Such transfers are not UI draws; stop this node. */
                 if (op >= 0xA0u && op <= 0xBFu) break;
+                if (op >= 0x20u && op <= 0x3Fu) polygon_count++;
                 uint32_t words[12] = {0};
                 for (int i = 0; i < count && i < 12; i++) {
                     words[i] = psx_read_word(
@@ -4126,6 +4205,8 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         if (next == 0xFFFFFFu) break;
         addr = next & 0x1FFFFCu;
     }
+    gp0_ll_world = ws_projection_submission_is_world(
+        polygon_count, ws_nw_world_min_polygons);
     if (ws_ui_prepass_count == 0) {
         ws_ui_prepass_count = 0;
         return;
@@ -4305,6 +4386,8 @@ typedef struct {
     int16_t  base_x;      /* back-buffer origin (draw_area_left) at draw time */
     uint8_t  opcode;
     uint8_t  tagged;      /* psx_ws_prim_is_tagged() at draw time */
+    uint16_t list_index;   /* linked-list DMA ordinal in this host frame */
+    uint32_t list_root;    /* physical RAM root of the owning DMA chain */
 } WsCensusEntry;
 static WsCensusEntry *ws_census = NULL;
 static uint64_t       ws_census_seq = 0;
@@ -4384,6 +4467,8 @@ static void ws_census_record(uint8_t opcode, int32_t x, int32_t y) {
     e->base_x   = (int16_t)draw_area_left;
     e->opcode   = opcode;
     e->tagged   = (uint8_t)psx_ws_prim_is_tagged();
+    e->list_index = gp0_ll_index;
+    e->list_root = gp0_ll_root;
     ws_census_seq++;
 }
 
@@ -4392,7 +4477,7 @@ int gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path) {
     if (!ws_census) return 0;
     FILE *fp = fopen(path, "w");
     if (!fp) return -1;
-    fprintf(fp, "frame,src_addr,cam_x,cam_y,x,y,xmin,xmax,base_x,opcode,tagged\n");
+    fprintf(fp, "frame,src_addr,cam_x,cam_y,x,y,xmin,xmax,base_x,opcode,tagged,list_index,list_root\n");
     uint64_t total = ws_census_seq;
     uint64_t avail = total < WS_CENSUS_CAP ? total : WS_CENSUS_CAP;
     uint64_t start = total - avail;
@@ -4400,9 +4485,10 @@ int gpu_ws_census_dump(uint32_t f0, uint32_t f1, const char *path) {
     for (uint64_t s = start; s < total; s++) {
         WsCensusEntry *e = &ws_census[s & (WS_CENSUS_CAP - 1)];
         if (e->frame < f0 || e->frame > f1) continue;
-        fprintf(fp, "%u,0x%08X,%d,%d,%d,%d,%d,%d,%d,0x%02X,%u\n",
+        fprintf(fp, "%u,0x%08X,%d,%d,%d,%d,%d,%d,%d,0x%02X,%u,%u,0x%08X\n",
                 e->frame, e->src_addr, e->cam_x, e->cam_y, e->x, e->y,
-                e->xmin, e->xmax, e->base_x, e->opcode, e->tagged);
+                e->xmin, e->xmax, e->base_x, e->opcode, e->tagged,
+                e->list_index, e->list_root);
         n++;
     }
     fclose(fp);

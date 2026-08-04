@@ -888,6 +888,18 @@ struct GameConfig {
     // transformed in the mirror.
     bool ws_nw_full_mirror = false;
 
+    // Apply the aspect-scaled horizontal projection to guest-visible GTE SXY
+    // in native-wide mode, then restore the retail projection for dense world
+    // DMA submissions. This lets the title's visibility decisions observe the
+    // wide cone without moving later HUD/effect submissions. Runtime-only;
+    // off by default.
+    bool ws_nw_guest_projection = false;
+
+    // Minimum polygon commands required to classify one linked-list DMA
+    // submission as world-owned for native-wide projection compensation.
+    // Zero disables the classifier. Runtime-only and title-profile data.
+    uint32_t ws_nw_world_min_polygons = 0;
+
     // [[widescreen.signed_x_bound]] guarded LUI sites whose signed Q16
     // constants scale with the active native-wide field and remain identity in
     // 4:3/menus/FMV. Shared by static codegen, overlay JIT, and interpreter.

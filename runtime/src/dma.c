@@ -701,8 +701,8 @@ static uint32_t execute_ch2_gpu(void) {
          * Each node: bits 24-31 = number of words following header,
          *            bits 0-23  = next node address (0xFFFFFF = end).
          * The words following the header are sent to GP0. */
-        gpu_ws_begin_linked_list();
         uint32_t addr = channels[2].madr & 0x1FFFFCu;
+        gpu_ws_begin_linked_list(addr);
         gpu_ws_prepass_linked_list(addr);
         uint32_t safety = 0;
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */

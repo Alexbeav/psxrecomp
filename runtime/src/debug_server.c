@@ -4897,6 +4897,9 @@ static void handle_gpu_state(int id, const char *json)
              "\"present_native_43\":%d,\"x_margin\":%d,"
              "\"activation_margin\":%d,\"squash\":[%d,%d],"
              "\"mode\":%d,\"nw_extra\":%d,"
+             "\"nw_guest_projection\":%d,"
+             "\"nw_guest_projection_scale\":[%d,%d],"
+             "\"nw_guest_projection_restores\":%llu,"
              "\"cur_frame\":%llu,\"last_tag_frame\":%u,\"last_3d_frame\":%u,"
              "\"gte_verts\":%u,\"last_world3d_frame\":%u,"
              "\"ovh_prims\":%u,\"last_ovh_frame\":%u,"
@@ -4925,7 +4928,9 @@ static void handle_gpu_state(int id, const char *json)
              ws.configured, ws.active, ws.game_mode,
              ws.present_native_43, ws.x_margin, ws.activation_margin,
              ws.xnum, ws.xden,
-             ws.mode, ws.nw_extra,
+             ws.mode, ws.nw_extra, ws.nw_guest_projection,
+             ws.nw_guest_projection_num, ws.nw_guest_projection_den,
+             (unsigned long long)ws.nw_guest_projection_restores,
              (unsigned long long)ws.cur_frame, ws.last_tag_frame,
               ws.last_3d_frame, ws.gte_verts, ws.last_world3d_frame,
               ws.ovh_prims, ws.last_ovh_frame,

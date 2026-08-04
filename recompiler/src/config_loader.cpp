@@ -1322,6 +1322,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_nw_textured_edges = false;
     int ws_nw_textured_edge_scale = 0;
     bool ws_nw_full_mirror = false;
+    bool ws_nw_guest_projection = false;
+    uint32_t ws_nw_world_min_polygons = 0;
     std::vector<WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     bool ws_offered = true;
     bool vulkan_offered = false;
@@ -1476,6 +1478,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
         if (ws.contains("nw_full_mirror"))
             ws_nw_full_mirror = toml::find<bool>(ws, "nw_full_mirror");
+        if (ws.contains("nw_guest_projection"))
+            ws_nw_guest_projection = toml::find<bool>(ws, "nw_guest_projection");
+        if (ws.contains("nw_world_min_polygons")) {
+            const int value = toml::find<int>(ws, "nw_world_min_polygons");
+            if (value < 0 || value > 65535)
+                throw std::runtime_error(
+                    "widescreen.nw_world_min_polygons must be 0..65535");
+            ws_nw_world_min_polygons = static_cast<uint32_t>(value);
+        }
         if (ws.contains("signed_x_bound")) {
             std::set<uint32_t> seen;
             for (const auto& item : toml::find<toml::array>(ws, "signed_x_bound")) {
@@ -1985,6 +1996,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_nw_textured_edges*/ ws_nw_textured_edges,
         /*ws_nw_textured_edge_scale*/ ws_nw_textured_edge_scale,
         /*ws_nw_full_mirror*/ ws_nw_full_mirror,
+        /*ws_nw_guest_projection*/ ws_nw_guest_projection,
+        /*ws_nw_world_min_polygons*/ ws_nw_world_min_polygons,
         /*ws_signed_x_bound_sites*/ ws_signed_x_bound_sites,
         /*ws_offered*/            ws_offered,
         /*vulkan_offered*/        vulkan_offered,

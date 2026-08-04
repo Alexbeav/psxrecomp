@@ -297,7 +297,7 @@ void gpu_ws_set_nw_hud_corners(int on);
 /* Targeted alternative for sprite-heavy 2D games: corner-anchor only primitives
  * whose ordering-table packet lives in the configured half-open RAM range. */
 void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
-void gpu_ws_begin_linked_list(void);
+void gpu_ws_begin_linked_list(uint32_t start_addr);
 void gpu_ws_end_linked_list(void);
 void gpu_ws_prepass_linked_list(uint32_t start_addr);
 /* Native-wide full-frame 2D backdrop stretch ([widescreen] nw_backdrop):
@@ -380,6 +380,10 @@ typedef struct {
     int      xnum, xden;        /* squash factor */
     int      mode;              /* 0 = off, 1 = squash, 2 = native-wide */
     int      nw_extra;          /* native-wide frame growth (display px), 0 if off */
+    int      nw_guest_projection; /* guest-visible X squash + world-OT inverse */
+    int      nw_guest_projection_num;
+    int      nw_guest_projection_den;
+    uint64_t nw_guest_projection_restores;
     uint64_t cur_frame;
     uint32_t last_tag_frame;    /* frame of newest tagged prim */
     uint32_t last_3d_frame;     /* frame of newest shaded prim (diagnostic) */

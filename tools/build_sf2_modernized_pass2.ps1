@@ -1,10 +1,19 @@
-param()
+param(
+    [string]$BuildName = 'build-modern-pass2',
+    [switch]$GuestProjection
+)
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Project = Join-Path $Repo 'lab\sf2\local\generated-disc1-r2-load-delay'
 $BaselineBuild = Join-Path $Project 'build-r8-scheduled-input'
-$ModernBuild = Join-Path $Project 'build-modern-pass2'
-$ModernConfig = Join-Path $Project 'game-modern-pass2.toml'
+$CanonicalModernBuild = Join-Path $Project 'build-modern-pass2'
+$ModernBuild = Join-Path $Project $BuildName
+$ConfigName = if ($BuildName -eq 'build-modern-pass2') {
+    'game-modern-pass2.toml'
+} else {
+    "game-modern-pass2-$BuildName.toml"
+}
+$ModernConfig = Join-Path $Project $ConfigName
 $Profile = Join-Path $Repo 'lab\sf2\modernization'
 $Package = Join-Path $Repo 'dist\psxrecomp-cli-windows-x86_64'
 $Framework = Join-Path $Package 'framework'
@@ -28,7 +37,10 @@ aspect_ratio = "16:9"
 '@
 $ConfigText = [regex]::Replace(
     $ConfigText, '(?ms)^\[video\]\s*\r?\n.*\z', $VideoHeader + "`r`n")
-$ConfigText += @'
+$ConfigText = [regex]::Replace(
+    $ConfigText, '(?m)^(bios_hle\s*=\s*false\s*)$',
+    ('$1' + "`r`nfast_boot = true"))
+$ConfigText += @"
 
 [controller]
 default_mode = "digital"
@@ -60,11 +72,14 @@ invert_y = false
 native_wide = true
 gte_game_mode = true
 nw_phase_backdrop = false
+nw_full_mirror = true
+nw_guest_projection = $($GuestProjection.IsPresent.ToString().ToLowerInvariant())
+nw_world_min_polygons = 64
 
 [widescreen.cull]
 auto_screen_x = true
 screen_h_imms = ["0xE0", "0xF0", "0xF1"]
-'@
+"@
 Set-Content -LiteralPath $ModernConfig -Value $ConfigText -Encoding utf8
 
 Push-Location $Project
@@ -86,9 +101,31 @@ Copy-Item -LiteralPath (Join-Path $Profile 'keybinds.ini') `
     -Destination (Join-Path $ModernBuild 'keybinds.ini') -Force
 Copy-Item -LiteralPath (Join-Path $Profile 'settings-pass2.toml') `
     -Destination (Join-Path $ModernBuild 'settings.toml') -Force
-if (Test-Path -LiteralPath (Join-Path $BaselineBuild 'cache')) {
-    Copy-Item -Path (Join-Path $BaselineBuild 'cache\*') `
-        -Destination (Join-Path $ModernBuild 'cache') -Recurse -Force
+$CacheSource = $BaselineBuild
+if ($ModernBuild -ne $CanonicalModernBuild -and
+    (Test-Path -LiteralPath (Join-Path $CanonicalModernBuild 'cache'))) {
+    $CacheSource = $CanonicalModernBuild
+}
+if (Test-Path -LiteralPath (Join-Path $CacheSource 'cache')) {
+    $CacheDestination = Join-Path $ModernBuild 'cache'
+    New-Item -ItemType Directory -Path $CacheDestination -Force | Out-Null
+    robocopy (Join-Path $CacheSource 'cache') $CacheDestination /E /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "Overlay cache copy failed with robocopy code $LASTEXITCODE"
+    }
+}
+if ($CacheSource -eq $CanonicalModernBuild) {
+    $CaptureManifest = Join-Path $CacheSource 'overlay_captures.json'
+    $CaptureFragments = Join-Path $CacheSource 'overlay_captures.json.d'
+    if (Test-Path -LiteralPath $CaptureManifest -PathType Leaf) {
+        Copy-Item -LiteralPath $CaptureManifest -Destination $ModernBuild -Force
+    }
+    if (Test-Path -LiteralPath $CaptureFragments -PathType Container) {
+        Copy-Item -Path (Join-Path $CaptureFragments '*') `
+            -Destination (Join-Path $ModernBuild 'overlay_captures.json.d') `
+            -Recurse -Force
+    }
 }
 Write-Host "Pass-2 executable: $(Join-Path $ModernBuild 'SCUS94451_Recompiled.exe')"
+Write-Host "Pass-2 configuration: $ModernConfig"
 Write-Host "Frozen compatibility executable: $(Join-Path $BaselineBuild 'SCUS94451_Recompiled.exe')"
