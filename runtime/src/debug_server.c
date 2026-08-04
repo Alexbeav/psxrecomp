@@ -7951,9 +7951,11 @@ static void handle_get_snapshots(int id, const char *json)
  * — which keeps the self-contained static runtime self-contained. */
 #include "png_write.h"   /* png_write_rgb + zlib/CRC helpers (shared with Beetle) */
 
-/* Unified screenshot: writes an 8-bit RGB PNG of the current display to "path"
- * (default psx_screenshot.png in the runtime cwd) and answers with a single
- * metadata line.  Registered as both "screenshot" and "screenshot_file";
+/* Canonical screenshot: writes an 8-bit RGB PNG of the current PSX display to
+ * "path" (default psx_screenshot.png in the runtime cwd) and answers with a
+ * single metadata line. Registered as "screenshot_file"; the user-facing
+ * "screenshot" command selects the presented native-wide surface when one is
+ * active and falls back to this canonical capture at 4:3.
  * the old "screenshot" inline-hex-row variant streamed h+1 response lines
  * per request, which violated the one-request/one-response protocol and
  * poisoned every client connection that used it. */
@@ -8265,6 +8267,21 @@ static void handle_wide_shot(int id, const char *json)
     if (!ok) { send_err(id, "png encode failed"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d}",
              id, path, W, H);
+}
+
+/* screenshot: capture what the player is actually being shown. Native-wide
+ * presentation is wider than the canonical PSX display rectangle, so routing
+ * this command unconditionally through handle_screenshot_file silently omits
+ * precisely the reveal margins that widescreen diagnostics need to inspect.
+ * Keep screenshot_file as the explicit canonical-VRAM probe. */
+static void handle_present_screenshot(int id, const char *json)
+{
+    extern int gr_wide_supported(void);
+    if (gr_wide_supported() && ws_nw_extra() > 0) {
+        handle_wide_shot(id, json);
+        return;
+    }
+    handle_screenshot_file(id, json);
 }
 
 /* wide_full: dump the ENTIRE active wide compositor surface (both double-buffer
@@ -12775,8 +12792,8 @@ static const CmdEntry s_commands[] = {
     { "read_frame_ram",    handle_read_frame_ram },
     { "set_snapshot",      handle_set_snapshot },
     { "get_snapshots",     handle_get_snapshots },
-    { "screenshot",        handle_screenshot_file },
-    { "screenshot_file",   handle_screenshot_file },   /* alias */
+    { "screenshot",        handle_present_screenshot },
+    { "screenshot_file",   handle_screenshot_file },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },
