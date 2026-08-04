@@ -1,6 +1,54 @@
 # Current objective — modernization pass 2 widescreen and direct mouse
 
+## 2026-08-04 accepted modernization checkpoint and next objective
+
+Human A/B testing accepts the current enhanced build as visually correct and
+playing well for the exercised Mission 1 scenes. The native-wide solution keeps
+retail-visible GTE projection widened, then compensates raster X only within the
+dense polygon-owned linked-list DMA submission. It does not classify by SF2
+address or reused packed coordinate. The 64-polygon discriminator is explicit
+title-profile data and zero disables it. Source checkpoint `a2b951c`; rebuilt
+Release executable SHA-256
+`1A6B0DE5FDB4CCC7DE2D6AD99BAE89A878741B508114978D16465C12DDF1C529`.
+
+The compatibility and enhanced launch/build identities remain separate. The
+rejected value-provenance cache has been removed from production code. CLI
+Release generation and link pass; all 50 registered tests pass when the required
+`PYTHONUTF8=1` environment is present, and the focused projection-composition
+and primitive-rejection tests pass with warnings-as-errors.
+
+The next objective is PGXP, followed by high-refresh presentation. PGXP must
+consume complete renderer-neutral GTE provenance while leaving guest-visible
+GTE/RAM values unchanged and falling back to native PS1 coordinates on every
+unmatched primitive. The first 60 FPS milestone is presentation interpolation
+with retail simulation unchanged. A true simulation-rate unlock is prohibited
+until SF2's authoritative timestep is identified and gameplay, scripts, audio,
+device clocks, and input semantics remain invariant. See
+`NEXT_ENHANCEMENTS_2026-08-04.md`.
+
 Updated: 2026-08-03
+
+## 2026-08-04 per-triangle projection-provenance candidate
+
+Live A/B evidence contradicts both the OpenGL wide-mirror surface and a single
+display page as the rhythmic triangle-flicker owner. The broad ordering-table
+inverse is replaced by a complete three-vertex GTE value-provenance rule. CPU-
+authored and partially matched triangles now fail closed; each hardware half of
+a quad is classified independently. Exact pre-squash 16.16 X is retained in the
+generic GTE geometry cache, so the host no longer applies an approximate second
+FOV transform.
+
+Focused projection, GTE provenance, primitive-reject, and recompiler parser
+tests pass. Release build `build-modern-pass2-provenance` completes. Two clean
+hidden OpenGL routes pass authentic TITLE through Mission 1 state-0 movement
+with matching normalized checkpoint fingerprints and final player position.
+Human visual acceptance remains the owning gate.
+
+Overlay coverage for these candidate runs is honestly interpreter-backed:
+existing caches have stale emitter hashes, and the current broader-capture
+preflight has four failed audits. No failing shard set was installed. See
+`WIDESCREEN_FLICKER_PROVENANCE_2026-08-04.md` for the evidence, candidate hashes,
+three bounded overlay falsification attempts, and test command.
 
 ## Objective
 
@@ -95,6 +143,15 @@ must not obstruct either follow-up.
   is 7.3316% of the overlay tier and is not reported as native coverage.
 - Automated Mission 1 is therefore green for the exact candidate recorded in
   `DISC1_VALIDATION.md`. Human Missions 1--8 acceptance is now the next gate.
+- Human Mission 1 inspection rejected that candidate's OpenGL native-wide
+  presentation. The canonical 4:3 centre remained coherent, but the independently
+  rasterized reveal margins exposed fan-shaped affine texture distortion and a
+  hard discontinuity at both former 4:3 edges. This contradicts visual acceptance
+  despite the semantic route passing. The first bounded A/B now disables the
+  OpenGL centre-blit optimization (`nw_full_mirror = true`) so the entire wide
+  image follows one raster path, matching the software backend architecture.
+  This is an unaccepted visual candidate until the user verifies Mission 1; the
+  recorded candidate manifest intentionally still names the last automated build.
 
 ## 2026-08-03 modernization pass 1
 
@@ -370,3 +427,61 @@ must not obstruct either follow-up.
 Windows is using a Greek legacy code page. Python source-reading tests can fail
 with `cp1253` decoding errors unless `$env:PYTHONUTF8 = "1"` is set. This is an
 environment issue, not a framework regression.
+
+## Modernization pass 2 visual gate
+
+Human A/B testing accepted `nw_full_mirror = true` as correcting the distorted
+native-wide margins, but exposed genuine edge culling. The read-only hybrid
+oracle identifies the owning invariant as guest-visible GTE horizontal
+projection. The new opt-in preserves widened guest visibility and unsquashed
+raster X through exact SWC2-to-GP0 address/value provenance, leaving
+CPU-authored HUD and effects unchanged. Focused config and GTE provenance tests
+pass. Human evidence then narrowed the remaining rectangular loss to the finite
+outdoor sky/SCRIM boundary rather than whole-scene frustum culling. The current
+A/B adds only the existing edge-only textured transform: interior/canonical
+vertices remain unchanged and only already-outside vertices expand toward the
+wide edge. Human evidence rejected that A/B: the black SCRIM boundary remained,
+and Gabe appeared horizontally thinner. Both guest projection and textured-edge
+expansion are disabled in the current build, returning to the accepted
+full-mirror presentation while the semantic SCRIM owner is investigated.
+
+Further human evidence proves NPCs also disappear at the wide edge while the
+floor remains continuously submitted. A third bounded candidate restored the
+widened guest projection and replaced incomplete SWC2 provenance with
+ordering-table compensation. Human testing rejected it: culling persisted and
+character proportions were wrong again. The active generated profile is
+therefore restored to the aspect-correct full-mirror-only baseline.
+
+Corpus consultation plus three distinct bounded falsification attempts are now
+complete: exact SWC2-to-GP0 provenance was incomplete, edge-only textured
+expansion did not affect the loss, and world-ordering-table inverse compensation
+changed aspect without retaining culled objects. The first unresolved semantic
+divergence is that actor and finite-background packets cease to be submitted
+inside the added field while resident floor geometry remains. The next work is
+an evidence capture of the retail model/room visibility owner, not another
+presentation transform.
+
+The restored Release executable is
+`F47B337D391BA44CE57B436E5B739CB27DE47A3EC8E2E7DA67AE29544D5E586C`;
+its generated config is
+`06D2C40300CE7AC015A5E5C52D06B726463EB781485A87F61DF6D846A87DB2DF`
+and contains only `nw_full_mirror = true` among the three rejected A/B flags.
+`tools/start_sf2_widescreen_cull_capture.ps1` now arms the bounded packet
+census and captures the preceding 360 frames when the human tester holds a
+camera at the disappearance boundary. It records GPU and semantic state plus
+input identities under the ignored local tree and never writes guest state.
+
+The later value-provenance attempt is also rejected. Live evidence showed more
+than 1.15 million matches and severe rhythmic corruption; equality of packed
+SXY values does not preserve primitive ownership across DMA submissions or
+frames. A retail-4:3 live A/B removed that corruption and restored proportions,
+while the original edge culling returned.
+
+Read-only DMA traversal at the held Mission 1 position now identifies the
+missing semantic boundary: six linked-list submissions occur per gameplay
+tick, with three setup-only lists, one dense 696-polygon world list, then 31-
+and 10-draw auxiliary/UI lists. The active candidate work moves inverse
+projection to that dense world-submission boundary and extends the bounded
+census with list ordinal/root evidence. This directly mirrors the verified
+hybrid ownership rule without copying an address or classifying individual
+triangles by reused coordinate values.

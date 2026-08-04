@@ -1064,3 +1064,237 @@ hashes all five files and refuses to open a runtime on any mismatch. A focused
 source regression keeps the manifest, human guide and launcher synchronized;
 it and a direct local five-file verification pass. This records no retail
 payload and does not modify either build.
+
+## 2026-08-03 — human rejection of split native-wide rasterization
+
+Human Mission 1 screenshots reject the automated native-wide candidate. The
+canonical 4:3 centre is coherent, while both reveal margins contain strongly
+fan-shaped affine-textured world polygons and visible discontinuities exactly
+at the old 4:3 edges. This direct presentation evidence overrides the earlier
+semantic-route acceptance. It is not classified as ordinary missing culling:
+geometry exists in the margins, but its raster continuity is wrong.
+
+The OpenGL fast path renders only margin-reaching primitives into the wide FBO,
+then copies the canonical high-resolution framebuffer into its centre at
+present. Software instead mirrors every primitive across one full wide surface.
+The first bounded A/B sets `nw_full_mirror = true`, disabling the OpenGL centre
+blit and centre-only primitive skips. The enhanced build was regenerated, but
+the candidate manifest was deliberately not advanced: Mission 1 human visual
+acceptance is required before this becomes a milestone. No PGXP, retail-code
+change, address rule, or game-state containment was introduced.
+
+The missing-side-geometry hypothesis was also checked against the generic
+screen-extent detector. SF2 displays gameplay at 384x240, making width
+immediates `0x180/0x181` a bounded lead. It is contradicted for this detector:
+all captured overlay variants contain zero `slti/sltiu` sites with either
+immediate, and an independent scan of the user-owned resident executable also
+finds zero. Seven resident `slti 0xF0` height comparisons exist, but there is no
+paired 384-wide signature. The production config therefore remains unchanged;
+the zero automatic-cull count is not fixed by substituting display dimensions.
+The hybrid project's broader room/portal envelope remains an architectural
+lead only and requires a locally verified SCUS-94451 traversal owner.
+
+## 2026-08-03 — native-wide edge-culling candidate
+
+Human testing confirms the full-mirror A/B corrected the split-raster margin
+distortion. It also identifies the next first divergence: world geometry is
+culled near the new 16:9 edges. Read-only comparison with the hybrid project's
+verified Mission 1–4 correction narrowed ownership to guest GTE horizontal
+projection, not a 384-pixel retail screen-limit immediate.
+
+The title-neutral opt-in applies native-wide aspect scale to the X value visible
+to guest code and records unsquashed retail X at the precise GTE projection
+site. GP0 restores retail X only when the command word's guest RAM address and
+packed value exactly match recorded SWC2 provenance. Retail visibility thus
+sees the wider cone without compressing geometry on the already-wide raster;
+CPU-authored HUD/effects remain in their original coordinate space. Menus,
+FMVs and other native-4:3 phases remain outside the active predicate. No PGXP,
+SF2 address rule, generated-code edit or forced state was introduced.
+
+The focused recompiler config regression and `gte_register_access_test` pass,
+and the Release build links. Candidate executable SHA-256 is
+`8555B60512EDC0CC266D340439D713C7E3DD8946C1B7994FBC5CEFB5569DC64F`;
+generated config SHA-256 is
+`89E65A8646565CC6418577629B1FDE5FC92D38D11444B9BAFDFE2E0B3E16045A`.
+The Disc 1 manifest remains unchanged pending human visual acceptance.
+
+The first human run of the guest-projection candidate still produced a black
+rectangular region at one reveal edge. It did not erase the scene top-to-bottom:
+foreground terrain remained while the outdoor sky/SCRIM ended on a stable
+rectangular boundary, and holding the camera could grow the border square.
+This narrows guest GTE projection to necessary-but-insufficient for this frame;
+the remaining symptom is the already-open finite background coverage owner,
+not evidence that every world model is still rejected.
+
+The next bounded A/B enables the existing title-neutral textured-edge rule.
+Unlike the rejected first-textured-rank transform, it leaves every canonical
+and interior vertex unchanged and expands only textured polygon vertices that
+retail already placed outside the authored 4:3 boundary. Aspect-derived scale
+is used; full-mirror and exact guest-projection provenance remain enabled.
+Focused parser tests pass. Candidate executable SHA-256 is
+`6A9C14777FCE96EC163DD31378549BFFE913922EB9F41FABF0A17C6CE798EF16` and
+config SHA-256 is
+`9B38FB1632EAA23A78CB30D71442F05E9F153D269BA2D8F3C2A959BCC4AF2FB9`.
+The recorded Disc 1 manifest is still unchanged pending visual acceptance.
+
+Human evidence rejects this edge-only A/B as well: the rectangular black
+SCRIM boundary remained, while Gabe appeared horizontally thinner. The latter
+is consistent with incomplete unsquashed-X provenance leaving some packet paths
+under the guest projection scale; visual parity cannot be claimed from the
+aggregate restore counter. Guest projection is therefore narrowed but not
+production-safe, and textured-edge expansion is contradicted for the observed
+finite boundary.
+
+The generated profile has been returned to the last accepted presentation
+combination: native-wide full mirror enabled, guest projection and textured-edge
+expansion disabled. This retains the known finite SCRIM edge rather than
+manufacturing coverage or risking mixed character aspect. Rebuilt executable
+SHA-256 is
+`84D62E39AA201FAE881127353CE4C66CFCC5E8800C41B3C1108CBF234C4A2295` and
+config SHA-256 is
+`06D2C40300CE7AC015A5E5C52D06B726463EB781485A87F61DF6D846A87DB2DF`.
+
+The next human observation separates the finite backdrop from general retail
+visibility: NPCs also disappear while visibly inside the added side field, but
+the floor remains. This is consistent with resident floor submission plus
+4:3-frustum actor/background rejection. The guest projection is therefore
+reinstated, but its presentation inverse no longer depends on partial SWC2
+address provenance.
+
+The generic linked-list prepass now runs for this mode and identifies the
+frontmost eligible HUD ordering-table rank. Every polygon in earlier world
+ranks is inversely compensated once around the live authored display centre;
+the HUD rank, direct GP0 submissions and axis-aligned full-width effects remain
+unchanged. This mirrors the hybrid oracle's world-OT/presentation split without
+copying an address or classifying by texture payload. Release regeneration and
+the focused parser tests pass. Candidate executable SHA-256 is
+`136285C525E835E7E470D0BF5A01DDAF5FA847544F0246E737EEAF177DED139A` and
+config SHA-256 is
+`89E65A8646565CC6418577629B1FDE5FC92D38D11444B9BAFDFE2E0B3E16045A`.
+
+Human testing rejects this third candidate. Edge culling remains and Gabe's
+aspect is wrong again. This contradicts world-ordering-table inverse
+compensation as a complete projection composition and ends the bounded visual
+A/B sequence. Together with the preceding exact-provenance and textured-edge
+tests, three distinct corpus-derived hypotheses have now been falsified or
+narrowed without containment.
+
+The exact open divergence is submission ownership: NPCs and finite outdoor
+background/SCRIM geometry disappear while still inside the widened display,
+whereas resident floor geometry continues to render. No current evidence shows
+that OpenGL clipping or the full-mirror presenter owns that loss. The next
+probe must capture the transition at the retail model/room visibility layer
+and correlate it with the bounded GPU packet census. The generated production
+profile is restored to `nw_full_mirror = true` with guest projection and
+textured-edge transforms disabled; this preserves correct character aspect and
+the known culling defect rather than hiding it.
+
+Release regeneration succeeded and the focused `recompiler_patch_test` passes.
+The restored executable SHA-256 is
+`F47B337D391BA44CE57B436E5B739CB27DE47A3EC8E2E7DA67AE29544D5E586C`;
+the generated config SHA-256 is
+`06D2C40300CE7AC015A5E5C52D06B726463EB781485A87F61DF6D846A87DB2DF`.
+The executable identity differs from the earlier full-mirror build because it
+retains inactive diagnostic code, while the active config identity is the same.
+
+For the next falsifiable check,
+`tools/start_sf2_widescreen_cull_capture.ps1` launches this restored profile
+with an isolated card directory and arms the existing bounded GPU census. At a
+human-confirmed disappearance boundary it dumps only the preceding 360 frames,
+GPU state, application/player identity and input hashes under `lab/sf2/local/`.
+It does not write guest RAM, force state, capture pixels, or terminate the
+runtime. Python and PowerShell syntax checks pass.
+
+## 2026-08-04 — rhythmic triangle flicker and GTE value provenance
+
+The user's stationary-camera screenshots and live observation established a
+rhythmic individual-face defect after the broad ordering-table projection
+inverse. A live `gl_wide_fast` A/B retained the flicker while switching away
+from the independent wide FBO. A live 4:3 guest-projection A/B also retained
+the defect while changing aspect/FOV. Both toggles were restored afterward.
+Bad-frame packet captures cover both display pages; the repeating 13-command
+SCRIM cycle correlates with the cadence, but its CPU VRAM copy co-simulation is
+exact.
+
+The broad OT ownership rule was removed. `GeomVertex` now retains the exact
+pre-squash X and exposes it through a value-provenance lookup independently of
+optional high-precision rendering. GPU polygon execution requires all three
+packed positions to match before composing the retail X delta. Quad halves use
+separate draw coordinates, so no matched half mutates the other. The guest
+projection setter also now keeps exact precision tracking enabled while native-
+wide projection is active.
+
+Direct focused builds pass for `test_ws_projection_compose.c`,
+`test_gte_register_access.cpp`, and `test_gpu_primitive_reject.c`.
+`recompiler_patch_test` and its C++17-header companion pass. The isolated
+Release executable links successfully. Two clean hidden OpenGL routes pass all
+five retail semantic checkpoints and finish at identical player XYZ. Their
+normalized fingerprints match, while host-timed movie/input records differ and
+are recorded as non-deterministic rather than normalized away.
+
+The build script gained an explicit build-name parameter and copies the current
+modern cache/capture inputs into isolated candidates. That check exposed stale
+overlay emitter namespaces rather than native coverage: current emitter
+`d6bc536d` cannot load old `9713afe3`/`dae7adf8` DLLs. A current single-image
+preflight passes; the broader seven-region preflight builds 127 shards but
+fails four audits. The failing set was not published. Candidate route ownership
+therefore remains resident AOT plus interpreter fallback with zero compiled-
+overlay dispatch, documented in
+`docs/sf2/WIDESCREEN_FLICKER_PROVENANCE_2026-08-04.md`.
+
+Ignored footprint after the work is 13.034 GiB, below the 20 GiB ceiling.
+
+### Rejection and DMA-submission ownership correction
+
+Human testing decisively rejected the value-provenance candidate. It produced
+severe rhythmic face corruption and changed character proportions. A live
+read-only `gpu` query measured 1,156,788 projection restores, rising to
+1,475,298 shortly afterward; the supposed narrow match was therefore broad.
+Changing only the live GTE aspect to retail 4:3 stopped the severe corruption
+and restored proportions while immediately restoring the known edge cull.
+This separates the presentation regression from the original visibility defect.
+
+The rejected inference was equality of packed SXY values. Those values are not
+stable primitive identity: unrelated geometry and UI can reuse them, and the
+cache lifetime crossed submissions and frames. Exact value equality therefore
+cannot recover ownership after DMA ordering has been discarded.
+
+A bounded three-second census at the restored culling position recorded 45,061
+draw commands over 61 retail draw frames in
+`lab/sf2/local/widescreen-cull-live-20260804-restore-ab/`. A simultaneous DMA
+trace and read-only traversal of current linked lists identified six submissions
+per gameplay tick. The first three contain no draws; the fourth contains 696
+polygon draws in the sampled scene; the remaining lists contain 31 auxiliary
+draws and 10 sprites. This independently matches the hybrid oracle's rule that
+only the first actual world submission receives projection compensation.
+
+The next candidate therefore retains guest-visible wide GTE projection but
+restores X uniformly only inside a dense polygon-owned linked-list submission.
+It does not use packed-coordinate provenance, an SF2 address, packet payload,
+or ordering-table rank. The census now records linked-list ordinal/root so this
+ownership can be falsified directly. A focused title-neutral regression covers
+the dense-submission predicate at, below, and disabled thresholds.
+## 2026-08-04 — native-wide acceptance checkpoint
+
+- Human A/B testing accepted the linked-list submission candidate: correct
+  proportions and wide margins, no observed actor/sky culling, black-edge flash,
+  or rhythmic triangle-face corruption in the exercised Mission 1 scenes.
+- The packed-SXY value cache was removed. It was a disproved ownership model:
+  coordinate equality crossed frames/submissions and caused more than 1.15
+  million false restores.
+- The accepted owner is semantic submission structure. Bounded evidence shows
+  three setup-only linked lists, one dense approximately 696-polygon world list,
+  then 31-draw auxiliary and 10-sprite UI lists per representative tick.
+- The generic runtime counts linked-list polygon commands and performs inverse
+  projection only when the title profile's minimum is met. The threshold is
+  explicit config (`nw_world_min_polygons = 64`), is disabled at zero, and
+  contains no guest address.
+- Source checkpoint: `a2b951c`. Rebuilt ignored Release executable SHA-256:
+  `1A6B0DE5FDB4CCC7DE2D6AD99BAE89A878741B508114978D16465C12DDF1C529`.
+- Validation: CLI Release package and candidate regeneration/link pass; 50/50
+  registered tests pass with `PYTHONUTF8=1`; focused projection-composition and
+  primitive-size regressions pass under `-Wall -Wextra -Werror`.
+- Corpus consultation for the next pass confirms `PSX-GPU-005` as the PGXP
+  contract and `PSX-TIME-002` as the high-refresh warning. VSync-divisor changes
+  are not a valid 60 FPS implementation. PGXP comes first; presentation
+  interpolation precedes any title-sensitive simulation unlock.

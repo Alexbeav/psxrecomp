@@ -1,6 +1,11 @@
 # SF2 modernization pass 2 — widescreen and direct mouse
 
-Updated: 2026-08-03
+Updated: 2026-08-04
+
+Status: accepted by human A/B testing for Mission 1. The enhanced build now
+provides correct-aspect native widescreen and direct mouse control without the
+previous edge culling, black-margin flashes, or rhythmic triangle corruption.
+The frozen 4:3 compatibility build remains separate.
 
 ## Scope
 
@@ -10,8 +15,8 @@ under software and OpenGL plus direct relative-mouse yaw/pitch for third-person
 camera control and first-person aiming. Retail owns gameplay and controller
 input; scripted camera ownership suppresses the enhancement.
 
-PGXP and high-refresh interpolation are deliberately deferred. New presentation
-and input interfaces must remain suitable for those later stages.
+PGXP and high-refresh work are the next pass. They remain disabled in this
+checkpoint so this accepted build is a stable differential oracle.
 
 ## Consult-test-return classification
 
@@ -178,4 +183,28 @@ categories:
   handoff; and
 - chase versus first-person sensitivity, sign, or axis behavior.
 
-PGXP and high-refresh interpolation remain intentionally outside this pass.
+## Accepted checkpoint
+
+Human testing on 2026-08-04 accepted the dense-world-submission candidate:
+
+- character proportions match the 4:3 control;
+- the native-wide margins expose real scene content;
+- the earlier actor/sky edge culling is absent;
+- rhythmic triangle and black-edge flicker are absent; and
+- direct mouse control remains usable.
+
+The owning distinction is the linked-list DMA submission, not a reused packed
+SXY value, ordering-table rank, draw address, or presentation rectangle. SF2
+submits three setup-only lists, one dense world polygon list, and small
+auxiliary/UI lists during the representative Mission 1 scene. The title profile
+classifies a world submission with a bounded polygon-count predicate; the
+generic runtime owns only the traversal and inverse projection operation. A
+focused title-neutral regression covers the predicate, 4:3 identity, native-
+wide scale/inverse composition, and pre-transform PS1 primitive rejection.
+
+Source checkpoint: `a2b951c`. Rebuilt Release executable SHA-256:
+`1A6B0DE5FDB4CCC7DE2D6AD99BAE89A878741B508114978D16465C12DDF1C529`.
+The executable and generated retail code remain ignored local artifacts.
+
+PGXP and high-refresh presentation remain intentionally outside this pass.
+Their bounded plan is recorded in `NEXT_ENHANCEMENTS_2026-08-04.md`.
