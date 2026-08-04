@@ -26,6 +26,10 @@ until SF2's authoritative timestep is identified and gameplay, scripts, audio,
 device clocks, and input semantics remain invariant. See
 `NEXT_ENHANCEMENTS_2026-08-04.md`.
 
+The payload-free return is published to the private PSX-Ports corpus at commit
+`6fd986a`. It records the linked-list projection-owner rule as a candidate, not
+a stable finding, and names SF3 recomp as its independent validator.
+
 Updated: 2026-08-03
 
 ## 2026-08-04 per-triangle projection-provenance candidate

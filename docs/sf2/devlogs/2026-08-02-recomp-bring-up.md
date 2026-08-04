@@ -1298,3 +1298,7 @@ the dense-submission predicate at, below, and disabled thresholds.
   contract and `PSX-TIME-002` as the high-refresh warning. VSync-divisor changes
   are not a valid 60 FPS implementation. PGXP comes first; presentation
   interpolation precedes any title-sensitive simulation unlock.
+- The payload-free corpus return was committed and pushed as `6fd986a`. Only
+  `_knowledge/projects/sf2-recomp.md` and the dated modernization return were
+  staged. The portfolio-wide validator remains red because of an unrelated
+  pre-existing retail BIOS artifact; it was neither read nor changed.

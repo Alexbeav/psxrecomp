@@ -127,7 +127,8 @@ case uses bit-identical native PS1 coordinates.
 
 ## Knowledge-base actions
 
-- Project report updated with the accepted modernization checkpoint
+- Project report updated with the accepted modernization checkpoint; private
+  corpus return committed and pushed as `6fd986a`
 - New stable registry row: none; submission ownership remains a project-level
   candidate pending independent validation
 - Next independent consumer: SF3 recomp for linked-list projection ownership;
