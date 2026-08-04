@@ -1,18 +1,22 @@
-# Codex instructions — SF2 recompilation feasibility lab
+# Codex instructions — SF2 recompilation and modernization lab
 
 These instructions apply to the entire repository. This checkout is an
-isolated, noncommercial feasibility experiment based on PSXRecomp. It is not
+isolated, noncommercial SF2 recompilation project based on PSXRecomp. It is not
 the shipping SF2 port and must never modify its sibling workspaces.
 
 ## Mission
 
-Determine whether PSXRecomp's static resident-executable translation,
-capture-and-compile overlay pipeline, and bounded interpreter fallback can
-reach the SF2 retail frontend and a representative Mission 3 route with less
-game-specific machinery than the existing hybrid runtime.
+The original feasibility mission is complete. PSXRecomp's static resident-
+executable translation, capture-and-compile overlay pipeline, and bounded
+interpreter fallback have brought the full retail game up accurately. That
+compatibility result was reached in approximately 1.5 days, compared with
+approximately 5 days for the first porting pass.
 
-This is a measured architectural comparison, not a race to claim the game is
-playable and not authorization to produce a second full port.
+Preserve the proven compatibility build as a frozen differential baseline.
+Continue production-quality PC modernization on isolated modernization
+branches and in separately named builds. Modernization must enhance authentic
+retail execution; it must not replace retail gameplay, progression, timing, or
+authored behavior.
 
 ## Required reading before acting
 
@@ -23,9 +27,11 @@ Read these files completely at the start of each Codex session:
 3. `docs/sf2/FEASIBILITY_PLAN.md`
 4. `docs/sf2/COMPARISON_PROTOCOL.md`
 5. `docs/sf2/REFERENCE_MAP.md`
-6. `lab/sf2/reference-manifest.toml`
-7. `CLAUDE.md`
-8. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
+6. `docs/sf2/MODERNIZATION_PASS1.md` when present on the active branch
+7. `docs/sf2/MODERNIZATION_PASS2.md` when present on the active branch
+8. `lab/sf2/reference-manifest.toml`
+9. `CLAUDE.md`
+10. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
 
 `CLAUDE.md` is inherited upstream context. Preserve its hardware-faithfulness,
 no-stubs, no-generated-code-edits, evidence, and bounded-diagnostics rules.
@@ -75,8 +81,18 @@ this pinned commit as the framework contract.
   source configuration and regenerate.
 - A working interpreter fallback is not native recompilation coverage. Measure
   and report each dispatch tier honestly.
-- Do not add modernization work: no widescreen, PGXP, interpolation, texture
-  replacement, mouse-camera enhancement, or remastered UI.
+- Modernization is permitted only on an isolated modernization branch with a
+  separately named build. Keep the frozen 4:3 compatibility build immediately
+  available for A/B reproduction.
+- Independently prove every title-specific projection, culling, HUD, FMV,
+  scope, fade, fullscreen-effect, input, or camera rule against SCUS-94451.
+  Never copy another project's addresses by analogy.
+- Direct keyboard/mouse controls must respect retail camera ownership and
+  scripted cameras. Controller/PAD behavior must remain available and retail-
+  faithful.
+- PGXP, high-refresh interpolation, texture replacement, and remastered UI
+  require their own explicit milestone. Do not fold them into an unrelated
+  modernization pass.
 
 ## Evidence and validation
 
@@ -105,19 +121,23 @@ cmake --build recompiler\build-cli --parallel
 ctest --test-dir recompiler\build-cli --output-on-failure
 ```
 
-The verified baseline is 38/38 passing tests. The CLI package is ignored under
+The verified baseline is 45/45 passing tests. The CLI package is ignored under
 `dist/`.
 
 ## Git discipline
 
 - Begin by checking branch, status, remotes, and recent commits.
-- Expected branch: `experiment/sf2-recomp-feasibility`.
+- Compatibility work belongs on `experiment/sf2-recomp-feasibility`.
+  Modernization pass two belongs on `experiment/sf2-modernization-pass2`.
+  Follow `docs/sf2/CURRENT_OBJECTIVE.md` when a later isolated milestone is
+  explicitly selected.
 - Preserve unrelated user changes. Do not reset, clean, or discard work.
 - Keep commits small and milestone-oriented. Update the current devlog with
   commands, evidence, failures, and rejected hypotheses.
 - Run `git diff --check` and the relevant tests before each checkpoint commit.
-- There is intentionally no `origin`. The `upstream` push URL is disabled. Do
-  not add or push a remote without explicit user authorization.
+- `origin` is the project fork. The `upstream` push URL remains disabled. Push
+  only the active project branch when the user has authorized that milestone;
+  never push to `upstream` or alter sibling repositories.
 
 ## Session behavior
 
