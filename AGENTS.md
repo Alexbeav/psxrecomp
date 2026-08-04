@@ -110,6 +110,31 @@ this pinned commit as the framework contract.
 - When tooling is broken, fix or precisely diagnose it before relying on its
   output.
 
+### Iteration testing ladder
+
+Use the cheapest test that can reject the current candidate, in this order:
+
+1. **Implementation gate:** run the relevant focused regression or static
+   check, build and link the enhanced target, and perform only a short launch
+   smoke test. Confirm that the frozen compatibility executable was not
+   changed. Do not start a full campaign route for a disposable iteration.
+2. **Targeted human gate:** provide the exact shortcut or launcher, identify
+   the candidate/build identity, and list the small number of observations the
+   user should check. Keep the frozen 4:3 launcher available for immediate A/B.
+3. **Acceptance gate:** iterate from the user's visual, control-feel, or
+   gameplay report until the feature is accepted. Repeat only focused tests
+   between small candidates unless the owning subsystem or risk changes.
+4. **Milestone gate:** only after targeted acceptance, run the complete
+   registered suite, deterministic clean-process routes, and any long campaign
+   validation required by the milestone. Then update identities,
+   documentation, knowledge returns, and milestone commits.
+
+A human test does not replace focused automated safety checks. Changes that
+can corrupt saves, persistent data, guest state, or a generic hardware/runtime
+invariant must pass their owning regression before handoff. Conversely, do not
+spend minutes or hours proving the full campaign for a visual or input
+candidate the user may reject within seconds.
+
 ## Windows build baseline
 
 Use PowerShell from the repository root:
