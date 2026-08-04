@@ -560,6 +560,69 @@ static DWORD WINAPI watch_thread(LPVOID arg) {
 }
 #endif /* _WIN32 */
 
+#ifdef _WIN32
+/* Name the interpreter the spawn will actually run, once, at configure time.
+ * The command line's first token resolves through PATH exactly as cmd.exe /C
+ * will resolve it, and on machines where an MSYS2/Cygwin usr/bin precedes the
+ * Windows Python install, a bare `python` silently binds to the Cygwin build.
+ * That interpreter dies with SIGSEGV (exit 0x0B00) under this file's
+ * job-object spawn BEFORE writing a single byte, so the failure report shows
+ * "(no output captured)" and nothing points at the cause. Resolving and
+ * printing the binding up front turns that class of breakage into a one-line
+ * diagnosis; the msys-2.0.dll/cygwin1.dll sibling check calls it out loudly
+ * before the first compile ever runs. */
+static void autocompile_report_interpreter(void) {
+    char tok[MAX_PATH];
+    size_t n = 0;
+    const char *p = s_cmd;
+    if (*p == '"') {                     /* quoted interpreter path */
+        p++;
+        while (*p && *p != '"' && n + 1 < sizeof(tok)) tok[n++] = *p++;
+    } else {
+        while (*p && *p != ' ' && n + 1 < sizeof(tok)) tok[n++] = *p++;
+    }
+    tok[n] = '\0';
+    if (!tok[0]) return;
+    char resolved[MAX_PATH];
+    /* SearchPathA with .exe mirrors cmd.exe's lookup for extension-less
+     * tokens; a token that already has a path or extension resolves as-is. */
+    DWORD r = SearchPathA(NULL, tok, ".exe", sizeof(resolved), resolved, NULL);
+    if (r == 0 || r >= sizeof(resolved)) {
+        fprintf(stdout,
+            "psxrecomp: overlay autocompile interpreter '%s' does not resolve "
+            "on PATH — every compile run will fail.\n", tok);
+        fflush(stdout);
+        return;
+    }
+    fprintf(stdout, "psxrecomp: overlay autocompile interpreter: %s\n", resolved);
+    char *slash = strrchr(resolved, '\\');
+    if (!slash) slash = strrchr(resolved, '/');
+    if (slash) {
+        static const char *posix_dlls[] = { "msys-2.0.dll", "cygwin1.dll" };
+        for (size_t k = 0; k < sizeof(posix_dlls) / sizeof(posix_dlls[0]); k++) {
+            char cand[MAX_PATH + 16];
+            snprintf(cand, sizeof(cand), "%.*s\\%s",
+                     (int)(slash - resolved), resolved, posix_dlls[k]);
+            FILE *f = fopen(cand, "rb");
+            if (f) {
+                fclose(f);
+                fprintf(stdout,
+                    "psxrecomp: WARNING: that interpreter is an MSYS2/Cygwin "
+                    "build (%s beside it).\n"
+                    "  Cygwin-runtime processes crash under the autocompile "
+                    "job spawn before producing output,\n"
+                    "  so every overlay compile will fail with no diagnostics. "
+                    "Use the Windows Python launcher\n"
+                    "  instead: overlay_autocompile_cmd = \"py -3 ...\" in "
+                    "game.toml.\n", posix_dlls[k]);
+                fflush(stdout);
+                break;
+            }
+        }
+    }
+}
+#endif
+
 void autocompile_configure(const char *cmd, const char *cwd) {
     snprintf(s_cmd, sizeof(s_cmd), "%s", cmd ? cmd : "");
     snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
@@ -569,6 +632,7 @@ void autocompile_configure(const char *cmd, const char *cwd) {
         InitializeConditionVariable(&s_publish_cv);
         s_out_lock_init = 1;
     }
+    if (s_cmd[0]) autocompile_report_interpreter();
 #endif
 }
 
