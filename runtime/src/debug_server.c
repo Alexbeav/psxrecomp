@@ -312,6 +312,23 @@ static int s_input_frames   = 0;
 static int     s_axis_override = 0;
 static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
 
+/*
+ * Exact guest-VBlank input route. A client queues run-length encoded digital
+ * pad segments while inactive, then starts the route atomically. Consuming the
+ * queue in debug_server_get_input_override() avoids host/TCP timing gaps
+ * between short presses and remains deterministic while turbo loads are active.
+ */
+#define INPUT_ROUTE_MAX_STEPS 4096
+typedef struct {
+    uint32_t frames;
+    uint16_t buttons;
+} InputRouteStep;
+static InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
+static uint32_t s_input_route_count = 0;
+static uint32_t s_input_route_index = 0;
+static uint32_t s_input_route_remaining = 0;
+static int      s_input_route_active = 0;
+
 /* ---- Frontend turbo override ---- */
 static volatile int s_turbo_enabled = 0;
 
@@ -7075,11 +7092,82 @@ static void handle_pad_status(int id, const char *json)
 static void handle_clear_input(int id, const char *json)
 {
     (void)json;
+    s_input_route_active = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = 0;
     s_input_override = -1;
     s_input_frames   = 0;
     s_axis_override  = 0;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     send_ok(id);
+}
+
+static void handle_input_route_clear(int id, const char *json)
+{
+    (void)json;
+    s_input_route_active = 0;
+    s_input_route_count = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = 0;
+    send_ok(id);
+}
+
+static void handle_input_route_append(int id, const char *json)
+{
+    int frames = json_get_int(json, "frames", -1);
+    int buttons = json_get_int(json, "buttons", -1);
+    if (s_input_route_active) {
+        send_err(id, "input route is active"); return;
+    }
+    if (frames <= 0) {
+        send_err(id, "frames must be positive"); return;
+    }
+    if (buttons < 0 || buttons > 0xFFFF) {
+        send_err(id, "buttons must be a 16-bit pad word"); return;
+    }
+    if (s_input_route_count >= INPUT_ROUTE_MAX_STEPS) {
+        send_err(id, "input route is full"); return;
+    }
+    InputRouteStep *step = &s_input_route[s_input_route_count++];
+    step->frames = (uint32_t)frames;
+    step->buttons = (uint16_t)buttons;
+    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u}\n",
+             id, (unsigned)s_input_route_count);
+}
+
+static void handle_input_route_start(int id, const char *json)
+{
+    (void)json;
+    if (s_input_route_count == 0) {
+        send_err(id, "input route is empty"); return;
+    }
+    s_input_override = -1;
+    s_input_frames = 0;
+    s_axis_override = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = s_input_route[0].frames;
+    s_input_route_active = 1;
+    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u,\"start_frame\":%llu}\n",
+             id, (unsigned)s_input_route_count,
+             (unsigned long long)s_frame_count);
+}
+
+static void handle_input_route_stop(int id, const char *json)
+{
+    (void)json;
+    s_input_route_active = 0;
+    s_input_route_remaining = 0;
+    send_ok(id);
+}
+
+static void handle_input_route_status(int id, const char *json)
+{
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"active\":%s,\"steps\":%u,"
+             "\"index\":%u,\"remaining\":%u}\n",
+             id, s_input_route_active ? "true" : "false",
+             (unsigned)s_input_route_count, (unsigned)s_input_route_index,
+             (unsigned)s_input_route_remaining);
 }
 
 /* Live A/B for the native-wide HUD corner gate:
@@ -12664,6 +12752,11 @@ static const CmdEntry s_commands[] = {
     { "press",             handle_press },
     { "pad_status",        handle_pad_status },
     { "clear_input",       handle_clear_input },
+    { "input_route_clear", handle_input_route_clear },
+    { "input_route_append",handle_input_route_append },
+    { "input_route_start", handle_input_route_start },
+    { "input_route_stop",  handle_input_route_stop },
+    { "input_route_status",handle_input_route_status },
     { "savestate",         handle_savestate },
     { "turbo",             handle_turbo },
     { "turbo_state",       handle_turbo_state },
@@ -13510,6 +13603,19 @@ int debug_server_is_connected(void)
 
 int debug_server_get_input_override(void)
 {
+    if (s_input_route_active && s_input_route_index < s_input_route_count) {
+        int current = (int)s_input_route[s_input_route_index].buttons;
+        if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
+            s_input_route_index++;
+            if (s_input_route_index < s_input_route_count) {
+                s_input_route_remaining =
+                    s_input_route[s_input_route_index].frames;
+            } else {
+                s_input_route_active = 0;
+            }
+        }
+        return current;
+    }
     int current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
         if (--s_input_frames == 0)
