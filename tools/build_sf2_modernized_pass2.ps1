@@ -1,6 +1,9 @@
 param(
     [string]$BuildName = 'build-modern-pass2',
-    [switch]$GuestProjection
+    [switch]$GuestProjection,
+    [switch]$Pgxp,
+    [ValidateSet('opengl', 'software')]
+    [string]$Renderer = 'opengl'
 )
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -27,14 +30,15 @@ Copy-Item -Path (Join-Path $Framework '*') `
     -Destination (Join-Path $Project 'psxrecomp') -Recurse -Force
 
 $ConfigText = Get-Content -LiteralPath (Join-Path $Project 'game.toml') -Raw
-$VideoHeader = @'
+$VideoHeader = @"
 [video]
-renderer = "opengl"
+renderer = "$Renderer"
 supersampling = 4
 antialiasing = true
 texture_filtering = "nearest"
 aspect_ratio = "16:9"
-'@
+pgxp = $($Pgxp.IsPresent.ToString().ToLowerInvariant())
+"@
 $ConfigText = [regex]::Replace(
     $ConfigText, '(?ms)^\[video\]\s*\r?\n.*\z', $VideoHeader + "`r`n")
 $ConfigText = [regex]::Replace(

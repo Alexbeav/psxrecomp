@@ -317,6 +317,10 @@ struct RuntimeConfig {
     // (smooths textures and 2D backgrounds). Stored as 0/1.
     int                   video_texture_filter = 0;
 
+    // pgxp: visual-only precise GTE position/depth metadata. Disabled by
+    // default and fail-closed when packet provenance is incomplete.
+    bool                  video_pgxp = false;
+
     // renderer: "software" | "opengl" (default) | "vulkan". Selects the
     // rasterizer/present backend. The software rasterizer remains the explicit
     // fallback. Stored as VIDEO_RENDERER_*.

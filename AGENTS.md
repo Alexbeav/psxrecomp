@@ -139,7 +139,7 @@ cmake --build recompiler\build-cli --parallel
 ctest --test-dir recompiler\build-cli --output-on-failure
 ```
 
-The verified baseline is 45/45 passing tests. The CLI package is ignored under
+The verified baseline is 50/50 passing tests. The CLI package is ignored under
 `dist/`.
 
 ## Git discipline

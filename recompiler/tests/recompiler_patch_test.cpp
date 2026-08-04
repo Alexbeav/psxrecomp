@@ -142,6 +142,18 @@ buffer_ms = 60
     check(audio_config.runtime.audio_buffer_ms == 60,
           "parser preserves per-game audio buffer target");
 
+    const auto pgxp = write_config(root, "pgxp", R"toml(
+[runtime]
+
+[video]
+renderer = "software"
+supersampling = 4
+pgxp = true
+)toml");
+    const auto pgxp_config = PSXRecompV4::load_game_config(pgxp);
+    check(pgxp_config.runtime.video_pgxp,
+          "parser preserves opt-in PGXP precision mode");
+
     const auto full_wide_mirror = write_config(root, "full-wide-mirror", R"toml(
 [widescreen]
 native_wide = true

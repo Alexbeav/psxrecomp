@@ -1302,3 +1302,50 @@ the dense-submission predicate at, below, and disabled thresholds.
   `_knowledge/projects/sf2-recomp.md` and the dated modernization return were
   staged. The portfolio-wide validator remains red because of an unrelated
   pre-existing retail BIOS artifact; it was neither read nor changed.
+
+## 2026-08-04 — PGXP pass-1 acceptance
+
+The first isolated PGXP pass implements the private corpus's `PSX-GPU-005`
+contract without copying a title address. Precise GTE X/Y/depth follows exact
+SWC2 RAM address and generation into a renderer-neutral triangle sidecar. GPU
+assembly applies it only after a complete three-vertex match; all incomplete
+ownership fails atomically to native integer coordinates and affine texture
+mapping. Canonical guest-visible VRAM remains affine. OpenGL consumes precise
+positions and reciprocal depth through its vertex stream; software consumes
+the same metadata only in high-resolution/presentation mirrors. Bounded debug
+counters report complete, partial, unmatched, CPU-authored, stale, address,
+packed-value, and invalid classes.
+
+Human A/B testing accepted the corrected OpenGL candidate as visually excellent:
+culling is absent, aspect remains correct, and polygon wobble/texture swimming
+are materially reduced. The first candidate had accidentally omitted the
+accepted `-GuestProjection` build switch; exact generated-config comparison
+found `nw_guest_projection = false`, and a config-only R2 rebuild corrected it.
+
+Gate D/E qualification ran only after that acceptance. CLI Release generation,
+link, 50/50 registered tests, and the focused canonical-VRAM regression pass.
+Two clean hidden-window OpenGL routes pass authentic startup through retail
+Mission 1 state-0 movement and compare with zero errors: identical startup and
+input hashes, matching normalized fingerprints at all five checkpoints, and
+identical final player/camera state and XYZ. A clean software route passes the
+same semantic gates and matches all normalized fingerprints; its polling loop
+first observed the legal movie 19 frames later, so exact cross-renderer movie
+observation time is not claimed.
+
+The untouched frozen 4:3 OpenGL executable also passes a bounded hidden-window
+launch with widescreen unconfigured and inactive. The accepted compatibility
+artifact was not rebuilt or overwritten.
+
+An initial qualification launch used `--headless`; that mode intentionally
+omits the renderer and therefore reported widescreen unconfigured before
+stalling at state 8. The owned process was stopped and the route was rerun with
+`--hidden-window`, the correct invisible renderer mode. This tooling failure is
+retained as a rejected qualification attempt.
+
+Final OpenGL telemetry records 390,433 triangles, 14,823 complete exact PGXP
+matches, and 375,610 unmatched, with zero partial/stale/address/packed/invalid
+samples. Coverage is therefore selective and residual in-motion instability is
+not disproved. Overlay ownership is approximately 15.99M resident-AOT, zero
+compiled-overlay, and 13.53M interpreter fallback because the copied cache hash
+is stale. The ignored footprint is 14.836 GiB. Full payload-free record:
+`docs/sf2/PGXP_PASS1.md`.

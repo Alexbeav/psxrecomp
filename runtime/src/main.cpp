@@ -521,6 +521,7 @@ static int           g_mouse_pad_aim_counts_per_frame = 4;
 static int           g_mouse_camera_enabled = 0;
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
+static int           g_video_pgxp = 0;      /* visual-only precise GTE sidecar */
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
@@ -5172,6 +5173,7 @@ int main(int argc, char** argv) {
             g_video_scale      = gc.runtime.video_supersampling;
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_texfilter  = gc.runtime.video_texture_filter;
+            g_video_pgxp       = gc.runtime.video_pgxp ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
@@ -6584,6 +6586,11 @@ session_reboot:
     gr_set_scale(g_video_scale);
     g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
     gr_set_texture_filter(g_video_texfilter);
+    gpu_pgxp_set(g_video_pgxp);
+    if (g_video_pgxp) {
+        std::fprintf(stdout,
+                     "psxrecomp: PGXP precision sidecar enabled (guest state unchanged)\n");
+    }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
      * this aspect; native-wide fills it with a genuinely wider frame (no
      * stretch), squash mode stretches the 4:3 frame into it. */

@@ -1,4 +1,45 @@
-# Current objective — modernization pass 2 widescreen and direct mouse
+# Current objective — high-refresh presentation after accepted PGXP pass 1
+
+## 2026-08-04 accepted PGXP pass-1 checkpoint
+
+Human Mission 1 testing accepts PGXP pass 1 on top of the accepted native-wide
+and direct-mouse profile: culling is absent, aspect is correct, and polygon
+wobble and texture swimming are visibly reduced. The accepted OpenGL candidate
+is `build-pgxp-pass1-widescreen-r2`; executable SHA-256
+`CA6CE21CB71CE71C6A270939BCD12752FCFC0FF224B7761B94F93DC31FD87DC3` and
+generated-config SHA-256
+`80BA2A4D702131EA5288B5EB12F39848C64AFFD9370E4737BEA389F1CE08FE45`.
+
+The title-neutral implementation preserves guest-visible GTE registers, RAM,
+and canonical PS1 VRAM. It attaches exact address/generation provenance to
+SWC2 stores and gives a triangle subpixel position and reciprocal-depth UVs
+only when all three packet vertices match. Every incomplete primitive falls
+back atomically to native integer coordinates and affine texture mapping. Both
+software and OpenGL consume the same renderer-neutral metadata. At the final
+OpenGL Mission 1 checkpoint, 14,823 of 390,433 submitted triangles were exact;
+the selective coverage explains why this is an accepted first pass rather than
+a claim of complete PGXP coverage.
+
+Two clean hidden-window OpenGL routes pass the authentic startup and retail
+Mission 1 route with identical startup/input hashes, matching normalized
+fingerprints at stable TITLE, aircraft FMV, state 8, player ownership, and
+movement, and identical final player XYZ `(-5606,2036,7529)`. An independent
+software route passes the same semantic gate and all cross-renderer normalized
+checkpoint fingerprints match. The software poll first observed `LEGAL.STR`
+19 guest frames later, so exact cross-renderer movie-observation timing is not
+claimed. The full registered suite passes 50/50 and the focused canonical-VRAM
+regression passes.
+
+Overlay ownership remains intentionally honest: the new codegen hash does not
+match the copied older cache, so qualification measured approximately 15.99M
+resident-AOT calls, zero compiled-overlay dispatch, and 13.53M interpreter
+fallbacks. Rebuilding the current-hash overlay cache and profiling renderer,
+resident, compiled-overlay, and fallback host time is the next prerequisite.
+After that, implement 60 Hz presentation interpolation while retail simulation,
+timers, CD, SPU/XA, PAD sampling, scripts, and authored timing remain unchanged.
+See `PGXP_PASS1.md` and `NEXT_ENHANCEMENTS_2026-08-04.md`.
+
+Updated: 2026-08-04
 
 ## 2026-08-04 accepted modernization checkpoint and next objective
 

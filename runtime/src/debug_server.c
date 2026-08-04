@@ -4881,6 +4881,8 @@ static void handle_gpu_state(int id, const char *json)
     gpu_get_gp0_stats(&nop, &fill, &draw, &env, &copy);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
+    GpuPgxpStats pgxp;
+    gpu_pgxp_get_stats(&pgxp);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"display_x\":%d,\"display_y\":%d,"
              "\"width\":%d,\"height\":%d,"
@@ -4893,6 +4895,12 @@ static void handle_gpu_state(int id, const char *json)
              "\"gp0_nop\":%llu,\"gp0_fill\":%llu,\"gp0_draw\":%llu,\"gp0_env\":%llu,\"gp0_copy\":%llu,"
              "\"draw_area\":[%u,%u,%u,%u],"
              "\"draw_offset\":[%d,%d],"
+             "\"pgxp\":{\"enabled\":%d,\"triangles\":%llu,"
+             "\"complete\":%llu,\"partial\":%llu,\"unmatched\":%llu,"
+             "\"cpu_authored\":%llu,\"stale_vertices\":%llu,"
+             "\"address_mismatch_vertices\":%llu,"
+             "\"packed_mismatch_vertices\":%llu,"
+             "\"invalid_vertices\":%llu},"
              "\"ws\":{\"configured\":%d,\"active\":%d,\"game_mode\":%d,"
              "\"present_native_43\":%d,\"x_margin\":%d,"
              "\"activation_margin\":%d,\"squash\":[%d,%d],"
@@ -4925,6 +4933,16 @@ static void handle_gpu_state(int id, const char *json)
              (unsigned long long)copy,
              da.left, da.top, da.right, da.bottom,
              da.offset_x, da.offset_y,
+             gpu_pgxp_enabled(),
+             (unsigned long long)pgxp.triangles,
+             (unsigned long long)pgxp.complete,
+             (unsigned long long)pgxp.partial,
+             (unsigned long long)pgxp.unmatched,
+             (unsigned long long)pgxp.cpu_authored,
+             (unsigned long long)pgxp.stale_vertices,
+             (unsigned long long)pgxp.address_mismatch_vertices,
+             (unsigned long long)pgxp.packed_mismatch_vertices,
+             (unsigned long long)pgxp.invalid_vertices,
              ws.configured, ws.active, ws.game_mode,
              ws.present_native_43, ws.x_margin, ws.activation_margin,
              ws.xnum, ws.xden,

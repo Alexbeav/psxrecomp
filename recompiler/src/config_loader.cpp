@@ -582,6 +582,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.video_offer_frame_interpolation =
                 toml::find<bool>(video, "offer_frame_interpolation");
         }
+        if (video.contains("pgxp")) {
+            rt.video_pgxp = toml::find<bool>(video, "pgxp");
+        }
         if (video.contains("aspect_ratio")) {
             const auto mode = toml::find<std::string>(video, "aspect_ratio");
             int n = 0, d = 0;

@@ -998,10 +998,11 @@ void sw_draw_textured_triangle(int x0, int y0, int u0, int v0,
     }
 
     RTarget n = rt_native();
+    /* Canonical VRAM is guest-visible hardware state and always retains PS1
+     * affine mapping. PGXP affects only visual high-resolution mirrors. */
     raster_textured_triangle(&n, x0, y0, u0, v0, x1, y1, u1, v1,
                              x2, y2, u2, v2, clut_x, clut_y, texpage,
-                             g_perspective_valid,
-                             g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
+                             0, 1.0f, 1.0f, 1.0f);
     if (g_hr) {
         int s = g_scale;
         RTarget hr = rt_hires();
@@ -1189,8 +1190,7 @@ void sw_draw_shaded_textured_triangle(int x0, int y0, int u0, int v0,
         x0, y0, u0, v0, r0, g0, b0,
         x1, y1, u1, v1, r1, g1, b1,
         x2, y2, u2, v2, r2, g2, b2,
-        clut_x, clut_y, texpage, raw_texture, g_perspective_valid,
-        g_perspective_q[0], g_perspective_q[1], g_perspective_q[2]);
+        clut_x, clut_y, texpage, raw_texture, 0, 1.0f, 1.0f, 1.0f);
     if (g_hr) {
         int s = g_scale;
         RTarget hr = rt_hires();

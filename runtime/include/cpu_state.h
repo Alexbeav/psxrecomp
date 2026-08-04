@@ -205,6 +205,19 @@ extern void     gte_precision_timeline_invalidate(void);
 extern void     gte_precision_speculative_begin(void);
 extern void     gte_precision_speculative_end(void);
 extern void     gte_precision_store_word(uint32_t addr, uint8_t reg);
+typedef enum GtePrecisionStatus {
+    GTE_PRECISION_DISABLED = 0,
+    GTE_PRECISION_EXACT = 1,
+    GTE_PRECISION_SPECULATIVE = -1,
+    GTE_PRECISION_NON_RAM = -2,
+    GTE_PRECISION_MISSING = -3,
+    GTE_PRECISION_STALE = -4,
+    GTE_PRECISION_ADDRESS_MISMATCH = -5,
+    GTE_PRECISION_PACKED_MISMATCH = -6,
+    GTE_PRECISION_INVALID = -7
+} GtePrecisionStatus;
+extern GtePrecisionStatus gte_precision_query_word(
+    uint32_t addr, uint32_t packed, int32_t *x16, int32_t *y16, uint16_t *z);
 
 /* ============================================================================
  * Dispatch call contract (Bug D / wild-return family fix)

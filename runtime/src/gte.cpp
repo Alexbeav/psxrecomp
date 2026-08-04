@@ -318,20 +318,32 @@ extern "C" void gte_precision_invalidate_word(uint32_t addr) {
         entry.generation = 0;
 }
 
-extern "C" int gte_precision_load_word(uint32_t addr, uint32_t packed,
-                                        int32_t *x16, int32_t *y16,
-                                        uint16_t *z) {
-    if (s_speculative_depth != 0 || !s_precision_tracking) return 0;
+extern "C" GtePrecisionStatus gte_precision_query_word(
+    uint32_t addr, uint32_t packed, int32_t *x16, int32_t *y16,
+    uint16_t *z) {
+    if (!s_precision_tracking) return GTE_PRECISION_DISABLED;
+    if (s_speculative_depth != 0) return GTE_PRECISION_SPECULATIVE;
     uint32_t physical;
-    if (!precision_ram_address(addr, &physical)) return 0;
+    if (!precision_ram_address(addr, &physical)) return GTE_PRECISION_NON_RAM;
     const PrecisionStoreEntry &entry = s_precision_store[precision_hash(physical)];
-    if (entry.generation != s_precision_generation || entry.addr != physical ||
-        !entry.projection.valid || entry.projection.packed != packed)
-        return 0;
+    if (entry.generation == 0) return GTE_PRECISION_MISSING;
+    if (entry.generation != s_precision_generation) return GTE_PRECISION_STALE;
+    if (entry.addr != physical) return GTE_PRECISION_ADDRESS_MISMATCH;
+    if (!entry.projection.valid || entry.projection.z == 0)
+        return GTE_PRECISION_INVALID;
+    if (entry.projection.packed != packed)
+        return GTE_PRECISION_PACKED_MISMATCH;
     if (x16) *x16 = entry.projection.x16;
     if (y16) *y16 = entry.projection.y16;
     if (z) *z = entry.projection.z;
-    return entry.projection.z != 0;
+    return GTE_PRECISION_EXACT;
+}
+
+extern "C" int gte_precision_load_word(uint32_t addr, uint32_t packed,
+                                        int32_t *x16, int32_t *y16,
+                                        uint16_t *z) {
+    return gte_precision_query_word(addr, packed, x16, y16, z) ==
+           GTE_PRECISION_EXACT;
 }
 
 static inline uint32_t geom_hash(uint32_t packed) {

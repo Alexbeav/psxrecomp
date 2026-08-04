@@ -96,6 +96,15 @@ if(BUILD_TESTING)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
 
+    add_executable(pgxp_native_vram_test
+        tests/test_pgxp_native_vram.c
+        src/gpu_sw_renderer.c)
+    target_include_directories(pgxp_native_vram_test PRIVATE include src)
+    if(NOT MSVC)
+        target_link_libraries(pgxp_native_vram_test PRIVATE m)
+    endif()
+    add_test(NAME pgxp_native_vram_test COMMAND pgxp_native_vram_test)
+
     add_executable(mouse_camera_test
         tests/test_mouse_camera.c
         src/mouse_camera.c)

@@ -69,6 +69,25 @@ void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
 uint64_t gpu_get_gp0_count(void);  /* Total GP0 writes since init */
 void gpu_get_gp0_stats(uint64_t* nop, uint64_t* fill, uint64_t* draw, uint64_t* env, uint64_t* copy);
 
+/* Visual-only PGXP side channel. Exact address/generation provenance is
+ * required for every vertex; otherwise the entire triangle uses native PS1
+ * coordinates and affine texture mapping. */
+typedef struct GpuPgxpStats {
+    uint64_t triangles;
+    uint64_t complete;
+    uint64_t partial;
+    uint64_t unmatched;
+    uint64_t cpu_authored;
+    uint64_t stale_vertices;
+    uint64_t address_mismatch_vertices;
+    uint64_t packed_mismatch_vertices;
+    uint64_t invalid_vertices;
+} GpuPgxpStats;
+void gpu_pgxp_set(int enabled);
+int  gpu_pgxp_enabled(void);
+void gpu_pgxp_get_stats(GpuPgxpStats *out);
+void gpu_pgxp_reset_stats(void);
+
 typedef struct {
     uint32_t left, top, right, bottom;
     int32_t offset_x, offset_y;

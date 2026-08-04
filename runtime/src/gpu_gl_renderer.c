@@ -341,6 +341,24 @@ static int interp_present(void);
 static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh);
 
 static int           s_raster_ok = 0;      /* full GPU pipeline available */
+static GrPrecisionTriangle s_precision_next;
+
+static void precision_take(GrPrecisionTriangle *out) {
+    *out = s_precision_next;
+    memset(&s_precision_next, 0, sizeof(s_precision_next));
+}
+
+static void precision_to_software(const GrPrecisionTriangle *p) {
+    const int valid = p && p->valid;
+    sw_set_precise_triangle(valid,
+        valid ? p->x16[0] : 0, valid ? p->y16[0] : 0,
+        valid ? p->x16[1] : 0, valid ? p->y16[1] : 0,
+        valid ? p->x16[2] : 0, valid ? p->y16[2] : 0);
+    sw_set_perspective_triangle(valid && p->perspective,
+        valid ? p->q[0] : 0.0f,
+        valid ? p->q[1] : 0.0f,
+        valid ? p->q[2] : 0.0f);
+}
 
 /* Authoritative VRAM: hr color texture + stencil (mask bit) FBO. */
 static GLuint        s_hr_tex = 0, s_hr_fbo = 0, s_hr_rb = 0;
@@ -354,9 +372,10 @@ static GLuint        s_scratch_tex = 0, s_scratch_fbo = 0;
 /* Programs. */
 static GLuint s_geo_prog = 0, s_geo_vao = 0, s_geo_vbo = 0;
 static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
-/* Textured vertex: pos(2) uv(2) col(4) tpage(2) clut(2) depth(1) raw(1) limits(4)
- * — per-prim texture state in flat attributes so prims batch (see flush_tex_batch). */
-#define TEXV 19
+/* Textured vertex: pos(2) uv(2) col(4) tpage(2) clut(2) depth(1) raw(1),
+ * limits(4), semi(1), reciprocal-depth q(1). Per-primitive texture state stays
+ * in flat attributes so primitives continue to batch (see flush_tex_batch). */
+#define TEXV 20
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
 static GLuint s_pack_prog = 0, s_stencil_prog = 0, s_empty_vao = 0;
 
@@ -816,12 +835,13 @@ static const char *TEX_VS =
     "layout(location=6) in float a_raw;\n"
     "layout(location=7) in vec4 a_limits;\n"
     "layout(location=8) in float a_semi;\n"
+    "layout(location=9) in float a_q;\n"
     "uniform float u_shift;\n"
     "uniform float u_xoff;   /* native-wide x translation (px); 0 canonical */\n"
     "uniform float u_xhalf;  /* x clip half-extent (px); 512 canonical */\n"
     "uniform float u_xscale; /* native-wide 2D-backdrop x-stretch; 1 canonical */\n"
     "uniform float u_xcenter;/* stretch centre in VRAM px; 0 canonical */\n"
-    "noperspective out vec2 v_uv; noperspective out vec4 v_col;\n"
+    "out vec2 v_uv; noperspective out vec4 v_col;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
     "void main(){ v_uv = a_uv; v_col = a_col;\n"
@@ -837,10 +857,12 @@ static const char *TEX_VS =
     "    float l = u_xcenter - h, r = u_xcenter + h;\n"
     "    if (xb < l) xb = l + (xb-l)*s; else if (xb > r) xb = r + (xb-r)*s;\n"
     "  } else xb = (xb - u_xcenter)*u_xscale + u_xcenter;\n"
-    "  gl_Position = vec4((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0, 0.0, 1.0); }\n";
+    "  float q = a_q > 0.0 ? a_q : 1.0; float w = 1.0 / q;\n"
+    "  vec2 ndc = vec2((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0);\n"
+    "  gl_Position = vec4(ndc * w, 0.0, w); }\n";
 static const char *TEX_FS =
     "#version 330\n"
-    "noperspective in vec2 v_uv; noperspective in vec4 v_col;\n"
+    "in vec2 v_uv; noperspective in vec4 v_col;\n"
     "out vec4 frag; out vec4 blend_factor;\n"
     "flat in ivec2 v_tpage;   /* texture page base, VRAM px */\n"
     "flat in ivec2 v_clut;    /* CLUT base, VRAM px */\n"
@@ -1643,7 +1665,8 @@ static void flush_flat_batch(void) {
 /* Flat / gouraud triangles and lines share the GEO program. mode: GL_TRIANGLES
  * or GL_LINES; verts are (x, y, r, g, b, a) tuples with colors as 1555. */
 static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
-                         const uint16_t *cs, int n, int semi) {
+                         const uint16_t *cs, int n, int semi,
+                         const GrPrecisionTriangle *precision) {
     flush_tex_batch();   /* flat prim: drain textured draws first (order + program) */
     flush_cpu_upload();  /* also drains flat batch if an upload was pending */
     mark_prim_dirty(xs, ys, n, 0 /* flat */);
@@ -1654,8 +1677,10 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         float verts[3 * 6];
         float mask_a = s_mask_set ? 1.0f : 0.0f;
         for (int i = 0; i < n; i++) {
-            verts[i*6+0] = (float)xs[i];
-            verts[i*6+1] = (float)ys[i];
+            verts[i*6+0] = precision && precision->valid
+                ? (float)precision->x16[i] / 65536.0f : (float)xs[i];
+            verts[i*6+1] = precision && precision->valid
+                ? (float)precision->y16[i] / 65536.0f : (float)ys[i];
             verts[i*6+2] = ((cs[i] & 0x1F) << 3) / 255.0f;
             verts[i*6+3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
             verts[i*6+4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
@@ -1697,8 +1722,10 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     float mask_a = s_mask_set ? 1.0f : 0.0f;
     for (int i = 0; i < n; i++) {
         float *v = &s_fb[s_fb_n * 6];
-        v[0] = (float)xs[i];
-        v[1] = (float)ys[i];
+        v[0] = precision && precision->valid
+            ? (float)precision->x16[i] / 65536.0f : (float)xs[i];
+        v[1] = precision && precision->valid
+            ? (float)precision->y16[i] / 65536.0f : (float)ys[i];
         v[2] = ((cs[i] & 0x1F) << 3) / 255.0f;
         v[3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
         v[4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
@@ -1711,13 +1738,15 @@ static void gpu_triangle(int x0,int y0,uint16_t c0, int x1,int y1,uint16_t c1,
                          int x2,int y2,uint16_t c2, int semi) {
     int xs[3] = {x0, x1, x2}, ys[3] = {y0, y1, y2};
     uint16_t cs[3] = {c0, c1, c2};
-    gpu_geometry(GL_TRIANGLES, xs, ys, cs, 3, semi);
+    GrPrecisionTriangle precision;
+    precision_take(&precision);
+    gpu_geometry(GL_TRIANGLES, xs, ys, cs, 3, semi, &precision);
 }
 
 static void gpu_line(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int semi) {
     int xs[2] = {x0, x1}, ys[2] = {y0, y1};
     uint16_t cs[2] = {c0, c1};
-    gpu_geometry(GL_LINES, xs, ys, cs, 2, semi);
+    gpu_geometry(GL_LINES, xs, ys, cs, 2, semi, NULL);
 }
 
 /* Shared PS1 uv-sampling model (limits + mirrored-2D compensation) — one
@@ -1733,6 +1762,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
                                   const float *col, uint16_t texpage,
                                   uint16_t clut_x, uint16_t clut_y, int rawtex,
                                   int semi, const int *lim) {
+    GrPrecisionTriangle precision;
+    precision_take(&precision);
     int lim_buf[4];
     int uv_buf[6];
     if (!lim) {
@@ -1804,7 +1835,10 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         }
         float *vp = &s_tb[s_tb_n * TEXV];
         for (int i = 0; i < 3; i++, vp += TEXV) {
-            vp[0] = (float)xs[i];   vp[1] = (float)ys[i];
+            vp[0] = precision.valid
+                ? (float)precision.x16[i] / 65536.0f : (float)xs[i];
+            vp[1] = precision.valid
+                ? (float)precision.y16[i] / 65536.0f : (float)ys[i];
             vp[2] = (float)us[i];   vp[3] = (float)vs[i];
             vp[4] = col[i*3+0];     vp[5] = col[i*3+1];     vp[6] = col[i*3+2];   vp[7] = 1.0f;
             vp[8]  = (float)base_x;  vp[9]  = (float)base_y;        /* a_tpage  */
@@ -1813,6 +1847,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[14] = (float)lim[0];  vp[15] = (float)lim[1];        /* a_limits */
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
             vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
+            vp[19] = precision.valid && precision.perspective
+                ? precision.q[i] : 1.0f;                              /* a_q */
         }
         s_tb_n += 3;
         if (isolate) flush_tex_batch();   /* draw this semi prim alone, in submission order */
@@ -2050,6 +2086,10 @@ static void glb_set_texture_window(uint32_t r) {
     sw_set_texture_window(r);
 }
 static void glb_set_color_modulation(int r,int g,int b,int raw) { s_mod_r=r; s_mod_g=g; s_mod_b=b; s_mod_raw=raw; sw_set_color_modulation(r,g,b,raw); }
+static void glb_set_precision_triangle(const GrPrecisionTriangle *precision) {
+    if (precision) s_precision_next = *precision;
+    else memset(&s_precision_next, 0, sizeof(s_precision_next));
+}
 static void glb_set_draw_area(int x1,int y1,int x2,int y2) { flush_flat_batch(); flush_tex_batch(); s_area_x1=x1; s_area_y1=y1; s_area_x2=x2; s_area_y2=y2; sw_set_draw_area(x1,y1,x2,y2); }
 static void glb_get_draw_area(int *x1,int *y1,int *x2,int *y2) { sw_get_draw_area(x1,y1,x2,y2); }
 static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_batch(); s_off_x=x; s_off_y=y; sw_set_draw_offset(x,y); }
@@ -2058,11 +2098,19 @@ static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_bat
  * over CPU VRAM; the initial full-VRAM upload at context init folds them in.
  * Post-init, the GPU pipeline is all-or-nothing — no per-prim fallback. */
 static void glb_draw_flat_triangle(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t col) {
-    if (!s_raster_ok) { sw_draw_flat_triangle(x0,y0,x1,y1,x2,y2,col); return; }
+    if (!s_raster_ok) {
+        GrPrecisionTriangle precision; precision_take(&precision);
+        precision_to_software(&precision);
+        sw_draw_flat_triangle(x0,y0,x1,y1,x2,y2,col); return;
+    }
     gpu_triangle(x0,y0,col, x1,y1,col, x2,y2,col, s_semi_en?s_semi_mode:-1);
 }
 static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int x2,int y2,uint16_t c2) {
-    if (!s_raster_ok) { sw_draw_gouraud_triangle(x0,y0,c0,x1,y1,c1,x2,y2,c2); return; }
+    if (!s_raster_ok) {
+        GrPrecisionTriangle precision; precision_take(&precision);
+        precision_to_software(&precision);
+        sw_draw_gouraud_triangle(x0,y0,c0,x1,y1,c1,x2,y2,c2); return;
+    }
     gpu_triangle(x0,y0,c0, x1,y1,c1, x2,y2,c2, s_semi_en?s_semi_mode:-1);
 }
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
@@ -2078,14 +2126,22 @@ static void glb_copy_rect(int sx,int sy,int dx,int dy,int w,int h){
     gpu_copy_rect(sx,sy,dx,dy,w,h);
 }
 static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1,int u1,int v1,int x2,int y2,int u2,int v2,uint16_t cx,uint16_t cy,uint16_t tp){
-    if (!s_raster_ok) { sw_draw_textured_triangle(x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,cx,cy,tp); return; }
+    if (!s_raster_ok) {
+        GrPrecisionTriangle precision; precision_take(&precision);
+        precision_to_software(&precision);
+        sw_draw_textured_triangle(x0,y0,u0,v0,x1,y1,u1,v1,x2,y2,u2,v2,cx,cy,tp); return;
+    }
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
     float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
     float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
     gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
 }
 static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32_t c0,int x1,int y1,int u1,int v1,uint32_t c1,int x2,int y2,int u2,int v2,uint32_t c2,uint16_t cx,uint16_t cy,uint16_t tp,int raw){
-    if (!s_raster_ok) { sw_draw_shaded_textured_triangle(x0,y0,u0,v0,c0,x1,y1,u1,v1,c1,x2,y2,u2,v2,c2,cx,cy,tp,raw); return; }
+    if (!s_raster_ok) {
+        GrPrecisionTriangle precision; precision_take(&precision);
+        precision_to_software(&precision);
+        sw_draw_shaded_textured_triangle(x0,y0,u0,v0,c0,x1,y1,u1,v1,c1,x2,y2,u2,v2,c2,cx,cy,tp,raw); return;
+    }
     int xs[3]={x0,x1,x2}, ys[3]={y0,y1,y2}, us[3]={u0,u1,u2}, vs[3]={v0,v1,v2};
     uint32_t cc[3]={c0,c1,c2}; float col[9];
     for (int i=0;i<3;i++){ col[i*3+0]=(cc[i]&0xFF)/255.0f; col[i*3+1]=((cc[i]>>8)&0xFF)/255.0f; col[i*3+2]=((cc[i]>>16)&0xFF)/255.0f; }
@@ -2409,6 +2465,7 @@ static int init_gpu_raster(void) {
         p_glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, st, (void*)(13*sizeof(float))); p_glEnableVertexAttribArray(6); /* raw    */
         p_glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, st, (void*)(14*sizeof(float))); p_glEnableVertexAttribArray(7); /* limits */
         p_glVertexAttribPointer(8, 1, GL_FLOAT, GL_FALSE, st, (void*)(18*sizeof(float))); p_glEnableVertexAttribArray(8); /* semi   */
+        p_glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, st, (void*)(19*sizeof(float))); p_glEnableVertexAttribArray(9); /* q      */
     }
 
     p_glGenVertexArrays(1, &s_blit_vao);
@@ -3720,6 +3777,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .display_depth_changed = glb_display_depth_changed,
     .set_semi_transparency = glb_set_semi_transparency, .set_mask_bits = glb_set_mask_bits,
     .set_texture_window = glb_set_texture_window, .set_color_modulation = glb_set_color_modulation,
+    .set_precision_triangle = glb_set_precision_triangle,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
     .draw_flat_triangle = glb_draw_flat_triangle, .draw_gouraud_triangle = glb_draw_gouraud_triangle,
     .draw_textured_triangle = glb_draw_textured_triangle,

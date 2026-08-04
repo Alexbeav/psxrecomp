@@ -10,6 +10,15 @@ the retail VSync divisor or running the simulation twice as often.
 
 ## Phase 1 — PGXP precision path
 
+Status: accepted first-pass checkpoint on 2026-08-04. The exact SWC2
+address/generation sidecar, renderer-neutral triangle metadata, atomic native
+fallback, software/OpenGL consumers, provenance counters, and canonical-VRAM
+regression are implemented. Two clean OpenGL Mission 1 routes compare exactly
+under the semantic evidence tool, an independent software route passes, and
+human widescreen testing accepts the visual result. Coverage remains selective,
+so broader provenance propagation is future PGXP refinement rather than a
+prerequisite for beginning the separately isolated high-refresh pass.
+
 The applicable corpus contract is `PSX-GPU-005`:
 
 1. Preserve every retail-visible GTE register and RAM store exactly.
@@ -34,6 +43,11 @@ and on; PGXP-on software/OpenGL images show stable geometry with bounded
 provenance counters and zero guest-state mutation.
 
 ## Phase 2 — 60 Hz presentation
+
+Status: next feature milestone after current-hash overlay convergence and a
+Release host-time profile. Keep PGXP pass 1 frozen as the visual/semantic
+oracle and create a separately named build and branch for the first
+interpolation candidate.
 
 The applicable corpus warning is `PSX-TIME-002`: VSync(2) to VSync(1) can double
 fixed-step gameplay. Measure four domains separately before changing policy:

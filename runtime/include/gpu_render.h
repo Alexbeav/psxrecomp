@@ -23,6 +23,18 @@ typedef enum {
     GR_BACKEND_VULKAN   = 2
 } GrBackend;
 
+/* Visual-only precision metadata for the next triangle.  Command processing
+ * submits this only after all three packet positions have exact GTE-to-RAM
+ * provenance.  Backends must consume it once and then clear it; valid == 0
+ * means native integer positions and affine texture coordinates. */
+typedef struct GrPrecisionTriangle {
+    int valid;
+    int perspective;
+    int32_t x16[3];
+    int32_t y16[3];
+    float q[3];
+} GrPrecisionTriangle;
+
 void      gr_set_backend(GrBackend backend);  /* call before gr_init() */
 GrBackend gr_backend(void);                   /* effective backend after init */
 
@@ -42,6 +54,7 @@ void gr_set_semi_transparency(int enabled, int mode);
 void gr_set_mask_bits(int set_bit, int check_bit);
 void gr_set_texture_window(uint32_t raw);
 void gr_set_color_modulation(int r, int g, int b, int raw_texture);
+void gr_set_precision_triangle(const GrPrecisionTriangle *precision);
 
 /* Primitives */
 void gr_fill_rect(int x, int y, int w, int h, uint16_t color);
@@ -124,6 +137,7 @@ typedef struct GpuRenderBackend {
     void (*set_mask_bits)(int set_bit, int check_bit);
     void (*set_texture_window)(uint32_t raw);
     void (*set_color_modulation)(int r, int g, int b, int raw_texture);
+    void (*set_precision_triangle)(const GrPrecisionTriangle *precision);
     void (*fill_rect)(int x, int y, int w, int h, uint16_t color);
     void (*copy_rect)(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
     void (*draw_flat_triangle)(int x0, int y0, int x1, int y1, int x2, int y2,
