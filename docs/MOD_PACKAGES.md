@@ -294,6 +294,20 @@ frames. Trusted callbacks receive only the narrow C services exposed by
 `runtime/include/mod_plugins.h`. Games should continue to use declarative
 patches and overlays when those operations are sufficient.
 
+`psx_mod_set_load_acceleration(multiplier, release_frames)` is the narrow
+pre-boot service for a game-owned fast-loading feature. It changes host
+wall-clock pacing only: guest VBlanks, CD deadlines, interrupts, callbacks, and
+game logic still execute. Multipliers 2 through 16 are bounded choices; zero
+selects uncapped host speed. A zero-frame release stops acceleration as soon as
+the sustained-load predicate clears, which is appropriate for timing-sensitive
+or speedrun-oriented packages.
+
+`psx_mod_set_disc_speed(divisor, instant_max_per_frame)` is the guest-visible
+alternative. Divisors 2 and 4 shorten emulated CD deadlines; zero selects the
+bounded instant scheduler. Because this changes interrupt timing, packages
+should label it experimental and make it mutually exclusive with host-only
+load acceleration (normally as choices in one default-off feature).
+
 ## Native operations
 
 `main_exe` writes use PSX guest virtual addresses. Expected bytes are checked

@@ -151,6 +151,19 @@ void test_bare_image(const fs::path& root) {
     write_sectors(dir / "game2.iso", 4, 0x33);
     const auto iso = resolve_disc_path(dir / "game2.iso");
     check(same(iso.mount, dir / "game2.iso"), "bare: iso mounts itself");
+
+    // A CHD embeds its own TOC. Even if a same-stem cue exists, never replace
+    // the selected compressed image with that cue or its external payload.
+    write_text(dir / "compressed.chd", "not-a-real-chd");
+    write_sectors(dir / "compressed.bin", 4, 0x44);
+    write_text(dir / "compressed.cue",
+               "FILE \"compressed.bin\" BINARY\n"
+               "  TRACK 01 MODE2/2352\n"
+               "    INDEX 01 00:00:00\n");
+    const auto chd = resolve_disc_path(dir / "compressed.chd");
+    check(same(chd.mount, dir / "compressed.chd"), "bare: chd mounts itself");
+    check(same(chd.data, dir / "compressed.chd"), "bare: chd identifies itself");
+    check(!chd.upgraded_to_cue, "bare: chd never upgrades to a cue");
 }
 
 // ---- 5. surface-syntax tolerance in the shared cue parser -------------------

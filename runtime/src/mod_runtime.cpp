@@ -1,6 +1,7 @@
 #include "mod_runtime.h"
 
 #include "disc_path.h"
+#include "iso_reader.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
 #include "psx_sha256.h"
@@ -140,9 +141,40 @@ bool sha256_file(const std::filesystem::path& path, std::string& out,
                  std::string* error) {
     out.clear();
     if (path.empty()) return true;
-    const std::filesystem::path input = resolve_disc_path(path).data;
+    const DiscPathResolution resolved = resolve_disc_path(path);
+    const std::filesystem::path input = resolved.data;
     psx_sha256_ctx hash;
     psx_sha256_init(&hash);
+    std::string extension = resolved.mount.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension == ".chd") {
+        PS1::ISOReader disc;
+        if (!disc.Open(resolved.mount.string())) {
+            if (error) *error =
+                "cannot decode image fingerprint: " + resolved.mount.string();
+            return false;
+        }
+        std::array<uint8_t, 2352> sector{};
+        for (uint32_t lba = 0; lba < disc.GetSectorCount(); ++lba) {
+            if (!disc.ReadRawSector(lba, sector.data())) {
+                if (error) *error =
+                    "cannot finish decoding image fingerprint: " +
+                    resolved.mount.string();
+                return false;
+            }
+            psx_sha256_update(&hash, sector.data(), sector.size());
+        }
+        uint8_t digest[32];
+        psx_sha256_final(&hash, digest);
+        std::ostringstream text;
+        for (uint8_t byte : digest)
+            text << std::hex << std::setw(2) << std::setfill('0')
+                 << (unsigned)byte;
+        out = text.str();
+        return true;
+    }
+
     std::array<uint8_t, 1024 * 1024> buffer{};
     std::ifstream file(input, std::ios::binary);
     if (!file) {
@@ -207,6 +239,53 @@ std::filesystem::path raw_image_path(const std::filesystem::path& path,
 bool sha256_disc_range(const std::filesystem::path& image,
                        ModPatchTarget target, uint64_t location, size_t size,
                        std::string& out, std::string* error) {
+    std::string extension = image.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension == ".chd") {
+        PS1::ISOReader disc;
+        if (!disc.Open(image.string())) {
+            if (error) *error = "cannot open stock CHD range: " + image.string();
+            return false;
+        }
+        psx_sha256_ctx hash;
+        psx_sha256_init(&hash);
+        std::array<uint8_t, 2352> sector{};
+        size_t remaining = size;
+        uint64_t at = location;
+        const uint64_t sector_size =
+            target == ModPatchTarget::DiscRaw ? 2352u : 2048u;
+        while (remaining != 0) {
+            const uint64_t lba64 = at / sector_size;
+            if (lba64 >= disc.GetSectorCount()) {
+                if (error) *error = "overlay expected range exceeds stock CHD";
+                return false;
+            }
+            const size_t within = (size_t)(at % sector_size);
+            const bool read_ok =
+                target == ModPatchTarget::DiscRaw
+                    ? disc.ReadRawSector((uint32_t)lba64, sector.data())
+                    : disc.ReadSector((uint32_t)lba64, sector.data());
+            if (!read_ok) {
+                if (error) *error = "cannot decode stock CHD overlay range";
+                return false;
+            }
+            const size_t chunk =
+                std::min(remaining, (size_t)sector_size - within);
+            psx_sha256_update(&hash, sector.data() + within, chunk);
+            at += chunk;
+            remaining -= chunk;
+        }
+        uint8_t digest[32];
+        psx_sha256_final(&hash, digest);
+        std::ostringstream text;
+        for (uint8_t byte : digest)
+            text << std::hex << std::setw(2) << std::setfill('0')
+                 << (unsigned)byte;
+        out = text.str();
+        return true;
+    }
+
     const std::filesystem::path source = raw_image_path(image, error);
     if (source.empty()) return false;
     std::ifstream file(source, std::ios::binary);

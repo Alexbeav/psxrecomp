@@ -116,6 +116,7 @@ if(BUILD_TESTING)
         src/cue_sheet.cpp
         src/iso_reader.cpp)
     target_include_directories(disc_path_resolve_test PRIVATE include)
+    target_link_libraries(disc_path_resolve_test PRIVATE chdr-static)
     add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
 
     # Both BIOS filename conventions (bare vs region-qualified) resolve, in
@@ -131,6 +132,7 @@ if(BUILD_TESTING)
         src/iso_reader.cpp
         src/cue_sheet.cpp)
     target_include_directories(iso_reader_cdda_test PRIVATE include)
+    target_link_libraries(iso_reader_cdda_test PRIVATE chdr-static)
     add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
 
     add_executable(mod_packages_test
@@ -149,11 +151,13 @@ if(BUILD_TESTING)
         src/mod_packages.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp
+        src/iso_reader.cpp
         src/crc32.c
         src/psx_sha256.c)
     target_include_directories(mod_runtime_test PRIVATE
         include
         ../recompiler/lib/toml11)
+    target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     add_test(NAME mod_runtime_test COMMAND mod_runtime_test)
 
     if(WIN32)

@@ -615,6 +615,11 @@ static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
 static double        g_frame_period_ms = PSX_FRAME_PERIOD_MS;
 static bool          g_mod_native_vblank_rate = false;
 static uint32_t      g_mod_native_vblank_fps = 0;
+/* Activation-time request. -1 means no enabled mod owns load acceleration. */
+static int           g_mod_load_wall_multiplier = -1;
+static int           g_mod_load_release_frames = -1;
+static int           g_mod_disc_speed_divisor = -1;
+static int           g_mod_disc_instant_rate = -1;
 
 /* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
  * window-fullscreen flag: used both to open the window in that mode and to
@@ -794,6 +799,39 @@ extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     return 1;
 }
 
+extern "C" int psx_mod_set_load_acceleration(
+    uint32_t wall_clock_multiplier, uint32_t release_frames) {
+    if ((wall_clock_multiplier != 0 &&
+         (wall_clock_multiplier < 2 || wall_clock_multiplier > 16)) ||
+        release_frames > 60) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected load acceleration "
+            "(multiplier %u, release frames %u)\n",
+            (unsigned)wall_clock_multiplier, (unsigned)release_frames);
+        return 0;
+    }
+    g_mod_load_wall_multiplier = (int)wall_clock_multiplier;
+    g_mod_load_release_frames = (int)release_frames;
+    return 1;
+}
+
+extern "C" int psx_mod_set_disc_speed(
+    uint32_t divisor, uint32_t instant_max_per_frame) {
+    if ((divisor != 0 && divisor != 2 && divisor != 4) ||
+        (divisor == 0 &&
+         (instant_max_per_frame < 1 || instant_max_per_frame > 256))) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected disc speed "
+            "(divisor %u, instant budget %u)\n",
+            (unsigned)divisor, (unsigned)instant_max_per_frame);
+        return 0;
+    }
+    g_mod_disc_speed_divisor = (int)divisor;
+    g_mod_disc_instant_rate =
+        divisor == 0 ? (int)instant_max_per_frame : -1;
+    return 1;
+}
+
 extern "C" int psx_mod_set_controller_mode_override(
     uint32_t player, uint32_t controller_mode) {
     if (player >= 2 ||
@@ -951,6 +989,9 @@ uint64_t g_turbo_audio_sink_frames = 0; /* guest SPU frames advanced, not queued
  * advancing normally. */
 #define TURBO_LOADS_ENGAGE_FRAMES  4
 #define TURBO_LOADS_RELEASE_FRAMES 6
+/* Zero multiplier retains the historical uncapped turbo behavior. */
+static int g_turbo_load_wall_multiplier = 0;
+static int g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
 static SDL_AudioDeviceID sdl_audio_device;
 static int16_t       sdl_audio_buf[2048 * 2];
 
@@ -1435,16 +1476,16 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         (game_id.empty() ? std::string() : " (" + game_id + ")") +
         " disc image ripped from your own disc.\n\n"
         "Accepted formats: .cue (preferred, with its .bin next to it), "
-        ".bin, or .iso.\n\n"
+        ".bin, .iso, or .chd.\n\n"
         "(This is NOT the BIOS — the BIOS was already chosen.)");
     std::string disc_title =
         s_picker_game_name + " — Step 2 of 2: select " + s_picker_game_name +
-        " disc image (.cue / .bin / .iso)";
+        " disc image (.cue / .bin / .iso / .chd)";
     for (;;) {
         std::filesystem::path picked;
         if (!pick_runtime_file(
                 disc_title.c_str(),
-                "PS1 Disc Images (*.cue;*.bin;*.iso)\0*.cue;*.bin;*.iso\0All Files (*.*)\0*.*\0",
+                "PS1 Disc Images (*.cue;*.bin;*.iso;*.chd)\0*.cue;*.bin;*.iso;*.chd\0All Files (*.*)\0*.*\0",
                 picked, "--disc")) {
             return {};
         }
@@ -2821,13 +2862,16 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any) {
  * pad TYPE is left unchanged: a launcher-assigned analog DualShock still presents
  * as analog (so the game's analog input path / SIO handshake cadence is preserved
  * exactly), and merged sources only contribute button/stick STATE, never a type
- * downgrade. Controlled by PSX_DEV_INPUT (default ON for the dev workflow); set
- * PSX_DEV_INPUT=0 to restore strict single-device-per-port routing. */
+ * downgrade. This diagnostic convenience must never alter normal player input:
+ * strict single-device-per-port routing is the default, and PSX_DEV_INPUT must
+ * be explicitly set to 1/true/yes/on to enable the merge. */
 static bool dev_any_input_enabled() {
     static int cached = -1;
     if (cached < 0) {
         const char* e = std::getenv("PSX_DEV_INPUT");
-        cached = (e && (e[0] == '0' || e[0] == 'n' || e[0] == 'N' || e[0] == 'f' || e[0] == 'F')) ? 0 : 1;
+        const std::string value = lower_copy(trim_copy(e ? e : ""));
+        cached = (value == "1" || value == "true" ||
+                  value == "yes" || value == "on") ? 1 : 0;
     }
     return cached != 0;
 }
@@ -3679,7 +3723,7 @@ static void sdl_vblank_present(void) {
             if (load_run < (1 << 20)) load_run++;
             if (load_run >= TURBO_LOADS_ENGAGE_FRAMES || release_run > 0) {
                 turbo_loads_active = 1;
-                release_run = TURBO_LOADS_RELEASE_FRAMES;
+                release_run = g_turbo_load_release_frames;
             }
         } else {
             load_run = 0;
@@ -3797,8 +3841,24 @@ static void sdl_vblank_present(void) {
      * real time (2.2-4.8 sectors/frame against a 32-256 IRQ budget), so
      * host-speed execution is the lever that compresses load wall-time.
      * Presents 1-in-30 so visual progress stays visible. */
+    bool turbo_load_paced = false;
     if (turbo_loads_active) {
         g_turbo_loads_frames++;
+        /* A mod may request a bounded wall-clock multiplier instead of the
+         * legacy unpaced host-speed path. Pace every simulated guest frame at
+         * the divided period; the presentation skip below remains independent
+         * so rendering cost does not distort the selected multiplier. */
+        if (g_turbo_load_wall_multiplier >= 2 &&
+            g_frame_period_ms > 0.0) {
+            uint64_t perf_start = runtime_perf_section_begin();
+            frame_pacer_wait(
+                &s_frame_pacer,
+                g_frame_period_ms / (double)g_turbo_load_wall_multiplier);
+            runtime_perf_section_end(
+                perf_start, &g_runtime_perf.pacer_ticks);
+            latency_ring_mark(LAT_PACED);
+            turbo_load_paced = true;
+        }
         const int TL_PRESENT_EVERY = 30;
         s_turbo_present_skip = (s_turbo_present_skip + 1) % TL_PRESENT_EVERY;
         if (s_turbo_present_skip != 0) {
@@ -3836,7 +3896,7 @@ static void sdl_vblank_present(void) {
      * AFTER present so Swap overlaps the peer's guest quantum. */
     if (!psx_netplay_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
-        if (g_frame_period_ms > 0.0)
+        if (!turbo_load_paced && g_frame_period_ms > 0.0)
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
@@ -4962,12 +5022,11 @@ int main(int argc, char** argv) {
     bool memcard1_enabled = true;
     bool memcard2_enabled = true;
     /* [controller] device routing (defaults: P1 keyboard/digital, P2 none). */
-    /* Dev builds default Player 1 to the first connected controller ("auto"):
-     * combined with dev-any-input (dev_any_input_enabled(), default ON) the
-     * selected controller, EVERY other plugged-in controller, AND the keyboard
-     * all drive P1 with no launcher setup. If no controller is present, "auto"
-     * opens nothing and the keyboard/any-controller merge still drives P1.
-     * Release keeps "keyboard" (the launcher assigns devices). */
+    /* Dev builds default Player 1 to the first connected controller ("auto").
+     * PSX_DEV_INPUT=1 additionally merges every other controller and the
+     * keyboard for diagnostic convenience; normal routing stays exclusive.
+     * Release keeps "keyboard" as its pre-launch default (the launcher assigns
+     * the selected physical device). */
 #if defined(PSX_DEBUG_TOOLS)
     std::string p1_device = "auto";
 #else
@@ -4990,6 +5049,7 @@ int main(int argc, char** argv) {
     bool ws_adaptive_view_supported = false;
     bool frame_interpolation_offered = true;
     bool skip_fmv_offered = true;
+    bool turbo_loads_offered = true;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     int  resolved_deadzone = -1;  /* <0 => keep input.ini/runtime default (12000) */
     /* Localization: the effective language (game.toml default -> settings.toml ->
@@ -5251,6 +5311,7 @@ int main(int argc, char** argv) {
             frame_interpolation_offered =
                 gc.runtime.video_offer_frame_interpolation;
             skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
+            turbo_loads_offered = gc.runtime.offer_turbo_loads;
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
              * interpreter applies the backdrop screenX squash on the interp
@@ -5681,6 +5742,15 @@ int main(int argc, char** argv) {
             "ignoring the legacy Settings value\n");
         g_auto_skip_fmv = 0;
     }
+    /* A game may likewise move load acceleration into its mod catalog. The
+     * activation plugin runs after final plan commit, so clear both the
+     * game.toml default and stale Settings value before the launcher is seeded. */
+    if (!turbo_loads_offered && g_turbo_loads_enabled) {
+        std::fprintf(stdout,
+            "psxrecomp: Turbo loads is mod-owned for this title; "
+            "ignoring the legacy Settings value\n");
+        g_turbo_loads_enabled = 0;
+    }
     /* Treat presentation interpolation the same way when a title moves it to
      * Mods. Both the boolean and target rate are cleared so launcher-less
      * starts cannot revive an old generic Settings selection. */
@@ -5854,7 +5924,8 @@ int main(int argc, char** argv) {
             seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
             seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
             seed.has_auto_skip_fmv = skip_fmv_offered;
-            seed.turbo_loads = (g_turbo_loads_enabled != 0); seed.has_turbo_loads = true;
+            seed.turbo_loads = (g_turbo_loads_enabled != 0);
+            seed.has_turbo_loads = turbo_loads_offered;
             seed.fast_boot = fast_boot;                   seed.has_fast_boot = true;
             seed.bios_hle  = bios_hle_requested;          seed.has_bios_hle  = true;
             seed.fullscreen = g_fullscreen;                seed.has_fullscreen = true;
@@ -6079,6 +6150,7 @@ int main(int argc, char** argv) {
             gi.renderer_labels      = kPsxRendererLabels;
             gi.num_renderers        = vulkan_offered ? 3 : 2;
             gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
+            gi.has_turbo_loads      = turbo_loads_offered ? 1 : 0;
             /* Localization menu: shown only when the game declares languages. */
             if (!rui_lang_labels.empty()) {
                 gi.language_labels = rui_lang_labels.data();
@@ -6192,7 +6264,8 @@ int main(int argc, char** argv) {
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = skip_fmv_offered;
-                seed.turbo_loads           = ls.turbo_loads != 0;      seed.has_turbo_loads           = true;
+                seed.turbo_loads = ls.turbo_loads != 0;
+                seed.has_turbo_loads = turbo_loads_offered;
                 /* Bundled-BIOS builds ignore any launcher-supplied path (the
                  * picker is hidden, but a stale settings file could still
                  * carry one) — resolve_bios_for_runtime would reject it and
@@ -6222,8 +6295,10 @@ int main(int argc, char** argv) {
                         seed.aspect_num = caps->aspect_num ? caps->aspect_num : seed.aspect_num;
                         seed.aspect_den = caps->aspect_den ? caps->aspect_den : seed.aspect_den;
                         seed.has_aspect_ratio = true;
-                        seed.turbo_loads = caps->turbo_loads != 0;
-                        seed.has_turbo_loads = true;
+                        if (turbo_loads_offered) {
+                            seed.turbo_loads = caps->turbo_loads != 0;
+                            seed.has_turbo_loads = true;
+                        }
                         if (skip_fmv_offered) {
                             seed.auto_skip_fmv = caps->auto_skip_fmv != 0;
                             seed.has_auto_skip_fmv = true;
@@ -6267,7 +6342,8 @@ int main(int argc, char** argv) {
                 g_video_texfilter = seed.texture_filter;
                 g_video_screen    = seed.screen_kind;
                 g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
-                g_turbo_loads_enabled = seed.turbo_loads ? 1 : 0;
+                g_turbo_loads_enabled =
+                    turbo_loads_offered && seed.turbo_loads ? 1 : 0;
                 fast_boot = seed.fast_boot;
                 bios_hle_requested = seed.bios_hle;
                 g_fullscreen      = seed.fullscreen;
@@ -6331,12 +6407,36 @@ int main(int argc, char** argv) {
      * leave its prior mode latched across a soft return to the launcher. */
     g_mod_controller_mode_override[0] = -1;
     g_mod_controller_mode_override[1] = -1;
+    g_mod_load_wall_multiplier = -1;
+    g_mod_load_release_frames = -1;
+    g_mod_disc_speed_divisor = -1;
+    g_mod_disc_instant_rate = -1;
+    g_turbo_load_wall_multiplier = 0;
+    g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
+    if (!turbo_loads_offered)
+        g_turbo_loads_enabled = 0;
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     mod_runtime_activate_plugins();
     if (g_mod_controller_mode_override[0] >= 0)
         p1_mode = g_mod_controller_mode_override[0];
     if (g_mod_controller_mode_override[1] >= 0)
         p2_mode = g_mod_controller_mode_override[1];
+    if (g_mod_load_wall_multiplier >= 0) {
+        g_turbo_loads_enabled = 1;
+        g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
+        g_turbo_load_release_frames = g_mod_load_release_frames;
+        if (g_turbo_load_wall_multiplier) {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected %dx load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_wall_multiplier, g_turbo_load_release_frames);
+        } else {
+            std::fprintf(stdout,
+                "psxrecomp: mod selected uncapped load acceleration "
+                "(%d release frames)\n",
+                g_turbo_load_release_frames);
+        }
+    }
 
     /* Re-apply the resolved language to the translation layer. text_xlate_init
      * (at config load) only saw the game.toml default; this folds in the
@@ -6540,14 +6640,19 @@ session_reboot:
         if (disc_speed == "instant") divisor = 0;
         else if (disc_speed == "4x") divisor = 4;
         else if (disc_speed == "2x") divisor = 2;
+        if (g_mod_disc_speed_divisor >= 0)
+            divisor = g_mod_disc_speed_divisor;
         /* Store for post-BIOS application; boot always runs at 1x so the
          * BIOS disc-init sequence sees correct timing. */
         cdrom_set_game_speed(divisor);
-        if (instant_rate > 0) cdrom_set_instant_rate(instant_rate);
+        if (g_mod_disc_instant_rate > 0)
+            cdrom_set_instant_rate(g_mod_disc_instant_rate);
+        else if (instant_rate > 0)
+            cdrom_set_instant_rate(instant_rate);
         if (divisor != 1)
-            std::fprintf(stdout, "psxrecomp: disc_speed=%s (applied post-BIOS, "
+            std::fprintf(stdout, "psxrecomp: disc speed divisor=%d (applied post-BIOS, "
                          "instant budget %d/frame)\n",
-                         disc_speed.c_str(), cdrom_get_instant_rate());
+                         divisor, cdrom_get_instant_rate());
     }
     {
         std::string mc1 = memcard1_path.string();

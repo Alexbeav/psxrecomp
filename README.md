@@ -111,7 +111,8 @@ Builds support two recompiled BIOS backends: **OpenBIOS** and a compatible
 **retail BIOS**. OpenBIOS is a free, open-source PlayStation BIOS from the
 [PCSX-Redux](https://github.com/grumpycoders/pcsx-redux) project that we're
 allowed to distribute. It is bundled and runs by default, so you usually do not
-need to provide a BIOS dump. Bring a game disc image and play.
+need to provide a BIOS dump. Bring a game disc image (`.cue`/`.bin`, `.iso`, or
+MAME-compatible `.chd`) and play.
 
 **If you'd rather use a retail BIOS**, pick your dumped `SCPH1001.BIN` in
 settings and it will be used instead. Clear that choice to return to OpenBIOS.
