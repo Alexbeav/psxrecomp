@@ -32,6 +32,7 @@ Read these files completely at the start of each Codex session:
 8. `lab/sf2/reference-manifest.toml`
 9. `CLAUDE.md`
 10. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
+11. `docs/DEVELOPMENT_VALIDATION_WORKFLOW.md`
 
 `CLAUDE.md` is inherited upstream context. Preserve its hardware-faithfulness,
 no-stubs, no-generated-code-edits, evidence, and bounded-diagnostics rules.
@@ -110,30 +111,22 @@ this pinned commit as the framework contract.
 - When tooling is broken, fix or precisely diagnose it before relying on its
   output.
 
-### Iteration testing ladder
+### Development and validation workflow
 
-Use the cheapest test that can reject the current candidate, in this order:
+Follow [`docs/DEVELOPMENT_VALIDATION_WORKFLOW.md`](docs/DEVELOPMENT_VALIDATION_WORKFLOW.md)
+for every feature candidate. In particular:
 
-1. **Implementation gate:** run the relevant focused regression or static
-   check, build and link the enhanced target, and perform only a short launch
-   smoke test. Confirm that the frozen compatibility executable was not
-   changed. Do not start a full campaign route for a disposable iteration.
-2. **Targeted human gate:** provide the exact shortcut or launcher, identify
-   the candidate/build identity, and list the small number of observations the
-   user should check. Keep the frozen 4:3 launcher available for immediate A/B.
-3. **Acceptance gate:** iterate from the user's visual, control-feel, or
-   gameplay report until the feature is accepted. Repeat only focused tests
-   between small candidates unless the owning subsystem or risk changes.
-4. **Milestone gate:** only after targeted acceptance, run the complete
-   registered suite, deterministic clean-process routes, and any long campaign
-   validation required by the milestone. Then update identities,
-   documentation, knowledge returns, and milestone commits.
+- keep each candidate to one logical change whenever practical;
+- use the smallest local build, launch, and feature smoke that can reject it;
+- hand the candidate to the user immediately with an exact shortcut and two to
+  five targeted observations;
+- stop and wait for user feedback after handoff; and
+- defer focused regressions, deterministic routes, campaign validation, the
+  full suite, final documentation, commit, and push until explicit user
+  approval advances the candidate to qualification.
 
-A human test does not replace focused automated safety checks. Changes that
-can corrupt saves, persistent data, guest state, or a generic hardware/runtime
-invariant must pass their owning regression before handoff. Conversely, do not
-spend minutes or hours proving the full campaign for a visual or input
-candidate the user may reject within seconds.
+The workflow's risk exceptions still require only the minimum focused safety
+validation before handoff, never an automatic blanket campaign run.
 
 ## Windows build baseline
 
