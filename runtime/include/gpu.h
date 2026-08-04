@@ -137,6 +137,9 @@ void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
                            uint32_t map_size_addr, uint32_t layer_stride_addr,
                            uint32_t ring_cols, uint32_t layer_count,
                            uint32_t layer_struct_stride, uint32_t packet_cap);
+/* Some Capcom variants (MMX5/MMX6) can compose a layer's scroll with a parent
+ * selected by byte +0x52. MMX4's streamer always uses each layer's own scroll. */
+void gpu_ws_bg2d_set_parent_links(int on);
 int psx_ws_bg2d_cols(int base);
 int psx_ws_bg2d_startcol(int col, unsigned mask);
 int psx_ws_bg2d_startx(int x);

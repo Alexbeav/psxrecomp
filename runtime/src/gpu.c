@@ -938,6 +938,7 @@ static uint32_t g_bg2d_layer_count = 3;
 static uint32_t g_bg2d_layer_struct_stride = 0x54;
 static uint32_t g_bg2d_packet_cap = 1000;
 static int g_bg2d_native_cols = 21;
+static int g_bg2d_parent_links = 1;
 
 void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
                            uint32_t map_size_addr, uint32_t layer_stride_addr,
@@ -951,6 +952,10 @@ void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
     g_bg2d_layer_count = layer_count;
     g_bg2d_layer_struct_stride = layer_struct_stride;
     g_bg2d_packet_cap = packet_cap;
+}
+
+void gpu_ws_bg2d_set_parent_links(int on) {
+    g_bg2d_parent_links = on ? 1 : 0;
 }
 
 static int ws_bg2d_left_cols(void) {
@@ -1117,15 +1122,20 @@ static int bg2d_fill_column(int layer, int worldX, int worldY, int scrollX, int 
         }
     }
     int mapW = psx_read_byte(g_bg2d_map_size_addr);
-    int mapH = psx_read_byte(g_bg2d_map_size_addr + 1u);
     uint32_t mapBase  = psx_read_word(0x1F800004u);
     uint32_t metaBase = psx_read_word(0x1F800008u);
-    if (mapBase == 0 || metaBase == 0 || mapW <= 0 || mapH <= 0) return 0;
+    if (mapBase == 0 || metaBase == 0 || mapW <= 0) return 0;
     int layerStride = (uint16_t)psx_read_half(g_bg2d_layer_stride_addr);
 
-    int metaIdx = 0;
-    if ((uint32_t)metaCol < (uint32_t)mapW && (uint32_t)metaRow < (uint32_t)mapH)
-        metaIdx = psx_read_byte(mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
+    /*
+     * The Capcom streamer has no map-height field or vertical bounds check.
+     * After normalizing negative worldY to zero it indexes rows as
+     *   layer*stride + mapW*metaRow + metaCol
+     * directly. Treating map_size_addr+1 as a guessed height rejects every
+     * MMX4 column because that adjacent byte is zero.
+     */
+    int metaIdx = psx_read_byte(
+        mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
 
     uint32_t ringbase = g_bg2d_ring_base
                       + (uint32_t)layer * (g_bg2d_ring_cols * 64u);
@@ -1144,9 +1154,9 @@ static int bg2d_fill_column(int layer, int worldX, int worldY, int scrollX, int 
         if (++trowInMeta == 0x10) {
             trowInMeta = 0;
             metaRow++;
-            metaIdx = 0;
-            if ((uint32_t)metaCol < (uint32_t)mapW && (uint32_t)metaRow < (uint32_t)mapH)
-                metaIdx = psx_read_byte(mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
+            metaIdx = psx_read_byte(
+                mapBase +
+                (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
         }
     }
     return 1;
@@ -1178,7 +1188,8 @@ void psx_ws_mmx6_bg_refill_all(void) {
         int sx = (int16_t)psx_read_half(lbase + 0xa);
         int sy = (int16_t)psx_read_half(lbase + 0xe);
         int8_t parent = (int8_t)psx_read_byte(lbase + 0x52);
-        if (parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
+        if (g_bg2d_parent_links &&
+            parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
             uint32_t pbase = g_bg2d_layer_base
                            + (uint32_t)(uint8_t)parent * g_bg2d_layer_struct_stride;
             sx += (int16_t)psx_read_half(pbase + 0xa);
@@ -1221,7 +1232,8 @@ int gpu_ws_mmx6_validate(int *bad_out) {
         int sx = (int16_t)psx_read_half(lbase + 0xa);
         int sy = (int16_t)psx_read_half(lbase + 0xe);
         int8_t parent = (int8_t)psx_read_byte(lbase + 0x52);
-        if (parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
+        if (g_bg2d_parent_links &&
+            parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
             uint32_t pbase = g_bg2d_layer_base
                            + (uint32_t)(uint8_t)parent * g_bg2d_layer_struct_stride;
             sx += (int16_t)psx_read_half(pbase + 0xa);
