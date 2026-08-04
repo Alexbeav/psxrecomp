@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Guard Hybrid mode's physical-controller detection in dev-any routing."""
+"""Guard Hybrid mode's explicitly opt-in dev-any routing."""
 
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 MAIN = (ROOT / "runtime" / "src" / "main.cpp").read_text(encoding="utf-8")
+
+assert "strict single-device-per-port routing is the default" in MAIN
+for truthy in ('"1"', '"true"', '"yes"', '"on"'):
+    assert f"value == {truthy}" in MAIN
+assert "e && (e[0] == '0'" not in MAIN, (
+    "PSX_DEV_INPUT must not use the old default-on/explicit-disable predicate"
+)
 
 assert "hybrid_stick_active(const PlayerInput& p, bool dev_any)" in MAIN
 assert "hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any)" in MAIN

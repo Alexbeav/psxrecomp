@@ -8,6 +8,9 @@ extern "C" {
 
 typedef void (*PSXModVBlankCallback)(void);
 typedef void (*PSXModActivationCallback)(void);
+struct CPUState;
+typedef void (*PSXModFunctionEntryCallback)(struct CPUState* cpu,
+                                            uint32_t address);
 
 /*
  * Register a trusted, statically linked plugin implementation. Package
@@ -18,11 +21,36 @@ int psx_mod_register_activation_plugin(const char* id,
                                        PSXModActivationCallback callback);
 int psx_mod_register_vblank_plugin(const char* id,
                                    PSXModVBlankCallback callback);
+int psx_mod_register_function_entry_plugin(
+    const char* id, uint32_t address, PSXModFunctionEntryCallback callback);
+/* Called only from generated functions explicitly listed by the game config. */
+void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
 
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);
 uint8_t psx_mod_read_byte(uint32_t address);
 void psx_mod_write_byte(uint32_t address, uint8_t value);
+uint16_t psx_mod_read_half(uint32_t address);
+void psx_mod_write_half(uint32_t address, uint16_t value);
+uint32_t psx_mod_read_word(uint32_t address);
+void psx_mod_write_word(uint32_t address, uint32_t value);
+
+/*
+ * Allocate opt-in enhancement memory from Expansion 1. Until the first
+ * allocation, the region remains hardware-faithful open bus. The returned
+ * KSEG0 address is accessible through normal generated guest loads.
+ */
+uint32_t psx_mod_alloc_guest_memory(uint32_t size, uint32_t alignment);
+
+/*
+ * Allocate guest memory that is also addressable by 24-bit GPU linked-list
+ * tags. This is intended for opt-in enhanced primitive/ordering-table arenas;
+ * without an allocation the aperture remains unmapped and DMA stays faithful.
+ */
+uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
+
+/* Current per-side widescreen reveal in native game pixels (zero at 4:3). */
+int32_t psx_mod_widescreen_x_margin(void);
 
 /*
  * Read the committed value of one of this package's declared options, as the
@@ -88,6 +116,25 @@ enum {
 };
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
+
+/*
+ * Accelerate only the wall-clock pacing of sustained non-XA data loads while
+ * preserving every guest VBlank, CD deadline, interrupt, and callback.
+ * wall_clock_multiplier accepts 2..16, or zero for uncapped host speed.
+ * release_frames controls how many guest frames acceleration may remain active
+ * after the load predicate clears; zero is the precise/speedrun-safe policy.
+ */
+int psx_mod_set_load_acceleration(uint32_t wall_clock_multiplier,
+                                  uint32_t release_frames);
+
+/*
+ * Select guest-visible CD timing for a game-owned loading feature. divisor is
+ * 2 or 4, or zero for the bounded "instant" scheduler; instant_max_per_frame
+ * is used only with divisor zero. Unlike host load acceleration, this changes
+ * when the emulated game receives CD interrupts and can expose timing bugs.
+ */
+int psx_mod_set_disc_speed(uint32_t divisor,
+                           uint32_t instant_max_per_frame);
 
 /*
  * Override one player's resolved controller presentation mode for this launch.

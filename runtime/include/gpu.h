@@ -200,6 +200,7 @@ void gpu_ws_set_activation_guard_pixels(int pixels);
 void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
                                     const uint32_t *slti, int nslti,
                                     const uint32_t *range, int nrange);
+void gpu_ws_set_slti_lower_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_negsub_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_vxrange_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_depth_cull_sites(const uint32_t *sites, int nsites);
@@ -228,6 +229,7 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t queue_type_masks[3]);
 int  psx_ws_is_cull_bias_site(uint32_t pc);
 int  psx_ws_is_cull_slti_site(uint32_t pc);
+int  psx_ws_is_cull_slti_lower_site(uint32_t pc);
 int  psx_ws_is_cull_negsub_site(uint32_t pc);
 int  psx_ws_is_cull_vxrange_site(uint32_t pc);
 int  psx_ws_is_cull_depth_site(uint32_t pc);
@@ -263,6 +265,7 @@ int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);
  * ws_cull_detect.h): right-edge widen for `slti v, minSX, W` and left-edge
  * widen for the paired `bltz maxSX` reject. Identity at 4:3. */
 int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);
+int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_bltz(uint32_t v);
 int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm);
 /* True if a run of instruction words carries the screen-extent reject signature
@@ -285,6 +288,10 @@ int  psx_ws_auto_cull_on(void);
  * that projects enough vertices is stamped as gameplay. */
 void gpu_ws_set_gte_game_mode(int on);
 void psx_ws_note_gte_project(int nverts);
+/* Optional authoritative gameplay-state gate. When configured, it replaces
+ * heuristic gameplay classification for native-wide presentation. */
+void gpu_ws_set_gameplay_state_gate(uint32_t addr,
+                                    const uint32_t *values, int nvalues);
 /* Native-wide HUD corner re-anchoring ([widescreen] nw_hud_corners): push
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */

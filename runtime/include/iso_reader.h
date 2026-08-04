@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <fstream>
+#include <memory>
 #include <vector>
 
 /**
@@ -18,6 +19,8 @@
  */
 
 namespace PS1 {
+
+struct CHDState;
 
 /**
  * Information about a file entry in the ISO filesystem
@@ -81,7 +84,7 @@ public:
 
     /**
      * Open an ISO/BIN file for reading
-     * @param filename Path to .iso, .bin, or .cue file
+     * @param filename Path to .iso, .bin, .cue, or .chd file
      * @return true if opened successfully, false otherwise
      */
     bool Open(const std::string& filename);
@@ -218,6 +221,7 @@ private:
     RootDirectoryInfo root_dir_;
     std::vector<CDTrack> tracks_;   // from the .cue TOC; >=1 entry after Open()
     std::vector<BinSegment> segments_;  // cue FILE entries in disc order; >=1 after Open()
+    std::unique_ptr<CHDState> chd_; // present only for a directly mounted CHD
 };
 
 } // namespace PS1

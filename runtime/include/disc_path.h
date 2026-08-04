@@ -13,6 +13,7 @@
 //   picked a .cue with a missing bin   -> mount a sibling image, if one exists
 //   picked a .bin/.iso/.img owned by a cue -> mount that cue (keeps the TOC)
 //   picked a .bin/.iso/.img with no cue    -> mount it directly
+//   picked a .chd                          -> mount it directly (TOC is embedded)
 //
 // Preferring the cue matters beyond tidiness: the cue is the only place the
 // CD-DA track layout lives. Silently swapping a cue for its same-named .bin
