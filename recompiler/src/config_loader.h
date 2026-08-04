@@ -248,6 +248,13 @@ struct RuntimeConfig {
     // load wall-time. Streaming titles (e.g. Crash) must leave this off.
     bool                  turbo_loads = false;
 
+    // offer_turbo_loads: expose the generic Turbo loads switch through
+    // recomp-ui Settings. Defaults true for compatibility. A game migrating
+    // load acceleration into its mod catalog sets this false; stale persisted
+    // Settings values are then ignored and a trusted activation plugin owns
+    // the launch policy.
+    bool                  offer_turbo_loads = true;
+
     // turbo_audio_sink: while turbo_loads is actively running unpaced, keep
     // rendering the exact guest-time SPU sample budget (so voice/CD state
     // advances) but discard those samples before the host playback queue.

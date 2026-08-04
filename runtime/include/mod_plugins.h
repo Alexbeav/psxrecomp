@@ -118,6 +118,25 @@ int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
 
 /*
+ * Accelerate only the wall-clock pacing of sustained non-XA data loads while
+ * preserving every guest VBlank, CD deadline, interrupt, and callback.
+ * wall_clock_multiplier accepts 2..16, or zero for uncapped host speed.
+ * release_frames controls how many guest frames acceleration may remain active
+ * after the load predicate clears; zero is the precise/speedrun-safe policy.
+ */
+int psx_mod_set_load_acceleration(uint32_t wall_clock_multiplier,
+                                  uint32_t release_frames);
+
+/*
+ * Select guest-visible CD timing for a game-owned loading feature. divisor is
+ * 2 or 4, or zero for the bounded "instant" scheduler; instant_max_per_frame
+ * is used only with divisor zero. Unlike host load acceleration, this changes
+ * when the emulated game receives CD interrupts and can expose timing bugs.
+ */
+int psx_mod_set_disc_speed(uint32_t divisor,
+                           uint32_t instant_max_per_frame);
+
+/*
  * Override one player's resolved controller presentation mode for this launch.
  * This is intentionally a trusted-plugin API, not a generic launcher setting:
  * games may hide Hybrid from their normal selector while offering it as an

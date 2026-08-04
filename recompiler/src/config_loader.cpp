@@ -439,6 +439,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("turbo_loads")) {
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");
     }
+    if (runtime.contains("offer_turbo_loads")) {
+        rt.offer_turbo_loads =
+            toml::find<bool>(runtime, "offer_turbo_loads");
+    }
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }

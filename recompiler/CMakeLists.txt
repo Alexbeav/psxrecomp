@@ -4,6 +4,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../runtime/chd_dependency.cmake")
+
 add_subdirectory(lib/fmt)
 
 # Vendored fmt 9.1.0 enables its `consteval` format-string check on Apple
@@ -121,7 +123,7 @@ target_include_directories(psxrecomp PRIVATE
     ../runtime/include
     lib/fmt/include
 )
-target_link_libraries(psxrecomp PRIVATE fmt)
+target_link_libraries(psxrecomp PRIVATE fmt chdr-static)
 if(MINGW)
     target_link_options(psxrecomp PRIVATE -Wl,--stack,16777216)
 elseif(MSVC)
@@ -407,7 +409,9 @@ if(BUILD_TESTING)
                 hybrid_dev_any_input
                 launcher_vulkan_option
                 mod_controller_override
+                mod_load_acceleration
                 overlay_candidate_capacity
+                release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
                 sdl3_main_single_include
