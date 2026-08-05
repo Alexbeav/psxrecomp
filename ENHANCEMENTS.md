@@ -709,3 +709,32 @@ precise_consumed() only on the GPU path — the `!s_raster_ok` software-fallback
 branch returns EARLY without clearing s_pc_valid, so an override could be
 applied to a primitive it was never computed for. That would displace a vertex
 arbitrarily and produce exactly these long stretched lines.
+
+### G1.8 — RESOLVED by isolation: perspective textures SHIP, geometry correction DOES NOT
+
+The control run and the two isolation runs were finally done, on Ape Escape,
+OpenGL, supersampling 2, same scene each time:
+
+| geometry_correction | perspective_texturing | result |
+|---|---|---|
+| off | off | **clean** (the control — establishes the framework/UI jumps are NOT the cause) |
+| **on** | off | **lines** |
+| off | **on** | **clean** |
+
+**`perspective_texturing` is good and should ship.** It is unaffected by the
+coverage problem: it only alters UV interpolation inside a polygon whose
+provenance is fully proven, so a polygon either gets perspective UVs or keeps
+the PS1's affine ones. Neither outcome moves a vertex, so adjacent polygons
+cannot disagree about a shared edge and nothing can crack.
+
+**`geometry_correction` must not be offered.** It moves vertices, and at ~5%
+coverage a corrected triangle meets an uncorrected neighbour along a shared
+edge — the seams in the isolation run trace polygon boundaries, confirming
+G1.4's mechanism (and retiring the "long scene-spanning lines" reading in G1.7,
+which misjudged the artifact). It cannot be fixed by tuning: it needs the full
+PGXP dataflow of G1.2/G1.3 to reach coverage where meshes move as one.
+
+**Recommended disposition:** keep the `perspective_texturing` setting and its
+launcher row; withdraw the `geometry_correction` row until value propagation
+lands (leave the setting readable from game.toml/settings.toml so the work
+stays testable, but do not present it to players).
