@@ -657,7 +657,12 @@ bool target_matches(const ModPackage& package, const std::string& game,
                     const std::string& exe, const std::string& disc) {
     if (package.targets.empty()) return false;
     for (const ModTarget& target : package.targets) {
-        if (target.game_id != game) continue;
+        /* "*" targets every game. Framework-owned mods (loading speed, and
+         * anything else that is a property of the emulator rather than of a
+         * particular disc) ship once and apply everywhere, instead of every
+         * title carrying a copy of the same manifest. An empty target list
+         * still matches nothing, so a malformed manifest fails loudly. */
+        if (target.game_id != "*" && target.game_id != game) continue;
         if (!target.exe_sha256.empty() && target.exe_sha256 != exe) continue;
         if (!target.disc_sha256.empty() && target.disc_sha256 != disc) continue;
         return true;
