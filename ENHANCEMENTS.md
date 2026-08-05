@@ -613,3 +613,38 @@ through the CPU dataflow, so a GP0 word's provenance is known exactly rather
 than guessed from where it landed — produces a clean result. A coverage gate or
 a better cache is ruled out by measurement, not by argument. `geometry_correction`
 must not ship until value propagation exists.
+
+### G1.5 — CORRECTION to G1.4: the ambiguity gate fixed the cracking
+
+**G1.4's closing claim ("meshes still mix ... and still crack, visually
+confirmed") was wrong, and was not verified.** User observation on the exact-
+table + ambiguity-gate build, at window resolution: *"in game is looking pretty
+nice ... whatever is up doesn't have the lines issue."* Same scene that was
+visibly torn before. The seams are gone.
+
+**Why the wrong claim was made — the instrument was blind.** Verification used
+the TCP `screenshot`, which resolves native 15-bit VRAM. Geometry correction
+exists ONLY in the supersampled mirror (that is why it needs `supersampling
+>= 2`), so it is erased before a native capture is taken. Those captures showed
+clean frames no matter what the player saw, and the conclusion then leaned on
+counters instead. Fixed by adding `screenshot_hires`, which routes the same
+present path as the window. **Anything that lives in the hi-res mirror must be
+verified with `screenshot_hires`; a native screenshot cannot see it.**
+
+**What this means technically.** The visible defect was *ambiguity*, not
+coverage:
+
+- A wrongly-attributed fraction displaces a vertex by up to a full pixel in an
+  arbitrary direction — a large, obvious tear that moves as winners change.
+- Missing coverage only leaves a sub-pixel (<1px) mismatch where a corrected
+  triangle meets an uncorrected one — not visually objectionable.
+
+So the ambiguity gate removed the harm. Coverage (~5% of lookups) now bounds the
+*benefit*, not the damage: the feature is safe but only lightly effective. Full
+value propagation remains the path to a large improvement — it would take
+coverage toward total — but it is no longer a prerequisite for shipping
+something that does not hurt.
+
+**Still to verify first-hand** with `screenshot_hires`, before any of this is
+called done: an A/B of the same frame with the knob off vs on, at
+supersampling >= 2.
