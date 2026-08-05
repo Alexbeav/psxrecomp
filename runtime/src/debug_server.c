@@ -24,6 +24,7 @@
 #include "cpu_state.h"
 #include "dma.h"
 #include "gpu.h"
+#include "gpu_render.h"   /* gr_scale + gr_render_display_hires (screenshot_hires) */
 #include "present_ring.h"
 #include "load_transition_ring.h"
 #include "cdrom.h"
@@ -8202,6 +8203,77 @@ static void handle_screenshot_file(int id, const char *json)
              id, path, w, h);
 }
 
+/* screenshot_hires — capture the SUPERSAMPLED surface, not native VRAM.
+ *
+ * screenshot_file above reads gpu_display_pixel_rgb, i.e. the native 15-bit
+ * VRAM the PS1 would have produced. That is the right capture for faithfulness
+ * work, but it is BLIND to any enhancement that lives only in the high-
+ * resolution mirror: at [video] supersampling >= 2 the geometry-correction
+ * sub-pixel vertices, the SSAA edges and the perspective UVs are all resolved
+ * in the hi-res surface and are gone by the time pixels are packed back to
+ * native. Verifying those against a native screenshot silently "confirms" a
+ * clean frame while the player is looking at a broken one — which is exactly
+ * how the geometry-correction cracking got mis-reported as fixed.
+ *
+ * This routes the same present path the window uses (gr_render_display_hires),
+ * so what lands in the PNG is what the player sees. Falls back to the native
+ * resolve when no hi-res surface exists (supersampling 1 / software), so the
+ * command always answers with something truthful about the actual output. */
+static void handle_screenshot_hires(int id, const char *json)
+{
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.width == 0 || di.height == 0) {
+        send_err(id, "display disabled"); return;
+    }
+    if (di.depth24) { send_err(id, "24bpp scanout (unsupported)"); return; }
+
+    int scale = gr_scale();
+    if (scale < 1) scale = 1;
+    uint32_t w = di.width, h = di.height;
+    if (w > 640) w = 640;
+    if (h > 512) h = 512;
+    uint32_t ow = w * (uint32_t)scale, oh = h * (uint32_t)scale;
+
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
+    if (!argb) { send_err(id, "alloc failed"); return; }
+    int got = gr_render_display_hires(argb, (int)ow, (int)di.display_x,
+                                      (int)di.display_y, (int)w, (int)h);
+    if (!got) {
+        /* No hi-res surface (scale 1, or a backend without one): resolve the
+         * native display instead and say so, rather than emitting a blank. */
+        scale = 1; ow = w; oh = h;
+        got = gr_render_display(argb, (int)ow, (int)di.display_x,
+                                (int)di.display_y, (int)w, (int)h);
+        if (!got) { free(argb); send_err(id, "no display surface"); return; }
+    }
+
+    uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
+    if (!rgb) { free(argb); send_err(id, "alloc failed"); return; }
+    for (size_t i = 0; i < (size_t)ow * oh; i++) {
+        uint32_t p = argb[i];
+        rgb[i * 3 + 0] = (uint8_t)((p >> 16) & 0xFF);
+        rgb[i * 3 + 1] = (uint8_t)((p >> 8) & 0xFF);
+        rgb[i * 3 + 2] = (uint8_t)(p & 0xFF);
+    }
+    free(argb);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    int ok = png_write_rgb(f, rgb, ow, oh);
+    free(rgb);
+    fclose(f);
+    if (!ok) { send_err(id, "png encode failed"); return; }
+
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
+             "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
 /* dump_buffer: dump a raw 512x240 VRAM region starting at display Y = `y` to a
  * PNG, regardless of what the game currently displays. Used to inspect BOTH
  * double-buffer halves (y=0 and y=256) coherently in one call to see whether a
@@ -12828,6 +12900,7 @@ static const CmdEntry s_commands[] = {
     { "get_snapshots",     handle_get_snapshots },
     { "screenshot",        handle_present_screenshot },
     { "screenshot_file",   handle_screenshot_file },
+    { "screenshot_hires",  handle_screenshot_hires },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },

@@ -328,6 +328,15 @@ def build_cmd(args):
         if len(args) > 1:
             d["path"] = args[1]
         return d, pretty_json
+    elif cmd in ("screenshot_hires", "shot_hires"):
+        # Captures the SUPERSAMPLED surface the player actually sees. Use this
+        # (not `screenshot`) to verify anything that only exists in the hi-res
+        # mirror -- geometry correction, SSAA edges, perspective UVs -- because
+        # the native capture resolves those away and looks clean regardless.
+        d = {"cmd": "screenshot_hires"}
+        if len(args) > 1:
+            d["path"] = args[1]
+        return d, pretty_json
     elif cmd == "bios_trace":
         d = {"cmd": "bios_trace"}
         if len(args) > 1:
