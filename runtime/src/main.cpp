@@ -514,6 +514,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
 static bool          g_video_aa    = true;  /* linear present filtering */
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
+/* Sub-pixel vertex precision + perspective-correct UVs (PGXP-style). Visual
+ * only: the PS1-visible GTE SXY FIFO stays integer, so guest-side culling and
+ * SXY readback are untouched. Default off = the faithful floor. */
+static int           g_video_geometry_correction   = 0;
+static int           g_video_perspective_texturing = 0;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
@@ -5147,6 +5152,10 @@ int main(int argc, char** argv) {
             g_video_scale      = gc.runtime.video_supersampling;
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_texfilter  = gc.runtime.video_texture_filter;
+            g_video_geometry_correction   =
+                gc.runtime.video_geometry_correction ? 1 : 0;
+            g_video_perspective_texturing =
+                gc.runtime.video_perspective_texturing ? 1 : 0;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
@@ -5639,6 +5648,10 @@ int main(int argc, char** argv) {
         if (us.has_window_width)   g_video_win_w     = us.window_width;
         if (us.has_antialiasing)   g_video_aa        = us.antialiasing;
         if (us.has_texture_filter) g_video_texfilter = us.texture_filter;
+        if (us.has_geometry_correction)
+            g_video_geometry_correction = us.geometry_correction ? 1 : 0;
+        if (us.has_perspective_texturing)
+            g_video_perspective_texturing = us.perspective_texturing ? 1 : 0;
         if (us.has_screen_kind)    g_video_screen    = us.screen_kind;
         if (us.has_auto_skip_fmv)  g_auto_skip_fmv   = us.auto_skip_fmv ? 1 : 0;
         if (us.has_turbo_loads)    g_turbo_loads_enabled = us.turbo_loads ? 1 : 0;
@@ -5931,6 +5944,12 @@ int main(int argc, char** argv) {
             seed.supersampling = g_video_scale;           seed.has_supersampling = true;
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
             seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
+            /* Seeded (and marked present) so a launcher save round-trips the
+             * player's hand-edited value instead of dropping the key. */
+            seed.geometry_correction = (g_video_geometry_correction != 0);
+            seed.has_geometry_correction = true;
+            seed.perspective_texturing = (g_video_perspective_texturing != 0);
+            seed.has_perspective_texturing = true;
             seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
             seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
             seed.has_auto_skip_fmv = skip_fmv_offered;
@@ -6356,6 +6375,8 @@ int main(int argc, char** argv) {
                 g_video_scale     = seed.supersampling;
                 g_video_aa        = seed.antialiasing;
                 g_video_texfilter = seed.texture_filter;
+                g_video_geometry_correction   = seed.geometry_correction ? 1 : 0;
+                g_video_perspective_texturing = seed.perspective_texturing ? 1 : 0;
                 g_video_screen    = seed.screen_kind;
                 g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled =
@@ -6541,8 +6562,26 @@ session_reboot:
     if (g_video_scale < 1) g_video_scale = 1;
     if (g_video_scale > SW_MAX_INTERNAL_SCALE) g_video_scale = SW_MAX_INTERNAL_SCALE;
     gr_set_scale(g_video_scale);
+    /* The scale we asked the backend for. Read it before the reflection below:
+     * the GL backend's gr_scale() reports its REAL internal scale, which is
+     * still 0/1 until the GL context comes up later, so g_video_scale does not
+     * hold the effective factor at this point. */
+    const int requested_scale = g_video_scale;
     g_video_scale = gr_scale(); /* reflect any clamp / alloc fallback */
     gr_set_texture_filter(g_video_texfilter);
+    /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
+     * with both off every setter below leaves the tracking caches disabled and
+     * the draw path is the faithful integer one, unchanged. */
+    gte_geometry_correction_set(g_video_geometry_correction);
+    gpu_texture_correction_set(g_video_perspective_texturing);
+    if (g_video_geometry_correction || g_video_perspective_texturing) {
+        std::fprintf(stdout,
+                     "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
+                     g_video_geometry_correction ? "on" : "off",
+                     g_video_perspective_texturing ? "on" : "off",
+                     (g_video_geometry_correction && requested_scale < 2)
+                         ? " (needs [video] supersampling >= 2 to be visible)" : "");
+    }
     /* Display aspect. Identity at the default 4:3. The present letterbox uses
      * this aspect; native-wide fills it with a genuinely wider frame (no
      * stretch), squash mode stretches the 4:3 frame into it. */

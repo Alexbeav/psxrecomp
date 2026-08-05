@@ -316,6 +316,22 @@ if(BUILD_TESTING)
     add_test(NAME recompiler_patch_cxx17_header_test
              COMMAND recompiler_patch_cxx17_header_test)
 
+    # [video] geometry_correction / perspective_texturing opt-in plumbing.
+    add_executable(video_enhancement_settings_test
+        tests/video_enhancement_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(video_enhancement_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(video_enhancement_settings_test PRIVATE fmt)
+    add_test(NAME video_enhancement_settings_test
+             COMMAND video_enhancement_settings_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test

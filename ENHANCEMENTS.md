@@ -400,3 +400,113 @@ stays, inert + A/B-able). What was learned, so the next attempt starts ahead:
 - **Groundwork landed on `feat/ws-2d-scene-pillarbox`:** census `tagged`
   column, `ws_hud_mode` live A/B, and the untagged-rect scoping that makes
   `nw_hud_corners` safe to experiment with on tag titles.
+
+---
+
+## G1 — Sub-pixel vertex precision + perspective-correct textures (issue #92)
+
+PS1 polygon jitter ("wobble", "bouncing lines") and warped floor/wall textures
+have one root cause each, both in the fixed-point geometry pipeline:
+
+- **Jitter.** The GTE computes the projected screen position in 16.16, then
+  saturates it to an integer pixel when it pushes SXY. The fraction is thrown
+  away. A slowly moving mesh therefore snaps its vertices between whole pixels
+  and the model shimmers.
+- **Texture warp.** The GPU interpolates UV *affinely* across a triangle, with
+  no 1/z term, so a large floor or wall polygon's texture swims as the camera
+  moves.
+
+Both are addressed as **opt-in, visual-only** enhancements. The PS1-visible GTE
+SXY FIFO stays integer and fully faithful — a game's own post-projection
+screen-bounds culls and any SXY readback see exactly what hardware produces.
+Nothing about guest state changes; the correction lives entirely on the host
+render path.
+
+### Configuration
+
+```toml
+[video]
+geometry_correction   = true   # sub-pixel vertex precision (kills the wobble)
+perspective_texturing = true   # perspective-correct UVs on world polygons
+supersampling         = 2      # REQUIRED for geometry_correction to be visible
+```
+
+Both default **false** (the faithful floor). They are independent — a title may
+want stable geometry without changing texture mapping. Settable per-game in
+`game.toml` and per-player in `settings.toml` (the player's file wins, and a
+launcher save round-trips both keys rather than dropping them).
+
+`geometry_correction` needs `supersampling >= 2`: at native resolution the
+corrected position rounds back to the pixel it started on, so there is nothing
+to see. The runtime prints a note at startup when it is on at scale 1.
+
+### How it works
+
+The recompiler emits GTE commands as calls to a single runtime entry point
+(`gte_execute`), which both the compiled backend and the dirty-RAM interpreter
+share — so unlike an interpreter/dynarec emulator there is no dispatch hook to
+add, just one funnel to instrument.
+
+1. **`runtime/src/gte.cpp`** — RTPS/RTPT keep the discarded 16.16 fraction in a
+   side cache keyed by the packed SXY word it rounded to (`geom_note`).
+   Saturated (off-screen) projections are rejected: they carry no usable
+   sub-pixel information.
+2. **SWC2 provenance** — the recompiler, strict translator, dirty-RAM interp,
+   overlay ABI (v14) and fallback interp all call
+   `gte_precision_store_word(addr, reg)` when a projection register is stored to
+   guest RAM, recording *which RAM address* a projection landed at. Perspective
+   texturing only fires when all three of a triangle's position words came from
+   such a store at that exact DMA packet address — which preserves the
+   association through ordering-table reordering and rejects CPU-built UI and
+   2D sprites outright. A plain `sw` to a tracked address invalidates it.
+3. **`runtime/src/gpu.c`** — `prepare_precise_triangle()` /
+   `prepare_texture_triangle()` look the packet up per triangle and hand the
+   result to the renderer facade as sideband state for the next draw
+   (`gr_set_precise_triangle` / `gr_set_perspective_triangle`).
+4. **All three renderers consume it.** Software uses the fractional positions
+   in its supersampled mirror; OpenGL and Vulkan take them as float vertex
+   positions directly. For perspective UVs both GPU backends carry a per-vertex
+   `a_q` weight and emit clip coordinates pre-multiplied by `w = 1/q`, so the
+   hardware's own perspective divide interpolates a `smooth` UV varying while
+   the affine `noperspective` one stays available. **`a_q == 0` (the default)
+   makes `w` exactly 1.0 and selects the affine varying — the pre-feature
+   pipeline, unchanged.**
+
+Save states and speculative native-validation passes drop host-only provenance
+(`gte_precision_timeline_invalidate`, `gte_precision_speculative_begin/end`) so
+a rewind can never resurrect a stale projection.
+
+### Validation story
+
+By construction this feature *diverges* from stock hardware output, so the
+Beetle oracle cannot be the judge of the corrected frame. What the oracle still
+pins is the part that must not move: **with both flags off the output is
+byte-identical to the pre-feature build**, and guest-visible GTE state is
+identical either way (the SXY FIFO is untouched in both). That reduces
+validation to (a) an off/off pixel-identity check against the oracle, and
+(b) human A/B of the on/off frames on a 3D title.
+
+`gte_geometry_correction_hits()` and `gpu_texture_correction_hits()` report how
+many vertices/triangles were actually corrected — the "is this doing anything
+on this title" counter, and the thing to check first when a title shows no
+visible change.
+
+### Provenance
+
+The GTE side cache, SWC2 provenance tracking, GP0 triangle preparation and the
+software-renderer consumption path were contributed by **Kareem Olim (kem0x)**
+in [PR #14](https://github.com/mstan/psxrecomp/pull/14) and parked in commit
+`2ceaf5a` (see `docs/internal/upstream/kem0x-pr14-projection-perspective.md`),
+disabled pending generic setters. This work adds the opt-in configuration, the
+renderer-facade seam, and OpenGL + Vulkan support.
+
+### Status / next
+
+- **Done:** config plumbing (game.toml + settings.toml + launcher seed
+  round-trip), renderer-facade sideband, software / OpenGL / Vulkan consumption,
+  `[video]` plumbing unit test.
+- **Open:** per-title A/B validation. Ape Escape is the obvious first 3D
+  subject (Tomba 1/2 and MMX5/6 are largely 2D, where neither knob does much).
+- **Open:** launcher (recomp-ui) toggles. The keys round-trip through
+  `settings.toml` today, but there is no UI row yet — that lives in the
+  recomp-ui repo.

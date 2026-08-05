@@ -401,8 +401,19 @@ static int            s_geo_mirror_suppress = 0;   /* open batch: skip the wide 
                                                     * (full-screen overlay rect draws its
                                                     * own full-width wide pass instead) */
 
-/* Textured batch: 18 floats/vert (pos,uv,col,tpage,clut,depth,raw,limits). */
-#define TEXV 18
+/* Sub-pixel vertex override + perspective UV weights for the next triangle
+ * ([video] geometry_correction / perspective_texturing; see gpu_render.h).
+ * gpu.c sets these immediately before the matching gr_draw_*_triangle and they
+ * are consumed by it. All-zero == the faithful integer/affine path. */
+static int   s_pc_valid = 0;           /* sub-pixel positions present */
+static float s_pc_x[3], s_pc_y[3];     /* native VRAM px, fractional  */
+static int   s_pq_valid = 0;           /* perspective weights present */
+static float s_pq[3];
+
+/* Textured batch: 19 floats/vert (pos,uv,col,tpage,clut,depth,raw,limits,q).
+ * q is the perspective weight ([video] perspective_texturing); 0 = affine,
+ * which the vertex shader turns into w == 1.0 — the faithful default. */
+#define TEXV 19
 typedef struct { float v[TEXV]; } TexVert;
 #define VK_TBUF_VERTS 24576               /* multiple of 3 */
 static VkBuffer       s_tbuf;
@@ -1224,7 +1235,7 @@ static VkPipeline get_pipeline(int prog, int topo, int blend, int stencil, int c
 
     VkShaderModule vs, fs; VkPipelineLayout layout;
     VkVertexInputBindingDescription bind = {0};
-    VkVertexInputAttributeDescription attrs[8]; uint32_t nattr;
+    VkVertexInputAttributeDescription attrs[9]; uint32_t nattr;
     if (prog == 0) {            /* GEO */
         vs = s_mod_geo_v; fs = s_mod_geo_f; layout = s_pl_geo;
         bind = (VkVertexInputBindingDescription){ 0, sizeof(Vert), VK_VERTEX_INPUT_RATE_VERTEX };
@@ -1242,7 +1253,8 @@ static VkPipeline get_pipeline(int prog, int topo, int blend, int stencil, int c
         attrs[5] = (VkVertexInputAttributeDescription){ 5, 0, VK_FORMAT_R32_SFLOAT, 48 };
         attrs[6] = (VkVertexInputAttributeDescription){ 6, 0, VK_FORMAT_R32_SFLOAT, 52 };
         attrs[7] = (VkVertexInputAttributeDescription){ 7, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 56 };
-        nattr = 8;
+        attrs[8] = (VkVertexInputAttributeDescription){ 8, 0, VK_FORMAT_R32_SFLOAT, 72 };  /* a_q */
+        nattr = 9;
     } else {                    /* BLIT (vertex-less: rect from push constant) */
         vs = s_mod_blit_v; fs = s_mod_blit_f; layout = s_pl_blit;
         nattr = 0;
@@ -2563,15 +2575,46 @@ static void vkb_set_color_modulation(int r, int g, int b, int raw) {
     s_mod_r = r; s_mod_g = g; s_mod_b = b; s_mod_raw = raw ? 1 : 0;
 }
 
+/* Sub-pixel / perspective overrides for the next triangle. */
+static void vkb_set_precise_triangle(int enabled,
+                                     int32_t x0,int32_t y0, int32_t x1,int32_t y1,
+                                     int32_t x2,int32_t y2) {
+    s_pc_valid = enabled ? 1 : 0;
+    if (s_pc_valid) {
+        /* 16.16 native VRAM px -> float; the VK pipeline is float end-to-end. */
+        s_pc_x[0] = (float)x0 / 65536.0f;  s_pc_y[0] = (float)y0 / 65536.0f;
+        s_pc_x[1] = (float)x1 / 65536.0f;  s_pc_y[1] = (float)y1 / 65536.0f;
+        s_pc_x[2] = (float)x2 / 65536.0f;  s_pc_y[2] = (float)y2 / 65536.0f;
+    }
+}
+static void vkb_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
+    s_pq_valid = (enabled && q0 > 0.0f && q1 > 0.0f && q2 > 0.0f) ? 1 : 0;
+    s_pq[0] = q0; s_pq[1] = q1; s_pq[2] = q2;
+    /* The corrected-triangle tally lives in the software rasterizer and backs
+     * gpu_texture_correction_hits() — the "is this doing anything on this
+     * title" counter. Forward so it reads the same on every backend. */
+    sw_set_perspective_triangle(enabled, q0, q1, q2);
+}
+/* The override describes exactly one triangle; drop it once submitted so a
+ * later prim can never inherit it. */
+static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; }
+
+/* Position a vertex: the sub-pixel value when geometry_correction supplied one
+ * for this triangle, else the integer GP0 position. */
+#define PCX(i, v) (s_pc_valid ? s_pc_x[i] : (float)(v))
+#define PCY(i, v) (s_pc_valid ? s_pc_y[i] : (float)(v))
+
 static void vkb_draw_flat_triangle(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t c){
     geo_prim_begin();
     float col[3]; col555(c, col);
-    tri3((float)x0,(float)y0,col, (float)x1,(float)y1,col, (float)x2,(float)y2,col);
+    tri3(PCX(0,x0),PCY(0,y0),col, PCX(1,x1),PCY(1,y1),col, PCX(2,x2),PCY(2,y2),col);
+    precise_consumed();
 }
 static void vkb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int x2,int y2,uint16_t c2){
     geo_prim_begin();
     float a[3],b[3],cc[3]; col555(c0,a); col555(c1,b); col555(c2,cc);
-    tri3((float)x0,(float)y0,a, (float)x1,(float)y1,b, (float)x2,(float)y2,cc);
+    tri3(PCX(0,x0),PCY(0,y0),a, PCX(1,x1),PCY(1,y1),b, PCX(2,x2),PCY(2,y2),cc);
+    precise_consumed();
 }
 /* Full-screen-overlay wide pass (pause gray-filter / load fade): draw a flat
  * rect covering the FULL wide width [0, wide_w) x [y, y+h) directly into the
@@ -2788,7 +2831,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys, const int *us, c
     int bx0 = xs[0], bx1 = xs[0], by0 = ys[0], by1 = ys[0];
     for (int i = 0; i < 3; i++) {
         float *vp = s_tmap[s_tbase + s_tcount + i].v;
-        vp[0] = (float)xs[i];   vp[1] = (float)ys[i];
+        vp[0] = s_pc_valid ? s_pc_x[i] : (float)xs[i];
+        vp[1] = s_pc_valid ? s_pc_y[i] : (float)ys[i];
         vp[2] = (float)us[i];   vp[3] = (float)vs[i];
         vp[4] = col[i*3+0];     vp[5] = col[i*3+1];     vp[6] = col[i*3+2]; vp[7] = 1.0f;
         vp[8]  = (float)base_x;  vp[9]  = (float)base_y;
@@ -2796,10 +2840,14 @@ static void gpu_textured_triangle(const int *xs, const int *ys, const int *us, c
         vp[12] = (float)depth;   vp[13] = (float)rawtex;
         vp[14] = (float)lim[0];  vp[15] = (float)lim[1];
         vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
+        vp[18] = s_pq_valid ? s_pq[i] : 0.0f;   /* a_q; 0 = affine */
         if (xs[i] < bx0) bx0 = xs[i]; if (xs[i] > bx1) bx1 = xs[i];
         if (ys[i] < by0) by0 = ys[i]; if (ys[i] > by1) by1 = ys[i];
     }
     s_tcount += 3;
+    /* A sub-pixel-corrected vertex lies in [int, int+1) of the integer position
+     * it was rounded from, so widen the readback rect by one pixel. */
+    if (s_pc_valid) { bx1 += 1; by1 += 1; }
     /* mark dirty for later readback/pack (clamped to draw area) */
     if (bx0 < s_da_x1) bx0 = s_da_x1; if (by0 < s_da_y1) by0 = s_da_y1;
     if (bx1 > s_da_x2) bx1 = s_da_x2; if (by1 > s_da_y2) by1 = s_da_y2;
@@ -2832,6 +2880,7 @@ static void vkb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
     float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
     float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
     gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+    precise_consumed();
 }
 static void vkb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32_t c0,
                                               int x1,int y1,int u1,int v1,uint32_t c1,
@@ -2842,6 +2891,7 @@ static void vkb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
     float col[9];
     col888(c0, &col[0]); col888(c1, &col[3]); col888(c2, &col[6]);
     gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+    precise_consumed();
 }
 static void vkb_draw_textured_rect(int x,int y,int w,int h,int u,int v,uint16_t cx,uint16_t cy,uint16_t tp){
     gpu_textured_rect(x,y,w,h, u,v, u+w,v+h, cx,cy,tp, s_semi_en?s_semi_mode:-1);
@@ -3058,6 +3108,8 @@ static const GpuRenderBackend VK_BACKEND = {
     .set_mask_bits                 = vkb_set_mask_bits,
     .set_texture_window            = vkb_set_texture_window,
     .set_color_modulation          = vkb_set_color_modulation,
+    .set_precise_triangle          = vkb_set_precise_triangle,
+    .set_perspective_triangle      = vkb_set_perspective_triangle,
     .fill_rect                     = vkb_fill_rect,
     .copy_rect                     = vkb_copy_rect,
     .draw_flat_triangle            = vkb_draw_flat_triangle,

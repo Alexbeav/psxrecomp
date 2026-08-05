@@ -375,6 +375,25 @@ See [`docs/STRING_TRANSLATION.md`](docs/STRING_TRANSLATION.md); *Tsumu Light*
 | **Vulkan** | **Experimental.** Built when the SDK is present, opt-in at runtime; falls back to OpenGL if unavailable. |
 | **Software** | CPU rasterizer — the reference look, and the most portable fallback. |
 
+### Geometry enhancements (opt-in)
+
+Two optional fixes for the PS1's fixed-point geometry pipeline, off by default
+so the faithful look stays the baseline. Set them in `game.toml` or the
+player's `settings.toml`:
+
+```toml
+[video]
+geometry_correction   = true   # sub-pixel vertex precision — removes polygon
+                               # jitter/wobble. Needs supersampling >= 2.
+perspective_texturing = true   # perspective-correct UVs — removes the texture
+                               # warp on large floor/wall polygons.
+supersampling         = 2
+```
+
+Both are visual-only: the GTE's guest-visible screen coordinates stay integer
+and fully faithful, so game logic and culling are unaffected. Supported on all
+three renderers. See [`ENHANCEMENTS.md`](ENHANCEMENTS.md) §G1.
+
 ## How to use PSXRecomp
 
 PSXRecomp takes a PlayStation disc image and creates a recompilation project

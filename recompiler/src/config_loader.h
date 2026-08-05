@@ -329,6 +329,29 @@ struct RuntimeConfig {
     // fallback. Stored as VIDEO_RENDERER_*.
     int                   video_renderer = DEFAULT_VIDEO_RENDERER;
 
+    // geometry_correction: sub-pixel vertex precision (the PGXP-style fix for
+    // PS1 polygon jitter/wobble). The GTE projects in 16.16 and then throws the
+    // fraction away when it saturates SXY to integer screen pixels; vertices of
+    // a moving mesh therefore snap between whole pixels and the model appears to
+    // shimmer. With this on, the GTE keeps the discarded fraction in a side
+    // cache and the rasterizer places the vertex between native pixels.
+    //
+    // The PS1-visible SXY FIFO stays integer and fully faithful — the game's own
+    // screen-bounds culls and any SXY readback see exactly what hardware would
+    // produce. This is visual-only. Default off (faithful floor).
+    //
+    // Only observable at [video] supersampling >= 2: at native resolution the
+    // corrected position rounds back to the same pixel it started on.
+    bool                  video_geometry_correction = false;
+
+    // perspective_texturing: perspective-correct UV interpolation for textured
+    // world polygons (the PS1 GPU interpolates UV affinely, which warps textures
+    // on large floor/wall polygons as the camera moves). Uses the exact SWC2
+    // projection provenance — a polygon only qualifies when every one of its
+    // position words was written to that DMA packet address by a projection
+    // store — so CPU-built UI and 2D sprites are never touched. Default off.
+    bool                  video_perspective_texturing = false;
+
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.
@@ -969,6 +992,10 @@ struct UserSettings {
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
     bool has_antialiasing   = false; bool antialiasing   = true;
     bool has_texture_filter = false; int  texture_filter = 0; // 0=nearest,1=bilinear
+    // Sub-pixel vertex precision / perspective-correct UVs (see RuntimeConfig).
+    // Both default off — the faithful floor — and are player-selectable.
+    bool has_geometry_correction   = false; bool geometry_correction   = false;
+    bool has_perspective_texturing = false; bool perspective_texturing = false;
     bool has_screen_kind    = false; int  screen_kind    = 0; // 0..3 (ScreenKind)
     bool has_auto_skip_fmv  = false; bool auto_skip_fmv  = false; // skip FMVs
     // Turbo through in-game load screens: while the CD data stream is active, run

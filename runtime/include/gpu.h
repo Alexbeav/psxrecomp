@@ -283,6 +283,13 @@ int  psx_ws_is_cull_w_imm(uint32_t imm);
  * never opted in must never have its live code pattern-scanned and rewritten. */
 void gpu_ws_set_auto_hooks(int cull_on, int backdrop_on);
 int  psx_ws_auto_cull_on(void);
+/* Perspective-correct UV interpolation for textured world polygons
+ * ([video] perspective_texturing). Also turns on the SWC2 RAM-provenance
+ * tracking it needs, so a polygon only qualifies when every position word in
+ * its DMA packet was written by a GTE projection store. Default off. */
+void gpu_texture_correction_set(int enabled);
+/* Triangles drawn with perspective-correct UVs since startup. */
+uint32_t gpu_texture_correction_hits(void);
 /* GTE-activity gameplay detector ([widescreen] gte_game_mode) for 3D titles
  * with no sprite-tag helper: gte.cpp notes every RTPS/RTPT projection; a frame
  * that projects enough vertices is stamped as gameplay. */

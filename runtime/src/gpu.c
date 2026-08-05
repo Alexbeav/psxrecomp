@@ -2795,16 +2795,16 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
     uint32_t words[3] = { w0, w1, w2 };
     int32_t fx[3], fy[3];
     const int geometry_enabled = gte_geometry_correction_enabled();
-    sw_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
+    gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
     if (!geometry_enabled) {
-        sw_set_precise_triangle(0, 0,0, 0,0, 0,0);
+        gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
         return;
     }
     for (int i = 0; i < 3; i++) {
         int32_t raw_x, raw_y;
         parse_vertex(words[i], &raw_x, &raw_y);
         if (!gte_geometry_correction_lookup(words[i], &fx[i], &fy[i])) {
-            sw_set_precise_triangle(0, 0,0, 0,0, 0,0);
+            gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
             return;
         }
         fx[i] = (int32_t)((int64_t)fx[i] +
@@ -2812,14 +2812,14 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
         fy[i] = (int32_t)((int64_t)fy[i] +
                           (int64_t)(vy[i] - raw_y) * 65536);
     }
-    sw_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
+    gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
 }
 
 /* Enable perspective UVs only when every position word came from an exact
  * SWC2 projection store at that same DMA packet address. This preserves the
  * association through ordering-table reordering and rejects CPU-built UI. */
 static void prepare_texture_triangle(int i0, int i1, int i2) {
-    sw_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
+    gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
     if (!s_texture_correction_enabled || gp0_cmd_source_addr == 0xFFFFFFFFu)
         return;
     int indices[3] = { i0, i1, i2 };
@@ -2835,7 +2835,7 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
     if (q[1] > qmax) qmax = q[1];
     if (q[2] > qmax) qmax = q[2];
     if (qmax <= 0.0f) return;
-    sw_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
+    gr_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
 }
 
 /* Write a single pixel to VRAM with draw area clipping and mask bit handling */

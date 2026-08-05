@@ -523,6 +523,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("offer_vulkan")) {
             rt.video_offer_vulkan = toml::find<bool>(video, "offer_vulkan");
         }
+        if (video.contains("geometry_correction")) {
+            rt.video_geometry_correction =
+                toml::find<bool>(video, "geometry_correction");
+        }
+        if (video.contains("perspective_texturing")) {
+            rt.video_perspective_texturing =
+                toml::find<bool>(video, "perspective_texturing");
+        }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
             if      (mode == "raw")       rt.video_screen_kind = 0;
@@ -2040,6 +2048,14 @@ UserSettings load_user_settings(const fs::path& path) {
             if (m == "nearest") { s.texture_filter = 0; s.has_texture_filter = true; }
             else if (m == "bilinear") { s.texture_filter = 1; s.has_texture_filter = true; }
         });
+        if (v.contains("geometry_correction")) try_get([&]{
+            s.geometry_correction = toml::find<bool>(v, "geometry_correction");
+            s.has_geometry_correction = true;
+        });
+        if (v.contains("perspective_texturing")) try_get([&]{
+            s.perspective_texturing = toml::find<bool>(v, "perspective_texturing");
+            s.has_perspective_texturing = true;
+        });
         if (v.contains("crt_filter")) try_get([&]{
             const auto m = toml::find<std::string>(v, "crt_filter");
             if (m == "raw")            { s.screen_kind = 0; s.has_screen_kind = true; }
@@ -2263,6 +2279,12 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "antialiasing      = " << (s.antialiasing ? "true" : "false") << "\n";
     if (s.has_texture_filter)
         f << "texture_filtering = \"" << (s.texture_filter ? "bilinear" : "nearest") << "\"\n";
+    if (s.has_geometry_correction)
+        f << "geometry_correction   = "
+          << (s.geometry_correction ? "true" : "false") << "\n";
+    if (s.has_perspective_texturing)
+        f << "perspective_texturing = "
+          << (s.perspective_texturing ? "true" : "false") << "\n";
     if (s.has_screen_kind) {
         const char* k = s.screen_kind == 1 ? "crt"
                       : s.screen_kind == 2 ? "composite"
