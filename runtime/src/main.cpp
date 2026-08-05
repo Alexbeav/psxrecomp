@@ -6070,6 +6070,8 @@ int main(int argc, char** argv) {
             ls.supersampling      = seed.supersampling;
             ls.antialiasing       = seed.antialiasing ? 1 : 0;
             ls.texture_filter     = seed.texture_filter;
+            ls.geometry_correction   = seed.geometry_correction ? 1 : 0;
+            ls.perspective_texturing = seed.perspective_texturing ? 1 : 0;
             ls.screen_kind        = seed.screen_kind;
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
@@ -6186,6 +6188,9 @@ int main(int argc, char** argv) {
             gi.num_renderers        = vulkan_offered ? 3 : 2;
             gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
             gi.has_turbo_loads      = turbo_loads_offered ? 1 : 0;
+            /* Geometry precision is a property of the PS1 pipeline, not of any
+             * particular disc, so every PSX title exposes it. */
+            gi.has_geometry_precision = 1;
             /* Localization menu: shown only when the game declares languages. */
             if (!rui_lang_labels.empty()) {
                 gi.language_labels = rui_lang_labels.data();
@@ -6291,6 +6296,10 @@ int main(int argc, char** argv) {
                 seed.renderer              = ls.renderer;              seed.has_renderer              = true;
                 seed.supersampling         = ls.supersampling;         seed.has_supersampling         = true;
                 seed.antialiasing          = ls.antialiasing != 0;     seed.has_antialiasing          = true;
+                seed.geometry_correction   = ls.geometry_correction != 0;
+                seed.has_geometry_correction = true;
+                seed.perspective_texturing = ls.perspective_texturing != 0;
+                seed.has_perspective_texturing = true;
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
                 seed.frame_interpolation = ls.frame_interp != 0;
                 seed.has_frame_interpolation = frame_interpolation_offered;
