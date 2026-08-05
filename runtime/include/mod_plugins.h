@@ -34,6 +34,12 @@ uint16_t psx_mod_read_half(uint32_t address);
 void psx_mod_write_half(uint32_t address, uint16_t value);
 uint32_t psx_mod_read_word(uint32_t address);
 void psx_mod_write_word(uint32_t address, uint32_t value);
+/*
+ * Replace one guest instruction and route that address through the runtime's
+ * executable-RAM path. Use this instead of psx_mod_write_word for code so a
+ * restored save state cannot leave the compiled instruction stale.
+ */
+void psx_mod_write_code_word(uint32_t address, uint32_t value);
 
 /*
  * Allocate opt-in enhancement memory from Expansion 1. Until the first

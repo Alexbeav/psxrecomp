@@ -6007,7 +6007,13 @@ int main(int argc, char** argv) {
             }
 #endif
             {
-                int rui_deadzone_pct = seed.deadzone * 100 / 32767;
+                /*
+                 * Round to the nearest launcher percent. Truncation turned a
+                 * saved 20% value (6553/32767) into 19%, which the launcher's
+                 * 5% normalization then silently reduced to 15%.
+                 */
+                int rui_deadzone_pct =
+                    (seed.deadzone * 100 + 32767 / 2) / 32767;
                 ls.deadzone[0] = rui_deadzone_pct;
                 ls.deadzone[1] = rui_deadzone_pct;
             }

@@ -1124,6 +1124,11 @@ extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
     psx_write_word(address, value);
 }
 
+extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
+    psx_write_word(address, value);
+    dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
+}
+
 extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,
                                                 uint32_t alignment) {
     return psx_mod_memory_alloc(size, alignment);
