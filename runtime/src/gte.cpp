@@ -191,16 +191,33 @@ static int s_gte_replay_sandbox = 0;
  * remains integer and fully faithful; this side cache retains the discarded
  * 16.16 projection fraction so the high-resolution software mirror can match
  * a later GP0 polygon and place its vertices between native pixels. */
-#define GEOM_CACHE_SIZE 8192u
+/* Direct-indexed by the projected screen position, matching what both reference
+ * PGXP implementations use for this fallback (beetle-psx pgxp_gpu.c
+ * vertexCache[0x800*2][0x800*2]; DuckStation cpu_pgxp.cpp 2048x2048). SXY is an
+ * 11-bit signed pair, so every reachable position gets its OWN slot and
+ * distinct positions can never collide.
+ *
+ * The previous 8192-entry HASHED table was the defect: unrelated positions
+ * shared a slot, so a vertex could be handed a different vertex's fraction, and
+ * eviction made which triangles got corrected change frame to frame (moving
+ * seams). Allocated lazily on enable so the faithful default costs nothing. */
+#define GEOM_AXIS   2048u                       /* -1024 .. 1023 */
+#define GEOM_BIAS   1024
+#define GEOM_CACHE_SIZE (GEOM_AXIS * GEOM_AXIS)
 struct GeomVertex {
-    uint32_t packed;
     int32_t x16, y16;
     uint32_t generation;
+    uint32_t ambiguous;   /* two DIFFERENT sub-pixel values seen at this pixel */
 };
-static GeomVertex s_geom_cache[GEOM_CACHE_SIZE];
+static GeomVertex *s_geom_cache = nullptr;
 static uint32_t s_geom_generation = 1;
 static int s_geom_enabled = 0;
 static uint32_t s_geom_hits = 0;
+/* Lookup outcome census — this is what says whether coverage is limited by the
+ * cache or by projections never reaching the packet in a matchable form. */
+static uint32_t s_geom_lookups = 0;      /* lookups attempted                  */
+static uint32_t s_geom_miss_unrec = 0;   /* nothing was ever recorded here     */
+static uint32_t s_geom_miss_ambig = 0;   /* recorded, but not unambiguously    */
 
 /* Exact GTE projection provenance for perspective texture correction. The
  * recompiler/interpreters call gte_precision_store after SWC2 writes an SXY
@@ -236,7 +253,8 @@ static void gte_precision_generation_advance(void) {
 
 static void gte_geom_generation_advance(void) {
     if (++s_geom_generation == 0) {
-        std::memset(s_geom_cache, 0, sizeof(s_geom_cache));
+        if (s_geom_cache)
+            std::memset(s_geom_cache, 0, GEOM_CACHE_SIZE * sizeof(GeomVertex));
         s_geom_generation = 1;
     }
 }
@@ -333,15 +351,40 @@ extern "C" int gte_precision_load_word(uint32_t addr, uint32_t packed,
     return entry.projection.z != 0;
 }
 
-static inline uint32_t geom_hash(uint32_t packed) {
-    packed ^= packed >> 16;
-    return (packed * 2654435761u) & (GEOM_CACHE_SIZE - 1u);
+/* Exact slot for a packed SXY pair, or -1 if it is outside the representable
+ * screen range. No hashing: distinct positions never share a slot. */
+static inline int64_t geom_slot(uint32_t packed) {
+    int32_t x = (int16_t)(packed & 0xFFFFu);
+    int32_t y = (int16_t)(packed >> 16);
+    if (x < -GEOM_BIAS || x >= GEOM_BIAS || y < -GEOM_BIAS || y >= GEOM_BIAS)
+        return -1;
+    return (int64_t)(y + GEOM_BIAS) * GEOM_AXIS + (x + GEOM_BIAS);
 }
 
 extern "C" void gte_geometry_correction_set(int enabled) {
     s_geom_enabled = enabled ? 1 : 0;
     s_geom_hits = 0;
+    s_geom_lookups = 0;
+    s_geom_miss_unrec = 0;
+    s_geom_miss_ambig = 0;
+    if (s_geom_enabled && !s_geom_cache) {
+        s_geom_cache = (GeomVertex *)std::calloc(GEOM_CACHE_SIZE,
+                                                 sizeof(GeomVertex));
+        if (!s_geom_cache) s_geom_enabled = 0;   /* fail closed: stay faithful */
+    }
     gte_geom_generation_advance();
+}
+
+/* Lookup census for the debug server: attempted, hit, and the two miss classes.
+ * "unrecorded" means no projection was ever cached at that screen position —
+ * with an exact table that is a genuine coverage gap, not a cache artifact. */
+extern "C" void gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
+                                              uint32_t *miss_unrecorded,
+                                              uint32_t *miss_ambiguous) {
+    if (lookups) *lookups = s_geom_lookups;
+    if (hits) *hits = s_geom_hits;
+    if (miss_unrecorded) *miss_unrecorded = s_geom_miss_unrec;
+    if (miss_ambiguous) *miss_ambiguous = s_geom_miss_ambig;
 }
 
 extern "C" int gte_geometry_correction_enabled(void) {
@@ -354,9 +397,17 @@ extern "C" uint32_t gte_geometry_correction_hits(void) {
 
 extern "C" int gte_geometry_correction_lookup(uint32_t packed,
                                                 int32_t *x16, int32_t *y16) {
-    if (s_speculative_depth != 0 || !s_geom_enabled) return 0;
-    const GeomVertex &entry = s_geom_cache[geom_hash(packed)];
-    if (entry.generation != s_geom_generation || entry.packed != packed) return 0;
+    if (s_speculative_depth != 0 || !s_geom_enabled || !s_geom_cache) return 0;
+    int64_t slot = geom_slot(packed);
+    if (slot < 0) return 0;
+    s_geom_lookups++;
+    const GeomVertex &entry = s_geom_cache[slot];
+    if (entry.generation != s_geom_generation) { s_geom_miss_unrec++; return 0; }
+    /* Ambiguity gate, as in both references (beetle gFlags == 1): if two
+     * DIFFERENT sub-pixel positions rounded to this same pixel, we cannot tell
+     * which one this packet means, and guessing is what makes a vertex inherit
+     * a neighbour's fraction. Fall back to the faithful integer position. */
+    if (entry.ambiguous) { s_geom_miss_ambig++; return 0; }
     if (x16) *x16 = entry.x16;
     if (y16) *y16 = entry.y16;
     s_geom_hits++;
@@ -364,15 +415,26 @@ extern "C" int gte_geometry_correction_lookup(uint32_t packed,
 }
 
 static inline void geom_note(uint32_t packed, int64_t x16, int64_t y16) {
-    if (s_speculative_depth != 0 || s_gte_replay_sandbox || !s_geom_enabled) return;
+    if (s_speculative_depth != 0 || s_gte_replay_sandbox || !s_geom_enabled ||
+        !s_geom_cache) return;
     /* Saturated off-screen projections are unsuitable for subpixel recovery. */
     int32_t x = (int16_t)(packed & 0xFFFFu);
     int32_t y = (int16_t)(packed >> 16);
     if (x <= -0x400 || x >= 0x3FF || y <= -0x400 || y >= 0x3FF) return;
-    GeomVertex &entry = s_geom_cache[geom_hash(packed)];
-    entry.packed = packed;
+    int64_t slot = geom_slot(packed);
+    if (slot < 0) return;
+    GeomVertex &entry = s_geom_cache[slot];
+    if (entry.generation == s_geom_generation) {
+        /* Already occupied this generation: only flag ambiguity if the stored
+         * sub-pixel position actually DIFFERS — re-projecting the same vertex
+         * to the same place is not ambiguous. */
+        if (entry.x16 != (int32_t)x16 || entry.y16 != (int32_t)y16)
+            entry.ambiguous = 1;
+        return;                      /* first writer wins, as in the references */
+    }
     entry.x16 = (int32_t)x16;
     entry.y16 = (int32_t)y16;
+    entry.ambiguous = 0;
     entry.generation = s_geom_generation;
 }
 
@@ -2029,11 +2091,20 @@ extern "C" void gte_test_get_precise_projection(uint32_t index,
 
 extern "C" void gte_test_seed_geometry(uint32_t packed, int32_t x16,
                                          int32_t y16) {
-    auto &entry = PSXRecomp::GTE::s_geom_cache[
-        PSXRecomp::GTE::geom_hash(packed)];
-    entry.packed = packed;
+    /* The table is allocated lazily on enable; tests seed it directly, so make
+     * sure it exists rather than writing through a null pointer. */
+    if (!PSXRecomp::GTE::s_geom_cache) {
+        PSXRecomp::GTE::s_geom_cache =
+            (PSXRecomp::GTE::GeomVertex *)std::calloc(
+                GEOM_CACHE_SIZE, sizeof(PSXRecomp::GTE::GeomVertex));
+        if (!PSXRecomp::GTE::s_geom_cache) return;
+    }
+    int64_t slot = PSXRecomp::GTE::geom_slot(packed);
+    if (slot < 0) return;
+    auto &entry = PSXRecomp::GTE::s_geom_cache[slot];
     entry.x16 = x16;
     entry.y16 = y16;
+    entry.ambiguous = 0;
     entry.generation = PSXRecomp::GTE::s_geom_generation;
 }
 #endif

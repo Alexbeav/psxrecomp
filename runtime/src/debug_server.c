@@ -4886,14 +4886,25 @@ static void handle_write_ram(int id, const char *json)
 static void handle_geom_correction(int id, const char *json)
 {
     (void)json;
+    /* The miss split is the diagnostic that matters. The position table is
+     * exact (one slot per reachable SXY, no hashing), so "unrecorded" means no
+     * projection was EVER cached at that screen position — a real coverage gap
+     * in the tracking, not a cache artifact. A high unrecorded share means the
+     * game's vertex path never reaches us in a matchable form, which only
+     * full value propagation can fix; a high ambiguous share instead means
+     * distinct vertices are landing on the same pixel. */
+    uint32_t lookups = 0, hits = 0, unrec = 0, ambig = 0;
+    gte_geometry_correction_stats(&lookups, &hits, &unrec, &ambig);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"geometry_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
-             "\"perspective_triangles\":%u}",
+             "\"perspective_triangles\":%u,"
+             "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u}",
              id,
              gte_geometry_correction_enabled(),
-             (unsigned)gte_geometry_correction_hits(),
-             (unsigned)gpu_texture_correction_hits());
+             (unsigned)hits,
+             (unsigned)gpu_texture_correction_hits(),
+             (unsigned)lookups, (unsigned)unrec, (unsigned)ambig);
 }
 
 static void handle_gpu_state(int id, const char *json)

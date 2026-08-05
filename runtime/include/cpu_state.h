@@ -214,6 +214,11 @@ extern int      gte_geometry_correction_enabled(void);
 /* Corrected vertices consumed since the last gte_geometry_correction_set —
  * the "is this actually doing anything on this title" counter. */
 extern uint32_t gte_geometry_correction_hits(void);
+/* Lookup census: attempted, hit, and the two miss classes. The position table
+ * is exact, so miss_unrecorded counts genuine tracking-coverage gaps. */
+extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
+                                              uint32_t *miss_unrecorded,
+                                              uint32_t *miss_ambiguous);
 
 /* ============================================================================
  * Dispatch call contract (Bug D / wild-return family fix)
