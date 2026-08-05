@@ -15,7 +15,7 @@ namespace {
 
 // Raw image extensions we are willing to mount on their own, in preference
 // order for the cue-fallback search.
-const char* const kImageExtensions[] = { ".bin", ".img", ".iso" };
+const char* const kImageExtensions[] = { ".bin", ".img", ".iso", ".car" };
 
 bool is_cue(const fs::path& p) { return path_has_extension_ci(p, ".cue"); }
 bool is_chd(const fs::path& p) { return path_has_extension_ci(p, ".chd"); }
@@ -56,7 +56,7 @@ fs::path first_existing_binary(const CueSheet& sheet) {
     return {};
 }
 
-// <stem>.bin / .img / .iso next to a cue we could not use.
+// <stem>.bin / .img / .iso / .car next to a cue we could not use.
 fs::path find_sibling_image(const fs::path& cue) {
     std::error_code ec;
     for (const char* ext : kImageExtensions) {

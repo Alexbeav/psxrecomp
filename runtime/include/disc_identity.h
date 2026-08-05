@@ -1,7 +1,7 @@
 // disc_identity.h — disc-image identification + verification.
 //
 // Single source of truth for "is this the right disc?". Reads a .cue, raw
-// .bin/.iso, or CHD, checks for the ISO9660 PVD, extracts the volume id and the
+// .bin/.iso/.img/.car, or CHD, checks for the ISO9660 PVD, extracts the volume id and the
 // PlayStation boot serial (from SYSTEM.CNF), derives the region from the
 // serial prefix, and optionally compares against an expected serial / CRC32.
 //
@@ -40,7 +40,7 @@ struct DiscIdentity {
 };
 
 // Identify and (optionally) verify a disc image.
-//   path             : a .cue, raw .bin/.iso, or .chd image
+//   path             : a .cue, raw .bin/.iso/.img/.car, or .chd image
 //   expected_serial  : the game id, e.g. "SCUS-94236" ("" skips the serial check)
 //   expected_crc     : full-file CRC32 to match against
 //   has_expected_crc : whether expected_crc is meaningful

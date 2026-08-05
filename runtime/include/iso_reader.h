@@ -84,7 +84,7 @@ public:
 
     /**
      * Open an ISO/BIN file for reading
-     * @param filename Path to .iso, .bin, .cue, or .chd file
+     * @param filename Path to .iso, .bin, .img, .car, .cue, or .chd file
      * @return true if opened successfully, false otherwise
      */
     bool Open(const std::string& filename);

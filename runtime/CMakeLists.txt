@@ -108,8 +108,8 @@ if(BUILD_TESTING)
     target_include_directories(bios_hle_plan_test PRIVATE include)
     add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
-    # Either member of a disc dump (.cue or .bin) is a valid pick: both mount
-    # the same disc and identify off the same data track.
+    # A cue, conventional raw image, or Steam .car image is a valid pick; each
+    # must mount the same disc and identify off the same data track.
     add_executable(disc_path_resolve_test
         tests/test_disc_path_resolve.cpp
         src/disc_path.cpp
