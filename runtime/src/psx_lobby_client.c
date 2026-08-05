@@ -283,6 +283,50 @@ static int endpoint_host_port(const char *ep, char *host, size_t host_cap, int *
     return *port_out > 0 && *port_out <= 65535;
 }
 
+static int host_name_is_loopback(const char *host)
+{
+    if (!host || !host[0])
+        return 0;
+    if (strncmp(host, "127.", 4) == 0)
+        return 1;
+    if (strcmp(host, "::1") == 0)
+        return 1;
+    if (strcmp(host, "localhost") == 0)
+        return 1;
+    return 0;
+}
+
+/* Lobby WebSocket and UDP input relay are the same recomp-net-server process.
+ * Launch may advertise INPUT_RELAY_ADVERTISE_HOST=127.0.0.1 (server default).
+ * Remote peers rewrite that to the WS host they dialed (LAN IP / public DNS).
+ * Same-machine peers keep loopback when UDP relay port is bound locally —
+ * avoids hairpin NAT through the public DNS and start failures on hostname. */
+static int rewrite_relay_endpoint_to_lobby_host(char *ep, size_t cap)
+{
+    char rh[128];
+    int rport = 0;
+    int n;
+    if (!ep || !cap || !g_lc.host[0])
+        return 0;
+    if (!endpoint_host_port(ep, rh, sizeof(rh), &rport))
+        return 0;
+    if (strcmp(rh, g_lc.host) == 0)
+        return 0;
+    if (host_name_is_loopback(g_lc.host))
+        return 0;
+    if (host_endpoint_is_loopback(ep) && rnet_udp_port_available(rport) == 0) {
+        fprintf(stderr,
+                "psx_lobby: keep relay_endpoint %s "
+                "(local UDP %d busy — same host as lobby server)\n",
+                ep, rport);
+        return 0;
+    }
+    n = snprintf(ep, cap, "%s:%d", g_lc.host, rport);
+    if (n <= 0 || (size_t)n >= cap)
+        return -1;
+    return 1;
+}
+
 static int parse_ipv4_dotted(const char *host, unsigned *o)
 {
     unsigned a, b, c, d;
@@ -1733,6 +1777,15 @@ static void handle_server_json(const char *json)
          * Apply after caps ingest: omitted force_input_relay must not leave
          * hosts on the hub path while guests dial the relay. */
         if (relay_endpoint[0] && !endpoint_port_is_zero(relay_endpoint)) {
+            char relay_raw[PSX_LOBBY_ENDPOINT_LEN];
+            strncpy(relay_raw, relay_endpoint, sizeof(relay_raw) - 1);
+            relay_raw[sizeof(relay_raw) - 1] = '\0';
+            if (rewrite_relay_endpoint_to_lobby_host(relay_endpoint,
+                                                    sizeof(relay_endpoint)) > 0) {
+                fprintf(stderr,
+                        "psx_lobby: relay_endpoint %s → %s (lobby WS host)\n",
+                        relay_raw, relay_endpoint);
+            }
             strncpy(g_lc.join.host_endpoint, relay_endpoint,
                     sizeof(g_lc.join.host_endpoint) - 1);
             g_lc.join.host_endpoint[sizeof(g_lc.join.host_endpoint) - 1] = '\0';
