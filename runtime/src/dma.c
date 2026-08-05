@@ -798,10 +798,19 @@ static uint32_t execute_ch4_spu(void) {
         audio_trace_event(AUDIO_EV_DMA_WRITE, total_words,
                           channels[4].madr & 0x1FFFFCu);
     } else {
+        /* SPU RAM -> CPU RAM. This direction previously zero-filled the
+         * destination, which is not a transfer at all: SPU RAM is readable
+         * memory and games do read it back. Titles that carry state through
+         * SPU RAM across an Exec boundary (a checksummed block surviving an
+         * EXE swap, since SPU RAM is one of the few regions main RAM's reload
+         * does not touch) got zeros, failed their own integrity check, and
+         * fell back to a cold-boot path. */
         for (uint32_t i = 0; i < total_words; i++) {
-            psx_write_word(addr, 0);
+            psx_write_word(addr, spu_dma_read());
             addr = (addr + addr_step) & 0x1FFFFCu;
         }
+        audio_trace_event(AUDIO_EV_DMA_READ, total_words,
+                          channels[4].madr & 0x1FFFFCu);
     }
 
     channels[4].madr = addr;

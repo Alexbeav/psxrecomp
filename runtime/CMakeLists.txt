@@ -24,6 +24,12 @@ if(BUILD_TESTING)
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 
+    # COP0.CAUSE IP2 must mirror the INTC line combinationally, never latch.
+    add_executable(cause_ip2_combinational_test
+        tests/test_cause_ip2_combinational.c)
+    add_test(NAME cause_ip2_combinational_test
+             COMMAND cause_ip2_combinational_test)
+
     add_executable(psx_cyc_batch_test tests/test_psx_cyc_batch.c)
     target_include_directories(psx_cyc_batch_test PRIVATE include)
     target_compile_definitions(psx_cyc_batch_test PRIVATE
@@ -81,6 +87,15 @@ if(BUILD_TESTING)
     target_include_directories(mod_gpu_dma_aperture_test PRIVATE include)
     add_test(NAME mod_gpu_dma_aperture_test
              COMMAND mod_gpu_dma_aperture_test)
+
+    # Clean-room SPU DSP fidelity (issue #103): SPU IRQ on every RAM access
+    # class, reverb (write gating + work-area wrap + CD-only path), noise
+    # generator, volume sweeps / direct decode, capture buffers, and
+    # savestate coverage of all the new state. Includes src/spu.c directly
+    # (white-box) and stubs its externs.
+    add_executable(spu_fidelity_test tests/test_spu_fidelity.c)
+    target_include_directories(spu_fidelity_test PRIVATE include)
+    add_test(NAME spu_fidelity_test COMMAND spu_fidelity_test)
 
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
