@@ -32,6 +32,11 @@ struct ModOption {
     int64_t max_value = 0;
     int64_t step = 1;
     std::vector<ModChoice> choices;
+    /* Optional id of a BOOLEAN option in the same feature that overrides this
+     * one. While that option is true this control is inert: the launcher greys
+     * it out and plugins ignore its value. Models "tick Instant and the speed
+     * box stops mattering" without inventing a second widget type. */
+    std::string disabled_by;
 };
 
 struct ModFeature {

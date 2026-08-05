@@ -107,6 +107,22 @@ std::string selected_value(const ModPackage& package, const ModOption& option) {
     return option.default_value;
 }
 
+/* Resolve the manifest's disabled_by link against the CURRENT selection: the
+ * named boolean sibling being true makes this option inert. Both the launcher
+ * (greys the control) and psx_mod_option_value (returns the default instead of
+ * a stale value) go through this, so the UI and the plugins can never disagree
+ * about whether a control counts. */
+bool option_is_disabled(const ModPackage& package, const ModOption& option) {
+    if (option.disabled_by.empty()) return false;
+    for (const ModOption& other : package.options) {
+        if (other.feature_id != option.feature_id ||
+            other.id != option.disabled_by)
+            continue;
+        return selected_value(package, other) == "true";
+    }
+    return false;
+}
+
 void build_disc_index(RuntimeMods& s) {
     s.raw_disc_index.clear();
     s.user_disc_index.clear();
@@ -562,6 +578,7 @@ int provider_option_get(void*, const char* package_id, int index,
     out->max_value = option.max_value;
     out->step = option.step;
     out->choice_count = (int)option.choices.size();
+    out->disabled = option_is_disabled(*package, option) ? 1 : 0;
     return 1;
 }
 
@@ -682,6 +699,7 @@ int provider_feature_option_get(void*, const char* package_id,
     out->max_value = option.max_value;
     out->step = option.step;
     out->choice_count = (int)option.choices.size();
+    out->disabled = option_is_disabled(*package, option) ? 1 : 0;
     return 1;
 }
 

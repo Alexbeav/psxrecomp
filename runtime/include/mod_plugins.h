@@ -124,9 +124,19 @@ int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
 
 /*
+ * Upper bounds for the two loading-speed knobs below. Both are generous on
+ * purpose: games surface them to players as free-form integers, and neither
+ * can corrupt guest state (see the notes on each setter). They exist to reject
+ * nonsense, not to curate a list of "blessed" speeds.
+ */
+#define PSX_MOD_LOAD_ACCEL_MAX  1024u
+#define PSX_MOD_DISC_SPEED_MAX  1024u
+
+/*
  * Accelerate only the wall-clock pacing of sustained non-XA data loads while
  * preserving every guest VBlank, CD deadline, interrupt, and callback.
- * wall_clock_multiplier accepts 2..16, or zero for uncapped host speed.
+ * wall_clock_multiplier accepts 1..PSX_MOD_LOAD_ACCEL_MAX, or zero for
+ * uncapped host speed (1 is a no-op, i.e. authentic pacing).
  * release_frames controls how many guest frames acceleration may remain active
  * after the load predicate clears; zero is the precise/speedrun-safe policy.
  */
@@ -134,10 +144,15 @@ int psx_mod_set_load_acceleration(uint32_t wall_clock_multiplier,
                                   uint32_t release_frames);
 
 /*
- * Select guest-visible CD timing for a game-owned loading feature. divisor is
- * 2 or 4, or zero for the bounded "instant" scheduler; instant_max_per_frame
- * is used only with divisor zero. Unlike host load acceleration, this changes
- * when the emulated game receives CD interrupts and can expose timing bugs.
+ * Select guest-visible CD timing for a game-owned loading feature. divisor
+ * divides the emulated sector delay, so it IS the speed multiplier: 1 is
+ * authentic timing, higher is faster, up to PSX_MOD_DISC_SPEED_MAX. Zero
+ * selects the bounded "instant" scheduler, and instant_max_per_frame (1..256)
+ * applies only in that case. cdrom.c floors the divided delay at
+ * CDROM_MIN_DELAY and leaves XA streaming at authentic timing, so no value
+ * here can produce a zero-delay storm or speed up FMV audio. Unlike host load
+ * acceleration this changes WHEN the guest receives CD interrupts and can
+ * expose game timing bugs, which is why it is a separate, opt-in knob.
  */
 int psx_mod_set_disc_speed(uint32_t divisor,
                            uint32_t instant_max_per_frame);

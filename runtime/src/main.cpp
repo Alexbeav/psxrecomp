@@ -801,9 +801,12 @@ extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
 
 extern "C" int psx_mod_set_load_acceleration(
     uint32_t wall_clock_multiplier, uint32_t release_frames) {
-    if ((wall_clock_multiplier != 0 &&
-         (wall_clock_multiplier < 2 || wall_clock_multiplier > 16)) ||
-        release_frames > 60) {
+    /* Host pacing only changes how fast wall-clock time is fed to a load; every
+     * guest frame, CD deadline, interrupt and callback still happens, so a high
+     * multiplier cannot desync the guest -- it just approaches "as fast as the
+     * host can". Ceiling raised from 16 for the same reason as disc speed:
+     * players set this as an integer and want to find their own limit. */
+    if (wall_clock_multiplier > PSX_MOD_LOAD_ACCEL_MAX || release_frames > 60) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected load acceleration "
             "(multiplier %u, release frames %u)\n",
@@ -817,7 +820,14 @@ extern "C" int psx_mod_set_load_acceleration(
 
 extern "C" int psx_mod_set_disc_speed(
     uint32_t divisor, uint32_t instant_max_per_frame) {
-    if ((divisor != 0 && divisor != 2 && divisor != 4) ||
+    /* Any positive divisor is arithmetically safe: cdrom.c divides the sector
+     * delay by it and floors the result at CDROM_MIN_DELAY, and XA streaming
+     * keeps authentic timing regardless. The old 2-or-4 allowlist was policy,
+     * not a hardware constraint, and it blocked players from finding the
+     * highest speed their game tolerates (GH TombaRecomp#5). Games expose the
+     * value as a player-set integer, so accept the full sane range and let the
+     * mod's own description carry the risk warning. */
+    if (divisor > PSX_MOD_DISC_SPEED_MAX ||
         (divisor == 0 &&
          (instant_max_per_frame < 1 || instant_max_per_frame > 256))) {
         std::fprintf(stderr,

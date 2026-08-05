@@ -1514,6 +1514,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 option.description =
                     v.contains("description") ? toml::find<std::string>(v, "description") : "";
                 option.group = v.contains("group") ? toml::find<std::string>(v, "group") : "General";
+                option.disabled_by =
+                    v.contains("disabled_by") ? toml::find<std::string>(v, "disabled_by") : "";
                 const std::string type = toml::find<std::string>(v, "type");
                 if (!find_feature(out, option.feature_id))
                     throw std::runtime_error("option references unknown feature");
@@ -1554,6 +1556,26 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     throw std::runtime_error("unknown option type");
                 }
                 out.options.push_back(std::move(option));
+            }
+            /* Resolve disabled_by AFTER the whole list is read, so it may name
+             * an option declared later. A dangling or non-boolean reference is
+             * a manifest bug that would silently leave the control always
+             * enabled, so reject it here rather than at render time. */
+            for (const ModOption& option : out.options) {
+                if (option.disabled_by.empty()) continue;
+                if (option.disabled_by == option.id)
+                    throw std::runtime_error("option disabled_by references itself");
+                const auto owner = std::find_if(
+                    out.options.begin(), out.options.end(),
+                    [&](const ModOption& o) {
+                        return o.feature_id == option.feature_id &&
+                               o.id == option.disabled_by;
+                    });
+                if (owner == out.options.end() ||
+                    owner->type != ModOptionType::Boolean)
+                    throw std::runtime_error(
+                        "option disabled_by must name a boolean option "
+                        "in the same feature");
             }
         }
         if (cfg.contains("constraint")) {
