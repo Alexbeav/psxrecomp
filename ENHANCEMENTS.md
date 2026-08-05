@@ -510,3 +510,72 @@ renderer-facade seam, and OpenGL + Vulkan support.
 - **Open:** launcher (recomp-ui) toggles. The keys round-trip through
   `settings.toml` today, but there is no UI row yet — that lives in the
   recomp-ui repo.
+
+### G1.1 — MEASURED REGRESSION: partial coverage cracks meshes (2026-08-05)
+
+**User verdict on Ape Escape: "little lines jittering everywhere — visually
+this is worse."** Confirmed and root-caused. `geometry_correction` must not be
+presented as usable in its current form.
+
+Measured on Ape Escape (OpenGL, supersampling 2, 213-frame window, via the new
+`geom_correction` TCP command):
+
+| | per frame |
+|---|---|
+| GP0 draw commands | ~316 (≈400–600 triangles) |
+| vertices given sub-pixel positions | ~114 (≈38 triangles) |
+| triangles given perspective UVs | ~1.9 |
+
+**Under 10% of the scene is corrected.** `prepare_precise_triangle` is
+all-or-nothing per triangle, so every boundary between a corrected triangle and
+an uncorrected neighbour is a seam: one edge moved sub-pixel, the other stayed
+on the integer grid. Because the geometry cache is direct-mapped and keyed on
+the *rounded* position, which triangles win changes frame to frame — so the
+seams move. That is exactly the reported jitter.
+
+### G1.2 — What the reference implementations actually do
+
+Both vendored emulators (`beetle-psx/pgxp/`, `duckstation/src/core/cpu_pgxp.cpp`)
+implement PGXP the same way, and it is **not** what is parked here:
+
+1. **A complete shadow of the dataflow.** A `PGXP_value {x,y,z,flags,value}` per
+   32-bit word of RAM + scratchpad (Beetle mirrors all 2 MB; DuckStation the
+   same), plus a shadow per CPU GPR and per GTE register.
+2. **Propagation through every instruction.** Beetle registers **47 CPU hooks** —
+   LW/LH/LB/LWL/LWR, SW/SH/SB/SWL/SWR, ADD(I)(U)/SUB(U)/AND/OR/XOR/NOR/SLT(U),
+   SLL/SRL/SRA(+V), MULT(U)/DIV(U), MFHI/MTHI/MFLO/MTLO, LUI. DuckStation carries
+   the same set. High precision therefore survives any route the game takes from
+   GTE output to the GP0 packet.
+3. **`Validate(value)`.** Every shadow read checks the tracked `value` against
+   the *actual* current word and drops the shadow on mismatch. This is what stops
+   stale precision from corrupting geometry.
+4. **The value-keyed cache is only a LAST-RESORT FALLBACK**, and even then it is
+   fully direct-indexed — Beetle `vertexCache[0x800*2][0x800*2]`, DuckStation
+   2048×2048 — so distinct screen positions **never collide**; it is gated on an
+   ambiguity flag (`gFlags == 1`, "only one value was recorded at this position")
+   and it disables perspective (`valid_w = 0`) because its w is untrustworthy.
+
+**The parked implementation is only item 4, degraded**: an 8192-entry *hashed*
+table (unrelated positions collide) with *no* ambiguity check and *no* primary
+path. A vertex can therefore inherit a different vertex's fraction. That is the
+design defect, not a wiring bug.
+
+### G1.3 — What matching them costs in a static recompiler
+
+The emit mechanism already exists — `gte_precision_store_word(addr, reg)` is
+emitted at SWC2 sites today — so this is an extension, not new machinery:
+
+- per-word shadow of RAM + scratchpad (~12 MB), per-GPR and per-GTE-reg shadows;
+- propagation hooks at ~47 instruction classes, emitted in `code_generator.cpp`
+  and `strict_translator.cpp`, mirrored in `dirty_ram_interp.c` and
+  `psx_interpreter.c`, and forwarded through the overlay ABI (another bump);
+- `Validate()` on every shadow read;
+- GPU-side lookup keyed on the packet word with a `value ==` check, with the
+  corrected fallback cache last.
+
+**The static-recompiler-specific cost:** in an interpreter these hooks are a
+runtime branch. Here they are emitted C on the hot path, so they bloat generated
+code and cost speed *even with the feature off* unless they are gated at
+CODEGEN time — i.e. a separate generated flavour, which touches the build matrix
+and every title's regen. That is the real decision, and it is why this cannot be
+a runtime-only toggle like the rest of the `[video]` block.
