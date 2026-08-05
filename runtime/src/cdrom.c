@@ -264,6 +264,7 @@ static uint8_t cd_muted;
 #define XA_SUBMODE_REALTIME 0x40
 #define CDROM_SECTOR_MODE2 0x02
 
+
 #define CDROM_SKIP_NONE 0
 #define CDROM_SKIP_XA_AUDIO_REALTIME 1
 #define CDROM_REQUEST_BFRD 0x80u
@@ -2004,6 +2005,26 @@ static void exec_command(uint8_t cmd) {
     trace_cdrom('C', 0, cmd, 0);
     /* ENQUEUE: a CD command was issued (aux = command byte). */
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_CD_CMD, (uint32_t)cmd);
+    /* A new command CANCELS the previous command's outstanding second
+     * response (psx-spx command flow; DuckStation BeginCommand "command
+     * cancellation"). The sub-CPU runs one transaction at a time: once a
+     * new command is accepted, the superseded command's INT2 is never
+     * delivered. Two-phase handlers below already overwrite `pending`;
+     * this clears it for single-phase commands (GetStat/Setmode/Setloc/…)
+     * and for ReadN/ReadS, which do not use `pending` at all.
+     *
+     * Without this, a Pause(0x09) INT2 scheduled ~1.1M cycles out (see
+     * pause_complete_delay_cycles) survives into the guest's next
+     * Setmode/Setloc/ReadN sequence and fires MID-READ as a stale
+     * COMPLETE. LIBDS drivers treat that as a read failure: MOHU Mission 1
+     * wedged in a phase-locked DsRead FATAL/retry loop on its single-sector
+     * marker reads, corrupting the streamed resource chain
+     * (medal-of-honor-underground DEVLOG 2026-08-05). GT1 race loading
+     * shows the same stale-Pause overlap during ReadS streaming. */
+    if (pending.pending) {
+        trace_cdrom('X', 0, pending.cmd, 0);
+        pending.pending = 0;
+    }
     /* Snapshot the param FIFO before handlers consume it, so the
      * command-history record at the end sees the original params. */
     uint8_t cmd_params[PARAM_FIFO_SIZE];
