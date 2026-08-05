@@ -225,18 +225,99 @@ Recorded explicitly rather than presented as exact (Rule 14).
 
 ## 6. Implementation judgement calls
 
-_Populated from the implementation pass; each entry is an oracle-comparison
-candidate rather than a settled fact._
+Every point where the documentation ran out. Each is an oracle-comparison
+candidate, NOT a settled fact. Listed so a later measurement pass has a work
+list instead of having to rediscover them.
+
+1. **Reverb 22.05 ↔ 44.1 kHz boundary** (the flagged known gap): input is the
+   box average of the frame pair, output is linear interpolation between
+   successive engine results. Isolated in `rev_reconstruct()` plus one call
+   site. **The one deliberate deviation from hardware.**
+2. **Noise divider wiring**: down-counter decremented by step `4 + SPUCNT[9:8]`
+   per 44.1 kHz cycle, reloaded with `0x20000 >> shift`. The least-documented
+   part of the noise generator.
+3. **Register-write IRQ compare sites**: the transfer-address write, the
+   IRQ-address write and an SPUCNT-enable re-check all compare against the
+   *resting* transfer address immediately. Consequence: enabling the IRQ while
+   both registers are 0 fires immediately (unit 0 == unit 0). Real drivers set
+   the address first.
+4. **Suppressed reverb writes** (SPUCNT bit 7 clear) do not run the IRQ compare,
+   since no access occurs. Reads always do.
+5. **Sweep negative-phase semantics**: the envelope works on a 0..0x7FFF value
+   in the phase's domain; wrong-sign levels clamp to 0 first. A sweep-mode
+   register read returns the live level as signed 16-bit.
+6. **Reverb send taps**: post-envelope and post-voice-volume for EON voices;
+   post-CD-volume for the CD send.
+7. **Capture values**: CD captured pre-CD-volume (raw input bus), voice 1/3
+   post-envelope pre-voice-volume. The CD bus now **pops continuously while the
+   SPU is enabled** (SPUCNT bit 0 gates only mix/reverb), needed for capture
+   correctness. This is a behaviour change — measured as *not* causing
+   starvation, see §7.
+8. **Mix saturation order**: the summed bus (dry + CD + wet) saturates to 16-bit
+   *before* main volume, per the documented mixer order. Replaces previous
+   unclamped, int32-overflow-prone math. Audible only in loud scenes.
+9. **All-disabled gating**: capture / noise / reverb / sweeps run only while
+   SPUCNT bit 15 is set; whether they free-run with the SPU disabled is
+   undocumented. Noise clocks after the voice walk within a frame.
+10. **Shadow tap and `SpuDebugInfo` volume fields** keep the historical 1.14
+    scale (`level >> 1`) so `spu_shadow.c` and old captures stay byte-compatible
+    for direct-mode volumes.
 
 ## 7. Validation status
 
 - [x] `test_cause_ip2_combinational` passes (`-Wall -Wextra -Werror`).
-- [x] Changed C translation units compile clean.
-- [ ] `test_spu_fidelity` passes.
-- [ ] `psx-runtime` links; BIOS boots; boot chime audible and non-distorted.
-- [ ] Title run: no regression, reverb present.
-- [ ] Oracle audio comparison against `psx-beetle` at a fixed scene.
+- [x] `test_spu_fidelity` passes — 137 checks, 0 failures. Independently re-run,
+      not taken from the implementation report.
+- [x] All changed translation units compile clean; `psx-runtime` and
+      `Tomba2Recomp` both link.
+- [x] **BIOS LLE boot proves the reverb engine runs.** The BIOS itself sets
+      SPUCNT bit 7 (`ctrl = 0xC085`) and allocates a 62 KB work area at
+      `mBASE = 0x70940`. Sampled through the boot chime: the work area holds
+      256/256 non-zero reflection halfwords peaking at 24681, `reverb_cur`
+      advances and laps correctly inside `[mBASE, 0x80000)`, and after the dry
+      signal goes silent (output peak → 0 at t≈6.8 s) the work area keeps
+      ringing down (628 → 18 → 2) for ~3 s. A decaying tail that outlives its
+      input is the reverb working. Noise LFSR observed shifting with correct
+      parity feedback (`000F → 001F → … → FFA3`).
+- [x] **Tomba 2 intro FMV: A/B against the exact parent commit.** Same worktree,
+      framework at `c88c3ca9^` vs `c88c3ca9`, identical generated code
+      (SPU work is runtime-only).
+
+      | Metric | Baseline | SPU branch |
+      | --- | --- | --- |
+      | FPS drop | 59.9 → 40.7 at t=6.2 s | 59.9 → 40.4 at t=6.2 s |
+      | min p50 fps | 40.3 | 40.0 |
+      | `cd_underflow_frames` | 441, flat | 441, flat |
+      | host underruns @32 s | 594 | 582 |
+      | audio peak | 23066 | 26876 |
+      | `reverb_cur`/`noise_lfsr` | absent (control) | live |
+
+      Conclusions: performance is a wash (the FMV's 40 fps and its ~19/s host
+      underruns are **pre-existing on master** — worth their own issue, not
+      caused here); the continuous CD-bus drain does **not** starve the bus; and
+      the peak rising 23066 → 26876 is wet signal adding on top of dry, still
+      well under 32767, so not clipping. FMV video confirmed correct by
+      screenshot through the debug server (320x224, intro scene).
+- [ ] Oracle audio comparison against `psx-beetle` at a fixed scene — settles
+      the §6 items, especially (1). `audio_wav`/`audio_stats` exist on both
+      ports, so this is a symmetric always-on ring query. **Not yet done.**
 - [ ] User ear-validation (final gate).
+
+## 9. Merge prerequisites
+
+- **Rebase required.** This branch is based on `7f7fbc8e`; master moved during
+  the session (observed `9217ae2`, alpha-258). Re-fetch and rebase; do not
+  merge stale.
+- **`recomp-ui` must be bumped in lockstep.** Framework master's
+  `feat(mods): expose linked package attribution` needs recomp-ui `99558ee`
+  (`feat(mods): link package authors and sources`), which adds `author_links` /
+  `author_link_count` / `source_name` / `source_url` to
+  `RecompLauncherCModPackage`. Tomba 2's pin at `854ae10` is one commit short
+  and **fails to compile** with `'RecompLauncherCModPackage' has no member named
+  'author_link_count'`. This is unrelated to the SPU work but blocks any title
+  build against current master.
+- Every title needs regen + revalidation, because CAUSE.IP2 touches core IRQ
+  delivery for all of them.
 
 ## 8. Incidental fix — `tools/embed_spirv.py` build race
 
