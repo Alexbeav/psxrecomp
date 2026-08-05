@@ -676,3 +676,36 @@ until precision propagates with the data (G1.2/G1.3). The launcher rows, the
 **Method rule for the next attempt:** no conclusion about this feature from a
 single frame. Same frame, same scene, off vs on, captured with
 `screenshot_hires`, on at least two titles.
+
+### G1.7 — ⚠ G1.6's MECHANISM IS UNCONFIRMED. Read this before trusting G1.1-G1.6.
+
+Two problems with everything above, both found only after G1.6 was written.
+
+**1. The line signature does not match the stated mechanism.** G1.4/G1.6 explain
+the artifact as cracks between corrected and uncorrected triangles. Such cracks
+would be SHORT seams tracing mesh silhouettes. The reported artifacts on both
+titles are **long, straight, scene-spanning lines** — cyan diagonals crossing
+Tomba 2's terrain, dark diagonals crossing Ape's. That is the signature of a
+vertex landing far from where it belongs (a stretched/degenerate primitive), or
+of stray line primitives — NOT of sub-pixel boundary mismatch. The coverage
+numbers in G1.4 are real, but they were fitted to the wrong picture.
+
+**2. THE CONTROL WAS NEVER RUN.** At no point was it confirmed that these lines
+are ABSENT with both toggles off on these builds. Every conclusion in G1.1-G1.6
+assumed the feature caused them. Two other large changes landed underneath this
+work and are equally plausible causes:
+  - the framework jumped **92 commits** (Ape's pin 3c67a52 -> current master);
+  - recomp-ui jumped **64 commits** (bb62af1 -> origin/master), forced because
+    the old pin could not compile against current framework master at all.
+
+**Do this first, before any further analysis:** same scene, same spot, both
+toggles false, `supersampling = 2`, captured with `screenshot_hires`. If the
+lines persist, this is not the geometry feature and G1.1-G1.6 are describing
+something that was never happening.
+
+Candidate to check if the feature IS implicated, given the signature: a stale
+sub-pixel override surviving to a later primitive. `glb_draw_*_triangle` calls
+precise_consumed() only on the GPU path — the `!s_raster_ok` software-fallback
+branch returns EARLY without clearing s_pc_valid, so an override could be
+applied to a primitive it was never computed for. That would displace a vertex
+arbitrarily and produce exactly these long stretched lines.
