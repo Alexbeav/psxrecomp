@@ -648,3 +648,31 @@ something that does not hurt.
 **Still to verify first-hand** with `screenshot_hires`, before any of this is
 called done: an A/B of the same frame with the knob off vs on, at
 supersampling >= 2.
+
+### G1.6 — G1.5 RETRACTED: both titles crack. Ambiguity gating is not enough.
+
+User verification on the exact-table + ambiguity-gate build, **Ape Escape AND
+Tomba 2**: thin seams across meshes in both. G1.5 claimed the gate had fixed the
+cracking; it had not. G1.4's original conclusion stands.
+
+**What went wrong in the analysis, twice:** each conclusion was drawn from a
+SINGLE observation instead of a controlled A/B — first from native screenshots
+that could not show the defect at all (G1.5), then from one favourable in-game
+frame that happened not to expose it. A scene where the corrected ~5% of
+triangles do not border a visible silhouette looks clean; that is not evidence
+the seams are gone.
+
+**Settled position.** Ambiguity gating removed one failure mode (vertices
+inheriting a neighbour's fraction) but coverage of ~5% still mixes corrected and
+uncorrected triangles within a mesh, and those seams ARE visible. Partial
+coverage is not shippable at any ratio short of near-total, because the crack is
+a property of the boundary, not of the magnitude of the error.
+
+`geometry_correction` therefore stays OFF and must not be offered as usable
+until precision propagates with the data (G1.2/G1.3). The launcher rows, the
+`[video]` plumbing, the renderer-facade seam, `geom_correction` and
+`screenshot_hires` all remain valid groundwork for that work.
+
+**Method rule for the next attempt:** no conclusion about this feature from a
+single frame. Same frame, same scene, off vs on, captured with
+`screenshot_hires`, on at least two titles.
