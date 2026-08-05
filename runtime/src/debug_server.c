@@ -4874,6 +4874,28 @@ static void handle_write_ram(int id, const char *json)
     send_ok(id);
 }
 
+/* geom_correction — is [video] geometry_correction / perspective_texturing
+ * actually doing anything on THIS title?
+ *
+ * Both enhancements are silent no-ops on content they cannot prove is
+ * projected geometry: a vertex whose sub-pixel fraction was never cached, or a
+ * packet whose position words lack full GTE projection provenance, simply draws
+ * the faithful way. So "enabled" alone tells you nothing — these counters are
+ * how you tell an engaged correction from an inert one. Both are free-running
+ * totals; sample twice and diff for a per-window rate. */
+static void handle_geom_correction(int id, const char *json)
+{
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,"
+             "\"geometry_correction\":%d,"
+             "\"geometry_vertex_hits\":%u,"
+             "\"perspective_triangles\":%u}",
+             id,
+             gte_geometry_correction_enabled(),
+             (unsigned)gte_geometry_correction_hits(),
+             (unsigned)gpu_texture_correction_hits());
+}
+
 static void handle_gpu_state(int id, const char *json)
 {
     (void)json;
@@ -12603,6 +12625,7 @@ static const CmdEntry s_commands[] = {
     { "dump_ram",          handle_read_ram },   /* alias: one request, one response */
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
+    { "geom_correction",   handle_geom_correction },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },

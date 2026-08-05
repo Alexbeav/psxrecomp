@@ -220,6 +220,11 @@ def build_cmd(args):
         return {"cmd": "read_scratch", "addr": addr, "len": length}, pretty_json
     elif cmd == "gpu":
         return {"cmd": "gpu_state"}, pretty_json
+    elif cmd in ("geom", "geom_correction"):
+        # Are the [video] geometry_correction / perspective_texturing
+        # enhancements actually engaging on this title? Free-running totals;
+        # sample twice and diff for a per-window rate.
+        return {"cmd": "geom_correction"}, pretty_json
     elif cmd == "overlay":
         return {"cmd": "overlay_state"}, pretty_json
     elif cmd == "watch":
