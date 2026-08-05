@@ -579,3 +579,37 @@ code and cost speed *even with the feature off* unless they are gated at
 CODEGEN time — i.e. a separate generated flavour, which touches the build matrix
 and every title's regen. That is the real decision, and it is why this cannot be
 a runtime-only toggle like the rest of the `[video]` block.
+
+### G1.4 — DECISIVE: position-keyed lookup cannot work (measured, 2026-08-05)
+
+The cheap fix was tried and **measured to be insufficient**, which settles the
+direction. The hashed table was replaced with the references' exact
+direct-indexed one (one slot per reachable SXY, no collisions) plus their
+ambiguity gate. Ape Escape attract demo, cumulative:
+
+| outcome | count | share |
+|---|---|---|
+| lookups attempted | 4,860,057 | — |
+| **hit** | 253,679 | **5.2%** |
+| miss — never recorded at that position | 82,253 | **1.7%** |
+| miss — **ambiguous** (several DIFFERENT projections rounded to that pixel) | 4,524,125 | **93.1%** |
+
+**93% ambiguous, 1.7% unrecorded.** The tracking is not failing to *reach* the
+vertices — it reaches almost all of them. The rounded screen position simply is
+not a unique key: in a dense 3D scene most pixels have several distinct vertices
+projecting onto them, so no position-keyed lookup can tell which sub-pixel
+fraction belongs to the packet being drawn. That share is irreducible; a bigger,
+faster or smarter table cannot move it.
+
+It also explains why the first attempt looked *so* bad. Without the ambiguity
+gate those 93% were not misses — they were silently answered with **another
+vertex's fraction**. The gate makes the feature safe (wrong fractions are no
+longer applied) but drops honest coverage to ~5%, so meshes still mix corrected
+and uncorrected triangles and still crack. Visually confirmed on Ape Escape:
+thin dark seams tracking across characters and floor in the intro/attract.
+
+**Conclusion.** Only PGXP's primary path — precision travelling *with the data*
+through the CPU dataflow, so a GP0 word's provenance is known exactly rather
+than guessed from where it landed — produces a clean result. A coverage gate or
+a better cache is ruled out by measurement, not by argument. `geometry_correction`
+must not ship until value propagation exists.
