@@ -75,7 +75,9 @@ static void cdcmd_trace_callback(uint8_t cmd, uint8_t nargs,
                                  uint32_t pc) {
     /* Symmetric self-stop trap (mirror of the runtime's PSX_CD_TRAP_CMD):
      * SIGSTOP on the Nth matching CD command so a debugger can freeze the
-     * oracle at the exact boot point and diff its state against ours. */
+     * oracle at the exact boot point and diff its state against ours.
+     * POSIX-only, same guard as debug_server.c — Windows has no SIGSTOP. */
+#ifndef _WIN32
     {
         static long trap_cmd = -2, trap_nth = 1, hits = 0;
         if (trap_cmd == -2) {
@@ -86,6 +88,7 @@ static void cdcmd_trace_callback(uint8_t cmd, uint8_t nargs,
         }
         if ((long)cmd == trap_cmd && ++hits == trap_nth) raise(SIGSTOP);
     }
+#endif
     BeetleCdcmdEntry *e = &s_cdcmd_trace[s_cdcmd_idx];
     e->seq = s_cdcmd_seq++; e->pc = pc; e->cmd = cmd; e->nargs = nargs;
     e->a0 = a0; e->a1 = a1; e->a2 = a2;
