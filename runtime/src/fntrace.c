@@ -4,6 +4,7 @@
 #include "text_xlate.h"     /* on-the-fly string translation hook (framework) */
 #include "parity_trace.h"   /* general control-flow parity ring (native producer) */
 #include "mod_runtime.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -57,6 +58,19 @@ void fntrace_mark_game_started(CPUState* cpu) {
     memory_clear_low_boot_scratch();
     cdrom_notify_game_started();
     boot_state_trigger_capture(cpu);
+}
+
+/* Range-guarded latch for the dirty-RAM interpreter path.  Mirrors the
+ * native path's semantics: latch ONLY on the exact game entry PC set via
+ * fntrace_set_game_range().  Never latch on a broad address heuristic —
+ * the BIOS shell/kernel execute relocated RAM code well above the game
+ * load address during boot, and a premature handoff (baseline/scratch
+ * clears, CD speed switch) corrupts the boot sequence. */
+void fntrace_maybe_mark_game_started(CPUState* cpu, uint32_t addr) {
+    if (s_game_started) return;
+    if (s_game_entry_phys == 0) return;   /* no game range armed */
+    if ((addr & 0x1FFFFFFFu) == s_game_entry_phys)
+        fntrace_mark_game_started(cpu);
 }
 
 static inline int armed_match(uint32_t target) {
