@@ -1476,16 +1476,16 @@ static std::filesystem::path resolve_disc_for_runtime(const std::filesystem::pat
         (game_id.empty() ? std::string() : " (" + game_id + ")") +
         " disc image ripped from your own disc.\n\n"
         "Accepted formats: .cue (preferred, with its .bin next to it), "
-        ".bin, .iso, or .chd.\n\n"
+        ".bin, .img, .iso, .car (Steam), or .chd.\n\n"
         "(This is NOT the BIOS — the BIOS was already chosen.)");
     std::string disc_title =
         s_picker_game_name + " — Step 2 of 2: select " + s_picker_game_name +
-        " disc image (.cue / .bin / .iso / .chd)";
+        " disc image (.cue / .bin / .img / .iso / .car / .chd)";
     for (;;) {
         std::filesystem::path picked;
         if (!pick_runtime_file(
                 disc_title.c_str(),
-                "PS1 Disc Images (*.cue;*.bin;*.iso;*.chd)\0*.cue;*.bin;*.iso;*.chd\0All Files (*.*)\0*.*\0",
+                "PS1 Disc Images (*.cue;*.bin;*.img;*.iso;*.car;*.chd)\0*.cue;*.bin;*.img;*.iso;*.car;*.chd\0All Files (*.*)\0*.*\0",
                 picked, "--disc")) {
             return {};
         }
