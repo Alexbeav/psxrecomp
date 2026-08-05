@@ -75,6 +75,7 @@
 #else
 #include <SDL_opengl.h>
 #endif
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1575,12 +1576,16 @@ static int    s_cw_batches = 0, s_cw_wide_sets = 0, s_cw_wide_cfgs = 0,
  * (attr 0, stride TEXV). Defined here so s_tb / TEXV are in scope. */
 static int mirror_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
-    int lo = (int)s_tb[0], hi = (int)s_tb[0];
+    float flo = s_tb[0], fhi = s_tb[0];
     for (int i = 1; i < nverts; i++) {
-        int x = (int)s_tb[i * TEXV];
-        if (x < lo) lo = x; if (x > hi) hi = x;
+        float x = s_tb[i * TEXV];
+        if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
-    return mirror_x_center_only(lo, hi);
+    /* floor/ceil, not a truncating cast: with geometry_correction these are
+     * fractional, and (int) rounds toward zero — which WIDENS a negative x
+     * toward the centre and could wrongly call a margin-touching batch
+     * centre-only, dropping its wide-mirror draw. Whole values are unchanged. */
+    return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
 static void flush_tex_batch(void) {
@@ -1635,12 +1640,13 @@ static int   s_fb_mask = -1;
 
 static int mirror_flat_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
-    int lo = (int)s_fb[0], hi = (int)s_fb[0];
+    float flo = s_fb[0], fhi = s_fb[0];
     for (int i = 1; i < nverts; i++) {
-        int x = (int)s_fb[i * 6];
-        if (x < lo) lo = x; if (x > hi) hi = x;
+        float x = s_fb[i * 6];
+        if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
-    return mirror_x_center_only(lo, hi);
+    /* floor/ceil rather than a truncating cast — see mirror_batch_center_only. */
+    return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
 static void flush_flat_batch(void) {
