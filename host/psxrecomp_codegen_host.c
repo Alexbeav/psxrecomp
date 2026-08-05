@@ -1204,9 +1204,6 @@ static int run_cli_posix(char* const argv[],
 /* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
 
 static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
-/* Floor: Linux 1.0.4+ ships libxml2 + clang.cfg (-fuse-ld=lld) for IPO;
- * Windows 1.0.3+ ships static zlib. Override with RETCOMM_TOOLCHAIN_MIN_VERSION. */
-static const char* k_tc_min_version_default = "1.0.4";
 
 static const char* toolchain_zip_asset_name(void) {
 #if defined(_WIN32)
@@ -1218,11 +1215,14 @@ static const char* toolchain_zip_asset_name(void) {
 #endif
 }
 
+/* Optional floor via RETCOMM_TOOLCHAIN_MIN_VERSION. Wizard/default is empty:
+ * download GitHub /releases/latest and accept any usable pack (no per-title
+ * version pinning to maintain). */
 static const char* toolchain_min_version(void) {
     const char* env = getenv("RETCOMM_TOOLCHAIN_MIN_VERSION");
     if (env && env[0])
         return env;
-    return k_tc_min_version_default;
+    return "";
 }
 
 /* Parse leading dotted integers from a version / tag (optional leading 'v'). */
@@ -1917,6 +1917,7 @@ static int host_toolchain_is_ready(void) {
         return 0;
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
+    /* Usable cmake is enough — no engine-side version floor by default. */
     if (find_cmake(g_cmake, sizeof(g_cmake)) && active_toolchain_meets_min())
         return 1;
 #if defined(_WIN32)
@@ -1926,7 +1927,7 @@ static int host_toolchain_is_ready(void) {
         if (pack_root_from_bin(g_cli_toolchain_bin[0] ? g_cli_toolchain_bin
                                                      : g_toolchain_bin,
                                pack, sizeof(pack)) &&
-            pack_meets_min_version(pack))
+            pack_root_has_cmake(pack) && pack_meets_min_version(pack))
             return 1;
     }
 #endif
@@ -1971,26 +1972,28 @@ static int host_ensure_toolchain_with_progress(
             if (active_toolchain_meets_min())
                 return 1;
             snprintf(err_msg, err_cap,
-                     "Toolchain zip does not meet min_version %s "
-                     "(set RETCOMM_TOOLCHAIN_MIN_VERSION or use a newer pack).",
-                     toolchain_min_version());
+                     "Toolchain zip is unusable or below RETCOMM_TOOLCHAIN_MIN_VERSION.");
             return 0;
         }
         return 0;
     }
 
     if (download) {
-        if (on_progress && find_cmake(g_cmake, sizeof(g_cmake)) &&
-            !active_toolchain_meets_min())
+        /* Always fetch GitHub /releases/latest (no per-title version pin). */
+        if (on_progress)
             on_progress(progress_ctx, 0.05f,
-                        "Updating portable toolchain to required version…");
+                        "Downloading latest portable cmake/clang…");
         if (host_download_and_install_toolchain(on_progress, progress_ctx,
                                                 err_msg, err_cap)) {
-            if (active_toolchain_meets_min())
+            if (find_cmake(g_cmake, sizeof(g_cmake)) &&
+                active_toolchain_meets_min())
                 return 1;
             snprintf(err_msg, err_cap,
-                     "Downloaded toolchain does not meet min_version %s.",
-                     toolchain_min_version());
+                     "Downloaded toolchain is missing cmake"
+                     "%s.",
+                     (toolchain_min_version()[0]
+                          ? " or is below RETCOMM_TOOLCHAIN_MIN_VERSION"
+                          : ""));
             return 0;
         }
         return 0;
