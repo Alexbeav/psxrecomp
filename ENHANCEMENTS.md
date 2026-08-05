@@ -738,3 +738,31 @@ PGXP dataflow of G1.2/G1.3 to reach coverage where meshes move as one.
 launcher row; withdraw the `geometry_correction` row until value propagation
 lands (leave the setting readable from game.toml/settings.toml so the work
 stays testable, but do not present it to players).
+
+### G1.9 — Disposition EXECUTED (2026-08-05): this is the shippable line
+
+G1.8's recommendation was carried out. This branch
+(`feat/pgxp-perspective-textures`, renamed from `feat/pgxp-geometry-correction`)
+is the line intended for review and eventual merge.
+
+| setting | default | player-reachable? | verdict |
+|---|---|---|---|
+| `perspective_texturing` | false | **yes** — Display row in the launcher | ships |
+| `geometry_correction` | false | **no** — `game.toml` / `settings.toml` only | known broken, hidden |
+
+`geometry_correction` is deliberately still *compiled in*. It was not excised,
+because the setting is only worth keeping if the code behind it still runs, and
+G1.8 asked for it to stay testable. What was withdrawn is the launcher row — the
+only surface through which a player could have reached it. Combined with the
+false default, there is no path by which someone who is not editing a toml by
+hand can turn on a feature we know cracks meshes.
+
+**Standing constraint for future sessions.** Do not add a `geometry_correction`
+control to any settings surface, and do not flip its default, until the coverage
+problem is actually solved — meaning the census reports something far better than
+the measured 5.2% hit / 93.1% ambiguous, on a real title, with the OFF control
+run first. Partial coverage is not a partial feature here; it is a visible
+defect, which is the whole finding of G1.1–G1.8.
+
+The withdrawn row, the full post-mortem, the mechanism that would fix it, and the
+re-test protocol are preserved on `park/pgxp-geometry-correction` (see its G1.9).
