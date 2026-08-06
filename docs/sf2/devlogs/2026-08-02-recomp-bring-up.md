@@ -1852,3 +1852,51 @@ exist; the executable hash matches the handoff value. The runtime does not
 implement `--help`, so the intended CLI-only probe opened the accepted game
 window instead. That agent-owned PID was closed immediately and no user-owned
 process was touched. This proves startup only, not campaign qualification.
+
+### 2026-08-06 — public alpha repository and audited Windows asset prepared
+
+Created a separate clean-history repository under
+`syphon-filter-2-recompiled/` rather than renaming the existing public
+`Alexbeav/psxrecomp` framework fork. The game repository's root commit is
+`5b67990`; its `psxrecomp` submodule is pinned to accepted commit `34dcc23`.
+The repository contains the sanitized SCUS-94451 game config, 2,291 locally
+derived JAL-target seeds, CMake glue, user settings/keys, project documentation,
+release scripts, CI, and a manual draft-release audit/publish workflow. All
+retail inputs and generated outputs remain ignored.
+
+CI is intentionally payload-free. The source-policy job audits the repository
+and runs behavioral rejection tests. The Windows job builds the pinned generic
+PSXRecomp CLI and runs its registered tests, but never acquires an SF2 disc or
+generates SF2 C. The release workflow accepts only an existing draft asset,
+audits its exact layout and private-path boundary, attaches `SHA256SUMS.txt`,
+and then publishes it. This preserves the legal/provenance boundary that makes
+an unattended CI game build impossible.
+
+Packaged the accepted local executable through the new packager with the
+expected executable hash gate. The resulting ignored candidate is:
+
+- `syphon-filter-2-recompiled/dist/syphon-filter-2-recompiled-v0.1.0-alpha-windows-x64.zip`
+- ZIP SHA-256: `EADAA86073D8BDB63B7A1B8E8ABE15D07E628E1F7EFD71219A8CC9CE7DE82580`
+- contained executable SHA-256 before its package rename:
+  `DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`
+
+The ZIP contains exactly ten approved files: the renamed executable, sanitized
+`game.toml`, settings, keys, README, license, release notes, start guide, and
+the MIT OpenBIOS image/notice. It contains no cache, capture, save, generated C,
+disc data, screenshot, or diagnostic report. Source audit, workflow YAML parse,
+archive audit, and five behavioral policy tests pass. A clean staged copy used
+the real disc through `--disc`, loaded the sanitized config, and remained alive
+for a 15-second headless smoke. The first smoke command incorrectly allowed
+PowerShell `Start-Process` to split the spaced disc path and exited at the
+expected disc-open check; the committed smoke tool uses
+`ProcessStartInfo.ArgumentList`, and the corrected run passed. All temporary
+stage files—including smoke-created cards, captures, reports, and logs—were
+deleted after validation; only the audited ZIP remains ignored.
+
+Prepared a transparent `r/decomps` post and media checklist. The draft says
+static recompilation (not decompilation), uses `v0.1.0-alpha`, discloses
+AI-assisted/human-directed development and partial native overlay coverage,
+and explicitly says high refresh is rejected and absent. Media must be uploaded
+outside Git. No GitHub repository, release, or Reddit post has been created;
+those external actions wait for user review and capture of the short video and
+four to six screenshots.

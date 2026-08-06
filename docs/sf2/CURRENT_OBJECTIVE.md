@@ -9,6 +9,43 @@
 > and referenced by the older `## R1 verdict` / `## R2 remaining target`
 > sections near the end of this file.
 
+## 2026-08-06 — public alpha repository prepared; publication pending review
+
+A clean-history game repository has been prepared locally at
+`syphon-filter-2-recompiled/`, root commit `5b67990`. It pins this accepted
+framework commit (`34dcc23`) as a submodule and contains only source-owned
+configuration, 2,291 verified resident-function seeds, build/package glue,
+public documentation, CI, and release-policy tests. It contains no retail
+input, generated game C, overlay capture, cache, save, screenshot, or trace.
+
+The candidate Windows asset is
+`syphon-filter-2-recompiled/dist/syphon-filter-2-recompiled-v0.1.0-alpha-windows-x64.zip`,
+SHA-256 `EADAA86073D8BDB63B7A1B8E8ABE15D07E628E1F7EFD71219A8CC9CE7DE82580`.
+It packages the accepted executable byte-for-byte (pre-rename SHA-256
+`DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`),
+the sanitized relative SCUS-94451 config, keyboard/settings profiles, project
+notices, and the MIT OpenBIOS image/notice. The archive audit permits exactly
+those ten files and scans text and executable bytes for private build paths.
+
+The source audit passes, five behavioral archive-policy tests pass, both
+workflow YAML files parse, the archive audit passes, and a clean staged copy
+remained active for a 15-second headless boot against the verified local disc.
+The smoke's temporary stage, cards, captures, reports, and logs were removed;
+only the ignored audited ZIP remains. GitHub repository creation, release
+upload/publication, and Reddit submission have deliberately not occurred.
+The prepared repository name is exactly `syphon-filter-2-recompiled`.
+
+The public README and Reddit draft call this a static recompilation rather than
+a decompilation, label it `v0.1.0-alpha`, disclose AI assistance and partial
+overlay-native coverage, and state that high refresh is rejected/not shipped.
+Media stays outside Git; `docs/MEDIA_CAPTURE_CHECKLIST.md` requests a short
+uncut video and four to six screenshots without private paths or misleading
+60-FPS claims. The next gate is user review of the draft and recorded media,
+then explicit approval to create the public GitHub repository, upload a draft
+release, run the audit-and-publish workflow, and submit the Reddit post.
+
+Updated: 2026-08-06
+
 ## 2026-08-06 — playable accepted handoff; high-refresh milestone closed
 
 The playable build is the frozen accepted PGXP/native-wide control:
