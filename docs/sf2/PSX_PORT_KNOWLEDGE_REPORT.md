@@ -114,22 +114,25 @@ only for the classified list, and PS1 primitive rejection on raw packet data.
 | Debt | Owner | User impact | Evidence/containment | Removal or acceptance gate |
 |---|---|---|---|---|
 | PGXP coverage selective | GTE/RAM provenance propagation | some motion instability can remain | exact full-triangle match or native fallback | broaden coverage with focused provenance classes and preserve semantic parity |
-| 60 Hz absent | presentation/timing | retail frame cadence | no VSync hack | interpolated 60 Hz with unchanged simulation |
+| 60 Hz absent | missing semantic world ownership | retail frame cadence | R1/R2/R3 renderer-only families rejected | matching decomp or equivalent complete camera/object/bone snapshot and rebuild boundary |
 | overlay fallback high | loader/capture pipeline | performance ceiling | reported honestly | converged current-hash overlays and host-time profile |
 | campaign incomplete | validation | unknown later-mode defects | separate compatibility oracle | consecutive campaign completion |
 
 ## Current blockers
 
 No blocker remains for the accepted widescreen/direct-mouse/PGXP pass-1
-checkpoint. The next unresolved prerequisite is current-hash compiled-overlay
-convergence and host-time ownership before 60 Hz presentation interpolation.
+playthrough checkpoint. High-refresh presentation is explicitly blocked on
+semantic world-state recovery; overlay convergence remains a separate
+performance/coverage task and is not a prerequisite for playing the accepted
+build.
 
 ## Next decisive experiment
 
-Rebuild the active overlay images for the accepted PGXP codegen/config hash,
-measure resident-AOT, compiled-overlay, interpreter, and renderer host time
-separately, then create one presentation-interpolation candidate that keeps the
-retail simulation and all device clocks unchanged.
+Begin a targeted matching decompilation of the world-update/camera/actor-render
+path, using the existing overlay/range manifests as function boundaries. Resume
+60 Hz work only when immutable previous/current semantic transforms and a
+per-display world rebuild can be owned explicitly. Overlay-cache convergence
+can proceed independently as a performance packaging task.
 
 ## Knowledge-base actions
 
@@ -143,3 +146,6 @@ retail simulation and all device clocks unchanged.
   SF2 is the independent consumer of Tenchu's PGXP contract
 - Upstream candidate: title-neutral projection composition and regression after
   another project validates the submission-owner model
+- High-refresh corpus return: R1/R2/R3 negative controls recorded as
+  `PSX-TIME-003` through `PSX-TIME-006` and `FAIL-028` through `FAIL-030`;
+  R3 has no upstream code patch because its source architecture was rejected

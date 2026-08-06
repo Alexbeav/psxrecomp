@@ -1713,3 +1713,142 @@ telemetry — the new counters exist precisely to prove it. Validation order:
    two captures per page, no brightness ramp while stationary, HUD
    completeness — the implicit HUD exclusion caveat from 2026-08-06 still
    stands and remains unverified).
+
+## 2026-08-06 — fixed R3 rebuild and automated handoff gate
+
+Session startup re-read the mandated project and corpus material, including the
+Aug-4 SF2 sweep and Aug-6 translation-lane scan. The sweep's three direct
+capture/serializer findings are already closed by `17e9bba`: transactional
+bounded serializers, a 2 MiB crash buffer, a behavioural 512-record JSON bounds
+test, validated scalar merges, accurate contribution ordering comments, and a
+vanishing-`getmtime` guard are present. `overlay_dump_bounds` and five focused
+additive-history tests pass. The broader additive module still contains the
+previously documented obsolete-API tests; no unrelated repair was folded into
+R3.
+
+Upstream was refreshed read-only to `11ddfe6` (#104/#105). This branch predates
+#104 and still has both pre-fix CAUSE.IP2 latch sites (`interrupts.c:1095` and
+`psx_interpreter.c:543`). It has no VBlank-edge audio pump, so the
+`PSX-AUDIO-001` mute/turbo bypass cannot occur here yet. Integrating the full
+SPU/IRQ/autocompile changes is a separate candidate; doing it before the R3 A/B
+would bundle unrelated runtime behaviour and invalidate the visual comparison.
+
+The nine runtime/test source files were synced byte-for-byte into
+`generated-disc1-r2-load-delay/psxrecomp`. Only
+`build-high-refresh-pass1-r1` was rebuilt. Its Ninja dependency database was
+truncated (`premature end of file`, every immediate rebuild recompiling the
+target); the exact candidate-tree `.ninja_deps` was moved recoverably to
+`.ninja_deps.corrupt-20260806`, regenerated, and an immediate build became an
+incremental two-step no-op. The final executable SHA-256 is
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`.
+
+The first smoke attempt is not game evidence. The launch command incorrectly
+set `PSX_DEBUG_PORT`, which this runtime does not consume; stdout proved the
+healthy runtime listened on compiled default 4370 while the route queried
+64137. The owned process was stopped and a fresh-card corrected run used
+`--debug-port 64138`.
+
+The corrected SDL-hidden OpenGL route passed in 438 seconds with replay,
+output, and parity enabled. Evidence:
+`evidence/high-refresh-transform-r3-frozen-pairs-20260806-110008`.
+
+- static invariance: 4/4 exact, zero differing pixels;
+- alpha=1 parity: 2/2 exact, zero differing pixels;
+- page slots: valid Y=0 and Y=240;
+- midpoint mismatches, displacement rejects, render failures, overflows: zero;
+- pair telemetry at player-owned/final: found 408/480, missing 255/255, proving
+  zero new misses across the measured stationary cadence and movement window;
+- cadence: guest 59.985 Hz, world 18.995 Hz, display 60.485 Hz;
+- final player XYZ `(-5606,2036,7529)`, health 150, armor 600; CD INT1 lost 0.
+
+Overlay ownership remains honest and unchanged from the prior R3 smoke:
+15,989,122 resident-AOT hits, zero compiled-overlay dispatch, and 13,535,051
+interpreter fallbacks because the rebuilt codegen hash has no matching warmed
+shards. The shortcut now points at `build-high-refresh-pass1-r1` and leaves
+parity readbacks disabled for interactive use. Hand off now for exactly three
+observations: startup right band, stationary brightness ramp, and HUD
+completeness. Stop before qualification, full-suite validation, commit, or push.
+
+## 2026-08-06 — fixed R3 user rejection and architectural closeout
+
+The user ran the exact frozen-pair rebuild (SHA-256
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`)
+from `Launch SF2 Transform High Refresh R3.bat`. All three observable failures
+remained: motion looked one-third-rate, brightness ramped toward a flashbang
+between authentic frames, and roughly the right fifth was black at startup.
+No process remained open after the report. This is a decisive rejection; the
+shortcut is now non-launching and explains why.
+
+The mandatory corpus was rechecked before diagnosis. `FAIL-002`/`FAIL-003`
+remain directly relevant: SF2 uses persistent VRAM, and retained translucent
+draws must not be repeatedly composed without correct ownership. The exact
+launcher target and executable hash matched the intended candidate, excluding
+a stale-binary explanation.
+
+The hidden route's green counters were non-representative:
+
+- 1,876 transform presents accumulated only 480 successful pair-resolution
+  projection attempts; the final snapshot froze one pair. With almost all
+  primitives left at their captured position, 60 swaps could not produce 60 Hz
+  scene motion.
+- The four invariance samples required every pair in a snapshot to be identity.
+  They proved that narrow special case, not a live scene containing a sparse
+  mixture of movable and snapped primitives.
+- `capture_count >= 2` did not inspect either synthetic margin and therefore
+  could not establish that the startup base was authored.
+
+Freezing pairs remains a valid fix for the observed live-census lifetime race,
+but the unchanged flash retracts the prior claim that this race was its dominant
+pixel owner. At world-list begin, `wide_blit_center` snapshots persistent wide
+VRAM before the current world draw; that surface can already contain the prior
+world. Replay then redraws the captured current command stream while moving
+only the sparse transform-owned subset, including translucent/additive draws.
+The result is not a coherent intermediate scene: stale and current opaque
+coverage disagree, while additive coverage can brighten as the moved subset
+separates from its retained predecessor.
+
+R3 is retired rather than threshold-tuned. No full validation, commit, or push
+was performed. Future high-refresh work requires a complete semantic
+pre-projection snapshot and world rebuild (camera, objects, bones, and explicit
+HUD/effect separation), which this GP0 retained-replay boundary does not own.
+Matching decompilation is now the credible route to that boundary.
+
+## 2026-08-06 — playable package, corpus return, and cleanup
+
+At the user's request, the high-refresh experiment was closed around the
+accepted playthrough build. All uncommitted R3 runtime/header/test/route changes
+were reverse-applied with content checks until `git diff --exit-code -- runtime`
+and the route file were clean. This preserves the committed branch fixes and
+the accepted PGXP implementation while removing the rejected replay path.
+
+The active local shortcut is now `Launch SF2 Playable Accepted.bat`. It points
+to the already accepted, unrecompiled build
+`build-pgxp-pass1-widescreen-r2/SCUS94451_Recompiled.exe` (SHA-256
+`DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`),
+uses the accepted 16:9 PGXP/mouse config, starts with the build directory as
+CWD, and keeps playthrough saves in `cards-playable-accepted`. The launcher is
+ASCII with CRLF line endings.
+
+Rejected R1/R2/R3 launchers were removed. Recursive deletion of the two
+approximately 1.3 GiB rejected build trees was blocked by the active tool
+policy after exact target/root verification; they were instead renamed
+`rejected-build-high-refresh-r3` and
+`rejected-build-high-refresh-diagnostics`, with no launcher. Evidence and R3
+cards were retained for reproducibility. The root heartbeat and last-run report
+were moved into the existing ignored historical-freeze directory, leaving no
+runtime report in the repository root.
+
+Corpus return updated `PSX-TIME-005` from verdict-pending to rejected,
+strengthened `PSX-TIME-006` with R1/R2/R3 negative controls, added `FAIL-030`,
+and added the retained-transform negative regression row. There is no R3 code
+submission: the implementation is title-specific and rejected. The portable
+output is validation doctrine. The bounded transactional crash serializer and
+behavioural bounds regression from `17e9bba` remain the highest-priority real
+upstream code contribution.
+
+Package verification confirmed the accepted executable, config, user-owned
+disc path, extracted game EXE, BIOS config, and dedicated card directory all
+exist; the executable hash matches the handoff value. The runtime does not
+implement `--help`, so the intended CLI-only probe opened the accepted game
+window instead. That agent-owned PID was closed immediately and no user-owned
+process was touched. This proves startup only, not campaign qualification.

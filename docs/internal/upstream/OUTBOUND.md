@@ -25,6 +25,21 @@ remains. Submission itself requires explicit user authorization.
 | 8 | Bounded transactional crash/atexit JSON serializers + always-on native overlay ring in ordinary reports | `17e9bba` | `crash_overlay_ring_guards`, `overlay_dump_bounds` | Ready — never submitted |
 | 9 | Renderer-neutral PGXP pass 1 (SWC2 provenance, atomic per-primitive fallback, canonical-VRAM preservation) | `2eebc41` | focused canonical-VRAM regression + suite 50/50 | Candidate — consider after independent validation by a second title (per `PSX_PORT_KNOWLEDGE_REPORT.md`) |
 
+## High-refresh R3 disposition
+
+No R3 source should be submitted upstream. Frozen transform pairs closed a
+real snapshot-lifetime race inside the experiment, but the complete retained
+GP0 replay architecture was visually rejected after its automated gates passed
+and has been removed from active source. The portable contribution is the
+negative validation result returned to the shared corpus as `PSX-TIME-005`,
+`PSX-TIME-006`, and `FAIL-030`.
+
+The next source submission worth preparing is row 8: bounded transactional
+crash/atexit serializers plus the behavioural 512-record bounds regression.
+It is title-neutral, fixes the reachable `PSX-DIAG-001` crash-path OOB, and is
+already separated in `17e9bba`. Opening a PR still requires explicit user
+authorization under the community contribution policy.
+
 ## Known upstream-relevant test debt
 
 `tools/test_compile_overlays_additive.py` contains 8 tests that reference APIs

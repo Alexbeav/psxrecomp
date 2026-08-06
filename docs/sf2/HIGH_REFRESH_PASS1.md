@@ -1,11 +1,9 @@
 # High-refresh pass 1 — shutdown/resume handoff
 
 Started: 2026-08-04. Last updated: 2026-08-06. This file is chronological —
-newest sections are appended at the end. Current status: the first R3 build
-was visually REJECTED (startup black band, stationary progressive flashbang);
-root causes are diagnosed and fixed in the worktree, rebuild and validation
-pending (final section). See `CURRENT_OBJECTIVE.md` for the live state and
-the devlog for the exact resume procedure.
+newest sections are appended at the end. Current status: R1, R2, and both R3
+builds are visually REJECTED. Transform replay is retired; the accepted PGXP
+baseline remains current. See `CURRENT_OBJECTIVE.md` for the live state.
 
 ## Objective and current gate
 
@@ -496,3 +494,84 @@ directories), telemetry-gated hidden route, then a fresh user handoff — is
 in the devlog section "2026-08-06 — R3 user findings, root-cause diagnosis,
 and fix implementation". The implicit-HUD-exclusion caveat remains open and
 must be checked in the next visual test.
+
+## 2026-08-06 — fixed R3 automated handoff gate passes
+
+The modified runtime files were copied into the generated package source and
+only `build-high-refresh-pass1-r1` was rebuilt. A corrupt/truncated Ninja
+dependency database caused a persistent `premature end of file` warning and
+full rebuilds; it was moved aside as `.ninja_deps.corrupt-20260806`, regenerated
+by Ninja, and an immediate build then became a clean two-step no-op. Candidate
+executable SHA-256:
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`.
+
+The first smoke attempt is invalid launch-harness evidence only: the command
+set an unsupported `PSX_DEBUG_PORT` environment variable, so the healthy
+runtime listened on 4370 while the route queried 64137. The corrected fresh-
+card run used `--debug-port 64138` and passed the authentic Mission 1 route.
+Evidence:
+`evidence/high-refresh-transform-r3-frozen-pairs-20260806-110008`.
+
+Automated result:
+
+- invariance 4/4 exact, zero differing pixels;
+- parity 2/2 exact, zero differing pixels;
+- both snapshot pages valid at Y=0 and Y=240;
+- midpoint mismatches, displacement rejects, render failures, and overflows
+  all zero;
+- cumulative `pairs_missing` unchanged at 255 across the measured player-owned
+  through final interval while `pairs_found` advanced 408 to 480;
+- guest/world/display cadence 59.99/19.00/60.49 Hz; and
+- final retail player XYZ `(-5606,2036,7529)`, health 150, armor 600, with
+  zero lost CD INT1.
+
+As with the previous R3 smoke, current-hash overlay shards are absent: resident
+AOT executed, while the overlay tier honestly used 13,535,051 interpreter
+fallbacks. This is not native overlay coverage and is not newly caused by the
+frozen-pair fix. The ignored shortcut `Launch SF2 Transform High Refresh
+R3.bat` now points at `build-high-refresh-pass1-r1`; parity readbacks are off
+for the user run. The next gate is the user's visual verdict on the startup
+band, stationary brightness ramp, and HUD completeness. Stop there before
+qualification.
+
+## 2026-08-06 — fixed R3 visually rejected and retired
+
+The user ran the exact rebuilt candidate
+(`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`)
+and reported the same three failures: one-third-rate visible motion,
+progressive flashbang, and a black right fifth at startup. The R3 shortcut is
+disabled. No qualification, full suite, commit, or push was performed.
+
+The route's own counters explain why its green result was not predictive:
+1,876 transform presents produced only 480 successful frozen-pair projection
+attempts, and the final snapshot held one pair. Most geometry therefore stayed
+at the authentic 20 Hz position. The invariance gate sampled identity-only
+snapshots, not the interactive mixed-provenance case. The two-capture gate
+proved only a count, not authored margin coverage.
+
+Freezing snapshot pairs closed a genuine live-state race but the unchanged
+visual result disproves that race as the dominant flash owner. The remaining
+design replays sparse moved geometry and translucent/additive commands over a
+pre-world snapshot of persistent wide VRAM that may already contain the prior
+world. It cannot reconstruct one coherent intermediate world. This candidate
+family is retired; a successor needs complete semantic camera/object/bone
+snapshots and a world rebuild, most plausibly supplied by matching decompilation.
+
+## 2026-08-06 — milestone cleanup and playable handoff
+
+The rejected transform source, tests, debug endpoint wiring and route fields
+were restored exactly to the branch checkpoint. The three rejected launchers
+were removed. Filesystem policy declined recursive deletion of the two
+regenerable high-refresh build trees, so they were renamed with a `rejected-`
+prefix and left without a launcher; evidence and cards remain as audit data.
+
+The playable shortcut is `Launch SF2 Playable Accepted.bat`. It starts the
+accepted PGXP/native-wide executable from
+`build-pgxp-pass1-widescreen-r2`, SHA-256
+`DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`,
+using `game-modern-pass2-build-pgxp-pass1-widescreen-r2.toml` and dedicated
+persistent cards under `cards-playable-accepted`. No accepted executable or
+configuration was rebuilt.
+
+The milestone is closed. Resume high-refresh work only after a matching decomp
+or another complete semantic camera/object/bone snapshot boundary exists.

@@ -9,6 +9,97 @@
 > and referenced by the older `## R1 verdict` / `## R2 remaining target`
 > sections near the end of this file.
 
+## 2026-08-06 — playable accepted handoff; high-refresh milestone closed
+
+The playable build is the frozen accepted PGXP/native-wide control:
+`build-pgxp-pass1-widescreen-r2/SCUS94451_Recompiled.exe`, SHA-256
+`DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`,
+with config `game-modern-pass2-build-pgxp-pass1-widescreen-r2.toml`. Launch it
+with `Launch SF2 Playable Accepted.bat`. The launcher uses persistent cards in
+`cards-playable-accepted`, starts in the build directory, and enables no
+high-refresh environment gates.
+
+All rejected R3 source/test/route edits were restored byte-for-byte to the
+branch checkpoint. Rejected R1/R2/R3 launchers were removed. The two large
+rejected build trees could not be deleted under the active filesystem policy,
+so they were renamed `rejected-build-high-refresh-r3` and
+`rejected-build-high-refresh-diagnostics`; they have no active launcher.
+Evidence and the old R3 cards remain for audit. Root runtime reports were moved
+under `lab/sf2/local/historical-freeze-snapshots-2026-08-03`.
+
+High-refresh pass 1 is closed pending matching decompilation or an equivalent
+complete semantic world-state interface. The accepted PGXP/native-wide/mouse
+build is the playthrough target. R3 contributes no upstream source patch; its
+portable result is the negative validation finding returned as
+`PSX-TIME-005`, `PSX-TIME-006`, and `FAIL-030`. The strongest actual upstream
+code candidate remains the bounded transactional serializer fix in `17e9bba`.
+
+Updated: 2026-08-06
+
+## 2026-08-06 — fixed R3 visually rejected; transform replay retired
+
+The user tested the rebuilt frozen-pair candidate, executable SHA-256
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`,
+and reported the same three disqualifying failures: motion still appeared at
+one third of the display rate, the progressive flashbang remained, and roughly
+the right fifth of the screen was black at startup. This is the decisive R3
+verdict. The ignored R3 shortcut is disabled and must not be handed off again.
+
+The green automated gate did not exercise representative output. Across 1,876
+transform presents, only 480 vertex projection attempts found a frozen pair;
+the final snapshot contained one pair. The renderer therefore replayed almost
+the entire captured scene at its retail position, explaining the unchanged
+20 Hz motion despite approximately 60 swaps. The static-invariance samples
+selected only the special case where every frozen pair was identity, and the
+two-capture startup gate counted captures without proving either synthetic
+widescreen margin had been authored.
+
+Freezing pairs fixed a real lifetime race but did not fix the visible flash,
+so the earlier claim that the race owned the flashbang is retracted. Source
+chronology now exposes the architectural conflict: the replay base is a
+pre-world snapshot of persistent wide VRAM, which can already contain the
+previous world, while replay moves only the sparse subset with complete
+semantic provenance and redraws translucent/additive primitives. That mixture
+is not one coherent intermediate scene and can progressively brighten or
+expose stale coverage as alpha advances. A retained GP0 replay cannot supply
+the complete camera/object/bone ownership required by `PSX-TIME-006`.
+
+R3 is retired rather than patched again. The accepted PGXP/native-wide build
+remains the usable baseline. Future high-refresh work requires semantic state
+from a matching decompilation or an equivalent complete pre-projection world
+snapshot/rebuild boundary; cadence, endpoint parity, sparse-pair telemetry,
+and identity-only invariance are not sufficient handoff gates.
+
+Updated: 2026-08-06
+
+## 2026-08-06 — fixed R3 candidate passes automated handoff gate
+
+*SUPERSEDED by the fixed-candidate visual rejection above. This section is
+retained as evidence of a non-predictive automated gate.*
+
+The R3 root-cause fixes were synced into the generated package copy and only
+`build-high-refresh-pass1-r1` was rebuilt. The accepted PGXP and earlier
+handoff directories were not rebuilt. The candidate executable SHA-256 is
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`.
+
+One fresh-card, SDL-hidden OpenGL Mission 1 route passed with transform replay,
+output, and parity enabled. Static invariance is exact 4/4 with zero differing
+pixels; alpha=1 parity remains exact 2/2; midpoint mismatches, displacement
+rejects, render failures, and overflows are all zero; both Y=0/Y=240 snapshot
+slots are valid. Cumulative pair misses stayed fixed at 255 from player
+ownership through the final checkpoint while pair hits rose from 408 to 480,
+so the measured stationary/movement present window added zero misses. Cadence
+remained 59.99 Hz guest VBlank, 19.00 Hz retail world, and 60.49 Hz display.
+Evidence is ignored under
+`evidence/high-refresh-transform-r3-frozen-pairs-20260806-110008`.
+
+The R3 shortcut now points at the rebuilt candidate tree. Gate B is the next
+step: verify that the startup black band and stationary brightness ramp are
+gone, and check HUD completeness because late-list exclusion remains implicit.
+Do not qualify, commit, or push until the user returns that visual verdict.
+
+Updated: 2026-08-06
+
 ## 2026-08-06 — R3 rejected on visual evidence; root causes fixed, rebuild pending
 
 User testing rejected the first R3 build on two artifacts: a black band over
