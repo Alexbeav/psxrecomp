@@ -6047,6 +6047,13 @@ static void handle_spu_status(int id, const char *json)
     (void)json;
     SpuDebugInfo info;
     spu_debug_info(&info);
+    /* The DSP-fidelity state (issue #103: SPU IRQ, reverb, noise, sweeps) lives
+     * in SpuGlobalState. Surfaced here so the whole SPU can be judged from one
+     * always-on query — without it there is no way to tell whether the reverb
+     * engine is actually stepping, whether the IRQ is armed, or which volume
+     * registers are sweeping. */
+    SpuGlobalState g;
+    spu_get_global_state(&g);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"ctrl\":\"0x%04X\",\"active_mask\":\"0x%06X\","
              "\"main_l\":%d,\"main_r\":%d,"
@@ -6055,7 +6062,15 @@ static void handle_spu_status(int id, const char *json)
              "\"render_frames\":%llu,\"nonzero_frames\":%llu,"
              "\"last_peak\":%d,\"peak\":%d,"
              "\"cd_frames\":%u,\"cd_push_frames\":%llu,"
-             "\"cd_overflow_frames\":%llu,\"cd_underflow_frames\":%llu}",
+             "\"cd_overflow_frames\":%llu,\"cd_underflow_frames\":%llu,"
+             "\"pmon\":\"0x%06X\",\"non\":\"0x%06X\",\"eon\":\"0x%06X\","
+             "\"endx\":\"0x%06X\","
+             "\"irq_flag\":%u,\"irq_addr\":\"0x%05X\","
+             "\"reverb_on\":%u,\"reverb_mbase\":\"0x%05X\","
+             "\"reverb_cur\":\"0x%05X\",\"capture_pos\":\"0x%03X\","
+             "\"noise_lfsr\":\"0x%04X\","
+             "\"sweep_l_mask\":\"0x%06X\",\"sweep_r_mask\":\"0x%06X\","
+             "\"sweep_main\":%u}",
              id,
              info.ctrl & 0xFFFFu,
              info.active_mask & 0xFFFFFFu,
@@ -6071,7 +6086,21 @@ static void handle_spu_status(int id, const char *json)
              info.cd_frames,
              (unsigned long long)info.cd_push_frames,
              (unsigned long long)info.cd_overflow_frames,
-             (unsigned long long)info.cd_underflow_frames);
+             (unsigned long long)info.cd_underflow_frames,
+             g.pmon & 0xFFFFFFu,
+             g.non  & 0xFFFFFFu,
+             g.eon  & 0xFFFFFFu,
+             g.endx & 0xFFFFFFu,
+             (unsigned)g.irq_flag,
+             g.irq_addr & 0xFFFFFu,
+             (unsigned)g.reverb_on,
+             g.reverb_mbase & 0xFFFFFu,
+             g.reverb_cur & 0xFFFFFu,
+             g.capture_pos & 0xFFFu,
+             (unsigned)g.noise_lfsr,
+             g.sweep_l_mask & 0xFFFFFFu,
+             g.sweep_r_mask & 0xFFFFFFu,
+             (unsigned)g.sweep_main);
 }
 
 /* ---- Per-voice SPU snapshot. Mirrors fields the Beetle oracle exposes
@@ -6087,7 +6116,9 @@ static void handle_spu_voices(int id, const char *json)
     SpuGlobalState g;
     spu_get_global_state(&g);
 
-    size_t cap = 8192;
+    /* 24 voices x ~280 chars + header. Headroom matters: snprintf would silently
+     * truncate mid-object and hand the caller unparseable JSON. */
+    size_t cap = 16384;
     char *out = (char *)malloc(cap);
     if (!out) { send_fmt("{\"id\":%d,\"ok\":false,\"err\":\"alloc\"}", id); return; }
     size_t off = 0;
@@ -6116,7 +6147,11 @@ static void handle_spu_voices(int id, const char *json)
             "\"adsr_lo\":\"0x%04X\",\"adsr_hi\":\"0x%04X\","
             "\"cur_addr\":\"0x%05X\",\"repeat_addr\":\"0x%05X\","
             "\"flags\":\"0x%02X\",\"sample_idx\":%d,\"phase\":\"0x%04X\","
-            "\"env\":\"0x%04X\",\"env_phase\":%d}",
+            "\"env\":\"0x%04X\",\"env_phase\":%d,"
+            /* Live effective volumes. For a sweeping register (bit 15 set) the
+             * vol_l/vol_r control words above say nothing about the current
+             * level, so these are the only way to see a sweep actually glide. */
+            "\"vol_cur_l\":%d,\"vol_cur_r\":%d}",
             v == 0 ? "" : ",",
             v, s.active,
             s.vol_ctrl_l, s.vol_ctrl_r,
@@ -6126,7 +6161,8 @@ static void handle_spu_voices(int id, const char *json)
             s.adsr_lo, s.adsr_hi,
             s.cur_addr, s.repeat_addr,
             s.last_flags, s.sample_idx, s.phase,
-            s.env_level, s.adsr_phase);
+            s.env_level, s.adsr_phase,
+            s.vol_cur_l, s.vol_cur_r);
         if (n > 0) off += (size_t)n;
     }
     n = snprintf(out + off, cap - off, "]}");
@@ -6155,7 +6191,7 @@ static void handle_spu_ram(int id, const char *json)
 }
 
 /* ---- SPU event ring dump. Returns the most recent N events
- * (KEYON / KEYOFF / END_STOP / END_LOOP) with frame timestamps. */
+ * (KEYON / KEYOFF / END_STOP / END_LOOP / IRQ) with frame timestamps. */
 static void handle_spu_events(int id, const char *json)
 {
     int count = json_get_int(json, "count", 256);
@@ -6165,7 +6201,12 @@ static void handle_spu_events(int id, const char *json)
     if (!evs) { send_fmt("{\"id\":%d,\"ok\":false,\"err\":\"alloc\"}", id); return; }
     uint32_t got = spu_event_get(evs, (uint32_t)count);
     uint64_t total = spu_event_total();
-    static const char *kind_names[5] = { "?", "KEYON", "KEYOFF", "END_STOP", "END_LOOP" };
+    /* Index by SpuEventKind (spu.h). IRQ (=5) is not voice-attributable; the
+     * ring stores voice=0xFF for it and `addr` is the byte address that matched
+     * the programmed IRQ address. Keep this table in step with SpuEventKind or
+     * a new kind renders as "?". */
+    static const char *kind_names[6] = { "?", "KEYON", "KEYOFF", "END_STOP",
+                                         "END_LOOP", "IRQ" };
 
     /* Worst case ~200 chars per event; 64 KB is plenty for 4096 events. */
     size_t cap = 256u + (size_t)got * 256u;
@@ -6178,7 +6219,8 @@ static void handle_spu_events(int id, const char *json)
     if (n > 0) off += (size_t)n;
     for (uint32_t i = 0; i < got; i++) {
         const SpuEvent *e = &evs[i];
-        const char *kn = (e->kind <= 4) ? kind_names[e->kind] : "?";
+        const char *kn = (e->kind < sizeof(kind_names) / sizeof(kind_names[0]))
+                         ? kind_names[e->kind] : "?";
         n = snprintf(out + off, cap - off,
             "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"v\":%d,"
             "\"pitch\":\"0x%04X\",\"addr\":\"0x%05X\","

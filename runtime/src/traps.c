@@ -24,6 +24,7 @@ static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
 /* Forward declarations from interrupts.c */
 int psx_get_in_exception(void);
 void psx_exception_longjmp(void);
+void psx_irq_refresh_cause_ip2(void);
 
 /* ── Deterministic TCB scheduler — SCAFFOLDING (plan steps 1-2, INERT) ───────
  * These definitions back psx_scheduler.h. They are NOT yet wired into the live
@@ -340,7 +341,14 @@ static uint32_t psx_restore_context_from_tcb(CPUState* cpu, uint32_t tcb)
         uint32_t saved_sr = cpu->read_word(save + 140u);
         cpu->cop0[12] = (saved_sr & 0xFFFFFFC0u) | ((saved_sr >> 2) & 0x0Fu);
     }
+    /* Restore the saved CAUSE, then re-derive IP2. On hardware the IP field is
+     * live interrupt-line state and is never storage, so it cannot meaningfully
+     * be saved and restored: a context captured while an interrupt was pending
+     * and restored after the ack would re-latch a phantom IP2 out of guest
+     * memory. Reload the architecturally-saved bits, then let the single owner
+     * recompute bit 10 from the actual line. */
     cpu->cop0[13] = cpu->read_word(save + 144u);
+    psx_irq_refresh_cause_ip2();
     cpu->gpr[26] = cpu->read_word(save + 128u);
     psx_assert_no_sentinel_pc("restore_context_from_tcb", tcb, cpu->gpr[26]);
     thread_ctx_ring_log(cpu, tcb, cpu->gpr[26], 1);

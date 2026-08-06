@@ -115,13 +115,61 @@ extern uint32_t i_mask;
  * recorded here with its guest cycle. */
 #include "device_trace.h"
 
+/* ---- CAUSE.IP2 is COMBINATIONAL, not latched ---------------------------
+ *
+ * On R3000A the Cause.IP field is not storage: it reflects the current state
+ * of the interrupt input pins. On the PSX only IP2 (bit 10) is wired, and it
+ * carries the interrupt controller's output line, i.e. (I_STAT & I_MASK) != 0.
+ * It therefore RISES when a device raises and FALLS the instant the guest acks
+ * I_STAT or masks the source — with no CPU involvement either way.
+ *
+ * This runtime previously only ever OR'd bit 10 in at delivery and never
+ * cleared it, leaving a phantom IP2 in COP0.CAUSE. A kernel exception
+ * dispatcher that loops on CAUSE.IP & SR.IM to decide whether to service
+ * again sees a pending interrupt that no longer exists and can spin in its
+ * event scan forever.
+ *
+ * Verified against the independent Beetle oracle rather than asserted:
+ * beetle-psx/mednafen/psx/irq.cpp defines
+ *     #define Recalc() PSX_CPU->AssertIRQ(0, (bool)(Status & Mask))
+ * and calls it from IRQ_Assert (raise), from IRQ_Write for BOTH the Status ack
+ * and the Mask write, and at power-on; cpu.cpp's AssertIRQ clears bit (10+n)
+ * unconditionally and re-sets it only when the level is asserted. So the line
+ * is recomputed at every point (I_STAT & I_MASK) can change, which is exactly
+ * the set of call sites below.
+ *
+ * Ownership: this function is the ONLY writer of CAUSE bit 10. The delivery
+ * path no longer ORs it in separately — one owner, no divergence.
+ *
+ * Derived from PR #102 by Alexandros Mandravillis; the mirror call sites and
+ * the single-owner refactor are ours. */
+static uint32_t *s_cause_ptr;
+
+void psx_irq_refresh_cause_ip2(void)
+{
+    if (!s_cause_ptr) return;
+    if ((i_stat & i_mask & 0x7FFu) != 0u)
+        *s_cause_ptr |= (1u << 10);
+    else
+        *s_cause_ptr &= ~(1u << 10);
+}
+
+void psx_irq_set_cause_ptr(uint32_t *p)
+{
+    s_cause_ptr = p;
+    /* Power-on recompute, mirroring Beetle's IRQ_Power() -> Recalc(). Without
+     * this the first mirror only happens at the first raise/ack, so a CAUSE
+     * read before any interrupt activity would show a stale bit. */
+    psx_irq_refresh_cause_ip2();
+}
+
 /* Central IRQ-raise choke point. All device sources call this to set their
  * I_STAT bit so the device-event ring sees every raise from one place with the
- * exact guest cycle. Pure addition over `i_stat |= (1<<bit)` — identical effect
- * on i_stat, plus the trace note (no-op unless the ring is armed). */
+ * exact guest cycle. */
 void psx_irq_raise(uint32_t bit, uint32_t detail)
 {
     i_stat |= (1u << bit);
+    psx_irq_refresh_cause_ip2();
     device_trace_note(bit, detail);
 }
 
@@ -309,6 +357,33 @@ static int should_defer_vblank_for_sio(void) {
     return since_progress < VBLANK_DEFER_STALE_CYCLES;
 }
 
+/* ---- Mid-dispatch audio pump -------------------------------------------
+ *
+ * The SPU is autonomous on real hardware: it keeps consuming samples and
+ * advancing voice positions while the CPU busy-waits. Our audio pump is driven
+ * from the main loop between presented frames, so a guest busy-wait that never
+ * completes a frame starves it and freezes SPU time. That is self-deadlocking
+ * for any game that waits on an SPU-generated condition — the SPU IRQ it waits
+ * for needs SPU time to advance, and SPU time only advances when the wait ends.
+ *
+ * The VBlank edge is the right place to also pump because it is derived from
+ * the guest cycle counter, not from host presentation, so it keeps firing
+ * through such a wait. The pump itself is guest-cycle-budgeted (it renders
+ * elapsed_cycles/768 frames and carries the remainder), so pumping from both
+ * here and the main loop produces the same total sample count — the second
+ * caller simply finds little or no debt outstanding. Both callers are the main
+ * loop thread, so this is not concurrent with the SDL audio callback, which
+ * only drains an already-filled ring.
+ *
+ * Called at the END of the edge so the VBlank's own IRQ raise and ring records
+ * complete first: the pump can itself raise an SPU IRQ, and that should land
+ * after the VBlank edge it followed rather than interleaved into it.
+ *
+ * From PR #102 by Alexandros Mandravillis. */
+static void (*s_midframe_audio_pump)(void);
+
+void psx_set_midframe_audio_pump(void (*fn)(void)) { s_midframe_audio_pump = fn; }
+
 static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot
      * carries forward. Prevents long-running blocks from rounding multiple
@@ -328,6 +403,8 @@ static void fire_vblank_edge(void) {
     timers_tick(33868); /* ~1 NTSC frame worth of cycles */
     cdrom_tick();      /* Process pending CDROM responses */
 #endif
+    /* Keep SPU time flowing across guest busy-waits (see comment above). */
+    if (s_midframe_audio_pump) s_midframe_audio_pump();
 }
 
 void interrupts_service_scheduled_events(void) {
@@ -1085,14 +1162,20 @@ irq_deliver_eval:
     exception_entries_total++;
     uint32_t pre_handler_istat = i_stat;  /* snapshot for cooldown decision */
 
-    /* Set COP0 Cause: ExcCode=0 (interrupt). IP2 reflects the INTC line, so
-     * set it only when the hardware source is what's being delivered; a pure
-     * software interrupt must present the guest-written IP0/IP1 bits
-     * unmodified (the guest's dispatcher discriminates stages by exactly
-     * these bits — see sw_pending rationale at the top of this function). */
+    /* Set COP0 Cause: ExcCode=0 (interrupt). The ~0x7C mask deliberately
+     * preserves the whole IP field, because a pure software interrupt must
+     * present the guest-written IP0/IP1 bits unmodified (the guest's dispatcher
+     * discriminates stages by exactly those bits — see the sw_pending rationale
+     * at the top of this function).
+     *
+     * IP2 specifically is NOT set here. It is combinational and has a single
+     * owner, psx_irq_refresh_cause_ip2(), which already tracks the INTC line at
+     * every point that line can move. Refreshing rather than OR-ing means a
+     * delivery that races an ack cannot leave a stale bit behind, and a
+     * software-interrupt delivery gets IP2 reflecting the true line state
+     * instead of whatever bit 10 happened to be left as. */
     cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & ~0x7C) | (0 << 2);
-    if (hw_deliverable)
-        cpu->cop0[COP0_CAUSE] |= (1 << 10);
+    psx_irq_refresh_cause_ip2();
 
     /* Push SR exception stack: shift bits [5:0] left by 2. */
     cpu->cop0[COP0_SR] = (sr & ~0x3F) | ((sr & 0x0F) << 2);

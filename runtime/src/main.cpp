@@ -153,6 +153,9 @@ extern "C" {
 /* memory.c */
 extern "C" void     memory_init(const char* bios_path);
 extern "C" void     memory_set_sr_ptr(const uint32_t *p);
+/* interrupts.c */
+extern "C" void     psx_irq_set_cause_ptr(uint32_t *p);
+extern "C" void     psx_set_midframe_audio_pump(void (*fn)(void));
 extern "C" uint32_t memory_get_bios_checksum(void);
 extern "C" void     dirty_ram_register_text_image(uint32_t phys_lo,
                                                   const uint8_t *bytes,
@@ -2136,6 +2139,43 @@ static void runtime_perf_diag_tick() {
     for (int i = 0; i < 6; i++) last_up[i] = up[i];
 }
 
+/* Audio gate state, shared with the mid-frame (VBlank-edge) pump.
+ *
+ * sdl_audio_update() below is the sole authority on whether a pump should emit
+ * audio, discard it, or not run at all. The mid-frame pump exists to keep SPU
+ * time flowing across guest busy-waits that never present a frame, but it must
+ * NOT bypass that authority: pumping unconditionally would push real audio
+ * during a turbo-load hard mute, defeating the mute model (the queue is
+ * supposed to drain and voice positions freeze in place, so music resumes where
+ * it left off rather than replaying time-compressed garble), and would emit to
+ * the device during the discard-only turbo sink.
+ *
+ * So the mid-frame pump mirrors whatever the last frame decided. */
+enum AudioGate { AUDIO_GATE_NORMAL = 0, AUDIO_GATE_MUTED = 1, AUDIO_GATE_SINK = 2 };
+static AudioGate s_audio_gate = AUDIO_GATE_NORMAL;
+
+/* Invoked from the guest-derived VBlank edge (interrupts.c). */
+static void sdl_audio_pump_midframe(void) {
+    if (!sdl_audio_device) return;
+    switch (s_audio_gate) {
+    case AUDIO_GATE_MUTED:
+        /* Deliberately nothing. This preserves the existing, user-validated
+         * freeze-in-place mute semantics exactly. NOTE a real tension here: the
+         * SPU is autonomous on hardware and never freezes, so a game that
+         * busy-waits on an SPU-generated condition *during* a turbo load would
+         * still stall. No title in our suite is known to do that; recording it
+         * rather than guessing a fix that would change validated mute audio. */
+        return;
+    case AUDIO_GATE_SINK:
+        sdl_audio_pump(true);   /* advance SPU time, discard output */
+        return;
+    case AUDIO_GATE_NORMAL:
+    default:
+        sdl_audio_pump(false);
+        return;
+    }
+}
+
 static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
     if (!sdl_audio_device) return;
     {   /* Tag audio events with the vblank frame counter. */
@@ -2171,10 +2211,13 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             }
             muted = 1;
         }
+        s_audio_gate = AUDIO_GATE_MUTED;
         hangover = HANGOVER_FRAMES;
         return;
     }
     if (muted) {
+        /* Still inside the post-mute hangover: the gate stays MUTED so the
+         * mid-frame pump does not sneak audio out ahead of the unmute ramp. */
         if (hangover > 0) { hangover--; return; }
         muted = 0;
         sdl_audio_fadein_left = sdl_audio_fade_samples;
@@ -2188,6 +2231,7 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             audio_trace_event(AUDIO_EV_MUTE, 0, 2); /* b=2: discard-only sink */
         }
         g_turbo_audio_sink_active = 1;
+        s_audio_gate = AUDIO_GATE_SINK;
         sdl_audio_pump(true);
         return;
     }
@@ -2199,6 +2243,7 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
                           (uint32_t)sdl_audio_fadein_left, 2);
         g_audio_unmute_resync = 1;
     }
+    s_audio_gate = AUDIO_GATE_NORMAL;
     sdl_audio_pump(false);
 }
 
@@ -6812,6 +6857,12 @@ session_reboot:
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
             (void)psx_sdl_audio_resume(sdl_audio_device);
+            /* Also pump from the guest-derived VBlank edge so SPU time keeps
+             * advancing across guest busy-waits that never present a frame
+             * (guest-cycle-budgeted; same thread — see interrupts.c). Routed
+             * through the gated wrapper so it honours the turbo mute/sink
+             * state rather than bypassing it. */
+            psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
         }
     }
 #endif
@@ -7147,6 +7198,12 @@ session_reboot:
 
     /* Let memory subsystem see SR for cache-isolation checks. */
     memory_set_sr_ptr(&cpu.cop0[12]);
+
+    /* Wire the CAUSE.IP2 mirror. IP2 is combinational on real hardware and has
+     * to track (I_STAT & I_MASK) through raises, acks and mask writes; this
+     * hands interrupts.c the one location it is allowed to maintain. Also
+     * performs the power-on recompute. */
+    psx_irq_set_cause_ptr(&cpu.cop0[13]);
 
     /* Wire debug server to CPU state for register queries. */
     debug_server_set_cpu(&cpu);
