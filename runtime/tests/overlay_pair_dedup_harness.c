@@ -143,6 +143,15 @@ void gte_write_ctrl(CPUState *cpu, uint8_t reg, uint32_t val) {
 }
 int32_t psx_ws_plane_nx(int32_t nx) { return nx; }
 uint32_t psx_ws_xclip_bound(uint32_t vanilla) { return vanilla; }
+uint32_t psx_ws_cull_keep_result(uint32_t vanilla, uint32_t forced) {
+    (void)forced; return vanilla;
+}
+uint32_t psx_ws_angle_widen(uint32_t vanilla) { return vanilla; }
+uint32_t psx_ws_aspect_cone_result(uint32_t site, uint32_t vanilla,
+                                   uint32_t object, int32_t x, int32_t z,
+                                   int32_t y) {
+    (void)site; (void)object; (void)x; (void)z; (void)y; return vanilla;
+}
 void gte_precision_store_word(uint32_t addr, uint8_t reg) {
     (void)addr; (void)reg;
 }
@@ -223,6 +232,60 @@ static int expect_int(const char *what, long long actual, long long expected) {
     return 0;
 }
 
+#ifdef PSX_OVERLAY_TEST_HOOKS
+typedef int (*ReportDumpFn)(char *, int);
+
+static int exercise_report_dump(const char *name, ReportDumpFn dump, int cap) {
+    const int guard = 16;
+    size_t payload = cap > 0 ? (size_t)cap : 1u;
+    unsigned char *storage = (unsigned char *)malloc(payload + guard * 2u);
+    if (!storage) return 0;
+    memset(storage, 0xA5, payload + guard * 2u);
+    char *out = (char *)storage + guard;
+    int written = dump(out, cap);
+    int ok = written >= 0 && (cap <= 0 || written < cap);
+    for (int i = 0; i < guard; i++) {
+        if (storage[i] != 0xA5 || storage[guard + payload + i] != 0xA5)
+            ok = 0;
+    }
+    if (cap > 0) {
+        if (written > 0)
+            ok &= out[written] == '\0' && strlen(out) == (size_t)written;
+        else
+            ok &= out[0] == '\0';
+    }
+    if (!ok) {
+        fprintf(stderr, "%s cap=%d corrupted bounds or length (written=%d)\n",
+                name, cap, written);
+        free(storage);
+        return 0;
+    }
+    printf("%s\t%d\t%d\t%s\n", name, cap, written,
+           written > 0 ? out : "<empty>");
+    free(storage);
+    return 1;
+}
+
+static int exercise_report_bounds(void) {
+    static const int common_caps[] = {1, 2, 3, 64, 128, 512, 4096,
+                                      128 * 1024,
+                                      PSX_OVERLAY_SHADOW_DUMP_CAP};
+    int ok = 1;
+    overlay_loader_test_seed_report_rings();
+    for (size_t i = 0; i < sizeof(common_caps) / sizeof(common_caps[0]); i++) {
+        ok &= exercise_report_dump("shadow", overlay_loader_dump_shadow,
+                                   common_caps[i]);
+        ok &= exercise_report_dump("detail", overlay_loader_dump_shadow_detail,
+                                   common_caps[i]);
+        ok &= exercise_report_dump("native", overlay_loader_dump_native_ring,
+                                   common_caps[i]);
+    }
+    ok &= exercise_report_dump("native", overlay_loader_dump_native_ring,
+                               2 * 1024 * 1024);
+    return ok;
+}
+#endif
+
 static uint32_t loader_owner_count(void) {
     uint32_t loads = 0;
     overlay_loader_get_counters(&loads, NULL, NULL, NULL, NULL, NULL,
@@ -273,6 +336,10 @@ static int reveal_second_pair(const char *second) {
 }
 
 int main(int argc, char **argv) {
+#ifdef PSX_OVERLAY_TEST_HOOKS
+    if (argc == 2 && strcmp(argv[1], "--report-bounds") == 0)
+        return exercise_report_bounds() ? 0 : 1;
+#endif
     if (argc != 5) {
         fprintf(stderr, "usage: %s <cache-root> <scenario> <first> <second>\n",
                 argv[0]);

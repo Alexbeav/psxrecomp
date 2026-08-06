@@ -23,12 +23,14 @@
 #  include <direct.h>
 #  include <io.h>
 #  define CAPTURE_MKDIR(path) _mkdir(path)
+#  define CAPTURE_RMDIR(path) _rmdir(path)
 #  define CAPTURE_FSYNC(file) _commit(_fileno(file))
 #  define CAPTURE_PID() ((unsigned long)GetCurrentProcessId())
 #else
 #  include <sys/stat.h>
 #  include <unistd.h>
 #  define CAPTURE_MKDIR(path) mkdir((path), 0755)
+#  define CAPTURE_RMDIR(path) rmdir(path)
 #  define CAPTURE_FSYNC(file) fsync(fileno(file))
 #  define CAPTURE_PID() ((unsigned long)getpid())
 #endif
@@ -548,6 +550,73 @@ static int copy_file_atomic(const char *src_path, const char *dst_path)
     return 1;
 }
 
+static int capture_path_is_directory(const char *path)
+{
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+           (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+/* Runtime builds before additive fragments were introduced could leave
+ * `<capture>.d` as one JSON file.  Never overwrite or discard that evidence.
+ * Move it to a deterministic recoverable sibling, create the directory, and
+ * publish an exact immutable copy inside it before accepting a new fragment.
+ * If publication fails, roll the empty directory back to the legacy file so a
+ * later run (and legacy tooling) can retry safely. */
+static int capture_prepare_contribution_dir(const char *path)
+{
+    char backup[960];
+    char contribution[1024];
+    FILE *probe;
+    uint64_t sig;
+    unsigned collision;
+
+    if (capture_path_is_directory(path)) return 1;
+    probe = fopen(path, "rb");
+    if (!probe) {
+        if (CAPTURE_MKDIR(path) == 0 || capture_path_is_directory(path))
+            return 1;
+        return 0;
+    }
+    fclose(probe);
+
+    sig = capture_file_sig(path);
+    if (!sig) return 0;
+    for (collision = 0;; collision++) {
+        if (collision == 0)
+            snprintf(backup, sizeof(backup), "%s.legacy-%016llX.json", path,
+                     (unsigned long long)sig);
+        else
+            snprintf(backup, sizeof(backup), "%s.legacy-%016llX-%u.json", path,
+                     (unsigned long long)sig, collision);
+        probe = fopen(backup, "rb");
+        if (!probe) break;
+        fclose(probe);
+    }
+    if (rename(path, backup) != 0) return 0;
+    if (CAPTURE_MKDIR(path) != 0 && !capture_path_is_directory(path)) {
+        (void)rename(backup, path);
+        return 0;
+    }
+
+    snprintf(contribution, sizeof(contribution), "%s/%016llX.json", path,
+             (unsigned long long)sig);
+    if (!copy_file_atomic(backup, contribution)) {
+        (void)CAPTURE_RMDIR(path);
+        (void)rename(backup, path);
+        return 0;
+    }
+    fprintf(stderr,
+            "psxrecomp: migrated legacy additive capture history %s -> %s\n",
+            backup, contribution);
+    return 1;
+}
+
 /* Append the canonical JSON array as one minified JSONL record. Whitespace is
  * stripped only outside strings, so bytes_b64 remains byte-for-byte intact.
  * A crash can damage only the final line; every earlier launch remains a valid
@@ -712,34 +781,39 @@ static uint64_t capture_commit_temp(const char *temp_path, const char *reason,
     if (s_commit_mutex) SDL_LockMutex(s_commit_mutex);
 
     snprintf(contribution_dir, sizeof(contribution_dir), "%s.d", s_capture_path);
-    (void)CAPTURE_MKDIR(contribution_dir); /* already-exists is success */
-    for (unsigned collision = 0;; collision++) {
-        if (collision == 0)
-            snprintf(contribution, sizeof(contribution), "%s/%016llX.json",
-                     contribution_dir, (unsigned long long)sig);
-        else
-            snprintf(contribution, sizeof(contribution), "%s/%016llX-%u.json",
-                     contribution_dir, (unsigned long long)sig, collision);
-        probe = fopen(contribution, "rb");
-        if (!probe) break;
-        fclose(probe);
-        if (capture_files_equal(temp_path, contribution)) break;
-    }
-    probe = fopen(contribution, "rb");
-    if (probe) {
-        fclose(probe); /* exact snapshot already retained */
-        history_ok = 1;
+    if (!capture_prepare_contribution_dir(contribution_dir)) {
+        fprintf(stderr,
+                "psxrecomp: ERROR: cannot prepare additive capture history %s\n",
+                contribution_dir);
     } else {
-        snprintf(contribution_tmp, sizeof(contribution_tmp), "%s.%lu.%llu.tmp",
-                 contribution, CAPTURE_PID(), (unsigned long long)sequence);
-        if (capture_copy_file(temp_path, contribution_tmp) &&
-            atomic_replace_file(contribution_tmp, contribution)) {
+        for (unsigned collision = 0;; collision++) {
+            if (collision == 0)
+                snprintf(contribution, sizeof(contribution), "%s/%016llX.json",
+                         contribution_dir, (unsigned long long)sig);
+            else
+                snprintf(contribution, sizeof(contribution), "%s/%016llX-%u.json",
+                         contribution_dir, (unsigned long long)sig, collision);
+            probe = fopen(contribution, "rb");
+            if (!probe) break;
+            fclose(probe);
+            if (capture_files_equal(temp_path, contribution)) break;
+        }
+        probe = fopen(contribution, "rb");
+        if (probe) {
+            fclose(probe); /* exact snapshot already retained */
             history_ok = 1;
         } else {
-            remove(contribution_tmp);
-            fprintf(stderr,
-                "psxrecomp: ERROR: additive capture history write failed: %s\n",
-                contribution);
+            snprintf(contribution_tmp, sizeof(contribution_tmp), "%s.%lu.%llu.tmp",
+                     contribution, CAPTURE_PID(), (unsigned long long)sequence);
+            if (capture_copy_file(temp_path, contribution_tmp) &&
+                atomic_replace_file(contribution_tmp, contribution)) {
+                history_ok = 1;
+            } else {
+                remove(contribution_tmp);
+                fprintf(stderr,
+                    "psxrecomp: ERROR: additive capture history write failed: %s\n",
+                    contribution);
+            }
         }
     }
     /* Snapshots may be formatted concurrently, so only the newest snapshot is

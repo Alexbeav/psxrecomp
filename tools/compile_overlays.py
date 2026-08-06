@@ -54,6 +54,124 @@ import platform
 import re
 
 
+def load_additive_captures(capture_path):
+    """Load and union the latest capture plus immutable history snapshots.
+
+    Runtime capture history normally lives in ``<capture_path>.d/*.json``.
+    Older builds used a single JSON snapshot named ``<capture_path>.d``;
+    accepting that legacy form keeps their coherent evidence usable without
+    rewriting game-derived artifacts.  Regions are merged only when their
+    normalized load address, size, and exact decoded bytes match, so address
+    reuse remains a set of distinct variants while observed entry evidence is
+    additive.
+    """
+    if os.path.isdir(capture_path):
+        base_path = os.path.join(capture_path, 'overlay_captures.json')
+        history_path = capture_path
+    else:
+        base_path = capture_path
+        history_path = capture_path + '.d'
+
+    paths = []
+    if os.path.isdir(history_path):
+        history_paths = [
+            os.path.join(history_path, name)
+            for name in os.listdir(history_path)
+            if name.lower().endswith('.json')
+        ]
+        def history_sort_key(path):
+            try:
+                return os.path.getmtime(path), path
+            except OSError:
+                # The open below owns the authoritative check. A capture can
+                # disappear between listdir and stat when another process is
+                # rotating a contribution; retain it so that path produces a
+                # bounded warning instead of aborting the whole compile.
+                return float('inf'), path
+
+        history_paths.sort(key=history_sort_key)
+        paths.extend(history_paths)
+    elif os.path.isfile(history_path):
+        # Compatibility with the pre-directory additive snapshot format.
+        paths.append(history_path)
+    if os.path.isfile(base_path) and base_path not in paths:
+        # In the canonical file layout the mutable current snapshot is applied
+        # after immutable history. Directory input already included this path
+        # in the mtime-ordered contribution list above.
+        paths.append(base_path)
+    if not paths:
+        raise FileNotFoundError(f'no capture manifests at {capture_path}')
+
+    evidence_fields = (
+        'executed_pcs', 'observed_pcs', 'dispatch_entry_pcs',
+        'static_dispatch_entry_pcs', 'function_entry_pcs', 'seeds',
+        'static_discovery_entry_pcs',
+    )
+    merged = {}
+    accepted_sources = []
+    for path in paths:
+        try:
+            with open(path, encoding='utf-8') as source:
+                records = json.load(source)
+            if not isinstance(records, list):
+                raise ValueError('root is not a list')
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f'[captures] WARNING: skipping unreadable contribution '
+                  f'{path}: {exc}')
+            continue
+        accepted_sources.append(path)
+        for record_index, region in enumerate(records):
+            try:
+                if not isinstance(region, dict):
+                    raise ValueError('record is not an object')
+                raw_load = region['load_addr']
+                load_addr = (int(raw_load, 0) if isinstance(raw_load, str)
+                             else int(raw_load)) & 0x1FFFFFFF
+                size = int(region['size'])
+                encoded = region['bytes_b64']
+                if size <= 0 or not isinstance(encoded, str):
+                    raise ValueError('invalid size or bytes_b64')
+                decoded = base64.b64decode(encoded, validate=True)
+                if len(decoded) != size:
+                    raise ValueError('decoded byte length does not match size')
+                if load_addr >= 0x200000 or size > 0x200000 - load_addr:
+                    raise ValueError('capture range is outside 2 MiB RAM')
+
+                validated = dict(region)
+                for field in evidence_fields:
+                    values = region.get(field, [])
+                    if not isinstance(values, list):
+                        raise ValueError(f'{field} is not a list')
+                    parsed = set()
+                    for value in values:
+                        addr = _parse_addr(value)
+                        if (addr & 0x1FFFFFFF) >= 0x200000:
+                            raise ValueError(f'{field} address is outside RAM')
+                        parsed.add(addr)
+                    validated[field] = sorted(parsed)
+            except (KeyError, TypeError, ValueError, binascii.Error) as exc:
+                print(f'[captures] WARNING: skipping malformed record '
+                      f'{record_index} in {path}: {exc}')
+                continue
+
+            identity = (load_addr, size, hashlib.sha256(decoded).digest())
+            target = merged.get(identity)
+            if target is None:
+                merged[identity] = validated
+                continue
+            for field in evidence_fields:
+                target[field] = sorted(
+                    _parse_addr_list(target.get(field, [])) |
+                    set(validated[field]))
+            for field, value in validated.items():
+                if field not in evidence_fields:
+                    target[field] = value
+
+    if not merged:
+        raise ValueError(f'no valid capture records at {capture_path}')
+    return list(merged.values()), accepted_sources
+
+
 def codegen_ver(runtime_include: str) -> int:
     """Parse PSX_OVERLAY_CODEGEN_VER from overlay_api.h so the cache path version
     is the SAME value the runtime (overlay_loader.c) uses — the two can't drift.
@@ -375,6 +493,7 @@ HOSTED_OWNER_REASONS = EXACT_FRAGMENT_REASONS - {'DISPATCH_ROOT'}
 FATAL_SEED_REASONS = {'BRANCH_TARGET_ONLY', 'OBSERVED_PC_ONLY', 'UNKNOWN'}
 BIOS_RESIDENT_PRODUCER = 'bios_resident_manifest'
 BIOS_RESIDENT_MARKER = 'psxrecomp bios resident shard v1'
+UNPROMOTED_MARKER = 'psxrecomp unpromoted shard v1'
 
 # Hosted aliases are supplemental optimizations, never correctness authority.
 # Keep every phase deterministically bounded so adversarial/malformed capture
@@ -602,6 +721,77 @@ def _is_control_flow(word) -> bool:
                    0x14, 0x15, 0x16, 0x17) or
             (op == 0 and fn in (0x08, 0x09)) or
             (op in (0x11, 0x12) and ((word >> 21) & 0x1F) == 0x08))
+
+
+def load_game_resident_text(game_toml: str, toml_doc: dict):
+    """Load configured resident executable text for promotion checks."""
+    game = toml_doc.get('game', {})
+    exe_name = game.get('exe')
+    if not exe_name:
+        return None
+    exe_path = os.path.join(os.path.dirname(os.path.abspath(game_toml)),
+                            str(exe_name))
+    try:
+        with open(exe_path, 'rb') as source:
+            image = source.read()
+    except OSError:
+        return None
+    if image.startswith(b'PS-X EXE') and len(image) >= 0x800:
+        load_addr, text_size = struct.unpack_from('<II', image, 0x18)
+        if text_size <= len(image) - 0x800:
+            return load_addr & 0x1FFFFFFF, image[0x800:0x800 + text_size]
+        return None
+    load = game.get('load_address')
+    size = game.get('text_size')
+    if load is None or size is None:
+        return None
+    text_size = min(_parse_addr(size), len(image))
+    return _parse_addr(load) & 0x1FFFFFFF, image[:text_size]
+
+
+def resident_control_flow_patch_ranges(data: bytes, phys_addr: int,
+                                       func_ids: list,
+                                       resident: tuple[int, bytes] | None
+                                       ) -> bool:
+    """True when guarded native bytes differ only by CFG-edge presence.
+
+    Captures may include mutable data outside a compiled function. Those words
+    cannot affect the emitted candidate and must not hide a JAL/JR/branch that
+    was inserted or removed inside one of its exact guarded ranges.
+    """
+    if resident is None or not data or (phys_addr & 3) or (len(data) & 3):
+        return False
+    resident_addr, resident_data = resident
+    for _entry, _crc, ranges in func_ids:
+        changed = 0
+        seen = set()
+        cfg_only = True
+        for start, length in ranges:
+            lo = start & 0x1FFFFFFF
+            if (lo & 3) or length <= 0 or (length & 3):
+                return False
+            capture_off = lo - phys_addr
+            resident_off = lo - resident_addr
+            if (capture_off < 0 or capture_off + length > len(data) or
+                    resident_off < 0 or
+                    resident_off + length > len(resident_data)):
+                return False
+            for rel in range(0, length, 4):
+                address = lo + rel
+                if address in seen:
+                    continue
+                seen.add(address)
+                captured = struct.unpack_from('<I', data, capture_off + rel)[0]
+                original = struct.unpack_from(
+                    '<I', resident_data, resident_off + rel)[0]
+                if captured == original:
+                    continue
+                if _is_control_flow(captured) == _is_control_flow(original):
+                    cfg_only = False
+                changed += 1
+        if cfg_only and changed > 0:
+            return True
+    return False
 
 
 def _is_valid_mips_word(word) -> bool:
@@ -4254,6 +4444,18 @@ def _write_json_atomic(path: str, value: dict) -> None:
         _best_effort_unlink(staged)
 
 
+def update_unpromoted_marker(dll_path: str, reason: str | None) -> None:
+    """Atomically publish or remove a fail-closed native-promotion sidecar."""
+    marker = os.path.splitext(dll_path)[0] + '.unpromoted'
+    if reason is None:
+        _best_effort_unlink(marker)
+        return
+    _write_json_atomic(marker, {
+        'schema': UNPROMOTED_MARKER,
+        'reason': reason,
+    })
+
+
 @contextmanager
 def _exclusive_file_lock(lock_path: str, timeout: float | None = 120.0):
     """Kernel-owned cross-process lock on one permanent byte-range file.
@@ -5235,6 +5437,7 @@ def main():
         raw = f.read().lstrip(b'\xef\xbb\xbf')  # UTF-8 BOM
     toml = tomllib.loads(raw.decode('utf-8'))
     game_id = toml.get('game', {}).get('id', 'UNKNOWN')
+    resident_text = load_game_resident_text(args.game_toml, toml)
     print(f'Game ID: {game_id}')
 
     # Stale-recompiler-binary guard — BOTH modes (static overlays are just as
@@ -5262,8 +5465,8 @@ def main():
         print(f'Cache dir: {cache_dir}  '
               f'(codegen ver {cg}, emitter {ch:08x}, config {gh:08x})')
 
-    with open(args.captures) as f:
-        captures = json.load(f)
+    captures, capture_sources = load_additive_captures(args.captures)
+    print(f'Capture sources: {len(capture_sources)} coherent snapshot(s)')
 
     if args.only_region:
         only_regions = {int(value, 0) & 0x1FFFFFFF
@@ -5400,6 +5603,27 @@ def main():
             print('  SKIP: no walk-root seeds (data-only region)\n')
             stats.add_skip()
             return
+
+        # Re-evaluate an existing exact pair before the ordinary coverage skip.
+        # Otherwise a newly learned promotion rule could never quarantine a
+        # cache entry that already satisfies all current root demand.
+        if not args.static:
+            expected_abi = overlay_abi_tag(
+                args.runtime_include, args.flavor)
+            cached_ids = current_variant_func_ids(
+                load_shard_func_ids(dll_path, expected_abi),
+                data, load_addr, size)
+            if cached_ids:
+                if resident_control_flow_patch_ranges(
+                        data, phys_addr, cached_ids, resident_text):
+                    update_unpromoted_marker(
+                        dll_path, 'resident-control-flow-patch')
+                    print('  SKIP: guarded native bytes are resident text '
+                          'changed only at control-flow words; retained for '
+                          'interpreter ownership\n')
+                    stats.add_skip()
+                    return
+                update_unpromoted_marker(dll_path, None)
 
         # Cheap evidence-aware cache gate. A valid existing pair is not enough:
         # a later capture can add roots for identical bytes. Skip reanalysis only
@@ -5596,6 +5820,16 @@ def main():
                 # an endless pile of redundant DLLs.
                 this_ids = (parse_overlay_func_ids(ranges_src, data, load_addr, size)
                             if ranges_src else [])
+                if resident_control_flow_patch_ranges(
+                        data, phys_addr, this_ids, resident_text):
+                    update_unpromoted_marker(
+                        dll_path, 'resident-control-flow-patch')
+                    print('  SKIP: guarded native bytes are resident text '
+                          'changed only at control-flow words; retained for '
+                          'interpreter ownership\n')
+                    stats.add_skip()
+                    return
+                update_unpromoted_marker(dll_path, None)
                 delay_errors = audit_func_id_delay_slots(
                     this_ids, data, load_addr)
                 if delay_errors:

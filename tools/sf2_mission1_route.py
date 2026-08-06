@@ -157,6 +157,7 @@ def checkpoint(client: DebugClient, name: str) -> dict[str, Any]:
         "gpu": client.call("gpu_state"),
         "present": client.call("present_ring", n=16),
         "gl_present": client.call("gl_present_ring", n=16),
+        "gl_interp": client.call("gl_interp"),
         "pad": client.call("pad_status"),
         "cdrom": client.call("cdrom_state"),
         "spu": client.call("spu_status"),
@@ -260,6 +261,11 @@ def semantic_future_frame(planned_frame: int, observed_frame: int) -> int:
     return next_frame_boundary(observed_frame + 600)
 
 
+def oldest_sector_entry(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Select the first guest observation from a newest-first history reply."""
+    return min(entries, key=lambda item: (item["frame"], item["seq"]))
+
+
 def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "schema": 1,
@@ -279,9 +285,13 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
         for name, lba in STARTUP_MOVIE_LBAS.items():
             if name in evidence["startup_seen"]:
                 continue
-            result = client.call("cdrom_sector_history", count=1, lba=hex(lba))
+            # The endpoint returns newest-first.  Request enough matching
+            # entries to cover a polling interval, then retain the oldest one;
+            # count=1 makes the recorded "first" frame depend on host polling
+            # timing during a contiguous movie-sector burst.
+            result = client.call("cdrom_sector_history", count=64, lba=hex(lba))
             if result["entries"]:
-                entry = result["entries"][0]
+                entry = oldest_sector_entry(result["entries"])
                 evidence["startup_seen"][name] = {
                     "frame": entry["frame"],
                     "lba": entry["lba"],

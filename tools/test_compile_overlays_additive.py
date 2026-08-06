@@ -357,6 +357,55 @@ class AdditiveCaptureTests(unittest.TestCase):
             vault_view = coverage_vault._load_list(str(base))
             self.assertEqual(len(vault_view), 2)
 
+    def test_loads_legacy_single_file_history_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "overlay_captures.json"
+            history = Path(str(base) + ".d")
+            bytes_a = b"\x10\x20\x30\x40"
+            bytes_b = b"\x50\x60\x70\x80"
+            history.write_text(json.dumps([
+                region(0x80010000, bytes_a, executed=(0x80010000,)),
+            ]), encoding="utf-8")
+            base.write_text(json.dumps([
+                region(0x80010000, bytes_b, executed=(0x80010004,)),
+            ]), encoding="utf-8")
+
+            captures, sources = compile_overlays.load_additive_captures(
+                str(base))
+
+            self.assertEqual(sources, [str(history), str(base)])
+            self.assertEqual(len(captures), 2)
+            self.assertTrue(history.is_file())
+
+    def test_vanishing_history_stat_does_not_abort_compile(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "overlay_captures.json"
+            history = Path(str(base) + ".d")
+            history.mkdir()
+            contribution = history / "vanishing.json"
+            contribution.write_text(json.dumps([
+                region(0x80010000, b"\x10\x20\x30\x40"),
+            ]), encoding="utf-8")
+            base.write_text(json.dumps([
+                region(0x80011000, b"\x50\x60\x70\x80"),
+            ]), encoding="utf-8")
+
+            real_getmtime = compile_overlays.os.path.getmtime
+
+            def transient_getmtime(path):
+                if Path(path) == contribution:
+                    raise FileNotFoundError(path)
+                return real_getmtime(path)
+
+            with mock.patch.object(
+                    compile_overlays.os.path, "getmtime",
+                    side_effect=transient_getmtime):
+                captures, sources = compile_overlays.load_additive_captures(
+                    str(base))
+
+            self.assertEqual(len(captures), 2)
+            self.assertEqual(set(sources), {str(contribution), str(base)})
+
     def test_vault_accepts_history_only_and_unions_all_evidence_fields(self):
         with tempfile.TemporaryDirectory() as td:
             source = Path(td) / "source.json"

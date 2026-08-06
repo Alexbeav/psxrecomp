@@ -33,6 +33,7 @@
 
 #include "cpu_state.h"
 #include "crash_trace.h"
+#include "overlay_loader.h"
 
 /* Output path — overwritten per dump. */
 static const char *kReportPath = "psx_last_run_report.json";
@@ -498,6 +499,40 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         if (k > 0) {
             append_str(buf, sizeof(buf), &pos, "  \"ce_profile\": ");
             append_str(buf, sizeof(buf), &pos, ce);
+            append_str(buf, sizeof(buf), &pos, ",\n");
+        }
+    }
+
+    /* Ordinary-Release overlay ownership. The loader already records this
+     * bounded ring on every production native call; the crash report merely
+     * serializes it after execution has stopped. Emit it before the optional
+     * host-stack walk so a fault there cannot hide the last native owner. */
+    {
+        static char native_overlay[2 * 1024 * 1024];
+        int k = overlay_loader_dump_native_ring(
+            native_overlay, (int)sizeof(native_overlay));
+        if (k > 0) {
+            append_str(buf, sizeof(buf), &pos, "  \"native_overlay\": ");
+            append_str(buf, sizeof(buf), &pos, native_overlay);
+            append_str(buf, sizeof(buf), &pos, ",\n");
+        }
+    }
+
+    /* Opt-in same-state differential evidence. With differential mode off,
+     * these serializers remain a small zero-count object. */
+    {
+        static char overlay_shadow[PSX_OVERLAY_SHADOW_DUMP_CAP];
+        static char overlay_shadow_detail[8 * 1024];
+        int k = overlay_loader_dump_shadow(
+            overlay_shadow, (int)sizeof(overlay_shadow));
+        int d = overlay_loader_dump_shadow_detail(
+            overlay_shadow_detail, (int)sizeof(overlay_shadow_detail));
+        if (k > 0 && d > 0) {
+            append_str(buf, sizeof(buf), &pos, "  \"overlay_shadow\": ");
+            append_str(buf, sizeof(buf), &pos, overlay_shadow);
+            append_str(buf, sizeof(buf), &pos,
+                       ",\n  \"overlay_shadow_detail\": ");
+            append_str(buf, sizeof(buf), &pos, overlay_shadow_detail);
             append_str(buf, sizeof(buf), &pos, ",\n");
         }
     }

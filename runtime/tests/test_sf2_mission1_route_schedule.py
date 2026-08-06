@@ -39,6 +39,15 @@ def main() -> int:
     assert route.semantic_future_frame(24000, 24417) == 25200
     assert route.semantic_future_frame(24000, 24435) == 25200
 
+    # Sector-history replies are newest-first.  Startup identity evidence must
+    # retain the first guest frame rather than whichever repeat a host poll saw.
+    entries = [
+        {"seq": 102, "frame": 1124},
+        {"seq": 101, "frame": 1106},
+        {"seq": 100, "frame": 1105},
+    ]
+    assert route.oldest_sector_entry(entries) == entries[2]
+
     print("sf2 mission1 route schedule regression: PASS")
     return 0
 

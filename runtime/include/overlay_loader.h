@@ -99,6 +99,15 @@ void overlay_loader_get_load_timing(uint64_t *total_us, uint64_t *max_us,
 /* Opt-in PSX_RUNTIME_PERF_DIAG sampler: returns and clears the hottest native
  * owner since the preceding call. Disabled runs pay no table update cost. */
 void overlay_loader_take_hot_native(uint32_t *pc, uint64_t *calls);
+/* Serialize bounded state already collected by the ordinary Release loader.
+ * These are called only after a crash/freeze has stopped useful execution. */
+#define PSX_OVERLAY_SHADOW_DUMP_CAP (512 * 512 + 1024)
+int overlay_loader_dump_native_ring(char *out, int cap);
+int overlay_loader_dump_shadow(char *out, int cap);
+int overlay_loader_dump_shadow_detail(char *out, int cap);
+#ifdef PSX_OVERLAY_TEST_HOOKS
+void overlay_loader_test_seed_report_rings(void);
+#endif
 /* Exact shadow-differential summary for opt-in perf diagnostics. */
 void overlay_loader_get_shadow_summary(uint64_t *calls, uint64_t *divergences,
                                        uint32_t *first_divergence_pc);

@@ -414,6 +414,7 @@ if(BUILD_TESTING)
         #       built; not a source-only guard
         foreach(_t IN ITEMS
                 capture_history
+                crash_overlay_ring_guards
                 cdrom_seek_retarget
                 debug_input_schedule
                 default_renderer_guards
@@ -428,7 +429,10 @@ if(BUILD_TESTING)
                 mod_controller_override
                 overlay_call_unit_irq_guards
                 overlay_candidate_capacity
+                overlay_capture_legacy_history
                 overlay_decodable_fallback
+                overlay_dump_bounds
+                overlay_resident_patch_promotion
                 overlay_init_guard
                 pad_timeline_final_sample
                 sf2_mission1_route_schedule

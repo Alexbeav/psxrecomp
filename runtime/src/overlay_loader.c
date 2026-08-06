@@ -1556,6 +1556,33 @@ static int cache_filename_equal(const char *a, const char *b) {
  * passes the ordinary per-function live-byte CRC guard, so a different BIOS or
  * boot-time patch fails closed to the interpreter. */
 #define BIOS_RESIDENT_MARKER_SCHEMA "psxrecomp bios resident shard v1"
+/* A compiled identity can be valid evidence while still lacking a safe native
+ * promotion contract. Keep the artifact for audit, but omit it from the live
+ * index whenever compile_overlays publishes this sidecar. */
+#define UNPROMOTED_MARKER_SCHEMA "psxrecomp unpromoted shard v1"
+static int cache_path_is_unpromoted(const char *dll_path) {
+    char path[800];
+    int written = snprintf(path, sizeof(path), "%s", dll_path);
+    if (written < 0 || (size_t)written >= sizeof(path)) return 1;
+    size_t n = strlen(path);
+    if (n < OVERLAY_SHARED_EXT_LEN ||
+        strcmp(path + n - OVERLAY_SHARED_EXT_LEN, OVERLAY_SHARED_EXT) != 0)
+        return 0;
+    written = snprintf(path + n - OVERLAY_SHARED_EXT_LEN,
+                       sizeof(path) - (n - OVERLAY_SHARED_EXT_LEN),
+                       ".unpromoted");
+    if (written < 0 ||
+        (size_t)written >= sizeof(path) - (n - OVERLAY_SHARED_EXT_LEN))
+        return 1;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    char buf[256] = {0};
+    size_t got = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[got] = '\0';
+    return strstr(buf, UNPROMOTED_MARKER_SCHEMA) != NULL;
+}
+
 static int cache_path_is_bios_resident(const char *dll_path) {
     char path[800];
     snprintf(path, sizeof(path), "%s", dll_path);
@@ -1613,6 +1640,7 @@ static int add_posix_cache_file(const PsxOverlayCacheFile *file, void *opaque) {
      * migration, but never let them suppress or execute instead of a bound
      * immutable 8_8_8 repair. */
     if (!cache_name_is_immutable(file->name)) return 0;
+    if (cache_path_is_unpromoted(file->path)) return 0;
     if (s_cache_idx_count >= CACHE_IDX_CAP) {
         loader_log("*** CACHE INDEX FULL (%d): further DLLs near %s are being "
                    "IGNORED — their regions will run interpreted. Raise "
@@ -1660,6 +1688,7 @@ static void scan_one_cache_dir(const char *dir, int tier) {
         }
         char full[768];
         snprintf(full, sizeof(full), "%s/%s", dir, fd.cFileName);
+        if (cache_path_is_unpromoted(full)) continue;
         /* Same full path means a rescan duplicate. Same logical name with a
          * different artifact suffix is an additive repair and is retained. */
         if (cache_idx_has_path(full)) continue;
@@ -2829,6 +2858,13 @@ static void overlay_library_close(OverlayLibraryHandle handle) {
  * retains that reference for process lifetime, matching the ordinary loader. */
 static int load_one_dll(const char *dll_path,
                         OverlayLibraryHandle prepared) {
+    /* Autocompile can publish the sidecar after the initial scan. Recheck at
+     * the final load boundary so an indexed path cannot outrun quarantine. */
+    if (cache_path_is_unpromoted(dll_path)) {
+        loader_log("unpromoted shard left to interpreter: %s", dll_path);
+        overlay_library_close(prepared);
+        return 0;
+    }
     /* Fail CLOSED at the tracking cap, BEFORE registering anything: past this
      * point dll_already_loaded() would lose track of the DLL and a later
      * rescan could double-register its candidates (stale-chain execution).
@@ -4411,43 +4447,93 @@ void overlay_loader_shadow_scheduler_escape_fixup(void) {
     if (s_in_shadow) shadow_escape_cleanup();
 }
 
+/* Crash serializers must remain safe for every caller-provided capacity. Keep
+ * each JSON token transactional: format it away from the output, then copy it
+ * only when the complete token plus the final object suffix fits. */
+static int report_format(char *dst, size_t dst_cap, const char *fmt, ...) {
+    va_list ap;
+    int written;
+    va_start(ap, fmt);
+    written = vsnprintf(dst, dst_cap, fmt, ap);
+    va_end(ap);
+    if (written < 0 || (size_t)written >= dst_cap) return -1;
+    return written;
+}
+
+static int report_copy(char *out, int cap, int *pos,
+                       const char *text, int text_len) {
+    if (!out || !pos || cap <= 0 || *pos < 0 || text_len < 0 ||
+        *pos >= cap || text_len >= cap - *pos)
+        return 0;
+    memcpy(out + *pos, text, (size_t)text_len);
+    *pos += text_len;
+    out[*pos] = '\0';
+    return 1;
+}
+
+static int report_empty_object(char *out, int cap) {
+    if (!out || cap <= 0) return 0;
+    out[0] = '\0';
+    if (cap < 3) return 0;
+    memcpy(out, "{}", 3);
+    return 2;
+}
+
 int overlay_loader_dump_shadow_detail(char *out, int cap) {
-    int n = 0;
-    n += snprintf(out + n, cap - n,
-        "{\"captured\":%d,\"addr\":\"0x%08X\",\"regs\":[", s_detail_captured, s_detail_addr);
     static const char *rn[32] = {"zero","at","v0","v1","a0","a1","a2","a3",
         "t0","t1","t2","t3","t4","t5","t6","t7","s0","s1","s2","s3","s4","s5",
         "s6","s7","t8","t9","k0","k1","gp","sp","fp","ra"};
-    int first = 1;
-    for (int r = 0; r < 32; r++) {
-        if (s_detail_nat_gpr[r] == s_detail_int_gpr[r]) continue;
-        n += snprintf(out + n, cap - n,
-            "%s{\"r\":%d,\"name\":\"%s\",\"native\":\"0x%08X\",\"interp\":\"0x%08X\"}",
-            first ? "" : ",", r, rn[r], s_detail_nat_gpr[r], s_detail_int_gpr[r]);
-        first = 0;
-    }
-    n += snprintf(out + n, cap - n, "],\"hi\":{\"native\":\"0x%08X\",\"interp\":\"0x%08X\"},"
+    char header[128], record[192], tail[192];
+    int n = 0, shown = 0;
+    int header_len = report_format(header, sizeof header,
+        "{\"captured\":%d,\"addr\":\"0x%08X\",\"regs\":[",
+        s_detail_captured, s_detail_addr);
+    int tail_len = report_format(tail, sizeof tail,
+        "],\"hi\":{\"native\":\"0x%08X\",\"interp\":\"0x%08X\"},"
         "\"lo\":{\"native\":\"0x%08X\",\"interp\":\"0x%08X\"}}",
         s_detail_nat_hi, s_detail_int_hi, s_detail_nat_lo, s_detail_int_lo);
+    if (header_len < 0 || tail_len < 0 ||
+        header_len + tail_len >= cap ||
+        !report_copy(out, cap, &n, header, header_len))
+        return report_empty_object(out, cap);
+    for (int r = 0; r < 32; r++) {
+        int record_len;
+        if (s_detail_nat_gpr[r] == s_detail_int_gpr[r]) continue;
+        record_len = report_format(record, sizeof record,
+            "%s{\"r\":%d,\"name\":\"%s\",\"native\":\"0x%08X\",\"interp\":\"0x%08X\"}",
+            shown ? "," : "", r, rn[r],
+            s_detail_nat_gpr[r], s_detail_int_gpr[r]);
+        if (record_len < 0 || n + record_len + tail_len >= cap) break;
+        if (!report_copy(out, cap, &n, record, record_len)) break;
+        shown++;
+    }
+    if (!report_copy(out, cap, &n, tail, tail_len))
+        return report_empty_object(out, cap);
     return n;
 }
 
 int overlay_loader_dump_shadow(char *out, int cap) {
-    int n = 0;
-    n += snprintf(out + n, cap - n,
+    char header[512], record[768];
+    static const char tail[] = "]}";
+    int n = 0, shown = 0;
+    int header_len = report_format(header, sizeof header,
         "{\"diff_mode\":%d,\"shadow_calls\":%llu,\"divergences\":%llu,"
         "\"skipped_device\":%llu,\"interior_gated\":%llu,"
         "\"in_shadow\":%d,\"native_exec\":%d,"
-        "\"escapes\":%u,\"escapes_native\":%u,\"records\":[",
+        "\"escapes\":%u,\"escapes_native\":%u,\"records_total\":%d,"
+        "\"records\":[",
         s_diff_mode, (unsigned long long)s_shadow_calls,
         (unsigned long long)s_shadow_divs,
         (unsigned long long)s_shadow_skipped_dev,
         (unsigned long long)s_diffgate_interp,
         s_in_shadow, s_native_exec,
-        s_shadow_escapes, s_shadow_escapes_native);
-    for (int i = 0; i < s_sdiv_n && n < cap - 200; i++) {
+        s_shadow_escapes, s_shadow_escapes_native, s_sdiv_n);
+    if (header_len < 0 || header_len + (int)sizeof(tail) - 1 >= cap ||
+        !report_copy(out, cap, &n, header, header_len))
+        return report_empty_object(out, cap);
+    for (int i = 0; i < s_sdiv_n; i++) {
         ShadowDiv *d = &s_sdiv[i];
-        n += snprintf(out + n, cap - n,
+        int record_len = report_format(record, sizeof record,
             "%s{\"seq\":%llu,\"addr\":\"0x%08X\",\"kind\":%d,\"index\":%d,\"reg\":%d,"
             "\"reg_native\":\"0x%08X\",\"reg_interp\":\"0x%08X\","
             "\"hi\":%d,\"lo\":%d,\"ram_off\":%lld,"
@@ -4456,7 +4542,7 @@ int overlay_loader_dump_shadow(char *out, int cap) {
             "\"trace_ops\":%u,\"replay_ops\":%u,\"trace_kind\":%d,"
             "\"trace_pc\":\"0x%08X\",\"trace_addr\":\"0x%08X\","
             "\"trace_expected\":\"0x%08X\",\"trace_actual\":\"0x%08X\"}",
-            i ? "," : "", (unsigned long long)d->seq, d->addr,
+            shown ? "," : "", (unsigned long long)d->seq, d->addr,
             d->kind, d->index, d->reg,
             d->reg_native, d->reg_interp, d->hi_diff, d->lo_diff,
             (long long)d->ram_off, d->ram_native, d->ram_interp,
@@ -4464,8 +4550,14 @@ int overlay_loader_dump_shadow(char *out, int cap) {
             (unsigned long long)d->cycle_interp,
             d->trace_ops, d->replay_ops, d->trace_kind,
             d->trace_pc, d->trace_addr, d->trace_expected, d->trace_actual);
+        if (record_len < 0 ||
+            n + record_len + (int)sizeof(tail) - 1 >= cap)
+            break;
+        if (!report_copy(out, cap, &n, record, record_len)) break;
+        shown++;
     }
-    n += snprintf(out + n, cap - n, "]}");
+    if (!report_copy(out, cap, &n, tail, (int)sizeof(tail) - 1))
+        return report_empty_object(out, cap);
     return n;
 }
 
@@ -4578,26 +4670,81 @@ int overlay_loader_write_fp_file(const char *path) {
  * in_progress field being nonzero means a native function was entered and never
  * returned — a freeze INSIDE native code, pointing straight at the suspect. */
 int overlay_loader_dump_native_ring(char *out, int cap) {
+    char header[256], record[192];
+    static const char tail[] = "]}";
     int n = 0;
-    n += snprintf(out + n, cap - n,
+    int header_len = report_format(header, sizeof header,
         "{\"native_exec\":%d,\"calls_total\":%llu,\"would_run\":%llu,"
         "\"in_progress\":\"0x%08X\",\"recent\":[",
         s_native_exec, (unsigned long long)s_native_calls_total,
         (unsigned long long)s_would_run_native, s_native_inprogress);
+    if (header_len < 0 || header_len + (int)sizeof(tail) - 1 >= cap ||
+        !report_copy(out, cap, &n, header, header_len))
+        return report_empty_object(out, cap);
     /* Walk backward from the most recent entries kept in the diagnostic ring. */
     int shown = 0;
-    for (uint32_t k = 0; k < NRING_CAP && n < cap - 140; k++) {
+    for (uint32_t k = 0; k < NRING_CAP; k++) {
         uint32_t idx = (s_nring_pos - 1u - k) & (NRING_CAP - 1u);
+        int record_len;
         if (s_nring[idx].seq == 0) break;
-        n += snprintf(out + n, cap - n,
+        record_len = report_format(record, sizeof record,
             "%s{\"addr\":\"0x%08X\",\"crc\":\"0x%08X\",\"frame\":%u,\"seq\":%llu,\"returned\":%d}",
             shown ? "," : "", s_nring[idx].addr, s_nring[idx].crc, s_nring[idx].frame,
             (unsigned long long)s_nring[idx].seq, s_nring[idx].returned);
+        if (record_len < 0 ||
+            n + record_len + (int)sizeof(tail) - 1 >= cap)
+            break;
+        if (!report_copy(out, cap, &n, record, record_len)) break;
         shown++;
     }
-    n += snprintf(out + n, cap - n, "]}");
+    if (!report_copy(out, cap, &n, tail, (int)sizeof(tail) - 1))
+        return report_empty_object(out, cap);
     return n;
 }
+
+#ifdef PSX_OVERLAY_TEST_HOOKS
+void overlay_loader_test_seed_report_rings(void) {
+    s_detail_captured = 1;
+    s_detail_addr = 0x00123456u;
+    s_detail_nat_hi = 0xAAAAAAAAu;
+    s_detail_int_hi = 0xBBBBBBBBu;
+    s_detail_nat_lo = 0xCCCCCCCCu;
+    s_detail_int_lo = 0xDDDDDDDDu;
+    for (int r = 0; r < 32; r++) {
+        s_detail_nat_gpr[r] = 0x10000000u + (uint32_t)r;
+        s_detail_int_gpr[r] = 0x20000000u + (uint32_t)r;
+    }
+    s_sdiv_n = SDIV_CAP;
+    for (int i = 0; i < SDIV_CAP; i++) {
+        ShadowDiv *d = &s_sdiv[i];
+        memset(d, 0, sizeof *d);
+        d->seq = UINT64_MAX - (uint64_t)i;
+        d->addr = 0x00100000u + (uint32_t)i * 4u;
+        d->kind = 9; d->index = 31; d->reg = 31;
+        d->reg_native = 0xFFFFFFFFu; d->reg_interp = 0xEEEEEEEEu;
+        d->hi_diff = 1; d->lo_diff = 1; d->ram_off = 0x1FFFFF;
+        d->ram_native = 0xDDDDDDDDu; d->ram_interp = 0xCCCCCCCCu;
+        d->cycle_native = UINT64_MAX; d->cycle_interp = UINT64_MAX - 1u;
+        d->trace_ops = UINT32_MAX; d->replay_ops = UINT32_MAX;
+        d->trace_kind = 9; d->trace_pc = 0xFFFFFFFFu;
+        d->trace_addr = 0xFFFFFFFFu; d->trace_expected = 0xFFFFFFFFu;
+        d->trace_actual = 0xEEEEEEEEu;
+    }
+    s_native_exec = 1;
+    s_native_calls_total = UINT64_MAX;
+    s_would_run_native = UINT64_MAX;
+    s_native_inprogress = 0x00123456u;
+    s_nring_pos = NRING_CAP;
+    s_nring_seq = NRING_CAP;
+    for (uint32_t i = 0; i < NRING_CAP; i++) {
+        s_nring[i].addr = 0x00100000u + i * 4u;
+        s_nring[i].crc = 0xFFFFFFFFu - i;
+        s_nring[i].frame = UINT32_MAX;
+        s_nring[i].seq = (uint64_t)i + 1u;
+        s_nring[i].returned = (int)(i & 1u);
+    }
+}
+#endif
 
 /* Diagnostic: dump every candidate with its stored vs live hash and generation
  * state, so reload behaviour can be inspected directly (Rule 3 — visibility via

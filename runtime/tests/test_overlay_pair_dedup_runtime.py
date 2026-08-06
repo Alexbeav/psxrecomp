@@ -92,13 +92,15 @@ def compile_fixture(gcc: str, out: pathlib.Path, *, instance: int,
     run(command)
 
 
-def compile_harness(gcc: str, out: pathlib) -> None:
+def compile_harness(gcc: str, out: pathlib.Path,
+                    extra_defines: tuple[str, ...] = ()) -> None:
     platform_defines = ["-D_GNU_SOURCE"] if platform.system() != "Windows" else []
     command = [
         gcc, "-std=c11", "-O0", "-Wall", "-Wextra",
         "-DPSX_NO_DEBUG_TOOLS",
         "-DPSX_OVERLAY_DLL_BUILD",
         "-DPSX_OVERLAY_TEST_CANDIDATE_CAP=4", f"-I{RUNTIME / 'include'}",
+        *extra_defines,
         *platform_defines,
         str(RUNTIME / "src" / "overlay_loader.c"),
         str(RUNTIME / "src" / "overlay_path_canon.c"),
