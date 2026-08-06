@@ -4,6 +4,7 @@
 #include "autocompile.h"
 #include "overlay_loader.h"
 
+#include <stdarg.h>   /* autocompile_set_degraded takes a format + varargs */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>   /* getenv — declared here; glibc/windows.h leak it, macOS SDK does not */
@@ -107,6 +108,37 @@ static uint32_t     s_shard_skipped    = 0;   /* last run */
 static uint32_t     s_shard_fail_total = 0;   /* accumulated across all runs */
 static int          s_shard_result_seen = 0;  /* did we parse a result line? */
 
+/* ---- Degraded-state channel (portable; read by autocompile_status_json) ----
+ *
+ * Every warning in this file goes to stdout, and the shipped runtime links
+ * `-mwindows` — a GUI-subsystem binary with NO console attached. So the careful
+ * diagnostics below are emitted into nothing on exactly the builds people run,
+ * and a broken autocompile presents only as "the game feels slow".
+ *
+ * That is not hypothetical. A fresh worktree ran 100% interpreted for an entire
+ * session — `runs=8 fails=8 shard_ok=0`, `dispatch_native=0` — because
+ * `overlay_autocompile_cmd` named a recompiler path the documented build recipe
+ * does not produce. Nothing surfaced it, and it invalidated a whole performance
+ * comparison before the counters were queried by hand.
+ *
+ * Rule 3 forbids log files and printf debugging, so the fix is not more
+ * printing: record WHY we are degraded in one string that leaves over the TCP
+ * debug server in `autocompile_status`. One queryable field, carrying the
+ * reason, instead of a state that has to be reconstructed from counters. */
+static char s_degraded[600];
+
+static void autocompile_set_degraded(const char *fmt, ...) {
+    if (s_degraded[0]) return;          /* keep the FIRST cause, not the last */
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_degraded, sizeof(s_degraded), fmt, ap);
+    va_end(ap);
+}
+
+const char *autocompile_degraded_reason(void) {
+    return s_degraded[0] ? s_degraded : NULL;
+}
+
 /* Child-output tail ring. Watcher thread writes, TCP reads — guarded by a
  * critical section on Windows. Holds the TAIL (newest bytes win). */
 #define AC_OUT_CAP 8192
@@ -157,6 +189,13 @@ static int  s_child_line_overflow = 0;
 static void autocompile_report_broken_once(void) {
     if (s_reported_broken || s_consecutive_fails < AC_LOUD_AFTER_FAILS) return;
     s_reported_broken = 1;
+    autocompile_set_degraded(
+        "overlay autocompile failed %u consecutive runs (last exit %d); "
+        "nothing is being compiled to native code, so overlay execution stays "
+        "in the interpreter. Check [runtime] overlay_autocompile_cmd in "
+        "game.toml: every path in it must resolve from the process working "
+        "directory.",
+        s_consecutive_fails, (int)s_exit_code);
     char tail[AC_OUT_CAP];
     int n = 0;
     if (s_out_lock_init) {
@@ -588,6 +627,10 @@ static void autocompile_report_interpreter(void) {
      * tokens; a token that already has a path or extension resolves as-is. */
     DWORD r = SearchPathA(NULL, tok, ".exe", sizeof(resolved), resolved, NULL);
     if (r == 0 || r >= sizeof(resolved)) {
+        autocompile_set_degraded(
+            "overlay autocompile interpreter \"%s\" does not resolve on PATH; "
+            "every compile run will fail and overlay execution will stay in "
+            "the interpreter.", tok);
         fprintf(stdout,
             "psxrecomp: overlay autocompile interpreter '%s' does not resolve "
             "on PATH — every compile run will fail.\n", tok);
@@ -606,6 +649,13 @@ static void autocompile_report_interpreter(void) {
             FILE *f = fopen(cand, "rb");
             if (f) {
                 fclose(f);
+                autocompile_set_degraded(
+                    "overlay autocompile interpreter \"%s\" is an MSYS2/Cygwin "
+                    "build (%s beside it); it crashes under the job spawn "
+                    "before producing output, so every compile fails with no "
+                    "diagnostics. Use \"py -3 ...\" in "
+                    "[runtime] overlay_autocompile_cmd.",
+                    resolved, posix_dlls[k]);
                 fprintf(stdout,
                     "psxrecomp: WARNING: that interpreter is an MSYS2/Cygwin "
                     "build (%s beside it).\n"
@@ -623,6 +673,82 @@ static void autocompile_report_interpreter(void) {
 }
 #endif
 
+/* Validate the file arguments the command names, at configure time.
+ *
+ * autocompile_report_interpreter() above resolves the FIRST token (the Python
+ * interpreter). It does not look at the rest of the command line, and the
+ * argument that actually breaks in practice is `--recompiler <path>`: the path
+ * is per-title, hardcoded in game.toml, and does not agree with where the
+ * documented build recipe puts the recompiler.
+ *
+ *   Tomba 2 names psxrecomp-v4/recompiler/build-t2/psxrecomp-game.exe, while
+ *   the recipe builds build-recompiler/ at the worktree root — never matches.
+ *   MMX6 hardcodes an ABSOLUTE path into one checkout, so it works only by
+ *   luck of local layout.
+ *
+ * When the path is wrong every compile fails identically, and because the
+ * failure is only reachable through counters nobody queries, the run silently
+ * degrades to the interpreter. Checking here turns a session-long mystery into
+ * a fact known before the first compile is ever attempted.
+ *
+ * Deliberately advisory: a missing path is recorded and reported, not fatal.
+ * The runtime still runs (interpreted) exactly as before — this only removes
+ * the silence. */
+#ifdef _WIN32
+static void autocompile_check_path_args(void) {
+    static const char *flags[] = { "--recompiler", "--runtime-include" };
+    for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        const char *at = strstr(s_cmd, flags[i]);
+        if (!at) continue;
+        const char *p = at + strlen(flags[i]);
+        while (*p == ' ' || *p == '=') p++;
+        char path[MAX_PATH];
+        size_t n = 0;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"' && n + 1 < sizeof(path)) path[n++] = *p++;
+        } else {
+            while (*p && *p != ' ' && n + 1 < sizeof(path)) path[n++] = *p++;
+        }
+        path[n] = '\0';
+        if (!path[0]) continue;
+
+        /* Relative paths resolve against the child's working directory, which
+         * is s_cwd — not ours. Mirror that, or a correct relative path would
+         * look broken from here. */
+        /* Sized to hold s_cwd + separator + a full MAX_PATH argument, so a long
+         * working directory cannot silently truncate the path we then test. */
+        char full[sizeof(s_cwd) + MAX_PATH + 2];
+        int absolute = (path[0] == '/' || path[0] == '\\' ||
+                        (path[1] == ':' && (path[2] == '\\' || path[2] == '/')));
+        if (absolute || !s_cwd[0])
+            snprintf(full, sizeof(full), "%s", path);
+        else
+            snprintf(full, sizeof(full), "%s\\%s", s_cwd, path);
+
+        DWORD attr = GetFileAttributesA(full);
+        if (attr == INVALID_FILE_ATTRIBUTES) {
+            autocompile_set_degraded(
+                "overlay autocompile cannot start: %s \"%s\" does not exist "
+                "(resolved to \"%s\"). Every compile will fail and overlay "
+                "execution will stay in the interpreter. Fix the path in "
+                "[runtime] overlay_autocompile_cmd, or build the recompiler "
+                "where it points.",
+                flags[i], path, full);
+            fprintf(stdout,
+                "psxrecomp: WARNING: overlay autocompile %s \"%s\" does not "
+                "exist (resolved to \"%s\").\n"
+                "  Every overlay compile will fail and execution will stay in "
+                "the interpreter.\n"
+                "  Query the debug server's autocompile_status "
+                "(\"degraded_reason\") to see this without a console.\n",
+                flags[i], path, full);
+            fflush(stdout);
+        }
+    }
+}
+#endif /* _WIN32 */
+
 void autocompile_configure(const char *cmd, const char *cwd) {
     snprintf(s_cmd, sizeof(s_cmd), "%s", cmd ? cmd : "");
     snprintf(s_cwd, sizeof(s_cwd), "%s", cwd ? cwd : "");
@@ -632,7 +758,10 @@ void autocompile_configure(const char *cmd, const char *cwd) {
         InitializeConditionVariable(&s_publish_cv);
         s_out_lock_init = 1;
     }
-    if (s_cmd[0]) autocompile_report_interpreter();
+    if (s_cmd[0]) {
+        autocompile_report_interpreter();
+        autocompile_check_path_args();
+    }
 #endif
 }
 
@@ -1052,8 +1181,18 @@ int autocompile_status_json(char *out, int cap) {
     const uint64_t now_ms = autocompile_now_ms();
     if (s_retry_not_before_ms > now_ms)
         retry_ms = s_retry_not_before_ms - now_ms;
+    /* Degraded reason first, so it is the first thing a reader sees. This is
+     * the ONLY channel that works on the shipped build: the stdout warnings
+     * elsewhere in this file go nowhere under -mwindows. */
+    char degr[720];
+    degr[0] = '\0';
+    if (s_degraded[0])
+        json_escape_into(degr, (int)sizeof(degr), s_degraded,
+                         (int)strlen(s_degraded));
+
     return snprintf(out, cap,
-        "{\"configured\":%d,\"state\":\"%s\",\"runs\":%u,\"fails\":%u,"
+        "{\"degraded\":%d,\"degraded_reason\":\"%s\","
+        "\"configured\":%d,\"state\":\"%s\",\"runs\":%u,\"fails\":%u,"
         "\"rescans\":%u,\"last_exit\":%d,"
         "\"consecutive_fails\":%u,\"retry_ms\":%llu,"
         "\"shard_ok\":%u,\"shard_fail\":%u,\"shard_skipped\":%u,"
@@ -1066,8 +1205,9 @@ int autocompile_status_json(char *out, int cap) {
         "\"publish_prepare_max_us\":%llu,"
         "\"publish_prepare_last_us\":%llu,"
         "\"output_tail\":\"%s\"}",
+        s_degraded[0] ? 1 : 0, degr,
         autocompile_configured(), names[ac_state_load() & 3], s_runs, s_fails,
-        s_rescans, s_exit_code, s_consecutive_fails,
+        s_rescans, (int)s_exit_code, s_consecutive_fails,
         (unsigned long long)retry_ms,
         s_shard_ok, s_shard_fail, s_shard_skipped,
         s_shard_fail_total, s_shard_result_seen,
