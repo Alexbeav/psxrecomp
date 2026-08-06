@@ -1949,3 +1949,27 @@ as negative results; no rejected interpolation implementation ships. Correct
 60 FPS requires partial matching decompilation or an equivalent authoritative
 semantic snapshot/render-at-will interface. Remaining alpha work is campaign
 playthrough coverage and issue triage from public testers.
+
+### 2026-08-06 — publication result
+
+Created `Alexbeav/syphon-filter-2-recompiled`, pushed `main`, and published the
+`v0.1.0-alpha` prerelease. The release-kit workflow completed successfully.
+Because rebuilding the tool kit changes ZIP metadata and therefore its archive
+digest, the workflow-produced asset was replaced after completion with the
+exact locally audited and clean-room-qualified archive. GitHub now reports
+SHA-256
+`57452CD322CCA0C0D19BAFC0B4C51D40EB1162444E15C51963AC8635224798FD`.
+
+The first public CI run correctly caught a workflow omission: `build_cli.py`
+configured 54 tests but did not build nine native test executables, so CTest
+reported those nine as Not Run while the remaining 45 passed. Public-repo
+commit `a911da7` adds the baseline `cmake --build ... --parallel` step. The
+replacement run is fully green: source audit and five behavioral policy tests,
+pinned CLI build, native test build, 54/54 CTest, and explicit confirmation
+that CI acquired no retail input or generated game code.
+
+The Reddit post remains a draft pending external video and screenshots. Exact
+cleanup targets were resolved and proven inside this workspace, but the
+execution policy still rejected recursive deletion of the ignored rejected
+build/clean-room trees and diagnostic freeze dumps. No bypass was attempted;
+they cannot enter Git or the audited release archive.

@@ -9,7 +9,7 @@
 > and referenced by the older `## R1 verdict` / `## R2 remaining target`
 > sections near the end of this file.
 
-## 2026-08-06 — v0.1.0-alpha qualified and authorized for publication
+## 2026-08-06 — v0.1.0-alpha published; recomp milestone closed
 
 The user accepted the final playable R4 candidate. Its executable is
 `build-playable-r4-candidate/SCUS94451_Recompiled.exe`, SHA-256
@@ -36,6 +36,21 @@ FPS is closed as unattainable at this pure recompilation boundary without at
 least partial matching decompilation or an equivalent complete semantic
 world-state/render-at-will interface. Remaining work is public playthrough
 coverage, not another renderer-only interpolation experiment.
+
+The public repository is
+`https://github.com/Alexbeav/syphon-filter-2-recompiled`; the prerelease is
+`v0.1.0-alpha`. The release asset's GitHub digest is the same recorded
+`57452CD3...`. The release-kit workflow passed. The first CI run exposed a
+workflow-only omission: `build_cli.py` configured native tests but did not
+compile their executables before CTest. Main commit `a911da7` added the missing
+`cmake --build`; the replacement public CI run passed source policy, CLI build,
+all 54 framework tests, and the no-retail-input checks.
+
+The Reddit draft is complete but deliberately unsubmitted until the user adds
+the planned video and screenshots. Recursive cleanup of ignored rejected build
+trees and freeze dumps was again refused by the execution safety layer after
+exact in-workspace target validation. They remain untracked and unreferenced;
+the accepted R4 build and release ZIP are intact.
 
 Updated: 2026-08-06
 
