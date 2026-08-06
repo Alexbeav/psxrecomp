@@ -61,6 +61,11 @@ int psx_mod_set_fixed_display_aspect(uint32_t numerator,
  */
 int psx_mod_set_adaptive_display_aspect(uint32_t max_numerator,
                                         uint32_t max_denominator);
+
+/* Enable host enhancements whose title-specific support is compiled into the
+ * executable but whose player-facing ownership lives in the Mods panel. */
+int psx_mod_set_pgxp(int enabled);
+int psx_mod_set_mouse_camera(int enabled);
 /*
  * Set the wall-clock cadence of simulated guest VBlanks. A value of zero
  * removes frontend pacing; 60 and higher request that many native guest

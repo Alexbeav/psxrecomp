@@ -32,6 +32,7 @@ typedef struct PsxMouseCameraConfig {
 } PsxMouseCameraConfig;
 
 void psx_mouse_camera_configure(const PsxMouseCameraConfig* config);
+void psx_mouse_camera_set_enabled(int enabled);
 int  psx_mouse_camera_enabled(void);
 void psx_mouse_camera_set_focus(int focused);
 void psx_mouse_camera_set_aim(int aiming);

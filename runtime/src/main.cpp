@@ -707,6 +707,21 @@ extern "C" int psx_mod_set_adaptive_display_aspect(
     return 1;
 }
 
+extern "C" int psx_mod_set_pgxp(int enabled) {
+    g_video_pgxp = enabled ? 1 : 0;
+    std::fprintf(stdout, "psxrecomp: mod %s PGXP geometry correction\n",
+                 g_video_pgxp ? "enabled" : "disabled");
+    return 1;
+}
+
+extern "C" int psx_mod_set_mouse_camera(int enabled) {
+    g_mouse_camera_enabled = enabled ? 1 : 0;
+    psx_mouse_camera_set_enabled(g_mouse_camera_enabled);
+    std::fprintf(stdout, "psxrecomp: mod %s direct mouse camera\n",
+                 g_mouse_camera_enabled ? "enabled" : "disabled");
+    return 1;
+}
+
 extern "C" int psx_mod_set_native_vblank_rate(
     uint32_t frames_per_second) {
     if (frames_per_second != 0 &&
@@ -2994,11 +3009,15 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     const bool suppress_stick = (eff_analog != 0);
     uint16_t btn = (p.kind != 0) ? pad_buttons_for(p, player, suppress_stick)
                                  : (uint16_t)0xFFFF;
+    /* Keyboard and mouse bindings remain live alongside a routed gamepad.
+     * Active-low AND means an unpressed source is a no-op. */
+    if (p.kind != 0 && p.kind != 1)
+        btn &= pad_from_keyboard(player);
     if (dev_here) {
         btn &= pad_from_keyboard(1);                        /* keyboard P1 binds  */
         btn &= dev_all_controllers_buttons(suppress_stick); /* any plugged-in pad */
     }
-    if (s == 0 && g_mouse_pad_enabled && sdl_window) {
+    if (s == 0 && (g_mouse_pad_enabled || g_mouse_camera_enabled) && sdl_window) {
         const Uint32 mouse = SDL_GetMouseState(nullptr, nullptr);
         uint32_t host = 0;
         if (mouse & SDL_BUTTON(SDL_BUTTON_LEFT))   host |= PSX_MOUSE_LEFT;
@@ -3007,7 +3026,8 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         if (mouse & SDL_BUTTON(SDL_BUTTON_X1))     host |= PSX_MOUSE_X1;
         if (mouse & SDL_BUTTON(SDL_BUTTON_X2))     host |= PSX_MOUSE_X2;
         psx_mouse_camera_set_aim((host & PSX_MOUSE_RIGHT) != 0);
-        btn = mouse_pad_merge(btn, host);
+        if (g_mouse_pad_enabled)
+            btn = mouse_pad_merge(btn, host);
     }
 
     /* Analog axes. Pinned-ANALOG folds the physical D-pad onto the left axes
@@ -6175,6 +6195,11 @@ int main(int argc, char** argv) {
             for (const auto& lo : lang_menu_options) rui_lang_labels.push_back(lo.label.c_str());
 
             RecompLauncherCGameInfo gi{};
+            /* One absolute file shared by the launcher and runtime. Relying on
+             * cwd made launcher edits appear saved while gameplay could reload
+             * the exe-relative default from a different path. */
+            const std::string rui_keybinds_path =
+                (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
             static const char* const kPsxRendererLabels[] = {
                 "Software",
                 "OpenGL (Recommended)",
@@ -6207,6 +6232,7 @@ int main(int argc, char** argv) {
              * populated until a backend is activated. */
             gi.has_bios             = psx_bios_has_selectable();
             gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
+            gi.keybinds_path        = rui_keybinds_path.c_str();
             gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
                                                   PSX multi-track discs — skip verification */
@@ -6268,6 +6294,13 @@ int main(int argc, char** argv) {
                 rui_initial_disc.c_str(), rui_out_disc, sizeof(rui_out_disc));
 
             lr = rui_rc;
+
+            if (lr == 0) {
+                /* Rebinds are persisted immediately by recomp-ui. Import that
+                 * exact file before gameplay in the same process; requiring a
+                 * second launch makes a successful edit look discarded. */
+                psx_keybinds_load_file(rui_keybinds_path.c_str());
+            }
 
             if (lr == 0) {
                 seed.netplay_player_name = ls.netplay_player_name;

@@ -40,6 +40,11 @@ void psx_mouse_camera_configure(const PsxMouseCameraConfig* config) {
     memset(&s_stats, 0, sizeof(s_stats));
 }
 
+void psx_mouse_camera_set_enabled(int enabled) {
+    s_config.enabled = enabled ? 1 : 0;
+    if (!s_config.enabled) psx_mouse_camera_reset();
+}
+
 int psx_mouse_camera_enabled(void) { return s_config.enabled != 0; }
 
 void psx_mouse_camera_set_focus(int focused) {

@@ -61,6 +61,8 @@ typedef struct {
  * not exist. exe_path may be NULL/argv[0]/the exe directory itself — the .ini is
  * placed in that file's directory (or the path itself when it is a directory). */
 void psx_keybinds_init(const char *exe_path);
+/* Reload an explicit launcher-owned keybind file into the live runtime map. */
+void psx_keybinds_load_file(const char *path);
 
 /* Read-only view of the current bindings. */
 const PsxKeyBinds *psx_keybinds_get(void);
@@ -91,6 +93,10 @@ const char  *psx_keybinds_button_name(int button);          /* "up".."rs_right" 
 const char  *psx_keybinds_button_label(int button);         /* pretty, e.g. "Cross" */
 SDL_Scancode psx_keybinds_get_button(int player, int button);
 void         psx_keybinds_set_button(int player, int button, SDL_Scancode sc);
+/* Optional alternate binding. Primary OR alternate asserts the control. */
+SDL_Scancode psx_keybinds_get_button_alt(int player, int button);
+void         psx_keybinds_set_button_alt(int player, int button,
+                                         SDL_Scancode sc);
 /* Reset one player's bindings to the built-in defaults (P2 = all unbound). */
 void         psx_keybinds_reset_player(int player);
 /* Persist the current bindings to keybinds.ini (path resolved by

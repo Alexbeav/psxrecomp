@@ -209,7 +209,9 @@ int main(int argc, char** argv) {
         bios_profile_path    = cfg.bios_config_path;
         out_dir              = cfg.out_dir;
         instruction_patches  = cfg.recompiler_patches;
-        if (cfg.runtime.controller_mouse_camera_enabled) {
+        /* A title may compile the verified hook while leaving the runtime
+         * feature disabled until a trusted launcher mod activates it. */
+        if (cfg.runtime.controller_mouse_camera_facing_site) {
             mouse_camera_facing_site =
                 cfg.runtime.controller_mouse_camera_facing_site;
             mouse_camera_facing_expected =
