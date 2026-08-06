@@ -634,9 +634,24 @@ retail BIOS support):
 ```sh
 git clone --recurse-submodules https://github.com/mstan/psxrecomp.git && cd psxrecomp
 
+# 1. Recompiler tool (produces psxrecomp-bios and psxrecomp-game)
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build recompiler/build
+
+# 2. Generate a BIOS backend. REQUIRED before the first runtime build: the
+#    recompiled BIOS C is build output, not tracked, so a fresh clone has none
+#    and the runtime configure fails with "No recompiled BIOS backend
+#    available". OpenBIOS is bundled and MIT-licensed, so this needs no dump.
+bash tools/regen_bios.sh --config bios/OpenBIOS.toml
+bash tools/regen_bios.sh --config bios/SCPH1001.toml   # optional, needs your own dump
+
+# 3. Runtime (produces psx-runtime)
 cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF && cmake --build runtime/build --target psx-runtime
 ```
+
+Step 2 depends on step 1: `regen_bios.sh` builds the emitter but does not
+configure it, so run it only after `recompiler/build` exists. Re-run step 2
+whenever the recompiler's BIOS emitter changes — a stale `generated/` raises a
+fingerprint-mismatch warning at configure time.
 
 On Windows swap `-G Ninja` for your generator if you prefer (e.g.
 `-G "Unix Makefiles"`); always keep an explicit `-DCMAKE_BUILD_TYPE` so the

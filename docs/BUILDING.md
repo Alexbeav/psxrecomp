@@ -244,6 +244,35 @@ available through pkg-config.
 for the `gcc` tier; otherwise areas stay in the interpreter. See
 [`EXECUTION_MODEL.md`](EXECUTION_MODEL.md).
 
+**`ninja: error: loading 'build.ninja': GetLastError() = 2`, or CMake's
+`Error: could not load cache`.** Both mean the same thing: you ran a *build* in
+a directory that was never successfully *configured*. `CMakeCache.txt` is
+written before the generate step, so a configure that ends in "Configuring
+incomplete, errors occurred!" leaves a cache behind but no `build.ninja` /
+`Makefile` — and the build then fails on the missing generator file rather than
+on the original configure error. Fix the configure error, re-run the same
+`cmake -S ... -B ...` and let it finish; if it keeps failing, delete the build
+directory so a stale cache cannot poison the retry. `tools/regen_bios.sh`
+diagnoses this for the recompiler build directory rather than passing it to
+CMake.
+
+**`No recompiled BIOS backend available` at configure time.** Expected on a
+fresh clone: the recompiled BIOS C is build output and is not tracked. Run
+step 2 of [Build the framework](#build-the-framework)
+(`bash tools/regen_bios.sh --config bios/OpenBIOS.toml`) before configuring the
+runtime or a game. The runtime reads those files from
+`<framework>/generated/<stem>_full.c` and `<stem>_dispatch.c`; that location is
+fixed, and the emitter writes there because `out_dir = "generated"` in
+`bios/<stem>.toml`.
+
+**`regen_bios: no usable recompiler build dir found`.** The script builds the
+BIOS emitter but never configures it, so step 1 of
+[Build the framework](#build-the-framework) has to have run first.
+`PSXRECOMP_BIOS_BUILD` overrides which directory it uses, and is resolved
+**relative to the framework root**, not your shell's working directory — from a
+game project that vendors the framework, that is `recompiler/build`, never
+`psxrecomp/recompiler/build`.
+
 ## Regenerating BIOS backends
 
 Every normal runtime links both statically recompiled BIOS backends. OpenBIOS
