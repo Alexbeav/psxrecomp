@@ -349,8 +349,16 @@ struct RuntimeConfig {
     // on large floor/wall polygons as the camera moves). Uses the exact SWC2
     // projection provenance — a polygon only qualifies when every one of its
     // position words was written to that DMA packet address by a projection
-    // store — so CPU-built UI and 2D sprites are never touched. Default off.
-    bool                  video_perspective_texturing = false;
+    // store — so CPU-built UI and 2D sprites are never touched.
+    //
+    // Default ON (enhancement-phase default, 2026-08-05). Unlike
+    // geometry_correction above, this never moves a vertex: it only changes how
+    // UVs are interpolated inside a polygon whose provenance is already proven,
+    // so adjacent polygons cannot disagree about a shared edge and partial
+    // coverage cannot crack a mesh. A polygon that does not qualify simply keeps
+    // the PS1's affine interpolation. Opt out per-game with
+    // [video] perspective_texturing = false.
+    bool                  video_perspective_texturing = true;
 
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
