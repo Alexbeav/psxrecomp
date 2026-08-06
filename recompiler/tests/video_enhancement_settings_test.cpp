@@ -58,17 +58,20 @@ static fs::path write_game_toml(const std::string& name,
         + video_block);
 }
 
-/* The two defaults deliberately DIFFER. geometry_correction moves vertices and
- * cracks meshes at the coverage the runtime can reach, so it stays off and has no
- * launcher control. perspective_texturing never moves a vertex, so partial
- * coverage is harmless and it ships on. See ENHANCEMENTS.md G1.8/G1.9. */
-static void test_defaults() {
+/* BOTH default off — the faithful floor — but for different reasons, and the
+ * distinction matters if anyone reconsiders these later. geometry_correction is
+ * off because it is BROKEN at the coverage the runtime can reach (it moves
+ * vertices and splits shared edges) and has no launcher control at all.
+ * perspective_texturing is off because it is a deliberate departure from hardware
+ * output validated on only one title and renderer; it is structurally safe and
+ * players opt in from the launcher. See ENHANCEMENTS.md G1.8/G1.9. */
+static void test_defaults_off() {
     fs::path p = write_game_toml("psxrecomp_pgxp_default.toml", "");
     auto gc = PSXRecompV4::load_game_config(p);
     check(!gc.runtime.video_geometry_correction,
           "geometry_correction defaults OFF (known to crack meshes)");
-    check(gc.runtime.video_perspective_texturing,
-          "perspective_texturing defaults ON (cannot crack; enhancement default)");
+    check(!gc.runtime.video_perspective_texturing,
+          "perspective_texturing defaults OFF (faithful floor; opt-in)");
     fs::remove(p);
 }
 
@@ -101,16 +104,17 @@ static void test_knobs_independent() {
           "perspective_texturing can be opted OUT while geometry is on");
     fs::remove(p);
 
-    /* And the converse: naming only geometry_correction must not disturb
-     * perspective_texturing's on-by-default state. */
-    fs::path q = write_game_toml("psxrecomp_pgxp_geom_named.toml",
+    /* And the converse direction: perspective_texturing alone must turn on
+     * WITHOUT dragging the broken geometry knob on with it. This is the case that
+     * matters most in practice — it is what the launcher checkbox does. */
+    fs::path q = write_game_toml("psxrecomp_pgxp_persp_only.toml",
         "[video]\n"
-        "geometry_correction = true\n");
+        "perspective_texturing = true\n");
     auto gq = PSXRecompV4::load_game_config(q);
-    check(gq.runtime.video_geometry_correction,
-          "geometry_correction alone turns on");
     check(gq.runtime.video_perspective_texturing,
-          "naming geometry_correction leaves perspective_texturing at its default");
+          "perspective_texturing alone turns on");
+    check(!gq.runtime.video_geometry_correction,
+          "perspective_texturing does NOT drag geometry_correction on with it");
     fs::remove(q);
 }
 
@@ -160,7 +164,7 @@ static void test_user_settings_round_trip() {
 }
 
 int main() {
-    test_defaults();
+    test_defaults_off();
     test_game_toml_opt_in();
     test_knobs_independent();
     test_user_settings_read();

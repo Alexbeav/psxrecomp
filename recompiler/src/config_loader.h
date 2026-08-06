@@ -351,14 +351,20 @@ struct RuntimeConfig {
     // position words was written to that DMA packet address by a projection
     // store — so CPU-built UI and 2D sprites are never touched.
     //
-    // Default ON (enhancement-phase default, 2026-08-05). Unlike
-    // geometry_correction above, this never moves a vertex: it only changes how
-    // UVs are interpolated inside a polygon whose provenance is already proven,
-    // so adjacent polygons cannot disagree about a shared edge and partial
-    // coverage cannot crack a mesh. A polygon that does not qualify simply keeps
-    // the PS1's affine interpolation. Opt out per-game with
-    // [video] perspective_texturing = false.
-    bool                  video_perspective_texturing = true;
+    // Default OFF (faithful floor), same as geometry_correction above — but for a
+    // different reason. geometry_correction is off because it is BROKEN at the
+    // coverage we can reach (it moves vertices and splits shared edges); this one
+    // is off because it is a deliberate departure from hardware output that has
+    // only been validated on one title and one renderer. It is structurally safe
+    // — it never moves a vertex, only alters UV interpolation inside a polygon
+    // whose provenance is already proven, so a non-qualifying polygon simply keeps
+    // the PS1's affine interpolation and neighbours can never disagree about a
+    // shared edge. Safe is not the same as validated, so it stays opt-in.
+    //
+    // Players opt in from the launcher's Display panel (unlike
+    // geometry_correction, which has no control at all); per-game with
+    // [video] perspective_texturing = true.
+    bool                  video_perspective_texturing = false;
 
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
