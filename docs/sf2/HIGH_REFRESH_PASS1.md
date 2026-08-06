@@ -1,9 +1,11 @@
 # High-refresh pass 1 — shutdown/resume handoff
 
 Started: 2026-08-04. Last updated: 2026-08-06. This file is chronological —
-newest sections are appended at the end. Current status: the transform-snapshot
-R3 candidate (final section) is awaiting the user's visual verdict; see
-`CURRENT_OBJECTIVE.md` for the live state.
+newest sections are appended at the end. Current status: the first R3 build
+was visually REJECTED (startup black band, stationary progressive flashbang);
+root causes are diagnosed and fixed in the worktree, rebuild and validation
+pending (final section). See `CURRENT_OBJECTIVE.md` for the live state and
+the devlog for the exact resume procedure.
 
 ## Objective and current gate
 
@@ -462,3 +464,35 @@ separate linked list would be absent from replayed frames, so HUD completeness
 needs explicit visual confirmation. The R3 implementation is intentionally the
 only uncommitted work on the branch; the prerequisite classifier/serializer
 work and this documentation are committed separately.
+
+## 2026-08-06 — R3 visual rejection, diagnosis, and fixed candidate pending rebuild
+
+The user rejected the first R3 build: a startup black band over the right
+fifth of the frame, and a progressive brightening to near-white while
+standing still that reset on each authentic frame. No R1-style ghosting and
+no R2-style cracking were observed.
+
+Root causes (all confirmed in source, all fixed in the worktree):
+
+1. Present-time pair resolution used the live world census, which every
+   linked-list begin resets — replay raced capture and paired old geometry
+   with an empty or newer-tick census. Pairs are now frozen into each
+   snapshot at the world-submission end boundary
+   (`gpu_pgxp_export_transform_pairs`); the live lookup is removed.
+2. The alpha=1 parity gate bypassed interpolation (`transform_project_vertex`
+   rejects alpha>=1), so the displayed interpolated path was never gated. A
+   static-invariance sampler now proves identity-pair captures replay
+   pixel-identically at alpha=0.5, and present-time telemetry
+   (`pairs_found/pairs_missing/disp_rejects/last_max_disp_px` plus
+   invariance counters) is exported in `gl_interp.transform`.
+3. The untextured replay path lacked the textured path's depth rejection;
+   additive light polygons are now snapped whole on any invalid depth.
+4. First-capture bases embed pre-authentic page content (the black band);
+   output now requires two captures per page slot.
+
+Validation is NOT done: changes are syntax-verified only. The resume
+procedure — package-copy sync, candidate-tree rebuild (never the accepted
+directories), telemetry-gated hidden route, then a fresh user handoff — is
+in the devlog section "2026-08-06 — R3 user findings, root-cause diagnosis,
+and fix implementation". The implicit-HUD-exclusion caveat remains open and
+must be checked in the next visual test.

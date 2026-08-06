@@ -9,7 +9,42 @@
 > and referenced by the older `## R1 verdict` / `## R2 remaining target`
 > sections near the end of this file.
 
+## 2026-08-06 — R3 rejected on visual evidence; root causes fixed, rebuild pending
+
+User testing rejected the first R3 build on two artifacts: a black band over
+roughly the right fifth of the frame during the first output frames, and a
+progressive stationary "flashbang" — successive display frames brighten to
+near-white, then snap back on each authentic frame. There was no ghosting and
+no texture cracking, so this is not a regression toward R1 or R2.
+
+Code inspection contradicted the framebuffer-accumulation hypothesis and
+confirmed three defects instead: present-time transform-pair resolution read
+the live world census, which every linked-list begin resets (SF2 submits six
+lists per tick), so replay paired captured geometry with an empty or
+newer-tick census; the alpha=1 parity gate bypassed interpolation entirely
+(`transform_project_vertex` returns 0 at alpha>=1), so the interpolated path
+that presents actually display was never validated; and the untextured replay
+path lacked the textured path's depth guard. The startup band is the first
+capture embedding the page's pre-authentic (black-margin) content.
+
+All fixes are implemented in the uncommitted R3 worktree: pairs are frozen
+into each snapshot at the world-submission boundary and the live-census
+lookup is removed; a static-invariance gate proves identity-pair captures
+replay pixel-identically at intermediate alpha; per-present pair/displacement
+telemetry is exported through `gl_interp.transform`; the GEO path gained the
+depth guard; output waits for two captures per page slot; `spatial_valid` was
+renamed `transform_valid`. Everything passes syntax checks; **no rebuild or
+route has run yet**. The resume point, validation order, and honest limits
+are in the devlog section "2026-08-06 — R3 user findings, root-cause
+diagnosis, and fix implementation" — start there. The R3 launcher still runs
+the OLD rejected binary until the candidate tree is rebuilt.
+
+Updated: 2026-08-06
+
 ## 2026-08-05 — transform-snapshot high-refresh R3 awaiting visual verdict
+
+*SUPERSEDED by the 2026-08-06 section above: the user's visual verdict
+arrived (rejected) and the diagnosed root causes are fixed pending rebuild.*
 
 The SF1-style semantic transform path now retains authentic pre-world render
 state and replays renderer-native geometry without advancing retail execution.

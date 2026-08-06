@@ -1608,3 +1608,108 @@ but weak on persistence and reciprocity. Repairs applied this session:
   milestone handoff document and the devlog.
 - Ignored footprint measured at 18.82 GiB of the 20 GiB ceiling; pruning is
   deferred to an explicit user decision before the next capture campaign.
+
+## 2026-08-06 — R3 user findings, root-cause diagnosis, and fix implementation
+
+The user tested R3 and reported two artifact classes with screenshots,
+classified via an external AI triage against the R1/R2/R3 signature guide:
+
+1. **Startup black band**: approximately the right fifth of the frame is
+   black during the first output frames, then becomes valid.
+2. **Progressive stationary flashbang**: while standing still, successive
+   display frames brighten step by step until near-white, then snap back to
+   normal and repeat. No ghosting (rules out R1-family blending), no texture
+   cracks or speed instability (rules out R2-family matching).
+
+### Code-level diagnosis (read-only, then fixed)
+
+The triage's leading hypothesis — a missing clear / framebuffer accumulation —
+is contradicted by the source: `transform_render` re-blits the frozen base
+snapshot into the replay FBO on every present, the batch helpers
+(`tex_batch_draw_passes`, `mask_stencil`, `apply_psx_blend`) never rebind
+framebuffers, and `transform_present` draws the replay texture to the window
+without writing any live surface. The ramp-then-reset pattern instead tracks
+the only value that changes monotonically between authentic frames: the
+interpolation alpha. Three real defects were confirmed:
+
+1. **Present-time pair resolution read live, volatile census state.**
+   `gpu_pgxp_get_transform_pair` iterated `s_pgxp_world_groups` — an array
+   that `gpu_ws_begin_linked_list` memsets on EVERY linked-list begin, and
+   SF2 submits six lists per tick (three setup, one world, two aux/UI).
+   Depending on where a present landed relative to those lists, snapshot
+   replay resolved transform pairs against an empty census (silent no-op:
+   authentic positions) or against a NEWER tick's rebuilt census (captured
+   geometry corrected by the wrong tick's transform delta). The snapshot
+   was immutable in every respect except its most important input.
+2. **The alpha=1 parity gate never exercised interpolation.**
+   `transform_project_vertex` returns 0 for `alpha_q16 >= 65536`, so the
+   "pixel-exact 2/2" parity evidence replayed pure captured geometry; the
+   interpolated path that presents actually display shipped unvalidated.
+   The midpoint sampler ran at capture end — the one moment the live census
+   is guaranteed correct — so it could not catch the race either. There was
+   no static-scene invariance gate at all.
+3. **The untextured (GEO) replay path had no depth guard.** It passed NULL
+   for depth, unlike the textured path, so a bad interpolated projection of
+   an additive (B+F) light polygon had one less rejection before smearing
+   brightness.
+
+Finding 1's owner: the first capture into a page slot embeds whatever the
+page's wide surface held before its first complete authentic draw — cleared
+black margins at gameplay entry, presented verbatim until later captures
+embed authored content. `transform_free_targets` was audited and does reset
+snapshot state correctly on target recreation, so a stale-slot theory was
+rejected.
+
+### Fixes implemented (uncommitted, R3 candidate worktree)
+
+- `GtePrecisionTransformPair` (cpu_state.h): frozen pair record.
+  `gpu_pgxp_export_transform_pairs` (gpu.c/gpu.h) copies every semantically
+  matched pair out of the census exactly once, at the world-submission end
+  boundary; `gpu_pgxp_get_transform_pair` is REMOVED so no future code can
+  resolve pairs from live census state.
+- `TransformSnapshot` now owns `pairs[512]`, `pair_n`, `pairs_identity`
+  (every pair previous==current), and `capture_count`. Pairs are frozen in
+  `gl_renderer_transform_end_linked_list` while the census that produced the
+  capture is still live. `transform_project_vertex` takes the snapshot and
+  resolves only frozen pairs (with a last-hit cache).
+- GEO replay path now collects and requires nonzero depths for the whole
+  primitive, matching the TEX path.
+- `transform_output_ready` requires `capture_count >= 2` per page slot, so
+  the first capture (pre-authentic-frame base) is never displayed.
+- New static-invariance sampler (parity-gated): when a capture's pairs are
+  all identity, replay at alpha=0.5 must be pixel-identical to the alpha=1
+  reconstruction; up to four samples with exact/diff-pixel counters. This is
+  the gate the flashbang would have failed before handoff.
+- Present-time telemetry: `pairs_found`, `pairs_missing`, `disp_rejects`,
+  `last_max_disp_px`, `frozen_pairs`, `pairs_identity`, and the invariance
+  counters, exported via `gl_renderer_transform_present_diag` and appended
+  to the debug server's `gl_interp.transform` object.
+- `spatial_valid` renamed to `transform_valid` (gpu_render.h, gpu.c,
+  gpu_gl_renderer.c) so R2-era vocabulary cannot confuse future audits.
+- All modified translation units pass `gcc -fsyntax-only` with the SDL3
+  headers (`-DPSX_SDL3 -DDEFAULT_DEBUG_PORT=4370`). A sed slip rewrote
+  gpu_gl_renderer.c line endings; restored with unix2dos (content diff is
+  ~+2.2k lines across 10 files).
+
+### Honest limits and required validation (next session — start here)
+
+The fixes are syntax-verified only; no rebuild or route has run. The exact
+pixel mechanism of the flashbang is DIAGNOSED AS A FAMILY (alpha-dependent
+error from wrong/missing pair resolution at present time), not yet proven by
+telemetry — the new counters exist precisely to prove it. Validation order:
+
+1. Sync the modified runtime sources into the generated package copy
+   (`lab/sf2/local/generated-disc1-r2-load-delay/psxrecomp/runtime/...`) and
+   rebuild the R3 candidate tree (`build-high-refresh-pass1-r1`). Do NOT
+   rebuild any accepted/handoff directory; record the new executable SHA-256.
+2. Hidden-route smoke with `PSX_GL_TRANSFORM_REPLAY/OUTPUT/PARITY` set:
+   confirm `invariance_samples > 0` with `invariance_exact` equal to it and
+   zero `invariance_diff_pixels` while stationary; confirm `pairs_missing`
+   is near zero during presents (it was the silent no-op signature);
+   confirm parity/midpoint gates still pass; wall_clock_cadence unchanged.
+3. If invariance fails, the telemetry (`last_max_disp_px`, `disp_rejects`)
+   localizes the residual owner before any user handoff.
+4. Only then a fresh user visual handoff (watch: startup band gone after
+   two captures per page, no brightness ramp while stationary, HUD
+   completeness — the implicit HUD exclusion caveat from 2026-08-06 still
+   stands and remains unverified).
