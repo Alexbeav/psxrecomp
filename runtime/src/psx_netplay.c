@@ -668,7 +668,8 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
      * "persisted 39 ticks"). */
     if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
         psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
-        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent())
+        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent() ||
+        psx_netplay_rb_fmv_episode_unsafe(fork_tick))
         return;
     sim = rnet_session_sim_tick(g_np.session);
     fork_cap = psx_netplay_rb_baseline_fork_cap();
@@ -3950,6 +3951,13 @@ static void np_pump_session(void)
 #endif
     drain_lobby_signals();
     rnet_session_pump(g_np.session);
+    /* STATE_CHUNK AIMD still needs many pumps per wall-second on TURN; frame-
+     * paced call sites alone leave the cwnd idle between vblanks. */
+    if (rnet_session_state_busy(g_np.session)) {
+        int burst;
+        for (burst = 0; burst < 12; burst++)
+            rnet_session_pump(g_np.session);
+    }
     np_drain_peer_frame_commits();
     if (g_np.rollback) {
         np_rollback_reconcile_wire();

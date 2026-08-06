@@ -34,6 +34,7 @@ int psx_netplay_rb_rewind_suppressed(void) { return 0; }
 int psx_netplay_rb_fmv_defer_rewind(void) { return 0; }
 int psx_netplay_rb_fmv_media_active(void) { return 0; }
 int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
+int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick) { (void)tick; return 0; }
 void psx_netplay_rb_poll_replay_stall(void) {}
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
@@ -406,6 +407,9 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
  * an unrecoverable fork (loud DESYNC log, keep-live, long cooldown). */
 #define RB_FORK_STORM_LIMIT 4u
 #define RB_FORK_STORM_COOLDOWN_TICKS 600u
+/* §93: matched-baseline resim diverge on the same sim twice is proven
+ * nondeterminism (FMV/CD) — do not realign to the same pin again. */
+#define RB_RESIM_DIVERGE_STORM_LIMIT 2u
 /* After a genuine POST diverge where Live successfully realigned, do not
  * promote-only-block the next edges — cooldown was preventing the fork from
  * self-correcting (2026-08-01 §17 soak: tip=9203 abort → promote-no-resim
@@ -533,6 +537,17 @@ static uint32_t g_fmv_core_match_streak;
 static int g_fmv_lockstep_released; /* sticky: never re-lock after invent on */
 /* Inclusive last tick both peers dense-snapped (media/lockstep/+tip). */
 static uint32_t g_fmv_dense_through;
+/* §93: media bout range (sim ticks). Begin/follow refuse loads/mismatches
+ * inside [lo, unsafe_hi] even when Live tip has already left media — that
+ * was the hole that opened ep8 load=176 / ep24 load=736 into FMV state. */
+static uint32_t g_fmv_media_lo;
+static uint32_t g_fmv_media_hi;
+/* §93: FMV lockstep hit MAX with streak < CONFIRM — cores never agreed.
+ * Keep invent/begin off until cores rematch CONFIRM ticks or session reset. */
+static int g_fmv_unmatched_desync;
+/* §93: consecutive resim-core aborts on the same diverge sim. */
+static uint32_t g_resim_diverge_tick;
+static uint32_t g_resim_diverge_streak;
 static uint32_t g_bl_mismatch_streak;
 static uint32_t g_tip_hold_until;
 /* TipHold invent-cap quiet: wall-clock ms when we first stalled at tip+slack
@@ -597,6 +612,8 @@ static void poll_tip_hold_finalize(void);
 static void clear_tip_extend_prime(void);
 static void clear_tip_hold_rereplay_pending(void);
 static int flush_tip_hold_deferred_rereplay(void);
+static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *why);
+static void clear_rewind_cooldown(const char *why);
 static void tip_hold_try_finalize(void);
 static void schedule_episode_rereplay(uint32_t prefer_plus_one);
 static void ownership_on_post_match(uint32_t tip);
@@ -795,7 +812,7 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
     int matched = 0;
     uint32_t cap;
     uint32_t prev_until;
-    if (!g_fmv_media_end_sim || rb_fmv_media_active() || g_fmv_lockstep_released)
+    if (!g_fmv_media_end_sim || rb_fmv_media_active())
         return;
 
     if (g_b.hc && !netplay_hc_peek_mismatch(g_b.hc, NULL, NULL, NULL)) {
@@ -807,6 +824,22 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
         g_fmv_core_match_streak++;
     else
         g_fmv_core_match_streak = 0;
+
+    /* §93: after MAX-unmatched DESYNC, keep counting so a later rematch can
+     * clear invent/begin hold without requiring a new media bout. */
+    if (g_fmv_lockstep_released) {
+        if (g_fmv_unmatched_desync &&
+            g_fmv_core_match_streak >= RB_FMV_LOCKSTEP_CONFIRM) {
+            fprintf(stderr,
+                    "psxrecomp: rb FMV DESYNC cleared — cores rematched "
+                    "streak=%u sim=%u\n",
+                    (unsigned)g_fmv_core_match_streak, (unsigned)sim);
+            fflush(stderr);
+            g_fmv_unmatched_desync = 0;
+            clear_rewind_cooldown("FMV cores rematched after MAX unmatched");
+        }
+        return;
+    }
 
     if (sim < g_fmv_media_end_sim + RB_FMV_LOCKSTEP_MIN)
         return; /* accumulate streak; invent stays off through MIN */
@@ -827,23 +860,37 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
             g_fmv_lockstep_until = grace_until;
         g_fmv_lockstep_released = 1;
         g_promote_sweep = 1;
-        /* §71: MAX unlock with streak=0 means cores never confirmed after
-         * FMV — keep promote_sweep sticky via a longer dense window so
-         * reconcile prefers hist repair over tip episodes into a fork. */
+        /* §71/§93: MAX unlock with streak=0 means cores never confirmed after
+         * FMV — do NOT invent-unlock into a soft fork. Arm DESYNC hold +
+         * storm cooldown; invent/begin stay gated until rematch or reset. */
         if (max_unmatched) {
             uint32_t dense = sim + RB_FMV_UNLOCK_GRACE * 2u;
             if (dense > g_fmv_lockstep_until)
                 g_fmv_lockstep_until = dense;
+            g_fmv_unmatched_desync = 1;
+            arm_rewind_cooldown_ticks(sim, RB_FORK_STORM_COOLDOWN_TICKS,
+                                      "FMV lockstep MAX unmatched "
+                                      "(cores never confirmed)");
+            fprintf(stderr,
+                    "psxrecomp: rb DESYNC — FMV lockstep MAX unmatched "
+                    "sim=%u streak=%u cap=%u — invent/begin held until "
+                    "cores rematch (confirm=%u)\n",
+                    (unsigned)sim, (unsigned)g_fmv_core_match_streak,
+                    (unsigned)cap, (unsigned)RB_FMV_LOCKSTEP_CONFIRM);
+            fflush(stderr);
         }
         fprintf(stderr,
                 "psxrecomp: rb FMV lockstep RELEASE sim=%u streak=%u "
                 "cap=%u dense_until=%u (unlock_grace=%u; promote_sweep%s; "
-                "invent already on after settle §26)\n",
+                "%s)\n",
                 (unsigned)sim, (unsigned)g_fmv_core_match_streak,
                 (unsigned)cap, (unsigned)g_fmv_lockstep_until,
                 (unsigned)RB_FMV_UNLOCK_GRACE,
                 max_unmatched ? "; MAX unmatched"
-                              : ((sim >= cap) ? "; MAX" : "; cores matched"));
+                              : ((sim >= cap) ? "; MAX" : "; cores matched"),
+                max_unmatched
+                    ? "DESYNC hold — invent off until rematch"
+                    : "invent already on after settle §26");
         fflush(stderr);
         (void)prev_until;
         return;
@@ -880,6 +927,7 @@ static void rb_fmv_tick_settle(void)
     if (media) {
         if (!g_was_in_fmv) {
             g_was_in_fmv = 1;
+            g_fmv_media_lo = sim;
             fprintf(stderr,
                     "psxrecomp: rb FMV rewind-defer ON (depth24/mdec; no invent)\n");
             fflush(stderr);
@@ -896,6 +944,10 @@ static void rb_fmv_tick_settle(void)
                 finalize_tip_hold();
             }
         }
+        if (sim >= g_fmv_media_hi)
+            g_fmv_media_hi = sim;
+        if (g_fmv_media_lo == 0u || sim < g_fmv_media_lo)
+            g_fmv_media_lo = sim;
         /* Heartbeat through the movie — digs are sparse while MDEC is hot. */
         {
             static uint32_t s_fmv_hb_sim;
@@ -924,6 +976,8 @@ static void rb_fmv_tick_settle(void)
     if (g_was_in_fmv) {
         g_was_in_fmv = 0;
         g_fmv_media_end_sim = sim;
+        if (sim >= g_fmv_media_hi)
+            g_fmv_media_hi = sim;
         g_fmv_core_match_streak = 0;
         g_fmv_lockstep_released = 0;
         g_fmv_settle_until = sim + RB_FMV_SETTLE_TICKS;
@@ -946,6 +1000,37 @@ static void rb_fmv_tick_settle(void)
     rb_fmv_update_lockstep_gate(sim);
 }
 
+/* §93: true if an episode load/mismatch tick sits inside the last FMV media
+ * bout or its settle tail — even when Live tip has already left media. */
+static int rb_fmv_tick_unsafe_for_episode(uint32_t tick)
+{
+    uint32_t unsafe_hi;
+    if (rb_fmv_media_active())
+        return 1;
+    if (g_fmv_unmatched_desync)
+        return 1;
+    if (g_fmv_media_hi == 0u && g_fmv_media_end_sim == 0u)
+        return 0;
+    unsafe_hi = g_fmv_settle_until;
+    if (g_fmv_media_hi > 0u) {
+        uint32_t media_settle = g_fmv_media_hi + RB_FMV_SETTLE_TICKS;
+        if (media_settle > unsafe_hi)
+            unsafe_hi = media_settle;
+    }
+    if (g_fmv_media_end_sim > 0u) {
+        uint32_t end_settle = g_fmv_media_end_sim + RB_FMV_SETTLE_TICKS;
+        if (end_settle > unsafe_hi)
+            unsafe_hi = end_settle;
+    }
+    if (unsafe_hi == 0u)
+        return 0;
+    /* Media bout may start at 0 (boot). Treat lo==0 with hi set as from 0. */
+    if (tick <= unsafe_hi &&
+        (g_fmv_media_lo == 0u || tick >= g_fmv_media_lo))
+        return 1;
+    return 0;
+}
+
 /* Defer rewind during movie + short settle. */
 static int rb_in_fmv_defer_rewind_window(void)
 {
@@ -953,6 +1038,8 @@ static int rb_in_fmv_defer_rewind_window(void)
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
     rb_fmv_tick_settle();
     if (rb_fmv_media_active())
+        return 1;
+    if (g_fmv_unmatched_desync)
         return 1;
     return sim < g_fmv_settle_until;
 }
@@ -963,13 +1050,16 @@ static int rb_in_fmv_defer_rewind_window(void)
  * re-serialized presentation to ~packet rate (~30 fps) even with
  * PSX_RB_GAP1_INVENT — invent count was 0 from FMV-on through invent_at.
  * Digest-gated lockstep (g_fmv_lockstep_until) still runs for dense snaps
- * / RELEASE logs; it no longer stalls admit. */
+ * / RELEASE logs; it no longer stalls admit.
+ * §93: also hold invent after MAX-unmatched DESYNC until cores rematch. */
 static int rb_in_fmv_lockstep_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
     rb_fmv_tick_settle();
     if (rb_fmv_media_active())
+        return 1;
+    if (g_fmv_unmatched_desync)
         return 1;
     return sim < g_fmv_settle_until;
 }
@@ -1654,21 +1744,77 @@ static void abort_episode_realign(const char *why)
     int hard_fail;
     int post_fail = why && strstr(why, "post ") != NULL;
     int baseline_fail = why && strstr(why, "baseline") != NULL;
+    int resim_fail = why && strstr(why, "resim core") != NULL;
+    int fmv_load_fail = why && strstr(why, "FMV media") != NULL;
     int arm_absurd_catchup = 0;
 
     /* §55/§83: raise fork_cap BEFORE pick_realign_tip so we never select the
      * just-failed (or previously failed) baseline as the Live heal tip. */
-    if (baseline_fail) {
+    if (baseline_fail || fmv_load_fail) {
         uint32_t failed_load = g_rb ? rnet_rb_get_load_tick(g_rb) : 0u;
+        if (fmv_load_fail && failed_load == 0u && why) {
+            const char *lp = strstr(why, "load=");
+            if (lp)
+                (void)sscanf(lp + 5, "%u", &failed_load);
+        }
         if (failed_load > 0u &&
             (g_bl_fork_cap == 0u || failed_load < g_bl_fork_cap)) {
             g_bl_fork_cap = failed_load;
             fprintf(stderr,
                     "psxrecomp: rb fork cap — next load must be < %u "
-                    "(baseline mismatch there)\n",
-                    (unsigned)g_bl_fork_cap);
+                    "(%s)\n",
+                    (unsigned)g_bl_fork_cap,
+                    fmv_load_fail ? "FMV media load" : "baseline mismatch there");
             fflush(stderr);
         }
+    }
+
+    /* §93: matched-baseline resim diverge on the same sim is nondeterminism
+     * (FMV/CD). Second hit → DESYNC keep-live; do not realign to the same pin. */
+    if (resim_fail) {
+        uint32_t diverge_sim = 0u;
+        const char *p = strstr(why, "sim=");
+        if (p && sscanf(p + 4, "%u", &diverge_sim) == 1 && diverge_sim > 0u) {
+            if (diverge_sim == g_resim_diverge_tick)
+                g_resim_diverge_streak++;
+            else {
+                g_resim_diverge_tick = diverge_sim;
+                g_resim_diverge_streak = 1u;
+            }
+        } else {
+            g_resim_diverge_streak++;
+        }
+        {
+            uint32_t failed_load = g_rb ? rnet_rb_get_load_tick(g_rb) : 0u;
+            if (failed_load > 0u &&
+                (g_bl_fork_cap == 0u || failed_load < g_bl_fork_cap)) {
+                g_bl_fork_cap = failed_load;
+                fprintf(stderr,
+                        "psxrecomp: rb fork cap — next load must be < %u "
+                        "(resim diverge there)\n",
+                        (unsigned)g_bl_fork_cap);
+                fflush(stderr);
+            }
+        }
+        if (g_resim_diverge_streak >= RB_RESIM_DIVERGE_STORM_LIMIT) {
+            fprintf(stderr,
+                    "psxrecomp: rb DESYNC — resim diverge storm sim=%u "
+                    "(%u× same tick; matched baseline nondeterminism) — "
+                    "keep-live, cooldown %u ticks (no same-pin realign)\n",
+                    (unsigned)g_resim_diverge_tick,
+                    (unsigned)g_resim_diverge_streak,
+                    (unsigned)RB_FORK_STORM_COOLDOWN_TICKS);
+            fflush(stderr);
+            g_abort_wire_class = RNET_RB_ABORT_CLASS_STORM;
+            g_abort_wire_realign_tick = 0u;
+            abort_episode(why);
+            arm_rewind_cooldown_ticks(live_sim, RB_FORK_STORM_COOLDOWN_TICKS,
+                                      "DESYNC resim diverge storm");
+            return;
+        }
+    } else if (!baseline_fail) {
+        g_resim_diverge_tick = 0u;
+        g_resim_diverge_streak = 0u;
     }
 
     have = pick_realign_tip(&tick);
@@ -1726,6 +1872,7 @@ static void abort_episode_realign(const char *why)
         hard_fail = !have ||
                     (why && (strstr(why, "baseline") != NULL ||
                              strstr(why, "resim core") != NULL ||
+                             strstr(why, "FMV media") != NULL ||
                              post_fail ||
                              strstr(why, "desync") != NULL));
         if (hard_fail)
@@ -4575,6 +4722,8 @@ static void finalize_tip_hold(void)
     g_bl_mismatch_streak = 0;
     g_fork_streak = 0u; /* §42 P4: clean commit ends any fork suspicion */
     g_fork_streak_tick = 0u;
+    g_resim_diverge_tick = 0u;
+    g_resim_diverge_streak = 0u;
     g_bl_fork_cap = 0u; /* §55 */
     g_peer_nack_floor = 0u; /* §62 */
     /* §38: hold agreed at tip until peer tip-hold (SAFETY ~250ms) can exit. */
@@ -4954,6 +5103,8 @@ static void commit_episode(void)
     g_bl_mismatch_streak = 0;
     g_fork_streak = 0u; /* §42 P4 */
     g_fork_streak_tick = 0u;
+    g_resim_diverge_tick = 0u;
+    g_resim_diverge_streak = 0u;
     g_bl_fork_cap = 0u; /* §55 */
     g_peer_nack_floor = 0u; /* §62 */
     /* No post-commit cooldown: promote-only after commit made char-select
@@ -5112,6 +5263,11 @@ void psx_netplay_rb_shutdown(void)
     g_fmv_core_match_streak = 0;
     g_fmv_lockstep_released = 0;
     g_fmv_dense_through = 0;
+    g_fmv_media_lo = 0;
+    g_fmv_media_hi = 0;
+    g_fmv_unmatched_desync = 0;
+    g_resim_diverge_tick = 0;
+    g_resim_diverge_streak = 0;
     g_bl_mismatch_streak = 0;
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
@@ -5507,6 +5663,30 @@ static int try_apply_pending_load(CPUState *cpu_in)
                     "psxrecomp: rb snap applied tick=%u pc=0x%08x (resume deferred)\n",
                     (unsigned)loaded_tick, (unsigned)pc);
             fflush(stderr);
+            /* §93: Live media detector can be cold while the load snap is mid-
+             * FMV (soak: begin@184 load=176 → flush media=1). Expand the media
+             * range and abort before Replay poisons both peers. */
+            if (rb_fmv_media_active()) {
+                if (!g_was_in_fmv) {
+                    g_was_in_fmv = 1;
+                    fprintf(stderr,
+                            "psxrecomp: rb FMV rewind-defer ON "
+                            "(depth24/mdec; no invent)\n");
+                    fflush(stderr);
+                }
+                if (g_fmv_media_lo == 0u || loaded_tick < g_fmv_media_lo)
+                    g_fmv_media_lo = loaded_tick;
+                if (loaded_tick >= g_fmv_media_hi)
+                    g_fmv_media_hi = loaded_tick;
+                if (!g_ownership_skip_snap) {
+                    char why[96];
+                    snprintf(why, sizeof(why),
+                             "episode load into FMV media (load=%u)",
+                             (unsigned)loaded_tick);
+                    abort_episode_realign(why);
+                    return 0;
+                }
+            }
             maybe_send_baseline();
             return 1;
         }
@@ -5670,8 +5850,15 @@ int psx_netplay_rb_fmv_media_active(void)
 
 int psx_netplay_rb_lockstep_no_invent(void)
 {
-    /* Media + settle only (§26). Post-FMV title menus invent+resim. */
+    /* Media + settle only (§26). Post-FMV title menus invent+resim.
+     * §93: also hold after MAX-unmatched DESYNC until cores rematch. */
     return rb_in_fmv_lockstep_window();
+}
+
+int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick)
+{
+    (void)rb_in_fmv_defer_rewind_window();
+    return rb_fmv_tick_unsafe_for_episode(tick);
 }
 
 void psx_netplay_rb_poll_replay_stall(void)
@@ -6069,10 +6256,26 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         if (s_fmv_refuse_sim != sim) {
             fprintf(stderr,
                     "psxrecomp: rb begin REFUSED mismatch=%u — FMV lockstep "
-                    "(no tip episode; admit waits for wire)\n",
-                    (unsigned)mismatch_tick);
+                    "(no tip episode; admit waits for wire)%s\n",
+                    (unsigned)mismatch_tick,
+                    g_fmv_unmatched_desync ? " [DESYNC hold]" : "");
             fflush(stderr);
             s_fmv_refuse_sim = sim;
+        }
+        return 0;
+    }
+    /* §93: refuse when the *mismatch* sits in the last media bout — Live tip
+     * may already be past FMV while hc-fork still targets an in-media tick. */
+    if (rb_fmv_tick_unsafe_for_episode(mismatch_tick)) {
+        static uint32_t s_media_mm_refuse_sim;
+        if (s_media_mm_refuse_sim != sim) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin REFUSED mismatch=%u — FMV media-range "
+                    "(lo=%u hi=%u settle_until=%u; no episode into media)\n",
+                    (unsigned)mismatch_tick, (unsigned)g_fmv_media_lo,
+                    (unsigned)g_fmv_media_hi, (unsigned)g_fmv_settle_until);
+            fflush(stderr);
+            s_media_mm_refuse_sim = sim;
         }
         return 0;
     }
@@ -6183,6 +6386,19 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         s_refuse_last_mismatch = 0xffffffffu;
     }
 
+    /* §93: chosen load may sit inside a prior FMV bout even when Live tip and
+     * mismatch are past settle (soak: load=176 / 736 into media). */
+    if (rb_fmv_tick_unsafe_for_episode(load)) {
+        fprintf(stderr,
+                "psxrecomp: rb begin REFUSED mismatch=%u load=%u — FMV "
+                "media-range load (lo=%u hi=%u settle_until=%u)\n",
+                (unsigned)mismatch_tick, (unsigned)load,
+                (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
+                (unsigned)g_fmv_settle_until);
+        fflush(stderr);
+        return 0;
+    }
+
     target = rnet_rb_suggest_target(g_rb, mismatch_tick, sim);
     if (target < load)
         target = load;
@@ -6219,8 +6435,10 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     /* Prefer MotK agreed tip when library watermark not yet set. Depth
      * ceiling comes from the session's configured light_tip_max_depth
      * (== RB_MOTK_TIP_RUNWAY), not the library default — see
-     * psx_netplay_rb_start(). */
+     * psx_netplay_rb_start(). §93: never light-tip into/near FMV media. */
     if (g_agreed_valid &&
+        !rb_fmv_tick_unsafe_for_episode(load) &&
+        !rb_fmv_tick_unsafe_for_episode(target) &&
         rnet_rb_is_light_tip_candidate_ex(load, target, g_agreed_through,
                                           rnet_rb_get_light_tip_max_depth(g_rb)))
         corr.flags = RNET_RB_CORR_LIGHT_TIP;
@@ -6684,8 +6902,30 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     /* Same policy as begin: do not follow into media/lockstep tip episodes. */
     if (rb_in_fmv_lockstep_window()) {
         fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u — FMV lockstep\n",
-                (unsigned)epoch, (unsigned)load);
+                "psxrecomp: rb follow REFUSED epoch=%u load=%u — FMV lockstep%s\n",
+                (unsigned)epoch, (unsigned)load,
+                g_fmv_unmatched_desync ? " [DESYNC hold]" : "");
+        fflush(stderr);
+        g_follow_nack_pending = 1;
+        g_follow_nack_epoch = epoch;
+        g_follow_nack_mismatch = mismatch;
+        g_follow_nack_load = load;
+        g_follow_nack_target = target;
+        g_follow_nack_slot = slot;
+        g_follow_nack_sends = 0;
+        send_follow_nack(epoch, mismatch, load, target, slot, 1);
+        g_follow_nack_sends = 1;
+        return;
+    }
+    /* §93: refuse follow when load/mismatch sits in the last FMV media bout. */
+    if (rb_fmv_tick_unsafe_for_episode(load) ||
+        rb_fmv_tick_unsafe_for_episode(mismatch)) {
+        fprintf(stderr,
+                "psxrecomp: rb follow REFUSED epoch=%u load=%u mismatch=%u — "
+                "FMV media-range (lo=%u hi=%u settle_until=%u)\n",
+                (unsigned)epoch, (unsigned)load, (unsigned)mismatch,
+                (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
+                (unsigned)g_fmv_settle_until);
         fflush(stderr);
         g_follow_nack_pending = 1;
         g_follow_nack_epoch = epoch;

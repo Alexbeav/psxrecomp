@@ -131,6 +131,8 @@ typedef struct {
     char display_name[PSX_LOBBY_NAME_LEN];
     char host[128];
     int port;
+    /* Actual TCP peer after connect (split-horizon / hairpin-safe for SFU). */
+    char connected_peer_ip[64];
     char path[128];
     char rx_http[4096];
     size_t rx_http_len;
@@ -283,48 +285,30 @@ static int endpoint_host_port(const char *ep, char *host, size_t host_cap, int *
     return *port_out > 0 && *port_out <= 65535;
 }
 
-static int host_name_is_loopback(const char *host)
+static void lobby_store_connected_peer_ip(int fd)
 {
-    if (!host || !host[0])
-        return 0;
-    if (strncmp(host, "127.", 4) == 0)
-        return 1;
-    if (strcmp(host, "::1") == 0)
-        return 1;
-    if (strcmp(host, "localhost") == 0)
-        return 1;
-    return 0;
-}
-
-/* Lobby WebSocket and UDP input relay are the same recomp-net-server process.
- * Launch may advertise INPUT_RELAY_ADVERTISE_HOST=127.0.0.1 (server default).
- * Remote peers rewrite that to the WS host they dialed (LAN IP / public DNS).
- * Same-machine peers keep loopback when UDP relay port is bound locally —
- * avoids hairpin NAT through the public DNS and start failures on hostname. */
-static int rewrite_relay_endpoint_to_lobby_host(char *ep, size_t cap)
-{
-    char rh[128];
-    int rport = 0;
-    int n;
-    if (!ep || !cap || !g_lc.host[0])
-        return 0;
-    if (!endpoint_host_port(ep, rh, sizeof(rh), &rport))
-        return 0;
-    if (strcmp(rh, g_lc.host) == 0)
-        return 0;
-    if (host_name_is_loopback(g_lc.host))
-        return 0;
-    if (host_endpoint_is_loopback(ep) && rnet_udp_port_available(rport) == 0) {
-        fprintf(stderr,
-                "psx_lobby: keep relay_endpoint %s "
-                "(local UDP %d busy — same host as lobby server)\n",
-                ep, rport);
-        return 0;
+    struct sockaddr_storage ss;
+    socklen_t slen = (socklen_t)sizeof(ss);
+    g_lc.connected_peer_ip[0] = '\0';
+    if (fd < 0)
+        return;
+    memset(&ss, 0, sizeof(ss));
+    if (getpeername(fd, (struct sockaddr *)&ss, &slen) != 0)
+        return;
+    if (ss.ss_family == AF_INET) {
+        const struct sockaddr_in *in = (const struct sockaddr_in *)&ss;
+        if (!inet_ntop(AF_INET, &in->sin_addr, g_lc.connected_peer_ip,
+                       sizeof(g_lc.connected_peer_ip)))
+            g_lc.connected_peer_ip[0] = '\0';
     }
-    n = snprintf(ep, cap, "%s:%d", g_lc.host, rport);
-    if (n <= 0 || (size_t)n >= cap)
-        return -1;
-    return 1;
+#if defined(AF_INET6)
+    else if (ss.ss_family == AF_INET6) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)&ss;
+        if (!inet_ntop(AF_INET6, &in6->sin6_addr, g_lc.connected_peer_ip,
+                       sizeof(g_lc.connected_peer_ip)))
+            g_lc.connected_peer_ip[0] = '\0';
+    }
+#endif
 }
 
 static int parse_ipv4_dotted(const char *host, unsigned *o)
@@ -355,6 +339,67 @@ static int ipv4_is_rfc1918(const unsigned o[4])
     if (o[0] == 192 && o[1] == 168)
         return 1;
     return 0;
+}
+
+static int host_is_loopback_name(const char *host)
+{
+    if (!host || !host[0])
+        return 0;
+    if (strncmp(host, "127.", 4) == 0)
+        return 1;
+    if (strcmp(host, "::1") == 0)
+        return 1;
+    if (strcmp(host, "localhost") == 0)
+        return 1;
+    return 0;
+}
+
+static int host_is_rfc1918_name(const char *host)
+{
+    unsigned o[4];
+    if (!host || !host[0])
+        return 0;
+    if (!parse_ipv4_dotted(host, o))
+        return 0;
+    return ipv4_is_rfc1918(o);
+}
+
+/* Lobby WebSocket and UDP input relay are the same recomp-net-server process.
+ * Rewrite only when it improves reachability:
+ *   - keep an already-RFC1918 advertise (server LAN pick / split-horizon)
+ *   - rewrite to WS peer IP only when that peer is private/loopback and
+ *     advertise is public, loopback, or a hostname (never clobber LAN with WAN)
+ *   - else fall back to WS URL host string for loopback advertise only */
+static int rewrite_relay_endpoint_to_lobby_host(char *ep, size_t cap)
+{
+    char rh[128];
+    const char *use_host = NULL;
+    int rport = 0;
+    int n;
+    int adv_lan, adv_loop, peer_local;
+    if (!ep || !cap)
+        return 0;
+    if (!endpoint_host_port(ep, rh, sizeof(rh), &rport))
+        return 0;
+    adv_lan = host_is_rfc1918_name(rh);
+    adv_loop = host_is_loopback_name(rh);
+    if (adv_lan)
+        return 0; /* server already gave a same-LAN dial target */
+    peer_local = g_lc.connected_peer_ip[0] &&
+                 (host_is_rfc1918_name(g_lc.connected_peer_ip) ||
+                  host_is_loopback_name(g_lc.connected_peer_ip));
+    if (peer_local)
+        use_host = g_lc.connected_peer_ip;
+    else if (adv_loop && g_lc.host[0] && !host_is_loopback_name(g_lc.host))
+        use_host = g_lc.host;
+    if (!use_host || !use_host[0])
+        return 0;
+    if (strcmp(rh, use_host) == 0)
+        return 0;
+    n = snprintf(ep, cap, "%s:%d", use_host, rport);
+    if (n <= 0 || (size_t)n >= cap)
+        return -1;
+    return 1;
 }
 
 static int ipv4_is_link_local(const unsigned o[4])
@@ -1783,7 +1828,7 @@ static void handle_server_json(const char *json)
             if (rewrite_relay_endpoint_to_lobby_host(relay_endpoint,
                                                     sizeof(relay_endpoint)) > 0) {
                 fprintf(stderr,
-                        "psx_lobby: relay_endpoint %s → %s (lobby WS host)\n",
+                        "psx_lobby: relay_endpoint %s → %s (WS peer/host)\n",
                         relay_raw, relay_endpoint);
             }
             strncpy(g_lc.join.host_endpoint, relay_endpoint,
@@ -1967,6 +2012,12 @@ int psx_lobby_connect(const char *ws_url)
         return -3;
     }
     g_lc.fd = fd;
+    lobby_store_connected_peer_ip(fd);
+    if (g_lc.connected_peer_ip[0] &&
+        strcmp(g_lc.connected_peer_ip, g_lc.host) != 0) {
+        fprintf(stderr, "psx_lobby: WS connected peer %s (url host %s)\n",
+                g_lc.connected_peer_ip, g_lc.host);
+    }
     for (i = 0; i < 16; ++i) {
         key_raw[i] = (char)(rand() & 0xff);
     }

@@ -79,8 +79,13 @@ int  psx_netplay_rb_fmv_defer_rewind(void);
 int  psx_netplay_rb_fmv_media_active(void);
 
 /* 1 during FMV media + short settle (§26) — admit waits for remote wire.
- * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle. */
+ * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle.
+ * Also 1 while §93 MAX-unmatched DESYNC hold is armed. */
 int  psx_netplay_rb_lockstep_no_invent(void);
+
+/* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
+ * hold). Begin/follow/hc-fork must not open episodes that load there. */
+int  psx_netplay_rb_fmv_episode_unsafe(uint32_t tick);
 
 /* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
  * Full rb_pump stays admit/present-edge only (host-asymmetric). */

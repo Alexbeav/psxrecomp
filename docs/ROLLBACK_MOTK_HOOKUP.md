@@ -4414,3 +4414,43 @@ GP0 → Software @ 1× → CPU VRAM → snaps / av= / GPUREAD (authority)
 **Re-soak watch:** matched `av=` across peers; visible 4× GL quality in
 match; no black first present after tip load; rematch keeps dual after
 lobby soft-return.
+
+## 93. FMV stability gates — refuse media episodes / resim storm / MAX DESYNC (2026-08-05)
+
+**Soak (rb-diag1/2 session 8):** post-FMV resim from matched baseline `39655d1b`
+diverged at sim 184 (~459 cycles) twice with identical abort digests; match-start
+episode load=736 died on baseline `mdec`/`cd` mismatch; FMV lockstep RELEASE
+with `streak=0` / MAX unmatched then soft-desynced the rest of the fight.
+Broken main-menu assets after were consistent with mid-FMV VRAM realign churn.
+
+FMV savestate completeness is not the bug — cross-peer determinism / policy is.
+
+**Fixes (§93 stability P0):**
+
+1. **Media-range episode refuse:** track `g_fmv_media_lo`/`hi` through each FMV
+   bout. Begin/follow refuse when mismatch or chosen load sits in
+   `[lo, hi+SETTLE]` (or DESYNC hold), even if Live tip already left media.
+   `psx_netplay_rb_fmv_episode_unsafe` + hc-fork skip. Snap apply that lands
+   mid-media aborts before Replay (`episode load into FMV media`) and raises
+   fork_cap. No `LIGHT_TIP` into media-range loads.
+2. **Resim-diverge storm:** second `resim core diverge` on the same sim →
+   DESYNC keep-live + storm cooldown; no same-pin realign. First hit still
+   raises fork_cap so the doomed load is not reused.
+3. **MAX unmatched RELEASE:** if lockstep hits MAX with `streak < CONFIRM`,
+   arm `g_fmv_unmatched_desync` + storm cooldown — invent/begin stay held
+   until cores rematch CONFIRM ticks (or session reset). Log
+   `rb DESYNC — FMV lockstep MAX unmatched`.
+
+**Re-soak watch:**
+
+- No `begin epoch=…` / `follow` into FMV media or settle; expect
+  `begin REFUSED … FMV media-range` / `episode load into FMV media`.
+- No second `ABORT — resim core diverge` on the same sim; expect
+  `DESYNC — resim diverge storm` instead of same-pin realign loop.
+- Post-FMV: either `RELEASE … cores matched` or `DESYNC — MAX unmatched`
+  with invent held — never `streak=0` + keep inventing through a fork.
+- Idle digs: `core`/`cd` match through title → vs → match start.
+- Menu after disconnect stays clean (no mid-FMV realign poison).
+
+**Still open (P1/P2):** mid-session host state-transfer on storm; CD/MDEC
+cycle determinism for matched-baseline sim 184.
