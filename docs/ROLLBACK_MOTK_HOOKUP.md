@@ -24,7 +24,7 @@ episode. Menu releases rewind (FMV soft-promote release-only only). Host
 | Keep delay-sync `RNetSession` working behind a flag | Lobby / ICE / save-xfer stay useful; Disable Rollback opts out |
 | Predicted rows promote only via `hash_confirm` (or host protect) | Library invariant; NULL `hash_confirm_promote` = always rewind |
 | Digests must be bit-identical across peers for the same sealed inputs | Otherwise every invent becomes an episode storm |
-| **Same bit-identical binary on both peers** | Mixed `build-release` vs packaged `motk-*` can match live digests for hundreds of ticks then fork GPRs/timers in Replay (pin zlib skew is the symptom) |
+| **Same game version + guest semantics** | Prefer matching commits/deps. **Per-peer PGO is OK** (Settings → Optimize FMV Playback). Mixed trees/zlib still fork — size alone is not proof of match |
 | Snapshots must restore at the exact sim tick requested | Ring load is the only rewind mechanism |
 | Single-thread ownership of session + rings | Same as delay-sync |
 
@@ -914,30 +914,22 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       comparison value never compared across differently-built peers, and
       both peers already have to run the identical binary.
 
-      **Tier 2 — dirty-region digest (planned, not started).** Convert
-      "CRC the whole buffer" into "CRC only what changed since the last
-      digest." **VRAM is the tractable target**: audited every write to
-      the 1 MiB `vram[]` array in `gpu.c` and found only **3 call sites**
-      in the whole GPU emulation (CPU→VRAM transfer ~L2071, pixel
-      plot/fill/line/poly ~L2930, depth24/16bpp write ~L4744) — a small,
-      fully auditable surface where each site could mark a per-scanline
-      or per-tile "touched" bitmap, and `netplay_av_digest()` would CRC
-      only touched regions since the last checkpoint. This is also the
-      cheaper alternative flagged above as the unblocker for "one-sided
-      episodes" (exact per-tick VRAM state without a permanent per-frame
-      CRC tax). **RAM is not a good near-term target the same way**: guest
-      stores happen from essentially every recompiled `sw`/`sh`/`sb` site
-      across the whole program — thousands of call sites, not 3 — so
-      reliable RAM dirty-tracking means threading write-tracking through
-      the recompiler/interpreter's store path itself, a much larger
-      change. (Note: `dirty_ram_interp.h`'s existing per-page dirty
-      bitmap is an unrelated subsystem — self-modifying-code detection for
-      the static recompiler, CLAUDE.md Rule 18 — not a digest optimization
-      and not reusable for this without its own risk analysis.) **Risk to
-      respect:** a missed write site doesn't crash, it silently produces a
-      digest that doesn't reflect true state — masking a real divergence
-      or manufacturing a phantom one. Should ship with a "shadow-verify
-      against a full recompute" mode during bring-up, not on faith.
+      **Tier 2 — dirty-region digest (tracking landed for snaps §96;
+      digest fold still planned).** Convert "CRC the whole buffer" into
+      "CRC only what changed since the last digest." **VRAM tracking is
+      in:** `gpu_vram_dirty.*` marks per-scanline dirtiness from
+      `gpu.c` (raster_pixel / GP0 A0) and `gpu_sw_renderer.c` (put_*/
+      fill/copy/transfer). Raw ring snaps already consume this (§96).
+      Next: `netplay_av_digest()` CRC only touched rows since the last
+      checkpoint (unblocker for one-sided episodes). **RAM is not a good
+      near-term target the same way**: guest stores happen from essentially
+      every recompiled `sw`/`sh`/`sb` site — thousands of call sites, not a
+      handful — so reliable RAM dirty-tracking means threading write-tracking
+      through the recompiler/interpreter store path. (Note:
+      `dirty_ram_interp.h`'s per-page bitmap is SMC detection — CLAUDE.md
+      Rule 18 — not a digest optimization.) **Risk:** a missed write site
+      silently produces a wrong digest. Shadow-verify:
+      `PSX_NET_VRAM_DIRTY_VERIFY=1`.
 
       **Tier 3 — Merkle/hash-tree digest (planned, longer-horizon idea).**
       Replace the flat CRC with fixed-size blocks (e.g. 4 KiB) each hashed,
@@ -979,8 +971,8 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
 4. ~~Episode resim wiring~~  
 5. ~~Lobby flag + UI~~  
 6. ~~Rate-limit live snaps (`PSX_NET_SNAP_INTERVAL`) + safe episode resume~~  
-7. ~~Thinner snap / FMV policy~~ — interval **16**, settle invent ok, digest
-   fold (skip-VRAM on live snaps unsafe for rewind; optional later)
+7. ~~Thinner snap / FMV policy~~ — interval **16**, settle invent ok; §96
+   dirty-VRAM mirror + FMV media snap interval 4 (skip-VRAM still unsafe)
 8. **Dual-instance soak** — prove Done-when items  
 
 ---
@@ -4438,7 +4430,8 @@ FMV savestate completeness is not the bug — cross-peer determinism / policy is
    raises fork_cap so the doomed load is not reused.
 3. **MAX unmatched RELEASE:** if lockstep hits MAX with `streak < CONFIRM`,
    arm `g_fmv_unmatched_desync` + storm cooldown — invent/begin stay held
-   until cores rematch CONFIRM ticks (or session reset). Log
+   until cores rematch CONFIRM ticks, invent-hold expires (~600 ticks /
+   §94), netplay SAVE completes (§94), or session reset. Log
    `rb DESYNC — FMV lockstep MAX unmatched`.
 
 **Re-soak watch:**
@@ -4454,3 +4447,142 @@ FMV savestate completeness is not the bug — cross-peer determinism / policy is
 
 **Still open (P1/P2):** mid-session host state-transfer on storm; CD/MDEC
 cycle determinism for matched-baseline sim 184.
+
+## 94. Netplay SAVE under FMV DESYNC invent-hold — tip-hole deadlock (2026-08-05)
+
+**Soak (rb-diag1):** after FMV `DESYNC — MAX unmatched` at sim=1044 (streak=0,
+never rematched), fight ran wire-only (~60 fps, lead≈-1). Host Shift+F2 SAVE
+at sim=2598 completed (`hashes match, skip transfer`), then admit froze at
+sim=2608 `stall=fmv_settle lead=-1` for 20s → `admit stall timeout` → lobby.
+Guest tip stuck at 2607. Save itself was fine; resume needed gap1 invent and
+could not get it.
+
+**Cause:** `g_fmv_unmatched_desync` keeps `lockstep_no_invent` true forever when
+soft-fork digests never hit CONFIRM. Scheduler mis-tagged that stall as
+`fmv_settle` (media inactive). SAVE coord freezes both peers → tip hole →
+neither invents → mutual wait → watchdog.
+
+**Fixes (§94):**
+
+1. **Stall tag:** `fmv_desync_hold` when DESYNC invent-hold is the gate
+   (`psx_netplay_rb_fmv_desync_hold`); keep `fmv_media` / `fmv_settle`.
+2. **Invent-hold expire:** `RB_FMV_DESYNC_INVENT_EXPIRE` (600 ticks) after arm —
+   clear invent-hold if rematch never comes. Log
+   `FMV DESYNC invent-hold cleared (invent-hold expired…)`.
+3. **Save complete clear:** host/guest after SAVE hash-match or transfer done
+   call `psx_netplay_rb_clear_fmv_desync_hold("netplay save complete")` so tip
+   invent can refill immediately.
+
+**Re-soak watch:** SAVE mid-fight after post-FMV DESYNC does not stall-timeout;
+expect invent-hold cleared (expire or save) and gap1 invent resumes. Stall
+lines should say `fmv_desync_hold` not `fmv_settle` while the hold is live.
+
+## 95. Netplay LOAD — host hung `wait_confirm`, guest-only apply (2026-08-05)
+
+**Soak (rb-diag1/2 session 19):** SAVE transfer OK. Host Shift+F1 LOAD hash-match
+→ guest `LOADED` + `waiting for host`; host stuck
+`load_applying+wait_confirm` ~14s (never `LOADED`) → peer disconnect / desync
+(guest on .pst, host still live timeline).
+
+**Cause:** `LOAD_APPLYING` used delay-sync `rnet_session_try_admit` (INPUT_CONFIRM).
+Rollback live does not confirm. Faster peer applies → `LOAD_READY` freezes admit
+→ slower peer never gets confirm for the next tick → `savestate_poll` never runs.
+
+**Fixes (§95):**
+
+1. **Rollback load-barrier admit:** while `LOAD_APPLYING` + `savestate_pending`
+   (and when exiting `LOAD_READY` after mutual sync), use tip + hold-last invent
+   with **no** confirm (`np_try_admit_load_barrier_rb`). Always invent missing
+   remotes — peer may already be frozen in LOAD_READY.
+2. **Clear DESYNC invent-hold** at `np_commit_load_sync` (hard resync).
+
+**Re-soak watch:** both peers log `LOADED` / `applied, waiting…` then
+`peer ready, resuming lockstep`. No host-only `load_applying+wait_confirm`
+stall after hash-match apply.
+
+## 96. FMV snap cost — dirty VRAM mirror + media interval (2026-08-05)
+
+**Goal:** keep invent/episode policy for FMV media (§50/§93) but make the
+rollback snap machinery cheaper while the movie runs.
+
+**What landed:**
+
+1. **Per-scanline VRAM dirty tracking** (`gpu_vram_dirty.*`) on every CPU-VRAM
+   write path (gpu.c A0/raster + sw fill/copy/put/transfer). **Gated:**
+   `gpu_vram_dirty_set_tracking(1)` only in `psx_netplay_rb_start`; off in
+   `shutdown`. Offline / delay-sync: `g_psx_vram_dirty_tracking==0` so
+   `mark_row` is an inlined no-op (zero gameplay impact).
+2. **Incremental raw snap VRAM** (`boot_state_save_buffer_raw` + tracking on):
+   persistent 1 MiB mirror; only dirty scanlines are copied from live VRAM
+   before emitting a still-complete `BS_SEC_VRAM` (loads stay independent /
+   no delta chain). Offline raw/zlib saves keep full `gr_vram_transfer_out`.
+3. **FMV media snap interval** (default **4**, `PSX_NET_FMV_SNAP_INTERVAL`):
+   during media, live snaps every N ticks. Settle + post-FMV lockstep remain
+   every-tick dense (cutover near-tip load). Episodes into media still refused.
+4. **Telemetry:** `rb snap tele` every 64 saves — `last/avg ms`, `dirty_rows`,
+   `incr%%`. Bring-up verify: `PSX_NET_VRAM_DIRTY_VERIFY=1` memcmp vs full
+   transfer_out.
+
+**Not changed (still accept):** no invent through media; SW@1× CPU-auth VRAM;
+soft-fork / DESYNC invent-hold after unmatched FMV.
+
+**Re-soak watch:** during FMV media, `rb snap tele` shows `incr=1` with
+`dirty_rows` ≪ 512 (typical depth24 band), lower `avg ms` than pre-change,
+and media snap cadence ~interval 4. Settle/lockstep still dense. Optional
+verify run once with `PSX_NET_VRAM_DIRTY_VERIFY=1` (no VERIFY FAIL lines).
+
+## 97. FMV media keyframe episodes — invent into media (2026-08-05)
+
+**Goal:** abandon blanket “no invent / no episode into FMV media” (§93) by
+healing stream soft-forks the same way SAVE/LOAD heals state: **host seals a
+raw snap keyframe at `load_tick` before Replay**.
+
+**Default ON** (`PSX_NET_FMV_MEDIA_KF=0` restores §93 refuse + invent-off).
+
+**What landed:**
+
+1. **Invent during live media** when MEDIA_KF on (settle + DESYNC hold still
+   block invent). Media snap interval defaults to **1** (every tick) so
+   `load_tick` hits a ring snap.
+2. **Begin/follow into media-range** allowed when a snap exists (initiator) or
+   peer flags `RNET_RB_SYNC_FLAG_MEDIA_KF` (follower may lack the snap).
+3. **Host keyframe transfer** (`RNET_STATE_OP_RB_KF`): probe CRC of raw snap →
+   skip xfer on match; else chunked transfer. Both peers install into pin+ring
+   (`rb MEDIA-KF …`). No LIGHT_TIP into media KF episodes.
+4. **Apply waits** for `g_media_kf_ready`; prefers pin; **skips**
+   `episode load into FMV media` abort for KF episodes.
+5. Restore epilogue unchanged (`cdrom_resync_*`, depth24 cutover, XA FIFO).
+
+**Re-soak watch:**
+
+- Mid-FMV: invent can fire; logs `rb begin … media_kf=1` /
+  `MEDIA-KF probe` / `hash match` or `transfer start` / `installed`.
+- No resim-diverge storm on first media episode; baseline digests match after KF.
+- `PSX_NET_FMV_MEDIA_KF=0` restores prior refuse / invent-off behavior.
+
+## 98. FMV admit/FPS — freeze D + timesync during media (2026-08-05)
+
+**Diag (post-§97):** snaps were already cheap (`rb snap tele avg≈0.7 ms`,
+`incr=1`, `dirty_rows≈128`) but FMV sat ~43–55 fps. Ceiling was
+`guest≈13–16 ms/f` + `admit≈4–8 ms/f` (timesync debt + D ratcheted to 6–7
+under invent-through-media). `present_gap_p95≈80–100 ms` was mostly the
+hardcoded present-1/4 skip (~67 ms+ between Swaps), not snap cost.
+
+**What landed:**
+
+1. **No timesync debt during FMV media** — `np_timesync_note_late` skips;
+   `np_timesync_throttle` clears debt and never stalls admit while media.
+2. **Freeze adaptive D during media** — both `np_adapt_delay_on_pcap_enter`
+   and `np_auto_delay_tick` no-op while `psx_netplay_rb_fmv_media_active()`.
+3. **No LAN gap1 micro-grace during media** — invent immediately when the
+   MEDIA_KF path allows invent (avoid admit wait for a peer that is also
+   inventing through the movie).
+4. **Media snap interval default 2** with MEDIA_KF (was 1). Near-tip loads
+   still work; halves snap tax vs every-tick. Override
+   `PSX_NET_FMV_SNAP_INTERVAL`.
+5. **Present every 2nd depth24 vblank** during hot MDEC (was every 4th).
+   Override `PSX_NET_FMV_PRESENT_DIV` (`1`=every frame, `4`=legacy).
+
+**Re-soak watch:** during FMV media, `admit=` near ~0–2 ms/f (not 5–11),
+`D` stable (no mid-movie 6→7), `present_gap_p95` roughly half of §97,
+`rb snap tele` cadence ~interval 2, sim FPS closer to guest ceiling.

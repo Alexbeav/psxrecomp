@@ -340,6 +340,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             int ok = boot_state_save(&snap, s_bios_checksum, s_entry_pc, path);
             fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
                     ok ? "SAVED" : "SAVE FAILED", slot, (unsigned)resume_pc, path);
+            psx_frontend_on_savestate_notify(0, slot, ok);
+        } else {
+            psx_frontend_on_savestate_notify(0, slot, 0);
         }
     }
 
@@ -362,6 +365,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         "savestate: LOAD FAILED blob (%zu bytes, entry=%08X)\n",
                         blob_len, (unsigned)s_entry_pc);
                 s_load_failed = 1;
+                psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
             loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
@@ -370,10 +374,12 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         "savestate: LOAD FAILED slot %d %s\n",
                         slot, path);
                 s_load_failed = 1;
+                psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else {
             fprintf(stderr, "savestate: LOAD FAILED slot %d (no path)\n", slot);
             s_load_failed = 1;
+            psx_frontend_on_savestate_notify(1, slot, 0);
         }
         if (loaded) {
             t_after_boot = savestate_mono_ms();
@@ -400,6 +406,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     t_after_frontend - t_after_boot,
                     t_after_frontend - t_load0,
                     path[0] ? "" : " [blob]");
+            psx_frontend_on_savestate_notify(1, slot, 1);
             /* Unwind to the scheduler and re-dispatch the restored PC. Never
              * returns; abandons the suspended CPS frames on the current stack. */
             psx_scheduler_resume_at(cpu->pc);

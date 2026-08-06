@@ -591,6 +591,12 @@ static void np_timesync_note_late(uint32_t age)
         g_ts_note_late_suppressed_rb++;
         return;
     }
+    /* §98: FMV media invent/mispredict noise must not pile timesync debt —
+     * each 6 ms/tick shave showed up as admit=5–11 ms/f in FMV soaks. */
+    if (psx_netplay_rb_fmv_media_active()) {
+        g_ts_note_late_suppressed_rb++;
+        return;
+    }
     now = sched_mono_ms();
     if (g_ts_off_until_ms != 0u && (int32_t)(now - g_ts_off_until_ms) < 0) {
         g_ts_note_late_suppressed_off++;
@@ -715,6 +721,14 @@ static int np_timesync_throttle(uint32_t wire)
     np_timesync_check_enabled();
     if (!g_ts_enabled)
         return 0;
+    /* §98: drain media-era debt without stalling admit (FMV guest is already
+     * the ceiling; do not stack timesync shaves on top). */
+    if (psx_netplay_rb_fmv_media_active()) {
+        g_ts_debt_ms = 0u;
+        s_stall_until = 0u;
+        s_logged = 0;
+        return 0;
+    }
     now = sched_mono_ms();
     if (wire != s_last_wire) {
         if (s_last_wire != 0u && wire == s_last_wire + 1u) {
@@ -1052,6 +1066,10 @@ static void np_adapt_delay_on_pcap_enter(uint32_t now)
     /* Host / sim-authority only — guests receive DELAY_SYNC. */
     if (sched_local_slot() != 0)
         return;
+    /* §98: FMV media invent storms must not ratchet D (soak: D=6→7 while
+     * admit climbed to 5–11 ms/f). Keep D stable through the movie. */
+    if (psx_netplay_rb_fmv_media_active())
+        return;
 
     if (g_pcap_window_t0_ms == 0u ||
         (uint32_t)(now - g_pcap_window_t0_ms) > RB_ADAPT_WINDOW_MS) {
@@ -1194,6 +1212,11 @@ static void np_auto_delay_tick(uint32_t now)
     g_ad_late_n = 0;
     g_ad_late_sum_ms = 0;
     g_ad_late_max_ms = 0;
+
+    /* §98: freeze D through FMV media — discard invent-storm samples so the
+     * first post-media eval does not ratchet from movie miss_rate. */
+    if (psx_netplay_rb_fmv_media_active())
+        return;
 
     d = sched_delay();
     if (ticks < 120u) {
@@ -1513,8 +1536,10 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
      * Start). Invent idle opened tip episodes that hung. Tip-ahead with a
      * missing consumption wire is a ring hole — log before stalling. */
     if (psx_netplay_rb_lockstep_no_invent()) {
+        /* §94: DESYNC invent-hold is not settle — mis-tag hid the real gate. */
         const char *why = psx_netplay_rb_fmv_media_active() ? "fmv_media"
-                                                            : "fmv_settle";
+                          : (psx_netplay_rb_fmv_desync_hold() ? "fmv_desync_hold"
+                                                             : "fmv_settle");
         if (st->highest_remote_wire > wire)
             np_diag_wire_hole(slot, sim, wire, st, why);
         else
@@ -1646,7 +1671,7 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
              * next tip is due by cadence. Expiry still invents
              * (np_gap1_note_expire_invent), so WAN behavior degrades to
              * §29 with a bounded 6ms tax at worst. */
-            if (case_a) {
+            if (case_a && !psx_netplay_rb_fmv_media_active()) {
                 uint32_t rtt_raw = 0u;
                 int lan;
                 int tip_due;
@@ -1660,6 +1685,7 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
                         gap1_cap = RB_GAP1_LAN_GRACE_CAP_MS;
                 }
             }
+            /* §98: during FMV media invent immediately (no LAN micro-grace). */
         }
         if (gap1_cap != 0u) {
             if (np_invent_grace_stall_ex(slot, wire, gap1_cap, 0)) {

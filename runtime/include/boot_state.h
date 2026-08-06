@@ -118,6 +118,14 @@ int  boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
                                 uint32_t entry_pc, uint8_t** out_data,
                                 size_t* out_len);
 
+/* §96 telemetry: after the latest save, how many VRAM scanlines were dirty
+ * and whether the incremental mirror path patched (vs full memcpy). */
+uint32_t boot_state_last_vram_dirty_rows(void);
+int      boot_state_last_vram_incremental(void);
+
+/* Drop the §96 VRAM mirror (RB shutdown / before re-enable). */
+void boot_state_vram_mirror_reset(void);
+
 /* Load + validate (integrity key) + restore the full machine. On any mismatch
  * or incompleteness returns 0 (caller then boots normally and recaptures). */
 int  boot_state_load(const char* path, uint32_t bios_checksum,

@@ -20,6 +20,7 @@
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
+#include "host_osd.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -843,6 +844,23 @@ static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
 /* Called from savestate_poll after a successful restore (before scheduler
  * longjmp). Clears present latches and forces the next vblank to show the
  * restored VRAM — including a blank if display was disabled in the snapshot. */
+extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) {
+    char buf[64];
+    const int disp = slot + 1; /* F1 = slot 1 */
+    if (is_load) {
+        if (ok)
+            snprintf(buf, sizeof(buf), "Loaded slot %d", disp);
+        else
+            snprintf(buf, sizeof(buf), "Load failed slot %d", disp);
+    } else {
+        if (ok)
+            snprintf(buf, sizeof(buf), "Saved slot %d", disp);
+        else
+            snprintf(buf, sizeof(buf), "Save failed slot %d", disp);
+    }
+    host_osd_push(buf, 2000);
+}
+
 extern "C" void psx_frontend_on_savestate_loaded(void) {
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
@@ -2084,6 +2102,15 @@ static void sdl_audio_pump(bool discard_output = false) {
         sdl_audio_gain_ramp(sdl_audio_buf, ramp, g0, g1);
         sdl_audio_fadein_left -= ramp;
     }
+    /* Host master volume (launcher / numpad +/-). Applied after fade so mute
+     * edges stay continuous and volume steps take effect immediately. */
+    {
+        const int vol = host_volume_get();
+        if (vol < 100) {
+            const float g = (float)vol / 100.0f;
+            sdl_audio_gain_ramp(sdl_audio_buf, frames, g, g);
+        }
+    }
     if (legacy) {
         /* T3 tap: the exact post-fade bytes handed to the host audio queue. */
         audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, frames);
@@ -2474,8 +2501,9 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             if (tail > buf_cap) tail = buf_cap;
             /* An unmute ramp may still be in progress; start the down-ramp
              * from its current gain so the edge stays continuous. */
-            const float g0 = 1.0f - (float)sdl_audio_fadein_left
-                                    / (float)sdl_audio_fade_samples;
+            const float vol = (float)host_volume_get() / 100.0f;
+            const float g0 = (1.0f - (float)sdl_audio_fadein_left
+                                     / (float)sdl_audio_fade_samples) * vol;
             sdl_audio_fadein_left = 0;
             spu_render(sdl_audio_buf, tail);
             sdl_audio_gain_ramp(sdl_audio_buf, tail, g0, 0.0f);
@@ -4088,6 +4116,7 @@ static void netplay_hold_last_present_tick(void) {
         SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
         SDL_RenderClear(sdl_renderer);
         SDL_RenderCopy(sdl_renderer, sdl_texture, &s_sw_hold_src, &s_sw_hold_dst);
+        host_osd_draw_sdl(sdl_renderer);
         SDL_RenderPresent(sdl_renderer);
         did = 1;
     }
@@ -4534,6 +4563,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
+                    host_osd_push("CD reinsert", 1500);
+                }
+                /* Host volume: numpad + / - (5% steps). Shows right-side bar. */
+                else if (key == SDLK_KP_PLUS) {
+                    host_volume_adjust(+5);
+                } else if (key == SDLK_KP_MINUS) {
+                    host_volume_adjust(-5);
                 }
                 /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
                  * windowed and the CONFIGURED tri-state mode (g_fullscreen: 1
@@ -4549,6 +4585,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
                         SDL_SetWindowFullscreen(sdl_window, 0);
+                        host_osd_push("Windowed", 1500);
                     } else {
                         /* If the configured mode is "off", the hotkey still
                          * needs a mode to switch INTO — default to borderless,
@@ -4556,6 +4593,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                         Uint32 target = psx_fullscreen_flag_for_mode(g_fullscreen);
                         if (target == 0) target = SDL_WINDOW_FULLSCREEN_DESKTOP;
                         SDL_SetWindowFullscreen(sdl_window, target);
+                        host_osd_push("Fullscreen", 1500);
                     }
                 }
             }
@@ -4790,19 +4828,32 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         }
     }
 
-    /* Netplay FMV: present 1 of every 4 depth24 vblanks while MDEC is hot.
-     * SW RGB888 scanout dominates guest ms; admit + wall pace still run every
-     * tick in the epilogue. Do NOT skip pace — MotK ran ~90fps when decode was
-     * fast and pace was skipped here. During MDEC-idle cutover (FMV1→FMV2)
-     * present every frame so the next stream can handshake (1/4 skip left the
-     * gap looking frozen with cheap guest + TURN admit wait). */
+    /* Netplay FMV: present 1 of every N depth24 vblanks while MDEC is hot.
+     * §98: default N=2 (was 4). 1/4 made present_gap_p95≈80–100 ms look like
+     * hitches; SW scanout is batched so 1/2 is affordable. Admit + wall pace
+     * still run every tick. During MDEC-idle cutover present every frame.
+     * Override: PSX_NET_FMV_PRESENT_DIV (1=every frame, 2=default, 4=legacy). */
     if (psx_netplay_active() && gpu_display_is_depth24() &&
         mdec_recently_active(8)) {
-        if (s_netplay_depth24_present_skip > 0) {
+        static int s_fmv_present_div = -1;
+        int div;
+        if (s_fmv_present_div < 0) {
+            const char *e = getenv("PSX_NET_FMV_PRESENT_DIV");
+            unsigned v = 2u;
+            if (e && e[0] && sscanf(e, "%u", &v) == 1 && v >= 1u && v <= 8u)
+                s_fmv_present_div = (int)v;
+            else
+                s_fmv_present_div = 2;
+        }
+        div = s_fmv_present_div;
+        if (div <= 1) {
+            s_netplay_depth24_present_skip = 0;
+        } else if (s_netplay_depth24_present_skip > 0) {
             s_netplay_depth24_present_skip--;
             return ep;
+        } else {
+            s_netplay_depth24_present_skip = div - 1;
         }
-        s_netplay_depth24_present_skip = 3; /* skip next three presents */
     } else {
         s_netplay_depth24_present_skip = 0;
     }
@@ -4927,6 +4978,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     if (sdl_renderer) {
                         SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
                         SDL_RenderClear(sdl_renderer);
+                        host_osd_draw_sdl(sdl_renderer);
                         SDL_RenderPresent(sdl_renderer);
                     }
                 }
@@ -5233,6 +5285,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
+    host_osd_draw_sdl(sdl_renderer);
     /* §33: remember active rect for resim hold-last (not full 640x512). */
     s_sw_hold_src = src;
     s_sw_hold_dst = dst;
@@ -8986,7 +9039,7 @@ std::string player_device[PSX_MAX_PLAYERS];
             ls.widescreen_hud = ls.widescreen;
             ls.enable_audio   = 1;
             ls.audio_freq     = 44100;
-            ls.volume         = 100;
+            ls.volume         = host_volume_get();
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                 for (int i = 0; i < n; ++i) {
@@ -9278,6 +9331,7 @@ std::string player_device[PSX_MAX_PLAYERS];
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.auto_skip_fmv         = ls.auto_skip_fmv != 0;    seed.has_auto_skip_fmv         = true;
                 seed.turbo_loads           = ls.turbo_loads != 0;      seed.has_turbo_loads           = true;
+                host_volume_set(ls.volume);
                 if (ls.bios_path[0]) {
                     std::filesystem::path resolved =
                         resolve_bios_path(ls.bios_path, argv[0]);
@@ -10406,7 +10460,7 @@ soft_return_lobby:
         ls.fullscreen = g_fullscreen ? 1 : 0;
         ls.enable_audio = 1;
         ls.audio_freq = 44100;
-        ls.volume = 100;
+        ls.volume = host_volume_get();
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
         ls.supersampling = g_video_scale;
@@ -10499,6 +10553,7 @@ soft_return_lobby:
 #endif
 
         if (rui_rc == 0) {
+            host_volume_set(ls.volume);
             if (rui_out_disc[0]) {
                 resolved_disc = normalize_disc_path_for_launch(rui_out_disc);
                 disc_path_str = resolved_disc.string();

@@ -1,7 +1,9 @@
 #include "boot_state.h"
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
 #include "dirty_ram_interp.h"
+#include "gpu.h"           /* gpu_get_vram — CPU-auth mirror under dual-raster   */
 #include "gpu_render.h"    /* gr_vram_transfer_in / gr_vram_transfer_out          */
+#include "gpu_vram_dirty.h"
 #include "cpu_state.h"     /* gte_canonicalize_cpu_state after CPU wire restore   */
 #include "interrupts.h"
 #include "psx_cycles.h"
@@ -85,6 +87,103 @@ extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
 static char     s_capture_path[512];
 static uint32_t s_capture_checksum;
 static uint32_t s_capture_entry_pc;
+
+/* §96: persistent VRAM mirror for raw ring snaps — patch dirty scanlines only. */
+static uint16_t s_vram_mirror[VRAM_W * VRAM_H];
+static int      s_vram_mirror_valid;
+static uint32_t s_last_vram_dirty_rows;
+static int      s_last_vram_incremental;
+
+uint32_t boot_state_last_vram_dirty_rows(void)
+{
+    return s_last_vram_dirty_rows;
+}
+
+int boot_state_last_vram_incremental(void)
+{
+    return s_last_vram_incremental;
+}
+
+void boot_state_vram_mirror_reset(void)
+{
+    s_vram_mirror_valid = 0;
+    s_last_vram_dirty_rows = VRAM_H;
+    s_last_vram_incremental = 0;
+}
+
+/* Build s_vram_mirror from live CPU VRAM using dirty rows when possible.
+ * Always emits a full 1 MiB BS_SEC_VRAM (loads stay independent).
+ * Only used while gpu_vram_dirty_tracking() (rollback netplay). */
+static int sync_vram_mirror_for_save(void)
+{
+    const uint16_t *live = gpu_get_vram();
+    uint32_t dirty_n;
+    uint32_t y;
+
+    if (!gpu_vram_dirty_tracking()) {
+        /* Should not be called offline — full refresh fallback. */
+        if (live)
+            memcpy(s_vram_mirror, live, VRAM_SIZE);
+        else
+            gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, s_vram_mirror);
+        s_vram_mirror_valid = 1;
+        s_last_vram_dirty_rows = VRAM_H;
+        s_last_vram_incremental = 0;
+        return 1;
+    }
+
+    dirty_n = gpu_vram_dirty_row_count();
+    s_last_vram_dirty_rows = dirty_n;
+
+    if (!live) {
+        gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, s_vram_mirror);
+        s_vram_mirror_valid = 1;
+        s_last_vram_dirty_rows = VRAM_H;
+        s_last_vram_incremental = 0;
+        gpu_vram_dirty_clear();
+        return 1;
+    }
+
+    if (!s_vram_mirror_valid || dirty_n >= VRAM_H) {
+        memcpy(s_vram_mirror, live, VRAM_SIZE);
+        s_vram_mirror_valid = 1;
+        s_last_vram_incremental = 0;
+    } else if (dirty_n == 0u) {
+        /* Mirror already matches live. */
+        s_last_vram_incremental = 1;
+    } else {
+        const uint64_t *mask = gpu_vram_dirty_mask();
+        for (y = 0; y < VRAM_H; y++) {
+            if (mask[y >> 6] & ((uint64_t)1u << (y & 63u))) {
+                memcpy(s_vram_mirror + (size_t)y * VRAM_W,
+                       live + (size_t)y * VRAM_W,
+                       (size_t)VRAM_W * sizeof(uint16_t));
+            }
+        }
+        s_last_vram_incremental = 1;
+    }
+
+    if (gpu_vram_dirty_verify_enabled()) {
+        uint16_t *full = (uint16_t *)malloc(VRAM_SIZE);
+        if (full) {
+            gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, full);
+            if (memcmp(full, s_vram_mirror, VRAM_SIZE) != 0) {
+                fprintf(stderr,
+                        "psxrecomp: VRAM dirty VERIFY FAIL dirty_rows=%u "
+                        "incr=%d — forcing full mirror\n",
+                        (unsigned)dirty_n, s_last_vram_incremental);
+                fflush(stderr);
+                memcpy(s_vram_mirror, full, VRAM_SIZE);
+                s_last_vram_incremental = 0;
+                s_last_vram_dirty_rows = VRAM_H;
+            }
+            free(full);
+        }
+    }
+
+    gpu_vram_dirty_clear();
+    return 1;
+}
 
 /* File or growable memory sink — both save paths share one serializer. */
 typedef struct BsOut {
@@ -227,6 +326,38 @@ static int write_timer_section(BsOut* o) {
 
 /* ============================ SAVE ============================ */
 
+/* Classic full VRAM section (offline / zlib / tracking off). */
+static int write_vram_section_full(BsOut *o)
+{
+    uint16_t *vbuf = (uint16_t *)malloc(VRAM_SIZE);
+    int ok;
+    if (!vbuf)
+        return 0;
+    gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, vbuf);
+    s_last_vram_dirty_rows = VRAM_H;
+    s_last_vram_incremental = 0;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    ok = write_section(o, BS_SEC_VRAM, vbuf, VRAM_SIZE);
+#else
+    {
+        uint8_t *wire = (uint8_t *)malloc(VRAM_SIZE);
+        if (!wire) {
+            free(vbuf);
+            return 0;
+        }
+        {
+            PstW w;
+            pst_w_init(&w, wire, VRAM_SIZE);
+            ok = pst_w_pod(&w, vbuf, VRAM_SIZE, 2) &&
+                 write_section(o, BS_SEC_VRAM, wire, VRAM_SIZE);
+        }
+        free(wire);
+    }
+#endif
+    free(vbuf);
+    return ok;
+}
+
 static int boot_state_save_to(BsOut* o, const CPUState* cpu,
                               uint32_t bios_checksum, uint32_t entry_pc) {
     BootStateHeader h;
@@ -269,29 +400,29 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     }
     if (ok) ok = write_module_section(o, BS_SEC_GPU, gpu_snapshot_bytes, gpu_snapshot_write);
     if (ok) {
-        uint16_t* vbuf = (uint16_t*)malloc(VRAM_SIZE);
-        if (!vbuf) ok = 0;
-        else {
-            gr_vram_transfer_out(0, 0, VRAM_W, VRAM_H, vbuf);
-            /* VRAM is uint16 LE guest pixels — emit as LE u16 stream.
-             * pst_w_pod is a memcpy on LE hosts (see pst_wire.h); skip the
-             * extra wire alloc there (netplay ring snaps every few ticks). */
+        /* §96 incremental mirror only while RB dirty-tracking is on.
+         * Offline / delay-sync / zlib disk: classic full transfer_out. */
+        if (o->no_zlib && gpu_vram_dirty_tracking()) {
+            ok = sync_vram_mirror_for_save();
+            if (ok) {
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-            ok = write_section(o, BS_SEC_VRAM, vbuf, VRAM_SIZE);
+                ok = write_section(o, BS_SEC_VRAM, s_vram_mirror, VRAM_SIZE);
 #else
-            {
-                uint8_t* wire = (uint8_t*)malloc(VRAM_SIZE);
-                if (!wire) ok = 0;
-                else {
-                    PstW w;
-                    pst_w_init(&w, wire, VRAM_SIZE);
-                    ok = pst_w_pod(&w, vbuf, VRAM_SIZE, 2) &&
-                         write_section(o, BS_SEC_VRAM, wire, VRAM_SIZE);
-                    free(wire);
+                {
+                    uint8_t* wire = (uint8_t*)malloc(VRAM_SIZE);
+                    if (!wire) ok = 0;
+                    else {
+                        PstW w;
+                        pst_w_init(&w, wire, VRAM_SIZE);
+                        ok = pst_w_pod(&w, s_vram_mirror, VRAM_SIZE, 2) &&
+                             write_section(o, BS_SEC_VRAM, wire, VRAM_SIZE);
+                        free(wire);
+                    }
                 }
-            }
 #endif
-            free(vbuf);
+            }
+        } else {
+            ok = write_vram_section_full(o);
         }
     }
     if (ok) ok = write_module_section(o, BS_SEC_SPU, spu_snapshot_bytes, spu_snapshot_write);
@@ -472,6 +603,13 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
 #if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
         /* Wire == host layout: upload straight from the section buffer. */
         gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, (const uint16_t*)p);
+        if (gpu_vram_dirty_tracking()) {
+            memcpy(s_vram_mirror, p, VRAM_SIZE);
+            s_vram_mirror_valid = 1;
+            gpu_vram_dirty_clear();
+        } else {
+            s_vram_mirror_valid = 0;
+        }
         return 1;
 #else
         {
@@ -485,6 +623,13 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
                 return 0;
             }
             gr_vram_transfer_in(0, 0, VRAM_W, VRAM_H, vbuf);
+            if (gpu_vram_dirty_tracking()) {
+                memcpy(s_vram_mirror, vbuf, VRAM_SIZE);
+                s_vram_mirror_valid = 1;
+                gpu_vram_dirty_clear();
+            } else {
+                s_vram_mirror_valid = 0;
+            }
             free(vbuf);
             return 1;
         }

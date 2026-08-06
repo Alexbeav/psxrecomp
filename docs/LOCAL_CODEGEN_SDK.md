@@ -147,6 +147,10 @@ host present paths in the profile.
 | `PSXRECOMP_PROJECT_ROOT` / game-specific | project root |
 | `PSXRECOMP_BUILD_DIR` / game-specific | cmake build dir |
 | `PSXRECOMP_FORCE_SETUP` / game-specific | force setup wizard |
+
+Project-root discovery order: env → walk **cwd** → walk **exe dir**
+(`$APPIMAGE` parent or `/proc/self/exe` / `GetModuleFileName`). GUI launches
+that leave cwd as `$HOME` still find a setup zip next to the binary.
 | `PSXRECOMP_GAME` | path to `psxrecomp-game` binary |
 | `PSX_HOST_MUTE=1` | discard host SDL audio (SPU still runs; set by PGO train) |
 | `PSX_HEADLESS=1` | no SDL window (set by PGO train when `hide_video`) |

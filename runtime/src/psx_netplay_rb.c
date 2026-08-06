@@ -34,7 +34,21 @@ int psx_netplay_rb_rewind_suppressed(void) { return 0; }
 int psx_netplay_rb_fmv_defer_rewind(void) { return 0; }
 int psx_netplay_rb_fmv_media_active(void) { return 0; }
 int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
+int psx_netplay_rb_fmv_desync_hold(void) { return 0; }
+void psx_netplay_rb_clear_fmv_desync_hold(const char *why) { (void)why; }
 int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick) { (void)tick; return 0; }
+int psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc)
+{
+    (void)size;
+    (void)crc;
+    return 0;
+}
+int psx_netplay_rb_media_kf_on_ready(const void *data, size_t size)
+{
+    (void)data;
+    (void)size;
+    return 0;
+}
 void psx_netplay_rb_poll_replay_stall(void) {}
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
@@ -102,6 +116,7 @@ uint32_t psx_netplay_rb_rtt_estimate_ms(void) { return 0; }
 #include "cpu_state.h"
 #include "crc32.h"
 #include "gpu.h"
+#include "gpu_vram_dirty.h"
 #include "interrupts.h"
 #include "mdec.h"
 #include "psx_cycles.h"
@@ -175,6 +190,29 @@ static uint32_t snap_interval(void)
     }
     return iv;
 }
+
+static int rb_media_kf_enabled(void); /* §97 — defined near episode wire clear */
+
+/* §96/§98: FMV media snap interval. Default 4; MEDIA_KF uses 2 (near-tip
+ * loads without every-tick 0.7 ms snap tax). Override: PSX_NET_FMV_SNAP_INTERVAL. */
+static uint32_t fmv_media_snap_interval(void)
+{
+    static int latched;
+    static uint32_t iv = 4u;
+    if (!latched) {
+        const char *e = getenv("PSX_NET_FMV_SNAP_INTERVAL");
+        if (e && e[0]) {
+            unsigned v = 0;
+            if (sscanf(e, "%u", &v) == 1 && v >= 1u && v <= 16u)
+                iv = v;
+        } else if (rb_media_kf_enabled()) {
+            iv = 2u;
+        }
+        latched = 1;
+    }
+    return iv;
+}
+
 /* §58 dense tip snaps: live saves every tick inside a sliding window so a
  * near-tip mispredict loads at (or within a tick of) the mismatch instead of
  * up to snap_interval-1 ticks below it (§57 soak: depth_avg 14–41 with
@@ -348,6 +386,14 @@ static size_t g_pin_size;
 static uint32_t g_pin_tick;
 static int g_pin_valid;
 
+/* §97: FMV media keyframe episode — host forces identical snap at load_tick
+ * before Replay (probe CRC, transfer on miss). Default ON; set
+ * PSX_NET_FMV_MEDIA_KF=0 to restore §93 refuse / invent-off during media. */
+static int g_media_kf_episode;
+static int g_media_kf_ready;      /* pin holds authoritative KF for load */
+static int g_media_kf_host_armed; /* host started probe/send for this episode */
+static int g_media_kf_sending;    /* host transfer in flight */
+
 /* §67 resim audit digest cache (fin state per replayed tick) — declared here
  * so pin_baseline_from_cpu can compare pin digest vs audit fin (§78 PIN-SKEW
  * diag). See log_resim_tick_audit for the cache contract. */
@@ -430,6 +476,11 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_FMV_LOCKSTEP_MIN 180u
 #define RB_FMV_LOCKSTEP_MAX 300u
 #define RB_FMV_LOCKSTEP_CONFIRM 16u
+/* §94: MAX-unmatched DESYNC invent-hold must not last forever. Soft-forked
+ * digests never rematch CONFIRM ticks — invent stays off, then a SAVE/hitch
+ * tip hole deadlocks admit (soak: stall=fmv_settle → lobby). Expire invent
+ * hold after this many sim ticks; episode media-range refuse is separate. */
+#define RB_FMV_DESYNC_INVENT_EXPIRE 600u
 /* After cores match (or MAX): keep invent off this many more ticks so admit
  * waits for wire. Prevents hold-last sticky Up (pub=ffef vs wire=ffff) from
  * inventing at unlock+1 → FIRST CORE DIVERGE / tip episode. Matches dense
@@ -545,6 +596,7 @@ static uint32_t g_fmv_media_hi;
 /* §93: FMV lockstep hit MAX with streak < CONFIRM — cores never agreed.
  * Keep invent/begin off until cores rematch CONFIRM ticks or session reset. */
 static int g_fmv_unmatched_desync;
+static uint32_t g_fmv_unmatched_desync_arm_sim;
 /* §93: consecutive resim-core aborts on the same diverge sim. */
 static uint32_t g_resim_diverge_tick;
 static uint32_t g_resim_diverge_streak;
@@ -614,6 +666,7 @@ static void clear_tip_hold_rereplay_pending(void);
 static int flush_tip_hold_deferred_rereplay(void);
 static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *why);
 static void clear_rewind_cooldown(const char *why);
+static void rb_clear_fmv_desync_hold(const char *why);
 static void tip_hold_try_finalize(void);
 static void schedule_episode_rereplay(uint32_t prefer_plus_one);
 static void ownership_on_post_match(uint32_t tip);
@@ -830,13 +883,13 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
     if (g_fmv_lockstep_released) {
         if (g_fmv_unmatched_desync &&
             g_fmv_core_match_streak >= RB_FMV_LOCKSTEP_CONFIRM) {
-            fprintf(stderr,
-                    "psxrecomp: rb FMV DESYNC cleared — cores rematched "
-                    "streak=%u sim=%u\n",
-                    (unsigned)g_fmv_core_match_streak, (unsigned)sim);
-            fflush(stderr);
-            g_fmv_unmatched_desync = 0;
-            clear_rewind_cooldown("FMV cores rematched after MAX unmatched");
+            {
+                char why[96];
+                snprintf(why, sizeof(why),
+                         "cores rematched streak=%u sim=%u",
+                         (unsigned)g_fmv_core_match_streak, (unsigned)sim);
+                rb_clear_fmv_desync_hold(why);
+            }
         }
         return;
     }
@@ -868,15 +921,18 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
             if (dense > g_fmv_lockstep_until)
                 g_fmv_lockstep_until = dense;
             g_fmv_unmatched_desync = 1;
+            g_fmv_unmatched_desync_arm_sim = sim;
             arm_rewind_cooldown_ticks(sim, RB_FORK_STORM_COOLDOWN_TICKS,
                                       "FMV lockstep MAX unmatched "
                                       "(cores never confirmed)");
             fprintf(stderr,
                     "psxrecomp: rb DESYNC — FMV lockstep MAX unmatched "
                     "sim=%u streak=%u cap=%u — invent/begin held until "
-                    "cores rematch (confirm=%u)\n",
+                    "cores rematch (confirm=%u) or invent-hold expires "
+                    "(+%u ticks) / netplay save\n",
                     (unsigned)sim, (unsigned)g_fmv_core_match_streak,
-                    (unsigned)cap, (unsigned)RB_FMV_LOCKSTEP_CONFIRM);
+                    (unsigned)cap, (unsigned)RB_FMV_LOCKSTEP_CONFIRM,
+                    (unsigned)RB_FMV_DESYNC_INVENT_EXPIRE);
             fflush(stderr);
         }
         fprintf(stderr,
@@ -1031,34 +1087,57 @@ static int rb_fmv_tick_unsafe_for_episode(uint32_t tick)
     return 0;
 }
 
-/* Defer rewind during movie + short settle. */
+/* §94: drop MAX-unmatched invent-hold (rematch, save complete, or expire). */
+static void rb_clear_fmv_desync_hold(const char *why)
+{
+    if (!g_fmv_unmatched_desync)
+        return;
+    g_fmv_unmatched_desync = 0;
+    g_fmv_unmatched_desync_arm_sim = 0;
+    fprintf(stderr,
+            "psxrecomp: rb FMV DESYNC invent-hold cleared (%s)\n",
+            why ? why : "?");
+    fflush(stderr);
+    clear_rewind_cooldown(why ? why : "FMV DESYNC invent-hold cleared");
+}
+
+/* Expire invent-hold when soft-fork digests never rematch CONFIRM ticks. */
+static void rb_fmv_desync_invent_maybe_expire(uint32_t sim)
+{
+    if (!g_fmv_unmatched_desync || g_fmv_unmatched_desync_arm_sim == 0u)
+        return;
+    if (sim < g_fmv_unmatched_desync_arm_sim + RB_FMV_DESYNC_INVENT_EXPIRE)
+        return;
+    rb_clear_fmv_desync_hold("invent-hold expired (no rematch)");
+}
+
+/* Defer rewind during movie + short settle.
+ * §97: with MEDIA_KF, allow rewind/episodes into live media (keyframe
+ * heals stream forks); settle + DESYNC hold still defer. */
 static int rb_in_fmv_defer_rewind_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
     rb_fmv_tick_settle();
+    rb_fmv_desync_invent_maybe_expire(sim);
     if (rb_fmv_media_active())
-        return 1;
+        return rb_media_kf_enabled() ? 0 : 1;
     if (g_fmv_unmatched_desync)
         return 1;
     return sim < g_fmv_settle_until;
 }
 
 /* Admit no-invent gate (§26): media + short settle only.
- * Pre-§26 also blocked invent through g_fmv_lockstep_until (MIN 180 +
- * UNLOCK_GRACE 64 ≈ 4s of title-menu delay-sync). On TURN/CGNAT that
- * re-serialized presentation to ~packet rate (~30 fps) even with
- * PSX_RB_GAP1_INVENT — invent count was 0 from FMV-on through invent_at.
- * Digest-gated lockstep (g_fmv_lockstep_until) still runs for dense snaps
- * / RELEASE logs; it no longer stalls admit.
- * §93: also hold invent after MAX-unmatched DESYNC until cores rematch. */
+ * §97: MEDIA_KF allows invent during live media (episodes open with host
+ * keyframe). Settle + DESYNC invent-hold unchanged. */
 static int rb_in_fmv_lockstep_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
     rb_fmv_tick_settle();
+    rb_fmv_desync_invent_maybe_expire(sim);
     if (rb_fmv_media_active())
-        return 1;
+        return rb_media_kf_enabled() ? 0 : 1;
     if (g_fmv_unmatched_desync)
         return 1;
     return sim < g_fmv_settle_until;
@@ -1378,6 +1457,143 @@ static void clear_episode_wire_state(void)
     g_seal_wait_logged = 0;
     g_last_begin_rexmit_ms = 0;
     g_begin_rexmit_logged = 0;
+    g_media_kf_episode = 0;
+    g_media_kf_ready = 0;
+    g_media_kf_host_armed = 0;
+    g_media_kf_sending = 0;
+}
+
+/* §97: default ON — invent/episodes into FMV media with host keyframe. */
+static int rb_media_kf_enabled(void)
+{
+    static int latched = -1;
+    if (latched < 0) {
+        const char *e = getenv("PSX_NET_FMV_MEDIA_KF");
+        latched = (e && e[0] == '0') ? 0 : 1;
+    }
+    return latched;
+}
+
+static void clear_baseline_pin(void);
+
+static int rb_install_media_kf_bytes(uint32_t tick, const uint8_t *data, size_t size)
+{
+    uint8_t *ring_copy;
+    if (!data || !size)
+        return 0;
+    clear_baseline_pin();
+    g_pin_data = (uint8_t *)malloc(size);
+    if (!g_pin_data)
+        return 0;
+    memcpy(g_pin_data, data, size);
+    g_pin_size = size;
+    g_pin_tick = tick;
+    g_pin_valid = 1;
+    /* Ring store takes ownership — keep a separate copy from the pin. */
+    if (g_snaps) {
+        ring_copy = (uint8_t *)malloc(size);
+        if (ring_copy) {
+            memcpy(ring_copy, data, size);
+            if (!netplay_snap_ring_store(g_snaps, tick, ring_copy, size))
+                ; /* store frees ring_copy on hard failure */
+        }
+    }
+    g_media_kf_ready = 1;
+    return 1;
+}
+
+static int rb_media_kf_seal_local(uint32_t tick)
+{
+    size_t sz = 0;
+    const uint8_t *p;
+    if (!g_snaps || !netplay_snap_ring_has(g_snaps, tick))
+        return 0;
+    p = netplay_snap_ring_peek(g_snaps, tick, &sz);
+    if (!p || !sz)
+        return 0;
+    return rb_install_media_kf_bytes(tick, p, sz);
+}
+
+static void rb_media_kf_host_drive(void)
+{
+    RNetSession *s = sess();
+    uint32_t load;
+    size_t sz = 0;
+    const uint8_t *p;
+    int match = 0;
+    uint32_t crc;
+    int local_slot;
+
+    if (!g_media_kf_episode || !g_rb || !s || !rnet_rb_is_active(g_rb))
+        return;
+    if (g_media_kf_ready)
+        return;
+    local_slot = g_b.local_slot ? *g_b.local_slot : 0;
+    if (local_slot != 0)
+        return; /* host-only transfer */
+    if (rnet_session_state_busy(s) && !g_media_kf_sending)
+        return; /* SAVE/LOAD in flight — wait */
+
+    load = rnet_rb_get_load_tick(g_rb);
+    p = g_snaps ? netplay_snap_ring_peek(g_snaps, load, &sz) : NULL;
+    if (!p || !sz) {
+        static uint32_t s_miss_log;
+        if (s_miss_log != load) {
+            fprintf(stderr,
+                    "psxrecomp: rb MEDIA-KF host — no snap at load=%u\n",
+                    (unsigned)load);
+            fflush(stderr);
+            s_miss_log = load;
+        }
+        return;
+    }
+
+    if (!g_media_kf_host_armed) {
+        crc = rnet_checksum(p, sz);
+        if (rnet_session_state_probe(s, RNET_STATE_OP_RB_KF, 0, (rnet_u32)sz,
+                                     crc) != 0)
+            return;
+        g_media_kf_host_armed = 1;
+        fprintf(stderr,
+                "psxrecomp: rb MEDIA-KF probe load=%u bytes=%zu crc=%08x\n",
+                (unsigned)load, sz, (unsigned)crc);
+        fflush(stderr);
+        return;
+    }
+
+    if (g_media_kf_sending) {
+        /* Wait for take_ready on host side (sender also gets ready). */
+        return;
+    }
+
+    if (rnet_session_state_probe_take_reply(s, &match)) {
+        rnet_session_state_probe_finish(s);
+        if (match) {
+            if (rb_media_kf_seal_local(load)) {
+                fprintf(stderr,
+                        "psxrecomp: rb MEDIA-KF hash match load=%u — local "
+                        "pin sealed\n",
+                        (unsigned)load);
+                fflush(stderr);
+            }
+            return;
+        }
+        /* Miss: send host snap bytes. */
+        if (rnet_session_state_begin(s, RNET_STATE_OP_RB_KF, 0, p, sz) != 0) {
+            fprintf(stderr,
+                    "psxrecomp: rb MEDIA-KF begin FAILED load=%u\n",
+                    (unsigned)load);
+            fflush(stderr);
+            g_media_kf_host_armed = 0;
+            return;
+        }
+        g_media_kf_sending = 1;
+        (void)rb_media_kf_seal_local(load);
+        fprintf(stderr,
+                "psxrecomp: rb MEDIA-KF transfer start load=%u bytes=%zu\n",
+                (unsigned)load, sz);
+        fflush(stderr);
+    }
 }
 
 static void clear_baseline_pin(void)
@@ -5134,10 +5350,16 @@ void psx_netplay_rb_start(void)
     if (!g_bound || !s)
         return;
 
+    /* §96: dirty-VRAM tracking only while RB netplay is live. */
+    gpu_vram_dirty_set_tracking(1);
+    boot_state_vram_mirror_reset();
+
     g_snaps = netplay_snap_ring_create(NETPLAY_SNAP_RING_DEFAULT_DEPTH);
     tip_dense_reset();
     if (!g_snaps) {
         fprintf(stderr, "psxrecomp: rb snap ring create FAILED — rewind disabled\n");
+        gpu_vram_dirty_set_tracking(0);
+        boot_state_vram_mirror_reset();
         return;
     }
     delay = g_b.input_delay ? *g_b.input_delay : 2;
@@ -5245,6 +5467,8 @@ void psx_netplay_rb_shutdown(void)
         netplay_snap_ring_destroy(g_snaps);
         g_snaps = NULL;
     }
+    gpu_vram_dirty_set_tracking(0);
+    boot_state_vram_mirror_reset();
     clear_baseline_pin();
     g_pending_save_valid = 0;
     g_pending_load_valid = 0;
@@ -5266,6 +5490,7 @@ void psx_netplay_rb_shutdown(void)
     g_fmv_media_lo = 0;
     g_fmv_media_hi = 0;
     g_fmv_unmatched_desync = 0;
+    g_fmv_unmatched_desync_arm_sim = 0;
     g_resim_diverge_tick = 0;
     g_resim_diverge_streak = 0;
     g_bl_mismatch_streak = 0;
@@ -5311,15 +5536,13 @@ void psx_netplay_rb_shutdown(void)
     g_rb_rtt_ema_ms = 0;
 }
 
-/* Dense tip snaps: media/settle, plus the digest lockstep/+tip window even
- * after invent is allowed again (§26) — first Cross/Start after FMV still
- * wants a near-tip load. */
+/* Dense tip snaps: settle + digest lockstep/+tip (§26) — first Cross/Start
+ * after FMV still wants a near-tip load. Media uses fmv_media_snap_interval
+ * instead (§96); episodes into media remain refused. */
 static int rb_fmv_dense_snap_window(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
-    if (rb_fmv_media_active())
-        return 1;
     if (sim < g_fmv_settle_until)
         return 1;
     if (g_fmv_media_end_sim &&
@@ -5341,9 +5564,9 @@ void psx_netplay_rb_request_snap(uint32_t tick)
         return;
     /* Resim must keep a snap at every replayed tick (post-verify + next
      * correction). Live path rate-limits — full boot_state snaps dominate FPS.
-     * Exception: media + post-FMV lockstep/+tip keep dense snaps so the first
-     * invent-miss loads near the mismatch (954→944 was a ~10-tick hitch;
-     * with tip snaps + shared frontier → load≈953). */
+     * Exception: post-FMV settle/lockstep/+tip keep every-tick snaps so the
+     * first invent-miss loads near the mismatch. FMV media (§96) uses a
+     * coarser interval — episodes into media are refused anyway. */
     if (!(g_rb && rnet_rb_is_resimulating(g_rb))) {
         /* §75: sealed Replay snaps are authoritative — Live invent must not
          * poison them for tip-extend rereplay. */
@@ -5354,6 +5577,12 @@ void psx_netplay_rb_request_snap(uint32_t tick)
          * first_bad-1 still in the ring after a 16–30 tick REMOTE-HELD walk. */
         if (g_rb && rnet_rb_is_tip_holding(g_rb) && tip_dense_window() > 0u) {
             tip_dense_push(tick);
+        } else if (rb_fmv_media_active()) {
+            iv = fmv_media_snap_interval();
+            if (iv > 1u && (tick % iv) != 0u)
+                return;
+            if (tick >= g_fmv_dense_through)
+                g_fmv_dense_through = tick;
         } else if (!rb_fmv_dense_snap_window()) {
             iv = snap_interval();
             if (iv > 1u && (tick % iv) != 0u) {
@@ -5482,11 +5711,15 @@ static int try_apply_pending_load(CPUState *cpu_in)
         int loaded = 0;
         int loaded_from_pin = 0;
         uint32_t loaded_tick = g_pending_load_tick;
+        /* §97: wait for host MEDIA-KF pin before applying into FMV media. */
+        if (g_media_kf_episode && !g_media_kf_ready)
+            return 0;
         /* Prefer pin when it matches the load tick: live realign and §76
          * tip-hold flush (sealed tip at tip-hold entry — ring may still be
-         * invent-poisoned). */
+         * invent-poisoned). §97 MEDIA-KF always prefers the sealed pin. */
         if (g_pin_valid && g_pin_tick == loaded_tick && g_pin_data &&
-            g_pin_size && (live_realign || g_tip_extend_rereplay)) {
+            g_pin_size &&
+            (live_realign || g_tip_extend_rereplay || g_media_kf_episode)) {
             loaded = boot_state_load_buffer(g_pin_data, g_pin_size,
                                             *g_b.bios_checksum, *g_b.entry_pc,
                                             cpu_in);
@@ -5664,21 +5897,22 @@ static int try_apply_pending_load(CPUState *cpu_in)
                     (unsigned)loaded_tick, (unsigned)pc);
             fflush(stderr);
             /* §93: Live media detector can be cold while the load snap is mid-
-             * FMV (soak: begin@184 load=176 → flush media=1). Expand the media
-             * range and abort before Replay poisons both peers. */
+             * FMV. Expand the media range. §97 MEDIA-KF episodes continue into
+             * Replay with the host-sealed keyframe (no abort). */
             if (rb_fmv_media_active()) {
                 if (!g_was_in_fmv) {
                     g_was_in_fmv = 1;
                     fprintf(stderr,
                             "psxrecomp: rb FMV rewind-defer ON "
-                            "(depth24/mdec; no invent)\n");
+                            "(depth24/mdec; media_kf=%d)\n",
+                            g_media_kf_episode);
                     fflush(stderr);
                 }
                 if (g_fmv_media_lo == 0u || loaded_tick < g_fmv_media_lo)
                     g_fmv_media_lo = loaded_tick;
                 if (loaded_tick >= g_fmv_media_hi)
                     g_fmv_media_hi = loaded_tick;
-                if (!g_ownership_skip_snap) {
+                if (!g_media_kf_episode && !g_ownership_skip_snap) {
                     char why[96];
                     snprintf(why, sizeof(why),
                              "episode load into FMV media (load=%u)",
@@ -5748,6 +5982,9 @@ void psx_netplay_rb_flush_resume(void)
         {
             extern int g_psx_cyc_bb_defer;
             extern uint32_t g_psx_cyc_batch;
+            extern uint32_t *g_psx_cyc_local_acc;
+            if (g_psx_cyc_local_acc) *g_psx_cyc_local_acc = 0;
+            g_psx_cyc_local_acc = NULL;
             g_psx_cyc_bb_defer = 0;
             g_psx_cyc_batch = 0;
         }
@@ -5850,15 +6087,79 @@ int psx_netplay_rb_fmv_media_active(void)
 
 int psx_netplay_rb_lockstep_no_invent(void)
 {
-    /* Media + settle only (§26). Post-FMV title menus invent+resim.
-     * §93: also hold after MAX-unmatched DESYNC until cores rematch. */
+    /* Media + settle (§26). Post-FMV title menus invent+resim.
+     * §93/§94: also hold after MAX-unmatched DESYNC until rematch,
+     * invent-hold expire, or netplay save complete. */
     return rb_in_fmv_lockstep_window();
+}
+
+int psx_netplay_rb_fmv_desync_hold(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    rb_fmv_desync_invent_maybe_expire(sim);
+    return g_fmv_unmatched_desync ? 1 : 0;
+}
+
+void psx_netplay_rb_clear_fmv_desync_hold(const char *why)
+{
+    rb_clear_fmv_desync_hold(why);
 }
 
 int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick)
 {
     (void)rb_in_fmv_defer_rewind_window();
+    /* §97: MEDIA_KF allows episodes into media-range (begin arms keyframe).
+     * DESYNC invent-hold still blocks. */
+    if (rb_media_kf_enabled() && !g_fmv_unmatched_desync)
+        return 0;
     return rb_fmv_tick_unsafe_for_episode(tick);
+}
+
+int psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc)
+{
+    uint32_t load;
+    size_t sz = 0;
+    const uint8_t *p;
+    if (!g_media_kf_episode || !g_rb || !g_snaps)
+        return 0;
+    load = rnet_rb_get_load_tick(g_rb);
+    p = netplay_snap_ring_peek(g_snaps, load, &sz);
+    if (!p || sz != (size_t)size)
+        return 0;
+    if (rnet_checksum(p, sz) != crc)
+        return 0;
+    /* Seal local pin so apply can proceed without waiting for a no-op xfer. */
+    (void)rb_media_kf_seal_local(load);
+    return 1;
+}
+
+int psx_netplay_rb_media_kf_on_ready(const void *data, size_t size)
+{
+    uint32_t load;
+    if (!g_media_kf_episode || !g_rb)
+        return 0;
+    load = rnet_rb_get_load_tick(g_rb);
+    if (!g_media_kf_ready) {
+        if (data && size > 0) {
+            if (!rb_install_media_kf_bytes(load, (const uint8_t *)data, size)) {
+                fprintf(stderr,
+                        "psxrecomp: rb MEDIA-KF install FAILED load=%u "
+                        "bytes=%zu\n",
+                        (unsigned)load, size);
+                fflush(stderr);
+                return 1;
+            }
+            fprintf(stderr,
+                    "psxrecomp: rb MEDIA-KF installed load=%u bytes=%zu\n",
+                    (unsigned)load, size);
+            fflush(stderr);
+        } else {
+            (void)rb_media_kf_seal_local(load);
+        }
+    }
+    g_media_kf_sending = 0;
+    return 1;
 }
 
 void psx_netplay_rb_poll_replay_stall(void)
@@ -6264,9 +6565,8 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         }
         return 0;
     }
-    /* §93: refuse when the *mismatch* sits in the last media bout — Live tip
-     * may already be past FMV while hc-fork still targets an in-media tick. */
-    if (rb_fmv_tick_unsafe_for_episode(mismatch_tick)) {
+    /* §93 refuse / §97 MEDIA_KF: mismatch in prior media bout. */
+    if (rb_fmv_tick_unsafe_for_episode(mismatch_tick) && !rb_media_kf_enabled()) {
         static uint32_t s_media_mm_refuse_sim;
         if (s_media_mm_refuse_sim != sim) {
             fprintf(stderr,
@@ -6386,17 +6686,30 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         s_refuse_last_mismatch = 0xffffffffu;
     }
 
-    /* §93: chosen load may sit inside a prior FMV bout even when Live tip and
-     * mismatch are past settle (soak: load=176 / 736 into media). */
-    if (rb_fmv_tick_unsafe_for_episode(load)) {
-        fprintf(stderr,
-                "psxrecomp: rb begin REFUSED mismatch=%u load=%u — FMV "
-                "media-range load (lo=%u hi=%u settle_until=%u)\n",
-                (unsigned)mismatch_tick, (unsigned)load,
-                (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
-                (unsigned)g_fmv_settle_until);
-        fflush(stderr);
-        return 0;
+    /* §93 refuse / §97 MEDIA_KF path for loads inside a prior FMV bout. */
+    {
+        int media_load = rb_fmv_tick_unsafe_for_episode(load) ||
+                         rb_fmv_tick_unsafe_for_episode(mismatch_tick);
+        if (media_load && !rb_media_kf_enabled()) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin REFUSED mismatch=%u load=%u — FMV "
+                    "media-range load (lo=%u hi=%u settle_until=%u)\n",
+                    (unsigned)mismatch_tick, (unsigned)load,
+                    (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
+                    (unsigned)g_fmv_settle_until);
+            fflush(stderr);
+            return 0;
+        }
+        if (media_load && rb_media_kf_enabled()) {
+            if (!g_snaps || !netplay_snap_ring_has(g_snaps, load)) {
+                fprintf(stderr,
+                        "psxrecomp: rb begin REFUSED mismatch=%u load=%u — "
+                        "MEDIA-KF needs snap at load\n",
+                        (unsigned)mismatch_tick, (unsigned)load);
+                fflush(stderr);
+                return 0;
+            }
+        }
     }
 
     target = rnet_rb_suggest_target(g_rb, mismatch_tick, sim);
@@ -6435,7 +6748,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     /* Prefer MotK agreed tip when library watermark not yet set. Depth
      * ceiling comes from the session's configured light_tip_max_depth
      * (== RB_MOTK_TIP_RUNWAY), not the library default — see
-     * psx_netplay_rb_start(). §93: never light-tip into/near FMV media. */
+     * psx_netplay_rb_start(). §93/§97: never light-tip into/near FMV media. */
     if (g_agreed_valid &&
         !rb_fmv_tick_unsafe_for_episode(load) &&
         !rb_fmv_tick_unsafe_for_episode(target) &&
@@ -6447,6 +6760,15 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     rnet_rb_begin_episode(g_rb, &corr);
     psx_netplay_timesync_on_episode_boundary();
     clear_episode_wire_state();
+    /* §97: arm MEDIA_KF after wire clear (clear resets the flag). */
+    if (rb_media_kf_enabled() &&
+        (rb_fmv_tick_unsafe_for_episode(load) ||
+         rb_fmv_tick_unsafe_for_episode(mismatch_tick))) {
+        g_media_kf_episode = 1;
+        g_media_kf_ready = 0;
+        g_media_kf_host_armed = 0;
+        g_media_kf_sending = 0;
+    }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
     g_needs_advance = 0;
@@ -6463,6 +6785,8 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         rnet_u8 wire_flags = (rnet_u8)(
             (rnet_rb_get_corr_flags(g_rb) & RNET_RB_CORR_LIGHT_TIP)
                 ? RNET_RB_SYNC_FLAG_LIGHT_TIP : 0u);
+        if (g_media_kf_episode)
+            wire_flags = (rnet_u8)(wire_flags | RNET_RB_SYNC_FLAG_MEDIA_KF);
         (void)rnet_session_send_rb_sync(s, corr.epoch_id, corr.mismatch_tick, corr.load_tick,
                                         corr.target_tick, (rnet_u8)(slot < 0 ? 0 : slot),
                                         RNET_RB_SYNC_OP_BEGIN, wire_flags);
@@ -6470,10 +6794,10 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     export_local_seals();
     fprintf(stderr,
             "psxrecomp: rb begin epoch=%u mismatch=%u load=%u target=%u slot=%d "
-            "light=%u (snaps=%u %u..%u local_slot=%d)\n",
+            "light=%u media_kf=%d (snaps=%u %u..%u local_slot=%d)\n",
             (unsigned)corr.epoch_id, (unsigned)mismatch_tick, (unsigned)load, (unsigned)target,
-            slot, (unsigned)rnet_rb_recommend_light_tip(g_rb), (unsigned)snap_n,
-            (unsigned)snap_lo, (unsigned)snap_hi,
+            slot, (unsigned)rnet_rb_recommend_light_tip(g_rb), g_media_kf_episode,
+            (unsigned)snap_n, (unsigned)snap_lo, (unsigned)snap_hi,
             g_b.local_slot ? *g_b.local_slot : -1);
     fflush(stderr);
 
@@ -6917,35 +7241,65 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
         g_follow_nack_sends = 1;
         return;
     }
-    /* §93: refuse follow when load/mismatch sits in the last FMV media bout. */
-    if (rb_fmv_tick_unsafe_for_episode(load) ||
-        rb_fmv_tick_unsafe_for_episode(mismatch)) {
-        fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u mismatch=%u — "
-                "FMV media-range (lo=%u hi=%u settle_until=%u)\n",
-                (unsigned)epoch, (unsigned)load, (unsigned)mismatch,
-                (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
-                (unsigned)g_fmv_settle_until);
-        fflush(stderr);
-        g_follow_nack_pending = 1;
-        g_follow_nack_epoch = epoch;
-        g_follow_nack_mismatch = mismatch;
-        g_follow_nack_load = load;
-        g_follow_nack_target = target;
-        g_follow_nack_slot = slot;
-        g_follow_nack_sends = 0;
-        send_follow_nack(epoch, mismatch, load, target, slot, 1);
-        g_follow_nack_sends = 1;
-        return;
+    /* §93 refuse / §97 MEDIA_KF follow into prior FMV bout. */
+    {
+        int media_ep = (wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
+                       rb_fmv_tick_unsafe_for_episode(load) ||
+                       rb_fmv_tick_unsafe_for_episode(mismatch);
+        if (media_ep && !rb_media_kf_enabled() &&
+            !(wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF)) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED epoch=%u load=%u mismatch=%u — "
+                    "FMV media-range (lo=%u hi=%u settle_until=%u)\n",
+                    (unsigned)epoch, (unsigned)load, (unsigned)mismatch,
+                    (unsigned)g_fmv_media_lo, (unsigned)g_fmv_media_hi,
+                    (unsigned)g_fmv_settle_until);
+            fflush(stderr);
+            g_follow_nack_pending = 1;
+            g_follow_nack_epoch = epoch;
+            g_follow_nack_mismatch = mismatch;
+            g_follow_nack_load = load;
+            g_follow_nack_target = target;
+            g_follow_nack_slot = slot;
+            g_follow_nack_sends = 0;
+            send_follow_nack(epoch, mismatch, load, target, slot, 1);
+            g_follow_nack_sends = 1;
+            return;
+        }
+        if (media_ep && rb_media_kf_enabled()) {
+            /* Follower may lack the snap — host will transfer the keyframe. */
+            ;
+        } else if (media_ep) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED epoch=%u — MEDIA-KF disabled "
+                    "but peer requested media episode\n",
+                    (unsigned)epoch);
+            fflush(stderr);
+            g_follow_nack_pending = 1;
+            g_follow_nack_epoch = epoch;
+            g_follow_nack_mismatch = mismatch;
+            g_follow_nack_load = load;
+            g_follow_nack_target = target;
+            g_follow_nack_slot = slot;
+            g_follow_nack_sends = 0;
+            send_follow_nack(epoch, mismatch, load, target, slot, 1);
+            g_follow_nack_sends = 1;
+            return;
+        }
     }
     snap_n = g_snaps ? netplay_snap_ring_count(g_snaps) : 0u;
     /* §60: ownership-chain continue uses skip-snap at the verified tip — the
      * initiator does not require a ring snap there; neither may the follower,
-     * or we NACK a legitimate chain BEGIN and storm. */
+     * or we NACK a legitimate chain BEGIN and storm.
+     * §97 MEDIA_KF: missing snap is OK — host transfers the keyframe. */
     if (!g_snaps || !netplay_snap_ring_has(g_snaps, load)) {
         int skip_ok = (g_ownership_skip_snap && g_agreed_valid &&
                        load == g_agreed_through);
-        if (!skip_ok) {
+        int media_kf_ok = rb_media_kf_enabled() &&
+                          ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
+                           rb_fmv_tick_unsafe_for_episode(load) ||
+                           rb_fmv_tick_unsafe_for_episode(mismatch));
+        if (!skip_ok && !media_kf_ok) {
             fprintf(stderr,
                     "psxrecomp: rb follow REFUSED epoch=%u load=%u — snap missing "
                     "(ring count=%u newest=%u)\n",
@@ -7041,6 +7395,15 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     rnet_rb_begin_episode(g_rb, &corr);
     psx_netplay_timesync_on_episode_boundary();
     clear_episode_wire_state();
+    if (rb_media_kf_enabled() &&
+        ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
+         rb_fmv_tick_unsafe_for_episode(load) ||
+         rb_fmv_tick_unsafe_for_episode(mismatch))) {
+        g_media_kf_episode = 1;
+        g_media_kf_ready = 0;
+        g_media_kf_host_armed = 0;
+        g_media_kf_sending = 0;
+    }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
     g_needs_advance = 0;
@@ -7057,9 +7420,10 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     export_local_seals();
     fprintf(stderr,
             "psxrecomp: rb follow epoch=%u mismatch=%u load=%u target=%u "
-            "(snaps=%u local_slot=%d)\n",
+            "media_kf=%d (snaps=%u local_slot=%d)\n",
             (unsigned)epoch, (unsigned)mismatch, (unsigned)load, (unsigned)target,
-            (unsigned)snap_n, g_b.local_slot ? *g_b.local_slot : -1);
+            g_media_kf_episode, (unsigned)snap_n,
+            g_b.local_slot ? *g_b.local_slot : -1);
     fflush(stderr);
     /* Initiator's export_local_seals() burst can have beaten this follower's
      * own delayed SYNC through the relay — drain any stash for this epoch
@@ -7085,6 +7449,9 @@ void psx_netplay_rb_pump(void)
 
     if (!g_rb || !s)
         return;
+
+    /* §97: host probe/transfer media keyframe while awaiting baseline. */
+    rb_media_kf_host_drive();
 
     /* §40: drain RESOLVED before SYNC so follow BEGIN in the same poll
      * sees an updated frontier (max(agreed, resolved_through)). */

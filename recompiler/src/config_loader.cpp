@@ -169,6 +169,15 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(patch.expected);
         h.u32(patch.replacement);
     }
+
+    h.tag("load_charge_batch");
+    h.u32(c.load_charge_batch ? 1u : 0u);
+    {
+        std::vector<uint32_t> lcb = c.load_charge_batch_funcs;
+        std::sort(lcb.begin(), lcb.end());
+        h.u32((uint32_t)lcb.size());
+        for (uint32_t pc : lcb) h.u32(pc);
+    }
     return h.value;
 }
 
@@ -1266,6 +1275,20 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         for (const auto& a : arr)
             hot_funcs.push_back(parse_hex(a, "recompiler.hot_funcs"));
     }
+    // Optional emitter-level load-charge batching for VLC leaves.
+    bool load_charge_batch = false;
+    std::vector<uint32_t> load_charge_batch_funcs;
+    if (recomp.contains("load_charge_batch"))
+        load_charge_batch = toml::find<bool>(recomp, "load_charge_batch");
+    if (recomp.contains("load_charge_batch_funcs")) {
+        const auto& arr =
+            toml::find<std::vector<std::string>>(recomp, "load_charge_batch_funcs");
+        for (const auto& a : arr)
+            load_charge_batch_funcs.push_back(
+                parse_hex(a, "recompiler.load_charge_batch_funcs"));
+    }
+    if (load_charge_batch && load_charge_batch_funcs.empty())
+        load_charge_batch_funcs = hot_funcs;
     uint32_t vsync_query_func = 0;
     uint32_t vsync_counter_addr = 0;
     uint32_t vsync_gpustat_ptr_addr = 0;
@@ -1858,6 +1881,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_auto_ui_squash*/      ws_auto_ui_squash,
         /*data_shard_funcs*/      data_shard_funcs,
         /*hot_funcs*/             hot_funcs,
+        /*load_charge_batch*/     load_charge_batch,
+        /*load_charge_batch_funcs*/ load_charge_batch_funcs,
         /*vsync_query_func*/      vsync_query_func,
         /*vsync_counter_addr*/    vsync_counter_addr,
         /*vsync_gpustat_ptr_addr*/ vsync_gpustat_ptr_addr,

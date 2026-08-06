@@ -82,6 +82,10 @@ void psx_frontend_on_savestate_loaded(void);
 /* Rollback snap apply: depth24 hold clear + restage without FMV cutover thrash. */
 void psx_frontend_on_rb_snap_loaded(void);
 
+/* Frontend hook (main.cpp): host OSD toast after a user save/load settles.
+ * is_load: 0 = save, 1 = load. slot is 0-based (F1 = 0). ok: 1 on success. */
+void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
+
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and
  * longjmp to the scheduler (never returns in that case). Near-free when idle. */

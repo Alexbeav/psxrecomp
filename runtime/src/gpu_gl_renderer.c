@@ -67,6 +67,7 @@
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
+#include "host_osd.h"
 #include "latency_ring.h"
 
 #include "psx_sdl.h"
@@ -312,7 +313,10 @@ static int           s_req_scale = 1;      /* requested before context init */
 
 static GLuint        s_present_tex = 0;    /* CPU-readout present path (24bpp) */
 static int           s_present_w = 0, s_present_h = 0;
+static GLuint        s_osd_tex = 0;
+static int           s_osd_tw = 0, s_osd_th = 0;
 static GLuint        s_present_prog = 0, s_present_vao = 0;
+static void          gl_swap_with_osd(void);
 static GLint         s_present_uTex = -1, s_present_uUvRect = -1;
 static GLuint        s_interp_prog = 0, s_interp_tex[3];
 static GLsync        s_interp_fence[3];
@@ -2716,6 +2720,9 @@ void gl_renderer_shutdown(void) {
      * (rematch 24-bit FMV → black picture, audio still runs). */
     s_present_w = 0;
     s_present_h = 0;
+    s_osd_tex = 0;
+    s_osd_tw = 0;
+    s_osd_th = 0;
     s_depth24_skip_up = 0;
     rect_clear(&s_d24_skip_fb);
     hold_invalidate();
@@ -2792,7 +2799,7 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     pres_record(GL_PRES_CPU, 0, 0, src_w, src_h, lx, ly, lw, lh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     latency_ring_mark(LAT_SWAP_END);
     s_probe_swap++;
     present_force_consumed();
@@ -2808,7 +2815,7 @@ void gl_renderer_present_blank(void) {
     pres_record(GL_PRES_BLANK, 0, 0, 0, 0, 0, 0, ww, wh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     latency_ring_mark(LAT_SWAP_END);
     s_probe_swap++;
     present_force_consumed();
@@ -3695,7 +3702,7 @@ static int interp_present(void) {
     glFlush();
     pres_record(GL_PRES_INTERP, 0, 0, s_interp_w, s_interp_h,
                 lx, ly, lw, lh);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     s_interp_swaps++;
     return 1;
 }
@@ -3756,6 +3763,79 @@ static int interp_thread_main(void *opaque) {
     p_glBindVertexArray(0);
     SDL_GL_MakeCurrent(s_win, NULL);
     return 0;
+}
+
+/* Draw one host OSD ARGB image into the default framebuffer at (vx,vy)
+ * in top-left window coordinates (y down). */
+static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
+                              int vx, int vy, int ww, int wh) {
+    if (!px || ow <= 0 || oh <= 0 || !s_present_prog || ww <= 0 || wh <= 0)
+        return;
+    if (!s_osd_tex) glGenTextures(1, &s_osd_tex);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_osd_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (s_osd_tw != ow || s_osd_th != oh) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ow, oh, 0,
+                     GL_BGRA, GL_UNSIGNED_BYTE, px);
+        s_osd_tw = ow;
+        s_osd_th = oh;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ow, oh,
+                        GL_BGRA, GL_UNSIGNED_BYTE, px);
+    }
+    int dw = ow, dh = oh;
+    if (vx + dw > ww) dw = ww - vx;
+    if (vy + dh > wh) dh = wh - vy;
+    if (dw < 1 || dh < 1) return;
+    p_glBindFramebuffer(PSXGL_DRAW_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* GL viewport origin is bottom-left. */
+    glViewport(vx, wh - vy - dh, dw, dh);
+    p_glUseProgram(s_present_prog);
+    p_glUniform1i(s_present_uTex, 0);
+    /* Cancel PRESENT_VS V-flip — CPU row 0 is the top of the image. */
+    p_glUniform4f(s_present_uUvRect, 0.f, 1.f, 1.f, 0.f);
+    {
+        GLuint vao = s_present_vao;
+        if (s_interp_ctx && SDL_GL_GetCurrentContext() == s_interp_ctx &&
+            s_interp_thread_vao)
+            vao = s_interp_thread_vao;
+        p_glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        p_glBindVertexArray(0);
+    }
+    p_glUseProgram(0);
+    glDisable(GL_BLEND);
+}
+
+/* Composite host toast + volume bar into the default framebuffer, then swap. */
+static void gl_swap_with_osd(void) {
+    if (s_present_prog && s_ctx) {
+        int ww = 0, wh = 0;
+        SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+        if (ww > 0 && wh > 0) {
+            const uint32_t *px = NULL;
+            int ow = 0, oh = 0;
+            const int margin = 8;
+            if (host_osd_image(&px, &ow, &oh) && px)
+                gl_draw_osd_image(px, ow, oh, margin, margin, ww, wh);
+            if (host_osd_volume_image(&px, &ow, &oh) && px) {
+                int vx = (ww > ow + margin) ? (ww - ow - margin) : margin;
+                int vy = (wh > oh) ? ((wh - oh) / 2) : margin;
+                gl_draw_osd_image(px, ow, oh, vx, vy, ww, wh);
+            }
+        }
+    }
+    host_osd_present_done();
+    SDL_GL_SwapWindow(s_win);
 }
 
 static void present_target_quad(GLuint tex, int tex_w, int tex_h,
@@ -3847,7 +3927,7 @@ int gl_renderer_present_hold_last(void) {
         hold_capture_drawable();
     }
     latency_ring_mark(LAT_SWAP_BEGIN);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     latency_ring_mark(LAT_SWAP_END);
     s_probe_swap++;
     return 1;
@@ -3863,7 +3943,8 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_present_path == GL_PRES_VRAM &&
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == w && s_last_dh == h &&
-        !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1)) {
+        !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1) &&
+        !host_osd_needs_present()) {
         s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(0);
@@ -3904,7 +3985,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     pres_record(GL_PRES_VRAM, disp_x, disp_y, w, h, lx, ly, lw, lh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     latency_ring_mark(LAT_SWAP_END);
     s_probe_swap++;
     gl_perf_present_exit(0);
@@ -3969,7 +4050,8 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         s_last_present_path == GL_PRES_WIDE &&
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == g_wide_w && s_last_dh == disp_h &&
-        !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1)) {
+        !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1) &&
+        !host_osd_needs_present()) {
         s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(1);
@@ -4004,7 +4086,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
     pres_record(GL_PRES_WIDE, disp_x, disp_y, g_wide_w, disp_h, lx, ly, lw, lh);
     hold_capture_drawable();
     latency_ring_mark(LAT_SWAP_BEGIN);
-    SDL_GL_SwapWindow(s_win);
+    gl_swap_with_osd();
     latency_ring_mark(LAT_SWAP_END);
     s_probe_swap++;
     gl_perf_present_exit(1);

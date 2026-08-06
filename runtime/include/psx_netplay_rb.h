@@ -6,6 +6,7 @@
  * Delay-sync path never calls these.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -80,12 +81,26 @@ int  psx_netplay_rb_fmv_media_active(void);
 
 /* 1 during FMV media + short settle (§26) — admit waits for remote wire.
  * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle.
- * Also 1 while §93 MAX-unmatched DESYNC hold is armed. */
+ * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires). */
 int  psx_netplay_rb_lockstep_no_invent(void);
 
+/* §93/§94: 1 while MAX-unmatched DESYNC invent-hold is armed (not media/settle).
+ * Stall tag should say fmv_desync_hold, not fmv_settle. */
+int  psx_netplay_rb_fmv_desync_hold(void);
+
+/* §94: drop invent-hold after a successful netplay SAVE (tip hole refill) or
+ * when the hold expires. Episode media-range refuse is unchanged. */
+void psx_netplay_rb_clear_fmv_desync_hold(const char *why);
+
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
- * hold). Begin/follow/hc-fork must not open episodes that load there. */
+ * hold). Begin/follow/hc-fork must not open episodes that load there.
+ * §97 MEDIA_KF (default on): returns 0 for media-range — episodes allowed. */
 int  psx_netplay_rb_fmv_episode_unsafe(uint32_t tick);
+
+/* §97: guest probe reply — 1 if local snap at episode load matches size/crc. */
+int  psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc);
+/* §97: apply RB_KF state blob (or host finish). Returns 1 if handled. */
+int  psx_netplay_rb_media_kf_on_ready(const void *data, size_t size);
 
 /* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
  * Full rb_pump stays admit/present-edge only (host-asymmetric). */

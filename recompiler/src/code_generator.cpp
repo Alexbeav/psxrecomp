@@ -2415,8 +2415,17 @@ GeneratedFunction CodeGenerator::generate_function(
             << config_.indent
             << "__attribute__((cleanup(psx_cyc_bb_defer_cleanup))) "
                "int _psx_cyc_bb_guard = 1;\n"
-            << config_.indent << "psx_cyc_bb_defer_begin();\n"
-            << "#endif\n";
+            << config_.indent << "psx_cyc_bb_defer_begin();\n";
+    // Declare local-acc AFTER bb_guard so cleanup runs local_end first
+    // (publish), then bb_defer_end (flush). Gated VLC leaves only.
+    if (config_.load_charge_batch_funcs.count(func.start_addr)) {
+        body_ss << config_.indent << "uint32_t _psx_lc_acc = 0;\n"
+                << config_.indent
+                << "__attribute__((cleanup(psx_cyc_local_cleanup))) "
+                   "uint32_t *_psx_lc_guard = &_psx_lc_acc;\n"
+                << config_.indent << "psx_cyc_local_begin(&_psx_lc_acc);\n";
+    }
+    body_ss << "#endif\n";
 
     // CPS entry-switch: when the unified flat trampoline dispatches a
     // continuation address (a callee published cpu->pc = $ra back to us), route

@@ -13,6 +13,7 @@
 #include "gpu.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
+#include "gpu_vram_dirty.h"
 #include "gpu_render.h"
 #include "text_xlate.h"
 #include "crash_trace.h"
@@ -2258,6 +2259,7 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 static void gpu_reset_state(int clear_vram) {
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
+        gpu_vram_dirty_mark_all();
     }
     gr_init(vram);
 
@@ -2928,6 +2930,7 @@ static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
     uint32_t idx = vy * 1024 + vx;
     if (check_mask_bit && (vram[idx] & 0x8000u)) return;
     vram[idx] = color | (set_mask_bit ? 0x8000u : 0u);
+    gpu_vram_dirty_mark_row(vy);
 }
 
 /* Inclusive draw-area reject (same predicate as raster_pixel / hardware clip).
@@ -4742,6 +4745,7 @@ static void gpu_write_gp0_body(uint32_t val) {
              * reads/savestates. The renderer mirror is committed in bulk when
              * the GP0 payload completes. */
             vram[(uint32_t)wy * 1024u + wx] = pixel;
+            gpu_vram_dirty_mark_row((uint32_t)wy);
 
         next_pixel:
             if (++vram_write_col == vram_write_w) {

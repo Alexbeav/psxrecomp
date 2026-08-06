@@ -702,26 +702,12 @@ static int find_cmake(char* out, size_t cap) {
 #endif
 }
 
-static int discover_project_root(char* out, size_t cap) {
-    const char* env_name =
-        cfg_or(g_cfg->project_root_env, "PSXRECOMP_PROJECT_ROOT");
-    const char* env = getenv(env_name);
-    if (env && env[0] && looks_like_project_root(env)) {
-        snprintf(out, cap, "%s", env);
-        return 1;
-    }
-
-    char start[1024];
-#if defined(_WIN32)
-    if (!GetCurrentDirectoryA((DWORD)sizeof(start), start))
-        start[0] = '\0';
-#else
-    if (!getcwd(start, sizeof(start)))
-        start[0] = '\0';
-#endif
-
+/* Walk start and up to 10 parents for game.toml + psxrecomp_cli.py. */
+static int walk_up_for_project_root(const char* start, char* out, size_t cap) {
     char cur[1024];
-    snprintf(cur, sizeof(cur), "%s", start[0] ? start : ".");
+    if (!start || !start[0])
+        return 0;
+    snprintf(cur, sizeof(cur), "%s", start);
     for (int i = 0; i < 10; ++i) {
         if (looks_like_project_root(cur)) {
             snprintf(out, cap, "%s", cur);
@@ -734,6 +720,71 @@ static int discover_project_root(char* out, size_t cap) {
             break;
         snprintf(cur, sizeof(cur), "%s", parent);
     }
+    return 0;
+}
+
+/* Directory containing this process's executable (not cwd). Dolphin / .desktop
+ * launches leave cwd as $HOME — VIDEO/PGO/setup must still find the zip tree.
+ * Linux: $APPIMAGE parent, else /proc/self/exe. Windows: GetModuleFileName. */
+static int resolve_host_exe_dir(char* out, size_t cap) {
+    char exe[1100];
+    if (!out || cap < 2)
+        return 0;
+    out[0] = '\0';
+    exe[0] = '\0';
+
+#if defined(_WIN32)
+    {
+        DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+        if (n == 0 || n >= (DWORD)sizeof(exe))
+            return 0;
+    }
+#else
+    {
+        const char* appimg = getenv("APPIMAGE");
+        if (appimg && appimg[0] && path_is_file(appimg)) {
+            snprintf(exe, sizeof(exe), "%s", appimg);
+        } else {
+            char* rp = realpath("/proc/self/exe", NULL);
+            if (!rp)
+                return 0;
+            snprintf(exe, sizeof(exe), "%s", rp);
+            free(rp);
+        }
+    }
+#endif
+    if (!exe[0])
+        return 0;
+    return dirname_copy(out, cap, exe);
+}
+
+static int discover_project_root(char* out, size_t cap) {
+    const char* env_name =
+        cfg_or(g_cfg->project_root_env, "PSXRECOMP_PROJECT_ROOT");
+    const char* env = getenv(env_name);
+    if (env && env[0] && looks_like_project_root(env)) {
+        snprintf(out, cap, "%s", env);
+        return 1;
+    }
+
+    /* 1) cwd (terminal launches from the unzip / repo root). */
+    char start[1024];
+#if defined(_WIN32)
+    if (!GetCurrentDirectoryA((DWORD)sizeof(start), start))
+        start[0] = '\0';
+#else
+    if (!getcwd(start, sizeof(start)))
+        start[0] = '\0';
+#endif
+    if (start[0] && walk_up_for_project_root(start, out, cap))
+        return 1;
+
+    /* 2) exe dir (GUI double-click: cwd is often $HOME / Desktop). */
+    char exe_dir[1024];
+    if (resolve_host_exe_dir(exe_dir, sizeof(exe_dir)) &&
+        walk_up_for_project_root(exe_dir, out, cap))
+        return 1;
+
     return 0;
 }
 
@@ -2112,7 +2163,12 @@ static void bat_write_set(FILE* f, const char* name, const char* value) {
     fprintf(f, "\"\r\n");
 }
 
-static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) {
+/* force_pgo: Settings Optimize FMV (instrument → train → use). Else setup
+ * rebuild with --no-pgo. disc_path required when force_pgo. */
+static int write_windows_deferred_rebuild_helper(int force_pgo,
+                                                 const char* disc_path,
+                                                 char* err_msg,
+                                                 size_t err_cap) {
     if (!join_path(g_helper_path, sizeof(g_helper_path), g_build_dir,
                    "recomp_deferred_rebuild.cmd")) {
         snprintf(err_msg, err_cap, "Failed to form helper path.");
@@ -2135,7 +2191,8 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
              (unsigned long)GetCurrentProcessId());
     fprintf(f, "@echo off\r\n");
     fprintf(f, "setlocal EnableExtensions\r\n");
-    fprintf(f, "title %s - rebuilding\r\n", g_display);
+    fprintf(f, "title %s - %s\r\n", g_display,
+            force_pgo ? "PGO optimize" : "rebuilding");
     bat_write_set(f, "PARENT_PID", pid_buf);
     bat_write_set(f, "PYTHON", g_python);
     bat_write_set(f, "CLI", g_cli_path);
@@ -2146,6 +2203,8 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
     bat_write_set(f, "EXE_BASE", g_exe_basename);
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
+    if (force_pgo && disc_path && disc_path[0])
+        bat_write_set(f, "DISC", disc_path);
     if (g_toolchain_bin[0])
         bat_write_set(f, "TC_BIN", g_toolchain_bin);
     fprintf(f,
@@ -2167,12 +2226,23 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
             "  echo RETCOMM_TOOLCHAIN_DIR / pass --toolchain-zip on rebuild.\r\n"
             "  pause\r\n"
             "  exit /b 1\r\n"
-            ")\r\n"
-            "echo Building...\r\n"
-            "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
-            "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
-            "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-            "--no-pgo --prune-after build-intermediates\r\n"
+            ")\r\n");
+    if (force_pgo) {
+        fprintf(f,
+                "echo PGO optimize (instrument + train + rebuild)...\r\n"
+                "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
+                "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
+                "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
+                "--disc \"%%DISC%%\" --force-pgo --pgo-video\r\n");
+    } else {
+        fprintf(f,
+                "echo Building...\r\n"
+                "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
+                "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
+                "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
+                "--no-pgo --prune-after build-intermediates\r\n");
+    }
+    fprintf(f,
             "if errorlevel 1 (\r\n"
             "  echo.\r\n"
             "  echo Build failed. Fix the errors above, then rebuild manually.\r\n"
@@ -2187,41 +2257,60 @@ static int write_windows_deferred_rebuild_helper(char* err_msg, size_t err_cap) 
 }
 #endif
 
-static int host_rebuild_game(const char* disc_path, char* out_exe_path,
-                             size_t out_cap, char* err_msg, size_t err_cap,
-                             RecompLauncherCPrepareProgressFn on_progress,
-                             void* progress_ctx) {
+static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
+                                char* out_exe_path, size_t out_cap,
+                                char* err_msg, size_t err_cap,
+                                RecompLauncherCPrepareProgressFn on_progress,
+                                void* progress_ctx) {
     g_relaunch_is_helper = 0;
     if (!g_ready || !g_build_dir[0]) {
         snprintf(err_msg, err_cap, "CMake build environment is not available.");
         return 0;
+    }
+    if (force_pgo) {
+        if (psxrecomp_codegen_host_sources_missing(g_cfg)) {
+            snprintf(err_msg, err_cap,
+                     "Generated game C is missing — finish Generate & rebuild "
+                     "in the setup wizard first.");
+            return 0;
+        }
+        if (!disc_path || !disc_path[0] || !path_is_file(disc_path)) {
+            snprintf(err_msg, err_cap,
+                     "Select a playable disc image before optimizing FMV.");
+            return 0;
+        }
     }
 
     if (!host_ensure_toolchain(on_progress, progress_ctx, err_msg, err_cap))
         return 0;
 
 #if defined(_WIN32)
-    (void)disc_path;
     activate_toolchain_path();
     if (on_progress)
         on_progress(progress_ctx, 0.4f,
-                    "Scheduling Windows rebuild after exit…");
-    if (!write_windows_deferred_rebuild_helper(err_msg, err_cap))
+                    force_pgo ? "Scheduling Windows PGO optimize after exit…"
+                              : "Scheduling Windows rebuild after exit…");
+    if (!write_windows_deferred_rebuild_helper(force_pgo, disc_path, err_msg,
+                                               err_cap))
         return 0;
     g_relaunch_is_helper = 1;
     snprintf(out_exe_path, out_cap, "%s", g_helper_path);
     if (on_progress)
         on_progress(progress_ctx, 1.0f,
-                    "Exiting so Windows can rebuild safely…");
+                    force_pgo
+                        ? "Exiting so Windows can run PGO train + rebuild…"
+                        : "Exiting so Windows can rebuild safely…");
     return 1;
 #else
     if (on_progress)
-        on_progress(progress_ctx, 0.05f, "Starting rebuild (cmake)…");
+        on_progress(progress_ctx, 0.05f,
+                    force_pgo ? "Starting FMV PGO optimize…"
+                              : "Starting rebuild (cmake)…");
 
     activate_toolchain_path();
 
     char disc_arg_storage[1100];
-    char* argv[36];
+    char* argv[40];
     int argc = 0;
     argv[argc++] = g_python;
     argv[argc++] = g_cli_path;
@@ -2241,14 +2330,20 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
         argv[argc++] = "--disc";
         argv[argc++] = disc_arg_storage;
     }
-    argv[argc++] = "--no-pgo";
-    argv[argc++] = "--prune-after";
-    argv[argc++] = "build-intermediates";
+    if (force_pgo) {
+        argv[argc++] = "--force-pgo";
+        argv[argc++] = "--pgo-video";
+    } else {
+        argv[argc++] = "--no-pgo";
+        argv[argc++] = "--prune-after";
+        argv[argc++] = "build-intermediates";
+    }
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
 
     if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
-                       "psxrecomp rebuild"))
+                       force_pgo ? "psxrecomp PGO optimize"
+                                 : "psxrecomp rebuild"))
         return 0;
     if (!path_is_file(g_exe_path)) {
         snprintf(err_msg, err_cap, "Build succeeded but binary missing: %s",
@@ -2257,9 +2352,41 @@ static int host_rebuild_game(const char* disc_path, char* out_exe_path,
     }
     snprintf(out_exe_path, out_cap, "%s", g_exe_path);
     if (on_progress)
-        on_progress(progress_ctx, 1.0f, "Build complete");
+        on_progress(progress_ctx, 1.0f,
+                    force_pgo ? "FMV optimize complete" : "Build complete");
     return 1;
 #endif
+}
+
+static int host_rebuild_game(const char* disc_path, char* out_exe_path,
+                             size_t out_cap, char* err_msg, size_t err_cap,
+                             RecompLauncherCPrepareProgressFn on_progress,
+                             void* progress_ctx) {
+    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
+                                err_cap, on_progress, progress_ctx);
+}
+
+static int host_pgo_optimize(const char* disc_path, char* out_exe_path,
+                             size_t out_cap, char* err_msg, size_t err_cap,
+                             RecompLauncherCPrepareProgressFn on_progress,
+                             void* progress_ctx) {
+    return host_rebuild_game_ex(disc_path, 1, out_exe_path, out_cap, err_msg,
+                                err_cap, on_progress, progress_ctx);
+}
+
+/* Settings → VIDEO → Apply FMV Timing Opt: regenerate C (picks up
+ * load_charge_batch) then rebuild without PGO training. */
+static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
+                                    size_t out_cap, char* err_msg,
+                                    size_t err_cap,
+                                    RecompLauncherCPrepareProgressFn on_progress,
+                                    void* progress_ctx) {
+    char gen_out[512];
+    if (!host_prepare_generate(disc_path, gen_out, sizeof(gen_out), err_msg,
+                               err_cap, on_progress, progress_ctx))
+        return 0;
+    return host_rebuild_game_ex(disc_path, 0, out_exe_path, out_cap, err_msg,
+                                err_cap, on_progress, progress_ctx);
 }
 
 void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
@@ -2415,6 +2542,19 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->setup_needs_toolchain = 1;
         gi->toolchain_is_ready = host_toolchain_is_ready;
         gi->ensure_toolchain_with_progress = host_ensure_toolchain_with_progress;
+        /* Settings → SYSTEM: PGO on existing generated C (no wizard). */
+        gi->pgo_optimize_with_progress = host_pgo_optimize;
+#if defined(_WIN32)
+        gi->pgo_busy_status = "Scheduling FMV PGO optimize…";
+        gi->pgo_success_status =
+            "Exiting for Windows PGO train + rebuild…";
+#else
+        gi->pgo_busy_status =
+            "Optimizing FMV (instrument → train → rebuild)…";
+        gi->pgo_success_status = "FMV optimize complete — restarting…";
+#endif
+        /* FMV timing (emitter load_charge_batch) generate+rebuild: host kept
+         * but not exposed in Settings for now. */
     } else {
         gi->prepare_disc_label = "Generate sources…";
         gi->prepare_disc_note =

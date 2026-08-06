@@ -1,6 +1,7 @@
 ﻿#ifndef PSXRECOMP_PSX_CYCLES_H
 #define PSXRECOMP_PSX_CYCLES_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -59,6 +60,11 @@ extern uint32_t g_psx_cyc_batch_limit;
 /* GCC/Clang-generated functions can defer deadline probes within a basic
  * block. Interrupt/MMIO edges still publish the accumulated guest cycles. */
 extern int g_psx_cyc_bb_defer;
+
+/* Emitter-level VLC load-charge batching: when non-NULL, psx_cyc_charge
+ * accumulates into *g_psx_cyc_local_acc instead of g_psx_cyc_batch. Publish
+ * via psx_cyc_local_publish / psx_cyc_batch_flush before IRQ/MMIO barriers. */
+extern uint32_t *g_psx_cyc_local_acc;
 
 /* Advance guest time. Overlay DLLs forward this through their callback shim;
  * normal runtime/generated code keeps the common production path inlined. */
@@ -121,10 +127,27 @@ static inline void psx_advance_cycles(uint32_t cycles) {
  * their pending total in the callback shim rather than these host globals. */
 #if defined(PSX_OVERLAY_DLL_BUILD)
 void overlay_flush_cycles(void);
+static inline void psx_cyc_local_publish(void) { }
 static inline void psx_cyc_batch_flush(void) { overlay_flush_cycles(); }
 #else
+/* Publish function-local charges into the normal batch/advance path while
+ * keeping the local pointer installed (nested charges resume locally). */
+static inline void psx_cyc_local_publish(void) {
+#if !defined(PSX_COSIM)
+    uint32_t *acc = g_psx_cyc_local_acc;
+    if (!acc) return;
+    uint32_t v = *acc;
+    if (!v) return;
+    *acc = 0;
+    g_psx_cyc_local_acc = NULL;
+    psx_advance_cycles(v);
+    g_psx_cyc_local_acc = acc;
+#endif
+}
+
 static inline void psx_cyc_batch_flush(void) {
 #if !defined(PSX_COSIM)
+    psx_cyc_local_publish();
     uint32_t b = g_psx_cyc_batch;
     if (!b) return;
     g_psx_cyc_batch = 0;

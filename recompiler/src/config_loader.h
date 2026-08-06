@@ -654,6 +654,12 @@ struct GameConfig {
     // on their generated C bodies (profile/host locality; no guest semantics).
     std::vector<uint32_t> hot_funcs;
 
+    // [recompiler] load_charge_batch: when true, emit function-local cycle
+    // accumulators for load_charge_batch_funcs (or hot_funcs if that list is
+    // empty). Requires regen; guest totals at IRQ/MMIO barriers unchanged.
+    bool                  load_charge_batch = false;
+    std::vector<uint32_t> load_charge_batch_funcs;
+
     // [load_accel.vsync_query] opt-in for a byte-verified PsyQ VSync(mode)
     // implementation.  mode=-1 returns vsync_counter_addr while bypassing two
     // unused MMIO reads; every other mode executes the original function.

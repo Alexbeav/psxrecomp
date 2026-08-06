@@ -858,6 +858,7 @@ static void np_commit_load_sync(void);
 static void np_begin_load_apply(int slot);
 static void np_starv_reset(void);
 static void np_maybe_stage_target_save(void);
+static void np_note_save_complete(void);
 
 static int np_file_crc(const uint8_t *data, size_t size, uint32_t *crc_out)
 {
@@ -1015,6 +1016,14 @@ static void np_apply_ready_state(void)
         return;
     }
 
+    /* §97: FMV media keyframe — install into RB pin/ring (no disk slot). */
+    if (op == RNET_STATE_OP_RB_KF) {
+        (void)psx_netplay_rb_media_kf_on_ready(data, size);
+        rnet_session_state_finish(g_np.session, 0);
+        g_np.xfer = NP_XFER_NONE;
+        return;
+    }
+
     if (op == RNET_STATE_OP_SAVE) {
         if (g_np.local_slot != 0) {
             if (!savestate_write_slot((int)slot, data, size)) {
@@ -1047,6 +1056,7 @@ static void np_apply_ready_state(void)
         }
         rnet_session_state_finish(g_np.session, 0);
         g_np.xfer = NP_XFER_NONE;
+        np_note_save_complete();
         return;
     }
 
@@ -1153,6 +1163,16 @@ static void np_guest_handle_probe(void)
         return;
     }
 
+    /* §97: rollback FMV media keyframe — CRC of raw snap at episode load. */
+    if (op == RNET_STATE_OP_RB_KF) {
+        match = psx_netplay_rb_media_kf_probe_match(size, crc);
+        (void)rnet_session_state_probe_reply(g_np.session, match);
+        printf("psxrecomp: netplay MEDIA-KF probe — %s (size=%u crc=%08x)\n",
+               match ? "match" : "miss", (unsigned)size, (unsigned)crc);
+        fflush(stdout);
+        return;
+    }
+
     {
         uint32_t local_sz = 0, local_crc = 0;
         char reason[192];
@@ -1177,6 +1197,7 @@ static void np_guest_handle_probe(void)
                        "skip transfer\n",
                        (unsigned)slot);
                 fflush(stdout);
+                np_note_save_complete();
             } else {
                 /* Host will chunk the authoritative .pst — stay parked. */
                 g_np.xfer = NP_XFER_SAVE_SEND;
@@ -1276,6 +1297,7 @@ static void np_host_drive_xfer(void)
                    g_np.xfer_slot);
             fflush(stdout);
             g_np.xfer = NP_XFER_NONE;
+            np_note_save_complete();
             return;
         }
         if (!savestate_read_slot(g_np.xfer_slot, &buf, &n) || !buf ||
@@ -1333,6 +1355,7 @@ static void np_host_drive_xfer(void)
     case NP_XFER_LOAD_SEND:
         /* apply_ready runs first and clears take_ready (LOAD → LOAD_APPLYING). */
         if (rnet_session_state_take_ready(g_np.session, NULL, NULL, NULL, NULL)) {
+            int was_save = (g_np.xfer == NP_XFER_SAVE_SEND);
             if (g_np.xfer == NP_XFER_MC_SEND)
                 g_np.mc_sync_done = 1;
             rnet_session_state_finish(g_np.session, 0);
@@ -1340,6 +1363,8 @@ static void np_host_drive_xfer(void)
                 np_begin_load_apply(g_np.xfer_slot);
             } else {
                 g_np.xfer = NP_XFER_NONE;
+                if (was_save)
+                    np_note_save_complete();
             }
         }
         return;
@@ -1431,6 +1456,9 @@ static void np_commit_load_sync(void)
     g_np.needs_advance = 0;
     g_np.latched_for_tick = 0;
     /* staged_valid left set by prime — tip must match delay-prefix hold. */
+    /* §95: load is a hard resync — drop leftover FMV DESYNC invent-hold. */
+    if (g_np.rollback)
+        psx_netplay_rb_clear_fmv_desync_hold("netplay load sync");
 }
 
 static void np_enter_load_ready(int slot)
@@ -3421,7 +3449,7 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
 #endif
             fprintf(stderr,
                     "psxrecomp: rb binary path=%s size=%lld "
-                    "(peers must match bit-identical)\n",
+                    "(same game version + digests; per-peer PGO OK)\n",
                     exe, sz);
             fflush(stderr);
         }
@@ -3943,6 +3971,16 @@ static void np_maybe_stage_target_save(void)
     fflush(stdout);
 }
 
+/* §94: SAVE freeze opens a tip hole; invent-hold from FMV MAX-unmatched then
+ * deadlocks admit (stall looked like fmv_settle). Clear invent-hold so gap1
+ * invent can refill before the 20s watchdog. */
+static void np_note_save_complete(void)
+{
+    if (!g_np.rollback)
+        return;
+    psx_netplay_rb_clear_fmv_desync_hold("netplay save complete");
+}
+
 static void np_pump_session(void)
 {
 #if defined(PSX_HAS_LOBBY_CLIENT)
@@ -4008,6 +4046,66 @@ static int np_try_admit_gameplay(void)
     return 0;
 }
 
+/*
+ * §95: rollback LOAD barrier admit — tip + hold-last invent, no INPUT_CONFIRM.
+ * Delay-sync try_admit wait_confirm hung the slower peer after the faster one
+ * applied and froze (guest LOADED, host stuck load_applying+wait_confirm).
+ * Load will hard_resync at mutual ready; pads here only need guest cycles for
+ * savestate_poll / one resume tick.
+ */
+static int np_try_admit_load_barrier_rb(void)
+{
+    rnet_u32 sim = rnet_session_sim_tick(g_np.session);
+    rnet_u32 wire;
+    RNetInputSample sample;
+    RNetRbFrame row;
+    PsxNetPad pad;
+    int slot;
+
+    np_sched_set_admit_stall("load_barrier_rb");
+    if (!rnet_session_prepare_local_tip(g_np.session, sim)) {
+        np_sched_set_admit_stall("load_barrier_prepare_tip");
+        force_session_pads_connected(g_np.slot_count);
+        return 0;
+    }
+    wire = np_sched_wire_for_sim(sim);
+
+    for (slot = 0; slot < g_np.slot_count; ++slot) {
+        if (slot == g_np.local_slot) {
+            if (rnet_session_peek_input(g_np.session, slot, wire, &sample)) {
+                decode_pad(&sample, &pad);
+                netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            } else if (g_np.staged_valid) {
+                netplay_ih_pad_to_frame(&g_np.staged, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            } else {
+                memset(&pad, 0, sizeof(pad));
+                pad.buttons = 0xFFFFu;
+                pad.lx = pad.ly = pad.rx = pad.ry = 0x80u;
+                pad.analog = 0;
+                pad.connected = 1;
+                netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+                (void)netplay_ih_put(&g_np.ih, slot, &row);
+            }
+            continue;
+        }
+        if (rnet_session_peek_remote_input(g_np.session, slot, wire, &sample)) {
+            decode_pad(&sample, &pad);
+            netplay_ih_pad_to_frame(&pad, sim, 0, &row);
+            (void)netplay_ih_put(&g_np.ih, slot, &row);
+        } else {
+            /* Never stall — peer may already be frozen in LOAD_READY. */
+            (void)netplay_ih_invent_hold_last(&g_np.ih, slot, sim, &row);
+        }
+    }
+
+    np_publish_hist_sio(sim);
+    g_np.needs_advance = 1;
+    np_sched_set_admit_stall("");
+    return 1;
+}
+
 int psx_netplay_poll_admit(void)
 {
     rnet_u32 sim;
@@ -4036,31 +4134,42 @@ int psx_netplay_poll_admit(void)
         return 0;
 
     /* Staged load must run guest cycles — bypass starvation latch. ICE xfer
-     * often leaves lead=D-1 and would otherwise block try_admit forever. */
+     * often leaves lead=D-1 and would otherwise block try_admit forever.
+     * §95: rollback must not use delay-sync confirm here. */
     if (g_np.xfer == NP_XFER_LOAD_APPLYING && savestate_pending()) {
         if (g_np.needs_advance)
             return 1;
+        if (g_np.rollback)
+            return np_try_admit_load_barrier_rb();
         return np_try_admit_gameplay();
     }
 
-    /* Both peers: after mutual ready + sync, stay in LOAD_READY until try_admit
-     * succeeds (fresh tip exchange + INPUT_CONFIRM). Dropping the barrier early
-     * on the host let it spin on confirm with FPS/present already "live". */
+    /* Both peers: after mutual ready + sync, stay in LOAD_READY until admit
+     * succeeds. Dropping the barrier early on the host let it spin on confirm
+     * with FPS/present already "live". §95: rollback exits via tip invent. */
     if (g_np.xfer == NP_XFER_LOAD_READY) {
         if (g_np.load_sync_done && g_np.load_ready_replied && !g_np.needs_advance) {
-            sim = rnet_session_sim_tick(g_np.session);
-            if (rnet_session_try_admit(g_np.session, sim)) {
+            int admitted;
+            if (g_np.rollback)
+                admitted = np_try_admit_load_barrier_rb();
+            else {
+                sim = rnet_session_sim_tick(g_np.session);
+                admitted = rnet_session_try_admit(g_np.session, sim);
+                if (admitted)
+                    g_np.needs_advance = 1;
+                else
+                    force_session_pads_connected(g_np.slot_count);
+            }
+            if (admitted) {
                 g_np.xfer = NP_XFER_NONE;
                 g_np.load_applied_local = 0;
                 g_np.load_ready_replied = 0;
                 g_np.load_sync_done = 0;
-                g_np.needs_advance = 1;
                 printf("psxrecomp: netplay load slot=%d — peer ready, resuming lockstep\n",
                        g_np.xfer_slot);
                 fflush(stdout);
                 return 1;
             }
-            force_session_pads_connected(g_np.slot_count);
         }
         return 0;
     }

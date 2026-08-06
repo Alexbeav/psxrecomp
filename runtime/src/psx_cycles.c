@@ -24,6 +24,7 @@ uint64_t psx_cycle_count = 0;
 uint32_t g_psx_cyc_batch = 0;
 uint32_t g_psx_cyc_batch_limit = 0;
 int      g_psx_cyc_bb_defer = 0;
+uint32_t *g_psx_cyc_local_acc = NULL;
 static int      s_cycle_replay_active = 0;
 static uint64_t s_cycle_replay_live = 0;
 
@@ -331,7 +332,9 @@ void psx_advance_cycles_slow(uint32_t cycles) {
 }
 
 uint64_t psx_get_cycle_count(void) {
-    return psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    uint64_t n = psx_cycle_count + (uint64_t)g_psx_cyc_batch;
+    if (g_psx_cyc_local_acc) n += (uint64_t)(*g_psx_cyc_local_acc);
+    return n;
 }
 
 /* ===== Idle-loop cycle skip (wait-loop elision, 2026-07-06) ==================
@@ -554,6 +557,8 @@ void psx_idle_note_check(CPUState *cpu, uint32_t check_pc) {
  * would try to replay a bogus gap. Re-anchor devices at the restored cycle and
  * force a fresh deadline on the next charge. */
 void psx_cycles_resync_after_restore(CPUState *cpu) {
+    if (g_psx_cyc_local_acc) *g_psx_cyc_local_acc = 0;
+    g_psx_cyc_local_acc    = NULL;
     g_psx_cyc_batch        = 0;
     g_psx_cyc_batch_limit  = 0;
     g_psx_cyc_bb_defer     = 0;
@@ -593,6 +598,8 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
 }
 
 void psx_cycles_reset_for_boot(void) {
+    if (g_psx_cyc_local_acc) *g_psx_cyc_local_acc = 0;
+    g_psx_cyc_local_acc    = NULL;
     g_psx_cyc_batch        = 0;
     g_psx_cyc_batch_limit  = 0;
     g_psx_cyc_bb_defer     = 0;

@@ -28,6 +28,7 @@
  */
 
 #include "gpu_sw_renderer.h"
+#include "gpu_vram_dirty.h"
 #include "gpu_sw_edges.h"
 #include <string.h>
 #include <stdlib.h>
@@ -274,6 +275,9 @@ static inline void put_opaque(const RTarget *t, int x, int y, uint16_t color) {
     if (g_mask_set_bit) color |= 0x8000;
 
     t->buf[idx] = color;
+    /* Canonical VRAM only (hi-res / wide mirrors are present-side). */
+    if (t->buf == g_vram)
+        gpu_vram_dirty_mark_row((uint32_t)y);
 }
 
 /* Write a textured pixel — semi-trans only if texel bit 15 is set */
@@ -316,6 +320,8 @@ static inline void put_textured(const RTarget *t, int x, int y, uint16_t texel,
     if (g_mask_set_bit) color |= 0x8000;
 
     t->buf[idx] = color;
+    if (t->buf == g_vram)
+        gpu_vram_dirty_mark_row((uint32_t)y);
 }
 
 /* ------------------------------------------------------------------ */
@@ -626,6 +632,7 @@ void sw_fill_rect(int x, int y, int w, int h, uint16_t color) {
             g_vram[py * VRAM_WIDTH + px] = color;
         }
     }
+    gpu_vram_dirty_mark_rect(x0, y0, w, h);
 
     if (g_hr) hr_fill_block(x, y, w, h, color);
 }
@@ -691,6 +698,7 @@ void sw_copy_rect(int src_x, int src_y, int dst_x, int dst_y, int w, int h) {
                 }
             }
         }
+        gpu_vram_dirty_mark_row((uint32_t)dy);
     }
 
     if (hr_rows) free(hr_rows);
@@ -1514,6 +1522,7 @@ void sw_vram_write(int x, int y, uint16_t pixel) {
     x &= (VRAM_WIDTH - 1);
     y &= (VRAM_HEIGHT - 1);
     g_vram[y * VRAM_WIDTH + x] = pixel;
+    gpu_vram_dirty_mark_row((uint32_t)y);
 
     if (g_hr) {
         int s = g_scale;
@@ -1580,6 +1589,7 @@ void sw_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data) {
      * does s² stores per guest texel — multi-second hitches on 2×/4×. */
     if (x == 0 && y == 0 && w == VRAM_WIDTH && h == VRAM_HEIGHT) {
         memcpy(g_vram, data, (size_t)VRAM_WIDTH * (size_t)VRAM_HEIGHT * sizeof(uint16_t));
+        gpu_vram_dirty_mark_all();
         if (g_hr) hr_rebuild_from_vram();
         return;
     }
@@ -1593,6 +1603,7 @@ void sw_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data) {
                    data + (size_t)row * (size_t)w,
                    (size_t)w * sizeof(uint16_t));
         }
+        gpu_vram_dirty_mark_rect(x, y, w, h);
         return;
     }
 
@@ -1614,6 +1625,7 @@ void sw_vram_transfer_in(int x, int y, int w, int h, const uint16_t *data) {
                 }
             }
         }
+        gpu_vram_dirty_mark_row((uint32_t)py);
     }
 }
 

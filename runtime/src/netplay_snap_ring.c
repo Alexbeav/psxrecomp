@@ -1,8 +1,29 @@
 #include "netplay_snap_ring.h"
 #include "boot_state.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <time.h>
+#endif
+
+static double snap_mono_ms(void)
+{
+#if defined(_WIN32)
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+#endif
+}
 
 typedef struct NetplaySnapSlot {
     int      valid;
@@ -160,11 +181,39 @@ int netplay_snap_ring_save(NetplaySnapRing* r, uint32_t tick,
                            uint32_t entry_pc) {
     uint8_t* data = NULL;
     size_t len = 0;
+    double t0, dt;
+    static uint32_t s_tele_n;
+    static double s_tele_ms_sum;
+    static uint64_t s_tele_bytes_sum;
+    static uint64_t s_tele_dirty_sum;
+    static uint32_t s_tele_incr_n;
     if (!r || !cpu) return 0;
     /* Raw (no zlib): compress2 on RAM+VRAM+SPU dominated live FPS. Load
-     * accepts uncompressed v4 sections. */
+     * accepts uncompressed v4 sections. §96: dirty-scanline VRAM mirror. */
+    t0 = snap_mono_ms();
     if (!boot_state_save_buffer_raw(cpu, bios_checksum, entry_pc, &data, &len))
         return 0;
+    dt = snap_mono_ms() - t0;
+    s_tele_n++;
+    s_tele_ms_sum += dt;
+    s_tele_bytes_sum += (uint64_t)len;
+    s_tele_dirty_sum += (uint64_t)boot_state_last_vram_dirty_rows();
+    if (boot_state_last_vram_incremental())
+        s_tele_incr_n++;
+    /* Heartbeat every 64 saves — visible during FMV dense / media windows. */
+    if ((s_tele_n & 63u) == 0u) {
+        fprintf(stderr,
+                "psxrecomp: rb snap tele n=%u last=%.2fms avg=%.2fms "
+                "bytes=%zu avg_bytes=%.0f dirty_rows=%u incr=%d "
+                "(avg_dirty=%.1f incr%%=%.0f)\n",
+                (unsigned)s_tele_n, dt, s_tele_ms_sum / (double)s_tele_n,
+                len, (double)s_tele_bytes_sum / (double)s_tele_n,
+                (unsigned)boot_state_last_vram_dirty_rows(),
+                boot_state_last_vram_incremental(),
+                (double)s_tele_dirty_sum / (double)s_tele_n,
+                100.0 * (double)s_tele_incr_n / (double)s_tele_n);
+        fflush(stderr);
+    }
     if (!netplay_snap_ring_store(r, tick, data, len))
         return 0; /* store frees data on hard failure */
     return 1;

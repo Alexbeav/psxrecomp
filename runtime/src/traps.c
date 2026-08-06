@@ -816,6 +816,9 @@ void psx_scheduler_run(CPUState* cpu)
             {
                 extern int g_psx_cyc_bb_defer;
                 extern uint32_t g_psx_cyc_batch;
+                extern uint32_t *g_psx_cyc_local_acc;
+                if (g_psx_cyc_local_acc) *g_psx_cyc_local_acc = 0;
+                g_psx_cyc_local_acc = NULL;
                 g_psx_cyc_bb_defer = 0;
                 g_psx_cyc_batch = 0;
             }

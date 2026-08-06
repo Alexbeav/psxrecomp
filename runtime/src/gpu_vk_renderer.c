@@ -21,6 +21,7 @@
 #include "gpu_render.h"
 #include "gpu_vk_renderer.h"
 #include "gpu_sw_renderer.h"
+#include "host_osd.h"
 #include "crash_trace.h"
 #include "gpu_vk_upload.h"
 
@@ -1394,11 +1395,13 @@ int vk_renderer_init_context(SDL_Window *win) {
 }
 
 static void cpres_cache_free(void);   /* fwd: CPU-present resource cache */
+static void osd_staging_free(void);
 void vk_renderer_shutdown(void) {
     if (!s_dev) return;
     p_vkDeviceWaitIdle(s_dev);
     vk_gpu_sync_internal();   /* reclaim deferred staging before tearing down */
     cpres_cache_free();       /* FMV CPU-present cached image + staging */
+    osd_staging_free();       /* host toast OSD staging */
     for (int i = 0; i < STAGING_CACHE_MAX; ++i) {
         if (s_staging_cache[i].buf)
             staging_destroy(s_staging_cache[i].buf, s_staging_cache[i].mem);
@@ -1491,6 +1494,108 @@ static int acquire_present(VkImage *out_sc, VkCommandBuffer *out_cb,
     return 1;
 }
 
+/* Copy host toast into the swapchain (must still be TRANSFER_DST). Opaque
+ * overwrite — host_osd bakes an opaque panel so no blend pass is needed. */
+static VkBuffer       s_osd_buf  = VK_NULL_HANDLE;
+static VkDeviceMemory s_osd_mem  = VK_NULL_HANDLE;
+static void          *s_osd_map  = NULL;
+static VkDeviceSize   s_osd_cap  = 0;
+
+static void osd_staging_free(void) {
+    if (s_osd_buf) {
+        staging_destroy(s_osd_buf, s_osd_mem);
+        s_osd_buf = VK_NULL_HANDLE;
+        s_osd_mem = VK_NULL_HANDLE;
+    }
+    s_osd_map = NULL;
+    s_osd_cap = 0;
+}
+
+static void vk_osd_copy_rect(VkCommandBuffer cb, VkImage sc,
+                             const uint32_t *px, int w, int h,
+                             int x, int y, VkDeviceSize buf_off) {
+    if (!px || w <= 0 || h <= 0) return;
+    int dw = w, dh = h;
+    if (x + dw > (int)s_sc_extent.width) dw = (int)s_sc_extent.width - x;
+    if (y + dh > (int)s_sc_extent.height) dh = (int)s_sc_extent.height - y;
+    if (dw < 1 || dh < 1) return;
+    memcpy((uint8_t *)s_osd_map + (size_t)buf_off, px,
+           (size_t)w * (size_t)h * 4u);
+    VkBufferImageCopy bc = {0};
+    bc.bufferOffset = buf_off;
+    bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    bc.imageSubresource.layerCount = 1;
+    bc.imageOffset.x = x;
+    bc.imageOffset.y = y;
+    bc.imageExtent.width = (uint32_t)dw;
+    bc.imageExtent.height = (uint32_t)dh;
+    bc.imageExtent.depth = 1;
+    bc.bufferRowLength = (uint32_t)w;
+    bc.bufferImageHeight = (uint32_t)h;
+    p_vkCmdCopyBufferToImage(cb, s_osd_buf, sc,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+}
+
+static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
+    const uint32_t *text_px = NULL, *vol_px = NULL;
+    int tw = 0, th = 0, vw = 0, vh = 0;
+    const int have_text = host_osd_image(&text_px, &tw, &th) && text_px;
+    const int have_vol = host_osd_volume_image(&vol_px, &vw, &vh) && vol_px;
+    if (!have_text && !have_vol) {
+        host_osd_present_done();
+        return;
+    }
+    /* Only BGRA swapchains match ARGB8888 LE packing used by host_osd. */
+    if (s_sc_format != VK_FORMAT_B8G8R8A8_UNORM &&
+        s_sc_format != VK_FORMAT_B8G8R8A8_SRGB) {
+        host_osd_present_done();
+        return;
+    }
+    VkDeviceSize text_bytes =
+        have_text ? (VkDeviceSize)tw * (VkDeviceSize)th * 4u : 0;
+    VkDeviceSize vol_bytes =
+        have_vol ? (VkDeviceSize)vw * (VkDeviceSize)vh * 4u : 0;
+    VkDeviceSize bytes = text_bytes + vol_bytes;
+    if (bytes > s_osd_cap) {
+        p_vkQueueWaitIdle(s_queue);
+        osd_staging_free();
+        if (!make_staging(bytes, &s_osd_buf, &s_osd_mem, &s_osd_map)) {
+            host_osd_present_done();
+            return;
+        }
+        s_osd_cap = bytes;
+    }
+    const int margin = 8;
+    VkDeviceSize off = 0;
+    if (have_text) {
+        vk_osd_copy_rect(cb, sc, text_px, tw, th, margin, margin, off);
+        off += text_bytes;
+    }
+    if (have_vol) {
+        int x = ((int)s_sc_extent.width > vw + margin)
+                    ? ((int)s_sc_extent.width - vw - margin)
+                    : margin;
+        int y = ((int)s_sc_extent.height > vh)
+                    ? (((int)s_sc_extent.height - vh) / 2)
+                    : margin;
+        vk_osd_copy_rect(cb, sc, vol_px, vw, vh, x, y, off);
+    }
+    host_osd_present_done();
+}
+
+static void submit_present(VkCommandBuffer cb, uint32_t img_idx, uint32_t fr);
+
+static void finish_present(VkCommandBuffer cb, VkImage sc,
+                           uint32_t img_idx, uint32_t fr) {
+    vk_osd_blit(cb, sc);
+    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    submit_present(cb, img_idx, fr);
+}
+
 static void submit_present(VkCommandBuffer cb, uint32_t img_idx, uint32_t fr) {
     p_vkEndCommandBuffer(cb);
     /* Present command buffers write the acquired swapchain image with
@@ -1562,10 +1667,7 @@ int vk_renderer_present_vram(int disp_x, int disp_y, int w, int h,
                      sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
 
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
     return 1;
 }
@@ -1581,10 +1683,7 @@ void vk_renderer_present_blank(void) {
     VkClearColorValue black = {{0,0,0,1}};
     VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     p_vkCmdClearColorImage(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rng);
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
 }
 
@@ -1677,10 +1776,7 @@ void vk_renderer_present_cpu(const uint32_t *pixels, int src_w, int src_h,
     blit.dstOffsets[0] = dst[0]; blit.dstOffsets[1] = dst[1];
     p_vkCmdBlitImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
 
     /* Cached resources are rewritten next frame: wait for this frame's copy +
      * blit to complete first (FMV cadence is 15-24 fps; one idle-wait per
@@ -1738,10 +1834,7 @@ int vk_renderer_present_wide(int disp_x, int disp_y, int disp_h, int linear) {
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     img_to(cb, s_wide_img[i], &s_wide_layout[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
     return 1;
 }

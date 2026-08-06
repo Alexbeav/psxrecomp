@@ -185,6 +185,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_aspect_cone_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c
+    ${PSXRECOMP_ROOT}/runtime/src/gpu_vram_dirty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
@@ -215,6 +216,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
