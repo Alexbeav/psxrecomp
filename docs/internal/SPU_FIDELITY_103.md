@@ -338,14 +338,32 @@ list instead of having to rediscover them.
 - Every title needs regen + revalidation, because CAUSE.IP2 touches core IRQ
   delivery for all of them.
 
-## 8. Incidental fix — `tools/embed_spirv.py` build race
+## 8. Two build traps hit on the way (neither SPU-related)
 
-Not SPU-related, found while building. Two runtime targets (`psx-runtime`,
-`psx-oracle`) embed the same shader set, so ninja runs `embed_spirv.py`
-concurrently. It wrote its intermediate SPIR-V to `<source>.spv` **in the source
-tree**, so the two invocations raced on one path and whichever finished first
-`os.remove()`d the file the other was about to read — a hard build failure
-(`FileNotFoundError: .../blit.frag.spv`), and source-tree pollution besides.
-Now compiled to a private `mkdtemp` directory, with the output header written
-via atomic replace and a loud error if `glslc` reports success but produces no
-file. Fixed per Rule 15 rather than worked around.
+**`tools/embed_spirv.py` race — fixed upstream, our fix dropped.** Two runtime
+targets embed the same shader set, so ninja runs the script concurrently; it
+wrote its intermediate SPIR-V to `<source>.spv` in the source tree, so the two
+invocations raced and one `os.remove()`d the file the other was reading
+(`FileNotFoundError: .../blit.frag.spv`). We fixed it locally with `mkdtemp`,
+but master fixed the same bug independently using
+`tempfile.TemporaryDirectory` — which is better, since it also cleans up when
+an error path returns early. **The rebase conflict was resolved in master's
+favour and our redundant fix removed**, keeping this branch to SPU work.
+
+**Autocompile silently falling back to the interpreter.** A fresh title
+worktree can run 100% interpreted without saying so. `game.toml`'s
+`overlay_autocompile_cmd` names a specific recompiler path, and if it is not
+there, autocompile fails every attempt and no shard is ever built — the runtime
+just interprets. It cost a whole invalid performance measurement here (§7).
+
+- Tomba 2 expects `psxrecomp-v4/recompiler/build-t2/psxrecomp-game.exe`, while
+  the documented recipe builds the recompiler at `build-recompiler/` in the
+  worktree root. Result: `runs=8 fails=8 shard_ok=0`, `dispatch_native = 0`.
+- MMX6 instead hardcodes an **absolute** path into the main repo
+  (`F:/Projects/psxrecomp/psxrecomp/recompiler/build/psxrecomp-game.exe`),
+  which happens to exist with a matching codegen hash — so it works by luck of
+  local layout and would fail on any other machine.
+
+Check `autocompile_status` (`fails`, `shard_ok`) before trusting ANY performance
+number from a fresh worktree. Master commit `42a69624` moves in this direction
+for `regen_bios`; the same diagnosis is wanted for the autocompile path.
