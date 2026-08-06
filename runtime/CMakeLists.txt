@@ -184,6 +184,16 @@ if(BUILD_TESTING)
             PSX_AUTOCOMPILE_TEST=1)
         add_test(NAME autocompile_publication_test
                  COMMAND autocompile_publication_test)
+
+        # A misconfigured overlay_autocompile_cmd must be reported on a channel
+        # that exists: the stdout warnings reach nobody under -mwindows, so a
+        # broken autocompile silently degrades the whole run to the interpreter.
+        add_executable(autocompile_degraded_test
+            tests/test_autocompile_degraded.c
+            src/autocompile.c)
+        target_include_directories(autocompile_degraded_test PRIVATE include)
+        add_test(NAME autocompile_degraded_test
+                 COMMAND autocompile_degraded_test)
     endif()
 endif()
 

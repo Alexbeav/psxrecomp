@@ -33,6 +33,8 @@
 
 #include "cpu_state.h"
 #include "crash_trace.h"
+#include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
+                            * (interpreter-only) run into its own report */
 
 /* Output path — overwritten per dump. */
 static const char *kReportPath = "psx_last_run_report.json";
@@ -265,10 +267,31 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         if (tm) strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", tm);
     }
 
+    /* Overlay autocompile health. A run whose autocompile never worked executed
+     * entirely in the interpreter, so ANY timing taken from it is meaningless —
+     * and that state is otherwise invisible (the warnings go to stdout, which
+     * does not exist under -mwindows). Stamping it into the run report makes a
+     * degraded session self-documenting rather than something the next reader
+     * has to suspect and re-derive. */
+    const char *ac_degraded = autocompile_degraded_reason();
+    char ac_escaped[640];
+    ac_escaped[0] = '\0';
+    if (ac_degraded) {
+        size_t w = 0;
+        for (const char *p = ac_degraded; *p && w + 2 < sizeof(ac_escaped); p++) {
+            if (*p == '"' || *p == '\\') ac_escaped[w++] = '\\';
+            else if ((unsigned char)*p < 0x20) { ac_escaped[w++] = ' '; continue; }
+            ac_escaped[w++] = *p;
+        }
+        ac_escaped[w] = '\0';
+    }
+
     append_fmt(buf, sizeof(buf), &pos,
         "{\n"
         "  \"reason\": \"%s\",\n"
         "  \"exit_origin\": \"%s\",\n"
+        "  \"autocompile_degraded\": %d,\n"
+        "  \"autocompile_degraded_reason\": \"%s\",\n"
         "  \"build\": \"%s\",\n"
         "  \"timestamp\": \"%s\",\n"
         "  \"frame\": %llu,\n"
@@ -291,6 +314,8 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         "  },\n",
         reason ? reason : "(unknown)",
         s_exit_origin,
+        ac_degraded ? 1 : 0,
+        ac_degraded ? ac_escaped : "",
         kBuildId,
         ts,
         (unsigned long long)s_frame_count,
