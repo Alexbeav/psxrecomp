@@ -279,25 +279,44 @@ list instead of having to rediscover them.
       ringing down (628 → 18 → 2) for ~3 s. A decaying tail that outlives its
       input is the reverb working. Noise LFSR observed shifting with correct
       parity feedback (`000F → 001F → … → FFA3`).
-- [x] **Tomba 2 intro FMV: A/B against the exact parent commit.** Same worktree,
-      framework at `c88c3ca9^` vs `c88c3ca9`, identical generated code
-      (SPU work is runtime-only).
+- [x] **Tomba 2 intro FMV — measured twice, because the first attempt was on a
+      broken setup. Recording both so the mistake is not repeated.**
 
-      | Metric | Baseline | SPU branch |
+      *Attempt 1 (INVALID as an absolute measurement).* A fresh worktree has a
+      cold overlay shard cache, and `autocompile` failed 8/8 with `WinError 2`:
+      `game.toml` points at `psxrecomp-v4/recompiler/build-t2/psxrecomp-game.exe`
+      while the documented build recipe puts the recompiler at
+      `build-recompiler/` in the worktree root. No shards were ever built and the
+      runtime silently fell back to the interpreter (`dispatch_native = 0`,
+      `native_share = 0.0`). The resulting "40 fps, ~19 underruns/s" was my setup,
+      NOT a property of master. Fixed by building the recompiler at the path
+      `game.toml` expects; autocompile then reports `fails=0`, `shard_ok` rising,
+      and the cache grows.
+
+      *Attempt 2 (valid).* Ran the SPU build against the fully warm cache in
+      `_wt-t2-measure`, then the original pre-SPU exe in the same worktree with
+      the same cache as a control:
+
+      | Metric | Control (no SPU work) | SPU branch |
       | --- | --- | --- |
-      | FPS drop | 59.9 → 40.7 at t=6.2 s | 59.9 → 40.4 at t=6.2 s |
-      | min p50 fps | 40.3 | 40.0 |
-      | `cd_underflow_frames` | 441, flat | 441, flat |
-      | host underruns @32 s | 594 | 582 |
-      | audio peak | 23066 | 26876 |
-      | `reverb_cur`/`noise_lfsr` | absent (control) | live |
+      | `native_share` (by time) | 0.1558 | 0.1704 |
+      | `interp_share` | 0.7813 | 0.7775 |
+      | `exc_share` | 0.2386 | 0.2381 |
+      | p50 fps | 39.1 | 38.0-38.4 |
+      | native/interp dispatch | 96.6% native | 95.9% native |
 
-      Conclusions: performance is a wash (the FMV's 40 fps and its ~19/s host
-      underruns are **pre-existing on master** — worth their own issue, not
-      caused here); the continuous CD-bus drain does **not** starve the bus; and
-      the peak rising 23066 → 26876 is wet signal adding on top of dry, still
-      well under 32767, so not clipping. FMV video confirmed correct by
-      screenshot through the debug server (320x224, intro scene).
+      Identical within noise, so the added per-frame DSP work costs nothing
+      measurable. Reverb/noise state observed live; peak rose 23066 -> 26876
+      (wet adding to dry, still under 32767 so not clipping); `cd_underflow`
+      flat at 441 on both, so the continuous CD-bus drain does not starve it.
+      FMV video confirmed correct by debug-server screenshot (320x224).
+
+      **Pre-existing defect characterised, not caused here:** Tomba 2's intro FMV
+      is 96% native by DISPATCH COUNT but 78% interpreted by WALL CLOCK, with 24%
+      of time in exception handling, giving ~39 fps and continuous host-sink
+      underruns even with a fully warm cache. A few interpreted blocks consume
+      most of the frame. Worth its own issue.
+
 - [ ] Oracle audio comparison against `psx-beetle` at a fixed scene — settles
       the §6 items, especially (1). `audio_wav`/`audio_stats` exist on both
       ports, so this is a symmetric always-on ring query. **Not yet done.**
