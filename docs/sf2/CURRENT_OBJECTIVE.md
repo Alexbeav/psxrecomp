@@ -1,5 +1,208 @@
 # Current objective — high-refresh presentation after accepted PGXP pass 1
 
+## 2026-08-05 user result — spatial R2 rejected and reverted
+
+The user rejected spatial R2. Gameplay did not maintain steady speed and could
+run considerably faster than regular play; widespread texture cracking exposed
+seams between independently replayed polygons. These are disqualifying failures
+even though the hidden routes preserved endpoint guest state and alpha=1 replay
+was pixel-exact.
+
+The result invalidates two automated assumptions. Endpoint equality did not
+prove invariant guest progression per wall-clock second under visible output,
+and exact reconstruction at alpha=1 did not prove watertight shared edges at
+intermediate alpha. Conservative per-packet matching can select different
+motion histories for adjacent triangles, so it is not an adequate topology
+owner for interpolation.
+
+The R2 shortcut is disabled. All spatial capture, matching, replay, output,
+debug endpoint, provenance hooks, probe test and route census plumbing have
+been removed from the active source. The accepted PGXP source checkpoint
+`2eebc41`, native-wide presentation, direct mouselook and retail timing remain
+the baseline. R2 evidence is retained only as rejected research.
+
+Future 60 FPS work must reproduce the authoritative object/camera snapshot
+boundary used by the SF1 approach, or establish an equally coherent SF2 owner.
+It must prove wall-clock guest progression, shared-edge/topology coherence, and
+HUD/FMV/fade exclusion before another user handoff. Packet-nearest-neighbor
+replay and whole-frame temporal blending are both retired.
+
+Updated: 2026-08-05
+
+## 2026-08-05 user result — R1 rejected and retired
+
+The user rejected the 60 Hz linear presentation candidate: motion felt the
+same as the accepted build and moving imagery acquired visible ghosting. This
+is decisive visual evidence even though the automated semantic and cadence
+gates passed. R1 must not advance to qualification.
+
+The result matches the implementation. R1 crossfades the previous and current
+retail render targets; it increases host swaps but does not estimate where
+geometry belongs between authentic frames. The existing motion-adaptive mode
+only suppresses blending for pixels whose color delta exceeds a threshold. It
+can trade ghost trails for stepped/shimmering changed regions, but it cannot
+create correct intermediate motion, so no R2 user handoff will be made from
+that blend family.
+
+The candidate-only parser relaxation to 60 Hz was reverted to the pre-candidate
+90 Hz floor, and the R1 shortcut now exits with a rejection notice rather than
+launching the game. The executable, config and evidence remain in ignored local
+paths for audit. The useful route improvements remain: interpolation telemetry
+at semantic checkpoints and oldest-entry selection for newest-first sector
+history, with a focused regression.
+
+The next high-refresh investigation must prove a spatially correct
+presentation method before another user handoff—for example renderer-side
+geometry/camera reprojection with complete provenance and explicit HUD/effect
+exclusion. It must not change retail simulation, VBlank, gameplay state or
+authored timing. Until that exists, the accepted PGXP build remains the user
+build and there is nothing further for the user to test.
+
+Updated: 2026-08-05
+
+## 2026-08-05 candidate handoff — 60 Hz presentation R1
+
+The first presentation-only high-refresh candidate is green at the automated
+handoff gate and is ready for user observation. Retail simulation, VBlank and
+authored timing remain unchanged; the isolated config enables the existing
+OpenGL presentation interpolator at 60 Hz with VSync off. The parser now
+accepts the runtime-supported floor of 60 Hz (59 remains rejected), and route
+checkpoints include bounded `gl_interp` state.
+
+Two clean-card hidden OpenGL Mission 1 routes passed. The corrected repeat
+compares with zero errors against the frozen native baseline: startup hash
+`6bf9af29fcb41a118455be11a25893937f59e64e3d2bb173bc58f937d4e1bff2`,
+input hash `c518cd5e1e597e70eebc0e82e8b305dcc56f6499f8672a52867cdc89bdefd650`,
+matching fingerprints at all five checkpoints, and final player XYZ
+`(-5606,2036,7529)` with health 150. Interpolation is enabled but suspended
+with empty history and zero swaps at TITLE, the aircraft movie and state 8.
+After retail player/camera ownership it has two history frames and presents at
+exactly 60.00 Hz from approximately 19.9 authentic captures/s. The repeat ends
+with 1,882 interpolated swaps and zero lost CD INT1.
+
+Evidence is under
+`evidence/high-refresh-r1-route-repeat-20260805-042525`; the initial valid route
+is `evidence/high-refresh-r1-route-20260805-041448`. The latter exposed a route
+artifact: `cdrom_sector_history(count=1)` returns the newest match, so its
+startup frame depended on host polling. The route now requests a bounded
+matching history and selects the oldest guest entry; its focused regression
+passes. The earlier `041241` directory is an invalid launch because developer
+endpoints were compiled out, not a retail result.
+
+The separately named candidate executable SHA-256 is
+`0199B159814B6E6FD047AC8993FEAFAB3D2C1F7990629A2F95AD63A282C9B851`.
+The exact user shortcut is `lab/sf2/local/generated-disc1-r2-load-delay/Launch
+SF2 High Refresh R1.bat`. Ask the user to inspect world-motion smoothness,
+camera/mouse response, HUD stability, transitions/FMV, and any shimmer or
+double-image artifact. Stop after handoff; do not run the full suite, commit or
+push until explicit approval advances qualification.
+
+The ignored footprint is 18.71 GiB and no owned runtime/route process remains.
+
+Updated: 2026-08-05
+
+## 2026-08-05 handoff — current-hash native route restored
+
+The high-refresh prerequisite is now green. Deterministic first-live rank
+bisection isolated the first failing native candidate to rank 306: entry
+`0x8001DA48`, code CRC `0x58690F42`, in shard
+`0001C000_7A4D33C6.dll`. Limits 305 and below pass; limit 306 fails at guest
+frame 24003; an otherwise fully native exact block of only `0x8001DA48`
+passes. The block was diagnostic only and is not retained.
+
+Read-only comparison with the configured SCUS-94451 executable explains the
+failure. The 8,196-byte captured image differs from resident text at two words:
+an unrelated data word at `0x8001C754`, outside the compiled function, and a
+resident JALR `0x01204009` changed to NOP at `0x8001DA9C`, inside the exact
+guarded range `0x8001DA48..0x8001E004`. The earlier whole-capture
+`PSX-OVL-005` classifier therefore reported zero matches: the unrelated data
+word hid a pure control-flow-presence change in the emitted candidate.
+
+The generic correction classifies each compiled function over its exact range
+manifest instead of classifying the complete dirty capture. If any native
+identity is otherwise resident text and changes only the presence of control
+flow, `compile_overlays.py` atomically publishes an `unpromoted` sidecar. Cache
+scans on Windows and POSIX omit marked shards, and the loader rechecks the
+marker immediately before loading to close the publication race. Captures and
+compiled audit artifacts remain intact; only native authority is withheld.
+
+Two clean hidden-window OpenGL Mission 1 routes pass through retail state-0
+player movement. Their comparison has zero errors, identical startup/input
+hashes and checkpoint fingerprints, identical card hashes, and final player
+XYZ `(-5606,2036,7529)`. The repeat records 580 registered candidates,
+approximately 145.82 million compiled-overlay dispatches and 147.9 thousand
+interpreter fallbacks, with zero candidate/range overflow. The complete
+16,384-entry native ring contains no `0x8001DA48` call. Evidence:
+
+- `evidence/high-refresh-resident-range-gate-20260805-034046`
+- `evidence/high-refresh-resident-range-gate-repeat-20260805-035033`
+
+The exact rebuilt diagnostic executable SHA-256 is
+`59557D6D1640FFEE236504E5EBC16E5C12AFE1ADA2D1EC37A9834EDDB3E6C0BB`.
+Focused classifier, marker, serializer-bounds, capture-history and crash-ring
+tests pass 5/5. `git diff --check` passes. The ignored footprint is 17.43 GiB.
+No runtime/route process remains. Per the development workflow, the full suite,
+commit and push remain deferred until the candidate advances to qualification.
+
+The next implementation objective is the first presentation-only high-refresh
+candidate described in `HIGH_REFRESH_PASS1.md`: retail simulation and authored
+timing remain at 59.94 Hz while host presentation interpolates independently.
+
+Updated: 2026-08-05
+
+## 2026-08-04 shutdown handoff — current-hash overlay divergence isolated
+
+Work continues on `experiment/sf2-high-refresh-pass1` from source checkpoint
+`2eebc41`. Presentation interpolation has **not** started. The prerequisite is
+still to restore current-hash compiled-overlay execution without changing the
+accepted retail route.
+
+The current `cg9_82e77d3e_gcd6e97ca6` cache is valid and active. A clean hidden
+OpenGL run registered 443 candidates across 12 runtime regions and reached
+approximately 145.6 million compiled-overlay dispatches with approximately
+97.8 thousand interpreter fallbacks, zero invalidations, zero stale blocks,
+and zero candidate overflow. It nevertheless exits deterministically at guest
+frame 24003 while the route is scheduling the state-8 briefing exit. The same
+route passes with all overlay execution interpreted, so current-hash native
+execution remains the owner class, but the final native call is not the root
+cause by itself.
+
+Three bounded controls are now recorded:
+
+1. All-interpreter execution passes state-0 movement.
+2. Blocking only `0x8000293C` still exits at frame 24003 and moves the final
+   unreturned owner to sibling entry `0x80002954`.
+3. Blocking all captured entries into the shared OpenBIOS RAM exception body
+   `0x80002814..0x800029CC` still exits at frame 24003. It leaves no native call
+   in progress, retains approximately 142.9 million native calls, and records
+   approximately 9.1 million blocked/fallback opportunities.
+
+Therefore a final-call blocklist is contradicted. Resume with bounded
+`PSX_NATIVE_RANK_LIMIT` bisection to find the earliest candidate-set boundary
+that changes the semantic result, then use an exact candidate control and fix
+the owning generic invariant. Initial conservative bounds are `[0, 449]`; the
+first clean control should use limit `224`. Do not retain an SF2 blocklist as
+containment.
+
+Generic diagnostics now expose the always-on native call ring in ordinary
+atexit/crash reports. The additive capture loader unions current, directory,
+and legacy-single-file evidence. The runtime also migrates a legacy
+`overlay_captures.json.d` file into an immutable directory contribution while
+retaining a recoverable sibling. Focused tests pass. Full details, exact local
+evidence paths, rejected hypotheses, build identities, and resume commands are
+in `HIGH_REFRESH_PASS1.md`.
+
+The historical accepted PGXP executable hash remains documentation evidence,
+but that ignored binary was accidentally rebuilt during diagnostic source-sync
+work. It has been reconstructed from exact source checkpoint `2eebc41` and the
+unchanged accepted config (whose hash still matches), but the non-reproducible
+Windows link now hashes to
+`DE284A5BBBF7C783CC68A90C97937CF8BB9B1AD6B780581178B83E51794C95F2`.
+The frozen source branch and accepted configuration remain intact. All further
+diagnostics use the separate `build-high-refresh-pass1-diag` tree.
+
+Updated: 2026-08-04
+
 ## 2026-08-04 accepted PGXP pass-1 checkpoint
 
 Human Mission 1 testing accepts PGXP pass 1 on top of the accepted native-wide
@@ -530,3 +733,28 @@ projection to that dense world-submission boundary and extends the bounded
 census with list ordinal/root evidence. This directly mirrors the verified
 hybrid ownership rule without copying an address or classifying individual
 triangles by reused coordinate values.
+
+## 2026-08-05 — transform-snapshot high-refresh R3 awaiting visual verdict
+
+The SF1-style semantic transform path now retains authentic pre-world render
+state and replays renderer-native geometry without advancing retail execution.
+Exact GTE transform provenance, mutual object-space group matching, camera-cut
+rejection, immutable raw-texture capture, atomic whole-primitive projection,
+and separate Y=0/Y=240 display-page snapshots are implemented. HUD, FMV,
+briefing, fades, fullscreen effects, ambiguous groups, and unsafe projections
+fail closed to the accepted current frame.
+
+The latest automated Mission 1 route passed with guest VBlank 60.98 Hz, retail
+world updates 18.99 Hz, and actual swaps 60.48 Hz. Both page slots were valid,
+alpha=1 reconstruction was pixel-exact 2/2 with zero differing pixels, 408/408
+eligible midpoint vertices moved, 320 repeated midpoint vertices agreed, and
+there were zero seam mismatches, render failures, or overflows. Evidence is
+ignored under `evidence/high-refresh-transform-twopage-fix-20260805-132105`.
+
+An earlier single-snapshot output produced major white flashes despite passing
+cadence and endpoint gates. It is rejected. Root causes were partial-primitive
+projection and failure to retain independent snapshots for SF2's vertically
+stacked double-buffer pages. The corrected human-test shortcut is
+`Launch SF2 Transform High Refresh R3.bat`; qualification remains blocked on
+the user's visual verdict, especially flashes, texture seams, perceived speed,
+HUD stability, and motion smoothness.
