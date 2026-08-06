@@ -40,6 +40,11 @@ It is title-neutral, fixes the reachable `PSX-DIAG-001` crash-path OOB, and is
 already separated in `17e9bba`. Opening a PR still requires explicit user
 authorization under the community contribution policy.
 
+Final alpha qualification adds no further upstream source patch. The generic
+release-process lesson is recorded in the shared corpus as `PSX-VAL-005`: a
+late deterministic route that watches authored startup cannot qualify the
+separately reachable rapid-skip transition path.
+
 ## Known upstream-relevant test debt
 
 `tools/test_compile_overlays_additive.py` contains 8 tests that reference APIs

@@ -9,6 +9,36 @@
 > and referenced by the older `## R1 verdict` / `## R2 remaining target`
 > sections near the end of this file.
 
+## 2026-08-06 — v0.1.0-alpha qualified and authorized for publication
+
+The user accepted the final playable R4 candidate. Its executable is
+`build-playable-r4-candidate/SCUS94451_Recompiled.exe`, SHA-256
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`.
+The release profile preserves the accepted native-wide/PGXP/mouse path,
+restores the accepted keyboard bindings, disables overlay autocompilation and
+native-rank promotion, and contains no rejected high-refresh code.
+
+The release repository is an owned-input kit, not a redistributed game build.
+Its clean-room `SETUP.ps1` run extracted the verified SCUS-94451 executable,
+regenerated the MIT OpenBIOS backend, rebuilt from pinned framework source, and
+produced executable SHA-256
+`C8118D3ECF87637394295C5A42B6435436A048CC8278033F48163C5CC70F8038`.
+That exact executable passed the compressed startup route with repeated START
+skips, immediate briefing exit, retail player ownership, and observed movement
+(`BriefingFrame=23073`, `LeaveFrame=23089`, `PlayerFrame=24487`,
+`MoveFrame=25905`). The redistributable kit is
+`syphon-filter-2-recompiled-kit-windows-x64.zip`, SHA-256
+`57452CD322CCA0C0D19BAFC0B4C51D40EB1162444E15C51963AC8635224798FD`.
+
+Framework qualification is 54/54 passing, including the behavioral
+`overlay_dump_bounds` regression for the crash-path serializer fix. True 60
+FPS is closed as unattainable at this pure recompilation boundary without at
+least partial matching decompilation or an equivalent complete semantic
+world-state/render-at-will interface. Remaining work is public playthrough
+coverage, not another renderer-only interpolation experiment.
+
+Updated: 2026-08-06
+
 ## 2026-08-06 — public alpha repository prepared; publication pending review
 
 A clean-history game repository has been prepared locally at

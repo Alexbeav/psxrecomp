@@ -1900,3 +1900,52 @@ and explicitly says high refresh is rejected and absent. Media must be uploaded
 outside Git. No GitHub repository, release, or Reddit post has been created;
 those external actions wait for user review and capture of the short video and
 four to six screenshots.
+
+### 2026-08-06 — final playable and clean-room release qualification
+
+The earlier `DE284A...` handoff was withdrawn after the user reproduced an
+immediate mission-load crash when rapidly skipping the startup sequence. That
+failure was not evidence against OpenBIOS: the launcher already used OpenBIOS,
+and the captured terminal state was a guest PC=0 in an old reconstructed
+binary. The route had also hidden the reachable path by watching every movie
+and delaying its briefing exit.
+
+The Mission 1 route now supports repeated startup START presses and an explicit
+briefing-exit delay. Its menu input was moved two frames later after the first
+compressed run exposed a sampling-boundary race. The freshly rebuilt playable
+R4 executable is
+`A9D2F393C9301F0D786F04AB63CF16073F1276766EF464681A9FB54646209D10`.
+An automated full-startup route passed through the briefing, player ownership,
+and movement; the user then confirmed the same candidate loads and that the
+restored `keybinds.ini` controls work.
+
+The public repository was converted from a prebuilt-binary package to a
+legally clean owned-input setup kit. CI builds the pinned redistributable
+PSXRecomp tooling only. `SETUP.ps1` takes the user's SCUS-94451 Disc 1 CUE,
+checks the retail executable hash, regenerates the MIT OpenBIOS and game
+backends, and performs the native build locally. The kit archive audit and all
+five public-policy tests pass.
+
+Clean-room qualification used the packaged kit from a new directory. It built
+`SyphonFilter2Recompiled.exe` with SHA-256
+`C8118D3ECF87637394295C5A42B6435436A048CC8278033F48163C5CC70F8038`.
+That exact output passed the compressed startup route:
+
+- title frame 18318;
+- briefing frame 23073;
+- briefing exit frame 23089;
+- retail player ownership frame 24487;
+- movement frame 25905; and
+- final player XYZ `(-5606,2036,7529)`.
+
+The framework release build and complete registered suite pass 54/54,
+including `overlay_dump_bounds`, the behavioral regression required by
+`PSX-DIAG-001`/`PSX-TEST-001`. The final redistributable owned-input kit is
+`syphon-filter-2-recompiled-kit-windows-x64.zip`, SHA-256
+`57452CD322CCA0C0D19BAFC0B4C51D40EB1162444E15C51963AC8635224798FD`.
+
+This closes development of renderer-only high refresh. R1/R2/R3 are retained
+as negative results; no rejected interpolation implementation ships. Correct
+60 FPS requires partial matching decompilation or an equivalent authoritative
+semantic snapshot/render-at-will interface. Remaining alpha work is campaign
+playthrough coverage and issue triage from public testers.

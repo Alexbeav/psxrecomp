@@ -266,7 +266,12 @@ def oldest_sector_entry(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return min(entries, key=lambda item: (item["frame"], item["seq"]))
 
 
-def run(client: DebugClient, timeout: float) -> dict[str, Any]:
+def run(
+    client: DebugClient,
+    timeout: float,
+    briefing_exit_delay: int | None = None,
+    fast_skip_startup: bool = False,
+) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "schema": 1,
         "movie_lbas": STARTUP_MOVIE_LBAS,
@@ -276,27 +281,6 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     }
     start_time = time.monotonic()
     enhanced = bool(client.call("mouse_camera_stats")["enabled"])
-
-    # Latch every movie when its first payload sector appears; the ring cannot
-    # retain the early logos throughout the full ZINTRO duration.
-    while len(evidence["startup_seen"]) != len(STARTUP_MOVIE_LBAS):
-        if time.monotonic() - start_time > timeout:
-            raise TimeoutError(f"startup sequence incomplete: {evidence['startup_seen']}")
-        for name, lba in STARTUP_MOVIE_LBAS.items():
-            if name in evidence["startup_seen"]:
-                continue
-            # The endpoint returns newest-first.  Request enough matching
-            # entries to cover a polling interval, then retain the oldest one;
-            # count=1 makes the recorded "first" frame depend on host polling
-            # timing during a contiguous movie-sector burst.
-            result = client.call("cdrom_sector_history", count=64, lba=hex(lba))
-            if result["entries"]:
-                entry = oldest_sector_entry(result["entries"])
-                evidence["startup_seen"][name] = {
-                    "frame": entry["frame"],
-                    "lba": entry["lba"],
-                }
-        time.sleep(0.5)
 
     def title_ready() -> dict[str, Any] | None:
         app = app_state(client)
@@ -318,6 +302,38 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
             return {"frame": client.frame(), "app": app, "gpu": gpu, "pad": pad}
         return None
 
+    # Latch every movie when its first payload sector appears; the ring cannot
+    # retain the early logos throughout the full ZINTRO duration.
+    if fast_skip_startup:
+        while not (ready := title_ready()):
+            if time.monotonic() - start_time > timeout:
+                raise TimeoutError("fast-skip startup did not reach stable TITLE")
+            client.call("press", buttons=0xFFF7, frames=2)  # Retail START.
+            wait_guest_frames(client, 60, 30)
+        evidence["startup_seen"]["TITLE.STR"] = {
+            "frame": ready["frame"],
+            "lba": None,
+        }
+    else:
+        while len(evidence["startup_seen"]) != len(STARTUP_MOVIE_LBAS):
+            if time.monotonic() - start_time > timeout:
+                raise TimeoutError(f"startup sequence incomplete: {evidence['startup_seen']}")
+            for name, lba in STARTUP_MOVIE_LBAS.items():
+                if name in evidence["startup_seen"]:
+                    continue
+                # The endpoint returns newest-first.  Request enough matching
+                # entries to cover a polling interval, then retain the oldest one;
+                # count=1 makes the recorded "first" frame depend on host polling
+                # timing during a contiguous movie-sector burst.
+                result = client.call("cdrom_sector_history", count=64, lba=hex(lba))
+                if result["entries"]:
+                    entry = oldest_sector_entry(result["entries"])
+                    evidence["startup_seen"][name] = {
+                        "frame": entry["frame"],
+                        "lba": entry["lba"],
+                    }
+            time.sleep(0.5)
+
     ready = wait_for(client, "compound stable retail TITLE", title_ready, timeout)
     ready_frame = ready["frame"]
     wait_guest_frames(client, 60, 60)
@@ -331,6 +347,12 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
     schedule = deterministic_route_schedule(
         evidence["startup_seen"]["TITLE.STR"]["frame"]
     )
+    if fast_skip_startup:
+        # Leave enough room for the request/response round trip itself. Two
+        # frames can elapse between frame() and scheduled_press() on a fast
+        # host, turning the diagnostic into a harness-only rejection.
+        schedule["new_game"] = client.frame() + 60
+        schedule["one_player"] = schedule["new_game"] + 120
     evidence["input_schedule"].append(
         scheduled_press(client, 0xBFFF, schedule["new_game"])
     )
@@ -372,9 +394,12 @@ def run(client: DebugClient, timeout: float) -> dict[str, Any]:
 
     wait_for(client, "retail Mission 1 state-8 briefing", briefing, timeout)
     evidence["checkpoints"].append(checkpoint(client, "mission1_state8"))
-    schedule["leave_briefing"] = semantic_future_frame(
-        schedule["leave_briefing"], client.frame()
-    )
+    if briefing_exit_delay is None:
+        schedule["leave_briefing"] = semantic_future_frame(
+            schedule["leave_briefing"], client.frame()
+        )
+    else:
+        schedule["leave_briefing"] = client.frame() + max(2, briefing_exit_delay)
     evidence["input_schedule"].append(
         scheduled_press(client, 0xBFFF, schedule["leave_briefing"])
     )
@@ -510,10 +535,28 @@ def main() -> int:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=1200.0)
+    parser.add_argument(
+        "--briefing-exit-delay",
+        type=int,
+        help=(
+            "leave the briefing this many guest frames after observing it; "
+            "used to reproduce immediate manual briefing exits"
+        ),
+    )
+    parser.add_argument(
+        "--fast-skip-startup",
+        action="store_true",
+        help="press START repeatedly through startup movies before the route",
+    )
     args = parser.parse_args()
     client = DebugClient(args.port)
     wait_for_endpoint(client)
-    evidence = run(client, args.timeout)
+    evidence = run(
+        client,
+        args.timeout,
+        args.briefing_exit_delay,
+        args.fast_skip_startup,
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(f"SF2 Mission 1 retail route: PASS ({args.out})")

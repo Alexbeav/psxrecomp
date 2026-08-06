@@ -575,3 +575,17 @@ configuration was rebuilt.
 
 The milestone is closed. Resume high-refresh work only after a matching decomp
 or another complete semantic camera/object/bone snapshot boundary exists.
+
+## 2026-08-06 — final release disposition
+
+The user accepted the separately rebuilt playable R4 candidate after verifying
+mission entry and the restored controls. A clean-room build made from the
+public owned-input kit then passed repeated startup skips, immediate briefing
+exit, player ownership, and movement. None of the R1/R2/R3 interpolation paths
+ship in `v0.1.0-alpha`.
+
+This milestone is permanently parked for the pure recomp project. Correct high
+refresh needs pre-projection semantic snapshots and a render-at-will boundary;
+partial matching decompilation is the credible way to obtain them. Host swap
+rate, endpoint hashes, sparse GTE provenance, and retained GP0 replay are not
+substitutes for that ownership.
