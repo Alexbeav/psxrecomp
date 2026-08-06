@@ -29,10 +29,15 @@ Read these files completely at the start of each Codex session:
 5. `docs/sf2/REFERENCE_MAP.md`
 6. `docs/sf2/MODERNIZATION_PASS1.md` when present on the active branch
 7. `docs/sf2/MODERNIZATION_PASS2.md` when present on the active branch
-8. `lab/sf2/reference-manifest.toml`
-9. `CLAUDE.md`
-10. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
-11. `docs/DEVELOPMENT_VALIDATION_WORKFLOW.md`
+8. The active milestone's handoff document when present on the active branch
+   (`docs/sf2/PGXP_PASS1.md`, `docs/sf2/HIGH_REFRESH_PASS1.md`, or the
+   equivalent named in `CURRENT_OBJECTIVE.md`)
+9. The newest sections of the current devlog under `docs/sf2/devlogs/` — it is
+   the most detailed record and may be ahead of the state documents
+10. `lab/sf2/reference-manifest.toml`
+11. `CLAUDE.md`
+12. `I:\Projects\PSX-References\COMMUNITY_CONTRIBUTION_POLICY.md`
+13. `docs/DEVELOPMENT_VALIDATION_WORKFLOW.md`
 
 `CLAUDE.md` is inherited upstream context. Preserve its hardware-faithfulness,
 no-stubs, no-generated-code-edits, evidence, and bounded-diagnostics rules.
@@ -172,6 +177,8 @@ The verified baseline is 50/50 passing tests. The CLI package is ignored under
 - When the lab produces a generic fix, test, tool, or verified documentation
   correction useful to PSXRecomp or another reference project, follow the
   community contribution policy and prepare an upstream-ready contribution.
+  Record it as a row in `docs/internal/upstream/OUTBOUND.md` in the same
+  session the fix lands, and keep that table's submission statuses current.
 
 
 ## Mandatory corpus check (added 2026-08-05)

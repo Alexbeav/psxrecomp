@@ -1,5 +1,48 @@
 # Current objective — high-refresh presentation after accepted PGXP pass 1
 
+> **Convention:** this file is newest-first. The first dated section below is
+> the live state; later sections are history and may contain superseded "next
+> objective" statements that are intentionally preserved un-rewritten.
+> **Naming:** high-refresh candidates R1/R2/R3 in the 2026-08-05 sections are
+> presentation candidates on `experiment/sf2-high-refresh-pass1`. They are
+> unrelated to the feasibility rounds R0–R4 defined in `FEASIBILITY_PLAN.md`
+> and referenced by the older `## R1 verdict` / `## R2 remaining target`
+> sections near the end of this file.
+
+## 2026-08-05 — transform-snapshot high-refresh R3 awaiting visual verdict
+
+The SF1-style semantic transform path now retains authentic pre-world render
+state and replays renderer-native geometry without advancing retail execution.
+Exact GTE transform provenance, mutual object-space group matching, camera-cut
+rejection, immutable raw-texture capture, atomic whole-primitive projection,
+and separate Y=0/Y=240 display-page snapshots are implemented. HUD, FMV,
+briefing, fades, fullscreen effects, ambiguous groups, and unsafe projections
+fail closed to the accepted current frame.
+
+The latest automated Mission 1 route passed with guest VBlank 60.98 Hz, retail
+world updates 18.99 Hz, and actual swaps 60.48 Hz. Both page slots were valid,
+alpha=1 reconstruction was pixel-exact 2/2 with zero differing pixels, 408/408
+eligible midpoint vertices moved, 320 repeated midpoint vertices agreed, and
+there were zero seam mismatches, render failures, or overflows. Evidence is
+ignored under `evidence/high-refresh-transform-twopage-fix-20260805-132105`.
+
+An earlier single-snapshot output produced major white flashes despite passing
+cadence and endpoint gates. It is rejected. Root causes were partial-primitive
+projection and failure to retain independent snapshots for SF2's vertically
+stacked double-buffer pages. The corrected human-test shortcut is
+`lab/sf2/local/generated-disc1-r2-load-delay/Launch SF2 Transform High Refresh
+R3.bat`; qualification remains blocked on the user's visual verdict, especially
+flashes, texture seams, perceived speed, HUD stability, and motion smoothness.
+
+Known handoff caveats recorded 2026-08-06: HUD/FMV exclusion is implicit (no
+GTE provenance means no reprojection) rather than an explicit predicate, so
+geometry submitted in a separate linked list after the captured world list
+would be absent from replayed frames — verify HUD completeness during the
+visual test. The unconditional world-census begin call was gated behind the
+PGXP enable after the handoff build; qualification must rebuild from source.
+
+Updated: 2026-08-06
+
 ## 2026-08-05 user result — spatial R2 rejected and reverted
 
 The user rejected spatial R2. Gameplay did not maintain steady speed and could
@@ -300,6 +343,10 @@ three bounded overlay falsification attempts, and test command.
 
 ## Objective
 
+*SUPERSEDED 2026-08-04 — this was the modernization pass-2 objective. It was
+completed and accepted; the live objective is the newest dated section at the
+top of this file.*
+
 Preserve compatibility checkpoint `2009297` on
 `experiment/sf2-recomp-feasibility` and the accepted pass-1 checkpoint
 `5b64d86` while implementing the explicitly authorized production-quality
@@ -483,8 +530,11 @@ must not obstruct either follow-up.
 
 ## Verified state
 
+*Historical (feasibility/pass-1 era). The active branch is
+`experiment/sf2-high-refresh-pass1`; see the top of this file.*
+
 - Compatibility branch: `experiment/sf2-recomp-feasibility` at `2009297`
-- Active opt-in branch: `experiment/sf2-modernization-pass1`
+- Active opt-in branch at the time of writing: `experiment/sf2-modernization-pass1`
 - Scaffold commit: `83e0d70`
 - PSXRecomp baseline: `0cfa9fe0a8da944e9f694a24361b4973c57131ea`
 - R0 passes: two corrected-package generations contain 992 identical
@@ -652,6 +702,9 @@ must not obstruct either follow-up.
 
 ## Next execution sequence
 
+*SUPERSEDED — feasibility-era plan retained for history. The live next step is
+the R3 visual verdict at the top of this file.*
+
 1. Perform the short user-visible OpenGL acceptance check on the retained r8
    build: complete startup, clean FMV bands, and Mission 1 control. This is
    presentation confirmation, not a substitute for the completed headless
@@ -664,6 +717,9 @@ must not obstruct either follow-up.
    review only with explicit user authorization.
 
 ## R2 remaining target
+
+*SUPERSEDED — "R2" here is feasibility round 2 (`FEASIBILITY_PLAN.md`), not the
+rejected high-refresh spatial R2. Retained for history.*
 
 - R2's reproducible Mission 1 route is closed.
 - The remaining feasibility-plan target is the representative Mission 3 route
@@ -734,27 +790,5 @@ census with list ordinal/root evidence. This directly mirrors the verified
 hybrid ownership rule without copying an address or classifying individual
 triangles by reused coordinate values.
 
-## 2026-08-05 — transform-snapshot high-refresh R3 awaiting visual verdict
-
-The SF1-style semantic transform path now retains authentic pre-world render
-state and replays renderer-native geometry without advancing retail execution.
-Exact GTE transform provenance, mutual object-space group matching, camera-cut
-rejection, immutable raw-texture capture, atomic whole-primitive projection,
-and separate Y=0/Y=240 display-page snapshots are implemented. HUD, FMV,
-briefing, fades, fullscreen effects, ambiguous groups, and unsafe projections
-fail closed to the accepted current frame.
-
-The latest automated Mission 1 route passed with guest VBlank 60.98 Hz, retail
-world updates 18.99 Hz, and actual swaps 60.48 Hz. Both page slots were valid,
-alpha=1 reconstruction was pixel-exact 2/2 with zero differing pixels, 408/408
-eligible midpoint vertices moved, 320 repeated midpoint vertices agreed, and
-there were zero seam mismatches, render failures, or overflows. Evidence is
-ignored under `evidence/high-refresh-transform-twopage-fix-20260805-132105`.
-
-An earlier single-snapshot output produced major white flashes despite passing
-cadence and endpoint gates. It is rejected. Root causes were partial-primitive
-projection and failure to retain independent snapshots for SF2's vertically
-stacked double-buffer pages. The corrected human-test shortcut is
-`Launch SF2 Transform High Refresh R3.bat`; qualification remains blocked on
-the user's visual verdict, especially flashes, texture seams, perceived speed,
-HUD stability, and motion smoothness.
+*The transform-snapshot R3 section formerly appended here was moved to the top
+of this file on 2026-08-06 so the newest-first convention holds.*

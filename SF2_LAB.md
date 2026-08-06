@@ -1,25 +1,27 @@
-# Syphon Filter 2 recompilation feasibility lab
+# Syphon Filter 2 recompilation and modernization lab
 
-This branch is an isolated, noncommercial experiment built on PSXRecomp. It
+This repository is an isolated, noncommercial project built on PSXRecomp. It
 does not replace the working SF2 hybrid port and it is not the SF2 modern
 presentation stream.
 
 ## Purpose
 
-Determine, with reproducible evidence, how much of *Syphon Filter 2* can be
-handled by PSXRecomp's ahead-of-time executable translation, native overlay
-cache, and interpreter fallback. Compare the result with the already playable
-hybrid runtime before deciding whether to build a clean reusable porting
-harness around the approach.
-
-The experiment is successful if it answers the architectural question. It does
-not need to reproduce the entire campaign.
+The original feasibility question is answered: PSXRecomp's ahead-of-time
+executable translation, native overlay cache, and interpreter fallback bring
+the full retail game up accurately (see `docs/sf2/FEASIBILITY_PLAN.md` and the
+R1/R2 verdicts in `docs/sf2/CURRENT_OBJECTIVE.md`). The lab now preserves that
+compatibility result as a frozen differential baseline and continues
+production-quality PC modernization — widescreen, direct mouse input, PGXP,
+high-refresh presentation — on isolated milestone branches with separately
+named builds. Modernization enhances authentic retail execution; it never
+replaces retail gameplay, progression, timing, or authored behavior.
 
 ## Repository identity
 
 | Field | Value |
 |---|---|
-| Branch | `experiment/sf2-recomp-feasibility` |
+| Frozen compatibility branch | `experiment/sf2-recomp-feasibility` (checkpoint `2009297`) |
+| Active milestone branch | named in `docs/sf2/CURRENT_OBJECTIVE.md` (do not hardcode it here) |
 | PSXRecomp baseline | `0cfa9fe0a8da944e9f694a24361b4973c57131ea` |
 | Upstream remote | `https://github.com/mstan/psxrecomp.git` |
 | License | PolyForm Noncommercial 1.0.0 |
@@ -34,19 +36,25 @@ licensed project after an explicit provenance review.
 
 ## Start here
 
-1. Read [`docs/sf2/FEASIBILITY_PLAN.md`](docs/sf2/FEASIBILITY_PLAN.md).
-2. Read [`docs/sf2/REFERENCE_MAP.md`](docs/sf2/REFERENCE_MAP.md).
-3. Use [`lab/sf2/reference-manifest.toml`](lab/sf2/reference-manifest.toml) as
+1. Read [`docs/sf2/CURRENT_OBJECTIVE.md`](docs/sf2/CURRENT_OBJECTIVE.md) —
+   the live state document (newest entry first) naming the active branch,
+   accepted checkpoints, and pending candidate.
+2. Read [`docs/sf2/FEASIBILITY_PLAN.md`](docs/sf2/FEASIBILITY_PLAN.md).
+3. Read [`docs/sf2/REFERENCE_MAP.md`](docs/sf2/REFERENCE_MAP.md).
+4. Use [`lab/sf2/reference-manifest.toml`](lab/sf2/reference-manifest.toml) as
    the immutable identity record for the supported retail executable.
-4. Keep discs, BIOS files, generated code, captures, and private notes beneath
+5. Keep discs, BIOS files, generated code, captures, and private notes beneath
    `lab/sf2/local/`, which is ignored by Git.
-5. Record every comparison using
+6. Record every comparison using
    [`docs/sf2/COMPARISON_PROTOCOL.md`](docs/sf2/COMPARISON_PROTOCOL.md).
 
 ## Non-goals
 
 - Do not fix outstanding SF2 gameplay bugs here.
-- Do not add modern camera, widescreen, PGXP, interpolation, or texture work.
+- Do not fold modernization into the frozen compatibility baseline. Widescreen,
+  direct mouse, PGXP, and high-refresh work are authorized, but only on an
+  isolated milestone branch with a separately named build, per
+  `AGENTS.md` and `docs/sf2/CURRENT_OBJECTIVE.md`.
 - Do not copy implementation code from `sf-pc-port` into this repository.
 - Do not copy PSXRecomp code into the MIT-licensed Syphon Filter repository.
 - Do not commit generated retail code, disc sectors, executable bytes, BIOS

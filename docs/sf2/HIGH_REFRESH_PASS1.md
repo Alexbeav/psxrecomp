@@ -1,6 +1,9 @@
 # High-refresh pass 1 — shutdown/resume handoff
 
-Date: 2026-08-04
+Started: 2026-08-04. Last updated: 2026-08-06. This file is chronological —
+newest sections are appended at the end. Current status: the transform-snapshot
+R3 candidate (final section) is awaiting the user's visual verdict; see
+`CURRENT_OBJECTIVE.md` for the live state.
 
 ## Objective and current gate
 
@@ -126,6 +129,9 @@ route.
   supplies useful atexit evidence.
 
 ## Exact resume point
+
+*SUPERSEDED — this seven-step plan was completed on 2026-08-05; see the
+"native prerequisite closure" section below. Retained for history.*
 
 1. Re-read the required session documents and confirm the branch/worktree.
 2. Do not query port `1994x` from a second client while
@@ -425,3 +431,34 @@ owned by one wall-clock scheduler or otherwise prove that display swaps cannot
 advance/perturb guest time. Required gates are independent display FPS and guest
 logic FPS meters, one-second guest frame/timer/movement invariance, exact shared-
 edge equality after reprojection, and explicit camera-cut/HUD/FMV/fade exclusion.
+
+## 2026-08-05 — transform-snapshot R3 implemented and handed off
+
+The successor described above is implemented as the R3 candidate. RTPS/RTPT
+now record the input vertex with complete RT/TR/H/OFX/OFY state and a
+transform hash; the world census groups primitives by transform at the dense
+linked-list boundary with mutual-best matching and camera-cut snapping; the GL
+renderer keeps two page-keyed snapshots (Y=0 / Y=240) with frozen raw-texture
+atlases and replays whole primitives from interpolated group transforms.
+Capture, output, and parity probes are separately env-gated
+(`PSX_GL_TRANSFORM_REPLAY` / `_OUTPUT` / `_PARITY`) and fail closed to the
+authentic current frame.
+
+An earlier single-snapshot build produced white flashes and was rejected
+before handoff; the corrected two-page build passed the automated Mission 1
+route (guest 60.98 Hz, world 18.99 Hz, swaps 60.48 Hz, alpha=1 pixel-exact,
+zero seam mismatches). Full detail, including the exact executable hash, is in
+the devlog section "2026-08-05 — transform snapshots, flash rejection, and R3
+handoff". The user shortcut is
+`lab/sf2/local/generated-disc1-r2-load-delay/Launch SF2 Transform High Refresh
+R3.bat`. Qualification is blocked on the user's visual verdict.
+
+Post-handoff source corrections recorded 2026-08-06: the world-census begin
+call is now gated on the PGXP enable (it previously cleared census state on
+every linked-list submission even with the feature off), so qualification must
+rebuild from source. Known caveat for the visual test: HUD/FMV exclusion is
+implicit (no GTE provenance, no reprojection); geometry submitted in a later
+separate linked list would be absent from replayed frames, so HUD completeness
+needs explicit visual confirmation. The R3 implementation is intentionally the
+only uncommitted work on the branch; the prerequisite classifier/serializer
+work and this documentation are committed separately.

@@ -1564,3 +1564,47 @@ overflows. The executable SHA-256 is
 `8494883760FCA00AA3876643697C946961B564A9ADC7FC764A02E2991CAE9EE8`.
 The isolated handoff is `Launch SF2 Transform High Refresh R3.bat` with
 separate R3 cards. Stop for the user's visual verdict before qualification.
+
+## 2026-08-06 — repair pass: durability, gating, and reciprocity
+
+A project-state review found the R1/R2/R3 arc healthy on evidence discipline
+but weak on persistence and reciprocity. Repairs applied this session:
+
+- Gated `pgxp_world_census_begin()` on the PGXP enable
+  (`runtime/src/gpu.c`). It previously memset ~436 KB of census state on
+  every linked-list submission even with PGXP and all transform env gates
+  off, perturbing the accepted baseline. Syntax-verified with the MinGW
+  toolchain; the R3 handoff binary predates this fix, so qualification must
+  rebuild from source.
+- Split the four-day uncommitted worktree. Commit `17e9bba` carries the
+  validated prerequisite work (per-function resident-patch classifier and
+  `unpromoted` sidecar, additive capture-history union and legacy migration,
+  transactional crash/atexit serializers, native overlay ring exposure,
+  oldest-entry sector-history selection, five focused CTests plus route and
+  additive regressions). Commit `11e949f` snapshots the session docs,
+  including the previously untracked `HIGH_REFRESH_PASS1.md`. Only the R3
+  transform-snapshot implementation remains uncommitted, pending the user's
+  visual verdict.
+- Focused validation before the commits: the five overlay CTests pass 5/5,
+  the route schedule regression passes, and the three additive-history unit
+  tests pass. Newly diagnosed debt: 8 further tests in
+  `tools/test_compile_overlays_additive.py` reference APIs removed by the
+  interpreter-hotpath integration (`cached_bundle_pairs`, old
+  `load_region_coverage` signature) and error as a module; the module is not
+  CTest-registered, so the 50/50 suite never ran it. Recorded in
+  `docs/internal/upstream/OUTBOUND.md`; the two recompiler files whose only
+  change was line endings were restored untouched.
+- Created `docs/internal/upstream/OUTBOUND.md`: nine generic fixes inventoried
+  with submission status. Upstream PR #93 (dependent load delays) checked via
+  GitHub today: open, unmerged, no review decision. Items 2–8 are ready and
+  unsubmitted; submission awaits explicit user authorization.
+- Documentation pass: `SF2_LAB.md` rewritten from feasibility-era identity to
+  the modernization mission (its non-goals list contradicted every accepted
+  milestone); `CURRENT_OBJECTIVE.md` gained a newest-first convention note,
+  the R3 section moved from the bottom to the top with the full launcher
+  path and the implicit-HUD-exclusion caveat, and superseded sections are
+  now marked; `HIGH_REFRESH_PASS1.md` gained a status header and the R3
+  handoff section; `AGENTS.md` required reading now includes the active
+  milestone handoff document and the devlog.
+- Ignored footprint measured at 18.82 GiB of the 20 GiB ceiling; pruning is
+  deferred to an explicit user decision before the next capture campaign.
