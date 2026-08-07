@@ -101,6 +101,9 @@ int  psx_netplay_rb_fmv_episode_unsafe(uint32_t tick);
 int  psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc);
 /* §97: apply RB_KF state blob (or host finish). Returns 1 if handled. */
 int  psx_netplay_rb_media_kf_on_ready(const void *data, size_t size);
+/* §100: 1 while a MEDIA-KF episode is waiting on probe/transfer/pin (sim
+ * stalled — present should hold-last so the intro FMV does not freeze). */
+int  psx_netplay_rb_media_kf_busy(void);
 
 /* Mid-guest resim pump: abort if Replay has made no finish_frame progress.
  * Full rb_pump stays admit/present-edge only (host-asymmetric). */

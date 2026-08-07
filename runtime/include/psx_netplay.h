@@ -52,7 +52,7 @@ typedef struct PsxNetplayConfig {
     int         input_delay;
     /* Rollback invent runway (phase_lock / P). Clamped 2..16. Unused in delay-sync. */
     int         input_prediction;
-    int         force_input_relay; /* 1 = lobby UDP SFU star (online default) */
+    int         force_input_relay; /* 1 = lobby UDP SFU star (from launch) */
     int         force_turn;        /* 1 = ICE relay-only (Force TURN for UDP) */
     /* 0 = auto (MotK room → ICE, else LAN), 1 = force ICE, 2 = force LAN.
      * Env PSX_NET_TRANSPORT=lan|ice overrides. */
@@ -93,8 +93,10 @@ int  psx_netplay_start(const PsxNetplayConfig *cfg);
 void psx_netplay_shutdown(void);
 
 /*
- * Guest only: after savestate_configure + memcard_init, redirect .pst/.mcd
- * writes to saves/netplay/ so host sync never touches personal saves.
+ * After savestate_configure + memcard_init: refresh RB integrity keys from
+ * savestate (host + guest — start() ran before configure), then guest-only
+ * redirect .pst/.mcd writes to saves/netplay/ so host sync never touches
+ * personal saves.
  */
 void psx_netplay_bind_guest_saves(void);
 
@@ -247,6 +249,17 @@ void psx_netplay_on_rb_snap_loaded(void);
 /* §64: restart hc-fork persist/retry clocks after tip-extend abandon so a
  * second recovery episode cannot open on the same Live tick. */
 void psx_netplay_hc_fork_recovery_restart(void);
+/* §102: drop pending hc-fork bookkeeping (peer-ahead NACK already scheduled
+ * a light tip reopen — do not open a deep SPAN recovery). */
+void psx_netplay_hc_fork_recovery_clear(void);
+
+/* §93 P1 bisect: PSX_RB_CD_BISECT=1 (optional =LO-HI, default 150-250) logs
+ * per-tick CD/MDEC/clk crumbs + CD cmd ISSUE/QUEUE/DONE timeline (cdrom.c;
+ * includes stat/resp FIFO + GetTN tracks / GetTD td_lba).
+ * Arm N more ticks after a media flush_resume. */
+void psx_netplay_cd_bisect_arm(uint32_t from_sim, uint32_t ticks);
+/* 1 when CD bisect env is on and sim is in the fixed or post-media arm window. */
+int psx_netplay_cd_bisect_active(void);
 
 /* Netplay GPU lock: CPU-authoritative VRAM (software raster) so snaps/digests
  * are peer-identical. If OpenGL was requested, keep the GL context for

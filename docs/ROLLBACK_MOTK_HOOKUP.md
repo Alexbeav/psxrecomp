@@ -4586,3 +4586,219 @@ hardcoded present-1/4 skip (~67 ms+ between Swaps), not snap cost.
 **Re-soak watch:** during FMV media, `admit=` near ~0–2 ms/f (not 5–11),
 `D` stable (no mid-movie 6→7), `present_gap_p95` roughly half of §97,
 `rb snap tele` cadence ~interval 2, sim FPS closer to guest ceiling.
+
+---
+
+## 101. Zombie-load follow NACK (session-136 seal hang) (2026-08-06)
+
+**Symptoms (session 136 soak):** guest `begin epoch=33 load=3184` while host
+already had `agreed tip=3200` → host `follow REFUSED … zombie load` ×100 with
+**no NACK** → guest sat in `SealInputs` until `RB_SEAL_TIMEOUT_MS` (4s) →
+`episode ABORT` → hc-fork + ownership cascade; host FPS cliff `0.8` /
+`admit≈1241 ms`, present_gap max ~3–4 s.
+
+**Root cause:** §87 zombie-load / zombie-epoch refuse returned silently. Other
+refuse paths (past frontier, missing snap, FMV) already armed `follow NACK`.
+
+**What landed:**
+
+1. **NACK on zombie load / zombie epoch** — `follow_refuse_nack` arms the
+   same follow-NACK (frontier = `follower_frontier_hint` / agreed tip) so the
+   initiator aborts Seal in ~1 RTT instead of 4s.
+2. **Rate-limited refuse log** — one line per `(epoch, load)`, then
+   `+N similar` every 32; one NACK arm per unique refuse.
+3. **NACK peer-ahead fast path** — when NACK `frontier >= load`, set
+   `g_peer_nack_floor`, `apply_peer_resolved(frontier)`, abort Seal, and
+   **keep-live** when the snap was never applied (no demote-to-`load-1`
+   rewind of good Live).
+4. **Begin raise** — after `choose_load`, if `peer_resolved > load`, raise
+   to a mutual snap ≤ peer tip so we do not reopen a zombie load.
+
+**Re-soak watch:** no `seal timeout (peer missing snap / NACK lost)` after
+zombie refuse; expect `follow NACK … frontier=` then
+`NACK keep-live peer-ahead` / `begin raise load` within tens of ms, not a
+multi-second present hitch.
+
+---
+
+## 102. Peer-ahead NACK → one light tip (no ownership cascade) (2026-08-06)
+
+**Symptoms (session 140 after §101):** zombie refuse NACKed cleanly, but host
+still opened `hc-fork` → `begin load=6640 target=6660` → ownership hops
+32/40 → host **22 fps / replay 96%** / present_gap max ~531 ms.
+
+**Root cause:** keep-live left hc-fork recovery to open a deep SPAN; Replay
+ownership then chained to drain confirmed backlog.
+
+**What landed:**
+
+1. **Drain RESOLVED before `choose_load`** — avoid opening a zombie load when
+   the peer tip is already queued on the socket.
+2. **`psx_netplay_hc_fork_recovery_clear`** — peer-ahead NACK drops pending
+   hc-fork bookkeeping so it cannot open a SPAN recovery.
+3. **Immediate light tip reopen** — raise agreed to peer tip, arm
+   `g_peer_ahead_force_load`, `begin` with target capped to `load+4`, force
+   light-tip class.
+4. **No ownership chain** — `ownership_on_post_match` exits that episode to
+   Live (`peer-ahead light → Live`) instead of SPAN hops.
+
+**Re-soak watch:** after zombie NACK expect
+`peer-ahead light reopen` / `begin … light=1` / `peer-ahead light → Live`
+with **no** `ownership chain tip=` hops and no `hc-fork recovery begin` on
+that edge. Hitch should be a short light replay (depth ≤4), not a 96% window.
+
+---
+
+## 103. Past-frontier NACK deep demote → MEDIA-KF hang (2026-08-06)
+
+**Symptoms (session 142):** post-FMV host `begin epoch=16 load=816 light=1
+media_kf=0`; guest `follow REFUSED … past frontier=763` + NACK; host
+`NACK realign … demote=763 live_was=827` (dropped 63 snaps) →
+`FIRST CORE DIVERGE @764` → `begin … load=752 media_kf=1` (~3.7 MB transfer,
+`stall=rb_baseline`) → after KF tip=776 ownership hop
+`begin REFUSED … FMV lockstep` → tip-hold; host present_gap max ~3531 ms /
+~15 fps, guest ~7.4 fps.
+
+**Root cause:** past-frontier NACK treated a stale follower frontier like a
+shared rewind tip. Live demote across the FMV bout forked cores and forced a
+deep MEDIA-KF; re-armed settle then blocked the ownership catch-up hop.
+
+**What landed:**
+
+1. **Deep keep-live** — when snap was never applied and
+   `live − demote > RB_NACK_DEEP_REALIGN_MAX` (8): no Live realign; soft-demote
+   agreed to `load-1` only; clamp `peer_resolved` to the follower frontier.
+2. **Sticky peer gate** — `g_past_frontier_sticky` prevents GATE_MS force-open
+   from reopening above that frontier until the follower advertises RESOLVED.
+3. **Ownership through settle** — `begin` allows `g_ownership_chain` (and
+   active MEDIA_KF) through FMV lockstep so post-KF SPAN catch-up is not
+   tip-held.
+
+**Re-soak watch:** after `follow REFUSED … past frontier` expect
+`NACK keep-live deep frontier=…` (not `NACK realign … demote=` far below
+live); no immediate `MEDIA-KF transfer` / `stall=rb_baseline` from that edge;
+if a MEDIA-KF still completes, ownership should log `ownership chain tip=`
+hops rather than `ownership chain FAILED … tip-hold`.
+
+---
+
+## 104. Fight ownership tax + guest invent (session 144) (2026-08-06)
+
+**Symptoms (session 144 after §103):** no MEDIA-KF / deep demote / seal hang.
+Median 60 fps. Remaining cost was fight-phase: many short ownership
+`final`/`BUDGET` hops → replay windows 12–79% / present_gap max ~430 ms;
+guest invent ~5× host (`GAP1_LEGACY` case_b + `RUNWAY_EMPTY`); auto-delay
+`5→4` mid-fight; one ~3.1 s FMV present cliff (unchanged — not `present_div`).
+
+**What landed:**
+
+1. **Ownership floor tip+6** — `RB_OWNERSHIP_CHAIN_MIN_AHEAD` 4→6 so tip+4/+5
+   delay cushion exits Live instead of SPAN. Suppress after budget
+   24→48 ticks / 400→800 ms.
+2. **Gap1 micro-grace for relay-LAN** — `RB_GAP1_LAN_RTT_MAX_MS` 12→48 so
+   `force_input_relay` RTT≈21–45 ms arms grace; cap 6→12 ms. Healthy-lead
+   case_b also waits (not invent-now on tip cadence blips).
+3. **Runway grace** — `RB_INVENT_RUNWAY_GRACE_CAP_MS` 8→12.
+4. **Auto-delay lower floor** — never shrink below D=5 mid-match
+   (`RB_AUTO_DELAY_LOWER_FLOOR`); tighter lower bar (miss&lt;1‰ + lead≥3).
+   Force-TURN floor 6 unchanged.
+5. **PIN-SKEW log rate-limit** — one line per tick (cosmetic; no control change).
+
+**Left alone:** FMV `PSX_NET_FMV_PRESENT_DIV` default 2 (3.1 s cliff is a
+single media stall, not 1/N cadence); HC-silent promote stay fail-closed on
+digest proof; §101–103 NACK paths untouched.
+
+**Re-soak watch:** fewer `ownership chain tip=` / `BUDGET` lines during
+fight; guest `admit stats invent_gap1` closer to host; `gap1_grace` counts
+rise; no `delay committed 5 → 4`; replay% spikes under button traffic
+smaller (aim <30% windows, present_gap max <200 ms outside FMV).
+
+---
+
+## 105. Invent≠delay raise + gap1 wait for tip invent (session 149) (2026-08-06)
+
+**Symptoms (session 149 after §104):** felt regressive. Ownership begins
+dropped (good), but host invent exploded (`invent_gap1=2285`, all
+`remote_lead=-1` / case_b), `gap1_grace=0` (healthy-lead arm dead), lobby
+`D=4` then auto-delay `4→5→6→7` on invent-as-miss (`miss=993‰`,
+`late_n≈1`, `lead_avg≈-2`). Ended in FMV DESYNC MAX unmatched.
+
+**Root cause:** tip invent counted as auto-delay arrival miss → raising D
+added lag without stopping invent. §104 grace required `lead≥D-1`, which
+never holds on the invent path (`lead=-1`).
+
+**What landed:**
+
+1. **Undo invent miss** — invent clears the auto-delay miss sample
+   (`np_auto_delay_undo_invent_miss`); scorecard miss-at-need still counts.
+2. **Raise needs lateness** — auto-delay bump only when `late_n>0` (waited-out
+   arrival), not invent-only miss storms.
+3. **Gap1 grace for tip invent** — on gap=1, if RTT≤48 ms or tip-due, always
+   wait `min(½RTT+base, 12ms)` (no healthy-lead gate).
+4. **Session D floor 5** — rollback clamps lobby seed `<5` → `5` at
+   `rnet_session_create` and in `np_sched_sync_delay_from_session`.
+
+**Kept from §104:** ownership `min_ahead=6` / suppress 48/800; runway grace
+12; PIN-SKEW rate-limit; auto-delay lower floor 5.
+
+**Re-soak watch:** start log `session delay floor … → 5` if lobby was 4;
+`gap1_grace` > 0 in admit stats; no `auto delay 5 → 6/7` driven by
+`miss≈1000‰` with `late_n=0/1` and `lead_avg<0`; invent counts lower; D
+stable near 5–6 unless real lateness / pcap.
+
+---
+
+## 106. No-ICE MotK → SFU dial / clear ice_p2p refuse (session 151) (2026-08-06)
+
+**Symptoms (session 151):** host (`dist/motk`, ICE build) started SFU
+(`force_input_relay=1`, peer `192.168.66.3:8777`). Guest Desktop pack
+failed start `-4` with `hosted lobby requires ICE, but ICE is not available
+in this build` while peer was already `netplay…:8777` — SFU endpoint present,
+`force_input_relay` not applied / ICE required anyway.
+
+**Root cause:** no-ICE guest + MotK room treated as hard ICE requirement even
+when a usable SFU peer (or equal host/guest relay advertise) was available.
+`ice_p2p` launch on no-ICE builds fell through to the same opaque `-4`.
+
+**What landed:**
+
+1. **`resolve_use_ice` no-ICE** — MotK + non-empty `peer_hostport` → LAN/SFU
+   dial (log note); MotK/`transport=1` with empty peer → clearer SFU/ICE error.
+2. **Launch `ice_p2p` without ICE** — refuse with `last_error=ice_required`
+   (do not leave launch_pending for a doomed start).
+3. **`ae_np_fill_launch`** — infer `force_input_relay=1` when
+   `host_endpoint==guest_endpoint` (SFU advertise) even if caps bit omitted.
+
+**Re-soak watch:** no-ICE guest on SFU MotK logs `server input relay` or
+`no-ICE build — MotK room dialing peer … as LAN/SFU` and connects; ice_p2p
+without ICE shows `ice_required` in lobby UI, not start `-4`; both sides
+share SFU when server picked `transport=sfu`.
+
+---
+
+## 107. Gap1 micro-grace on SFU/relay RTT (post-§105 soak) (2026-08-06)
+
+**Symptoms (post-§105 soak, ~18k ticks, SFU `force_input_relay=1`):** resim
+health good (mispredict host 8 / guest 17, freeze=0, MEDIA-KF sealed, D
+ends 7 and moves on real `late_n`). Remaining cost: host tip invent storms
+in fight windows (`GAP1_LEGACY` ~550–600 at `remote_lead=-1` while guest
+~0–5); **1277/1305 host invents had `rtt>48`**. One auto-delay window
+`miss=926‰` with `lead_avg≈-0.9` at rtt~75 (tip-park tax).
+
+**Root cause:** §105 gap1 micro-grace only armed when `rtt_raw≤48` (LAN gate)
+or tip-due. SFU/relay POST-RTT sat ~75–125 → `lan=false` → `gap1_cap=0` →
+invent every gap=1 tick. §105 correctly stopped invent-as-miss from
+ratcheting D; it did not stop the invents.
+
+**What landed:**
+
+1. **Always grace on gap=1** (non-FMV) — `min(½RTT+base, cap)` for tip invent.
+2. **Split caps** — LAN / tip-due keep cap **12 ms**; relay (`rtt>48` and not
+   tip-due) cap **20 ms** so SFU gets a real wait without parking a full
+   frame on a due tip.
+3. **FMV unchanged** — §98 invent-immediate during media.
+
+**Re-soak watch:** host invents/1k drop hard in fight windows (aim ≪70);
+`gap1_grace` rises vs invent_gap1; guest invent stays low; D still only
+raises on real lateness (`late_n>0`); no feel of extra stall on LAN
+(`rtt≤48` path unchanged at cap 12).

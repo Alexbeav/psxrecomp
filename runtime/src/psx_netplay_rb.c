@@ -49,6 +49,7 @@ int psx_netplay_rb_media_kf_on_ready(const void *data, size_t size)
     (void)size;
     return 0;
 }
+int psx_netplay_rb_media_kf_busy(void) { return 0; }
 void psx_netplay_rb_poll_replay_stall(void) {}
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
@@ -192,6 +193,7 @@ static uint32_t snap_interval(void)
 }
 
 static int rb_media_kf_enabled(void); /* §97 — defined near episode wire clear */
+static int rb_fmv_media_active(void); /* §96 — used by ownership budget during FMV */
 
 /* §96/§98: FMV media snap interval. Default 4; MEDIA_KF uses 2 (near-tip
  * loads without every-tick 0.7 ms snap tax). Override: PSX_NET_FMV_SNAP_INTERVAL. */
@@ -388,11 +390,27 @@ static int g_pin_valid;
 
 /* §97: FMV media keyframe episode — host forces identical snap at load_tick
  * before Replay (probe CRC, transfer on miss). Default ON; set
- * PSX_NET_FMV_MEDIA_KF=0 to restore §93 refuse / invent-off during media. */
+ * PSX_NET_FMV_MEDIA_KF=0 to restore §93 refuse / invent-off during media.
+ * §100: invent stays off during live media (lockstep); KF still heals real
+ * rewinds. Present hold-last while probe/xfer runs. */
 static int g_media_kf_episode;
 static int g_media_kf_ready;      /* pin holds authoritative KF for load */
 static int g_media_kf_host_armed; /* host started probe/send for this episode */
 static int g_media_kf_sending;    /* host transfer in flight */
+
+/* §100: recent FMV media snap CRCs — prefer choose_load ticks we already
+ * sealed, and let probe_match confirm without a ring edge-case miss. */
+#define RB_MEDIA_CRC_RING 32u
+typedef struct RbMediaCrc {
+    uint32_t tick;
+    uint32_t size;
+    uint32_t crc;
+} RbMediaCrc;
+static RbMediaCrc g_media_crc[RB_MEDIA_CRC_RING];
+static uint32_t g_media_crc_head;
+static uint32_t g_media_crc_n;
+/* Highest FMV media tick whose CRC was probe-matched (peer aligned). */
+static uint32_t g_media_crc_peer_match_through;
 
 /* §67 resim audit digest cache (fin state per replayed tick) — declared here
  * so pin_baseline_from_cpu can compare pin digest vs audit fin (§78 PIN-SKEW
@@ -424,12 +442,15 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
 #define RB_READY_TIMEOUT_MS 4000u
 /* §49: WAN/TURN baseline GO can take multiple RTT; floor stays 4s. */
 #define RB_READY_TIMEOUT_MAX_MS 12000u
-/* §49/§73/§86: ownership chain min confirmed ticks ahead of tip. tip+1 (§48)
- * opened SPAN every Verify on WAN. tip+8 tip-held every POST on LAN tip+4/+5
- * (§73). Default floor tip+4; §86 also raises to max(floor, D) so Force-TURN
- * delay cushion is not treated as catch-up backlog. Env PSX_RB_CHAIN_MIN_AHEAD
- * (when set) overrides both. */
-#define RB_OWNERSHIP_CHAIN_MIN_AHEAD 4u
+/* §49/§73/§86/§104: ownership chain min confirmed ticks ahead of tip. tip+1
+ * (§48) opened SPAN every Verify on WAN. tip+8 tip-held every POST on LAN
+ * tip+4/+5 (§73/§144). Default floor tip+6; §86 also raises to max(floor, D-1)
+ * so Force-TURN delay cushion is not treated as catch-up backlog. Env
+ * PSX_RB_CHAIN_MIN_AHEAD (when set) overrides both. */
+/* §104: floor tip+6 — session-144 fight soak chained tip+4/+5 every POST
+ * (ownership final / hop storms → 12–79% replay windows). tip+6 still leaves
+ * D≈5–7 cushion as Live exit, not SPAN. Env PSX_RB_CHAIN_MIN_AHEAD overrides. */
+#define RB_OWNERSHIP_CHAIN_MIN_AHEAD 6u
 /* §85: Replay must not chase Live forever. With Force-TURN D≈6–7 the
  * post-match frontier stays tip+5..+8 (> MIN_AHEAD), so §47 chaining +
  * mid-Replay tip-extends treadmilled ~800 ticks (audio mute / OBS cutout).
@@ -438,11 +459,11 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
  * at wire pace (§74). Env: PSX_RB_CHAIN_MAX_HOPS / PSX_RB_CHAIN_MAX_TICKS. */
 #define RB_OWNERSHIP_CHAIN_MAX_HOPS 2u
 #define RB_OWNERSHIP_CHAIN_MAX_TICKS 48u
-/* §86 C: after BUDGET→Live, suppress re-chain for one tip-runway / 400ms so
- * residual coalesce/FOLLOW ping-pong is logged as SUPPRESS (diagnose) instead
- * of immediately restarting hop1. Env: PSX_RB_CHAIN_SUPPRESS_TICKS / _MS. */
-#define RB_OWNERSHIP_CHAIN_SUPPRESS_TICKS 24u
-#define RB_OWNERSHIP_CHAIN_SUPPRESS_MS 400u
+/* §86 C / §104: after BUDGET→Live, suppress re-chain for ~one tip-runway /
+ * 800ms so fight button chatter does not immediately restart hop1.
+ * Env: PSX_RB_CHAIN_SUPPRESS_TICKS / _MS. */
+#define RB_OWNERSHIP_CHAIN_SUPPRESS_TICKS 48u
+#define RB_OWNERSHIP_CHAIN_SUPPRESS_MS 800u
 /* Failed episode (resim/baseline/post): calm from *live* sim before realign.
  * Was 60/120 — after abort, choose_load stuck at agreed tip so the next begin
  * resimmed the whole cooldown (depth 63→128) = "pushing further back". */
@@ -675,6 +696,20 @@ static int seat_tick_confirmed(int slot, uint32_t tick);
 static void advertise_agreed_resolved(uint32_t through);
 static uint64_t rb_mono_ms(void);
 
+/* §102: after peer-ahead follow-NACK, force one short light tip reopen and
+ * suppress ownership chaining (session-140: NACK keep-live → hc-fork SPAN
+ * 6640→6660 → hops 32/40 → 96% replay hitch). */
+#define RB_PEER_AHEAD_LIGHT_DEPTH 4u
+static uint32_t g_peer_ahead_force_load; /* 0 = off; consumed in begin_rewind */
+static int g_peer_ahead_light_episode;   /* 1 while that light tip is open */
+
+/* §103: past-frontier NACK with demote depth > this → keep-live (no deep
+ * Live rewind). Session 142: demote 827→763 forked cores → MEDIA-KF 3.7MB. */
+#define RB_NACK_DEEP_REALIGN_MAX 8u
+/* Sticky: peer_resolved gate must not expire until the follower advertises
+ * past the refused tip (force-open after GATE_MS reopened the NACK storm). */
+static int g_past_frontier_sticky;
+
 /* §47: begin_rewind is an ownership SPAN chain (skip cooldown; force target). */
 static int g_ownership_chain;
 static uint32_t g_ownership_chain_frontier;
@@ -707,6 +742,10 @@ static uint32_t ownership_chain_max_hops(void)
         if (v >= 0 && v <= 64)
             return (uint32_t)v;
     }
+    /* §100: during live FMV media, at most one ownership hop after MEDIA-KF
+     * (logs showed hop1/hop2 stack + present hitch). */
+    if (rb_fmv_media_active())
+        return 1u;
     return RB_OWNERSHIP_CHAIN_MAX_HOPS;
 }
 
@@ -718,13 +757,16 @@ static uint32_t ownership_chain_max_ticks(void)
         if (v >= 1 && v <= 512)
             return (uint32_t)v;
     }
+    if (rb_fmv_media_active())
+        return 8u;
     return RB_OWNERSHIP_CHAIN_MAX_TICKS;
 }
 
-/* §86/§87 B: floor tip+4; raise toward D but leave one tick of headroom
- * (max(4, D-1)) so Force-TURN frontier≈tip+D still chains once instead of
- * tip-hold invent-parking every POST (soak §86: min_ahead=D → tip+9 final
- * tip-hold → dual-init hang). Env PSX_RB_CHAIN_MIN_AHEAD overrides. */
+/* §86/§87 B / §104: floor tip+6; raise toward D but leave one tick of
+ * headroom (max(6, D-1)) so Force-TURN frontier≈tip+D still chains once
+ * instead of tip-hold invent-parking every POST (soak §86: min_ahead=D →
+ * tip+9 final tip-hold → dual-init hang). Env PSX_RB_CHAIN_MIN_AHEAD
+ * overrides. */
 static uint32_t ownership_chain_min_ahead(void)
 {
     uint32_t min_ahead = RB_OWNERSHIP_CHAIN_MIN_AHEAD;
@@ -750,6 +792,9 @@ static uint32_t ownership_chain_suppress_ticks(void)
         if (v >= 0 && v <= 256)
             return (uint32_t)v;
     }
+    /* §100: longer post-BUDGET quiet during intro FMV. */
+    if (rb_fmv_media_active())
+        return 48u;
     return RB_OWNERSHIP_CHAIN_SUPPRESS_TICKS;
 }
 
@@ -761,6 +806,8 @@ static uint32_t ownership_chain_suppress_ms(void)
         if (v >= 0 && v <= 5000)
             return (uint32_t)v;
     }
+    if (rb_fmv_media_active())
+        return 800u;
     return RB_OWNERSHIP_CHAIN_SUPPRESS_MS;
 }
 
@@ -1128,8 +1175,10 @@ static int rb_in_fmv_defer_rewind_window(void)
 }
 
 /* Admit no-invent gate (§26): media + short settle only.
- * §97: MEDIA_KF allows invent during live media (episodes open with host
- * keyframe). Settle + DESYNC invent-hold unchanged. */
+ * §100: invent stays OFF during live media even with MEDIA_KF — GAP1 invent
+ * was opening ~3.7 MB KF transfers mid-intro FMV. Wait for wire; real
+ * rewinds still open episodes (defer_rewind allows MEDIA_KF). Settle +
+ * DESYNC invent-hold unchanged. */
 static int rb_in_fmv_lockstep_window(void)
 {
     RNetSession *s = sess();
@@ -1137,10 +1186,51 @@ static int rb_in_fmv_lockstep_window(void)
     rb_fmv_tick_settle();
     rb_fmv_desync_invent_maybe_expire(sim);
     if (rb_fmv_media_active())
-        return rb_media_kf_enabled() ? 0 : 1;
+        return 1;
     if (g_fmv_unmatched_desync)
         return 1;
     return sim < g_fmv_settle_until;
+}
+
+static void rb_media_crc_note(uint32_t tick, uint32_t size, uint32_t crc)
+{
+    RbMediaCrc *e;
+    uint32_t i;
+    if (tick == 0u || size == 0u)
+        return;
+    for (i = 0; i < g_media_crc_n && i < RB_MEDIA_CRC_RING; ++i) {
+        uint32_t idx = (g_media_crc_head + RB_MEDIA_CRC_RING - 1u - i) %
+                       RB_MEDIA_CRC_RING;
+        if (g_media_crc[idx].tick == tick) {
+            g_media_crc[idx].size = size;
+            g_media_crc[idx].crc = crc;
+            return;
+        }
+    }
+    e = &g_media_crc[g_media_crc_head % RB_MEDIA_CRC_RING];
+    e->tick = tick;
+    e->size = size;
+    e->crc = crc;
+    g_media_crc_head = (g_media_crc_head + 1u) % RB_MEDIA_CRC_RING;
+    if (g_media_crc_n < RB_MEDIA_CRC_RING)
+        g_media_crc_n++;
+}
+
+static int rb_media_crc_lookup(uint32_t tick, uint32_t *size_out, uint32_t *crc_out)
+{
+    uint32_t i;
+    for (i = 0; i < g_media_crc_n && i < RB_MEDIA_CRC_RING; ++i) {
+        uint32_t idx = (g_media_crc_head + RB_MEDIA_CRC_RING - 1u - i) %
+                       RB_MEDIA_CRC_RING;
+        if (g_media_crc[idx].tick == tick) {
+            if (size_out)
+                *size_out = g_media_crc[idx].size;
+            if (crc_out)
+                *crc_out = g_media_crc[idx].crc;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void arm_rewind_cooldown_ticks(uint32_t sim, uint32_t ticks, const char *why)
@@ -1475,6 +1565,7 @@ static int rb_media_kf_enabled(void)
 }
 
 static void clear_baseline_pin(void);
+static void abort_episode(const char *why);
 
 static int rb_install_media_kf_bytes(uint32_t tick, const uint8_t *data, size_t size)
 {
@@ -1547,6 +1638,31 @@ static void rb_media_kf_host_drive(void)
         }
         return;
     }
+    /* Refuse to probe/send a snap the peer cannot load (host integrity still
+     * 0/0 after start-before-configure left all ring snaps poisoned). */
+    if (!g_b.bios_checksum || !g_b.entry_pc || *g_b.bios_checksum == 0u ||
+        *g_b.entry_pc == 0u) {
+        fprintf(stderr,
+                "psxrecomp: rb MEDIA-KF host — integrity unset "
+                "(bios=%08x entry=%08x)\n",
+                (unsigned)(g_b.bios_checksum ? *g_b.bios_checksum : 0u),
+                (unsigned)(g_b.entry_pc ? *g_b.entry_pc : 0u));
+        fflush(stderr);
+        abort_episode("MEDIA-KF integrity unset");
+        return;
+    }
+    {
+        char reason[256];
+        if (!boot_state_check_buffer(p, sz, *g_b.bios_checksum, *g_b.entry_pc,
+                                     reason, sizeof(reason))) {
+            fprintf(stderr,
+                    "psxrecomp: rb MEDIA-KF host — snap reject load=%u — %s\n",
+                    (unsigned)load, reason[0] ? reason : "unknown");
+            fflush(stderr);
+            abort_episode("MEDIA-KF snap integrity reject");
+            return;
+        }
+    }
 
     if (!g_media_kf_host_armed) {
         crc = rnet_checksum(p, sz);
@@ -1570,6 +1686,8 @@ static void rb_media_kf_host_drive(void)
         rnet_session_state_probe_finish(s);
         if (match) {
             if (rb_media_kf_seal_local(load)) {
+                if (load > g_media_crc_peer_match_through)
+                    g_media_crc_peer_match_through = load;
                 fprintf(stderr,
                         "psxrecomp: rb MEDIA-KF hash match load=%u — local "
                         "pin sealed\n",
@@ -1666,21 +1784,26 @@ static int pin_baseline_from_cpu(uint32_t tick)
     /* §75: pin is sealed POST state — Live must not re-poison this tick. */
     if (tick > g_auth_snap_through)
         g_auth_snap_through = tick;
-    /* §78 diag: digest the pin with its canonical resume pc AT SAVE. If this
-     * already differs from the just-computed audit fin, the SNAP-STALE class
-     * is the pc substitution (snap.pc = pick_snap_resume_pc vs live pc), not
-     * load infidelity — names which layer owns the fork. */
+    /* §78/§104 diag: digest the pin with its canonical resume pc AT SAVE.
+     * If this already differs from the just-computed audit fin, the
+     * SNAP-STALE class is the pc substitution (snap.pc = pick_snap_resume_pc
+     * vs live pc), not load infidelity. Rate-limit — session-144 logged 32×
+     * identical lines per fight (cosmetic; no control-plane effect). */
     {
         uint32_t pin_core = netplay_core_digest(&snap);
         if (s_resim_audit_valid && s_resim_audit_sim == tick &&
             pin_core != s_resim_audit_core) {
-            fprintf(stderr,
-                    "psxrecomp: rb PIN-SKEW tick=%u pin_core=%08x "
-                    "fin_core=%08x live_pc=0x%08x snap_pc=0x%08x — pc "
-                    "substitution shifts digest at save\n",
-                    (unsigned)tick, (unsigned)pin_core,
-                    (unsigned)s_resim_audit_core, (unsigned)c->pc,
-                    (unsigned)pc);
+            static uint32_t s_pin_skew_log_tick;
+            if (s_pin_skew_log_tick != tick) {
+                fprintf(stderr,
+                        "psxrecomp: rb PIN-SKEW tick=%u pin_core=%08x "
+                        "fin_core=%08x live_pc=0x%08x snap_pc=0x%08x — pc "
+                        "substitution shifts digest at save\n",
+                        (unsigned)tick, (unsigned)pin_core,
+                        (unsigned)s_resim_audit_core, (unsigned)c->pc,
+                        (unsigned)pc);
+                s_pin_skew_log_tick = tick;
+            }
         }
         fprintf(stderr,
                 "psxrecomp: rb baseline pinned from CPU tick=%u bytes=%zu "
@@ -1831,6 +1954,9 @@ static void abort_episode(const char *why)
     clear_episode_wire_state();
     g_ownership_skip_snap = 0;
     ownership_clear_chain_budget();
+    /* Keep g_peer_ahead_force_load — NACK handler sets it after abort then
+     * immediately begin_rewind. Clear a stale light-episode marker. */
+    g_peer_ahead_light_episode = 0;
     if (g_rb && rnet_rb_is_active(g_rb)) {
         rnet_rb_set_phase(g_rb, nRNetRbPhaseAbort);
         rnet_rb_session_reset(g_rb);
@@ -2484,15 +2610,22 @@ static void advertise_agreed_resolved(uint32_t through)
 }
 
 /* §41: 1 while choose_load/begin should clamp to g_peer_resolved_through.
- * After GATE_MS of waiting, sticky-expire until peer RESOLVED advances. */
+ * After GATE_MS of waiting, sticky-expire until peer RESOLVED advances.
+ * §103: past-frontier sticky never expires on the timer — only a peer
+ * RESOLVED raise clears it (session 142: force-open → NACK → deep demote). */
 static int peer_resolved_gate_blocks(uint32_t want_through)
 {
     uint64_t now;
 
     if (g_peer_resolved_through == 0u)
         return 0;
-    if (want_through <= g_peer_resolved_through)
+    if (want_through <= g_peer_resolved_through) {
+        if (g_past_frontier_sticky)
+            g_past_frontier_sticky = 0;
         return 0;
+    }
+    if (g_past_frontier_sticky)
+        return 1;
     if (g_peer_resolved_gate_expired)
         return 0;
     now = rb_mono_ms();
@@ -2688,6 +2821,9 @@ static void apply_peer_resolved(uint32_t resolved)
         g_peer_resolved_through = resolved;
         g_peer_resolved_gate_expired = 0;
         g_peer_resolved_wait_t0_ms = 0ull;
+        /* §103: follower caught up past sticky past-frontier NACK. */
+        if (g_past_frontier_sticky)
+            g_past_frontier_sticky = 0;
     }
     rnet_rb_set_peer_convergence(g_rb, resolved);
     /* Peer already POST-matched and tip-held this tip (or later). If we are
@@ -3101,12 +3237,39 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
         uint32_t hi = shared;
         uint32_t lo;
         uint32_t oldest = netplay_snap_ring_oldest_tick(g_snaps);
+        /* §99 MEDIA_KF: invent-through-media leaves HC/agreed on the last
+         * pre-media interval snap (e.g. 432) while the ring holds FMV snaps
+         * every fmv_media_snap_interval. Raise the walk to mismatch-1 so
+         * Start-during-FMV loads ~tip; probe/transfer makes the pin identical. */
+        int media_kf_near = 0;
+        if (rb_media_kf_enabled() &&
+            (rb_fmv_tick_unsafe_for_episode(mismatch) ||
+             rb_fmv_tick_unsafe_for_episode(mismatch - 1u)))
+            media_kf_near = 1;
         if (hi > mismatch - 1u)
             hi = mismatch - 1u;
+        if (media_kf_near && mismatch > 1u) {
+            uint32_t media_hi = mismatch - 1u;
+            if (media_hi > hi) {
+                static uint32_t s_media_raise_log;
+                if (s_media_raise_log != media_hi) {
+                    fprintf(stderr,
+                            "psxrecomp: rb choose_load MEDIA-KF raise walk "
+                            "%u→%u (mismatch=%u agreed=%u hc_iv=%u)\n",
+                            (unsigned)hi, (unsigned)media_hi,
+                            (unsigned)mismatch,
+                            (unsigned)(g_agreed_valid ? g_agreed_through : 0u),
+                            (unsigned)hc_iv);
+                    fflush(stderr);
+                    s_media_raise_log = media_hi;
+                }
+                hi = media_hi;
+            }
+        }
         /* Watermark entirely below the ring: walk cannot succeed. Fall through
          * to tip-slack (BOOTSTRAP/HEAL should have raised agreed; if not,
          * refuse would stick forever with invent≠wire). */
-        if (shared < oldest) {
+        if (shared < oldest && !media_kf_near) {
             have_shared = 0;
         } else {
             /* Bound the walk to one ring depth of ticks. */
@@ -3144,6 +3307,17 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
                 if (!mutual && hc_floor > 0u && t <= hc_floor &&
                     netplay_hc_confirm_through(g_b.hc, t))
                     mutual = 1;
+                /* §99: media-interval (or dense) snaps are mutual under MEDIA_KF
+                 * — CRC probe / transfer reconciles peer forks. */
+                if (!mutual && media_kf_near) {
+                    uint32_t miv = fmv_media_snap_interval();
+                    if (miv < 1u)
+                        miv = 1u;
+                    if ((miv <= 1u) || ((t % miv) == 0u) ||
+                        (g_fmv_dense_through > 0u && t <= g_fmv_dense_through &&
+                         (g_fmv_media_lo == 0u || t >= g_fmv_media_lo)))
+                        mutual = 1;
+                }
                 if (mutual && netplay_snap_ring_has(g_snaps, t)) {
                     *out_load = t;
                     return 1;
@@ -3152,10 +3326,51 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
                     break;
             }
             /* Shared frontier in range but no snap left — refuse rather than
-             * load an unconfirmed tip above a live agreed watermark. */
-            if (g_agreed_valid)
+             * load an unconfirmed tip above a live agreed watermark. MEDIA_KF
+             * may still tip-slack on media-interval snaps below. */
+            if (g_agreed_valid && !media_kf_near)
                 return 0;
             have_shared = 0;
+        }
+    }
+    /* §99/§100: tip-slack with FMV media interval when MEDIA_KF covers the
+     * bout. Prefer ticks whose CRC we already cached (peer more likely to
+     * hash-match and skip the 3.7 MB xfer). */
+    if (rb_media_kf_enabled() && mismatch > 0u &&
+        (rb_fmv_tick_unsafe_for_episode(mismatch) ||
+         rb_fmv_tick_unsafe_for_episode(mismatch - 1u))) {
+        uint32_t miv = fmv_media_snap_interval();
+        uint32_t mcap = mismatch - 1u;
+        uint32_t fallback = 0u;
+        int have_fallback = 0;
+        if (miv < 1u)
+            miv = 1u;
+        if (miv > 1u)
+            mcap -= (mcap % miv);
+        for (;;) {
+            if (netplay_snap_ring_has(g_snaps, mcap)) {
+                uint32_t csz = 0, ccrc = 0;
+                if (rb_media_crc_lookup(mcap, &csz, &ccrc) ||
+                    (g_media_crc_peer_match_through > 0u &&
+                     mcap <= g_media_crc_peer_match_through)) {
+                    *out_load = mcap;
+                    return 1;
+                }
+                if (!have_fallback) {
+                    fallback = mcap;
+                    have_fallback = 1;
+                }
+            }
+            if (mcap == 0u)
+                break;
+            if (miv > 1u)
+                mcap = (mcap < miv) ? 0u : (mcap - miv);
+            else
+                mcap--;
+        }
+        if (have_fallback) {
+            *out_load = fallback;
+            return 1;
         }
     }
     cap = mismatch;
@@ -3331,8 +3546,9 @@ static uint32_t remote_wire_hole_end_after(uint32_t demote, uint32_t live_sim)
 }
 
 /* MotK convention: SYNC op=NACK = follower cannot open episode (missing load
- * snap / past frontier). Initiator aborts SealInputs instead of hanging.
- * target field carries this follower's frontier (recomputed every send). */
+ * snap / past frontier / zombie load). Initiator aborts SealInputs instead of
+ * hanging. target field carries this follower's frontier (recomputed every
+ * send). */
 static void send_follow_nack(uint32_t epoch, uint32_t mismatch, uint32_t load,
                              uint32_t target, int slot, int log_line)
 {
@@ -3349,6 +3565,64 @@ static void send_follow_nack(uint32_t epoch, uint32_t mismatch, uint32_t load,
                 "psxrecomp: rb follow NACK epoch=%u load=%u frontier=%u\n",
                 (unsigned)epoch, (unsigned)load, (unsigned)frontier);
         fflush(stderr);
+    }
+}
+
+/* §101: refuse FOLLOW with NACK + rate-limited log. Zombie load/epoch used to
+ * return silently → initiator sat in SealInputs until RB_SEAL_TIMEOUT_MS (4s)
+ * while the follower spammed identical REFUSED lines (session-136 soak). */
+static void follow_refuse_nack(uint32_t epoch, uint32_t mismatch, uint32_t load,
+                               uint32_t target, int slot, const char *detail)
+{
+    static uint32_t s_ep;
+    static uint32_t s_load;
+    static uint32_t s_suppressed;
+    int log_line = 1;
+    int arm_fresh;
+
+    if (epoch == s_ep && load == s_load) {
+        s_suppressed++;
+        log_line = 0;
+        if ((s_suppressed % 32u) == 0u) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED (+%u similar epoch=%u "
+                    "load=%u)%s%s\n",
+                    (unsigned)s_suppressed, (unsigned)epoch, (unsigned)load,
+                    detail && detail[0] ? " — " : "",
+                    detail && detail[0] ? detail : "");
+            fflush(stderr);
+        }
+    } else {
+        if (s_suppressed > 0u) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED (+%u similar epoch=%u "
+                    "load=%u)\n",
+                    (unsigned)s_suppressed, (unsigned)s_ep, (unsigned)s_load);
+            fflush(stderr);
+            s_suppressed = 0u;
+        }
+        s_ep = epoch;
+        s_load = load;
+        if (detail && detail[0]) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED epoch=%u load=%u — %s\n",
+                    (unsigned)epoch, (unsigned)load, detail);
+            fflush(stderr);
+        }
+    }
+
+    arm_fresh = !g_follow_nack_pending || g_follow_nack_epoch != epoch ||
+                g_follow_nack_load != load;
+    if (arm_fresh) {
+        g_follow_nack_pending = 1;
+        g_follow_nack_epoch = epoch;
+        g_follow_nack_mismatch = mismatch;
+        g_follow_nack_load = load;
+        g_follow_nack_target = target;
+        g_follow_nack_slot = slot;
+        g_follow_nack_sends = 0;
+        send_follow_nack(epoch, mismatch, load, target, slot, log_line);
+        g_follow_nack_sends = 1;
     }
 }
 
@@ -4470,9 +4744,21 @@ static void ownership_on_post_match(uint32_t tip)
 
     /* Contiguous frontier from the tick after the verified tip. */
     frontier = psx_netplay_rb_confirmed_frontier(tip + 1u);
-    /* §48/§49/§73/§86/§87 B: micro frontiers at/below min_ahead do not chain.
-     * min_ahead = max(4, D-1) — delay cushion is not catch-up backlog, but
-     * tip+D still chains once (D-1 headroom) instead of tip-hold every POST. */
+    /* §102: peer-ahead light tip — one Verify then Live (no SPAN hops). */
+    if (g_peer_ahead_light_episode) {
+        fprintf(stderr,
+                "psxrecomp: rb peer-ahead light tip=%u frontier=%u → Live "
+                "(no ownership chain)\n",
+                (unsigned)tip, (unsigned)frontier);
+        fflush(stderr);
+        g_peer_ahead_light_episode = 0;
+        ownership_exit_to_live(tip, frontier, "peer-ahead light", 1);
+        return;
+    }
+    /* §48/§49/§73/§86/§87 B/§104: micro frontiers at/below min_ahead do not
+     * chain. min_ahead = max(6, D-1) — delay cushion is not catch-up backlog,
+     * but tip+D still chains once (D-1 headroom) instead of tip-hold every
+     * POST. */
     min_ahead = ownership_chain_min_ahead();
     if (frontier > tip + min_ahead) {
         uint32_t max_hops = ownership_chain_max_hops();
@@ -5423,6 +5709,7 @@ void psx_netplay_rb_start(void)
     g_peer_resolved_through = 0;
     g_peer_resolved_wait_t0_ms = 0ull;
     g_peer_resolved_gate_expired = 0;
+    g_past_frontier_sticky = 0;
     g_local_advertised_through = 0;
     g_peer_resolved_hb_last_ms = 0ull;
     g_live_realign_pending = 0;
@@ -5491,6 +5778,10 @@ void psx_netplay_rb_shutdown(void)
     g_fmv_media_hi = 0;
     g_fmv_unmatched_desync = 0;
     g_fmv_unmatched_desync_arm_sim = 0;
+    g_media_crc_head = 0;
+    g_media_crc_n = 0;
+    g_media_crc_peer_match_through = 0;
+    memset(g_media_crc, 0, sizeof(g_media_crc));
     g_resim_diverge_tick = 0;
     g_resim_diverge_streak = 0;
     g_bl_mismatch_streak = 0;
@@ -5526,6 +5817,7 @@ void psx_netplay_rb_shutdown(void)
     g_peer_resolved_through = 0;
     g_peer_resolved_wait_t0_ms = 0ull;
     g_peer_resolved_gate_expired = 0;
+    g_past_frontier_sticky = 0;
     g_local_advertised_through = 0;
     g_peer_resolved_hb_last_ms = 0ull;
     g_epoch = 0;
@@ -5912,7 +6204,10 @@ static int try_apply_pending_load(CPUState *cpu_in)
                     g_fmv_media_lo = loaded_tick;
                 if (loaded_tick >= g_fmv_media_hi)
                     g_fmv_media_hi = loaded_tick;
-                if (!g_media_kf_episode && !g_ownership_skip_snap) {
+                /* Boot dig0 realign after rematch residue must not refuse
+                 * load=0 as "FMV media" — BIOS has not reached a movie yet. */
+                if (!g_media_kf_episode && !g_ownership_skip_snap &&
+                    loaded_tick != 0u) {
                     char why[96];
                     snprintf(why, sizeof(why),
                              "episode load into FMV media (load=%u)",
@@ -5972,6 +6267,13 @@ void psx_netplay_rb_flush_resume(void)
                 cdrom_fmv_stream_pending(), (unsigned)cds.i_stat,
                 c ? (unsigned)c->cop0[12] : 0u);
         fflush(stderr);
+        /* §93 P1: densify CD/MDEC crumbs after media pin load (160→192 class). */
+        if (rb_fmv_media_active() || cds.reading ||
+            mdec_recently_active(RB_FMV_MDEC_HYSTERESIS)) {
+            RNetSession *s = sess();
+            uint32_t sim = s ? (uint32_t)rnet_session_sim_tick(s) : 0u;
+            psx_netplay_cd_bisect_arm(sim, 0u);
+        }
         /* flush_resume is called from admit inside sdl_vblank_present, which
          * runs under gpu_vblank_flush_present with s_flushing_present=1.
          * longjmp abandons that frame — drop guard AND any leftover present
@@ -6032,6 +6334,15 @@ void psx_netplay_rb_poll(struct CPUState *cpu_in, uint32_t resume_pc)
                 if (g_rb && rnet_rb_is_resimulating(g_rb) &&
                     g_pending_save_tick > g_auth_snap_through)
                     g_auth_snap_through = g_pending_save_tick;
+                /* §100: cache FMV media snap CRC for later MEDIA-KF probe. */
+                if (rb_fmv_media_active()) {
+                    size_t sz = 0;
+                    const uint8_t *p = netplay_snap_ring_peek(
+                        g_snaps, g_pending_save_tick, &sz);
+                    if (p && sz)
+                        rb_media_crc_note(g_pending_save_tick, (uint32_t)sz,
+                                          rnet_checksum(p, sz));
+                }
                 g_pending_save_valid = 0;
                 s_snap_fail_logged = 0;
                 s_snap_pc_reject_logged = 0;
@@ -6121,17 +6432,28 @@ int psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc)
     uint32_t load;
     size_t sz = 0;
     const uint8_t *p;
+    uint32_t got;
     if (!g_media_kf_episode || !g_rb || !g_snaps)
         return 0;
     load = rnet_rb_get_load_tick(g_rb);
     p = netplay_snap_ring_peek(g_snaps, load, &sz);
     if (!p || sz != (size_t)size)
         return 0;
-    if (rnet_checksum(p, sz) != crc)
+    got = rnet_checksum(p, sz);
+    if (got != crc)
         return 0;
-    /* Seal local pin so apply can proceed without waiting for a no-op xfer. */
-    (void)rb_media_kf_seal_local(load);
+    /* §100: refresh CRC ring + peer-match watermark (skip xfer). */
+    rb_media_crc_note(load, size, got);
+    if (!rb_media_kf_seal_local(load))
+        return 0;
+    if (load > g_media_crc_peer_match_through)
+        g_media_crc_peer_match_through = load;
     return 1;
+}
+
+int psx_netplay_rb_media_kf_busy(void)
+{
+    return (g_media_kf_episode && !g_media_kf_ready) ? 1 : 0;
 }
 
 int psx_netplay_rb_media_kf_on_ready(const void *data, size_t size)
@@ -6142,6 +6464,22 @@ int psx_netplay_rb_media_kf_on_ready(const void *data, size_t size)
     load = rnet_rb_get_load_tick(g_rb);
     if (!g_media_kf_ready) {
         if (data && size > 0) {
+            if (g_b.bios_checksum && g_b.entry_pc) {
+                char reason[256];
+                if (!boot_state_check_buffer((const uint8_t *)data, size,
+                                             *g_b.bios_checksum, *g_b.entry_pc,
+                                             reason, sizeof(reason))) {
+                    fprintf(stderr,
+                            "psxrecomp: rb MEDIA-KF install reject load=%u "
+                            "bytes=%zu — %s\n",
+                            (unsigned)load, size,
+                            reason[0] ? reason : "unknown");
+                    fflush(stderr);
+                    g_media_kf_sending = 0;
+                    abort_episode("MEDIA-KF install integrity reject");
+                    return 1;
+                }
+            }
             if (!rb_install_media_kf_bytes(load, (const uint8_t *)data, size)) {
                 fprintf(stderr,
                         "psxrecomp: rb MEDIA-KF install FAILED load=%u "
@@ -6548,11 +6886,21 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     }
 
     sim = rnet_session_sim_tick(s);
+    /* §102: drain peer RESOLVED before choose_load — a tip already in the
+     * UDP queue must raise peer_resolved so we do not open a zombie load. */
+    {
+        rnet_u32 resolved = 0;
+        while (rnet_session_take_rb_resolved(s, &resolved))
+            apply_peer_resolved(resolved);
+    }
 
     /* Tick settle tracker. Media/lockstep episodes resume into MotK wait/VLC
-     * tips and hang — admit waits for wire instead. */
+     * tips and hang — admit waits for wire instead.
+     * §103: ownership SPAN after MEDIA-KF must continue through re-armed
+     * settle (session 142: tip=776 frontier=835 refused → tip-hold hang). */
     (void)rb_in_fmv_defer_rewind_window();
-    if (rb_in_fmv_lockstep_window()) {
+    if (rb_in_fmv_lockstep_window() && !g_ownership_chain &&
+        !(g_media_kf_episode && rb_media_kf_enabled())) {
         static uint32_t s_fmv_refuse_sim;
         if (s_fmv_refuse_sim != sim) {
             fprintf(stderr,
@@ -6625,6 +6973,51 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
             s_refuse_suppressed++;
         }
         return 0;
+    }
+    /* §101: never begin behind a peer tip we already know — that opens a
+     * zombie-load episode the follower must NACK. Prefer peer_resolved (or
+     * the newest mutual snap ≤ it) when choose_load landed lower. */
+    if (!g_ownership_chain && g_peer_resolved_through > load &&
+        mismatch_tick > 0u && g_peer_resolved_through < mismatch_tick &&
+        g_snaps) {
+        uint32_t want = g_peer_resolved_through;
+        uint32_t t;
+        uint32_t raised = 0u;
+        if (want > mismatch_tick - 1u)
+            want = mismatch_tick - 1u;
+        for (t = want;; --t) {
+            if (netplay_snap_ring_has(g_snaps, t) &&
+                (t <= g_peer_resolved_through) &&
+                (g_peer_nack_floor == 0u || t > g_peer_nack_floor)) {
+                raised = t;
+                break;
+            }
+            if (t == 0u || t <= load)
+                break;
+        }
+        if (raised > load) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin raise load %u→%u "
+                    "(peer_resolved=%u — avoid zombie load)\n",
+                    (unsigned)load, (unsigned)raised,
+                    (unsigned)g_peer_resolved_through);
+            fflush(stderr);
+            load = raised;
+        }
+    }
+    /* §102: peer-ahead NACK reopen — pin load at the follower's tip. */
+    if (g_peer_ahead_force_load > 0u &&
+        g_peer_ahead_force_load < mismatch_tick &&
+        (g_peer_nack_floor == 0u || g_peer_ahead_force_load > g_peer_nack_floor) &&
+        (netplay_snap_ring_has(g_snaps, g_peer_ahead_force_load) ||
+         (g_agreed_valid && g_peer_ahead_force_load == g_agreed_through))) {
+        if (load != g_peer_ahead_force_load) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin peer-ahead force load %u→%u\n",
+                    (unsigned)load, (unsigned)g_peer_ahead_force_load);
+            fflush(stderr);
+            load = g_peer_ahead_force_load;
+        }
     }
     /* §51 Layer 3: chain continue must load exactly at the verified tip. */
     if (g_ownership_chain && mismatch_tick > 0u) {
@@ -6718,6 +7111,24 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     /* §47 ownership chain: aim at contiguous frontier, still SPAN-chunked. */
     if (g_ownership_chain && g_ownership_chain_frontier > target)
         target = g_ownership_chain_frontier;
+    /* §102: peer-ahead light tip — short depth, no ownership SPAN chain. */
+    if (g_peer_ahead_force_load > 0u) {
+        uint32_t max_t = load + RB_PEER_AHEAD_LIGHT_DEPTH;
+        if (target > max_t) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin peer-ahead light CAP target %u→%u "
+                    "(load=%u depth=%u)\n",
+                    (unsigned)target, (unsigned)max_t, (unsigned)load,
+                    (unsigned)RB_PEER_AHEAD_LIGHT_DEPTH);
+            fflush(stderr);
+            target = max_t;
+        }
+        g_ownership_chain = 0;
+        g_ownership_chain_frontier = 0;
+        ownership_clear_chain_budget();
+        g_peer_ahead_light_episode = 1;
+        g_peer_ahead_force_load = 0u;
+    }
     /* Chunk deep catch-up (post-abort agreed tip << live) so Replay never
      * walks the whole cooldown window in one episode. */
     if (target > load + RB_MAX_RESIM_SPAN) {
@@ -7191,26 +7602,26 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     }
     if (!g_rb)
         return;
-    /* §87: never reopen an epoch we already committed (tip-hold / ownership).
+    /* §87/§101: never reopen an epoch we already committed (tip-hold /
+     * ownership). NACK so the initiator aborts Seal instead of waiting 4s.
      * Soak: tie-break follow of zombie epoch=8 after tip-hold commit →
      * rb_baseline hang while peer already left → peer pcap_freeze. */
     if (!rnet_rb_is_active(g_rb) && epoch == g_last_commit_epoch) {
-        fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u — already "
-                "committed (zombie epoch)\n",
-                (unsigned)epoch, (unsigned)load);
-        fflush(stderr);
+        char detail[96];
+        snprintf(detail, sizeof(detail), "already committed (zombie epoch)");
+        follow_refuse_nack(epoch, mismatch, load, target, slot, detail);
         return;
     }
-    /* §87: load strictly behind agreed tip rewinds into a dead timeline
-     * (soak: follow load=1808 after commit tip=1852). load==agreed is the
-     * ownership-chain skip-snap continue and stays legal. */
+    /* §87/§101: load strictly behind agreed tip rewinds into a dead timeline
+     * (soak: follow load=1808 after commit tip=1852; session-136 load=3184
+     * vs agreed tip=3200 → silent REFUSED ×100 + seal timeout). load==agreed
+     * is the ownership-chain skip-snap continue and stays legal. */
     if (!rnet_rb_is_active(g_rb) && g_agreed_valid && load < g_agreed_through) {
-        fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u — behind "
-                "agreed tip=%u (zombie load)\n",
-                (unsigned)epoch, (unsigned)load, (unsigned)g_agreed_through);
-        fflush(stderr);
+        char detail[96];
+        snprintf(detail, sizeof(detail),
+                 "behind agreed tip=%u (zombie load)",
+                 (unsigned)g_agreed_through);
+        follow_refuse_nack(epoch, mismatch, load, target, slot, detail);
         return;
     }
     if (rnet_rb_is_active(g_rb)) {
@@ -7357,23 +7768,38 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
             frontier = rnet_rb_resolved_through(g_rb);
         /* Mirror choose_load hard cap: once tip-hold/commit set agreed_through,
          * refuse loads above it even if local hash_confirm matched TipHold Live
-         * (heal raises agreed when that tip aged out of the ring). */
+         * (heal raises agreed when that tip aged out of the ring).
+         * §99 MEDIA_KF: invent-through-media leaves HC/agreed lagging the tip
+         * while choose_load raises to a near-tip media snap — same trust as
+         * missing-snap OK (host KF probe/transfer). Do not NACK. */
         if (have_f && load > frontier) {
-            fprintf(stderr,
-                    "psxrecomp: rb follow REFUSED epoch=%u load=%u — past "
-                    "frontier=%u (unconfirmed tip)\n",
-                    (unsigned)epoch, (unsigned)load, (unsigned)frontier);
-            fflush(stderr);
-            g_follow_nack_pending = 1;
-            g_follow_nack_epoch = epoch;
-            g_follow_nack_mismatch = mismatch;
-            g_follow_nack_load = load;
-            g_follow_nack_target = target;
-            g_follow_nack_slot = slot;
-            g_follow_nack_sends = 0;
-            send_follow_nack(epoch, mismatch, load, target, slot, 1);
-            g_follow_nack_sends = 1;
-            return;
+            int media_kf_ok = rb_media_kf_enabled() &&
+                              ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
+                               rb_fmv_tick_unsafe_for_episode(load) ||
+                               rb_fmv_tick_unsafe_for_episode(mismatch));
+            if (media_kf_ok) {
+                fprintf(stderr,
+                        "psxrecomp: rb follow MEDIA-KF allow load=%u past "
+                        "frontier=%u (keyframe reconciles)\n",
+                        (unsigned)load, (unsigned)frontier);
+                fflush(stderr);
+            } else {
+                fprintf(stderr,
+                        "psxrecomp: rb follow REFUSED epoch=%u load=%u — past "
+                        "frontier=%u (unconfirmed tip)\n",
+                        (unsigned)epoch, (unsigned)load, (unsigned)frontier);
+                fflush(stderr);
+                g_follow_nack_pending = 1;
+                g_follow_nack_epoch = epoch;
+                g_follow_nack_mismatch = mismatch;
+                g_follow_nack_load = load;
+                g_follow_nack_target = target;
+                g_follow_nack_slot = slot;
+                g_follow_nack_sends = 0;
+                send_follow_nack(epoch, mismatch, load, target, slot, 1);
+                g_follow_nack_sends = 1;
+                return;
+            }
         }
     }
     memset(&corr, 0, sizeof(corr));
@@ -7560,8 +7986,9 @@ void psx_netplay_rb_pump(void)
             continue;
         }
         if (op == RNET_RB_SYNC_OP_NACK) {
-            /* MotK: op=NACK is follow-NACK (missing load snap / past frontier),
-             * not an echo. target field carries the follower's frontier. */
+            /* MotK: op=NACK is follow-NACK (missing load snap / past frontier /
+             * zombie load), not an echo. target field carries the follower's
+             * frontier. */
             if (rnet_rb_is_active(g_rb) && epoch == rnet_rb_get_epoch_id(g_rb) &&
                 !rnet_rb_is_from_peer_notify(g_rb)) {
                 char why[96];
@@ -7569,24 +7996,6 @@ void psx_netplay_rb_pump(void)
                 uint32_t live_sim = ns ? rnet_session_sim_tick(ns) : 0u;
                 uint32_t peer_frontier = target;
                 uint32_t demote = (load > 0u) ? load - 1u : 0u;
-                /* Shared frontier: demote to the follower's advertised
-                 * frontier when it is deeper than load-1 — a tick the
-                 * follower can actually prove, so the reopened episode's
-                 * load is followable instead of NACK-cycling. */
-                if (peer_frontier > 0u && peer_frontier < demote)
-                    demote = peer_frontier;
-                /* §62: frontier AHEAD of the refused load = the peer's snap
-                 * ring evicted that tick (not "peer behind"). Remember the
-                 * floor so choose_load never reopens at/below it. */
-                if (peer_frontier >= load && load > g_peer_nack_floor) {
-                    g_peer_nack_floor = load;
-                    fprintf(stderr,
-                            "psxrecomp: rb peer NACK floor=%u "
-                            "(peer frontier=%u ahead — snap evicted)\n",
-                            (unsigned)g_peer_nack_floor,
-                            (unsigned)peer_frontier);
-                    fflush(stderr);
-                }
                 /* Capture before abort_episode clears it — decides whether Live
                  * must rewind (snap already applied) or can stay put. */
                 int snap_was_applied = g_episode_snap_applied;
@@ -7594,6 +8003,102 @@ void psx_netplay_rb_pump(void)
                 int do_live_realign = 0;
                 uint32_t cls;
                 uint32_t cool_n;
+
+                /* §101/§102: peer frontier ahead of refused load = zombie load
+                 * (or §62 snap eviction). Raise peer_resolved + agreed, abort
+                 * Seal immediately, clear hc-fork, and reopen one short light
+                 * tip at the follower tip (no ownership SPAN cascade). */
+                if (peer_frontier >= load && load > 0u) {
+                    int local_slot = g_b.local_slot ? *g_b.local_slot : 0;
+                    int remote_slot = (local_slot == 0) ? 1 : 0;
+                    uint32_t light_mm;
+                    if (g_b.slot_count && *g_b.slot_count < 2)
+                        remote_slot = local_slot;
+                    if (load > g_peer_nack_floor) {
+                        g_peer_nack_floor = load;
+                        fprintf(stderr,
+                                "psxrecomp: rb peer NACK floor=%u "
+                                "(peer frontier=%u ahead — zombie/evicted)\n",
+                                (unsigned)g_peer_nack_floor,
+                                (unsigned)peer_frontier);
+                        fflush(stderr);
+                    }
+                    apply_peer_resolved(peer_frontier);
+                    if (!g_agreed_valid || g_agreed_through < peer_frontier) {
+                        g_agreed_through = peer_frontier;
+                        g_agreed_span_lo = peer_frontier;
+                        g_agreed_valid = 1;
+                    }
+                    advertise_agreed_resolved(peer_frontier);
+                    snprintf(why, sizeof(why),
+                             "peer follow NACK load=%u (peer tip=%u ahead)",
+                             (unsigned)load, (unsigned)peer_frontier);
+                    g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+                    g_abort_wire_realign_tick = 0u;
+                    abort_episode(why);
+                    if (snap_was_applied) {
+                        uint32_t t = peer_frontier;
+                        realign_to = 0u;
+                        if (g_snaps) {
+                            for (;;) {
+                                if (netplay_snap_ring_has(g_snaps, t)) {
+                                    realign_to = t;
+                                    break;
+                                }
+                                if (t == 0u)
+                                    break;
+                                --t;
+                            }
+                        }
+                        if (realign_to > 0u) {
+                            fprintf(stderr,
+                                    "psxrecomp: rb NACK peer-ahead realign "
+                                    "load=%u → %u (frontier=%u)\n",
+                                    (unsigned)load, (unsigned)realign_to,
+                                    (unsigned)peer_frontier);
+                            fflush(stderr);
+                            schedule_live_realign(realign_to, why);
+                        }
+                    } else {
+                        fprintf(stderr,
+                                "psxrecomp: rb NACK keep-live peer-ahead "
+                                "load=%u frontier=%u live=%u (no rewind)\n",
+                                (unsigned)load, (unsigned)peer_frontier,
+                                (unsigned)live_sim);
+                        fflush(stderr);
+                    }
+                    clear_rewind_cooldown(why);
+                    psx_netplay_hc_fork_recovery_clear();
+                    /* Immediate short light tip at peer tip — not hc-fork SPAN. */
+                    g_peer_ahead_force_load = peer_frontier;
+                    light_mm = peer_frontier + 1u;
+                    if (live_sim > light_mm)
+                        light_mm = live_sim;
+                    if (light_mm <= peer_frontier)
+                        light_mm = peer_frontier + 1u;
+                    fprintf(stderr,
+                            "psxrecomp: rb peer-ahead light reopen "
+                            "mismatch=%u load=%u depth≤%u\n",
+                            (unsigned)light_mm, (unsigned)peer_frontier,
+                            (unsigned)RB_PEER_AHEAD_LIGHT_DEPTH);
+                    fflush(stderr);
+                    if (!psx_netplay_rb_begin_rewind(light_mm, remote_slot)) {
+                        g_peer_ahead_force_load = 0u;
+                        g_peer_ahead_light_episode = 0;
+                        fprintf(stderr,
+                                "psxrecomp: rb peer-ahead light reopen "
+                                "deferred (begin refused)\n");
+                        fflush(stderr);
+                    }
+                    continue;
+                }
+
+                /* Shared frontier: demote to the follower's advertised
+                 * frontier when it is deeper than load-1 — a tick the
+                 * follower can actually prove, so the reopened episode's
+                 * load is followable instead of NACK-cycling. */
+                if (peer_frontier > 0u && peer_frontier < demote)
+                    demote = peer_frontier;
                 snprintf(why, sizeof(why), "peer follow NACK load=%u", (unsigned)load);
                 /* Peer refused load as past its frontier — usually because we
                  * tip-held / advanced agreed_through without their POST ack
@@ -7610,7 +8115,14 @@ void psx_netplay_rb_pump(void)
                  * demote watermarks + prime HC so live hash_confirm cannot
                  * immediately re-ADVANCE past the refused tip (soak: NACK
                  * demote 3840 then `agreed ADVANCE 3840→3856` on the next
-                 * pump from stale HC). */
+                 * pump from stale HC).
+                 *
+                 * §103 (session 142): deep demote Live 827→763 after a light
+                 * tip NACK (snap never applied) forked cores @764 → forced
+                 * MEDIA-KF ~3.7MB + ownership FMV refuse. When demote depth
+                 * exceeds RB_NACK_DEEP_REALIGN_MAX and the snap was never
+                 * applied: keep-live, soft-demote agreed to load-1 only,
+                 * sticky-clamp peer_resolved to the follower frontier. */
                 if (g_snaps && demote > 0u) {
                     uint32_t t;
                     for (t = demote;; --t) {
@@ -7620,6 +8132,58 @@ void psx_netplay_rb_pump(void)
                         }
                         if (t == 0u)
                             break;
+                    }
+                }
+                {
+                    int deep_keep_live =
+                        !snap_was_applied && live_sim > load && demote > 0u &&
+                        live_sim > demote &&
+                        (live_sim - demote) > RB_NACK_DEEP_REALIGN_MAX;
+                    if (deep_keep_live) {
+                        uint32_t soft =
+                            (load > 0u) ? (load - 1u) : 0u;
+                        if (g_snaps && soft > 0u) {
+                            uint32_t t;
+                            for (t = soft;; --t) {
+                                if (netplay_snap_ring_has(g_snaps, t)) {
+                                    soft = t;
+                                    break;
+                                }
+                                if (t == 0u)
+                                    break;
+                            }
+                        }
+                        if (g_agreed_valid && g_agreed_through >= load) {
+                            g_agreed_through = soft;
+                            g_agreed_span_lo = soft;
+                        }
+                        /* Clamp peer tip to what the follower proved — do not
+                         * drag local HC/agreed down to a stale frontier. */
+                        if (peer_frontier > 0u) {
+                            if (g_peer_resolved_through == 0u ||
+                                g_peer_resolved_through > peer_frontier)
+                                g_peer_resolved_through = peer_frontier;
+                            g_peer_resolved_gate_expired = 0;
+                            g_peer_resolved_wait_t0_ms = 0ull;
+                            g_past_frontier_sticky = 1;
+                            rnet_rb_demote_resolved_through(g_rb,
+                                                            peer_frontier);
+                        }
+                        if (g_pin_valid && g_pin_tick >= load)
+                            clear_baseline_pin();
+                        g_episode_baseline_matched = 0;
+                        g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+                        g_abort_wire_realign_tick = 0u;
+                        abort_episode(why);
+                        fprintf(stderr,
+                                "psxrecomp: rb NACK keep-live deep "
+                                "frontier=%u soft_agreed=%u live=%u load=%u "
+                                "(no demote Live; sticky peer gate)\n",
+                                (unsigned)peer_frontier, (unsigned)soft,
+                                (unsigned)live_sim, (unsigned)load);
+                        fflush(stderr);
+                        clear_rewind_cooldown(why);
+                        continue;
                     }
                 }
                 if (g_agreed_valid && g_agreed_through >= load) {
@@ -7646,7 +8210,8 @@ void psx_netplay_rb_pump(void)
                          * §71: also realign when the snap was NEVER applied but
                          * Live already walked past the refused load — keep-live
                          * + cooldown promote-no-resim forks START/menu presses
-                         * (soak: NACK load=880 live=887 → cores diverge @896). */
+                         * (soak: NACK load=880 live=887 → cores diverge @896).
+                         * §103: deep cases handled above (keep-live). */
                         uint32_t hole_end =
                             remote_wire_hole_end_after(demote, live_sim);
                         if (hole_end > 0u) {

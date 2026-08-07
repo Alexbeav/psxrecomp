@@ -34,9 +34,11 @@
 #include "psx_netplay_rb.h"
 #include "psx_netplay_sched.h"
 #include "cpu_state.h"
+#include "cdrom.h"
 #include "gpu.h"
 #include "interrupts.h"
 #include "mdec.h"
+#include "psx_cycles.h"
 #include "psx_scheduler.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
 #include "psx_lobby_client.h"
@@ -415,6 +417,13 @@ void psx_netplay_pad_trace_dev(int card, int fallback, int sdl_start,
 }
 void psx_netplay_on_rb_snap_loaded(void) {}
 void psx_netplay_hc_fork_recovery_restart(void) {}
+void psx_netplay_hc_fork_recovery_clear(void) {}
+void psx_netplay_cd_bisect_arm(uint32_t from_sim, uint32_t ticks)
+{
+    (void)from_sim;
+    (void)ticks;
+}
+int psx_netplay_cd_bisect_active(void) { return 0; }
 int  psx_netplay_needs_local_sample(void) { return 0; }
 int  psx_netplay_live_pad_buttons(uint16_t *out)
 {
@@ -709,6 +718,166 @@ void psx_netplay_hc_fork_recovery_restart(void)
     fprintf(stderr,
             "psxrecomp: rb hc-fork recovery restart (sim=%u — fresh persist)\n",
             (unsigned)sim);
+    fflush(stderr);
+}
+
+void psx_netplay_hc_fork_recovery_clear(void)
+{
+    s_fork_tick = 0xffffffffu;
+    s_fork_first_sim = 0u;
+    s_fork_last_attempt_sim = 0u;
+}
+
+/* §93 P1: per-tick CD/MDEC/clk crumbs across BIOS→FMV (~160–192) and after
+ * media realign. Enable with PSX_RB_CD_BISECT=1 or =LO-HI (default 150-250).
+ * PSX_RB_CD_BISECT_ARM=N extends N ticks past each media flush_resume arm. */
+static int s_cd_bisect_enabled;
+static int s_cd_bisect_inited;
+static uint32_t s_cd_bisect_lo = 150u;
+static uint32_t s_cd_bisect_hi = 250u;
+static uint32_t s_cd_bisect_arm_until; /* exclusive sim; 0 = inactive */
+static uint32_t s_cd_bisect_arm_span = 48u;
+static uint32_t s_cd_bisect_last_tick = 0xffffffffu;
+
+static void np_cd_bisect_init(void)
+{
+    const char *e;
+    const char *dash;
+    unsigned lo = 0, hi = 0;
+    if (s_cd_bisect_inited)
+        return;
+    s_cd_bisect_inited = 1;
+    e = getenv("PSX_RB_CD_BISECT");
+    if (!e || !e[0] || e[0] == '0')
+        return;
+    s_cd_bisect_enabled = 1;
+    dash = strchr(e, '-');
+    if (dash && dash > e &&
+        sscanf(e, "%u-%u", &lo, &hi) == 2 && hi >= lo) {
+        s_cd_bisect_lo = lo;
+        s_cd_bisect_hi = hi;
+    }
+    e = getenv("PSX_RB_CD_BISECT_ARM");
+    if (e && e[0]) {
+        unsigned n = (unsigned)atoi(e);
+        if (n > 0u && n < 4096u)
+            s_cd_bisect_arm_span = n;
+    }
+    fprintf(stderr,
+            "psxrecomp: rb CD bisect ON sim=%u..%u +arm=%u after media "
+            "flush_resume (per-tick crumbs + cd-cmd ISSUE/QUEUE/DONE; "
+            "diff peer lines by cyc, ignore resim=1)\n",
+            (unsigned)s_cd_bisect_lo, (unsigned)s_cd_bisect_hi,
+            (unsigned)s_cd_bisect_arm_span);
+    fflush(stderr);
+}
+
+void psx_netplay_cd_bisect_arm(uint32_t from_sim, uint32_t ticks)
+{
+    uint32_t span;
+    np_cd_bisect_init();
+    if (!s_cd_bisect_enabled)
+        return;
+    span = ticks ? ticks : s_cd_bisect_arm_span;
+    if (span == 0u)
+        span = 48u;
+    if (from_sim + span < from_sim)
+        s_cd_bisect_arm_until = 0xffffffffu;
+    else
+        s_cd_bisect_arm_until = from_sim + span;
+    fprintf(stderr,
+            "psxrecomp: rb CD bisect arm sim=%u..%u (media flush_resume)\n",
+            (unsigned)from_sim, (unsigned)(s_cd_bisect_arm_until - 1u));
+    fflush(stderr);
+}
+
+int psx_netplay_cd_bisect_active(void)
+{
+    uint32_t sim;
+    np_cd_bisect_init();
+    if (!s_cd_bisect_enabled)
+        return 0;
+    sim = psx_netplay_sim_tick();
+    if (sim >= s_cd_bisect_lo && sim <= s_cd_bisect_hi)
+        return 1;
+    if (s_cd_bisect_arm_until != 0u && sim < s_cd_bisect_arm_until)
+        return 1;
+    return 0;
+}
+
+static void np_cd_bisect_tick(uint32_t tick)
+{
+    CDROMDebugState cds;
+    MDECDebugState mds;
+    CPUState dig_cpu;
+    uint32_t csv;
+    uint32_t cd_crc;
+    uint32_t clk_h;
+    uint64_t mdec_age;
+    int in_fixed;
+    int in_arm;
+    np_cd_bisect_init();
+    if (!s_cd_bisect_enabled || !g_np.cpu)
+        return;
+    in_fixed = (tick >= s_cd_bisect_lo && tick <= s_cd_bisect_hi);
+    in_arm = (s_cd_bisect_arm_until != 0u && tick < s_cd_bisect_arm_until);
+    if (!in_fixed && !in_arm)
+        return;
+    if (s_cd_bisect_last_tick == tick)
+        return;
+    s_cd_bisect_last_tick = tick;
+
+    memset(&cds, 0, sizeof(cds));
+    memset(&mds, 0, sizeof(mds));
+    cdrom_debug_snapshot(&cds);
+    mdec_debug_get_state(&mds);
+    psx_netplay_rb_cpu_for_present_digest(&dig_cpu, g_np.cpu);
+    csv = interrupts_get_cycles_since_vblank();
+    cd_crc = netplay_cdrom_digest();
+    {
+        NetplayCoreParts parts;
+        netplay_core_digest_parts(&dig_cpu, &parts);
+        clk_h = parts.clock_irq;
+    }
+    mdec_age = mdec_color_age_cycles();
+
+    fprintf(stderr,
+            "psxrecomp: rb cd-bisect sim=%u cyc=%llu csv=%u pc=%08x "
+            "i_stat=%08x clk=%08x cd=%08x "
+            "rd=%d reading=%d present_d=%d pend=%d/%d pend_cmd=%02x div=%d "
+            "lba=%d rMSF=%02d:%02d:%02d mode=%02x "
+            "irq_f=%02x irq_e=%02x sec_av=%d sec_pos=%d "
+            "mdec_age=%llu mdec_busy=%u in=%u out=%u/%u depth24=%d "
+            "xa=%d fmv_pend=%d\n",
+            (unsigned)tick,
+            (unsigned long long)psx_cycle_count,
+            (unsigned)csv,
+            (unsigned)dig_cpu.pc,
+            (unsigned)cds.i_stat,
+            (unsigned)clk_h,
+            (unsigned)cd_crc,
+            cds.read_delay,
+            cds.reading,
+            cds.irq_present_delay,
+            cds.pending_pending,
+            cds.pending_delay,
+            (unsigned)cds.pending_cmd,
+            cds.speed_divisor,
+            cds.last_sector_lba,
+            cds.read_min, cds.read_sec, cds.read_sect,
+            (unsigned)cds.mode_reg,
+            (unsigned)cds.irq_flag,
+            (unsigned)cds.irq_enable,
+            cds.sector_available,
+            cds.sector_read_pos,
+            (unsigned long long)mdec_age,
+            (unsigned)mds.busy,
+            (unsigned)mds.input_count,
+            (unsigned)mds.output_pos,
+            (unsigned)mds.output_size,
+            gpu_display_is_depth24(),
+            cdrom_xa_stream_active(),
+            cdrom_fmv_stream_pending());
     fflush(stderr);
 }
 
@@ -2310,9 +2479,9 @@ static void np_rollback_reconcile_wire(void)
     cooldown = psx_netplay_rb_rewind_suppressed();
     fmv_defer = psx_netplay_rb_fmv_defer_rewind();
     {
-        /* Media + short settle (§26): promote-only; admit waits for wire so
-         * FMV Start/skip never opens depth24 tip episodes. Post-FMV menus
-         * invent+resim (digest lockstep no longer gates admit). */
+        /* Media + short settle (§26/§100): promote-only; invent off during
+         * live FMV even with MEDIA_KF (avoids GAP1→3.7MB KF xfer). Post-FMV
+         * menus invent+resim. */
         int fmv_lock = psx_netplay_rb_lockstep_no_invent();
         no_resim = promote_sweep || cooldown || fmv_lock;
         if (promote_sweep)
@@ -3114,13 +3283,24 @@ static int resolve_use_ice(const PsxNetplayConfig *cfg)
     return 0;
 #else
     {
-        int online_requested = cfg->transport == 1 ||
-                               (cfg->transport == 0 && in_motk_room);
-        if (online_requested) {
+        /* Session 151: Desktop guest (no ICE) got MotK launch with peer set
+         * to the SFU advertise host but force_input_relay unset → hard -4
+         * while host SFU-started. Dial a usable peer as LAN/SFU instead. */
+        if (in_motk_room && cfg->peer_hostport && cfg->peer_hostport[0]) {
             fprintf(stderr,
-                    "psx_netplay: hosted lobby requires ICE, but ICE is not "
-                    "available in this build (configure with PSX_NET_ICE=ON / "
-                    "RNET_ENABLE_ICE=ON)\n");
+                    "psx_netplay: no-ICE build — MotK room dialing peer %s "
+                    "as LAN/SFU (rebuild with PSX_NET_ICE=ON for ice_p2p)\n",
+                    cfg->peer_hostport);
+            fflush(stderr);
+            return 0;
+        }
+        if (cfg->transport == 1 || in_motk_room) {
+            fprintf(stderr,
+                    "psx_netplay: hosted lobby needs ICE or a SFU "
+                    "relay_endpoint, but ICE is not in this build and peer "
+                    "is empty (configure PSX_NET_ICE=ON / RNET_ENABLE_ICE=ON, "
+                    "or Force Relay so launch includes relay_endpoint)\n");
+            fflush(stderr);
             return -1;
         }
     }
@@ -3156,6 +3336,15 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
     /* Max delay 20 matches RNET_MAX_BUNDLE 21 (neutral prefix + tip). */
     rcfg.input_delay = (rnet_u8)(cfg->input_delay < 0 ? 0
                                : (cfg->input_delay > 20 ? 20 : cfg->input_delay));
+    /* §105: rollback floor D≥5 at session create (both peers). Lobby can
+     * still seed 2–4 for delay-sync probe; Play clamps here. */
+    if (cfg->rollback && rcfg.input_delay > 0u && rcfg.input_delay < 5u) {
+        fprintf(stderr,
+                "psxrecomp: rb session delay floor %u → 5 (rollback min)\n",
+                (unsigned)rcfg.input_delay);
+        fflush(stderr);
+        rcfg.input_delay = 5u;
+    }
     rcfg.session_id = cfg->session_id ? cfg->session_id : 1u;
 
     /* Host resolves auto (-1) before start; accept 0..PSX_MAX_PLAYERS-1. */
@@ -3522,7 +3711,16 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
 
 void psx_netplay_bind_guest_saves(void)
 {
-    if (!psx_netplay_active() || g_np.local_slot == 0 || g_np.guest_sandbox)
+    uint32_t bios = 0, entry = 0;
+    if (!psx_netplay_active())
+        return;
+    /* psx_netplay_start runs before savestate_configure, so g_np still held
+     * bios=0/entry=0. Refresh for both seats: host RB snaps (MEDIA-KF) must
+     * carry the real integrity key or the guest rejects the transfer. */
+    savestate_get_integrity(&bios, &entry);
+    g_np.bios_checksum = bios;
+    g_np.entry_pc = entry;
+    if (g_np.local_slot == 0 || g_np.guest_sandbox)
         return;
     np_enter_guest_sandbox();
 }
@@ -4329,6 +4527,8 @@ void psx_netplay_finish_frame(void)
         psx_netplay_rb_finish_frame();
         /* Exchange cores during Replay so mid-resim forks abort before POST. */
         np_emit_frame_commit(done);
+        /* Outside emit: Live FMV skips FRAME_COMMIT; bisect still needs crumbs. */
+        np_cd_bisect_tick(done);
         np_drain_peer_frame_commits();
         g_np.latched_for_tick = 0;
         g_np.needs_advance = 0; /* live latch must not outlive a resim vblank */
@@ -4340,6 +4540,7 @@ void psx_netplay_finish_frame(void)
     /* Digest the tick that just ran (sim_tick before advance). */
     done = rnet_session_sim_tick(g_np.session);
     np_emit_frame_commit(done);
+    np_cd_bisect_tick(done);
     if (g_np.rollback) {
         uint32_t resume_hint = 0;
         /* TipHold Live: reconcile late wire so tip-extend can schedule rereplay. */

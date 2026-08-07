@@ -3996,8 +3996,13 @@ static void netplay_barrier_admit(int override) {
         if (psx_return_to_lobby_requested()) return;
         /* §35: TipHold invent-cap stall freezes guest (no vblank present).
          * Keep Swap alive on the last Live frame so SAFETY/held waits do not
-         * open a ~250ms present gap. */
-        if (psx_netplay_rb_tip_holding())
+         * open a ~250ms present gap.
+         * §100: MEDIA-KF probe/xfer (~3.7 MB) also parks sim in admit — hold
+         * last FMV frame so intro does not freeze for the transfer window. */
+        if (psx_netplay_rb_tip_holding() ||
+            psx_netplay_rb_media_kf_busy() ||
+            (psx_netplay_rb_fmv_media_active() && psx_netplay_rb_active() &&
+             !psx_netplay_rb_is_resimulating()))
             netplay_hold_last_present_tick();
         /* Wake on peer UDP (or 1ms timeout). SDL_Delay(1) under dual FMV load
          * often stretches multi-ms and cut MotK netplay intro ~59→~36; Delay(0)
@@ -4925,6 +4930,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         uint32_t sim = psx_netplay_sim_tick();
         int beyond_shown = sim != 0u && sim != 0xffffffffu &&
                            sim > s_netplay_present_sim_watermark;
+        /* §99: FMV media Replay is CD/MDEC-bound — skip dual-raster present
+         * entirely (hold-last). Live FMV present + catchup gate still apply
+         * once media ends; near-tip media loads are short enough that a frozen
+         * frame for a few resim ticks is preferable to 1–3s GL hitch. */
+        if (psx_netplay_rb_fmv_media_active()) {
+            netplay_hold_last_present_tick();
+            return ep;
+        }
         if (!beyond_shown && !netplay_replay_catchup_should_live_present(rem)) {
             netplay_hold_last_present_tick();
             return ep;
@@ -5349,6 +5362,12 @@ static void sdl_vblank_present(void) {
     latency_ring_mark(LAT_PACED);
 }
 
+/* game.toml [netplay] + last TOC fingerprint — shared by launcher verify and
+ * the pre-psx_netplay_start gate (works with or without RECOMP_LAUNCHER). */
+static PSXRecompV4::NetplayDiscExpect g_netplay_disc_expect{};
+static std::string g_session_disc_fp;
+static bool        g_session_netplay_disc_ok = false;
+
 #if defined(RECOMP_LAUNCHER)
 // Host verification/inspection callbacks for the shared recomp-ui launcher.
 // The launcher re-runs these on every disc/memory-card change so the "Disc
@@ -5526,18 +5545,30 @@ namespace {
 
     int ae_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
         if (!disc_path || !disc_path[0] || !out) return 0;
+        std::memset(out, 0, sizeof(*out));
         PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
             disc_path, g_lnch_expected_serial, g_lnch_expected_crc,
-            g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc);
+            g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc,
+            &g_netplay_disc_expect);
         const std::string& serial = !id.detected_serial.empty()
             ? id.detected_serial : g_lnch_expected_serial;
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
-        // Verdict shown by the launcher.
+        out->track_count = id.track_count;
+        out->netplay_ok = id.netplay_ok ? 1 : 0;
+        std::snprintf(out->disc_fp, sizeof(out->disc_fp), "%s", id.disc_fp.c_str());
+        std::snprintf(out->netplay_detail, sizeof(out->netplay_detail), "%s",
+                      id.netplay_detail.c_str());
+        g_session_disc_fp = id.disc_fp;
+        g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
+        psx_lobby_set_disc_fp(id.disc_fp.c_str());
+        // Verdict shown by the launcher. TOC / [netplay] failures are warn so
+        // offline Play still works; online is gated by netplay_ok + disc_fp.
         if (!id.opened || !id.has_header)                            out->verdict = 3; // bad
         else if (id.expected_serial_given && !id.serial_matches)     out->verdict = 3; // wrong disc
         else if (id.expected_crc_given && id.crc_computed && !id.crc_matches) out->verdict = 2; // warn
+        else if (!id.netplay_ok)                                     out->verdict = 2; // TOC/cue
         else                                                          out->verdict = 1; // ok
         return 1;
     }
@@ -5559,10 +5590,10 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
     int g_lnch_lobby_input_prediction = 4;
-    /* Online default: lobby UDP SFU star (server always opens relay on start). */
-    int g_lnch_force_input_relay = 1;
-    /* Default on: CGNAT-safe relay-only ICE (BattleShip-style online path). */
-    int g_lnch_force_turn = 1;
+    /* Offline default off — waiting-room ICE probes host/srflx so the lobby
+     * server can choose ice_p2p vs SFU. Force-relay / Force TURN still override. */
+    int g_lnch_force_input_relay = 0;
+    int g_lnch_force_turn = 0;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
     int g_lnch_rollback = 1;
     int g_lnch_host_max_slots = 2;
@@ -6843,6 +6874,7 @@ namespace {
 
     int ae_np_connect(void*) {
         psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
         return psx_lobby_connect(ae_np_default_url(nullptr));
     }
@@ -8012,11 +8044,26 @@ namespace {
             if (seated > out->max_slots) seated = out->max_slots;
             out->player_count = seated;
         }
-        /* Online WS lobbies always use lobby UDP SFU; LAN/direct stay local. */
+        /* SFU when launch rewrote caps.force_input_relay (relay_endpoint);
+         * ice_p2p / LAN leave it clear. Also detect equal host/guest
+         * endpoints (server SFU advertise) when the caps bit was omitted —
+         * session 151 Desktop guest dialed the relay hostname without
+         * force_input_relay and died in resolve_use_ice (-4). */
         out->force_input_relay =
-            (g_lnch_hosting_lan || g_lnch_joined_lan) ? 0 : 1;
-        out->force_turn =
-            (caps && caps->valid && caps->force_turn) ? 1 : 0;
+            (g_lnch_hosting_lan || g_lnch_joined_lan)
+                ? 0
+                : (caps->force_input_relay ? 1 : 0);
+        if (!out->force_input_relay && !g_lnch_hosting_lan &&
+            !g_lnch_joined_lan && ji->host_endpoint[0] &&
+            ji->guest_endpoint[0] &&
+            std::strcmp(ji->host_endpoint, ji->guest_endpoint) == 0) {
+            out->force_input_relay = 1;
+            std::fprintf(stderr,
+                         "psxrecomp: launch force_input_relay inferred "
+                         "(host_endpoint==guest_endpoint=%s)\n",
+                         ji->host_endpoint);
+        }
+        out->force_turn = caps->force_turn ? 1 : 0;
         out->rollback =
             (caps && caps->valid && caps->rollback) ? 1 : 0;
         return 1;
@@ -8311,6 +8358,13 @@ std::string player_device[PSX_MAX_PLAYERS];
                 g_offline_pad_count = PSX_MAX_PLAYERS;
             game_has_disc_crc = gc.has_disc_crc;
             game_disc_crc     = gc.disc_crc;
+            g_netplay_disc_expect.require_cue = gc.netplay_require_cue;
+            g_netplay_disc_expect.required_tracks = gc.netplay_required_tracks;
+            g_netplay_disc_expect.has_required_leadout =
+                gc.has_netplay_required_leadout;
+            g_netplay_disc_expect.required_leadout_lba =
+                gc.netplay_required_leadout_lba;
+            g_netplay_disc_expect.required_disc_fp = gc.netplay_required_disc_fp;
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -10055,6 +10109,43 @@ session_reboot:
      * Must start after SDL so local pad capture has devices; before the guest
      * fiber so the first vblanks already pump HELLO/START. */
     if (net_cfg.enabled) {
+        /* Refuse mismatched / incomplete mounts before opening transport.
+         * Launcher already gates create/join; this covers CLI --netplay and
+         * any path that skipped the UI verify. */
+        {
+            const std::filesystem::path disc_check = resolved_disc;
+            if (!disc_check.empty()) {
+#if defined(RECOMP_LAUNCHER)
+                const std::string& expect_serial = g_lnch_expected_serial;
+                const uint32_t expect_crc = g_lnch_expected_crc;
+                const bool has_crc = g_lnch_has_crc;
+#else
+                const std::string expect_serial = game_id;
+                const uint32_t expect_crc = game_disc_crc;
+                const bool has_crc = game_has_disc_crc;
+#endif
+                PSXRecompV4::DiscIdentity nid = PSXRecompV4::identify_disc(
+                    disc_check, expect_serial, expect_crc, has_crc,
+                    /*compute_crc*/ false, &g_netplay_disc_expect);
+                g_session_disc_fp = nid.disc_fp;
+                g_session_netplay_disc_ok = nid.netplay_ok && !nid.disc_fp.empty();
+                psx_lobby_set_disc_fp(nid.disc_fp.c_str());
+                if (!g_session_netplay_disc_ok) {
+                    std::fprintf(stderr,
+                        "psxrecomp: netplay refused — disc mount not valid for "
+                        "online (%s)\n",
+                        nid.netplay_detail.empty()
+                            ? "TOC fingerprint missing or policy failed"
+                            : nid.netplay_detail.c_str());
+                    return 1;
+                }
+            } else if (!g_session_netplay_disc_ok || g_session_disc_fp.empty()) {
+                std::fprintf(stderr,
+                    "psxrecomp: netplay refused — no verified disc TOC "
+                    "fingerprint (mount the supported .cue dump)\n");
+                return 1;
+            }
+        }
         /* Transport role and gameplay slot are independent. An empty peer
          * means this process listens for the first peer, even when the lobby
          * owner was reordered into gameplay slot 1 (Player 2). */
@@ -10182,8 +10273,8 @@ session_reboot:
             }
         }
     }
-    /* Guest netplay: sandbox .pst/.mcd under saves/netplay/ after personal
-     * roots are known (must follow savestate_configure + memcard_init). */
+    /* Netplay: refresh RB bios/entry after savestate_configure (start() ran
+     * earlier with zeros); guest also sandboxes .pst/.mcd under saves/netplay/. */
     psx_netplay_bind_guest_saves();
 
     /* Let memory subsystem see SR for cache-isolation checks. */

@@ -2263,12 +2263,27 @@ static void gpu_reset_state(int clear_vram) {
     }
     gr_init(vram);
 
-    /* Reset GP0 state machine */
+    /* Reset GP0 state machine (+ leftover cmd/xfer crumbs that survive in
+     * gpu_snapshot and fork av digests on rematch). */
     gp0_state = GP0_IDLE;
     gp0_words_collected = 0;
     gp0_words_needed = 0;
+    memset(gp0_cmd_buf, 0, sizeof(gp0_cmd_buf));
+    gp0_next_source_addr = 0xFFFFFFFFu;
+    gp0_cmd_source_addr = 0xFFFFFFFFu;
+    polyline_color = 0;
+    polyline_prev_x = polyline_prev_y = 0;
+    polyline_prev_c = 0;
+    polyline_semi_trans = 0;
+    polyline_has_prev = 0;
+    vram_write_x = vram_write_y = 0;
+    vram_write_w = vram_write_h = 0;
+    vram_write_col = vram_write_row = 0;
     vram_write_remaining = 0;
     vram_read_active = 0;
+    vram_read_x = vram_read_y = 0;
+    vram_read_w = vram_read_h = 0;
+    vram_read_col = vram_read_row = 0;
 
     /* Reset all state to power-on defaults */
     texpage_x = 0;

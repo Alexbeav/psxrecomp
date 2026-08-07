@@ -5,6 +5,11 @@
 // PlayStation boot serial (from SYSTEM.CNF), derives the region from the
 // serial prefix, and optionally compares against an expected serial / CRC32.
 //
+// Also mounts the resolved path via ISOReader to capture TOC geometry
+// (track count, lead-out, per-track LBAs) and a stable disc_fp fingerprint
+// used by netplay peer matching — data-track CRC alone cannot catch a
+// Track-01-only mount vs a full Redump multi-track cue.
+//
 // Used both by the runtime's launch-time disc check (runtime/src/main.cpp)
 // and by the shared launcher's "Disc verified" badge, so
 // the two never drift apart.
@@ -36,7 +41,29 @@ struct DiscIdentity {
     bool        expected_crc_given = false;
     bool        crc_matches        = false;
 
+    // Mount / TOC (ISOReader on resolve_disc_path().mount).
+    bool        from_cue       = false;  // mount path is a .cue
+    bool        cue_fallback   = false;  // resolver fell back from a broken cue to a bin
+    bool        upgraded_to_cue = false; // caller picked bin; mounted owning cue
+    bool        toc_opened     = false;  // ISOReader::Open succeeded on mount
+    int         track_count    = 0;      // >= 1 when toc_opened
+    uint32_t    leadout_lba    = 0;      // iso sector count (GetTD track 0)
+    std::string disc_fp;                 // lowercase hex SHA-256 of canonical TOC
+
+    // Netplay gate (filled when NetplayDiscExpect is applied).
+    bool        netplay_ok     = true;
+    std::string netplay_detail;          // why netplay_ok is false
+
     std::string detail;  // human-readable note (failure reason or extra info)
+};
+
+// Optional title policy from game.toml [netplay] (0 / empty = do not check).
+struct NetplayDiscExpect {
+    bool        require_cue = false;
+    int         required_tracks = 0;           // exact iso_track_count; 0 = skip
+    bool        has_required_leadout = false;
+    uint32_t    required_leadout_lba = 0;
+    std::string required_disc_fp;              // exact fingerprint; empty = skip
 };
 
 // Identify and (optionally) verify a disc image.
@@ -47,9 +74,15 @@ struct DiscIdentity {
 //   compute_crc      : compute the full-file CRC32 (streamed; can be slow on big
 //                      images — callers typically only request it when there is an
 //                      expected CRC to compare against)
+//   netplay_expect   : optional TOC / cue policy; nullptr skips netplay_ok checks
+//                      (disc_fp / track_count are still computed when mount opens)
 DiscIdentity identify_disc(const std::filesystem::path& path,
                            const std::string& expected_serial,
                            uint32_t expected_crc, bool has_expected_crc,
-                           bool compute_crc);
+                           bool compute_crc,
+                           const NetplayDiscExpect* netplay_expect = nullptr);
+
+// Apply / re-apply netplay mount policy onto an already-identified disc.
+void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect);
 
 }  // namespace PSXRecompV4

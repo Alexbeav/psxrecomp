@@ -25,6 +25,8 @@ int  psx_lobby_list_count(void) { return 0; }
 int  psx_lobby_list_get(int index, PsxLobbyRow *out) { (void)index; (void)out; return 0; }
 void psx_lobby_set_game_identity(const char *a, const char *b) { (void)a; (void)b; }
 const char *psx_lobby_game_version(void) { return PSX_GAME_VERSION; }
+void psx_lobby_set_disc_fp(const char *disc_fp) { (void)disc_fp; }
+const char *psx_lobby_disc_fp(void) { return ""; }
 void psx_lobby_set_max_slots(int max_slots) { (void)max_slots; }
 int  psx_lobby_create(const char *a, const char *b, const char *c, const char *d,
                       const char *e, const PsxLobbyMatchCaps *f)
@@ -147,6 +149,7 @@ typedef struct {
     char my_bind[PSX_LOBBY_ENDPOINT_LEN];
     char filter_game_name[PSX_LOBBY_NAME_LEN];
     char filter_game_version[PSX_LOBBY_VERSION_LEN];
+    char disc_fp[65]; /* lowercase hex SHA-256 TOC fingerprint; "" = unset */
     PsxLobbyJoinInfo join;
     PsxLobbyMember members[PSX_LOBBY_MAX_MEMBERS];
     int member_count;
@@ -223,6 +226,9 @@ static RNetIceRttProbe *g_ice_rtt;
 static char g_ice_rtt_peer_id[PSX_LOBBY_ID_LEN];
 static int g_ice_rtt_force_relay;
 static uint64_t g_ice_rtt_last_log_ms;
+/* Last path_report sent to the lobby server (direct|relay|fail). */
+static char g_ice_path_reported[16];
+static uint64_t g_ice_path_report_ms;
 
 /* One-shot list latency: burst-ping LAN + public candidates after lobby_list. */
 #define PSX_LOBBY_MAX_PROBE_PEND (PSX_LOBBY_MAX_LIST * (PSX_LOBBY_MAX_LAN_EPS + 1))
@@ -1840,12 +1846,17 @@ static void handle_server_json(const char *json)
             if (!g_lc.match_caps.valid)
                 g_lc.match_caps.valid = 1;
             g_lc.match_caps.force_input_relay = 1;
+        } else if (g_lc.match_caps.valid) {
+            /* ice_p2p / non-SFU launch — do not keep a stale force_input_relay. */
+            g_lc.match_caps.force_input_relay = 0;
         }
         fill_peer_bind_from_join();
         parse_slots_array(json);
         /* Guest must know host:port (or relay). Host may leave peer empty for
-         * accept-first / host-as-relay. Server relay: every peer dials relay. */
+         * accept-first / host-as-relay. Server relay: every peer dials relay.
+         * ice_p2p: MotK ICE signaling; LAN endpoints optional. */
         {
+            char transport[24];
             const int force_relay = using_server_input_relay(&g_lc.join);
             const int seats = g_lc.join.player_count >= 2 ? g_lc.join.player_count
                                                          : g_lc.join.max_slots;
@@ -1853,6 +1864,12 @@ static void handle_server_json(const char *json)
                 (g_lc.is_host && seats >= 3 && !force_relay) ? 1 : 0;
             const int peer_bad = !g_lc.join.peer_hostport[0] ||
                                  endpoint_port_is_zero(g_lc.join.peer_hostport);
+            int ice_p2p = 0;
+            transport[0] = '\0';
+            json_get_str(json, "transport", transport, sizeof(transport));
+            if (strcmp(transport, "ice_p2p") == 0 ||
+                (!force_relay && seats == 2 && !relay_endpoint[0]))
+                ice_p2p = 1;
             if (force_relay) {
                 if (peer_bad) {
                     strncpy(g_lc.join.last_error, "missing_endpoints",
@@ -1860,6 +1877,24 @@ static void handle_server_json(const char *json)
                     g_lc.launch_pending = 0;
                     return;
                 }
+            } else if (ice_p2p) {
+#if !defined(RNET_ENABLE_ICE)
+                /* Session 151: no-ICE Desktop cannot run ice_p2p — refuse
+                 * launch with a clear error instead of start failed (-4). */
+                fprintf(stderr,
+                        "psx_lobby: launch transport=ice_p2p refused — this "
+                        "build has no ICE (need SFU / Force Relay, or rebuild "
+                        "with PSX_NET_ICE=ON)\n");
+                fflush(stderr);
+                strncpy(g_lc.join.last_error, "ice_required",
+                        sizeof(g_lc.join.last_error) - 1);
+                g_lc.launch_pending = 0;
+                return;
+#else
+                fprintf(stderr,
+                        "psx_lobby: launch transport=ice_p2p (no SFU)\n");
+                fflush(stderr);
+#endif
             } else if (!g_lc.join.host_endpoint[0] ||
                        (g_lc.is_host && !host_hub && !g_lc.join.guest_endpoint[0]) ||
                        (!g_lc.is_host && peer_bad)) {
@@ -1928,7 +1963,8 @@ static void handle_server_json(const char *json)
             strcmp(code, "already_in_lobby") == 0 ||
             strcmp(code, "lobby_limit") == 0 ||
             strcmp(code, "version_mismatch") == 0 ||
-            strcmp(code, "game_mismatch") == 0) {
+            strcmp(code, "game_mismatch") == 0 ||
+            strcmp(code, "disc_mismatch") == 0) {
             g_lc.join.ok = 0;
         }
         return;
@@ -2193,6 +2229,8 @@ static void lobby_ice_rtt_close(void)
     g_ice_rtt_peer_id[0] = '\0';
     g_ice_rtt_force_relay = 0;
     g_ice_rtt_last_log_ms = 0;
+    g_ice_path_reported[0] = '\0';
+    g_ice_path_report_ms = 0;
     /* Keep accept=1 through launch / match so match ICE can queue offers.
      * Waiting-room resume clears accept until the probe restarts. */
     if (!g_lc.launch_pending && !g_lc.ice_rtt_suspended)
@@ -2366,11 +2404,33 @@ static void lobby_ice_rtt_tick(void)
     rnet_ice_rtt_selected_path(g_ice_rtt, path, sizeof(path));
     {
         uint64_t now = lobby_mono_ms();
+        const char *report = NULL;
         if (now - g_ice_rtt_last_log_ms >= 3000ull) {
             g_ice_rtt_last_log_ms = now;
             fprintf(stderr,
                     "psx_lobby: ICE RTT state=%s path=%s rtt=%d\n",
                     rnet_ice_state_name(st), path, ms);
+            fflush(stderr);
+        }
+        /* Server picks SFU vs ICE P2P from these reports (2 seated only). */
+        if (strcmp(path, "host") == 0 || strcmp(path, "srflx") == 0 ||
+            strcmp(path, "prflx") == 0)
+            report = "direct";
+        else if (strcmp(path, "relay") == 0)
+            report = "relay";
+        else if (strcmp(path, "failed") == 0)
+            report = "fail";
+        if (report && g_lc.member_count == 2 &&
+            (strcmp(report, g_ice_path_reported) != 0 ||
+             now - g_ice_path_report_ms >= 10000ull)) {
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                     "{\"op\":\"path_report\",\"path\":\"%s\"}", report);
+            queue_send(msg);
+            strncpy(g_ice_path_reported, report, sizeof(g_ice_path_reported) - 1);
+            g_ice_path_reported[sizeof(g_ice_path_reported) - 1] = '\0';
+            g_ice_path_report_ms = now ? now : 1ull;
+            fprintf(stderr, "psx_lobby: path_report %s\n", report);
             fflush(stderr);
         }
     }
@@ -2498,6 +2558,29 @@ const char *psx_lobby_game_version(void)
     return effective_game_version(NULL);
 }
 
+void psx_lobby_set_disc_fp(const char *disc_fp)
+{
+    size_t i;
+    g_lc.disc_fp[0] = '\0';
+    if (!disc_fp || !disc_fp[0]) return;
+    /* Accept only 64 lowercase/uppercase hex chars; normalize to lower. */
+    for (i = 0; i < 64; i++) {
+        unsigned char c = (unsigned char)disc_fp[i];
+        if (!isxdigit(c)) return;
+        g_lc.disc_fp[i] = (char)tolower(c);
+    }
+    if (disc_fp[64] != '\0') {
+        g_lc.disc_fp[0] = '\0';
+        return;
+    }
+    g_lc.disc_fp[64] = '\0';
+}
+
+const char *psx_lobby_disc_fp(void)
+{
+    return g_lc.disc_fp;
+}
+
 void psx_lobby_request_list(void)
 {
     g_list_rtt_on_next_list = 1;
@@ -2547,10 +2630,12 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
     }
     n = snprintf(msg, sizeof(msg),
                  "{\"op\":\"create\",\"name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
-                 "\"password\":\"%s\",\"max_slots\":%d,\"host_bind\":\"%s\",\"display_name\":\"%s\"%s}",
+                 "\"password\":\"%s\",\"max_slots\":%d,\"host_bind\":\"%s\",\"display_name\":\"%s\","
+                 "\"disc_fp\":\"%s\"%s}",
                  name && name[0] ? name : "Lobby", gn, gv,
                  password ? password : "", g_lobby_max_slots, g_lc.my_bind,
-                 g_lc.display_name[0] ? g_lc.display_name : "Host", caps_json);
+                 g_lc.display_name[0] ? g_lc.display_name : "Host",
+                 g_lc.disc_fp, caps_json);
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);
     flush_pending();
@@ -2572,10 +2657,11 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
     g_lc.join.last_error[0] = '\0';
     snprintf(msg, sizeof(msg),
              "{\"op\":\"join\",\"lobby_id\":\"%s\",\"password\":\"%s\",\"guest_bind\":\"%s\","
-             "\"display_name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\"}",
+             "\"display_name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
+             "\"disc_fp\":\"%s\"}",
              lobby_id, password ? password : "", g_lc.my_bind,
              g_lc.display_name[0] ? g_lc.display_name : "Guest",
-             gn, gv);
+             gn, gv, g_lc.disc_fp);
     queue_send(msg);
     flush_pending();
     return 0;

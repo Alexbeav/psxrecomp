@@ -63,7 +63,8 @@ int  cdrom_xa_stream_active(void);
  * entry opened a tip episode into a matched black wait. */
 int  cdrom_fmv_stream_pending(void);
 /* Re-arm host absolute CD deadlines from restored relative delays after
- * boot_state / RB snap load. Does NOT clamp delays (unlike accelerate). */
+ * boot_state / RB snap load (read stream + pending/present dues from snap).
+ * Does NOT clamp delays (unlike accelerate). */
 void cdrom_resync_deadlines_after_restore(void);
 
 /* CD load-burst ring (always-on). One record per gap-separated run of
@@ -155,9 +156,13 @@ typedef struct CDROMDebugState {
     uint8_t filter_channel;
     uint8_t muted;
     int read_delay;
+    /* Cycles until a held CD response is presented to INTC (0 = ready). */
+    int irq_present_delay;
     int pending_pending;
     int pending_delay;
     int pending_phase;
+    /* Operating disc-speed divisor (1 during BIOS; game.toml post-entry). */
+    int speed_divisor;
     uint32_t i_stat;
     int last_sector_lba;
     int last_sector_size;

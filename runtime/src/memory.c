@@ -609,6 +609,20 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
 static uint32_t overlay_watch_bitmap[DIRTY_RAM_BITMAP_WORDS];
 static uint32_t overlay_page_gen[DIRTY_RAM_PAGE_COUNT];
 
+void dirty_ram_reset_for_boot(void) {
+    memset(dirty_ram_bitmap, 0, sizeof(dirty_ram_bitmap));
+    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));
+    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));
+    g_text_diverged_pages = 0;
+    memset(overlay_watch_bitmap, 0, sizeof(overlay_watch_bitmap));
+    memset(overlay_page_gen, 0, sizeof(overlay_page_gen));
+    memset(g_dirty_ram_exec_page_bitmap, 0, sizeof(g_dirty_ram_exec_page_bitmap));
+    memset(g_dirty_ram_exec_pc_bitmap, 0, sizeof(g_dirty_ram_exec_pc_bitmap));
+    memset(g_dirty_ram_dispatch_pc_bitmap, 0,
+           sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    g_dirty_ram_code_gen++;
+}
+
 void overlay_watch_set_range(uint32_t phys, uint32_t len) {
     if (len == 0 || phys >= RAM_SIZE) return;
     uint32_t end = phys + len - 1u;
@@ -874,6 +888,8 @@ void memory_init(const char* bios_path) {
     ram_size_reg = 0;
     i_stat = 0;
     i_mask = 0;
+    /* Host dirty/text/overlay bitmaps survive memset(ram) and fork dig0. */
+    dirty_ram_reset_for_boot();
 
     FILE* f = fopen(bios_path, "rb");
     if (!f) {

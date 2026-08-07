@@ -103,6 +103,16 @@ void psx_lobby_pump(void);
 void psx_lobby_set_game_identity(const char *game_name, const char *game_version);
 const char *psx_lobby_game_version(void);
 
+/*
+ * TOC fingerprint (lowercase hex SHA-256 from DiscIdentity::disc_fp).
+ * Sent on create/join so the lobby server can reject mismatched mounts
+ * (e.g. Track-01-only vs full multi-track cue). Empty disables the check
+ * on the server for that peer (legacy clients); modern clients always set it
+ * after a successful disc verify.
+ */
+void psx_lobby_set_disc_fp(const char *disc_fp);
+const char *psx_lobby_disc_fp(void);
+
 /* Default max_slots for create (clamped 2..8, default 2). */
 void psx_lobby_set_max_slots(int max_slots);
 

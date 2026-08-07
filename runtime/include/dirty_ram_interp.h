@@ -125,6 +125,9 @@ uint32_t dirty_ram_get_bitmap(void);
 uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 uint32_t dirty_ram_get_bitmap_word_count(void);
 void     dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count);
+/* Rematch / session_reboot: wipe host dirty tracking so dig0 matches a cold
+ * process (memory_init clears RAM but used to leave these bitmaps sticky). */
+void     dirty_ram_reset_for_boot(void);
 /* After bulk RAM restore (savestate): bump overlay page gens + lazy-miss epoch
  * so native overlays re-hash against restored bytes; also drop sticky
  * text_diverged/modified bitmaps (host-only — restored RAM may match ref). */

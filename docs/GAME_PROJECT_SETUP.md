@@ -189,6 +189,9 @@ Use this before tagging a setup-host release that matches other titles
 - [ ] `psxrecomp/` and `recomp-ui/` are root-level submodules on pinned commits
 - [ ] CLI lives in the submodule (`psxrecomp/psxrecomp_cli.py`) — no sibling sdk
 - [ ] `game.toml` has disc identity (`[prepare_disc]` hashes/sizes) and boot EXE
+- [ ] Multi-track titles that ship netplay: `[netplay] require_cue` +
+      `required_tracks` (and optional `required_disc_fp`) so Track-01-only
+      dumps cannot go online against full Redump cues
 - [ ] Seeds cover the boot path; `VERSION` matches the release you will tag
 - [ ] Disc images, `generated/`, and `SCPH1001.BIN` are gitignored
 - [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends

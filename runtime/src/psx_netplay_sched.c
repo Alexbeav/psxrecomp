@@ -26,6 +26,10 @@
 #include "psx_netplay_rb.h"
 #include "recomp_net/recomp_net.h"
 
+/* §104/§105: auto-delay / lobby seed floors (shared with sync_delay). */
+#define RB_FORCE_TURN_DELAY_FLOOR 6
+#define RB_AUTO_DELAY_LOWER_FLOOR 5
+
 /* ------------------------------------------------------------------ */
 /* Bridge into psx_netplay.c state                                     */
 /* ------------------------------------------------------------------ */
@@ -114,6 +118,22 @@ void np_sched_sync_delay_from_session(void)
     if (!s || !g_sb.input_delay)
         return;
     d = rnet_session_committed_delay(s);
+    /* §105: rollback never runs undersized D from lobby seed (session-149
+     * started D=4 → invent storm → auto-delay ratchet to 7). Floor matches
+     * auto-delay lower bound; Force-TURN keeps its higher floor via adapt. */
+    if (d >= 2u && d < (rnet_u8)RB_AUTO_DELAY_LOWER_FLOOR &&
+        np_sched_real_delay_enabled()) {
+        static int s_floor_log;
+        if (!s_floor_log) {
+            fprintf(stderr,
+                    "psxrecomp: rb delay floor %u → %u (rollback min D; "
+                    "lobby seed was undersized)\n",
+                    (unsigned)d, (unsigned)RB_AUTO_DELAY_LOWER_FLOOR);
+            fflush(stderr);
+            s_floor_log = 1;
+        }
+        d = (rnet_u8)RB_AUTO_DELAY_LOWER_FLOOR;
+    }
     if (d >= 2u && (int)d != *g_sb.input_delay) {
         fprintf(stderr, "psxrecomp: rb delay committed %d → %u (session)\n",
                 *g_sb.input_delay, (unsigned)d);
@@ -335,20 +355,21 @@ static uint32_t g_gap1_expire_invent_streak;
 #define RB_GAP1_SHRINK_HOLD_MS 1000u
 /* §27: deep invent (pred_depth≥2) only after tip looks stale. */
 #define RB_INVENT_DEPTH_STALE_FLOOR_MS 40u
-#define RB_INVENT_RUNWAY_GRACE_CAP_MS 8u
 /* §29: A/B classification — tip considered "advancing" if its last advance
  * was within this multiple of its own arrival-period EMA (x2 fixed point). */
 #define RB_TIP_FRESH_MULT_X2 3u
 
-/* §43: LAN micro-grace before a gap=1 invent. 2026-08-02 soak #4: with
- * rtt_raw 0–1ms both peers still ran ~100% of admissions 1 tick ahead of
- * the confirmed wire — a sub-frame PHASE offset, not latency. §29's
- * immediate-invent is right for WAN (a transit delay cannot be waited out)
- * but on LAN the row is in flight and lands within a few ms. Under §44 real
- * delay this only fires once the cushion is empty. */
-#define RB_GAP1_LAN_RTT_MAX_MS 12u
-#define RB_GAP1_LAN_GRACE_BASE_MS 3u
-#define RB_GAP1_LAN_GRACE_CAP_MS 6u
+/* §43/§104/§105/§107: micro-grace before a gap=1 invent. Session-149 invents
+ * were 100% remote_lead=-1. §105 waited only when RTT≤48 or tip-due (cap 12).
+ * Post-§105 soak: 1277/1305 host invents had rtt>48 (SFU ~75ms) → lan gate
+ * off → gap1_cap=0 → invent every tip tick. §107: always grace on gap=1
+ * (non-FMV), scale ½RTT+base, LAN cap 12 / relay cap 20. */
+#define RB_GAP1_LAN_RTT_MAX_MS 48u
+#define RB_GAP1_LAN_GRACE_BASE_MS 4u
+#define RB_GAP1_LAN_GRACE_CAP_MS 12u
+#define RB_GAP1_RELAY_GRACE_CAP_MS 20u
+/* §104: runway (gap≥2) grace — was 8; guest RUNWAY_EMPTY invent was high. */
+#define RB_INVENT_RUNWAY_GRACE_CAP_MS 12u
 
 /* §28: tip arrival cadence — tracks how often the confirmed remote tip
  * (highest_remote_wire) actually advances, independent of whether admit
@@ -954,14 +975,25 @@ static void np_scorecard_note_miss(rnet_u32 wire)
     if (s_counted_wire != wire) {
         s_counted_wire = wire;
         g_sc_miss_at_need++;
-        /* §57: feed the delay controller and arm the lateness timer — if we
-         * end up waiting this miss out, note_remote_hit measures how late
-         * the row was; if we invent instead, the pending flag is cleared at
-         * the invent exit (lateness then shows up as a mispredict age, not
-         * an arrival stat). */
+        /* §57/§105: feed the delay controller and arm the lateness timer —
+         * if we wait this miss out, note_remote_hit measures how late the
+         * row was. If we invent instead, np_auto_delay_undo_invent_miss
+         * drops the controller sample (session-149: invent→miss 993‰
+         * ratcheted D 4→7 without real arrival lateness). */
         g_ad_miss++;
         g_ad_miss_pending = 1;
         g_ad_miss_t0_ms = sched_mono_ms();
+    }
+}
+
+/* §105: invent is not an arrival miss — undo the controller sample so tip
+ * invent storms cannot raise D (mushy input with no cushion gain). */
+static void np_auto_delay_undo_invent_miss(void)
+{
+    if (g_ad_miss_pending) {
+        if (g_ad_miss > 0u)
+            g_ad_miss--;
+        g_ad_miss_pending = 0;
     }
 }
 
@@ -1160,9 +1192,8 @@ static void np_pcap_freeze_exit(void)
 #define RB_AUTO_DELAY_EVAL_MS     5000u
 #define RB_AUTO_DELAY_AGREE       3u
 #define RB_AUTO_DELAY_COOLDOWN_MS 30000u
-/* Match launcher Force TURN Play floor — do not shrink below this mid-match
- * when the session is relay-only (soak: auto delay 6→5 then invent/fork). */
-#define RB_FORCE_TURN_DELAY_FLOOR 6
+/* Delay floors: RB_FORCE_TURN_DELAY_FLOOR / RB_AUTO_DELAY_LOWER_FLOOR
+ * defined near top of file (§104/§105). */
 
 static void np_auto_delay_tick(uint32_t now)
 {
@@ -1240,7 +1271,10 @@ static void np_auto_delay_tick(uint32_t now)
         return; /* host proposes; guests follow DELAY_SYNC */
 
     miss_per_mille = (uint32_t)(((uint64_t)miss * 1000u) / ticks);
-    if (miss_per_mille > 20u) {
+    /* §105: raise only on waited-out arrival pressure (late_n>0). Invent-only
+     * miss storms (session-149 lead_avg≈-2, late_n=1, miss=993‰) must not
+     * ratchet D — raising delay does not stop tip invent. */
+    if (miss_per_mille > 20u && late_n > 0u) {
         uint32_t late_avg = late_n ? (late_sum / late_n) : 0u;
         int bump = (int)((late_avg + tick_ms - 1u) / tick_ms);
         if (bump < 1)
@@ -1248,13 +1282,15 @@ static void np_auto_delay_tick(uint32_t now)
         if (bump > 2)
             bump = 2;
         target = d + bump;
-    } else if (miss_per_mille < 2u && lead_avg_x16 >= 2 * 16) {
-        target = d - 1; /* ≥2 spare ticks sustained — cushion oversized */
+    } else if (miss_per_mille < 1u && lead_avg_x16 >= 3 * 16) {
+        /* §104: tighter lower bar (was miss<2‰ + lead≥2) — session-144
+         * shrank D 5→4 under healthy fight cushion and fueled invent. */
+        target = d - 1;
     } else {
         target = d;
     }
     {
-        int floor_d = 2;
+        int floor_d = RB_AUTO_DELAY_LOWER_FLOOR;
         if (g_sb.force_turn)
             floor_d = RB_FORCE_TURN_DELAY_FLOOR;
         if (target < floor_d)
@@ -1666,26 +1702,35 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
             else
                 g_admit_gap1_case_b++;
             gap1_cap = 0u; /* §29 default: no wait — classify only */
-            /* §43: LAN micro-grace — wait a few ms for the in-flight row
-             * instead of inventing, when the link is provably fast or the
-             * next tip is due by cadence. Expiry still invents
-             * (np_gap1_note_expire_invent), so WAN behavior degrades to
-             * §29 with a bounded 6ms tax at worst. */
-            if (case_a && !psx_netplay_rb_fmv_media_active()) {
+            /* §43/§105/§107: micro-grace for gap=1 tip invent (lead typically
+             * -1). Session-149: invents were 100% remote_lead=-1 / case_b —
+             * the §104 "healthy lead ≥ D-1" arm never fired. §105 waited
+             * only when RTT≤LAN gate or tip-due — SFU soaks (rtt~75) skipped
+             * grace and invented every tick. §107: always wait
+             * min(½RTT+base, lan_cap|relay_cap) outside FMV; tip_due still
+             * uses the short LAN cap so a due tip does not stall a full
+             * relay budget. Expiry still invents. */
+            if (!psx_netplay_rb_fmv_media_active()) {
                 uint32_t rtt_raw = 0u;
                 int lan;
                 int tip_due;
+                uint32_t cap;
                 (void)np_invent_rtt_ms(&rtt_raw);
                 lan = (rtt_raw <= RB_GAP1_LAN_RTT_MAX_MS);
                 tip_due = (tip_age != 0xffffffffu &&
                            tip_age + RB_GAP1_LAN_GRACE_CAP_MS >= period);
-                if (lan || tip_due) {
-                    gap1_cap = rtt_raw / 2u + RB_GAP1_LAN_GRACE_BASE_MS;
-                    if (gap1_cap > RB_GAP1_LAN_GRACE_CAP_MS)
-                        gap1_cap = RB_GAP1_LAN_GRACE_CAP_MS;
-                }
+                /* Prefer trusted POST sample; synth/zero still get base. */
+                gap1_cap = rtt_raw / 2u + RB_GAP1_LAN_GRACE_BASE_MS;
+                if (lan || tip_due)
+                    cap = RB_GAP1_LAN_GRACE_CAP_MS;
+                else
+                    cap = RB_GAP1_RELAY_GRACE_CAP_MS;
+                if (gap1_cap > cap)
+                    gap1_cap = cap;
+                if (gap1_cap < RB_GAP1_LAN_GRACE_BASE_MS)
+                    gap1_cap = RB_GAP1_LAN_GRACE_BASE_MS;
             }
-            /* §98: during FMV media invent immediately (no LAN micro-grace). */
+            /* §98: during FMV media invent immediately (no micro-grace). */
         }
         if (gap1_cap != 0u) {
             if (np_invent_grace_stall_ex(slot, wire, gap1_cap, 0)) {
@@ -1736,7 +1781,8 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
     np_admit_note_invent_gap(wire, st->highest_remote_wire);
     np_admit_log_invent(sim, wire, st->highest_remote_wire,
                         st->remote_lead, invent_reason);
-    g_ad_miss_pending = 0; /* §57: invented — lateness timer no longer valid */
+    /* §105: invent is not arrival lateness — drop controller miss sample. */
+    np_auto_delay_undo_invent_miss();
     if (reason_out)
         *reason_out = invent_reason;
     np_sched_clear_admit_stall(); /* inventing — not a barrier stall */

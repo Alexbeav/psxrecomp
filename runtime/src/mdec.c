@@ -782,6 +782,14 @@ int mdec_recently_active(uint32_t within_frames) {
     return (psx_cycle_count - mdec_last_color_decode_cycle) <= window;
 }
 
+uint64_t mdec_color_age_cycles(void) {
+    if (mdec_last_color_decode_cycle == (uint64_t)0 - 1000u)
+        return (uint64_t)0 - 1u;
+    if (psx_cycle_count < mdec_last_color_decode_cycle)
+        return (uint64_t)0 - 1u;
+    return psx_cycle_count - mdec_last_color_decode_cycle;
+}
+
 void mdec_init(void) {
     memset(&mdec, 0, sizeof(mdec));
     memset(mdec_trace, 0, sizeof(mdec_trace));

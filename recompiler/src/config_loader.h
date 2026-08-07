@@ -603,6 +603,16 @@ struct GameConfig {
     uint32_t              disc_crc = 0;
     std::string           disc_sha1;
 
+    // [netplay] disc mount policy (portable across psxrecomp titles).
+    // Data-track CRC proves "right game"; these prove "same CD geometry"
+    // (GetTN track count / cue layout) so peers cannot join with Track-01-only
+    // dumps vs full Redump multi-track cues. 0 / empty = do not check that field.
+    bool                  netplay_require_cue = false;
+    int                   netplay_required_tracks = 0;
+    bool                  has_netplay_required_leadout = false;
+    uint32_t              netplay_required_leadout_lba = 0;
+    std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
     std::filesystem::path bios_thunks_path; // optional; empty if not set
