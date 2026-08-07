@@ -3766,10 +3766,12 @@ static int interp_thread_main(void *opaque) {
 }
 
 /* Draw one host OSD ARGB image into the default framebuffer at (vx,vy)
- * in top-left window coordinates (y down). */
+ * in top-left window coordinates (y down). Bitmap is ow×oh; viewport is
+ * dw×dh (may upscale for HiDPI / large windows). */
 static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
-                              int vx, int vy, int ww, int wh) {
-    if (!px || ow <= 0 || oh <= 0 || !s_present_prog || ww <= 0 || wh <= 0)
+                              int dw, int dh, int vx, int vy, int ww, int wh) {
+    if (!px || ow <= 0 || oh <= 0 || dw <= 0 || dh <= 0 ||
+        !s_present_prog || ww <= 0 || wh <= 0)
         return;
     if (!s_osd_tex) glGenTextures(1, &s_osd_tex);
     p_glActiveTexture(PSXGL_TEXTURE0);
@@ -3787,7 +3789,6 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ow, oh,
                         GL_BGRA, GL_UNSIGNED_BYTE, px);
     }
-    int dw = ow, dh = oh;
     if (vx + dw > ww) dw = ww - vx;
     if (vy + dh > wh) dh = wh - vy;
     if (dw < 1 || dh < 1) return;
@@ -3801,8 +3802,10 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     glViewport(vx, wh - vy - dh, dw, dh);
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
-    /* Cancel PRESENT_VS V-flip — CPU row 0 is the top of the image. */
-    p_glUniform4f(s_present_uUvRect, 0.f, 1.f, 1.f, 0.f);
+    /* Host OSD bitmaps are top-down (row 0 = top), same as guest CPU
+     * present with v_flip=1: uv (0,0)-(1,1). (0,1)-(1,0) was the hold-last
+     * cancel for already-oriented captures and made toasts upside-down. */
+    p_glUniform4f(s_present_uUvRect, 0.f, 0.f, 1.f, 1.f);
     {
         GLuint vao = s_present_vao;
         if (s_interp_ctx && SDL_GL_GetCurrentContext() == s_interp_ctx &&
@@ -3824,13 +3827,20 @@ static void gl_swap_with_osd(void) {
         if (ww > 0 && wh > 0) {
             const uint32_t *px = NULL;
             int ow = 0, oh = 0;
-            const int margin = 8;
+            /* OSD authored for ~480-tall present; grow with drawable height. */
+            int ui = wh / 480;
+            int margin;
+            if (ui < 1) ui = 1;
+            if (ui > 8) ui = 8;
+            margin = 8 * ui;
             if (host_osd_image(&px, &ow, &oh) && px)
-                gl_draw_osd_image(px, ow, oh, margin, margin, ww, wh);
+                gl_draw_osd_image(px, ow, oh, ow * ui, oh * ui,
+                                  margin, margin, ww, wh);
             if (host_osd_volume_image(&px, &ow, &oh) && px) {
-                int vx = (ww > ow + margin) ? (ww - ow - margin) : margin;
-                int vy = (wh > oh) ? ((wh - oh) / 2) : margin;
-                gl_draw_osd_image(px, ow, oh, vx, vy, ww, wh);
+                const int dw = ow * ui, dh = oh * ui;
+                int vx = (ww > dw + margin) ? (ww - dw - margin) : margin;
+                int vy = (wh > dh) ? ((wh - dh) / 2) : margin;
+                gl_draw_osd_image(px, ow, oh, dw, dh, vx, vy, ww, wh);
             }
         }
     }

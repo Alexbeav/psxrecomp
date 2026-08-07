@@ -248,7 +248,7 @@ static void rasterize_volume(void) {
 #ifndef PSX_SDL_NO_RENDER
 static void sdl_blit_argb(SDL_Renderer *renderer, SDL_Texture **tex,
                           int *tw, int *th, const uint32_t *px, int w, int h,
-                          int dst_x, int dst_y) {
+                          int dst_x, int dst_y, int dst_w, int dst_h) {
     if (!*tex || *tw != w || *th != h || renderer != s_sdl_ren) {
         if (*tex) SDL_DestroyTexture(*tex);
         *tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
@@ -273,12 +273,35 @@ static void sdl_blit_argb(SDL_Renderer *renderer, SDL_Texture **tex,
                    (size_t)w * sizeof(uint32_t));
         SDL_UnlockTexture(*tex);
     }
-    SDL_Rect dst = { dst_x, dst_y, w, h };
+    if (dst_w < 1) dst_w = w;
+    if (dst_h < 1) dst_h = h;
+    SDL_Rect dst = { dst_x, dst_y, dst_w, dst_h };
 #if defined(PSX_SDL3)
     (void)psx_sdl_render_copy(renderer, *tex, NULL, &dst);
 #else
     SDL_RenderCopy(renderer, *tex, NULL, &dst);
 #endif
+}
+
+/* Present uses SDL_RenderSetLogicalSize — position/size in logical pixels,
+ * not window/output pixels (GetRenderOutputSize mixed spaces and broke scale). */
+static void sdl_logical_size(SDL_Renderer *renderer, int *lw, int *lh) {
+    int w = 0, h = 0;
+#if defined(PSX_SDL3)
+    {
+        SDL_RendererLogicalPresentation mode =
+            SDL_LOGICAL_PRESENTATION_DISABLED;
+        if (!SDL_GetRenderLogicalPresentation(renderer, &w, &h, &mode) ||
+            w <= 0 || h <= 0)
+            SDL_GetRenderOutputSize(renderer, &w, &h);
+    }
+#else
+    SDL_RenderGetLogicalSize(renderer, &w, &h);
+    if (w <= 0 || h <= 0)
+        SDL_GetRendererOutputSize(renderer, &w, &h);
+#endif
+    if (lw) *lw = w > 0 ? w : 640;
+    if (lh) *lh = h > 0 ? h : 480;
 }
 #endif
 
@@ -356,21 +379,27 @@ void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
 #ifndef PSX_SDL_NO_RENDER
     if (!renderer) return;
     s_sdl_ren = renderer;
-    const uint32_t *px;
-    int w, h;
-    if (host_osd_image(&px, &w, &h) && px)
-        sdl_blit_argb(renderer, &s_sdl_tex, &s_sdl_tw, &s_sdl_th, px, w, h, 8, 8);
-    if (host_osd_volume_image(&px, &w, &h) && px) {
-        int ww = 0, wh = 0;
-#if defined(PSX_SDL3)
-        SDL_GetRenderOutputSize(renderer, &ww, &wh);
-#else
-        SDL_GetRendererOutputSize(renderer, &ww, &wh);
-#endif
-        int x = (ww > w + 8) ? (ww - w - 8) : 8;
-        int y = (wh > h) ? ((wh - h) / 2) : 8;
-        sdl_blit_argb(renderer, &s_sdl_vol_tex, &s_sdl_vol_tw, &s_sdl_vol_th,
-                      px, w, h, x, y);
+    {
+        const uint32_t *px;
+        int w, h;
+        int lw = 640, lh = 480;
+        int ui, margin;
+        sdl_logical_size(renderer, &lw, &lh);
+        /* Bitmaps authored for ~480-tall logical; scale with supersampling. */
+        ui = lh / 480;
+        if (ui < 1) ui = 1;
+        if (ui > 8) ui = 8;
+        margin = 8 * ui;
+        if (host_osd_image(&px, &w, &h) && px)
+            sdl_blit_argb(renderer, &s_sdl_tex, &s_sdl_tw, &s_sdl_th, px, w, h,
+                          margin, margin, w * ui, h * ui);
+        if (host_osd_volume_image(&px, &w, &h) && px) {
+            const int dw = w * ui, dh = h * ui;
+            int x = (lw > dw + margin) ? (lw - dw - margin) : margin;
+            int y = (lh > dh) ? ((lh - dh) / 2) : margin;
+            sdl_blit_argb(renderer, &s_sdl_vol_tex, &s_sdl_vol_tw, &s_sdl_vol_th,
+                          px, w, h, x, y, dw, dh);
+        }
     }
     host_osd_present_done();
 #else
