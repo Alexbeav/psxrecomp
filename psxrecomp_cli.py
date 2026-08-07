@@ -29,6 +29,7 @@ from sdk_progress import ProgressReporter  # noqa: E402
 from toolchain_pack import (  # noqa: E402
     ensure_toolchain as _ensure_toolchain_pack,
     resolve_toolchain_bin,
+    toolchain_bin_runs,
 )
 
 EXIT_OK = 0
@@ -46,14 +47,13 @@ def activate_embedded_toolchain(
     project_root: Path, progress: Optional[ProgressReporter] = None
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
+    log = progress.log if progress else None
     bin_dir = resolve_toolchain_bin(project_root)
-    if not bin_dir:
+    if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
         return False
     from toolchain_pack import activate_toolchain_bin
 
-    activate_toolchain_bin(
-        bin_dir, log=(progress.log if progress else None)
-    )
+    activate_toolchain_bin(bin_dir, log=log)
     return True
 
 

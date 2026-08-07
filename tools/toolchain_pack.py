@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -58,6 +59,72 @@ def bin_looks_usable(bin_dir: Path) -> bool:
 
 def pack_root_looks_usable(root: Path) -> bool:
     return bin_looks_usable(root / "bin")
+
+
+def toolchain_bin_runs(bin_dir: Path, log=None) -> bool:
+    """True when bin/cmake exists and ``cmake --version`` exits 0."""
+    if not bin_looks_usable(bin_dir):
+        return False
+    cmake = bin_dir / cmake_name()
+    try:
+        proc = subprocess.run(
+            [str(cmake), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        if log:
+            log(f"Toolchain cmake probe failed ({cmake}): {exc}")
+        return False
+    if proc.returncode != 0 and log:
+        err = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = err[0] if err else f"exit {proc.returncode}"
+        log(f"Toolchain cmake unusable ({cmake}): {detail}")
+    return proc.returncode == 0
+
+
+def clear_project_toolchain_stamp(project_root: Optional[Path]) -> None:
+    if project_root is None:
+        return
+    stamp = project_root / "toolchain" / STAMP_NAME
+    try:
+        if stamp.is_file():
+            stamp.unlink()
+    except OSError:
+        pass
+
+
+def heal_broken_toolchain_pointers(log=None) -> None:
+    """Remove unusable ``latest`` pointers so ensure can reinstall cleanly.
+
+    Does not delete versioned ``<tag>/`` packs — only broken ``latest``
+    symlinks/directories that lack a runnable bin/cmake.
+    """
+    for base in shared_cache_roots():
+        latest = base / "latest"
+        try:
+            present = latest.exists() or latest.is_symlink()
+        except OSError:
+            present = False
+        if not present:
+            continue
+        root = unwrap_pack_root(latest)
+        if pack_root_looks_usable(root) and toolchain_bin_runs(root / "bin"):
+            continue
+        if log:
+            log(f"Removing broken toolchain pointer: {latest}")
+        try:
+            if latest.is_symlink() or latest.is_file():
+                latest.unlink(missing_ok=True)
+            elif latest.is_dir():
+                shutil.rmtree(latest, ignore_errors=True)
+            else:
+                latest.unlink(missing_ok=True)
+        except OSError as exc:
+            if log:
+                log(f"Could not remove broken toolchain pointer: {exc}")
 
 
 def unwrap_pack_root(path: Path) -> Path:
@@ -745,6 +812,8 @@ def ensure_toolchain(
     migrate_legacy_psxrecomp_cache(log=log)
 
     if from_zip is not None:
+        heal_broken_toolchain_pointers(log=log)
+        clear_project_toolchain_stamp(project_root)
         root = install_from_zip(
             Path(from_zip),
             project_root=project_root,
@@ -754,13 +823,15 @@ def ensure_toolchain(
         bin_dir = unwrap_pack_root(root) / "bin"
         if not bin_looks_usable(bin_dir):
             bin_dir = root / "bin"
+        if not toolchain_bin_runs(bin_dir, log=log):
+            raise RuntimeError(f"Toolchain zip installed but cmake is unusable: {bin_dir}")
         if project_root is not None:
             write_toolchain_stamp(project_root, bin_dir)
         activate_toolchain_bin(bin_dir, log=log)
         return bin_dir
 
     existing = resolve_toolchain_bin(project_root, min_version=need)
-    if existing:
+    if existing and toolchain_bin_runs(existing, log=log):
         if project_root is not None:
             write_toolchain_stamp(project_root, existing)
         # Cached pack: still publish latest + user PATH (idempotent).
@@ -773,21 +844,37 @@ def ensure_toolchain(
         activate_toolchain_bin(existing, log=log)
         return existing
 
+    if existing and log:
+        log(
+            f"Cached toolchain at {existing} is missing or broken; "
+            "will repair."
+        )
+
     # Usable pack exists but is too old — fall through to download/replace.
     stale = resolve_toolchain_bin(project_root, min_version="")
-    if stale and need and log:
+    if stale and need and not existing and log:
         log(
             f"Cached toolchain does not meet min_version {need}; "
             "will download/replace."
         )
 
+    # Drop bad latest/ pointers and project stamps before reinstall.
+    heal_broken_toolchain_pointers(log=log)
+    clear_project_toolchain_stamp(project_root)
+
     if download:
+        if log:
+            log("Downloading portable cmake/clang toolchain…")
         root = download_latest_pack(
             repo=repo, log=log, project_root=project_root, min_version=need
         )
         bin_dir = unwrap_pack_root(root) / "bin"
         if not bin_looks_usable(bin_dir):
             bin_dir = root / "bin"
+        if not toolchain_bin_runs(bin_dir, log=log):
+            raise RuntimeError(
+                f"Downloaded toolchain but cmake is unusable: {bin_dir}"
+            )
         if project_root is not None:
             write_toolchain_stamp(project_root, bin_dir)
         activate_toolchain_bin(bin_dir, log=log)

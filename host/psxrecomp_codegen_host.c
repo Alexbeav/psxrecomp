@@ -2202,6 +2202,81 @@ static int pack_root_from_bin(const char* bin, char* out, size_t cap) {
     return bin && bin[0] && dirname_copy(out, cap, bin);
 }
 
+static int run_cmd_exit_zero(const char* cmdline) {
+#if defined(_WIN32)
+    DWORD code = 1;
+    if (!run_cmdline_wait(cmdline, &code))
+        return 0;
+    return code == 0;
+#else
+    int st = system(cmdline);
+    return st == 0;
+#endif
+}
+
+/* True when cmake_path exists and ``cmake --version`` succeeds. */
+static int cmake_path_runs(const char* cmake_path) {
+    char cmd[1600];
+    if (!cmake_path || !cmake_path[0] || !path_is_file(cmake_path))
+        return 0;
+#if defined(_WIN32)
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >NUL 2>&1", cmake_path);
+#else
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", cmake_path);
+#endif
+    return run_cmd_exit_zero(cmd);
+}
+
+static void clear_project_toolchain_stamp(void) {
+    char stamp[1200];
+    if (!g_project_root[0])
+        return;
+    if (!join_path(stamp, sizeof(stamp), g_project_root,
+                   "toolchain/.psxrecomp-bin"))
+        return;
+#if defined(_WIN32)
+    DeleteFileA(stamp);
+#else
+    unlink(stamp);
+#endif
+}
+
+/* Remove unusable latest/ pointers under shared cache roots (heal before
+ * re-download). Leaves versioned <tag>/ packs intact. */
+static void heal_broken_toolchain_pointers(void) {
+    char bases[12][1400];
+    int n = collect_toolchain_cache_bases(bases, 12);
+    for (int i = 0; i < n; ++i) {
+        char latest[1400], root[1400], bin[1400], cmake[1400];
+        int present = 0;
+        if (!join_path(latest, sizeof(latest), bases[i], "latest"))
+            continue;
+#if defined(_WIN32)
+        present = path_is_dir(latest) || path_is_file(latest);
+#else
+        {
+            struct stat st;
+            present = (lstat(latest, &st) == 0);
+        }
+#endif
+        if (!present)
+            continue;
+        if (unwrap_toolchain_pack_root(latest, root, sizeof(root)) &&
+            join_path(bin, sizeof(bin), root, "bin") &&
+#if defined(_WIN32)
+            join_path(cmake, sizeof(cmake), bin, "cmake.exe") &&
+#else
+            join_path(cmake, sizeof(cmake), bin, "cmake") &&
+#endif
+            cmake_path_runs(cmake))
+            continue;
+        rmtree_path(latest);
+#if !defined(_WIN32)
+        unlink(latest); /* dangling symlink after rmtree no-op */
+#endif
+    }
+}
+
 static int active_toolchain_meets_min(void) {
     char pack[1400];
     if (!g_toolchain_bin[0] && !resolve_toolchain_bin(g_toolchain_bin,
@@ -2212,13 +2287,21 @@ static int active_toolchain_meets_min(void) {
     return pack_meets_min_version(pack);
 }
 
+static int host_portable_cmake_ready(void) {
+    if (!find_cmake(g_cmake, sizeof(g_cmake)))
+        return 0;
+    if (!cmake_path_runs(g_cmake))
+        return 0;
+    return active_toolchain_meets_min();
+}
+
 static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
-    /* Usable cmake is enough — no engine-side version floor by default. */
-    if (find_cmake(g_cmake, sizeof(g_cmake)) && active_toolchain_meets_min())
+    /* Usable, runnable cmake — no engine-side version floor by default. */
+    if (host_portable_cmake_ready())
         return 1;
 #if defined(_WIN32)
     /* Reuse a Store-Python LocalCache install without copying. */
@@ -2227,7 +2310,8 @@ static int host_toolchain_is_ready(void) {
         if (pack_root_from_bin(g_cli_toolchain_bin[0] ? g_cli_toolchain_bin
                                                      : g_toolchain_bin,
                                pack, sizeof(pack)) &&
-            pack_root_has_cmake(pack) && pack_meets_min_version(pack))
+            pack_root_has_cmake(pack) && pack_meets_min_version(pack) &&
+            host_portable_cmake_ready())
             return 1;
     }
 #endif
@@ -2237,7 +2321,8 @@ static int host_toolchain_is_ready(void) {
 /* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback).
  * Prefer host-native curl/tar so Microsoft Store Python cannot redirect the
  * unpack into Packages\\...\\LocalCache. Installs into the shared RetComM
- * cache: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/… */
+ * cache: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/…
+ * Broken latest/ stamps are healed, then GitHub /releases/latest is fetched. */
 static int host_ensure_toolchain_with_progress(
     int download, const char* zip_path, char* err_msg, size_t err_cap,
     RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx) {
@@ -2247,7 +2332,7 @@ static int host_ensure_toolchain_with_progress(
     }
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
-    if (find_cmake(g_cmake, sizeof(g_cmake)) && active_toolchain_meets_min())
+    if (host_portable_cmake_ready())
         return 1;
 
 #if defined(_WIN32)
@@ -2255,21 +2340,30 @@ static int host_ensure_toolchain_with_progress(
         on_progress(progress_ctx, 0.02f,
                     "Checking for an existing portable toolchain…");
     if (harvest_store_python_toolchain(1)) {
-        char pack[1400];
-        if (pack_root_from_bin(g_cli_toolchain_bin[0] ? g_cli_toolchain_bin
-                                                     : g_toolchain_bin,
-                               pack, sizeof(pack)) &&
-            pack_meets_min_version(pack))
+        activate_toolchain_path();
+        if (host_portable_cmake_ready())
             return 1;
     }
 #endif
+
+    if (on_progress)
+        on_progress(progress_ctx, 0.03f,
+                    "Repairing broken toolchain cache if needed…");
+    heal_broken_toolchain_pointers();
+    clear_project_toolchain_stamp();
+    g_toolchain_bin[0] = '\0';
+    g_cli_toolchain_bin[0] = '\0';
+    g_cmake[0] = '\0';
+    activate_toolchain_path();
+    if (host_portable_cmake_ready())
+        return 1;
 
     if (zip_path && zip_path[0]) {
         if (on_progress)
             on_progress(progress_ctx, 0.05f, "Installing toolchain from zip…");
         if (host_install_toolchain_from_zip(zip_path, on_progress, progress_ctx,
                                             err_msg, err_cap)) {
-            if (active_toolchain_meets_min())
+            if (host_portable_cmake_ready())
                 return 1;
             snprintf(err_msg, err_cap,
                      "Toolchain zip is unusable or below RETCOMM_TOOLCHAIN_MIN_VERSION.");
@@ -2285,8 +2379,7 @@ static int host_ensure_toolchain_with_progress(
                         "Downloading latest portable cmake/clang…");
         if (host_download_and_install_toolchain(on_progress, progress_ctx,
                                                 err_msg, err_cap)) {
-            if (find_cmake(g_cmake, sizeof(g_cmake)) &&
-                active_toolchain_meets_min())
+            if (host_portable_cmake_ready())
                 return 1;
             snprintf(err_msg, err_cap,
                      "Downloaded toolchain is missing cmake"
