@@ -52,6 +52,12 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    add_executable(sio_dualshock_rumble_test
+        tests/test_sio_dualshock_rumble.c
+        src/sio.c)
+    target_include_directories(sio_dualshock_rumble_test PRIVATE include)
+    add_test(NAME sio_dualshock_rumble_test COMMAND sio_dualshock_rumble_test)
+
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
         src/gte.cpp

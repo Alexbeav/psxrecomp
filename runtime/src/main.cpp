@@ -314,6 +314,10 @@ struct PlayerInput {
     bool  hybrid_analog = false;
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
+    uint8_t rumble_small = 0;
+    uint8_t rumble_large = 0;
+    bool    rumble_known = false;
+    bool    rumble_warned = false;
 };
 static PlayerInput g_players[2];
 /* ARGB8888 staging buffer. Sized for the active internal resolution:
@@ -2627,10 +2631,16 @@ static void load_input_config(const char* argv0) {
 
 static void close_player(PlayerInput& p) {
     if (p.handle) {
+        if (p.rumble_small || p.rumble_large)
+            (void)SDL_GameControllerRumble(p.handle, 0, 0, 0);
         SDL_GameControllerClose(p.handle);
         p.handle = nullptr;
         p.instance = -1;
     }
+    p.rumble_small = 0;
+    p.rumble_large = 0;
+    p.rumble_known = false;
+    p.rumble_warned = false;
 }
 
 static void close_controller(void) {
@@ -2668,6 +2678,61 @@ static void open_player(PlayerInput& p, const PlayerInput& other) {
         const char* name = SDL_GameControllerName(p.handle);
         std::fprintf(stdout, "psxrecomp runtime: opened controller for slot: %s\n",
                      name ? name : "(unnamed)");
+        p.rumble_known = false;
+        p.rumble_warned = false;
+    }
+}
+
+/* Forward the emulated DualShock's two motors to the SDL controller assigned
+ * to the same PSX port. The large motor is variable-strength/low-frequency;
+ * the small motor is fixed-strength/high-frequency. Active effects are renewed
+ * every VBlank with a short lifetime so a crash or unplug cannot leave a host
+ * controller vibrating indefinitely. */
+static void update_controller_rumble(void) {
+    static const bool trace = [] {
+        const char* e = std::getenv("PSX_RUMBLE_TRACE");
+        return e && e[0] && e[0] != '0';
+    }();
+    for (int s = 0; s < 2; s++) {
+        PlayerInput& p = g_players[s];
+        uint8_t small = 0, large = 0;
+        sio_get_pad_rumble(s, &small, &large);
+        if (!p.handle) {
+            p.rumble_small = small;
+            p.rumble_large = large;
+            p.rumble_known = true;
+            continue;
+        }
+
+        const bool changed = !p.rumble_known || p.rumble_small != small ||
+                             p.rumble_large != large;
+        if (small || large || (changed && p.rumble_known)) {
+            const Uint16 low_frequency = (Uint16)((unsigned)large * 257u);
+            const Uint16 high_frequency = small ? 0xFFFFu : 0u;
+#if defined(PSX_SDL3)
+            const int rc = SDL_GameControllerRumble(
+                p.handle, low_frequency, high_frequency,
+                (small || large) ? 100u : 0u) ? 0 : -1;
+#else
+            const int rc = SDL_GameControllerRumble(
+                p.handle, low_frequency, high_frequency,
+                (small || large) ? 100u : 0u);
+#endif
+            if (rc != 0 && !p.rumble_warned) {
+                std::fprintf(stderr,
+                    "psxrecomp runtime: controller for slot %d rejected rumble: %s\n",
+                    s + 1, SDL_GetError());
+                p.rumble_warned = true;
+            }
+        }
+        if (trace && changed) {
+            std::fprintf(stdout,
+                "psxrecomp rumble: slot=%d small=%u large=%u\n",
+                s + 1, (unsigned)small, (unsigned)large);
+        }
+        p.rumble_small = small;
+        p.rumble_large = large;
+        p.rumble_known = true;
     }
 }
 
@@ -3765,6 +3830,7 @@ static void sdl_vblank_present(void) {
     } else {
         sample_pad_into_sio(override);
     }
+    if (!g_headless) update_controller_rumble();
 
     /* Latency ring: open this present cycle's slot, stamping when input was
      * sampled into SIO.  Always-on; queried via the debug server "latency". */
@@ -6813,6 +6879,10 @@ session_reboot:
      * as a game controller rather than a raw HID device. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+    /* SDL3 aliases the SDL2-era PS5 rumble hint to enhanced reports. Enabling
+     * it also preserves DualSense rumble on the explicit SDL2 fallback. */
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1",
+                            SDL_HINT_OVERRIDE);
     /* ...but HIDAPI's Xbox sub-driver is OFF by default on Windows (Xbox pads are
      * normally RAWINPUT/XInput there). With RAWINPUT disabled above, a PHYSICAL
      * Xbox One/Series controller would be claimed by nobody -> not a GameController
