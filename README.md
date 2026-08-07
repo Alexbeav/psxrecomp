@@ -101,6 +101,35 @@ repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
 and game code (`game.toml`, seeds, CMake) at the repo root. See
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
+### New Project Layout (preview)
+
+Scaffold a title repo: pass **`--disc`** (required path — tab-complete it);
+the script **prompts** for name, players, marketing, recomp-ui, wizard/netplay,
+lobby URL (default `netplay.retcomm.net`), CI, boxart, Generate, optional
+build, and optional `gh` repo create. Seeds `symbols.toml` + a rich
+`.gitignore`. Full flow: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
+```bash
+# Linux / macOS — interactive prompts after --disc
+sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/src
+```
+
+```powershell
+# Windows
+powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
+```
+
+Launcher features that are still in active development are **opt-in at
+configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
+
+| Flag | Default | Enables |
+|------|---------|---------|
+| `-DPSX_SETUP_WIZARD=ON` | OFF | First-run setup wizard + Generate & rebuild |
+| `-DPSX_NETPLAY=ON` | OFF | Full netplay UI (needs `lib/recomp-net`) |
+
+Details: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md). Legacy CLI
+`psxrecomp build` / `tools/setup_dev.sh` remain available.
+
 **New here?** The fastest way in:
 
 | Path | Doc |
@@ -109,6 +138,7 @@ and game code (`game.toml`, seeds, CMake) at the repo root. See
 | Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
 | **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
+| **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
 | Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
 | Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |

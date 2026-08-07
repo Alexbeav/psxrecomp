@@ -9684,6 +9684,7 @@ int main(int argc, char** argv) {
             gi.disc_verify     = ae_disc_verify;
             gi.memcard_inspect = ae_memcard_inspect;
             gi.bios_verify     = ae_bios_verify;
+#if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
              * first-run wizard so players need not run the script by hand. */
             {
@@ -9741,7 +9742,10 @@ int main(int argc, char** argv) {
              * generate & rebuild wizard (may also set prepare_required). */
             psx_game_codegen_setup_apply(&gi);
 #endif
+#endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
+            /* Full netplay UI: only when this build linked recomp-net + lobby
+             * (-DPSX_NETPLAY=ON) and the title is multiplayer-capable. */
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
             g_lnch_game_players = game_players;
@@ -11150,7 +11154,7 @@ soft_return_lobby:
         gi.allow_hybrid = ctrl_allow_hybrid ? 1 : 0;
         gi.locked_pad_mode = ctrl_locked_mode[0];
         gi.lock_device = ctrl_lock_device ? 1 : 0;
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)
         psx_game_codegen_setup_apply(&gi);
 #endif
 

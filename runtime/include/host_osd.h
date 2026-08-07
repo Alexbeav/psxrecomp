@@ -9,6 +9,11 @@ extern "C" {
 
 /*
  * Host-only OSD (toasts + volume bar). Not part of guest VRAM / savestates.
+ *
+ * Visual overlays (toasts, volume bar, draw helpers) are compiled active only
+ * when RECOMP_LAUNCHER is defined (recomp-ui linked via PSX_RECOMP_UI=ON).
+ * host_volume_get/set/adjust still work without the launcher; adjust is silent
+ * when OSD is gated off.
  */
 
 /* Top-left text toast. duration_ms <= 0 uses 2000. */

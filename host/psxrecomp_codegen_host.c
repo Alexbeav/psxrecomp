@@ -2447,6 +2447,14 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     if (!gi || !cfg || !cfg->cmake_target || !cfg->exe_basename)
         return;
 
+#if !defined(PSX_HAS_SETUP_WIZARD)
+    /* Build did not opt into the setup-wizard product surface
+     * (-DPSX_SETUP_WIZARD=ON / ENABLE_SETUP_WIZARD). Leave GameInfo dark so
+     * recomp-ui never opens first-run / Generate & rebuild. */
+    (void)cfg;
+    return;
+#else
+
     g_cfg = cfg;
     g_ready = 0;
     g_relaunch_is_helper = 0;
@@ -2471,6 +2479,9 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         cfg_or(cfg->force_setup_env, "PSXRECOMP_FORCE_SETUP");
     const char* force = getenv(force_env);
     const int force_setup = force && force[0] && force[0] != '0';
+
+    /* Master switch for recomp-ui: first-run wizard + Generate & rebuild. */
+    gi->setup_wizard_supported = 1;
 
     if (!discover_project_root(g_project_root, sizeof(g_project_root))) {
         /* Still force the wizard when generated/ is missing — discover may
@@ -2573,4 +2584,5 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->needs_setup = 1;
         gi->prepare_required_before_continue = 1;
     }
+#endif /* PSX_HAS_SETUP_WIZARD */
 }

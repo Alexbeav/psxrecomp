@@ -277,6 +277,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
 # deps for games that can never use them. A multiplayer title opts in with
 # -DPSX_NETPLAY=ON (or sets it before including this file).
 option(PSX_NETPLAY "Link recomp-net delay-sync (opt-in; needs recomp-net)" OFF)
+# First-run setup wizard + Generate & rebuild (recomp-ui). OFF by default so
+# titles that have not tested the self-build flow do not advertise it. Opt in
+# with -DPSX_SETUP_WIZARD=ON (or ENABLE_SETUP_WIZARD on psxrecomp_add_game_runtime
+# after setting the cache before include, same pattern as PSX_NETPLAY).
+option(PSX_SETUP_WIZARD
+    "Advertise first-run setup wizard + Generate & rebuild in recomp-ui" OFF)
 set(RECOMP_NET_ROOT "" CACHE PATH "Path to recomp-net; empty = auto-discover")
 if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
     foreach(_cand
@@ -958,6 +964,9 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRECOMP_HAS_LOBBY_CLIENT)
         target_compile_definitions(${target} PRIVATE PSX_HAS_LOBBY_CLIENT=1)
     endif()
+    if(PSX_SETUP_WIZARD)
+        target_compile_definitions(${target} PRIVATE PSX_HAS_SETUP_WIZARD=1)
+    endif()
 
     # First-divergence co-sim oracle (COSIM_ORACLE.md): the clean, deterministic build.
     # PSX_COSIM activates the cosim engine/hooks; PSX_NO_DEBUG_TOOLS strips ALL the laggy
@@ -1223,17 +1232,19 @@ endfunction()
 #     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
 #     MAX_PLAYERS 2
 #     ENABLE_NETPLAY_IF_PRESENT
+#     ENABLE_SETUP_WIZARD
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
 # ---------------------------------------------------------------------------
 function(psxrecomp_add_game_runtime target)
-    set(options ENABLE_NETPLAY_IF_PRESENT)
+    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD)
     set(oneValueArgs
         GEN_MARKER
         GEN_FULL_FALLBACK
         VERSION_FILE
         CODEGEN_SETUP_INCLUDE_DIR
+        NETPLAY_LOBBY_URL
     )
     set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES)
     cmake_parse_arguments(PSXG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -1307,6 +1318,22 @@ function(psxrecomp_add_game_runtime target)
                 set(PSX_NETPLAY ON)
             endif()
         endif()
+    endif()
+
+    # Title default lobby WebSocket URL (compile-time; env PSX_NET_LOBBY_URL wins).
+    if(PSXG_NETPLAY_LOBBY_URL)
+        set(PSX_NET_LOBBY_DEFAULT_URL "${PSXG_NETPLAY_LOBBY_URL}" CACHE STRING
+            "Compile-time default lobby URL (ws://host:port)" FORCE)
+    endif()
+
+    # Optional: advertise first-run wizard + Generate & rebuild.
+    # Prefer setting -DPSX_SETUP_WIZARD=ON before include(runtime.cmake) so the
+    # option() default does not stick OFF in an existing cache; this helper
+    # still forces ON when the title lists ENABLE_SETUP_WIZARD.
+    if(PSXG_ENABLE_SETUP_WIZARD)
+        set(PSX_SETUP_WIZARD ON CACHE BOOL
+            "Advertise first-run setup wizard + Generate & rebuild in recomp-ui"
+            FORCE)
     endif()
 
     if(NOT PSXG_GEN_MARKER)
@@ -1388,6 +1415,12 @@ function(psxrecomp_add_game_runtime target)
     endif()
 
     target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_CODEGEN=1)
+
+    if(PSX_NET_LOBBY_DEFAULT_URL)
+        # Stringify for C: PSX_NET_LOBBY_DEFAULT_URL="ws://..."
+        target_compile_definitions(${target} PRIVATE
+            "PSX_NET_LOBBY_DEFAULT_URL=\"${PSX_NET_LOBBY_DEFAULT_URL}\"")
+    endif()
 
     # Include the portable codegen host. Do NOT add CMAKE_CURRENT_SOURCE_DIR
     # wholesale to -I: on case-insensitive macOS, #include <version> can pick

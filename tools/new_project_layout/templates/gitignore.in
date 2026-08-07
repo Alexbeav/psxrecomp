@@ -1,6 +1,5 @@
-# Suggested .gitignore for a PSXRecomp game repository.
-# setup_project copies the New Project Layout equivalent (gitignore.in).
-# Adjust title-specific disc dirs (e.g. /motk/ /bpe/) if you use them.
+# Scaffold .gitignore for a PSXRecomp game repository (New Project Layout).
+# Aligned with docs/ci/templates/game.gitignore.
 
 # Build outputs
 /build/
@@ -8,8 +7,7 @@
 /out/
 /.happypath/
 
-# Setup-host: leave generated/ gitignored (users generate locally).
-# Titles that still CI-build from committed game C may track generated/ instead.
+# Setup-host: players Generate game C locally (CI clears generated/).
 /generated/
 
 # Release packaging
@@ -17,7 +15,7 @@
 /dist/
 *.zip
 
-# Local PlayStation assets (never commit)
+# Local PlayStation assets (never commit dumps / BIOS)
 /bios/
 /isos/
 /saves/
@@ -38,6 +36,7 @@
 *.car
 SCPH*.BIN
 
+# Local path/config stubs
 bios.cfg
 disc.cfg
 rom.cfg
@@ -57,6 +56,9 @@ settings.toml
 *.log
 .DS_Store
 __pycache__/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
 
 # Runtime artifacts from psx-runtime launches
 psx_crash.txt
