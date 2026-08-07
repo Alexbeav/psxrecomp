@@ -1758,6 +1758,69 @@ std::string CodeGenerator::translate_basic_block(
         exit_branch_addr = block.end_addr;
     }
 
+    /* MIPS-I load-delay value semantics for ordinary in-block pairs.  The
+     * resident/full-function emitter already models these; overlay/game CFG
+     * emission must do the same.  OpenBIOS's CD/card fasttrack deliberately
+     * uses `lw k0,...; move at,k0`, where the move must observe OLD k0. */
+    auto simple_load_dest = [](uint32_t w) -> int {
+        uint32_t op = w >> 26;
+        if (op == 0x20u || op == 0x21u || op == 0x23u ||
+            op == 0x24u || op == 0x25u) {
+            uint32_t rt = (w >> 16) & 31u;
+            return rt ? static_cast<int>(rt) : -1;
+        }
+        return -1;
+    };
+    auto reads_gpr = [](uint32_t w, uint32_t r) -> bool {
+        if (r == 0u || w == 0u) return false;
+        uint32_t op = w >> 26, rs = (w >> 21) & 31u;
+        uint32_t rt = (w >> 16) & 31u, fn = w & 63u;
+        if (op == 0u) {
+            if (fn == 0x08u || fn == 0x09u) return rs == r;
+            if (fn == 0x0Cu || fn == 0x0Du || fn == 0x10u || fn == 0x12u)
+                return false;
+            return rs == r || rt == r;
+        }
+        if (op == 0x02u || op == 0x03u || op == 0x0Fu) return false;
+        if (op == 0x01u || op == 0x06u || op == 0x07u) return rs == r;
+        if (op == 0x04u || op == 0x05u) return rs == r || rt == r;
+        if (op >= 0x08u && op <= 0x0Eu) return rs == r;
+        if (op == 0x10u) return ((w >> 21) & 31u) == 0x04u && rt == r;
+        if (op == 0x12u) {
+            uint32_t f = (w >> 21) & 31u;
+            return (f == 0x04u || f == 0x06u) && rt == r;
+        }
+        if (op == 0x22u || op == 0x26u ||
+            (op >= 0x28u && op <= 0x2Eu))
+            return rs == r || rt == r;
+        return rs == r;
+    };
+    auto writes_gpr = [](uint32_t w, uint32_t r) -> bool {
+        if (r == 0u || w == 0u) return false;
+        uint32_t op = w >> 26, rt = (w >> 16) & 31u;
+        uint32_t rd = (w >> 11) & 31u, fn = w & 63u;
+        if (op == 0u) {
+            if (fn == 0x08u || fn == 0x0Cu || fn == 0x0Du || fn == 0x0Fu ||
+                fn == 0x11u || fn == 0x13u ||
+                (fn >= 0x18u && fn <= 0x1Bu)) return false;
+            return rd == r;
+        }
+        if (op == 0x03u) return r == 31u;
+        if (op == 0x01u) return (rt == 0x10u || rt == 0x11u) && r == 31u;
+        if (op == 0x02u || (op >= 0x04u && op <= 0x07u) ||
+            (op >= 0x28u && op <= 0x2Eu) || op == 0x32u || op == 0x3Au)
+            return false;
+        if (op == 0x10u) return ((w >> 21) & 31u) == 0u && rt == r;
+        if (op == 0x12u) {
+            uint32_t f = (w >> 21) & 31u;
+            return (f == 0u || f == 2u) && rt == r;
+        }
+        return rt == r;
+    };
+    uint32_t delayed_load_addr = 0u;
+    uint32_t delayed_load_dest = 0u;
+    bool delayed_load_active = false;
+
     while (addr <= block.end_addr) {
         auto instr_opt = exe_.read_word(addr);
         if (!instr_opt.has_value()) {
@@ -1790,7 +1853,42 @@ std::string CodeGenerator::translate_basic_block(
         if (!is_cf) {
             if (cycle_per_insn) emit_pre_icache(addr, config_.indent);
             if (cycle_per_insn) emit_pre_timing(instr, config_.indent);
-            ss << translate_instruction(addr, instr) << "\n";
+            std::string emitted = translate_instruction(addr, instr);
+            int load_dest = simple_load_dest(instr);
+            bool defer_load = false;
+            if (!delayed_load_active && load_dest > 0 && addr + 4u <= block.end_addr &&
+                !extra_labels_.count(addr + 4u)) {
+                auto next = exe_.read_word(addr + 4u);
+                defer_load = next.has_value() &&
+                    !ControlFlowAnalyzer::is_control_flow(*next) &&
+                    reads_gpr(*next, static_cast<uint32_t>(load_dest));
+            }
+            if (defer_load) {
+                const std::string lhs = fmt::format("cpu->gpr[{}] =", load_dest);
+                const size_t pos = emitted.find(lhs);
+                if (pos != std::string::npos) {
+                    const std::string temp = fmt::format("psx_ldd_{:08X}", addr);
+                    emitted.replace(pos, lhs.size(), "uint32_t " + temp + " =");
+                    ss << config_.indent << "{ /* MIPS-I load-delay pair */\n";
+                    delayed_load_addr = addr;
+                    delayed_load_dest = static_cast<uint32_t>(load_dest);
+                    delayed_load_active = true;
+                }
+            }
+            ss << emitted << "\n";
+            if (delayed_load_active && addr == delayed_load_addr + 4u) {
+                if (writes_gpr(instr, delayed_load_dest)) {
+                    ss << config_.indent << fmt::format(
+                        "(void)psx_ldd_{:08X};  /* successor write wins */\n",
+                        delayed_load_addr);
+                } else {
+                    ss << config_.indent << fmt::format(
+                        "cpu->gpr[{}] = psx_ldd_{:08X};  /* load-delay writeback */\n",
+                        delayed_load_dest, delayed_load_addr);
+                }
+                ss << config_.indent << "}\n";
+                delayed_load_active = false;
+            }
             emit_cosim_instr(addr, config_.indent);
         } else {
             // Control flow is handled at block exit
