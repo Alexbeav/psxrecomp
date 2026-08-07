@@ -3251,61 +3251,31 @@ static int resolve_use_ice(const PsxNetplayConfig *cfg)
     in_motk_room = psx_lobby_connected() && psx_lobby_in_lobby();
 #endif
 
-    /* Server UDP pad relay: dial relay_endpoint with LAN transport (not ICE).
-     * MotK previously always preferred ICE and ignored the relay rewrite. */
-    if (cfg->force_input_relay) {
+    /* §108: MotK/BPE online lobbies always use lobby UDP SFU — LAN dial to
+     * relay_endpoint (or equal host/guest advertise). Match ICE / ice_p2p
+     * selection was removed; waiting-room ICE RTT may still run for delay
+     * hints only. Direct IP / LAN file lobby (no MotK seat) stays LAN UDP. */
+    if (cfg->force_input_relay || in_motk_room) {
         if (!cfg->peer_hostport || !cfg->peer_hostport[0]) {
             fprintf(stderr,
-                    "psx_netplay: force_input_relay set but peer/relay "
-                    "endpoint empty\n");
+                    "psx_netplay: MotK online / force_input_relay needs a "
+                    "peer or SFU endpoint (empty peer)\n");
+            fflush(stderr);
             return -1;
         }
         fprintf(stderr,
                 "psx_netplay: server input relay — LAN transport to %s\n",
                 cfg->peer_hostport);
+        fflush(stderr);
         return 0;
     }
 
-#if defined(RNET_ENABLE_ICE) && defined(PSX_HAS_LOBBY_CLIENT)
-    if (cfg->transport == 1) {
-        if (!in_motk_room) {
-            fprintf(stderr,
-                    "psx_netplay: ICE requested but MotK lobby not connected\n");
-            return -1;
-        }
+#if defined(RNET_ENABLE_ICE)
+    /* Explicit ICE only outside MotK online (rare). */
+    if (cfg->transport == 1)
         return 1;
-    }
-    /* Auto: hosted MotK room always uses ICE. Do not demote to LAN when the
-     * lobby rewrites 0.0.0.0 binds to a private TCP peer IP (often wrong).
-     * Direct IP / LAN file lobby (no MotK seat) stays on LAN UDP. */
-    if (in_motk_room)
-        return 1;
-    return 0;
-#else
-    {
-        /* Session 151: Desktop guest (no ICE) got MotK launch with peer set
-         * to the SFU advertise host but force_input_relay unset → hard -4
-         * while host SFU-started. Dial a usable peer as LAN/SFU instead. */
-        if (in_motk_room && cfg->peer_hostport && cfg->peer_hostport[0]) {
-            fprintf(stderr,
-                    "psx_netplay: no-ICE build — MotK room dialing peer %s "
-                    "as LAN/SFU (rebuild with PSX_NET_ICE=ON for ice_p2p)\n",
-                    cfg->peer_hostport);
-            fflush(stderr);
-            return 0;
-        }
-        if (cfg->transport == 1 || in_motk_room) {
-            fprintf(stderr,
-                    "psx_netplay: hosted lobby needs ICE or a SFU "
-                    "relay_endpoint, but ICE is not in this build and peer "
-                    "is empty (configure PSX_NET_ICE=ON / RNET_ENABLE_ICE=ON, "
-                    "or Force Relay so launch includes relay_endpoint)\n");
-            fflush(stderr);
-            return -1;
-        }
-    }
-    return 0;
 #endif
+    return 0;
 }
 
 

@@ -4802,3 +4802,27 @@ ratcheting D; it did not stop the invents.
 `gap1_grace` rises vs invent_gap1; guest invent stays low; D still only
 raises on real lateness (`late_n>0`); no feel of extra stall on LAN
 (`rtt≤48` path unchanged at cap 12).
+
+---
+
+## 108. Always SFU for online MotK/BPE lobbies (2026-08-06)
+
+**Problem:** Online connectivity layered lobby SFU + waiting-room ICE
+`path_report` → optional `ice_p2p` + Coturn/Force TURN. Host/guest could
+disagree (session 151 no-ICE guest, stale caps bits, Force TURN meaning
+ICE-relay vs SFU). Too many signals for CGNAT reachability SFU already covers.
+
+**What landed:**
+
+1. **Server** — `start_use_sfu` always returns SFU (`reason=always_sfu`).
+   No `ice_p2p` selection from path reports / caps.
+2. **Client `resolve_use_ice`** — MotK room / `force_input_relay` → LAN dial
+   to peer/SFU; match ICE not used online.
+3. **Launch** — legacy `transport=ice_p2p` refused (`sfu_required`);
+   `path_report` kept as telemetry only.
+4. **Force TURN** — delay-floor hint only; does not change transport.
+5. **LAN/direct** — unchanged (local UDP / host hub; no MotK SFU).
+
+**Re-soak watch:** start logs `use_sfu=true reason=always_sfu`; both peers
+`server input relay — LAN transport to …`; no `ice_p2p` / `ice_required`
+on online MotK; no-ICE Desktop guests connect; Force TURN only affects D floor.

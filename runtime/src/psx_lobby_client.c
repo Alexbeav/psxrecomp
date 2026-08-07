@@ -1847,14 +1847,13 @@ static void handle_server_json(const char *json)
                 g_lc.match_caps.valid = 1;
             g_lc.match_caps.force_input_relay = 1;
         } else if (g_lc.match_caps.valid) {
-            /* ice_p2p / non-SFU launch — do not keep a stale force_input_relay. */
+            /* Non-SFU launch (legacy ice_p2p) — clear stale force_input_relay. */
             g_lc.match_caps.force_input_relay = 0;
         }
         fill_peer_bind_from_join();
         parse_slots_array(json);
-        /* Guest must know host:port (or relay). Host may leave peer empty for
-         * accept-first / host-as-relay. Server relay: every peer dials relay.
-         * ice_p2p: MotK ICE signaling; LAN endpoints optional. */
+        /* §108: online start always SFU — every peer dials relay_endpoint.
+         * Legacy ice_p2p from an old server is refused (need SFU). */
         {
             char transport[24];
             const int force_relay = using_server_input_relay(&g_lc.join);
@@ -1867,8 +1866,7 @@ static void handle_server_json(const char *json)
             int ice_p2p = 0;
             transport[0] = '\0';
             json_get_str(json, "transport", transport, sizeof(transport));
-            if (strcmp(transport, "ice_p2p") == 0 ||
-                (!force_relay && seats == 2 && !relay_endpoint[0]))
+            if (strcmp(transport, "ice_p2p") == 0)
                 ice_p2p = 1;
             if (force_relay) {
                 if (peer_bad) {
@@ -1878,23 +1876,15 @@ static void handle_server_json(const char *json)
                     return;
                 }
             } else if (ice_p2p) {
-#if !defined(RNET_ENABLE_ICE)
-                /* Session 151: no-ICE Desktop cannot run ice_p2p — refuse
-                 * launch with a clear error instead of start failed (-4). */
                 fprintf(stderr,
-                        "psx_lobby: launch transport=ice_p2p refused — this "
-                        "build has no ICE (need SFU / Force Relay, or rebuild "
-                        "with PSX_NET_ICE=ON)\n");
+                        "psx_lobby: launch transport=ice_p2p refused — "
+                        "online lobbies require SFU (§108; upgrade lobby "
+                        "server)\n");
                 fflush(stderr);
-                strncpy(g_lc.join.last_error, "ice_required",
+                strncpy(g_lc.join.last_error, "sfu_required",
                         sizeof(g_lc.join.last_error) - 1);
                 g_lc.launch_pending = 0;
                 return;
-#else
-                fprintf(stderr,
-                        "psx_lobby: launch transport=ice_p2p (no SFU)\n");
-                fflush(stderr);
-#endif
             } else if (!g_lc.join.host_endpoint[0] ||
                        (g_lc.is_host && !host_hub && !g_lc.join.guest_endpoint[0]) ||
                        (!g_lc.is_host && peer_bad)) {
@@ -2412,7 +2402,7 @@ static void lobby_ice_rtt_tick(void)
                     rnet_ice_state_name(st), path, ms);
             fflush(stderr);
         }
-        /* Server picks SFU vs ICE P2P from these reports (2 seated only). */
+        /* §108: path_report is telemetry only — server always picks SFU. */
         if (strcmp(path, "host") == 0 || strcmp(path, "srflx") == 0 ||
             strcmp(path, "prflx") == 0)
             report = "direct";
@@ -2430,7 +2420,7 @@ static void lobby_ice_rtt_tick(void)
             strncpy(g_ice_path_reported, report, sizeof(g_ice_path_reported) - 1);
             g_ice_path_reported[sizeof(g_ice_path_reported) - 1] = '\0';
             g_ice_path_report_ms = now ? now : 1ull;
-            fprintf(stderr, "psx_lobby: path_report %s\n", report);
+            fprintf(stderr, "psx_lobby: path_report %s (telemetry)\n", report);
             fflush(stderr);
         }
     }

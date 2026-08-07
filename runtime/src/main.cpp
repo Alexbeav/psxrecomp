@@ -439,8 +439,9 @@ static int      s_fmv_skip_present_skip = 0;
 static int      s_netplay_depth24_present_skip = 0;
 static uint32_t s_fmv_skip_last_mdec = 0;
 static int      s_fmv_skip_hold = 0;
-/* MotK FMV cutover: after an idle gap, blank the first depth24+MDEC presents
- * so one-frame RGB888 junk (stale VRAM) never reaches the window. */
+/* Depth24 FMV cutover: blank the first depth24+MDEC presents after leaving
+ * depth24 or a *long* MDEC idle so one-frame RGB888 junk never reaches the
+ * window. Short inter-frame gaps must not re-arm this (BPE ~15fps flicker). */
 static int      s_d24_prev_mdec = 0;
 static int      s_d24_saw_gap = 0;
 static int      s_d24_cutover_blank = 0;
@@ -4315,17 +4316,25 @@ static void load_transition_note(int read_active, int load_active,
     prev_turbo = turbo_active;
 }
 
-/* Tick MotK-style depth24 cutover state once per present. Arm a short full-
- * frame blank when MDEC returns after an idle gap (or after leaving depth24). */
+/* Tick depth24 cutover state once per present. Arm a short full-frame blank
+ * when MDEC returns after leaving depth24, or after a *long* intra-depth24
+ * idle (real inter-movie gap) — not after every short gap between ~15fps
+ * MDEC frames. With SIMD IDCT a movie frame often finishes in one vblank;
+ * treating !mdec_recently_active(3) as a cutover re-armed a 2-present full
+ * black blank on every decode burst (BPE FMV flicker). Do not regress to
+ * short-gap arming for MotK merges — MotK cutovers still arm via depth24
+ * exit and long idle. */
 static void depth24_cutover_tick(int depth24) {
     const int mdec_on = depth24 && mdec_recently_active(3);
+    /* ~0.5s @60Hz — longer than inter-frame MDEC idle in a live movie. */
+    const int mdec_long_idle = depth24 && !mdec_recently_active(30);
     if (!depth24) {
         s_d24_prev_mdec = 0;
         s_d24_cutover_blank = 0;
         s_d24_saw_gap = 1; /* next depth24+MDEC is a fresh movie cutover */
         return;
     }
-    if (!mdec_on)
+    if (mdec_long_idle)
         s_d24_saw_gap = 1;
     if (s_d24_saw_gap && mdec_on && !s_d24_prev_mdec) {
         /* Hide the transitional present(s) that still show stale RGB888 junk. */
@@ -4345,8 +4354,8 @@ static void depth24_cutover_tick(int depth24) {
  * reset the span — hold ticks skip Swap, then the next present saw lim=0
  * and wiped the whole frame every vblank.
  *
- * Optional short cutover blank (tip): full-frame black for 1–2 presents when
- * MDEC returns after an idle gap, hiding one-frame transitional junk. */
+ * Optional short cutover blank: full-frame black for 1–2 presents on movie
+ * start / long idle resume only (see depth24_cutover_tick). */
 static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
                                           uint32_t display_x) {
     if (!buf || w < 8u || h == 0u) return;
@@ -5590,8 +5599,8 @@ namespace {
     RecompLauncherCNetplayLaunch g_lnch_pending_direct_launch{};
     int g_lnch_lobby_input_delay = 2;
     int g_lnch_lobby_input_prediction = 4;
-    /* Offline default off — waiting-room ICE probes host/srflx so the lobby
-     * server can choose ice_p2p vs SFU. Force-relay / Force TURN still override. */
+    /* §108: online lobbies always SFU; force_input_relay is set from launch
+     * relay_endpoint. force_turn is a rollback delay-floor hint only. */
     int g_lnch_force_input_relay = 0;
     int g_lnch_force_turn = 0;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
@@ -6793,7 +6802,8 @@ namespace {
     }
     int ae_np_force_turn_set(void*, int force) {
         if (g_lnch_hosting_lan || g_lnch_joined_lan)
-            return 0; /* LAN/Direct IP does not use ICE TURN */
+            return 0; /* LAN/Direct IP — no online delay-floor hint */
+        /* Delay floor only (§108); does not change SFU vs ICE transport. */
         g_lnch_force_turn = force ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
@@ -8044,11 +8054,8 @@ namespace {
             if (seated > out->max_slots) seated = out->max_slots;
             out->player_count = seated;
         }
-        /* SFU when launch rewrote caps.force_input_relay (relay_endpoint);
-         * ice_p2p / LAN leave it clear. Also detect equal host/guest
-         * endpoints (server SFU advertise) when the caps bit was omitted —
-         * session 151 Desktop guest dialed the relay hostname without
-         * force_input_relay and died in resolve_use_ice (-4). */
+        /* §108: online launch always SFU. Prefer caps.force_input_relay from
+         * relay_endpoint rewrite; also infer when host==guest advertise. */
         out->force_input_relay =
             (g_lnch_hosting_lan || g_lnch_joined_lan)
                 ? 0
