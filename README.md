@@ -101,6 +101,35 @@ repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
 and game code (`game.toml`, seeds, CMake) at the repo root. See
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
+### New Project Layout (preview)
+
+Scaffold a title repo: pass **`--disc`** (required path — tab-complete it);
+the script **prompts** for name, players, marketing, recomp-ui, wizard/netplay,
+lobby URL (default `netplay.retcomm.net`), CI, boxart, Generate, optional
+build, and optional `gh` repo create. Seeds `symbols.toml` + a rich
+`.gitignore`. Full flow: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
+```bash
+# Linux / macOS — interactive prompts after --disc
+sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/src
+```
+
+```powershell
+# Windows
+powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
+```
+
+Launcher features that are still in active development are **opt-in at
+configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
+
+| Flag | Default | Enables |
+|------|---------|---------|
+| `-DPSX_SETUP_WIZARD=ON` | OFF | First-run setup wizard + Generate & rebuild |
+| `-DPSX_NETPLAY=ON` | OFF | Full netplay UI (needs `lib/recomp-net`) |
+
+Details: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md). Legacy CLI
+`psxrecomp build` / `tools/setup_dev.sh` remain available.
+
 **New here?** The fastest way in:
 
 | Path | Doc |
@@ -109,6 +138,7 @@ and game code (`game.toml`, seeds, CMake) at the repo root. See
 | Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
 | **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
+| **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
 | Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
 | Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
@@ -120,7 +150,8 @@ Builds support two recompiled BIOS backends: **OpenBIOS** and a compatible
 **retail BIOS**. OpenBIOS is a free, open-source PlayStation BIOS from the
 [PCSX-Redux](https://github.com/grumpycoders/pcsx-redux) project that we're
 allowed to distribute. It is bundled and runs by default, so you usually do not
-need to provide a BIOS dump. Bring a game disc image and play.
+need to provide a BIOS dump. Bring a game disc image (`.cue`/`.bin`, `.iso`, or
+MAME-compatible `.chd`) and play.
 
 **If you'd rather use a retail BIOS**, pick your dumped `SCPH1001.BIN` in
 settings and it will be used instead. Clear that choice to return to OpenBIOS.
@@ -383,6 +414,25 @@ See [`docs/STRING_TRANSLATION.md`](docs/STRING_TRANSLATION.md); *Tsumu Light*
 | **Vulkan** | **Experimental.** Built when the SDK is present, opt-in at runtime; falls back to OpenGL if unavailable. |
 | **Software** | CPU rasterizer — the reference look, and the most portable fallback. |
 
+### Geometry enhancements (opt-in)
+
+Two optional fixes for the PS1's fixed-point geometry pipeline, off by default
+so the faithful look stays the baseline. Set them in `game.toml` or the
+player's `settings.toml`:
+
+```toml
+[video]
+geometry_correction   = true   # sub-pixel vertex precision — removes polygon
+                               # jitter/wobble. Needs supersampling >= 2.
+perspective_texturing = true   # perspective-correct UVs — removes the texture
+                               # warp on large floor/wall polygons.
+supersampling         = 2
+```
+
+Both are visual-only: the GTE's guest-visible screen coordinates stay integer
+and fully faithful, so game logic and culling are unaffected. Supported on all
+three renderers. See [`ENHANCEMENTS.md`](ENHANCEMENTS.md) §G1.
+
 ## How to use PSXRecomp
 
 PSXRecomp takes a PlayStation disc image and creates a recompilation project
@@ -623,9 +673,24 @@ retail BIOS support):
 ```sh
 git clone --recurse-submodules https://github.com/mstan/psxrecomp.git && cd psxrecomp
 
+# 1. Recompiler tool (produces psxrecomp-bios and psxrecomp-game)
 cmake -S recompiler -B recompiler/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build recompiler/build
+
+# 2. Generate a BIOS backend. REQUIRED before the first runtime build: the
+#    recompiled BIOS C is build output, not tracked, so a fresh clone has none
+#    and the runtime configure fails with "No recompiled BIOS backend
+#    available". OpenBIOS is bundled and MIT-licensed, so this needs no dump.
+bash tools/regen_bios.sh --config bios/OpenBIOS.toml
+bash tools/regen_bios.sh --config bios/SCPH1001.toml   # optional, needs your own dump
+
+# 3. Runtime (produces psx-runtime)
 cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSX_RECOMP_UI=OFF && cmake --build runtime/build --target psx-runtime
 ```
+
+Step 2 depends on step 1: `regen_bios.sh` builds the emitter but does not
+configure it, so run it only after `recompiler/build` exists. Re-run step 2
+whenever the recompiler's BIOS emitter changes — a stale `generated/` raises a
+fingerprint-mismatch warning at configure time.
 
 On Windows swap `-G Ninja` for your generator if you prefer (e.g.
 `-G "Unix Makefiles"`); always keep an explicit `-DCMAKE_BUILD_TYPE` so the

@@ -13,8 +13,13 @@ What this session ADDED to make it work under CPS + match the user's gcc-only pr
 2. `overlay_loader.c overlay_loader_apply_live_policy` — when the active backend is gcc, sljit-live
    is forced OFF (gcc>interp; toolchain-less stays sljit>interp) — "mutually exclusive" per user.
 3. The dev/soak config (`tomba_soak_a.toml`, untracked): `overlay_cache=true` +
-   `overlay_autocompile_cmd = python ../psxrecomp/tools/compile_overlays.py … --cps`. The PRODUCTION
+   `overlay_autocompile_cmd = py -3 ../psxrecomp/tools/compile_overlays.py … --cps`. The PRODUCTION
    `game.toml` overlay_autocompile_cmd needs `--cps` appended when CPS ships to master.
+   (Windows recipes must invoke the interpreter as `py -3`, never bare `python`: on machines where
+   an MSYS2/Cygwin `usr/bin` precedes the Windows Python on PATH, `python` binds to the Cygwin
+   build, which segfaults under the runtime's job-object spawn before writing any output — every
+   compile fails with "(no output captured)". The runtime prints the resolved interpreter at
+   startup and warns when it is a Cygwin binary.)
 
 VALIDATED: autocapture fired (triggers≥1) → background `compile_overlays --cps` produced CPS
 overlay DLLs (new CRCs, post-cache-clear) → loader loaded them (`loads`>0) → `dispatch_native`

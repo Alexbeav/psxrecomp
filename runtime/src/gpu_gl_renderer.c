@@ -76,6 +76,7 @@
 #else
 #include <SDL_opengl.h>
 #endif
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -361,10 +362,24 @@ static GLuint        s_scratch_tex = 0, s_scratch_fbo = 0;
 static GLuint s_geo_prog = 0, s_geo_vao = 0, s_geo_vbo = 0;
 static GLuint s_tex_prog = 0, s_tex_vao = 0, s_tex_vbo = 0;
 /* Textured vertex: pos(2) uv(2) col(4) tpage(2) clut(2) depth(1) raw(1) limits(4)
- * — per-prim texture state in flat attributes so prims batch (see flush_tex_batch). */
-#define TEXV 19
+ * semi(1) q(1)
+ * — per-prim texture state in flat attributes so prims batch (see flush_tex_batch).
+ * q is the perspective weight ([video] perspective_texturing): 0 = affine, the
+ * PS1-faithful default, which makes the vertex shader's w exactly 1.0 and the
+ * fragment shader read the noperspective varying — i.e. bit-identical to the
+ * pre-feature pipeline. */
+#define TEXV 20
 static GLuint s_blit_prog = 0, s_blit_vao = 0, s_blit_vbo = 0;
 static GLuint s_pack_prog = 0, s_stencil_prog = 0, s_empty_vao = 0;
+
+/* Sub-pixel vertex override + perspective UV weights for the next triangle
+ * ([video] geometry_correction / perspective_texturing; see gpu_render.h).
+ * gpu.c sets these immediately before the matching gr_draw_*_triangle and they
+ * are consumed by it. All-zero == the faithful integer/affine path. */
+static int     s_pc_valid = 0;                  /* sub-pixel positions present */
+static float   s_pc_x[3], s_pc_y[3];            /* native VRAM px, fractional  */
+static int     s_pq_valid = 0;                  /* perspective weights present */
+static float   s_pq[3];
 
 /* TEX program uniforms. */
 static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
@@ -919,15 +934,19 @@ static const char *TEX_VS =
     "layout(location=6) in float a_raw;\n"
     "layout(location=7) in vec4 a_limits;\n"
     "layout(location=8) in float a_semi;\n"
+    "layout(location=9) in float a_q;   /* persp weight; 0 = affine (default) */\n"
     "uniform float u_shift;\n"
     "uniform float u_xoff;   /* native-wide x translation (px); 0 canonical */\n"
     "uniform float u_xhalf;  /* x clip half-extent (px); 512 canonical */\n"
     "uniform float u_xscale; /* native-wide 2D-backdrop x-stretch; 1 canonical */\n"
     "uniform float u_xcenter;/* stretch centre in VRAM px; 0 canonical */\n"
     "noperspective out vec2 v_uv; noperspective out vec4 v_col;\n"
+    "smooth out vec2 v_uv_p;  /* perspective-correct UV (used when v_persp!=0) */\n"
+    "flat out int v_persp;\n"
     "flat out ivec2 v_tpage; flat out ivec2 v_clut; flat out int v_depth;\n"
     "flat out int v_raw; flat out ivec4 v_limits; flat out int v_semi;\n"
-    "void main(){ v_uv = a_uv; v_col = a_col;\n"
+    "void main(){ v_uv = a_uv; v_uv_p = a_uv; v_col = a_col;\n"
+    "  v_persp = (a_q > 0.0) ? 1 : 0;\n"
     "  v_tpage = ivec2(a_tpage + 0.5); v_clut = ivec2(a_clut + 0.5);\n"
     "  v_depth = int(a_depth + 0.5); v_raw = int(a_raw + 0.5);\n"
     "  v_semi = int(a_semi + 0.5);\n"
@@ -940,10 +959,17 @@ static const char *TEX_VS =
     "    float l = u_xcenter - h, r = u_xcenter + h;\n"
     "    if (xb < l) xb = l + (xb-l)*s; else if (xb > r) xb = r + (xb-r)*s;\n"
     "  } else xb = (xb - u_xcenter)*u_xscale + u_xcenter;\n"
-    "  gl_Position = vec4((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0, 0.0, 1.0); }\n";
+    "  /* Perspective-correct UV rides the standard w divide: emit clip coords\n"
+    "   * pre-multiplied by w = 1/q so the post-divide NDC is unchanged while\n"
+    "   * the rasterizer interpolates the smooth varying hyperbolically. With\n"
+    "   * a_q == 0 (feature off) w is exactly 1.0 and this is the old expression. */\n"
+    "  float w = (a_q > 0.0) ? (1.0 / a_q) : 1.0;\n"
+    "  vec2 ndc = vec2((xb+u_shift+u_xoff)/u_xhalf - 1.0, (a_pos.y+u_shift)/256.0 - 1.0);\n"
+    "  gl_Position = vec4(ndc * w, 0.0, w); }\n";
 static const char *TEX_FS =
     "#version 330\n"
     "noperspective in vec2 v_uv; noperspective in vec4 v_col;\n"
+    "smooth in vec2 v_uv_p; flat in int v_persp;\n"
     "out vec4 frag; out vec4 blend_factor;\n"
     "flat in ivec2 v_tpage;   /* texture page base, VRAM px */\n"
     "flat in ivec2 v_clut;    /* CLUT base, VRAM px */\n"
@@ -983,8 +1009,12 @@ static const char *TEX_FS =
     "}\n"
     "void main(){\n"
     "  int stp; vec3 rgb;\n"
+    "  /* v_persp is 0 for every prim unless [video] perspective_texturing is on\n"
+    "   * AND this prim's packet carried full GTE projection provenance, so the\n"
+    "   * default is the PS1's affine (noperspective) mapping. */\n"
+    "  vec2 uv = (v_persp != 0) ? v_uv_p : v_uv;\n"
     "  if (u_filter == 0) {\n"
-    "    int raw = fetch_texel(int(floor(v_uv.x)), int(floor(v_uv.y)));\n"
+    "    int raw = fetch_texel(int(floor(uv.x)), int(floor(uv.y)));\n"
     "    if (raw == 0) discard;\n"
     "    rgb = col5(raw);\n"
     "    stp = (raw >> 15) & 1;\n"
@@ -995,8 +1025,8 @@ static const char *TEX_FS =
     "     * its opacity with the colour renormalised — so prim edges and\n"
     "     * cutout borders keep their colour instead of dissolving into the\n"
     "     * transparent (black) neighbour and discarding whole edge columns. */\n"
-    "    int iu = int(floor(v_uv.x)), iv = int(floor(v_uv.y));\n"
-    "    float fx = v_uv.x - float(iu) - 0.5, fy = v_uv.y - float(iv) - 0.5;\n"
+    "    int iu = int(floor(uv.x)), iv = int(floor(uv.y));\n"
+    "    float fx = uv.x - float(iu) - 0.5, fy = uv.y - float(iv) - 0.5;\n"
     "    int sx = fx < 0.0 ? -1 : 1, sy = fy < 0.0 ? -1 : 1;\n"
     "    fx = abs(fx); fy = abs(fy);\n"
     "    int c00 = fetch_texel(iu, iv);\n"
@@ -1401,6 +1431,11 @@ static void mark_prim_dirty(const int *xs, const int *ys, int n, int textured) {
         if (xs[i] < x0) x0 = xs[i]; if (xs[i] > x1) x1 = xs[i];
         if (ys[i] < y0) y0 = ys[i]; if (ys[i] > y1) y1 = ys[i];
     }
+    /* A sub-pixel-corrected vertex lies in [int, int+1) of the integer position
+     * it was rounded from, so the corrected prim can touch one more pixel on
+     * each max edge than the integer bbox covers. Widen before clipping so the
+     * pack/readback dirty rect never trails the drawn area. */
+    if (s_pc_valid) { x1 += 1; y1 += 1; }
     s_bdg_prims++;   /* dbg: prims seen this frame (gate is now per-prim, see bd_prim_gate) */
     if (s_ptrace_n < PTRACE_CAP) {
         PrimRec *p = &s_ptrace[s_ptrace_n++];
@@ -1653,12 +1688,16 @@ static int    s_cw_batches = 0, s_cw_wide_sets = 0, s_cw_wide_cfgs = 0,
  * (attr 0, stride TEXV). Defined here so s_tb / TEXV are in scope. */
 static int mirror_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
-    int lo = (int)s_tb[0], hi = (int)s_tb[0];
+    float flo = s_tb[0], fhi = s_tb[0];
     for (int i = 1; i < nverts; i++) {
-        int x = (int)s_tb[i * TEXV];
-        if (x < lo) lo = x; if (x > hi) hi = x;
+        float x = s_tb[i * TEXV];
+        if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
-    return mirror_x_center_only(lo, hi);
+    /* floor/ceil, not a truncating cast: with geometry_correction these are
+     * fractional, and (int) rounds toward zero — which WIDENS a negative x
+     * toward the centre and could wrongly call a margin-touching batch
+     * centre-only, dropping its wide-mirror draw. Whole values are unchanged. */
+    return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
 static void flush_tex_batch(void) {
@@ -1713,12 +1752,13 @@ static int   s_fb_mask = -1;
 
 static int mirror_flat_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
-    int lo = (int)s_fb[0], hi = (int)s_fb[0];
+    float flo = s_fb[0], fhi = s_fb[0];
     for (int i = 1; i < nverts; i++) {
-        int x = (int)s_fb[i * 6];
-        if (x < lo) lo = x; if (x > hi) hi = x;
+        float x = s_fb[i * 6];
+        if (x < flo) flo = x; if (x > fhi) fhi = x;
     }
-    return mirror_x_center_only(lo, hi);
+    /* floor/ceil rather than a truncating cast — see mirror_batch_center_only. */
+    return mirror_x_center_only((int)floorf(flo), (int)ceilf(fhi));
 }
 
 static void flush_flat_batch(void) {
@@ -1759,6 +1799,8 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     flush_tex_batch();   /* flat prim: drain textured draws first (order + program) */
     flush_cpu_upload();  /* also drains flat batch if an upload was pending */
     mark_prim_dirty(xs, ys, n, 0 /* flat */);
+    /* Sub-pixel positions only describe a 3-vertex projected triangle. */
+    const int precise = s_pc_valid && mode == GL_TRIANGLES && n == 3;
 
     /* Lines stay immediate (rare); tris batch for MotK 0x68 starfields. */
     if (mode != GL_TRIANGLES || n < 3) {
@@ -1766,8 +1808,8 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         float verts[3 * 6];
         float mask_a = s_mask_set ? 1.0f : 0.0f;
         for (int i = 0; i < n; i++) {
-            verts[i*6+0] = (float)xs[i];
-            verts[i*6+1] = (float)ys[i];
+            verts[i*6+0] = precise ? s_pc_x[i] : (float)xs[i];
+            verts[i*6+1] = precise ? s_pc_y[i] : (float)ys[i];
             verts[i*6+2] = ((cs[i] & 0x1F) << 3) / 255.0f;
             verts[i*6+3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
             verts[i*6+4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
@@ -1809,8 +1851,8 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     float mask_a = s_mask_set ? 1.0f : 0.0f;
     for (int i = 0; i < n; i++) {
         float *v = &s_fb[s_fb_n * 6];
-        v[0] = (float)xs[i];
-        v[1] = (float)ys[i];
+        v[0] = precise ? s_pc_x[i] : (float)xs[i];
+        v[1] = precise ? s_pc_y[i] : (float)ys[i];
         v[2] = ((cs[i] & 0x1F) << 3) / 255.0f;
         v[3] = (((cs[i] >> 5) & 0x1F) << 3) / 255.0f;
         v[4] = (((cs[i] >> 10) & 0x1F) << 3) / 255.0f;
@@ -1916,7 +1958,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         }
         float *vp = &s_tb[s_tb_n * TEXV];
         for (int i = 0; i < 3; i++, vp += TEXV) {
-            vp[0] = (float)xs[i];   vp[1] = (float)ys[i];
+            vp[0] = s_pc_valid ? s_pc_x[i] : (float)xs[i];
+            vp[1] = s_pc_valid ? s_pc_y[i] : (float)ys[i];
             vp[2] = (float)us[i];   vp[3] = (float)vs[i];
             vp[4] = col[i*3+0];     vp[5] = col[i*3+1];     vp[6] = col[i*3+2];   vp[7] = 1.0f;
             vp[8]  = (float)base_x;  vp[9]  = (float)base_y;        /* a_tpage  */
@@ -1925,6 +1968,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             vp[14] = (float)lim[0];  vp[15] = (float)lim[1];        /* a_limits */
             vp[16] = (float)lim[2];  vp[17] = (float)lim[3];
             vp[18] = semi >= 0 ? (float)(semi + 1) : 0.0f;          /* a_semi code */
+            vp[19] = s_pq_valid ? s_pq[i] : 0.0f;                   /* a_q; 0 = affine */
         }
         s_tb_n += 3;
         if (isolate) flush_tex_batch();   /* draw this semi prim alone, in submission order */
@@ -2164,6 +2208,27 @@ static void glb_set_texture_window(uint32_t r) {
     sw_set_texture_window(r);
 }
 static void glb_set_color_modulation(int r,int g,int b,int raw) { s_mod_r=r; s_mod_g=g; s_mod_b=b; s_mod_raw=raw; sw_set_color_modulation(r,g,b,raw); }
+/* Sub-pixel / perspective overrides for the next triangle. Forwarded to the
+ * software rasterizer too: pre-context draws (s_raster_ok == 0) still go there,
+ * and the GL backend delegates whole prim classes to it. */
+static void glb_set_precise_triangle(int enabled,
+                                     int32_t x0,int32_t y0, int32_t x1,int32_t y1,
+                                     int32_t x2,int32_t y2) {
+    s_pc_valid = enabled ? 1 : 0;
+    if (s_pc_valid) {
+        /* 16.16 native VRAM px -> float. The GL pipeline is float end-to-end,
+         * so the fraction survives to the rasterizer at any internal scale. */
+        s_pc_x[0] = (float)x0 / 65536.0f;  s_pc_y[0] = (float)y0 / 65536.0f;
+        s_pc_x[1] = (float)x1 / 65536.0f;  s_pc_y[1] = (float)y1 / 65536.0f;
+        s_pc_x[2] = (float)x2 / 65536.0f;  s_pc_y[2] = (float)y2 / 65536.0f;
+    }
+    sw_set_precise_triangle(enabled, x0,y0, x1,y1, x2,y2);
+}
+static void glb_set_perspective_triangle(int enabled, float q0, float q1, float q2) {
+    s_pq_valid = (enabled && q0 > 0.0f && q1 > 0.0f && q2 > 0.0f) ? 1 : 0;
+    s_pq[0] = q0; s_pq[1] = q1; s_pq[2] = q2;
+    sw_set_perspective_triangle(enabled, q0, q1, q2);
+}
 static void glb_set_draw_area(int x1,int y1,int x2,int y2) { flush_flat_batch(); flush_tex_batch(); s_area_x1=x1; s_area_y1=y1; s_area_x2=x2; s_area_y2=y2; sw_set_draw_area(x1,y1,x2,y2); }
 static void glb_get_draw_area(int *x1,int *y1,int *x2,int *y2) { sw_get_draw_area(x1,y1,x2,y2); }
 static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_batch(); s_off_x=x; s_off_y=y; sw_set_draw_offset(x,y); }
@@ -2172,17 +2237,23 @@ static void glb_set_draw_offset(int x,int y) { flush_flat_batch(); flush_tex_bat
  * over CPU VRAM; the initial full-VRAM upload at context init folds them in.
  * Offline post-init is GPU-only (FBO-auth). Netplay dual-raster always writes
  * SW @ 1× for authority, then GPU @ s_scale for present quality. */
+/* The sub-pixel / perspective override describes exactly one triangle; drop it
+ * once that triangle has been submitted so a later prim can never inherit it. */
+static inline void precise_consumed(void) { s_pc_valid = 0; s_pq_valid = 0; }
+
 static void glb_draw_flat_triangle(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t col) {
     if (s_cpu_auth_dual || !s_raster_ok)
         sw_draw_flat_triangle(x0,y0,x1,y1,x2,y2,col);
     if (!s_raster_ok) return;
     gpu_triangle(x0,y0,col, x1,y1,col, x2,y2,col, s_semi_en?s_semi_mode:-1);
+    precise_consumed();
 }
 static void glb_draw_gouraud_triangle(int x0,int y0,uint16_t c0,int x1,int y1,uint16_t c1,int x2,int y2,uint16_t c2) {
     if (s_cpu_auth_dual || !s_raster_ok)
         sw_draw_gouraud_triangle(x0,y0,c0,x1,y1,c1,x2,y2,c2);
     if (!s_raster_ok) return;
     gpu_triangle(x0,y0,c0, x1,y1,c1, x2,y2,c2, s_semi_en?s_semi_mode:-1);
+    precise_consumed();
 }
 static void glb_fill_rect(int x,int y,int w,int h,uint16_t c){
     if (s_cpu_auth_dual || !s_raster_ok)
@@ -2204,6 +2275,7 @@ static void glb_draw_textured_triangle(int x0,int y0,int u0,int v0,int x1,int y1
     float mr=s_mod_r/255.0f, mg=s_mod_g/255.0f, mb=s_mod_b/255.0f;
     float col[9]={mr,mg,mb, mr,mg,mb, mr,mg,mb};
     gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,s_mod_raw, s_semi_en?s_semi_mode:-1, NULL);
+    precise_consumed();
 }
 static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32_t c0,int x1,int y1,int u1,int v1,uint32_t c1,int x2,int y2,int u2,int v2,uint32_t c2,uint16_t cx,uint16_t cy,uint16_t tp,int raw){
     if (s_cpu_auth_dual || !s_raster_ok)
@@ -2213,6 +2285,7 @@ static void glb_draw_shaded_textured_triangle(int x0,int y0,int u0,int v0,uint32
     uint32_t cc[3]={c0,c1,c2}; float col[9];
     for (int i=0;i<3;i++){ col[i*3+0]=(cc[i]&0xFF)/255.0f; col[i*3+1]=((cc[i]>>8)&0xFF)/255.0f; col[i*3+2]=((cc[i]>>16)&0xFF)/255.0f; }
     gpu_textured_triangle(xs,ys,us,vs,col,tp,cx,cy,raw, s_semi_en?s_semi_mode:-1, NULL);
+    precise_consumed();
 }
 static void glb_draw_flat_rect(int x,int y,int w,int h,uint16_t c){
     if (s_cpu_auth_dual || !s_raster_ok)
@@ -2561,6 +2634,7 @@ static int init_gpu_raster(void) {
         p_glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, st, (void*)(13*sizeof(float))); p_glEnableVertexAttribArray(6); /* raw    */
         p_glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, st, (void*)(14*sizeof(float))); p_glEnableVertexAttribArray(7); /* limits */
         p_glVertexAttribPointer(8, 1, GL_FLOAT, GL_FALSE, st, (void*)(18*sizeof(float))); p_glEnableVertexAttribArray(8); /* semi   */
+        p_glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, st, (void*)(19*sizeof(float))); p_glEnableVertexAttribArray(9); /* q      */
     }
 
     p_glGenVertexArrays(1, &s_blit_vao);
@@ -4114,6 +4188,8 @@ static const GpuRenderBackend GL_BACKEND = {
     .set_texture_filter = glb_set_texture_filter, .texture_filter = glb_texture_filter,
     .set_semi_transparency = glb_set_semi_transparency, .set_mask_bits = glb_set_mask_bits,
     .set_texture_window = glb_set_texture_window, .set_color_modulation = glb_set_color_modulation,
+    .set_precise_triangle = glb_set_precise_triangle,
+    .set_perspective_triangle = glb_set_perspective_triangle,
     .fill_rect = glb_fill_rect, .copy_rect = glb_copy_rect,
     .draw_flat_triangle = glb_draw_flat_triangle, .draw_gouraud_triangle = glb_draw_gouraud_triangle,
     .draw_textured_triangle = glb_draw_textured_triangle,

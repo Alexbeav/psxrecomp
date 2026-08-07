@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "mod_memory.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_vram_dirty.h"
@@ -164,6 +165,10 @@ static int      ws_gte_game_mode_cfg = 0;
 static uint32_t ws_gte_frame = (uint32_t)-1;
 static uint32_t ws_gte_count = 0;
 static uint32_t ws_last_gte_stamp = (uint32_t)-1000;
+#define WS_GAMEPLAY_STATE_VALUES_MAX 16
+static uint32_t ws_gameplay_state_addr = 0;
+static uint32_t ws_gameplay_state_values[WS_GAMEPLAY_STATE_VALUES_MAX];
+static int ws_gameplay_state_value_count = 0;
 /* Any frame that projects a handful of vertices is "3D" (a low threshold so a
  * sparse close-up cutscene frame still counts — the flicker was frames dipping
  * below a high 16-vert bar and pillarboxing for a frame or two). */
@@ -174,6 +179,25 @@ static uint32_t ws_last_gte_stamp = (uint32_t)-1000;
  * this many consecutive frames (save/options/memory-card) — reverts to 4:3. */
 #define WS_GTE_GAME_MODE_HYSTERESIS 45u
 void gpu_ws_set_gte_game_mode(int on) { ws_gte_game_mode_cfg = on ? 1 : 0; }
+void gpu_ws_set_gameplay_state_gate(uint32_t addr,
+                                    const uint32_t *values, int nvalues) {
+    if (nvalues < 0) nvalues = 0;
+    if (nvalues > WS_GAMEPLAY_STATE_VALUES_MAX)
+        nvalues = WS_GAMEPLAY_STATE_VALUES_MAX;
+    ws_gameplay_state_addr = addr;
+    ws_gameplay_state_value_count = nvalues;
+    for (int i = 0; i < nvalues; i++)
+        ws_gameplay_state_values[i] = values[i];
+}
+
+static int ws_gameplay_state_matches(void) {
+    if (!ws_gameplay_state_addr || ws_gameplay_state_value_count == 0)
+        return -1;
+    uint32_t state = psx_read_word(ws_gameplay_state_addr);
+    for (int i = 0; i < ws_gameplay_state_value_count; i++)
+        if (state == ws_gameplay_state_values[i]) return 1;
+    return 0;
+}
 
 /* World-scale 3D signal for the 2D-only-scene classifier (sprite-tag titles).
  * Shaded-prim presence proved to be a FALSE world signal: task-clear /
@@ -240,6 +264,8 @@ static int ws_full_2d_mode(void) {
     return ws_full_2d || env;
 }
 static int ws_game_mode(void) {
+    int state_match = ws_gameplay_state_matches();
+    if (state_match >= 0) return state_match;
     if (ws_full_2d_mode()) return 1;
     if (ws_gte_game_mode_cfg &&
         (uint32_t)s_frame_count - ws_last_gte_stamp <= WS_GTE_GAME_MODE_HYSTERESIS) return 1;
@@ -387,6 +413,20 @@ int psx_ws_is_cull_bias_site(uint32_t pc) {
 }
 int psx_ws_is_cull_slti_site(uint32_t pc) {
     return ws_explicit_site(ws_explicit_slti_sites, ws_explicit_slti_n, pc);
+}
+static uint32_t ws_explicit_slti_lower_sites[WS_EXPLICIT_CULL_SITES_MAX];
+static int ws_explicit_slti_lower_n = 0;
+void gpu_ws_set_slti_lower_cull_sites(const uint32_t *sites, int nsites) {
+    if (nsites < 0) nsites = 0;
+    if (nsites > WS_EXPLICIT_CULL_SITES_MAX)
+        nsites = WS_EXPLICIT_CULL_SITES_MAX;
+    ws_explicit_slti_lower_n = nsites;
+    for (int i = 0; i < nsites; i++)
+        ws_explicit_slti_lower_sites[i] = sites[i] & 0x1FFFFFFFu;
+}
+int psx_ws_is_cull_slti_lower_site(uint32_t pc) {
+    return ws_explicit_site(ws_explicit_slti_lower_sites,
+                            ws_explicit_slti_lower_n, pc);
 }
 static uint32_t ws_explicit_negsub_sites[WS_EXPLICIT_CULL_SITES_MAX];
 static int ws_explicit_negsub_n = 0;
@@ -939,6 +979,7 @@ static uint32_t g_bg2d_layer_count = 3;
 static uint32_t g_bg2d_layer_struct_stride = 0x54;
 static uint32_t g_bg2d_packet_cap = 1000;
 static int g_bg2d_native_cols = 21;
+static int g_bg2d_parent_links = 1;
 
 void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
                            uint32_t map_size_addr, uint32_t layer_stride_addr,
@@ -952,6 +993,10 @@ void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
     g_bg2d_layer_count = layer_count;
     g_bg2d_layer_struct_stride = layer_struct_stride;
     g_bg2d_packet_cap = packet_cap;
+}
+
+void gpu_ws_bg2d_set_parent_links(int on) {
+    g_bg2d_parent_links = on ? 1 : 0;
 }
 
 static int ws_bg2d_left_cols(void) {
@@ -1118,15 +1163,20 @@ static int bg2d_fill_column(int layer, int worldX, int worldY, int scrollX, int 
         }
     }
     int mapW = psx_read_byte(g_bg2d_map_size_addr);
-    int mapH = psx_read_byte(g_bg2d_map_size_addr + 1u);
     uint32_t mapBase  = psx_read_word(0x1F800004u);
     uint32_t metaBase = psx_read_word(0x1F800008u);
-    if (mapBase == 0 || metaBase == 0 || mapW <= 0 || mapH <= 0) return 0;
+    if (mapBase == 0 || metaBase == 0 || mapW <= 0) return 0;
     int layerStride = (uint16_t)psx_read_half(g_bg2d_layer_stride_addr);
 
-    int metaIdx = 0;
-    if ((uint32_t)metaCol < (uint32_t)mapW && (uint32_t)metaRow < (uint32_t)mapH)
-        metaIdx = psx_read_byte(mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
+    /*
+     * The Capcom streamer has no map-height field or vertical bounds check.
+     * After normalizing negative worldY to zero it indexes rows as
+     *   layer*stride + mapW*metaRow + metaCol
+     * directly. Treating map_size_addr+1 as a guessed height rejects every
+     * MMX4 column because that adjacent byte is zero.
+     */
+    int metaIdx = psx_read_byte(
+        mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
 
     uint32_t ringbase = g_bg2d_ring_base
                       + (uint32_t)layer * (g_bg2d_ring_cols * 64u);
@@ -1145,9 +1195,9 @@ static int bg2d_fill_column(int layer, int worldX, int worldY, int scrollX, int 
         if (++trowInMeta == 0x10) {
             trowInMeta = 0;
             metaRow++;
-            metaIdx = 0;
-            if ((uint32_t)metaCol < (uint32_t)mapW && (uint32_t)metaRow < (uint32_t)mapH)
-                metaIdx = psx_read_byte(mapBase + (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
+            metaIdx = psx_read_byte(
+                mapBase +
+                (uint32_t)(layer * layerStride + mapW * metaRow + metaCol));
         }
     }
     return 1;
@@ -1179,7 +1229,8 @@ void psx_ws_mmx6_bg_refill_all(void) {
         int sx = (int16_t)psx_read_half(lbase + 0xa);
         int sy = (int16_t)psx_read_half(lbase + 0xe);
         int8_t parent = (int8_t)psx_read_byte(lbase + 0x52);
-        if (parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
+        if (g_bg2d_parent_links &&
+            parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
             uint32_t pbase = g_bg2d_layer_base
                            + (uint32_t)(uint8_t)parent * g_bg2d_layer_struct_stride;
             sx += (int16_t)psx_read_half(pbase + 0xa);
@@ -1222,7 +1273,8 @@ int gpu_ws_mmx6_validate(int *bad_out) {
         int sx = (int16_t)psx_read_half(lbase + 0xa);
         int sy = (int16_t)psx_read_half(lbase + 0xe);
         int8_t parent = (int8_t)psx_read_byte(lbase + 0x52);
-        if (parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
+        if (g_bg2d_parent_links &&
+            parent >= 0 && (uint32_t)(uint8_t)parent < g_bg2d_layer_count) {
             uint32_t pbase = g_bg2d_layer_base
                            + (uint32_t)(uint8_t)parent * g_bg2d_layer_struct_stride;
             sx += (int16_t)psx_read_half(pbase + 0xa);
@@ -1255,6 +1307,13 @@ int psx_ws_cull_sltiu(uint32_t sx, uint32_t imm) {
  * computed 32-bit screen X. Identity at margin 0 (4:3). */
 int psx_ws_cull_slti(uint32_t sx, uint32_t imm) {
     return ((int32_t)sx < (int32_t)imm + psx_ws_x_margin()) ? 1 : 0;
+}
+
+/* Signed fixed lower-bound widen (`slti v, x, -W`): move the reject edge left
+ * by one live reveal margin. The encoded immediate must be sign-extended. */
+int psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm) {
+    int32_t bound = (int32_t)(int16_t)(uint16_t)imm;
+    return ((int32_t)sx < bound - psx_ws_x_margin()) ? 1 : 0;
 }
 
 /* Signed left-edge widen for the funnel's `bltz maxSX, reject`: reject only
@@ -2893,16 +2952,16 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
     uint32_t words[3] = { w0, w1, w2 };
     int32_t fx[3], fy[3];
     const int geometry_enabled = gte_geometry_correction_enabled();
-    sw_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
+    gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
     if (!geometry_enabled) {
-        sw_set_precise_triangle(0, 0,0, 0,0, 0,0);
+        gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
         return;
     }
     for (int i = 0; i < 3; i++) {
         int32_t raw_x, raw_y;
         parse_vertex(words[i], &raw_x, &raw_y);
         if (!gte_geometry_correction_lookup(words[i], &fx[i], &fy[i])) {
-            sw_set_precise_triangle(0, 0,0, 0,0, 0,0);
+            gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
             return;
         }
         fx[i] = (int32_t)((int64_t)fx[i] +
@@ -2910,14 +2969,14 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
         fy[i] = (int32_t)((int64_t)fy[i] +
                           (int64_t)(vy[i] - raw_y) * 65536);
     }
-    sw_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
+    gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
 }
 
 /* Enable perspective UVs only when every position word came from an exact
  * SWC2 projection store at that same DMA packet address. This preserves the
  * association through ordering-table reordering and rejects CPU-built UI. */
 static void prepare_texture_triangle(int i0, int i1, int i2) {
-    sw_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
+    gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
     if (!s_texture_correction_enabled || gp0_cmd_source_addr == 0xFFFFFFFFu)
         return;
     int indices[3] = { i0, i1, i2 };
@@ -2933,7 +2992,7 @@ static void prepare_texture_triangle(int i0, int i1, int i2) {
     if (q[1] > qmax) qmax = q[1];
     if (q[2] > qmax) qmax = q[2];
     if (qmax <= 0.0f) return;
-    sw_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
+    gr_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
 }
 
 /* Write a single pixel to VRAM with draw area clipping and mask bit handling */
@@ -4168,7 +4227,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
-    uint32_t addr = start_addr & 0x1FFFFCu;
+    uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
     uint32_t safety = 0;
     uint16_t rank = 0xFFFFu;
     const uint32_t max_nodes = 0x40000u;
@@ -4183,11 +4242,13 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
-            uint32_t word_addr = (addr + 4u) & 0x1FFFFCu;
+            uint32_t word_addr =
+                psx_mod_gpu_dma_resolve_address(addr + 4u);
             uint32_t offset = 0;
             while (offset < num_words) {
                 uint32_t first = psx_read_word(
-                    (word_addr + offset * 4u) & 0x1FFFFCu);
+                    psx_mod_gpu_dma_resolve_address(
+                        word_addr + offset * 4u));
                 uint8_t op = (uint8_t)(first >> 24);
                 int count = gp0_command_word_count(op);
                 if (count <= 0 || offset + (uint32_t)count > num_words)
@@ -4198,18 +4259,19 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                 uint32_t words[12] = {0};
                 for (int i = 0; i < count && i < 12; i++) {
                     words[i] = psx_read_word(
-                        (word_addr + (offset + (uint32_t)i) * 4u) &
-                        0x1FFFFCu);
+                        psx_mod_gpu_dma_resolve_address(
+                            word_addr + (offset + (uint32_t)i) * 4u));
                 }
                 ws_ui_prepass_add(words,
-                    (word_addr + offset * 4u) & 0x1FFFFCu, rank);
+                    psx_mod_gpu_dma_resolve_address(
+                        word_addr + offset * 4u), rank);
                 offset += (uint32_t)count;
             }
         }
 
         uint32_t next = header & 0xFFFFFFu;
         if (next == 0xFFFFFFu) break;
-        addr = next & 0x1FFFFCu;
+        addr = psx_mod_gpu_dma_resolve_address(next);
     }
     if (ws_ui_prepass_count == 0) {
         ws_ui_prepass_count = 0;

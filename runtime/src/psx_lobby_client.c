@@ -11,7 +11,14 @@
 
 const char *psx_lobby_default_url(void)
 {
+    const char *e = getenv("PSX_NET_LOBBY_URL");
+    if (e && e[0])
+        return e;
+#if defined(PSX_NET_LOBBY_DEFAULT_URL)
+    return PSX_NET_LOBBY_DEFAULT_URL;
+#else
     return "ws://netplay.retcomm.net:8765";
+#endif
 }
 int  psx_lobby_connect(const char *ws_url) { (void)ws_url; return -1; }
 void psx_lobby_disconnect(void) {}
@@ -960,7 +967,13 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
 const char *psx_lobby_default_url(void)
 {
     const char *e = getenv("PSX_NET_LOBBY_URL");
-    return (e && e[0]) ? e : "ws://netplay.retcomm.net:8765";
+    if (e && e[0])
+        return e;
+#if defined(PSX_NET_LOBBY_DEFAULT_URL)
+    return PSX_NET_LOBBY_DEFAULT_URL;
+#else
+    return "ws://netplay.retcomm.net:8765";
+#endif
 }
 
 static int parse_ws_url(const char *url, char *host, size_t hcap, int *port, char *path, size_t pcap)

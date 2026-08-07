@@ -79,8 +79,10 @@ typedef struct PsxLobbyJoinInfo {
     char     last_error[64]; /* need_password | bad_password | … */
 } PsxLobbyJoinInfo;
 
-/* Default URL when PSX_NET_LOBBY_URL unset:
- * ws://netplay.retcomm.net:8765 */
+/* Default URL when PSX_NET_LOBBY_URL unset. Order:
+ *   1) env PSX_NET_LOBBY_URL
+ *   2) compile-time PSX_NET_LOBBY_DEFAULT_URL (title CMake / scaffold)
+ *   3) ws://netplay.retcomm.net:8765 */
 const char *psx_lobby_default_url(void);
 
 int  psx_lobby_connect(const char *ws_url); /* 0 ok */

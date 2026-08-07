@@ -220,6 +220,11 @@ def build_cmd(args):
         return {"cmd": "read_scratch", "addr": addr, "len": length}, pretty_json
     elif cmd == "gpu":
         return {"cmd": "gpu_state"}, pretty_json
+    elif cmd in ("geom", "geom_correction"):
+        # Are the [video] geometry_correction / perspective_texturing
+        # enhancements actually engaging on this title? Free-running totals;
+        # sample twice and diff for a per-window rate.
+        return {"cmd": "geom_correction"}, pretty_json
     elif cmd == "overlay":
         return {"cmd": "overlay_state"}, pretty_json
     elif cmd == "watch":
@@ -320,6 +325,15 @@ def build_cmd(args):
         return {"cmd": "dispatch_tail", "count": str(count)}, pretty_json
     elif cmd == "screenshot":
         d = {"cmd": "screenshot"}
+        if len(args) > 1:
+            d["path"] = args[1]
+        return d, pretty_json
+    elif cmd in ("screenshot_hires", "shot_hires"):
+        # Captures the SUPERSAMPLED surface the player actually sees. Use this
+        # (not `screenshot`) to verify anything that only exists in the hi-res
+        # mirror -- geometry correction, SSAA edges, perspective UVs -- because
+        # the native capture resolves those away and looks clean regardless.
+        d = {"cmd": "screenshot_hires"}
         if len(args) > 1:
             d["path"] = args[1]
         return d, pretty_json

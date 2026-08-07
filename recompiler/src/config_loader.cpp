@@ -57,11 +57,13 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.tag("psxrecomp-overlay-config-v1");
 
     h.words("sprite_tag_funcs", c.ws_sprite_tag_funcs);
+    h.words("mod_function_entry_funcs", c.mod_function_entry_funcs);
     h.words("cull_bias", c.ws_cull_bias_sites);
     h.words("cull_range", c.ws_cull_range_sites);
     h.words("cull_a1", c.ws_cull_a1_sites);
     h.words("cull_screen_x", c.ws_cull_screen_x_sites);
     h.words("cull_slti", c.ws_cull_slti_sites);
+    h.words("cull_slti_lower", c.ws_cull_slti_lower_sites);
     h.words("cull_bltz", c.ws_cull_bltz_sites);
     h.words("cull_negsub", c.ws_cull_negsub_sites);
     h.words("cull_vxrange", c.ws_cull_vxrange_sites);
@@ -446,6 +448,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("turbo_loads")) {
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");
     }
+    if (runtime.contains("offer_turbo_loads")) {
+        rt.offer_turbo_loads =
+            toml::find<bool>(runtime, "offer_turbo_loads");
+    }
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
     }
@@ -525,6 +531,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         }
         if (video.contains("offer_vulkan")) {
             rt.video_offer_vulkan = toml::find<bool>(video, "offer_vulkan");
+        }
+        if (video.contains("geometry_correction")) {
+            rt.video_geometry_correction =
+                toml::find<bool>(video, "geometry_correction");
+        }
+        if (video.contains("perspective_texturing")) {
+            rt.video_perspective_texturing =
+                toml::find<bool>(video, "perspective_texturing");
         }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
@@ -1261,6 +1275,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
+    uint32_t ws_gameplay_state_addr = 0;
+    std::vector<uint32_t> ws_gameplay_state_values;
     bool ws_native_wide = true;
     bool ws_nw_hud_corners = false;
     uint32_t ws_nw_left_hud_packet_lo = 0;
@@ -1293,6 +1309,15 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         }
     }
     // Optional [recompiler] hot_funcs — __attribute__((hot)) on emitted C.
+    // Optional trusted, statically linked game-mod entry hooks.
+    std::vector<uint32_t> mod_function_entry_funcs;
+    if (recomp.contains("mod_function_entry_funcs")) {
+        const auto& arr = toml::find<std::vector<std::string>>(
+            recomp, "mod_function_entry_funcs");
+        for (const auto& a : arr)
+            mod_function_entry_funcs.push_back(
+                parse_hex(a, "recompiler.mod_function_entry_funcs"));
+    }
     std::vector<uint32_t> hot_funcs;
     if (recomp.contains("hot_funcs")) {
         const auto& arr = toml::find<std::vector<std::string>>(recomp, "hot_funcs");
@@ -1397,6 +1422,27 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
             ws_gte_game_mode = toml::find<bool>(ws, "gte_game_mode");
+        const bool has_gameplay_state_addr = ws.contains("gameplay_state_addr");
+        const bool has_gameplay_state_values = ws.contains("gameplay_state_values");
+        if (has_gameplay_state_addr != has_gameplay_state_values)
+            throw std::runtime_error(fmt::format(
+                "{}: [widescreen] gameplay_state_addr and "
+                "gameplay_state_values must be set together",
+                config_path.string()));
+        if (has_gameplay_state_addr) {
+            ws_gameplay_state_addr = parse_hex(
+                toml::find<std::string>(ws, "gameplay_state_addr"),
+                "widescreen.gameplay_state_addr");
+            const auto& arr = toml::find<std::vector<std::string>>(
+                ws, "gameplay_state_values");
+            for (const auto& value : arr)
+                ws_gameplay_state_values.push_back(parse_hex(
+                    value, "widescreen.gameplay_state_values"));
+            if (ws_gameplay_state_values.empty())
+                throw std::runtime_error(fmt::format(
+                    "{}: [widescreen] gameplay_state_values must not be empty",
+                    config_path.string()));
+        }
         if (ws.contains("native_wide"))
             ws_native_wide = toml::find<bool>(ws, "native_wide");
         if (ws.contains("nw_hud_corners"))
@@ -1471,6 +1517,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_bias_sites, ws_cull_range_sites, ws_cull_a1_sites;
     std::vector<uint32_t> ws_cull_screen_x_sites;
     std::vector<uint32_t> ws_cull_slti_sites;
+    std::vector<uint32_t> ws_cull_slti_lower_sites;
     std::vector<uint32_t> ws_cull_bltz_sites;
     std::vector<uint32_t> ws_cull_negsub_sites;
     std::vector<uint32_t> ws_cull_vxrange_sites;
@@ -1503,6 +1550,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("a1_sites",    ws_cull_a1_sites);
             load_sites("screen_x_sites", ws_cull_screen_x_sites);
             load_sites("slti_sites",  ws_cull_slti_sites);
+            load_sites("slti_lower_sites", ws_cull_slti_lower_sites);
             load_sites("bltz_sites",  ws_cull_bltz_sites);
             load_sites("negsub_sites", ws_cull_negsub_sites);
             load_sites("vxrange_sites", ws_cull_vxrange_sites);
@@ -1909,6 +1957,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_hud_sprt_squash*/    ws_hud_sprt_squash,
         /*ws_auto_ui_squash*/      ws_auto_ui_squash,
         /*data_shard_funcs*/      data_shard_funcs,
+        /*mod_function_entry_funcs*/ mod_function_entry_funcs,
         /*hot_funcs*/             hot_funcs,
         /*load_charge_batch*/     load_charge_batch,
         /*load_charge_batch_funcs*/ load_charge_batch_funcs,
@@ -1925,6 +1974,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_a1_sites*/      ws_cull_a1_sites,
         /*ws_cull_screen_x_sites*/ ws_cull_screen_x_sites,
         /*ws_cull_slti_sites*/    ws_cull_slti_sites,
+        /*ws_cull_slti_lower_sites*/ ws_cull_slti_lower_sites,
         /*ws_cull_bltz_sites*/    ws_cull_bltz_sites,
         /*ws_cull_negsub_sites*/  ws_cull_negsub_sites,
         /*ws_cull_vxrange_sites*/ ws_cull_vxrange_sites,
@@ -1945,6 +1995,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_auto_backdrop_preload*/ ws_auto_backdrop_preload,
         /*ws_full_2d*/            ws_full_2d,
         /*ws_gte_game_mode*/      ws_gte_game_mode,
+        /*ws_gameplay_state_addr*/ ws_gameplay_state_addr,
+        /*ws_gameplay_state_values*/ ws_gameplay_state_values,
         /*ws_native_wide*/        ws_native_wide,
         /*ws_nw_hud_corners*/     ws_nw_hud_corners,
         /*ws_nw_left_hud_packet_lo*/ ws_nw_left_hud_packet_lo,
@@ -2061,6 +2113,14 @@ UserSettings load_user_settings(const fs::path& path) {
             const auto m = toml::find<std::string>(v, "texture_filtering");
             if (m == "nearest") { s.texture_filter = 0; s.has_texture_filter = true; }
             else if (m == "bilinear") { s.texture_filter = 1; s.has_texture_filter = true; }
+        });
+        if (v.contains("geometry_correction")) try_get([&]{
+            s.geometry_correction = toml::find<bool>(v, "geometry_correction");
+            s.has_geometry_correction = true;
+        });
+        if (v.contains("perspective_texturing")) try_get([&]{
+            s.perspective_texturing = toml::find<bool>(v, "perspective_texturing");
+            s.has_perspective_texturing = true;
         });
         if (v.contains("crt_filter")) try_get([&]{
             const auto m = toml::find<std::string>(v, "crt_filter");
@@ -2302,6 +2362,12 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "antialiasing      = " << (s.antialiasing ? "true" : "false") << "\n";
     if (s.has_texture_filter)
         f << "texture_filtering = \"" << (s.texture_filter ? "bilinear" : "nearest") << "\"\n";
+    if (s.has_geometry_correction)
+        f << "geometry_correction   = "
+          << (s.geometry_correction ? "true" : "false") << "\n";
+    if (s.has_perspective_texturing)
+        f << "perspective_texturing = "
+          << (s.perspective_texturing ? "true" : "false") << "\n";
     if (s.has_screen_kind) {
         const char* k = s.screen_kind == 1 ? "crt"
                       : s.screen_kind == 2 ? "composite"

@@ -24,6 +24,12 @@ if(BUILD_TESTING)
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 
+    # COP0.CAUSE IP2 must mirror the INTC line combinationally, never latch.
+    add_executable(cause_ip2_combinational_test
+        tests/test_cause_ip2_combinational.c)
+    add_test(NAME cause_ip2_combinational_test
+             COMMAND cause_ip2_combinational_test)
+
     add_executable(psx_cyc_batch_test tests/test_psx_cyc_batch.c)
     target_include_directories(psx_cyc_batch_test PRIVATE include)
     target_compile_definitions(psx_cyc_batch_test PRIVATE
@@ -76,6 +82,21 @@ if(BUILD_TESTING)
     target_include_directories(ws_ui_group_test PRIVATE include)
     add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
 
+    add_executable(mod_gpu_dma_aperture_test
+        tests/test_mod_gpu_dma_aperture.c)
+    target_include_directories(mod_gpu_dma_aperture_test PRIVATE include)
+    add_test(NAME mod_gpu_dma_aperture_test
+             COMMAND mod_gpu_dma_aperture_test)
+
+    # Clean-room SPU DSP fidelity (issue #103): SPU IRQ on every RAM access
+    # class, reverb (write gating + work-area wrap + CD-only path), noise
+    # generator, volume sweeps / direct decode, capture buffers, and
+    # savestate coverage of all the new state. Includes src/spu.c directly
+    # (white-box) and stubs its externs.
+    add_executable(spu_fidelity_test tests/test_spu_fidelity.c)
+    target_include_directories(spu_fidelity_test PRIVATE include)
+    add_test(NAME spu_fidelity_test COMMAND spu_fidelity_test)
+
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
         src/overlay_capture.c)
@@ -102,14 +123,15 @@ if(BUILD_TESTING)
     target_include_directories(bios_hle_plan_test PRIVATE include)
     add_test(NAME bios_hle_plan_test COMMAND bios_hle_plan_test)
 
-    # Either member of a disc dump (.cue or .bin) is a valid pick: both mount
-    # the same disc and identify off the same data track.
+    # A cue, conventional raw image, or Steam .car image is a valid pick; each
+    # must mount the same disc and identify off the same data track.
     add_executable(disc_path_resolve_test
         tests/test_disc_path_resolve.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp
         src/iso_reader.cpp)
     target_include_directories(disc_path_resolve_test PRIVATE include)
+    target_link_libraries(disc_path_resolve_test PRIVATE chdr-static)
     add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
 
     # Both BIOS filename conventions (bare vs region-qualified) resolve, in
@@ -125,6 +147,7 @@ if(BUILD_TESTING)
         src/iso_reader.cpp
         src/cue_sheet.cpp)
     target_include_directories(iso_reader_cdda_test PRIVATE include)
+    target_link_libraries(iso_reader_cdda_test PRIVATE chdr-static)
     add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
 
     add_executable(mod_packages_test
@@ -143,11 +166,13 @@ if(BUILD_TESTING)
         src/mod_packages.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp
+        src/iso_reader.cpp
         src/crc32.c
         src/psx_sha256.c)
     target_include_directories(mod_runtime_test PRIVATE
         include
         ../recompiler/lib/toml11)
+    target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     add_test(NAME mod_runtime_test COMMAND mod_runtime_test)
 
     if(WIN32)
@@ -159,6 +184,16 @@ if(BUILD_TESTING)
             PSX_AUTOCOMPILE_TEST=1)
         add_test(NAME autocompile_publication_test
                  COMMAND autocompile_publication_test)
+
+        # A misconfigured overlay_autocompile_cmd must be reported on a channel
+        # that exists: the stdout warnings reach nobody under -mwindows, so a
+        # broken autocompile silently degrades the whole run to the interpreter.
+        add_executable(autocompile_degraded_test
+            tests/test_autocompile_degraded.c
+            src/autocompile.c)
+        target_include_directories(autocompile_degraded_test PRIVATE include)
+        add_test(NAME autocompile_degraded_test
+                 COMMAND autocompile_degraded_test)
     endif()
 endif()
 

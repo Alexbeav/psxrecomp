@@ -3,7 +3,8 @@
 # Install:
 #   mkdir -p .github/workflows
 #   cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
-# Then replace every YOUR_* token. See docs/GAME_PROJECT_SETUP.md.
+# Then replace every YOUR_* token (or let setup_project / fill_tokens.py do it).
+# See docs/GAME_PROJECT_SETUP.md.
 #
 # Shared (do not fork these into the title):
 #   ./psxrecomp/.github/actions/{build-emitters,fetch-toolchain (optional embed),stage-setup-sdk}
@@ -115,6 +116,10 @@ jobs:
           printf '%s\n' "${RELEASE_VERSION}" >VERSION
           echo "VERSION=$(cat VERSION)"
 
+      - name: Verify framework pins
+        shell: bash
+        run: bash psxrecomp/tools/ci/verify_pins.sh
+
       - name: Record pinned framework revisions
         shell: bash
         run: bash psxrecomp/tools/ci/record_pins.sh
@@ -202,7 +207,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          # YOUR_ZIP_PREFIX e.g. bpe, motk, yourgame
+          # Artifact name uses the title zip prefix (e.g. bpe, motk).
           name: YOUR_ZIP_PREFIX-${{ matrix.artifact }}
           path: dist/YOUR_ZIP_PREFIX-*-${{ matrix.artifact }}.zip
           if-no-files-found: error

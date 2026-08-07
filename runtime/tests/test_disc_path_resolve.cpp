@@ -1,7 +1,8 @@
 // test_disc_path_resolve.cpp — either member of a disc dump is a valid pick.
 //
 // The contract under test (runtime/include/disc_path.h): whichever file the
-// player hands us — the .cue or the .bin — we mount the same disc and read
+// player hands us — the .cue, a conventional raw image, or Steam's .car raw
+// image — we mount the same disc and read
 // identity/CRC from the same data track. Regression anchor for the old
 // behavior, which swapped a .cue for its same-named .bin unconditionally and
 // silently dropped the cue's CD-DA tracks.
@@ -151,6 +152,31 @@ void test_bare_image(const fs::path& root) {
     write_sectors(dir / "game2.iso", 4, 0x33);
     const auto iso = resolve_disc_path(dir / "game2.iso");
     check(same(iso.mount, dir / "game2.iso"), "bare: iso mounts itself");
+
+    // Steam ships some PlayStation games as extension-renamed raw images. The
+    // extension is packaging, not a different on-disc format: accept the file
+    // directly without requiring the player to rename t_data_u.car to .bin.
+    write_sectors(dir / "t_data_u.car", 4, 0x55);
+    const auto car = resolve_disc_path(dir / "t_data_u.car");
+    check(same(car.mount, dir / "t_data_u.car"), "bare: Steam car mounts itself");
+    check(same(car.data, dir / "t_data_u.car"), "bare: Steam car identifies itself");
+    PS1::ISOReader car_reader;
+    check(car_reader.Open(car.mount.string()), "bare: Steam car opens as a raw image");
+    check(car_reader.TrackCount() == 1, "bare: Steam car exposes one data track");
+    car_reader.Close();
+
+    // A CHD embeds its own TOC. Even if a same-stem cue exists, never replace
+    // the selected compressed image with that cue or its external payload.
+    write_text(dir / "compressed.chd", "not-a-real-chd");
+    write_sectors(dir / "compressed.bin", 4, 0x44);
+    write_text(dir / "compressed.cue",
+               "FILE \"compressed.bin\" BINARY\n"
+               "  TRACK 01 MODE2/2352\n"
+               "    INDEX 01 00:00:00\n");
+    const auto chd = resolve_disc_path(dir / "compressed.chd");
+    check(same(chd.mount, dir / "compressed.chd"), "bare: chd mounts itself");
+    check(same(chd.data, dir / "compressed.chd"), "bare: chd identifies itself");
+    check(!chd.upgraded_to_cue, "bare: chd never upgrades to a cue");
 }
 
 // ---- 5. surface-syntax tolerance in the shared cue parser -------------------

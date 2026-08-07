@@ -400,3 +400,369 @@ stays, inert + A/B-able). What was learned, so the next attempt starts ahead:
 - **Groundwork landed on `feat/ws-2d-scene-pillarbox`:** census `tagged`
   column, `ws_hud_mode` live A/B, and the untagged-rect scoping that makes
   `nw_hud_corners` safe to experiment with on tag titles.
+
+---
+
+## G1 — Sub-pixel vertex precision + perspective-correct textures (issue #92)
+
+PS1 polygon jitter ("wobble", "bouncing lines") and warped floor/wall textures
+have one root cause each, both in the fixed-point geometry pipeline:
+
+- **Jitter.** The GTE computes the projected screen position in 16.16, then
+  saturates it to an integer pixel when it pushes SXY. The fraction is thrown
+  away. A slowly moving mesh therefore snaps its vertices between whole pixels
+  and the model shimmers.
+- **Texture warp.** The GPU interpolates UV *affinely* across a triangle, with
+  no 1/z term, so a large floor or wall polygon's texture swims as the camera
+  moves.
+
+Both are addressed as **opt-in, visual-only** enhancements. The PS1-visible GTE
+SXY FIFO stays integer and fully faithful — a game's own post-projection
+screen-bounds culls and any SXY readback see exactly what hardware produces.
+Nothing about guest state changes; the correction lives entirely on the host
+render path.
+
+### Configuration
+
+```toml
+[video]
+geometry_correction   = true   # sub-pixel vertex precision (kills the wobble)
+perspective_texturing = true   # perspective-correct UVs on world polygons
+supersampling         = 2      # REQUIRED for geometry_correction to be visible
+```
+
+Both default **false** (the faithful floor). They are independent — a title may
+want stable geometry without changing texture mapping. Settable per-game in
+`game.toml` and per-player in `settings.toml` (the player's file wins, and a
+launcher save round-trips both keys rather than dropping them).
+
+`geometry_correction` needs `supersampling >= 2`: at native resolution the
+corrected position rounds back to the pixel it started on, so there is nothing
+to see. The runtime prints a note at startup when it is on at scale 1.
+
+### How it works
+
+The recompiler emits GTE commands as calls to a single runtime entry point
+(`gte_execute`), which both the compiled backend and the dirty-RAM interpreter
+share — so unlike an interpreter/dynarec emulator there is no dispatch hook to
+add, just one funnel to instrument.
+
+1. **`runtime/src/gte.cpp`** — RTPS/RTPT keep the discarded 16.16 fraction in a
+   side cache keyed by the packed SXY word it rounded to (`geom_note`).
+   Saturated (off-screen) projections are rejected: they carry no usable
+   sub-pixel information.
+2. **SWC2 provenance** — the recompiler, strict translator, dirty-RAM interp,
+   overlay ABI (v14) and fallback interp all call
+   `gte_precision_store_word(addr, reg)` when a projection register is stored to
+   guest RAM, recording *which RAM address* a projection landed at. Perspective
+   texturing only fires when all three of a triangle's position words came from
+   such a store at that exact DMA packet address — which preserves the
+   association through ordering-table reordering and rejects CPU-built UI and
+   2D sprites outright. A plain `sw` to a tracked address invalidates it.
+3. **`runtime/src/gpu.c`** — `prepare_precise_triangle()` /
+   `prepare_texture_triangle()` look the packet up per triangle and hand the
+   result to the renderer facade as sideband state for the next draw
+   (`gr_set_precise_triangle` / `gr_set_perspective_triangle`).
+4. **All three renderers consume it.** Software uses the fractional positions
+   in its supersampled mirror; OpenGL and Vulkan take them as float vertex
+   positions directly. For perspective UVs both GPU backends carry a per-vertex
+   `a_q` weight and emit clip coordinates pre-multiplied by `w = 1/q`, so the
+   hardware's own perspective divide interpolates a `smooth` UV varying while
+   the affine `noperspective` one stays available. **`a_q == 0` (the default)
+   makes `w` exactly 1.0 and selects the affine varying — the pre-feature
+   pipeline, unchanged.**
+
+Save states and speculative native-validation passes drop host-only provenance
+(`gte_precision_timeline_invalidate`, `gte_precision_speculative_begin/end`) so
+a rewind can never resurrect a stale projection.
+
+### Validation story
+
+By construction this feature *diverges* from stock hardware output, so the
+Beetle oracle cannot be the judge of the corrected frame. What the oracle still
+pins is the part that must not move: **with both flags off the output is
+byte-identical to the pre-feature build**, and guest-visible GTE state is
+identical either way (the SXY FIFO is untouched in both). That reduces
+validation to (a) an off/off pixel-identity check against the oracle, and
+(b) human A/B of the on/off frames on a 3D title.
+
+`gte_geometry_correction_hits()` and `gpu_texture_correction_hits()` report how
+many vertices/triangles were actually corrected — the "is this doing anything
+on this title" counter, and the thing to check first when a title shows no
+visible change.
+
+### Provenance
+
+The GTE side cache, SWC2 provenance tracking, GP0 triangle preparation and the
+software-renderer consumption path were contributed by **Kareem Olim (kem0x)**
+in [PR #14](https://github.com/mstan/psxrecomp/pull/14) and parked in commit
+`2ceaf5a` (see `docs/internal/upstream/kem0x-pr14-projection-perspective.md`),
+disabled pending generic setters. This work adds the opt-in configuration, the
+renderer-facade seam, and OpenGL + Vulkan support.
+
+### Status / next
+
+- **Done:** config plumbing (game.toml + settings.toml + launcher seed
+  round-trip), renderer-facade sideband, software / OpenGL / Vulkan consumption,
+  `[video]` plumbing unit test.
+- **Open:** per-title A/B validation. Ape Escape is the obvious first 3D
+  subject (Tomba 1/2 and MMX5/6 are largely 2D, where neither knob does much).
+- **Open:** launcher (recomp-ui) toggles. The keys round-trip through
+  `settings.toml` today, but there is no UI row yet — that lives in the
+  recomp-ui repo.
+
+### G1.1 — MEASURED REGRESSION: partial coverage cracks meshes (2026-08-05)
+
+**User verdict on Ape Escape: "little lines jittering everywhere — visually
+this is worse."** Confirmed and root-caused. `geometry_correction` must not be
+presented as usable in its current form.
+
+Measured on Ape Escape (OpenGL, supersampling 2, 213-frame window, via the new
+`geom_correction` TCP command):
+
+| | per frame |
+|---|---|
+| GP0 draw commands | ~316 (≈400–600 triangles) |
+| vertices given sub-pixel positions | ~114 (≈38 triangles) |
+| triangles given perspective UVs | ~1.9 |
+
+**Under 10% of the scene is corrected.** `prepare_precise_triangle` is
+all-or-nothing per triangle, so every boundary between a corrected triangle and
+an uncorrected neighbour is a seam: one edge moved sub-pixel, the other stayed
+on the integer grid. Because the geometry cache is direct-mapped and keyed on
+the *rounded* position, which triangles win changes frame to frame — so the
+seams move. That is exactly the reported jitter.
+
+### G1.2 — What the reference implementations actually do
+
+Both vendored emulators (`beetle-psx/pgxp/`, `duckstation/src/core/cpu_pgxp.cpp`)
+implement PGXP the same way, and it is **not** what is parked here:
+
+1. **A complete shadow of the dataflow.** A `PGXP_value {x,y,z,flags,value}` per
+   32-bit word of RAM + scratchpad (Beetle mirrors all 2 MB; DuckStation the
+   same), plus a shadow per CPU GPR and per GTE register.
+2. **Propagation through every instruction.** Beetle registers **47 CPU hooks** —
+   LW/LH/LB/LWL/LWR, SW/SH/SB/SWL/SWR, ADD(I)(U)/SUB(U)/AND/OR/XOR/NOR/SLT(U),
+   SLL/SRL/SRA(+V), MULT(U)/DIV(U), MFHI/MTHI/MFLO/MTLO, LUI. DuckStation carries
+   the same set. High precision therefore survives any route the game takes from
+   GTE output to the GP0 packet.
+3. **`Validate(value)`.** Every shadow read checks the tracked `value` against
+   the *actual* current word and drops the shadow on mismatch. This is what stops
+   stale precision from corrupting geometry.
+4. **The value-keyed cache is only a LAST-RESORT FALLBACK**, and even then it is
+   fully direct-indexed — Beetle `vertexCache[0x800*2][0x800*2]`, DuckStation
+   2048×2048 — so distinct screen positions **never collide**; it is gated on an
+   ambiguity flag (`gFlags == 1`, "only one value was recorded at this position")
+   and it disables perspective (`valid_w = 0`) because its w is untrustworthy.
+
+**The parked implementation is only item 4, degraded**: an 8192-entry *hashed*
+table (unrelated positions collide) with *no* ambiguity check and *no* primary
+path. A vertex can therefore inherit a different vertex's fraction. That is the
+design defect, not a wiring bug.
+
+### G1.3 — What matching them costs in a static recompiler
+
+The emit mechanism already exists — `gte_precision_store_word(addr, reg)` is
+emitted at SWC2 sites today — so this is an extension, not new machinery:
+
+- per-word shadow of RAM + scratchpad (~12 MB), per-GPR and per-GTE-reg shadows;
+- propagation hooks at ~47 instruction classes, emitted in `code_generator.cpp`
+  and `strict_translator.cpp`, mirrored in `dirty_ram_interp.c` and
+  `psx_interpreter.c`, and forwarded through the overlay ABI (another bump);
+- `Validate()` on every shadow read;
+- GPU-side lookup keyed on the packet word with a `value ==` check, with the
+  corrected fallback cache last.
+
+**The static-recompiler-specific cost:** in an interpreter these hooks are a
+runtime branch. Here they are emitted C on the hot path, so they bloat generated
+code and cost speed *even with the feature off* unless they are gated at
+CODEGEN time — i.e. a separate generated flavour, which touches the build matrix
+and every title's regen. That is the real decision, and it is why this cannot be
+a runtime-only toggle like the rest of the `[video]` block.
+
+### G1.4 — DECISIVE: position-keyed lookup cannot work (measured, 2026-08-05)
+
+The cheap fix was tried and **measured to be insufficient**, which settles the
+direction. The hashed table was replaced with the references' exact
+direct-indexed one (one slot per reachable SXY, no collisions) plus their
+ambiguity gate. Ape Escape attract demo, cumulative:
+
+| outcome | count | share |
+|---|---|---|
+| lookups attempted | 4,860,057 | — |
+| **hit** | 253,679 | **5.2%** |
+| miss — never recorded at that position | 82,253 | **1.7%** |
+| miss — **ambiguous** (several DIFFERENT projections rounded to that pixel) | 4,524,125 | **93.1%** |
+
+**93% ambiguous, 1.7% unrecorded.** The tracking is not failing to *reach* the
+vertices — it reaches almost all of them. The rounded screen position simply is
+not a unique key: in a dense 3D scene most pixels have several distinct vertices
+projecting onto them, so no position-keyed lookup can tell which sub-pixel
+fraction belongs to the packet being drawn. That share is irreducible; a bigger,
+faster or smarter table cannot move it.
+
+It also explains why the first attempt looked *so* bad. Without the ambiguity
+gate those 93% were not misses — they were silently answered with **another
+vertex's fraction**. The gate makes the feature safe (wrong fractions are no
+longer applied) but drops honest coverage to ~5%, so meshes still mix corrected
+and uncorrected triangles and still crack. Visually confirmed on Ape Escape:
+thin dark seams tracking across characters and floor in the intro/attract.
+
+**Conclusion.** Only PGXP's primary path — precision travelling *with the data*
+through the CPU dataflow, so a GP0 word's provenance is known exactly rather
+than guessed from where it landed — produces a clean result. A coverage gate or
+a better cache is ruled out by measurement, not by argument. `geometry_correction`
+must not ship until value propagation exists.
+
+### G1.5 — CORRECTION to G1.4: the ambiguity gate fixed the cracking
+
+**G1.4's closing claim ("meshes still mix ... and still crack, visually
+confirmed") was wrong, and was not verified.** User observation on the exact-
+table + ambiguity-gate build, at window resolution: *"in game is looking pretty
+nice ... whatever is up doesn't have the lines issue."* Same scene that was
+visibly torn before. The seams are gone.
+
+**Why the wrong claim was made — the instrument was blind.** Verification used
+the TCP `screenshot`, which resolves native 15-bit VRAM. Geometry correction
+exists ONLY in the supersampled mirror (that is why it needs `supersampling
+>= 2`), so it is erased before a native capture is taken. Those captures showed
+clean frames no matter what the player saw, and the conclusion then leaned on
+counters instead. Fixed by adding `screenshot_hires`, which routes the same
+present path as the window. **Anything that lives in the hi-res mirror must be
+verified with `screenshot_hires`; a native screenshot cannot see it.**
+
+**What this means technically.** The visible defect was *ambiguity*, not
+coverage:
+
+- A wrongly-attributed fraction displaces a vertex by up to a full pixel in an
+  arbitrary direction — a large, obvious tear that moves as winners change.
+- Missing coverage only leaves a sub-pixel (<1px) mismatch where a corrected
+  triangle meets an uncorrected one — not visually objectionable.
+
+So the ambiguity gate removed the harm. Coverage (~5% of lookups) now bounds the
+*benefit*, not the damage: the feature is safe but only lightly effective. Full
+value propagation remains the path to a large improvement — it would take
+coverage toward total — but it is no longer a prerequisite for shipping
+something that does not hurt.
+
+**Still to verify first-hand** with `screenshot_hires`, before any of this is
+called done: an A/B of the same frame with the knob off vs on, at
+supersampling >= 2.
+
+### G1.6 — G1.5 RETRACTED: both titles crack. Ambiguity gating is not enough.
+
+User verification on the exact-table + ambiguity-gate build, **Ape Escape AND
+Tomba 2**: thin seams across meshes in both. G1.5 claimed the gate had fixed the
+cracking; it had not. G1.4's original conclusion stands.
+
+**What went wrong in the analysis, twice:** each conclusion was drawn from a
+SINGLE observation instead of a controlled A/B — first from native screenshots
+that could not show the defect at all (G1.5), then from one favourable in-game
+frame that happened not to expose it. A scene where the corrected ~5% of
+triangles do not border a visible silhouette looks clean; that is not evidence
+the seams are gone.
+
+**Settled position.** Ambiguity gating removed one failure mode (vertices
+inheriting a neighbour's fraction) but coverage of ~5% still mixes corrected and
+uncorrected triangles within a mesh, and those seams ARE visible. Partial
+coverage is not shippable at any ratio short of near-total, because the crack is
+a property of the boundary, not of the magnitude of the error.
+
+`geometry_correction` therefore stays OFF and must not be offered as usable
+until precision propagates with the data (G1.2/G1.3). The launcher rows, the
+`[video]` plumbing, the renderer-facade seam, `geom_correction` and
+`screenshot_hires` all remain valid groundwork for that work.
+
+**Method rule for the next attempt:** no conclusion about this feature from a
+single frame. Same frame, same scene, off vs on, captured with
+`screenshot_hires`, on at least two titles.
+
+### G1.7 — ⚠ G1.6's MECHANISM IS UNCONFIRMED. Read this before trusting G1.1-G1.6.
+
+Two problems with everything above, both found only after G1.6 was written.
+
+**1. The line signature does not match the stated mechanism.** G1.4/G1.6 explain
+the artifact as cracks between corrected and uncorrected triangles. Such cracks
+would be SHORT seams tracing mesh silhouettes. The reported artifacts on both
+titles are **long, straight, scene-spanning lines** — cyan diagonals crossing
+Tomba 2's terrain, dark diagonals crossing Ape's. That is the signature of a
+vertex landing far from where it belongs (a stretched/degenerate primitive), or
+of stray line primitives — NOT of sub-pixel boundary mismatch. The coverage
+numbers in G1.4 are real, but they were fitted to the wrong picture.
+
+**2. THE CONTROL WAS NEVER RUN.** At no point was it confirmed that these lines
+are ABSENT with both toggles off on these builds. Every conclusion in G1.1-G1.6
+assumed the feature caused them. Two other large changes landed underneath this
+work and are equally plausible causes:
+  - the framework jumped **92 commits** (Ape's pin 3c67a52 -> current master);
+  - recomp-ui jumped **64 commits** (bb62af1 -> origin/master), forced because
+    the old pin could not compile against current framework master at all.
+
+**Do this first, before any further analysis:** same scene, same spot, both
+toggles false, `supersampling = 2`, captured with `screenshot_hires`. If the
+lines persist, this is not the geometry feature and G1.1-G1.6 are describing
+something that was never happening.
+
+Candidate to check if the feature IS implicated, given the signature: a stale
+sub-pixel override surviving to a later primitive. `glb_draw_*_triangle` calls
+precise_consumed() only on the GPU path — the `!s_raster_ok` software-fallback
+branch returns EARLY without clearing s_pc_valid, so an override could be
+applied to a primitive it was never computed for. That would displace a vertex
+arbitrarily and produce exactly these long stretched lines.
+
+### G1.8 — RESOLVED by isolation: perspective textures SHIP, geometry correction DOES NOT
+
+The control run and the two isolation runs were finally done, on Ape Escape,
+OpenGL, supersampling 2, same scene each time:
+
+| geometry_correction | perspective_texturing | result |
+|---|---|---|
+| off | off | **clean** (the control — establishes the framework/UI jumps are NOT the cause) |
+| **on** | off | **lines** |
+| off | **on** | **clean** |
+
+**`perspective_texturing` is good and should ship.** It is unaffected by the
+coverage problem: it only alters UV interpolation inside a polygon whose
+provenance is fully proven, so a polygon either gets perspective UVs or keeps
+the PS1's affine ones. Neither outcome moves a vertex, so adjacent polygons
+cannot disagree about a shared edge and nothing can crack.
+
+**`geometry_correction` must not be offered.** It moves vertices, and at ~5%
+coverage a corrected triangle meets an uncorrected neighbour along a shared
+edge — the seams in the isolation run trace polygon boundaries, confirming
+G1.4's mechanism (and retiring the "long scene-spanning lines" reading in G1.7,
+which misjudged the artifact). It cannot be fixed by tuning: it needs the full
+PGXP dataflow of G1.2/G1.3 to reach coverage where meshes move as one.
+
+**Recommended disposition:** keep the `perspective_texturing` setting and its
+launcher row; withdraw the `geometry_correction` row until value propagation
+lands (leave the setting readable from game.toml/settings.toml so the work
+stays testable, but do not present it to players).
+
+### G1.9 — Disposition EXECUTED (2026-08-05): this is the shippable line
+
+G1.8's recommendation was carried out. This branch
+(`feat/pgxp-perspective-textures`, renamed from `feat/pgxp-geometry-correction`)
+is the line intended for review and eventual merge.
+
+| setting | default | player-reachable? | verdict |
+|---|---|---|---|
+| `perspective_texturing` | false | **yes** — Display row in the launcher | ships |
+| `geometry_correction` | false | **no** — `game.toml` / `settings.toml` only | known broken, hidden |
+
+`geometry_correction` is deliberately still *compiled in*. It was not excised,
+because the setting is only worth keeping if the code behind it still runs, and
+G1.8 asked for it to stay testable. What was withdrawn is the launcher row — the
+only surface through which a player could have reached it. Combined with the
+false default, there is no path by which someone who is not editing a toml by
+hand can turn on a feature we know cracks meshes.
+
+**Standing constraint for future sessions.** Do not add a `geometry_correction`
+control to any settings surface, and do not flip its default, until the coverage
+problem is actually solved — meaning the census reports something far better than
+the measured 5.2% hit / 93.1% ambiguous, on a real title, with the OFF control
+run first. Partial coverage is not a partial feature here; it is a visible
+defect, which is the whole finding of G1.1–G1.8.
+
+The withdrawn row, the full post-mortem, the mechanism that would fix it, and the
+re-test protocol are preserved on `park/pgxp-geometry-correction` (see its G1.9).

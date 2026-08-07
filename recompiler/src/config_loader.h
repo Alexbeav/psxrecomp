@@ -248,6 +248,13 @@ struct RuntimeConfig {
     // load wall-time. Streaming titles (e.g. Crash) must leave this off.
     bool                  turbo_loads = false;
 
+    // offer_turbo_loads: expose the generic Turbo loads switch through
+    // recomp-ui Settings. Defaults true for compatibility. A game migrating
+    // load acceleration into its mod catalog sets this false; stale persisted
+    // Settings values are then ignored and a trusted activation plugin owns
+    // the launch policy.
+    bool                  offer_turbo_loads = true;
+
     // turbo_audio_sink: while turbo_loads is actively running unpaced, keep
     // rendering the exact guest-time SPU sample budget (so voice/CD state
     // advances) but discard those samples before the host playback queue.
@@ -321,6 +328,43 @@ struct RuntimeConfig {
     // rasterizer/present backend. The software rasterizer remains the explicit
     // fallback. Stored as VIDEO_RENDERER_*.
     int                   video_renderer = DEFAULT_VIDEO_RENDERER;
+
+    // geometry_correction: sub-pixel vertex precision (the PGXP-style fix for
+    // PS1 polygon jitter/wobble). The GTE projects in 16.16 and then throws the
+    // fraction away when it saturates SXY to integer screen pixels; vertices of
+    // a moving mesh therefore snap between whole pixels and the model appears to
+    // shimmer. With this on, the GTE keeps the discarded fraction in a side
+    // cache and the rasterizer places the vertex between native pixels.
+    //
+    // The PS1-visible SXY FIFO stays integer and fully faithful — the game's own
+    // screen-bounds culls and any SXY readback see exactly what hardware would
+    // produce. This is visual-only. Default off (faithful floor).
+    //
+    // Only observable at [video] supersampling >= 2: at native resolution the
+    // corrected position rounds back to the same pixel it started on.
+    bool                  video_geometry_correction = false;
+
+    // perspective_texturing: perspective-correct UV interpolation for textured
+    // world polygons (the PS1 GPU interpolates UV affinely, which warps textures
+    // on large floor/wall polygons as the camera moves). Uses the exact SWC2
+    // projection provenance — a polygon only qualifies when every one of its
+    // position words was written to that DMA packet address by a projection
+    // store — so CPU-built UI and 2D sprites are never touched.
+    //
+    // Default OFF (faithful floor), same as geometry_correction above — but for a
+    // different reason. geometry_correction is off because it is BROKEN at the
+    // coverage we can reach (it moves vertices and splits shared edges); this one
+    // is off because it is a deliberate departure from hardware output that has
+    // only been validated on one title and one renderer. It is structurally safe
+    // — it never moves a vertex, only alters UV interpolation inside a polygon
+    // whose provenance is already proven, so a non-qualifying polygon simply keeps
+    // the PS1's affine interpolation and neighbours can never disagree about a
+    // shared edge. Safe is not the same as validated, so it stays opt-in.
+    //
+    // Players opt in from the launcher's Display panel (unlike
+    // geometry_correction, which has no control at all); per-game with
+    // [video] perspective_texturing = true.
+    bool                  video_perspective_texturing = false;
 
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
@@ -660,6 +704,11 @@ struct GameConfig {
     // out to be impure only costs a poisoned capture, never a wrong replay.
     std::vector<uint32_t> data_shard_funcs;
 
+    // [recompiler] mod_function_entry_funcs: narrowly selected guest function
+    // entries that dispatch trusted, statically linked mod callbacks. Empty by
+    // default, so projects that do not opt in emit no callback overhead.
+    std::vector<uint32_t> mod_function_entry_funcs;
+
     // [recompiler] hot_funcs: guest addresses that get __attribute__((hot))
     // on their generated C bodies (profile/host locality; no guest semantics).
     std::vector<uint32_t> hot_funcs;
@@ -712,6 +761,9 @@ struct GameConfig {
     // auto-detector cannot qualify (e.g. an X-only test with no height compare
     // in the same function — Ape Escape 0x8004AB64). Empty by default; regen.
     std::vector<uint32_t> ws_cull_slti_sites;
+    // Explicit signed lower-bound sites (`slti rt, sx, -W`). The threshold is
+    // moved left by the live reveal margin. Empty by default; regen required.
+    std::vector<uint32_t> ws_cull_slti_lower_sites;
     // [widescreen.cull] bltz_sites — explicit signed LEFT-edge widen sites
     // (`bltz rs, reject` -> psx_ws_cull_bltz), the counterpart to slti_sites.
     // detect_cull_bltz_sites only classifies left-edge bltz for functions
@@ -831,6 +883,12 @@ struct GameConfig {
     // (native-wide engages); genuine full-2D screens (save/options) still
     // pillarbox 4:3. Runtime-only — no regen required. Off by default.
     bool ws_gte_game_mode = false;
+    // Optional authoritative game-state gate for titles whose menus also
+    // render enough 3D geometry to fool gte_game_mode. When configured,
+    // native-wide is active only while the guest word matches one listed
+    // value. Runtime-only; both fields must be supplied together.
+    uint32_t ws_gameplay_state_addr = 0;
+    std::vector<uint32_t> ws_gameplay_state_values;
 
     // [widescreen] native_wide — select the newer wide render-target path.
     // Defaults on for compatibility. Titles can keep the original GTE-squash
@@ -980,6 +1038,10 @@ struct UserSettings {
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
     bool has_antialiasing   = false; bool antialiasing   = true;
     bool has_texture_filter = false; int  texture_filter = 0; // 0=nearest,1=bilinear
+    // Sub-pixel vertex precision / perspective-correct UVs (see RuntimeConfig).
+    // Both default off — the faithful floor — and are player-selectable.
+    bool has_geometry_correction   = false; bool geometry_correction   = false;
+    bool has_perspective_texturing = false; bool perspective_texturing = false;
     bool has_screen_kind    = false; int  screen_kind    = 0; // 0..3 (ScreenKind)
     bool has_auto_skip_fmv  = false; bool auto_skip_fmv  = false; // skip FMVs
     // Turbo through in-game load screens: while the CD data stream is active, run

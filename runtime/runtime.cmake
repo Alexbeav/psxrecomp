@@ -8,6 +8,8 @@ if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 endif()
 
+include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
+
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
 # generated C; with no CMAKE_BUILD_TYPE the compiler emits it at -O0 and the game
 # runs at a small fraction of full speed (terrible framerate). A naive
@@ -253,6 +255,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/code_provider.c
     ${PSXRECOMP_ROOT}/runtime/src/event_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
@@ -274,6 +277,12 @@ set(PSXRECOMP_RUNTIME_SOURCES
 # deps for games that can never use them. A multiplayer title opts in with
 # -DPSX_NETPLAY=ON (or sets it before including this file).
 option(PSX_NETPLAY "Link recomp-net delay-sync (opt-in; needs recomp-net)" OFF)
+# First-run setup wizard + Generate & rebuild (recomp-ui). OFF by default so
+# titles that have not tested the self-build flow do not advertise it. Opt in
+# with -DPSX_SETUP_WIZARD=ON (or ENABLE_SETUP_WIZARD on psxrecomp_add_game_runtime
+# after setting the cache before include, same pattern as PSX_NETPLAY).
+option(PSX_SETUP_WIZARD
+    "Advertise first-run setup wizard + Generate & rebuild in recomp-ui" OFF)
 set(RECOMP_NET_ROOT "" CACHE PATH "Path to recomp-net; empty = auto-discover")
 if(PSX_NETPLAY AND NOT RECOMP_NET_ROOT)
     foreach(_cand
@@ -659,6 +668,7 @@ function(psxrecomp_add_runtime_target target)
         ${generated_sources}
         ${PSXRT_EXTRAS_SOURCES}
     )
+    target_link_libraries(${target} PRIVATE chdr-static)
 
     # Game-specific executable name. Every title instantiates this function with
     # the same CMake target name ("psx-runtime"), so without this they ALL produce
@@ -890,6 +900,27 @@ function(psxrecomp_add_runtime_target target)
                 "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
                 "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
         endif()
+
+    # Framework-owned mod catalog (loading speed). These target game_id "*" and
+    # are emulator features rather than per-disc content, so every game gets
+    # them without carrying a copy of the manifests. Staged BEFORE the game's
+    # own POST_BUILD copy so a title may still override an id if it ever needs
+    # to; copy_directory merges rather than replacing the tree.
+    if(EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages")
+        add_custom_command(TARGET ${target} POST_BUILD
+            # Clear first: copy_directory MERGES, so a mod deleted from source
+            # would otherwise survive in the build output forever and keep
+            # appearing on the Mods page (and inflate the release packagers'
+            # catalog assertions). This runs before the game's own staging, so
+            # both catalogs land on a clean slate.
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "$<TARGET_FILE_DIR:${target}>/mods"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PSXRECOMP_ROOT}/mods/builtin"
+                "$<TARGET_FILE_DIR:${target}>/mods"
+            COMMENT "Staging framework-owned mod catalog (loading speed)"
+            VERBATIM)
+    endif()
     endif()
 
     if(PSXRT_ORACLE)
@@ -932,6 +963,9 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSXRECOMP_HAS_LOBBY_CLIENT)
         target_compile_definitions(${target} PRIVATE PSX_HAS_LOBBY_CLIENT=1)
+    endif()
+    if(PSX_SETUP_WIZARD)
+        target_compile_definitions(${target} PRIVATE PSX_HAS_SETUP_WIZARD=1)
     endif()
 
     # First-divergence co-sim oracle (COSIM_ORACLE.md): the clean, deterministic build.
@@ -1198,17 +1232,19 @@ endfunction()
 #     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
 #     MAX_PLAYERS 2
 #     ENABLE_NETPLAY_IF_PRESENT
+#     ENABLE_SETUP_WIZARD
 #   )
 #
 # Remaining args are forwarded to psxrecomp_add_runtime_target.
 # ---------------------------------------------------------------------------
 function(psxrecomp_add_game_runtime target)
-    set(options ENABLE_NETPLAY_IF_PRESENT)
+    set(options ENABLE_NETPLAY_IF_PRESENT ENABLE_SETUP_WIZARD)
     set(oneValueArgs
         GEN_MARKER
         GEN_FULL_FALLBACK
         VERSION_FILE
         CODEGEN_SETUP_INCLUDE_DIR
+        NETPLAY_LOBBY_URL
     )
     set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES)
     cmake_parse_arguments(PSXG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -1282,6 +1318,22 @@ function(psxrecomp_add_game_runtime target)
                 set(PSX_NETPLAY ON)
             endif()
         endif()
+    endif()
+
+    # Title default lobby WebSocket URL (compile-time; env PSX_NET_LOBBY_URL wins).
+    if(PSXG_NETPLAY_LOBBY_URL)
+        set(PSX_NET_LOBBY_DEFAULT_URL "${PSXG_NETPLAY_LOBBY_URL}" CACHE STRING
+            "Compile-time default lobby URL (ws://host:port)" FORCE)
+    endif()
+
+    # Optional: advertise first-run wizard + Generate & rebuild.
+    # Prefer setting -DPSX_SETUP_WIZARD=ON before include(runtime.cmake) so the
+    # option() default does not stick OFF in an existing cache; this helper
+    # still forces ON when the title lists ENABLE_SETUP_WIZARD.
+    if(PSXG_ENABLE_SETUP_WIZARD)
+        set(PSX_SETUP_WIZARD ON CACHE BOOL
+            "Advertise first-run setup wizard + Generate & rebuild in recomp-ui"
+            FORCE)
     endif()
 
     if(NOT PSXG_GEN_MARKER)
@@ -1363,6 +1415,12 @@ function(psxrecomp_add_game_runtime target)
     endif()
 
     target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_CODEGEN=1)
+
+    if(PSX_NET_LOBBY_DEFAULT_URL)
+        # Stringify for C: PSX_NET_LOBBY_DEFAULT_URL="ws://..."
+        target_compile_definitions(${target} PRIVATE
+            "PSX_NET_LOBBY_DEFAULT_URL=\"${PSX_NET_LOBBY_DEFAULT_URL}\"")
+    endif()
 
     # Include the portable codegen host. Do NOT add CMAKE_CURRENT_SOURCE_DIR
     # wholesale to -I: on case-insensitive macOS, #include <version> can pick

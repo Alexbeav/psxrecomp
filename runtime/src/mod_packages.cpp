@@ -61,6 +61,10 @@ bool valid_sha256(const std::string& value) {
         });
 }
 
+bool valid_web_url(const std::string& value) {
+    return value.rfind("https://", 0) == 0 || value.rfind("http://", 0) == 0;
+}
+
 bool parse_hex_bytes(const std::string& text, std::vector<uint8_t>& out) {
     std::string compact;
     compact.reserve(text.size());
@@ -657,7 +661,12 @@ bool target_matches(const ModPackage& package, const std::string& game,
                     const std::string& exe, const std::string& disc) {
     if (package.targets.empty()) return false;
     for (const ModTarget& target : package.targets) {
-        if (target.game_id != game) continue;
+        /* "*" targets every game. Framework-owned mods (loading speed, and
+         * anything else that is a property of the emulator rather than of a
+         * particular disc) ship once and apply everywhere, instead of every
+         * title carrying a copy of the same manifest. An empty target list
+         * still matches nothing, so a malformed manifest fails loudly. */
+        if (target.game_id != "*" && target.game_id != game) continue;
         if (!target.exe_sha256.empty() && target.exe_sha256 != exe) continue;
         if (!target.disc_sha256.empty() && target.disc_sha256 != disc) continue;
         return true;
@@ -1425,9 +1434,30 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
         out.version = toml::find<std::string>(cfg, "version");
         out.name = toml::find<std::string>(cfg, "name");
         out.author = cfg.contains("author") ? toml::find<std::string>(cfg, "author") : "";
+        if (cfg.contains("author_link")) {
+            std::set<std::string> linked_authors;
+            for (const toml::value& v : toml::find(cfg, "author_link").as_array()) {
+                ModAuthorLink link;
+                link.name = toml::find<std::string>(v, "name");
+                link.url = toml::find<std::string>(v, "url");
+                if (link.name.empty() || !linked_authors.insert(link.name).second)
+                    throw std::runtime_error("empty or duplicate author link name");
+                if (!valid_web_url(link.url))
+                    throw std::runtime_error("author link URL must use http or https");
+                out.author_links.push_back(std::move(link));
+            }
+        }
         out.description =
             cfg.contains("description") ? toml::find<std::string>(cfg, "description") : "";
         out.license = cfg.contains("license") ? toml::find<std::string>(cfg, "license") : "";
+        out.source_name =
+            cfg.contains("source_name") ? toml::find<std::string>(cfg, "source_name") : "";
+        out.source_url =
+            cfg.contains("source_url") ? toml::find<std::string>(cfg, "source_url") : "";
+        if (!out.source_url.empty() && !valid_web_url(out.source_url))
+            throw std::runtime_error("source URL must use http or https");
+        if (!out.source_url.empty() && out.source_name.empty())
+            out.source_name = "Project page";
         out.resolver =
             cfg.contains("resolver") ? toml::find<std::string>(cfg, "resolver") : "declarative";
         out.save_compatibility = cfg.contains("save_compatibility")
@@ -1479,6 +1509,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 ModFeature feature;
                 feature.id = toml::find<std::string>(v, "id");
                 feature.name = toml::find<std::string>(v, "name");
+                feature.author = v.contains("author")
+                    ? toml::find<std::string>(v, "author") : "";
                 feature.description = v.contains("description")
                     ? toml::find<std::string>(v, "description") : "";
                 feature.group = v.contains("group")
@@ -1498,6 +1530,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
             ModFeature feature;
             feature.id = "legacy";
             feature.name = out.name;
+            feature.author = out.author;
             feature.description = out.description;
             feature.legacy = true;
             out.features.push_back(std::move(feature));
@@ -1514,6 +1547,8 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                 option.description =
                     v.contains("description") ? toml::find<std::string>(v, "description") : "";
                 option.group = v.contains("group") ? toml::find<std::string>(v, "group") : "General";
+                option.disabled_by =
+                    v.contains("disabled_by") ? toml::find<std::string>(v, "disabled_by") : "";
                 const std::string type = toml::find<std::string>(v, "type");
                 if (!find_feature(out, option.feature_id))
                     throw std::runtime_error("option references unknown feature");
@@ -1554,6 +1589,26 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     throw std::runtime_error("unknown option type");
                 }
                 out.options.push_back(std::move(option));
+            }
+            /* Resolve disabled_by AFTER the whole list is read, so it may name
+             * an option declared later. A dangling or non-boolean reference is
+             * a manifest bug that would silently leave the control always
+             * enabled, so reject it here rather than at render time. */
+            for (const ModOption& option : out.options) {
+                if (option.disabled_by.empty()) continue;
+                if (option.disabled_by == option.id)
+                    throw std::runtime_error("option disabled_by references itself");
+                const auto owner = std::find_if(
+                    out.options.begin(), out.options.end(),
+                    [&](const ModOption& o) {
+                        return o.feature_id == option.feature_id &&
+                               o.id == option.disabled_by;
+                    });
+                if (owner == out.options.end() ||
+                    owner->type != ModOptionType::Boolean)
+                    throw std::runtime_error(
+                        "option disabled_by must name a boolean option "
+                        "in the same feature");
             }
         }
         if (cfg.contains("constraint")) {

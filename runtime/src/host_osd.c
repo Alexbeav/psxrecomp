@@ -1,10 +1,19 @@
-/* host_osd.c — top-left toast messages for host hotkeys / savestate results. */
+/* host_osd.c — top-left toast messages for host hotkeys / savestate results.
+ *
+ * Visual OSD is gated on RECOMP_LAUNCHER (recomp-ui bundled). Volume state
+ * remains available for headless / launcher-less builds. */
 
 #include "host_osd.h"
 #include "psx_sdl.h"
 
 #include <stdio.h>
 #include <string.h>
+
+#if defined(RECOMP_LAUNCHER)
+#define HOST_OSD_VISUAL 1
+#else
+#define HOST_OSD_VISUAL 0
+#endif
 
 #define OSD_MAX_CHARS  64
 #define OSD_PAD_X      2
@@ -306,6 +315,11 @@ static void sdl_logical_size(SDL_Renderer *renderer, int *lw, int *lh) {
 #endif
 
 void host_osd_push(const char *msg, int duration_ms) {
+#if !HOST_OSD_VISUAL
+    (void)msg;
+    (void)duration_ms;
+    return;
+#else
     if (!msg || !msg[0]) return;
     if (duration_ms <= 0) duration_ms = OSD_DEFAULT_MS;
     snprintf(s_msg, sizeof(s_msg), "%s", msg);
@@ -313,15 +327,22 @@ void host_osd_push(const char *msg, int duration_ms) {
     s_active = 1;
     s_needs_clear = 0;
     s_img_dirty = 1;
+#endif
 }
 
 void host_osd_show_volume(int percent, int duration_ms) {
+#if !HOST_OSD_VISUAL
+    (void)percent;
+    (void)duration_ms;
+    return;
+#else
     if (duration_ms <= 0) duration_ms = OSD_DEFAULT_MS;
     s_vol_pct = clamp_pct(percent);
     s_vol_expire_ms = SDL_GetTicks() + (Uint32)duration_ms;
     s_vol_active = 1;
     s_needs_clear = 0;
     s_vol_dirty = 1;
+#endif
 }
 
 int host_volume_get(void) {
@@ -334,16 +355,28 @@ void host_volume_set(int percent) {
 
 int host_volume_adjust(int delta) {
     s_volume = clamp_pct(s_volume + delta);
+#if HOST_OSD_VISUAL
     host_osd_show_volume(s_volume, OSD_DEFAULT_MS);
+#endif
     return s_volume;
 }
 
 int host_osd_needs_present(void) {
+#if !HOST_OSD_VISUAL
+    return 0;
+#else
     if (msg_visible() || vol_visible()) return 1;
     return s_needs_clear;
+#endif
 }
 
 int host_osd_image(const uint32_t **pixels, int *w, int *h) {
+#if !HOST_OSD_VISUAL
+    if (pixels) *pixels = NULL;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    return 0;
+#else
     if (!msg_visible()) {
         if (pixels) *pixels = NULL;
         if (w) *w = 0;
@@ -355,9 +388,16 @@ int host_osd_image(const uint32_t **pixels, int *w, int *h) {
     if (w) *w = s_img_w;
     if (h) *h = s_img_h;
     return 1;
+#endif
 }
 
 int host_osd_volume_image(const uint32_t **pixels, int *w, int *h) {
+#if !HOST_OSD_VISUAL
+    if (pixels) *pixels = NULL;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    return 0;
+#else
     if (!vol_visible()) {
         if (pixels) *pixels = NULL;
         if (w) *w = 0;
@@ -369,13 +409,22 @@ int host_osd_volume_image(const uint32_t **pixels, int *w, int *h) {
     if (w) *w = s_vol_w;
     if (h) *h = s_vol_h;
     return 1;
+#endif
 }
 
 void host_osd_present_done(void) {
+#if !HOST_OSD_VISUAL
+    return;
+#else
     if (!s_active && !s_vol_active) s_needs_clear = 0;
+#endif
 }
 
 void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
+#if !HOST_OSD_VISUAL
+    (void)renderer;
+    return;
+#else
 #ifndef PSX_SDL_NO_RENDER
     if (!renderer) return;
     s_sdl_ren = renderer;
@@ -404,5 +453,6 @@ void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
     host_osd_present_done();
 #else
     (void)renderer;
-#endif
+#endif /* PSX_SDL_NO_RENDER */
+#endif /* HOST_OSD_VISUAL */
 }

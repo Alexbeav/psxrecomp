@@ -32,11 +32,17 @@ struct ModOption {
     int64_t max_value = 0;
     int64_t step = 1;
     std::vector<ModChoice> choices;
+    /* Optional id of a BOOLEAN option in the same feature that overrides this
+     * one. While that option is true this control is inert: the launcher greys
+     * it out and plugins ignore its value. Models "tick Instant and the speed
+     * box stops mattering" without inventing a second widget type. */
+    std::string disabled_by;
 };
 
 struct ModFeature {
     std::string id;
     std::string name;
+    std::string author;
     std::string description;
     std::string group = "General";
     bool default_enabled = false;
@@ -161,14 +167,22 @@ struct ModDerivedDisc {
     std::map<std::string, std::string> when;
 };
 
+struct ModAuthorLink {
+    std::string name;
+    std::string url;
+};
+
 struct ModPackage {
     uint32_t format_version = 0;
     std::string id;
     std::string version;
     std::string name;
     std::string author;
+    std::vector<ModAuthorLink> author_links;
     std::string description;
     std::string license;
+    std::string source_name;
+    std::string source_url;
     std::string resolver = "declarative";
     std::string save_compatibility = "shared";
     std::filesystem::path root;
