@@ -1,4 +1,5 @@
 #include "psx_netplay_rb.h"
+#include "cpu_state.h" /* full CPUState — stub path assigns *out = *in */
 
 #if !defined(PSX_HAS_RECOMP_NET)
 void psx_netplay_rb_bind(const PsxNetplayRbBindings *b) { (void)b; }
