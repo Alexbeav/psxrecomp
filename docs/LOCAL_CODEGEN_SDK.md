@@ -11,7 +11,9 @@ PGO (optional) runs **only on the user’s machine** during local rebuild when
 
 Games can ship a **setup host**: `psx-runtime` linked **without** game C and
 **without** BIOS backends (`-DPSXRECOMP_FORCE_SETUP_HOST=ON`, or legacy
-`-DBPE_FORCE_SETUP_HOST=ON`) via `psxrecomp_add_game_runtime(...)`. CI never
+`-DBPE_FORCE_SETUP_HOST=ON`) via `psxrecomp_add_game_runtime(...)`, and with
+`PSX_SETUP_WIZARD=ON` / `ENABLE_SETUP_WIZARD` so first-run Generate & rebuild
+actually appears. CI never
 needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
 bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
 rebuild links everything into `build-release/` (or the title’s
@@ -164,3 +166,12 @@ that leave cwd as `$HOME` still find a setup zip next to the binary.
 | `PSX_HEADLESS=1` | no SDL window (set by PGO train when `hide_video`) |
 | `SDL_VIDEODRIVER=dummy` | set by default with headless train |
 | `PYTHON` / `CMAKE` | tool overrides |
+
+### Toolchain update prompt (wizard)
+
+The first-run / setup wizard compares the local cmake-clang pack version against
+GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now**.
+
+- `ensure_toolchain_with_progress(..., download == 2)` forces a re-download from
+  latest (update path); `download == 1` fetches only if missing; `0` is cache-only.
+- Set `RETCOMM_TOOLCHAIN_SKIP_UPDATE=1` to disable the remote newer-than-local check.

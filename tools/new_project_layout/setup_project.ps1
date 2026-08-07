@@ -151,7 +151,8 @@ if (-not $Region) {
     if ($interactive) { $Region = Prompt-Line "Region" "USA" } else { $Region = "USA" }
 }
 
-# Tri-state: CLI enable/no, else prompt, else -Yes default off
+# Tri-state: CLI enable/no, else prompt, else -Yes / non-interactive default off
+# (wizard is forced ON below when recomp-ui is enabled unless -NoWizard).
 function Resolve-BoolOpt([switch]$Enable, [switch]$No, [bool]$PromptDefault, [string]$Question) {
     if ($No) { return $false }
     if ($Enable) { return $true }
@@ -170,8 +171,10 @@ if (-not $useRecompUi) {
     }
     Write-Host "  (recomp-ui declined — skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 } else {
-    $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$false `
+    # Default ON (interactive + non-interactive): setup-host CI needs the wizard.
+    $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$true `
         -Question "Enable first-run setup wizard + Generate & rebuild?"
+    if (-not $interactive -and -not $NoWizard) { $useWizard = $true }
     $useNetplay = Resolve-BoolOpt -Enable:$EnableNetplay -No:$NoNetplay -PromptDefault:$false `
         -Question "Enable netplay UI (needs nested recomp-net)?"
 }
@@ -207,6 +210,10 @@ if ($doGenerate) {
 
 $createGithub = Resolve-BoolOpt -Enable:$CreateGithub -No:$NoGithub -PromptDefault:$false `
     -Question "Create GitHub repo with gh (needs auth)?"
+
+if ($useCi -and $useRecompUi -and -not $useWizard) {
+    throw "Release CI requires the first-run setup wizard (omit -NoWizard, or pass -EnableWizard)."
+}
 
 if ($Bios -and -not (Test-Path -LiteralPath $Bios)) { throw "-Bios not found: $Bios" }
 if ($Bios -and -not $doGenerate) { Write-Warning "-Bios ignored without Generate" }

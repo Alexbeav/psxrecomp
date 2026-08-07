@@ -6,6 +6,8 @@ set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp" CACHE PATH
 
 # --- Opt-in product surfaces (OFF by default in the framework) -------------
 # Scaffold prompts / flags fill these. Without recomp-ui, PSX_RECOMP_UI is OFF.
+# Setup-host CI requires WIZARD_CMAKE_BLOCK / ENABLE_SETUP_WIZARD (FORCE_SETUP_HOST
+# alone does not open first-run / Generate & rebuild).
 @RECOMP_UI_CMAKE_BLOCK@
 @NETPLAY_CMAKE_BLOCK@
 @WIZARD_CMAKE_BLOCK@

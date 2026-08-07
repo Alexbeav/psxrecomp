@@ -83,8 +83,11 @@ Keep only this in the game repo:
 - Zip prefix / display name / disc hint in that wrapper
 - Release notes / GitHub Release job naming
 
-Release CI configures with both `-DPSXRECOMP_FORCE_SETUP_HOST=ON` and
-`-DPSXRECOMP_ALLOW_NO_BIOS=ON` after `clear_generated.sh`. The zip ships
+Release CI configures with `-DPSXRECOMP_FORCE_SETUP_HOST=ON`,
+`-DPSXRECOMP_ALLOW_NO_BIOS=ON`, and `-DPSX_SETUP_WIZARD=ON` after
+`clear_generated.sh`. Titles must also set `PSX_SETUP_WIZARD` /
+`ENABLE_SETUP_WIZARD` in `CMakeLists.txt` — without the wizard flag the
+setup-host zip never opens first-run / Generate & rebuild. The zip ships
 emitters + OpenBIOS.toml; end users Generate (OpenBIOS always; SCPH1001 if
 they have a dump) via the wizard, then rebuild.
 

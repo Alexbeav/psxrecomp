@@ -303,10 +303,12 @@ if [ "$ENABLE_RECOMP_UI" -eq 0 ]; then
     echo "  (recomp-ui declined — skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 else
     if [ "$SET_WIZARD" -eq 0 ]; then
+        # Default ON: setup-host CI zips need the wizard (FORCE_SETUP_HOST
+        # without PSX_SETUP_WIZARD opens no first-run UI).
         if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
-            ENABLE_WIZARD=0
+            ENABLE_WIZARD=1
         else
-            prompt_yn "Enable first-run setup wizard + Generate & rebuild?" ENABLE_WIZARD 0
+            prompt_yn "Enable first-run setup wizard + Generate & rebuild?" ENABLE_WIZARD 1
         fi
     fi
     if [ "$SET_NETPLAY" -eq 0 ]; then
@@ -337,6 +339,14 @@ if [ "$SET_CI" -eq 0 ]; then
     else
         prompt_yn "Add GitHub Actions release workflow (Linux/Windows/macOS)?" ENABLE_CI 1
     fi
+fi
+
+# Setup-host release CI needs PSX_SETUP_WIZARD (FORCE_SETUP_HOST alone is not enough).
+if [ "${ENABLE_CI:-0}" -eq 1 ] && [ "${ENABLE_RECOMP_UI:-0}" -eq 1 ] &&
+   [ "${ENABLE_WIZARD:-0}" -eq 0 ]; then
+    echo "error: release CI requires the first-run setup wizard." >&2
+    echo "  Pass --enable-wizard (or omit --no-wizard)." >&2
+    exit 1
 fi
 
 if [ "$SET_BOXART" -eq 0 ]; then

@@ -243,16 +243,19 @@ YourGameRecomp/                 # your git repo
 └── disc/                       # local disc working tree — gitignore
 ```
 
-Minimal `CMakeLists.txt` shape (wizard/netplay left off until tested):
+Minimal `CMakeLists.txt` shape for a **setup-host** title (CI zip / first-run
+Generate & rebuild). Wizard is required whenever you ship
+`PSXRECOMP_FORCE_SETUP_HOST=ON` — without it the launcher never opens first-run.
 
 ```cmake
 set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp")
-# set(PSX_SETUP_WIZARD ON CACHE BOOL "…" FORCE)   # after testing self-build
 # set(PSX_NETPLAY ON CACHE BOOL "…" FORCE)        # multiplayer titles only
+set(PSX_SETUP_WIZARD ON CACHE BOOL
+    "Advertise first-run setup wizard + Generate & rebuild in recomp-ui" FORCE)
 include("${PSXRECOMP_ROOT}/runtime/runtime.cmake")
 psxrecomp_add_game_runtime(psx-runtime
   # ENABLE_NETPLAY_IF_PRESENT
-  # ENABLE_SETUP_WIZARD
+  ENABLE_SETUP_WIZARD
   WINDOW_TITLE "My Game Recompiled"
   GEN_MARKER "generated/SLUS_01234_dispatch.c"
   GEN_FULL_GLOB "generated/SLUS_01234_full_*.c"
@@ -445,8 +448,11 @@ Use this before tagging a setup-host release that matches other titles
   ```
 - [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends
   ```
-  CI: `-DPSXRECOMP_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON`
-  (clear_generated.sh wipes OpenBIOS C too; users Generate locally / via wizard)
+  CI: `-DPSXRECOMP_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON
+  -DPSX_SETUP_WIZARD=ON` (CMakeLists must also set `PSX_SETUP_WIZARD` /
+  `ENABLE_SETUP_WIZARD` — FORCE_SETUP_HOST alone does not open the wizard;
+  `psxrecomp_add_game_runtime` FATAL_ERRORs if FORCE_SETUP_HOST is on without
+  the wizard). clear_generated.sh wipes OpenBIOS C; users Generate via wizard.
   ```
 - [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in
   ```

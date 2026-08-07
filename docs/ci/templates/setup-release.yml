@@ -268,6 +268,9 @@ jobs:
           # SCPH1001) locally via the wizard, then rebuild.
           # Prefer -DPSXRECOMP_FORCE_SETUP_HOST=ON (psxrecomp_add_game_runtime).
           # Legacy -DYOURGAME_FORCE_SETUP_HOST=ON still works if the title wires it.
+          # PSX_SETUP_WIZARD is required with FORCE_SETUP_HOST (CMakeLists
+          # ENABLE_SETUP_WIZARD + -D here). Without it the zip never opens
+          # first-run / Generate & rebuild.
           # Title root codegen_setup.c must define
           # psx_game_codegen_forward_if_built (see codegen_setup.c.in) or link
           # fails — main.cpp always calls it, including setup-host CI builds.
@@ -284,6 +287,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DPSXRECOMP_FORCE_SETUP_HOST=ON \
             -DPSXRECOMP_ALLOW_NO_BIOS=ON \
+            -DPSX_SETUP_WIZARD=ON \
             -DPSX_GAME_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]}" 2>&1 | tee build-ci-configure.log
           if ! grep -q 'Vulkan backend: headers' build-ci-configure.log; then

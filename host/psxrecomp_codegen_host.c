@@ -2340,44 +2340,210 @@ static int host_toolchain_is_ready(void) {
     return 0;
 }
 
+/* Fill *out with the installed pack's version string (retcomm-toolchain.json). */
+static int host_local_toolchain_version(char* out, size_t cap) {
+    char pack[1400];
+    if (!out || cap == 0)
+        return 0;
+    out[0] = '\0';
+    activate_toolchain_path();
+    if (!g_toolchain_bin[0] &&
+        !resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
+        return 0;
+    if (!pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack)))
+        return 0;
+    return read_pack_version(pack, out, cap);
+}
+
+/* Parse "tag_name":"…" or a …/releases/tag/<ver> URL into *out. */
+static int parse_github_release_tag(const char* text, char* out, size_t cap) {
+    const char* p;
+    size_t i;
+    if (!text || !out || cap < 2)
+        return 0;
+    out[0] = '\0';
+    p = strstr(text, "\"tag_name\"");
+    if (p) {
+        p = strchr(p + 10, '"');
+        if (!p)
+            return 0;
+        ++p;
+        i = 0;
+        while (*p && *p != '"' && i + 1 < cap)
+            out[i++] = *p++;
+        out[i] = '\0';
+        return i > 0;
+    }
+    p = strstr(text, "/releases/tag/");
+    if (!p)
+        return 0;
+    p += strlen("/releases/tag/");
+    i = 0;
+    while (*p && *p != '"' && *p != '\'' && *p != ' ' && *p != '\n' &&
+           *p != '\r' && *p != '?' && *p != '#' && i + 1 < cap)
+        out[i++] = *p++;
+    out[i] = '\0';
+    return i > 0;
+}
+
+/* Query GitHub for the latest cmake-clang-v1 release tag (short timeout). */
+static int host_remote_toolchain_version(char* out, size_t cap) {
+    char url[320], tmp[1400], buf[8192];
+    FILE* f;
+    size_t n;
+    char err[256];
+    if (!out || cap < 2)
+        return 0;
+    out[0] = '\0';
+    snprintf(url, sizeof(url),
+             "https://api.github.com/repos/%s/releases/latest", k_tc_repo);
+#if defined(_WIN32)
+    {
+        char tdir[512];
+        DWORD tn = GetTempPathA(sizeof(tdir), tdir);
+        if (tn == 0 || tn >= sizeof(tdir))
+            return 0;
+        snprintf(tmp, sizeof(tmp), "%spsxrecomp-tc-latest-%lu.json", tdir,
+                 (unsigned long)GetCurrentProcessId());
+    }
+#else
+    snprintf(tmp, sizeof(tmp), "/tmp/psxrecomp-tc-latest-%d.json", (int)getpid());
+#endif
+    /* GitHub API wants a UA; keep the request short so wizard open stays snappy. */
+#if defined(_WIN32)
+    {
+        char cmd[4096];
+        DWORD code = 1;
+        DeleteFileA(tmp);
+        snprintf(cmd, sizeof(cmd),
+                 "curl.exe -fsSL --connect-timeout 5 --max-time 15 "
+                 "-A psxrecomp-codegen -H \"Accept: application/vnd.github+json\" "
+                 "-o \"%s\" \"%s\"",
+                 tmp, url);
+        if (!run_cmdline_wait(cmd, &code) || code != 0 || !path_is_file(tmp)) {
+            /* Fallback via cmd so stdout redirect works under CreateProcess. */
+            DeleteFileA(tmp);
+            snprintf(cmd, sizeof(cmd),
+                     "cmd.exe /C \"curl.exe -fsSIL --connect-timeout 5 "
+                     "--max-time 15 -A psxrecomp-codegen -o NUL "
+                     "-w %%{url_effective} "
+                     "https://github.com/%s/releases/latest > \"%s\"\"",
+                     k_tc_repo, tmp);
+            if (!run_cmdline_wait(cmd, &code) || code != 0 || !path_is_file(tmp))
+                return 0;
+        }
+    }
+#else
+    {
+        char cmd[4096];
+        unlink(tmp);
+        snprintf(cmd, sizeof(cmd),
+                 "curl -fsSL --connect-timeout 5 --max-time 15 "
+                 "-A psxrecomp-codegen -H 'Accept: application/vnd.github+json' "
+                 "-o '%s' '%s'",
+                 tmp, url);
+        if (system(cmd) != 0 || !path_is_file(tmp)) {
+            unlink(tmp);
+            snprintf(cmd, sizeof(cmd),
+                     "curl -fsSIL --connect-timeout 5 --max-time 15 "
+                     "-A psxrecomp-codegen -o /dev/null -w '%%{url_effective}' "
+                     "'https://github.com/%s/releases/latest' > '%s'",
+                     k_tc_repo, tmp);
+            if (system(cmd) != 0 || !path_is_file(tmp))
+                return 0;
+        }
+    }
+#endif
+    (void)err;
+    f = fopen(tmp, "rb");
+    if (!f) {
+#if defined(_WIN32)
+        DeleteFileA(tmp);
+#else
+        unlink(tmp);
+#endif
+        return 0;
+    }
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+#if defined(_WIN32)
+    DeleteFileA(tmp);
+#else
+    unlink(tmp);
+#endif
+    buf[n] = '\0';
+    return parse_github_release_tag(buf, out, cap);
+}
+
+/* 1 = installed pack is older than GitHub /releases/latest (prompt to update).
+ * 0 = up to date, not installed, offline, or RETCOMM_TOOLCHAIN_SKIP_UPDATE.
+ * Always fills local/remote when discoverable. */
+static int host_toolchain_update_available(char* local_ver, size_t local_cap,
+                                           char* remote_ver, size_t remote_cap) {
+    const char* skip = getenv("RETCOMM_TOOLCHAIN_SKIP_UPDATE");
+    if (local_ver && local_cap)
+        local_ver[0] = '\0';
+    if (remote_ver && remote_cap)
+        remote_ver[0] = '\0';
+    if (skip && skip[0] && skip[0] != '0')
+        return 0;
+    if (!g_project_root[0])
+        return 0;
+    migrate_legacy_psxrecomp_toolchain();
+    (void)host_local_toolchain_version(local_ver, local_cap);
+    if (!host_remote_toolchain_version(remote_ver, remote_cap))
+        return 0;
+    if (!local_ver || !local_ver[0])
+        return 0; /* missing install → page 0 is "install", not "update" */
+    if (!remote_ver || !remote_ver[0])
+        return 0;
+    return version_cmp(local_ver, remote_ver) < 0;
+}
+
 /* Download or offline-install cmake-clang-v1 (wizard page 0 / rebuild fallback).
  * Prefer host-native curl/tar so Microsoft Store Python cannot redirect the
  * unpack into Packages\\...\\LocalCache. Installs into the shared RetComM
  * cache: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/…
- * Broken latest/ stamps are healed, then GitHub /releases/latest is fetched. */
+ * Broken latest/ stamps are healed, then GitHub /releases/latest is fetched.
+ *
+ * download: 0 = zip/cache only, 1 = download if missing, 2 = force latest. */
 static int host_ensure_toolchain_with_progress(
     int download, const char* zip_path, char* err_msg, size_t err_cap,
     RecompLauncherCPrepareProgressFn on_progress, void* progress_ctx) {
+    const int force = (download == 2);
     if (!g_project_root[0]) {
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
-    if (host_portable_cmake_ready())
+    if (!force && host_portable_cmake_ready())
         return 1;
 
 #if defined(_WIN32)
-    if (on_progress)
-        on_progress(progress_ctx, 0.02f,
-                    "Checking for an existing portable toolchain…");
-    if (harvest_store_python_toolchain(1)) {
-        activate_toolchain_path();
-        if (host_portable_cmake_ready())
-            return 1;
+    if (!force) {
+        if (on_progress)
+            on_progress(progress_ctx, 0.02f,
+                        "Checking for an existing portable toolchain…");
+        if (harvest_store_python_toolchain(1)) {
+            activate_toolchain_path();
+            if (host_portable_cmake_ready())
+                return 1;
+        }
     }
 #endif
 
     if (on_progress)
         on_progress(progress_ctx, 0.03f,
-                    "Repairing broken toolchain cache if needed…");
+                    force ? "Preparing toolchain update…"
+                          : "Repairing broken toolchain cache if needed…");
     heal_broken_toolchain_pointers();
     clear_project_toolchain_stamp();
     g_toolchain_bin[0] = '\0';
     g_cli_toolchain_bin[0] = '\0';
     g_cmake[0] = '\0';
     activate_toolchain_path();
-    if (host_portable_cmake_ready())
+    if (!force && host_portable_cmake_ready())
         return 1;
 
     if (zip_path && zip_path[0]) {
@@ -2401,10 +2567,11 @@ static int host_ensure_toolchain_with_progress(
     }
 
     if (download) {
-        /* Always fetch GitHub /releases/latest (no per-title version pin). */
+        /* Fetch GitHub /releases/latest (no per-title version pin). */
         if (on_progress)
             on_progress(progress_ctx, 0.05f,
-                        "Downloading latest portable cmake/clang…");
+                        force ? "Downloading toolchain update…"
+                              : "Downloading latest portable cmake/clang…");
         if (host_download_and_install_toolchain(on_progress, progress_ctx,
                                                 err_msg, err_cap)) {
             if (host_portable_cmake_ready())
@@ -3103,6 +3270,7 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->setup_needs_toolchain = 1;
         gi->toolchain_is_ready = host_toolchain_is_ready;
         gi->ensure_toolchain_with_progress = host_ensure_toolchain_with_progress;
+        gi->toolchain_update_available = host_toolchain_update_available;
         /* Settings → SYSTEM: PGO on existing generated C (no wizard). */
         gi->pgo_optimize_with_progress = host_pgo_optimize;
 #if defined(_WIN32)

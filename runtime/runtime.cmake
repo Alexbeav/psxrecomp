@@ -1344,6 +1344,17 @@ function(psxrecomp_add_game_runtime target)
             FORCE)
     endif()
 
+    # Setup-host CI (-DPSXRECOMP_FORCE_SETUP_HOST=ON) without the wizard ships a
+    # zip that never opens first-run / Generate & rebuild (BPE regression).
+    if(PSXRECOMP_FORCE_SETUP_HOST AND NOT PSX_SETUP_WIZARD)
+        message(FATAL_ERROR
+            "PSXRECOMP_FORCE_SETUP_HOST=ON requires PSX_SETUP_WIZARD=ON.\n"
+            "Add ENABLE_SETUP_WIZARD to psxrecomp_add_game_runtime(...), and/or:\n"
+            "  set(PSX_SETUP_WIZARD ON CACHE BOOL \"…\" FORCE)\n"
+            "before include(runtime.cmake), and/or pass -DPSX_SETUP_WIZARD=ON\n"
+            "on the cmake command line (setup-release CI does this).")
+    endif()
+
     if(NOT PSXG_GEN_MARKER)
         message(FATAL_ERROR
             "psxrecomp_add_game_runtime: GEN_MARKER is required "
