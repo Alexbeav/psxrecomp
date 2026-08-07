@@ -2731,6 +2731,182 @@ static int host_fmv_timing_optimize(const char* disc_path, char* out_exe_path,
                                 err_cap, on_progress, progress_ctx);
 }
 
+static int host_self_exe_path(char* out, size_t cap) {
+    if (!out || cap < 2)
+        return 0;
+    out[0] = '\0';
+#if defined(_WIN32)
+    {
+        DWORD n = GetModuleFileNameA(NULL, out, (DWORD)cap);
+        return n > 0 && n < (DWORD)cap;
+    }
+#else
+    {
+        const char* appimg = getenv("APPIMAGE");
+        if (appimg && appimg[0] && path_is_file(appimg)) {
+            snprintf(out, cap, "%s", appimg);
+            return 1;
+        }
+        char* rp = realpath("/proc/self/exe", NULL);
+        if (!rp)
+            return 0;
+        snprintf(out, cap, "%s", rp);
+        free(rp);
+        return out[0] != '\0';
+    }
+#endif
+}
+
+static int host_paths_same_file(const char* a, const char* b) {
+    char fa[1100], fb[1100];
+    if (!a || !a[0] || !b || !b[0])
+        return 0;
+#if defined(_WIN32)
+    {
+        DWORD na = GetFullPathNameA(a, (DWORD)sizeof(fa), fa, NULL);
+        DWORD nb = GetFullPathNameA(b, (DWORD)sizeof(fb), fb, NULL);
+        if (na == 0 || na >= (DWORD)sizeof(fa) || nb == 0 ||
+            nb >= (DWORD)sizeof(fb))
+            return 0;
+        return _stricmp(fa, fb) == 0;
+    }
+#else
+    {
+        char* ra = realpath(a, NULL);
+        char* rb = realpath(b, NULL);
+        int same = ra && rb && strcmp(ra, rb) == 0;
+        free(ra);
+        free(rb);
+        return same;
+    }
+#endif
+}
+
+/* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
+void psxrecomp_codegen_host_forward_if_built(
+    const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+#if defined(PSX_HAS_GAME_DISPATCH)
+    /* Full game binary — already the product tree. */
+    (void)cfg;
+    (void)argc;
+    (void)argv;
+    return;
+#else
+    char self[1100];
+    const char* no_fwd;
+    const char* force_env;
+    const char* force;
+
+    if (!cfg || !cfg->cmake_target || !cfg->exe_basename)
+        return;
+
+    no_fwd = getenv("PSXRECOMP_NO_FORWARD");
+    if (no_fwd && no_fwd[0] && no_fwd[0] != '0')
+        return;
+
+    g_cfg = cfg;
+    snprintf(g_display, sizeof(g_display), "%s",
+             cfg_or(cfg->display_name, "Game"));
+    snprintf(g_cmake_target, sizeof(g_cmake_target), "%s", cfg->cmake_target);
+    snprintf(g_exe_basename, sizeof(g_exe_basename), "%s", cfg->exe_basename);
+
+    force_env = cfg_or(cfg->force_setup_env, "PSXRECOMP_FORCE_SETUP");
+    force = getenv(force_env);
+    if (force && force[0] && force[0] != '0')
+        return;
+
+    /* Still need Generate — stay on the setup host. */
+    if (psxrecomp_codegen_host_sources_missing(cfg))
+        return;
+
+    if (!discover_project_root(g_project_root, sizeof(g_project_root)))
+        return;
+    if (!resolve_build_paths())
+        return;
+    if (!g_exe_path[0] || !path_is_file(g_exe_path))
+        return;
+    if (!host_self_exe_path(self, sizeof(self)))
+        return;
+    if (host_paths_same_file(self, g_exe_path))
+        return;
+
+    fprintf(stderr,
+            "psxrecomp-codegen: setup host forwarding to product build:\n  %s\n",
+            g_exe_path);
+
+#if defined(_WIN32)
+    {
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        char cmd[4096];
+        size_t pos = 0;
+        int i;
+        memset(&si, 0, sizeof(si));
+        memset(&pi, 0, sizeof(pi));
+        si.cb = sizeof(si);
+        pos += (size_t)snprintf(cmd + pos, sizeof(cmd) - pos, "\"%s\"",
+                                g_exe_path);
+        /* Preserve caller argv (skip argv[0]); ensure --launcher so skip_launcher
+         * in the product tree cannot hide the UI on first handoff. */
+        {
+            int has_launcher = 0;
+            for (i = 1; i < argc && argv && argv[i]; ++i) {
+                int n;
+                if (strcmp(argv[i], "--launcher") == 0)
+                    has_launcher = 1;
+                n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
+                if (n <= 0 || (size_t)n >= sizeof(cmd) - pos)
+                    break;
+                pos += (size_t)n;
+            }
+            if (!has_launcher && pos + 12 < sizeof(cmd))
+                snprintf(cmd + pos, sizeof(cmd) - pos, " --launcher");
+        }
+        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL,
+                            g_project_root[0] ? g_project_root : NULL, &si,
+                            &pi)) {
+            fprintf(stderr,
+                    "psxrecomp-codegen: failed to start product exe (error %lu)\n",
+                    (unsigned long)GetLastError());
+            return;
+        }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        ExitProcess(0);
+    }
+#else
+    {
+        char** args;
+        int i;
+        int narg = (argc > 0) ? argc : 1;
+        int has_launcher = 0;
+        for (i = 1; i < argc && argv && argv[i]; ++i) {
+            if (strcmp(argv[i], "--launcher") == 0) {
+                has_launcher = 1;
+                break;
+            }
+        }
+        args = (char**)calloc((size_t)narg + 2, sizeof(char*));
+        if (!args)
+            return;
+        args[0] = g_exe_path;
+        for (i = 1; i < argc && argv && argv[i]; ++i)
+            args[i] = argv[i];
+        if (!has_launcher)
+            args[i++] = "--launcher";
+        args[i] = NULL;
+        if (g_project_root[0] && chdir(g_project_root) != 0) {
+            fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
+                    g_project_root, strerror(errno));
+        }
+        execv(g_exe_path, args);
+        perror("psxrecomp-codegen: execv product exe failed");
+        free(args);
+    }
+#endif
+#endif /* !PSX_HAS_GAME_DISPATCH */
+}
+
 void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path) {
     char exe[512];
     const char* near_exe;

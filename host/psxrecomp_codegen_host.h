@@ -48,6 +48,13 @@ int psxrecomp_codegen_host_sources_missing(
 
 void psxrecomp_codegen_host_relaunch_or_exit(const char* disc_path);
 
+/* Setup-host only (no PSX_HAS_GAME_DISPATCH): if generated/ is present and
+ * build-<dir>/<exe> exists, exec that binary (product tree with bios/, mods/,
+ * assets/, settings) and do not return. Full builds are a no-op.
+ * Skip with PSXRECOMP_NO_FORWARD=1 or the title force-setup env (=1). */
+void psxrecomp_codegen_host_forward_if_built(
+    const PsxrecompCodegenHostConfig* cfg, int argc, char** argv);
+
 #ifdef __cplusplus
 }
 #endif

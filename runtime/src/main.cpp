@@ -77,6 +77,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #if defined(PSX_HAS_GAME_CODEGEN)
 extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
 extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
+extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #endif
 #include "psx_sdl.h"
@@ -2061,6 +2062,19 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
             "or does not match.\n\nExpected next to the executable:\n" +
             (s_bundled_bios_rel.empty() ? "(default path)" : s_bundled_bios_rel) +
             "\n\nReinstall or rebuild.");
+        return {};
+    }
+
+    /* Setup host (CI zip root): no BIOS backends linked yet. Play belongs to
+     * the product binary under build-release/ after Generate & rebuild. */
+    if (psx_bios_registry_count == 0) {
+        launcher_warning("Setup host — finish Generate & rebuild",
+            "This executable is the first-run setup host (no game/BIOS code "
+            "linked).\n\n"
+            "Use Generate & rebuild in the launcher. After that succeeds, open "
+            "this same shortcut again — it starts the game from build-release/ "
+            "(where bios/, mods/, and settings live).\n\n"
+            "Or run build-release/<game>.exe directly.");
         return {};
     }
 
@@ -5773,10 +5787,13 @@ namespace {
              * game C will also emit OpenBIOS from redistributable openbios.bin.
              * Selecting OpenBIOS itself still does not require a BIOS regen. */
             if (s_openbios_allowed && psx_bios_registry_count == 0) {
+                /* Wizard may Continue; Play is blocked in resolve_bios_for_runtime
+                 * until the product build under build-release/ is linked. */
                 out->ok = 1;
                 std::snprintf(out->detail, sizeof(out->detail),
-                              "Using OpenBIOS (emitted on first Generate & "
-                              "rebuild with game C; optional: pick SCPH1001).");
+                              "OpenBIOS will be emitted on Generate & rebuild "
+                              "(optional: pick SCPH1001). Play uses "
+                              "build-release/ after rebuild.");
                 return 1;
             }
             std::snprintf(out->detail, sizeof(out->detail),
@@ -8519,6 +8536,12 @@ int main(int argc, char** argv) {
     std::fflush(stderr);
 #if defined(RECOMP_LAUNCHER)
     launcher_boot_timing_mark("host:main_enter");
+#endif
+
+    /* Setup-host zip-root exe: after Generate & rebuild, hand off to the
+     * product binary under build-release/ (bios/, mods/, assets/, settings). */
+#if defined(PSX_HAS_GAME_CODEGEN)
+    psx_game_codegen_forward_if_built(argc, argv);
 #endif
 
     /* Install crash handlers early so they catch issues during init too.

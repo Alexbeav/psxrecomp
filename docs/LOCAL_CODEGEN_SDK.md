@@ -14,11 +14,19 @@ Games can ship a **setup host**: `psx-runtime` linked **without** game C and
 `-DBPE_FORCE_SETUP_HOST=ON`) via `psxrecomp_add_game_runtime(...)`. CI never
 needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
 bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
-rebuild links everything.
+rebuild links everything into `build-release/` (or the title’s
+`build_dir_name`).
+
+**Layout after Generate & rebuild:** the zip-root exe stays the setup host;
+the playable product (exe + `bios/` + `mods/` + `assets/` + `settings.toml`)
+lives under `build-release/`. Reopening the zip-root exe **forwards** to that
+product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
+`PSXRECOMP_NO_FORWARD=1` or the title’s `*_FORCE_SETUP=1`.
 
 | Piece | Role |
 |-------|------|
-| Setup exe | `recomp-ui` + codegen host; opens Generate & rebuild |
+| Setup exe (zip root) | First-run wizard; after rebuild, forwards to `build-release/` |
+| Product exe | `build-release/<exe>` — Play, bios/mods/assets/settings |
 | Game zip `psxrecomp/` | submodule tree: CLI, tools, emitters, OpenBIOS profiles |
 | `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
 | `tools/package_setup_host.sh` | Universal setup-host zip packager |
