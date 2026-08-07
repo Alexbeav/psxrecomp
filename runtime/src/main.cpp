@@ -329,15 +329,15 @@ struct PlayerInput {
 static PlayerInput g_players[PSX_MAX_PLAYERS];
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
-/* Offline seat ceiling from game.toml players, optionally capped at 4 when
- * the launcher Multitap toggle is off (seats 5+). Netplay ignores this and
- * arms multitap whenever session slot_count > 2. */
+/* Offline seat ceiling from game.toml players, optionally capped at 2 when
+ * the launcher Multitap toggle is off (3+ player titles). Netplay ignores
+ * this and arms multitap whenever session slot_count > 2. */
 static void apply_offline_pad_count(int game_players, bool multitap_enabled)
 {
     int n = game_players > 0 ? game_players : 1;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
-    if (game_players > 4 && !multitap_enabled && n > 4)
-        n = 4;
+    if (game_players >= 3 && !multitap_enabled && n > 2)
+        n = 2;
     g_offline_pad_count = n;
 }
 /* ARGB8888 staging buffer. Sized for the active internal resolution:
@@ -8671,7 +8671,7 @@ int main(int argc, char** argv) {
     std::filesystem::path memcard2_path;   /* explicit slot-2 .mcd (empty => dir/card2.mcd) */
     bool memcard1_enabled = true;
     bool memcard2_enabled = true;
-    bool multitap_enabled = true; /* [controller] multitap; seats 5+ offline */
+    bool multitap_enabled = true; /* [controller] multitap; 3+ seats offline */
     bool multitap_analog = false; /* DualShock-on-tap hack; game.toml/settings */
     /* [controller] device routing (defaults: P1 keyboard/digital, P2 none). */
     /* Dev builds default Player 1 to the first connected controller ("auto").

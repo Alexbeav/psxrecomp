@@ -103,16 +103,16 @@ Guests rearrange among seats **1..N−1**.
 | Library / lobby / UI ceiling | **8** seats (`RNET_MAX_SLOTS`, dual SCPH-1070) |
 | Per-title cap | `game.toml` `players` / `PSX_MAX_PLAYERS` (e.g. MotK=2, Bomberman Party=5) |
 
-**Offline:** recomp-ui exposes a Multitap checkbox on PSX titles with
-`num_players > 4`. Off hides controller seats beyond Player 4 and caps
-`g_offline_pad_count` at 4 (`settings.toml` `[controller] multitap`,
-default on). Multitap still arms at game-start when three or more offline
-seats are live (`multitap_port` from `game.toml`).
+**Offline:** recomp-ui exposes Multitap under Settings → INPUT on PSX titles
+with `num_players >= 3`. Off hides seats beyond the two native controller
+ports and caps `g_offline_pad_count` at 2 (`settings.toml` `[controller]
+multitap`, default on). Multitap still arms at game-start when three or more
+offline seats are live (`multitap_port` from `game.toml`).
 
 **Multitap analog (hack):** tap seats are plain digital by default. Opt in
 with `game.toml` / `settings.toml` `[controller] multitap_analog = true`
-(or the Controllers / Lobby Settings checkbox). When on, tap seats may
-report DualShock (`0x73` + sticks) in multitap bulk status. Hosts publish
+(or Settings → INPUT / Lobby Settings). When on, tap seats may report
+DualShock (`0x73` + sticks) in multitap bulk status. Hosts publish
 `match_caps.multitap_analog` so every peer applies the same setting at
 launch. Not reliable across titles — leave off unless the game needs it.
 

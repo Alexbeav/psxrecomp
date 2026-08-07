@@ -1121,9 +1121,10 @@ struct UserSettings {
     // Legacy global deadzone (settings.toml `deadzone=`). Applied to slots
     // that do not have an explicit pN_deadzone. Default 10%.
     bool has_deadzone  = false; int  deadzone  = 3277;
-    // SCPH-1070 multitap for offline seats beyond Player 4 (settings.toml
-    // [controller] multitap). Default ON when unset. Netplay lobbies with
-    // more than 2 seats always arm multitap in the runtime regardless.
+    // SCPH-1070 multitap for offline 3+ player seats (settings.toml
+    // [controller] multitap). Default ON when unset. When false, offline
+    // sampling caps at 2 native ports. Netplay lobbies with more than 2
+    // seats always arm multitap in the runtime regardless.
     bool has_multitap_enabled = false; bool multitap_enabled = true;
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
     // Default off when unset; game.toml [controller] multitap_analog seeds it.

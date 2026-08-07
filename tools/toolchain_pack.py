@@ -399,17 +399,53 @@ def _upsert_profile_block(path: Path, block: str) -> None:
     path.write_text(body, encoding="utf-8")
 
 
+def _paths_equal(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(
+            os.path.normpath(str(b))
+        )
+
+
+def _is_under(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except (ValueError, OSError):
+        c = os.path.normcase(os.path.normpath(str(child)))
+        p = os.path.normcase(os.path.normpath(str(parent)))
+        sep = os.sep
+        return c == p or c.startswith(p + sep)
+
+
 def _set_latest_pointer(cache_root: Path, pack_root: Path) -> Path:
+    """Ensure cache_root/latest points at *pack_root* (symlink, else copy).
+
+    The C setup host unpacks cmake-clang-v1 *into* ``…/latest`` as a real
+    directory. Do not delete that tree to create a self-pointer (WinError 3).
+    """
     latest = cache_root / "latest"
+    root = unwrap_pack_root(pack_root)
+    # Pack already *is* latest/ (or lives under it) — leave it alone.
+    if _paths_equal(root, latest) or _paths_equal(pack_root, latest):
+        return root if pack_root_looks_usable(root) else latest
+    if (latest.exists() or latest.is_symlink()) and (
+        _is_under(root, latest) or _is_under(pack_root, latest)
+    ):
+        return unwrap_pack_root(latest) if pack_root_looks_usable(
+            unwrap_pack_root(latest)
+        ) else root
+
     if latest.exists() or latest.is_symlink():
         if latest.is_dir() and not latest.is_symlink():
             shutil.rmtree(latest, ignore_errors=True)
         else:
             latest.unlink(missing_ok=True)
     try:
-        latest.symlink_to(pack_root, target_is_directory=True)
+        latest.symlink_to(root, target_is_directory=True)
     except OSError:
-        shutil.copytree(pack_root, latest)
+        shutil.copytree(root, latest)
     return latest
 
 
@@ -515,12 +551,20 @@ def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
         raise RuntimeError(f"toolchain pack unusable for PATH register: {pack_root}")
     cache_root = preferred_install_root()
     cache_root.mkdir(parents=True, exist_ok=True)
-    latest = _set_latest_pointer(cache_root, root)
+    try:
+        latest = _set_latest_pointer(cache_root, root)
+    except OSError as exc:
+        # Pointer refresh is best-effort — never discard a usable pack over it.
+        if log:
+            log(f"Could not refresh latest pointer: {exc}")
+        latest = root
     bin_dir = latest / "bin"
+    if not bin_looks_usable(bin_dir):
+        bin_dir = root / "bin"
     if sys_platform_is_windows():
-        _register_user_path_windows(bin_dir, latest, log=log)
+        _register_user_path_windows(bin_dir, unwrap_pack_root(latest), log=log)
     else:
-        _register_user_path_unix(cache_root, latest, log=log)
+        _register_user_path_unix(cache_root, unwrap_pack_root(latest), log=log)
     # Session PATH for this process (idempotent).
     activate_toolchain_bin(bin_dir if bin_looks_usable(bin_dir) else root / "bin", log=None)
     if log:
@@ -678,9 +722,10 @@ def ensure_toolchain(
         if project_root is not None:
             write_toolchain_stamp(project_root, existing)
         # Cached pack: still publish latest + user PATH (idempotent).
+        # PATH register must not fail ensure (e.g. Store Python AppData quirks).
         try:
             register_toolchain_user_env(existing.parent, log=log)
-        except RuntimeError as exc:
+        except Exception as exc:  # noqa: BLE001 — best-effort side effect
             if log:
                 log(f"PATH register skipped: {exc}")
         activate_toolchain_bin(existing, log=log)
