@@ -76,9 +76,11 @@ asymmetric NAT does not strand players on failed ICE attempts.
 
 **ICE** (with **TURN** relay via the project’s coturn on
 `netplay.retcomm.net`) remains part of the stack for discovery,
-signaling, and fallbacks. Builds that need ICE link libjuice with
-`-DRNET_ENABLE_ICE=ON`. “Force TURN” in the UI can raise delay floors for
-relay-heavy paths; it does not replace the SFU online architecture above.
+signaling, and fallbacks. With `PSX_NETPLAY=ON`, `runtime.cmake` defaults
+`RNET_ENABLE_ICE=ON` (libjuice) before adding `recomp-net`. Pass
+`-DRNET_ENABLE_ICE=OFF` only for LAN-only / no-FetchContent builds.
+“Force TURN” in the UI can raise delay floors for relay-heavy paths; it
+does not replace the SFU online architecture above.
 
 ### LAN / Direct IP (P2P star)
 
@@ -153,9 +155,10 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
 2. Before `include(runtime.cmake)`: `set(PSX_NETPLAY ON CACHE BOOL … FORCE)`.
 3. `psxrecomp_add_game_runtime(… ENABLE_NETPLAY_IF_PRESENT …)` with
    `MAX_PLAYERS` / `game.toml` `players` set correctly.
-4. For ICE builds: `-DRNET_ENABLE_ICE=ON`.
-5. Fill `[netplay]` disc gates for multi-track games.
-6. Test LAN 2P, then online lobby; soak rollback + FMV if the title uses media.
+   ICE (libjuice) defaults ON with `PSX_NETPLAY`; override with
+   `-DRNET_ENABLE_ICE=OFF` if needed.
+4. Fill `[netplay]` disc gates for multi-track games.
+5. Test LAN 2P, then online lobby; soak rollback + FMV if the title uses media.
 
 This document will grow as N-way rollback confirmation, SFU soak on 5P titles,
 and further ICE/SFU policy land.

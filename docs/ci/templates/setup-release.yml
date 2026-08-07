@@ -183,6 +183,8 @@ jobs:
           # SCPH1001) locally via the wizard, then rebuild.
           # Prefer -DPSXRECOMP_FORCE_SETUP_HOST=ON (psxrecomp_add_game_runtime).
           # Legacy -DYOURGAME_FORCE_SETUP_HOST=ON still works if the title wires it.
+          # Titles with PSX_NETPLAY=ON in CMakeLists get RNET_ENABLE_ICE=ON from
+          # runtime.cmake (libjuice FetchContent — needs network at configure).
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPSXRECOMP_FORCE_SETUP_HOST=ON \
