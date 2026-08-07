@@ -7,6 +7,7 @@
 #include "psx_cycles.h"
 #include "psx_icache.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -194,13 +195,39 @@ uint32_t netplay_core_digest(const CPUState* cpu)
     return p.core;
 }
 
+uint32_t netplay_spu_regs_digest(void)
+{
+    return digest_module(spu_snapshot_bytes, spu_snapshot_write);
+}
+
+static int spu_dig_regs_only(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        const char *e = getenv("PSX_RB_SPU_DIG_REGS_ONLY");
+        s = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+        if (s) {
+            fprintf(stderr,
+                    "psxrecomp: rb SPU digest REGS-ONLY "
+                    "(PSX_RB_SPU_DIG_REGS_ONLY=1 — skip SPU RAM in spu/aux)\n");
+            fflush(stderr);
+        }
+    }
+    return s;
+}
+
 uint32_t netplay_spu_digest(void)
 {
     uint32_t crc = 0xFFFFFFFFu;
-    uint32_t regs = digest_module(spu_snapshot_bytes, spu_snapshot_write);
-    const uint8_t *ram = spu_get_ram_ptr();
-    uint32_t ram_n = spu_get_ram_bytes();
+    uint32_t regs = netplay_spu_regs_digest();
+    const uint8_t *ram;
+    uint32_t ram_n;
+
     crc = crc32_update(crc, (const uint8_t *)&regs, sizeof(regs));
+    if (spu_dig_regs_only())
+        return crc ^ 0xFFFFFFFFu;
+    ram = spu_get_ram_ptr();
+    ram_n = spu_get_ram_bytes();
     if (ram && ram_n)
         crc = crc32_update(crc, ram, ram_n);
     return crc ^ 0xFFFFFFFFu;

@@ -38,7 +38,10 @@ uint32_t netplay_cdrom_digest(void);
 uint32_t netplay_av_digest(void); /* GPU + VRAM */
 /* SPU regs+RAM and MDEC — in snaps but not core/av; pin zlib skew with matched
  * core/av was this. Baseline dig_c / live dig carry aux.
- * MDEC snap age is guest-cycle relative (not host s_frame_count). */
+ * MDEC snap age is guest-cycle relative (not host s_frame_count).
+ * PSX_RB_SPU_DIG_REGS_ONLY=1: netplay_spu_digest skips 512 KiB SPU RAM (A/B
+ * whether Win↔Linux aux forks in reverb/capture RAM vs voice regs). */
+uint32_t netplay_spu_regs_digest(void); /* regs/voices/tail only — no SPU RAM */
 uint32_t netplay_spu_digest(void);
 uint32_t netplay_mdec_digest(void);
 uint32_t netplay_aux_digest(void); /* crc(spu, mdec) */

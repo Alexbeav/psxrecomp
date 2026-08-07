@@ -29,6 +29,7 @@
 #if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/recomp_net.h"
 #include "recomp_net/input_contract.h"
+#include "crc32.h"
 #include "netplay_hash_confirm.h"
 #include "netplay_input_hist.h"
 #include "netplay_state_digest.h"
@@ -572,6 +573,8 @@ typedef struct NpPartSlot {
     NetplayCoreParts parts;
     uint32_t av;
     uint32_t cd;
+    uint32_t spu;
+    uint32_t mdec;
     uint32_t aux;
     uint8_t  valid;
 } NpPartSlot;
@@ -609,13 +612,16 @@ static void np_part_ring_reset(void)
 }
 
 static void np_part_ring_put(uint32_t tick, const NetplayCoreParts *parts,
-                             uint32_t av, uint32_t cd, uint32_t aux)
+                             uint32_t av, uint32_t cd, uint32_t spu,
+                             uint32_t mdec, uint32_t aux)
 {
     NpPartSlot *s = &s_part_ring[tick % NP_PART_RING];
     s->tick = tick;
     s->parts = *parts;
     s->av = av;
     s->cd = cd;
+    s->spu = spu;
+    s->mdec = mdec;
     s->aux = aux;
     s->valid = 1u;
 }
@@ -629,17 +635,18 @@ static const NpPartSlot *np_part_ring_get(uint32_t tick)
 }
 
 static void np_log_live_digest(uint32_t tick, const NetplayCoreParts *parts,
-                               uint32_t av, uint32_t cd, uint32_t aux,
-                               const char *tag)
+                               uint32_t av, uint32_t cd, uint32_t spu,
+                               uint32_t mdec, uint32_t aux, const char *tag)
 {
     fprintf(stderr,
             "psxrecomp: rb live dig %s sim=%u core=%08x cpu=%08x clk=%08x "
-            "tim=%08x ram=%08x dirty=%08x av=%08x cd=%08x aux=%08x\n",
+            "tim=%08x ram=%08x dirty=%08x av=%08x cd=%08x "
+            "spu=%08x mdec=%08x aux=%08x\n",
             tag ? tag : "tick", (unsigned)tick, (unsigned)parts->core,
             (unsigned)parts->cpu, (unsigned)parts->clock_irq,
             (unsigned)parts->timers, (unsigned)parts->ram,
             (unsigned)parts->dirty, (unsigned)av, (unsigned)cd,
-            (unsigned)aux);
+            (unsigned)spu, (unsigned)mdec, (unsigned)aux);
     fflush(stderr);
 }
 
@@ -897,12 +904,14 @@ static void np_check_core_diverge(void)
         fprintf(stderr,
                 "psxrecomp: rb FIRST CORE DIVERGE sim=%u local=%08x peer=%08x "
                 "| local parts cpu=%08x clk=%08x tim=%08x ram=%08x dirty=%08x "
-                "av=%08x cd=%08x aux=%08x (compare peer rb live dig at same sim)\n",
+                "av=%08x cd=%08x spu=%08x mdec=%08x aux=%08x "
+                "(compare peer rb live dig at same sim)\n",
                 (unsigned)tick, (unsigned)local_d, (unsigned)peer_d,
                 (unsigned)slot->parts.cpu, (unsigned)slot->parts.clock_irq,
                 (unsigned)slot->parts.timers, (unsigned)slot->parts.ram,
                 (unsigned)slot->parts.dirty, (unsigned)slot->av,
-                (unsigned)slot->cd, (unsigned)slot->aux);
+                (unsigned)slot->cd, (unsigned)slot->spu, (unsigned)slot->mdec,
+                (unsigned)slot->aux);
     } else {
         fprintf(stderr,
                 "psxrecomp: rb FIRST CORE DIVERGE sim=%u local=%08x peer=%08x "
@@ -946,6 +955,8 @@ static void np_emit_frame_commit(uint32_t tick)
     CPUState dig_cpu;
     uint32_t av = 0u;
     uint32_t cd = 0u;
+    uint32_t spu = 0u;
+    uint32_t mdec = 0u;
     uint32_t aux = 0u;
     int crumb;
     if (!g_np.cpu || !g_np.session) return;
@@ -966,14 +977,20 @@ static void np_emit_frame_commit(uint32_t tick)
      * while GPRs/RAM/clk match (was aborting good Replay on dig_cpu alone). */
     psx_netplay_rb_cpu_for_present_digest(&dig_cpu, g_np.cpu);
     netplay_core_digest_parts(&dig_cpu, &parts);
-    /* av/cd/aux every 32 ticks — VRAM + SPU-RAM CRC every frame is too heavy. */
+    /* av/cd/spu/mdec every 32 ticks — VRAM + SPU-RAM CRC every frame is heavy. */
     crumb = (tick == 0u || (tick % 32u) == 0u);
     if (crumb) {
+        uint32_t aux_crc = 0xFFFFFFFFu;
         av = netplay_av_digest();
         cd = netplay_cdrom_digest();
-        aux = netplay_aux_digest();
+        spu = netplay_spu_digest();
+        mdec = netplay_mdec_digest();
+        /* Same fold as netplay_aux_digest — avoid hashing SPU RAM twice. */
+        aux_crc = crc32_update(aux_crc, (const uint8_t *)&spu, sizeof(spu));
+        aux_crc = crc32_update(aux_crc, (const uint8_t *)&mdec, sizeof(mdec));
+        aux = aux_crc ^ 0xFFFFFFFFu;
     }
-    np_part_ring_put(tick, &parts, av, cd, aux);
+    np_part_ring_put(tick, &parts, av, cd, spu, mdec, aux);
     netplay_hc_note_local(&g_np.hc, tick, parts.core);
     (void)rnet_session_send_rb_frame_commit(g_np.session, tick, parts.core);
     (void)netplay_hc_heal_stale_gap(&g_np.hc);
@@ -981,7 +998,7 @@ static void np_emit_frame_commit(uint32_t tick)
      * (not peer agreement — that is hash_confirm resolved_through). */
     if (crumb && s_live_dig_last_tick != tick) {
         s_live_dig_last_tick = tick;
-        np_log_live_digest(tick, &parts, av, cd, aux, "local");
+        np_log_live_digest(tick, &parts, av, cd, spu, mdec, aux, "local");
     }
     np_check_core_diverge();
 }
