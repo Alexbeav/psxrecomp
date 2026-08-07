@@ -910,6 +910,85 @@ static void np_admit_maybe_log_stats(uint32_t now)
     fflush(stderr);
 }
 
+/* BattleShip-style Win↔Linux cadence triage. PSX_NETPLAY_CROSS_OS_PACING_DIAG=1 */
+static int np_cross_os_diag_enabled(void)
+{
+    static int s = -1;
+    if (s < 0) {
+        const char *e = getenv("PSX_NETPLAY_CROSS_OS_PACING_DIAG");
+        s = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+    }
+    return s;
+}
+
+static const char *np_cross_os_platform(void)
+{
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "darwin";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "other";
+#endif
+}
+
+static void np_cross_os_maybe_log(uint32_t now, uint32_t sim,
+                                  const RNetSessionStats *st)
+{
+    static uint32_t s_last_ms;
+    static uint32_t s_gap1_0;
+    static uint32_t s_gap2_0;
+    static uint32_t s_gap3_0;
+    static uint32_t s_grace_0;
+    static uint32_t s_tip_stale_0;
+    static uint32_t s_runway_0;
+    static uint32_t s_cushion_wait_0;
+    static uint32_t s_debt_added_0;
+    const char *stall;
+    uint32_t tip_age;
+
+    if (!np_cross_os_diag_enabled() || !st)
+        return;
+    if (s_last_ms != 0u && (uint32_t)(now - s_last_ms) < 1000u)
+        return;
+    s_last_ms = now ? now : 1u;
+    stall = np_sched_admit_stall_tag();
+    tip_age = np_tip_age_ms();
+    fprintf(stderr,
+            "psxrecomp: cross_os_pacing platform=%s slot=%d sim=%u "
+            "hr=%u remote_lead=%d D=%d P=%d tip_ema=%u tip_age=%u "
+            "debt_ms=%u d_debt_added=%u "
+            "d_invent_gap1=%u gap2=%u gap3+=%u grace=%u tip_stale=%u "
+            "runway=%u cushion_wait=%u stall=%s freeze=%d cushion=%d\n",
+            np_cross_os_platform(), sched_local_slot(), (unsigned)sim,
+            (unsigned)st->highest_remote_wire, st->remote_lead, sched_delay(),
+            g_sb.input_prediction ? *g_sb.input_prediction : 0,
+            (unsigned)g_tip_arrival_ema_ms,
+            tip_age == 0xffffffffu ? 0u : (unsigned)tip_age,
+            (unsigned)g_ts_debt_ms,
+            (unsigned)(g_ts_debt_added_ms - s_debt_added_0),
+            (unsigned)(g_admit_invent_gap1 - s_gap1_0),
+            (unsigned)(g_admit_invent_gap2 - s_gap2_0),
+            (unsigned)(g_admit_invent_gap3p - s_gap3_0),
+            (unsigned)(g_admit_gap1_grace - s_grace_0),
+            (unsigned)(g_admit_invent_tip_stale - s_tip_stale_0),
+            (unsigned)(g_admit_invent_runway_empty - s_runway_0),
+            (unsigned)(g_admit_cushion_wait - s_cushion_wait_0),
+            (stall && stall[0]) ? stall : "-", g_pcap_frozen,
+            g_cushion_rebuild);
+    fflush(stderr);
+    s_gap1_0 = g_admit_invent_gap1;
+    s_gap2_0 = g_admit_invent_gap2;
+    s_gap3_0 = g_admit_invent_gap3p;
+    s_grace_0 = g_admit_gap1_grace;
+    s_tip_stale_0 = g_admit_invent_tip_stale;
+    s_runway_0 = g_admit_invent_runway_empty;
+    s_cushion_wait_0 = g_admit_cushion_wait;
+    s_debt_added_0 = g_ts_debt_added_ms;
+}
+
 /* ------------------------------------------------------------------ */
 /* §56 equilibrium scorecard (per-window deltas, ~30 s)                 */
 /*                                                                      */
@@ -1446,6 +1525,7 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
      * source). Never engages during episodes/lockstep — only live admits. */
     if (!psx_netplay_rb_active() && np_timesync_throttle(wire)) {
         np_sched_set_admit_stall("timesync_pace");
+        np_cross_os_maybe_log(sched_mono_ms(), sim, st);
         return 1;
     }
 
@@ -1454,6 +1534,7 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
     np_admit_log_runway(now, sim, wire, st->highest_remote_wire,
                         st->remote_lead);
     np_phase_ctrl_maybe_log(now, sim, st->remote_lead);
+    np_cross_os_maybe_log(now, sim, st);
     np_auto_delay_tick(now);
     np_scorecard_sample(now, sim, wire, st);
 
@@ -1778,9 +1859,20 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
 
 void np_sched_post_admit(int any_invent)
 {
+    RNetSession *s;
+    RNetSessionStats st;
+    uint32_t now;
+
     np_sched_clear_admit_stall();
     /* Remote caught up or we invented inside P — leave freeze if armed. */
     np_pcap_freeze_exit();
+    now = sched_mono_ms();
     if (any_invent)
-        np_admit_maybe_log_stats(sched_mono_ms());
+        np_admit_maybe_log_stats(now);
+    s = sched_session();
+    if (s) {
+        memset(&st, 0, sizeof(st));
+        rnet_session_get_stats(s, &st);
+        np_cross_os_maybe_log(now, st.sim_tick, &st);
+    }
 }

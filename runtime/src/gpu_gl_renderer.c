@@ -68,6 +68,7 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
 #include "host_osd.h"
+#include "host_time.h"
 #include "latency_ring.h"
 
 #include "psx_sdl.h"
@@ -3808,7 +3809,7 @@ static int interp_thread_main(void *opaque) {
                 uint64_t remain = deadline - now;
                 uint32_t ms = (uint32_t)((remain * 1000u) /
                                          (freq ? freq : 1u));
-                if (ms > 1) SDL_Delay(ms - 1);
+                if (ms > 1) psx_host_sleep_ms(ms - 1);
             }
             while (SDL_GetPerformanceCounter() < deadline) {}
             now = SDL_GetPerformanceCounter();
@@ -3832,7 +3833,7 @@ static int interp_thread_main(void *opaque) {
             diag_swaps = s_interp_swaps;
         }
         SDL_UnlockMutex(s_interp_mutex);
-        if (uncapped && !presented) SDL_Delay(1);
+        if (uncapped && !presented) psx_host_sleep_ms(1);
     }
     p_glBindVertexArray(0);
     SDL_GL_MakeCurrent(s_win, NULL);
