@@ -11,7 +11,7 @@
 
 const char *psx_lobby_default_url(void)
 {
-    return "ws://netplay.technicallycomputers.ca:8765";
+    return "ws://netplay.retcomm.net:8765";
 }
 int  psx_lobby_connect(const char *ws_url) { (void)ws_url; return -1; }
 void psx_lobby_disconnect(void) {}
@@ -960,7 +960,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
 const char *psx_lobby_default_url(void)
 {
     const char *e = getenv("PSX_NET_LOBBY_URL");
-    return (e && e[0]) ? e : "ws://netplay.technicallycomputers.ca:8765";
+    return (e && e[0]) ? e : "ws://netplay.retcomm.net:8765";
 }
 
 static int parse_ws_url(const char *url, char *host, size_t hcap, int *port, char *path, size_t pcap)

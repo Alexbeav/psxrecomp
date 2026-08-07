@@ -80,7 +80,7 @@ typedef struct PsxLobbyJoinInfo {
 } PsxLobbyJoinInfo;
 
 /* Default URL when PSX_NET_LOBBY_URL unset:
- * ws://netplay.technicallycomputers.ca:8765 */
+ * ws://netplay.retcomm.net:8765 */
 const char *psx_lobby_default_url(void);
 
 int  psx_lobby_connect(const char *ws_url); /* 0 ok */
