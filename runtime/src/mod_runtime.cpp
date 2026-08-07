@@ -153,6 +153,66 @@ void set_error(const std::string& error) {
     state().error = error;
 }
 
+void apply_main_write(const ModResolution::Write& write) {
+    if (write.fields.empty()) {
+        for (size_t i = 0; i < write.replacement.size(); ++i)
+            psx_write_byte((uint32_t)write.location + (uint32_t)i,
+                           write.replacement[i]);
+        dirty_ram_mark_executable_range(
+            (uint32_t)write.location & 0x1FFFFFFFu,
+            (uint32_t)write.replacement.size());
+        return;
+    }
+    for (const ModResolution::Write::Field& field : write.fields) {
+        for (size_t i = 0; i < field.replacement.size(); ++i)
+            psx_write_byte(
+                (uint32_t)write.location +
+                    (uint32_t)field.offset + (uint32_t)i,
+                field.replacement[i]);
+        dirty_ram_mark_executable_range(
+            ((uint32_t)write.location +
+             (uint32_t)field.offset) & 0x1FFFFFFFu,
+            (uint32_t)field.replacement.size());
+    }
+}
+
+bool restored_main_matches_plan(const RuntimeMods& s, uint32_t& failed_at) {
+    std::map<uint32_t, uint8_t> desired;
+    for (const ModResolution::Write& write : s.plan.writes) {
+        if (write.target != ModPatchTarget::MainExe) continue;
+        if (write.fields.empty()) {
+            for (size_t i = 0; i < write.replacement.size(); ++i)
+                desired[(uint32_t)write.location + (uint32_t)i] =
+                    write.replacement[i];
+        } else {
+            for (const ModResolution::Write::Field& field : write.fields) {
+                for (size_t i = 0; i < field.replacement.size(); ++i)
+                    desired[
+                        (uint32_t)write.location +
+                        (uint32_t)field.offset + (uint32_t)i] =
+                        field.replacement[i];
+            }
+        }
+    }
+
+    for (const ModResolution::Write& write : s.plan.writes) {
+        if (write.target != ModPatchTarget::MainExe) continue;
+        for (size_t i = 0; i < write.expected.size(); ++i) {
+            const uint32_t address =
+                (uint32_t)write.location + (uint32_t)i;
+            const uint8_t observed = psx_read_byte(address);
+            if (observed == write.expected[i]) continue;
+            const auto replacement = desired.find(address);
+            if (replacement != desired.end() &&
+                observed == replacement->second)
+                continue;
+            failed_at = address;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool sha256_file(const std::filesystem::path& path, std::string& out,
                  std::string* error) {
     out.clear();
@@ -1066,31 +1126,41 @@ extern "C" void mod_runtime_on_dispatch(uint32_t target) {
     }
     for (const ModResolution::Write& write : s.plan.writes) {
         if (write.target != ModPatchTarget::MainExe) continue;
-        if (write.fields.empty()) {
-            for (size_t i = 0; i < write.replacement.size(); ++i)
-                psx_write_byte((uint32_t)write.location + (uint32_t)i,
-                               write.replacement[i]);
-            dirty_ram_mark_executable_range(
-                (uint32_t)write.location & 0x1FFFFFFFu,
-                (uint32_t)write.replacement.size());
-        } else {
-            for (const ModResolution::Write::Field& field : write.fields) {
-                for (size_t i = 0; i < field.replacement.size(); ++i)
-                    psx_write_byte(
-                        (uint32_t)write.location +
-                            (uint32_t)field.offset + (uint32_t)i,
-                        field.replacement[i]);
-                dirty_ram_mark_executable_range(
-                    ((uint32_t)write.location +
-                     (uint32_t)field.offset) & 0x1FFFFFFFu,
-                    (uint32_t)field.replacement.size());
-            }
-        }
+        apply_main_write(write);
     }
     s.main_applied = true;
     if (!s.plan.writes.empty())
         std::fprintf(stdout, "psxrecomp: applied mod plan %s\n",
                      s.plan.fingerprint.c_str());
+}
+
+extern "C" void mod_runtime_on_savestate_loaded(void) {
+    using namespace PSXRecompV4;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok) return;
+
+    if (!s.main_applied) {
+        uint32_t failed_at = 0;
+        if (!restored_main_matches_plan(s, failed_at)) {
+            std::fprintf(stderr,
+                "psxrecomp: mod plan %s rejected after savestate restore at "
+                "0x%08X (expected-byte guard failed)\n",
+                s.plan.fingerprint.c_str(), (unsigned)failed_at);
+            return;
+        }
+    }
+
+    bool applied = false;
+    for (const ModResolution::Write& write : s.plan.writes) {
+        if (write.target != ModPatchTarget::MainExe) continue;
+        apply_main_write(write);
+        applied = true;
+    }
+    s.main_applied = true;
+    if (applied)
+        std::fprintf(stdout,
+            "psxrecomp: reapplied mod plan %s after savestate restore\n",
+            s.plan.fingerprint.c_str());
 }
 
 extern "C" void mod_runtime_enable_disc_patches(void) {

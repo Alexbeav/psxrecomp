@@ -25,6 +25,39 @@ extern "C" void psx_write_byte(uint32_t address, uint8_t value) {
     ram[address & 0x1fffffu] = value;
 }
 
+extern "C" uint16_t psx_read_half(uint32_t address) {
+    const uint32_t offset = address & 0x1fffffu;
+    return (uint16_t)(ram[offset] | ((uint16_t)ram[offset + 1] << 8));
+}
+
+extern "C" void psx_write_half(uint32_t address, uint16_t value) {
+    const uint32_t offset = address & 0x1fffffu;
+    ram[offset] = (uint8_t)value;
+    ram[offset + 1] = (uint8_t)(value >> 8);
+}
+
+extern "C" uint32_t psx_read_word(uint32_t address) {
+    const uint32_t offset = address & 0x1fffffu;
+    return (uint32_t)ram[offset] |
+           ((uint32_t)ram[offset + 1] << 8) |
+           ((uint32_t)ram[offset + 2] << 16) |
+           ((uint32_t)ram[offset + 3] << 24);
+}
+
+extern "C" void psx_write_word(uint32_t address, uint32_t value) {
+    const uint32_t offset = address & 0x1fffffu;
+    ram[offset] = (uint8_t)value;
+    ram[offset + 1] = (uint8_t)(value >> 8);
+    ram[offset + 2] = (uint8_t)(value >> 16);
+    ram[offset + 3] = (uint8_t)(value >> 24);
+}
+
+extern "C" uint32_t psx_mod_memory_alloc(uint32_t, uint32_t) { return 0; }
+extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) {
+    return 0;
+}
+extern "C" int psx_ws_x_margin(void) { return 0; }
+
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
 
@@ -292,6 +325,21 @@ int main() {
           "adjacent sparse fields must compose while preserving guard-only "
           "bytes");
 
+    /* A full-machine savestate replaces main RAM after the entry-point plan
+     * has already applied. Loading a stock checkpoint must not silently turn
+     * the currently enabled main-EXE features back off. */
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    ram[0x1100] = 0; ram[0x1101] = 0;
+    ram[0x1102] = 1; ram[0x1103] = 0;
+    ram[0x1200] = 2; ram[0x1201] = 0;
+    ram[0x1202] = 1; ram[0x1203] = 0x32;
+    mod_runtime_on_savestate_loaded();
+    check(ram[0x1000] == 0xa1 && ram[0x1003] == 0xa4 &&
+              ram[0x1100] == 42 && ram[0x1102] == 43 &&
+              ram[0x1200] == 1 && ram[0x1201] == 0x42 &&
+              ram[0x1202] == 0 && ram[0x1203] == 0x32,
+          "savestate restore must reapply the complete enabled main plan");
+
     std::array<uint8_t, 2352> sector{};
     sector[10] = 0xaa;
     mod_runtime_patch_disc_sector(2, 1, sector.data(), (uint32_t)sector.size());
@@ -373,6 +421,26 @@ int main() {
               ram[0x1202] == 1 && ram[0x1203] == 0x33,
           "a failed sparse guard-only byte must leave the complete main plan "
           "untouched");
+
+    /* Loading can be requested while the boot executable is still running,
+     * before the configured game entry point has dispatched. The restored
+     * checkpoint itself supplies the bytes used to validate and apply the
+     * plan in that case. */
+    check(PSXRecompV4::mod_runtime_initialize(
+              root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+          error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    ram[0x1100] = 0; ram[0x1101] = 0;
+    ram[0x1102] = 1; ram[0x1103] = 0;
+    ram[0x1200] = 2; ram[0x1201] = 0;
+    ram[0x1202] = 1; ram[0x1203] = 0x32;
+    mod_runtime_on_savestate_loaded();
+    check(ram[0x1000] == 0xa1 && ram[0x1003] == 0xa4 &&
+              ram[0x1100] == 42 && ram[0x1102] == 43 &&
+              ram[0x1200] == 1 && ram[0x1201] == 0x42 &&
+              ram[0x1202] == 0 && ram[0x1203] == 0x32,
+          "pre-entry savestate restore must validate and apply the main plan");
 
     mod_runtime_enable_disc_patches();
     std::array<uint8_t, 2352> bad_sparse_disc{};

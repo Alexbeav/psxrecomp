@@ -409,6 +409,7 @@ static void present_session_reset(void) {
  * longjmp). Clears present latches and forces the next vblank to show the
  * restored VRAM — including a blank if display was disabled in the snapshot. */
 extern "C" void psx_frontend_on_savestate_loaded(void) {
+    mod_runtime_on_savestate_loaded();
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
     smooth_60_reset();
