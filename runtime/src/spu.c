@@ -20,8 +20,11 @@
 #include "spu_gauss.h"
 #include "spu_shadow.h"
 #include "audio_trace.h"
+#include "crc32.h"
 #include "psx_cycles.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SPU_RAM_SIZE       (512 * 1024)
@@ -1672,3 +1675,41 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
 }
 uint8_t*  spu_get_ram_ptr(void){ return spu_ram; }
 uint32_t  spu_get_ram_bytes(void){ return (uint32_t)sizeof(spu_ram); }
+
+void spu_snapshot_part_digests(SpuSnapPartDigests *out)
+{
+    static uint8_t *buf;
+    static uint32_t cap;
+    uint32_t n;
+    uint32_t regs_n;
+    uint32_t voices_n;
+    uint32_t crc;
+
+    if (!out)
+        return;
+    memset(out, 0, sizeof(*out));
+    n = spu_snapshot_bytes();
+    if (!n)
+        return;
+    if (n > cap) {
+        uint8_t *nb = (uint8_t *)realloc(buf, n);
+        if (!nb)
+            return;
+        buf = nb;
+        cap = n;
+    }
+    spu_snapshot_write(buf);
+    regs_n = (uint32_t)(SPU_REG_COUNT * 2u);
+    voices_n = (uint32_t)(SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES);
+    if (regs_n + voices_n + SPU_SNAPSHOT_TAIL_BYTES != n)
+        return;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf, regs_n);
+    out->regs = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + regs_n, voices_n);
+    out->voices = crc ^ 0xFFFFFFFFu;
+    crc = 0xFFFFFFFFu;
+    crc = crc32_update(crc, buf + regs_n + voices_n, SPU_SNAPSHOT_TAIL_BYTES);
+    out->tail = crc ^ 0xFFFFFFFFu;
+}

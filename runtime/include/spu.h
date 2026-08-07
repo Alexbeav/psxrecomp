@@ -164,6 +164,21 @@ typedef struct {
 const void* spu_shadow_tap_buffer(void);
 int         spu_shadow_tap_count(void);
 
+uint32_t spu_snapshot_bytes(void);
+void     spu_snapshot_write(uint8_t *p);
+int      spu_snapshot_read(const uint8_t *p, uint32_t len);
+uint8_t *spu_get_ram_ptr(void);
+uint32_t spu_get_ram_bytes(void);
+
+/* Split digests of the snap wire (regs / voices / DSP tail) for Win↔Linux
+ * aux bisect. PSX_RB_SPU_PARTS=1 prints these on rb live dig. */
+typedef struct SpuSnapPartDigests {
+    uint32_t regs;
+    uint32_t voices;
+    uint32_t tail;
+} SpuSnapPartDigests;
+void spu_snapshot_part_digests(SpuSnapPartDigests *out);
+
 #ifdef __cplusplus
 }
 #endif

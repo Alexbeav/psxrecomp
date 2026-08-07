@@ -2321,16 +2321,20 @@ static const int sdl_audio_fade_samples = 44100 * 40 / 1000;  /* 40 ms */
 static int       sdl_audio_fadein_left  = 0;
 
 static void sdl_audio_pump(bool discard_output = false) {
-    if (!sdl_audio_device) return;
-
+    /* Guest-cycle SPU advance must not depend on host audio device/backpressure.
+     * Win↔Linux rollback forked on aux/spu when one peer skipped spu_render
+     * (queue full / !drc / no device) while the other kept advancing. */
     const uint32_t bytes_per_frame = sizeof(int16_t) * 2u;
     const bool legacy = audio_legacy_mode();
+    const int netplay = psx_netplay_active();
     static int had_audio = 0;
     uint32_t queued = 0;   /* RENDER event b: bytes (legacy) / fill ms (bridge) */
+    int host_queue_ok = 0;
+
     if (discard_output) {
         /* Host-only sink: skip all queue/bridge interaction, but continue to
          * the guest-cycle sample budget and spu_render below. */
-    } else if (legacy) {
+    } else if (sdl_audio_device && legacy) {
         /* Historical push model + baseline measurement: a drained (==0) queue
          * means the device was silence-filling since the last pump = a gap.
          * Only meaningful after the first audio has been queued. */
@@ -2342,12 +2346,11 @@ static void sdl_audio_pump(bool discard_output = false) {
         }
         if (queued > max_queue_bytes) {
             audio_trace_event(AUDIO_EV_PUMP_SKIP, queued, 0);
-            return;
+            /* Still advance SPU below; only skip host enqueue. */
+        } else {
+            host_queue_ok = 1;
         }
-    } else {
-        /* No host-queue backpressure check: the bridge's ring + DRC hold the
-         * fill near target, so we always render this frame and push it. */
-        if (!s_drc_ready) return;
+    } else if (sdl_audio_device && !legacy && s_drc_ready) {
         /* Surface bridge underruns (counted on the SDL audio thread) into the
          * event ring from this thread — the event ring is single-writer.
          * Across a turbo mute the ring intentionally runs dry (the pump stops
@@ -2366,6 +2369,7 @@ static void sdl_audio_pump(bool discard_output = false) {
             prev_underruns = st.underrun_events;
         }
         queued = (uint32_t)st.last_fill_ms;
+        host_queue_ok = 1;
     }
 
     /* Faithful sample budget: the SPU is clocked by the GUEST, not by host
@@ -2383,7 +2387,7 @@ static void sdl_audio_pump(bool discard_output = false) {
         last_cycles = now_cycles;
         cycle_carry = 0;
         g_audio_cycle_resync = 0;
-        if (legacy)
+        if (legacy && sdl_audio_device)
             psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
@@ -2395,22 +2399,38 @@ static void sdl_audio_pump(bool discard_output = false) {
     int frames = (int)(delta / 768u);
     cycle_carry = delta % 768u;
     if (frames <= 0) return;
-    if (frames > 2048) {
-        /* A burst beyond one buffer (e.g. right after an unmute or a long
-         * stall): render one full buffer and DROP the remainder of the debt —
-         * same semantic as the mute model (voice positions freeze across the
-         * gap) rather than time-compressing a backlog into garble. */
+    if (frames > 2048 && !netplay) {
+        /* Offline: a burst beyond one buffer (e.g. right after an unmute or a
+         * long stall) renders one full buffer and DROPs the remainder of the
+         * debt — mute-model freeze rather than time-compressing a backlog.
+         * Netplay never drops: both peers must consume the same guest debt. */
         frames = 2048;
         cycle_carry = 0;
     }
 
     audio_trace_event(AUDIO_EV_RENDER, (uint32_t)frames, queued);
-    spu_render(sdl_audio_buf, frames);
-    if (discard_output) {
-        g_turbo_audio_sink_frames += (uint64_t)frames;
-        audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)frames, 0);
-        return;
+
+    /* Catch up in ≤2048-frame chunks (sdl_audio_buf capacity). Only the last
+     * chunk may be handed to the host queue — earlier chunks advance state
+     * only (avoids dumping seconds of catch-up into the device ring). */
+    int remaining = frames;
+    int host_frames = 0;
+    while (remaining > 0) {
+        const int chunk = remaining > 2048 ? 2048 : remaining;
+        spu_render(sdl_audio_buf, chunk);
+        remaining -= chunk;
+        host_frames = chunk;
+        if (discard_output) {
+            g_turbo_audio_sink_frames += (uint64_t)chunk;
+            audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)chunk, 0);
+        }
     }
+    if (discard_output)
+        return;
+    if (!host_queue_ok || !sdl_audio_device)
+        return;
+
+    frames = host_frames;
     if (sdl_audio_fadein_left > 0) {
         const float g0 = 1.0f - (float)sdl_audio_fadein_left
                                 / (float)sdl_audio_fade_samples;
@@ -2818,7 +2838,7 @@ static AudioGate s_audio_gate = AUDIO_GATE_NORMAL;
 
 /* Invoked from the guest-derived VBlank edge (interrupts.c). */
 static void sdl_audio_pump_midframe(void) {
-    if (!sdl_audio_device) return;
+    /* Device optional: SPU still advances from guest cycles (netplay-safe). */
     switch (s_audio_gate) {
     case AUDIO_GATE_MUTED:
         /* Deliberately nothing. This preserves the existing, user-validated
@@ -2839,7 +2859,6 @@ static void sdl_audio_pump_midframe(void) {
 }
 
 static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
-    if (!sdl_audio_device) return;
     {   /* Tag audio events with the vblank frame counter. */
         extern uint64_t s_frame_count;
         audio_trace_note_frame((uint32_t)s_frame_count);
@@ -2863,10 +2882,10 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             spu_render(sdl_audio_buf, tail);
             sdl_audio_gain_ramp(sdl_audio_buf, tail, g0, 0.0f);
             audio_trace_event(AUDIO_EV_MUTE, (uint32_t)tail, 0);
-            if (audio_legacy_mode()) {
+            if (sdl_audio_device && audio_legacy_mode()) {
                 audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, tail);
                 psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf, (uint32_t)tail * sizeof(int16_t) * 2u);
-            } else if (s_drc_ready) {
+            } else if (sdl_audio_device && s_drc_ready) {
                 psx_sdl_audio_lock(sdl_audio_device);
                 rab_push(&s_drc, sdl_audio_buf, tail);
                 psx_sdl_audio_unlock(sdl_audio_device);
@@ -10551,14 +10570,12 @@ session_reboot:
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
             (void)psx_sdl_audio_resume(sdl_audio_device);
-            /* Also pump from the guest-derived VBlank edge so SPU time keeps
-             * advancing across guest busy-waits that never present a frame
-             * (guest-cycle-budgeted; same thread — see interrupts.c). Routed
-             * through the gated wrapper so it honours the turbo mute/sink
-             * state rather than bypassing it. */
-            psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
         }
     }
+    /* Always register: SPU advance is guest-cycle budgeted and must not
+     * depend on a successful host open (Win↔Linux aux/spu fork). Routed
+     * through the gated wrapper so turbo mute/sink still apply. */
+    psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
 #endif
 
     Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
