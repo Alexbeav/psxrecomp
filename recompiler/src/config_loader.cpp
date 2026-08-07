@@ -6,9 +6,11 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "bios_rom_alias.h"
 #include "fmt/format.h"
@@ -695,6 +697,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] multitap_port must be 1 or 2, got {}", n));
             rt.multitap_port = static_cast<int>(n);
             rt.has_multitap_port = true;
+        }
+        if (ct.contains("multitap_analog")) {
+            rt.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            rt.has_multitap_analog = true;
         }
         // Prefer string key; accept legacy bool alias.
         if (ct.contains("legacy_pad_config")) {
@@ -2314,6 +2320,14 @@ UserSettings load_user_settings(const fs::path& path) {
                 }
             });
         }
+        if (ct.contains("multitap")) try_get([&]{
+            s.multitap_enabled = toml::find<bool>(ct, "multitap");
+            s.has_multitap_enabled = true;
+        });
+        if (ct.contains("multitap_analog")) try_get([&]{
+            s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            s.has_multitap_analog = true;
+        });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
             if (n >= 0 && n <= 32767) {
@@ -2429,7 +2443,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
 
     {
-        bool any_ctrl = s.has_deadzone;
+        bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
+                        s.has_multitap_analog;
         for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
             if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
                 any_ctrl = true;
@@ -2452,6 +2467,12 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
                 if (s.has_p_deadzone[i])
                     f << kDzKeys[i] << " = " << s.p_deadzone[i] << "\n";
             }
+            if (s.has_multitap_enabled)
+                f << "multitap  = " << (s.multitap_enabled ? "true" : "false")
+                  << "\n";
+            if (s.has_multitap_analog)
+                f << "multitap_analog = "
+                  << (s.multitap_analog ? "true" : "false") << "\n";
             /* Keep a global deadzone= for older readers (mirrors P1). */
             if (s.has_deadzone || s.has_p_deadzone[0])
                 f << "deadzone  = "
@@ -2475,6 +2496,104 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
+    return f.good();
+}
+
+bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
+                                      const char* key, bool value)
+{
+    if (!key || !key[0]) return false;
+    std::string text;
+    {
+        std::ifstream in(path);
+        if (in) {
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            text = ss.str();
+        }
+    }
+    const std::string val = value ? "true" : "false";
+    const std::string assign = std::string(key) + " = " + val;
+
+    auto is_section = [](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        return i < line.size() && line[i] == '[';
+    };
+    auto section_name = [](const std::string& line) -> std::string {
+        size_t a = line.find('[');
+        size_t b = line.find(']');
+        if (a == std::string::npos || b == std::string::npos || b <= a + 1)
+            return {};
+        return line.substr(a + 1, b - a - 1);
+    };
+    auto key_prefix = [&](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        if (i < line.size() && line[i] == '#') return false;
+        const std::string rest = line.substr(i);
+        return rest.rfind(std::string(key) + " =", 0) == 0 ||
+               rest.rfind(std::string(key) + "=", 0) == 0;
+    };
+
+    std::istringstream ls(text);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(ls, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+    }
+
+    int ctrl_start = -1, ctrl_end = -1;
+    for (int i = 0; i < (int)lines.size(); ++i) {
+        if (is_section(lines[i]) && section_name(lines[i]) == "controller") {
+            ctrl_start = i;
+            ctrl_end = (int)lines.size();
+            for (int j = i + 1; j < (int)lines.size(); ++j) {
+                if (is_section(lines[j])) {
+                    ctrl_end = j;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    if (ctrl_start < 0) {
+        if (!text.empty() && text.back() != '\n') text.push_back('\n');
+        text += "\n[controller]\n";
+        text += assign;
+        text += "\n";
+    } else {
+        int replace_at = -1;
+        for (int i = ctrl_start + 1; i < ctrl_end; ++i) {
+            if (key_prefix(lines[i])) {
+                replace_at = i;
+                break;
+            }
+        }
+        if (replace_at >= 0) {
+            lines[replace_at] = assign;
+        } else {
+            int insert_at = ctrl_end;
+            while (insert_at > ctrl_start + 1 &&
+                   lines[insert_at - 1].find_first_not_of(" \t") ==
+                       std::string::npos)
+                --insert_at;
+            lines.insert(lines.begin() + insert_at, assign);
+        }
+        std::ostringstream out;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            out << lines[i];
+            if (i + 1 < lines.size() || (!text.empty() && text.back() == '\n'))
+                out << '\n';
+        }
+        text = out.str();
+    }
+
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f << text;
     return f.good();
 }
 

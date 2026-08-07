@@ -511,6 +511,12 @@ struct RuntimeConfig {
     bool                  has_multitap_port = false;
     int                   multitap_port     = 1;
 
+    // multitap_analog: opt-in DualShock-on-tap hack (default false). When true,
+    // multitap bulk seats may report 0x73 + stick bytes; when false (faithful),
+    // tap seats stay plain digital. Overridable by settings.toml / match_caps.
+    bool                  has_multitap_analog = false;
+    bool                  multitap_analog     = false;
+
     // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
     // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
     // 0xF3 only while in config) — required by MMX6 and the correct default for every
@@ -1115,6 +1121,13 @@ struct UserSettings {
     // Legacy global deadzone (settings.toml `deadzone=`). Applied to slots
     // that do not have an explicit pN_deadzone. Default 10%.
     bool has_deadzone  = false; int  deadzone  = 3277;
+    // SCPH-1070 multitap for offline seats beyond Player 4 (settings.toml
+    // [controller] multitap). Default ON when unset. Netplay lobbies with
+    // more than 2 seats always arm multitap in the runtime regardless.
+    bool has_multitap_enabled = false; bool multitap_enabled = true;
+    // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
+    // Default off when unset; game.toml [controller] multitap_analog seeds it.
+    bool has_multitap_analog = false; bool multitap_analog = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
@@ -1166,6 +1179,12 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
+
+// Surgical upsert of `key = true|false` under [controller] in game.toml.
+// Preserves comments and unrelated keys. Creates [controller] if missing.
+// Used to persist launcher multitap_analog into the title game config.
+bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
+                                      const char* key, bool value);
 
 // Locate the project root by walking upward from `config_path` until a
 // directory containing `.gitignore`, `.git`, or `CMakeLists.txt` is found.

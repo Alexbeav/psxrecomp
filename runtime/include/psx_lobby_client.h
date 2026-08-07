@@ -62,6 +62,8 @@ typedef struct PsxLobbyMatchCaps {
     int  force_input_relay; /* 0/1 — server input relay (vs P2P) */
     int  force_turn;       /* 0/1 — ICE relay-only (Force TURN for UDP) */
     int  rollback;         /* 0/1 — invent/rollback netplay (default on) */
+    /* DualShock-on-multitap-tap hack (0/1). Host-authoritative for the match. */
+    int  multitap_analog;
     char language[PSX_LOBBY_LANG_LEN];
 } PsxLobbyMatchCaps;
 

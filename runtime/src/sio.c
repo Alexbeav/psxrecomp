@@ -69,6 +69,8 @@ static uint8_t pad_connected = 0;
 static int sio_multitap_enabled = 0;
 /* Physical SIO port hosting the tap: 0 = console Port 1, 1 = Port 2. */
 static int sio_multitap_port = 0;
+/* Opt-in DualShock on tap seats (default off — faithful digital taps). */
+static int sio_multitap_analog_hack = 0;
 
 /* Pad communication state machine */
 typedef enum {
@@ -794,18 +796,31 @@ int sio_get_multitap_port(void) {
 #endif
 }
 
+void sio_set_multitap_analog(int enabled) {
+    sio_multitap_analog_hack = enabled ? 1 : 0;
+}
+
+int sio_get_multitap_analog(void) {
+    return sio_multitap_analog_hack;
+}
+
 int sio_pad_on_multitap(int logical_slot) {
 #if PSX_MAX_PLAYERS >= 5
     if (!sio_multitap_active()) return 0;
     if (logical_slot < 0 || logical_slot >= PSX_MAX_PLAYERS) return 0;
-    /* Dual tap: every seat is a tap pad (digital). Single tap: opposite-port
-     * lone pad may stay DualShock; every tap slot is digital. */
+    /* Dual tap: every seat is a tap pad. Single tap: opposite-port lone pad
+     * may stay DualShock; every other slot is on the tap. */
     if (sio_dual_multitap()) return 1;
     return (logical_slot == mtap_standalone_logical()) ? 0 : 1;
 #else
     (void)logical_slot;
     return 0;
 #endif
+}
+
+/* Tap seat that must stay digital unless the analog hack is armed. */
+static int sio_tap_force_digital(int logical_slot) {
+    return sio_pad_on_multitap(logical_slot) && !sio_multitap_analog_hack;
 }
 
 void sio_connect_pad(int slot) {
@@ -821,7 +836,7 @@ void sio_set_pad_connected(int slot, int connected) {
 
 void sio_set_pad_config_capable(int slot, int capable) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-    if (sio_pad_on_multitap(slot)) capable = 0;
+    if (sio_tap_force_digital(slot)) capable = 0;
     pad_supports_config[slot] = capable ? 1 : 0;
     /* A plain digital pad can never be in config mode; clear any stale latch so
      * the next poll reports the digital id (0x41), not the config id (0xF3). */
@@ -844,7 +859,7 @@ void sio_set_pad_state_slot(int slot, uint16_t buttons) {
 void sio_set_pad_analog(int slot, int enabled,
                         uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-    if (sio_pad_on_multitap(slot)) {
+    if (sio_tap_force_digital(slot)) {
         enabled = 0;
         lx = ly = rx = ry = 0x80;
     }
@@ -866,7 +881,7 @@ void sio_set_pad_sticks(int slot, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry
  * can never split a poll or a config handshake. A no-op if already that type. */
 void sio_request_pad_type(int slot, int analog) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-    if (sio_pad_on_multitap(slot)) analog = 0;
+    if (sio_tap_force_digital(slot)) analog = 0;
     int want = analog ? 1 : 0;
     pad_type_req[slot] = (pad_analog[slot] == want) ? -1 : (int8_t)want;
 }

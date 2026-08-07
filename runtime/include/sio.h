@@ -84,9 +84,15 @@ void sio_set_legacy_cfg(int enabled);
 int  sio_get_legacy_cfg(void);
 /* 1 when multitap is armed and `logical_slot` is a tap pad (not the lone
  * pad on the opposite console port). SCPH-1070 taps are treated as plain
- * digital controllers (0x41) — DualShock/analog on a tap is not reliable
- * across titles, so host input and SIO type requests are forced digital. */
+ * digital controllers (0x41) by default — DualShock/analog on a tap is not
+ * reliable across titles. Opt in with sio_set_multitap_analog(1) (hack). */
 int  sio_pad_on_multitap(int logical_slot);
+/* Opt-in DualShock-on-tap hack. Off by default. When on, tap seats may
+ * report 0x73 + stick bytes in multitap bulk status (and host/netplay
+ * sampling stops forcing digital). game.toml [controller] multitap_analog /
+ * settings.toml / lobby match_caps may enable this. */
+void sio_set_multitap_analog(int enabled);
+int  sio_get_multitap_analog(void);
 
 /* Update pad button state. Buttons use PS1 convention: 0=pressed, 1=released.
    Bit layout: SELECT, L3, R3, START, UP, RIGHT, DOWN, LEFT,

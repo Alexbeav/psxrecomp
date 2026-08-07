@@ -164,8 +164,10 @@ static void force_session_pads_connected(int slot_count)
         sio_set_multitap(0);
     for (i = 0; i < slot_count; ++i) {
         sio_connect_pad(i);
-        /* Multitap taps are plain digital (sio clamps); lone port pad may be DS. */
-        sio_set_pad_config_capable(i, sio_pad_on_multitap(i) ? 0 : 1);
+        /* Tap seats are digital unless multitap_analog hack is armed. */
+        const int force_dig =
+            sio_pad_on_multitap(i) && !sio_get_multitap_analog();
+        sio_set_pad_config_capable(i, force_dig ? 0 : 1);
     }
 }
 
@@ -2099,14 +2101,15 @@ static void apply_pad_slot(int slot, const PsxNetPad *pad)
         g_sio_pad_prev[slot] = pad->buttons;
         g_sio_pad_have[slot] = 1u;
     }
+    const int force_dig = on_tap && !sio_get_multitap_analog();
     sio_set_pad_connected(slot, 1);
-    sio_set_pad_config_capable(slot, on_tap ? 0 : 1);
+    sio_set_pad_config_capable(slot, force_dig ? 0 : 1);
     sio_set_pad_state_slot(slot, pad->buttons);
-    if (on_tap)
+    if (force_dig)
         sio_set_pad_sticks(slot, 0x80, 0x80, 0x80, 0x80);
     else
         sio_set_pad_sticks(slot, pad->lx, pad->ly, pad->rx, pad->ry);
-    sio_request_pad_type(slot, (!on_tap && pad->analog) ? 1 : 0);
+    sio_request_pad_type(slot, (!force_dig && pad->analog) ? 1 : 0);
     if (psx_start_consumer_enabled()) {
         uint32_t sim = g_np.session ? rnet_session_sim_tick(g_np.session) : 0u;
         psx_start_consumer_note(slot, sim, pad->buttons);

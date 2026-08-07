@@ -1276,6 +1276,7 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     out->force_turn = json_get_bool(obj, "force_turn", 0);
     /* Absent field → delay-sync (older hosts). New hosts always publish explicit. */
     out->rollback = json_get_bool(obj, "rollback", 0);
+    out->multitap_analog = json_get_bool(obj, "multitap_analog", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
     out->valid = 1;
 }
@@ -1306,7 +1307,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                     "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
                     "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
                     "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
-                    "\"language\":\"%s\"}",
+                    "\"multitap_analog\":%s,\"language\":\"%s\"}",
                     caps->aspect_num, caps->aspect_den,
                     caps->turbo_loads ? "true" : "false",
                     caps->bios_hle ? "true" : "false",
@@ -1317,6 +1318,7 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
                     caps->force_input_relay ? "true" : "false",
                     caps->force_turn ? "true" : "false",
                     caps->rollback ? "true" : "false",
+                    caps->multitap_analog ? "true" : "false",
                     lang);
 }
 

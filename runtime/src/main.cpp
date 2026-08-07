@@ -329,6 +329,17 @@ struct PlayerInput {
 static PlayerInput g_players[PSX_MAX_PLAYERS];
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
+/* Offline seat ceiling from game.toml players, optionally capped at 4 when
+ * the launcher Multitap toggle is off (seats 5+). Netplay ignores this and
+ * arms multitap whenever session slot_count > 2. */
+static void apply_offline_pad_count(int game_players, bool multitap_enabled)
+{
+    int n = game_players > 0 ? game_players : 1;
+    if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
+    if (game_players > 4 && !multitap_enabled && n > 4)
+        n = 4;
+    g_offline_pad_count = n;
+}
 /* ARGB8888 staging buffer. Sized for the active internal resolution:
  * 640*scale x 512*scale. Allocated once the supersampling scale is known
  * (sized for the native 640x512 when supersampling is off). */
@@ -3416,10 +3427,10 @@ static int effective_player_mode(const PlayerInput& p) {
     return p.mode;
 }
 
-/* Pad mode for the SIO seat this sample will drive. Multitap taps are always
- * plain digital (0x41) — DualShock on a SCPH-1070 tap is not reliable. */
+/* Pad mode for the SIO seat this sample will drive. Multitap taps stay digital
+ * unless the DualShock-on-tap hack (sio_get_multitap_analog) is armed. */
 static int effective_player_mode_for_sio(const PlayerInput& p, int sio_slot) {
-    if (sio_pad_on_multitap(sio_slot))
+    if (sio_pad_on_multitap(sio_slot) && !sio_get_multitap_analog())
         return (int)PSXRecompV4::PAD_MODE_DIGITAL;
     return effective_player_mode(p);
 }
@@ -3869,10 +3880,10 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
      * handshake cadence is preserved exactly). Keyboard is always digital.
-     * Multitap taps are forced digital. A P1 with no assigned device but
-     * dev-any-input on presents as HYBRID. */
+     * Multitap taps are forced digital unless multitap_analog hack is on.
+     * A P1 with no assigned device but dev-any-input on presents as HYBRID. */
     int mode;
-    if (sio_pad_on_multitap(s))
+    if (sio_pad_on_multitap(s) && !sio_get_multitap_analog())
         mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
     else if (p.kind != 0) mode = effective_player_mode(p);
     else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
@@ -3978,7 +3989,7 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
 }
 
 static void apply_pad_slot_to_sio(int s, const PsxNetPad& pad) {
-    if (sio_pad_on_multitap(s))
+    if (sio_pad_on_multitap(s) && !sio_get_multitap_analog())
         sio_set_pad_config_capable(s, 0);
     sio_set_pad_state_slot(s, pad.buttons);
     sio_set_pad_sticks(s, pad.lx, pad.ly, pad.rx, pad.ry);
@@ -4974,16 +4985,19 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (g_offline_pad_count >= 3 && fntrace_is_game_started() &&
             !sio_get_multitap()) {
             sio_set_multitap(1);
-            /* Tap seats drop to plain digital as soon as the tap is live. */
+            /* Tap seats drop to plain digital unless multitap_analog is on. */
             for (int s = 0; s < PSX_MAX_PLAYERS; ++s) {
                 if (!sio_pad_on_multitap(s)) continue;
+                if (sio_get_multitap_analog()) continue;
                 sio_set_pad_config_capable(s, 0);
                 sio_set_pad_analog(s, 0, 0x80, 0x80, 0x80, 0x80);
             }
             std::fprintf(stdout,
                          "psxrecomp: multitap armed (console Port %d; "
-                         "tap pads forced digital)\n",
-                         sio_get_multitap_port() + 1);
+                         "tap pads %s)\n",
+                         sio_get_multitap_port() + 1,
+                         sio_get_multitap_analog() ? "analog hack on"
+                                                   : "forced digital");
         }
         /* Solo resim self-check replay republishes the recorded rows itself —
          * live sampling must not touch SIO during the replay window. */
@@ -5958,6 +5972,7 @@ namespace {
     int g_lnch_force_turn = 0;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
     int g_lnch_rollback = 1;
+    int g_lnch_multitap_analog = 0;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -7090,6 +7105,8 @@ namespace {
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
+        caps.multitap_analog = g_lnch_multitap_analog != 0;
+        if (s) caps.multitap_analog = s->multitap_analog != 0;
         return caps;
     }
 
@@ -7109,6 +7126,8 @@ namespace {
         caps.force_input_relay = g_lnch_force_input_relay != 0;
         caps.force_turn = g_lnch_force_turn != 0;
         caps.rollback = g_lnch_rollback != 0;
+        caps.multitap_analog = g_lnch_multitap_analog != 0;
+        if (settings) caps.multitap_analog = settings->multitap_analog != 0;
         (void)psx_lobby_set_match_caps(&caps);
     }
 
@@ -7171,6 +7190,19 @@ namespace {
     }
     int ae_np_rollback_set(void*, int enable) {
         g_lnch_rollback = enable ? 1 : 0;
+        ae_np_push_match_caps(nullptr);
+        return 0;
+    }
+    int ae_np_multitap_analog_get(void*) {
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
+            const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+            if (caps && caps->valid)
+                return caps->multitap_analog ? 1 : 0;
+        }
+        return g_lnch_multitap_analog;
+    }
+    int ae_np_multitap_analog_set(void*, int enable) {
+        g_lnch_multitap_analog = enable ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
     }
@@ -8473,6 +8505,8 @@ namespace {
         ae_np_rollback_set,
         ae_np_input_prediction_get,
         ae_np_input_prediction_set,
+        ae_np_multitap_analog_get,
+        ae_np_multitap_analog_set,
     };
 }  // namespace
 #endif
@@ -8637,6 +8671,8 @@ int main(int argc, char** argv) {
     std::filesystem::path memcard2_path;   /* explicit slot-2 .mcd (empty => dir/card2.mcd) */
     bool memcard1_enabled = true;
     bool memcard2_enabled = true;
+    bool multitap_enabled = true; /* [controller] multitap; seats 5+ offline */
+    bool multitap_analog = false; /* DualShock-on-tap hack; game.toml/settings */
     /* [controller] device routing (defaults: P1 keyboard/digital, P2 none). */
     /* Dev builds default Player 1 to the first connected controller ("auto").
      * PSX_DEV_INPUT=1 additionally merges every other controller and the
@@ -8717,9 +8753,7 @@ int main(int argc, char** argv) {
             game_id   = gc.id;
             game_region = gc.region;
             game_players = gc.players;
-            g_offline_pad_count = game_players > 0 ? game_players : 1;
-            if (g_offline_pad_count > PSX_MAX_PLAYERS)
-                g_offline_pad_count = PSX_MAX_PLAYERS;
+            apply_offline_pad_count(game_players, multitap_enabled);
             game_has_disc_crc = gc.has_disc_crc;
             game_disc_crc     = gc.disc_crc;
             g_netplay_disc_expect.require_cue = gc.netplay_require_cue;
@@ -8919,6 +8953,17 @@ int main(int argc, char** argv) {
                              "psxrecomp: multitap on console Port %d\n",
                              gc.runtime.multitap_port);
             }
+            if (gc.runtime.has_multitap_analog) {
+                multitap_analog = gc.runtime.multitap_analog;
+                sio_set_multitap_analog(multitap_analog ? 1 : 0);
+#if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
+                g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+#endif
+                if (multitap_analog)
+                    std::fprintf(stdout,
+                                 "psxrecomp: multitap_analog hack ON "
+                                 "(DualShock on tap seats)\n");
+            }
             /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
              * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
              * libpad manufacture a 1-frame "pad unplugged". sio_init() does not
@@ -9082,6 +9127,14 @@ int main(int argc, char** argv) {
         if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
         if (us.has_memcard1_enabled) memcard1_enabled = us.memcard1_enabled;
         if (us.has_memcard2_enabled) memcard2_enabled = us.memcard2_enabled;
+        if (us.has_multitap_enabled) multitap_enabled = us.multitap_enabled;
+        if (us.has_multitap_analog) {
+            multitap_analog = us.multitap_analog;
+            sio_set_multitap_analog(multitap_analog ? 1 : 0);
+#if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
+            g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+#endif
+        }
         if (us.has_language) resolved_language = us.language;
         {
             const int n = std::min(PSX_MAX_PLAYERS,
@@ -9093,6 +9146,7 @@ int main(int argc, char** argv) {
             }
             if (us.has_deadzone) resolved_deadzone = us.deadzone;
         }
+        apply_offline_pad_count(game_players, multitap_enabled);
         if (us.has_low_latency_input) g_low_latency_input = us.low_latency_input ? 1 : 0;
         if (us.has_vsync)             g_video_vsync       = us.vsync;
         if (us.has_frame_interpolation)
@@ -9489,6 +9543,8 @@ int main(int argc, char** argv) {
             seed.memcard_dir = memcard_dir;          seed.has_memcard_dir = true;
             seed.memcard1_enabled = memcard1_enabled; seed.has_memcard1_enabled = true;
             seed.memcard2_enabled = memcard2_enabled; seed.has_memcard2_enabled = true;
+            seed.multitap_enabled = multitap_enabled; seed.has_multitap_enabled = true;
+            seed.multitap_analog = multitap_analog; seed.has_multitap_analog = true;
             if (!memcard1_path.empty()) { seed.memcard1_path = memcard1_path; seed.has_memcard1_path = true; }
             if (!memcard2_path.empty()) { seed.memcard2_path = memcard2_path; seed.has_memcard2_path = true; }
             seed.language = resolved_language; seed.has_language = true;
@@ -9613,6 +9669,13 @@ int main(int argc, char** argv) {
             }
             ls.memcard_enabled[0] = seed.memcard1_enabled ? 1 : 0;
             ls.memcard_enabled[1] = seed.memcard2_enabled ? 1 : 0;
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
+            ls.multitap_enabled = seed.multitap_enabled ? 1 : 0;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
+            ls.multitap_analog = seed.multitap_analog ? 1 : 0;
+            g_lnch_multitap_analog = seed.multitap_analog ? 1 : 0;
+#endif
 
             /* Region badge: game.toml [game] region wins verbatim; otherwise derive
              * from the game_id serial prefix (SCUS/SLUS/LSP -> USA, SCES/SLES ->
@@ -9749,9 +9812,7 @@ int main(int argc, char** argv) {
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
             g_lnch_game_players = game_players;
-            g_offline_pad_count = game_players > 0 ? game_players : 1;
-            if (g_offline_pad_count > PSX_MAX_PLAYERS)
-                g_offline_pad_count = PSX_MAX_PLAYERS;
+            apply_offline_pad_count(game_players, multitap_enabled);
             psx_lobby_set_max_slots(game_players);
             gi.netplay_supported =
                 (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
@@ -9867,6 +9928,22 @@ int main(int argc, char** argv) {
                 /* Memory-card slots: enable flags + any Browse/New paths. */
                 seed.memcard1_enabled = ls.memcard_enabled[0] != 0; seed.has_memcard1_enabled = true;
                 seed.memcard2_enabled = ls.memcard_enabled[1] != 0; seed.has_memcard2_enabled = true;
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
+                seed.multitap_enabled = ls.multitap_enabled != 0;
+                seed.has_multitap_enabled = true;
+                multitap_enabled = seed.multitap_enabled;
+                apply_offline_pad_count(game_players, multitap_enabled);
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
+                seed.multitap_analog = ls.multitap_analog != 0;
+                seed.has_multitap_analog = true;
+                multitap_analog = seed.multitap_analog;
+                sio_set_multitap_analog(multitap_analog ? 1 : 0);
+                if (game_config_path && game_config_path[0]) {
+                    (void)PSXRecompV4::upsert_game_toml_controller_bool(
+                        game_config_path, "multitap_analog", multitap_analog);
+                }
+#endif
                 if (ls.memcard_path[0][0]) { seed.memcard1_path = ls.memcard_path[0]; seed.has_memcard1_path = true; }
                 if (ls.memcard_path[1][0]) { seed.memcard2_path = ls.memcard_path[1]; seed.has_memcard2_path = true; }
 
@@ -9882,6 +9959,11 @@ int main(int argc, char** argv) {
                 if (ls.netplay_launch.enabled) {
                     const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
                     if (caps && caps->valid) {
+                        /* Host-authoritative DualShock-on-tap for the match. */
+                        multitap_analog = caps->multitap_analog != 0;
+                        seed.multitap_analog = multitap_analog;
+                        seed.has_multitap_analog = true;
+                        sio_set_multitap_analog(multitap_analog ? 1 : 0);
                         seed.aspect_num = caps->aspect_num ? caps->aspect_num : seed.aspect_num;
                         seed.aspect_den = caps->aspect_den ? caps->aspect_den : seed.aspect_den;
                         seed.has_aspect_ratio = true;
@@ -11114,6 +11196,13 @@ soft_return_lobby:
         std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
                       psx_lobby_display_name());
         std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s", bios_path_str.c_str());
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
+        ls.multitap_enabled = multitap_enabled ? 1 : 0;
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
+        ls.multitap_analog = multitap_analog ? 1 : 0;
+        g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+#endif
         /* Preserve input devices across soft-return. A zeroed ls left every
          * player_src at None, so the rematch UI (and a subsequent writeback)
          * looked like netplay had wiped the pad assignment. */
@@ -11196,6 +11285,18 @@ soft_return_lobby:
                 disc_path_str = resolved_disc.string();
             }
             if (ls.netplay_launch.enabled) {
+                {
+                    const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+                    if (caps && caps->valid) {
+                        multitap_analog = caps->multitap_analog != 0;
+                        g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+                        sio_set_multitap_analog(multitap_analog ? 1 : 0);
+                    } else {
+                        multitap_analog = ls.multitap_analog != 0;
+                        g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+                        sio_set_multitap_analog(multitap_analog ? 1 : 0);
+                    }
+                }
                 net_cfg = {};
                 net_cfg.enabled = 1;
                 net_cfg.local_slot = ls.netplay_launch.local_slot;
@@ -11264,6 +11365,23 @@ soft_return_lobby:
                 }
                 us.deadzone = player_deadzone[0];
                 us.has_deadzone = true;
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
+                multitap_enabled = ls.multitap_enabled != 0;
+                us.multitap_enabled = multitap_enabled;
+                us.has_multitap_enabled = true;
+                apply_offline_pad_count(game_players, multitap_enabled);
+#endif
+#if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
+                multitap_analog = ls.multitap_analog != 0;
+                us.multitap_analog = multitap_analog;
+                us.has_multitap_analog = true;
+                g_lnch_multitap_analog = multitap_analog ? 1 : 0;
+                sio_set_multitap_analog(multitap_analog ? 1 : 0);
+                if (game_config_path && game_config_path[0]) {
+                    (void)PSXRecompV4::upsert_game_toml_controller_bool(
+                        game_config_path, "multitap_analog", multitap_analog);
+                }
+#endif
                 us.renderer = ls.renderer;
                 us.has_renderer = true;
                 us.supersampling = ls.supersampling;
