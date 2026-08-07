@@ -19,6 +19,14 @@
 extern char** environ;
 #endif
 
+/* Forward decls — used by toolchain cache helpers before their definitions. */
+static int rmtree_path(const char* path);
+static int mkdir_p(const char* path);
+#if defined(_WIN32)
+static int junction_dir(const char* link_path, const char* target_path);
+static int run_cmdline_wait(const char* cmdline, DWORD* out_code);
+#endif
+
 static const PsxrecompCodegenHostConfig* g_cfg;
 static char g_project_root[1024];
 static char g_cli_path[1100];
@@ -481,50 +489,102 @@ static int resolve_toolchain_cache_base(const char* base, char* out, size_t cap)
     return resolve_toolchain_bin_under(base, out, cap);
 }
 
-/* Same layout as psxrecomp/tools/toolchain_pack.py shared_cache_roots().
- * RetComM (`retcomm`) is preferred; legacy `psxrecomp` is a fallback. */
-static int resolve_shared_toolchain_cache(char* out, size_t cap) {
-    char bases[8][1400];
+/* Collect …/cmake-clang-v1 cache roots (same order as toolchain_pack.py).
+ * Honors RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME; searches both XDG and
+ * ~/.local/share so a pack installed by install.sh is always found. */
+static int collect_toolchain_cache_bases(char bases[][1400], int max_n) {
     int n = 0;
+    const char* cache = getenv("RETCOMM_TOOLCHAIN_CACHE");
+    if (cache && cache[0] && n < max_n) {
+        snprintf(bases[n++], 1400, "%s", cache);
+    }
+    const char* data = getenv("RETCOMM_DATA_HOME");
+    if (data && data[0] && n < max_n) {
+        if (join_path(bases[n], 1400, data, "toolchains/cmake-clang-v1"))
+            ++n;
+    }
 #if defined(_WIN32)
     const char* local = getenv("LOCALAPPDATA");
     if (local && local[0]) {
-        if (join_path(bases[n], sizeof(bases[n]), local,
-                      "retcomm/toolchains/cmake-clang-v1"))
+        if (n < max_n &&
+            join_path(bases[n], 1400, local, "retcomm/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 8 &&
-            join_path(bases[n], sizeof(bases[n]), local,
+        if (n < max_n &&
+            join_path(bases[n], 1400, local,
                       "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
         /* Store Python may have written only into LocalCache mirrors. */
-        for (int i = 0, lim = n; i < lim && n < 8; ++i) {
+        for (int i = 0, lim = n; i < lim && n < max_n; ++i) {
             char mirror[1400];
             if (store_python_localcache_mirror(bases[i], mirror,
                                               sizeof(mirror)))
-                snprintf(bases[n++], sizeof(bases[0]), "%s", mirror);
+                snprintf(bases[n++], 1400, "%s", mirror);
         }
     }
-#else
+#endif
     const char* xdg = getenv("XDG_DATA_HOME");
     const char* home = getenv("HOME");
     if (xdg && xdg[0]) {
-        if (join_path(bases[n], sizeof(bases[n]), xdg,
-                      "retcomm/toolchains/cmake-clang-v1"))
+        if (n < max_n &&
+            join_path(bases[n], 1400, xdg, "retcomm/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 8 &&
-            join_path(bases[n], sizeof(bases[n]), xdg,
+        if (n < max_n &&
+            join_path(bases[n], 1400, xdg,
                       "psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
-    } else if (home && home[0]) {
-        if (join_path(bases[n], sizeof(bases[n]), home,
+    }
+    if (home && home[0]) {
+        if (n < max_n &&
+            join_path(bases[n], 1400, home,
                       ".local/share/retcomm/toolchains/cmake-clang-v1"))
             ++n;
-        if (n < 8 &&
-            join_path(bases[n], sizeof(bases[n]), home,
+        if (n < max_n &&
+            join_path(bases[n], 1400, home,
                       ".local/share/psxrecomp/toolchains/cmake-clang-v1"))
             ++n;
     }
+    /* Dedup in-place. */
+    int w = 0;
+    for (int i = 0; i < n; ++i) {
+        int dup = 0;
+        for (int j = 0; j < w; ++j) {
+#if defined(_WIN32)
+            if (_stricmp(bases[i], bases[j]) == 0) {
+#else
+            if (strcmp(bases[i], bases[j]) == 0) {
 #endif
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            if (w != i)
+                snprintf(bases[w], 1400, "%s", bases[i]);
+            ++w;
+        }
+    }
+    return w;
+}
+
+/* Preferred install root for new downloads (first retcomm cache base). */
+static int preferred_toolchain_cache_root(char* out, size_t cap) {
+    char bases[12][1400];
+    int n = collect_toolchain_cache_bases(bases, 12);
+    for (int i = 0; i < n; ++i) {
+        if (strstr(bases[i], "retcomm") != NULL) {
+            snprintf(out, cap, "%s", bases[i]);
+            return 1;
+        }
+    }
+    if (n < 1)
+        return 0;
+    snprintf(out, cap, "%s", bases[0]);
+    return 1;
+}
+
+static int resolve_shared_toolchain_cache(char* out, size_t cap) {
+    char bases[12][1400];
+    int n = collect_toolchain_cache_bases(bases, 12);
     for (int i = 0; i < n; ++i) {
         if (resolve_toolchain_cache_base(bases[i], out, cap))
             return 1;
@@ -1439,32 +1499,14 @@ static int run_cmdline_wait(const char* cmdline, DWORD* out_code) {
 #endif
 
 static int shared_toolchain_latest_dir(char* out, size_t cap) {
-#if defined(_WIN32)
-    const char* local = getenv("LOCALAPPDATA");
-    if (!local || !local[0])
+    char cache[1400];
+    if (!preferred_toolchain_cache_root(cache, sizeof(cache)))
         return 0;
-    return join_path(out, cap, local, "retcomm/toolchains/cmake-clang-v1/latest");
-#else
-    const char* xdg = getenv("XDG_DATA_HOME");
-    const char* home = getenv("HOME");
-    char base[1100];
-    if (xdg && xdg[0]) {
-        if (!join_path(base, sizeof(base), xdg,
-                       "retcomm/toolchains/cmake-clang-v1/latest"))
-            return 0;
-    } else if (home && home[0]) {
-        if (!join_path(base, sizeof(base), home,
-                       ".local/share/retcomm/toolchains/cmake-clang-v1/latest"))
-            return 0;
-    } else {
-        return 0;
-    }
-    snprintf(out, cap, "%s", base);
-    return 1;
-#endif
+    return join_path(out, cap, cache, "latest");
 }
 
-static int pack_root_has_cmake(const char* root) {
+/* True when root/bin/cmake(.exe) exists (no nested unwrap). */
+static int pack_root_has_cmake_direct(const char* root) {
     char bin[1400], cmake[1400];
     if (!root || !root[0])
         return 0;
@@ -1475,6 +1517,131 @@ static int pack_root_has_cmake(const char* root) {
 #else
     return join_path(cmake, sizeof(cmake), bin, "cmake") && path_is_file(cmake);
 #endif
+}
+
+/* Resolve pack root with bin/cmake — flat or single nested child (zip layout). */
+static int unwrap_toolchain_pack_root(const char* in, char* out, size_t cap) {
+    char bin[1400];
+    if (!in || !in[0] || !out || cap < 2)
+        return 0;
+    if (pack_root_has_cmake_direct(in)) {
+        snprintf(out, cap, "%s", in);
+        return 1;
+    }
+    if (resolve_toolchain_bin_under(in, bin, sizeof(bin)) &&
+        dirname_copy(out, cap, bin))
+        return pack_root_has_cmake_direct(out);
+    return 0;
+}
+
+static int pack_root_has_cmake(const char* root) {
+    char unwrapped[1400];
+    return unwrap_toolchain_pack_root(root, unwrapped, sizeof(unwrapped));
+}
+
+/* Read retcomm-toolchain.json "version" (best-effort; empty if missing). */
+static void read_toolchain_pack_version(const char* pack_root, char* out,
+                                        size_t cap) {
+    char path[1400], buf[2048];
+    FILE* f;
+    out[0] = '\0';
+    if (!pack_root || !pack_root[0] || !out || cap < 2)
+        return;
+    if (!join_path(path, sizeof(path), pack_root, "retcomm-toolchain.json"))
+        return;
+    f = fopen(path, "r");
+    if (!f)
+        return;
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    const char* p = strstr(buf, "\"version\"");
+    if (!p)
+        return;
+    p = strchr(p + 9, '"');
+    if (!p)
+        return;
+    ++p;
+    const char* end = strchr(p, '"');
+    if (!end || end <= p)
+        return;
+    size_t len = (size_t)(end - p);
+    if (len >= cap)
+        len = cap - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+}
+
+static void sanitize_toolchain_tag(const char* ver, char* out, size_t cap) {
+    size_t j = 0;
+    if (!out || cap < 2) return;
+    if (!ver || !ver[0]) {
+        snprintf(out, cap, "offline");
+        return;
+    }
+    for (size_t i = 0; ver[i] && j + 1 < cap; ++i) {
+        unsigned char c = (unsigned char)ver[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')
+            out[j++] = (char)c;
+        else
+            out[j++] = '_';
+    }
+    out[j] = '\0';
+    if (!out[0])
+        snprintf(out, cap, "offline");
+}
+
+/* Point cache_root/latest at pack_root (symlink preferred; copy fallback).
+ * Never install pack contents *into* latest/ — latest is pointer-only. */
+static int set_toolchain_latest_pointer(const char* cache_root,
+                                        const char* pack_root) {
+    char latest[1400], resolved_pack[1400];
+    if (!cache_root || !pack_root || !pack_root[0])
+        return 0;
+    if (!unwrap_toolchain_pack_root(pack_root, resolved_pack,
+                                   sizeof(resolved_pack)))
+        return 0;
+    if (!join_path(latest, sizeof(latest), cache_root, "latest"))
+        return 0;
+    /* Already points at a usable pack (symlink or real dir with bin/). */
+    if (pack_root_has_cmake_direct(latest)) {
+#if !defined(_WIN32)
+        char latest_res[1400], pack_res[1400];
+        if (realpath(latest, latest_res) && realpath(resolved_pack, pack_res) &&
+            strcmp(latest_res, pack_res) == 0)
+            return 1;
+#endif
+        if (strcmp(latest, resolved_pack) == 0)
+            return 1;
+    }
+    rmtree_path(latest);
+#if defined(_WIN32)
+    if (junction_dir(latest, resolved_pack))
+        return 1;
+    {
+        char cmd[3200];
+        DWORD code = 1;
+        mkdir_p(latest);
+        snprintf(cmd, sizeof(cmd),
+                 "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /nc "
+                 "/ns /np",
+                 resolved_pack, latest);
+        if (run_cmdline_wait(cmd, &code) && code <= 7 &&
+            pack_root_has_cmake_direct(latest))
+            return 1;
+    }
+#else
+    if (symlink(resolved_pack, latest) == 0)
+        return 1;
+    {
+        char cmd[3200];
+        snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", resolved_pack, latest);
+        if (system(cmd) == 0 && pack_root_has_cmake_direct(latest))
+            return 1;
+    }
+#endif
+    return pack_root_has_cmake_direct(latest);
 }
 
 static int write_project_toolchain_stamp(const char* bin_dir) {
@@ -1496,18 +1663,18 @@ static int write_project_toolchain_stamp(const char* bin_dir) {
 }
 
 static int activate_installed_pack_root(const char* pack_root) {
-    char bin[1400];
-    if (!pack_root_has_cmake(pack_root))
+    char root[1400], bin[1400];
+    if (!unwrap_toolchain_pack_root(pack_root, root, sizeof(root)))
         return 0;
-    if (!join_path(bin, sizeof(bin), pack_root, "bin"))
+    if (!join_path(bin, sizeof(bin), root, "bin"))
         return 0;
     snprintf(g_cli_toolchain_bin, sizeof(g_cli_toolchain_bin), "%s", bin);
 #if defined(_WIN32)
-    _putenv_s("RETCOMM_TOOLCHAIN_DIR", pack_root);
-    _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", pack_root);
+    _putenv_s("RETCOMM_TOOLCHAIN_DIR", root);
+    _putenv_s("PSXRECOMP_TOOLCHAIN_DIR", root);
 #else
-    setenv("RETCOMM_TOOLCHAIN_DIR", pack_root, 1);
-    setenv("PSXRECOMP_TOOLCHAIN_DIR", pack_root, 1);
+    setenv("RETCOMM_TOOLCHAIN_DIR", root, 1);
+    setenv("PSXRECOMP_TOOLCHAIN_DIR", root, 1);
 #endif
     write_project_toolchain_stamp(bin);
     activate_toolchain_path();
@@ -1791,24 +1958,23 @@ static int host_extract_zip(const char* zip_path, const char* dest_dir,
 #endif
 
 static int link_or_stamp_project_toolchain(const char* pack_root) {
-    char proj_tc[1200], bin[1400];
-    if (!pack_root_has_cmake(pack_root))
+    char root[1400], proj_tc[1200], bin[1400];
+    if (!unwrap_toolchain_pack_root(pack_root, root, sizeof(root)))
         return 0;
-    if (!join_path(bin, sizeof(bin), pack_root, "bin"))
+    if (!join_path(bin, sizeof(bin), root, "bin"))
         return 0;
 #if defined(_WIN32)
     if (g_project_root[0] &&
         join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
         if (!pack_root_has_cmake(proj_tc))
-            junction_dir(proj_tc, pack_root);
+            junction_dir(proj_tc, root);
     }
 #else
     if (g_project_root[0] &&
         join_path(proj_tc, sizeof(proj_tc), g_project_root, "toolchain")) {
         if (!pack_root_has_cmake(proj_tc) && !path_is_dir(proj_tc)) {
             char cmd[2800];
-            snprintf(cmd, sizeof(cmd), "ln -s \"%s\" \"%s\"", pack_root,
-                     proj_tc);
+            snprintf(cmd, sizeof(cmd), "ln -s \"%s\" \"%s\"", root, proj_tc);
             (void)system(cmd);
         }
     }
@@ -1820,27 +1986,110 @@ static int link_or_stamp_project_toolchain(const char* pack_root) {
 static int host_install_toolchain_from_zip(
     const char* zip_path, RecompLauncherCPrepareProgressFn on_progress,
     void* progress_ctx, char* err_msg, size_t err_cap) {
-    char dest[1400];
-    if (!shared_toolchain_latest_dir(dest, sizeof(dest))) {
+    /* Match retcomm-toolchains install.sh:
+     *   …/cmake-clang-v1/<tag>/   (real pack with bin/)
+     *   …/cmake-clang-v1/latest → <tag>   (pointer only)
+     * Never extract the zip *into* latest/ — resolvers expect latest/bin. */
+    char cache_root[1400], staging[1400], pack[1400], ver[64], tag[80];
+    char dest[1400], latest[1400];
+    if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root))) {
         snprintf(err_msg, err_cap, "Cannot resolve shared toolchain directory.");
+        return 0;
+    }
+    mkdir_p(cache_root);
+    if (!join_path(staging, sizeof(staging), cache_root, ".staging-host")) {
+        snprintf(err_msg, err_cap, "Staging path too long.");
         return 0;
     }
     if (on_progress)
         on_progress(progress_ctx, 0.45f, "Extracting portable cmake/clang…");
-    if (!host_extract_zip(zip_path, dest, err_msg, err_cap))
+    if (!host_extract_zip(zip_path, staging, err_msg, err_cap))
         return 0;
+    if (!unwrap_toolchain_pack_root(staging, pack, sizeof(pack))) {
+        snprintf(err_msg, err_cap, "Extracted toolchain but cmake was not found.");
+        rmtree_path(staging);
+        return 0;
+    }
+    read_toolchain_pack_version(pack, ver, sizeof(ver));
+    sanitize_toolchain_tag(ver[0] ? ver : "offline", tag, sizeof(tag));
+    /* Never use "latest" as a tag directory name — reserved for the pointer. */
+    if (strcmp(tag, "latest") == 0)
+        snprintf(tag, sizeof(tag), "offline");
+    if (!join_path(dest, sizeof(dest), cache_root, tag)) {
+        snprintf(err_msg, err_cap, "Install path too long.");
+        rmtree_path(staging);
+        return 0;
+    }
+    if (on_progress)
+        on_progress(progress_ctx, 0.7f, "Installing into shared toolchain cache…");
+    rmtree_path(dest);
+    mkdir_p(cache_root);
+    /* Move usable pack to <tag>/ (flat bin/ at dest). */
+    if (strcmp(pack, staging) == 0) {
+#if defined(_WIN32)
+        if (!MoveFileExA(staging, dest, MOVEFILE_COPY_ALLOWED |
+                                            MOVEFILE_REPLACE_EXISTING)) {
+            char cmd[3200];
+            DWORD code = 1;
+            mkdir_p(dest);
+            snprintf(cmd, sizeof(cmd),
+                     "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS "
+                     "/nc /ns /np /MOVE",
+                     staging, dest);
+            (void)run_cmdline_wait(cmd, &code);
+        }
+#else
+        if (rename(staging, dest) != 0) {
+            char cmd[3200];
+            snprintf(cmd, sizeof(cmd), "mv \"%s\" \"%s\"", staging, dest);
+            if (system(cmd) != 0) {
+                snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", staging, dest);
+                (void)system(cmd);
+                rmtree_path(staging);
+            }
+        }
+#endif
+    } else {
+        /* Nested zip: move the child with bin/ up to dest. */
+#if defined(_WIN32)
+        if (!MoveFileExA(pack, dest, MOVEFILE_COPY_ALLOWED |
+                                         MOVEFILE_REPLACE_EXISTING)) {
+            char cmd[3200];
+            DWORD code = 1;
+            mkdir_p(dest);
+            snprintf(cmd, sizeof(cmd),
+                     "cmd.exe /c robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS "
+                     "/nc /ns /np /MOVE",
+                     pack, dest);
+            (void)run_cmdline_wait(cmd, &code);
+        }
+#else
+        if (rename(pack, dest) != 0) {
+            char cmd[3200];
+            snprintf(cmd, sizeof(cmd), "mv \"%s\" \"%s\"", pack, dest);
+            if (system(cmd) != 0) {
+                snprintf(cmd, sizeof(cmd), "cp -a \"%s\" \"%s\"", pack, dest);
+                (void)system(cmd);
+            }
+        }
+#endif
+        rmtree_path(staging);
+    }
+    if (!unwrap_toolchain_pack_root(dest, pack, sizeof(pack))) {
+        snprintf(err_msg, err_cap, "Installed toolchain missing bin/cmake.");
+        return 0;
+    }
+    if (!set_toolchain_latest_pointer(cache_root, pack)) {
+        /* Pointer is best-effort — pack at <tag>/ is still usable. */
+    }
     if (on_progress)
         on_progress(progress_ctx, 0.85f, "Activating toolchain…");
-    link_or_stamp_project_toolchain(dest);
-    if (activate_installed_pack_root(dest))
+    link_or_stamp_project_toolchain(pack);
+    if (activate_installed_pack_root(pack))
         return 1;
-    /* Nested layout under dest/ */
-    if (resolve_toolchain_bin_under(dest, g_cli_toolchain_bin,
-                                    sizeof(g_cli_toolchain_bin))) {
-        char pack[1400];
-        if (dirname_copy(pack, sizeof(pack), g_cli_toolchain_bin))
-            return activate_installed_pack_root(pack);
-    }
+    if (join_path(latest, sizeof(latest), cache_root, "latest") &&
+        activate_installed_pack_root(latest))
+        return 1;
     snprintf(err_msg, err_cap, "Extracted toolchain but cmake was not found.");
     return 0;
 }

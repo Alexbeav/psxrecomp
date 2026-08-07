@@ -1,11 +1,13 @@
 """Resolve / download / unpack portable cmake-clang-v1 toolchain packs.
 
-Shared cache matches RetComM:
+Shared cache matches RetComM / retcomm-toolchains install.sh:
 
   Windows: %LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/<tag>/
-  Linux/macOS: $XDG_DATA_HOME/retcomm/toolchains/… or ~/.local/share/retcomm/…
+  Linux/macOS: $XDG_DATA_HOME/retcomm/… and ~/.local/share/retcomm/…
+  plus latest → current <tag> (pointer only; never a pack extract target)
 
-Legacy %LOCALAPPDATA%/psxrecomp/… is still searched and migrated on ensure.
+Overrides: RETCOMM_TOOLCHAIN_CACHE, RETCOMM_DATA_HOME, RETCOMM_TOOLCHAIN_DIR.
+Legacy …/psxrecomp/toolchains/… is still searched and migrated on ensure.
 """
 
 from __future__ import annotations
@@ -103,39 +105,72 @@ def env_toolchain_roots() -> list[Path]:
     return out
 
 
-def shared_cache_roots() -> list[Path]:
-    """Candidate parent dirs that contain <tag>/ packs (or a flat pack).
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for r in paths:
+        try:
+            key = str(r.expanduser())
+        except OSError:
+            key = str(r)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(Path(key))
+    return uniq
 
-    RetComM (`retcomm`) is preferred; legacy `psxrecomp` remains a read/migrate
-    fallback.
-    """
-    roots: list[Path] = []
+
+def retcomm_data_homes() -> list[Path]:
+    """Candidate …/retcomm data roots (RETCOMM_DATA_HOME, XDG, ~/.local/share)."""
+    homes: list[Path] = []
+    env = (os.environ.get("RETCOMM_DATA_HOME") or "").strip()
+    if env:
+        homes.append(Path(env).expanduser())
+    xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
+    if xdg:
+        homes.append(Path(xdg).expanduser() / "retcomm")
+    # Always also try the conventional home path — install.sh may have used it
+    # even when XDG_DATA_HOME is set to something else (or vice versa).
+    homes.append(Path.home() / ".local" / "share" / "retcomm")
     if sys_platform_is_windows():
         local = os.environ.get("LOCALAPPDATA")
         if local:
-            roots.append(Path(local) / "retcomm" / "toolchains" / PACK_ID)
+            homes.append(Path(local) / "retcomm")
+    return _dedupe_paths(homes)
+
+
+def shared_cache_roots() -> list[Path]:
+    """Candidate parent dirs that contain <tag>/ packs (or a flat pack).
+
+    Layout matches retcomm-toolchains install.sh:
+      …/retcomm/toolchains/cmake-clang-v1/<tag>/   plus latest → current
+
+    RetComM (`retcomm`) is preferred; legacy `psxrecomp` remains a read/migrate
+    fallback. Honors RETCOMM_TOOLCHAIN_CACHE / RETCOMM_DATA_HOME.
+    """
+    roots: list[Path] = []
+    cache = (os.environ.get("RETCOMM_TOOLCHAIN_CACHE") or "").strip()
+    if cache:
+        roots.append(Path(cache).expanduser())
+    for data in retcomm_data_homes():
+        roots.append(data / "toolchains" / PACK_ID)
+    # Legacy psxrecomp mirrors beside each retcomm root's parent share.
+    for data in retcomm_data_homes():
+        parent = data.parent  # …/share or LOCALAPPDATA
+        roots.append(parent / "psxrecomp" / "toolchains" / PACK_ID)
+    if sys_platform_is_windows():
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
             roots.append(Path(local) / "psxrecomp" / "toolchains" / PACK_ID)
-    xdg = os.environ.get("XDG_DATA_HOME")
-    home = Path.home()
-    if xdg:
-        roots.append(Path(xdg) / "retcomm" / "toolchains" / PACK_ID)
-        roots.append(Path(xdg) / "psxrecomp" / "toolchains" / PACK_ID)
-    else:
-        roots.append(home / ".local" / "share" / "retcomm" / "toolchains" / PACK_ID)
-        roots.append(home / ".local" / "share" / "psxrecomp" / "toolchains" / PACK_ID)
-    # Dedup while preserving order.
-    seen: set[str] = set()
-    uniq: list[Path] = []
-    for r in roots:
-        key = str(r)
-        if key not in seen:
-            seen.add(key)
-            uniq.append(r)
-    return uniq
+    return _dedupe_paths(roots)
 
 
 def preferred_install_root() -> Path:
     """Where newly downloaded / offline-unpacked packs land (RetComM shared)."""
+    cache = (os.environ.get("RETCOMM_TOOLCHAIN_CACHE") or "").strip()
+    if cache:
+        r = Path(cache).expanduser()
+        r.mkdir(parents=True, exist_ok=True)
+        return r
     for r in shared_cache_roots():
         if "retcomm" in r.parts:
             r.mkdir(parents=True, exist_ok=True)
@@ -558,18 +593,23 @@ def register_toolchain_user_env(pack_root: Path, log=None) -> Path:
         if log:
             log(f"Could not refresh latest pointer: {exc}")
         latest = root
-    bin_dir = latest / "bin"
+    # PATH / env must target a pack with bin/cmake — unwrap nested zip layouts
+    # and prefer the real tag dir when latest is only a pointer.
+    usable = unwrap_pack_root(latest)
+    if not pack_root_looks_usable(usable):
+        usable = root
+    bin_dir = usable / "bin"
     if not bin_looks_usable(bin_dir):
         bin_dir = root / "bin"
     if sys_platform_is_windows():
-        _register_user_path_windows(bin_dir, unwrap_pack_root(latest), log=log)
+        _register_user_path_windows(bin_dir, usable, log=log)
     else:
-        _register_user_path_unix(cache_root, unwrap_pack_root(latest), log=log)
+        _register_user_path_unix(cache_root, usable, log=log)
     # Session PATH for this process (idempotent).
     activate_toolchain_bin(bin_dir if bin_looks_usable(bin_dir) else root / "bin", log=None)
     if log:
         log(f"Registered toolchain user PATH via {bin_dir}")
-    return latest
+    return usable
 
 
 def unpack_zip_to(zip_path: Path, dest: Path) -> Path:
@@ -667,9 +707,11 @@ def download_latest_pack(
             raise RuntimeError(f"toolchain download failed ({e.code}): {url}") from e
         except urllib.error.URLError as e:
             raise RuntimeError(f"toolchain download failed: {e.reason}") from e
+        # Tag fallback is "offline" — never install *into* latest/; latest is
+        # pointer-only (symlink/copy) matching retcomm-toolchains install.sh.
         return install_from_zip(
             zpath,
-            tag="latest",
+            tag="offline",
             project_root=project_root,
             min_version=min_version,
             log=log,
