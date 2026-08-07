@@ -6,7 +6,7 @@
 #   --dir <parent>        Parent directory for the new repo (default: .)
 #   --bios <SCPH1001.BIN> Optional retail BIOS for --generate / generate prompt
 #   --boot-exe <name>     Optional override until disc probe runs
-#   --psxrecomp-ref / --recomp-ui-ref / URLs
+#   --psxrecomp-ref / --recomp-ui-ref / --recomp-net-ref / URLs
 #
 # Everything else is prompted on a TTY (or passed via flags / --yes defaults):
 #   name, players (1–8, default 2), zip-prefix, marketing blurb, recomp-ui,
@@ -16,6 +16,10 @@
 # Non-interactive: --yes (or PSXRECOMP_SETUP_YES=1) requires --name and --disc;
 #   boolean opts stay off unless explicitly flagged; lobby URL defaults to
 #   netplay.retcomm.net when netplay is enabled.
+#
+# GitHub publish order (avoids competing "initial" commits / missing CI):
+#   scaffold + CI workflow → commit → gh repo create (no push) → generate/build
+#   → single git push -u origin HEAD → verify Actions workflows if CI enabled.
 #
 # Usage:
 #   sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue
@@ -53,8 +57,12 @@ REGION=""
 YES_MODE=0
 DEFAULT_LOBBY_HOST="netplay.retcomm.net"
 # mstan/psxrecomp and recomp-ui both use master (not main).
+# Nested recomp-net defaults to whatever SHA psxrecomp pins; override with
+# --recomp-net-ref (branch/tag/SHA) or RECOMP_NET_REF=… so netplay can track
+# main (or feat/rollback) instead of a stale nested pin.
 PSXRECOMP_REF="master"
 RECOMP_UI_REF="master"
+RECOMP_NET_REF="${RECOMP_NET_REF:-}"
 PSXRECOMP_URL="${PSXRECOMP_URL:-https://github.com/mstan/psxrecomp.git}"
 RECOMP_UI_URL="${RECOMP_UI_URL:-https://github.com/mstan/recomp-ui.git}"
 
@@ -175,6 +183,7 @@ while [ $# -gt 0 ]; do
         --yes|-y) YES_MODE=1; shift ;;
         --psxrecomp-ref) PSXRECOMP_REF=$2; shift 2 ;;
         --recomp-ui-ref) RECOMP_UI_REF=$2; shift 2 ;;
+        --recomp-net-ref) RECOMP_NET_REF=$2; shift 2 ;;
         -h|--help) usage 0 ;;
         *) echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -548,7 +557,16 @@ if [ "$ENABLE_RECOMP_UI" -eq 1 ]; then
     git add recomp-ui
 fi
 if [ -d psxrecomp/lib/recomp-net ]; then
-    git -C psxrecomp/lib/recomp-net checkout --detach -q HEAD 2>/dev/null || true
+    # Nested submodule pins a SHA inside psxrecomp — not live remote main.
+    # Optional override so netplay can follow a branch that has rollback.h etc.
+    if [ -n "$RECOMP_NET_REF" ]; then
+        echo "== Override recomp-net → $RECOMP_NET_REF =="
+        git -C psxrecomp/lib/recomp-net fetch -q origin "$RECOMP_NET_REF"
+        git -C psxrecomp/lib/recomp-net checkout --detach -q FETCH_HEAD
+        git -C psxrecomp add lib/recomp-net
+    else
+        git -C psxrecomp/lib/recomp-net checkout --detach -q HEAD 2>/dev/null || true
+    fi
 fi
 
 echo "== Framework pins =="
@@ -577,6 +595,7 @@ fill_template "$TEMPLATE_DIR/package_setup_release.sh.in" \
     "$ROOT/scripts/package_setup_release.sh"
 chmod +x "$ROOT/scripts/package_setup_release.sh"
 
+CI_WORKFLOW_OK=0
 if [ "$ENABLE_CI" -eq 1 ]; then
     echo "== CI release workflow =="
     WF_SRC="$ROOT/psxrecomp/docs/ci/templates/setup-release.yml"
@@ -588,8 +607,11 @@ if [ "$ENABLE_CI" -eq 1 ]; then
             --set "GAME_TITLE=$WINDOW_TITLE" \
             --set "WINDOW_TITLE=$WINDOW_TITLE"
         echo "  wrote .github/workflows/release.yml"
+        CI_WORKFLOW_OK=1
     else
-        echo "warning: missing $WF_SRC — skipped CI workflow copy" >&2
+        echo "error: CI enabled but missing $WF_SRC" >&2
+        echo "       Bump --psxrecomp-ref to a pin that has docs/ci/templates/." >&2
+        exit 1
     fi
 else
     echo "== CI workflow skipped =="
@@ -723,8 +745,12 @@ else
     echo "  (skipped initial commit — commit manually when ready)"
 fi
 
+# Create the GitHub repo + origin remote now, but do NOT push yet.
+# Push once after generate/build so CI workflow and final pins land together
+# (early --push caused a second local "initial" commit to conflict on re-run).
+GITHUB_CREATED=0
 if [ "${CREATE_GITHUB:-0}" -eq 1 ]; then
-    echo "== GitHub repo (gh) =="
+    echo "== GitHub repo (gh, create only — push deferred) =="
     if ! command -v gh >/dev/null 2>&1; then
         echo "warning: gh not installed — skip create; push manually later." >&2
     elif [ "$COMMITTED" -eq 0 ]; then
@@ -733,10 +759,22 @@ if [ "${CREATE_GITHUB:-0}" -eq 1 ]; then
         VIS_FLAG="--private"
         [ "$GITHUB_VISIBILITY" = "public" ] && VIS_FLAG="--public"
         [ "$GITHUB_VISIBILITY" = "internal" ] && VIS_FLAG="--internal"
-        if gh repo create "$NAME" $VIS_FLAG --source="$ROOT" --remote=origin --push; then
-            echo "  created and pushed origin ($GITHUB_VISIBILITY)"
+        if gh repo create "$NAME" $VIS_FLAG --source="$ROOT" --remote=origin; then
+            echo "  created origin ($GITHUB_VISIBILITY); push deferred until end"
+            GITHUB_CREATED=1
         else
-            echo "warning: gh repo create failed — create/push manually." >&2
+            echo "warning: gh repo create failed — if the repo already exists," >&2
+            echo "         add origin and push manually at the end." >&2
+            if ! git remote get-url origin >/dev/null 2>&1; then
+                _gh_url=$(gh repo view "$NAME" --json url -q .url 2>/dev/null || true)
+                if [ -n "$_gh_url" ]; then
+                    git remote add origin "$_gh_url"
+                    echo "  attached existing origin → $_gh_url"
+                    GITHUB_CREATED=1
+                fi
+            else
+                GITHUB_CREATED=1
+            fi
         fi
     fi
 fi
@@ -753,13 +791,13 @@ if [ "$DO_GENERATE" -eq 1 ]; then
     (
         cd "$ROOT"
         bash psxrecomp/tools/ci/build_emitters.sh
-        GEN_ARGS="--config game.toml --project-root . --disc $GEN_DISC_HINT"
+        # Quote disc/bios paths (Redump cues often contain spaces).
+        set -- --config game.toml --project-root . --disc "$GEN_DISC_HINT"
         if [ -n "$BIOS_PATH" ]; then
             BIOS_ABS=$(CDPATH= cd -- "$(dirname -- "$BIOS_PATH")" && pwd)/$(basename -- "$BIOS_PATH")
-            GEN_ARGS="$GEN_ARGS --bios $BIOS_ABS"
+            set -- "$@" --bios "$BIOS_ABS"
         fi
-        # shellcheck disable=SC2086
-        python3 psxrecomp/psxrecomp_cli.py generate $GEN_ARGS
+        python3 psxrecomp/psxrecomp_cli.py generate "$@"
     ) && GENERATED_OK=1
     if [ "$GENERATED_OK" -eq 1 ]; then
         echo "  generate OK (generated/ is gitignored — not committed)"
@@ -783,6 +821,38 @@ if [ "${DO_BUILD:-0}" -eq 1 ] && [ "$GENERATED_OK" -eq 1 ]; then
     fi
 fi
 
+# Single publish after scaffold (+ optional generate/build).
+GITHUB_PUSHED=0
+if [ "${CREATE_GITHUB:-0}" -eq 1 ] && git remote get-url origin >/dev/null 2>&1; then
+    echo "== GitHub push (final) =="
+    if [ "$COMMITTED" -eq 0 ]; then
+        echo "warning: no local commit to push." >&2
+    elif git push -u origin HEAD; then
+        GITHUB_PUSHED=1
+        echo "  pushed $(git rev-parse --abbrev-ref HEAD) → origin"
+        if [ "$CI_WORKFLOW_OK" -eq 1 ] && command -v gh >/dev/null 2>&1; then
+            _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+            if [ -n "$_owner_repo" ]; then
+                _wf=$(gh api "repos/${_owner_repo}/actions/workflows" \
+                    --jq '.workflows[] | select(.path|endswith("release.yml")) | .name' \
+                    2>/dev/null || true)
+                if [ -n "$_wf" ]; then
+                    echo "  Actions workflow registered: $_wf"
+                    echo "  (runs on workflow_dispatch or push of v* tags)"
+                else
+                    echo "warning: release.yml pushed but Actions has not listed it yet;" >&2
+                    echo "         open the Actions tab or re-check in a minute." >&2
+                fi
+            fi
+        fi
+    else
+        echo "warning: git push failed (non-fast-forward if origin already has" >&2
+        echo "         a different initial commit). Resolve with:" >&2
+        echo "           git fetch origin && git push -u origin HEAD" >&2
+        echo "         or, if this local tree should win: git push -u origin HEAD --force" >&2
+    fi
+fi
+
 if [ "$PROBED" -eq 1 ]; then
     STEP1="Review game.toml + catalog_identity.json + seeds/ghidra_funcs.txt ($SEED_COUNT JAL seeds)."
 else
@@ -801,18 +871,27 @@ else
 
        ./psxrecomp/tools/ci/build_emitters.sh
        python3 psxrecomp/psxrecomp_cli.py generate \\
-         --config game.toml --project-root . --disc $GEN_DISC_HINT
+         --config game.toml --project-root . --disc \"$GEN_DISC_HINT\"
        $BUILD_HINT"
 fi
 
 CI_NOTE="CI workflow not installed (declined)."
-if [ "$ENABLE_CI" -eq 1 ]; then
+if [ "$ENABLE_CI" -eq 1 ] && [ "$CI_WORKFLOW_OK" -eq 1 ]; then
     CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; verify_pins.sh gated)."
+    if [ "$GITHUB_PUSHED" -eq 1 ]; then
+        CI_NOTE="$CI_NOTE Pushed — open Actions → Release builds (workflow_dispatch)."
+    fi
 fi
 
 GH_NOTE="GitHub remote not created (declined)."
 if [ "${CREATE_GITHUB:-0}" -eq 1 ]; then
-    GH_NOTE="GitHub: tried gh repo create ($GITHUB_VISIBILITY)."
+    if [ "$GITHUB_PUSHED" -eq 1 ]; then
+        GH_NOTE="GitHub: created/attached origin and pushed ($GITHUB_VISIBILITY)."
+    elif [ "$GITHUB_CREATED" -eq 1 ]; then
+        GH_NOTE="GitHub: origin ready but push failed — see warnings above."
+    else
+        GH_NOTE="GitHub: create/push did not complete — check gh auth / remote."
+    fi
 fi
 
 cat <<EOF

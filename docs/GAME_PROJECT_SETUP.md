@@ -99,8 +99,9 @@ What runs after answers:
    `framework_pins.txt`
 3. Packager stub; optional CI workflow (pins gated by `verify_pins.sh`)
 4. Stage disc → `probe_disc.py` (marketing + seeds) → `psx_symbols.h` →
-   optional boxart → initial commit → optional `gh repo create` → optional
-   Generate → optional cmake/ninja build
+   optional boxart → initial commit → optional `gh repo create` (no push) →
+   optional Generate → optional cmake/ninja build → single `git push` +
+   Actions workflow verify
 
 Standalone helpers: `probe_disc.py`, `fetch_boxart.py`, `fill_tokens.py`,
 `sync_symbols.py`.
@@ -140,7 +141,8 @@ playable tree (OpenBIOS / optional retail BIOS C). You still must:
 1. **Boot / soak** — fix missing seeds, overlays, FMV/runtime quirks in `game.toml`
 2. **Netplay QA** — LAN then lobby; confirm digests + TOC fp; pin `VERSION`
 3. **Polish** — more symbols in `symbols.toml`, boxart name mismatches
-4. **Ship** — push (or use scaffold `gh`), enable Actions, tag `vX.Y.Z` (CI ships
+4. **Ship** — scaffold already creates the repo and pushes once at the end when
+   you opt in; otherwise push manually. Enable Actions, tag `vX.Y.Z` (CI ships
    setup-host **without** `generated/` — end users run Generate locally / via wizard)
 
 **Legacy layout** (CLI `psxrecomp build`, nested UI under older trees,
