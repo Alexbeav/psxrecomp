@@ -173,7 +173,10 @@ is zero-init.
 
 `psxrecomp_add_game_runtime` helpers:
 
-- `ENABLE_NETPLAY_IF_PRESENT` — turn on netplay when `lib/recomp-net` exists
+- `ENABLE_NETPLAY_IF_PRESENT` — *supplemental* only; still set `PSX_NETPLAY ON`
+  **before** `include(runtime.cmake)` when `lib/recomp-net` exists (otherwise
+  `option(PSX_NETPLAY)` stays OFF and `psx_netplay_sched.c` cannot find
+  `recomp_net/session.h`)
 - `NETPLAY_LOBBY_URL "ws://host:port"` — compile-time default lobby URL
 (`PSX_NET_LOBBY_DEFAULT_URL`; env `PSX_NET_LOBBY_URL` still wins at runtime)
 - `ENABLE_SETUP_WIZARD` — force `PSX_SETUP_WIZARD=ON` for that target

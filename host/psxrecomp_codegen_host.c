@@ -22,6 +22,7 @@ extern char** environ;
 /* Forward decls — used by toolchain cache helpers before their definitions. */
 static int rmtree_path(const char* path);
 static int mkdir_p(const char* path);
+static int cmake_path_runs(const char* cmake_path);
 #if defined(_WIN32)
 static int junction_dir(const char* link_path, const char* target_path);
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code);
@@ -1477,13 +1478,24 @@ static int run_cmdline_wait(const char* cmdline, DWORD* out_code) {
     PROCESS_INFORMATION pi;
     char mutable_cmd[8192];
     DWORD code = 1;
+    HANDLE hin, hout, herr;
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));
     si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    /* GUI launchers often have INVALID std handles. Passing those with
+     * STARTF_USESTDHANDLES makes console children (cmake/curl) fail even when
+     * the exe is fine — do not inherit broken handles. */
+    hin = GetStdHandle(STD_INPUT_HANDLE);
+    hout = GetStdHandle(STD_OUTPUT_HANDLE);
+    herr = GetStdHandle(STD_ERROR_HANDLE);
+    if (hin != INVALID_HANDLE_VALUE && hin != NULL &&
+        hout != INVALID_HANDLE_VALUE && hout != NULL &&
+        herr != INVALID_HANDLE_VALUE && herr != NULL) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = hin;
+        si.hStdOutput = hout;
+        si.hStdError = herr;
+    }
     snprintf(mutable_cmd, sizeof(mutable_cmd), "%s", cmdline);
     if (!CreateProcessA(NULL, mutable_cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
                         NULL, NULL, &si, &pi))
@@ -1678,7 +1690,12 @@ static int activate_installed_pack_root(const char* pack_root) {
 #endif
     write_project_toolchain_stamp(bin);
     activate_toolchain_path();
-    return find_cmake(g_cmake, sizeof(g_cmake)) ? 1 : 0;
+    /* File presence is not enough — portable cmake must actually run
+     * (missing DLLs / MOTW / GUI std-handle probes used to pass find_cmake
+     * then fail host_portable_cmake_ready with a misleading error). */
+    if (!find_cmake(g_cmake, sizeof(g_cmake)))
+        return 0;
+    return cmake_path_runs(g_cmake);
 }
 
 #if defined(_WIN32)
@@ -2090,7 +2107,9 @@ static int host_install_toolchain_from_zip(
     if (join_path(latest, sizeof(latest), cache_root, "latest") &&
         activate_installed_pack_root(latest))
         return 1;
-    snprintf(err_msg, err_cap, "Extracted toolchain but cmake was not found.");
+    snprintf(err_msg, err_cap,
+             "Extracted toolchain but cmake.exe is missing or will not run "
+             "(bin\\cmake.exe --version failed).");
     return 0;
 }
 
@@ -2220,7 +2239,10 @@ static int cmake_path_runs(const char* cmake_path) {
     if (!cmake_path || !cmake_path[0] || !path_is_file(cmake_path))
         return 0;
 #if defined(_WIN32)
-    snprintf(cmd, sizeof(cmd), "\"%s\" --version >NUL 2>&1", cmake_path);
+    /* CreateProcess does not honor >NUL — use cmd /C. Nested quotes are the
+     * documented form for a quoted exe path under cmd /C. */
+    snprintf(cmd, sizeof(cmd), "cmd.exe /C \"\"%s\" --version >NUL 2>&1\"",
+             cmake_path);
 #else
     snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", cmake_path);
 #endif
@@ -2366,7 +2388,13 @@ static int host_ensure_toolchain_with_progress(
             if (host_portable_cmake_ready())
                 return 1;
             snprintf(err_msg, err_cap,
-                     "Toolchain zip is unusable or below RETCOMM_TOOLCHAIN_MIN_VERSION.");
+                     "Toolchain zip installed but cmake will not run"
+                     "%s. Try Unblock on the zip, or set "
+                     "RETCOMM_TOOLCHAIN_DIR to a pack whose bin\\cmake.exe "
+                     "passes --version.",
+                     (toolchain_min_version()[0]
+                          ? " (or is below RETCOMM_TOOLCHAIN_MIN_VERSION)"
+                          : ""));
             return 0;
         }
         return 0;
@@ -2381,11 +2409,15 @@ static int host_ensure_toolchain_with_progress(
                                                 err_msg, err_cap)) {
             if (host_portable_cmake_ready())
                 return 1;
+            /* Install saw bin/cmake.exe; ready check failed (won't run / min). */
             snprintf(err_msg, err_cap,
-                     "Downloaded toolchain is missing cmake"
-                     "%s.",
+                     "Downloaded toolchain is present but cmake will not run"
+                     "%s. Check "
+                     "%%LOCALAPPDATA%%\\retcomm\\toolchains\\cmake-clang-v1\\"
+                     "<tag>\\bin\\cmake.exe --version, or set "
+                     "RETCOMM_TOOLCHAIN_DIR.",
                      (toolchain_min_version()[0]
-                          ? " or is below RETCOMM_TOOLCHAIN_MIN_VERSION"
+                          ? " (or is below RETCOMM_TOOLCHAIN_MIN_VERSION)"
                           : ""));
             return 0;
         }

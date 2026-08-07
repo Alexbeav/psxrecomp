@@ -76,6 +76,9 @@ Keep only this in the game repo:
 - Setup-host CMake flags and exe basename
 - Thin `codegen_setup.c` / `.h` with `psx_game_codegen_forward_if_built`
   (scaffold: `tools/new_project_layout/templates/codegen_setup.c.in`)
+- For netplay titles: `PSX_NETPLAY ON` **before** `include(runtime.cmake)`
+  (`ENABLE_NETPLAY_IF_PRESENT` alone is too late), plus `-DPSX_NETPLAY=ON`
+  in the release workflow configure step
 - Thin `scripts/package_setup_release.sh` wrapping `package_setup_host.sh`
 - Zip prefix / display name / disc hint in that wrapper
 - Release notes / GitHub Release job naming
