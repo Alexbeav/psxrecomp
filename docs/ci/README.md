@@ -73,6 +73,11 @@ Keep only this in the game repo:
 - Zip prefix / display name / disc hint in that wrapper
 - Release notes / GitHub Release job naming
 
+Release CI configures with both `-DPSXRECOMP_FORCE_SETUP_HOST=ON` and
+`-DPSXRECOMP_ALLOW_NO_BIOS=ON` after `clear_generated.sh`. The zip ships
+emitters + OpenBIOS.toml; end users Generate (OpenBIOS always; SCPH1001 if
+they have a dump) via the wizard, then rebuild.
+
 ## Release checklist
 
 See [`../GAME_PROJECT_SETUP.md`](../GAME_PROJECT_SETUP.md#bundled-release-checklist).

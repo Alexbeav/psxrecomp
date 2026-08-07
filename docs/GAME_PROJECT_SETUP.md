@@ -435,11 +435,12 @@ Use this before tagging a setup-host release that matches other titles
   ```
 - [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends
   ```
-  (e.g. `-DPSXRECOMP_ALLOW_NO_BIOS=ON` + your title’s force-setup option)
+  CI: `-DPSXRECOMP_FORCE_SETUP_HOST=ON -DPSXRECOMP_ALLOW_NO_BIOS=ON`
+  (clear_generated.sh wipes OpenBIOS C too; users Generate locally / via wizard)
   ```
 - [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in
   ```
-  `psxrecomp/host/`; CI may use `-DPSXRECOMP_FORCE_SETUP_HOST=ON`)
+  `psxrecomp/host/`)
   ```
 
 ### Packaging (shared helpers)

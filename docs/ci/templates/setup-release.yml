@@ -178,11 +178,15 @@ jobs:
             EXTRA+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
           fi
           JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+          # Setup host: no game C, no BIOS backends linked. clear_generated.sh
+          # already wiped generated/; end users Generate OpenBIOS (+ optional
+          # SCPH1001) locally via the wizard, then rebuild.
           # Prefer -DPSXRECOMP_FORCE_SETUP_HOST=ON (psxrecomp_add_game_runtime).
           # Legacy -DYOURGAME_FORCE_SETUP_HOST=ON still works if the title wires it.
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPSXRECOMP_FORCE_SETUP_HOST=ON \
+            -DPSXRECOMP_ALLOW_NO_BIOS=ON \
             -DPSX_GAME_VERSION="${RELEASE_VERSION}" \
             "${EXTRA[@]}"
           cmake --build build-ci --target psx-runtime -j"${JOBS}"
