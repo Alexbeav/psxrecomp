@@ -60,8 +60,17 @@ def main() -> int:
     if args.ci_placeholders:
         zp = repl.get("ZIP_PREFIX", "game")
         title = repl.get("GAME_TITLE") or repl.get("WINDOW_TITLE") or "Game"
+        # Collapse runs of whitespace; escape for YAML double-quoted release names
+        # (template uses name: "YOUR_GAME_TITLE ${{ … }}").
+        title = re.sub(r"\s+", " ", title.strip())
+        title_yaml = (
+            title.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", " ")
+            .replace("\r", "")
+        )
         text = text.replace("YOUR_ZIP_PREFIX", zp)
-        text = text.replace("YOUR_GAME_TITLE", title)
+        text = text.replace("YOUR_GAME_TITLE", title_yaml)
         text = text.replace("yourgame-release", f"{zp}-release")
 
     Path(args.dst).parent.mkdir(parents=True, exist_ok=True)

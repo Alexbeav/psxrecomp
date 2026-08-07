@@ -21,6 +21,7 @@ Manual:
 mkdir -p .github/workflows
 cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
 # edit YOUR_* placeholders — or use fill_tokens.py --ci-placeholders
+# Release name is YAML-quoted so titles with ':' (e.g. Marvel vs. Capcom: …) parse.
 ```
 
 Template: [`templates/setup-release.yml`](templates/setup-release.yml)

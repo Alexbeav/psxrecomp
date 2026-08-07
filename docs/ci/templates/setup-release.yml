@@ -379,7 +379,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: YOUR_GAME_TITLE ${{ needs.prepare.outputs.tag }}
+          # Quoted: titles may contain ':' (e.g. "Marvel vs. Capcom: …").
+          name: "YOUR_GAME_TITLE ${{ needs.prepare.outputs.tag }}"
           files: |
             dist/YOUR_ZIP_PREFIX-*.zip
           generate_release_notes: true
