@@ -52,7 +52,8 @@ YEAR=""
 REGION=""
 YES_MODE=0
 DEFAULT_LOBBY_HOST="netplay.retcomm.net"
-PSXRECOMP_REF="main"
+# mstan/psxrecomp and recomp-ui both use master (not main).
+PSXRECOMP_REF="master"
 RECOMP_UI_REF="master"
 PSXRECOMP_URL="${PSXRECOMP_URL:-https://github.com/mstan/psxrecomp.git}"
 RECOMP_UI_URL="${RECOMP_UI_URL:-https://github.com/mstan/recomp-ui.git}"

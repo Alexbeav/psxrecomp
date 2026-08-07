@@ -43,7 +43,8 @@ param(
     [string]$Region = "",
     [switch]$Yes,
     [string]$Bios = "",
-    [string]$PsxrecompRef = "main",
+    # mstan/psxrecomp and recomp-ui both use master (not main).
+    [string]$PsxrecompRef = "master",
     [string]$RecompUiRef = "master",
     [string]$PsxrecompUrl = "https://github.com/mstan/psxrecomp.git",
     [string]$RecompUiUrl = "https://github.com/mstan/recomp-ui.git"
