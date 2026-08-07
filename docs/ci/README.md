@@ -28,6 +28,11 @@ Template: [`templates/setup-release.yml`](templates/setup-release.yml)
 Matrix: `ubuntu-24.04` (linux-x64), `windows-2022` (windows-x64),
 `macos-15` (macos-arm64), `macos-15-intel` (macos-x64).
 
+Release hosts always configure with Vulkan headers + `glslc` (MSYS2 /
+apt / Homebrew packages), verify `vulkan.h` + `glslc` before configure, and
+fail the job if CMake does not select `PSX_HAVE_VULKAN`. Runtime still loads
+the ICD dynamically via SDL; CI only needs headers and the shader compiler.
+
 ## Tools under `psxrecomp/tools/`
 
 | Script | Role |
@@ -69,6 +74,8 @@ submodule — there is no separate `psxrecomp-sdk/` overlay.
 Keep only this in the game repo:
 
 - Setup-host CMake flags and exe basename
+- Thin `codegen_setup.c` / `.h` with `psx_game_codegen_forward_if_built`
+  (scaffold: `tools/new_project_layout/templates/codegen_setup.c.in`)
 - Thin `scripts/package_setup_release.sh` wrapping `package_setup_host.sh`
 - Zip prefix / display name / disc hint in that wrapper
 - Release notes / GitHub Release job naming

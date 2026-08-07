@@ -447,7 +447,8 @@ Use this before tagging a setup-host release that matches other titles
   ```
 - [ ] Thin `codegen_setup.c` + `psxrecomp_add_game_runtime` (codegen host is in
   ```
-  `psxrecomp/host/`)
+  `psxrecomp/host/`). Must export `psx_game_codegen_forward_if_built` (see
+  `codegen_setup.c.in`) — setup-host CI links `main.cpp`, which always calls it.
   ```
 
 ### Packaging (shared helpers)
