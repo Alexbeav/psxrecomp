@@ -63,6 +63,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
 #include "game_options.h"
+#include "mod_plugins.h"
+#include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
@@ -1797,12 +1799,14 @@ static void launcher_info(const char* title, const std::string& msg) {
 static std::string s_picker_game_name = "PSXRecomp";
 
 static bool pick_runtime_file(const char* title, const char* filter,
-                              std::filesystem::path& out) {
+                              std::filesystem::path& out, const char* cli_flag) {
     // Headless: never open an interactive file dialog (it blocks). Fail the
     // resolve so boot aborts cleanly with the stderr message the caller printed.
     if (g_headless) {
-        std::fprintf(stderr, "psxrecomp: headless — cannot prompt for '%s'; "
-                             "supply it via game.toml / --disc / --bios.\n", title);
+        std::fprintf(stderr,
+            "psxrecomp: headless — cannot prompt for '%s'.\n"
+            "  Supply it on the command line:  %s <path>   (or set it in game.toml).\n",
+            title, cli_flag);
         return false;
     }
 #ifdef _WIN32
@@ -1825,7 +1829,16 @@ static bool pick_runtime_file(const char* title, const char* filter,
 #else
     (void)filter;
     (void)out;
-    std::fprintf(stderr, "psxrecomp: %s requires a command-line path on this platform.\n", title);
+    // No native GUI file picker on this platform (macOS/Linux): the file must be
+    // named on the command line. Tell the user the exact flag + a full example
+    // instead of a dead-end "requires a command-line path".
+    std::fprintf(stderr,
+        "psxrecomp: no graphical file picker on this platform — '%s'\n"
+        "  must be supplied on the command line:  %s <path>\n"
+        "  Example:  ./<game-exe> --game game.toml "
+        "--bios /path/to/SCPH1001.BIN --disc /path/to/game.cue\n"
+        "  (or set the path in game.toml). See the game's README, \"Building From Source\".\n",
+        title, cli_flag);
     return false;
 #endif
 }
@@ -2058,7 +2071,7 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
         if (!pick_runtime_file(
                 bios_title.c_str(),
                 "PlayStation BIOS (*.bin)\0*.bin\0All Files (*.*)\0*.*\0",
-                picked)) {
+                picked, "--bios")) {
             return {};
         }
         if (validate_bios_for_launch(picked)) {
