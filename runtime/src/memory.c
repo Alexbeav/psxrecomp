@@ -476,6 +476,48 @@ int dirty_ram_text_native_ok(uint32_t phys) {
     return 0;
 }
 
+/* PSX_AOT_BLOCK — diagnostic bisection knob for RESIDENT game AOT, the static
+ * sibling of the overlay loader's PSX_NATIVE_BLOCK. Comma/space-separated phys
+ * ranges ("0x10000-0x25000") or single addresses; a dispatch whose exec_pc
+ * falls in a listed range reports its ranges as not-native-ok, so the caller
+ * takes the sanctioned dirty-RAM-interpreter fallback. The function still
+ * runs, just interpreted — localization only, no skip/stub/HLE. */
+#define AOT_BLOCK_CAP 64
+static uint32_t s_aot_block[AOT_BLOCK_CAP][2];
+static int s_aot_block_n = -1;   /* -1 = env not parsed yet */
+
+static void aot_block_init(void) {
+    s_aot_block_n = 0;
+    const char *e = getenv("PSX_AOT_BLOCK");
+    if (!e || !*e) return;
+    const char *p = e;
+    while (*p && s_aot_block_n < AOT_BLOCK_CAP) {
+        while (*p == ' ' || *p == ',' || *p == '\t') p++;
+        if (!*p) break;
+        char *end = NULL;
+        uint32_t lo = (uint32_t)strtoul(p, &end, 0) & 0x1FFFFFFFu;
+        uint32_t hi = lo;
+        if (end && *end == '-')
+            hi = (uint32_t)strtoul(end + 1, &end, 0) & 0x1FFFFFFFu;
+        if (hi >= lo) {
+            s_aot_block[s_aot_block_n][0] = lo;
+            s_aot_block[s_aot_block_n][1] = hi;
+            s_aot_block_n++;
+        }
+        p = end ? end : p + 1;
+        while (*p && *p != ' ' && *p != ',' && *p != '\t') p++;
+    }
+    fprintf(stderr, "psxrecomp: PSX_AOT_BLOCK armed with %d range%s\n",
+            s_aot_block_n, s_aot_block_n == 1 ? "" : "s");
+}
+
+static int aot_blocked(uint32_t phys) {
+    if (s_aot_block_n < 0) aot_block_init();
+    for (int i = 0; i < s_aot_block_n; i++)
+        if (phys >= s_aot_block[i][0] && phys <= s_aot_block[i][1]) return 1;
+    return 0;
+}
+
 /* Validate the exact instruction ranges emitted for a static game function.
  * Each pair is {virtual/physical lo, byte len}; non-code gaps and mutable data
  * on the same page are intentionally absent. Unlike the legacy 256-byte probe,
@@ -491,6 +533,10 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
                                          uint32_t exec_pc) {
     if (!text_ref_image || !lo_len_pairs || count == 0) return 0;
     uint32_t at = exec_pc & 0x1FFFFFFFu;
+    if (aot_blocked(at ? at : (lo_len_pairs[0] & 0x1FFFFFFFu))) {
+        g_text_native_blocked++;
+        return 0;
+    }
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t phys = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
