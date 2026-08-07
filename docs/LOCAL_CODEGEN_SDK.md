@@ -175,3 +175,11 @@ GitHub `/releases/latest` and, when newer, prompts **Update** or **Skip for now*
 - `ensure_toolchain_with_progress(..., download == 2)` forces a re-download from
   latest (update path); `download == 1` fetches only if missing; `0` is cache-only.
 - Set `RETCOMM_TOOLCHAIN_SKIP_UPDATE=1` to disable the remote newer-than-local check.
+
+### Broken toolchain heal (wizard open)
+
+`toolchain_is_ready` does not stop at `cmake --version`. It also smoke-tests
+`clang` + `ld.lld` (tiny link). If that fails (missing `libicuuc.so.*`, bad
+`latest/` pointer, etc.), the host removes the broken `latest/` cache entry,
+clears `toolchain/.psxrecomp-bin`, and re-opens wizard page 0 with a repair note
+so the player can redownload — without deleting the cache by hand.

@@ -23,6 +23,9 @@ extern char** environ;
 static int rmtree_path(const char* path);
 static int mkdir_p(const char* path);
 static int cmake_path_runs(const char* cmake_path);
+static int toolchain_bin_is_healthy(const char* bin);
+static void heal_broken_toolchain_pointers(void);
+static void clear_project_toolchain_stamp(void);
 #if defined(_WIN32)
 static int junction_dir(const char* link_path, const char* target_path);
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code);
@@ -47,6 +50,8 @@ static int g_ready;
 static int g_relaunch_is_helper;
 /* Wizard BIOS pick (survives cwd-relative bios.cfg misses on Windows). */
 static char g_wizard_bios[1100];
+/* Set when heal removes a broken latest/ / stamp at wizard open. */
+static char g_tc_repair_note[320];
 /* Set when host_persist_setup receives an explicit bios_path (including ""
  * for OpenBIOS). Distinguishes intentional OpenBIOS clear from "unset". */
 static int g_wizard_bios_explicit;
@@ -1690,12 +1695,13 @@ static int activate_installed_pack_root(const char* pack_root) {
 #endif
     write_project_toolchain_stamp(bin);
     activate_toolchain_path();
-    /* File presence is not enough — portable cmake must actually run
-     * (missing DLLs / MOTW / GUI std-handle probes used to pass find_cmake
-     * then fail host_portable_cmake_ready with a misleading error). */
+    /* File presence is not enough — cmake and clang/lld must actually run
+     * (missing DLLs / libicu / MOTW used to pass find_cmake then fail later). */
     if (!find_cmake(g_cmake, sizeof(g_cmake)))
         return 0;
-    return cmake_path_runs(g_cmake);
+    if (!cmake_path_runs(g_cmake))
+        return 0;
+    return toolchain_bin_is_healthy(bin);
 }
 
 #if defined(_WIN32)
@@ -2249,6 +2255,93 @@ static int cmake_path_runs(const char* cmake_path) {
     return run_cmd_exit_zero(cmd);
 }
 
+/* True when pack bin/ can compile+link a tiny C program (catches broken
+ * ld.lld / missing libicuuc.so.* etc. that cmake --version still passes). */
+static int toolchain_bin_compiler_works(const char* bin) {
+    char clang[1200], lld[1200], src[1400], exe[1400], cmd[4096];
+    FILE* f;
+    int ok;
+    if (!bin || !bin[0])
+        return 0;
+#if defined(_WIN32)
+    if (!join_path(clang, sizeof(clang), bin, "clang.exe") || !path_is_file(clang))
+        return 0;
+    if (!join_path(lld, sizeof(lld), bin, "ld.lld.exe") || !path_is_file(lld)) {
+        /* Some Windows packs only ship lld.exe — accept either. */
+        if (!join_path(lld, sizeof(lld), bin, "lld.exe") || !path_is_file(lld))
+            return 0;
+    }
+#else
+    if (!join_path(clang, sizeof(clang), bin, "clang") || !path_is_file(clang))
+        return 0;
+    if (!join_path(lld, sizeof(lld), bin, "ld.lld") || !path_is_file(lld))
+        return 0;
+#endif
+    if (!cmake_path_runs(clang))
+        return 0;
+
+#if defined(_WIN32)
+    {
+        char tdir[512];
+        DWORD tn = GetTempPathA(sizeof(tdir), tdir);
+        if (tn == 0 || tn >= sizeof(tdir))
+            return 0;
+        snprintf(src, sizeof(src), "%spsxrecomp-tc-probe-%lu.c", tdir,
+                 (unsigned long)GetCurrentProcessId());
+        snprintf(exe, sizeof(exe), "%spsxrecomp-tc-probe-%lu.exe", tdir,
+                 (unsigned long)GetCurrentProcessId());
+    }
+#else
+    snprintf(src, sizeof(src), "/tmp/psxrecomp-tc-probe-%d.c", (int)getpid());
+    snprintf(exe, sizeof(exe), "/tmp/psxrecomp-tc-probe-%d", (int)getpid());
+#endif
+
+    f = fopen(src, "wb");
+    if (!f)
+        return 0;
+    fputs("int main(void){return 0;}\n", f);
+    fclose(f);
+
+#if defined(_WIN32)
+    /* Prepend pack bin so clang picks this tree's lld, not a system linker. */
+    snprintf(cmd, sizeof(cmd),
+             "cmd.exe /C \"set \"PATH=%s;%%PATH%%\" && \"%s\" \"%s\" -o \"%s\" "
+             ">NUL 2>&1\"",
+             bin, clang, src, exe);
+#else
+    /* Prefer the pack linker explicitly so PATH cannot hide a broken lld. */
+    (void)lld; /* used via -fuse-ld when present; path already validated */
+    snprintf(cmd, sizeof(cmd),
+             "env PATH=\"%s:$PATH\" \"%s\" -fuse-ld=lld \"%s\" -o \"%s\" "
+             ">/dev/null 2>&1",
+             bin, clang, src, exe);
+#endif
+    ok = run_cmd_exit_zero(cmd);
+#if defined(_WIN32)
+    DeleteFileA(src);
+    DeleteFileA(exe);
+#else
+    unlink(src);
+    unlink(exe);
+#endif
+    return ok;
+}
+
+static int toolchain_bin_is_healthy(const char* bin) {
+    char cmake[1200];
+    if (!bin || !bin[0])
+        return 0;
+#if defined(_WIN32)
+    if (!join_path(cmake, sizeof(cmake), bin, "cmake.exe") ||
+        !cmake_path_runs(cmake))
+        return 0;
+#else
+    if (!join_path(cmake, sizeof(cmake), bin, "cmake") || !cmake_path_runs(cmake))
+        return 0;
+#endif
+    return toolchain_bin_compiler_works(bin);
+}
+
 static void clear_project_toolchain_stamp(void) {
     char stamp[1200];
     if (!g_project_root[0])
@@ -2263,13 +2356,49 @@ static void clear_project_toolchain_stamp(void) {
 #endif
 }
 
-/* Remove unusable latest/ pointers under shared cache roots (heal before
- * re-download). Leaves versioned <tag>/ packs intact. */
+/* True when path is …/latest or …/latest/bin (host unpack / pointer). */
+static int path_is_toolchain_latest_leaf(const char* path) {
+    const char* base;
+    size_t n;
+    if (!path || !path[0])
+        return 0;
+    n = strlen(path);
+    while (n > 1 && (path[n - 1] == '/' || path[n - 1] == '\\'))
+        --n;
+    base = path;
+    for (size_t i = 0; i < n; ++i) {
+        if (path[i] == '/' || path[i] == '\\')
+            base = path + i + 1;
+    }
+    if (strncmp(base, "latest", 6) == 0 &&
+        (base[6] == '\0' || base[6] == '/' || base[6] == '\\'))
+        return 1;
+    if (strcmp(base, "bin") != 0)
+        return 0;
+    /* parent directory name == latest */
+    {
+        const char* p = base;
+        while (p > path && p[-1] != '/' && p[-1] != '\\')
+            --p;
+        if (p <= path)
+            return 0;
+        --p;
+        while (p > path && p[-1] != '/' && p[-1] != '\\')
+            --p;
+        return strncmp(p, "latest", 6) == 0 &&
+               (p[6] == '/' || p[6] == '\\' || p[6] == '\0');
+    }
+}
+
+/* Remove unusable latest/ under shared cache roots (heal before re-download).
+ * Also rejects packs where cmake runs but clang/ld.lld cannot link (Linux ICU
+ * / missing libxml2). Leaves versioned <tag>/ packs intact. */
 static void heal_broken_toolchain_pointers(void) {
     char bases[12][1400];
     int n = collect_toolchain_cache_bases(bases, 12);
+    int removed = 0;
     for (int i = 0; i < n; ++i) {
-        char latest[1400], root[1400], bin[1400], cmake[1400];
+        char latest[1400], root[1400], bin[1400];
         int present = 0;
         if (!join_path(latest, sizeof(latest), bases[i], "latest"))
             continue;
@@ -2285,17 +2414,61 @@ static void heal_broken_toolchain_pointers(void) {
             continue;
         if (unwrap_toolchain_pack_root(latest, root, sizeof(root)) &&
             join_path(bin, sizeof(bin), root, "bin") &&
-#if defined(_WIN32)
-            join_path(cmake, sizeof(cmake), bin, "cmake.exe") &&
-#else
-            join_path(cmake, sizeof(cmake), bin, "cmake") &&
-#endif
-            cmake_path_runs(cmake))
+            toolchain_bin_is_healthy(bin))
             continue;
         rmtree_path(latest);
 #if !defined(_WIN32)
         unlink(latest); /* dangling symlink after rmtree no-op */
 #endif
+        removed = 1;
+    }
+    if (removed) {
+        clear_project_toolchain_stamp();
+        g_toolchain_bin[0] = '\0';
+        g_cli_toolchain_bin[0] = '\0';
+        g_cmake[0] = '\0';
+        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
+                 "Removed a broken portable toolchain cache (compiler/linker "
+                 "failed a smoke test). Download the latest pack to continue.");
+    }
+}
+
+/* If the active resolution points at an unhealthy pack, drop stamp / latest
+ * (or quarantine a versioned <tag>/ so resolve cannot keep re-selecting it). */
+static void discard_unhealthy_active_toolchain(void) {
+    char pack[1400];
+    if (!g_toolchain_bin[0])
+        return;
+    if (toolchain_bin_is_healthy(g_toolchain_bin))
+        return;
+    if (pack_root_from_bin(g_toolchain_bin, pack, sizeof(pack))) {
+        if (path_is_toolchain_latest_leaf(pack) ||
+            path_is_toolchain_latest_leaf(g_toolchain_bin)) {
+            rmtree_path(pack);
+#if !defined(_WIN32)
+            unlink(pack);
+#endif
+        } else if (path_is_dir(pack)) {
+            char quarantine[1500];
+            snprintf(quarantine, sizeof(quarantine), "%s.broken", pack);
+            rmtree_path(quarantine);
+#if defined(_WIN32)
+            if (!MoveFileExA(pack, quarantine, MOVEFILE_REPLACE_EXISTING))
+                rmtree_path(pack);
+#else
+            if (rename(pack, quarantine) != 0)
+                rmtree_path(pack);
+#endif
+        }
+    }
+    clear_project_toolchain_stamp();
+    g_toolchain_bin[0] = '\0';
+    g_cli_toolchain_bin[0] = '\0';
+    g_cmake[0] = '\0';
+    if (!g_tc_repair_note[0]) {
+        snprintf(g_tc_repair_note, sizeof(g_tc_repair_note),
+                 "Portable toolchain is installed but cannot compile/link "
+                 "(path or library error). Redownload the latest pack.");
     }
 }
 
@@ -2314,17 +2487,34 @@ static int host_portable_cmake_ready(void) {
         return 0;
     if (!cmake_path_runs(g_cmake))
         return 0;
-    return active_toolchain_meets_min();
+    if (!active_toolchain_meets_min())
+        return 0;
+    if (!g_toolchain_bin[0] &&
+        !resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
+        return 0;
+    return toolchain_bin_is_healthy(g_toolchain_bin);
+}
+
+static const char* host_toolchain_repair_note(void) {
+    return g_tc_repair_note[0] ? g_tc_repair_note : NULL;
 }
 
 static int host_toolchain_is_ready(void) {
+    int attempt;
     if (!g_project_root[0])
         return 0;
+    g_tc_repair_note[0] = '\0';
     migrate_legacy_psxrecomp_toolchain();
-    activate_toolchain_path();
-    /* Usable, runnable cmake — no engine-side version floor by default. */
-    if (host_portable_cmake_ready())
-        return 1;
+    /* Wizard open: drop broken latest/ before treating the pack as ready. */
+    heal_broken_toolchain_pointers();
+    for (attempt = 0; attempt < 3; ++attempt) {
+        activate_toolchain_path();
+        if (host_portable_cmake_ready())
+            return 1;
+        if (!g_toolchain_bin[0])
+            break;
+        discard_unhealthy_active_toolchain();
+    }
 #if defined(_WIN32)
     /* Reuse a Store-Python LocalCache install without copying. */
     if (harvest_store_python_toolchain(0)) {
@@ -3271,6 +3461,7 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         gi->toolchain_is_ready = host_toolchain_is_ready;
         gi->ensure_toolchain_with_progress = host_ensure_toolchain_with_progress;
         gi->toolchain_update_available = host_toolchain_update_available;
+        gi->toolchain_repair_note = host_toolchain_repair_note;
         /* Settings → SYSTEM: PGO on existing generated C (no wizard). */
         gi->pgo_optimize_with_progress = host_pgo_optimize;
 #if defined(_WIN32)
