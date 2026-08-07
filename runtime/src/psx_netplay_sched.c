@@ -18,10 +18,7 @@
 #include <string.h>
 #include <time.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#endif
-
+#include "host_time.h"
 #include "psx_netplay.h"
 #include "psx_netplay_rb.h"
 #include "recomp_net/recomp_net.h"
@@ -61,18 +58,8 @@ static int sched_local_slot(void)
 
 static uint32_t sched_mono_ms(void)
 {
-    /* Win32 first: MinGW advertises CLOCK_MONOTONIC via winpthread. */
-#if defined(_WIN32)
-    return (uint32_t)GetTickCount64();
-#elif defined(CLOCK_MONOTONIC)
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-        return (uint32_t)((uint64_t)ts.tv_sec * 1000ull +
-                          (uint64_t)ts.tv_nsec / 1000000ull);
-    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
-#else
-    return (uint32_t)((uint64_t)time(NULL) * 1000ull);
-#endif
+    /* QPC / CLOCK_MONOTONIC — not GetTickCount64 (coarse on Win32). */
+    return (uint32_t)psx_host_mono_ms();
 }
 
 /* ------------------------------------------------------------------ */
