@@ -402,8 +402,11 @@ fi
 
 PROJECT_CMAKE_NAME=$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9_' '_')
 ENV_PREFIX=$(printf '%s' "$PROJECT_CMAKE_NAME" | tr 'a-z' 'A-Z')
-EXE_BASENAME=$(printf '%s' "$NAME" | tr ' ' '_')
 WINDOW_TITLE=$(printf '%s' "$NAME" | sed 's/Recomp$/ Recompiled/;s/Recompiled Recompiled/Recompiled/')
+# Must match runtime.cmake OUTPUT_NAME: MAKE_C_IDENTIFIER(WINDOW_TITLE).
+# Using $NAME alone (TwistedMetal4Recomp) breaks CI packaging — binary is
+# TwistedMetal4_Recompiled.
+EXE_BASENAME=$(printf '%s' "$WINDOW_TITLE" | tr -c 'A-Za-z0-9_' '_')
 GAME_NAME=$(printf '%s' "$NAME" | sed 's/Recomp$//;s/Recompiled$//' | sed 's/[[:space:]]*$//')
 [ -n "$GAME_NAME" ] || GAME_NAME="$NAME"
 DISC_HINT="your legally owned ${GAME_NAME} disc"
@@ -821,6 +824,70 @@ if [ "${DO_BUILD:-0}" -eq 1 ] && [ "$GENERATED_OK" -eq 1 ]; then
     fi
 fi
 
+# Return registered release.yml workflow name, or empty.
+github_release_workflow_name() {
+    _owner=$1
+    gh api "repos/${_owner}/actions/workflows" \
+        --jq '.workflows[] | select(.path|endswith("release.yml")) | .name' \
+        2>/dev/null | head -n1 || true
+}
+
+# After the first push, Actions sometimes does not index release.yml (especially
+# if the repo was private at first push). Poll, then nudge with a tiny commit.
+ensure_actions_registers_release_yml() {
+    _owner=$1
+    _wf_path=".github/workflows/release.yml"
+    [ -f "$_wf_path" ] || return 0
+    command -v gh >/dev/null 2>&1 || return 0
+
+    # If the user asked for public, force visibility before re-checking (idempotent).
+    if [ "${GITHUB_VISIBILITY}" = "public" ]; then
+        gh repo edit "$_owner" --visibility public --accept-visibility-change-consequences \
+            >/dev/null 2>&1 || true
+    fi
+
+    _i=0
+    while [ "$_i" -lt 5 ]; do
+        _wf=$(github_release_workflow_name "$_owner")
+        if [ -n "$_wf" ]; then
+            echo "  Actions workflow registered: $_wf"
+            echo "  (runs on workflow_dispatch or push of v* tags)"
+            return 0
+        fi
+        _i=$((_i + 1))
+        [ "$_i" -lt 5 ] && sleep 2
+    done
+
+    echo "  Actions has not listed release.yml yet — nudging with a follow-up commit…"
+    {
+        printf '\n'
+        printf '# Actions registration nudge (%s UTC)\n' "$(date -u +%Y-%m-%dT%H:%MZ)"
+    } >>"$_wf_path"
+    git add "$_wf_path"
+    if git -c user.email=setup@localhost -c user.name=setup \
+        commit -q -m "ci: nudge Actions to register release.yml"; then
+        if git push origin HEAD; then
+            _i=0
+            while [ "$_i" -lt 6 ]; do
+                _wf=$(github_release_workflow_name "$_owner")
+                if [ -n "$_wf" ]; then
+                    echo "  Actions workflow registered after nudge: $_wf"
+                    echo "  (runs on workflow_dispatch or push of v* tags)"
+                    return 0
+                fi
+                _i=$((_i + 1))
+                [ "$_i" -lt 6 ] && sleep 2
+            done
+            echo "warning: release.yml nudged but Actions still has not listed it;" >&2
+            echo "         open the Actions tab once, or re-push after making the repo public." >&2
+        else
+            echo "warning: nudge commit created but push failed." >&2
+        fi
+    else
+        echo "warning: could not create Actions nudge commit." >&2
+    fi
+}
+
 # Single publish after scaffold (+ optional generate/build).
 GITHUB_PUSHED=0
 if [ "${CREATE_GITHUB:-0}" -eq 1 ] && git remote get-url origin >/dev/null 2>&1; then
@@ -833,16 +900,7 @@ if [ "${CREATE_GITHUB:-0}" -eq 1 ] && git remote get-url origin >/dev/null 2>&1;
         if [ "$CI_WORKFLOW_OK" -eq 1 ] && command -v gh >/dev/null 2>&1; then
             _owner_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
             if [ -n "$_owner_repo" ]; then
-                _wf=$(gh api "repos/${_owner_repo}/actions/workflows" \
-                    --jq '.workflows[] | select(.path|endswith("release.yml")) | .name' \
-                    2>/dev/null || true)
-                if [ -n "$_wf" ]; then
-                    echo "  Actions workflow registered: $_wf"
-                    echo "  (runs on workflow_dispatch or push of v* tags)"
-                else
-                    echo "warning: release.yml pushed but Actions has not listed it yet;" >&2
-                    echo "         open the Actions tab or re-check in a minute." >&2
-                fi
+                ensure_actions_registers_release_yml "$_owner_repo"
             fi
         fi
     else

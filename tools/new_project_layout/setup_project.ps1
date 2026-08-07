@@ -213,9 +213,10 @@ if ($Bios -and -not $doGenerate) { Write-Warning "-Bios ignored without Generate
 
 $ProjectCmakeName = ($Name -replace '[^A-Za-z0-9_]', '_')
 $EnvPrefix = $ProjectCmakeName.ToUpperInvariant()
-$ExeBasename = ($Name -replace ' ', '_')
 $WindowTitle = $Name -replace 'Recomp$', ' Recompiled'
 $WindowTitle = $WindowTitle -replace 'Recompiled Recompiled', 'Recompiled'
+# Match runtime.cmake OUTPUT_NAME = MAKE_C_IDENTIFIER(WINDOW_TITLE).
+$ExeBasename = ($WindowTitle -replace '[^A-Za-z0-9_]', '_')
 $GameName = ($Name -replace 'Recomp$', '') -replace 'Recompiled$', ''
 $GameName = $GameName.Trim()
 if (-not $GameName) { $GameName = $Name }
@@ -527,8 +528,10 @@ try {
     Write-Host "  (skipped initial commit — commit manually when ready)"
 }
 
+# Create the GitHub repo + origin now; push deferred until after generate/build.
+$githubCreated = $false
 if ($createGithub) {
-    Write-Host "== GitHub repo (gh) =="
+    Write-Host "== GitHub repo (gh, create only — push deferred) =="
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
         Write-Warning "gh not installed — skip create; push manually later."
     } elseif (-not $committed) {
@@ -540,10 +543,23 @@ if ($createGithub) {
             default { "--private" }
         }
         try {
-            gh repo create $Name $vis --source=$Root --remote=origin --push
-            Write-Host "  created and pushed origin ($GithubVisibility)"
+            gh repo create $Name $vis --source=$Root --remote=origin
+            Write-Host "  created origin ($GithubVisibility); push deferred until end"
+            $githubCreated = $true
         } catch {
-            Write-Warning "gh repo create failed — create/push manually."
+            Write-Warning "gh repo create failed — if the repo already exists, add origin and push at the end."
+            if (-not (git remote get-url origin 2>$null)) {
+                try {
+                    $ghUrl = (gh repo view $Name --json url -q .url 2>$null)
+                    if ($ghUrl) {
+                        git remote add origin $ghUrl
+                        Write-Host "  attached existing origin → $ghUrl"
+                        $githubCreated = $true
+                    }
+                } catch {}
+            } else {
+                $githubCreated = $true
+            }
         }
     }
 }
@@ -592,6 +608,80 @@ if ($doBuild -and $GeneratedOk) {
     }
 }
 
+function Get-ReleaseWorkflowName([string]$OwnerRepo) {
+    try {
+        return (gh api "repos/$OwnerRepo/actions/workflows" `
+            --jq '.workflows[] | select(.path|endswith("release.yml")) | .name' 2>$null |
+            Select-Object -First 1)
+    } catch { return $null }
+}
+
+function Ensure-ActionsRegistersReleaseYml([string]$OwnerRepo) {
+    $wfPath = Join-Path $Root ".github\workflows\release.yml"
+    if (-not (Test-Path -LiteralPath $wfPath)) { return }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { return }
+
+    if ($GithubVisibility -eq "public") {
+        try {
+            gh repo edit $OwnerRepo --visibility public --accept-visibility-change-consequences 2>$null | Out-Null
+        } catch {}
+    }
+
+    for ($i = 0; $i -lt 5; $i++) {
+        $wf = Get-ReleaseWorkflowName $OwnerRepo
+        if ($wf) {
+            Write-Host "  Actions workflow registered: $wf"
+            Write-Host "  (runs on workflow_dispatch or push of v* tags)"
+            return
+        }
+        if ($i -lt 4) { Start-Sleep -Seconds 2 }
+    }
+
+    Write-Host "  Actions has not listed release.yml yet — nudging with a follow-up commit…"
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mmZ")
+    Add-Content -Encoding utf8 -Path $wfPath -Value "`n# Actions registration nudge ($stamp UTC)"
+    git add $wfPath 2>$null
+    try {
+        git -c user.email=setup@localhost -c user.name=setup `
+            commit -q -m "ci: nudge Actions to register release.yml"
+        git push origin HEAD
+        for ($i = 0; $i -lt 6; $i++) {
+            $wf = Get-ReleaseWorkflowName $OwnerRepo
+            if ($wf) {
+                Write-Host "  Actions workflow registered after nudge: $wf"
+                Write-Host "  (runs on workflow_dispatch or push of v* tags)"
+                return
+            }
+            if ($i -lt 5) { Start-Sleep -Seconds 2 }
+        }
+        Write-Warning "release.yml nudged but Actions still has not listed it; open the Actions tab once."
+    } catch {
+        Write-Warning "Actions nudge commit/push failed."
+    }
+}
+
+$githubPushed = $false
+if ($createGithub -and (git remote get-url origin 2>$null)) {
+    Write-Host "== GitHub push (final) =="
+    if (-not $committed) {
+        Write-Warning "no local commit to push."
+    } else {
+        try {
+            git push -u origin HEAD
+            $githubPushed = $true
+            Write-Host "  pushed $(git rev-parse --abbrev-ref HEAD) → origin"
+            if ($useCi -and (Test-Path (Join-Path $Root ".github\workflows\release.yml"))) {
+                try {
+                    $ownerRepo = (gh repo view --json nameWithOwner -q .nameWithOwner 2>$null)
+                    if ($ownerRepo) { Ensure-ActionsRegistersReleaseYml $ownerRepo }
+                } catch {}
+            }
+        } catch {
+            Write-Warning "git push failed — fetch/rebase or force-push manually if origin already has a different initial commit."
+        }
+    }
+}
+
 $Step1 = if ($Probed) {
     "Review game.toml + catalog_identity.json + seeds/ghidra_funcs.txt ($SeedCount JAL seeds)."
 } else {
@@ -617,12 +707,16 @@ Build emitters, Generate, then playable runtime:
 "@
 }
 $CiNote = if ($useCi) {
-    "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; submodule gitlinks pin the build)."
+    $n = "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; submodule gitlinks pin the build)."
+    if ($githubPushed) { $n += " Pushed — open Actions → Release builds (workflow_dispatch)." }
+    $n
 } else {
     "CI workflow not installed (declined)."
 }
 $GhNote = if ($createGithub) {
-    "GitHub: tried gh repo create ($GithubVisibility)."
+    if ($githubPushed) { "GitHub: created/attached origin and pushed ($GithubVisibility)." }
+    elseif ($githubCreated) { "GitHub: origin ready but push failed — see warnings above." }
+    else { "GitHub: create/push did not complete — check gh auth / remote." }
 } else {
     "GitHub remote not created (declined)."
 }

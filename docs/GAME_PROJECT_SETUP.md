@@ -101,8 +101,10 @@ What runs after answers:
    `record_pins.sh` logs SHAs)
 4. Stage disc → `probe_disc.py` (marketing + seeds) → `psx_symbols.h` →
    optional boxart → initial commit → optional `gh repo create` (no push) →
-   optional Generate → optional cmake/ninja build → single `git push` +
-   Actions workflow verify
+   optional Generate → optional cmake/ninja build → single `git push`. If
+   Actions has not indexed `release.yml` (common after a private first push),
+   the scaffold force-publishes when visibility is public and nudges with a
+   tiny follow-up commit that retouches the workflow file.
 
 Standalone helpers: `probe_disc.py`, `fetch_boxart.py`, `fill_tokens.py`,
 `sync_symbols.py`.
@@ -374,6 +376,11 @@ submodules land:
 - `.github/workflows/release.yml` ← `docs/ci/templates/setup-release.yml`
 (Linux x64, Windows x64, macOS arm64 + Intel)
 - `scripts/package_setup_release.sh` ← zip prefix / exe / display name
+
+`--exe-name` / `codegen_setup.exe_basename` must match CMake
+`OUTPUT_NAME` (`MAKE_C_IDENTIFIER(WINDOW_TITLE)`, e.g. `TwistedMetal4_Recompiled`),
+not the bare project folder name (`TwistedMetal4Recomp`). Scaffolding derives
+`EXE_BASENAME` from `WINDOW_TITLE` for that reason.
 
 Zip prefix defaults to a short acronym from `--name` (e.g. `MastersOfTerasKasiRecomp`
 → `motk`); override with `--zip-prefix` / `-ZipPrefix`.
