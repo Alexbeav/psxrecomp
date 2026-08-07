@@ -116,11 +116,8 @@ jobs:
           printf '%s\n' "${RELEASE_VERSION}" >VERSION
           echo "VERSION=$(cat VERSION)"
 
-      - name: Verify framework pins
-        shell: bash
-        run: bash psxrecomp/tools/ci/verify_pins.sh
-
-      - name: Record pinned framework revisions
+      # Submodule gitlinks are the pin; this step only logs SHAs for the job.
+      - name: Record framework revisions
         shell: bash
         run: bash psxrecomp/tools/ci/record_pins.sh
 

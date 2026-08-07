@@ -617,7 +617,7 @@ Build emitters, Generate, then playable runtime:
 "@
 }
 $CiNote = if ($useCi) {
-    "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; verify_pins.sh gated)."
+    "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; submodule gitlinks pin the build)."
 } else {
     "CI workflow not installed (declined)."
 }
@@ -637,7 +637,7 @@ Next steps:
   3. Label symbols in symbols.toml → python tools/sync_symbols.py
   4. Soak offline boot → netplay QA (if enabled) → tag vX.Y.Z.
   5. $CiNote
-     Pins: framework_pins.txt (CI verifies checkout matches)
+     Pins: submodule gitlinks (framework_pins.txt is an optional snapshot)
   6. $GhNote
 
 Docs: psxrecomp\docs\GAME_PROJECT_SETUP.md · psxrecomp\docs\SYMBOLS.md

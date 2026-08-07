@@ -46,6 +46,8 @@ Progressive map: `symbols.toml` → `python3 tools/sync_symbols.py` →
 
 ## Framework pins
 
-See `framework_pins.txt` (written at scaffold time). Release CI runs
-`psxrecomp/tools/ci/verify_pins.sh` — bump submodules deliberately and refresh
-pins; do not float on `main`/`master` in release CI.
+Submodule gitlinks (`psxrecomp`, optional `recomp-ui`, nested `recomp-net`)
+are authoritative. `framework_pins.txt` is an optional scaffold snapshot;
+release CI logs SHAs with `record_pins.sh` but builds whatever the gitlinks
+resolve to. Bump submodules deliberately — do not float on `main`/`master`
+in release CI.

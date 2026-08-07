@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Fail if checked-out submodule SHAs disagree with framework_pins.txt.
+# Optional local check: fail if checkout SHAs disagree with framework_pins.txt.
+#
+# Release CI does NOT run this — submodule gitlinks are authoritative; use
+# record_pins.sh to log SHAs. Keep this script for manual audits if you still
+# commit a framework_pins.txt snapshot.
 #
 # Pins file lines (either form is accepted):
 #   psxrecomp=<short> (<full40>)

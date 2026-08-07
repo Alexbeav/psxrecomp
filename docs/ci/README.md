@@ -10,8 +10,10 @@ standardized release flow.
 **New Project Layout** (`tools/new_project_layout/setup_project.{sh,ps1}`) copies
 this template into the title repo and replaces `YOUR_*` / `yourgame-release`
 using `--zip-prefix` (or a derived acronym) plus the window title. It also
-writes `scripts/package_setup_release.sh`, `README.md`, and `framework_pins.txt`,
-and can opt in wizard/netplay via `--enable-wizard` / `--enable-netplay`.
+writes `scripts/package_setup_release.sh`, `README.md`, and an optional
+`framework_pins.txt` snapshot, and can opt in wizard/netplay via
+`--enable-wizard` / `--enable-netplay`. Release CI pins via submodule gitlinks
+and only logs SHAs with `record_pins.sh` (no `verify_pins` gate).
 
 Manual:
 
@@ -32,8 +34,8 @@ Matrix: `ubuntu-24.04` (linux-x64), `windows-2022` (windows-x64),
 |--------|------|
 | `ci/normalize_version.sh` | Normalize / write `VERSION` + `TAG` |
 | `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
-| `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs |
-| `ci/verify_pins.sh` | Fail CI if checkout SHAs ≠ `framework_pins.txt` |
+| `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs (CI + scaffold) |
+| `ci/verify_pins.sh` | Optional local check vs `framework_pins.txt` (not used by release CI) |
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
 | `fetch_toolchain.sh` | Download/unpack cmake-clang-v1 (Windows emitter builds; optional embed) |
 | `stage_setup_sdk.sh` | Emitters, OpenBIOS, optional `toolchain/`, MinGW DLLs |

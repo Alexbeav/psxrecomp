@@ -77,7 +77,7 @@ Non-interactive / CI (`--yes` / `-Yes` or `PSXRECOMP_SETUP_YES=1`): requires
 | Include **recomp-ui**? | **N** → no `recomp-ui` submodule, `PSX_RECOMP_UI=OFF`, skip wizard/netplay |
 | Setup wizard? / Netplay? | Only asked if recomp-ui = Y |
 | Netplay lobby URL? | Only if netplay = Y; default host `netplay.retcomm.net` → `ws://…:8765` |
-| GitHub Actions release workflow? | Y → `.github/workflows/release.yml` (includes `verify_pins.sh`) |
+| GitHub Actions release workflow? | Y → `.github/workflows/release.yml` (logs submodule SHAs via `record_pins.sh`) |
 | Fetch libretro boxart? | Needs network |
 | Run Generate now? | Emitters + OpenBIOS + game C (`generated/` gitignored) |
 | Configure & build after Generate? | Only if Generate = Y |
@@ -95,9 +95,10 @@ What runs after answers:
 
 1. Create repo stubs (`CMakeLists.txt`, `game.toml`, codegen, rich `.gitignore`,
    `symbols.toml`, `README`, …) + copy `tools/sync_symbols.py`
-2. Submodule `psxrecomp` (+ `recomp-ui` only if accepted); pin SHAs →
-   `framework_pins.txt`
-3. Packager stub; optional CI workflow (pins gated by `verify_pins.sh`)
+2. Submodule `psxrecomp` (+ `recomp-ui` only if accepted); detach at fetched
+   SHAs; optional snapshot → `framework_pins.txt`
+3. Packager stub; optional CI workflow (submodule gitlinks are the pin;
+   `record_pins.sh` logs SHAs)
 4. Stage disc → `probe_disc.py` (marketing + seeds) → `psx_symbols.h` →
    optional boxart → initial commit → optional `gh repo create` (no push) →
    optional Generate → optional cmake/ninja build → single `git push` +
@@ -217,7 +218,7 @@ YourGameRecomp/                 # your git repo
 ├── CMakeLists.txt              # thin: psxrecomp_add_game_runtime(...)
 ├── game.toml                   # probe autofills identity / netplay gates
 ├── catalog_identity.json       # RetComM / catalog digests + track_counts + disc_fp
-├── framework_pins.txt          # scaffold: pinned psxrecomp / recomp-ui / recomp-net SHAs
+├── framework_pins.txt          # optional scaffold snapshot (gitlinks are authoritative)
 ├── README.md                   # scaffold stub (legal + quick start)
 ├── VERSION                     # release pin (e.g. 0.1.0)
 ├── seeds/ghidra_funcs.txt      # probe: boot-EXE JAL seeds (grow over time)
@@ -267,9 +268,10 @@ git submodule add -b master https://github.com/mstan/recomp-ui.git recomp-ui
 git submodule update --init --recursive
 ```
 
-The New Project Layout scaffold **pins** the fetched SHAs (detached HEAD +
-`framework_pins.txt`). Do not float on `main`/`master` in release CI — bump
-submodules deliberately when you want a newer framework or UI.
+The New Project Layout scaffold **pins** via detached submodule gitlinks
+(optional `framework_pins.txt` snapshot for humans/logs). Do not float on
+`main`/`master` in release CI — bump submodules deliberately when you want a
+newer framework or UI.
 
 Clone for contributors:
 
@@ -418,7 +420,7 @@ Use this before tagging a setup-host release that matches other titles
   `required_tracks` + `required_disc_fp` so Track-01-only dumps cannot go
   online against full Redump cues
   ```
-- [ ] Optional: commit `catalog_identity.json` + `framework_pins.txt`
+- [ ] Optional: commit `catalog_identity.json` (+ `framework_pins.txt` snapshot)
 - [ ] `seeds/ghidra_funcs.txt` covers the boot path (probe JAL pass + discoveries);
   ```
   `VERSION` matches the release you will tag
@@ -427,7 +429,10 @@ Use this before tagging a setup-host release that matches other titles
   ```
   (scaffold writes a rich `.gitignore`; see also `docs/ci/templates/game.gitignore`)
   ```
-- [ ] `framework_pins.txt` matches submodule SHAs (`verify_pins.sh` in release CI)
+- [ ] Submodule gitlinks (`psxrecomp` / `recomp-ui` / nested `recomp-net`) are
+  ```
+  the SHAs you intend to ship (CI builds those; `record_pins.sh` only logs)
+  ```
 - [ ] Setup-host CMake path builds with **no** game C and **no** BIOS backends
   ```
   (e.g. `-DPSXRECOMP_ALLOW_NO_BIOS=ON` + your title’s force-setup option)

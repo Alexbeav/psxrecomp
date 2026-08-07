@@ -877,7 +877,7 @@ fi
 
 CI_NOTE="CI workflow not installed (declined)."
 if [ "$ENABLE_CI" -eq 1 ] && [ "$CI_WORKFLOW_OK" -eq 1 ]; then
-    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; verify_pins.sh gated)."
+    CI_NOTE="CI: .github/workflows/release.yml ready (zip prefix=$ZIP_PREFIX; submodule gitlinks pin the build)."
     if [ "$GITHUB_PUSHED" -eq 1 ]; then
         CI_NOTE="$CI_NOTE Pushed — open Actions → Release builds (workflow_dispatch)."
     fi
@@ -904,7 +904,7 @@ Next steps:
   3. Label symbols in symbols.toml → python3 tools/sync_symbols.py
   4. Soak offline boot → netplay QA (if enabled) → tag vX.Y.Z.
   5. $CI_NOTE
-     Pins: framework_pins.txt (CI verifies checkout matches)
+     Pins: submodule gitlinks (framework_pins.txt is an optional snapshot)
   6. $GH_NOTE
 
 Docs: psxrecomp/docs/GAME_PROJECT_SETUP.md · psxrecomp/docs/SYMBOLS.md
