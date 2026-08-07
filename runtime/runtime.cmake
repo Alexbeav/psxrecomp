@@ -301,10 +301,18 @@ if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt
     if(NOT TARGET recomp_net)
         set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        # MotK lobby ice_p2p needs libjuice. Default ON with netplay; no FORCE
+        # so -DRNET_ENABLE_ICE=OFF still wins (LAN-only / offline configure).
+        set(RNET_ENABLE_ICE ON CACHE BOOL
+            "Build libjuice ICE transport (default ON with PSX_NETPLAY)")
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
     endif()
     set(PSXRECOMP_HAS_RECOMP_NET TRUE)
-    message(STATUS "psxrecomp: recomp-net netplay enabled (${RECOMP_NET_ROOT})")
+    if(RNET_ENABLE_ICE)
+        message(STATUS "psxrecomp: recomp-net netplay+ICE enabled (${RECOMP_NET_ROOT})")
+    else()
+        message(STATUS "psxrecomp: recomp-net netplay enabled, ICE off (${RECOMP_NET_ROOT})")
+    endif()
 else()
     set(PSXRECOMP_HAS_RECOMP_NET FALSE)
     if(PSX_NETPLAY)
