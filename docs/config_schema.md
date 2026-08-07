@@ -329,9 +329,14 @@ The other load-time accelerators are likewise opt-in:
 ```toml
 [runtime]
 turbo_loads = true
+offer_turbo_loads = true
 idle_skip = true
 turbo_audio_sink = true
 ```
+
+`offer_turbo_loads` defaults to true. A game that moves load acceleration into
+its mod catalog sets it false; the generic Settings switch is hidden and stale
+persisted values are ignored before the selected mod activation callback runs.
 
 `turbo_audio_sink` is meaningful only while `turbo_loads` is active. It keeps
 the guest SPU timeline advancing but discards accelerated samples before host

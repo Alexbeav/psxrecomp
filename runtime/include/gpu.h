@@ -157,6 +157,9 @@ void gpu_ws_bg2d_configure(uint32_t layer_base, uint32_t ring_base,
                            uint32_t map_size_addr, uint32_t layer_stride_addr,
                            uint32_t ring_cols, uint32_t layer_count,
                            uint32_t layer_struct_stride, uint32_t packet_cap);
+/* Some Capcom variants (MMX5/MMX6) can compose a layer's scroll with a parent
+ * selected by byte +0x52. MMX4's streamer always uses each layer's own scroll. */
+void gpu_ws_bg2d_set_parent_links(int on);
 int psx_ws_bg2d_cols(int base);
 int psx_ws_bg2d_startcol(int col, unsigned mask);
 int psx_ws_bg2d_startx(int x);
@@ -217,6 +220,7 @@ void gpu_ws_set_activation_guard_pixels(int pixels);
 void gpu_ws_set_explicit_cull_sites(const uint32_t *bias, int nbias,
                                     const uint32_t *slti, int nslti,
                                     const uint32_t *range, int nrange);
+void gpu_ws_set_slti_lower_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_negsub_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_vxrange_cull_sites(const uint32_t *sites, int nsites);
 void gpu_ws_set_depth_cull_sites(const uint32_t *sites, int nsites);
@@ -245,6 +249,7 @@ void gpu_ws_set_aspect_cone(const uint32_t *addresses,
                             const uint32_t queue_type_masks[3]);
 int  psx_ws_is_cull_bias_site(uint32_t pc);
 int  psx_ws_is_cull_slti_site(uint32_t pc);
+int  psx_ws_is_cull_slti_lower_site(uint32_t pc);
 int  psx_ws_is_cull_negsub_site(uint32_t pc);
 int  psx_ws_is_cull_vxrange_site(uint32_t pc);
 int  psx_ws_is_cull_depth_site(uint32_t pc);
@@ -280,6 +285,7 @@ int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);
  * ws_cull_detect.h): right-edge widen for `slti v, minSX, W` and left-edge
  * widen for the paired `bltz maxSX` reject. Identity at 4:3. */
 int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);
+int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm);
 int  psx_ws_cull_bltz(uint32_t v);
 int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm);
 /* True if a run of instruction words carries the screen-extent reject signature
@@ -297,11 +303,22 @@ int  psx_ws_is_cull_w_imm(uint32_t imm);
  * never opted in must never have its live code pattern-scanned and rewritten. */
 void gpu_ws_set_auto_hooks(int cull_on, int backdrop_on);
 int  psx_ws_auto_cull_on(void);
+/* Perspective-correct UV interpolation for textured world polygons
+ * ([video] perspective_texturing). Also turns on the SWC2 RAM-provenance
+ * tracking it needs, so a polygon only qualifies when every position word in
+ * its DMA packet was written by a GTE projection store. Default off. */
+void gpu_texture_correction_set(int enabled);
+/* Triangles drawn with perspective-correct UVs since startup. */
+uint32_t gpu_texture_correction_hits(void);
 /* GTE-activity gameplay detector ([widescreen] gte_game_mode) for 3D titles
  * with no sprite-tag helper: gte.cpp notes every RTPS/RTPT projection; a frame
  * that projects enough vertices is stamped as gameplay. */
 void gpu_ws_set_gte_game_mode(int on);
 void psx_ws_note_gte_project(int nverts);
+/* Optional authoritative gameplay-state gate. When configured, it replaces
+ * heuristic gameplay classification for native-wide presentation. */
+void gpu_ws_set_gameplay_state_gate(uint32_t addr,
+                                    const uint32_t *values, int nvalues);
 /* Native-wide HUD corner re-anchoring ([widescreen] nw_hud_corners): push
  * outer-third screen-space HUD primitives out to the true wide-frame corners
  * (they otherwise sit inset by the reveal). Runtime-only. Off by default. */

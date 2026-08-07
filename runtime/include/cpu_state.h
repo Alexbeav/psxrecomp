@@ -205,6 +205,20 @@ extern void     gte_precision_timeline_invalidate(void);
 extern void     gte_precision_speculative_begin(void);
 extern void     gte_precision_speculative_end(void);
 extern void     gte_precision_store_word(uint32_t addr, uint8_t reg);
+/* Sub-pixel vertex precision ([video] geometry_correction). Enables the side
+ * cache that retains the 16.16 projection fraction the GTE discards when it
+ * saturates SXY to integer screen pixels. Guest-visible GTE state is
+ * unchanged — this is a visual-only enhancement, default off. */
+extern void     gte_geometry_correction_set(int enabled);
+extern int      gte_geometry_correction_enabled(void);
+/* Corrected vertices consumed since the last gte_geometry_correction_set —
+ * the "is this actually doing anything on this title" counter. */
+extern uint32_t gte_geometry_correction_hits(void);
+/* Lookup census: attempted, hit, and the two miss classes. The position table
+ * is exact, so miss_unrecorded counts genuine tracking-coverage gaps. */
+extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
+                                              uint32_t *miss_unrecorded,
+                                              uint32_t *miss_ambiguous);
 
 /* ============================================================================
  * Dispatch call contract (Bug D / wild-return family fix)

@@ -45,7 +45,7 @@ struct BiosProfile {
 void usage(const char* program) {
     fmt::print(
         "Usage:\n"
-        "  {} build --disc <game.cue|bin|iso> --bios <PS1_BIOS.BIN> "
+        "  {} build --disc <game.cue|bin|iso|chd> --bios <PS1_BIOS.BIN> "
         "--output <directory> [--name <title>]\n\n"
         "The output contains generated game/BIOS C, game.toml, CMakeLists.txt,\n"
         "and build scripts. No compiler toolchain is bundled.\n"

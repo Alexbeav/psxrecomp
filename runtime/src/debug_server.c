@@ -24,6 +24,7 @@
 #include "cpu_state.h"
 #include "dma.h"
 #include "gpu.h"
+#include "gpu_render.h"   /* gr_scale + gr_render_display_hires (screenshot_hires) */
 #include "present_ring.h"
 #include "load_transition_ring.h"
 #include "cdrom.h"
@@ -310,6 +311,23 @@ static int s_input_frames   = 0;
  * pad sampler alongside the button word. */
 static int     s_axis_override = 0;
 static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
+
+/*
+ * Exact guest-VBlank input route. A client queues run-length encoded digital
+ * pad segments while inactive, then starts the route atomically. Consuming the
+ * queue in debug_server_get_input_override() avoids host/TCP timing gaps
+ * between short presses and remains deterministic while turbo loads are active.
+ */
+#define INPUT_ROUTE_MAX_STEPS 4096
+typedef struct {
+    uint32_t frames;
+    uint16_t buttons;
+} InputRouteStep;
+static InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
+static uint32_t s_input_route_count = 0;
+static uint32_t s_input_route_index = 0;
+static uint32_t s_input_route_remaining = 0;
+static int      s_input_route_active = 0;
 
 /* ---- Frontend turbo override ---- */
 static volatile int s_turbo_enabled = 0;
@@ -4693,6 +4711,39 @@ static void handle_write_ram(int id, const char *json)
     send_ok(id);
 }
 
+/* geom_correction — is [video] geometry_correction / perspective_texturing
+ * actually doing anything on THIS title?
+ *
+ * Both enhancements are silent no-ops on content they cannot prove is
+ * projected geometry: a vertex whose sub-pixel fraction was never cached, or a
+ * packet whose position words lack full GTE projection provenance, simply draws
+ * the faithful way. So "enabled" alone tells you nothing — these counters are
+ * how you tell an engaged correction from an inert one. Both are free-running
+ * totals; sample twice and diff for a per-window rate. */
+static void handle_geom_correction(int id, const char *json)
+{
+    (void)json;
+    /* The miss split is the diagnostic that matters. The position table is
+     * exact (one slot per reachable SXY, no hashing), so "unrecorded" means no
+     * projection was EVER cached at that screen position — a real coverage gap
+     * in the tracking, not a cache artifact. A high unrecorded share means the
+     * game's vertex path never reaches us in a matchable form, which only
+     * full value propagation can fix; a high ambiguous share instead means
+     * distinct vertices are landing on the same pixel. */
+    uint32_t lookups = 0, hits = 0, unrec = 0, ambig = 0;
+    gte_geometry_correction_stats(&lookups, &hits, &unrec, &ambig);
+    send_fmt("{\"id\":%d,\"ok\":true,"
+             "\"geometry_correction\":%d,"
+             "\"geometry_vertex_hits\":%u,"
+             "\"perspective_triangles\":%u,"
+             "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u}",
+             id,
+             gte_geometry_correction_enabled(),
+             (unsigned)hits,
+             (unsigned)gpu_texture_correction_hits(),
+             (unsigned)lookups, (unsigned)unrec, (unsigned)ambig);
+}
+
 static void handle_gpu_state(int id, const char *json)
 {
     (void)json;
@@ -5832,6 +5883,13 @@ static void handle_spu_status(int id, const char *json)
     (void)json;
     SpuDebugInfo info;
     spu_debug_info(&info);
+    /* The DSP-fidelity state (issue #103: SPU IRQ, reverb, noise, sweeps) lives
+     * in SpuGlobalState. Surfaced here so the whole SPU can be judged from one
+     * always-on query — without it there is no way to tell whether the reverb
+     * engine is actually stepping, whether the IRQ is armed, or which volume
+     * registers are sweeping. */
+    SpuGlobalState g;
+    spu_get_global_state(&g);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"ctrl\":\"0x%04X\",\"active_mask\":\"0x%06X\","
              "\"main_l\":%d,\"main_r\":%d,"
@@ -5840,7 +5898,15 @@ static void handle_spu_status(int id, const char *json)
              "\"render_frames\":%llu,\"nonzero_frames\":%llu,"
              "\"last_peak\":%d,\"peak\":%d,"
              "\"cd_frames\":%u,\"cd_push_frames\":%llu,"
-             "\"cd_overflow_frames\":%llu,\"cd_underflow_frames\":%llu}",
+             "\"cd_overflow_frames\":%llu,\"cd_underflow_frames\":%llu,"
+             "\"pmon\":\"0x%06X\",\"non\":\"0x%06X\",\"eon\":\"0x%06X\","
+             "\"endx\":\"0x%06X\","
+             "\"irq_flag\":%u,\"irq_addr\":\"0x%05X\","
+             "\"reverb_on\":%u,\"reverb_mbase\":\"0x%05X\","
+             "\"reverb_cur\":\"0x%05X\",\"capture_pos\":\"0x%03X\","
+             "\"noise_lfsr\":\"0x%04X\","
+             "\"sweep_l_mask\":\"0x%06X\",\"sweep_r_mask\":\"0x%06X\","
+             "\"sweep_main\":%u}",
              id,
              info.ctrl & 0xFFFFu,
              info.active_mask & 0xFFFFFFu,
@@ -5856,7 +5922,21 @@ static void handle_spu_status(int id, const char *json)
              info.cd_frames,
              (unsigned long long)info.cd_push_frames,
              (unsigned long long)info.cd_overflow_frames,
-             (unsigned long long)info.cd_underflow_frames);
+             (unsigned long long)info.cd_underflow_frames,
+             g.pmon & 0xFFFFFFu,
+             g.non  & 0xFFFFFFu,
+             g.eon  & 0xFFFFFFu,
+             g.endx & 0xFFFFFFu,
+             (unsigned)g.irq_flag,
+             g.irq_addr & 0xFFFFFu,
+             (unsigned)g.reverb_on,
+             g.reverb_mbase & 0xFFFFFu,
+             g.reverb_cur & 0xFFFFFu,
+             g.capture_pos & 0xFFFu,
+             (unsigned)g.noise_lfsr,
+             g.sweep_l_mask & 0xFFFFFFu,
+             g.sweep_r_mask & 0xFFFFFFu,
+             (unsigned)g.sweep_main);
 }
 
 /* ---- Per-voice SPU snapshot. Mirrors fields the Beetle oracle exposes
@@ -5872,7 +5952,9 @@ static void handle_spu_voices(int id, const char *json)
     SpuGlobalState g;
     spu_get_global_state(&g);
 
-    size_t cap = 8192;
+    /* 24 voices x ~280 chars + header. Headroom matters: snprintf would silently
+     * truncate mid-object and hand the caller unparseable JSON. */
+    size_t cap = 16384;
     char *out = (char *)malloc(cap);
     if (!out) { send_fmt("{\"id\":%d,\"ok\":false,\"err\":\"alloc\"}", id); return; }
     size_t off = 0;
@@ -5901,7 +5983,11 @@ static void handle_spu_voices(int id, const char *json)
             "\"adsr_lo\":\"0x%04X\",\"adsr_hi\":\"0x%04X\","
             "\"cur_addr\":\"0x%05X\",\"repeat_addr\":\"0x%05X\","
             "\"flags\":\"0x%02X\",\"sample_idx\":%d,\"phase\":\"0x%04X\","
-            "\"env\":\"0x%04X\",\"env_phase\":%d}",
+            "\"env\":\"0x%04X\",\"env_phase\":%d,"
+            /* Live effective volumes. For a sweeping register (bit 15 set) the
+             * vol_l/vol_r control words above say nothing about the current
+             * level, so these are the only way to see a sweep actually glide. */
+            "\"vol_cur_l\":%d,\"vol_cur_r\":%d}",
             v == 0 ? "" : ",",
             v, s.active,
             s.vol_ctrl_l, s.vol_ctrl_r,
@@ -5911,7 +5997,8 @@ static void handle_spu_voices(int id, const char *json)
             s.adsr_lo, s.adsr_hi,
             s.cur_addr, s.repeat_addr,
             s.last_flags, s.sample_idx, s.phase,
-            s.env_level, s.adsr_phase);
+            s.env_level, s.adsr_phase,
+            s.vol_cur_l, s.vol_cur_r);
         if (n > 0) off += (size_t)n;
     }
     n = snprintf(out + off, cap - off, "]}");
@@ -5940,7 +6027,7 @@ static void handle_spu_ram(int id, const char *json)
 }
 
 /* ---- SPU event ring dump. Returns the most recent N events
- * (KEYON / KEYOFF / END_STOP / END_LOOP) with frame timestamps. */
+ * (KEYON / KEYOFF / END_STOP / END_LOOP / IRQ) with frame timestamps. */
 static void handle_spu_events(int id, const char *json)
 {
     int count = json_get_int(json, "count", 256);
@@ -5950,7 +6037,12 @@ static void handle_spu_events(int id, const char *json)
     if (!evs) { send_fmt("{\"id\":%d,\"ok\":false,\"err\":\"alloc\"}", id); return; }
     uint32_t got = spu_event_get(evs, (uint32_t)count);
     uint64_t total = spu_event_total();
-    static const char *kind_names[5] = { "?", "KEYON", "KEYOFF", "END_STOP", "END_LOOP" };
+    /* Index by SpuEventKind (spu.h). IRQ (=5) is not voice-attributable; the
+     * ring stores voice=0xFF for it and `addr` is the byte address that matched
+     * the programmed IRQ address. Keep this table in step with SpuEventKind or
+     * a new kind renders as "?". */
+    static const char *kind_names[6] = { "?", "KEYON", "KEYOFF", "END_STOP",
+                                         "END_LOOP", "IRQ" };
 
     /* Worst case ~200 chars per event; 64 KB is plenty for 4096 events. */
     size_t cap = 256u + (size_t)got * 256u;
@@ -5963,7 +6055,8 @@ static void handle_spu_events(int id, const char *json)
     if (n > 0) off += (size_t)n;
     for (uint32_t i = 0; i < got; i++) {
         const SpuEvent *e = &evs[i];
-        const char *kn = (e->kind <= 4) ? kind_names[e->kind] : "?";
+        const char *kn = (e->kind < sizeof(kind_names) / sizeof(kind_names[0]))
+                         ? kind_names[e->kind] : "?";
         n = snprintf(out + off, cap - off,
             "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"v\":%d,"
             "\"pitch\":\"0x%04X\",\"addr\":\"0x%05X\","
@@ -6911,11 +7004,82 @@ static void handle_pad_status(int id, const char *json)
 static void handle_clear_input(int id, const char *json)
 {
     (void)json;
+    s_input_route_active = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = 0;
     s_input_override = -1;
     s_input_frames   = 0;
     s_axis_override  = 0;
     s_axis_st[0] = s_axis_st[1] = s_axis_st[2] = s_axis_st[3] = 0x80;
     send_ok(id);
+}
+
+static void handle_input_route_clear(int id, const char *json)
+{
+    (void)json;
+    s_input_route_active = 0;
+    s_input_route_count = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = 0;
+    send_ok(id);
+}
+
+static void handle_input_route_append(int id, const char *json)
+{
+    int frames = json_get_int(json, "frames", -1);
+    int buttons = json_get_int(json, "buttons", -1);
+    if (s_input_route_active) {
+        send_err(id, "input route is active"); return;
+    }
+    if (frames <= 0) {
+        send_err(id, "frames must be positive"); return;
+    }
+    if (buttons < 0 || buttons > 0xFFFF) {
+        send_err(id, "buttons must be a 16-bit pad word"); return;
+    }
+    if (s_input_route_count >= INPUT_ROUTE_MAX_STEPS) {
+        send_err(id, "input route is full"); return;
+    }
+    InputRouteStep *step = &s_input_route[s_input_route_count++];
+    step->frames = (uint32_t)frames;
+    step->buttons = (uint16_t)buttons;
+    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u}\n",
+             id, (unsigned)s_input_route_count);
+}
+
+static void handle_input_route_start(int id, const char *json)
+{
+    (void)json;
+    if (s_input_route_count == 0) {
+        send_err(id, "input route is empty"); return;
+    }
+    s_input_override = -1;
+    s_input_frames = 0;
+    s_axis_override = 0;
+    s_input_route_index = 0;
+    s_input_route_remaining = s_input_route[0].frames;
+    s_input_route_active = 1;
+    send_fmt("{\"id\":%d,\"ok\":true,\"steps\":%u,\"start_frame\":%llu}\n",
+             id, (unsigned)s_input_route_count,
+             (unsigned long long)s_frame_count);
+}
+
+static void handle_input_route_stop(int id, const char *json)
+{
+    (void)json;
+    s_input_route_active = 0;
+    s_input_route_remaining = 0;
+    send_ok(id);
+}
+
+static void handle_input_route_status(int id, const char *json)
+{
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"active\":%s,\"steps\":%u,"
+             "\"index\":%u,\"remaining\":%u}\n",
+             id, s_input_route_active ? "true" : "false",
+             (unsigned)s_input_route_count, (unsigned)s_input_route_index,
+             (unsigned)s_input_route_remaining);
 }
 
 /* Live A/B for the native-wide HUD corner gate:
@@ -7699,9 +7863,11 @@ static void handle_get_snapshots(int id, const char *json)
  * — which keeps the self-contained static runtime self-contained. */
 #include "png_write.h"   /* png_write_rgb + zlib/CRC helpers (shared with Beetle) */
 
-/* Unified screenshot: writes an 8-bit RGB PNG of the current display to "path"
- * (default psx_screenshot.png in the runtime cwd) and answers with a single
- * metadata line.  Registered as both "screenshot" and "screenshot_file";
+/* Canonical screenshot: writes an 8-bit RGB PNG of the current PSX display to
+ * "path" (default psx_screenshot.png in the runtime cwd) and answers with a
+ * single metadata line. Registered as "screenshot_file"; the user-facing
+ * "screenshot" command selects the presented native-wide surface when one is
+ * active and falls back to this canonical capture at 4:3.
  * the old "screenshot" inline-hex-row variant streamed h+1 response lines
  * per request, which violated the one-request/one-response protocol and
  * poisoned every client connection that used it. */
@@ -7915,6 +8081,77 @@ static void handle_screenshot_file(int id, const char *json)
              id, path, w, h);
 }
 
+/* screenshot_hires — capture the SUPERSAMPLED surface, not native VRAM.
+ *
+ * screenshot_file above reads gpu_display_pixel_rgb, i.e. the native 15-bit
+ * VRAM the PS1 would have produced. That is the right capture for faithfulness
+ * work, but it is BLIND to any enhancement that lives only in the high-
+ * resolution mirror: at [video] supersampling >= 2 the geometry-correction
+ * sub-pixel vertices, the SSAA edges and the perspective UVs are all resolved
+ * in the hi-res surface and are gone by the time pixels are packed back to
+ * native. Verifying those against a native screenshot silently "confirms" a
+ * clean frame while the player is looking at a broken one — which is exactly
+ * how the geometry-correction cracking got mis-reported as fixed.
+ *
+ * This routes the same present path the window uses (gr_render_display_hires),
+ * so what lands in the PNG is what the player sees. Falls back to the native
+ * resolve when no hi-res surface exists (supersampling 1 / software), so the
+ * command always answers with something truthful about the actual output. */
+static void handle_screenshot_hires(int id, const char *json)
+{
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.width == 0 || di.height == 0) {
+        send_err(id, "display disabled"); return;
+    }
+    if (di.depth24) { send_err(id, "24bpp scanout (unsupported)"); return; }
+
+    int scale = gr_scale();
+    if (scale < 1) scale = 1;
+    uint32_t w = di.width, h = di.height;
+    if (w > 640) w = 640;
+    if (h > 512) h = 512;
+    uint32_t ow = w * (uint32_t)scale, oh = h * (uint32_t)scale;
+
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
+    if (!argb) { send_err(id, "alloc failed"); return; }
+    int got = gr_render_display_hires(argb, (int)ow, (int)di.display_x,
+                                      (int)di.display_y, (int)w, (int)h);
+    if (!got) {
+        /* No hi-res surface (scale 1, or a backend without one): resolve the
+         * native display instead and say so, rather than emitting a blank. */
+        scale = 1; ow = w; oh = h;
+        got = gr_render_display(argb, (int)ow, (int)di.display_x,
+                                (int)di.display_y, (int)w, (int)h);
+        if (!got) { free(argb); send_err(id, "no display surface"); return; }
+    }
+
+    uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
+    if (!rgb) { free(argb); send_err(id, "alloc failed"); return; }
+    for (size_t i = 0; i < (size_t)ow * oh; i++) {
+        uint32_t p = argb[i];
+        rgb[i * 3 + 0] = (uint8_t)((p >> 16) & 0xFF);
+        rgb[i * 3 + 1] = (uint8_t)((p >> 8) & 0xFF);
+        rgb[i * 3 + 2] = (uint8_t)(p & 0xFF);
+    }
+    free(argb);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(rgb); send_err(id, "cannot open file"); return; }
+    int ok = png_write_rgb(f, rgb, ow, oh);
+    free(rgb);
+    fclose(f);
+    if (!ok) { send_err(id, "png encode failed"); return; }
+
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
+             "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
 /* dump_buffer: dump a raw 512x240 VRAM region starting at display Y = `y` to a
  * PNG, regardless of what the game currently displays. Used to inspect BOTH
  * double-buffer halves (y=0 and y=256) coherently in one call to see whether a
@@ -8013,6 +8250,21 @@ static void handle_wide_shot(int id, const char *json)
     if (!ok) { send_err(id, "png encode failed"); return; }
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%d,\"height\":%d}",
              id, path, W, H);
+}
+
+/* screenshot: capture what the player is actually being shown. Native-wide
+ * presentation is wider than the canonical PSX display rectangle, so routing
+ * this command unconditionally through handle_screenshot_file silently omits
+ * precisely the reveal margins that widescreen diagnostics need to inspect.
+ * Keep screenshot_file as the explicit canonical-VRAM probe. */
+static void handle_present_screenshot(int id, const char *json)
+{
+    extern int gr_wide_supported(void);
+    if (gr_wide_supported() && ws_nw_extra() > 0) {
+        handle_wide_shot(id, json);
+        return;
+    }
+    handle_screenshot_file(id, json);
 }
 
 /* wide_full: dump the ENTIRE active wide compositor surface (both double-buffer
@@ -12335,6 +12587,7 @@ static const CmdEntry s_commands[] = {
     { "dump_ram",          handle_read_ram },   /* alias: one request, one response */
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
+    { "geom_correction",   handle_geom_correction },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },
@@ -12498,6 +12751,11 @@ static const CmdEntry s_commands[] = {
     { "press",             handle_press },
     { "pad_status",        handle_pad_status },
     { "clear_input",       handle_clear_input },
+    { "input_route_clear", handle_input_route_clear },
+    { "input_route_append",handle_input_route_append },
+    { "input_route_start", handle_input_route_start },
+    { "input_route_stop",  handle_input_route_stop },
+    { "input_route_status",handle_input_route_status },
     { "savestate",         handle_savestate },
     { "turbo",             handle_turbo },
     { "turbo_state",       handle_turbo_state },
@@ -12516,8 +12774,9 @@ static const CmdEntry s_commands[] = {
     { "read_frame_ram",    handle_read_frame_ram },
     { "set_snapshot",      handle_set_snapshot },
     { "get_snapshots",     handle_get_snapshots },
-    { "screenshot",        handle_screenshot_file },
-    { "screenshot_file",   handle_screenshot_file },   /* alias */
+    { "screenshot",        handle_present_screenshot },
+    { "screenshot_file",   handle_screenshot_file },
+    { "screenshot_hires",  handle_screenshot_hires },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },
@@ -13310,6 +13569,19 @@ int debug_server_is_connected(void)
 
 int debug_server_get_input_override(void)
 {
+    if (s_input_route_active && s_input_route_index < s_input_route_count) {
+        int current = (int)s_input_route[s_input_route_index].buttons;
+        if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
+            s_input_route_index++;
+            if (s_input_route_index < s_input_route_count) {
+                s_input_route_remaining =
+                    s_input_route[s_input_route_index].frames;
+            } else {
+                s_input_route_active = 0;
+            }
+        }
+        return current;
+    }
     int current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
         if (--s_input_frames == 0)

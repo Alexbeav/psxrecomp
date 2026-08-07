@@ -88,7 +88,13 @@ static std::string manifest(const std::string& id, const std::string& version,
         "id = \"" + id + "\"\n"
         "version = \"" + version + "\"\n"
         "name = \"" + id + "\"\n"
+        "author = \"Test Author\"\n"
+        "source_name = \"Upstream project\"\n"
+        "source_url = \"https://example.com/project\"\n"
         "resolver = \"declarative\"\n"
+        "[[author_link]]\n"
+        "name = \"Test Author\"\n"
+        "url = \"https://example.com/author\"\n"
         "[[target]]\n"
         "game_id = \"SLUS-TEST\"\n" + extra;
 }
@@ -143,6 +149,14 @@ int main() {
     ModPackageManager manager(root);
     std::string error;
     check(manager.scan(&error), error.c_str());
+    const ModPackage& metadata_package =
+        manager.packages().at("base.mod").at("1.0.0");
+    check(metadata_package.source_url == "https://example.com/project",
+          "package source URL must be retained");
+    check(metadata_package.author_links.size() == 1 &&
+              metadata_package.author_links[0].name == "Test Author" &&
+              metadata_package.author_links[0].url == "https://example.com/author",
+          "package author links must be retained");
     write_deflated_package(root / "zip.psxmod");
     check(manager.install_archive(root / "zip.psxmod", nullptr, nullptr, &error),
           error.c_str());

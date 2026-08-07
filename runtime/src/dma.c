@@ -18,6 +18,7 @@
 #include "dirty_ram_interp.h"
 #include "gpu.h"
 #include "mdec.h"
+#include "mod_memory.h"
 #include "overlay_capture.h"
 #include "spu.h"
 #include "audio_trace.h"
@@ -702,7 +703,8 @@ static uint32_t execute_ch2_gpu(void) {
          *            bits 0-23  = next node address (0xFFFFFF = end).
          * The words following the header are sent to GP0. */
         gpu_ws_begin_linked_list();
-        uint32_t addr = channels[2].madr & 0x1FFFFCu;
+        uint32_t addr =
+            psx_mod_gpu_dma_resolve_address(channels[2].madr);
         gpu_ws_prepass_linked_list(addr);
         uint32_t safety = 0;
         const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
@@ -716,7 +718,8 @@ static uint32_t execute_ch2_gpu(void) {
 
             uint32_t header = psx_read_word(addr);
             uint32_t num_words = (header >> 24) & 0xFF;
-            uint32_t word_addr = (addr + 4) & 0x1FFFFCu;
+            uint32_t word_addr =
+                psx_mod_gpu_dma_resolve_address(addr + 4u);
             gpu_set_gp0_linked_list_node(addr, num_words);
             actual_words += 1u;
 
@@ -724,7 +727,8 @@ static uint32_t execute_ch2_gpu(void) {
                 uint32_t word = psx_read_word(word_addr);
                 gpu_set_gp0_source(word_addr);
                 gpu_write_gp0(word);
-                word_addr = (word_addr + 4) & 0x1FFFFCu;
+                word_addr =
+                    psx_mod_gpu_dma_resolve_address(word_addr + 4u);
             }
             actual_words += num_words;
 
@@ -734,7 +738,7 @@ static uint32_t execute_ch2_gpu(void) {
                 channels[2].madr = 0x00FFFFFFu;
                 break; /* end of list */
             }
-            addr = next & 0x1FFFFCu;
+            addr = psx_mod_gpu_dma_resolve_address(next);
         }
         if (safety > MAX_NODES) {
             channels[2].madr = addr;
@@ -794,10 +798,19 @@ static uint32_t execute_ch4_spu(void) {
         audio_trace_event(AUDIO_EV_DMA_WRITE, total_words,
                           channels[4].madr & 0x1FFFFCu);
     } else {
+        /* SPU RAM -> CPU RAM. This direction previously zero-filled the
+         * destination, which is not a transfer at all: SPU RAM is readable
+         * memory and games do read it back. Titles that carry state through
+         * SPU RAM across an Exec boundary (a checksummed block surviving an
+         * EXE swap, since SPU RAM is one of the few regions main RAM's reload
+         * does not touch) got zeros, failed their own integrity check, and
+         * fell back to a cold-boot path. */
         for (uint32_t i = 0; i < total_words; i++) {
-            psx_write_word(addr, 0);
+            psx_write_word(addr, spu_dma_read());
             addr = (addr + addr_step) & 0x1FFFFCu;
         }
+        audio_trace_event(AUDIO_EV_DMA_READ, total_words,
+                          channels[4].madr & 0x1FFFFCu);
     }
 
     channels[4].madr = addr;
@@ -827,6 +840,36 @@ static void execute_ch6_otc(void) {
     }
 
     complete_transfer(6);
+}
+
+static void execute_ch5_pio(void) {
+    /* PIO (Parallel I/O) — used for expansion port / parallel port transfers.
+     * Very simple: just move words directly to/from RAM with no device interaction.
+     * Direction: 0 = to RAM (read from device), 1 = from RAM (write to device).
+     * For now, we just complete the transfer immediately as PIO devices are
+     * typically slow and the game handles timing via busy-wait on the port. */
+    uint32_t chcr = channels[5].chcr;
+    uint32_t direction = chcr & 1u;
+    uint32_t step = (chcr >> 1) & 1u;
+    uint32_t total_words = transfer_word_count(5);
+    uint32_t addr = channels[5].madr & 0x1FFFFCu;
+    int32_t addr_step = step ? -4 : 4;
+
+    if (direction == 1) {
+        /* from RAM to device: just read and discard */
+        for (uint32_t i = 0; i < total_words; i++) {
+            (void)psx_read_word(addr);
+            addr = (addr + addr_step) & 0x1FFFFCu;
+        }
+    } else {
+        /* to RAM from device: write zeros (device not emulated) */
+        for (uint32_t i = 0; i < total_words; i++) {
+            psx_write_word(addr, 0);
+            addr = (addr + addr_step) & 0x1FFFFCu;
+        }
+    }
+    channels[5].madr = addr;
+    complete_transfer(5);
 }
 
 static void try_execute(int ch) {
@@ -867,6 +910,9 @@ static void try_execute(int ch) {
         case 4:
             schedule_delayed_complete(4, execute_ch4_spu(),
                                       DMA_SPU_CYCLES_PER_WORD);
+            break;
+        case 5:
+            execute_ch5_pio();
             break;
         case 6:
             execute_ch6_otc();

@@ -25,6 +25,7 @@
 extern uint32_t i_stat;
 /* Central IRQ-raise choke point (interrupts.c) — also records the device ring. */
 extern void psx_irq_raise(uint32_t bit, uint32_t detail);
+extern void psx_irq_refresh_cause_ip2(void);  /* interrupts.c — CAUSE.IP2 mirror */
 extern uint32_t i_mask;
 
 #define COP0_SR    12
@@ -546,7 +547,13 @@ static void interp_check_interrupts(CPUState* cpu) {
     /* Fire interrupt exception.
      * Push SR stack, set Cause, set EPC, jump to vector. */
     cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & ~0x7Cu) | (0u << 2); /* ExcCode=0 (interrupt) */
-    cpu->cop0[COP0_CAUSE] |= (1u << 10); /* IP2 */
+    /* IP2 is combinational — it mirrors the INTC line and is owned solely by
+     * psx_irq_refresh_cause_ip2() (interrupts.c). Latching it here with |= was
+     * the same defect as the compiled delivery path had: the bit was set at
+     * delivery and never cleared, so it survived the guest's I_STAT ack as a
+     * phantom pending interrupt. We reach this point only when
+     * (i_stat & i_mask) != 0, so the mirror necessarily asserts it. */
+    psx_irq_refresh_cause_ip2();
     cpu->cop0[COP0_SR] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
     cpu->cop0[COP0_EPC] = cpu->pc;
 

@@ -1,7 +1,9 @@
 #include "mod_runtime.h"
 
 #include "disc_path.h"
+#include "iso_reader.h"
 #include "mod_packages.h"
+#include "mod_plugins.h"
 #include "psx_sha256.h"
 
 #if defined(RECOMP_LAUNCHER)
@@ -33,6 +35,14 @@
 
 extern "C" uint8_t psx_read_byte(uint32_t addr);
 extern "C" void psx_write_byte(uint32_t addr, uint8_t value);
+extern "C" uint16_t psx_read_half(uint32_t addr);
+extern "C" void psx_write_half(uint32_t addr, uint16_t value);
+extern "C" uint32_t psx_read_word(uint32_t addr);
+extern "C" void psx_write_word(uint32_t addr, uint32_t value);
+extern "C" uint32_t psx_mod_memory_alloc(uint32_t size, uint32_t alignment);
+extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t size,
+                                                  uint32_t alignment);
+extern "C" int psx_ws_x_margin(void);
 extern "C" void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 extern "C" int fntrace_is_game_started(void);
 
@@ -65,6 +75,17 @@ RuntimeMods& state() {
     return value;
 }
 
+struct FunctionEntryPlugin {
+    std::string id;
+    uint32_t address = 0;
+    PSXModFunctionEntryCallback callback = nullptr;
+};
+
+std::vector<FunctionEntryPlugin>& function_entry_plugins() {
+    static std::vector<FunctionEntryPlugin> value;
+    return value;
+}
+
 const ModPackage* selected_package(const std::string& id) {
     return state().manager.selected_package(id);
 }
@@ -84,6 +105,22 @@ std::string selected_value(const ModPackage& package, const ModOption& option) {
         if (value != selection->second.values.end()) return value->second;
     }
     return option.default_value;
+}
+
+/* Resolve the manifest's disabled_by link against the CURRENT selection: the
+ * named boolean sibling being true makes this option inert. Both the launcher
+ * (greys the control) and psx_mod_option_value (returns the default instead of
+ * a stale value) go through this, so the UI and the plugins can never disagree
+ * about whether a control counts. */
+bool option_is_disabled(const ModPackage& package, const ModOption& option) {
+    if (option.disabled_by.empty()) return false;
+    for (const ModOption& other : package.options) {
+        if (other.feature_id != option.feature_id ||
+            other.id != option.disabled_by)
+            continue;
+        return selected_value(package, other) == "true";
+    }
+    return false;
 }
 
 void build_disc_index(RuntimeMods& s) {
@@ -120,9 +157,40 @@ bool sha256_file(const std::filesystem::path& path, std::string& out,
                  std::string* error) {
     out.clear();
     if (path.empty()) return true;
-    const std::filesystem::path input = resolve_disc_path(path).data;
+    const DiscPathResolution resolved = resolve_disc_path(path);
+    const std::filesystem::path input = resolved.data;
     psx_sha256_ctx hash;
     psx_sha256_init(&hash);
+    std::string extension = resolved.mount.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension == ".chd") {
+        PS1::ISOReader disc;
+        if (!disc.Open(resolved.mount.string())) {
+            if (error) *error =
+                "cannot decode image fingerprint: " + resolved.mount.string();
+            return false;
+        }
+        std::array<uint8_t, 2352> sector{};
+        for (uint32_t lba = 0; lba < disc.GetSectorCount(); ++lba) {
+            if (!disc.ReadRawSector(lba, sector.data())) {
+                if (error) *error =
+                    "cannot finish decoding image fingerprint: " +
+                    resolved.mount.string();
+                return false;
+            }
+            psx_sha256_update(&hash, sector.data(), sector.size());
+        }
+        uint8_t digest[32];
+        psx_sha256_final(&hash, digest);
+        std::ostringstream text;
+        for (uint8_t byte : digest)
+            text << std::hex << std::setw(2) << std::setfill('0')
+                 << (unsigned)byte;
+        out = text.str();
+        return true;
+    }
+
     std::array<uint8_t, 1024 * 1024> buffer{};
     std::ifstream file(input, std::ios::binary);
     if (!file) {
@@ -187,6 +255,53 @@ std::filesystem::path raw_image_path(const std::filesystem::path& path,
 bool sha256_disc_range(const std::filesystem::path& image,
                        ModPatchTarget target, uint64_t location, size_t size,
                        std::string& out, std::string* error) {
+    std::string extension = image.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension == ".chd") {
+        PS1::ISOReader disc;
+        if (!disc.Open(image.string())) {
+            if (error) *error = "cannot open stock CHD range: " + image.string();
+            return false;
+        }
+        psx_sha256_ctx hash;
+        psx_sha256_init(&hash);
+        std::array<uint8_t, 2352> sector{};
+        size_t remaining = size;
+        uint64_t at = location;
+        const uint64_t sector_size =
+            target == ModPatchTarget::DiscRaw ? 2352u : 2048u;
+        while (remaining != 0) {
+            const uint64_t lba64 = at / sector_size;
+            if (lba64 >= disc.GetSectorCount()) {
+                if (error) *error = "overlay expected range exceeds stock CHD";
+                return false;
+            }
+            const size_t within = (size_t)(at % sector_size);
+            const bool read_ok =
+                target == ModPatchTarget::DiscRaw
+                    ? disc.ReadRawSector((uint32_t)lba64, sector.data())
+                    : disc.ReadSector((uint32_t)lba64, sector.data());
+            if (!read_ok) {
+                if (error) *error = "cannot decode stock CHD overlay range";
+                return false;
+            }
+            const size_t chunk =
+                std::min(remaining, (size_t)sector_size - within);
+            psx_sha256_update(&hash, sector.data() + within, chunk);
+            at += chunk;
+            remaining -= chunk;
+        }
+        uint8_t digest[32];
+        psx_sha256_final(&hash, digest);
+        std::ostringstream text;
+        for (uint8_t byte : digest)
+            text << std::hex << std::setw(2) << std::setfill('0')
+                 << (unsigned)byte;
+        out = text.str();
+        return true;
+    }
+
     const std::filesystem::path source = raw_image_path(image, error);
     if (source.empty()) return false;
     std::ifstream file(source, std::ios::binary);
@@ -435,8 +550,18 @@ int provider_package_get(void*, int index, RecompLauncherCModPackage* out) {
     copy_text(out->version, sizeof(out->version), package->version);
     copy_text(out->name, sizeof(out->name), package->name);
     copy_text(out->author, sizeof(out->author), package->author);
+    out->author_link_count = std::min(
+        (int)package->author_links.size(), RECOMP_LAUNCHER_MOD_AUTHOR_LINK_MAX);
+    for (int i = 0; i < out->author_link_count; ++i) {
+        copy_text(out->author_links[i].name, sizeof(out->author_links[i].name),
+                  package->author_links[(size_t)i].name);
+        copy_text(out->author_links[i].url, sizeof(out->author_links[i].url),
+                  package->author_links[(size_t)i].url);
+    }
     copy_text(out->description, sizeof(out->description), package->description);
     copy_text(out->license, sizeof(out->license), package->license);
+    copy_text(out->source_name, sizeof(out->source_name), package->source_name);
+    copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     out->enabled = package_has_enabled_feature(*package);
     out->option_count = (int)package->options.size();
     out->removable = !out->enabled;
@@ -463,6 +588,7 @@ int provider_option_get(void*, const char* package_id, int index,
     out->max_value = option.max_value;
     out->step = option.step;
     out->choice_count = (int)option.choices.size();
+    out->disabled = option_is_disabled(*package, option) ? 1 : 0;
     return 1;
 }
 
@@ -539,8 +665,19 @@ int provider_feature_get(void*, int index, RecompLauncherCModFeature* out) {
     copy_text(out->package_version, sizeof(out->package_version), package->version);
     copy_text(out->package_name, sizeof(out->package_name), package->name);
     copy_text(out->name, sizeof(out->name), feature->name);
-    copy_text(out->author, sizeof(out->author), package->author);
+    copy_text(out->author, sizeof(out->author),
+              feature->author.empty() ? package->author : feature->author);
+    out->author_link_count = std::min(
+        (int)package->author_links.size(), RECOMP_LAUNCHER_MOD_AUTHOR_LINK_MAX);
+    for (int i = 0; i < out->author_link_count; ++i) {
+        copy_text(out->author_links[i].name, sizeof(out->author_links[i].name),
+                  package->author_links[(size_t)i].name);
+        copy_text(out->author_links[i].url, sizeof(out->author_links[i].url),
+                  package->author_links[(size_t)i].url);
+    }
     copy_text(out->description, sizeof(out->description), feature->description);
+    copy_text(out->source_name, sizeof(out->source_name), package->source_name);
+    copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     copy_text(out->group, sizeof(out->group), feature->group);
     out->enabled =
         state().manager.feature_enabled(package->id, feature->id) ? 1 : 0;
@@ -583,6 +720,7 @@ int provider_feature_option_get(void*, const char* package_id,
     out->max_value = option.max_value;
     out->step = option.step;
     out->choice_count = (int)option.choices.size();
+    out->disabled = option_is_disabled(*package, option) ? 1 : 0;
     return 1;
 }
 
@@ -1043,6 +1181,63 @@ extern "C" uint8_t psx_mod_read_byte(uint32_t address) {
 
 extern "C" void psx_mod_write_byte(uint32_t address, uint8_t value) {
     psx_write_byte(address, value);
+}
+
+extern "C" uint16_t psx_mod_read_half(uint32_t address) {
+    return psx_read_half(address);
+}
+
+extern "C" void psx_mod_write_half(uint32_t address, uint16_t value) {
+    psx_write_half(address, value);
+}
+
+extern "C" uint32_t psx_mod_read_word(uint32_t address) {
+    return psx_read_word(address);
+}
+
+extern "C" void psx_mod_write_word(uint32_t address, uint32_t value) {
+    psx_write_word(address, value);
+}
+
+extern "C" void psx_mod_write_code_word(uint32_t address, uint32_t value) {
+    psx_write_word(address, value);
+    dirty_ram_mark_executable_range(address & 0x1FFFFFFFu, 4u);
+}
+
+extern "C" uint32_t psx_mod_alloc_guest_memory(uint32_t size,
+                                                uint32_t alignment) {
+    return psx_mod_memory_alloc(size, alignment);
+}
+
+extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
+                                                  uint32_t alignment) {
+    return psx_mod_gpu_dma_memory_alloc(size, alignment);
+}
+
+extern "C" int32_t psx_mod_widescreen_x_margin(void) {
+    return (int32_t)psx_ws_x_margin();
+}
+
+extern "C" int psx_mod_register_function_entry_plugin(
+    const char* id, uint32_t address, PSXModFunctionEntryCallback callback) {
+    using namespace PSXRecompV4;
+    if (!id || !*id || !address || !callback) return 0;
+    auto& plugins = function_entry_plugins();
+    const auto duplicate = std::find_if(
+        plugins.begin(), plugins.end(), [&](const FunctionEntryPlugin& item) {
+            return item.id == id && item.address == address;
+        });
+    if (duplicate != plugins.end()) return 0;
+    plugins.push_back(FunctionEntryPlugin{id, address, callback});
+    return 1;
+}
+
+extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {
+    using namespace PSXRecompV4;
+    if (!cpu) return;
+    for (const FunctionEntryPlugin& plugin : function_entry_plugins()) {
+        if (plugin.address == address) plugin.callback(cpu, address);
+    }
 }
 
 extern "C" void mod_runtime_patch_disc_sector(uint32_t lba, int raw_sector,

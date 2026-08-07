@@ -159,6 +159,24 @@ void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
     v.disc_fp = hex_sha256(toc.str());
 }
 
+bool is_chd_path(const fs::path& path) {
+    std::string ext = path.extension().string();
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext == ".chd";
+}
+
+bool crc32_chd(PS1::ISOReader& disc, uint32_t& result) {
+    uint32_t crc = 0xFFFFFFFFu;
+    std::vector<uint8_t> sector(2352);
+    const uint32_t count = disc.GetSectorCount();
+    for (uint32_t lba = 0; lba < count; ++lba) {
+        if (!disc.ReadRawSector(lba, sector.data())) return false;
+        crc = crc32_update(crc, sector.data(), sector.size());
+    }
+    result = crc ^ 0xFFFFFFFFu;
+    return true;
+}
+
 }  // namespace
 
 void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect) {
@@ -223,6 +241,74 @@ DiscIdentity identify_disc(const fs::path& path,
     fill_toc_from_mount(v, resolved);
 
     const fs::path data_path = resolved.data;
+    PS1::ISOReader disc;
+    if (is_chd_path(resolved.mount)) {
+        if (!disc.Open(resolved.mount.string())) {
+            v.detail = "Could not open or decode the CHD disc image.";
+            return v;
+        }
+        v.opened = true;
+
+        uint8_t sector[2048];
+        if (disc.ReadSector(16, sector) && is_iso_pvd(sector)) {
+            v.has_header = true;
+        }
+        if (!v.has_header) {
+            v.detail =
+                "No ISO9660 CD001 header was found in the CHD data track.";
+            v.region = region_from_serial(expected_serial);
+            return v;
+        }
+
+        std::string vol((const char*)&sector[40], 32);
+        const size_t last = vol.find_last_not_of(" \t\0");
+        if (last != std::string::npos) vol.erase(last + 1); else vol.clear();
+        v.volume_id = vol;
+
+        const uint32_t scan_sectors =
+            std::min<uint32_t>(disc.GetSectorCount(), 8192);
+        std::vector<uint8_t> scan((size_t)scan_sectors * 2048);
+        bool scan_ok = true;
+        for (uint32_t lba = 0; lba < scan_sectors; ++lba) {
+            if (!disc.ReadSector(lba, scan.data() + (size_t)lba * 2048)) {
+                scan_ok = false;
+                break;
+            }
+        }
+        if (scan_ok) {
+            v.detected_serial = scan_boot_serial(scan);
+            if (v.expected_serial_given) {
+                const std::string serial_id = uppercase_ascii(expected_serial);
+                std::string exe_id = serial_id;
+                if (serial_id.size() == 10 && serial_id[4] == '-')
+                    exe_id = serial_id.substr(0, 4) + "_" +
+                             serial_id.substr(5, 3) + "." +
+                             serial_id.substr(8, 2);
+                auto contains = [&](const std::string& needle) {
+                    if (needle.empty() || needle.size() > scan.size()) return false;
+                    return std::search(scan.begin(), scan.end(),
+                        needle.begin(), needle.end()) != scan.end();
+                };
+                v.serial_matches = contains(serial_id) || contains(exe_id) ||
+                    (!v.detected_serial.empty() &&
+                     v.detected_serial == serial_id);
+            }
+        } else {
+            v.detail = "The CHD header is present, but its data track could not be scanned.";
+        }
+        v.region = region_from_serial(
+            !v.detected_serial.empty() ? v.detected_serial : expected_serial);
+        if (compute_crc) {
+            v.crc_computed = crc32_chd(disc, v.crc);
+            if (!v.crc_computed) {
+                v.detail = "The CHD opened, but a raw sector could not be decoded.";
+            } else if (has_expected_crc) {
+                v.crc_matches = v.crc == expected_crc;
+            }
+        }
+        return v;
+    }
+
     std::ifstream f(data_path, std::ios::binary | std::ios::ate);
     if (!f.is_open()) {
         v.detail = resolved.note.empty()

@@ -63,6 +63,10 @@ struct CodeGenConfig {
     // See docs/DATA_SHARDS.md. Empty = no hooks (default).
     std::set<uint32_t> data_shard_funcs;
 
+    // Trusted game-mod entry hooks ([recompiler] mod_function_entry_funcs).
+    // Only explicitly listed guest functions call the runtime dispatcher.
+    std::set<uint32_t> mod_function_entry_funcs;
+
     // [recompiler] hot_funcs: emit __attribute__((hot)) on these guest
     // addresses (MotK VLC leaves, etc.). Host locality hint only.
     std::set<uint32_t> hot_funcs;
@@ -108,6 +112,9 @@ struct CodeGenConfig {
     // `slti rt, sx, W` emitted through psx_ws_cull_slti for funnel functions
     // the auto-detector cannot qualify (X-only test, no height compare).
     std::set<uint32_t> ws_cull_slti_sites;
+    // Signed lower-bound counterpart: `slti rt,sx,-W` compares against
+    // `-W-x_margin`, preserving the original result at 4:3.
+    std::set<uint32_t> ws_cull_slti_lower_sites;
 
     // `bltz rs, reject` emitted through psx_ws_cull_bltz — the explicit
     // LEFT-edge counterpart to ws_cull_slti_sites ([widescreen.cull]

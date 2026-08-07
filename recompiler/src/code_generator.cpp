@@ -1168,6 +1168,23 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                                reg_name(rt), reg_name(rs), (int)uimm, comment);
         }
     }
+    // Explicit signed lower-bound widen (`slti rt, sx, -W`). Unlike the
+    // min/max right-edge helper below, this moves the immediate left by one
+    // live reveal margin. The helper sign-extends the 16-bit immediate.
+    if (config_.ws_cull_slti_lower_sites.count(addr)) {
+        if (opcode == 0x0A) {  // slti
+            uint32_t rs = get_rs(instr), rt = get_rt(instr);
+            uint16_t uimm = get_imm16_u(instr);
+            return fmt::format("{} = psx_ws_cull_slti_lower({}, {});"
+                               "  /* ws cull slti lower site */{}",
+                               reg_name(rt), reg_name(rs), (int)uimm, comment);
+        } else if (!config_.overlay_mode) {
+            fmt::print(stderr, "ERROR: [widescreen.cull] slti_lower site "
+                       "0x{:08X} is not slti (opcode 0x{:02X})\n",
+                       addr, opcode);
+            std::exit(1);
+        }
+    }
     // Explicit signed right-edge widen site ([widescreen.cull] slti_sites) for
     // funnel functions the auto-detector cannot qualify (X-only, no H compare).
     if (config_.ws_cull_slti_sites.count(addr)) {
@@ -2509,6 +2526,13 @@ GeneratedFunction CodeGenerator::generate_function(
                                "  /* data-shard: replay or arm capture */\n",
                                func.start_addr);
     }
+    if (config_.mod_function_entry_funcs.count(func.start_addr)) {
+        body_ss << config_.indent
+                << fmt::format(
+                       "psx_mod_function_entry(cpu, 0x{:08X}u);"
+                       "  /* trusted opt-in game-mod hook */\n",
+                       func.start_addr);
+    }
     if (config_.ws_sprite_tag_funcs.count(func.start_addr)) {
         body_ss << config_.indent
                 << "psx_ws_sprite_tag(cpu);  /* widescreen: record prim ($a0) + anchor */\n";
@@ -2968,6 +2992,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern void cosim_instr(uint32_t pc);\n";
     ss << "#endif\n";
     ss << "extern int  psx_datashard_enter(CPUState* cpu, uint32_t key);  /* data-shard replay/capture (data_shards.c) */\n";
+    ss << "extern void psx_mod_function_entry(CPUState* cpu, uint32_t address);  /* trusted opt-in game-mod hook */\n";
     ss << "extern void psx_datashard_ret(CPUState* cpu);                  /* data-shard capture finalize */\n";
     ss << "extern int  psx_vsync_query_hle_enter(CPUState* cpu, uint32_t func, uint32_t counter_addr, uint32_t gpustat_ptr_addr, uint32_t timer1_ptr_addr, uint32_t timer1_cache_addr);  /* load_accel.c */\n";
     ss << "extern void psx_ws_sprite_tag(CPUState* cpu);  /* widescreen prim tag (gpu.c) */\n";
@@ -2976,6 +3001,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern int32_t psx_ws_player_x_bound(int32_t vanilla);  /* typed gameplay X bound */\n";
     ss << "extern int  psx_ws_cull_sltiu(uint32_t sx, uint32_t imm);  /* ws auto screen-x cull (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_slti(uint32_t sx, uint32_t imm);   /* ws cull signed right edge (gpu.c) */\n";
+    ss << "extern int  psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm); /* ws cull signed lower edge (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_bltz(uint32_t v);                  /* ws cull signed left edge (gpu.c) */\n";
     ss << "extern int  psx_ws_cull_vxrange(uint32_t x, uint32_t imm); /* ws masked-u16 X window */\n";
     ss << "extern int32_t psx_ws_depth_bound(int32_t imm);            /* ws aspect-scaled far bound */\n";

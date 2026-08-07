@@ -8,6 +8,8 @@ if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 endif()
 
+include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
+
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
 # generated C; with no CMAKE_BUILD_TYPE the compiler emits it at -O0 and the game
 # runs at a small fraction of full speed (terrible framerate). A naive
@@ -253,6 +255,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/code_provider.c
     ${PSXRECOMP_ROOT}/runtime/src/event_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
@@ -659,6 +662,7 @@ function(psxrecomp_add_runtime_target target)
         ${generated_sources}
         ${PSXRT_EXTRAS_SOURCES}
     )
+    target_link_libraries(${target} PRIVATE chdr-static)
 
     # Game-specific executable name. Every title instantiates this function with
     # the same CMake target name ("psx-runtime"), so without this they ALL produce
@@ -890,6 +894,27 @@ function(psxrecomp_add_runtime_target target)
                 "${PSXRECOMP_BUNDLED_BIOS_SOURCE}"
                 "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
         endif()
+
+    # Framework-owned mod catalog (loading speed). These target game_id "*" and
+    # are emulator features rather than per-disc content, so every game gets
+    # them without carrying a copy of the manifests. Staged BEFORE the game's
+    # own POST_BUILD copy so a title may still override an id if it ever needs
+    # to; copy_directory merges rather than replacing the tree.
+    if(EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages")
+        add_custom_command(TARGET ${target} POST_BUILD
+            # Clear first: copy_directory MERGES, so a mod deleted from source
+            # would otherwise survive in the build output forever and keep
+            # appearing on the Mods page (and inflate the release packagers'
+            # catalog assertions). This runs before the game's own staging, so
+            # both catalogs land on a clean slate.
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "$<TARGET_FILE_DIR:${target}>/mods"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PSXRECOMP_ROOT}/mods/builtin"
+                "$<TARGET_FILE_DIR:${target}>/mods"
+            COMMENT "Staging framework-owned mod catalog (loading speed)"
+            VERBATIM)
+    endif()
     endif()
 
     if(PSXRT_ORACLE)
