@@ -929,19 +929,22 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
 
 void psx_check_interrupts(CPUState* cpu) {
     psx_cyc_batch_flush();
+    extern int g_ls_suppress_record;
+    extern int psx_netplay_active(void);
+    const int np_active = psx_netplay_active();
     /* Publish this edge's resume PC BEFORE deferred present flush. The MotK
      * CDA0 gate reads s_last_interrupt_check_pc; leaving it at the previous
      * BB (CD54) made every CDA0 entry flush look like CD54 and no-op. Present
      * then only drained on post-IRQ at a CDA0 delivery — if the first post-arm
      * VBlank was taken at CD54, peers waited a full extra VB (soak ep9: arm+2
-     * vs arm+1). */
-    {
+     * vs arm+1). Offline keeps master's later publish (idle-skip / mid-path). */
+    if (np_active) {
         uint32_t edge_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
                                                   : s_compiled_interrupt_resume_pc;
         if (edge_pc != 0u)
             s_last_interrupt_check_pc = edge_pc;
     }
-    /* Netplay: deferred sdl_vblank_present at BB edge (not mid-block
+    /* Netplay-only: deferred sdl_vblank_present at BB edge (not mid-block
      * fire_vblank_edge). Prefer flush AFTER delivery so finish_frame digests
      * post-RFE GPRs — but also attempt flush at entry when delivery is due.
      * MotK's CDA0 gate no-ops the entry attempt on CD54; without it, sticky
@@ -951,20 +954,19 @@ void psx_check_interrupts(CPUState* cpu) {
      * Selfcheck stays on immediate present (see gpu.c).
      *
      * Never flush while in_exception: handler BB edges see IEc clear so
-     * delivery_needed is false and the old else-branch called finish_frame
+     * delivery_needed is false and an older else-branch called finish_frame
      * mid-BIOS-handler. Soak: irqctx left restored=0/reason=0, peers forked
      * dig_cpu at v0=1 vs countdown (cyc±14) on sealed Cross resim. Outer
-     * delivery keeps np_present_after_irq and flushes on its RETURN. */
-    extern int g_ls_suppress_record;
-    extern int psx_netplay_active(void);
+     * delivery keeps np_present_after_irq and flushes on its RETURN.
+     *
+     * Offline must NOT flush here — master never did. BB-edge finish_frame
+     * during Ape Escape's memcard busy-wait wedges the card-check scene
+     * (empty starfield hang). Netplay MotK still needs the drain. */
     int np_present_after_irq = 0;
-    if (in_exception) {
-        np_present_after_irq = 0;
-    } else if (psx_netplay_active() && psx_interrupt_delivery_needed(cpu)) {
-        gpu_vblank_flush_present(); /* CDA0 only; CD54 no-ops inside gate */
-        np_present_after_irq = 1;
-    } else {
-        gpu_vblank_flush_present();
+    if (!in_exception && np_active) {
+        gpu_vblank_flush_present(); /* CDA0 only when gated; CD54 no-ops */
+        if (psx_interrupt_delivery_needed(cpu))
+            np_present_after_irq = 1;
     }
 #define PSX_CHECK_INTERRUPTS_RETURN() do { \
         if (np_present_after_irq) gpu_vblank_flush_present(); \
