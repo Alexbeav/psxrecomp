@@ -304,6 +304,8 @@ if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         # MotK lobby ice_p2p needs libjuice. Default ON with netplay; no FORCE
         # so -DRNET_ENABLE_ICE=OFF still wins (LAN-only / offline configure).
+        # recomp-net prefers URL FetchContent / third_party/libjuice over git
+        # clone (AppImage LD_LIBRARY_PATH breaks system git-remote-https).
         set(RNET_ENABLE_ICE ON CACHE BOOL
             "Build libjuice ICE transport (default ON with PSX_NETPLAY)")
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")

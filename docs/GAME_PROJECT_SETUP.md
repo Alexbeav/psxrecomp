@@ -167,7 +167,7 @@ is zero-init.
 
 | CMake option       | Default | Effect                                                                                        |
 | ------------------ | ------- | --------------------------------------------------------------------------------------------- |
-| `PSX_NETPLAY`      | OFF     | Link `recomp-net` + lobby client; advertise **full netplay UI** when the title has 2+ players. Also defaults `RNET_ENABLE_ICE=ON` (libjuice) unless `-DRNET_ENABLE_ICE=OFF`. |
+| `PSX_NETPLAY`      | OFF     | Link `recomp-net` + lobby client; advertise **full netplay UI** when the title has 2+ players. Also defaults `RNET_ENABLE_ICE=ON` (libjuice via URL FetchContent, or `third_party/libjuice` / `RNET_LIBJUICE_ROOT`) unless `-DRNET_ENABLE_ICE=OFF`. |
 | `PSX_SETUP_WIZARD` | OFF     | Advertise **first-run setup wizard + Generate & rebuild** (`GameInfo.setup_wizard_supported`) |
 
 

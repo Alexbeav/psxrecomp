@@ -459,6 +459,8 @@ else
 fi
 
 if [ "$ENABLE_NETPLAY" -eq 1 ]; then
+    # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
+    # libjuice via pinned URL (not git) so RetComM AppImage builds configure.
     printf '%s\n' \
 'if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
     set(PSX_NETPLAY ON CACHE BOOL

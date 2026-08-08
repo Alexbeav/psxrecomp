@@ -254,6 +254,8 @@ set(PSX_RECOMP_UI OFF CACHE BOOL
 }
 
 if ($useNetplay) {
+    # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
+    # libjuice via pinned URL (not git) so RetComM AppImage builds configure.
     Set-Content -Encoding UTF8 -Path $NetplayBlockFile -Value @"
 if(EXISTS "`${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
     set(PSX_NETPLAY ON CACHE BOOL
