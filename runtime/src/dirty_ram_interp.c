@@ -34,6 +34,7 @@
 #include "ws_backdrop_detect.h"  /* shared backdrop-window detector (auto_backdrop) */
 #include "lockstep.h"
 #include "starvation_ring.h"
+#include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -2397,6 +2398,16 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
         psx_fatal_halt("dispatch recursion guard tripped — runaway self-call "
                        "(see dispatch_depth + dirty_block cycle for the recursing PC)");
     }
+    /* Game-start detection for the dirty-RAM interpreter path.
+     * When dispatch_count == 0 (all code runs interpreted), the native
+     * dispatch path's fntrace_record() never fires, so widescreen/mouselook/
+     * CD-speed-switch are never engaged.  This one-shot check closes the gap
+     * with the SAME semantics as the native path: latch only on the exact
+     * game entry PC.  A broader match (any phys >= 0x10000) fires during
+     * BIOS boot — the shell/kernel run relocated RAM code above 0x10000 —
+     * and the handoff's baseline/scratch clears then corrupt the boot
+     * (observed: MoH SLUS-00974 garbage-jump/VBLANK-wedge, 2026-08-06). */
+    fntrace_maybe_mark_game_started(cpu, addr);
     if (addr == 0x8001A954u)      site_note(&g_site_dd954);   /* loop head re-dispatch */
     else if (addr == 0x80046264u) site_note(&g_site_dd264);   /* loop tail re-dispatch */
     int prev = g_dirty_interp_active;
