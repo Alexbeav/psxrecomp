@@ -330,6 +330,9 @@ struct PlayerInput {
 static PlayerInput g_players[PSX_MAX_PLAYERS];
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
+/* Set when [controller] lock_mode pins every seat to digital — blocks the
+ * DualShock-on-tap hack from settings.toml / Lobby Settings / match_caps. */
+static int g_force_digital_pads = 0;
 /* Offline seat ceiling from game.toml players, optionally capped at 2 when
  * the launcher Multitap toggle is off (3+ player titles). Netplay ignores
  * this and arms multitap whenever session slot_count > 2. */
@@ -5025,12 +5028,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 sio_set_pad_config_capable(s, 0);
                 sio_set_pad_analog(s, 0, 0x80, 0x80, 0x80, 0x80);
             }
-            std::fprintf(stdout,
-                         "psxrecomp: multitap armed (console Port %d; "
-                         "tap pads %s)\n",
-                         sio_get_multitap_port() + 1,
-                         sio_get_multitap_analog() ? "analog hack on"
-                                                   : "forced digital");
         }
         /* Solo resim self-check replay republishes the recorded rows itself —
          * live sampling must not touch SIO during the replay window. */
@@ -7230,6 +7227,8 @@ namespace {
         return 0;
     }
     int ae_np_multitap_analog_get(void*) {
+        if (g_force_digital_pads)
+            return 0;
         if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
             const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
             if (caps && caps->valid)
@@ -7238,6 +7237,8 @@ namespace {
         return g_lnch_multitap_analog;
     }
     int ae_np_multitap_analog_set(void*, int enable) {
+        if (g_force_digital_pads)
+            enable = 0;
         g_lnch_multitap_analog = enable ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
@@ -8991,9 +8992,6 @@ int main(int argc, char** argv) {
             if (gc.runtime.has_multitap_port) {
                 const int phys = (gc.runtime.multitap_port == 2) ? 1 : 0;
                 sio_set_multitap_port(phys);
-                std::fprintf(stdout,
-                             "psxrecomp: multitap on console Port %d\n",
-                             gc.runtime.multitap_port);
             }
             if (gc.runtime.has_multitap_analog) {
                 multitap_analog = gc.runtime.multitap_analog;
@@ -9001,10 +8999,6 @@ int main(int argc, char** argv) {
 #if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
                 g_lnch_multitap_analog = multitap_analog ? 1 : 0;
 #endif
-                if (multitap_analog)
-                    std::fprintf(stdout,
-                                 "psxrecomp: multitap_analog hack ON "
-                                 "(DualShock on tap seats)\n");
             }
             /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
              * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
@@ -9206,9 +9200,24 @@ int main(int argc, char** argv) {
      * locked_mode. Clamp to the game-declared modes here, after every
      * config/settings source has been applied, so a locked game can never boot
      * a pad type it doesn't support. */
+    g_force_digital_pads = 0;
     if (ctrl_lock_mode) {
-        for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
+        int all_digital = 1;
+        for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
             player_mode[i] = ctrl_locked_mode[i];
+            if (ctrl_locked_mode[i] != PSXRecompV4::PAD_MODE_DIGITAL)
+                all_digital = 0;
+        }
+        /* Digital-only titles (e.g. BPE): DualShock-on-tap cannot be armed from
+         * settings.toml or Lobby Settings either. */
+        if (all_digital) {
+            g_force_digital_pads = 1;
+            multitap_analog = false;
+            sio_set_multitap_analog(0);
+#if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
+            g_lnch_multitap_analog = 0;
+#endif
+        }
     }
     /* allow_hybrid=false removes Hybrid from the game's supported controller
      * modes. Clamp an old persisted Hybrid value here as well as hiding it in
@@ -9977,11 +9986,11 @@ int main(int argc, char** argv) {
                 apply_offline_pad_count(game_players, multitap_enabled);
 #endif
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
-                seed.multitap_analog = ls.multitap_analog != 0;
+                seed.multitap_analog = (!g_force_digital_pads && ls.multitap_analog != 0);
                 seed.has_multitap_analog = true;
                 multitap_analog = seed.multitap_analog;
                 sio_set_multitap_analog(multitap_analog ? 1 : 0);
-                if (game_config_path && game_config_path[0]) {
+                if (game_config_path && game_config_path[0] && !g_force_digital_pads) {
                     (void)PSXRecompV4::upsert_game_toml_controller_bool(
                         game_config_path, "multitap_analog", multitap_analog);
                 }
@@ -10002,7 +10011,8 @@ int main(int argc, char** argv) {
                     const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
                     if (caps && caps->valid) {
                         /* Host-authoritative DualShock-on-tap for the match. */
-                        multitap_analog = caps->multitap_analog != 0;
+                        multitap_analog = (!g_force_digital_pads &&
+                                           caps->multitap_analog != 0);
                         seed.multitap_analog = multitap_analog;
                         seed.has_multitap_analog = true;
                         sio_set_multitap_analog(multitap_analog ? 1 : 0);
