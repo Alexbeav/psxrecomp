@@ -146,6 +146,12 @@ struct ModOverlay {
     std::string expected_sha256;
     uint64_t size = 0;
     std::map<std::string, std::string> when;
+    struct FeaturePredicate {
+        bool present = false;
+        std::string package_id;
+        std::string feature_id;
+        bool enabled = true;
+    } when_feature;
     int64_t order = 0;
 };
 

@@ -326,10 +326,17 @@ struct PlayerInput {
     int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
+    uint8_t rumble_small = 0;
+    uint8_t rumble_large = 0;
+    bool    rumble_known = false;
+    bool    rumble_warned = false;
 };
 static PlayerInput g_players[PSX_MAX_PLAYERS];
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
+/* Set when [controller] lock_mode pins every seat to digital — blocks the
+ * DualShock-on-tap hack from settings.toml / Lobby Settings / match_caps. */
+static int g_force_digital_pads = 0;
 /* Offline seat ceiling from game.toml players, optionally capped at 2 when
  * the launcher Multitap toggle is off (3+ player titles). Netplay ignores
  * this and arms multitap whenever session slot_count > 2. */
@@ -880,6 +887,7 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
 }
 
 extern "C" void psx_frontend_on_savestate_loaded(void) {
+    mod_runtime_on_savestate_loaded();
     s_disabled_frame_presented = false;
     s_force_present_after_load = true;
     smooth_60_reset();
@@ -2321,16 +2329,20 @@ static const int sdl_audio_fade_samples = 44100 * 40 / 1000;  /* 40 ms */
 static int       sdl_audio_fadein_left  = 0;
 
 static void sdl_audio_pump(bool discard_output = false) {
-    if (!sdl_audio_device) return;
-
+    /* Guest-cycle SPU advance must not depend on host audio device/backpressure.
+     * Win↔Linux rollback forked on aux/spu when one peer skipped spu_render
+     * (queue full / !drc / no device) while the other kept advancing. */
     const uint32_t bytes_per_frame = sizeof(int16_t) * 2u;
     const bool legacy = audio_legacy_mode();
+    const int netplay = psx_netplay_active();
     static int had_audio = 0;
     uint32_t queued = 0;   /* RENDER event b: bytes (legacy) / fill ms (bridge) */
+    int host_queue_ok = 0;
+
     if (discard_output) {
         /* Host-only sink: skip all queue/bridge interaction, but continue to
          * the guest-cycle sample budget and spu_render below. */
-    } else if (legacy) {
+    } else if (sdl_audio_device && legacy) {
         /* Historical push model + baseline measurement: a drained (==0) queue
          * means the device was silence-filling since the last pump = a gap.
          * Only meaningful after the first audio has been queued. */
@@ -2342,12 +2354,11 @@ static void sdl_audio_pump(bool discard_output = false) {
         }
         if (queued > max_queue_bytes) {
             audio_trace_event(AUDIO_EV_PUMP_SKIP, queued, 0);
-            return;
+            /* Still advance SPU below; only skip host enqueue. */
+        } else {
+            host_queue_ok = 1;
         }
-    } else {
-        /* No host-queue backpressure check: the bridge's ring + DRC hold the
-         * fill near target, so we always render this frame and push it. */
-        if (!s_drc_ready) return;
+    } else if (sdl_audio_device && !legacy && s_drc_ready) {
         /* Surface bridge underruns (counted on the SDL audio thread) into the
          * event ring from this thread — the event ring is single-writer.
          * Across a turbo mute the ring intentionally runs dry (the pump stops
@@ -2366,6 +2377,7 @@ static void sdl_audio_pump(bool discard_output = false) {
             prev_underruns = st.underrun_events;
         }
         queued = (uint32_t)st.last_fill_ms;
+        host_queue_ok = 1;
     }
 
     /* Faithful sample budget: the SPU is clocked by the GUEST, not by host
@@ -2383,7 +2395,7 @@ static void sdl_audio_pump(bool discard_output = false) {
         last_cycles = now_cycles;
         cycle_carry = 0;
         g_audio_cycle_resync = 0;
-        if (legacy)
+        if (legacy && sdl_audio_device)
             psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
@@ -2395,22 +2407,38 @@ static void sdl_audio_pump(bool discard_output = false) {
     int frames = (int)(delta / 768u);
     cycle_carry = delta % 768u;
     if (frames <= 0) return;
-    if (frames > 2048) {
-        /* A burst beyond one buffer (e.g. right after an unmute or a long
-         * stall): render one full buffer and DROP the remainder of the debt —
-         * same semantic as the mute model (voice positions freeze across the
-         * gap) rather than time-compressing a backlog into garble. */
+    if (frames > 2048 && !netplay) {
+        /* Offline: a burst beyond one buffer (e.g. right after an unmute or a
+         * long stall) renders one full buffer and DROPs the remainder of the
+         * debt — mute-model freeze rather than time-compressing a backlog.
+         * Netplay never drops: both peers must consume the same guest debt. */
         frames = 2048;
         cycle_carry = 0;
     }
 
     audio_trace_event(AUDIO_EV_RENDER, (uint32_t)frames, queued);
-    spu_render(sdl_audio_buf, frames);
-    if (discard_output) {
-        g_turbo_audio_sink_frames += (uint64_t)frames;
-        audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)frames, 0);
-        return;
+
+    /* Catch up in ≤2048-frame chunks (sdl_audio_buf capacity). Only the last
+     * chunk may be handed to the host queue — earlier chunks advance state
+     * only (avoids dumping seconds of catch-up into the device ring). */
+    int remaining = frames;
+    int host_frames = 0;
+    while (remaining > 0) {
+        const int chunk = remaining > 2048 ? 2048 : remaining;
+        spu_render(sdl_audio_buf, chunk);
+        remaining -= chunk;
+        host_frames = chunk;
+        if (discard_output) {
+            g_turbo_audio_sink_frames += (uint64_t)chunk;
+            audio_trace_event(AUDIO_EV_SINK_DROP, (uint32_t)chunk, 0);
+        }
     }
+    if (discard_output)
+        return;
+    if (!host_queue_ok || !sdl_audio_device)
+        return;
+
+    frames = host_frames;
     if (sdl_audio_fadein_left > 0) {
         const float g0 = 1.0f - (float)sdl_audio_fadein_left
                                 / (float)sdl_audio_fade_samples;
@@ -2818,7 +2846,7 @@ static AudioGate s_audio_gate = AUDIO_GATE_NORMAL;
 
 /* Invoked from the guest-derived VBlank edge (interrupts.c). */
 static void sdl_audio_pump_midframe(void) {
-    if (!sdl_audio_device) return;
+    /* Device optional: SPU still advances from guest cycles (netplay-safe). */
     switch (s_audio_gate) {
     case AUDIO_GATE_MUTED:
         /* Deliberately nothing. This preserves the existing, user-validated
@@ -2839,7 +2867,6 @@ static void sdl_audio_pump_midframe(void) {
 }
 
 static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
-    if (!sdl_audio_device) return;
     {   /* Tag audio events with the vblank frame counter. */
         extern uint64_t s_frame_count;
         audio_trace_note_frame((uint32_t)s_frame_count);
@@ -2863,10 +2890,10 @@ static void sdl_audio_update(int hard_mute_active, int turbo_sink_active) {
             spu_render(sdl_audio_buf, tail);
             sdl_audio_gain_ramp(sdl_audio_buf, tail, g0, 0.0f);
             audio_trace_event(AUDIO_EV_MUTE, (uint32_t)tail, 0);
-            if (audio_legacy_mode()) {
+            if (sdl_audio_device && audio_legacy_mode()) {
                 audio_trace_pcm(AUDIO_TAP_HOST, sdl_audio_buf, tail);
                 psx_sdl_audio_queue(sdl_audio_device, sdl_audio_buf, (uint32_t)tail * sizeof(int16_t) * 2u);
-            } else if (s_drc_ready) {
+            } else if (sdl_audio_device && s_drc_ready) {
                 psx_sdl_audio_lock(sdl_audio_device);
                 rab_push(&s_drc, sdl_audio_buf, tail);
                 psx_sdl_audio_unlock(sdl_audio_device);
@@ -3099,80 +3126,99 @@ static ControllerSource parse_controller_source(const std::string& raw) {
     ControllerSource out;
     if (s.empty() || s == "none" || s == "disabled") return out;
 
-    if (s == "a")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_A; return out; }
-    if (s == "b")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_B; return out; }
-    if (s == "x")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_X; return out; }
-    if (s == "y")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_Y; return out; }
-    if (s == "back" || s == "view" || s == "select") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_BACK; return out;
-    }
-    if (s == "start" || s == "menu") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_START; return out;
-    }
-    if (s == "guide")          { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_GUIDE; return out; }
-    if (s == "leftstick")      { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_LEFTSTICK; return out; }
-    if (s == "rightstick")     { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_RIGHTSTICK; return out; }
-    if (s == "leftshoulder" || s == "lb" || s == "l1") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_LEFTSHOULDER; return out;
-    }
-    if (s == "rightshoulder" || s == "rb" || s == "r1") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER; return out;
-    }
-    if (s == "dpup" || s == "dpadup") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_UP; return out;
-    }
-    if (s == "dpdown" || s == "dpaddown") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_DOWN; return out;
-    }
-    if (s == "dpleft" || s == "dpadleft") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_LEFT; return out;
-    }
-    if (s == "dpright" || s == "dpadright") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_RIGHT; return out;
-    }
-    if (s == "lefttrigger" || s == "lt" || s == "l2") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_TRIGGERLEFT; return out;
-    }
-    if (s == "righttrigger" || s == "rt" || s == "r2") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_TRIGGERRIGHT; return out;
-    }
-    if (s == "leftx+" || s == "lsright") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_LEFTX; return out;
-    }
-    if (s == "leftx-" || s == "lsleft") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_LEFTX; return out;
-    }
-    if (s == "lefty+" || s == "lsdown") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_LEFTY; return out;
-    }
-    if (s == "lefty-" || s == "lsup") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_LEFTY; return out;
-    }
-    if (s == "rightx+" || s == "rsright") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_RIGHTX; return out;
-    }
-    if (s == "rightx-" || s == "rsleft") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_RIGHTX; return out;
-    }
-    if (s == "righty+" || s == "rsdown") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_RIGHTY; return out;
-    }
-    if (s == "righty-" || s == "rsup") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_RIGHTY; return out;
+    // recomp-ui pad capture persists axes as "name+" / "name-" (see
+    // source_from_bind). Defaults historically omit the suffix for triggers
+    // ("lefttrigger"). Accept both; strip the sign before name lookup.
+    int dir = 0; // -1, 0 (unspecified), +1
+    if (s.size() >= 2) {
+        const char last = s.back();
+        const char prev = s[s.size() - 2];
+        if ((last == '+' || last == '-') &&
+            (std::isalnum(static_cast<unsigned char>(prev)) || prev == '_')) {
+            dir = (last == '+') ? +1 : -1;
+            s.pop_back();
+        }
     }
 
-    SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(s.c_str());
-    if (button != SDL_CONTROLLER_BUTTON_INVALID) {
+    auto as_button = [&](SDL_GameControllerButton b) -> ControllerSource {
         out.kind = ControllerSource::Kind::Button;
-        out.id = button;
+        out.id = b;
         return out;
+    };
+    auto as_axis = [&](SDL_GameControllerAxis a, int d) -> ControllerSource {
+        // Unspecified direction → positive (triggers / capture default).
+        out.kind = (d < 0) ? ControllerSource::Kind::AxisNegative
+                           : ControllerSource::Kind::AxisPositive;
+        out.id = a;
+        return out;
+    };
+
+    if (s == "a") return as_button(SDL_CONTROLLER_BUTTON_A);
+    if (s == "b") return as_button(SDL_CONTROLLER_BUTTON_B);
+    if (s == "x") return as_button(SDL_CONTROLLER_BUTTON_X);
+    if (s == "y") return as_button(SDL_CONTROLLER_BUTTON_Y);
+    if (s == "back" || s == "view" || s == "select")
+        return as_button(SDL_CONTROLLER_BUTTON_BACK);
+    if (s == "start" || s == "menu")
+        return as_button(SDL_CONTROLLER_BUTTON_START);
+    if (s == "guide") return as_button(SDL_CONTROLLER_BUTTON_GUIDE);
+    if (s == "leftstick") return as_button(SDL_CONTROLLER_BUTTON_LEFTSTICK);
+    if (s == "rightstick") return as_button(SDL_CONTROLLER_BUTTON_RIGHTSTICK);
+    // Shoulders are digital buttons. A trailing +/- from axis-style capture is
+    // ignored so "leftshoulder+" still maps to L1 instead of becoming unbound.
+    if (s == "leftshoulder" || s == "lb" || s == "l1")
+        return as_button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    if (s == "rightshoulder" || s == "rb" || s == "r1")
+        return as_button(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+    if (s == "dpup" || s == "dpadup")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_UP);
+    if (s == "dpdown" || s == "dpaddown")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    if (s == "dpleft" || s == "dpadleft")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    if (s == "dpright" || s == "dpadright")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+
+    // Triggers: default "lefttrigger" and capture "lefttrigger+" both work.
+    if (s == "lefttrigger" || s == "lt" || s == "l2")
+        return as_axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, dir == 0 ? +1 : dir);
+    if (s == "righttrigger" || s == "rt" || s == "r2")
+        return as_axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, dir == 0 ? +1 : dir);
+
+    // Stick axes (suffix required unless using a directional alias).
+    if (s == "leftx") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_LEFTX, dir);
     }
+    if (s == "lefty") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_LEFTY, dir);
+    }
+    if (s == "rightx") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, dir);
+    }
+    if (s == "righty") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, dir);
+    }
+    if (s == "lsright") return as_axis(SDL_CONTROLLER_AXIS_LEFTX, +1);
+    if (s == "lsleft") return as_axis(SDL_CONTROLLER_AXIS_LEFTX, -1);
+    if (s == "lsdown") return as_axis(SDL_CONTROLLER_AXIS_LEFTY, +1);
+    if (s == "lsup") return as_axis(SDL_CONTROLLER_AXIS_LEFTY, -1);
+    if (s == "rsright") return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, +1);
+    if (s == "rsleft") return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, -1);
+    if (s == "rsdown") return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, +1);
+    if (s == "rsup") return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, -1);
+
+    SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(s.c_str());
+    if (button != SDL_CONTROLLER_BUTTON_INVALID)
+        return as_button(button);
+
     SDL_GameControllerAxis axis = SDL_GameControllerGetAxisFromString(s.c_str());
-    if (axis != SDL_CONTROLLER_AXIS_INVALID) {
-        out.kind = ControllerSource::Kind::AxisPositive;
-        out.id = axis;
-        return out;
-    }
+    if (axis != SDL_CONTROLLER_AXIS_INVALID)
+        return as_axis(axis, dir == 0 ? +1 : dir);
+
     return out;
 }
 
@@ -3238,8 +3284,9 @@ static std::string default_input_ini_text(void) {
     return
         "; PSXRecomp input mapping. PSX buttons are active when any listed source is pressed.\n"
         "; Sources use SDL/Xbox names: a,b,x,y,back,start,leftshoulder,rightshoulder,\n"
-        "; lefttrigger,righttrigger,leftstick,rightstick (stick clicks -> L3/R3),\n"
+        "; lefttrigger[/+],righttrigger[/+],leftstick,rightstick (stick clicks -> L3/R3),\n"
         "; dpup,dpdown,dpleft,dpright,leftx-/leftx+/lefty-/lefty+.\n"
+        "; Axis capture may append +/−; both forms are accepted. PSX slots are digital.\n"
         "; Optional per-device overrides: [mapping.<sdl-guid>].\n"
         "\n"
         "[controller]\n"
@@ -3362,10 +3409,16 @@ static void load_input_config(const char* argv0) {
 
 static void close_player(PlayerInput& p) {
     if (p.handle) {
+        if (p.rumble_small || p.rumble_large)
+            (void)SDL_GameControllerRumble(p.handle, 0, 0, 0);
         SDL_GameControllerClose(p.handle);
         p.handle = nullptr;
         p.instance = -1;
     }
+    p.rumble_small = 0;
+    p.rumble_large = 0;
+    p.rumble_known = false;
+    p.rumble_warned = false;
 }
 
 static void close_controller(void) {
@@ -3418,6 +3471,61 @@ static void open_player(PlayerInput& p, int self_slot) {
         const char* name = SDL_GameControllerName(p.handle);
         std::fprintf(stdout, "psxrecomp runtime: opened controller for slot: %s\n",
                      name ? name : "(unnamed)");
+        p.rumble_known = false;
+        p.rumble_warned = false;
+    }
+}
+
+/* Forward the emulated DualShock's two motors to the SDL controller assigned
+ * to the same PSX port. The large motor is variable-strength/low-frequency;
+ * the small motor is fixed-strength/high-frequency. Active effects are renewed
+ * every VBlank with a short lifetime so a crash or unplug cannot leave a host
+ * controller vibrating indefinitely. */
+static void update_controller_rumble(void) {
+    static const bool trace = [] {
+        const char* e = std::getenv("PSX_RUMBLE_TRACE");
+        return e && e[0] && e[0] != '0';
+    }();
+    for (int s = 0; s < 2; s++) {
+        PlayerInput& p = g_players[s];
+        uint8_t small = 0, large = 0;
+        sio_get_pad_rumble(s, &small, &large);
+        if (!p.handle) {
+            p.rumble_small = small;
+            p.rumble_large = large;
+            p.rumble_known = true;
+            continue;
+        }
+
+        const bool changed = !p.rumble_known || p.rumble_small != small ||
+                             p.rumble_large != large;
+        if (small || large || (changed && p.rumble_known)) {
+            const Uint16 low_frequency = (Uint16)((unsigned)large * 257u);
+            const Uint16 high_frequency = small ? 0xFFFFu : 0u;
+#if defined(PSX_SDL3)
+            const int rc = SDL_GameControllerRumble(
+                p.handle, low_frequency, high_frequency,
+                (small || large) ? 100u : 0u) ? 0 : -1;
+#else
+            const int rc = SDL_GameControllerRumble(
+                p.handle, low_frequency, high_frequency,
+                (small || large) ? 100u : 0u);
+#endif
+            if (rc != 0 && !p.rumble_warned) {
+                std::fprintf(stderr,
+                    "psxrecomp runtime: controller for slot %d rejected rumble: %s\n",
+                    s + 1, SDL_GetError());
+                p.rumble_warned = true;
+            }
+        }
+        if (trace && changed) {
+            std::fprintf(stdout,
+                "psxrecomp rumble: slot=%d small=%u large=%u\n",
+                s + 1, (unsigned)small, (unsigned)large);
+        }
+        p.rumble_small = small;
+        p.rumble_large = large;
+        p.rumble_known = true;
     }
 }
 
@@ -5006,12 +5114,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 sio_set_pad_config_capable(s, 0);
                 sio_set_pad_analog(s, 0, 0x80, 0x80, 0x80, 0x80);
             }
-            std::fprintf(stdout,
-                         "psxrecomp: multitap armed (console Port %d; "
-                         "tap pads %s)\n",
-                         sio_get_multitap_port() + 1,
-                         sio_get_multitap_analog() ? "analog hack on"
-                                                   : "forced digital");
         }
         /* Solo resim self-check replay republishes the recorded rows itself —
          * live sampling must not touch SIO during the replay window. */
@@ -5027,6 +5129,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         psx_selfcheck_finish_frame(
             (g_offline_pad_count >= 3 && !sio_get_multitap()) ? 1 : 0);
     }
+    if (!g_headless) update_controller_rumble();
 
     /* Latency ring: open this present cycle's slot, stamping when input was
      * sampled into SIO.  Always-on; queried via the debug server "latency". */
@@ -7211,6 +7314,8 @@ namespace {
         return 0;
     }
     int ae_np_multitap_analog_get(void*) {
+        if (g_force_digital_pads)
+            return 0;
         if (!g_lnch_hosting_lan && !g_lnch_joined_lan) {
             const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
             if (caps && caps->valid)
@@ -7219,6 +7324,8 @@ namespace {
         return g_lnch_multitap_analog;
     }
     int ae_np_multitap_analog_set(void*, int enable) {
+        if (g_force_digital_pads)
+            enable = 0;
         g_lnch_multitap_analog = enable ? 1 : 0;
         ae_np_push_match_caps(nullptr);
         return 0;
@@ -8972,9 +9079,6 @@ int main(int argc, char** argv) {
             if (gc.runtime.has_multitap_port) {
                 const int phys = (gc.runtime.multitap_port == 2) ? 1 : 0;
                 sio_set_multitap_port(phys);
-                std::fprintf(stdout,
-                             "psxrecomp: multitap on console Port %d\n",
-                             gc.runtime.multitap_port);
             }
             if (gc.runtime.has_multitap_analog) {
                 multitap_analog = gc.runtime.multitap_analog;
@@ -8982,10 +9086,6 @@ int main(int argc, char** argv) {
 #if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
                 g_lnch_multitap_analog = multitap_analog ? 1 : 0;
 #endif
-                if (multitap_analog)
-                    std::fprintf(stdout,
-                                 "psxrecomp: multitap_analog hack ON "
-                                 "(DualShock on tap seats)\n");
             }
             /* LEGACY per-game pad-config opt-in (default modern). Only Tomba sets
              * it, so its launcher Hybrid mode's analog<->digital flip doesn't make
@@ -9187,9 +9287,24 @@ int main(int argc, char** argv) {
      * locked_mode. Clamp to the game-declared modes here, after every
      * config/settings source has been applied, so a locked game can never boot
      * a pad type it doesn't support. */
+    g_force_digital_pads = 0;
     if (ctrl_lock_mode) {
-        for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
+        int all_digital = 1;
+        for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
             player_mode[i] = ctrl_locked_mode[i];
+            if (ctrl_locked_mode[i] != PSXRecompV4::PAD_MODE_DIGITAL)
+                all_digital = 0;
+        }
+        /* Digital-only titles (e.g. BPE): DualShock-on-tap cannot be armed from
+         * settings.toml or Lobby Settings either. */
+        if (all_digital) {
+            g_force_digital_pads = 1;
+            multitap_analog = false;
+            sio_set_multitap_analog(0);
+#if defined(RECOMP_LAUNCHER) && defined(PSX_HAS_LOBBY_CLIENT)
+            g_lnch_multitap_analog = 0;
+#endif
+        }
     }
     /* allow_hybrid=false removes Hybrid from the game's supported controller
      * modes. Clamp an old persisted Hybrid value here as well as hiding it in
@@ -9958,11 +10073,11 @@ int main(int argc, char** argv) {
                 apply_offline_pad_count(game_players, multitap_enabled);
 #endif
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ANALOG)
-                seed.multitap_analog = ls.multitap_analog != 0;
+                seed.multitap_analog = (!g_force_digital_pads && ls.multitap_analog != 0);
                 seed.has_multitap_analog = true;
                 multitap_analog = seed.multitap_analog;
                 sio_set_multitap_analog(multitap_analog ? 1 : 0);
-                if (game_config_path && game_config_path[0]) {
+                if (game_config_path && game_config_path[0] && !g_force_digital_pads) {
                     (void)PSXRecompV4::upsert_game_toml_controller_bool(
                         game_config_path, "multitap_analog", multitap_analog);
                 }
@@ -9983,7 +10098,8 @@ int main(int argc, char** argv) {
                     const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
                     if (caps && caps->valid) {
                         /* Host-authoritative DualShock-on-tap for the match. */
-                        multitap_analog = caps->multitap_analog != 0;
+                        multitap_analog = (!g_force_digital_pads &&
+                                           caps->multitap_analog != 0);
                         seed.multitap_analog = multitap_analog;
                         seed.has_multitap_analog = true;
                         sio_set_multitap_analog(multitap_analog ? 1 : 0);
@@ -10498,6 +10614,10 @@ session_reboot:
      * as a game controller rather than a raw HID device. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+    /* SDL3 aliases the SDL2-era PS5 rumble hint to enhanced reports. Enabling
+     * it also preserves DualSense rumble on the explicit SDL2 fallback. */
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1",
+                            SDL_HINT_OVERRIDE);
     /* ...but HIDAPI's Xbox sub-driver is OFF by default on Windows (Xbox pads are
      * normally RAWINPUT/XInput there). With RAWINPUT disabled above, a PHYSICAL
      * Xbox One/Series controller would be claimed by nobody -> not a GameController
@@ -10551,14 +10671,12 @@ session_reboot:
             g_audio_host_rate = have.freq;
             audio_trace_set_tap_rate(AUDIO_TAP_HOST, (uint32_t)have.freq);
             (void)psx_sdl_audio_resume(sdl_audio_device);
-            /* Also pump from the guest-derived VBlank edge so SPU time keeps
-             * advancing across guest busy-waits that never present a frame
-             * (guest-cycle-budgeted; same thread — see interrupts.c). Routed
-             * through the gated wrapper so it honours the turbo mute/sink
-             * state rather than bypassing it. */
-            psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
         }
     }
+    /* Always register: SPU advance is guest-cycle budgeted and must not
+     * depend on a successful host open (Win↔Linux aux/spu fork). Routed
+     * through the gated wrapper so turbo mute/sink still apply. */
+    psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
 #endif
 
     Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;

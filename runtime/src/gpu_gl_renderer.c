@@ -1917,27 +1917,30 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         flush_flat_batch();   /* painter order: flat GEO before textured */
         int twx = s_tw_mask_x, twy = s_tw_mask_y, tox = s_tw_off_x, toy = s_tw_off_y;
         int gate = bd_prim_gate(xs, 3, 1); /* backdrop-stretch gate is also a batch key */
-        /* With mask checking off, opaque and mode-0 semi primitives use the
-         * same dual-source blend state. The per-vertex a_semi flag selects
-         * replace vs half-blend without breaking painter order. */
-        int batch_semi = (!s_mask_check && semi != 2) ? 4 : semi;
-        /* STP draw-ORDER correctness. flush_tex_batch draws a batch in two passes
-         * over the WHOLE batch (pass 1 = every prim's STP=0/opaque texels, pass 2
-         * = every prim's STP=1/semi texels with the PSX blend). For overlapping
-         * prims that share a batch, a BEHIND prim's semi texels (pass 2) then
-         * paint OVER a FRONT prim's opaque texels (pass 1) — a painter's-order
-         * violation that only exists on GL (Tomba: the character drew behind the
-         * AP-block letters / a save post on GL, correct on software). So a
-         * semi-transparent prim must NOT coalesce with its neighbours: drain the
-         * open batch, draw this prim alone (its own STP=0+STP=1 passes, which do
-         * not self-overlap → composited fully before the next prim, exactly like
-         * the software renderer), and let opaque prims keep batching. Opaque
-         * content (terrain/foliage — the batching perf win) is untouched; the cost
-         * is one draw per semi prim, which are sparse. (A future single-pass
-         * optimization for modes 0/1/3 via GL_ONE,GL_SRC_ALPHA with a per-fragment
-         * destination factor in alpha could re-batch semi prims — see memory
-         * tomba_sprite_zorder_bug; mode 2 subtractive still needs isolation.) */
-        int isolate = (semi >= 0 && (semi == 2 || s_mask_check));
+        /* Batch key: keep opaque as -1. Dual-source (4) is only for semi modes
+         * 0/1/3 when mask-check is off — never coalesce opaque into that key.
+         * Mixing opaque+semi under u_semimode==4 made additive particle/glow
+         * batches (CTR Naughty Dog intro binary funnel) paint over later
+         * opaque crate flaps whenever submission order and STP bits disagreed
+         * with the dual-source path's assumptions. */
+        int batch_semi;
+        if (semi < 0)
+            batch_semi = -1;
+        else if (!s_mask_check && semi != 2)
+            batch_semi = 4;
+        else
+            batch_semi = semi;
+        /* STP draw-ORDER correctness. flush_tex_batch's conservative two-pass
+         * path draws pass 1 = every prim's STP=0 texels then pass 2 = every
+         * prim's STP=1 texels — a behind prim's semi texels then overwrite a
+         * front prim's opaque texels (Tomba AP-block / CTR intro flaps). The
+         * dual-source single-pass path avoids that WITHIN one prim, but
+         * batching many overlapping semi quads (digit particles + glow) still
+         * mis-orders against neighbouring opaque geometry. Isolate EVERY
+         * semi-transparent textured prim: drain the open batch, draw this
+         * prim alone (composited fully before the next), let opaque prims
+         * keep batching. Cost is one draw per semi prim. */
+        int isolate = (semi >= 0);
         int reason = -1;
         if (s_tb_n > 0) {
             if (isolate) reason = 0;
@@ -2330,7 +2333,7 @@ static int  glb_render_display_hires(uint32_t *o,int p,int dx,int dy,int dw,int 
 static int s_depth24_skip_up = 0;
 static DirtyRect s_d24_skip_fb; /* union of skipped MDEC FB rects (VRAM halfwords) */
 
-static int depth24_is_fb_transfer(int w, int h) {
+static int depth24_is_fb_transfer(int x, int y, int w, int h) {
     if (!gpu_display_is_depth24() || w <= 0 || h <= 0) return 0;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
@@ -2338,7 +2341,19 @@ static int depth24_is_fb_transfer(int w, int h) {
     int fb_h = (int)di.height;
     if (fb_w < 8) fb_w = 8;
     if (fb_h < 1) fb_h = 1;
-    /* MotK: 768×128 class blits; allow slack. Reject small texture pages. */
+    /* Classic VRAM texture pages. The area heuristic below treats 256×256 as
+     * "half of a 320-wide RGB888 FB" (480×240/2) and would skip staging them
+     * during FMV — TM4 post-intro loading text then samples an empty FBO. */
+    if (w <= 256 && h <= 256) return 0;
+    /* Must target the CRTC scanout band (halfword coords). */
+    {
+        int dx = (int)(di.display_x & 1023u);
+        int dy = (int)(di.display_y & 511u);
+        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
+        if (x0 + w <= dx || x0 >= dx + fb_w || y0 + h <= dy || y0 >= dy + fb_h)
+            return 0;
+    }
+    /* MotK: 768×128 class blits; allow slack. */
     if (h >= fb_h - 8 && h <= fb_h + 16 && w >= (fb_w * 3) / 4) return 1;
     if ((int64_t)w * (int64_t)h >= ((int64_t)fb_w * fb_h) / 2) return 1;
     return 0;
@@ -2406,6 +2421,9 @@ static void depth24_upload_policy(void) {
         s_up_nrects = 0;
         depth24_clear_skipped_fb();
         gpu_depth24_upload_span_reset();
+        /* Force a fresh present after FMV→15-bit so menus/loading screens
+         * are not held as a stale depth24 frame. */
+        gl_renderer_invalidate_present();
     }
     s_depth24_skip_up = d24;
 }
@@ -2420,10 +2438,12 @@ static uint16_t glb_vram_read(int x,int y){ ensure_cpu(); return sw_vram_read(x,
 static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
     sw_vram_transfer_in(x,y,w,h,d);
     depth24_upload_policy();
-    if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
+    if (s_depth24_skip_up && depth24_is_fb_transfer(x, y, w, h)) {
         /* Full-VRAM restore (boot_state): must stage into the FBO or every
          * texture page outside the movie band is missing after FMV→menus.
-         * Only the scanout band is remembered for clear-on-leave. */
+         * Only the scanout band is remembered for clear-on-leave — do not
+         * union every skipped rect (misclassified texture pages would be
+         * wiped from the FBO when leaving depth24). */
         if (w >= VRAM_W && h >= VRAM_H) {
             up_add_transfer(x, y, w, h);
             rect_clear(&s_d24_skip_fb);
@@ -2431,8 +2451,7 @@ static void glb_vram_transfer_in(int x,int y,int w,int h,const uint16_t *d){
             coh_record(GL_COH_UPLOAD, x, y, x + w - 1, y + h - 1);
             return;
         }
-        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
-        rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
+        depth24_mark_scanout_band();
         coh_record(GL_COH_UPLOAD, x, y, x+w-1, y+h-1);
         return;
     }

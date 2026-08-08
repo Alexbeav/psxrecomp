@@ -42,6 +42,7 @@
 #include "mdec.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
+#include "spu.h"
 #if defined(PSX_HAS_LOBBY_CLIENT)
 #include "psx_lobby_client.h"
 #endif
@@ -647,6 +648,27 @@ static void np_log_live_digest(uint32_t tick, const NetplayCoreParts *parts,
             (unsigned)parts->timers, (unsigned)parts->ram,
             (unsigned)parts->dirty, (unsigned)av, (unsigned)cd,
             (unsigned)spu, (unsigned)mdec, (unsigned)aux);
+    {
+        static int s_parts = -1;
+        if (s_parts < 0) {
+            const char *e = getenv("PSX_RB_SPU_PARTS");
+            s_parts = (e && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+            if (s_parts) {
+                fprintf(stderr,
+                        "psxrecomp: rb SPU part digests on "
+                        "(PSX_RB_SPU_PARTS=1 — regs/voices/tail)\n");
+            }
+        }
+        if (s_parts) {
+            SpuSnapPartDigests pd;
+            spu_snapshot_part_digests(&pd);
+            fprintf(stderr,
+                    "psxrecomp: rb spu parts sim=%u regs=%08x voices=%08x "
+                    "tail=%08x\n",
+                    (unsigned)tick, (unsigned)pd.regs, (unsigned)pd.voices,
+                    (unsigned)pd.tail);
+        }
+    }
     fflush(stderr);
 }
 

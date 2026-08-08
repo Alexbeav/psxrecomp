@@ -87,6 +87,16 @@ void fntrace_record(CPUState* cpu, uint32_t target);
  * First dispatch into [lo, hi) calls cdrom_notify_game_started(). */
 void fntrace_set_game_range(uint32_t lo, uint32_t hi);
 int  fntrace_is_game_started(void);
+/* One-shot game-start handoff. Idempotent — safe to call from any path
+ * (compiled dispatch, dirty-RAM interpreter, generated entry function).
+ * Performs dirty-image baseline clear, low-boot scratch clear, CD speed
+ * switch, and boot-state capture. */
+void fntrace_mark_game_started(CPUState* cpu);
+/* Entry-pc-exact latch for the interpreter path: calls
+ * fntrace_mark_game_started() only when addr matches the armed game entry
+ * (fntrace_set_game_range lo).  No-op before the range is armed and after
+ * the latch fires. */
+void fntrace_maybe_mark_game_started(CPUState* cpu, uint32_t addr);
 
 /* Arm a target filter. arm_count == 0 means "record all" (default).
  * When arm_count > 0, only dispatches whose target matches one of the

@@ -2879,7 +2879,19 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         if (w == 0u) w = 4u;
     }
 
-    uint32_t h = (v_display_y2 > v_display_y1) ? (v_display_y2 - v_display_y1) : 240;
+    /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
+     * active region before taking the difference. Unclamped Y2 past the
+     * active end (common overscan programming) includes a flickering junk
+     * line at the bottom of present that DuckStation crops away. */
+    const int ymin = video_mode ? 20 : 16;  /* PAL : NTSC */
+    const int ymax = video_mode ? 308 : 256;
+    int y1 = (int)v_display_y1;
+    int y2 = (int)v_display_y2;
+    if (y1 < ymin) y1 = ymin;
+    if (y1 > ymax) y1 = ymax;
+    if (y2 < ymin) y2 = ymin;
+    if (y2 > ymax) y2 = ymax;
+    uint32_t h = (y2 > y1) ? (uint32_t)(y2 - y1) : 240u;
     if (vres) h *= 2; /* 480i */
 
     /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /

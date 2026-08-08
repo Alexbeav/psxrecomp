@@ -626,10 +626,30 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     if(PSXRT_BIOS_GENERATED_FULL_C AND PSXRT_BIOS_GENERATED_DISPATCH_C)
-        set(generated_sources
+        # Per-game BIOS pin: the pinned files REPLACE the matching stem's
+        # fork-global generated files only. Every other backend and the
+        # generated psx_bios_registry.c stay linked — replacing the whole set
+        # (the previous behaviour) dropped the registry and the other
+        # backends, producing undefined references to psx_bios_registry at
+        # link time. The registry's extern for the pinned stem is satisfied
+        # by the pinned dispatch.c, which carries the same backend descriptor.
+        get_filename_component(_psxrt_pin_name "${PSXRT_BIOS_GENERATED_DISPATCH_C}" NAME)
+        string(REPLACE "_dispatch.c" "" _psxrt_pin_stem "${_psxrt_pin_name}")
+        set(generated_sources "")
+        foreach(_psxrt_src IN LISTS PSXRECOMP_BIOS_GENERATED)
+            get_filename_component(_psxrt_src_name "${_psxrt_src}" NAME)
+            if(_psxrt_src_name STREQUAL "${_psxrt_pin_stem}_full.c" OR
+               _psxrt_src_name STREQUAL "${_psxrt_pin_stem}_dispatch.c")
+                # replaced by the game's pinned copy
+            else()
+                list(APPEND generated_sources "${_psxrt_src}")
+            endif()
+        endforeach()
+        list(APPEND generated_sources
             "${PSXRT_BIOS_GENERATED_FULL_C}"
             "${PSXRT_BIOS_GENERATED_DISPATCH_C}")
         set_source_files_properties(${generated_sources} PROPERTIES GENERATED TRUE)
+        message(STATUS "psxrecomp: BIOS stem ${_psxrt_pin_stem} pinned to game-local copies")
     else()
         set(generated_sources ${PSXRECOMP_BIOS_GENERATED})
     endif()

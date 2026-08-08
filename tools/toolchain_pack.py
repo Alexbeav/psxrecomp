@@ -96,11 +96,62 @@ def clear_project_toolchain_stamp(project_root: Optional[Path]) -> None:
         pass
 
 
+def prune_old_toolchain_tags(keep_pack: Path, log=None) -> int:
+    """Delete sibling versioned ``<tag>/`` dirs under the managed install root.
+
+    Keeps *keep_pack* (and anything under it), ``latest/``, and dot-dirs
+    (staging). Returns the number of removed entries. No-op when *keep_pack*
+    is outside ``preferred_install_root()`` (e.g. ``RETCOMM_TOOLCHAIN_DIR``).
+    """
+    keep = unwrap_pack_root(Path(keep_pack).expanduser())
+    try:
+        cache_root = preferred_install_root()
+    except OSError:
+        return 0
+    if not cache_root.is_dir():
+        return 0
+    if not (_paths_equal(keep, cache_root) or _is_under(keep, cache_root)):
+        return 0
+    removed = 0
+    try:
+        children = list(cache_root.iterdir())
+    except OSError:
+        return 0
+    for child in children:
+        name = child.name
+        if name.startswith(".") or name == "latest":
+            continue
+        try:
+            if not (child.is_dir() or child.is_symlink()):
+                continue
+        except OSError:
+            continue
+        if (
+            _paths_equal(keep, child)
+            or _is_under(keep, child)
+            or _is_under(child, keep)
+        ):
+            continue
+        if log:
+            log(f"Removing old toolchain install: {child}")
+        try:
+            if child.is_symlink() or child.is_file():
+                child.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+        except OSError as exc:
+            if log:
+                log(f"Could not remove old toolchain {child}: {exc}")
+    return removed
+
+
 def heal_broken_toolchain_pointers(log=None) -> None:
     """Remove unusable ``latest`` pointers so ensure can reinstall cleanly.
 
     Does not delete versioned ``<tag>/`` packs — only broken ``latest``
-    symlinks/directories that lack a runnable bin/cmake.
+    symlinks/directories that lack a runnable bin/cmake. Sibling tags are
+    pruned after a successful install via ``prune_old_toolchain_tags``.
     """
     for base in shared_cache_roots():
         latest = base / "latest"
@@ -736,6 +787,8 @@ def install_from_zip(
             shutil.rmtree(staging, ignore_errors=True)
     # latest pointer + idempotent user login PATH (same as zip install.sh).
     register_toolchain_user_env(root, log=log)
+    # Drop prior versioned <tag>/ installs now that the new pack is active.
+    prune_old_toolchain_tags(root, log=log)
     if project_root is not None:
         return materialize_into_project(project_root, root, log=log)
     return root

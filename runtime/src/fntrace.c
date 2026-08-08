@@ -4,6 +4,7 @@
 #include "text_xlate.h"     /* on-the-fly string translation hook (framework) */
 #include "parity_trace.h"   /* general control-flow parity ring (native producer) */
 #include "mod_runtime.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -43,6 +44,34 @@ void fntrace_set_game_range(uint32_t lo, uint32_t hi) {
 }
 
 int fntrace_is_game_started(void) { return s_game_started; }
+
+/* Centralised game-start transition.  Idempotent — safe to call from both
+ * the dispatcher (fntrace_record) and the generated entry-point function.
+ * Performs the complete handoff side effects: dirty-image baseline clear,
+ * low-boot scratch clear, CD speed switch, and boot-state capture. */
+void fntrace_mark_game_started(CPUState* cpu) {
+    if (s_game_started) return;
+    s_game_started = 1;
+    extern void dirty_ram_clear_image_baseline(void);
+    extern void memory_clear_low_boot_scratch(void);
+    dirty_ram_clear_image_baseline();
+    memory_clear_low_boot_scratch();
+    cdrom_notify_game_started();
+    boot_state_trigger_capture(cpu);
+}
+
+/* Range-guarded latch for the dirty-RAM interpreter path.  Mirrors the
+ * native path's semantics: latch ONLY on the exact game entry PC set via
+ * fntrace_set_game_range().  Never latch on a broad address heuristic —
+ * the BIOS shell/kernel execute relocated RAM code well above the game
+ * load address during boot, and a premature handoff (baseline/scratch
+ * clears, CD speed switch) corrupts the boot sequence. */
+void fntrace_maybe_mark_game_started(CPUState* cpu, uint32_t addr) {
+    if (s_game_started) return;
+    if (s_game_entry_phys == 0) return;   /* no game range armed */
+    if ((addr & 0x1FFFFFFFu) == s_game_entry_phys)
+        fntrace_mark_game_started(cpu);
+}
 
 static inline int armed_match(uint32_t target) {
     /* PSX_FNTRACE_ALL=1 records every dispatch from power-on — the ring
@@ -184,19 +213,7 @@ void fntrace_record(CPUState* cpu, uint32_t target) {
         if (_tphys == s_game_entry_phys ||
             (dirty_ram_text_image_registered() &&
              psx_game_address_in_text(target) && psx_game_text_native_ok(target))) {
-            s_game_started = 1;
-            /* Establish the clean compiled-image baseline now: the boot EXE is fully
-             * loaded into the game-text region (== compiled image) and no gameplay
-             * overlay has run yet. The EXE load marked the whole text dirty (false
-             * positive); clearing it makes dirty_ram_is_dirty() true ONLY for pages a
-             * later overlay overwrites, so the dispatch runs clean text compiled and
-             * interprets only true overlays (Tomba 2 boot-text loader overlay). */
-            extern void dirty_ram_clear_image_baseline(void);
-            extern void memory_clear_low_boot_scratch(void);
-            dirty_ram_clear_image_baseline();
-            memory_clear_low_boot_scratch();
-            cdrom_notify_game_started();
-            boot_state_trigger_capture(cpu);
+            fntrace_mark_game_started(cpu);
         }
     }
     /* Honor the one-shot capture freeze (insn_freeze): once latched, the ring

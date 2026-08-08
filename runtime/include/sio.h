@@ -132,6 +132,12 @@ void sio_set_pad_connected(int slot, int connected);
  * analog/hybrid behaviour is unchanged. */
 void sio_set_pad_config_capable(int slot, int capable);
 
+/* Read the raw DualShock motor state selected by the guest's 0x4D rumble map
+ * and most recent 0x42 poll. `small` is the fixed-strength high-frequency
+ * motor byte; `large` is the variable-strength low-frequency motor byte.
+ * The frontend translates these values to its host controller API. */
+void sio_get_pad_rumble(int slot, uint8_t *small, uint8_t *large);
+
 /* Return current pad button state (for debug server). _slot targets a logical
  * pad 0 .. PSX_MAX_PLAYERS-1. */
 uint16_t sio_get_pad_buttons(void);

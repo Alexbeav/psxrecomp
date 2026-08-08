@@ -1003,6 +1003,28 @@ bool conditions_match(const ModPackage& package, const ModSelection& selection,
     return true;
 }
 
+bool feature_predicate_matches(
+    const ModOverlay::FeaturePredicate& predicate,
+    const std::map<std::string, const ModPackage*>& active_packages,
+    const std::map<std::string, ModSelection>& selections) {
+    if (!predicate.present) return true;
+    bool enabled = false;
+    const auto package_it = active_packages.find(predicate.package_id);
+    if (package_it != active_packages.end()) {
+        const ModPackage& package = *package_it->second;
+        const ModFeature* feature =
+            find_feature(package, predicate.feature_id);
+        if (feature) {
+            const auto selection_it = selections.find(predicate.package_id);
+            const ModSelection blank;
+            const ModSelection& selection =
+                selection_it == selections.end() ? blank : selection_it->second;
+            enabled = is_feature_enabled(package, selection, *feature);
+        }
+    }
+    return enabled == predicate.enabled;
+}
+
 bool valid_option_value(const ModOption& option, const std::string& value);
 
 void read_conditions(const toml::value& value, const std::vector<ModOption>& options,
@@ -2100,6 +2122,32 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     v, "order", (int64_t)declaration_index);
                 read_conditions(v, out.options, overlay.feature_id,
                                 overlay.when, "overlay");
+                if (v.contains("when_feature")) {
+                    if (out.format_version < 4)
+                        throw std::runtime_error(
+                            "overlay when_feature requires format_version 4");
+                    const toml::value& predicate =
+                        toml::find(v, "when_feature");
+                    for (const auto& [key, unused] : predicate.as_table()) {
+                        (void)unused;
+                        if (key != "package" && key != "feature" &&
+                            key != "enabled")
+                            throw std::runtime_error(
+                                "overlay when_feature has unknown field: " +
+                                key);
+                    }
+                    overlay.when_feature.present = true;
+                    overlay.when_feature.package_id =
+                        toml::find<std::string>(predicate, "package");
+                    overlay.when_feature.feature_id =
+                        toml::find<std::string>(predicate, "feature");
+                    overlay.when_feature.enabled =
+                        toml::find<bool>(predicate, "enabled");
+                    if (!valid_id(overlay.when_feature.package_id) ||
+                        !valid_id(overlay.when_feature.feature_id))
+                        throw std::runtime_error(
+                            "overlay when_feature references an invalid id");
+                }
                 out.overlays.push_back(std::move(overlay));
                 ++declaration_index;
             }
@@ -2967,50 +3015,6 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                 write.feature_id = patch->feature_id;
                 result.writes.push_back(std::move(write));
             }
-            std::vector<const ModOverlay*> overlays;
-            overlays.reserve(package->overlays.size());
-            for (const ModOverlay& overlay : package->overlays) {
-                const ModFeature* feature =
-                    find_feature(*package, overlay.feature_id);
-                if (!feature ||
-                    !is_feature_enabled(*package, selected, *feature) ||
-                    !conditions_match(*package, selected,
-                                      overlay.feature_id, overlay.when))
-                    continue;
-                overlays.push_back(&overlay);
-            }
-            std::stable_sort(overlays.begin(), overlays.end(),
-                [](const ModOverlay* a, const ModOverlay* b) {
-                    return a->order < b->order;
-                });
-            for (const ModOverlay* overlay : overlays) {
-                std::vector<uint8_t> payload;
-                std::string payload_error;
-                if (!read_file(overlay->file, payload, &payload_error)) {
-                    result.errors.push_back(
-                        package->id + "/" + overlay->feature_id + ": " +
-                        payload_error);
-                    continue;
-                }
-                const std::string actual = fingerprint_text(std::string(
-                    (const char*)payload.data(), payload.size()));
-                if (payload.size() != overlay->size ||
-                    actual != overlay->sha256) {
-                    result.errors.push_back(
-                        package->id + "/" + overlay->feature_id +
-                        ": overlay payload changed after installation");
-                    continue;
-                }
-                ModResolution::Overlay resolved;
-                resolved.target = overlay->target;
-                resolved.location = overlay->location;
-                resolved.payload = std::move(payload);
-                resolved.payload_sha256 = overlay->sha256;
-                resolved.expected_sha256 = overlay->expected_sha256;
-                resolved.package_id = package->id;
-                resolved.feature_id = overlay->feature_id;
-                result.overlays.push_back(std::move(resolved));
-            }
         } else {
             const std::string resolver_id = package->resolver.substr(8);
             const auto resolver = builtin_resolvers().find(resolver_id);
@@ -3020,6 +3024,52 @@ ModResolution ModPackageManager::resolve(const std::string& game_id,
                     result.writes, result.errors) &&
                 result.errors.empty())
                 result.errors.push_back(package->id + ": built-in resolver failed");
+        }
+        std::vector<const ModOverlay*> overlays;
+        overlays.reserve(package->overlays.size());
+        for (const ModOverlay& overlay : package->overlays) {
+            const ModFeature* feature =
+                find_feature(*package, overlay.feature_id);
+            if (!feature ||
+                !is_feature_enabled(*package, selected, *feature) ||
+                !conditions_match(*package, selected,
+                                  overlay.feature_id, overlay.when) ||
+                !feature_predicate_matches(
+                    overlay.when_feature, active, selections_))
+                continue;
+            overlays.push_back(&overlay);
+        }
+        std::stable_sort(overlays.begin(), overlays.end(),
+            [](const ModOverlay* a, const ModOverlay* b) {
+                return a->order < b->order;
+            });
+        for (const ModOverlay* overlay : overlays) {
+            std::vector<uint8_t> payload;
+            std::string payload_error;
+            if (!read_file(overlay->file, payload, &payload_error)) {
+                result.errors.push_back(
+                    package->id + "/" + overlay->feature_id + ": " +
+                    payload_error);
+                continue;
+            }
+            const std::string actual = fingerprint_text(std::string(
+                (const char*)payload.data(), payload.size()));
+            if (payload.size() != overlay->size ||
+                actual != overlay->sha256) {
+                result.errors.push_back(
+                    package->id + "/" + overlay->feature_id +
+                    ": overlay payload changed after installation");
+                continue;
+            }
+            ModResolution::Overlay resolved;
+            resolved.target = overlay->target;
+            resolved.location = overlay->location;
+            resolved.payload = std::move(payload);
+            resolved.payload_sha256 = overlay->sha256;
+            resolved.expected_sha256 = overlay->expected_sha256;
+            resolved.package_id = package->id;
+            resolved.feature_id = overlay->feature_id;
+            result.overlays.push_back(std::move(resolved));
         }
         std::vector<const ModPlugin*> plugins;
         plugins.reserve(package->plugins.size());

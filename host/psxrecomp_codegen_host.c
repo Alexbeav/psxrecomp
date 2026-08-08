@@ -26,6 +26,8 @@ static int cmake_path_runs(const char* cmake_path);
 static int toolchain_bin_is_healthy(const char* bin);
 static void heal_broken_toolchain_pointers(void);
 static void clear_project_toolchain_stamp(void);
+static int host_paths_same_file(const char* a, const char* b);
+static void prune_old_toolchain_tags(const char* keep_pack);
 #if defined(_WIN32)
 static int junction_dir(const char* link_path, const char* target_path);
 static int run_cmdline_wait(const char* cmdline, DWORD* out_code);
@@ -2006,6 +2008,125 @@ static int link_or_stamp_project_toolchain(const char* pack_root) {
     return 1;
 }
 
+/* True when *child* is *parent* or a path under *parent* (dir prefix). */
+static int path_is_under_dir(const char* child, const char* parent) {
+    char ca[1400], pa[1400];
+    size_t n;
+    if (!child || !child[0] || !parent || !parent[0])
+        return 0;
+#if defined(_WIN32)
+    {
+        DWORD nc = GetFullPathNameA(child, (DWORD)sizeof(ca), ca, NULL);
+        DWORD np = GetFullPathNameA(parent, (DWORD)sizeof(pa), pa, NULL);
+        if (nc == 0 || nc >= (DWORD)sizeof(ca) || np == 0 ||
+            np >= (DWORD)sizeof(pa))
+            return 0;
+    }
+#else
+    {
+        char* rc = realpath(child, NULL);
+        char* rp = realpath(parent, NULL);
+        if (!rc || !rp) {
+            free(rc);
+            free(rp);
+            return 0;
+        }
+        snprintf(ca, sizeof(ca), "%s", rc);
+        snprintf(pa, sizeof(pa), "%s", rp);
+        free(rc);
+        free(rp);
+    }
+#endif
+    n = strlen(pa);
+#if defined(_WIN32)
+    if (_strnicmp(ca, pa, (int)n) != 0)
+        return 0;
+#else
+    if (strncmp(ca, pa, n) != 0)
+        return 0;
+#endif
+    if (ca[n] == '\0')
+        return 1;
+    return ca[n] == '/' || ca[n] == '\\';
+}
+
+/* After a successful install into the managed cache, drop other versioned
+ * <tag>/ siblings (and *.broken quarantines). Keeps *keep_pack*, latest/, and
+ * dot-directories (staging). Does not touch RETCOMM_TOOLCHAIN_DIR overrides
+ * outside the preferred install root. */
+static void prune_old_toolchain_tags(const char* keep_pack) {
+    char cache_root[1400];
+    int removed = 0;
+    if (!keep_pack || !keep_pack[0])
+        return;
+    if (!preferred_toolchain_cache_root(cache_root, sizeof(cache_root)))
+        return;
+    if (!path_is_dir(cache_root))
+        return;
+    if (!path_is_under_dir(keep_pack, cache_root) &&
+        !host_paths_same_file(keep_pack, cache_root))
+        return;
+
+#if defined(_WIN32)
+    {
+        WIN32_FIND_DATAA fd;
+        HANDLE h;
+        char pattern[1400];
+        snprintf(pattern, sizeof(pattern), "%s\\*", cache_root);
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE)
+            return;
+        do {
+            char child[1400];
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                continue;
+            if (fd.cFileName[0] == '.')
+                continue;
+            if (_stricmp(fd.cFileName, "latest") == 0)
+                continue;
+            if (!join_path(child, sizeof(child), cache_root, fd.cFileName))
+                continue;
+            if (path_is_under_dir(keep_pack, child) ||
+                host_paths_same_file(keep_pack, child) ||
+                path_is_under_dir(child, keep_pack))
+                continue;
+            if (rmtree_path(child))
+                removed = 1;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    {
+        DIR* d = opendir(cache_root);
+        struct dirent* ent;
+        if (!d)
+            return;
+        while ((ent = readdir(d)) != NULL) {
+            char child[1400];
+            struct stat st;
+            if (ent->d_name[0] == '.')
+                continue;
+            if (strcmp(ent->d_name, "latest") == 0)
+                continue;
+            if (!join_path(child, sizeof(child), cache_root, ent->d_name))
+                continue;
+            if (lstat(child, &st) != 0)
+                continue;
+            if (!S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode))
+                continue;
+            if (path_is_under_dir(keep_pack, child) ||
+                host_paths_same_file(keep_pack, child) ||
+                path_is_under_dir(child, keep_pack))
+                continue;
+            if (rmtree_path(child))
+                removed = 1;
+        }
+        closedir(d);
+    }
+#endif
+    (void)removed;
+}
+
 static int host_install_toolchain_from_zip(
     const char* zip_path, RecompLauncherCPrepareProgressFn on_progress,
     void* progress_ctx, char* err_msg, size_t err_cap) {
@@ -2108,11 +2229,15 @@ static int host_install_toolchain_from_zip(
     if (on_progress)
         on_progress(progress_ctx, 0.85f, "Activating toolchain…");
     link_or_stamp_project_toolchain(pack);
-    if (activate_installed_pack_root(pack))
+    if (activate_installed_pack_root(pack) ||
+        (join_path(latest, sizeof(latest), cache_root, "latest") &&
+         activate_installed_pack_root(latest))) {
+        if (on_progress)
+            on_progress(progress_ctx, 0.92f,
+                        "Removing older toolchain installs…");
+        prune_old_toolchain_tags(pack);
         return 1;
-    if (join_path(latest, sizeof(latest), cache_root, "latest") &&
-        activate_installed_pack_root(latest))
-        return 1;
+    }
     snprintf(err_msg, err_cap,
              "Extracted toolchain but cmake.exe is missing or will not run "
              "(bin\\cmake.exe --version failed).");
@@ -2392,7 +2517,8 @@ static int path_is_toolchain_latest_leaf(const char* path) {
 
 /* Remove unusable latest/ under shared cache roots (heal before re-download).
  * Also rejects packs where cmake runs but clang/ld.lld cannot link (Linux ICU
- * / missing libxml2). Leaves versioned <tag>/ packs intact. */
+ * / missing libxml2). Versioned <tag>/ siblings are pruned after a successful
+ * install/update (see prune_old_toolchain_tags). */
 static void heal_broken_toolchain_pointers(void) {
     char bases[12][1400];
     int n = collect_toolchain_cache_bases(bases, 12);

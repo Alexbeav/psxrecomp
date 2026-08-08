@@ -2357,7 +2357,7 @@ static void vkb_fill_rect(int x, int y, int w, int h, uint16_t color) {
 static int s_depth24_skip_up = 0;
 static DirtyRect s_d24_skip_fb;
 
-static int depth24_is_fb_transfer(int w, int h) {
+static int depth24_is_fb_transfer(int x, int y, int w, int h) {
     if (!gpu_display_is_depth24() || w <= 0 || h <= 0) return 0;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
@@ -2365,6 +2365,15 @@ static int depth24_is_fb_transfer(int w, int h) {
     int fb_h = (int)di.height;
     if (fb_w < 8) fb_w = 8;
     if (fb_h < 1) fb_h = 1;
+    /* See GL: 256×256 pages must not match the half-FB area heuristic. */
+    if (w <= 256 && h <= 256) return 0;
+    {
+        int dx = (int)(di.display_x & 1023u);
+        int dy = (int)(di.display_y & 511u);
+        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
+        if (x0 + w <= dx || x0 >= dx + fb_w || y0 + h <= dy || y0 >= dy + fb_h)
+            return 0;
+    }
     if (h >= fb_h - 8 && h <= fb_h + 16 && w >= (fb_w * 3) / 4) return 1;
     if ((int64_t)w * (int64_t)h >= ((int64_t)fb_w * fb_h) / 2) return 1;
     return 0;
@@ -2412,7 +2421,7 @@ static void vkb_vram_transfer_in(int x, int y, int w, int h, const uint16_t *dat
     sw_vram_transfer_in(x, y, w, h, data);
     if (!s_ctx_ok) return;
     depth24_upload_policy();
-    if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
+    if (s_depth24_skip_up && depth24_is_fb_transfer(x, y, w, h)) {
         /* Full-VRAM savestate restore: stage FBO; mark scanout band only. */
         if (w >= VRAM_W && h >= VRAM_H) {
             up_add_transfer(x, y, w, h);
@@ -2420,8 +2429,7 @@ static void vkb_vram_transfer_in(int x, int y, int w, int h, const uint16_t *dat
             depth24_mark_scanout_band();
             return;
         }
-        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
-        rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
+        depth24_mark_scanout_band();
         return;
     }
     up_add_transfer(x, y, w, h);   /* exact touched rects, incl. per-pixel wrap */
