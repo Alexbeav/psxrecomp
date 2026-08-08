@@ -3938,9 +3938,25 @@ struct PadSources {
 static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
     PadSources s;
     s.device   = (p.kind != 0);
-    /* kind==1 consumes the binds through pad_buttons_for/pad_sticks_for; dev
-     * mode folds them in on top of whatever device is assigned. */
-    s.keybinds = (p.kind == 1) || dev_here;
+    /* Keybinds are ALWAYS live, including alongside a routed gamepad: that is
+     * the whole point of binding a mouse button for aiming while holding a
+     * pad. Routing a player to a controller used to discard every
+     * keybinds.ini/mouse bind silently.
+     *
+     * Widening this ONE line is safe precisely because every consumer reads
+     * it — the button merge, the HYBRID auto-switch detectors and the stick
+     * fold all learn about the keyboard in the same instant. Widening the
+     * button merge alone (the original shape of this change) let a keyboard
+     * D-pad press assert the D-pad bits while hybrid_dpad_active never saw
+     * them, leaving a mod-driven hybrid pad reporting D-pad input while still
+     * presenting ANALOG.
+     *
+     * The PSX pad word is active-low and the merge is an AND, so an unpressed
+     * source is a no-op: a pad-only player is unaffected. kind==1 already
+     * consumes the binds through pad_buttons_for/pad_sticks_for, and applying
+     * them twice is idempotent. */
+    (void)dev_here;
+    s.keybinds = true;
     s.all_pads = dev_here;
     return s;
 }
