@@ -53,6 +53,16 @@ static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
     [0 ... PSX_MAX_PLAYERS - 1] = { 0x80, 0x80, 0x80, 0x80 }
 }; /* lx,ly,rx,ry */
 
+/* DualShock command 0x4D maps the six writable bytes in a 0x42 poll onto the
+ * two motors: 0x00 = small/high-frequency, 0x01 = large/low-frequency,
+ * 0xFF = unused. The map powers up unassigned and is echoed back while a new
+ * map is latched, matching the physical pad/Mednafen protocol. */
+static uint8_t pad_rumble_map[PSX_MAX_PLAYERS][6] = {
+    [0 ... PSX_MAX_PLAYERS - 1] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
+};
+static uint8_t pad_rumble_small[PSX_MAX_PLAYERS];
+static uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
+
 /* Analog-mode lock, per logical pad. A real DualShock's config command 0x44
  * 0x..02/0x03 locks/unlocks the mode (dualshock.cpp:714-725); a locked pad
  * ignores the physical analog button (dualshock.cpp:203). We emulate the
@@ -691,6 +701,9 @@ void sio_init(void) {
     pad_response_idx = 0;
     pad_current_cmd = 0;
     pad_active_logical = 0;
+    memset(pad_rumble_map, 0xFF, sizeof(pad_rumble_map));
+    memset(pad_rumble_small, 0, sizeof(pad_rumble_small));
+    memset(pad_rumble_large, 0, sizeof(pad_rumble_large));
     for (int i = 0; i < PSX_MAX_PLAYERS; i++) {
         pad_buttons[i] = 0xFFFF;
         pad_analog[i] = 0;
@@ -830,8 +843,13 @@ void sio_connect_pad(int slot) {
 
 void sio_set_pad_connected(int slot, int connected) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
-    if (connected) pad_connected |=  (uint8_t)(1u << slot);
-    else           pad_connected &= (uint8_t)~(1u << slot);
+    if (connected) {
+        pad_connected |= (uint8_t)(1u << slot);
+    } else {
+        pad_connected &= (uint8_t)~(1u << slot);
+        pad_rumble_small[slot] = 0;
+        pad_rumble_large[slot] = 0;
+    }
 }
 
 void sio_set_pad_config_capable(int slot, int capable) {
@@ -840,7 +858,21 @@ void sio_set_pad_config_capable(int slot, int capable) {
     pad_supports_config[slot] = capable ? 1 : 0;
     /* A plain digital pad can never be in config mode; clear any stale latch so
      * the next poll reports the digital id (0x41), not the config id (0xF3). */
-    if (!capable) pad_in_config[slot] = 0;
+    if (!capable) {
+        pad_in_config[slot] = 0;
+        pad_rumble_small[slot] = 0;
+        pad_rumble_large[slot] = 0;
+    }
+}
+
+void sio_get_pad_rumble(int slot, uint8_t *small, uint8_t *large) {
+    uint8_t s = 0, l = 0;
+    if (slot >= 0 && slot < PSX_MAX_PLAYERS && (pad_connected & (1u << slot))) {
+        s = pad_rumble_small[slot];
+        l = pad_rumble_large[slot];
+    }
+    if (small) *small = s;
+    if (large) *large = l;
 }
 
 void sio_set_pad_state(uint16_t buttons) {
@@ -1196,6 +1228,10 @@ static void pad_process_byte(uint8_t tx_byte) {
              * (axis5_sio_controller.md D8). */
             if (tx_byte == 0x45)
                 pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
+            /* 0x4D returns the previous six-byte motor map while latching the
+             * replacement bytes later in this same transaction. */
+            if (tx_byte == 0x4D)
+                memcpy(&pad_response[2], pad_rumble_map[lp], 6);
             pad_response_len = 8;
             pad_state = PAD_SEND_RESPONSE;
             sio_rx_data = pad_response[0];
@@ -1219,6 +1255,33 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_mtap_addr == 0x01 && pad_response_idx == 1 &&
             selected_slot >= 0 && selected_slot <= 1)
             mtap_req_this[selected_slot] = (tx_byte == 0x01) ? 1 : 0;
+        /* DualShock rumble: index by the active logical pad (multitap-aware). */
+        {
+            const int rs = (pad_active_logical >= 0 && pad_active_logical < PSX_MAX_PLAYERS)
+                               ? pad_active_logical
+                               : selected_slot;
+            if (rs >= 0 && rs < PSX_MAX_PLAYERS) {
+                /* The six data bytes after 0x42's leading 0x00 occupy response
+                 * indexes 2..7. Route each through the map negotiated by 0x4D. */
+                if (pad_current_cmd == 0x42 &&
+                    pad_response_idx >= 2 && pad_response_idx < 8) {
+                    const unsigned map_index = (unsigned)pad_response_idx - 2u;
+                    const uint8_t motor = pad_rumble_map[rs][map_index];
+                    if (motor == 0x00)
+                        pad_rumble_small[rs] = tx_byte;
+                    else if (motor == 0x01)
+                        pad_rumble_large[rs] = tx_byte;
+                }
+                /* 0x4D uses the same six wire positions. pad_response[] was
+                 * populated with the old values before the transaction, so
+                 * updating the live map here preserves echo-before-write. */
+                if (pad_current_cmd == 0x4D &&
+                    pad_response_idx >= 2 && pad_response_idx < 8) {
+                    const unsigned map_index = (unsigned)pad_response_idx - 2u;
+                    pad_rumble_map[rs][map_index] = tx_byte;
+                }
+            }
+        }
         /* For 0x43 (enter/exit config), the data byte selecting enter(0x01)/
          * exit(0x00) arrives paired with response index 2. Latch the new config
          * state; it takes effect from the next transaction (the ID byte already
@@ -2546,18 +2609,26 @@ static int sio_snap_emit_fsm_meta(PstW *w) {
            pst_w_u32(w, sio_irq_pending_byte_seq);
 }
 
+/* DualShock rumble map/motors — appended after meta so pre-rumble snapshots
+ * remain loadable and netplay digests that stop at fsm_pace stay stable. */
+static int sio_snap_emit_rumble(PstW *w) {
+    return pst_w_bytes(w, pad_rumble_map, sizeof(pad_rumble_map)) &&
+           pst_w_bytes(w, pad_rumble_small, sizeof(pad_rumble_small)) &&
+           pst_w_bytes(w, pad_rumble_large, sizeof(pad_rumble_large));
+}
+
 static int sio_snap_emit_fsm(PstW *w) {
     return sio_snap_emit_fsm_pace(w) && sio_snap_emit_fsm_meta(w);
 }
 
 static int sio_snap_emit(PstW *w) {
     return sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
-           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w);
+           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w);
 }
 
 /* Cumulative section end offsets in the snapshot wire:
  * out[0]=regs, out[1]=pads, out[2]=memcard, out[3]=fsm_pace (netplay),
- * out[4]=full including fsm_meta (== sio_snapshot_bytes()). */
+ * out[4]=full including fsm_meta + rumble (== sio_snapshot_bytes()). */
 void sio_snapshot_section_ends(uint32_t out[5]) {
     PstW w;
     pst_w_init(&w, NULL, 0);
@@ -2570,6 +2641,7 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
     (void)sio_snap_emit_fsm_pace(&w);
     out[3] = (uint32_t)w.written;
     (void)sio_snap_emit_fsm_meta(&w);
+    (void)sio_snap_emit_rumble(&w);
     out[4] = (uint32_t)w.written;
 }
 
@@ -2652,6 +2724,24 @@ static int sio_snap_parse(PstR *r) {
      * restored byte_seq so the next TX does not stamp a peer-divergent
      * seq into sio_irq_pending_byte_seq (was forking fsm digests alone). */
     sio_trace_seq = sio_irq_pending_byte_seq;
+    /* Pre-rumble snapshots end here. A mid-game legacy state cannot tell us
+     * the negotiated map, so assume the standard 0x00/0x01 layout used by
+     * commercial DualShock games while leaving both motors stopped. */
+    if (r->p == r->end) {
+        memset(pad_rumble_map, 0xFF, sizeof(pad_rumble_map));
+        memset(pad_rumble_small, 0, sizeof(pad_rumble_small));
+        memset(pad_rumble_large, 0, sizeof(pad_rumble_large));
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+            pad_rumble_map[s][0] = 0x00;
+            pad_rumble_map[s][1] = 0x01;
+        }
+        return 1;
+    }
+    if (!pst_r_bytes(r, pad_rumble_map, sizeof(pad_rumble_map)) ||
+        !pst_r_bytes(r, pad_rumble_small, sizeof(pad_rumble_small)) ||
+        !pst_r_bytes(r, pad_rumble_large, sizeof(pad_rumble_large)))
+        return 0;
+    if (r->p != r->end) return 0;
     return 1;
 }
 
@@ -2671,7 +2761,12 @@ void sio_snapshot_write(uint8_t *p) {
 
 int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
-    if (len != sio_snapshot_bytes()) return 0;
+    const uint32_t current = sio_snapshot_bytes();
+    const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
+                                  sizeof(pad_rumble_small) +
+                                  sizeof(pad_rumble_large));
+    if (len != current && (len > current || len + rumble_bytes != current))
+        return 0;
     pst_r_init(&r, p, len);
     return sio_snap_parse(&r);
 }
