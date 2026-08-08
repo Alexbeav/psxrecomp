@@ -4008,10 +4008,13 @@ static void apply_input_override_to_sio(int override_word) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
+    /* Prefer the configured seat mode (incl. game.toml lock_mode / settings
+     * p1_mode). Falling back to DIGITAL when kind==0 made DualShock-locked
+     * titles (Ape Escape) ignore debug-server injection in headless runs. */
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4022,6 +4025,15 @@ static void apply_input_override_to_sio(int override_word) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    /* Pinned-ANALOG folds injected D-pad onto the left stick (same as a real
+     * DualShock seat). Without this, stick-only menu/move paths ignore
+     * button-bit injection even though pad_status shows the bits pressed. */
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF; /* Right */
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
@@ -4272,7 +4284,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4283,6 +4295,12 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF;
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
 
