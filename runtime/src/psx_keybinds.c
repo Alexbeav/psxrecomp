@@ -6,9 +6,8 @@
  * of the box. Edit + restart (or rebind live in the launcher's Controls page) to
  * apply. See psx_keybinds.h for the API contract and the PSX pad-word bit layout.
  */
-#include "psx_keybinds.h"
+#include "psx_keybinds.h"   /* pulls in psx_sdl.h (SDL2/SDL3 shim) */
 
-#include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
