@@ -192,6 +192,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
+    ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/mdec.c
     ${PSXRECOMP_ROOT}/runtime/src/timers.c
     ${PSXRECOMP_ROOT}/runtime/src/interrupts.c

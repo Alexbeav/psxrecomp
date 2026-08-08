@@ -16,6 +16,7 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "nd_intro_ot.h"
 #include "latency_ring.h"
 #include "overlay_loader.h"
 #include "overlay_capture.h"
@@ -2481,10 +2482,13 @@ static inline void pc_probe_observe(uint32_t block_leader_phys)
                            block_leader_phys == 0x0006A600u);
             int digit_ot = (block_leader_phys == 0x00023094u);
             int glow_ot = (block_leader_phys == 0x00053E10u);
+            int digit_rain_ot = (block_leader_phys == 0x0006AE34u);
             int dispatch = (block_leader_phys == 0x000440A0u);
             uint32_t ot_ptr = 0;
             if (digit_ot)
                 ot_ptr = t7; /* caller-supplied OT slot */
+            else if (digit_rain_ot)
+                ot_ptr = cpu->gpr[11]; /* $t3 OT slot from MAC0>>17 helper */
             else if (glow_ot) {
                 /* OT head at game+0x147C (same as AddPrim a few insns later). */
                 uint32_t game = psx_read_word(0x8008D2ACu);
@@ -2498,23 +2502,23 @@ static inline void pc_probe_observe(uint32_t block_leader_phys)
                 ot_ptr = fp ? fp : v0;
             pc_probe_ot_context(cpu, ot_ptr, &mode, &depth, &ot_base, &ot_index);
             if (wood_ot) {
-                /* Prefer OTZ as OT index (PsyQ AddPrim(ot+OTZ) style). */
-                if (ot_base && otz < (1u << 20)) {
-                    ot_ptr = ot_base + (otz << 2);
-                    ot_index = otz;
-                }
-                t0 = a2;
+                /* WoodEmit jalr $s5 @0x8006A608: MAC0 already swc2'd to 44($at);
+                 * OT base at 56($at) from model+228. Index = MAC0>>17 (== OTZ>>5). */
+                uint32_t at = cpu->gpr[1];
+                uint32_t mac0 = at ? psx_read_word(at + 44u) : 0;
+                uint32_t wood_base = at ? psx_read_word(at + 56u) : 0;
+                uint32_t widx = mac0 >> 17;
+                if (!widx && otz)
+                    widx = otz >> 5;
+                ot_base = wood_base;
+                ot_index = widx;
+                ot_ptr = wood_base ? (wood_base + (widx << 2)) : 0;
+                t0 = ot_ptr;           /* actual AddPrim OT slot */
                 depth = otz;
-                v0 = otz;
-                /* Pack max screen-X of SXY0/1/2 into mode for extent compares. */
-                {
-                    int32_t sx_max = -0x8000;
-                    for (int si = 12; si <= 14; si++) {
-                        int32_t sx = (int32_t)(int16_t)(cpu->gte_data[si] & 0xFFFFu);
-                        if (sx > sx_max) sx_max = sx;
-                    }
-                    mode = (uint32_t)sx_max;
-                }
+                v0 = cpu->gpr[21];     /* $s5 helper */
+                mode = wood_base;
+                if (wood_base)
+                    psx_nd_note_wood_batch_ot(wood_base);
             } else if (digit_ot) {
                 t0 = t7;
                 v0 = ot_index;
@@ -2555,14 +2559,17 @@ static inline void pc_probe_observe(uint32_t block_leader_phys)
                 }
             } else if (block_leader_phys == 0x0006AAF0u) {
                 /* Wood batch setup: $a0 stream, $ra = model (helpers at +92).
-                 * mode=flags@+184, depth=helper@+96, ot_base=name word@+8. */
+                 * mode=flags@+184, depth=helper@+96, ot_base=name@+8,
+                 * ot_index=batch OT @+228 (live; model RAM is reused later). */
                 t0 = cpu->gpr[4];  /* a0 */
                 v0 = cpu->gpr[31]; /* model */
                 if (v0) {
                     mode = psx_read_word(v0 + 184u);  /* draw flags */
                     depth = psx_read_word(v0 + 96u);  /* s5 helper */
                     ot_base = psx_read_word(v0 + 8u); /* name/tag */
-                    ot_index = psx_read_word(v0 + 92u); /* pre-emit */
+                    ot_index = psx_read_word(v0 + 228u); /* batch OT */
+                    if (ot_index)
+                        psx_nd_note_wood_batch_ot_tagged(ot_index, ot_base);
                 }
             } else if (block_leader_phys == 0x0006AB58u) {
                 /* Fallthrough past flag bne — batch accepted. */
@@ -2584,13 +2591,32 @@ static inline void pc_probe_observe(uint32_t block_leader_phys)
                 t0 = cpu->gpr[28]; /* gp */
                 v0 = cpu->gpr[2];
             } else if (block_leader_phys == 0x00069BB0u) {
-                /* Sibling matrix/OT setup entry: a1=ctx (s4+360), a0=mesh. */
+                /* Sibling matrix/OT setup entry: a1=ctx (s4+360), a0=mesh.
+                 * ot_index = preferred wood batch OT cache.
+                 * mode = CODE model+228, depth = GLOW model+228 when those
+                 * ND intro models are resident (stable addrs from batch stream). */
                 t0 = cpu->gpr[5]; /* a1 */
                 v0 = cpu->gpr[4]; /* a0 */
                 if (t0) {
-                    mode = psx_read_word(t0 + 244u); /* OT base field before +4092 */
-                    depth = mode ? (mode + 4092u) : 0;
-                    ot_base = mode;
+                    uint32_t main_ot = psx_read_word(t0 + 244u);
+                    ot_base = main_ot;
+                    /* s4+0xb4 = scene OT bump near WoodEmit batch pools. */
+                    if (t0 > 0xB4u)
+                        psx_nd_note_sibling_ot_hint(psx_read_word(t0 - 0xB4u));
+                }
+                ot_index = psx_nd_wood_batch_ot();
+                {
+                    /* ND intro digit/glow models — confirmed stable during rain. */
+                    const uint32_t code_m = 0x800FF390u;
+                    const uint32_t glow_m = 0x800FF294u;
+                    uint32_t code_tag = psx_read_word(code_m + 8u);
+                    uint32_t glow_tag = psx_read_word(glow_m + 8u);
+                    mode = (code_tag == 0x45444F43u) ? psx_read_word(code_m + 228u) : 0;
+                    depth = (glow_tag == 0x574F4C47u) ? psx_read_word(glow_m + 228u) : 0;
+                    if (mode)
+                        psx_nd_note_wood_batch_ot_tagged(mode, 0x45444F43u);
+                    else if (depth)
+                        psx_nd_note_wood_batch_ot_tagged(depth, 0x574F4C47u);
                 }
             } else if (block_leader_phys == 0x00069C34u ||
                        block_leader_phys == 0x00069CC4u) {
@@ -2600,6 +2626,11 @@ static inline void pc_probe_observe(uint32_t block_leader_phys)
                 mode = cpu->gpr[4]; /* a0 mesh */
                 depth = t0;
                 ot_base = (t0 >= 4092u) ? (t0 - 4092u) : 0;
+            } else if (digit_rain_ot) {
+                /* NdIntroDigitRainCode36: $t3 = OT slot; expose vs game ot_base. */
+                t0 = ot_ptr;
+                v0 = ot_index;
+                depth = otz;
             }
             s->last_t0 = t0;
             s->last_fp = fp;
@@ -2662,6 +2693,29 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
                     psx_write_word(a2 + 184u, fl & ~0x80u);
             }
         }
+    }
+    /* Cache WoodEmit batch OT at WoodBatchSetup (runs BEFORE sibling on ND
+     * rain frames) and at scratch load. */
+    if (phys == 0x0006AAF0u && debug_cpu_ptr) {
+        uint32_t model = debug_cpu_ptr->gpr[31]; /* $ra = model */
+        if (model) {
+            uint32_t tag = psx_read_word(model + 8u);
+            uint32_t base = psx_read_word(model + 228u);
+            if (base)
+                psx_nd_note_wood_batch_ot_tagged(base, tag);
+        }
+    }
+    if ((phys == 0x0006ACFCu || phys == 0x0006AD08u) && debug_cpu_ptr) {
+        uint32_t base = 0;
+        if (phys == 0x0006ACFCu) {
+            uint32_t a2 = debug_cpu_ptr->gpr[6];
+            if (a2)
+                base = psx_read_word(a2 + 228u);
+        } else {
+            base = debug_cpu_ptr->gpr[5]; /* a1 after lw model+228 */
+        }
+        if (base)
+            psx_nd_note_wood_batch_ot(base);
     }
     /* ND debug: PSX_ND_SIB_OT_LIFT=<n> adds n*4 to $a3 at sibling face-loop
      * entry 0x80069CC4 (a3 = *(a1+244)+4092 = last OT slot). Sibling PolyFT3
