@@ -2,6 +2,7 @@
 
 #include "psxrecomp_codegen_host.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -975,6 +976,114 @@ static void write_sidecar_near_exe(const char* near_exe, const char* name,
     write_line_file(path, value ? value : "");
 }
 
+/* IEEE CRC-32 (zlib / Ethernet) — SCPH-1001 identity for setup discovery. */
+static uint32_t host_crc32(const unsigned char* data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t i, j;
+    for (i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (j = 0; j < 8; ++j)
+            crc = (crc >> 1) ^ ((crc & 1u) ? 0xEDB88320u : 0u);
+    }
+    return ~crc;
+}
+
+static int retail_bios_file_ok_c(const char* path) {
+    FILE* f;
+    long size;
+    unsigned char* buf;
+    uint32_t crc;
+    if (!path || !path[0] || !path_is_file(path)) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    size = ftell(f);
+    if (size != 512 * 1024) { fclose(f); return 0; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
+    buf = (unsigned char*)malloc((size_t)size);
+    if (!buf) { fclose(f); return 0; }
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size) {
+        free(buf);
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    crc = host_crc32(buf, (size_t)size);
+    free(buf);
+    return crc == 0x37157331u; /* SCPH-1001 */
+}
+
+/* Prefer a player-supplied SCPH1001 next to the project/exe for Generate.
+ * Missing → leave empty (OpenBIOS). Does not override an explicit OpenBIOS. */
+static int discover_retail_bios_c(char* out, size_t cap) {
+    static const char* names[] = {
+        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
+        "SCPH1001.bin", "scph1001.BIN",
+    };
+    static const char* subs[] = {
+        "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
+    };
+    char roots[3][1100];
+    int nroots = 0;
+    int r, s, n;
+    if (g_project_root[0]) {
+        snprintf(roots[nroots], sizeof(roots[0]), "%s", g_project_root);
+        ++nroots;
+    }
+    if (g_exe_path[0]) {
+        char dir[1100];
+        if (dirname_copy(dir, sizeof(dir), g_exe_path)) {
+            snprintf(roots[nroots], sizeof(roots[0]), "%s", dir);
+            ++nroots;
+        }
+    }
+    for (r = 0; r < nroots; ++r) {
+        char walk[1100];
+        int depth;
+        snprintf(walk, sizeof(walk), "%s", roots[r]);
+        for (depth = 0; depth < 6 && walk[0]; ++depth) {
+            for (s = 0; s < (int)(sizeof(subs) / sizeof(subs[0])); ++s) {
+                char dir[1200];
+                if (subs[s][0]) {
+                    if (!join_path(dir, sizeof(dir), walk, subs[s])) continue;
+                } else {
+                    snprintf(dir, sizeof(dir), "%s", walk);
+                }
+                for (n = 0; n < (int)(sizeof(names) / sizeof(names[0])); ++n) {
+                    char cand[1300];
+                    if (!join_path(cand, sizeof(cand), dir, names[n])) continue;
+                    if (!retail_bios_file_ok_c(cand)) continue;
+                    if (!absolutize_existing_file(out, cap, cand))
+                        snprintf(out, cap, "%s", cand);
+                    return 1;
+                }
+            }
+            {
+                char parent[1100];
+                if (!dirname_copy(parent, sizeof(parent), walk)) break;
+                if (strcmp(parent, walk) == 0) break;
+                snprintf(walk, sizeof(walk), "%s", parent);
+            }
+        }
+    }
+    out[0] = '\0';
+    return 0;
+}
+
+static int bios_cfg_sidecar_exists(void) {
+    char cand[1100];
+    char dir[1100];
+    if (g_project_root[0] &&
+        join_path(cand, sizeof(cand), g_project_root, "bios.cfg") &&
+        path_is_file(cand))
+        return 1;
+    if (g_exe_path[0] && dirname_copy(dir, sizeof(dir), g_exe_path) &&
+        join_path(cand, sizeof(cand), dir, "bios.cfg") && path_is_file(cand))
+        return 1;
+    if (path_is_file("bios.cfg")) return 1;
+    return 0;
+}
+
 static int resolve_bios_arg(char* out, size_t cap) {
     char cand[1100];
     char line[1100];
@@ -1000,6 +1109,24 @@ static int resolve_bios_arg(char* out, size_t cap) {
     if (read_line_file("bios.cfg", line, sizeof(line)) &&
         absolutize_existing_file(out, cap, line))
         return 1;
+    /* bios.cfg present but empty = intentional OpenBIOS — do not rediscover. */
+    if (g_wizard_bios_explicit || bios_cfg_sidecar_exists()) {
+        out[0] = '\0';
+        return 0;
+    }
+    /* No remembered pick — adopt SCPH1001 if present; else OpenBIOS (empty). */
+    if (discover_retail_bios_c(out, cap)) {
+        snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", out);
+        if (g_project_root[0] &&
+            join_path(cand, sizeof(cand), g_project_root, "bios.cfg"))
+            write_line_file(cand, out);
+        write_line_file("bios.cfg", out);
+        if (g_exe_path[0])
+            write_sidecar_near_exe(g_exe_path, "bios.cfg", out);
+        fprintf(stderr, "psxrecomp-codegen: setup adopted retail BIOS %s\n",
+                out);
+        return 1;
+    }
     out[0] = '\0';
     return 0;
 }
@@ -2938,14 +3065,20 @@ static int host_prepare_generate(const char* source_path, char* out_path,
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
 
     /* Hand the CLI the launcher's staged disc + BIOS. Empty g_wizard_bios means
-     * OpenBIOS (clear sidecars — do not re-read a stale bios.cfg). */
+     * OpenBIOS unless setup can adopt a retail dump beside the install. */
     {
         char abs_bios[1100];
         if (g_wizard_bios[0] &&
             absolutize_existing_file(abs_bios, sizeof(abs_bios), g_wizard_bios))
             snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", abs_bios);
         else if (!g_wizard_bios[0]) {
-            /* keep empty */
+            /* Intentional OpenBIOS clear stays empty; otherwise adopt SCPH1001
+             * from bios.cfg / discovery (resolve_bios_arg). */
+            if (!g_wizard_bios_explicit) {
+                char found[1100];
+                if (resolve_bios_arg(found, sizeof(found)))
+                    snprintf(g_wizard_bios, sizeof(g_wizard_bios), "%s", found);
+            }
         } else {
             /* Staged path missing — fail clearly instead of silently OpenBIOS. */
             snprintf(err_msg, err_cap, "Staged BIOS not found: %s", g_wizard_bios);

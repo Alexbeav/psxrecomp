@@ -2031,10 +2031,9 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
  *   explicit choice, mismatched-> explained; falls back to OpenBIOS if allowed
  *   openbios disabled for this title -> a retail image is required
  *
- * "Explicit" means --bios or a remembered launcher/settings pick. Finding a
- * file on disk deliberately does NOT count: discovery used to adopt whatever
- * happened to sit near the executable, so two players with the same build
- * could end up on different BIOSes.
+ * "Explicit" means --bios or a remembered launcher/settings/`bios.cfg` pick.
+ * First-run setup may seed bios.cfg from a validated SCPH1001 beside the
+ * install; after that, Play never invents a BIOS from random on-disk files.
  */
 static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       const char* argv0,
@@ -2199,6 +2198,56 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     found = find_upward(exe_dir_from_argv(argv0), dev_marker);
     if (!found.empty()) return found / dev_marker;
     return p;
+}
+
+/* First-run / setup discovery of a retail BIOS the player already dumped next
+ * to the game (docs/BIOS_SELECTION.md). Only size+CRC identity counts — wrong
+ * dumps are skipped silently. Empty result → keep OpenBIOS (no prompt). */
+static bool retail_bios_file_ok(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return false;
+    if (psx_bios_registry_count > 0) {
+        const PsxBiosBackend* b = bios_backend_for_file(path, nullptr, nullptr);
+        return b && b->image && !b->image->image_bundled;
+    }
+    /* Setup host (no backends linked yet): accept validated SCPH-1001 only. */
+    constexpr uint64_t kSize = 512u * 1024u;
+    constexpr uint32_t kScph1001Crc = 0x37157331u;
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return false;
+    const auto size = static_cast<uint64_t>(f.tellg());
+    if (size != kSize) return false;
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    if (!read_at(f, 0, data.data(), data.size())) return false;
+    return crc32_compute(data.data(), data.size()) == kScph1001Crc;
+}
+
+static std::filesystem::path discover_retail_bios_near(const char* argv0) {
+    namespace fs = std::filesystem;
+    static const char* kNames[] = {
+        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
+        "SCPH1001.bin", "scph1001.BIN",
+    };
+    static const char* kSubdirs[] = {
+        "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
+    };
+    const fs::path exe_dir = exe_dir_from_argv(argv0);
+    std::error_code ec;
+    for (fs::path root = exe_dir; !root.empty(); root = root.parent_path()) {
+        for (const char* sub : kSubdirs) {
+            const fs::path dir = (sub && sub[0]) ? (root / sub) : root;
+            for (const char* name : kNames) {
+                const fs::path cand = dir / name;
+                if (retail_bios_file_ok(cand)) {
+                    auto abs = fs::weakly_canonical(cand, ec);
+                    if (ec) abs = fs::absolute(cand, ec);
+                    return abs;
+                }
+            }
+        }
+        if (!root.has_parent_path() || root == root.root_path()) break;
+    }
+    return {};
 }
 
 // Fallback memcard directory used when no game config (or its [runtime]
@@ -9675,6 +9724,24 @@ int main(int argc, char** argv) {
                 } else {
                     seed.bios_path.clear();
                     seed.has_bios_path = false;
+                }
+            }
+            /* First-run setup: if nothing remembered, adopt a retail dump next
+             * to the install (SCPH1001…). Missing → leave empty (OpenBIOS).
+             * Never override an existing bios.cfg (including cleared OpenBIOS). */
+            if (!seed.has_bios_path) {
+                std::error_code ec;
+                const auto cfg = sidecar_cfg_path(argv[0], "bios.cfg");
+                if (!std::filesystem::exists(cfg, ec)) {
+                    std::filesystem::path found = discover_retail_bios_near(argv[0]);
+                    if (!found.empty()) {
+                        seed.bios_path = found;
+                        seed.has_bios_path = true;
+                        write_cached_path(argv[0], "bios.cfg", found);
+                        std::fprintf(stderr,
+                                     "psxrecomp: setup adopted retail BIOS %s\n",
+                                     found.string().c_str());
+                    }
                 }
             }
             if (!resolved_disc.empty())    { seed.disc_path = resolved_disc; seed.has_disc_path = true; }
