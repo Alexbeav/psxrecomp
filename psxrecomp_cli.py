@@ -766,6 +766,28 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     return EXIT_OK
 
 
+def _which_tool(name: str) -> Optional[Path]:
+    """Resolve *name* or *name*.exe from PATH (Windows PATHEXT-friendly)."""
+    for cand in (name, f"{name}.exe"):
+        found = shutil.which(cand)
+        if found:
+            return Path(found)
+    return None
+
+
+def _read_cmake_cache_generator(cache_file: Path) -> str:
+    if not cache_file.is_file():
+        return ""
+    try:
+        text = cache_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if line.startswith("CMAKE_GENERATOR:INTERNAL="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
 def _cmake_configure(
     project_root: Path,
     build_dir: Path,
@@ -775,11 +797,34 @@ def _cmake_configure(
     progress: ProgressReporter,
 ) -> None:
     build_dir.mkdir(parents=True, exist_ok=True)
-    # Prefer Ninja when available; fall back so hosts without ninja still build.
-    if not (build_dir / "CMakeCache.txt").is_file() and shutil.which("ninja"):
-        gen = ["-G", "Ninja"]
-    else:
-        gen = []
+    cache_file = build_dir / "CMakeCache.txt"
+    ninja = _which_tool("ninja")
+    clang_c = _which_tool("clang")
+    clang_cxx = _which_tool("clang++")
+
+    # Prefer Ninja + pack clang when the portable toolchain is on PATH.
+    # On Windows, a prior failed configure often leaves CMakeCache stuck on
+    # "NMake Makefiles" with no compiler — wipe that and force Ninja.
+    gen: list[str] = []
+    if ninja is not None:
+        cached_gen = _read_cmake_cache_generator(cache_file)
+        if cached_gen and cached_gen != "Ninja":
+            progress.log(f'Replacing cmake generator "{cached_gen}" with Ninja…')
+            shutil.rmtree(build_dir, ignore_errors=True)
+            build_dir.mkdir(parents=True, exist_ok=True)
+        gen = ["-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}"]
+    elif sys.platform == "win32":
+        progress.log(
+            "warning: ninja not on PATH — cmake may pick NMake Makefiles "
+            "(ensure cmake-clang-v1 bin is active)"
+        )
+
+    compiler_args: list[str] = []
+    if clang_c is not None:
+        compiler_args.append(f"-DCMAKE_C_COMPILER={clang_c}")
+    if clang_cxx is not None:
+        compiler_args.append(f"-DCMAKE_CXX_COMPILER={clang_cxx}")
+
     cmd = [
         "cmake",
         "-S",
@@ -789,6 +834,7 @@ def _cmake_configure(
         *gen,
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DPSX_PGO={pgo}",
+        *compiler_args,
         *extra,
     ]
     progress.log(" ".join(cmd))

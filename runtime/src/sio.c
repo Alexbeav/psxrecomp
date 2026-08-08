@@ -2315,6 +2315,18 @@ static int sio_consume_ack_event(void) {
 }
 
 static void sio_fire_ack_irq(void) {
+    /* Offline card: drop sticky unmasked SPU (I_STAT bit 9) before raising
+     * SIO. Tip's LOAD probe ACKs otherwise land on i_stat_before 0x200 while
+     * master sees 0x000 — guest-visible divergence. Not sufficient alone to
+     * restore the post-probe 0x57 (still FAIL); kept as hygiene. Netplay
+     * unchanged. */
+    if (sio_irq_pending_source == SIO_IRQ_SRC_CARD_ACK) {
+        extern int psx_netplay_active(void);
+        extern int psx_selfcheck_enabled(void);
+        if (!psx_netplay_active() && !psx_selfcheck_enabled())
+            i_stat &= ~(1u << 9);
+    }
+
     sio_stat |= SIO_STAT_ACK;
     sio_ack_visible_reads = 2;
     sr_record(SR_EVT_ACK_FIRE, 0, 0);
@@ -2424,7 +2436,7 @@ static void sio_pace_walk(int cycles) {
     const int uncapped = psx_netplay_active() || psx_selfcheck_enabled();
     int remaining = cycles;
     int transitions = 0;
-    const int MAX_TRANSITIONS = 1; /* APE experiment: serialize ACK edges */
+    const int MAX_TRANSITIONS = 8;
     while ((uncapped || transitions < MAX_TRANSITIONS) &&
            (remaining > 0 ||
             (sio_shift_active && sio_shift_remaining <= 0) ||
