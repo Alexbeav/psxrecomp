@@ -412,6 +412,34 @@ int sio_card_protocol_active(void) {
     return 0;
 }
 
+int sio_hold_present_for_card(void) {
+    /* NTSC VBlank period — matches interrupts.c VBLANK_CYCLES. */
+    enum { SIO_PRESENT_HOLD_STALE_VB = 10 };
+    static const uint64_t stale_cycles =
+        564480ull * (uint64_t)SIO_PRESENT_HOLD_STALE_VB;
+    static uint32_t s_hold_seq;
+    static uint64_t s_hold_progress_cyc;
+    static int s_hold_armed;
+    uint32_t seq;
+    uint64_t now;
+
+    if (!sio_card_protocol_active()) {
+        s_hold_armed = 0;
+        return 0;
+    }
+    extern uint64_t psx_get_cycle_count(void);
+    seq = sio_get_seq();
+    now = psx_get_cycle_count();
+    if (!s_hold_armed || seq != s_hold_seq) {
+        s_hold_seq = seq;
+        s_hold_progress_cyc = now;
+        s_hold_armed = 1;
+    }
+    if (now - s_hold_progress_cyc >= stale_cycles)
+        return 0; /* stale: allow present drain */
+    return 1;
+}
+
 /* Forward decl: defined below sio_get_freeze_diag. */
 static int sio_card_burst_drain(int max_iters);
 extern int psx_get_in_exception(void);

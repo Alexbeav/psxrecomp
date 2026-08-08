@@ -118,7 +118,9 @@ void     gpu_gp0_ring_frame_span(uint32_t *out_oldest, uint32_t *out_newest);
 
 /* Vblank presentation callback — called from gpu_vblank_tick().
  * Under netplay the callback is deferred to gpu_vblank_flush_present() at
- * BB / IRQ-check edges so finish_frame digests are not sampled mid-block. */
+ * BB / IRQ-check edges so finish_frame digests are not sampled mid-block.
+ * Flush also holds while sio_hold_present_for_card() so native save/load
+ * busy-waits are not interrupted by MotK-style BB-edge commit. */
 typedef void (*gpu_vblank_cb)(void);
 void gpu_set_vblank_callback(gpu_vblank_cb cb);
 void gpu_vblank_flush_present(void);

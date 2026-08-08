@@ -196,6 +196,14 @@ uint32_t sio_get_seq(void);
  * transaction by issuing 0x01 on the SIO bus mid-read. */
 int sio_card_protocol_active(void);
 
+/* Netplay deferred-present coexistence: 1 while native memcard SIO is
+ * busy and still making progress. Callers keep s_present_pending and
+ * retry later so BB-edge finish_frame does not run mid card busy-wait
+ * (Ape Escape empty-starfield wedge; same class of risk on other titles).
+ * Returns 0 after ~10 VBlanks with no SIO seq progress so a wedged card
+ * FSM cannot stall commit forever (mirrors VBlank-for-SIO stale escape). */
+int sio_hold_present_for_card(void);
+
 /* Snapshot SIO IRQ-pacing internals for the freeze_check diagnostic. */
 void sio_get_freeze_diag(int *out_irq_pending, int *out_irq_countdown,
                          uint16_t *out_sio_stat, uint16_t *out_sio_ctrl,
