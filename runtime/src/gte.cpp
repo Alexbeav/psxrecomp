@@ -839,8 +839,17 @@ extern "C" void gte_set_display_aspect(int num, int den) {
 
 // ---------------------------------------------------------------------------
 // RTPS — Perspective Transformation (internal, operates on given vertex V)
+//
+// Matches DuckStation/Beetle (psx-spx):
+//   MAC1/2/3 = (TR*1000h + RT*V) SAR (sf*12)
+//   IR1/IR2  = limB(MAC, lm)
+//   IR3 FLAG = limB(MAC3_unshifted SAR 12, lm=0); stored IR3 = limB(MAC3, lm)
+//   SZ3      = limE(MAC3_unshifted SAR 12)   — always >>12, independent of sf
 // ---------------------------------------------------------------------------
-void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0) {
+void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) {
+    const int  shift = gte_instr_sf(instr);
+    const bool lm    = gte_instr_lm(instr);
+
     // Step 1: Matrix multiplication + translation
     int64_t mac1 = (int64_t)gte->TR[0] * 4096 +
                    (int64_t)gte->RT[0][0] * V[0] +
@@ -855,19 +864,29 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0) {
                    (int64_t)gte->RT[2][1] * V[1] +
                    (int64_t)gte->RT[2][2] * V[2];
 
+    // Overflow flags always check the >>12 view (hardware).
     gte->check_mac_overflow(mac1 >> 12, 1);
     gte->check_mac_overflow(mac2 >> 12, 2);
     gte->check_mac_overflow(mac3 >> 12, 3);
-    gte->MAC1 = static_cast<int32_t>(mac1 >> 12);
-    gte->MAC2 = static_cast<int32_t>(mac2 >> 12);
-    gte->MAC3 = static_cast<int32_t>(mac3 >> 12);
+    gte->MAC1 = static_cast<int32_t>(mac1 >> shift);
+    gte->MAC2 = static_cast<int32_t>(mac2 >> shift);
+    gte->MAC3 = static_cast<int32_t>(mac3 >> shift);
 
-    gte->IR1 = gte->saturate_ir(gte->MAC1, 1, false);
-    gte->IR2 = gte->saturate_ir(gte->MAC2, 2, false);
-    gte->IR3 = gte->saturate_ir(gte->MAC3, 3, false);
+    gte->IR1 = gte->saturate_ir(gte->MAC1, 1, lm);
+    gte->IR2 = gte->saturate_ir(gte->MAC2, 2, lm);
+    // IR3 quirk (psx-spx / DuckStation): FLAG.22 from (mac3>>12) as if lm=0;
+    // stored IR3 clamps MAC3 with the real lm bit and does not touch FLAG again.
+    (void)gte->saturate_ir(static_cast<int32_t>(mac3 >> 12), 3, false);
+    {
+        int32_t ir3 = gte->MAC3;
+        const int32_t lo = lm ? 0 : -0x8000;
+        if (ir3 < lo) ir3 = lo;
+        if (ir3 > 0x7FFF) ir3 = 0x7FFF;
+        gte->IR3 = static_cast<int16_t>(ir3);
+    }
 
-    // Step 2: Push SZ FIFO
-    gte->push_sz(gte->MAC3);
+    // Step 2: Push SZ FIFO — always unshifted>>12 (not MAC3 when sf=0).
+    gte->push_sz(static_cast<int32_t>(mac3 >> 12));
 
     // Step 3: Perspective division
     int32_t h_div_sz = gte_divide(gte->H, gte->SZ[3], gte->FLAG);
@@ -942,16 +961,16 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0) {
 // RTPS (0x01) — single vertex, always sets MAC0
 void gte_rtps(GTEState* gte, uint32_t instr) {
     gte->FLAG = 0;
-    gte_rtps_internal(gte, gte->V0, true);
+    gte_rtps_internal(gte, gte->V0, true, instr);
     gte->set_error_flag();
 }
 
 // RTPT (0x30) — triple vertex, only last sets MAC0
 void gte_rtpt(GTEState* gte, uint32_t instr) {
     gte->FLAG = 0;
-    gte_rtps_internal(gte, gte->V0, false);
-    gte_rtps_internal(gte, gte->V1, false);
-    gte_rtps_internal(gte, gte->V2, true);
+    gte_rtps_internal(gte, gte->V0, false, instr);
+    gte_rtps_internal(gte, gte->V1, false, instr);
+    gte_rtps_internal(gte, gte->V2, true, instr);
     gte->set_error_flag();
 }
 
