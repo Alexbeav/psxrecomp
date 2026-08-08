@@ -2031,10 +2031,9 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
  *   explicit choice, mismatched-> explained; falls back to OpenBIOS if allowed
  *   openbios disabled for this title -> a retail image is required
  *
- * "Explicit" means --bios or a remembered launcher/settings pick. Finding a
- * file on disk deliberately does NOT count: discovery used to adopt whatever
- * happened to sit near the executable, so two players with the same build
- * could end up on different BIOSes.
+ * "Explicit" means --bios or a remembered launcher/settings/`bios.cfg` pick.
+ * First-run setup may seed bios.cfg from a validated SCPH1001 beside the
+ * install; after that, Play never invents a BIOS from random on-disk files.
  */
 static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       const char* argv0,
@@ -2199,6 +2198,56 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     found = find_upward(exe_dir_from_argv(argv0), dev_marker);
     if (!found.empty()) return found / dev_marker;
     return p;
+}
+
+/* First-run / setup discovery of a retail BIOS the player already dumped next
+ * to the game (docs/BIOS_SELECTION.md). Only size+CRC identity counts — wrong
+ * dumps are skipped silently. Empty result → keep OpenBIOS (no prompt). */
+static bool retail_bios_file_ok(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return false;
+    if (psx_bios_registry_count > 0) {
+        const PsxBiosBackend* b = bios_backend_for_file(path, nullptr, nullptr);
+        return b && b->image && !b->image->image_bundled;
+    }
+    /* Setup host (no backends linked yet): accept validated SCPH-1001 only. */
+    constexpr uint64_t kSize = 512u * 1024u;
+    constexpr uint32_t kScph1001Crc = 0x37157331u;
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return false;
+    const auto size = static_cast<uint64_t>(f.tellg());
+    if (size != kSize) return false;
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    if (!read_at(f, 0, data.data(), data.size())) return false;
+    return crc32_compute(data.data(), data.size()) == kScph1001Crc;
+}
+
+static std::filesystem::path discover_retail_bios_near(const char* argv0) {
+    namespace fs = std::filesystem;
+    static const char* kNames[] = {
+        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
+        "SCPH1001.bin", "scph1001.BIN",
+    };
+    static const char* kSubdirs[] = {
+        "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
+    };
+    const fs::path exe_dir = exe_dir_from_argv(argv0);
+    std::error_code ec;
+    for (fs::path root = exe_dir; !root.empty(); root = root.parent_path()) {
+        for (const char* sub : kSubdirs) {
+            const fs::path dir = (sub && sub[0]) ? (root / sub) : root;
+            for (const char* name : kNames) {
+                const fs::path cand = dir / name;
+                if (retail_bios_file_ok(cand)) {
+                    auto abs = fs::weakly_canonical(cand, ec);
+                    if (ec) abs = fs::absolute(cand, ec);
+                    return abs;
+                }
+            }
+        }
+        if (!root.has_parent_path() || root == root.root_path()) break;
+    }
+    return {};
 }
 
 // Fallback memcard directory used when no game config (or its [runtime]
@@ -3959,10 +4008,13 @@ static void apply_input_override_to_sio(int override_word) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
+    /* Prefer the configured seat mode (incl. game.toml lock_mode / settings
+     * p1_mode). Falling back to DIGITAL when kind==0 made DualShock-locked
+     * titles (Ape Escape) ignore debug-server injection in headless runs. */
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -3973,6 +4025,15 @@ static void apply_input_override_to_sio(int override_word) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    /* Pinned-ANALOG folds injected D-pad onto the left stick (same as a real
+     * DualShock seat). Without this, stick-only menu/move paths ignore
+     * button-bit injection even though pad_status shows the bits pressed. */
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF; /* Right */
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
@@ -4223,7 +4284,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4234,6 +4295,12 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF;
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
 
@@ -9681,6 +9748,24 @@ int main(int argc, char** argv) {
                 } else {
                     seed.bios_path.clear();
                     seed.has_bios_path = false;
+                }
+            }
+            /* First-run setup: if nothing remembered, adopt a retail dump next
+             * to the install (SCPH1001…). Missing → leave empty (OpenBIOS).
+             * Never override an existing bios.cfg (including cleared OpenBIOS). */
+            if (!seed.has_bios_path) {
+                std::error_code ec;
+                const auto cfg = sidecar_cfg_path(argv[0], "bios.cfg");
+                if (!std::filesystem::exists(cfg, ec)) {
+                    std::filesystem::path found = discover_retail_bios_near(argv[0]);
+                    if (!found.empty()) {
+                        seed.bios_path = found;
+                        seed.has_bios_path = true;
+                        write_cached_path(argv[0], "bios.cfg", found);
+                        std::fprintf(stderr,
+                                     "psxrecomp: setup adopted retail BIOS %s\n",
+                                     found.string().c_str());
+                    }
                 }
             }
             if (!resolved_disc.empty())    { seed.disc_path = resolved_disc; seed.has_disc_path = true; }

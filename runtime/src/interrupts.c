@@ -961,15 +961,19 @@ void psx_check_interrupts(CPUState* cpu) {
      *
      * Offline must NOT flush here — master never did. BB-edge finish_frame
      * during Ape Escape's memcard busy-wait wedges the card-check scene
-     * (empty starfield hang). Netplay MotK still needs the drain. */
+     * (empty starfield hang). Netplay MotK still needs the drain — but
+     * gpu_vblank_flush_present holds while sio_hold_present_for_card(), and
+     * we also skip while a deferred cooperative ChangeThread is pending
+     * (Ape memcard fix #2) so finish_frame cannot run on a smeared TCB. */
     int np_present_after_irq = 0;
-    if (!in_exception && np_active) {
-        gpu_vblank_flush_present(); /* CDA0 only when gated; CD54 no-ops */
+    if (!in_exception && np_active && !s_defer_switch_pending) {
+        gpu_vblank_flush_present(); /* CDA0 / card gates inside; CD54 no-ops */
         if (psx_interrupt_delivery_needed(cpu))
             np_present_after_irq = 1;
     }
 #define PSX_CHECK_INTERRUPTS_RETURN() do { \
-        if (np_present_after_irq) gpu_vblank_flush_present(); \
+        if (np_present_after_irq && !s_defer_switch_pending) \
+            gpu_vblank_flush_present(); \
         if (g_ls_suppress_record > 0) g_ls_suppress_record--; \
         return; \
     } while (0)
@@ -1961,7 +1965,7 @@ irq_deliver_eval:
 #undef COSIM_IRQ_NOTE
 #undef COSIM_IRQ_TAKE_PC
 #endif
-    if (np_present_after_irq)
+    if (np_present_after_irq && !s_defer_switch_pending)
         gpu_vblank_flush_present();
 #undef PSX_CHECK_INTERRUPTS_RETURN
 }
