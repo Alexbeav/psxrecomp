@@ -322,11 +322,12 @@ static SDL_Texture*  sdl_texture;
 struct PlayerInput {
     int   kind = 0;            /* 0=none, 1=keyboard, 2=controller */
     char  guid[40] = {0};      /* SDL joystick GUID string when kind==controller */
-    /* Pad input mode (PSXRecompV4::PadMode): 0=hybrid (default), 1=analog,
+    /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 0=hybrid
+     * (MOD-ONLY, requested via psx_mod_set_controller_mode_override),
      * 2=digital. hybrid_analog is the per-frame auto-switch latch used only in
      * hybrid mode: true => currently presenting DualShock (stick was the last
      * input), false => currently presenting a digital pad (D-pad was last). */
-    int   mode = PSXRecompV4::PAD_MODE_HYBRID;
+    int   mode = PSXRecompV4::PAD_MODE_ANALOG;
     bool  hybrid_analog = false;
     int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
@@ -4091,7 +4092,7 @@ static void apply_input_override_to_sio(int override_word) {
      * titles (Ape Escape) ignore debug-server injection in headless runs. */
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
+    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
     int eff_analog;
@@ -4369,7 +4370,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
 
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
-    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
+    else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
     int eff_analog;
@@ -8975,11 +8976,10 @@ int main(int argc, char** argv) {
 #else
         player_device[i] = (i == 0) ? "keyboard" : "none";
 #endif
-        player_mode[i] = PSXRecompV4::PAD_MODE_HYBRID;
+        player_mode[i] = PSXRecompV4::PAD_MODE_ANALOG;
         player_deadzone[i] = kDefaultDeadzoneRaw;
-        ctrl_locked_mode[i] = PSXRecompV4::PAD_MODE_HYBRID;
+        ctrl_locked_mode[i] = PSXRecompV4::PAD_MODE_ANALOG;
     }
-    bool ctrl_allow_hybrid = true;  /* game.toml [controller] allow_hybrid; false hides Hybrid in the launcher */
     bool ctrl_lock_mode    = false; /* game.toml [controller] lock_mode; true hides the whole pad-mode selector */
     bool ctrl_lock_device  = false; /* game.toml [controller] lock_device; true hides the Player controller cards entirely */
     bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
@@ -9299,7 +9299,6 @@ int main(int argc, char** argv) {
             }
             for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
                 ctrl_locked_mode[i] = player_mode[i];
-            ctrl_allow_hybrid = gc.runtime.controller_allow_hybrid;
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
             ctrl_lock_device  = gc.runtime.controller_lock_device;
             if (gc.runtime.has_deadzone) {
@@ -9543,21 +9542,6 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-    /* allow_hybrid=false removes Hybrid from the game's supported controller
-     * modes. Clamp an old persisted Hybrid value here as well as hiding it in
-     * recomp-ui, so launcher-less builds cannot revive an unsupported mode.
-     * Prefer each port's game-declared default; malformed/legacy configs that
-     * also default to Hybrid fall back to Analog, matching recomp-ui. */
-    if (!ctrl_allow_hybrid) {
-        for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
-            const int fallback =
-                ctrl_locked_mode[i] == PSXRecompV4::PAD_MODE_HYBRID
-                    ? PSXRecompV4::PAD_MODE_ANALOG : ctrl_locked_mode[i];
-            if (player_mode[i] == PSXRecompV4::PAD_MODE_HYBRID)
-                player_mode[i] = fallback;
-        }
-    }
-
     /* A game may migrate Skip FMVs from generic Settings into its mod catalog.
      * Clamp stale settings before seeding recomp-ui; an enabled activation
      * plugin applies the feature after the final mod-plan commit. */
@@ -10134,7 +10118,6 @@ int main(int argc, char** argv) {
             /* Pad-mode + aspect capabilities sourced from game.toml
              * [controller]/[widescreen] via GameConfig. PSX always has pad modes. */
             gi.pad_mode_selectable  = ctrl_lock_mode ? 0 : 1;
-            gi.allow_hybrid         = ctrl_allow_hybrid ? 1 : 0;
             gi.locked_pad_mode      = ctrl_locked_mode[0];  /* game-declared default_mode */
             gi.lock_device          = ctrl_lock_device ? 1 : 0;
             gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
@@ -11742,7 +11725,6 @@ soft_return_lobby:
         gi.memcard_inspect = ae_memcard_inspect;
         gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
         gi.pad_mode_selectable = ctrl_lock_mode ? 0 : 1;
-        gi.allow_hybrid = ctrl_allow_hybrid ? 1 : 0;
         gi.locked_pad_mode = ctrl_locked_mode[0];
         gi.lock_device = ctrl_lock_device ? 1 : 0;
 #if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)

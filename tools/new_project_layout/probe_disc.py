@@ -514,7 +514,6 @@ def render_game_toml(p: DiscProbe, *, disc_rel: str, out_dir: str, players: int)
         "",
         "[controller]",
         'default_mode = "digital"',
-        "allow_hybrid = false",
         "",
         "# Online mount gate: digests + track count + optional TOC fingerprint",
         "# (see docs/NETPLAY.md).",
