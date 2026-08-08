@@ -3898,22 +3898,83 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
  * player has reached for analog. hybrid_dpad_active: any D-pad direction (or,
  * for the keyboard, an arrow key) is held — the player wants classic digital.
  * The keyboard has no analog stick, so a keyboard player stays digital. */
-static bool hybrid_stick_active(const PlayerInput& p) {
-    if (p.kind != 2 || !p.handle) return false;
-    const double lx = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTX);
-    const double ly = SDL_GameControllerGetAxis(p.handle, SDL_CONTROLLER_AXIS_LEFTY);
-    const double dz = (double)(p.deadzone > 0 ? p.deadzone : controller_deadzone);
+static bool controller_stick_active(SDL_GameController* handle, int deadzone) {
+    if (!handle) return false;
+    const double lx =
+        SDL_GameControllerGetAxis(handle, SDL_CONTROLLER_AXIS_LEFTX);
+    const double ly =
+        SDL_GameControllerGetAxis(handle, SDL_CONTROLLER_AXIS_LEFTY);
+    const double dz = (double)(deadzone > 0 ? deadzone : controller_deadzone);
     return std::sqrt(lx * lx + ly * ly) > dz;
 }
-static bool hybrid_dpad_active(const PlayerInput& p, int player, bool kb_always) {
-    if (p.kind == 2 && p.handle) {
-        if (SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT)  ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_UP)    ||
-            SDL_GameControllerGetButton(p.handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN))
-            return true;
+static bool controller_dpad_active(SDL_GameController* handle) {
+    return handle &&
+        (SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
+         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN));
+}
+/* Which input sources may drive ONE pad slot this frame.
+ *
+ * This exists because the answer is consumed in three places — the button
+ * merge, the HYBRID analog/digital auto-switch, and the analog stick fold —
+ * and those three used to compute it independently. Whenever they disagreed,
+ * a source could assert a button without the hybrid state machine seeing it,
+ * leaving the pad reporting D-pad presses while still presenting ANALOG: the
+ * exact failure the hybrid logic exists to prevent, and silent when it
+ * happens. Deriving all three from one predicate makes that desync
+ * structurally impossible rather than merely fixed once.
+ *
+ * Changing input-routing POLICY is therefore a change to this function alone
+ * (e.g. whether keybinds stay live alongside a routed gamepad), not a change
+ * to three separate conditions that must be kept in step by hand. */
+struct PadSources {
+    bool device;    /* the slot's own assigned device (keyboard or controller) */
+    bool keybinds;  /* keybinds.ini keyboard/mouse binds for this player       */
+    bool all_pads;  /* every connected controller (dev-any-input)              */
+};
+
+static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
+    PadSources s;
+    s.device   = (p.kind != 0);
+    /* kind==1 consumes the binds through pad_buttons_for/pad_sticks_for; dev
+     * mode folds them in on top of whatever device is assigned. */
+    s.keybinds = (p.kind == 1) || dev_here;
+    s.all_pads = dev_here;
+    return s;
+}
+
+static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src) {
+    if (src.device && p.kind == 2 &&
+        controller_stick_active(p.handle, p.deadzone)) return true;
+    if (src.all_pads) {
+        const int n = SDL_NumJoysticks();
+        for (int i = 0; i < n; i++) {
+            if (!SDL_IsGameController(i)) continue;
+            const SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+            SDL_GameController* handle =
+                SDL_GameControllerFromInstanceID(inst);
+            if (!handle) handle = SDL_GameControllerOpen(i);
+            if (controller_stick_active(handle, controller_deadzone)) return true;
+        }
     }
-    if (p.kind == 1 || kb_always) {
+    return false;
+}
+static bool hybrid_dpad_active(const PlayerInput& p, int player,
+                               const PadSources& src) {
+    if (src.device && p.kind == 2 && controller_dpad_active(p.handle)) return true;
+    if (src.all_pads) {
+        const int n = SDL_NumJoysticks();
+        for (int i = 0; i < n; i++) {
+            if (!SDL_IsGameController(i)) continue;
+            const SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+            SDL_GameController* handle =
+                SDL_GameControllerFromInstanceID(inst);
+            if (!handle) handle = SDL_GameControllerOpen(i);
+            if (controller_dpad_active(handle)) return true;
+        }
+    }
+    if (src.keybinds) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         if (psx_keybinds_dpad_active(keys, player)) return true;
     }
@@ -4079,23 +4140,22 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * state gates how the left stick is read for BOTH the button word and the
      * analog axes below. An assigned device keeps its configured mode (a
      * launcher-selected analog DualShock stays analog, so its input path / SIO
-     * handshake cadence is preserved exactly). Keyboard is always digital.
-     * Multitap taps are forced digital unless multitap_analog hack is on.
-     * A P1 with no assigned device but dev-any-input on presents as HYBRID. */
-    int mode;
-    if (sio_pad_on_multitap(s) && !sio_get_multitap_analog())
-        mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
-    else if (p.kind != 0) mode = effective_player_mode(p);
-    else if (dev_here)    mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                  mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+     * handshake cadence is preserved exactly). A P1 with no assigned device
+     * keeps the game's resolved mode while dev-any-input merges the keyboard and
+     * all connected controllers. */
+    /* One source set, consumed by the hybrid switch, the button merge and the
+     * stick fold below — see pad_sources_for(). */
+    const PadSources src = pad_sources_for(p, dev_here);
+
+    const int mode = effective_player_mode_for_sio(p, s);
     int eff_analog;
     if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
         eff_analog = 0;
     } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
         eff_analog = 1;
     } else { /* HYBRID */
-        if (hybrid_stick_active(p))                       p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, dev_here)) p.hybrid_analog = false;
+        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
+        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
 
@@ -4109,12 +4169,14 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * D-pad control (Ape Escape's camera rotate) from being spun by stick
      * movement or centre drift. Digital mode keeps the stick->D-pad fold. */
     const bool suppress_stick = (eff_analog != 0);
-    uint16_t btn = (p.kind != 0) ? pad_buttons_for(p, player, suppress_stick)
-                                 : (uint16_t)0xFFFF;
-    if (dev_here) {
-        btn &= pad_from_keyboard(1);                        /* keyboard P1 binds  */
-        btn &= dev_all_controllers_buttons(suppress_stick); /* any plugged-in pad */
-    }
+    uint16_t btn = src.device ? pad_buttons_for(p, player, suppress_stick)
+                              : (uint16_t)0xFFFF;
+    /* kind==1 already consumed the binds inside pad_buttons_for — ANDing the
+     * same word twice is idempotent, so this stays a plain source check. */
+    if (src.keybinds)
+        btn &= pad_from_keyboard(player);
+    if (src.all_pads)
+        btn &= dev_all_controllers_buttons(suppress_stick);
 
     /* Analog axes. Pinned-ANALOG folds the physical D-pad onto the left axes
      * (fold_dpad) so the D-pad still moves stick-only games; HYBRID feeds the
@@ -4126,13 +4188,17 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     } else if (eff_analog) {  /* HYBRID, currently presenting analog */
         pad_sticks_for(p, player, st, /*fold_dpad=*/false);
     }
-    /* Dev mode: fold the keyboard's stick binds AND any connected controller's
-     * sticks onto the analog stick, so an analog-mode P1 steers from whatever
-     * is plugged in (P1 binds). */
-    if (dev_here && eff_analog) {
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
-        psx_keybinds_sticks(keys, 1, st);
-        dev_any_controller_sticks(st);
+    /* Stick fold, driven by the SAME source set as the buttons above: whatever
+     * may press a button may also steer. kind==1 already folded its binds
+     * inside pad_sticks_for; psx_keybinds_sticks only widens a deflection, so
+     * applying it twice is idempotent. */
+    if (eff_analog) {
+        if (src.keybinds) {
+            const Uint8* keys = SDL_GetKeyboardState(NULL);
+            psx_keybinds_sticks(keys, player, st);
+        }
+        if (src.all_pads)
+            dev_any_controller_sticks(st);
     }
 
     out->buttons = btn;
@@ -4158,6 +4224,9 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     const bool dev_here = false;
     if (p.kind == 0) return 0;  /* no device in this port */
 
+    /* Same predicate as capture_pad_slot, with dev-any-input disabled:
+     * netplay must stay exclusive so peers hash-agree. */
+    const PadSources src = pad_sources_for(p, dev_here);
     const int sio_slot = (present_sio_slot >= 0) ? present_sio_slot : s;
     int mode = effective_player_mode_for_sio(p, sio_slot);
     int eff_analog;
@@ -4166,8 +4235,8 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
         eff_analog = 1;
     } else { /* HYBRID */
-        if (hybrid_stick_active(p))                       p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, dev_here)) p.hybrid_analog = false;
+        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
+        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
 
