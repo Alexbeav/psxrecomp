@@ -311,7 +311,15 @@ else
             prompt_yn "Enable first-run setup wizard + Generate & rebuild?" ENABLE_WIZARD 1
         fi
     fi
-    if [ "$SET_NETPLAY" -eq 0 ]; then
+    # 1-player titles cannot use multiplayer netplay — skip prompts entirely.
+    if [ "$PLAYERS" -eq 1 ]; then
+        if [ "${ENABLE_NETPLAY:-0}" = "1" ]; then
+            echo "warning: --enable-netplay ignored for 1-player title." >&2
+        fi
+        ENABLE_NETPLAY=0
+        SET_NETPLAY=1
+        echo "  (1-player title — netplay skipped)"
+    elif [ "$SET_NETPLAY" -eq 0 ]; then
         if [ "$YES_MODE" -eq 1 ] || ! is_tty; then
             ENABLE_NETPLAY=0
         else
@@ -459,6 +467,8 @@ else
 fi
 
 if [ "$ENABLE_NETPLAY" -eq 1 ]; then
+    # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
+    # libjuice via pinned URL (not git) so RetComM AppImage builds configure.
     printf '%s\n' \
 'if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
     set(PSX_NETPLAY ON CACHE BOOL
@@ -552,9 +562,27 @@ fill_template "$TEMPLATE_DIR/gitignore.in" "$ROOT/.gitignore"
 fill_template "$TEMPLATE_DIR/VERSION.in" "$ROOT/VERSION"
 fill_template "$TEMPLATE_DIR/README.md.in" "$ROOT/README.md"
 fill_template "$TEMPLATE_DIR/symbols.toml.in" "$ROOT/symbols.toml"
-mkdir -p "$ROOT/seeds" "$ROOT/launcher_assets/img" "$ROOT/scripts" "$ROOT/tools"
+mkdir -p "$ROOT/seeds" "$ROOT/launcher_assets/img" "$ROOT/scripts" "$ROOT/tools" \
+    "$ROOT/mods/preloaded/packages"
 cp "$SCRIPT_DIR/sync_symbols.py" "$ROOT/tools/sync_symbols.py"
 chmod +x "$ROOT/tools/sync_symbols.py"
+# Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
+cat > "$ROOT/mods/preloaded/README.md" <<'EOF'
+# Preloaded mods
+
+Ship reviewed, default-disabled packages here:
+
+```text
+packages/<package-id>/<version>/
+  manifest.toml
+  …
+```
+
+Build wiring copies `mods/preloaded` next to the game executable as `mods/`.
+Install player `.psxmod` archives through the launcher Mods manager instead of
+committing them here. See `psxrecomp/docs/MOD_PACKAGES.md`.
+EOF
+: > "$ROOT/mods/preloaded/packages/.gitkeep"
 
 echo "== Adding submodules =="
 git submodule add -b "$PSXRECOMP_REF" "$PSXRECOMP_URL" psxrecomp
@@ -737,7 +765,7 @@ echo "== Sync symbols header =="
     python3 tools/sync_symbols.py --game "$GAME_NAME" || true
 )
 
-git add CMakeLists.txt game.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools framework_pins.txt symbols.toml psx_symbols.h || true
+git add CMakeLists.txt game.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools mods framework_pins.txt symbols.toml psx_symbols.h || true
 if [ -d "$ROOT/.github/workflows" ]; then
     git add .github/workflows || true
 fi

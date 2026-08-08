@@ -75,8 +75,8 @@ Non-interactive / CI (`--yes` / `-Yes` or `PSXRECOMP_SETUP_YES=1`): requires
 | Zip / CI prefix | Default acronym from name (e.g. MotK → `motk`) |
 | Description / publisher / year / region | Optional marketing → `catalog_identity.json` + README |
 | Include **recomp-ui**? | **N** → no `recomp-ui` submodule, `PSX_RECOMP_UI=OFF`, skip wizard/netplay |
-| Setup wizard? / Netplay? | Only asked if recomp-ui = Y |
-| Netplay lobby URL? | Only if netplay = Y; default host `netplay.retcomm.net` → `ws://…:8765` |
+| Setup wizard? / Netplay? | Only asked if recomp-ui = Y; **netplay auto-off (no prompts) when players = 1** |
+| Netplay lobby URL? | Only if netplay = Y (players ≥ 2); default host `netplay.retcomm.net` → `ws://…:8765` |
 | GitHub Actions release workflow? | Y → `.github/workflows/release.yml` (logs submodule SHAs via `record_pins.sh`) |
 | Fetch libretro boxart? | Needs network |
 | Run Generate now? | Emitters + OpenBIOS + game C (`generated/` gitignored) |
@@ -94,7 +94,8 @@ Flag overrides (non-interactive): `--enable-recomp-ui` / `--no-recomp-ui`,
 What runs after answers:
 
 1. Create repo stubs (`CMakeLists.txt`, `game.toml`, codegen, rich `.gitignore`,
-   `symbols.toml`, `README`, …) + copy `tools/sync_symbols.py`
+   `symbols.toml`, `README`, empty `mods/preloaded/packages/`, …) + copy
+   `tools/sync_symbols.py`
 2. Submodule `psxrecomp` (+ `recomp-ui` only if accepted); detach at fetched
    SHAs; optional snapshot → `framework_pins.txt`
 3. Packager stub; optional CI workflow (submodule gitlinks are the pin;
@@ -167,7 +168,7 @@ is zero-init.
 
 | CMake option       | Default | Effect                                                                                        |
 | ------------------ | ------- | --------------------------------------------------------------------------------------------- |
-| `PSX_NETPLAY`      | OFF     | Link `recomp-net` + lobby client; advertise **full netplay UI** when the title has 2+ players. Also defaults `RNET_ENABLE_ICE=ON` (libjuice) unless `-DRNET_ENABLE_ICE=OFF`. |
+| `PSX_NETPLAY`      | OFF     | Link `recomp-net` + lobby client; advertise **full netplay UI** when the title has 2+ players. Also defaults `RNET_ENABLE_ICE=ON` (libjuice via URL FetchContent, or `third_party/libjuice` / `RNET_LIBJUICE_ROOT`) unless `-DRNET_ENABLE_ICE=OFF`. |
 | `PSX_SETUP_WIZARD` | OFF     | Advertise **first-run setup wizard + Generate & rebuild** (`GameInfo.setup_wizard_supported`) |
 
 
@@ -231,6 +232,9 @@ YourGameRecomp/                 # your git repo
 ├── launcher_assets/img/
 │   ├── boxart.tga              # optional: --fetch-boxart (libretro Named_Boxarts)
 │   └── BOXART_SOURCE.txt       # attribution URL
+├── mods/preloaded/             # scaffold: empty catalog for shipped .psxmod packages
+│   ├── README.md
+│   └── packages/               # packages/<id>/<version>/manifest.toml …
 ├── scripts/
 │   └── package_setup_release.sh   # scaffold fills from package_setup_release.sh.in
 ├── .github/workflows/

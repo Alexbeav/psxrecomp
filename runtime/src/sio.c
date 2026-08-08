@@ -2315,6 +2315,18 @@ static int sio_consume_ack_event(void) {
 }
 
 static void sio_fire_ack_irq(void) {
+    /* Offline card: drop sticky unmasked SPU (I_STAT bit 9) before raising
+     * SIO. Tip's LOAD probe ACKs otherwise land on i_stat_before 0x200 while
+     * master sees 0x000 — guest-visible divergence. Not sufficient alone to
+     * restore the post-probe 0x57 (still FAIL); kept as hygiene. Netplay
+     * unchanged. */
+    if (sio_irq_pending_source == SIO_IRQ_SRC_CARD_ACK) {
+        extern int psx_netplay_active(void);
+        extern int psx_selfcheck_enabled(void);
+        if (!psx_netplay_active() && !psx_selfcheck_enabled())
+            i_stat &= ~(1u << 9);
+    }
+
     sio_stat |= SIO_STAT_ACK;
     sio_ack_visible_reads = 2;
     sr_record(SR_EVT_ACK_FIRE, 0, 0);
@@ -2410,15 +2422,25 @@ static uint64_t s_sio_advance_with_work = 0;
 uint64_t sio_get_advance_called(void)    { return s_sio_advance_called; }
 uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 
-/* Walk shift/ack deadlines for `cycles`. Never drop leftover time: a fixed
- * transition cap used to exit with remaining>0, so peers that batched
- * advances differently left divergent sio_shift_remaining / ack_remaining
- * after the same guest cycle total (MotK menu Replay fsm-only fork). */
+/* Walk shift/ack deadlines for `cycles`.
+ *
+ * Offline keeps master's MAX_TRANSITIONS=8. Uncapped walks (netplay MotK
+ * determinism) can fire shift-complete + ACK pairs back-to-back inside one
+ * advance; when that advance runs under the card ISR, the next ACK merges
+ * into the same I_STAT edge and Ape Escape's LOAD dies after 81 52 00.
+ * Netplay still uncaps — MotK needs leftover-time fidelity; card ACK
+ * merge there is held by sio_hold_present_for_card / other gates. */
 static void sio_pace_walk(int cycles) {
+    extern int psx_netplay_active(void);
+    extern int psx_selfcheck_enabled(void);
+    const int uncapped = psx_netplay_active() || psx_selfcheck_enabled();
     int remaining = cycles;
-    while (remaining > 0 ||
-           (sio_shift_active && sio_shift_remaining <= 0) ||
-           (sio_pending_ack && sio_ack_remaining <= 0)) {
+    int transitions = 0;
+    const int MAX_TRANSITIONS = 8;
+    while ((uncapped || transitions < MAX_TRANSITIONS) &&
+           (remaining > 0 ||
+            (sio_shift_active && sio_shift_remaining <= 0) ||
+            (sio_pending_ack && sio_ack_remaining <= 0))) {
         int dt = remaining;
         int next_event = -1;
         if (sio_shift_active && sio_shift_remaining > 0
@@ -2442,9 +2464,11 @@ static void sio_pace_walk(int cycles) {
         remaining -= dt;
         if (next_event == 0) {
             sio_handle_shift_complete();
+            transitions++;
         } else if (next_event == 1) {
             sio_pending_ack = 0;
             sio_fire_ack_irq();
+            transitions++;
         } else {
             break;
         }
@@ -2467,11 +2491,18 @@ uint64_t sio_get_advance_with_work(void) { return 0; }
 
 void sio_tick(int cycles) {
 #if SIO_MODEL_CYCLE_PACED
-    /* Access-paced callers pass 0 (MMIO) — still flush overdue shift/ack.
-     * Quantum / tests pass a positive cycle budget. */
+    /* Access-paced callers (I_STAT / SIO MMIO) pass 0. Master never walked
+     * the cycle-paced shifter on those edges. Flushing overdue shift/ack
+     * from sio_tick(0) can raise the next card ACK inside the ISR that is
+     * still clearing the previous one. Netplay/selfcheck keep the MMIO
+     * flush for MotK peer parity. */
+    extern int psx_netplay_active(void);
+    extern int psx_selfcheck_enabled(void);
+    const int np_or_sc = psx_netplay_active() || psx_selfcheck_enabled();
     if (cycles > 0 ||
-        (sio_shift_active && sio_shift_remaining <= 0) ||
-        (sio_pending_ack && sio_ack_remaining <= 0))
+        (np_or_sc &&
+         ((sio_shift_active && sio_shift_remaining <= 0) ||
+          (sio_pending_ack && sio_ack_remaining <= 0))))
         sio_pace_walk(cycles > 0 ? cycles : 0);
 #else
     (void)cycles;
