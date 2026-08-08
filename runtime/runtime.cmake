@@ -319,6 +319,9 @@ else()
     if(PSX_NETPLAY)
         message(STATUS "psxrecomp: recomp-net not found — netplay stubs only "
                        "(set RECOMP_NET_ROOT or place checkout at ../recomp-net)")
+    else()
+        message(STATUS "psxrecomp: PSX_NETPLAY=OFF — netplay TUs compile as stubs "
+                       "(no recomp-net)")
     endif()
 endif()
 

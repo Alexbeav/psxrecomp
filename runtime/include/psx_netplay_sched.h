@@ -21,7 +21,14 @@
 
 #include <stdint.h>
 
+/* Full session types only when recomp-net is linked. Stub builds keep opaque
+ * pointers so this header stays includable with PSX_NETPLAY=OFF. */
+#if defined(PSX_HAS_RECOMP_NET)
 #include "recomp_net/session.h"
+#else
+typedef struct RNetSession RNetSession;
+typedef struct RNetSessionStats RNetSessionStats;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
