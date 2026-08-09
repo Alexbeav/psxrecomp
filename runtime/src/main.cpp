@@ -63,6 +63,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "crash_trace.h"
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
+#include "bios_rom_alias.h"
+#include "launcher_device.h"
 #include "game_options.h"
 #include "mod_plugins.h"
 #include "mod_runtime.h"
@@ -2183,11 +2185,26 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
         fs::path abs = fs::absolute(p, ec);
         return ec ? p : abs;
     }
+    // Either BIOS filename convention is acceptable: a dump folder holding
+    // "US-PSX-SCPH1001.BIN" satisfies a request for "SCPH1001.BIN" and vice
+    // versa (see recompiler/include/bios_rom_alias.h).
+    if (fs::path aliased = PSXRecompV4::resolve_bios_rom(p); aliased != p) {
+        fs::path abs = fs::absolute(aliased, ec);
+        return ec ? aliased : abs;
+    }
     if (p.is_absolute()) return p;
 
     // Anchor on the exe directory — never cwd (see exe_dir_from_argv).
     fs::path found = find_upward(exe_dir_from_argv(argv0), p);
     if (!found.empty()) return found / p;
+    // Same walk, accepting the other naming convention at each rung: the
+    // literal name is absent but a region-qualified sibling may be present.
+    for (fs::path dir = fs::absolute(exe_dir_from_argv(argv0), ec);
+         !dir.empty(); dir = dir.parent_path()) {
+        const fs::path aliased = PSXRecompV4::resolve_bios_rom(dir / p);
+        if (aliased != dir / p && fs::exists(aliased, ec)) return aliased;
+        if (!dir.has_parent_path() || dir.parent_path() == dir) break;
+    }
 
     // Dev-checkout rung: game projects keep the framework at
     // <game root>/psxrecomp-v4 (junction/worktree), so a relative default like
@@ -2307,6 +2324,11 @@ static void shutdown_runtime(void) {
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
     memcard_flush_all();
+    /* Stop and join the active external compiler before capture/debug teardown.
+     * Otherwise closing the window can leave cmd/python/gcc running against
+     * cache and capture files while the main thread performs synchronous
+     * shutdown work, making the window appear frozen until that tree exits. */
+    autocompile_shutdown();
     overlay_autocapture_shutdown();
     overlay_capture_wait_pending();
     overlay_capture_write_json();
@@ -3034,6 +3056,8 @@ struct PsxButtonMap {
 static int controller_device_index = 0;
 /* Default ~10% of SDL axis range (32767). Overridden per-player via settings. */
 static int controller_deadzone = 3277;
+/* [controller] anti_deadzone (game.toml). 0 = off, the historical behaviour. */
+static int controller_anti_deadzone = 0;
 static constexpr int kDefaultDeadzoneRaw = 3277;
 static constexpr int kControllerMapN = 24;
 using ControllerMap = std::array<PsxButtonMap, kControllerMapN>;
@@ -3741,25 +3765,15 @@ static uint16_t controller_pad_buttons(const ControllerMap& map,
  * capped at 32767 before rescale so a full-diagonal push (raw mag ~46341) maps
  * to ~0x9E/0x9E per axis — the circular gate a real DualShock stick reports,
  * not 0xFF/0xFF. At dz==0 it reduces to a plain magnitude-preserving map. */
+/* Radial deadzone + anti-deadzone in ONE place: psx_stick_to_dualshock
+ * (runtime/src/psx_stick.c), the shared implementation master calls. The
+ * per-player deadzone is PR #110's; anti_deadzone is master's [controller]
+ * setting, which an inlined copy of the maths here silently dropped. */
 static void axes_to_pad_pair(int16_t vx, int16_t vy, uint8_t* obx, uint8_t* oby,
                              int deadzone_raw) {
-    const double dz = (double)(deadzone_raw > 0 ? deadzone_raw : controller_deadzone);
-    double x = vx, y = vy;
-    double mag = std::sqrt(x * x + y * y);            /* 0 .. ~46341 */
-    if (mag <= dz || mag <= 0.0) { *obx = 0x80; *oby = 0x80; return; }
-    double capped = mag > 32767.0 ? 32767.0 : mag;
-    double range = 32767.0 - dz;
-    if (range < 1.0) range = 1.0;
-    double newmag = (capped - dz) * 32767.0 / range;  /* 0 .. 32767 */
-    double scale = newmag / mag;                       /* along true direction */
-    int sx = (int)std::lround(x * scale);
-    int sy = (int)std::lround(y * scale);
-    if (sx > 32767) sx = 32767; else if (sx < -32768) sx = -32768;
-    if (sy > 32767) sy = 32767; else if (sy < -32768) sy = -32768;
-    int bx = (sx + 32768) >> 8;
-    int by = (sy + 32768) >> 8;
-    *obx = (uint8_t)(bx < 0 ? 0 : (bx > 255 ? 255 : bx));
-    *oby = (uint8_t)(by < 0 ? 0 : (by > 255 ? 255 : by));
+    psx_stick_to_dualshock(vx, vy,
+                           deadzone_raw > 0 ? deadzone_raw : controller_deadzone,
+                           controller_anti_deadzone, obx, oby);
 }
 
 /* Buttons for a player's selected device (0xFFFF = none pressed). `player` is
@@ -9222,6 +9236,10 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
                     player_deadzone[i] = gc.runtime.deadzone;
             }
+            /* [controller] anti_deadzone — raises the minimum reported stick
+             * magnitude to compensate for a game's own internal deadzone. */
+            if (gc.runtime.has_anti_deadzone)
+                controller_anti_deadzone = gc.runtime.anti_deadzone;
             /* Console port for SCPH-1070 when offline/netplay arms multitap.
              * Most titles use Port 1; Bomberman Party Edition needs Port 2. */
             if (gc.runtime.has_multitap_port) {
@@ -9912,8 +9930,8 @@ int main(int argc, char** argv) {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                 for (int i = 0; i < n; ++i) {
                     const std::string& d = player_device[i];
-                    ls.player_src[i] = (d == "keyboard") ? 1
-                                       : (d == "none" || d.empty()) ? 0 : 2;
+                    ls.player_src[i] =
+                        PSXRecompV4::launcher_source_from_device(d);
                     /* Round to the nearest launcher percent. Truncation turned a
                      * saved 20% value (6553/32767) into 19%, which the launcher's
                      * 5% normalization then silently reduced to 15%. */
@@ -10037,6 +10055,11 @@ int main(int argc, char** argv) {
             gi.num_players          = game_players;
             gi.msu1_supported       = 0;
             gi.sram_path            = nullptr;   /* PSX uses memory cards, not SRAM -> hide SAVES */
+            /* BIOS row: ask the registry, not psx_bios_image, which is not
+             * populated until a backend is activated. With OpenBIOS AND a
+             * retail image linked, choosing retail (and clearing back to
+             * bundled) is exactly what the row is for. */
+            gi.has_bios             = psx_bios_has_selectable();
             /* Pad-mode + aspect capabilities sourced from game.toml
              * [controller]/[widescreen] via GameConfig. PSX always has pad modes. */
             gi.pad_mode_selectable  = ctrl_lock_mode ? 0 : 1;
@@ -10188,8 +10211,8 @@ int main(int argc, char** argv) {
                         } else if (ls.player_gamepad_guid[i][0]) {
                             player_device[i] = ls.player_gamepad_guid[i];
                             player_mode[i] = ls.pad_mode[i];
-                        } else if (player_device[i] == "none" ||
-                                   player_device[i] == "keyboard") {
+                        } else if (PSXRecompV4::launcher_source_from_device(
+                                       player_device[i]) <= 1) {
                             player_device[i] = "gamepad";
                             player_mode[i] = ls.pad_mode[i];
                         } else {
@@ -11566,8 +11589,8 @@ soft_return_lobby:
             const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
             for (int i = 0; i < n; ++i) {
                 const std::string& d = player_device[i];
-                ls.player_src[i] = (d == "keyboard") ? 1
-                                   : (d == "none" || d.empty()) ? 0 : 2;
+                ls.player_src[i] =
+                    PSXRecompV4::launcher_source_from_device(d);
                 ls.deadzone[i] = (player_deadzone[i] * 100 + 16383) / 32767;
                 ls.pad_mode[i] = (ls.player_src[i] == 1)
                                     ? PSXRecompV4::PAD_MODE_DIGITAL
@@ -11693,8 +11716,8 @@ soft_return_lobby:
                     } else if (ls.player_gamepad_guid[i][0]) {
                         player_device[i] = ls.player_gamepad_guid[i];
                         player_mode[i] = ls.pad_mode[i];
-                    } else if (player_device[i] == "none" ||
-                               player_device[i] == "keyboard") {
+                    } else if (PSXRecompV4::launcher_source_from_device(
+                                   player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
                         player_mode[i] = ls.pad_mode[i];
                     } else {
