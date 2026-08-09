@@ -470,10 +470,20 @@ static void card_handoff_push(uint8_t kind, uint8_t byte) {
     s_card_handoff_count++;
 }
 
-/* Tip libcard IntRP 0x800226C8 only sets B4E38 when A6C10 becomes idle
- * (0xFFFFFFFF) after pop. An extra nested push leaves depth≥1 so one pop
- * lands on 0 and skips B4E38 — guest never re-arms bit7 / never finishes
- * reads (mc_read_done stuck). Nest repair only (no host B4E38 synth).
+/* =========================================================================
+ * Ape Escape LOAD GAME — IMPORTANT offline memcard nest repair
+ *
+ * Without this block, offline LOAD wedges on the empty Checking starfield
+ * after 81 52 00 (A6C10 stuck nested, B4E38 never latches). Do not remove,
+ * collapse A6C10 to 0, or host-synth B4E20/B4E30/B4E38 without re-running
+ * ApeEscapeRecomp/tools/ape_memcard_loadtest.py. Netplay: always off.
+ * Doc: ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md
+ * =========================================================================
+ *
+ * LibCardIntRP (0x800226C8) only sets B4E38 when A6C10 becomes idle
+ * (bit31 / 0xFFFFFFFF) after pop. Merged IRQ7 edges leave depth≥1 so one
+ * pop lands on 0 and skips B4E38 — guest never re-arms bit7 / directory.
+ * Repair = re-edge IRQ7 only (no host B4E* / A6C10 stores).
  * Default ON offline; PSX_APE_CARD_UNSTICK=0 disables. */
 static int s_ape_unstick_env = -1;
 static int s_ape_unstick_pending = 0;
@@ -497,7 +507,7 @@ static int ape_unstick_enabled(void) {
 /* Defined later; sio_tick calls the pump. */
 void sio_ape_card_unstick_pump(void);
 
-/* Nest repair for Ape LOAD (LibCardIntRP @ PSX_FN_LibCardIntRP).
+/* Nest repair for Ape Escape LOAD (LibCardIntRP).
  *
  * Idle test is A6C10 bit31; publish runs only when a successful pop leaves
  * bit31 set. Tip post-probe hang without collapse: a6=1, busy=2, B4E38=0
@@ -729,8 +739,8 @@ static void txn_close(uint8_t end_reason, uint8_t terminal_state, uint32_t func)
     sio_txn_cur.end_reason     = end_reason;
     sio_txn_cur.terminal_state = terminal_state;
     sio_txn_cur.end_func       = func;
-    /* LOAD presence probe: 81 52 00 + SELECT abort. Arm handoff watch for
-     * the follow-up bit7 → 0x57 transfer the guest should start next. */
+    /* Ape Escape LOAD presence probe: 81 52 00 + SELECT abort. Arm handoff
+     * watch for the follow-up bit7 → directory / file-list path. */
     if (end_reason == SIO_TXN_END_ABORT_OTHER &&
         sio_txn_cur.byte_count == 3 &&
         sio_txn_cur.tx[0] == 0x81 && sio_txn_cur.tx[1] == 0x52) {
@@ -738,9 +748,9 @@ static void txn_close(uint8_t end_reason, uint8_t terminal_state, uint32_t func)
         s_ape_torn_pulses = 0;
         card_handoff_push(1, 0x52);
         sio_arm_card_ct_defer_guard();
-        /* Tip often ends this probe one IntRP short: A6C10=1, Ready=0.
-         * Do NOT poke A6C10 — writing 0 skips a nest level and leaves torn
-         * idle (dump: a6=0, no B4E38, Busy1 phase 0xB). With MT=1 + ACK
+        /* IMPORTANT (Ape Escape): tip often ends this probe one IntRP short
+         * (A6C10=1, Ready=0). Do NOT poke A6C10 — writing 0 skips a nest
+         * level and leaves torn idle (a6=0, no B4E38). With MT=1 + ACK
          * defer + I_MASK.7 hold, re-edge IRQ7 and let LibCardIntRP pop
          * naturally (1→0→FFFFFFFF + publish). */
         if (ape_unstick_enabled()) {
@@ -2583,11 +2593,11 @@ static void sio_fire_ack_irq(void) {
         return;
     }
 
-    /* Serialize card ACK IRQs offline: if I_STAT.7 is still set, the previous
-     * SIO edge has not been taken/acked. Raising again merges into the same
-     * bit — IntRP 0x800226C8 pops only once → A6C10 stays nested → B4E38
-     * never set → guest never re-arms bit7 / never TX 0x57. Re-queue until
-     * the guest clears bit7. MotK netplay keeps immediate raise. */
+    /* IMPORTANT (Ape Escape offline): serialize card ACK IRQs. If I_STAT.7
+     * is still set, raising again merges into the same bit — LibCardIntRP
+     * pops once → A6C10 stays nested → B4E38 never set → LOAD wedges after
+     * the presence probe. Re-queue until the guest clears bit7. MotK
+     * netplay keeps immediate raise. */
     if (card_ack && offline && (i_stat & 0x80u)) {
         sio_pending_ack = 1;
         sio_ack_remaining = 16;
@@ -2693,13 +2703,12 @@ uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 
 /* Walk shift/ack deadlines for `cycles`.
  *
- * Offline keeps master's MAX_TRANSITIONS=8. Uncapped walks (netplay MotK
- * determinism) can fire shift-complete + ACK pairs back-to-back inside one
- * advance; when that advance runs under the card ISR, the next ACK merges
- * into the same I_STAT edge and Ape Escape's LOAD dies after 81 52 00.
- * Netplay still uncaps — MotK needs leftover-time fidelity. Offline uses
- * MT=1 so each walk delivers at most one shift/ack edge (merged I_STAT.7
- * skips LibCardIntRP pops). Do not fake-collapse A6C10 to compensate. */
+ * IMPORTANT (Ape Escape offline LOAD): MAX_TRANSITIONS=1 so each walk
+ * delivers at most one shift/ack edge. Uncapped walks (netplay MotK) can
+ * fire shift-complete + ACK pairs back-to-back under the card ISR; the next
+ * ACK merges into the same I_STAT.7 edge and LibCardIntRP pops once for two
+ * bytes → nest stuck after 81 52 00. Netplay stays uncapped for leftover-time
+ * fidelity. Do not fake-collapse A6C10 to compensate. */
 static void sio_pace_walk(int cycles) {
     extern int psx_netplay_active(void);
     extern int psx_selfcheck_enabled(void);

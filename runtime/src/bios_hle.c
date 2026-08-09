@@ -330,9 +330,11 @@ static int bios_hle_dispatch(struct CPUState* cpu, uint32_t phys)
 
 void psx_bios_hle_configure(int call_hle, int boot_skip)
 {
-    /* Clamp call-HLE to deliver_event_ret: OpenBIOS omits the anchor, and
-     * servicing B0:07 without it silently skips CALLBACK EvCBs (HwCARD/SwCARD
-     * flag handlers never run). Plan should already refuse; this is backstop. */
+    /* IMPORTANT (Ape Escape + OpenBIOS): clamp call-HLE to deliver_event_ret.
+     * OpenBIOS omits the anchor; servicing B0:07 without it silently skips
+     * CALLBACK EvCBs (HwCARD/SwCARD flag handlers at 0x80022930/0x80022980
+     * never run → LOAD phase waits never complete). Plan should already
+     * refuse; this is the runtime backstop. Boot-skip remains independent. */
     s_call_hle_on  = (call_hle && psx_bios_image.deliver_event_ret != 0) ? 1 : 0;
     /* Clamp to what THIS image can actually do, so the state the banner and
      * `hle_dump` report can never claim a skip that bios_hle_dispatch below is
