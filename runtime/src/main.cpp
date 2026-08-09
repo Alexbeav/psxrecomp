@@ -15,6 +15,7 @@
 #include "text_xlate.h"
 #include "boot_state.h"
 #include "bios_hle.h"
+#include "bios_hle_plan.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
 #include "starvation_ring.h"
@@ -11223,10 +11224,38 @@ session_reboot:
             bios_hle = (e[0] && e[0] != '0');
         if (const char* e = std::getenv("PSX_BIOS_HLE_KEEP_INTRO"))
             bios_hle_keep_intro = (e[0] && e[0] != '0');
-        const bool boot_skip =
-            (bios_hle && !bios_hle_keep_intro) || fast_boot;
-        psx_bios_hle_configure(bios_hle ? 1 : 0,
-                               (boot_skip && game_entry_pc != 0) ? 1 : 0);
+        /* The two axes (kernel-call HLE, boot-skip) have DIFFERENT per-image
+         * requirements, so they are decided in ONE pure place —
+         * psx_bios_hle_plan(), runtime/src/bios_hle_plan.c. Conflating them
+         * broke boot-skip on OpenBIOS: call-HLE needs deliver_event_ret, the
+         * boot-skip needs only shell_entry_phys, so refusing the former must
+         * not silently cancel the latter. */
+        PsxBiosHleRequest req;
+        req.bios_hle               = bios_hle ? 1 : 0;
+        req.keep_intro             = bios_hle_keep_intro ? 1 : 0;
+        req.fast_boot              = fast_boot ? 1 : 0;
+        req.have_deliver_event_ret = (psx_bios_image.deliver_event_ret != 0);
+        req.have_shell_entry       = (psx_bios_image.shell_entry_phys != 0);
+        req.have_game_entry        = (game_entry_pc != 0);
+        const PsxBiosHlePlan plan = psx_bios_hle_plan(req);
+
+        /* Call-HLE is a per-image capability, not just a preference: an image
+         * exporting no DeliverEvent anchor (OpenBIOS until validated) declares
+         * that axis STRUCTURALLY UNAVAILABLE — servicing B0 events with
+         * mismatched semantics wedges the guest in event waits. */
+        if (plan.call_hle_denied) {
+            std::fprintf(stdout,
+                "psxrecomp: bios_hle kernel-call tier unavailable on %s (no "
+                "DeliverEvent anchor); kernel calls stay LLE\n",
+                psx_bios_image.image_id);
+        }
+        if (plan.boot_skip_denied) {
+            std::fprintf(stdout,
+                "psxrecomp: BIOS boot-skip unavailable on %s (no shell entry "
+                "anchor); playing the real intro\n",
+                psx_bios_image.image_id);
+        }
+        psx_bios_hle_configure(plan.call_hle, plan.boot_skip);
         std::fprintf(stdout, "psxrecomp: bios_backend=%s  bios_boot=%s\n",
                      psx_bios_hle_backend_name(),
                      psx_bios_hle_boot_skip_enabled()
