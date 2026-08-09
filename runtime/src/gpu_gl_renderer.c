@@ -1215,6 +1215,10 @@ static void hr_begin(int clip_to_draw_area) {
 }
 static void hr_end(void) {
     glDisable(GL_BLEND);
+    /* apply_psx_blend mode 2 leaves REVERSE_SUBTRACT armed; reset so later
+     * host draws (OSD) that re-enable blend do not inherit B-F math. */
+    if (p_glBlendEquationSeparate)
+        p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_SCISSOR_TEST);
     p_glBindVertexArray(0);
@@ -3890,8 +3894,11 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* host_osd bakes opaque panels (A=0xFF). Do not blend — PSX mode-2
+     * REVERSE_SUBTRACT left armed across FMV present made toasts solid black. */
+    glDisable(GL_BLEND);
+    if (p_glBlendEquationSeparate)
+        p_glBlendEquationSeparate(PSXGL_FUNC_ADD, PSXGL_FUNC_ADD);
     /* GL viewport origin is bottom-left. */
     glViewport(vx, wh - vy - dh, dw, dh);
     p_glUseProgram(s_present_prog);
@@ -3910,7 +3917,6 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
         p_glBindVertexArray(0);
     }
     p_glUseProgram(0);
-    glDisable(GL_BLEND);
 }
 
 /* Composite host toast + volume bar into the default framebuffer, then swap. */
