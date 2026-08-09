@@ -2,10 +2,12 @@
 """Headless disc → generate / rebuild / optional PGO for psxrecomp games.
 
 Commands:
-  verify-disc   Hash-check a dump against game.toml [prepare_disc]
-  generate      Prepare disc (if needed) + run psxrecomp-game → generated/
-  rebuild       cmake --build; if [pgo] enabled, instrument → train → use
-  pgo-train     Standalone PGO train (same as rebuild's PGO phase)
+  verify-disc        Hash-check a dump against game.toml [prepare_disc]
+  generate           Ensure emitters + prepare disc + run psxrecomp-game → generated/
+  rebuild            cmake --build; if [pgo] enabled, instrument → train → use
+  pgo-train          Standalone PGO train (same as rebuild's PGO phase)
+  ensure-toolchain   Resolve / download cmake-clang-v1 into the shared cache
+  ensure-emitters    Build psxrecomp-game + psxrecomp-bios when missing
 
 Exit codes: 0 ok · 1 runtime · 2 usage · 3 disc verify fail
 """
@@ -337,6 +339,163 @@ def find_psxrecomp_bios(project_root: Path) -> Path:
     return _find_recompiler_tool(project_root, "psxrecomp-bios", "PSXRECOMP_BIOS")
 
 
+def find_emitters(project_root: Path) -> tuple[Path, Path]:
+    """Return (psxrecomp-game, psxrecomp-bios); raises FileNotFoundError if either missing."""
+    return find_psxrecomp_game(project_root), find_psxrecomp_bios(project_root)
+
+
+def recompiler_source_dir(project_root: Path) -> Path:
+    fw = framework_root(project_root)
+    src = fw / "recompiler"
+    if not (src / "CMakeLists.txt").is_file():
+        raise FileNotFoundError(
+            f"recompiler sources missing under {src} "
+            "(need a full psxrecomp checkout / submodule, not a pruned zipball)"
+        )
+    return src
+
+
+def ensure_emitters(
+    project_root: Path,
+    progress: ProgressReporter,
+    *,
+    download_toolchain: bool = True,
+    force: bool = False,
+) -> tuple[Path, Path]:
+    """Return emitter binaries, building them with the portable toolchain if needed.
+
+    Matches setup_project.sh / tools/ci/build_emitters.sh so a GitHub fork can
+    Generate & rebuild without a pre-staged setup-host SDK.
+    """
+    if not force:
+        try:
+            game, bios = find_emitters(project_root)
+            progress.log(f"Emitters ready: {game.name}, {bios.name}")
+            return game, bios
+        except FileNotFoundError:
+            pass
+
+    progress.phase(
+        "emitters",
+        pct=0.12,
+        message="Building psxrecomp-game + psxrecomp-bios…",
+    )
+    if not activate_embedded_toolchain(project_root, progress):
+        if not download_toolchain or not ensure_toolchain_for_rebuild(
+            project_root, progress, download=True
+        ):
+            if not (_which_tool("cmake") and _which_tool("ninja")):
+                raise RuntimeError(
+                    "Cannot build emitters: no portable toolchain and no "
+                    "cmake+ninja on PATH. Finish the launcher toolchain step, "
+                    "or run: python3 psxrecomp/psxrecomp_cli.py ensure-toolchain"
+                )
+            progress.log("Using system cmake/ninja on PATH for emitters")
+        elif not activate_embedded_toolchain(project_root, progress):
+            raise RuntimeError(
+                "Toolchain ensure succeeded but bin/ is not usable for emitters"
+            )
+
+    src = recompiler_source_dir(project_root)
+    # Prefer recompiler/build (packaging / RetComM harvest layout); also keep
+    # project-root build-recompiler if that is where prior binaries lived.
+    build_dir = src / "build"
+    try:
+        existing_game = find_psxrecomp_game(project_root)
+        # Rebuild into the directory that already holds a partial install.
+        if existing_game.parent != build_dir:
+            alt = project_root / "build-recompiler"
+            if existing_game.parent.resolve() == alt.resolve():
+                build_dir = alt
+    except FileNotFoundError:
+        pass
+
+    build_dir.mkdir(parents=True, exist_ok=True)
+    ninja = _which_tool("ninja")
+    clang_c = _which_tool("clang")
+    clang_cxx = _which_tool("clang++")
+    cmake = _which_tool("cmake")
+    if cmake is None:
+        raise RuntimeError("cmake not found on PATH after toolchain activate")
+
+    cache_file = build_dir / "CMakeCache.txt"
+    gen: list[str] = []
+    if ninja is not None:
+        cached_gen = _read_cmake_cache_generator(cache_file)
+        if cached_gen and cached_gen != "Ninja":
+            progress.log(f'Replacing emitters cmake generator "{cached_gen}" with Ninja…')
+            shutil.rmtree(build_dir, ignore_errors=True)
+            build_dir.mkdir(parents=True, exist_ok=True)
+        gen = ["-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}"]
+    elif sys.platform == "win32":
+        progress.log(
+            "warning: ninja not on PATH — emitters cmake may pick NMake Makefiles"
+        )
+
+    cmake_args = [
+        str(cmake),
+        "-S",
+        str(src),
+        "-B",
+        str(build_dir),
+        *gen,
+        "-DCMAKE_BUILD_TYPE=Release",
+    ]
+    if clang_c is not None:
+        cmake_args.append(f"-DCMAKE_C_COMPILER={clang_c}")
+    if clang_cxx is not None:
+        cmake_args.append(f"-DCMAKE_CXX_COMPILER={clang_cxx}")
+    # Portable llvm-mingw / cmake-clang-v1: static CRT so staged emitters need
+    # no MSYS2 GCC DLLs (same as tools/ci/build_emitters.sh).
+    if clang_c is not None or clang_cxx is not None:
+        cmake_args.append("-DPSXRECOMP_STATIC_CLI=ON")
+
+    progress.log(" ".join(cmake_args))
+    proc = subprocess.run(
+        cmake_args, cwd=str(project_root), capture_output=True, text=True
+    )
+    for stream in (proc.stdout, proc.stderr):
+        if stream:
+            for line in stream.splitlines():
+                if line.strip():
+                    progress.log(line)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"emitters cmake configure failed (exit {proc.returncode})"
+        )
+
+    jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL") or str(os.cpu_count() or 4)
+    build_cmd = [
+        str(cmake),
+        "--build",
+        str(build_dir),
+        "--parallel",
+        jobs,
+        "--target",
+        "psxrecomp-game",
+        "--target",
+        "psxrecomp-bios",
+    ]
+    progress.log(" ".join(build_cmd))
+    proc = subprocess.run(build_cmd, capture_output=True, text=True)
+    for stream in (proc.stdout, proc.stderr):
+        if stream:
+            for line in stream.splitlines():
+                if line.strip():
+                    progress.log(line)
+    if proc.returncode != 0:
+        raise RuntimeError(f"emitters cmake build failed (exit {proc.returncode})")
+
+    try:
+        game, bios = find_emitters(project_root)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"emitters build finished but binaries not found under {build_dir}: {exc}"
+        ) from exc
+    progress.log(f"Emitters built: {game} , {bios}")
+    return game, bios
+
+
 def framework_root(project_root: Path) -> Path:
     """Directory containing bios/*.toml and recompiler/ (usually …/psxrecomp)."""
     cand = project_root / "psxrecomp"
@@ -652,6 +811,17 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
 
     # ---- BIOS backends (local only; CI ships none) ----
     fw = ensure_framework(project_root, progress=progress)
+    try:
+        ensure_emitters(
+            project_root,
+            progress,
+            download_toolchain=not bool(getattr(args, "no_toolchain_download", False)),
+            force=bool(getattr(args, "force_emitters", False)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        progress.error(str(exc), code=EXIT_ERROR)
+        return EXIT_ERROR
+
     bios_arg = (getattr(args, "bios", None) or "").strip()
     staged_retail = False
     if bios_arg:
@@ -715,7 +885,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 return EXIT_ERROR
 
     try:
-        game_tool = find_psxrecomp_game(project_root)
+        game_tool, _bios_tool = find_emitters(project_root)
     except FileNotFoundError as exc:
         progress.error(str(exc), code=EXIT_ERROR)
         return EXIT_ERROR
@@ -1259,6 +1429,29 @@ def cmd_ensure_toolchain(args: argparse.Namespace, progress: ProgressReporter) -
     return EXIT_OK
 
 
+def cmd_ensure_emitters(args: argparse.Namespace, progress: ProgressReporter) -> int:
+    """Build psxrecomp-game + psxrecomp-bios when missing (or --force)."""
+    project_root = (
+        Path(args.project_root).expanduser().resolve()
+        if args.project_root
+        else Path.cwd().resolve()
+    )
+    try:
+        ensure_framework(project_root, progress=progress)
+        game, bios = ensure_emitters(
+            project_root,
+            progress,
+            download_toolchain=not bool(getattr(args, "no_download", False)),
+            force=bool(getattr(args, "force", False)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        progress.error(str(exc), code=EXIT_ERROR)
+        return EXIT_ERROR
+    progress.phase("done", pct=1.0, message="Emitters ready")
+    progress.result(ok=True, game=str(game), bios=str(bios))
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="psxrecomp_cli", description=__doc__)
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1292,6 +1485,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--skip-hash-check", action="store_true")
     g.add_argument("--force-prepare", action="store_true")
     g.add_argument("--gen-marker", default="", help="expected marker under out_dir")
+    g.add_argument(
+        "--force-emitters",
+        action="store_true",
+        help="rebuild psxrecomp-game/bios even if binaries already exist",
+    )
+    g.add_argument(
+        "--no-toolchain-download",
+        action="store_true",
+        help="when emitters are missing, do not download cmake-clang-v1",
+    )
     g.set_defaults(handler=cmd_generate)
 
     r = sub.add_parser("rebuild", help="cmake build (+ optional local PGO)")
@@ -1390,6 +1593,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="require retcomm-toolchain.json version >= this (semver)",
     )
     e.set_defaults(handler=cmd_ensure_toolchain)
+
+    em = sub.add_parser(
+        "ensure-emitters",
+        help="build psxrecomp-game + psxrecomp-bios when missing",
+    )
+    em.add_argument("--project-root", default="", help="game project root (optional)")
+    em.add_argument("--json-progress", action="store_true")
+    em.add_argument(
+        "--force",
+        action="store_true",
+        help="rebuild even if emitter binaries already exist",
+    )
+    em.add_argument(
+        "--no-download",
+        action="store_true",
+        help="do not fetch cmake-clang-v1 when no local pack is found",
+    )
+    em.set_defaults(handler=cmd_ensure_emitters)
 
     p = sub.add_parser("pgo-train", help="force PGO rebuild+train+use")
     add_common(p)
