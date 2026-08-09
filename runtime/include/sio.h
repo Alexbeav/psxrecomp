@@ -202,12 +202,14 @@ int sio_card_protocol_active(void);
 int sio_should_defer_thread_switch(void);
 
 /* -------------------------------------------------------------------------
- * Ape Escape LOAD GAME (offline) — IMPORTANT memcard path
+ * Ape Escape LOAD GAME — IMPORTANT memcard path
  *
- * LibCardIntRP needs one distinct IRQ7 edge per nest pop. Offline SIO pacing,
+ * LibCardIntRP needs one distinct IRQ7 edge per nest pop. SIO pacing (MT=1),
  * ACK defer, I_MASK.7 hold, and nest IRQ pulses below exist so presence-probe
- * → directory → file-list can complete. Netplay leaves these inert / uncapped
- * (MotK). See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md.
+ * → directory → file-list can complete.
+ * EXPERIMENT (TwistedMetal4Recomp): formerly netplay-inert / MotK-uncapped;
+ * ungated for local netplay desync testing. PSX_APE_CARD_UNSTICK=0 disables
+ * nest repair + bit7 hold. See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md.
  * ------------------------------------------------------------------------- */
 
 /* Post-probe handoff ring: bit7 enable → TX 0x57 (debug_server card_handoff). */
@@ -228,11 +230,11 @@ const SioCardHandoffEntry *sio_get_card_handoff(int *idx_out, int *count_out);
 int sio_card_handoff_cap(void);
 int sio_card_handoff_armed(void);
 void sio_card_handoff_on_imask(uint32_t old_mask, uint32_t new_mask);
-/* Offline Ape Escape: 1 while libcard nest is stuck post-probe — keep I_MASK.7
- * so IntRP can finish (BIOS otherwise clears bit7 ~tens of cycles after SELECT
+/* Ape Escape: 1 while libcard nest is stuck post-probe — keep I_MASK.7 so
+ * IntRP can finish (BIOS otherwise clears bit7 ~tens of cycles after SELECT
  * abort, before the pending SIO edge is taken). */
 int sio_card_should_hold_imask_bit7(void);
-/* Offline Ape Escape: nest repair pump when the guest waiter polls RAM only
+/* Ape Escape: nest repair pump when the guest waiter polls RAM only
  * (no SIO MMIO → sio_tick never runs). IRQ re-edge only — never poke A6C10 /
  * invent B4E38. */
 void sio_ape_card_unstick_pump(void);

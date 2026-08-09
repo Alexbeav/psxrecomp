@@ -471,20 +471,24 @@ static void card_handoff_push(uint8_t kind, uint8_t byte) {
 }
 
 /* =========================================================================
- * Ape Escape LOAD GAME — IMPORTANT offline memcard nest repair
+ * Ape Escape LOAD GAME — IMPORTANT memcard nest repair
  *
- * Without this block, offline LOAD wedges on the empty Checking starfield
- * after 81 52 00 (A6C10 stuck nested, B4E38 never latches). Do not remove,
+ * Without this block, LOAD wedges on the empty Checking starfield after
+ * 81 52 00 (A6C10 stuck nested, B4E38 never latches). Do not remove,
  * collapse A6C10 to 0, or host-synth B4E20/B4E30/B4E38 without re-running
- * ApeEscapeRecomp/tools/ape_memcard_loadtest.py. Netplay: always off.
+ * ApeEscapeRecomp/tools/ape_memcard_loadtest.py.
  * Doc: ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md
+ *
+ * EXPERIMENT (TwistedMetal4Recomp): formerly netplay-gated OFF so MotK
+ * leftover-time SIO walks stayed uncapped. Ungated here for local netplay
+ * desync testing — PSX_APE_CARD_UNSTICK=0 still disables.
  * =========================================================================
  *
  * LibCardIntRP (0x800226C8) only sets B4E38 when A6C10 becomes idle
  * (bit31 / 0xFFFFFFFF) after pop. Merged IRQ7 edges leave depth≥1 so one
  * pop lands on 0 and skips B4E38 — guest never re-arms bit7 / directory.
  * Repair = re-edge IRQ7 only (no host B4E* / A6C10 stores).
- * Default ON offline; PSX_APE_CARD_UNSTICK=0 disables. */
+ * Default ON; PSX_APE_CARD_UNSTICK=0 disables. */
 static int s_ape_unstick_env = -1;
 static int s_ape_unstick_pending = 0;
 static uint64_t s_ape_unstick_cool_cyc = 0;
@@ -493,10 +497,7 @@ static int s_ape_torn_pulses = 0;
 static int ape_unstick_enabled(void) {
     if (s_ape_unstick_env < 0) {
         const char *e = getenv("PSX_APE_CARD_UNSTICK");
-        extern int psx_netplay_active(void);
-        if (psx_netplay_active())
-            s_ape_unstick_env = 0;
-        else if (e && e[0] == '0')
+        if (e && e[0] == '0')
             s_ape_unstick_env = 0;
         else
             s_ape_unstick_env = 1;
@@ -2572,15 +2573,13 @@ static int sio_consume_ack_event(void) {
 }
 
 static void sio_fire_ack_irq(void) {
-    /* Offline card: drop sticky unmasked SPU (I_STAT bit 9) before raising
-     * SIO. Tip's LOAD probe ACKs otherwise land on i_stat_before 0x200 while
-     * master sees 0x000 — guest-visible divergence. Netplay unchanged. */
+    /* Card: drop sticky unmasked SPU (I_STAT bit 9) before raising SIO.
+     * Tip's LOAD probe ACKs otherwise land on i_stat_before 0x200 while
+     * master sees 0x000 — guest-visible divergence.
+     * EXPERIMENT: was offline-only; ungated for TM4 netplay test. */
     int card_ack = (sio_irq_pending_source == SIO_IRQ_SRC_CARD_ACK ||
                     active_device == DEV_MEMCARD);
-    extern int psx_netplay_active(void);
-    extern int psx_selfcheck_enabled(void);
-    int offline = !psx_netplay_active() && !psx_selfcheck_enabled();
-    if (card_ack && offline)
+    if (card_ack)
         i_stat &= ~(1u << 9);
 
     sio_stat |= SIO_STAT_ACK;
@@ -2593,12 +2592,12 @@ static void sio_fire_ack_irq(void) {
         return;
     }
 
-    /* IMPORTANT (Ape Escape offline): serialize card ACK IRQs. If I_STAT.7
-     * is still set, raising again merges into the same bit — LibCardIntRP
-     * pops once → A6C10 stays nested → B4E38 never set → LOAD wedges after
-     * the presence probe. Re-queue until the guest clears bit7. MotK
-     * netplay keeps immediate raise. */
-    if (card_ack && offline && (i_stat & 0x80u)) {
+    /* IMPORTANT (Ape Escape): serialize card ACK IRQs. If I_STAT.7 is still
+     * set, raising again merges into the same bit — LibCardIntRP pops once
+     * → A6C10 stays nested → B4E38 never set → LOAD wedges after the
+     * presence probe. Re-queue until the guest clears bit7.
+     * EXPERIMENT: was offline-only; ungated for TM4 netplay test. */
+    if (card_ack && (i_stat & 0x80u)) {
         sio_pending_ack = 1;
         sio_ack_remaining = 16;
         sio_pending_ack_irq_en = 1;
@@ -2703,20 +2702,18 @@ uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 
 /* Walk shift/ack deadlines for `cycles`.
  *
- * IMPORTANT (Ape Escape offline LOAD): MAX_TRANSITIONS=1 so each walk
- * delivers at most one shift/ack edge. Uncapped walks (netplay MotK) can
- * fire shift-complete + ACK pairs back-to-back under the card ISR; the next
- * ACK merges into the same I_STAT.7 edge and LibCardIntRP pops once for two
- * bytes → nest stuck after 81 52 00. Netplay stays uncapped for leftover-time
- * fidelity. Do not fake-collapse A6C10 to compensate. */
+ * IMPORTANT (Ape Escape LOAD): MAX_TRANSITIONS=1 so each walk delivers at
+ * most one shift/ack edge. Uncapped walks can fire shift-complete + ACK
+ * pairs back-to-back under the card ISR; the next ACK merges into the same
+ * I_STAT.7 edge and LibCardIntRP pops once for two bytes → nest stuck after
+ * 81 52 00. Do not fake-collapse A6C10 to compensate.
+ * EXPERIMENT: was uncapped under netplay/selfcheck (MotK leftover-time);
+ * always MT=1 here for TM4 netplay desync testing. */
 static void sio_pace_walk(int cycles) {
-    extern int psx_netplay_active(void);
-    extern int psx_selfcheck_enabled(void);
-    const int uncapped = psx_netplay_active() || psx_selfcheck_enabled();
     int remaining = cycles;
     int transitions = 0;
     const int MAX_TRANSITIONS = 1;
-    while ((uncapped || transitions < MAX_TRANSITIONS) &&
+    while (transitions < MAX_TRANSITIONS &&
            (remaining > 0 ||
             (sio_shift_active && sio_shift_remaining <= 0) ||
             (sio_pending_ack && sio_ack_remaining <= 0))) {
@@ -2773,16 +2770,11 @@ void sio_tick(int cycles) {
     /* Access-paced callers (I_STAT / SIO MMIO) pass 0. Master never walked
      * the cycle-paced shifter on those edges. Flushing overdue shift/ack
      * from sio_tick(0) can raise the next card ACK inside the ISR that is
-     * still clearing the previous one. Netplay/selfcheck keep the MMIO
-     * flush for MotK peer parity. */
-    extern int psx_netplay_active(void);
-    extern int psx_selfcheck_enabled(void);
-    const int np_or_sc = psx_netplay_active() || psx_selfcheck_enabled();
-    if (cycles > 0 ||
-        (np_or_sc &&
-         ((sio_shift_active && sio_shift_remaining <= 0) ||
-          (sio_pending_ack && sio_ack_remaining <= 0))))
-        sio_pace_walk(cycles > 0 ? cycles : 0);
+     * still clearing the previous one.
+     * EXPERIMENT: was netplay-only MMIO flush (MotK peer parity); always
+     * skip tick(0) flush here for TM4 netplay desync testing. */
+    if (cycles > 0)
+        sio_pace_walk(cycles);
 #else
     (void)cycles;
 #endif

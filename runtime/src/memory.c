@@ -881,11 +881,12 @@ static void interrupt_write_stat_masked(uint32_t val, uint32_t mask) {
 static void interrupt_write_mask_masked(uint32_t val, uint32_t mask, uint8_t width) {
     uint32_t old = i_mask;
     uint32_t next = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
-    /* IMPORTANT (Ape Escape offline LOAD): BIOS clears I_MASK.7 immediately
-     * after the probe SELECT abort while A6C10 is still nested. That drops
-     * the nest_irq_pulse before LibCardIntRP can pop to idle / set B4E38.
+    /* IMPORTANT (Ape Escape LOAD): BIOS clears I_MASK.7 immediately after
+     * the probe SELECT abort while A6C10 is still nested. That drops the
+     * nest_irq_pulse before LibCardIntRP can pop to idle / set B4E38.
      * Hold bit7 until the nest unwinds (sio_card_should_hold_imask_bit7).
-     * Netplay: helper returns 0. See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md. */
+     * EXPERIMENT: helper used to no-op under netplay; ungated for TM4 test.
+     * See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md. */
     if ((old & 0x80u) && !(next & 0x80u)) {
         extern int sio_card_should_hold_imask_bit7(void);
         if (sio_card_should_hold_imask_bit7()) {
