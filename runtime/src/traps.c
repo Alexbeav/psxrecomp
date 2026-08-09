@@ -5,6 +5,7 @@
  */
 
 #include "cpu_state.h"
+#include "psx_bss.h"
 #include "psx_runtime.h"   /* fix B: psx_exc_escape_reason_t + g_exc_escape_reason */
 #include "debug_server.h"
 #include "crash_trace.h"
@@ -60,7 +61,7 @@ typedef struct SchedEscapeEntry {
     uint32_t sp;
 } SchedEscapeEntry;
 #define SCHED_ESCAPE_RING_CAP 256u
-SchedEscapeEntry g_sched_escape_ring[SCHED_ESCAPE_RING_CAP];
+PSX_BSS SchedEscapeEntry g_sched_escape_ring[SCHED_ESCAPE_RING_CAP];
 uint64_t g_sched_escape_seq = 0;
 
 static void sched_escape_ring_log(CPUState* cpu, uint32_t reason,
@@ -272,7 +273,7 @@ typedef struct ThreadCtxRingEntry {
     uint32_t cop0_epc;
 } ThreadCtxRingEntry;
 #define THREAD_CTX_RING_CAP 256u
-ThreadCtxRingEntry g_thread_ctx_ring[THREAD_CTX_RING_CAP];
+PSX_BSS ThreadCtxRingEntry g_thread_ctx_ring[THREAD_CTX_RING_CAP];
 uint64_t g_thread_ctx_ring_seq = 0;
 
 extern uint64_t s_frame_count;

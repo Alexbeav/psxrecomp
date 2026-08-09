@@ -16,6 +16,7 @@
 #endif
 #include <time.h>
 #include "debug_server.h"
+#include "psx_bss.h"
 #include "nd_intro_ot.h"
 #include "latency_ring.h"
 #include "overlay_loader.h"
@@ -100,7 +101,7 @@ static int    s_port    = DEFAULT_DEBUG_PORT;
 static int    s_listen_err = 0;   /* platform socket error captured by init */
 
 #define RECV_BUF_SIZE 8192
-static char s_recv_buf[RECV_BUF_SIZE];
+static PSX_BSS char s_recv_buf[RECV_BUF_SIZE];
 static int  s_recv_len = 0;
 
 /* ---- Dedicated TCP I/O thread (keeps the socket queryable under emu load) ----
@@ -171,7 +172,7 @@ uint64_t g_fp_sp_count   = 0;
 typedef struct { uint32_t frame; uint64_t wr_hash; uint64_t pc_hash; uint64_t wcount;
                  uint64_t mmio_hash; uint64_t mmio_count;
                  uint64_t sp_hash; uint64_t sp_count; uint64_t cyc; } FpEntry;
-static FpEntry  s_fp_ring[FP_RING_CAP];
+static PSX_BSS FpEntry  s_fp_ring[FP_RING_CAP];
 static uint32_t s_fp_head  = 0;
 static uint64_t s_fp_total = 0;
 
@@ -251,7 +252,7 @@ static void fp_snapshot(uint32_t frame)
 #define REC_KIND_MMIO_R  3   /* device-register read  */
 #define REC_KIND_RAM_R   4   /* main-RAM read (targeted watch range only) */
 typedef struct { uint8_t kind; uint32_t addr; uint32_t val; uint32_t pc; uint32_t ra; uint64_t cyc; } RecEntry;
-static RecEntry  s_rec_buf[REC_CAP];
+static PSX_BSS RecEntry  s_rec_buf[REC_CAP];
 static uint32_t  s_rec_count = 0;
 static int64_t   s_rec_frame = -1;       /* target guest frame, -1 = off */
 static uint32_t  s_rec_overflow = 0;
@@ -324,7 +325,7 @@ typedef struct {
     uint32_t frames;
     uint16_t buttons;
 } InputRouteStep;
-static InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
+static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
 static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
 static uint32_t s_input_route_remaining = 0;
@@ -348,7 +349,7 @@ typedef struct {
     uint8_t  prev_val;
     int      active;
 } Watchpoint;
-static Watchpoint s_watchpoints[MAX_WATCHPOINTS];
+static PSX_BSS Watchpoint s_watchpoints[MAX_WATCHPOINTS];
 
 /* ---- Write trace (Tier 1 reverse debugger) ----
  * Records every RAM write matching one of the configurable address ranges.
@@ -498,7 +499,7 @@ typedef struct {
     uint8_t  width;         /* 1=byte, 2=half, 4=word */
     uint8_t  pad[3];
 } SioPcTraceEntry;
-static SioPcTraceEntry s_sio_pc_trace[SIO_PC_TRACE_CAP];
+static PSX_BSS SioPcTraceEntry s_sio_pc_trace[SIO_PC_TRACE_CAP];
 static uint64_t s_sio_pc_trace_seq = 0;
 
 /* Compact register sidecar for SIO_CTRL writes.  The broad SIO PC ring keeps
@@ -529,7 +530,7 @@ typedef struct {
     uint8_t  counter_7514;
     uint8_t  pad;
 } SioCtrlRegTraceEntry;
-static SioCtrlRegTraceEntry s_sio_ctrl_reg_trace[SIO_CTRL_REG_TRACE_CAP];
+static PSX_BSS SioCtrlRegTraceEntry s_sio_ctrl_reg_trace[SIO_CTRL_REG_TRACE_CAP];
 static uint64_t s_sio_ctrl_reg_trace_seq = 0;
 
 /* RestoreState / exception longjmp trace.  This is intentionally compact:
@@ -564,7 +565,7 @@ typedef struct {
     uint8_t  in_exception;
     uint8_t  pad[3];
 } RestoreTraceEntry;
-static RestoreTraceEntry s_restore_trace[RESTORE_TRACE_CAP];
+static PSX_BSS RestoreTraceEntry s_restore_trace[RESTORE_TRACE_CAP];
 static uint64_t s_restore_trace_seq = 0;
 
 #define THREAD_TRACE_CAP (1 << 16)
@@ -613,7 +614,7 @@ typedef struct {
     uint8_t  in_exception;
     uint8_t  pad[3];
 } ThreadTraceEntry;
-static ThreadTraceEntry s_thread_trace[THREAD_TRACE_CAP];
+static PSX_BSS ThreadTraceEntry s_thread_trace[THREAD_TRACE_CAP];
 static uint64_t s_thread_trace_seq = 0;
 
 #define SREG_TRACE_CAP (1 << 18)
@@ -643,7 +644,7 @@ typedef struct {
     int valid;
 } SregLastEntry;
 
-static SregTraceEntry s_sreg_trace[SREG_TRACE_CAP];
+static PSX_BSS SregTraceEntry s_sreg_trace[SREG_TRACE_CAP];
 static uint64_t s_sreg_trace_seq = 0;
 static SregLastEntry s_sreg_last[32];
 
@@ -670,7 +671,7 @@ typedef struct {
     uint8_t  in_exception;
     uint8_t  pad[3];
 } ProbeTraceEntry;
-static ProbeTraceEntry s_probe_trace[PROBE_TRACE_CAP];
+static PSX_BSS ProbeTraceEntry s_probe_trace[PROBE_TRACE_CAP];
 static uint64_t s_probe_trace_seq = 0;
 
 void debug_server_log_probe(uint32_t pc, CPUState *cpu)
@@ -994,7 +995,7 @@ void debug_server_log_sio_write(uint32_t addr, uint32_t value, uint8_t width) {
  * Records every dispatched function address for post-mortem analysis.
  * 64K entries, stack-allocated (256 KB). */
 #define DISPATCH_TRACE_CAP (1 << 16)
-static uint32_t s_dispatch_ring[DISPATCH_TRACE_CAP];
+static PSX_BSS uint32_t s_dispatch_ring[DISPATCH_TRACE_CAP];
 static uint64_t s_dispatch_seq = 0;
 
 /* ---- Unknown-dispatch ring buffer ----
@@ -1013,7 +1014,7 @@ typedef struct {
     uint32_t frame;
     uint32_t pad;
 } UnknownDispatchEntry;
-static UnknownDispatchEntry s_unknown_ring[UNKNOWN_DISPATCH_CAP];
+static PSX_BSS UnknownDispatchEntry s_unknown_ring[UNKNOWN_DISPATCH_CAP];
 static uint64_t s_unknown_seq = 0;
 
 /* Crash-trace accessor: returns entry at the given seq number (modulo cap).
@@ -1025,7 +1026,7 @@ uint64_t crash_trace_unknown_seq_get(void) { return s_unknown_seq; }
 /* Per-target hit count — bounded set, ~N unique targets typically. */
 #define UNKNOWN_UNIQUE_CAP 1024
 typedef struct { uint32_t phys; uint64_t count; } UnknownUniqueEntry;
-static UnknownUniqueEntry s_unknown_unique[UNKNOWN_UNIQUE_CAP];
+static PSX_BSS UnknownUniqueEntry s_unknown_unique[UNKNOWN_UNIQUE_CAP];
 static int s_unknown_unique_count = 0;
 
 void psx_unknown_dispatch_record(uint32_t addr, uint32_t phys,
@@ -1067,7 +1068,7 @@ uint64_t crash_trace_dispatch_seq_get(void) { return s_dispatch_seq; }
 /* Unique dispatch set — tracks every unique function address ever dispatched.
  * Simple hash set with linear probing. */
 #define DISPATCH_UNIQUE_CAP 4096
-static uint32_t s_dispatch_unique[DISPATCH_UNIQUE_CAP];
+static PSX_BSS uint32_t s_dispatch_unique[DISPATCH_UNIQUE_CAP];
 static int s_dispatch_unique_count = 0;
 
 static void dispatch_unique_add(uint32_t addr) {
@@ -1109,7 +1110,7 @@ typedef struct {
     uint32_t flag_7520;       /* mem[0x7520] success flag */
     uint32_t mc_byte_seq;     /* sio_get_seq() for cross-ref */
 } ChainTraceEntry;
-static ChainTraceEntry s_chain_trace[CHAIN_TRACE_CAP];
+static PSX_BSS ChainTraceEntry s_chain_trace[CHAIN_TRACE_CAP];
 static uint64_t s_chain_trace_seq = 0;
 static uint32_t s_prev_dispatch_target = 0;
 
@@ -1266,7 +1267,7 @@ typedef struct {
     uint8_t  source; /* 0 = direct entry hook, 1 = dispatch hook */
     uint8_t  pad[3];
 } CardMgrTraceEntry;
-static CardMgrTraceEntry s_card_mgr_trace[CARD_MGR_TRACE_CAP];
+static PSX_BSS CardMgrTraceEntry s_card_mgr_trace[CARD_MGR_TRACE_CAP];
 static uint64_t s_card_mgr_trace_seq = 0;
 
 /* Shadow call stack: tracks open call frames. */
@@ -1918,7 +1919,7 @@ static int is_chain_epilogue(uint32_t phys) {
  * Defined unconditionally so crash_trace.c can always dump them; only the FEED
  * (and the guard) is gated on PSX_STACK_GUARD. */
 #define PSX_RECENT_FN_CAP 64u
-uint32_t g_psx_recent_fn[PSX_RECENT_FN_CAP];
+PSX_BSS uint32_t g_psx_recent_fn[PSX_RECENT_FN_CAP];
 uint32_t g_psx_recent_fn_i   = 0;
 uint32_t g_psx_recursion_func = 0;
 
@@ -1933,7 +1934,7 @@ uint32_t g_psx_recursion_func = 0;
  * trip are dumped to verify the math). Defined always; fed only under the guard. */
 typedef struct { uint32_t frame; uint32_t entries; uint32_t max_kb; uint32_t max_func; } CeSum;
 #define CE_CAP 512u
-static CeSum    s_ce[CE_CAP];
+static PSX_BSS CeSum    s_ce[CE_CAP];
 static uint64_t s_ce_seq = 0;
 static uint32_t s_ce_frame = 0xFFFFFFFFu, s_ce_entries = 0, s_ce_max_kb = 0, s_ce_max_func = 0;
 /* raw TEB values captured AT the guard trip (sanity-check garbage-read hypothesis) */
@@ -2123,7 +2124,7 @@ typedef struct {
     uint32_t a0, a1, a2, a3; uint32_t ra; uint32_t current_func; uint32_t frame;
     uint8_t in_exception;
 } BiosCallEntry;
-static BiosCallEntry s_bioscall_ring[BIOSCALL_RING_CAP];
+static PSX_BSS BiosCallEntry s_bioscall_ring[BIOSCALL_RING_CAP];
 static uint64_t s_bioscall_seq = 0;
 /* Arm flag for the B0 event/thread-op capture in debug_server_trace_dispatch.
  * OFF by default: recording every IRQ-context DeliverEvent per dispatch floods the
@@ -2132,7 +2133,7 @@ static uint64_t s_bioscall_seq = 0;
 int g_event_hook_armed = 0;
 #define BIOSCALL_UNIQUE_CAP 2048
 typedef struct { uint32_t table_base; uint32_t index; uint64_t count; } BiosCallUnique;
-static BiosCallUnique s_bioscall_unique[BIOSCALL_UNIQUE_CAP];
+static PSX_BSS BiosCallUnique s_bioscall_unique[BIOSCALL_UNIQUE_CAP];
 static int s_bioscall_unique_count = 0;
 void psx_bioscall_record(uint32_t table_base, uint32_t index, uint32_t func_ptr,
                          uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t ra)
@@ -2192,7 +2193,7 @@ typedef struct {
     uint32_t pc;              /* matched physical block-leader PC */
     uint64_t psx_cycle_count; /* absolute guest cycles at block entry */
 } CycWatchEntry;
-static CycWatchEntry s_cyc_watch_ring[CYC_WATCH_RING_CAP];
+static PSX_BSS CycWatchEntry s_cyc_watch_ring[CYC_WATCH_RING_CAP];
 static volatile int s_cyc_watch_armed = 0; /* 1 = recording active */
 static uint32_t s_cyc_watch_anchor_phys = 0; /* armed anchor (A / start), masked to phys */
 static uint32_t s_cyc_watch_anchor_raw = 0;  /* armed anchor as supplied (for echo) */
@@ -8363,7 +8364,7 @@ typedef struct {
     uint16_t *px;                 /* DISP_RING_MAX_W*DISP_RING_MAX_H halfwords */
     uint16_t *vram;               /* full 1024x512 */
 } DispRingEntry;
-static DispRingEntry s_disp_ring[DISP_RING_CAP];
+static PSX_BSS DispRingEntry s_disp_ring[DISP_RING_CAP];
 static uint16_t     *s_disp_ring_px = NULL;   /* one block for all entries */
 
 static void disp_ring_capture(void)
@@ -9152,7 +9153,7 @@ typedef struct {
     uint32_t pc; uint32_t cpu_pc; uint32_t ra; uint32_t func; uint32_t frame;
     uint8_t width; uint8_t in_exception;
 } CardTraceEntry;
-static CardTraceEntry s_card_trace[CARD_TRACE_CAP];
+static PSX_BSS CardTraceEntry s_card_trace[CARD_TRACE_CAP];
 static uint64_t s_card_trace_seq = 0;
 static inline int is_card_critical_addr(uint32_t phys) {
     return (phys >= 0x00009F20u && phys < 0x00009F40u) ||
@@ -12777,13 +12778,13 @@ extern int psx_get_in_exception(void);
 extern uint32_t overlay_loader_native_inprogress(void);
 
 #define PHASE_RING_SECS 64
-static volatile uint32_t s_phase_total [PHASE_RING_SECS];
-static volatile uint32_t s_phase_interp[PHASE_RING_SECS];
-static volatile uint32_t s_phase_native[PHASE_RING_SECS];
-static volatile uint32_t s_phase_static[PHASE_RING_SECS];
-static volatile uint32_t s_phase_gpu   [PHASE_RING_SECS];
-static volatile uint32_t s_phase_exc   [PHASE_RING_SECS];
-static volatile uint64_t s_phase_sec   [PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_total [PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_interp[PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_native[PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_static[PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_gpu   [PHASE_RING_SECS];
+static PSX_BSS volatile uint32_t s_phase_exc   [PHASE_RING_SECS];
+static PSX_BSS volatile uint64_t s_phase_sec   [PHASE_RING_SECS];
 static volatile uint64_t s_phase_samples_all = 0, s_phase_interp_all = 0;
 
 /* Hot-function histogram: when a sample lands in a native overlay shard,
