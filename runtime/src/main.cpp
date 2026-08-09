@@ -21,6 +21,7 @@
 #include "load_accel.h"
 #include "savestate.h"
 #include "host_osd.h"
+#include "host_keymap.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -5111,10 +5112,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     debug_force_cd_reinsert();
                     host_osd_push("CD reinsert", 1500);
                 }
-                /* Host volume: numpad + / - (5% steps). Shows right-side bar. */
-                else if (key == SDLK_KP_PLUS) {
+                /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
+                 * (defaults: keypad +/-). 5% steps; shows right-side bar. */
+                else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
+                                           (int)mod)) {
                     host_volume_adjust(+5);
-                } else if (key == SDLK_KP_MINUS) {
+                } else if (host_keymap_match(HOST_KEYMAP_VOLUME_DOWN, (int)key,
+                                             (int)mod)) {
                     host_volume_adjust(-5);
                 }
                 /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
@@ -9793,7 +9797,12 @@ int main(int argc, char** argv) {
             /* Same path the runtime's psx_keybinds_init(argv0) reads — keep the
              * launcher Controls page and in-game keyboard map on one file. */
             static std::string s_rui_keybinds_path;
+            static std::string s_rui_config_ini_path;
             s_rui_keybinds_path = (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
+            /* Same config.ini the runtime reads for [KeyMap] VolumeUp/Down —
+             * never cwd-relative "config.ini" (that drifted edits off the exe). */
+            s_rui_config_ini_path =
+                (exe_dir_from_argv(argv[0]) / "config.ini").string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
                                      + " - Launcher";
@@ -9930,6 +9939,7 @@ int main(int argc, char** argv) {
             gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
             gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
             gi.keybinds_path        = s_rui_keybinds_path.c_str();
+            gi.config_path          = s_rui_config_ini_path.c_str();
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
                                                   PSX multi-track discs — skip verification */
             gi.num_known_sha256     = 0;
@@ -11099,6 +11109,22 @@ session_reboot:
     /* R3000A reset state. */
     cpu.pc = 0xBFC00000u;
     cpu.cop0[12] = 0x00400000u; /* SR: BEV=1 (boot exception vectors) */
+
+    /* Host hotkeys: config.ini [KeyMap] next to the exe (VolumeUp/Down).
+     * Prefer exe-dir file; if missing, fall back to cwd config.ini so a
+     * launcher edit made before config_path was wired still applies. */
+    {
+        namespace fs = std::filesystem;
+        const fs::path exe_cfg = exe_dir_from_argv(argv[0]) / "config.ini";
+        std::error_code ec;
+        if (fs::is_regular_file(exe_cfg, ec)) {
+            host_keymap_load(exe_cfg.string().c_str());
+        } else if (fs::is_regular_file(fs::path("config.ini"), ec)) {
+            host_keymap_load("config.ini");
+        } else {
+            host_keymap_load(nullptr);
+        }
+    }
 
     /* User save states (F1-F12 / Shift+F1-F12): slots live in the per-game
      * memcard/save dir, keyed by entry_pc + guarded by the boot_state integrity
