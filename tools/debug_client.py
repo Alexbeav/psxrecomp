@@ -437,6 +437,29 @@ def build_cmd(args):
         if len(args) > 2:
             d["nth"] = int(args[2])
         return d, pretty_json
+    elif cmd == "pc_probe_arm":
+        # pc_probe_arm [nd_intro=1|2|3|nd|nd_ot|nd_wood] [pcs=0xA,0xB] [n=32]
+        d = {"cmd": "pc_probe_arm"}
+        for a in args[1:]:
+            if "=" in a:
+                k, v = a.split("=", 1)
+                if k in ("n", "nd_intro") and v.lstrip("-").isdigit():
+                    d[k] = int(v)
+                else:
+                    d[k] = v
+            elif a in ("nd", "nd_intro"):
+                d["nd_intro"] = 1
+            elif a in ("nd_ot", "ot"):
+                d["nd_intro"] = 2
+            elif a in ("nd_wood", "wood"):
+                d["nd_intro"] = 3
+            elif a in ("nd_depth", "depth"):
+                d["nd_intro"] = 4
+        return d, pretty_json
+    elif cmd == "pc_probe_dump":
+        return {"cmd": "pc_probe_dump"}, pretty_json
+    elif cmd == "pc_probe_clear":
+        return {"cmd": "pc_probe_clear"}, pretty_json
     elif cmd == "fntrace_arm":
         # <target_hex|0xFFFFFFFF=all|0=clear>
         return {"cmd": "fntrace_arm", "target": args[1]}, pretty_json

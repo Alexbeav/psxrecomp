@@ -17,6 +17,7 @@
 #include <time.h>
 #include "debug_server.h"
 #include "psx_bss.h"
+#include "nd_intro_ot.h"
 #include "latency_ring.h"
 #include "overlay_loader.h"
 #include "overlay_capture.h"
@@ -2268,6 +2269,398 @@ static inline void cyc_watch_observe(uint32_t block_leader_phys)
     if (s_cyc_watch_hits >= s_cyc_watch_max_hits) s_cyc_watch_armed = 0;
 }
 
+/* ---- pc_probe: multi-PC block-leader counters + reg samples (default-off) ----
+ * Arm via TCP `pc_probe_arm` or env PSX_PC_PROBE / PSX_ND_INTRO_PROBE.
+ * Samples $t0/$fp/$v0/frame at matched leaders. Disarmed = one branch.
+ * nd_intro=2 also fills mode/depth/ot_base/ot_index from GP + game struct. */
+#define PC_PROBE_MAX_PCS   16
+#define PC_PROBE_SAMPLE_CAP 64
+typedef struct {
+    uint32_t pc;
+    uint64_t count;
+    uint32_t last_t0;
+    uint32_t last_fp;
+    uint32_t last_v0;
+    uint32_t last_mode;
+    uint32_t last_depth;
+    uint32_t last_ot_base;
+    uint32_t last_ot_index;
+    uint32_t last_frame;
+    uint32_t t0_zero;
+    uint32_t t0_nonzero;
+} PcProbeSlot;
+typedef struct {
+    uint32_t pc;
+    uint32_t frame;
+    uint32_t t0;
+    uint32_t fp;
+    uint32_t v0;
+    uint32_t mode;
+    uint32_t depth;
+    uint32_t ot_base;
+    uint32_t ot_index;
+} PcProbeSample;
+static volatile int s_pc_probe_armed = 0;
+static int          s_pc_probe_n = 0;
+static PcProbeSlot  s_pc_probe[PC_PROBE_MAX_PCS];
+static PcProbeSample s_pc_probe_samples[PC_PROBE_SAMPLE_CAP];
+static uint32_t     s_pc_probe_sample_n = 0;
+static uint32_t     s_pc_probe_sample_max = 32;
+
+static void pc_probe_clear_state(void)
+{
+    s_pc_probe_armed = 0;
+    s_pc_probe_n = 0;
+    s_pc_probe_sample_n = 0;
+    memset(s_pc_probe, 0, sizeof(s_pc_probe));
+    memset(s_pc_probe_samples, 0, sizeof(s_pc_probe_samples));
+}
+
+static int pc_probe_add_pc(uint32_t raw)
+{
+    uint32_t phys = raw & 0x1FFFFFFFu;
+    if (phys == 0) return 0;
+    for (int i = 0; i < s_pc_probe_n; i++) {
+        if (s_pc_probe[i].pc == phys) return 1;
+    }
+    if (s_pc_probe_n >= PC_PROBE_MAX_PCS) return 0;
+    s_pc_probe[s_pc_probe_n].pc = phys;
+    s_pc_probe_n++;
+    return 1;
+}
+
+/* Comma/space-separated hex list, e.g. "0x80044D10,0x80044E58". */
+static int pc_probe_parse_list(const char *list)
+{
+    if (!list || !*list) return 0;
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s", list);
+    int added = 0;
+    for (char *p = tmp, *tok; (tok = strtok(p, ", \t\n")) != NULL; p = NULL) {
+        uint32_t raw = (uint32_t)strtoul(tok, NULL, 0);
+        if (pc_probe_add_pc(raw)) added++;
+    }
+    return added;
+}
+
+static void pc_probe_arm_nd_intro_defaults(void)
+{
+    /* NdIntroMeshDraw post-RTPT funnel (block leaders with cyc_observe). */
+    static const uint32_t k[] = {
+        0x80044580u, /* after dispatch: $fp = v0 OT ptr */
+        0x80044C80u, /* face clip start */
+        0x80044CB0u, /* passed neg outcode */
+        0x80044CDCu, /* passed hi outcode → alloc */
+        0x80044D10u, /* $t0 == 0 ? skip : emit */
+        0x80044D18u, /* emit continue */
+        0x80044DA4u, /* PolyG4 build */
+        0x80044E58u, /* clip skip */
+        0x80044EC8u, /* $t0==0 / OOM skip */
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+        pc_probe_add_pc(k[i]);
+}
+
+/* OT/depth leafs of NdIntroDrawDispatch — which path returns the OT slot. */
+static void pc_probe_arm_nd_intro_ot_defaults(void)
+{
+    static const uint32_t k[] = {
+        0x80044580u, /* after jal: v0 → $fp OT slot */
+        0x800440A0u, /* dispatch entry (mode half @ gp+0x4DE) */
+        0x80044120u, /* mode0 depth scale using *(game+0x1D04) */
+        0x80044154u, /* return OT base via *(game+buf*4+0x18C8) */
+        0x800441A8u, /* return *(game+0x25C)+0xFFC (near-ish) */
+        0x800441C0u, /* mode2 entry */
+        0x80044268u, /* mode1/ shared OT-base return */
+        0x80044DA4u, /* PolyG4 emit: confirm $fp sticky */
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+        pc_probe_add_pc(k[i]);
+}
+
+/* Textured wood funnel — live path is func_8006A52C (not dead twin 0x8006A6B8). */
+static void pc_probe_arm_nd_intro_wood_defaults(void)
+{
+    static const uint32_t k[] = {
+        0x8006A52Cu, /* NdIntroWoodEmit entry */
+        0x8006A564u, /* RTPT GTE caller_ra (sticky) */
+        0x8006A57Cu, /* post-RTPT face loop */
+        0x8006A590u, /* FLAG read / face setup */
+        0x8006A5B4u, /* NCLIP */
+        0x8006A610u, /* next-face hub (skip + post-emit) */
+        0x8006A69Cu, /* RTPS single-vert return (bgez $0 → loop) */
+        0x8006A6B8u, /* dead twin entry — expect count=0 */
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+        pc_probe_add_pc(k[i]);
+}
+
+/* Depth compare: wood OTZ vs digit/glow OT link ptrs vs MeshDraw OtFar.
+ * Only block-leader PCs (cyc_observe); mid-block AddPrim sites never fire. */
+static void pc_probe_arm_nd_intro_depth_defaults(void)
+{
+    static const uint32_t k[] = {
+        0x8006A608u, /* wood jalr emit — GTE OTZ */
+        0x80023094u, /* DigitGt4 entry — $t7 already OT slot */
+        0x80053E10u, /* glow color ori — $a2=prim; OT via game+0x147C later */
+        0x800440A0u, /* DrawDispatch entry — GP mode/depth */
+        0x80044580u, /* MeshDraw after dispatch */
+        0x800441A8u, /* OtFar leaf */
+        0x80052F98u, /* DigitFx entry */
+        0x800444ECu, /* MeshDraw entry — sample $ra */
+        0x80044DA4u, /* PolyG4 emit hub — lighting bytes on stack */
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+        pc_probe_add_pc(k[i]);
+}
+
+/* Wood DL / helper selection: batch setup + which emit helper is bound. */
+static void pc_probe_arm_nd_intro_wood_dl_defaults(void)
+{
+    static const uint32_t k[] = {
+        0x8006AAF0u, /* wood batch setup: a0=stream, ra=material desc */
+        0x8006AB58u, /* fallthrough past flag gates (accepted batch) */
+        0x8006ACE0u, /* after lw s5,96(ra) — helper bound */
+        0x8006A52Cu, /* wood emit entry */
+        0x8006A608u, /* wood jalr emit — also GTE OTZ/SXY via wood_ot */
+        0x8006AE90u, /* alt helper — expect 0 in ND */
+        0x8006AD20u, /* wood batch epilogue / next-opcode hub */
+        0x80044580u, /* MeshDraw post-RTPT — compare SX band */
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+        pc_probe_add_pc(k[i]);
+}
+
+/* Resolve double-buffered OT base: *(*(0x8008D2AC) + 0x18C8 + (*(+0xC)<<2)). */
+static void pc_probe_ot_context(CPUState *cpu, uint32_t v0_ot,
+                                uint32_t *mode_out, uint32_t *depth_out,
+                                uint32_t *ot_base_out, uint32_t *ot_index_out)
+{
+    uint32_t mode = 0, depth = 0, ot_base = 0, ot_index = 0xFFFFFFFFu;
+    if (cpu) {
+        uint32_t gp = cpu->gpr[28];
+        mode = psx_read_word(gp + 0x4D4u);
+        /* Depth countdown half lives at gp+0x4D8 (signed). */
+        depth = (uint32_t)(int32_t)(int16_t)(psx_read_word(gp + 0x4D8u) & 0xFFFFu);
+        uint32_t game = psx_read_word(0x8008D2ACu);
+        if (game) {
+            uint32_t buf = psx_read_word(game + 0xCu);
+            ot_base = psx_read_word(game + (buf << 2) + 0x18C8u);
+            if (ot_base && v0_ot) {
+                int32_t delta = (int32_t)(v0_ot - ot_base);
+                if ((delta & 3) == 0 && delta >= 0 && delta < (1 << 20))
+                    ot_index = (uint32_t)(delta >> 2);
+            }
+        }
+    }
+    if (mode_out) *mode_out = mode;
+    if (depth_out) *depth_out = depth;
+    if (ot_base_out) *ot_base_out = ot_base;
+    if (ot_index_out) *ot_index_out = ot_index;
+}
+
+static inline void pc_probe_observe(uint32_t block_leader_phys)
+{
+    if (!s_pc_probe_armed || s_pc_probe_n <= 0) return;
+    extern CPUState *debug_cpu_ptr;
+    CPUState *cpu = debug_cpu_ptr;
+    for (int i = 0; i < s_pc_probe_n; i++) {
+        if (s_pc_probe[i].pc != block_leader_phys) continue;
+        PcProbeSlot *s = &s_pc_probe[i];
+        s->count++;
+        if (cpu) {
+            uint32_t t0 = cpu->gpr[8];
+            uint32_t fp = cpu->gpr[30];
+            uint32_t v0 = cpu->gpr[2];
+            uint32_t a1 = cpu->gpr[5];
+            uint32_t a2 = cpu->gpr[6];
+            uint32_t t7 = cpu->gpr[15];
+            uint32_t otz = cpu->gte_data[7] & 0xFFFFu;
+            uint32_t mode = 0, depth = 0, ot_base = 0, ot_index = 0xFFFFFFFFu;
+            /* Wood: a2 is stack-table value (often prim-ish); OT slot ≈ ot_base+OTZ.
+             * Digit GT4 AddPrim @23180: $t7 = OT slot. Glow @53EB8: $a1 = OT head. */
+            int wood_ot = (block_leader_phys == 0x0006A608u ||
+                           block_leader_phys == 0x0006A600u);
+            int digit_ot = (block_leader_phys == 0x00023094u);
+            int glow_ot = (block_leader_phys == 0x00053E10u);
+            int digit_rain_ot = (block_leader_phys == 0x0006AE34u);
+            int dispatch = (block_leader_phys == 0x000440A0u);
+            uint32_t ot_ptr = 0;
+            if (digit_ot)
+                ot_ptr = t7; /* caller-supplied OT slot */
+            else if (digit_rain_ot)
+                ot_ptr = cpu->gpr[11]; /* $t3 OT slot from MAC0>>17 helper */
+            else if (glow_ot) {
+                /* OT head at game+0x147C (same as AddPrim a few insns later). */
+                uint32_t game = psx_read_word(0x8008D2ACu);
+                ot_ptr = game ? psx_read_word(game + 0x147Cu) : 0;
+            } else if (block_leader_phys == 0x00044580u ||
+                       block_leader_phys == 0x000441A8u)
+                ot_ptr = v0; /* dispatch result / OtFar v0 */
+            else if (wood_ot)
+                ot_ptr = 0; /* resolve via OTZ after ot_base known */
+            else
+                ot_ptr = fp ? fp : v0;
+            pc_probe_ot_context(cpu, ot_ptr, &mode, &depth, &ot_base, &ot_index);
+            if (wood_ot) {
+                /* WoodEmit jalr $s5 @0x8006A608: MAC0 already swc2'd to 44($at);
+                 * OT base at 56($at) from model+228. Index = MAC0>>17 (== OTZ>>5). */
+                uint32_t at = cpu->gpr[1];
+                uint32_t mac0 = at ? psx_read_word(at + 44u) : 0;
+                uint32_t wood_base = at ? psx_read_word(at + 56u) : 0;
+                uint32_t widx = mac0 >> 17;
+                if (!widx && otz)
+                    widx = otz >> 5;
+                ot_base = wood_base;
+                ot_index = widx;
+                ot_ptr = wood_base ? (wood_base + (widx << 2)) : 0;
+                t0 = ot_ptr;           /* actual AddPrim OT slot */
+                depth = otz;
+                v0 = cpu->gpr[21];     /* $s5 helper */
+                mode = wood_base;
+                if (wood_base)
+                    psx_nd_note_wood_batch_ot(wood_base);
+            } else if (digit_ot) {
+                t0 = t7;
+                v0 = ot_index;
+            } else if (glow_ot) {
+                t0 = ot_ptr;
+                v0 = ot_index;
+                depth = a2; /* prim ptr */
+            } else if (dispatch) {
+                /* Fresh GP mode/depth before leaf runs; v0 not OT yet. */
+                t0 = mode;
+                v0 = depth;
+            } else if (block_leader_phys == 0x000444ECu) {
+                /* MeshDraw entry: expose caller $ra (no jal-site in EXE). */
+                t0 = cpu->gpr[31];
+                v0 = cpu->gpr[2]; /* entry gate */
+            } else if (block_leader_phys == 0x00044DA4u) {
+                /* PolyG4 emit: sp+0x40/0x41 hold computed shade bytes. */
+                uint32_t sp = cpu->gpr[29];
+                t0 = psx_read_word(sp + 0x40u) & 0xFFFFu;
+                v0 = fp; /* OT link ptr */
+            } else if (block_leader_phys == 0x0006A52Cu) {
+                /* Wood emit entry: $t9=face list, $at=ctx, $s5=emit helper. */
+                t0 = cpu->gpr[25]; /* t9 */
+                v0 = cpu->gpr[1];  /* at */
+                depth = cpu->gpr[21]; /* s5 */
+            } else if (block_leader_phys == 0x0006ACE0u) {
+                /* Post helper-select: $s5 set, $a2=model.
+                 * ra may be clobbered by pre-emit jalr; trust s5 + model. */
+                t0 = cpu->gpr[21]; /* s5 helper */
+                v0 = cpu->gpr[6];  /* a2 model */
+                if (v0) {
+                    mode = psx_read_word(v0 + 184u); /* flags */
+                    /* face-list ptr @a2+200; depth = first face word */
+                    uint32_t faces = psx_read_word(v0 + 200u);
+                    depth = faces ? psx_read_word(faces) : 0;
+                    ot_base = faces;
+                    ot_index = faces ? psx_read_word(faces + 4u) : 0;
+                }
+            } else if (block_leader_phys == 0x0006AAF0u) {
+                /* Wood batch setup: $a0 stream, $ra = model (helpers at +92).
+                 * mode=flags@+184, depth=helper@+96, ot_base=name@+8,
+                 * ot_index=batch OT @+228 (live; model RAM is reused later). */
+                t0 = cpu->gpr[4];  /* a0 */
+                v0 = cpu->gpr[31]; /* model */
+                if (v0) {
+                    mode = psx_read_word(v0 + 184u);  /* draw flags */
+                    depth = psx_read_word(v0 + 96u);  /* s5 helper */
+                    ot_base = psx_read_word(v0 + 8u); /* name/tag */
+                    ot_index = psx_read_word(v0 + 228u); /* batch OT */
+                    if (ot_index)
+                        psx_nd_note_wood_batch_ot_tagged(ot_index, ot_base);
+                }
+            } else if (block_leader_phys == 0x0006AB58u) {
+                /* Fallthrough past flag bne — batch accepted. */
+                t0 = cpu->gpr[6]; /* a2 */
+                v0 = t0 ? psx_read_word(t0 + 184u) : 0;
+                depth = cpu->gpr[31]; /* desc */
+            } else if (block_leader_phys == 0x00044580u) {
+                /* MeshDraw post-dispatch: also pack GTE max SX into mode. */
+                {
+                    int32_t sx_max = -0x8000;
+                    for (int si = 12; si <= 14; si++) {
+                        int32_t sx = (int32_t)(int16_t)(cpu->gte_data[si] & 0xFFFFu);
+                        if (sx > sx_max) sx_max = sx;
+                    }
+                    mode = (uint32_t)sx_max;
+                }
+            } else if (block_leader_phys == 0x000444E8u) {
+                /* True MeshDraw entry: lh gp+0x4DC → v0 gate (observe pre-lh). */
+                t0 = cpu->gpr[28]; /* gp */
+                v0 = cpu->gpr[2];
+            } else if (block_leader_phys == 0x00069BB0u) {
+                /* Sibling matrix/OT setup entry: a1=ctx (s4+360), a0=mesh.
+                 * ot_index = preferred wood batch OT cache.
+                 * mode = CODE model+228, depth = GLOW model+228 when those
+                 * ND intro models are resident (stable addrs from batch stream). */
+                t0 = cpu->gpr[5]; /* a1 */
+                v0 = cpu->gpr[4]; /* a0 */
+                if (t0) {
+                    uint32_t main_ot = psx_read_word(t0 + 244u);
+                    ot_base = main_ot;
+                    /* s4+0xb4 = scene OT bump near WoodEmit batch pools. */
+                    if (t0 > 0xB4u)
+                        psx_nd_note_sibling_ot_hint(psx_read_word(t0 - 0xB4u));
+                }
+                ot_index = psx_nd_wood_batch_ot();
+                {
+                    /* ND intro digit/glow models — confirmed stable during rain. */
+                    const uint32_t code_m = 0x800FF390u;
+                    const uint32_t glow_m = 0x800FF294u;
+                    uint32_t code_tag = psx_read_word(code_m + 8u);
+                    uint32_t glow_tag = psx_read_word(glow_m + 8u);
+                    mode = (code_tag == 0x45444F43u) ? psx_read_word(code_m + 228u) : 0;
+                    depth = (glow_tag == 0x574F4C47u) ? psx_read_word(glow_m + 228u) : 0;
+                    if (mode)
+                        psx_nd_note_wood_batch_ot_tagged(mode, 0x45444F43u);
+                    else if (depth)
+                        psx_nd_note_wood_batch_ot_tagged(depth, 0x574F4C47u);
+                }
+            } else if (block_leader_phys == 0x00069C34u ||
+                       block_leader_phys == 0x00069CC4u) {
+                /* Face-loop jal / entry: a3 = OT origin (last slot). */
+                t0 = cpu->gpr[7]; /* a3 */
+                v0 = cpu->gpr[5]; /* a1 */
+                mode = cpu->gpr[4]; /* a0 mesh */
+                depth = t0;
+                ot_base = (t0 >= 4092u) ? (t0 - 4092u) : 0;
+            } else if (digit_rain_ot) {
+                /* NdIntroDigitRainCode36: $t3 = OT slot; expose vs game ot_base. */
+                t0 = ot_ptr;
+                v0 = ot_index;
+                depth = otz;
+            }
+            s->last_t0 = t0;
+            s->last_fp = fp;
+            s->last_v0 = v0;
+            s->last_mode = mode;
+            s->last_depth = depth;
+            s->last_ot_base = ot_base;
+            s->last_ot_index = ot_index;
+            s->last_frame = (uint32_t)s_frame_count;
+            if (t0 == 0) s->t0_zero++;
+            else s->t0_nonzero++;
+            if (s_pc_probe_sample_n < s_pc_probe_sample_max &&
+                s_pc_probe_sample_n < PC_PROBE_SAMPLE_CAP) {
+                PcProbeSample *sm = &s_pc_probe_samples[s_pc_probe_sample_n++];
+                sm->pc = block_leader_phys;
+                sm->frame = (uint32_t)s_frame_count;
+                sm->t0 = t0;
+                sm->fp = fp;
+                sm->v0 = v0;
+                sm->mode = mode;
+                sm->depth = depth;
+                sm->ot_base = ot_base;
+                sm->ot_index = ot_index;
+            }
+        }
+        return;
+    }
+}
+
 /* Exported per-basic-block-leader cycle observer. Emitted by the recompiler at
  * EVERY compiled block leader (under #ifndef PSX_NO_DEBUG_TOOLS, so prod builds
  * emit nothing — zero overhead) so native's cycle observation matches Beetle's
@@ -2281,11 +2674,81 @@ void debug_server_cyc_observe(uint32_t block_leader_phys) {
     return;
 #else
     if (s_fmv_quiet) return;
-    cyc_watch_observe(block_leader_phys & 0x1FFFFFFFu);
+    uint32_t phys = block_leader_phys & 0x1FFFFFFFu;
+    /* ND debug: PSX_ND_WOOD_CLEAR80=1 clears model+184 bit0x80 at the flag-load
+     * leader so 0x5CF/'cras' models enter NdIntroWoodBatchSetup's textured path.
+     * Fires before lw v1,184(a2) @ AB3C. Default-off. */
+    if (phys == 0x0006AB3Cu) {
+        static int s_clear80 = -1;
+        if (s_clear80 < 0) {
+            const char *e = getenv("PSX_ND_WOOD_CLEAR80");
+            s_clear80 = (e && *e && *e != '0') ? 1 : 0;
+            if (s_clear80)
+                fprintf(stdout, "psxrecomp: PSX_ND_WOOD_CLEAR80 enabled\n");
+        }
+        if (s_clear80 && debug_cpu_ptr) {
+            uint32_t a2 = debug_cpu_ptr->gpr[6];
+            if (a2) {
+                uint32_t fl = psx_read_word(a2 + 184u);
+                if (fl & 0x80u)
+                    psx_write_word(a2 + 184u, fl & ~0x80u);
+            }
+        }
+    }
+    /* Cache WoodEmit batch OT at WoodBatchSetup (runs BEFORE sibling on ND
+     * rain frames) and at scratch load. */
+    if (phys == 0x0006AAF0u && debug_cpu_ptr) {
+        uint32_t model = debug_cpu_ptr->gpr[31]; /* $ra = model */
+        if (model) {
+            uint32_t tag = psx_read_word(model + 8u);
+            uint32_t base = psx_read_word(model + 228u);
+            if (base)
+                psx_nd_note_wood_batch_ot_tagged(base, tag);
+        }
+    }
+    if ((phys == 0x0006ACFCu || phys == 0x0006AD08u) && debug_cpu_ptr) {
+        uint32_t base = 0;
+        if (phys == 0x0006ACFCu) {
+            uint32_t a2 = debug_cpu_ptr->gpr[6];
+            if (a2)
+                base = psx_read_word(a2 + 228u);
+        } else {
+            base = debug_cpu_ptr->gpr[5]; /* a1 after lw model+228 */
+        }
+        if (base)
+            psx_nd_note_wood_batch_ot(base);
+    }
+    /* ND debug: PSX_ND_SIB_OT_LIFT=<n> adds n*4 to $a3 at sibling face-loop
+     * entry 0x80069CC4 (a3 = *(a1+244)+4092 = last OT slot). Sibling PolyFT3
+     * right-flap faces use face_hi≈0 → farthest bucket (drawn before additive
+     * 0x36 glow). Negative n (e.g. -800) moves them nearer in the 1024-entry OT.
+     * Applied once per a3 value. */
+    if (phys == 0x00069CC4u && debug_cpu_ptr) {
+        static int s_sib_lift = -2; /* -2 unset, 0 disabled, else delta */
+        static uint32_t s_sib_lifted_a3 = 0;
+        if (s_sib_lift == -2) {
+            const char *e = getenv("PSX_ND_SIB_OT_LIFT");
+            if (e && *e) {
+                s_sib_lift = atoi(e);
+                fprintf(stdout, "psxrecomp: PSX_ND_SIB_OT_LIFT=%d\n", s_sib_lift);
+            } else {
+                s_sib_lift = 0;
+            }
+        }
+        if (s_sib_lift != 0) {
+            uint32_t a3 = debug_cpu_ptr->gpr[7];
+            if (a3 && a3 != s_sib_lifted_a3) {
+                debug_cpu_ptr->gpr[7] = a3 + (uint32_t)(int32_t)(s_sib_lift * 4);
+                s_sib_lifted_a3 = debug_cpu_ptr->gpr[7];
+            }
+        }
+    }
+    cyc_watch_observe(phys);
+    pc_probe_observe(phys);
     /* #2 lockstep comparator: per-basic-block compiled-vs-interp check. Self-gates
      * on the armed frame window; ~free (one branch) when disarmed. */
     { extern void ls_at_leader(uint32_t, CPUState*); extern CPUState *debug_cpu_ptr;
-      ls_at_leader(block_leader_phys & 0x1FFFFFFFu, debug_cpu_ptr); }
+      ls_at_leader(phys, debug_cpu_ptr); }
 #endif
 }
 
@@ -9035,6 +9498,81 @@ static void handle_cyc_watch_clear(int id, const char *json)
     send_ok(id);
 }
 
+/* pc_probe_arm — {"pcs":"0xA,0xB", "n":32, "nd_intro":1..5} or empty pcs+nd_intro.
+ * 1=PolyG4 clip 2=OT leaves 3=wood 4=depth 5=wood DL/helper bind. */
+static void handle_pc_probe_arm(int id, const char *json)
+{
+    pc_probe_clear_state();
+    int n = json_get_int(json, "n", 32);
+    if (n < 1) n = 1;
+    if (n > PC_PROBE_SAMPLE_CAP) n = PC_PROBE_SAMPLE_CAP;
+    s_pc_probe_sample_max = (uint32_t)n;
+
+    int nd = json_get_int(json, "nd_intro", 0);
+    char pcs[512];
+    const char *have_pcs = json_get_str(json, "pcs", pcs, sizeof(pcs));
+    if (nd == 5) pc_probe_arm_nd_intro_wood_dl_defaults();
+    else if (nd == 4) pc_probe_arm_nd_intro_depth_defaults();
+    else if (nd == 3) pc_probe_arm_nd_intro_wood_defaults();
+    else if (nd == 2) pc_probe_arm_nd_intro_ot_defaults();
+    else if (nd) pc_probe_arm_nd_intro_defaults();
+    if (have_pcs) pc_probe_parse_list(pcs);
+    if (s_pc_probe_n <= 0) {
+        send_err(id, "pc_probe_arm needs pcs=... and/or nd_intro=1..5");
+        return;
+    }
+    s_pc_probe_armed = 1;
+    send_fmt("{\"id\":%d,\"ok\":true,\"armed\":1,\"n_pcs\":%d,\"sample_max\":%u,\"nd_intro\":%d}",
+             id, s_pc_probe_n, s_pc_probe_sample_max, nd);
+}
+
+static void handle_pc_probe_dump(int id, const char *json)
+{
+    (void)json;
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "{\"id\":%d,\"ok\":true,\"armed\":%d,\"n_pcs\":%d,\"sample_max\":%u,"
+             "\"samples_n\":%u,\"slots\":[",
+             id, s_pc_probe_armed ? 1 : 0, s_pc_probe_n, s_pc_probe_sample_max,
+             s_pc_probe_sample_n);
+    send_line(buf);
+    for (int i = 0; i < s_pc_probe_n; i++) {
+        const PcProbeSlot *s = &s_pc_probe[i];
+        snprintf(buf, sizeof(buf),
+                 "%s{\"pc\":\"0x%08X\",\"count\":%llu,\"t0_zero\":%u,\"t0_nonzero\":%u,"
+                 "\"last_t0\":\"0x%08X\",\"last_fp\":\"0x%08X\",\"last_v0\":\"0x%08X\","
+                 "\"last_mode\":\"0x%08X\",\"last_depth\":\"0x%08X\","
+                 "\"last_ot_base\":\"0x%08X\",\"last_ot_index\":\"0x%08X\","
+                 "\"last_frame\":%u}",
+                 (i == 0) ? "" : ",",
+                 s->pc, (unsigned long long)s->count, s->t0_zero, s->t0_nonzero,
+                 s->last_t0, s->last_fp, s->last_v0,
+                 s->last_mode, s->last_depth, s->last_ot_base, s->last_ot_index,
+                 s->last_frame);
+        send_line(buf);
+    }
+    send_line("],\"samples\":[");
+    for (uint32_t i = 0; i < s_pc_probe_sample_n; i++) {
+        const PcProbeSample *sm = &s_pc_probe_samples[i];
+        snprintf(buf, sizeof(buf),
+                 "%s{\"pc\":\"0x%08X\",\"frame\":%u,\"t0\":\"0x%08X\","
+                 "\"fp\":\"0x%08X\",\"v0\":\"0x%08X\",\"mode\":\"0x%08X\","
+                 "\"depth\":\"0x%08X\",\"ot_base\":\"0x%08X\",\"ot_index\":\"0x%08X\"}",
+                 (i == 0) ? "" : ",",
+                 sm->pc, sm->frame, sm->t0, sm->fp, sm->v0,
+                 sm->mode, sm->depth, sm->ot_base, sm->ot_index);
+        send_line(buf);
+    }
+    send_line("]}");
+}
+
+static void handle_pc_probe_clear(int id, const char *json)
+{
+    (void)json;
+    pc_probe_clear_state();
+    send_ok(id);
+}
+
 /* Liveness/freeze diagnostic: returns a single snapshot of every counter
  * that distinguishes "stuck in a tight handler loop" from "just slow" or
  * "starved on TCP poll".  Pass {"window":N} (default 256) to also include
@@ -12735,6 +13273,9 @@ static const CmdEntry s_commands[] = {
     { "cyc_watch",         handle_cyc_watch },
     { "cyc_watch_dump",    handle_cyc_watch_dump },
     { "cyc_watch_clear",   handle_cyc_watch_clear },
+    { "pc_probe_arm",      handle_pc_probe_arm },
+    { "pc_probe_dump",     handle_pc_probe_dump },
+    { "pc_probe_clear",    handle_pc_probe_clear },
     { "mmio_dump",         handle_mmio_dump },
     { "mmio_clear",        handle_mmio_clear },
     { "capture_freeze",    handle_capture_freeze },
@@ -12932,6 +13473,29 @@ void debug_server_init(int port)
                 s_rwatch_lo = (uint32_t)strtoul(tmp, NULL, 0);
                 s_rwatch_hi = (uint32_t)strtoul(comma + 1, NULL, 0);
                 if (s_rwatch_hi > s_rwatch_lo) g_ram_read_watch_active = 1;
+            }
+        }
+        /* PSX_ND_INTRO_PROBE=1 PolyG4; =2 OT; =3 wood; =4 depth; =5 wood DL.
+         * PSX_PC_PROBE="0xA,0xB" arms an explicit list (can combine). */
+        {
+            const char *nd = getenv("PSX_ND_INTRO_PROBE");
+            const char *pcs = getenv("PSX_PC_PROBE");
+            if ((nd && *nd && *nd != '0') || (pcs && *pcs)) {
+                pc_probe_clear_state();
+                s_pc_probe_sample_max = 48;
+                if (nd && *nd && *nd != '0') {
+                    int ndv = (int)strtol(nd, NULL, 0);
+                    if (ndv == 5) pc_probe_arm_nd_intro_wood_dl_defaults();
+                    else if (ndv == 4) pc_probe_arm_nd_intro_depth_defaults();
+                    else if (ndv == 3) pc_probe_arm_nd_intro_wood_defaults();
+                    else if (ndv == 2) pc_probe_arm_nd_intro_ot_defaults();
+                    else pc_probe_arm_nd_intro_defaults();
+                }
+                if (pcs && *pcs) pc_probe_parse_list(pcs);
+                if (s_pc_probe_n > 0) {
+                    s_pc_probe_armed = 1;
+                    fprintf(stdout, "psxrecomp: pc_probe armed (%d pcs)\n", s_pc_probe_n);
+                }
             }
         }
     }
