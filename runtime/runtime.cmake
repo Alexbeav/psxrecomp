@@ -92,20 +92,41 @@ set(PSX_SDL_LIBRARIES "")
 set(PSX_SDL_STATIC_LDFLAGS "")
 set(PSX_SDL3 OFF)
 
+# Portable cmake-clang-v1 pack roots (wizard / RetComM / CI emitter fetch).
+# Collect as HINTS only — never list(PREPEND CMAKE_PREFIX_PATH …): on Windows CI
+# the pack is llvm-mingw while the setup host links with MSYS2 g++, and a
+# global prefix puts pack lib/ on the -L path so -static-libstdc++ can pick up
+# the wrong libstdc++ (codecvt / filesystem undefined refs at link).
+set(_PSX_TOOLCHAIN_PREFIX_HINTS "")
+foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR
+                              BPE_TOOLCHAIN_DIR TOOLCHAIN_DIR)
+    if(DEFINED ENV{${_psx_tc_env}} AND NOT "$ENV{${_psx_tc_env}}" STREQUAL "")
+        list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "$ENV{${_psx_tc_env}}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _PSX_TOOLCHAIN_PREFIX_HINTS)
+
 if(_psx_sdl_backend STREQUAL "SDL3")
     set(PSX_SDL3 ON)
     option(PSX_SDL3_FETCH
         "Fetch the pinned SDL3 release when no system SDL3 package is found"
         ON)
-    # cmake-clang-v1 1.0.7+ ships static SDL3 under the pack root. Prefer that
-    # over FetchContent (avoids hundreds of Windows try_compile probes).
-    foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR)
-        if(DEFINED ENV{${_psx_tc_env}} AND NOT "$ENV{${_psx_tc_env}}" STREQUAL "")
-            list(PREPEND CMAKE_PREFIX_PATH "$ENV{${_psx_tc_env}}")
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
-    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3)
+    # cmake-clang-v1 1.0.7+ ships static SDL3 (lib/cmake/SDL3). Prefer via
+    # SDL3_DIR / HINTS without mutating CMAKE_PREFIX_PATH.
+    if(NOT SDL3_DIR)
+        foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+            if(EXISTS "${_psx_tc_pfx}/lib/cmake/SDL3/SDL3Config.cmake")
+                set(SDL3_DIR "${_psx_tc_pfx}/lib/cmake/SDL3")
+                break()
+            elseif(EXISTS "${_psx_tc_pfx}/lib/cmake/SDL3/SDL3-config.cmake")
+                set(SDL3_DIR "${_psx_tc_pfx}/lib/cmake/SDL3")
+                break()
+            endif()
+        endforeach()
+    endif()
+    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3
+        HINTS ${_PSX_TOOLCHAIN_PREFIX_HINTS}
+        PATH_SUFFIXES lib/cmake/SDL3)
     if(TARGET SDL3::SDL3)
         message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
     endif()
@@ -537,6 +558,17 @@ function(psxrecomp_ensure_zlib)
     if(TARGET ZLIB::ZLIB)
         return()
     endif()
+    # Prefer pack zlib via ZLIB_ROOT (full path to libz.a) — not CMAKE_PREFIX_PATH.
+    if(NOT ZLIB_ROOT)
+        foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+            if(EXISTS "${_psx_tc_pfx}/include/zlib.h" AND
+               (EXISTS "${_psx_tc_pfx}/lib/libz.a" OR
+                EXISTS "${_psx_tc_pfx}/lib/zlib.lib"))
+                set(ZLIB_ROOT "${_psx_tc_pfx}")
+                break()
+            endif()
+        endforeach()
+    endif()
     find_package(ZLIB QUIET)
     if(TARGET ZLIB::ZLIB)
         return()
@@ -548,7 +580,7 @@ function(psxrecomp_ensure_zlib)
             "zlib-devel / mingw-w64-zlib, or configure with -DPSX_ZLIB_FETCH=ON.")
     endif()
     message(STATUS
-        "psxrecomp: ZLIB not in CMAKE_PREFIX_PATH/ZLIB_ROOT; "
+        "psxrecomp: ZLIB not in ZLIB_ROOT / system paths; "
         "fetching zlib 1.3.1 (prefer a toolchain pack that bundles it)")
     include(FetchContent)
     set(_psx_zlib_timestamp_args "")
