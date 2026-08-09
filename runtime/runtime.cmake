@@ -111,22 +111,30 @@ if(_psx_sdl_backend STREQUAL "SDL3")
     option(PSX_SDL3_FETCH
         "Fetch the pinned SDL3 release when no system SDL3 package is found"
         ON)
-    # cmake-clang-v1 1.0.7+ ships static SDL3 (lib/cmake/SDL3). Prefer via
-    # SDL3_DIR / HINTS without mutating CMAKE_PREFIX_PATH.
+    # cmake-clang-v1 1.0.9+ ships SDL3 under deps/; 1.0.7–1.0.8 used pack root.
+    # Prefer SDL3_DIR / HINTS — never CMAKE_PREFIX_PATH=pack (mingw include poisons libc++).
     if(NOT SDL3_DIR)
         foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
-            if(EXISTS "${_psx_tc_pfx}/lib/cmake/SDL3/SDL3Config.cmake")
-                set(SDL3_DIR "${_psx_tc_pfx}/lib/cmake/SDL3")
-                break()
-            elseif(EXISTS "${_psx_tc_pfx}/lib/cmake/SDL3/SDL3-config.cmake")
-                set(SDL3_DIR "${_psx_tc_pfx}/lib/cmake/SDL3")
+            foreach(_psx_sdl_root IN ITEMS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+                if(EXISTS "${_psx_sdl_root}/lib/cmake/SDL3/SDL3Config.cmake" OR
+                   EXISTS "${_psx_sdl_root}/lib/cmake/SDL3/SDL3-config.cmake")
+                    set(SDL3_DIR "${_psx_sdl_root}/lib/cmake/SDL3")
+                    break()
+                endif()
+            endforeach()
+            if(SDL3_DIR)
                 break()
             endif()
         endforeach()
     endif()
+    set(_PSX_SDL3_HINTS "")
+    foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+        list(APPEND _PSX_SDL3_HINTS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+    endforeach()
     find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3
-        HINTS ${_PSX_TOOLCHAIN_PREFIX_HINTS}
+        HINTS ${_PSX_SDL3_HINTS}
         PATH_SUFFIXES lib/cmake/SDL3)
+    unset(_PSX_SDL3_HINTS)
     if(TARGET SDL3::SDL3)
         message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
     endif()
@@ -224,7 +232,6 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
-    ${PSXRECOMP_ROOT}/runtime/src/nd_intro_ot.c
     ${PSXRECOMP_ROOT}/runtime/src/mdec.c
     ${PSXRECOMP_ROOT}/runtime/src/timers.c
     ${PSXRECOMP_ROOT}/runtime/src/interrupts.c
@@ -559,13 +566,19 @@ function(psxrecomp_ensure_zlib)
     if(TARGET ZLIB::ZLIB)
         return()
     endif()
-    # Prefer pack zlib via ZLIB_ROOT (full path to libz.a) — not CMAKE_PREFIX_PATH.
+    # Prefer pack zlib via ZLIB_ROOT — deps/ (1.0.9+) then legacy pack root.
+    # Never use CMAKE_PREFIX_PATH=pack on Windows llvm-mingw (libc++ clash).
     if(NOT ZLIB_ROOT)
         foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
-            if(EXISTS "${_psx_tc_pfx}/include/zlib.h" AND
-               (EXISTS "${_psx_tc_pfx}/lib/libz.a" OR
-                EXISTS "${_psx_tc_pfx}/lib/zlib.lib"))
-                set(ZLIB_ROOT "${_psx_tc_pfx}")
+            foreach(_psx_z_root IN ITEMS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+                if(EXISTS "${_psx_z_root}/include/zlib.h" AND
+                   (EXISTS "${_psx_z_root}/lib/libz.a" OR
+                    EXISTS "${_psx_z_root}/lib/zlib.lib"))
+                    set(ZLIB_ROOT "${_psx_z_root}")
+                    break()
+                endif()
+            endforeach()
+            if(ZLIB_ROOT)
                 break()
             endif()
         endforeach()
@@ -577,8 +590,9 @@ function(psxrecomp_ensure_zlib)
     if(NOT PSX_ZLIB_FETCH)
         message(FATAL_ERROR
             "ZLIB was not found. On Windows, use a cmake-clang-v1 pack that "
-            "ships include/zlib.h + lib/libz.a (sets ZLIB_ROOT), or install "
-            "zlib-devel / mingw-w64-zlib, or configure with -DPSX_ZLIB_FETCH=ON.")
+            "ships deps/include/zlib.h + deps/lib/libz.a (sets ZLIB_ROOT), or "
+            "install zlib-devel / mingw-w64-zlib, or configure with "
+            "-DPSX_ZLIB_FETCH=ON.")
     endif()
     message(STATUS
         "psxrecomp: ZLIB not in ZLIB_ROOT / system paths; "
