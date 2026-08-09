@@ -522,11 +522,15 @@ def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
             path_prefixes.append(py_dir)
         os.environ["RETCOMM_PYTHON"] = str(py_exe)
     if str(bin_dir) not in parts and prefix not in parts:
+<<<<<<< HEAD
         path_prefixes.append(prefix)
     if path_prefixes:
         os.environ["PATH"] = os.pathsep.join(path_prefixes) + (
             os.pathsep + cur if cur else ""
         )
+=======
+        os.environ["PATH"] = prefix + (os.pathsep + cur if cur else "")
+>>>>>>> 183ace6 (bump)
     # Host deps under deps/ (1.0.9+); legacy packs keep zlib/SDL3 at pack root.
     # Never put pack root on CMAKE_PREFIX_PATH — mingw include/ poisons libc++.
     pack_s = str(pack_root)
