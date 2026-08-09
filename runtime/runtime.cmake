@@ -97,7 +97,18 @@ if(_psx_sdl_backend STREQUAL "SDL3")
     option(PSX_SDL3_FETCH
         "Fetch the pinned SDL3 release when no system SDL3 package is found"
         ON)
+    # cmake-clang-v1 1.0.7+ ships static SDL3 under the pack root. Prefer that
+    # over FetchContent (avoids hundreds of Windows try_compile probes).
+    foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR)
+        if(DEFINED ENV{${_psx_tc_env}} AND NOT "$ENV{${_psx_tc_env}}" STREQUAL "")
+            list(PREPEND CMAKE_PREFIX_PATH "$ENV{${_psx_tc_env}}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
     find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3)
+    if(TARGET SDL3::SDL3)
+        message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
+    endif()
     if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
         include(FetchContent)
         # The fetched dependency is private to this build, so link it directly
