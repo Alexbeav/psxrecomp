@@ -9033,6 +9033,7 @@ int main(int argc, char** argv) {
             g_fmv_skip_no_xa_hold  = gc.runtime.video_fmv_skip_no_xa_hold;
             g_ws_anchor_addr   = gc.ws_sprite_anchor_addr;
             g_ws_hud_sprt      = gc.ws_hud_sprt_squash;
+            gpu_ws_set_auto_ui_squash(gc.ws_auto_ui_squash ? 1 : 0);
             /* [widescreen] full_2d — opt a pure-2D sprite game (MMX6) into the
              * widescreen present path. Applied to the GPU layer up front so the
              * ws engage at game entry classifies every frame as gameplay. */
@@ -9087,6 +9088,8 @@ int main(int argc, char** argv) {
              * cleanup of synthetic native-wide margins. */
             gpu_ws_set_clear_reveal(gc.ws_clear_reveal ? 1 : 0);
             gpu_ws_set_cull_guard_pixels(gc.ws_cull_guard_pixels);
+            gpu_ws_set_activation_guard_pixels(
+                gc.ws_cull_activation_guard_pixels);
             gpu_ws_set_explicit_cull_sites(
                 gc.ws_cull_bias_sites.data(), (int)gc.ws_cull_bias_sites.size(),
                 gc.ws_cull_slti_sites.data(), (int)gc.ws_cull_slti_sites.size(),
@@ -9104,6 +9107,74 @@ int main(int argc, char** argv) {
                 gc.ws_cull_plane_nx_sites.data(), (int)gc.ws_cull_plane_nx_sites.size());
             gpu_ws_set_xclip_load_sites(
                 gc.ws_cull_xclip_load_sites.data(), (int)gc.ws_cull_xclip_load_sites.size());
+            {
+                std::vector<uint32_t> addresses, expected, results;
+                addresses.reserve(gc.ws_cull_keep_sites.size());
+                expected.reserve(gc.ws_cull_keep_sites.size());
+                results.reserve(gc.ws_cull_keep_sites.size());
+                for (const auto& site : gc.ws_cull_keep_sites) {
+                    addresses.push_back(site.address);
+                    expected.push_back(site.expected);
+                    results.push_back(site.result);
+                }
+                gpu_ws_set_cull_keep_sites(
+                    addresses.data(), expected.data(), results.data(),
+                    (int)addresses.size());
+            }
+            {
+                std::vector<uint32_t> addresses, expected;
+                addresses.reserve(gc.ws_cull_angle_sites.size());
+                expected.reserve(gc.ws_cull_angle_sites.size());
+                for (const auto& site : gc.ws_cull_angle_sites) {
+                    addresses.push_back(site.address);
+                    expected.push_back(site.expected);
+                }
+                gpu_ws_set_angle_sites(
+                    addresses.data(), expected.data(), (int)addresses.size());
+            }
+            {
+                std::vector<uint32_t> addresses, expected, thresholds;
+                std::vector<uint32_t> object_regs, x_regs, z_regs, y_regs;
+                std::vector<uint32_t> queue_guards;
+                addresses.reserve(gc.ws_aspect_cone.sites.size());
+                expected.reserve(gc.ws_aspect_cone.sites.size());
+                thresholds.reserve(gc.ws_aspect_cone.sites.size());
+                object_regs.reserve(gc.ws_aspect_cone.sites.size());
+                x_regs.reserve(gc.ws_aspect_cone.sites.size());
+                z_regs.reserve(gc.ws_aspect_cone.sites.size());
+                y_regs.reserve(gc.ws_aspect_cone.sites.size());
+                queue_guards.reserve(gc.ws_aspect_cone.sites.size());
+                const auto effective_reg = [](uint32_t site_reg,
+                                              uint32_t default_reg) {
+                    return site_reg == 0xFFFFFFFFu
+                        ? default_reg : site_reg;
+                };
+                for (const auto& site : gc.ws_aspect_cone.sites) {
+                    addresses.push_back(site.address);
+                    expected.push_back(site.expected);
+                    thresholds.push_back(site.cosine_threshold);
+                    object_regs.push_back(effective_reg(
+                        site.object_reg, gc.ws_aspect_cone.object_reg));
+                    x_regs.push_back(effective_reg(
+                        site.x_reg, gc.ws_aspect_cone.x_reg));
+                    z_regs.push_back(effective_reg(
+                        site.z_reg, gc.ws_aspect_cone.z_reg));
+                    y_regs.push_back(effective_reg(
+                        site.y_reg, gc.ws_aspect_cone.y_reg));
+                    queue_guards.push_back(site.queue_guard ? 1u : 0u);
+                }
+                gpu_ws_set_aspect_cone(
+                    addresses.data(), expected.data(), thresholds.data(),
+                    object_regs.data(), x_regs.data(), z_regs.data(),
+                    y_regs.data(), queue_guards.data(), (int)addresses.size(),
+                    gc.ws_aspect_cone.forward_addr,
+                    gc.ws_aspect_cone.object_type_offset,
+                    gc.ws_aspect_cone.hysteresis_pixels,
+                    gc.ws_aspect_cone.queue_reserve,
+                    gc.ws_aspect_cone.queue_count_addrs.data(),
+                    gc.ws_aspect_cone.queue_capacities.data(),
+                    gc.ws_aspect_cone.queue_type_masks.data());
+            }
             gte_ws_configure_dome_sites(
                 gc.ws_dome_call_sites.data(), (int)gc.ws_dome_call_sites.size());
             /* [widescreen.cull] per-game gates + signature immediates for the
