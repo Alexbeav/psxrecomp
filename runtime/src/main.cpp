@@ -71,6 +71,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
+#include "disc_path.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
 
@@ -10737,6 +10738,29 @@ session_reboot:
         std::fprintf(stdout, "psxrecomp: SPU float-shadow enabled (verified-enhancement)\n");
     spu_init();
     cdrom_init(disc_path_str.empty() ? NULL : disc_path_str.c_str());
+
+    /* A disc was requested but nothing mounted. cdrom_init() is non-fatal here
+     * (BIOS-only targets run with an empty drive on purpose), so without this
+     * check the game would boot into an empty drive and render NOTHING -- the
+     * "black screen on a .cue that works as a .bin" symptom. The earlier
+     * validate_disc_for_launch() pass cannot catch it: identify_disc() reads
+     * the data track FILE directly, so a cue whose sheet the mounting reader
+     * rejects still shows a green "Disc verified" badge. Report the actual
+     * failure instead of leaving the player staring at black. */
+    if (!disc_path_str.empty() && !cdrom_has_disc()) {
+        const PSXRecompV4::DiscPathResolution r =
+            PSXRecompV4::resolve_disc_path(disc_path_str);
+        std::string detail =
+            "The disc image was found and verified, but the CD-ROM drive could "
+            "not mount it, so the game would boot with an empty drive.\n\n"
+            "Selected:\n" + disc_path_str;
+        if (r.mount != r.picked) detail += "\nMounted as:\n" + r.mount.string();
+        if (!r.note.empty())     detail += "\n\n" + r.note;
+        detail += "\n\nIf this is a .cue, check that every FILE line it names "
+                  "exists next to it; selecting the .bin directly also works.";
+        launcher_warning("Disc Could Not Be Mounted", detail);
+        return 1;
+    }
     for (const auto& route : warm_cd_routes) {
         cdrom_register_warm_route(route.arm_lba, route.lbas.data(),
                                   (int)route.lbas.size(),
