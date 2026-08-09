@@ -9527,6 +9527,19 @@ int main(int argc, char** argv) {
         }
     }
 
+    /* Scan <exe_dir>/mods and load persisted enable/option state. Everything
+     * downstream — the launcher Mods tab (gi.mods), disc patching, the
+     * psx_mod_set_* callbacks — is inert until this runs. */
+    {
+        std::string mod_error;
+        if (!PSXRecompV4::mod_runtime_initialize(
+                exe_dir_from_argv(argv[0]) / "mods", game_id,
+                game_entry_pc, text_guard_exe_path, &mod_error)) {
+            std::fprintf(stderr, "psxrecomp: mods unavailable: %s\n",
+                         mod_error.c_str());
+        }
+    }
+
 #if defined(RECOMP_LAUNCHER)
     launcher_boot_timing_mark("host:pre_overlay_worker");
 #endif
@@ -9985,6 +9998,7 @@ int main(int argc, char** argv) {
             g_lnch_argv0           = argv[0];
             gi.disc_verify     = ae_disc_verify;
             gi.memcard_inspect = ae_memcard_inspect;
+            gi.mods            = PSXRecompV4::mod_runtime_launcher_provider();
             gi.bios_verify     = ae_bios_verify;
 #if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
@@ -10432,7 +10446,17 @@ int main(int argc, char** argv) {
 
     std::string bios_path_str    = resolved_bios.string();
     std::string memcard_dir_str  = memcard_dir.string();
-    std::string disc_path_str    = resolved_disc.string();
+    /* A disc-patching mod builds a private patched image; mount that instead of
+     * the stock disc, leaving the user's original untouched (master behaviour). */
+    const std::filesystem::path& mod_disc =
+        PSXRecompV4::mod_runtime_effective_disc_path();
+    std::string disc_path_str =
+        (mod_disc.empty() ? resolved_disc : mod_disc).string();
+    if (!mod_disc.empty()) {
+        std::fprintf(stdout,
+            "psxrecomp: stock disc remains %s; mounting private mod cache %s\n",
+            resolved_disc.string().c_str(), mod_disc.string().c_str());
+    }
 
 session_reboot:
     /* Rematch after lobby soft-return re-enters here with updated net_cfg. */
@@ -10647,6 +10671,9 @@ session_reboot:
     if (game_config_path)
         arm_text_image_guard(text_guard_exe_path, text_guard_load_addr,
                              disc_path_str);
+    /* Executable/overlay patches from enabled mods, applied once the guard is
+     * armed so a patched image is never mistaken for a divergent one. */
+    mod_runtime_enable_disc_patches();
     {
         int divisor = 1; /* default: authentic 1x timing */
         if (disc_speed == "instant") divisor = 0;
@@ -11497,6 +11524,7 @@ soft_return_lobby:
         gi.resume_netplay_endpoint = ae_np_lan_endpoint_cstr();
         gi.disc_verify = ae_disc_verify;
         gi.memcard_inspect = ae_memcard_inspect;
+        gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
         gi.pad_mode_selectable = ctrl_lock_mode ? 0 : 1;
         gi.allow_hybrid = ctrl_allow_hybrid ? 1 : 0;
         gi.locked_pad_mode = ctrl_locked_mode[0];
