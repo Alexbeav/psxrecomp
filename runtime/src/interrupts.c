@@ -1125,6 +1125,12 @@ void psx_check_interrupts(CPUState* cpu) {
      * waiting for it to re-appear.  If we tick here, the IRQ fires
      * during the delay loop BEFORE the clear, and the BIOS never
      * sees it. */
+    /* Ape LOAD: libcard may poll nest/busy in RAM with no SIO MMIO, so
+     * sio_tick never runs. Throttled nest-repair pump only. */
+    if ((total_checks & 0xFFu) == 0) {
+        extern void sio_ape_card_unstick_pump(void);
+        sio_ape_card_unstick_pump();
+    }
 
     interrupts_service_scheduled_events();
 
@@ -1905,6 +1911,10 @@ irq_deliver_eval:
              * starve a target thread by re-entering the same VBlank EPC forever. */
             uint32_t epc_phys = g_exception_real_epc & 0x1FFFFFFFu;
             int low_kernel_epc = (epc_phys < 0x00010000u);
+            /* Low BIOS/kernel code is already scheduler code; deferring it can
+             * starve a target thread by re-entering the same VBlank EPC forever.
+             * (Card-guard overrides were tried for Ape LOAD and did not help —
+             * tip already defers like master; the hang is post-probe arming.) */
             int can_defer = defer_switch_enabled() && !low_kernel_epc && !at_outermost &&
                             g_exception_real_epc != 0u &&
                             (g_exception_real_epc & 0x3u) == 0u &&

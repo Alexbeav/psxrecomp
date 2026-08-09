@@ -6406,6 +6406,41 @@ static void handle_imask_trace(int id, const char *json)
     send_fmt("]}\n");
 }
 
+/* Post-probe bit7 → TX 0x57 handoff (Ape Escape LOAD). */
+static void handle_card_handoff(int id, const char *json)
+{
+    int count = json_get_int(json, "count", 64);
+    int idx = 0, total = 0;
+    const SioCardHandoffEntry *buf = sio_get_card_handoff(&idx, &total);
+    int cap = sio_card_handoff_cap();
+    int avail = total < cap ? total : cap;
+    if (count > avail) count = avail;
+    if (count < 0) count = 0;
+
+    int start = count ? (idx - count + cap) % cap : 0;
+    static const char *kinds[] = {
+        "?", "probe_abort", "b7_set", "b7_clear", "tx", "card_ack", "unstick",
+        "select_flush_ack", "ack_deferred_istat7", "nest_irq_pulse", "b7_hold"
+    };
+    send_fmt("{\"id\":%d,\"ok\":true,\"armed\":%d,\"total\":%d,\"count\":%d,\"entries\":[",
+             id, sio_card_handoff_armed(), total, count);
+    for (int i = 0; i < count; i++) {
+        const SioCardHandoffEntry *e = &buf[(start + i) % cap];
+        const char *k = (e->kind < (uint8_t)(sizeof(kinds) / sizeof(kinds[0])))
+                            ? kinds[e->kind] : "?";
+        if (i) send_fmt(",");
+        send_fmt("{\"kind\":\"%s\",\"byte\":\"0x%02X\",\"imask\":\"0x%03X\","
+                 "\"pc\":\"0x%08X\",\"func\":\"0x%08X\","
+                 "\"a6c10\":\"0x%08X\",\"b4e30\":\"0x%08X\",\"b4e38\":\"0x%08X\","
+                 "\"cyc\":%llu}",
+                 k, e->byte, e->imask,
+                 (unsigned)e->pc, (unsigned)e->func,
+                 (unsigned)e->a6c10, (unsigned)e->b4e30, (unsigned)e->b4e38,
+                 (unsigned long long)e->cyc);
+    }
+    send_fmt("]}\n");
+}
+
 static void handle_sio_trace(int id, const char *json)
 {
     int count = json_get_int(json, "count", 64);
@@ -12694,6 +12729,7 @@ static const CmdEntry s_commands[] = {
     { "evcb_walk_dump",    handle_evcb_walk_dump },
     { "evcb_walk_stats",   handle_evcb_walk_stats },
     { "imask_trace",       handle_imask_trace },
+    { "card_handoff",      handle_card_handoff },
     { "watch",             handle_watch },
     { "unwatch",           handle_unwatch },
     /* wtrace — normalized verb set (parity contract with psx-beetle).
