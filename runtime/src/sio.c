@@ -13,6 +13,7 @@
  */
 
 #include "sio.h"
+#include "psx_bss.h"
 #include "memcard.h"
 #include "debug_server.h"
 #include "event_ring.h"
@@ -48,7 +49,7 @@ static uint16_t pad_buttons[PSX_MAX_PLAYERS] = { [0 ... PSX_MAX_PLAYERS - 1] = 0
 
 /* Per-logical-pad type + analog stick state. analog: 0=digital pad (poll id
  * 0x41), 1=DualShock/analog (poll id 0x73). Sticks are 0..255, 0x80 centred. */
-static uint8_t pad_analog[PSX_MAX_PLAYERS];
+static PSX_BSS uint8_t pad_analog[PSX_MAX_PLAYERS];
 static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
     [0 ... PSX_MAX_PLAYERS - 1] = { 0x80, 0x80, 0x80, 0x80 }
 }; /* lx,ly,rx,ry */
@@ -60,8 +61,8 @@ static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
 static uint8_t pad_rumble_map[PSX_MAX_PLAYERS][6] = {
     [0 ... PSX_MAX_PLAYERS - 1] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
 };
-static uint8_t pad_rumble_small[PSX_MAX_PLAYERS];
-static uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
+static PSX_BSS uint8_t pad_rumble_small[PSX_MAX_PLAYERS];
+static PSX_BSS uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
 
 /* Analog-mode lock, per logical pad. A real DualShock's config command 0x44
  * 0x..02/0x03 locks/unlocks the mode (dualshock.cpp:714-725); a locked pad
@@ -70,7 +71,7 @@ static uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
  * LOCKS the mode the hybrid auto-flip must not override it — else the type
  * flips underneath a game that pinned DualShock, the exact desync the
  * deferred-request machinery cannot otherwise prevent. */
-static uint8_t analog_mode_locked[PSX_MAX_PLAYERS];
+static PSX_BSS uint8_t analog_mode_locked[PSX_MAX_PLAYERS];
 
 /* Which logical pads have devices connected (bit i = pad i). Fits 5 pads. */
 static uint8_t pad_connected = 0;
@@ -103,7 +104,7 @@ typedef enum {
 static PadState pad_state = PAD_IDLE;
 static int selected_slot = 0;          /* physical SIO slot (CTRL bit13): 0 or 1 */
 static int pad_active_logical = 0;     /* logical pad for single-pad / config cmds */
-static uint8_t pad_response[PAD_RESPONSE_MAX];
+static PSX_BSS uint8_t pad_response[PAD_RESPONSE_MAX];
 static uint8_t pad_response_len = 0;
 static uint8_t pad_response_idx = 0;
 static uint8_t pad_current_cmd = 0;
@@ -120,7 +121,7 @@ static int mtap_returned[2] = { MTAP_NEXT_SLOT_A, MTAP_NEXT_SLOT_A };
  * Faking "always in config" (constant 0xF3) wedges games that probe the pad
  * type via 0x43 before polling — e.g. Mega Man X6 loops 01 43 00 00 forever
  * and never reaches 0x42. (MMX6 ISSUES.md #2.) */
-static uint8_t pad_in_config[PSX_MAX_PLAYERS];
+static PSX_BSS uint8_t pad_in_config[PSX_MAX_PLAYERS];
 
 /* Whether the pad on a logical slot is a config-capable DualShock (1) or a
  * plain digital controller (0). A real SCPH-1080 digital pad (poll id 0x41)
@@ -389,7 +390,7 @@ static int sio_tx_gated = 0;        /* writes gated by missing TX_EN */
 static uint16_t sio_last_ctrl_on_tx = 0; /* CTRL at last TX write */
 
 /* ---- SIO byte-level trace ring buffer ---- */
-static SioTraceEntry sio_trace_buf[SIO_TRACE_CAP];
+static PSX_BSS SioTraceEntry sio_trace_buf[SIO_TRACE_CAP];
 static int sio_trace_idx = 0;       /* next write position */
 static uint32_t sio_trace_seq = 0;  /* monotonic sequence number */
 
@@ -504,7 +505,7 @@ static void sr_record(uint8_t kind, uint8_t tx, uint8_t rx) {
 
 
 /* ---- Card transaction ring buffer ---- */
-static SioTxnEntry sio_txn_buf[SIO_TXN_CAP];
+static PSX_BSS SioTxnEntry sio_txn_buf[SIO_TXN_CAP];
 static int       sio_txn_idx = 0;        /* next-write slot */
 static uint32_t  sio_txn_seq = 0;        /* monotonic id of next-to-close */
 static int       sio_txn_open = 0;       /* 1 when a txn is in progress */
@@ -563,7 +564,7 @@ static void txn_close(uint8_t end_reason, uint8_t terminal_state, uint32_t func)
 }
 
 /* ---- SIO IRQ #7 delivery ring ---- */
-static SioIrqEntry sio_irq_buf[SIO_IRQ_RING_CAP];
+static PSX_BSS SioIrqEntry sio_irq_buf[SIO_IRQ_RING_CAP];
 static int       sio_irq_idx = 0;
 static uint32_t  sio_irq_seq = 0;
 

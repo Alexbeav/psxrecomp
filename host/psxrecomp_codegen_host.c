@@ -370,12 +370,91 @@ static int find_on_path(const char* name, char* out, size_t cap) {
     return 0;
 }
 
+/* resolve_toolchain_bin is defined later; pack python lives beside bin/. */
+static int resolve_toolchain_bin(char* out, size_t cap);
+
+/* cmake-clang-v1 1.0.6+: python-build-standalone under <pack>/python/. */
+static int python_exe_under_py_root(const char* py_root, char* out, size_t cap) {
+    char cand[1200];
+    if (!py_root || !py_root[0] || !path_is_dir(py_root))
+        return 0;
+#if defined(_WIN32)
+    if (join_path(cand, sizeof(cand), py_root, "python.exe") &&
+        path_is_file(cand) && !python_path_is_store(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+    if (join_path(cand, sizeof(cand), py_root, "python3.exe") &&
+        path_is_file(cand) && !python_path_is_store(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+#endif
+    if (join_path(cand, sizeof(cand), py_root, "bin/python3") &&
+        path_is_file(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+    if (join_path(cand, sizeof(cand), py_root, "bin/python") &&
+        path_is_file(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+#if defined(__APPLE__)
+#if defined(__aarch64__)
+    if (join_path(cand, sizeof(cand), py_root,
+                  "aarch64-apple-darwin/bin/python3") &&
+        path_is_file(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+#else
+    if (join_path(cand, sizeof(cand), py_root,
+                  "x86_64-apple-darwin/bin/python3") &&
+        path_is_file(cand)) {
+        snprintf(out, cap, "%s", cand);
+        return 1;
+    }
+#endif
+#endif
+    return 0;
+}
+
+static int find_toolchain_python(char* out, size_t cap) {
+    char bin[1400], pack[1400], py_root[1400];
+    if (!resolve_toolchain_bin(bin, sizeof(bin)))
+        return 0;
+    if (!dirname_copy(pack, sizeof(pack), bin) || !pack[0])
+        return 0;
+    if (!join_path(py_root, sizeof(py_root), pack, "python"))
+        return 0;
+    return python_exe_under_py_root(py_root, out, cap);
+}
+
+static int python_env_usable(const char* env) {
+    if (!env || !env[0] || !path_is_file(env))
+        return 0;
+#if defined(_WIN32)
+    if (python_path_is_store(env))
+        return 0;
+#endif
+    return 1;
+}
+
+/* Prefer portable pack CPython (RetComM / cmake-clang-v1), then system. */
 static int find_python(char* out, size_t cap) {
-    const char* env = getenv("PYTHON");
-    if (env && env[0] && path_is_file(env)) {
+    const char* env = getenv("RETCOMM_PYTHON");
+    if (python_env_usable(env)) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+    env = getenv("PYTHON");
+    if (python_env_usable(env)) {
+        snprintf(out, cap, "%s", env);
+        return 1;
+    }
+    if (find_toolchain_python(out, cap))
+        return 1;
 #if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
@@ -390,7 +469,7 @@ static int find_python(char* out, size_t cap) {
     if (capture_cmd_first_line(
             "python -c \"import sys; print(sys.executable)\"", resolved,
             sizeof(resolved)) &&
-        path_is_file(resolved)) {
+        path_is_file(resolved) && !python_path_is_store(resolved)) {
         snprintf(out, cap, "%s", resolved);
         return 1;
     }
@@ -399,8 +478,13 @@ static int find_python(char* out, size_t cap) {
     const char* candidates[] = {"python3", "python"};
 #endif
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
-        if (find_on_path(candidates[i], out, cap))
-            return 1;
+        if (!find_on_path(candidates[i], out, cap))
+            continue;
+#if defined(_WIN32)
+        if (python_path_is_store(out))
+            continue;
+#endif
+        return 1;
     }
     return 0;
 }
@@ -678,21 +762,55 @@ static void activate_toolchain_path(void) {
     g_toolchain_bin[0] = '\0';
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
+    /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
+    pack_root[0] = '\0';
+    (void)dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin);
+
+    /* Prepend pack python/ (Windows) or python/bin (Unix), then bin/. */
+    char py_path_dir[1400];
+    char py_exe[1400];
+    py_path_dir[0] = '\0';
+    py_exe[0] = '\0';
+    if (pack_root[0]) {
+        char py_root[1400];
+        if (join_path(py_root, sizeof(py_root), pack_root, "python") &&
+            python_exe_under_py_root(py_root, py_exe, sizeof(py_exe))) {
+#if defined(_WIN32)
+            /* PBS Windows: <pack>/python/python.exe */
+            snprintf(py_path_dir, sizeof(py_path_dir), "%s", py_root);
+#else
+            /* PBS Unix: <pack>/python/bin/python3 */
+            if (!dirname_copy(py_path_dir, sizeof(py_path_dir), py_exe))
+                py_path_dir[0] = '\0';
+#endif
+        }
+    }
+
     const char* old = getenv("PATH");
 #if defined(_WIN32)
     char neu[8192];
-    snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ";" : "",
-             old ? old : "");
+    if (py_path_dir[0])
+        snprintf(neu, sizeof(neu), "%s;%s%s%s", py_path_dir, g_toolchain_bin,
+                 old ? ";" : "", old ? old : "");
+    else
+        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ";" : "",
+                 old ? old : "");
     _putenv_s("PATH", neu);
+    if (py_exe[0])
+        _putenv_s("RETCOMM_PYTHON", py_exe);
 #else
     char neu[8192];
-    snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ":" : "",
-             old ? old : "");
+    if (py_path_dir[0])
+        snprintf(neu, sizeof(neu), "%s:%s%s%s", py_path_dir, g_toolchain_bin,
+                 old ? ":" : "", old ? old : "");
+    else
+        snprintf(neu, sizeof(neu), "%s%s%s", g_toolchain_bin, old ? ":" : "",
+                 old ? old : "");
     setenv("PATH", neu, 1);
+    if (py_exe[0])
+        setenv("RETCOMM_PYTHON", py_exe, 1);
 #endif
-    /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
-    if (dirname_copy(pack_root, sizeof(pack_root), g_toolchain_bin) &&
-        pack_root[0]) {
+    if (pack_root[0]) {
 #if defined(_WIN32)
         _putenv_s("RETCOMM_TOOLCHAIN_DIR", pack_root);
         _putenv_s("ZLIB_ROOT", pack_root);
@@ -3061,6 +3179,18 @@ static int host_prepare_generate(const char* source_path, char* out_path,
         return 0;
     }
     activate_toolchain_path();
+    if (!find_python(g_python, sizeof(g_python))) {
+        /* First-run / pruned cache: page 0 normally installed the pack; heal. */
+        if (!host_ensure_toolchain(on_progress, progress_ctx, err_msg, err_cap))
+            return 0;
+        activate_toolchain_path();
+        if (!find_python(g_python, sizeof(g_python))) {
+            snprintf(err_msg, err_cap,
+                     "No usable Python. Install the portable toolchain step "
+                     "(includes CPython under python/), or set RETCOMM_PYTHON.");
+            return 0;
+        }
+    }
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
 
@@ -3274,8 +3404,15 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
     if (!host_ensure_toolchain(on_progress, progress_ctx, err_msg, err_cap))
         return 0;
 
-#if defined(_WIN32)
     activate_toolchain_path();
+    if (!find_python(g_python, sizeof(g_python))) {
+        snprintf(err_msg, err_cap,
+                 "No usable Python. Install the portable toolchain step "
+                 "(includes CPython under python/), or set RETCOMM_PYTHON.");
+        return 0;
+    }
+
+#if defined(_WIN32)
     if (on_progress)
         on_progress(progress_ctx, 0.4f,
                     force_pgo ? "Scheduling Windows PGO optimize after exit…"
@@ -3296,8 +3433,6 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         on_progress(progress_ctx, 0.05f,
                     force_pgo ? "Starting FMV PGO optimize…"
                               : "Starting rebuild (cmake)…");
-
-    activate_toolchain_path();
 
     char disc_arg_storage[1100];
     char* argv[40];
@@ -3670,16 +3805,13 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
         return;
     if (!path_is_file(g_game_toml))
         return;
-    if (!find_python(g_python, sizeof(g_python))) {
-        if (psxrecomp_codegen_host_sources_missing(cfg) || force_setup) {
-            gi->needs_setup = 1;
-            gi->prepare_required_before_continue = 1;
-        }
-        return;
-    }
 
+    /* Wire prepare/rebuild even when Python is not on PATH yet — wizard page 0
+     * installs cmake-clang-v1 (1.0.6+ ships portable CPython under python/).
+     * generate/rebuild re-resolve after activate_toolchain_path. */
     g_ready = 1;
     activate_toolchain_path();
+    (void)find_python(g_python, sizeof(g_python));
     gi->persist_setup = host_persist_setup;
     gi->persist_setup_ctx = NULL;
     gi->prepare_with_progress = host_prepare_generate;

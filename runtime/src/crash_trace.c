@@ -36,6 +36,7 @@
 #include <time.h>
 
 #include "cpu_state.h"
+#include "psx_bss.h"
 #include "crash_trace.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */

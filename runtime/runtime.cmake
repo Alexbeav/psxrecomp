@@ -1257,6 +1257,15 @@ function(psxrecomp_add_runtime_target target)
                        "gpu_vk_renderer.c builds as an inert stub")
     endif()
 
+    # Prefer BSS for zero-init data. MinGW+LTO has emitted multi‑MiB rings into
+    # .rdata as stored zeros (~150MiB MotK .exe bloat); pair with PSX_BSS on the
+    # largest arrays (see runtime/include/psx_bss.h).
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-fzero-initialized-in-bss>
+            $<$<COMPILE_LANGUAGE:CXX>:-fzero-initialized-in-bss>)
+    endif()
+
     if(MINGW)
         target_link_options(${target} PRIVATE -Wl,--stack,67108864)
         # No console window in Release MinGW builds.
