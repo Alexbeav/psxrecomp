@@ -13,6 +13,42 @@
 
 #include "psx_netplay_sched.h"
 
+#if !defined(PSX_HAS_RECOMP_NET)
+/* Single-player / PSX_NETPLAY=OFF: no recomp-net. Match psx_netplay_rb.c. */
+void np_sched_bind(const PsxNpSchedBridge *bridge) { (void)bridge; }
+uint32_t np_sched_wire_for_sim(uint32_t sim_tick) { return sim_tick; }
+int np_sched_real_delay_enabled(void) { return 0; }
+void np_sched_sync_delay_from_session(void) {}
+int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
+{
+    (void)sim;
+    (void)wire;
+    (void)st;
+    return 0;
+}
+int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
+                            const RNetSessionStats *st, int pred,
+                            const char **reason_out)
+{
+    (void)slot;
+    (void)sim;
+    (void)wire;
+    (void)st;
+    (void)pred;
+    if (reason_out)
+        *reason_out = "off";
+    return 0;
+}
+void np_sched_note_remote_hit(void) {}
+void np_sched_post_admit(int any_invent) { (void)any_invent; }
+void np_sched_set_admit_stall(const char *tag) { (void)tag; }
+void np_sched_clear_admit_stall(void) {}
+const char *np_sched_admit_stall_tag(void) { return ""; }
+void np_sched_note_mispredict(uint32_t age) { (void)age; }
+void np_sched_note_episode_boundary(void) {}
+void np_sched_arm_absurd_invent_catchup(void) {}
+#else /* PSX_HAS_RECOMP_NET */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1876,3 +1912,5 @@ void np_sched_post_admit(int any_invent)
         np_cross_os_maybe_log(now, st.sim_tick, &st);
     }
 }
+
+#endif /* PSX_HAS_RECOMP_NET */

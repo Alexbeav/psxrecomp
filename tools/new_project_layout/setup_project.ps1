@@ -175,8 +175,17 @@ if (-not $useRecompUi) {
     $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$true `
         -Question "Enable first-run setup wizard + Generate & rebuild?"
     if (-not $interactive -and -not $NoWizard) { $useWizard = $true }
-    $useNetplay = Resolve-BoolOpt -Enable:$EnableNetplay -No:$NoNetplay -PromptDefault:$false `
-        -Question "Enable netplay UI (needs nested recomp-net)?"
+    # 1-player titles cannot use multiplayer netplay — skip prompts entirely.
+    if ($Players -eq 1) {
+        if ($EnableNetplay) {
+            Write-Warning "-EnableNetplay ignored for 1-player title."
+        }
+        $useNetplay = $false
+        Write-Host "  (1-player title — netplay skipped)"
+    } else {
+        $useNetplay = Resolve-BoolOpt -Enable:$EnableNetplay -No:$NoNetplay -PromptDefault:$false `
+            -Question "Enable netplay UI (needs nested recomp-net)?"
+    }
 }
 
 $NetplayLobbyWs = ""
@@ -254,6 +263,8 @@ set(PSX_RECOMP_UI OFF CACHE BOOL
 }
 
 if ($useNetplay) {
+    # PSX_NETPLAY defaults RNET_ENABLE_ICE=ON; recomp-net FetchContents
+    # libjuice via pinned URL (not git) so RetComM AppImage builds configure.
     Set-Content -Encoding UTF8 -Path $NetplayBlockFile -Value @"
 if(EXISTS "`${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
     set(PSX_NETPLAY ON CACHE BOOL
@@ -349,6 +360,24 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Root "seeds") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "launcher_assets\img") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "scripts") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "tools") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "mods\preloaded\packages") | Out-Null
+# Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
+@'
+# Preloaded mods
+
+Ship reviewed, default-disabled packages here:
+
+```text
+packages/<package-id>/<version>/
+  manifest.toml
+  …
+```
+
+Build wiring copies `mods/preloaded` next to the game executable as `mods/`.
+Install player `.psxmod` archives through the launcher Mods manager instead of
+committing them here. See `psxrecomp/docs/MOD_PACKAGES.md`.
+'@ | Set-Content -Encoding utf8 (Join-Path $Root "mods\preloaded\README.md")
+New-Item -ItemType File -Force -Path (Join-Path $Root "mods\preloaded\packages\.gitkeep") | Out-Null
 Copy-Item (Join-Path $ScriptDir "sync_symbols.py") (Join-Path $Root "tools\sync_symbols.py")
 
 Write-Host "== Adding submodules =="
@@ -513,7 +542,7 @@ Push-Location $Root
 try { python tools/sync_symbols.py --game $GameName } catch { Write-Warning "sync_symbols failed" }
 Pop-Location
 
-git add CMakeLists.txt game.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools framework_pins.txt symbols.toml psx_symbols.h 2>$null
+git add CMakeLists.txt game.toml codegen_setup.c codegen_setup.h .gitignore VERSION README.md seeds scripts tools mods framework_pins.txt symbols.toml psx_symbols.h 2>$null
 if (Test-Path (Join-Path $Root ".github\workflows")) {
     git add .github/workflows 2>$null
 }

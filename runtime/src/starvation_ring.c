@@ -10,6 +10,7 @@
  * be inspected with grep/jq even after the process terminated. */
 
 #include "starvation_ring.h"
+#include "psx_bss.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include <stdio.h>
@@ -43,7 +44,7 @@ extern int psx_get_in_exception(void);
 
 #if STARVATION_RING_ENABLED
 
-static StarvationEntry s_ring[STARVATION_RING_CAP];
+static PSX_BSS StarvationEntry s_ring[STARVATION_RING_CAP];
 static uint64_t        s_seq = 0;
 static uint64_t        s_last_heartbeat_us = 0;
 static int             s_dump_done = 0;

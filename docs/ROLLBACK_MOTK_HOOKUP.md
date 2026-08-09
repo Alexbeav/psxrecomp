@@ -323,6 +323,14 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
       peers digested different instr points. Fix: under netplay, queue the
       GPU vblank callback and flush in `psx_check_interrupts` (BB edge);
       clear deferred pending on snap resync. Offline still presents immediately.
+- [x] **Card/save coexistence (BB-edge present hold):** BB-edge
+      `finish_frame` mid memcard busy-wait wedges Ape Escape's card-check
+      scene (empty starfield) and the same class of titles. Hold
+      `gpu_vblank_flush_present` while `sio_hold_present_for_card()` (SIO card
+      FSM busy + progress, stale escape ~10 VB) and while a deferred
+      cooperative ChangeThread is pending. Keep `s_present_pending`; MotK
+      menu-wait drain still runs outside card/save traffic. Do **not** remove
+      BB-edge commit — MotK sealed resim still needs it.
 - [x] **Menu wait resim phase (CD54↔CDA0):** after present-guard fix, ep1
       matched fin@load then forked fin@load+1 (`r2=1` vs countdown, cyc±5).
       Cause: flush_resume armed deferred present for latched I_STAT → phantom

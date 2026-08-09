@@ -701,18 +701,45 @@ static uint32_t execute_ch2_gpu(void) {
         /* Linked-list mode: follow ordering table in RAM.
          * Each node: bits 24-31 = number of words following header,
          *            bits 0-23  = next node address (0xFFFFFF = end).
-         * The words following the header are sent to GP0. */
-        gpu_ws_begin_linked_list();
-        uint32_t addr =
-            psx_mod_gpu_dma_resolve_address(channels[2].madr);
-        gpu_ws_prepass_linked_list(addr);
-        uint32_t safety = 0;
-        const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
+         * The words following the header are sent to GP0.
+         *
+         * PSX_ND_SIB_FLAP_LAST=1 (opt-in): skip additive PolyGT3 (GP0 0x36)
+         * whose signed 11-bit SX max is >= 280 AND whose OT rank is in the ND
+         * digit-rain band (~1832). Was a flap-overpaint workaround; after the
+         * AVSZ3 MAC0 fix it shreds the crate glow fountain — leave unset/0.
+         *
+         * OT-rank gate is mandatory: the same SX filter matches menu/char-select
+         * 0x36 (e.g. ot~1066) and would strip Crash face/trophy semis. Rank is
+         * the empty-node count used by gpu_set_gp0_linked_list_node.
+         *
+         * SX must be parsed as signed 11-bit (gpu.c parse_vertex). Legacy alias:
+         * PSX_ND_OT_OPAQUE_LAST. */
+        static int s_nd_flap_last = -1;
+        if (s_nd_flap_last < 0) {
+            const char *e = getenv("PSX_ND_SIB_FLAP_LAST");
+            if (!e || !*e)
+                e = getenv("PSX_ND_OT_OPAQUE_LAST");
+            s_nd_flap_last = (e && *e && *e != '0') ? 1 : 0;
+            if (s_nd_flap_last)
+                fprintf(stdout, "psxrecomp: PSX_ND_SIB_FLAP_LAST enabled\n");
+        }
 
+        gpu_ws_begin_linked_list();
+        uint32_t start_addr =
+            psx_mod_gpu_dma_resolve_address(channels[2].madr);
+        gpu_ws_prepass_linked_list(start_addr);
+        const uint32_t MAX_NODES = 0x40000; /* prevent infinite loops */
+        uint32_t last_addr = start_addr;
+        int hit_limit = 0;
+        /* Mirror gpu.c empty-node OT rank (0 after first empty header). */
+        uint32_t ot_rank = 0xffffffffu;
+
+        uint32_t addr = start_addr;
+        uint32_t safety = 0;
         for (;;) {
             if (safety++ > MAX_NODES) {
-                /* Abort this transfer — linked list has a cycle or is corrupt.
-                 * Don't crash; the shell may recover on the next frame. */
+                hit_limit = 1;
+                last_addr = addr;
                 break;
             }
 
@@ -720,29 +747,60 @@ static uint32_t execute_ch2_gpu(void) {
             uint32_t num_words = (header >> 24) & 0xFF;
             uint32_t word_addr =
                 psx_mod_gpu_dma_resolve_address(addr + 4u);
-            gpu_set_gp0_linked_list_node(addr, num_words);
-            actual_words += 1u;
 
-            for (uint32_t i = 0; i < num_words; i++) {
-                uint32_t word = psx_read_word(word_addr);
-                gpu_set_gp0_source(word_addr);
-                gpu_write_gp0(word);
-                word_addr =
-                    psx_mod_gpu_dma_resolve_address(word_addr + 4u);
+            if (num_words == 0u)
+                ot_rank = (ot_rank == 0xffffffffu) ? 0u : (ot_rank + 1u);
+
+            int emit = 1;
+            if (s_nd_flap_last && num_words >= 6u &&
+                ot_rank >= 1600u && ot_rank < 2100u) {
+                uint32_t cmd = psx_read_word(word_addr);
+                uint32_t op = (cmd >> 24) & 0xFFu;
+                if (op == 0x36u) {
+                    /* Match gpu.c parse_vertex: signed 11-bit SX. Digit-rain
+                     * packets often stash junk in the high bits of the XY word;
+                     * int16 SX mis-classifies them. Skip glow whose s11 bbox
+                     * reaches the sibling right-flap band (sx_max >= 280). */
+                    int32_t sx_max = -0x8000;
+                    for (uint32_t vi = 1; vi <= 5; vi += 2) {
+                        uint32_t xy = psx_read_word(
+                            psx_mod_gpu_dma_resolve_address(word_addr +
+                                                            vi * 4u));
+                        int32_t sx = (int32_t)(xy & 0x7FFu);
+                        if (sx & 0x400)
+                            sx -= 0x800;
+                        if (sx > sx_max)
+                            sx_max = sx;
+                    }
+                    if (sx_max >= 280)
+                        emit = 0;
+                }
             }
-            actual_words += num_words;
 
-            /* Next node */
+            if (emit) {
+                gpu_set_gp0_linked_list_node(addr, num_words);
+                actual_words += 1u;
+                for (uint32_t i = 0; i < num_words; i++) {
+                    uint32_t word = psx_read_word(word_addr);
+                    gpu_set_gp0_source(word_addr);
+                    gpu_write_gp0(word);
+                    word_addr =
+                        psx_mod_gpu_dma_resolve_address(word_addr + 4u);
+                }
+                actual_words += num_words;
+            }
+
             uint32_t next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu) {
-                channels[2].madr = 0x00FFFFFFu;
-                break; /* end of list */
+                last_addr = 0x00FFFFFFu;
+                break;
             }
             addr = psx_mod_gpu_dma_resolve_address(next);
+            last_addr = addr;
         }
-        if (safety > MAX_NODES) {
-            channels[2].madr = addr;
-        }
+        (void)hit_limit;
+
+        channels[2].madr = last_addr;
         gpu_ws_end_linked_list();
     } else {
         /* Burst mode (sync_mode == 0) */

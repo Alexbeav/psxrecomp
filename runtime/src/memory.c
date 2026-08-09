@@ -880,8 +880,26 @@ static void interrupt_write_stat_masked(uint32_t val, uint32_t mask) {
 
 static void interrupt_write_mask_masked(uint32_t val, uint32_t mask, uint8_t width) {
     uint32_t old = i_mask;
-    i_mask = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
+    uint32_t next = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
+    /* IMPORTANT (Ape Escape offline LOAD): BIOS clears I_MASK.7 immediately
+     * after the probe SELECT abort while A6C10 is still nested. That drops
+     * the nest_irq_pulse before LibCardIntRP can pop to idle / set B4E38.
+     * Hold bit7 until the nest unwinds (sio_card_should_hold_imask_bit7).
+     * Netplay: helper returns 0. See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md. */
+    if ((old & 0x80u) && !(next & 0x80u)) {
+        extern int sio_card_should_hold_imask_bit7(void);
+        if (sio_card_should_hold_imask_bit7()) {
+            next |= 0x80u;
+            if (!(i_stat & 0x80u))
+                i_stat |= 0x80u;
+        }
+    }
+    i_mask = next;
     imask_trace_record(old, i_mask, width);
+    {
+        extern void sio_card_handoff_on_imask(uint32_t old_mask, uint32_t new_mask);
+        sio_card_handoff_on_imask(old, i_mask);
+    }
     psx_irq_refresh_cause_ip2();
 }
 
@@ -1590,19 +1608,32 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
          * TestEvent poll, consuming the public card event and leaving the UI
          * stuck at "Checking MEMORY CARD...". Let the real TestEvent consume
          * public MARK card events instead; keep this narrowly keyed to the
-         * helper's status store and the EvCB layout. */
-        if (fntrace_is_game_started() &&
-            g_debug_last_store_pc == 0xBFC117E4u &&
-            val == 0x2000u &&
-            phys >= 4u && (phys + 8u) < RAM_SIZE &&
-            read_ram_word(phys) == 0x4000u &&
-            read_ram_word(phys - 4u) == 0xF0000011u &&
-            read_ram_word(phys + 8u) == 0x2000u) {
-            uint32_t spec = read_ram_word(phys + 4u);
-            if (spec == 0x00000004u || spec == 0x00008000u ||
-                spec == 0x00000100u || spec == 0x00000200u ||
-                spec == 0x00002000u) {
-                return;
+         * helper's status store and the EvCB layout.
+         *
+         * Ape Escape LOAD: this suppress is tip-only (post-483a0d4) and leaves
+         * libcard parked after the 81 52 00 probe (A6C10 nested, B4E38=0, never
+         * re-enables I_MASK bit7 / never TX 0x57). Opt out unless explicitly
+         * enabled — Tomba can set PSX_TOMB_CARD_EVCB_PROTECT=1. */
+        {
+            static int s_tomb_evcb_protect = -1;
+            if (s_tomb_evcb_protect < 0) {
+                const char *e = getenv("PSX_TOMB_CARD_EVCB_PROTECT");
+                s_tomb_evcb_protect = (e && e[0] == '1') ? 1 : 0;
+            }
+            if (s_tomb_evcb_protect &&
+                fntrace_is_game_started() &&
+                g_debug_last_store_pc == 0xBFC117E4u &&
+                val == 0x2000u &&
+                phys >= 4u && (phys + 8u) < RAM_SIZE &&
+                read_ram_word(phys) == 0x4000u &&
+                read_ram_word(phys - 4u) == 0xF0000011u &&
+                read_ram_word(phys + 8u) == 0x2000u) {
+                uint32_t spec = read_ram_word(phys + 4u);
+                if (spec == 0x00000004u || spec == 0x00008000u ||
+                    spec == 0x00000100u || spec == 0x00000200u ||
+                    spec == 0x00002000u) {
+                    return;
+                }
             }
         }
         if (phys == D44_PHYS) d44_note(phys, read_ram_word(phys), val);

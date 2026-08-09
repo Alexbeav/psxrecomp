@@ -473,14 +473,60 @@ def resolve_toolchain_bin(
     return None
 
 
+def pack_python_exe(pack_root: Path) -> Optional[Path]:
+    """Return portable CPython under <pack>/python/ (cmake-clang-v1 1.0.6+)."""
+    py_root = pack_root / "python"
+    if not py_root.is_dir():
+        return None
+    if sys_platform_is_windows():
+        for name in ("python.exe", "python3.exe"):
+            cand = py_root / name
+            if cand.is_file():
+                return cand
+    for rel in ("bin/python3", "bin/python"):
+        cand = py_root / rel
+        if cand.is_file():
+            return cand
+    # macOS universal pack: arch-specific trees (+ bin/ dispatcher).
+    if sys.platform == "darwin":
+        machine = platform.machine().lower()
+        if machine in ("arm64", "aarch64"):
+            arch_rels = (
+                "aarch64-apple-darwin/bin/python3",
+                "aarch64-apple-darwin/bin/python",
+            )
+        else:
+            arch_rels = (
+                "x86_64-apple-darwin/bin/python3",
+                "x86_64-apple-darwin/bin/python",
+            )
+        for rel in arch_rels:
+            cand = py_root / rel
+            if cand.is_file():
+                return cand
+    return None
+
+
 def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
     prefix = str(bin_dir)
     pack_root = bin_dir.parent
     cur = os.environ.get("PATH", "")
     parts = [p for p in (cur.split(os.pathsep) if cur else []) if p]
     # Idempotent session PATH: only prepend when missing.
+    path_prefixes: list[str] = []
+    py_exe = pack_python_exe(pack_root)
+    if py_exe is not None:
+        # Windows PBS: <pack>/python/python.exe — Unix: <pack>/python/bin/python3
+        py_dir = str(py_exe.parent)
+        if py_dir not in parts:
+            path_prefixes.append(py_dir)
+        os.environ["RETCOMM_PYTHON"] = str(py_exe)
     if str(bin_dir) not in parts and prefix not in parts:
-        os.environ["PATH"] = prefix + (os.pathsep + cur if cur else "")
+        path_prefixes.append(prefix)
+    if path_prefixes:
+        os.environ["PATH"] = os.pathsep.join(path_prefixes) + (
+            os.pathsep + cur if cur else ""
+        )
     # Host deps under deps/ (1.0.9+); legacy packs keep zlib/SDL3 at pack root.
     # Never put pack root on CMAKE_PREFIX_PATH — mingw include/ poisons libc++.
     pack_s = str(pack_root)

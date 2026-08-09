@@ -1917,27 +1917,30 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         flush_flat_batch();   /* painter order: flat GEO before textured */
         int twx = s_tw_mask_x, twy = s_tw_mask_y, tox = s_tw_off_x, toy = s_tw_off_y;
         int gate = bd_prim_gate(xs, 3, 1); /* backdrop-stretch gate is also a batch key */
-        /* With mask checking off, opaque and mode-0 semi primitives use the
-         * same dual-source blend state. The per-vertex a_semi flag selects
-         * replace vs half-blend without breaking painter order. */
-        int batch_semi = (!s_mask_check && semi != 2) ? 4 : semi;
-        /* STP draw-ORDER correctness. flush_tex_batch draws a batch in two passes
-         * over the WHOLE batch (pass 1 = every prim's STP=0/opaque texels, pass 2
-         * = every prim's STP=1/semi texels with the PSX blend). For overlapping
-         * prims that share a batch, a BEHIND prim's semi texels (pass 2) then
-         * paint OVER a FRONT prim's opaque texels (pass 1) — a painter's-order
-         * violation that only exists on GL (Tomba: the character drew behind the
-         * AP-block letters / a save post on GL, correct on software). So a
-         * semi-transparent prim must NOT coalesce with its neighbours: drain the
-         * open batch, draw this prim alone (its own STP=0+STP=1 passes, which do
-         * not self-overlap → composited fully before the next prim, exactly like
-         * the software renderer), and let opaque prims keep batching. Opaque
-         * content (terrain/foliage — the batching perf win) is untouched; the cost
-         * is one draw per semi prim, which are sparse. (A future single-pass
-         * optimization for modes 0/1/3 via GL_ONE,GL_SRC_ALPHA with a per-fragment
-         * destination factor in alpha could re-batch semi prims — see memory
-         * tomba_sprite_zorder_bug; mode 2 subtractive still needs isolation.) */
-        int isolate = (semi >= 0 && (semi == 2 || s_mask_check));
+        /* Batch key: keep opaque as -1. Dual-source (4) is only for semi modes
+         * 0/1/3 when mask-check is off — never coalesce opaque into that key.
+         * Mixing opaque+semi under u_semimode==4 made additive particle/glow
+         * batches (CTR Naughty Dog intro binary funnel) paint over later
+         * opaque crate flaps whenever submission order and STP bits disagreed
+         * with the dual-source path's assumptions. */
+        int batch_semi;
+        if (semi < 0)
+            batch_semi = -1;
+        else if (!s_mask_check && semi != 2)
+            batch_semi = 4;
+        else
+            batch_semi = semi;
+        /* STP draw-ORDER correctness. flush_tex_batch's conservative two-pass
+         * path draws pass 1 = every prim's STP=0 texels then pass 2 = every
+         * prim's STP=1 texels — a behind prim's semi texels then overwrite a
+         * front prim's opaque texels (Tomba AP-block / CTR intro flaps). The
+         * dual-source single-pass path avoids that WITHIN one prim, but
+         * batching many overlapping semi quads (digit particles + glow) still
+         * mis-orders against neighbouring opaque geometry. Isolate EVERY
+         * semi-transparent textured prim: drain the open batch, draw this
+         * prim alone (composited fully before the next), let opaque prims
+         * keep batching. Cost is one draw per semi prim. */
+        int isolate = (semi >= 0);
         int reason = -1;
         if (s_tb_n > 0) {
             if (isolate) reason = 0;

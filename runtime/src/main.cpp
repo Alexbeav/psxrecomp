@@ -21,6 +21,7 @@
 #include "load_accel.h"
 #include "savestate.h"
 #include "host_osd.h"
+#include "host_keymap.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -2031,10 +2032,9 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
  *   explicit choice, mismatched-> explained; falls back to OpenBIOS if allowed
  *   openbios disabled for this title -> a retail image is required
  *
- * "Explicit" means --bios or a remembered launcher/settings pick. Finding a
- * file on disk deliberately does NOT count: discovery used to adopt whatever
- * happened to sit near the executable, so two players with the same build
- * could end up on different BIOSes.
+ * "Explicit" means --bios or a remembered launcher/settings/`bios.cfg` pick.
+ * First-run setup may seed bios.cfg from a validated SCPH1001 beside the
+ * install; after that, Play never invents a BIOS from random on-disk files.
  */
 static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       const char* argv0,
@@ -2199,6 +2199,56 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     found = find_upward(exe_dir_from_argv(argv0), dev_marker);
     if (!found.empty()) return found / dev_marker;
     return p;
+}
+
+/* First-run / setup discovery of a retail BIOS the player already dumped next
+ * to the game (docs/BIOS_SELECTION.md). Only size+CRC identity counts — wrong
+ * dumps are skipped silently. Empty result → keep OpenBIOS (no prompt). */
+static bool retail_bios_file_ok(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return false;
+    if (psx_bios_registry_count > 0) {
+        const PsxBiosBackend* b = bios_backend_for_file(path, nullptr, nullptr);
+        return b && b->image && !b->image->image_bundled;
+    }
+    /* Setup host (no backends linked yet): accept validated SCPH-1001 only. */
+    constexpr uint64_t kSize = 512u * 1024u;
+    constexpr uint32_t kScph1001Crc = 0x37157331u;
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return false;
+    const auto size = static_cast<uint64_t>(f.tellg());
+    if (size != kSize) return false;
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    if (!read_at(f, 0, data.data(), data.size())) return false;
+    return crc32_compute(data.data(), data.size()) == kScph1001Crc;
+}
+
+static std::filesystem::path discover_retail_bios_near(const char* argv0) {
+    namespace fs = std::filesystem;
+    static const char* kNames[] = {
+        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
+        "SCPH1001.bin", "scph1001.BIN",
+    };
+    static const char* kSubdirs[] = {
+        "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
+    };
+    const fs::path exe_dir = exe_dir_from_argv(argv0);
+    std::error_code ec;
+    for (fs::path root = exe_dir; !root.empty(); root = root.parent_path()) {
+        for (const char* sub : kSubdirs) {
+            const fs::path dir = (sub && sub[0]) ? (root / sub) : root;
+            for (const char* name : kNames) {
+                const fs::path cand = dir / name;
+                if (retail_bios_file_ok(cand)) {
+                    auto abs = fs::weakly_canonical(cand, ec);
+                    if (ec) abs = fs::absolute(cand, ec);
+                    return abs;
+                }
+            }
+        }
+        if (!root.has_parent_path() || root == root.root_path()) break;
+    }
+    return {};
 }
 
 // Fallback memcard directory used when no game config (or its [runtime]
@@ -3126,80 +3176,99 @@ static ControllerSource parse_controller_source(const std::string& raw) {
     ControllerSource out;
     if (s.empty() || s == "none" || s == "disabled") return out;
 
-    if (s == "a")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_A; return out; }
-    if (s == "b")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_B; return out; }
-    if (s == "x")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_X; return out; }
-    if (s == "y")              { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_Y; return out; }
-    if (s == "back" || s == "view" || s == "select") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_BACK; return out;
-    }
-    if (s == "start" || s == "menu") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_START; return out;
-    }
-    if (s == "guide")          { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_GUIDE; return out; }
-    if (s == "leftstick")      { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_LEFTSTICK; return out; }
-    if (s == "rightstick")     { out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_RIGHTSTICK; return out; }
-    if (s == "leftshoulder" || s == "lb" || s == "l1") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_LEFTSHOULDER; return out;
-    }
-    if (s == "rightshoulder" || s == "rb" || s == "r1") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER; return out;
-    }
-    if (s == "dpup" || s == "dpadup") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_UP; return out;
-    }
-    if (s == "dpdown" || s == "dpaddown") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_DOWN; return out;
-    }
-    if (s == "dpleft" || s == "dpadleft") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_LEFT; return out;
-    }
-    if (s == "dpright" || s == "dpadright") {
-        out.kind = ControllerSource::Kind::Button; out.id = SDL_CONTROLLER_BUTTON_DPAD_RIGHT; return out;
-    }
-    if (s == "lefttrigger" || s == "lt" || s == "l2") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_TRIGGERLEFT; return out;
-    }
-    if (s == "righttrigger" || s == "rt" || s == "r2") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_TRIGGERRIGHT; return out;
-    }
-    if (s == "leftx+" || s == "lsright") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_LEFTX; return out;
-    }
-    if (s == "leftx-" || s == "lsleft") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_LEFTX; return out;
-    }
-    if (s == "lefty+" || s == "lsdown") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_LEFTY; return out;
-    }
-    if (s == "lefty-" || s == "lsup") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_LEFTY; return out;
-    }
-    if (s == "rightx+" || s == "rsright") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_RIGHTX; return out;
-    }
-    if (s == "rightx-" || s == "rsleft") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_RIGHTX; return out;
-    }
-    if (s == "righty+" || s == "rsdown") {
-        out.kind = ControllerSource::Kind::AxisPositive; out.id = SDL_CONTROLLER_AXIS_RIGHTY; return out;
-    }
-    if (s == "righty-" || s == "rsup") {
-        out.kind = ControllerSource::Kind::AxisNegative; out.id = SDL_CONTROLLER_AXIS_RIGHTY; return out;
+    // recomp-ui pad capture persists axes as "name+" / "name-" (see
+    // source_from_bind). Defaults historically omit the suffix for triggers
+    // ("lefttrigger"). Accept both; strip the sign before name lookup.
+    int dir = 0; // -1, 0 (unspecified), +1
+    if (s.size() >= 2) {
+        const char last = s.back();
+        const char prev = s[s.size() - 2];
+        if ((last == '+' || last == '-') &&
+            (std::isalnum(static_cast<unsigned char>(prev)) || prev == '_')) {
+            dir = (last == '+') ? +1 : -1;
+            s.pop_back();
+        }
     }
 
-    SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(s.c_str());
-    if (button != SDL_CONTROLLER_BUTTON_INVALID) {
+    auto as_button = [&](SDL_GameControllerButton b) -> ControllerSource {
         out.kind = ControllerSource::Kind::Button;
-        out.id = button;
+        out.id = b;
         return out;
+    };
+    auto as_axis = [&](SDL_GameControllerAxis a, int d) -> ControllerSource {
+        // Unspecified direction → positive (triggers / capture default).
+        out.kind = (d < 0) ? ControllerSource::Kind::AxisNegative
+                           : ControllerSource::Kind::AxisPositive;
+        out.id = a;
+        return out;
+    };
+
+    if (s == "a") return as_button(SDL_CONTROLLER_BUTTON_A);
+    if (s == "b") return as_button(SDL_CONTROLLER_BUTTON_B);
+    if (s == "x") return as_button(SDL_CONTROLLER_BUTTON_X);
+    if (s == "y") return as_button(SDL_CONTROLLER_BUTTON_Y);
+    if (s == "back" || s == "view" || s == "select")
+        return as_button(SDL_CONTROLLER_BUTTON_BACK);
+    if (s == "start" || s == "menu")
+        return as_button(SDL_CONTROLLER_BUTTON_START);
+    if (s == "guide") return as_button(SDL_CONTROLLER_BUTTON_GUIDE);
+    if (s == "leftstick") return as_button(SDL_CONTROLLER_BUTTON_LEFTSTICK);
+    if (s == "rightstick") return as_button(SDL_CONTROLLER_BUTTON_RIGHTSTICK);
+    // Shoulders are digital buttons. A trailing +/- from axis-style capture is
+    // ignored so "leftshoulder+" still maps to L1 instead of becoming unbound.
+    if (s == "leftshoulder" || s == "lb" || s == "l1")
+        return as_button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    if (s == "rightshoulder" || s == "rb" || s == "r1")
+        return as_button(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+    if (s == "dpup" || s == "dpadup")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_UP);
+    if (s == "dpdown" || s == "dpaddown")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    if (s == "dpleft" || s == "dpadleft")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    if (s == "dpright" || s == "dpadright")
+        return as_button(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+
+    // Triggers: default "lefttrigger" and capture "lefttrigger+" both work.
+    if (s == "lefttrigger" || s == "lt" || s == "l2")
+        return as_axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT, dir == 0 ? +1 : dir);
+    if (s == "righttrigger" || s == "rt" || s == "r2")
+        return as_axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, dir == 0 ? +1 : dir);
+
+    // Stick axes (suffix required unless using a directional alias).
+    if (s == "leftx") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_LEFTX, dir);
     }
+    if (s == "lefty") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_LEFTY, dir);
+    }
+    if (s == "rightx") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, dir);
+    }
+    if (s == "righty") {
+        if (dir == 0) return out;
+        return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, dir);
+    }
+    if (s == "lsright") return as_axis(SDL_CONTROLLER_AXIS_LEFTX, +1);
+    if (s == "lsleft") return as_axis(SDL_CONTROLLER_AXIS_LEFTX, -1);
+    if (s == "lsdown") return as_axis(SDL_CONTROLLER_AXIS_LEFTY, +1);
+    if (s == "lsup") return as_axis(SDL_CONTROLLER_AXIS_LEFTY, -1);
+    if (s == "rsright") return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, +1);
+    if (s == "rsleft") return as_axis(SDL_CONTROLLER_AXIS_RIGHTX, -1);
+    if (s == "rsdown") return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, +1);
+    if (s == "rsup") return as_axis(SDL_CONTROLLER_AXIS_RIGHTY, -1);
+
+    SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(s.c_str());
+    if (button != SDL_CONTROLLER_BUTTON_INVALID)
+        return as_button(button);
+
     SDL_GameControllerAxis axis = SDL_GameControllerGetAxisFromString(s.c_str());
-    if (axis != SDL_CONTROLLER_AXIS_INVALID) {
-        out.kind = ControllerSource::Kind::AxisPositive;
-        out.id = axis;
-        return out;
-    }
+    if (axis != SDL_CONTROLLER_AXIS_INVALID)
+        return as_axis(axis, dir == 0 ? +1 : dir);
+
     return out;
 }
 
@@ -3265,8 +3334,9 @@ static std::string default_input_ini_text(void) {
     return
         "; PSXRecomp input mapping. PSX buttons are active when any listed source is pressed.\n"
         "; Sources use SDL/Xbox names: a,b,x,y,back,start,leftshoulder,rightshoulder,\n"
-        "; lefttrigger,righttrigger,leftstick,rightstick (stick clicks -> L3/R3),\n"
+        "; lefttrigger[/+],righttrigger[/+],leftstick,rightstick (stick clicks -> L3/R3),\n"
         "; dpup,dpdown,dpleft,dpright,leftx-/leftx+/lefty-/lefty+.\n"
+        "; Axis capture may append +/−; both forms are accepted. PSX slots are digital.\n"
         "; Optional per-device overrides: [mapping.<sdl-guid>].\n"
         "\n"
         "[controller]\n"
@@ -3939,10 +4009,13 @@ static void apply_input_override_to_sio(int override_word) {
                                           st[2] != 0x80 || st[3] != 0x80);
     const bool dpad_live  = ((uint16_t)~w & 0x00F0u) != 0;   /* up/right/down/left */
 
+    /* Prefer the configured seat mode (incl. game.toml lock_mode / settings
+     * p1_mode). Falling back to DIGITAL when kind==0 made DualShock-locked
+     * titles (Ape Escape) ignore debug-server injection in headless runs. */
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -3953,6 +4026,15 @@ static void apply_input_override_to_sio(int override_word) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    /* Pinned-ANALOG folds injected D-pad onto the left stick (same as a real
+     * DualShock seat). Without this, stick-only menu/move paths ignore
+     * button-bit injection even though pad_status shows the bits pressed. */
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF; /* Right */
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
@@ -4203,7 +4285,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     int mode;
     if (p.kind != 0)                  mode = effective_player_mode(p);
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_HYBRID;
-    else                              mode = (int)PSXRecompV4::PAD_MODE_DIGITAL;
+    else                              mode = p.mode;
 
     int eff_analog;
     if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
@@ -4214,6 +4296,12 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
         if (stick_live)     p.hybrid_analog = true;
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
+        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
+        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
+        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF;
     }
     if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
 
@@ -5024,10 +5112,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     debug_force_cd_reinsert();
                     host_osd_push("CD reinsert", 1500);
                 }
-                /* Host volume: numpad + / - (5% steps). Shows right-side bar. */
-                else if (key == SDLK_KP_PLUS) {
+                /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
+                 * (defaults: keypad +/-). 5% steps; shows right-side bar. */
+                else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
+                                           (int)mod)) {
                     host_volume_adjust(+5);
-                } else if (key == SDLK_KP_MINUS) {
+                } else if (host_keymap_match(HOST_KEYMAP_VOLUME_DOWN, (int)key,
+                                             (int)mod)) {
                     host_volume_adjust(-5);
                 }
                 /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
@@ -8863,6 +8954,12 @@ int main(int argc, char** argv) {
             game_id   = gc.id;
             game_region = gc.region;
             game_players = gc.players;
+            /* CTR ND intro: an older workaround (PSX_ND_SIB_FLAP_LAST=1) skipped
+             * wide additive 0x36 in OT ranks 1600..2099 to unmask sibling flaps.
+             * After the AVSZ3 MAC0 fix (unshifted product → correct MAC0>>17 OT
+             * indices), flaps/rain sort without that skip — and FLAP_LAST=1
+             * shreds the crate glow fountain. Default is off; opt in via env
+             * (dma.c) only for experiments. */
             apply_offline_pad_count(game_players, multitap_enabled);
             game_has_disc_crc = gc.has_disc_crc;
             game_disc_crc     = gc.disc_crc;
@@ -9657,6 +9754,24 @@ int main(int argc, char** argv) {
                     seed.has_bios_path = false;
                 }
             }
+            /* First-run setup: if nothing remembered, adopt a retail dump next
+             * to the install (SCPH1001…). Missing → leave empty (OpenBIOS).
+             * Never override an existing bios.cfg (including cleared OpenBIOS). */
+            if (!seed.has_bios_path) {
+                std::error_code ec;
+                const auto cfg = sidecar_cfg_path(argv[0], "bios.cfg");
+                if (!std::filesystem::exists(cfg, ec)) {
+                    std::filesystem::path found = discover_retail_bios_near(argv[0]);
+                    if (!found.empty()) {
+                        seed.bios_path = found;
+                        seed.has_bios_path = true;
+                        write_cached_path(argv[0], "bios.cfg", found);
+                        std::fprintf(stderr,
+                                     "psxrecomp: setup adopted retail BIOS %s\n",
+                                     found.string().c_str());
+                    }
+                }
+            }
             if (!resolved_disc.empty())    { seed.disc_path = resolved_disc; seed.has_disc_path = true; }
             seed.memcard_dir = memcard_dir;          seed.has_memcard_dir = true;
             seed.memcard1_enabled = memcard1_enabled; seed.has_memcard1_enabled = true;
@@ -9688,7 +9803,12 @@ int main(int argc, char** argv) {
             /* Same path the runtime's psx_keybinds_init(argv0) reads — keep the
              * launcher Controls page and in-game keyboard map on one file. */
             static std::string s_rui_keybinds_path;
+            static std::string s_rui_config_ini_path;
             s_rui_keybinds_path = (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
+            /* Same config.ini the runtime reads for [KeyMap] VolumeUp/Down —
+             * never cwd-relative "config.ini" (that drifted edits off the exe). */
+            s_rui_config_ini_path =
+                (exe_dir_from_argv(argv[0]) / "config.ini").string();
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
                                      + " - Launcher";
@@ -9825,6 +9945,7 @@ int main(int argc, char** argv) {
             gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
             gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
             gi.keybinds_path        = s_rui_keybinds_path.c_str();
+            gi.config_path          = s_rui_config_ini_path.c_str();
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
                                                   PSX multi-track discs — skip verification */
             gi.num_known_sha256     = 0;
@@ -10994,6 +11115,22 @@ session_reboot:
     /* R3000A reset state. */
     cpu.pc = 0xBFC00000u;
     cpu.cop0[12] = 0x00400000u; /* SR: BEV=1 (boot exception vectors) */
+
+    /* Host hotkeys: config.ini [KeyMap] next to the exe (VolumeUp/Down).
+     * Prefer exe-dir file; if missing, fall back to cwd config.ini so a
+     * launcher edit made before config_path was wired still applies. */
+    {
+        namespace fs = std::filesystem;
+        const fs::path exe_cfg = exe_dir_from_argv(argv[0]) / "config.ini";
+        std::error_code ec;
+        if (fs::is_regular_file(exe_cfg, ec)) {
+            host_keymap_load(exe_cfg.string().c_str());
+        } else if (fs::is_regular_file(fs::path("config.ini"), ec)) {
+            host_keymap_load("config.ini");
+        } else {
+            host_keymap_load(nullptr);
+        }
+    }
 
     /* User save states (F1-F12 / Shift+F1-F12): slots live in the per-game
      * memcard/save dir, keyed by entry_pc + guarded by the boot_state integrity

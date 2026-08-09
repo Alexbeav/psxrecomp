@@ -260,6 +260,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
+    ${PSXRECOMP_ROOT}/runtime/src/host_keymap.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
@@ -1254,6 +1255,15 @@ function(psxrecomp_add_runtime_target target)
     else()
         message(STATUS "Vulkan backend: disabled (PSX_ENABLE_VULKAN=OFF) - "
                        "gpu_vk_renderer.c builds as an inert stub")
+    endif()
+
+    # Prefer BSS for zero-init data. MinGW+LTO has emitted multi‑MiB rings into
+    # .rdata as stored zeros (~150MiB MotK .exe bloat); pair with PSX_BSS on the
+    # largest arrays (see runtime/include/psx_bss.h).
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${target} PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-fzero-initialized-in-bss>
+            $<$<COMPILE_LANGUAGE:CXX>:-fzero-initialized-in-bss>)
     endif()
 
     if(MINGW)

@@ -287,9 +287,14 @@ jobs:
           # recomp_net/session.h. Also add -DPSX_NETPLAY=ON to this cmake
           # invocation for CI belt-and-suspenders (do not leave it commented
           # mid-continuation — that breaks the shell line).
-          # With PSX_NETPLAY, runtime.cmake defaults RNET_ENABLE_ICE=ON
-          # (libjuice FetchContent — needs network at configure).
+          # With PSX_NETPLAY, runtime.cmake defaults RNET_ENABLE_ICE=ON.
+          # recomp-net FetchContents libjuice via a pinned URL tarball (not
+          # git clone) so AppImage / mismatched libcurl hosts still configure.
+          # Offline: vendor under psxrecomp/lib/recomp-net/third_party/libjuice
+          # or pass -DRNET_LIBJUICE_ROOT=… / -DRNET_ENABLE_ICE=OFF.
           # Add title-specific -D flags here if needed (e.g. -DMOTK_NATIVE=OFF).
+          # Netplay titles: also pass -DPSX_NETPLAY=ON here (belt-and-suspenders
+          # when CMakeLists already FORCE-caches it before include(runtime.cmake)).
           cmake -S . -B build-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPSXRECOMP_FORCE_SETUP_HOST=ON \

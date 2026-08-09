@@ -961,15 +961,19 @@ void psx_check_interrupts(CPUState* cpu) {
      *
      * Offline must NOT flush here — master never did. BB-edge finish_frame
      * during Ape Escape's memcard busy-wait wedges the card-check scene
-     * (empty starfield hang). Netplay MotK still needs the drain. */
+     * (empty starfield hang). Netplay MotK still needs the drain — but
+     * gpu_vblank_flush_present holds while sio_hold_present_for_card(), and
+     * we also skip while a deferred cooperative ChangeThread is pending
+     * (Ape memcard fix #2) so finish_frame cannot run on a smeared TCB. */
     int np_present_after_irq = 0;
-    if (!in_exception && np_active) {
-        gpu_vblank_flush_present(); /* CDA0 only when gated; CD54 no-ops */
+    if (!in_exception && np_active && !s_defer_switch_pending) {
+        gpu_vblank_flush_present(); /* CDA0 / card gates inside; CD54 no-ops */
         if (psx_interrupt_delivery_needed(cpu))
             np_present_after_irq = 1;
     }
 #define PSX_CHECK_INTERRUPTS_RETURN() do { \
-        if (np_present_after_irq) gpu_vblank_flush_present(); \
+        if (np_present_after_irq && !s_defer_switch_pending) \
+            gpu_vblank_flush_present(); \
         if (g_ls_suppress_record > 0) g_ls_suppress_record--; \
         return; \
     } while (0)
@@ -1121,6 +1125,12 @@ void psx_check_interrupts(CPUState* cpu) {
      * waiting for it to re-appear.  If we tick here, the IRQ fires
      * during the delay loop BEFORE the clear, and the BIOS never
      * sees it. */
+    /* Ape LOAD: libcard may poll nest/busy in RAM with no SIO MMIO, so
+     * sio_tick never runs. Throttled nest-repair pump only. */
+    if ((total_checks & 0xFFu) == 0) {
+        extern void sio_ape_card_unstick_pump(void);
+        sio_ape_card_unstick_pump();
+    }
 
     interrupts_service_scheduled_events();
 
@@ -1901,6 +1911,10 @@ irq_deliver_eval:
              * starve a target thread by re-entering the same VBlank EPC forever. */
             uint32_t epc_phys = g_exception_real_epc & 0x1FFFFFFFu;
             int low_kernel_epc = (epc_phys < 0x00010000u);
+            /* Low BIOS/kernel code is already scheduler code; deferring it can
+             * starve a target thread by re-entering the same VBlank EPC forever.
+             * (Card-guard overrides were tried for Ape LOAD and did not help —
+             * tip already defers like master; the hang is post-probe arming.) */
             int can_defer = defer_switch_enabled() && !low_kernel_epc && !at_outermost &&
                             g_exception_real_epc != 0u &&
                             (g_exception_real_epc & 0x3u) == 0u &&
@@ -1961,7 +1975,7 @@ irq_deliver_eval:
 #undef COSIM_IRQ_NOTE
 #undef COSIM_IRQ_TAKE_PC
 #endif
-    if (np_present_after_irq)
+    if (np_present_after_irq && !s_defer_switch_pending)
         gpu_vblank_flush_present();
 #undef PSX_CHECK_INTERRUPTS_RETURN
 }
