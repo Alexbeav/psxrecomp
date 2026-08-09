@@ -481,22 +481,36 @@ def activate_toolchain_bin(bin_dir: Path, log=None) -> None:
     # Idempotent session PATH: only prepend when missing.
     if str(bin_dir) not in parts and prefix not in parts:
         os.environ["PATH"] = prefix + (os.pathsep + cur if cur else "")
-    # Pack root hosts zlib (Windows) + static SDL3 (1.0.7+) for find_package.
+    # Host deps under deps/ (1.0.9+); legacy packs keep zlib/SDL3 at pack root.
+    # Never put pack root on CMAKE_PREFIX_PATH — mingw include/ poisons libc++.
     pack_s = str(pack_root)
-    os.environ["ZLIB_ROOT"] = pack_s
+    deps_root = pack_root / "deps"
     os.environ["RETCOMM_TOOLCHAIN_DIR"] = pack_s
     if "PSXRECOMP_TOOLCHAIN_DIR" not in os.environ:
         os.environ["PSXRECOMP_TOOLCHAIN_DIR"] = pack_s
+    if (deps_root / "include" / "zlib.h").is_file():
+        os.environ["ZLIB_ROOT"] = str(deps_root)
+    elif (pack_root / "include" / "zlib.h").is_file():
+        os.environ["ZLIB_ROOT"] = pack_s
     prev_prefix = os.environ.get("CMAKE_PREFIX_PATH", "")
-    if not prev_prefix:
-        os.environ["CMAKE_PREFIX_PATH"] = pack_s
-    elif pack_s not in prev_prefix.split(os.pathsep):
-        os.environ["CMAKE_PREFIX_PATH"] = pack_s + os.pathsep + prev_prefix
-    # Hint CONFIG packages when present (harmless if absent on older packs).
-    sdl3_config = pack_root / "lib" / "cmake" / "SDL3" / "SDL3Config.cmake"
-    sdl3_config_alt = pack_root / "lib" / "cmake" / "SDL3" / "SDL3-config.cmake"
-    if sdl3_config.is_file() or sdl3_config_alt.is_file():
-        os.environ["SDL3_DIR"] = str(pack_root / "lib" / "cmake" / "SDL3")
+    if prev_prefix:
+        filtered = [
+            p for p in prev_prefix.split(os.pathsep)
+            if p and os.path.normcase(os.path.normpath(p))
+            != os.path.normcase(os.path.normpath(pack_s))
+        ]
+        os.environ["CMAKE_PREFIX_PATH"] = os.pathsep.join(filtered)
+    elif "CMAKE_PREFIX_PATH" in os.environ:
+        del os.environ["CMAKE_PREFIX_PATH"]
+    sdl3_dir = None
+    for root in (deps_root, pack_root):
+        cfg = root / "lib" / "cmake" / "SDL3" / "SDL3Config.cmake"
+        cfg_alt = root / "lib" / "cmake" / "SDL3" / "SDL3-config.cmake"
+        if cfg.is_file() or cfg_alt.is_file():
+            sdl3_dir = root / "lib" / "cmake" / "SDL3"
+            break
+    if sdl3_dir is not None:
+        os.environ["SDL3_DIR"] = str(sdl3_dir)
     lib_dir = pack_root / "lib"
     if lib_dir.is_dir() and not sys_platform_is_windows():
         lib_s = str(lib_dir)
