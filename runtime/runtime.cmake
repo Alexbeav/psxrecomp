@@ -92,12 +92,52 @@ set(PSX_SDL_LIBRARIES "")
 set(PSX_SDL_STATIC_LDFLAGS "")
 set(PSX_SDL3 OFF)
 
+# Portable cmake-clang-v1 pack roots (wizard / RetComM / CI emitter fetch).
+# Collect as HINTS only — never list(PREPEND CMAKE_PREFIX_PATH …): on Windows CI
+# the pack is llvm-mingw while the setup host links with MSYS2 g++, and a
+# global prefix puts pack lib/ on the -L path so -static-libstdc++ can pick up
+# the wrong libstdc++ (codecvt / filesystem undefined refs at link).
+set(_PSX_TOOLCHAIN_PREFIX_HINTS "")
+foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR
+                              BPE_TOOLCHAIN_DIR TOOLCHAIN_DIR)
+    if(DEFINED ENV{${_psx_tc_env}} AND NOT "$ENV{${_psx_tc_env}}" STREQUAL "")
+        list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "$ENV{${_psx_tc_env}}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _PSX_TOOLCHAIN_PREFIX_HINTS)
+
 if(_psx_sdl_backend STREQUAL "SDL3")
     set(PSX_SDL3 ON)
     option(PSX_SDL3_FETCH
         "Fetch the pinned SDL3 release when no system SDL3 package is found"
         ON)
-    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3)
+    # cmake-clang-v1 1.0.9+ ships SDL3 under deps/; 1.0.7–1.0.8 used pack root.
+    # Prefer SDL3_DIR / HINTS — never CMAKE_PREFIX_PATH=pack (mingw include poisons libc++).
+    if(NOT SDL3_DIR)
+        foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+            foreach(_psx_sdl_root IN ITEMS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+                if(EXISTS "${_psx_sdl_root}/lib/cmake/SDL3/SDL3Config.cmake" OR
+                   EXISTS "${_psx_sdl_root}/lib/cmake/SDL3/SDL3-config.cmake")
+                    set(SDL3_DIR "${_psx_sdl_root}/lib/cmake/SDL3")
+                    break()
+                endif()
+            endforeach()
+            if(SDL3_DIR)
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(_PSX_SDL3_HINTS "")
+    foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+        list(APPEND _PSX_SDL3_HINTS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+    endforeach()
+    find_package(SDL3 3.4 CONFIG QUIET COMPONENTS SDL3
+        HINTS ${_PSX_SDL3_HINTS}
+        PATH_SUFFIXES lib/cmake/SDL3)
+    unset(_PSX_SDL3_HINTS)
+    if(TARGET SDL3::SDL3)
+        message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
+    endif()
     if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
         include(FetchContent)
         # The fetched dependency is private to this build, so link it directly
@@ -304,6 +344,8 @@ if(PSX_NETPLAY AND RECOMP_NET_ROOT AND EXISTS "${RECOMP_NET_ROOT}/CMakeLists.txt
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         # MotK lobby ice_p2p needs libjuice. Default ON with netplay; no FORCE
         # so -DRNET_ENABLE_ICE=OFF still wins (LAN-only / offline configure).
+        # recomp-net prefers URL FetchContent / third_party/libjuice over git
+        # clone (AppImage LD_LIBRARY_PATH breaks system git-remote-https).
         set(RNET_ENABLE_ICE ON CACHE BOOL
             "Build libjuice ICE transport (default ON with PSX_NETPLAY)")
         add_subdirectory("${RECOMP_NET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net")
@@ -319,6 +361,9 @@ else()
     if(PSX_NETPLAY)
         message(STATUS "psxrecomp: recomp-net not found — netplay stubs only "
                        "(set RECOMP_NET_ROOT or place checkout at ../recomp-net)")
+    else()
+        message(STATUS "psxrecomp: PSX_NETPLAY=OFF — netplay TUs compile as stubs "
+                       "(no recomp-net)")
     endif()
 endif()
 
@@ -521,6 +566,23 @@ function(psxrecomp_ensure_zlib)
     if(TARGET ZLIB::ZLIB)
         return()
     endif()
+    # Prefer pack zlib via ZLIB_ROOT — deps/ (1.0.9+) then legacy pack root.
+    # Never use CMAKE_PREFIX_PATH=pack on Windows llvm-mingw (libc++ clash).
+    if(NOT ZLIB_ROOT)
+        foreach(_psx_tc_pfx IN LISTS _PSX_TOOLCHAIN_PREFIX_HINTS)
+            foreach(_psx_z_root IN ITEMS "${_psx_tc_pfx}/deps" "${_psx_tc_pfx}")
+                if(EXISTS "${_psx_z_root}/include/zlib.h" AND
+                   (EXISTS "${_psx_z_root}/lib/libz.a" OR
+                    EXISTS "${_psx_z_root}/lib/zlib.lib"))
+                    set(ZLIB_ROOT "${_psx_z_root}")
+                    break()
+                endif()
+            endforeach()
+            if(ZLIB_ROOT)
+                break()
+            endif()
+        endforeach()
+    endif()
     find_package(ZLIB QUIET)
     if(TARGET ZLIB::ZLIB)
         return()
@@ -528,11 +590,12 @@ function(psxrecomp_ensure_zlib)
     if(NOT PSX_ZLIB_FETCH)
         message(FATAL_ERROR
             "ZLIB was not found. On Windows, use a cmake-clang-v1 pack that "
-            "ships include/zlib.h + lib/libz.a (sets ZLIB_ROOT), or install "
-            "zlib-devel / mingw-w64-zlib, or configure with -DPSX_ZLIB_FETCH=ON.")
+            "ships deps/include/zlib.h + deps/lib/libz.a (sets ZLIB_ROOT), or "
+            "install zlib-devel / mingw-w64-zlib, or configure with "
+            "-DPSX_ZLIB_FETCH=ON.")
     endif()
     message(STATUS
-        "psxrecomp: ZLIB not in CMAKE_PREFIX_PATH/ZLIB_ROOT; "
+        "psxrecomp: ZLIB not in ZLIB_ROOT / system paths; "
         "fetching zlib 1.3.1 (prefer a toolchain pack that bundles it)")
     include(FetchContent)
     set(_psx_zlib_timestamp_args "")
