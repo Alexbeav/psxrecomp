@@ -30,14 +30,19 @@
 namespace PSXRecompV4 {
 
 // Pad input mode (per player). Replaces the old analog on/off boolean.
-//   hybrid  — auto-switch DualShock(analog)/digital per the most-recent input:
+//   hybrid  — MOD-ONLY. Not selectable in the launcher, not a valid game.toml
+//             value, never a default. It survives solely so a trusted game mod
+//             can request it via psx_mod_set_controller_mode_override() (Tomba's
+//             hybrid controller plugin). Auto-switches analog/digital per the
+//             most-recent input:
 //             nudge the stick -> report DualShock (0x73, variable sticks);
 //             press the D-pad -> report a digital pad (0x41) so the game runs
 //             its OWN d-pad path at true digital sensitivity. Mirrors a
 //             DualShock's analog LED toggling on/off (and Tomba Special
-//             Edition's auto-detect). Default.
+//             Edition's auto-detect).
 //   analog  — always present a DualShock/analog pad (id 0x73). The D-pad is
 //             folded onto the stick at full deflection so it still moves you.
+//             Default.
 //   digital — always present a digital pad (id 0x41); sticks disabled.
 enum PadMode { PAD_MODE_HYBRID = 0, PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
 
@@ -109,9 +114,13 @@ struct WidescreenAspectConeConfig {
     std::array<uint32_t, 3> queue_capacities{};
     std::array<uint32_t, 3> queue_type_masks{};
 };
-// Parse/format a pad mode. pad_mode_from_string accepts "hybrid"/"analog"/
-// "digital" (case-insensitive) and returns `fallback` for anything else.
+// Parse/format a pad mode. Strict game.toml parsing accepts "analog" or
+// "digital" (case-insensitive), returns `fallback` for unknown values, and
+// THROWS on "hybrid" — the mode is mod-only and must not be declared by a game.
 int         pad_mode_from_string(const std::string& s, int fallback);
+// Lenient: for a user's settings.toml, where a stale persisted "hybrid" must
+// migrate to analog rather than refuse to launch.
+int         pad_mode_from_settings_string(const std::string& s, int fallback);
 const char* pad_mode_to_string(int mode);
 
 // [runtime] block — consumed by runtime/src/main.cpp. All fields optional;
@@ -473,21 +482,14 @@ struct RuntimeConfig {
     // `p1_mode`/`p2_mode` set one. Legacy `default_analog`/`p1_analog`/
     // `p2_analog` booleans are still accepted (true->analog, false->digital).
     bool                  has_default_mode = false;
-    int                   default_p1_mode  = PAD_MODE_HYBRID;
-    int                   default_p2_mode  = PAD_MODE_HYBRID;
-
-    // allow_hybrid: whether the launcher offers the "Hybrid" pad mode at all.
-    // Default true (Hybrid | Analog | D-Pad). A game that needs an explicit
-    // analog/digital choice (e.g. one that hard-requires a DualShock) can set
-    // [controller] allow_hybrid = false to drop Hybrid from the selector.
-    bool                  controller_allow_hybrid = true;
+    int                   default_p1_mode  = PAD_MODE_ANALOG;
+    int                   default_p2_mode  = PAD_MODE_ANALOG;
 
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
     // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
     // game that supports exactly one pad type — e.g. Tomba 2, whose driver only
     // works as a plain digital pad because the DualShock config-mode handshake
     // is unhandled — so the player can't pick a broken mode. Supersedes
-    // allow_hybrid (which only hides the Hybrid segment). Default false.
     bool                  controller_lock_mode = false;
 
     // lock_device: when true the launcher HIDES the Player 1/2 controller cards
@@ -1103,7 +1105,7 @@ struct UserSettings {
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
-    // Modes (see PadMode): hybrid / analog / digital. Defaults: P1 keyboard,
+    // Modes (see PadMode): analog / digital. Hybrid is mod-only. Defaults: P1 keyboard,
     // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
     // pN_device / pN_mode / pN_deadzone (N=1..5). Legacy bare `deadzone`
     // still fills any slot that lacks pN_deadzone.
@@ -1113,8 +1115,8 @@ struct UserSettings {
         "keyboard", "none", "none", "none", "none"};
     bool has_p_mode[kMaxControllerPlayers] = {};
     int  p_mode[kMaxControllerPlayers] = {
-        PAD_MODE_HYBRID, PAD_MODE_HYBRID, PAD_MODE_HYBRID,
-        PAD_MODE_HYBRID, PAD_MODE_HYBRID};
+        PAD_MODE_ANALOG, PAD_MODE_ANALOG, PAD_MODE_ANALOG,
+        PAD_MODE_ANALOG, PAD_MODE_ANALOG};
     bool has_p_deadzone[kMaxControllerPlayers] = {};
     int  p_deadzone[kMaxControllerPlayers] = {
         3277, 3277, 3277, 3277, 3277};  /* ~10% of 32767 */
