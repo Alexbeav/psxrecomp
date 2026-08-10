@@ -784,7 +784,38 @@ static uint64_t write_and_commit_snapshot(uint32_t bw,
     return capture_commit_temp(temp_path, reason, sequence);
 }
 
-static uint64_t overlay_capture_write_current(const char *reason)
+static void capture_executed_pages(uint32_t *bitmap, uint32_t bw,
+                                   const uint32_t *exec_pc_bitmap,
+                                   uint32_t scope_lo, uint32_t scope_hi,
+                                   int include_halo)
+{
+    const uint32_t ram_size = 2u * 1024u * 1024u;
+    memset(bitmap, 0, (size_t)bw * sizeof(uint32_t));
+    if (scope_hi > ram_size) scope_hi = ram_size;
+    if (scope_lo >= scope_hi) return;
+    uint32_t first_page = scope_lo >> 12;
+    uint32_t last_page = (scope_hi - 1u) >> 12;
+    uint32_t scan_lo = include_halo && first_page ? first_page - 1u : first_page;
+    uint32_t scan_hi = include_halo && last_page + 1u < ram_size / 4096u
+                     ? last_page + 1u : last_page;
+    for (uint32_t page = scan_lo; page <= scan_hi; page++) {
+        uint32_t first_exec_word = page * (4096u / 4u);
+        int observed = 0;
+        for (uint32_t b = 0; b < 4096u / 4u / 32u; b++) {
+            if (exec_pc_bitmap[(first_exec_word >> 5) + b]) {
+                observed = 1;
+                break;
+            }
+        }
+        if (observed && (page >> 5) < bw)
+            bitmap[page >> 5] |= 1u << (page & 31u);
+    }
+}
+
+static uint64_t overlay_capture_write_current(const char *reason,
+                                              uint32_t scope_lo,
+                                              uint32_t scope_hi,
+                                              int include_halo)
 {
     extern uint8_t *memory_get_ram_ptr(void);
     uint32_t bw = dirty_ram_get_bitmap_word_count();
@@ -793,7 +824,8 @@ static uint64_t overlay_capture_write_current(const char *reason)
     if (!s_active) return 0;
     bitmap = (uint32_t *)malloc((size_t)bw * sizeof(uint32_t));
     if (!bitmap) return 0;
-    for (uint32_t i = 0; i < bw; i++) bitmap[i] = dirty_ram_get_bitmap_word(i);
+    capture_executed_pages(bitmap, bw, g_dirty_ram_exec_pc_bitmap,
+                           scope_lo, scope_hi, include_halo);
     sig = write_and_commit_snapshot(bw, bitmap,
                                     g_dirty_ram_dispatch_pc_bitmap,
                                     g_dirty_ram_exec_pc_bitmap,
@@ -806,7 +838,12 @@ static uint64_t overlay_capture_write_current(const char *reason)
 
 void overlay_capture_write_json(void)
 {
-    (void)overlay_capture_write_current("shutdown-or-manual");
+    /* Sticky dirty pages describe everything written since boot. They do not
+     * describe a coherent code variant: mutable data between two code pages
+     * can otherwise merge them into a giant region that changes every run.
+     * Final/manual captures use the same executed-page scope as autocapture. */
+    (void)overlay_capture_write_current("shutdown-or-manual",
+                                        0, 2u * 1024u * 1024u, 0);
 }
 
 void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
@@ -845,7 +882,8 @@ void overlay_capture_before_dma(uint32_t load_addr, uint32_t size)
          * Fall back to a synchronous durable commit rather than let the RAM
          * overwrite bind old evidence to new bytes. If storage itself fails,
          * report the unavoidable loss but still clear the stale association. */
-        if (!overlay_capture_write_current("preserve-sync-fallback"))
+        if (!overlay_capture_write_current("preserve-sync-fallback",
+                                           evidence_lo, evidence_hi, 1))
             fprintf(stderr,
                 "psxrecomp: ERROR: could not preserve outgoing overlay evidence; discarding stale epoch\n");
     }
@@ -1088,46 +1126,10 @@ static AutocapWriteJob *capture_snapshot_create(uint32_t scope_lo,
     memcpy(job->exec_pc_bitmap, g_dirty_ram_exec_pc_bitmap,
            sizeof(g_dirty_ram_exec_pc_bitmap));
     if (scoped) {
-        memset(job->bitmap, 0, (size_t)bw * sizeof(uint32_t));
-        uint32_t first_page = scope_lo >> 12;
-        uint32_t last_page = (scope_hi - 1u) >> 12;
-        for (uint32_t page = first_page; page <= last_page; page++) {
-            uint32_t first_exec_word = page * (4096u / 4u);
-            int observed = 0;
-            for (uint32_t b = 0; b < 4096u / 4u / 32u; b++) {
-                if (job->exec_pc_bitmap[(first_exec_word >> 5) + b]) {
-                    observed = 1;
-                    break;
-                }
-            }
-            if (observed)
-                job->bitmap[page >> 5] |= 1u << (page & 31u);
-        }
-        /* Preserve a one-page EXECUTED halo on both sides of a scoped DMA
-         * overwrite.  The overwritten page can contain either the ...FFC
-         * control transfer or the ...000 delay slot; the paired instruction
-         * may live in the neighboring page and must come from this same
-         * coherent pre-write RAM snapshot.  Only executed neighbors qualify,
-         * so a sector overwrite cannot pull unrelated dirty history into an
-         * unbounded capture.  Evidence clearing remains limited to the pages
-         * actually overwritten by DMA. */
-        uint32_t halo_lo = first_page > 0u ? first_page - 1u : first_page;
-        uint32_t ram_pages = (uint32_t)(ram_size >> 12);
-        uint32_t halo_hi = last_page + 1u < ram_pages
-                         ? last_page + 1u : last_page;
-        for (uint32_t page = halo_lo; page <= halo_hi; page++) {
-            if (page >= first_page && page <= last_page) continue;
-            uint32_t first_exec_word = page * (4096u / 4u);
-            int observed = 0;
-            for (uint32_t b = 0; b < 4096u / 4u / 32u; b++) {
-                if (job->exec_pc_bitmap[(first_exec_word >> 5) + b]) {
-                    observed = 1;
-                    break;
-                }
-            }
-            if (observed)
-                job->bitmap[page >> 5] |= 1u << (page & 31u);
-        }
+        /* DMA preservation includes a one-page executed halo so an ...FFC
+         * control transfer and its ...000 delay slot remain coherent. */
+        capture_executed_pages(job->bitmap, bw, job->exec_pc_bitmap,
+                               scope_lo, scope_hi, 1);
     } else {
         for (uint32_t i = 0; i < bw; i++)
             job->bitmap[i] = dirty_ram_get_bitmap_word(i);
@@ -1141,8 +1143,7 @@ static int autocap_write_start(void)
 {
     /* Periodic convergence needs executed code, not every sticky dirty page in
      * RAM. Evidence-scoping keeps the background manifest proportional to live
-     * coverage and avoids multi-megabyte rewrites every cooldown. Shutdown still
-     * emits the legacy full current snapshot once. */
+     * coverage and avoids multi-megabyte rewrites every cooldown. */
     AutocapWriteJob *job = capture_snapshot_create(
         0, 2u * 1024u * 1024u, 1);
     if (!job) return 0;
