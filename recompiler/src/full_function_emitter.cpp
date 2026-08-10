@@ -1793,7 +1793,10 @@ void FullFunctionEmitter::emit_dispatch(
                            g_sym_prefix, kb_count);
         out += kb;
         out += "};\n";
-        out += fmt::format("static const uint32_t {}psx_bios_kernel_body_count = {}u;\n\n",
+        // An enum is an integer constant expression in C. A const-qualified
+        // object is not, so MSVC rejects it in the file-scope backend
+        // initializer even though GCC and Clang accept it as an extension.
+        out += fmt::format("enum {{ {}psx_bios_kernel_body_count = {}u }};\n\n",
                            g_sym_prefix, kb_count);
     }
 
