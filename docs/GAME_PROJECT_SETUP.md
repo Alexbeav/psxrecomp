@@ -335,12 +335,24 @@ embedded `toolchain/`. The zip includes:
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
-run Generate & rebuild locally. RetComM / the wizard download
-`cmake-clang-v1` from
+run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
+RetComM / the wizard download `cmake-clang-v1` from
 [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
 (or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
+
+### Player updates (after first Generate)
+
+| Action | Meaning |
+|--------|---------|
+| **Update** (RetComM) | New setup-host zip → refresh source → cmake rebuild. Skips disc→C when `codegen-cache` fingerprints (ROM/BIOS/emitters) still match. |
+| **Generate & Rebuild** | Force regenerate game C from the disc, then rebuild. Use when emit inputs change or cache is wrong. |
+
+Ordinary host/UI releases do **not** require Generate & Rebuild. Details:
+[`ci/HOST_ONLY_RELEASES.md`](ci/HOST_ONLY_RELEASES.md). CI tip: leave the
+`psxrecomp` gitlink pinned and use `reuse_cached_emitters` so release jobs skip
+rebuilding emitters when only host sources moved.
 
 Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`.
 
@@ -496,7 +508,12 @@ Use this before tagging a setup-host release that matches other titles
 - [ ] After rebuild, game launches; saves/settings land beside the exe
 - [ ] RetComM install/update (if you publish a catalog entry) uses this **same**
   ```
-  zip — no separate tools pack required
+  zip — no separate tools pack required; Update rebuilds via codegen-cache
+  (not raw zip extract over a Play binary)
+  ```
+- [ ] Release notes: first Generate once; later Updates are host/UI rebuilds
+  ```
+  unless emitters/ROM/BIOS fingerprints change (see ci/HOST_ONLY_RELEASES.md)
   ```
 
 ### Publish
