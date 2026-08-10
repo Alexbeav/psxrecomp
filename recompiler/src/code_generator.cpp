@@ -14,9 +14,23 @@
 #include <cstdlib>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 namespace PSXRecomp {
+
+/* Reserved MIPS-II branch-likely words often appear when discovery sweeps
+ * ASCII/data as code. Emit the RI raise every time (faithfulness), but do not
+ * spam one WARNING per revisit of the same PC — product Generate was flooding
+ * the setup wizard with hundreds of identical lines. Set
+ * PSXRECOMP_VERBOSE_RI_WARNINGS=1 to print every hit (dev / tests). */
+static bool should_print_reserved_opcode_warning(uint32_t addr) {
+    const char* e = std::getenv("PSXRECOMP_VERBOSE_RI_WARNINGS");
+    if (e != nullptr && e[0] != '\0' && e[0] != '0')
+        return true;
+    static std::unordered_set<uint32_t> seen;
+    return seen.insert(addr).second;
+}
 
 static bool codegen_cycle_per_insn() {
     // DEFAULT ON for the faithful-timing (cycle-audit) branch: each instruction
@@ -1913,9 +1927,11 @@ std::string CodeGenerator::translate_basic_block(
                      * the word is data (never executed) nothing happens; if the
                      * guest really reaches it, the kernel handler sees the same
                      * exception hardware would deliver. */
-                    fmt::print("  WARNING: reserved opcode 0x{:08X} at 0x{:08X} "
-                               "— emitting guest RI exception raise\n",
-                               block.exit_instr.instruction, addr);
+                    if (should_print_reserved_opcode_warning(addr)) {
+                        fmt::print("  WARNING: reserved opcode 0x{:08X} at 0x{:08X} "
+                                   "— emitting guest RI exception raise\n",
+                                   block.exit_instr.instruction, addr);
+                    }
                     ss << config_.indent
                        << fmt::format("{{ /* reserved opcode 0x{:08X}: architectural RI exception */\n",
                                       block.exit_instr.instruction);

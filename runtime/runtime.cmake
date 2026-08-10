@@ -846,9 +846,18 @@ function(psxrecomp_add_runtime_target target)
                 "  (build that tool first if needed; see psxrecomp/docs/BUILDING.md). "
                 "This is expected on a fresh checkout before the first generation.")
         endif()
+        # Pass paths via a list file — large shard counts (hundreds of
+        # generated/*_full_*.c) make -DSOURCES=... exceed Windows' ~8191-char
+        # CreateProcess limit ("The system cannot execute the specified program").
+        set(_psxrt_gen_list
+            "${CMAKE_CURRENT_BINARY_DIR}/${target}_generated_sources.txt")
+        file(WRITE "${_psxrt_gen_list}" "")
+        foreach(_g IN LISTS _game_generated_check)
+            file(APPEND "${_psxrt_gen_list}" "${_g}\n")
+        endforeach()
         add_custom_target(${target}_require_generated
             COMMAND ${CMAKE_COMMAND}
-                    "-DSOURCES=${_game_generated_check}"
+                    "-DSOURCES_FILE=${_psxrt_gen_list}"
                     "-DTARGET=${target}"
                     "-DGAME_CONFIG=${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
                     "-DRECOMPILER=${_psxrt_recompiler_hint}"
