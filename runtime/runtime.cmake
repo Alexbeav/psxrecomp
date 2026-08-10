@@ -763,6 +763,10 @@ function(psxrecomp_add_runtime_target target)
         ${PSXRT_EXTRAS_SOURCES}
     )
     target_link_libraries(${target} PRIVATE chdr-static)
+    # audio_trace.c uses C11 atomics. Make the runtime's actual language
+    # requirement explicit instead of relying on a parent project's global
+    # CMAKE_C_STANDARD setting.
+    target_compile_features(${target} PRIVATE c_std_11)
 
     # Game-specific executable name. Every title instantiates this function with
     # the same CMake target name ("psx-runtime"), so without this they ALL produce
@@ -950,6 +954,7 @@ function(psxrecomp_add_runtime_target target)
         PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
+        $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
@@ -1281,6 +1286,11 @@ function(psxrecomp_add_runtime_target target)
         endif()
     elseif(MSVC)
         target_compile_options(${target} PRIVATE /GS- /guard:cf-)
+        # Visual Studio project files cannot represent language-specific target
+        # options on a mixed C/C++ target. Scope the experimental MSVC atomics
+        # switch to the one C source that needs it instead.
+        set_property(SOURCE ${PSXRECOMP_ROOT}/runtime/src/audio_trace.c
+            APPEND PROPERTY COMPILE_OPTIONS /experimental:c11atomics)
         target_link_options(${target} PRIVATE /STACK:67108864,67108864 /GUARD:NO)
         # No console window in Release MSVC builds. /ENTRY keeps main() as
         # the entry point (not WinMain) while switching to the Windows subsystem.
