@@ -311,6 +311,28 @@ if(BUILD_TESTING)
     target_link_libraries(recompiler_patch_test PRIVATE fmt rabbitizer)
     add_test(NAME recompiler_patch_test COMMAND recompiler_patch_test)
 
+    add_executable(full_function_emitter_test
+        tests/full_function_emitter_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/strict_translator.cpp
+        src/bios_address_model.cpp
+        src/function_discovery.cpp
+        src/full_function_emitter.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(full_function_emitter_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(full_function_emitter_test PRIVATE fmt rabbitizer)
+    add_test(NAME full_function_emitter_test COMMAND full_function_emitter_test)
+
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp
     )
