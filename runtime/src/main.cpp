@@ -6045,6 +6045,7 @@ namespace {
     uint32_t    g_lnch_expected_crc  = 0;
     bool        g_lnch_has_crc       = false;
     const char* g_lnch_argv0         = nullptr;
+    bool        g_lnch_netplay_available = false;
 
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
         if (!out) return 0;
@@ -6218,26 +6219,33 @@ namespace {
         PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
             disc_path, g_lnch_expected_serial, g_lnch_expected_crc,
             g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc,
-            &g_netplay_disc_expect);
+            g_lnch_netplay_available ? &g_netplay_disc_expect : nullptr);
         const std::string& serial = !id.detected_serial.empty()
             ? id.detected_serial : g_lnch_expected_serial;
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
-        out->track_count = id.track_count;
-        out->netplay_ok = id.netplay_ok ? 1 : 0;
-        std::snprintf(out->disc_fp, sizeof(out->disc_fp), "%s", id.disc_fp.c_str());
-        std::snprintf(out->netplay_detail, sizeof(out->netplay_detail), "%s",
-                      id.netplay_detail.c_str());
-        g_session_disc_fp = id.disc_fp;
-        g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
-        psx_lobby_set_disc_fp(id.disc_fp.c_str());
-        // Verdict shown by the launcher. TOC / [netplay] failures are warn so
-        // offline Play still works; online is gated by netplay_ok + disc_fp.
+        if (g_lnch_netplay_available) {
+            out->track_count = id.track_count;
+            out->netplay_ok = id.netplay_ok ? 1 : 0;
+            std::snprintf(out->disc_fp, sizeof(out->disc_fp), "%s",
+                          id.disc_fp.c_str());
+            std::snprintf(out->netplay_detail, sizeof(out->netplay_detail), "%s",
+                          id.netplay_detail.c_str());
+            g_session_disc_fp = id.disc_fp;
+            g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
+            psx_lobby_set_disc_fp(id.disc_fp.c_str());
+        } else {
+            g_session_disc_fp.clear();
+            g_session_netplay_disc_ok = false;
+        }
+        // Verdict shown by the launcher. TOC / [netplay] failures only affect
+        // netplay-capable titles; ordinary offline disc verification is
+        // strictly serial/header/optional-CRC based.
         if (!id.opened || !id.has_header)                            out->verdict = 3; // bad
         else if (id.expected_serial_given && !id.serial_matches)     out->verdict = 3; // wrong disc
         else if (id.expected_crc_given && id.crc_computed && !id.crc_matches) out->verdict = 2; // warn
-        else if (!id.netplay_ok)                                     out->verdict = 2; // TOC/cue
+        else if (g_lnch_netplay_available && !id.netplay_ok)         out->verdict = 2; // TOC/cue
         else                                                          out->verdict = 1; // ok
         return 1;
     }
@@ -10227,9 +10235,13 @@ int main(int argc, char** argv) {
             g_lnch_game_players = game_players;
             apply_offline_pad_count(game_players, multitap_enabled);
             psx_lobby_set_max_slots(game_players);
-            gi.netplay_supported =
-                (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
-            gi.netplay = &g_lnch_netplay_callbacks;
+            g_lnch_netplay_available =
+                game_players >= 2 && game_players <= PSX_MAX_PLAYERS;
+            gi.netplay_supported = g_lnch_netplay_available ? 1 : 0;
+            gi.netplay = g_lnch_netplay_available
+                ? &g_lnch_netplay_callbacks : nullptr;
+#else
+            g_lnch_netplay_available = false;
 #endif
 
             char rui_out_disc[1024] = {0};
