@@ -62,6 +62,11 @@ void set_exec(uint32_t phys) {
     g_dirty_pages[page >> 5] |= 1u << (page & 31u);
 }
 
+void set_dirty_page(uint32_t phys) {
+    const uint32_t page = phys >> 12;
+    g_dirty_pages[page >> 5] |= 1u << (page & 31u);
+}
+
 bool wait_for_failed_write() {
     for (int i = 0; i < 200; ++i) {
         overlay_autocapture_tick();
@@ -173,6 +178,16 @@ int main() {
         return fail("provider spawn failure was not retried exactly once", root);
     if (!bit_is_set(g_dirty_ram_exec_pc_bitmap, 0x10004u))
         return fail("provider retry mutated the newer live epoch", root);
+
+    /* A dirty but never-executed neighbor must not inflate the final snapshot
+     * into a mutable multi-page region. This is the shutdown path that made
+     * long coverage sessions grow by gigabytes. */
+    set_dirty_page(0x11000u);
+    g_ram[0x11000] = 0x77;
+    overlay_capture_write_json();
+    const std::string final_epoch = read_all(capture);
+    if (final_epoch.find("\"size\": 8196") != std::string::npos)
+        return fail("final snapshot included dirty unexecuted pages", root);
 
     overlay_capture_wait_pending();
     std::filesystem::remove_all(root, ignored);
