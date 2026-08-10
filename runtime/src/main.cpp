@@ -8998,11 +8998,14 @@ int main(int argc, char** argv) {
     }
     bool ctrl_lock_mode    = false; /* game.toml [controller] lock_mode; true hides the whole pad-mode selector */
     bool ctrl_lock_device  = false; /* game.toml [controller] lock_device; true hides the Player controller cards entirely */
-    bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
-    bool ws_ultrawide_offered = false;
-    bool ws_adaptive_view_supported = false;
-    bool frame_interpolation_offered = true;
-    bool skip_fmv_offered = true;
+    /* Widescreen/View mode and Skip FMVs are mod-owned on PSX. Their legacy
+     * game.toml offer flags remain parseable for old projects but deliberately
+     * cannot expose generic launcher controls or activate the features. Trusted
+     * activation plugins apply them after launcher/settings resolution. */
+    constexpr bool ws_offered = false;
+    constexpr bool ws_ultrawide_offered = false;
+    constexpr bool frame_interpolation_offered = false;
+    constexpr bool skip_fmv_offered = false;
     bool turbo_loads_offered = true;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     /* Legacy single deadzone (<0 => keep per-slot / input.ini defaults). */
@@ -9286,12 +9289,6 @@ int main(int argc, char** argv) {
             if (!gc.ws_cull_w_imms.empty() || !gc.ws_cull_h_imms.empty())
                 gpu_ws_set_cull_imms(gc.ws_cull_w_imms.data(), (int)gc.ws_cull_w_imms.size(),
                                      gc.ws_cull_h_imms.data(), (int)gc.ws_cull_h_imms.size());
-            ws_offered = gc.ws_offered;
-            ws_ultrawide_offered = gc.ws_ultrawide_offered;
-            ws_adaptive_view_supported = gc.ws_adaptive_view;
-            frame_interpolation_offered =
-                gc.runtime.video_offer_frame_interpolation;
-            skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
             turbo_loads_offered = gc.runtime.offer_turbo_loads;
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
@@ -9558,12 +9555,12 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-    /* A game may migrate Skip FMVs from generic Settings into its mod catalog.
-     * Clamp stale settings before seeding recomp-ui; an enabled activation
-     * plugin applies the feature after the final mod-plan commit. */
+    /* Skip FMVs is mod-owned on PSX. Clamp stale generic settings before
+     * seeding recomp-ui; an enabled activation plugin applies the feature
+     * after the final mod-plan commit. */
     if (!skip_fmv_offered && g_auto_skip_fmv) {
         std::fprintf(stdout,
-            "psxrecomp: Skip FMVs is mod-owned for this title; "
+            "psxrecomp: Skip FMVs is mod-owned on PSX; "
             "ignoring the legacy Settings value\n");
         g_auto_skip_fmv = 0;
     }
@@ -9588,13 +9585,11 @@ int main(int argc, char** argv) {
         g_frame_interpolation_fps = 0;
     }
 
-    /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
-     * so the launcher hides its toggle — and, same completeness treatment as
-     * lock_mode above, the runtime clamps the display aspect to native 4:3 here
-     * so a stale persisted 16:9 in settings.toml can't engage the hack in
-     * launcher-less builds either. */
+    /* Widescreen/View mode is mod-owned on PSX. Clamp the generic display
+     * aspect to native 4:3 so neither a legacy game.toml offer/default nor a
+     * stale settings.toml value can engage it before trusted mod activation. */
     if (!ws_offered && (g_video_aspect_num != 4 || g_video_aspect_den != 3)) {
-        std::fprintf(stdout, "psxrecomp: widescreen not offered for this title; "
+        std::fprintf(stdout, "psxrecomp: widescreen is mod-owned on PSX; "
                      "clamping display aspect %d:%d -> 4:3\n",
                      g_video_aspect_num, g_video_aspect_den);
         g_video_aspect_num = 4;
@@ -10122,7 +10117,7 @@ int main(int argc, char** argv) {
             gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
                                                   PSX multi-track discs — skip verification */
             gi.num_known_sha256     = 0;
-            gi.widescreen_supported = ws_offered ? 1 : 0;
+            gi.widescreen_supported = 0;
             gi.num_players          = game_players;
             gi.msu1_supported       = 0;
             gi.sram_path            = nullptr;   /* PSX uses memory cards, not SRAM -> hide SAVES */
@@ -10136,10 +10131,11 @@ int main(int argc, char** argv) {
             gi.pad_mode_selectable  = ctrl_lock_mode ? 0 : 1;
             gi.locked_pad_mode      = ctrl_locked_mode[0];  /* game-declared default_mode */
             gi.lock_device          = ctrl_lock_device ? 1 : 0;
-            gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
+            gi.aspect_mask          = 0;
             gi.renderer_labels      = kPsxRendererLabels;
             gi.num_renderers        = vulkan_offered ? 3 : 2;
-            gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
+            gi.has_frame_interp     = 0;
+            gi.has_skip_fmv         = 0;
             gi.has_turbo_loads      = turbo_loads_offered ? 1 : 0;
             /* Geometry precision is a property of the PS1 pipeline, not of any
              * particular disc, so every PSX title exposes it. */
