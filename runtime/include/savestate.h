@@ -45,6 +45,11 @@ int savestate_write_slot(int slot, const void* data, size_t size);
 /* 1 if the slot file exists and is non-empty. */
 int savestate_slot_exists(int slot);
 
+/* 1 if the slot .pst header matches this build's integrity key (BIOS/entry/
+ * codegen). 0 + optional reason when missing or stale — use before netplay
+ * load probe so incompatible saves never enter the post-load barrier. */
+int savestate_slot_compatible(int slot, char* reason, size_t reason_cap);
+
 /* Stage a save/load of slot [0..SAVESTATE_SLOTS-1]. Executed at the next safe
  * boundary by savestate_poll (called every block from psx_check_interrupts).
  * Safe to call from the SDL key handler or a debug-server command.
@@ -58,14 +63,28 @@ int savestate_request_load(int slot);
 int savestate_request_save_protocol(int slot);
 int savestate_request_load_protocol(int slot);
 
+/* Netplay LOAD transfer: stage an in-memory .pst (no disk write). Copied
+ * internally; applied by savestate_poll like a normal slot load. */
+int savestate_request_load_blob_protocol(const void* data, size_t size);
+
 /* 1 while a staged save/load has not yet been consumed by savestate_poll. */
 int savestate_pending(void);
 
 /* 1 once after a successful load restore (before scheduler longjmp). Clears. */
 int savestate_take_load_completed(void);
 
+/* 1 once after a staged load failed in savestate_poll (missing/mismatched).
+ * Clears. Netplay uses this to abort the load barrier instead of hanging. */
+int savestate_take_load_failed(void);
+
 /* Frontend hook (main.cpp): restage VRAM present path after a successful load. */
 void psx_frontend_on_savestate_loaded(void);
+/* Rollback snap apply: depth24 hold clear + restage without FMV cutover thrash. */
+void psx_frontend_on_rb_snap_loaded(void);
+
+/* Frontend hook (main.cpp): host OSD toast after a user save/load settles.
+ * is_load: 0 = save, 1 = load. slot is 0-based (F1 = 0). ok: 1 on success. */
+void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
 
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is
  * pending, serialize with cpu->pc = resume_pc; if a load is pending, restore and

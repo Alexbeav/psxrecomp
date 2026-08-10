@@ -14,6 +14,7 @@
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
+#include "gpu_vram_dirty.h"
 #include "gpu_render.h"
 #include "text_xlate.h"
 #include "crash_trace.h"
@@ -22,6 +23,7 @@
 #include "event_ring.h"
 #include "color_lut.h"
 #include "mod_runtime.h"
+#include "sio.h"
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
@@ -2317,15 +2319,31 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 static void gpu_reset_state(int clear_vram) {
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
+        gpu_vram_dirty_mark_all();
     }
     gr_init(vram);
 
-    /* Reset GP0 state machine */
+    /* Reset GP0 state machine (+ leftover cmd/xfer crumbs that survive in
+     * gpu_snapshot and fork av digests on rematch). */
     gp0_state = GP0_IDLE;
     gp0_words_collected = 0;
     gp0_words_needed = 0;
+    memset(gp0_cmd_buf, 0, sizeof(gp0_cmd_buf));
+    gp0_next_source_addr = 0xFFFFFFFFu;
+    gp0_cmd_source_addr = 0xFFFFFFFFu;
+    polyline_color = 0;
+    polyline_prev_x = polyline_prev_y = 0;
+    polyline_prev_c = 0;
+    polyline_semi_trans = 0;
+    polyline_has_prev = 0;
+    vram_write_x = vram_write_y = 0;
+    vram_write_w = vram_write_h = 0;
+    vram_write_col = vram_write_row = 0;
     vram_write_remaining = 0;
     vram_read_active = 0;
+    vram_read_x = vram_read_y = 0;
+    vram_read_w = vram_read_h = 0;
+    vram_read_col = vram_read_row = 0;
 
     /* Reset all state to power-on defaults */
     texpage_x = 0;
@@ -2527,6 +2545,92 @@ static uint16_t rgb888_to_rgb555(uint32_t color24) {
 
 /* i_stat extern declared earlier in this file (above gpu_read_gpustat). */
 
+/* Netplay: present/finish_frame deferred from mid-psx_cyc_step to the next
+ * psx_check_interrupts BB edge. MotK menu wait-loop (0x8006CDA0) was digesting
+ * peers at different instr points (post-lw v0 vs post-slt v0=1) → cpu+ram fork
+ * on idle sealed resim. Guest VBlank raise / LCF stay immediate. */
+static int s_present_pending;
+static int s_flushing_present;
+
+void gpu_vblank_clear_deferred_present(void) {
+    s_present_pending = 0;
+    /* longjmp from flush_resume abandons the flush_present stack frame —
+     * must drop the reentrancy guard or every later flush no-ops forever. */
+    s_flushing_present = 0;
+}
+
+void gpu_vblank_arm_deferred_present(void) {
+    /* Coalesce: at most one deferred present. Stacking (≥2) drained in one
+     * flush as double finish_frame at the same guest cycle (MotK soak:
+     * fin@N and fin@N+1 share dig/cyc → episode skew + clk/tim ±9). */
+    if (s_present_pending < 1)
+        s_present_pending = 1;
+}
+
+int gpu_vblank_present_pending(void) {
+    return s_present_pending > 0;
+}
+
+void gpu_vblank_release_present_flush_guard(void) {
+    s_flushing_present = 0;
+}
+
+void gpu_vblank_flush_present(void) {
+    if (s_flushing_present || s_present_pending <= 0)
+        return;
+    /* Belt-and-suspenders with interrupts.c: never finish_frame inside the
+     * exception handler (IEc-clear BB edges used to drain present_pending). */
+    {
+        extern int psx_get_in_exception(void);
+        if (psx_get_in_exception())
+            return;
+    }
+    /* Hold finish_frame while native memcard SIO is in flight. MotK needs
+     * BB-edge commit for menu-wait determinism, but draining mid card
+     * busy-wait wedges save/load on Ape Escape (empty starfield) and the
+     * same class of titles. Keep s_present_pending; retry after card idle
+     * (sio_hold_present_for_card has a stale escape). */
+    {
+        extern int psx_netplay_active(void);
+        if (psx_netplay_active() && sio_hold_present_for_card())
+            return;
+    }
+    /* MotK menu wait (0x8006CD54↔0x8006CDA0): present ONLY at an explicit
+     * CDA0 edge. Never present on a CD54 edge (sticky CDA0 must not allow
+     * that — soak ep3 non-det fin@946). Non-wait edges (FMV / cutover) must
+     * present even if sticky still names the wait loop — treating sticky as
+     * in_wait blocked deferred present for the whole FMV1→FMV2 gap. */
+    {
+        extern int psx_netplay_active(void);
+        extern uint32_t psx_compiled_irq_resume_pc(void);
+        extern uint32_t psx_last_irq_check_pc(void);
+        extern uint32_t psx_netplay_rb_sticky_bb_pc(void);
+        if (psx_netplay_active()) {
+            const uint32_t wait_a = 0x8006CD54u;
+            const uint32_t wait_b = 0x8006CDA0u;
+            uint32_t pc = psx_compiled_irq_resume_pc();
+            uint32_t last = psx_last_irq_check_pc();
+            uint32_t sticky = psx_netplay_rb_sticky_bb_pc();
+            uint32_t edge = pc ? pc : last;
+            if (edge == wait_a)
+                return;
+            if (edge == wait_b || edge != 0u) {
+                /* CDA0, or non-wait (FMV/cutover) — present; ignore sticky */
+            } else if (sticky == wait_a) {
+                return; /* latch cleared, sticky CD54 — defer */
+            }
+            /* sticky CDA0 or unrelated/0 — present */
+        }
+    }
+    s_flushing_present = 1;
+    while (s_present_pending > 0) {
+        s_present_pending--;
+        if (vblank_callback)
+            vblank_callback();
+    }
+    s_flushing_present = 0;
+}
+
 void gpu_vblank_tick(void) {
     lcf ^= 1;
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
@@ -2553,8 +2657,29 @@ void gpu_vblank_tick(void) {
     /* Trusted package-selected plugins run on guest VBlank, independent of
      * host presentation, pacing, turbo, or skipped frames. */
     mod_runtime_on_vblank();
+    /* Ape LOAD: RAM-only libcard waiter + idle-skip can starve sio_tick /
+     * interrupt-check pumps; VBlank always runs. */
+    {
+        extern void sio_ape_card_unstick_pump(void);
+        sio_ape_card_unstick_pump();
+    }
     psx_irq_raise(0, 0); /* IRQ_VBLANK (gpu_vblank_tick) */
-    if (vblank_callback) vblank_callback();
+    if (!vblank_callback)
+        return;
+    {
+        extern int psx_netplay_active(void);
+        /* Offline selfcheck keeps immediate present: BB-edge defer +
+         * post-IRQ flush reintroduces clk/tim/csv phase skew between warm
+         * resim peers (selfcheck soak: many FAILs with d_cyc≠0). Netplay
+         * defers — both peers share the same present contract from boot. */
+        if (psx_netplay_active()) {
+            /* Coalesce to one deferred present (see arm_deferred_present). */
+            if (s_present_pending < 1)
+                s_present_pending = 1;
+        } else {
+            vblank_callback();
+        }
+    }
 }
 
 const uint16_t* gpu_get_vram(void) {
@@ -2580,13 +2705,17 @@ static void depth24_note_upload(uint32_t x, uint32_t w) {
 }
 
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
-    if (!(display_depth & 1u) || s_d24_upload_x1 == 0u || crtc_w == 0u)
+    if (!(display_depth & 1u) || crtc_w == 0u)
         return crtc_w;
+    /* No uploads yet → treat as uncovered (present blanks until first blit). */
+    if (s_d24_upload_x1 == 0u)
+        return 0u;
     uint32_t dx = display_x & 1023u;
-    if (s_d24_upload_x1 <= dx) return crtc_w;
+    if (s_d24_upload_x1 <= dx) return 0u;
     uint32_t hw = s_d24_upload_x1 - dx;
     uint32_t rgb = (hw * 2u) / 3u;
-    if (rgb == 0u || rgb >= crtc_w) return crtc_w;
+    if (rgb == 0u) return 0u;
+    if (rgb >= crtc_w) return crtc_w;
     return rgb;
 }
 
@@ -2598,6 +2727,12 @@ int gpu_depth24_present_hold_tick(void) {
     if (s_d24_present_hold <= 0) return 0;
     s_d24_present_hold--;
     return 1;
+}
+
+void gpu_depth24_on_savestate_loaded(void) {
+    /* Hold skips Swap — after restore we want the restored VRAM visible now.
+     * Upload span / prev_h were restored from the GPU snap. */
+    s_d24_present_hold = 0;
 }
 
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
@@ -2690,6 +2825,45 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
     return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
+/* Batch depth24 (FMV) scanline → ARGB. Same semantics as calling
+ * gpu_display_pixel_argb(di, x, y) for x in [0, count) (byte-identical
+ * output, including the black-fill past the 2048-byte VRAM row), but hoists
+ * the per-row invariants (vy, base_byte_x, the "how many pixels are past the
+ * row edge" test) out of the per-pixel path instead of recomputing them
+ * `count` times and paying three gpu_vram_byte() calls per pixel. The
+ * per-pixel path was the dominant present-side cost of FMV frames (3x the
+ * VRAM touches of the 16-bit path, done as a function-call chain instead of
+ * a straight-line loop). Still scalar C — no host-endianness assumptions,
+ * same byte-order shifts as gpu_vram_byte. */
+void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
+                             uint32_t count) {
+    uint32_t vy = (di->display_y + y) & 511u;
+    uint32_t base_byte_x = (di->display_x & 1023u) * 2u;
+    const uint16_t* row = vram + (size_t)vy * 1024u;
+    uint32_t valid = 0u;
+    uint32_t x;
+
+    if (base_byte_x <= 2045u)
+        valid = (2045u - base_byte_x) / 3u + 1u;
+    if (valid > count)
+        valid = count;
+
+    for (x = 0; x < valid; x++) {
+        uint32_t byte_x = base_byte_x + x * 3u;
+        uint32_t bx1 = byte_x + 1u;
+        uint32_t bx2 = byte_x + 2u;
+        uint32_t hw0 = row[byte_x >> 1];
+        uint32_t hw1 = row[bx1 >> 1];
+        uint32_t hw2 = row[bx2 >> 1];
+        uint8_t r = (byte_x & 1u) ? (uint8_t)(hw0 >> 8) : (uint8_t)hw0;
+        uint8_t g = (bx1 & 1u) ? (uint8_t)(hw1 >> 8) : (uint8_t)hw1;
+        uint8_t b = (bx2 & 1u) ? (uint8_t)(hw2 >> 8) : (uint8_t)hw2;
+        out[x] = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
+    for (; x < count; x++)
+        out[x] = 0xFF000000u;
+}
+
 int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
@@ -2722,7 +2896,19 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         if (w == 0u) w = 4u;
     }
 
-    uint32_t h = (v_display_y2 > v_display_y1) ? (v_display_y2 - v_display_y1) : 240;
+    /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
+     * active region before taking the difference. Unclamped Y2 past the
+     * active end (common overscan programming) includes a flickering junk
+     * line at the bottom of present that DuckStation crops away. */
+    const int ymin = video_mode ? 20 : 16;  /* PAL : NTSC */
+    const int ymax = video_mode ? 308 : 256;
+    int y1 = (int)v_display_y1;
+    int y2 = (int)v_display_y2;
+    if (y1 < ymin) y1 = ymin;
+    if (y1 > ymax) y1 = ymax;
+    if (y2 < ymin) y2 = ymin;
+    if (y2 > ymax) y2 = ymax;
+    uint32_t h = (y2 > y1) ? (uint32_t)(y2 - y1) : 240u;
     if (vres) h *= 2; /* 480i */
 
     /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /
@@ -2847,6 +3033,7 @@ static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
     uint32_t idx = vy * 1024 + vx;
     if (check_mask_bit && (vram[idx] & 0x8000u)) return;
     vram[idx] = color | (set_mask_bit ? 0x8000u : 0u);
+    gpu_vram_dirty_mark_row(vy);
 }
 
 /* Inclusive draw-area reject (same predicate as raster_pixel / hardware clip).
@@ -3066,6 +3253,24 @@ static void gp0_exec_mono_quad(void) {
     }
     if (draw_area_out_bbox(vx, vy, 4)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
+    /* Semi axis-aligned mono quads (UI boxes/borders): one rect, not two tris.
+     * Thin semi borders (e.g. CTR name-entry OT-1144 teal 3×H) otherwise double-
+     * blend their shared diagonal — nearly the whole strip — and overpaint 3D. */
+    if (semi_trans && ws_axis_aligned_quad(vx, vy)) {
+        int32_t min_x = vx[0], max_x = vx[0], min_y = vy[0], max_y = vy[0];
+        for (int i = 1; i < 4; i++) {
+            if (vx[i] < min_x) min_x = vx[i];
+            if (vx[i] > max_x) max_x = vx[i];
+            if (vy[i] < min_y) min_y = vy[i];
+            if (vy[i] > max_y) max_y = vy[i];
+        }
+        int w = (int)(max_x - min_x);
+        int h = (int)(max_y - min_y);
+        if (w > 0 && h > 0) {
+            gr_draw_flat_rect(min_x, min_y, w, h, color);
+            return;
+        }
+    }
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
@@ -4664,6 +4869,7 @@ static void gpu_write_gp0_body(uint32_t val) {
              * reads/savestates. The renderer mirror is committed in bulk when
              * the GP0 payload completes. */
             vram[(uint32_t)wy * 1024u + wx] = pixel;
+            gpu_vram_dirty_mark_row((uint32_t)wy);
 
         next_pixel:
             if (++vram_write_col == vram_write_w) {
@@ -4910,10 +5116,13 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
+    uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
     video_mode = (val >> 3) & 1;
-    display_depth = (val >> 4) & 1;
+    if (new_depth != display_depth)
+        s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
+    display_depth = new_depth;
     vertical_interlace = (val >> 5) & 1;
     /* GPUSTAT.13 holds the legacy constant 0 in progressive (see the vblank
      * field flip); clear it on the switch so a title that toggles interlace
@@ -5054,6 +5263,8 @@ static int gpu_snap_emit(PstW *w) {
     WH(vram_write_col); WH(vram_write_row); WU(vram_write_remaining);
     WI(vram_read_active); WH(vram_read_x); WH(vram_read_y); WH(vram_read_w); WH(vram_read_h);
     WH(vram_read_col); WH(vram_read_row);
+    /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
+    WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
 #undef WU
 #undef WI
 #undef WH
@@ -5086,6 +5297,7 @@ static int gpu_snap_parse(PstR *r) {
     RH(vram_write_col); RH(vram_write_row); RU(vram_write_remaining);
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
+    RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
 #undef RU
 #undef RI
 #undef RH

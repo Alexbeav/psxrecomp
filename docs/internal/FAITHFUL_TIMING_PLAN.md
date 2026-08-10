@@ -338,7 +338,7 @@ on a fixed region -> next.
   GUID if the dropdown index is stale.
 
 - **2026-07-20 (lobby default → public host):**
-  `psx_lobby_default_url` now `ws://netplay.technicallycomputers.ca:8765`
+  `psx_lobby_default_url` now `ws://netplay.retcomm.net:8765`
   (match SNES); override still `PSX_NET_LOBBY_URL`. Synced MotK vendored
   `psx_lobby_client.{c,h}` + recomp-net `docs/lobby.md`.
 
@@ -602,7 +602,7 @@ on a fixed region -> next.
   Proprietary `recomp-net-server` (Rust) owns WS lobby + privacy/docs;
   removed C `servers/lobby` from open `recomp-net`. Client WS helpers
   vendored at `runtime/src/lobby_ws/`. Default
-  `ws://netplay.technicallycomputers.ca:8765`.
+  `ws://netplay.retcomm.net:8765`.
 
 - **2026-07-19 (netplay lobby server + launcher menus):**
   Lobby WS+JSON owned by proprietary `recomp-net-server` (was C

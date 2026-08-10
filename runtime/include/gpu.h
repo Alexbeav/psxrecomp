@@ -46,15 +46,24 @@ int  gpu_display_is_depth24(void);
 void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y);
+/* Batch equivalent of calling gpu_display_pixel_argb(di, x, y) for x in
+ * [0, count) on a depth24 (FMV) scanline — same output, far less per-pixel
+ * overhead. `out` must hold at least `count` uint32_t ARGB entries. */
+void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
+                             uint32_t count);
 /* Depth24: RGB columns covered by CPU→VRAM uploads since the last reset.
- * Returns crtc_w when unknown / full coverage. Present uses this to blank a
- * trailing margin without shrinking the CRTC-derived width globally. */
+ * Returns 0 when no uploads yet, crtc_w when coverage is full/unknown-beyond,
+ * else the covered RGB width. Present black-fills [limit, crtc_w) without
+ * shrinking the CRTC-derived draw width (avoids a flickering black pillar). */
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w);
 void     gpu_depth24_upload_span_reset(void);
 /* MotK intro cuts retarget GP1(07h). While hold > 0, present should skip
  * Swap (keep prior frame) so stale trailing VRAM never flashes. One tick
  * per vblank; returns non-zero while the hold is still active after tick. */
 int      gpu_depth24_present_hold_tick(void);
+/* After savestate restore: clear ephemeral hold so the restored depth24
+ * frame can present immediately (span/prev_h come from the GPU snap). */
+void     gpu_depth24_on_savestate_loaded(void);
 /* GP1(06h)/GP1(07h)/GP1(08h) fields for debug (gpu_state). */
 void gpu_get_crtc_debug(uint32_t *x1, uint32_t *x2, uint32_t *y1, uint32_t *y2,
                         uint32_t *hres1_out, uint32_t *hres2_out);
@@ -107,9 +116,22 @@ uint32_t gpu_gp0_ring_max_words(void);
 int      gpu_gp0_ring_dump_frame(uint32_t frame, GpuGp0RingEntry *out, int max_out);
 void     gpu_gp0_ring_frame_span(uint32_t *out_oldest, uint32_t *out_newest);
 
-/* Vblank presentation callback — called from gpu_vblank_tick(). */
+/* Vblank presentation callback — called from gpu_vblank_tick().
+ * Under netplay the callback is deferred to gpu_vblank_flush_present() at
+ * BB / IRQ-check edges so finish_frame digests are not sampled mid-block.
+ * Flush also holds while sio_hold_present_for_card() so native save/load
+ * busy-waits are not interrupted by MotK-style BB-edge commit. */
 typedef void (*gpu_vblank_cb)(void);
 void gpu_set_vblank_callback(gpu_vblank_cb cb);
+void gpu_vblank_flush_present(void);
+void gpu_vblank_clear_deferred_present(void);
+/* Queue one deferred present (netplay RB resume when I_STAT already has
+ * VBlank — snap resync cleared the pending callback). */
+void gpu_vblank_arm_deferred_present(void);
+/* 1 while a netplay deferred present is armed (MotK CD54 VBlank hold). */
+int  gpu_vblank_present_pending(void);
+/* Clear flush_present reentrancy guard before longjmp (flush_resume). */
+void gpu_vblank_release_present_flush_guard(void);
 
 /* Present-time screen-colour model (see color_lut.h ScreenKind: 0=raw,
  * 1=crt, 2=composite, 3=trinitron). Config/launcher-driven; the PSX_SCREEN

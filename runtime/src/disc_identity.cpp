@@ -9,9 +9,11 @@
 #include "crc32.h"
 #include "disc_path.h"
 #include "iso_reader.h"
+#include "psx_sha256.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -113,6 +115,50 @@ uint32_t crc32_stream(std::ifstream& f) {
     return crc ^ 0xFFFFFFFFu;
 }
 
+std::string hex_sha256(const std::string& canonical) {
+    uint8_t dig[32];
+    psx_sha256_compute(reinterpret_cast<const uint8_t*>(canonical.data()),
+                       canonical.size(), dig);
+    char hex[65];
+    for (int i = 0; i < 32; i++)
+        std::snprintf(hex + i * 2, 3, "%02x", dig[i]);
+    hex[64] = '\0';
+    return std::string(hex);
+}
+
+void fill_toc_from_mount(DiscIdentity& v, const DiscPathResolution& resolved) {
+    v.from_cue = resolved.from_cue;
+    v.cue_fallback = resolved.cue_fallback;
+    v.upgraded_to_cue = resolved.upgraded_to_cue;
+
+    PS1::ISOReader reader;
+    if (!reader.Open(resolved.mount.string())) {
+        v.toc_opened = false;
+        if (v.detail.empty())
+            v.detail = "Could not mount the disc image for TOC inspection "
+                       "(missing track FILE or unreadable cue).";
+        return;
+    }
+    v.toc_opened = true;
+    v.track_count = reader.TrackCount();
+    if (v.track_count < 1) v.track_count = 1;
+    v.leadout_lba = reader.GetSectorCount();
+
+    // Canonical TOC string — peers with the same mount geometry share disc_fp.
+    // Version prefix lets us evolve the format without silent collisions.
+    std::ostringstream toc;
+    toc << "psxrecomp-toc-v1\n";
+    toc << "tracks=" << v.track_count << "\n";
+    toc << "leadout=" << v.leadout_lba << "\n";
+    for (int t = 1; t <= v.track_count; t++) {
+        toc << "t=" << t
+            << ",a=" << (reader.TrackIsAudio(t) ? 1 : 0)
+            << ",start=" << reader.TrackStartLBA(t)
+            << ",pregap=" << reader.TrackPregapLBA(t) << "\n";
+    }
+    v.disc_fp = hex_sha256(toc.str());
+}
+
 bool is_chd_path(const fs::path& path) {
     std::string ext = path.extension().string();
     for (char& c : ext) c = (char)std::tolower((unsigned char)c);
@@ -133,10 +179,57 @@ bool crc32_chd(PS1::ISOReader& disc, uint32_t& result) {
 
 }  // namespace
 
+void apply_netplay_disc_expect(DiscIdentity& id, const NetplayDiscExpect& expect) {
+    id.netplay_ok = true;
+    id.netplay_detail.clear();
+
+    if (!id.toc_opened) {
+        id.netplay_ok = false;
+        id.netplay_detail = "Disc TOC could not be opened for netplay.";
+        return;
+    }
+    if (expect.require_cue) {
+        if (id.cue_fallback || !id.from_cue) {
+            id.netplay_ok = false;
+            id.netplay_detail =
+                "Netplay requires the full .cue (with all track files), "
+                "not a bare .bin / incomplete dump.";
+            return;
+        }
+    }
+    if (expect.required_tracks > 0 && id.track_count != expect.required_tracks) {
+        id.netplay_ok = false;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "Disc has %d track(s); netplay requires %d "
+                      "(use the supported multi-track .cue dump).",
+                      id.track_count, expect.required_tracks);
+        id.netplay_detail = buf;
+        return;
+    }
+    if (expect.has_required_leadout && id.leadout_lba != expect.required_leadout_lba) {
+        id.netplay_ok = false;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "Disc lead-out LBA %u != required %u.",
+                      (unsigned)id.leadout_lba,
+                      (unsigned)expect.required_leadout_lba);
+        id.netplay_detail = buf;
+        return;
+    }
+    if (!expect.required_disc_fp.empty() && id.disc_fp != expect.required_disc_fp) {
+        id.netplay_ok = false;
+        id.netplay_detail = "Disc TOC fingerprint does not match this build's "
+                            "required dump.";
+        return;
+    }
+}
+
 DiscIdentity identify_disc(const fs::path& path,
                            const std::string& expected_serial,
                            uint32_t expected_crc, bool has_expected_crc,
-                           bool compute_crc) {
+                           bool compute_crc,
+                           const NetplayDiscExpect* netplay_expect) {
     DiscIdentity v;
     v.expected_serial_given = !expected_serial.empty();
     v.expected_crc_given    = has_expected_crc;
@@ -145,6 +238,8 @@ DiscIdentity identify_disc(const fs::path& path,
     // the data track no matter which member of the dump the user handed us —
     // the .cue and its .bin must produce the same verdict, serial and CRC32.
     const DiscPathResolution resolved = resolve_disc_path(path);
+    fill_toc_from_mount(v, resolved);
+
     const fs::path data_path = resolved.data;
     PS1::ISOReader disc;
     if (is_chd_path(resolved.mount)) {
@@ -219,6 +314,10 @@ DiscIdentity identify_disc(const fs::path& path,
         v.detail = resolved.note.empty()
                        ? "Could not open the disc image or its CUE-referenced BIN file."
                        : resolved.note;
+        if (netplay_expect)
+            apply_netplay_disc_expect(v, *netplay_expect);
+        else if (!v.toc_opened)
+            v.netplay_ok = false;
         return v;
     }
     v.opened = true;
@@ -238,6 +337,8 @@ DiscIdentity identify_disc(const fs::path& path,
         v.detail = "No ISO9660 CD001 header was found at the standard PS1 disc locations.";
         // Region may still be inferable from the expected serial for display.
         v.region = region_from_serial(expected_serial);
+        if (netplay_expect)
+            apply_netplay_disc_expect(v, *netplay_expect);
         return v;
     }
 
@@ -286,6 +387,9 @@ DiscIdentity identify_disc(const fs::path& path,
         v.crc_computed = true;
         if (has_expected_crc) v.crc_matches = (v.crc == expected_crc);
     }
+
+    if (netplay_expect)
+        apply_netplay_disc_expect(v, *netplay_expect);
 
     return v;
 }

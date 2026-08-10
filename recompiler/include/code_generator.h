@@ -71,6 +71,11 @@ struct CodeGenConfig {
     // addresses (MotK VLC leaves, etc.). Host locality hint only.
     std::set<uint32_t> hot_funcs;
 
+    // [recompiler] load_charge_batch(_funcs): install a function-local
+    // cycle accumulator so load charges skip deadline probes until IRQ/MMIO
+    // / function exit. Guest totals at those barriers are unchanged.
+    std::set<uint32_t> load_charge_batch_funcs;
+
     // [load_accel.vsync_query] verified PsyQ VSync functions whose mode=-1
     // path may bypass its unused GPUSTAT/Timer1 reads.  The map value is the
     // guest RAM VBlank counter returned by that query path.  Empty = inert.

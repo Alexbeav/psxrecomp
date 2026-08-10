@@ -11,6 +11,7 @@
 #define SDL_ENABLE_OLD_NAMES
 #define SDL_FUNCTION_POINTER_IS_VOID_POINTER
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
 
 #ifndef SDL_WINDOW_SHOWN
 #define SDL_WINDOW_SHOWN 0

@@ -16,7 +16,9 @@
 #include "spu.h"
 #include "event_ring.h"
 #include "audio_trace.h"
+#include "interrupts.h"
 #include "psx_cycles.h"
+#include "psx_netplay.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -116,7 +118,9 @@ static uint32_t cdrom_intc_latched_generation;
  * while staying well under the second-response delays (10k-30k), so command
  * throughput is unaffected. */
 #define CDROM_IRQ_PRESENT_DELAY 5000
-static int cdrom_irq_present_delay;
+/* Absolute guest cycle when an armed CD response may be presented to INTC.
+ * 0 = no presentation hold. Relative remaining is derived for snaps/digests. */
+static uint64_t cdrom_irq_present_due;
 
 /* Parameter FIFO */
 #define PARAM_FIFO_SIZE 16
@@ -280,6 +284,28 @@ int cdrom_get_setloc_lba(void) { return s_setloc_lba; }
 
 /* Frontend XA-stream probe (FMV auto-skip / turbo-load gating in main.cpp). */
 int cdrom_xa_stream_active(void) { return xa_stream_active; }
+
+int cdrom_fmv_stream_pending(void)
+{
+    if (xa_stream_active)
+        return 1;
+    /* FMV/STR preamble: Form2 (0x20) often arms before XA-ADPCM (0x40) /
+     * filter (0x08). MotK intro SetMode(0xa2)+ReadN was invisible here, so
+     * invent ran through the first double-speed Form2 sector race. */
+    if (reading && (mode_reg & 0x68u))
+        return 1;
+    return 0;
+}
+
+void cdrom_resync_deadlines_after_restore(void)
+{
+    if (reading && read_delay > 0)
+        s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
+    else if (!reading)
+        s_cd_timing_next_due = 0;
+    /* pending.due_cyc / cdrom_irq_present_due rebuilt in snap_parse from
+     * relative remaining (same guest clock as the restore). */
+}
 
 /* Response-overwrite diagnostics consumed by debug_server.c. master's CD
  * response arbiter tracks how often an undelivered response was overwritten;
@@ -505,9 +531,11 @@ static int apply_speed(int delay) {
 
 static int apply_read_speed(int delay) {
     /* A route is an explicit DATA-read allowlist, never a blanket drive-speed
-     * change. XA filter/ADPCM modes are rejected before the first streaming
-     * sector can set xa_stream_active; established XA remains authentic too. */
-    if (xa_stream_active || (mode_reg & 0x48u)) return delay;
+     * change. Keep FMV/STR authentic: XA-ADPCM (0x40), filter (0x08), and
+     * Form2/0x924 (0x20) — MotK sets mode 0xa2 (Form2+2×) before the XA bit,
+     * and disc_speed=4x was compressing that preamble into a one-sector race
+     * (soak §93 P1 sim 184: rd≈112896 vs delivered). */
+    if (xa_stream_active || (mode_reg & 0x68u)) return delay;
     if (s_warm_route_active) return warm_route_period();
     return apply_speed(delay);
 }
@@ -592,14 +620,57 @@ static int seek_complete_delay_cycles(void) {
     return apply_speed(base);
 }
 
-/* Pending command */
+/* Pending second-response command. due_cyc is an absolute guest deadline —
+ * the drive clock never freezes while irq_flag is set (ack only gates
+ * presentation). Relative remaining is derived for snaps/digests so wire
+ * format stays peer-stable across hosts. */
 typedef struct {
     uint8_t cmd;
     int pending;
-    int delay;
     int phase;
+    uint64_t due_cyc;
 } PendingCmd;
 static PendingCmd pending;
+
+static int cycles_until_due(uint64_t due_cyc) {
+    if (due_cyc == 0 || psx_cycle_count >= due_cyc) return 0;
+    uint64_t rem = due_cyc - psx_cycle_count;
+    return rem > 0x7FFFFFFFull ? 0x7FFFFFFF : (int)rem;
+}
+
+static int pending_rem_cycles(void) {
+    if (!pending.pending) return 0;
+    return cycles_until_due(pending.due_cyc);
+}
+
+static int irq_present_rem_cycles(void) {
+    return cycles_until_due(cdrom_irq_present_due);
+}
+
+static void pending_arm(uint8_t cmd, int latency_cycles, int phase) {
+    if (latency_cycles < 0) latency_cycles = 0;
+    pending.cmd = cmd;
+    pending.pending = 1;
+    pending.phase = phase;
+    pending.due_cyc = psx_cycle_count + (uint64_t)latency_cycles;
+}
+
+static void pending_set_remaining(int rem) {
+    if (!pending.pending) {
+        pending.due_cyc = 0;
+        return;
+    }
+    if (rem < 0) rem = 0;
+    pending.due_cyc = psx_cycle_count + (uint64_t)rem;
+}
+
+static void irq_present_set_remaining(int rem) {
+    if (rem <= 0) {
+        cdrom_irq_present_due = 0;
+        return;
+    }
+    cdrom_irq_present_due = psx_cycle_count + (uint64_t)rem;
+}
 
 typedef struct {
     uint8_t cmd;
@@ -642,7 +713,7 @@ static void trace_cdrom(uint8_t kind, uint32_t addr, uint32_t val, uint8_t width
     e->sector_size = sector_size;
     e->pending_cmd = pending.cmd;
     e->pending_pending = (uint8_t)pending.pending;
-    e->pending_delay = pending.delay;
+    e->pending_delay = pending_rem_cycles();
     e->reading = (uint8_t)reading;
     e->read_cmd = read_cmd;
     e->read_delay = read_delay;
@@ -777,8 +848,9 @@ static void set_irq(int type) {
     cdrom_intc_request_latched = 0;
     /* Arm the presentation latency: this response must NOT be presented to INTC
      * synchronously inside the guest store that triggered it (see the
-     * CDROM_IRQ_PRESENT_DELAY note). It is presented at a later cdrom_advance. */
-    cdrom_irq_present_delay = CDROM_IRQ_PRESENT_DELAY;
+     * CDROM_IRQ_PRESENT_DELAY note). Absolute due — not a slice-relative
+     * countdown (see pending.due_cyc). */
+    cdrom_irq_present_due = psx_cycle_count + (uint64_t)CDROM_IRQ_PRESENT_DELAY;
     trace_cdrom('I', 0, (uint32_t)type, 0);
     /* DEQUEUE: CD response/data event fired (aux = CD irq type). */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_CD_IRQ, (uint32_t)type);
@@ -800,7 +872,8 @@ static void present_cdrom_irq(void) {
      * keeps a freshly-issued response from being presented synchronously inside
      * the guest's command/ack write — and thus from being lost to that ISR's
      * own trailing INTC ack. */
-    if (cdrom_irq_present_delay > 0) return;
+    if (cdrom_irq_present_due != 0 && psx_cycle_count < cdrom_irq_present_due)
+        return;
     if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag) &&
         !cdrom_intc_request_latched) {
         psx_irq_raise(2, irq_flag); /* IRQ_CDROM; detail = CD response/IRQ type */
@@ -1384,6 +1457,26 @@ static void start_read_stream(uint8_t cmd) {
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
     event_ring_record_aux(EV_ENQ, (uint8_t)SRC_CD_READ, (uint32_t)read_delay);
+    {
+        static int s_bisect = -1;
+        if (s_bisect < 0) {
+            const char *e = getenv("PSX_RB_CD_BISECT");
+            s_bisect = (e && e[0] && e[0] != '0') ? 1 : 0;
+        }
+        if (s_bisect) {
+            fprintf(stderr,
+                    "psxrecomp: rb cd-bisect ReadN-arm cyc=%llu csv=%u "
+                    "rd0=%d mode=%02x div=%d cmd=%02x lba=%d "
+                    "seek=%02d:%02d:%02d irq_f=%02x present_d=%d\n",
+                    (unsigned long long)psx_cycle_count,
+                    (unsigned)interrupts_get_cycles_since_vblank(),
+                    read_delay, (unsigned)mode_reg, g_disc_speed_divisor,
+                    (unsigned)cmd, msf_to_lba(read_min, read_sec, read_sect),
+                    read_min, read_sec, read_sect,
+                    (unsigned)irq_flag, irq_present_rem_cycles());
+            fflush(stderr);
+        }
+    }
 }
 
 static void stop_read_stream(void) {
@@ -1429,7 +1522,6 @@ static uint32_t cdda_track_end_lba(int track) {
 }
 
 static int start_cdda_playback(int requested_track) {
-    if (cdda_playing && requested_track == 0 && iso_handle && iso_track_count(iso_handle) > 1) return 1;
     uint32_t lba;
     int track;
     if (requested_track > 0) {
@@ -1543,6 +1635,82 @@ static int deliver_read_sector_without_irq(void) {
     return delivered;
 }
 
+/* §93 P1: cmd timeline under PSX_RB_CD_BISECT (window via netplay).
+ * ISSUE/DONE include controller stat + response FIFO (GetTN last-track BCD,
+ * GetTD MSF) so peers can diff TOC replies after matched command issue. */
+static void cd_bisect_cmd_log(const char *kind, uint8_t cmd,
+                              const uint8_t *params, int nparam)
+{
+    char pbuf[3 * PARAM_FIFO_SIZE + 4];
+    char rbuf[3 * RESPONSE_FIFO_SIZE + 4];
+    int i, o = 0;
+    int pend_rem;
+    int seek_lba;
+    int rn;
+    int tracks = 0;
+    int td_lba = -1;
+    if (!psx_netplay_cd_bisect_active())
+        return;
+    if (nparam < 0) nparam = 0;
+    if (nparam > PARAM_FIFO_SIZE) nparam = PARAM_FIFO_SIZE;
+    pbuf[0] = '-';
+    pbuf[1] = '\0';
+    if (params && nparam > 0) {
+        for (i = 0; i < nparam && o + 3 < (int)sizeof(pbuf); i++) {
+            if (i) pbuf[o++] = ',';
+            o += sprintf(pbuf + o, "%02x", (unsigned)params[i]);
+        }
+        pbuf[o] = '\0';
+    }
+    rn = response_count;
+    if (rn < 0) rn = 0;
+    if (rn > RESPONSE_FIFO_SIZE) rn = RESPONSE_FIFO_SIZE;
+    rbuf[0] = '-';
+    rbuf[1] = '\0';
+    o = 0;
+    if (rn > 0) {
+        for (i = 0; i < rn && o + 3 < (int)sizeof(rbuf); i++) {
+            if (i) rbuf[o++] = ',';
+            o += sprintf(rbuf + o, "%02x", (unsigned)response_fifo[i]);
+        }
+        rbuf[o] = '\0';
+    }
+    pend_rem = pending_rem_cycles();
+    seek_lba = msf_to_lba(seek_min, seek_sec, seek_sect);
+    /* TOC helpers: binary track count / resolved GetTD LBA (mount-side). */
+    if (cmd == 0x13u)
+        tracks = iso_handle ? iso_track_count(iso_handle) : 0;
+    else if (cmd == 0x14u && params && nparam >= 1) {
+        int raw = (int)params[0];
+        int track = bcd_to_bin(raw);
+        if (raw == 0xAA || track == 0) {
+            uint32_t sectors = iso_handle ? iso_sector_count(iso_handle) : 0u;
+            td_lba = sectors ? (int)sectors : 0;
+        } else {
+            td_lba = iso_handle ? (int)iso_track_start_lba(iso_handle, track) : 0;
+        }
+    }
+    fprintf(stderr,
+            "psxrecomp: rb cd-cmd %s sim=%u cyc=%llu csv=%u cmd=%02x "
+            "n=%d params=%s stat=%02x rn=%d resp=%s irq_f=%02x mode=%02x "
+            "reading=%d pend=%d/%d pend_cmd=%02x seek=%02d:%02d:%02d lba=%d "
+            "rMSF=%02d:%02d:%02d tracks=%d td_lba=%d resim=%d\n",
+            kind,
+            (unsigned)psx_netplay_sim_tick(),
+            (unsigned long long)psx_cycle_count,
+            (unsigned)interrupts_get_cycles_since_vblank(),
+            (unsigned)cmd, nparam, pbuf,
+            (unsigned)stat_reg, rn, rbuf,
+            (unsigned)irq_flag, (unsigned)mode_reg, reading ? 1 : 0,
+            pending.pending ? 1 : 0, pend_rem,
+            pending.pending ? (unsigned)pending.cmd : 0u,
+            seek_min, seek_sec, seek_sect, seek_lba,
+            read_min, read_sec, read_sect,
+            tracks, td_lba,
+            psx_netplay_is_resimulating() ? 1 : 0);
+    fflush(stderr);
+}
+
 static void try_execute_queued_command(void) {
     if (!queued_cmd.pending || irq_flag != 0) return;
 
@@ -1577,6 +1745,7 @@ static void queue_or_exec_command(uint8_t cmd) {
     param_count = 0;
     trace_cdrom('Q', 0, cmd, 0);
     record_command_history('Q', cmd, queued_cmd.params, queued_cmd.param_count);
+    cd_bisect_cmd_log("QUEUE", cmd, queued_cmd.params, queued_cmd.param_count);
 }
 
 /* Pause (0x09) completion latency — Beetle PS_CDC::Command_Pause.
@@ -1695,12 +1864,12 @@ static void exec_command(uint8_t cmd) {
         }
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x07;
-        pending.pending = 1;
-        pending.delay = apply_speed(30000); /* motor spin-up */
-        s_cd_probe_motor_count++;
-        s_cd_probe_motor_cycles += (uint64_t)pending.delay;
-        pending.phase = 1;
+        {
+            int lat = apply_speed(30000); /* motor spin-up */
+            pending_arm(0x07, lat, 1);
+            s_cd_probe_motor_count++;
+            s_cd_probe_motor_cycles += (uint64_t)lat;
+        }
         break;
 
     case 0x08: /* Stop — stop the motor. Two-phase like Pause: INT3 (ACK) now
@@ -1720,12 +1889,12 @@ static void exec_command(uint8_t cmd) {
         stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK);
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x08;
-        pending.pending = 1;
-        pending.delay = apply_speed(30000); /* motor spin-down */
-        s_cd_probe_stop_count++;
-        s_cd_probe_stop_cycles += (uint64_t)pending.delay;
-        pending.phase = 1;
+        {
+            int lat = apply_speed(30000); /* motor spin-down */
+            pending_arm(0x08, lat, 1);
+            s_cd_probe_stop_count++;
+            s_cd_probe_stop_cycles += (uint64_t)lat;
+        }
         break;
 
     case 0x09: { /* Pause */
@@ -1737,12 +1906,9 @@ static void exec_command(uint8_t cmd) {
         stat_reg &= ~(CDSTAT_READ | CDSTAT_PLAY);
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x09;
-        pending.pending = 1;
-        pending.delay = complete_delay;
+        pending_arm(0x09, complete_delay, 1);
         s_cd_probe_pause_count++;
         s_cd_probe_pause_cycles += (uint64_t)complete_delay;
-        pending.phase = 1;
         break;
     }
 
@@ -1754,8 +1920,6 @@ static void exec_command(uint8_t cmd) {
         stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x0A;
-        pending.pending = 1;
         /* The old 1136000-cycle (34 ms) value was borrowed from Beetle's
          * Command_RESET — a different command. Init(0x0A) on an already-
          * spinning drive completes far faster on real hardware, and OpenBIOS
@@ -1768,8 +1932,7 @@ static void exec_command(uint8_t cmd) {
          * two, not a measured constant) sits inside OpenBIOS's window and
          * within real-hardware quick-init behavior; cross-check against
          * Beetle's exact PS_CDC::Command_Init figure when refining. */
-        pending.delay = 131072;
-        pending.phase = 1;
+        pending_arm(0x0A, 131072, 1);
         break;
 
     case 0x0B: /* Mute */
@@ -1957,12 +2120,12 @@ static void exec_command(uint8_t cmd) {
         stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = cmd;   /* 0x15 or 0x16 — completed in process_pending */
-        pending.pending = 1;
-        pending.delay = seek_complete_delay_cycles();
-        s_cd_probe_seek_count++;
-        s_cd_probe_seek_cycles += (uint64_t)pending.delay;
-        pending.phase = 1;
+        {
+            int lat = seek_complete_delay_cycles();
+            pending_arm(cmd, lat, 1); /* 0x15/0x16 — completed in process_pending */
+            s_cd_probe_seek_count++;
+            s_cd_probe_seek_cycles += (uint64_t)lat;
+        }
         break;
 
     case 0x1A: /* GetID */
@@ -1971,12 +2134,9 @@ static void exec_command(uint8_t cmd) {
          * or INT5 (ERROR) if no disc / lid open. */
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x1A;
-        pending.pending = 1;
         /* Beetle PS_CDC::Command_ID: second response after 33868 cycles.
          * Unscaled — same authentic-latency class as Pause/Init/ReadTOC. */
-        pending.delay = 33868;
-        pending.phase = 1;
+        pending_arm(0x1A, 33868, 1);
         break;
 
     case 0x1B: /* ReadS */
@@ -1993,13 +2153,10 @@ static void exec_command(uint8_t cmd) {
     case 0x1E: /* ReadTOC */
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
-        pending.cmd = 0x1E;
-        pending.pending = 1;
         /* Beetle PS_CDC::Command_ReadTOC: ~30M cycles (a near-second TOC
          * re-scan; Beetle adds a seek term on top — we keep the dominant
          * constant). Unscaled — authentic-latency class. */
-        pending.delay = 30000000;
-        pending.phase = 1;
+        pending_arm(0x1E, 30000000, 1);
         break;
 
     case 0x19: /* Test */
@@ -2036,24 +2193,27 @@ static void exec_command(uint8_t cmd) {
      * Delayed responses (pending) fire from process_pending(). */
     fire_cdrom_irq();
     record_command_history('C', cmd, cmd_params, cmd_param_count);
+    cd_bisect_cmd_log("ISSUE", cmd, cmd_params, cmd_param_count);
 }
 
 static void process_pending(uint32_t cycles) {
+    uint8_t done_cmd;
+    (void)cycles;
     if (!pending.pending) return;
 
-    if (cycles == 0) return;
-    /* Serialized responses: a delayed completion (e.g. SeekL / Init COMPLETE)
-     * cannot be presented while a prior response IRQ is still unacked. Freeze
-     * pending.delay while held so it does not accrue fake time debt and
-     * underflow once the guest finally acks (mirrors process_read_stream). */
+    /* Absolute drive deadline: due_cyc advances with guest time regardless of
+     * slice quantum or irq_flag. Ack only gates *presentation* — do not push
+     * due_cyc forward while the response FIFO is busy (old relative freeze
+     * under/over-counted mid-slice acks and forked Pause→Seek→ReadN). */
+    if (psx_cycle_count < pending.due_cyc) return;
     if (irq_flag != 0) return;
-    pending.delay -= (int)cycles;
-    if (pending.delay > 0) return;
 
+    done_cmd = pending.cmd;
     pending.pending = 0;
+    pending.due_cyc = 0;
     response_clear();
 
-    switch (pending.cmd) {
+    switch (done_cmd) {
     case 0x06: /* ReadN data ready */
     case 0x1B: /* ReadS data ready */
         if (reading) {
@@ -2132,6 +2292,7 @@ static void process_pending(uint32_t cycles) {
     default:
         break;
     }
+    cd_bisect_cmd_log("DONE", done_cmd, NULL, 0);
 }
 
 /* Read-stream hold accounting (always-on). Before 2026-07-10 the stream
@@ -2255,7 +2416,7 @@ void cdrom_init(const char* cue_path) {
     cdrom_intc_request_latched = 0;
     cdrom_irq_generation = 0;
     cdrom_intc_latched_generation = 0;
-    cdrom_irq_present_delay = 0;
+    cdrom_irq_present_due = 0;
     param_count = 0;
     response_read = 0;
     response_count = 0;
@@ -2282,9 +2443,17 @@ void cdrom_init(const char* cue_path) {
     cd_muted = 0;
     xa_reset_decode();
     spu_cd_audio_reset();
-    pending.pending = 0;
+    /* Rematch: pending.cmd/delay/phase and read MSF used to survive with
+     * pending.pending=0 / reading=0 and fork the CD digest at dig0. */
+    memset(&pending, 0, sizeof(pending));
     memset(&queued_cmd, 0, sizeof(queued_cmd));
+    cdrom_clear_pending_dataready();
+    read_min = read_sec = read_sect = 0;
+    reading = 0;
+    read_cmd = 0;
+    read_delay = 0;
     seek_min = seek_sec = seek_sect = 0;
+    s_setloc_lba = -1;
     setloc_seek_far = 0;
     s_warm_routes_count = 0;
     s_warm_route_configured = 0;
@@ -2436,9 +2605,10 @@ void cdrom_write(uint32_t addr, uint32_t value) {
                 param_count = 0;
             }
             /* A fully-acked INT presents any pended data-ready first
-             * (Beetle CheckAIP on IRQ-register clear); a queued command
-             * then waits behind that INT1's own ack cycle. */
+             * (Beetle CheckAIP on IRQ-register clear); then a second-response
+             * that is already past due_cyc; a queued command waits behind. */
             present_pending_dataready();
+            process_pending(0);
             try_execute_queued_command();
         }
         break;
@@ -2457,14 +2627,23 @@ void cdrom_write(uint32_t addr, uint32_t value) {
 uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 2))) return 0xFFFFFFFFu;   /* IRQ_CDROM masked */
     uint32_t best = 0xFFFFFFFFu;
-    /* Armed response awaiting presentation (will raise bit2 when delay hits 0). */
+    /* Armed response awaiting presentation (raises bit2 at present_due). */
     if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag)) {
-        uint32_t d = cdrom_irq_present_delay > 0 ? (uint32_t)cdrom_irq_present_delay : 0u;
+        int rem = irq_present_rem_cycles();
+        uint32_t d = rem > 0 ? (uint32_t)rem : 0u;
         if (d < best) best = d;
     }
-    /* Pending second response: fires set_irq in pending.delay cycles. */
-    if (pending.pending && pending.delay > 0 && (uint32_t)pending.delay < best)
-        best = (uint32_t)pending.delay;
+    /* Pending second response: slice to due_cyc while the drive clock runs.
+     * Once due, presentation waits on irq_flag clear (CPU ack) — do not
+     * advertise a deliverable CD IRQ until the FIFO is free. */
+    if (pending.pending) {
+        if (psx_cycle_count < pending.due_cyc) {
+            uint32_t d = (uint32_t)cycles_until_due(pending.due_cyc);
+            if (d < best) best = d;
+        } else if (irq_flag == 0 && 0u < best) {
+            best = 0u;
+        }
+    }
     /* Active sector read: next data-ready in read_delay cycles. */
     if (reading && !warm_route_consumer_blocked() &&
         read_delay > 0 && (uint32_t)read_delay < best)
@@ -2473,17 +2652,13 @@ uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
 }
 
 void cdrom_advance(uint32_t cycles) {
-    /* Age the response presentation latency. Once it elapses, the following
-     * refresh_cdrom_irq_line() presents the held response to INTC — at this
-     * cdrom_advance boundary, not synchronously inside the guest store that
-     * armed it. */
-    if (cdrom_irq_present_delay > 0) {
-        cdrom_irq_present_delay -= (int)cycles;
-        if (cdrom_irq_present_delay < 0) cdrom_irq_present_delay = 0;
-    }
+    /* Presentation hold is absolute (cdrom_irq_present_due); refresh checks
+     * it. Note: do NOT freeze CD during rollback Replay. MotK FMV skip resim
+     * resumes into VLC/sector waits; frozen IRQs → no finish_frame hang.
+     * Menu CD asymmetry is contained by no-invent during media + core POST. */
     refresh_cdrom_irq_line();
-    try_execute_queued_command();
     process_pending(cycles);
+    try_execute_queued_command();
     process_read_stream(cycles);
     process_cdda_stream(cycles);
     refresh_cdrom_irq_line();
@@ -2572,13 +2747,15 @@ void cdrom_debug_snapshot(CDROMDebugState* out) {
     out->filter_channel = filter_channel;
     out->muted = cd_muted;
     out->read_delay = read_delay;
+    out->irq_present_delay = irq_present_rem_cycles();
+    out->speed_divisor = g_disc_speed_divisor;
     out->read_hold_cycles = s_read_hold_cycles;
     out->read_hold_events = s_read_hold_events;
     out->int1_pended = s_int1_pended;
     out->int1_lost = s_int1_lost;
     out->int1_pending_now = pending_dataready;
     out->pending_pending = pending.pending;
-    out->pending_delay = pending.delay;
+    out->pending_delay = pending_rem_cycles();
     out->pending_phase = pending.phase;
     out->i_stat = i_stat;
     out->last_sector_lba = last_sector_lba;
@@ -2662,6 +2839,68 @@ int cdrom_data_read_active(void) {
     return reading && !xa_stream_active;
 }
 
+/* Savestate post-load: authentic CD second-response delays (ReadTOC ~30M
+ * cycles, Init ~1.1M, far seeks, etc.) leave the restored frame on screen
+ * for up to ~1s+ of wall time. Clamp those timers so the next cdrom_advance
+ * delivers the IRQ; keep XA/FMV cadence untouched. */
+#define CDROM_SAVESTATE_DELAY_CAP     4096
+#define CDROM_SAVESTATE_BOOST_VBLANKS 180  /* ~3s at 60Hz */
+
+static int s_savestate_cd_boost_vblanks = 0;
+
+static void cdrom_apply_savestate_delay_caps(int log_clamps) {
+    if (pending.pending && psx_cycle_count < pending.due_cyc) {
+        int rem = pending_rem_cycles();
+        if (rem > CDROM_SAVESTATE_DELAY_CAP) {
+            if (log_clamps)
+                fprintf(stderr,
+                        "cdrom: savestate clamped pending cmd=0x%02X delay %d -> %d\n",
+                        (unsigned)pending.cmd, rem,
+                        CDROM_SAVESTATE_DELAY_CAP);
+            pending_set_remaining(CDROM_SAVESTATE_DELAY_CAP);
+        }
+    }
+    if (reading && !xa_stream_active &&
+        read_delay > CDROM_SAVESTATE_DELAY_CAP) {
+        if (log_clamps)
+            fprintf(stderr,
+                    "cdrom: savestate clamped read_delay %d -> %d\n",
+                    read_delay, CDROM_SAVESTATE_DELAY_CAP);
+        read_delay = CDROM_SAVESTATE_DELAY_CAP;
+        s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
+    }
+    if (irq_present_rem_cycles() > CDROM_SAVESTATE_DELAY_CAP)
+        irq_present_set_remaining(CDROM_SAVESTATE_DELAY_CAP);
+}
+
+void cdrom_accelerate_after_savestate(void) {
+    const char *probe = getenv("PSX_POST_LOAD_PROBE");
+    const int log_probe = (probe && probe[0] == '1');
+    s_savestate_cd_boost_vblanks = CDROM_SAVESTATE_BOOST_VBLANKS;
+    cdrom_apply_savestate_delay_caps(/*log_clamps*/log_probe);
+    if (log_probe)
+        fprintf(stderr,
+                "cdrom: savestate boost armed for %d vblanks (delay cap %d)\n",
+                CDROM_SAVESTATE_BOOST_VBLANKS, CDROM_SAVESTATE_DELAY_CAP);
+}
+
+void cdrom_savestate_boost_vblank(void) {
+    if (s_savestate_cd_boost_vblanks <= 0) return;
+    cdrom_apply_savestate_delay_caps(/*log_clamps*/0);
+    s_savestate_cd_boost_vblanks--;
+}
+
+int cdrom_savestate_cd_wait_active(void) {
+    if (s_savestate_cd_boost_vblanks <= 0) return 0;
+    if (pending.pending && pending_rem_cycles() > 0) return 1;
+    if (reading && !xa_stream_active) return 1;
+    return 0;
+}
+
+int cdrom_savestate_boost_vblanks_remaining(void) {
+    return s_savestate_cd_boost_vblanks;
+}
+
 /* ---- boot snapshot: complete CD-ROM controller FSM (see boot_state.h) ---- */
 /* Every functional controller/drive/FIFO/IRQ-latch/XA-decode/timing global is
  * listed here exactly once. The X-macro guarantees bytes()/write()/read() can
@@ -2680,12 +2919,14 @@ static int cdrom_snap_emit(PstW *w) {
 #define WB(a)  do { if (!pst_w_bytes(w, (a), sizeof(a))) return 0; } while (0)
     W8(index_reg); W8(stat_reg); W8(request_reg); W8(irq_enable); W8(irq_flag);
     WI(cdrom_intc_request_latched); WU(cdrom_irq_generation);
-    WU(cdrom_intc_latched_generation); WI(cdrom_irq_present_delay);
+    WU(cdrom_intc_latched_generation); WI(irq_present_rem_cycles());
     WB(param_fifo); WI(param_count);
     WB(response_fifo); WI(response_read); WI(response_count);
     WB(sector_buffer); WI(sector_read_pos); WI(sector_available); WI(sector_size);
     WB(last_sector_buffer); WI(last_sector_lba); WI(last_sector_size);
-    WU(last_sector_frame); W8(last_sector_mode); W8(last_sector_have_raw);
+    /* last_sector_frame is host s_frame_count — zero on the wire so netplay
+     * digests/pins are not forked by present-skip / FPS skew. */
+    WU(0u); W8(last_sector_mode); W8(last_sector_have_raw);
     W8(last_sector_raw_mode); W8(last_sector_xa_file); W8(last_sector_xa_channel);
     W8(last_sector_xa_submode); W8(last_sector_xa_coding);
     W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba); WI(setloc_seek_far);
@@ -2698,8 +2939,9 @@ static int cdrom_snap_emit(PstW *w) {
         return 0;
     W8(xa_stream_file); W8(xa_stream_channel); W8(xa_stream_coding); WI(xa_stream_active);
     WI(g_disc_speed_divisor); WI(g_game_divisor); WI(g_instant_max_per_frame);
-    /* PendingCmd / QueuedCmd — no host padding on the wire */
-    W8(pending.cmd); WI(pending.pending); WI(pending.delay); WI(pending.phase);
+    /* PendingCmd / QueuedCmd — relative remaining on the wire (absolute due
+     * rebuilt on load from psx_cycle_count). */
+    W8(pending.cmd); WI(pending.pending); WI(pending_rem_cycles()); WI(pending.phase);
     W8(queued_cmd.cmd); WB(queued_cmd.params); WI(queued_cmd.param_count); WI(queued_cmd.pending);
     W8(pending_dataready); W8(pending_dataready_stat);
 #undef W8
@@ -2715,6 +2957,8 @@ static int cdrom_snap_parse(PstR *r) {
     int32_t i;
     uint32_t u;
     uint64_t u64;
+    int present_rem = 0;
+    int pending_rem = 0;
 #define R8(f)  do { if (!pst_r_u8(r, &b)) return 0; (f) = b; } while (0)
 #define RI(f)  do { if (!pst_r_i32(r, &i)) return 0; (f) = (int)i; } while (0)
 #define RU(f)  do { if (!pst_r_u32(r, &u)) return 0; (f) = u; } while (0)
@@ -2722,7 +2966,7 @@ static int cdrom_snap_parse(PstR *r) {
 #define RB(a)  do { if (!pst_r_bytes(r, (a), sizeof(a))) return 0; } while (0)
     R8(index_reg); R8(stat_reg); R8(request_reg); R8(irq_enable); R8(irq_flag);
     RI(cdrom_intc_request_latched); RU(cdrom_irq_generation);
-    RU(cdrom_intc_latched_generation); RI(cdrom_irq_present_delay);
+    RU(cdrom_intc_latched_generation); RI(present_rem);
     RB(param_fifo); RI(param_count);
     RB(response_fifo); RI(response_read); RI(response_count);
     RB(sector_buffer); RI(sector_read_pos); RI(sector_available); RI(sector_size);
@@ -2740,7 +2984,7 @@ static int cdrom_snap_parse(PstR *r) {
         return 0;
     R8(xa_stream_file); R8(xa_stream_channel); R8(xa_stream_coding); RI(xa_stream_active);
     RI(g_disc_speed_divisor); RI(g_game_divisor); RI(g_instant_max_per_frame);
-    R8(pending.cmd); RI(pending.pending); RI(pending.delay); RI(pending.phase);
+    R8(pending.cmd); RI(pending.pending); RI(pending_rem); RI(pending.phase);
     R8(queued_cmd.cmd); RB(queued_cmd.params); RI(queued_cmd.param_count); RI(queued_cmd.pending);
     R8(pending_dataready); R8(pending_dataready_stat);
 #undef R8
@@ -2748,6 +2992,11 @@ static int cdrom_snap_parse(PstR *r) {
 #undef RU
 #undef R64
 #undef RB
+    irq_present_set_remaining(present_rem);
+    if (pending.pending)
+        pending_set_remaining(pending_rem);
+    else
+        pending.due_cyc = 0;
     return 1;
 }
 
@@ -2767,7 +3016,12 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     if (len != cdrom_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
-    return cdrom_snap_parse(&r);
+    if (!cdrom_snap_parse(&r))
+        return 0;
+    /* Absolute host deadlines are not on the wire — rebuild from restored
+     * relative read_delay (psx_cycle_count is resynced by the load caller). */
+    cdrom_resync_deadlines_after_restore();
+    return 1;
 }
 
 void debug_force_cd_reinsert(void) {

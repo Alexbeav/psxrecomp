@@ -250,6 +250,7 @@ if(NOT MSVC AND EXISTS "${BEETLE_LIB}")
         src/beetle_libretro.cpp
         src/beetle_debug_server.c
         src/frame_pacing.c
+        src/host_time.c
         src/parity_trace.c
         src/device_trace.c
         src/audio_trace.c

@@ -505,6 +505,28 @@ struct RuntimeConfig {
     bool                  has_deadzone = false;
     int                   deadzone     = 0;
 
+    // multitap_port: console port that hosts the SCPH-1070 when offline/netplay
+    // arms multitap (players/slot_count >= 3). 1 = Port 1 (default, most games),
+    // 2 = Port 2 (Bomberman Party Edition, Jigsaw Madness, S.C.A.R.S., …).
+    bool                  has_multitap_port = false;
+    int                   multitap_port     = 1;
+
+    // multitap_analog: opt-in DualShock-on-tap hack (default false). When true,
+    // multitap bulk seats may report 0x73 + stick bytes; when false (faithful),
+    // tap seats stay plain digital. Overridable by settings.toml / match_caps.
+    bool                  has_multitap_analog = false;
+    bool                  multitap_analog     = false;
+
+    // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
+    // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
+    // 0xF3 only while in config) — required by MMX6 and the correct default for every
+    // title. true = the pre-98aa688 behaviour (config commands always answer 0xF3, no
+    // enter/exit tracking). Only Tomba opts in: its libpad re-detect — triggered by the
+    // launcher Hybrid mode's analog<->digital type flip — manufactures a 1-frame "pad
+    // unplugged" under the modern SM (menu unpause / phantom input). The legacy answers
+    // make that re-detect benign. Scoped per-game; no other title's behaviour changes.
+    // Wired to sio_set_legacy_cfg(); see sio.c g_pad_legacy_cfg.
+    bool                  legacy_pad_config = false;
     // anti_deadzone: minimum radial analog output after leaving deadzone, in
     // raw SDL axis units (0..32767). This is a game-owned response setting used
     // to compensate a title's own internal stick deadzone. Absent => 0.
@@ -631,6 +653,16 @@ struct GameConfig {
     uint32_t              disc_crc = 0;
     std::string           disc_sha1;
 
+    // [netplay] disc mount policy (portable across psxrecomp titles).
+    // Data-track CRC proves "right game"; these prove "same CD geometry"
+    // (GetTN track count / cue layout) so peers cannot join with Track-01-only
+    // dumps vs full Redump multi-track cues. 0 / empty = do not check that field.
+    bool                  netplay_require_cue = false;
+    int                   netplay_required_tracks = 0;
+    bool                  has_netplay_required_leadout = false;
+    uint32_t              netplay_required_leadout_lba = 0;
+    std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
     std::filesystem::path bios_thunks_path; // optional; empty if not set
@@ -686,6 +718,12 @@ struct GameConfig {
     // [recompiler] hot_funcs: guest addresses that get __attribute__((hot))
     // on their generated C bodies (profile/host locality; no guest semantics).
     std::vector<uint32_t> hot_funcs;
+
+    // [recompiler] load_charge_batch: when true, emit function-local cycle
+    // accumulators for load_charge_batch_funcs (or hot_funcs if that list is
+    // empty). Requires regen; guest totals at IRQ/MMIO barriers unchanged.
+    bool                  load_charge_batch = false;
+    std::vector<uint32_t> load_charge_batch_funcs;
 
     // [load_accel.vsync_query] opt-in for a byte-verified PsyQ VSync(mode)
     // implementation.  mode=-1 returns vsync_counter_addr while bypassing two
@@ -999,7 +1037,7 @@ struct UserSettings {
     bool parse_error = false;
 
     // [video]
-    bool has_renderer       = false; int  renderer       = 0; // 0=software,1=opengl
+    bool has_renderer       = false; int  renderer       = DEFAULT_VIDEO_RENDERER; // 0=software,1=opengl,2=vulkan
     bool has_supersampling  = false; int  supersampling  = 1; // 1..4
     // Window size: width in px; height is always width*3/4 (PSX 4:3). Applies to
     // both the launcher and the emulator window so they boot at the same size.
@@ -1060,22 +1098,37 @@ struct UserSettings {
     bool has_memcard1_enabled = false; bool memcard1_enabled = true;
     bool has_memcard2_enabled = false; bool memcard2_enabled = true;
 
-    // [controller] — per-player input device + pad type. device is one of:
+    // [controller] — per-player input device + pad type + deadzone.
+    // device is one of:
     //   "none"     — no pad in this port (port not connected)
     //   "keyboard" — driven by the keyboard map (input.ini)
     //   "<GUID>"   — an SDL game-controller GUID (SDL_JoystickGetGUIDString)
-    // p1_mode/p2_mode select the emulated pad behaviour (see PadMode):
-    // hybrid (default) / analog / digital. Defaults: P1 keyboard, P2 none.
-    bool has_p1_device = false; std::string p1_device = "keyboard";
-    bool has_p2_device = false; std::string p2_device = "none";
-    // Pad input mode per player (see PadMode): hybrid (default) / analog /
-    // digital. Persisted as p1_mode/p2_mode strings. Legacy p1_analog/p2_analog
-    // booleans are still read for back-compat (true->analog, false->digital).
-    bool has_p1_mode = false; int p1_mode = PAD_MODE_HYBRID;
-    bool has_p2_mode = false; int p2_mode = PAD_MODE_HYBRID;
-    // Analog-stick deadzone, raw SDL axis units (0..32767). The launcher edits
-    // this as 0-100% (raw = pct*32767/100), mirroring snesrecomp's GamepadDeadzone.
-    bool has_deadzone  = false; int  deadzone  = 12000;
+    // Modes (see PadMode): hybrid / analog / digital. Defaults: P1 keyboard,
+    // P2–P5 none. Deadzone default is 10% (3277/32767). TOML keys:
+    // pN_device / pN_mode / pN_deadzone (N=1..5). Legacy bare `deadzone`
+    // still fills any slot that lacks pN_deadzone.
+    static constexpr int kMaxControllerPlayers = 5;
+    bool        has_p_device[kMaxControllerPlayers] = {};
+    std::string p_device[kMaxControllerPlayers] = {
+        "keyboard", "none", "none", "none", "none"};
+    bool has_p_mode[kMaxControllerPlayers] = {};
+    int  p_mode[kMaxControllerPlayers] = {
+        PAD_MODE_HYBRID, PAD_MODE_HYBRID, PAD_MODE_HYBRID,
+        PAD_MODE_HYBRID, PAD_MODE_HYBRID};
+    bool has_p_deadzone[kMaxControllerPlayers] = {};
+    int  p_deadzone[kMaxControllerPlayers] = {
+        3277, 3277, 3277, 3277, 3277};  /* ~10% of 32767 */
+    // Legacy global deadzone (settings.toml `deadzone=`). Applied to slots
+    // that do not have an explicit pN_deadzone. Default 10%.
+    bool has_deadzone  = false; int  deadzone  = 3277;
+    // SCPH-1070 multitap for offline 3+ player seats (settings.toml
+    // [controller] multitap). Default ON when unset. When false, offline
+    // sampling caps at 2 native ports. Netplay lobbies with more than 2
+    // seats always arm multitap in the runtime regardless.
+    bool has_multitap_enabled = false; bool multitap_enabled = true;
+    // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
+    // Default off when unset; game.toml [controller] multitap_analog seeds it.
+    bool has_multitap_analog = false; bool multitap_analog = false;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
@@ -1127,6 +1180,12 @@ UserSettings load_user_settings(const std::filesystem::path& path);
 
 // Write settings.toml deterministically. Returns false on I/O failure.
 bool save_user_settings(const std::filesystem::path& path, const UserSettings& s);
+
+// Surgical upsert of `key = true|false` under [controller] in game.toml.
+// Preserves comments and unrelated keys. Creates [controller] if missing.
+// Used to persist launcher multitap_analog into the title game config.
+bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
+                                      const char* key, bool value);
 
 // Locate the project root by walking upward from `config_path` until a
 // directory containing `.gitignore`, `.git`, or `CMakeLists.txt` is found.

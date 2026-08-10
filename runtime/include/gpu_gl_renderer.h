@@ -49,6 +49,12 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
 /* Clear to black + swap (display-disabled frame). */
 void gl_renderer_present_blank(void);
 
+/* §33: re-present the last Live frame captured before Swap (or from a VRAM
+ * snapshot when interpolation owned the last present). Used during rollback
+ * resim so the window keeps a wall-clock present cadence without reading
+ * mid-resim VRAM. Returns 1 if a Swap happened, 0 if no hold is available. */
+int gl_renderer_present_hold_last(void);
+
 /* Sync the authoritative FBO down to CPU VRAM if the GPU side is ahead (else
  * a no-op). Screenshots and the debug server call this before reading CPU
  * VRAM. Do NOT use before 24-bit (FMV) scanout — a full readback can clobber
@@ -64,6 +70,27 @@ void gl_renderer_flush_cpu_uploads(void);
  * VRAM tiles match the last present. Call after savestate restore so a
  * reloaded identical frame still reaches the window (double/triple buffer). */
 void gl_renderer_invalidate_present(void);
+
+/* After savestate restore: push the CPU VRAM mirror into the GL FBO. Needed
+ * when the load happened while GP1 depth24 was on — the normal path skips
+ * framebuffer-sized uploads, which also skipped the full-VRAM boot_state
+ * blit and left post-FMV menus without texture pages. */
+void gl_renderer_restage_vram_after_savestate(void);
+
+/* Netplay dual-raster: every GP0 also writes software VRAM @ 1× (snaps /
+ * digests / GPUREAD authority) while the OpenGL hr FBO keeps settings-scale
+ * SSAA for present-only. Never enables glReadPixels; CPU stays current. */
+void gl_renderer_set_cpu_auth_dual(int on);
+int  gl_renderer_cpu_auth_dual(void);
+
+/* Post-savestate freeze probe: skip/swap/dirty-mark counters (GL present path).
+ * take() returns deltas since the previous take/reset. Safe no-ops when GL is
+ * inactive. rect_dirty tests the current present-tile dirty bits. */
+void gl_renderer_present_probe_reset(void);
+void gl_renderer_present_probe_take(uint64_t *skip_delta, uint64_t *swap_delta,
+                                    uint64_t *dirty_mark_delta,
+                                    int *force_remaining);
+int  gl_renderer_present_rect_dirty(int disp_x, int disp_y, int w, int h);
 
 /* THE present path for 15-bit frames: blit the display region straight from
  * the authoritative VRAM FBO into a letterboxed rect (no readback).

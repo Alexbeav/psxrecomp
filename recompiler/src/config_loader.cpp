@@ -6,9 +6,11 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "bios_rom_alias.h"
 #include "fmt/format.h"
@@ -170,6 +172,15 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(recompiler_patch_address_key(patch.address));
         h.u32(patch.expected);
         h.u32(patch.replacement);
+    }
+
+    h.tag("load_charge_batch");
+    h.u32(c.load_charge_batch ? 1u : 0u);
+    {
+        std::vector<uint32_t> lcb = c.load_charge_batch_funcs;
+        std::sort(lcb.begin(), lcb.end());
+        h.u32((uint32_t)lcb.size());
+        for (uint32_t pc : lcb) h.u32(pc);
     }
     return h.value;
 }
@@ -679,6 +690,22 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
         }
+        if (ct.contains("multitap_port")) {
+            const auto n = toml::find<int64_t>(ct, "multitap_port");
+            if (n != 1 && n != 2)
+                throw std::runtime_error(fmt::format(
+                    "[controller] multitap_port must be 1 or 2, got {}", n));
+            rt.multitap_port = static_cast<int>(n);
+            rt.has_multitap_port = true;
+        }
+        if (ct.contains("multitap_analog")) {
+            rt.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            rt.has_multitap_analog = true;
+        }
+        // Prefer string key; accept legacy bool alias.
+        if (ct.contains("legacy_pad_config")) {
+            rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
+        }
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
             if (n < 0 || n > 32767)
@@ -1121,6 +1148,30 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         for (char& c : disc_sha1) c = (char)std::tolower((unsigned char)c);
     }
 
+    // [netplay] — mount / TOC policy for online (see DiscIdentity::disc_fp).
+    bool netplay_require_cue = false;
+    int netplay_required_tracks = 0;
+    bool has_netplay_required_leadout = false;
+    uint32_t netplay_required_leadout_lba = 0;
+    std::string netplay_required_disc_fp;
+    if (cfg.contains("netplay")) {
+        const toml::value& np = toml::find(cfg, "netplay");
+        if (np.contains("require_cue"))
+            netplay_require_cue = toml::find<bool>(np, "require_cue");
+        if (np.contains("required_tracks"))
+            netplay_required_tracks = toml::find<int>(np, "required_tracks");
+        if (np.contains("required_leadout_lba")) {
+            netplay_required_leadout_lba =
+                (uint32_t)toml::find<int64_t>(np, "required_leadout_lba");
+            has_netplay_required_leadout = true;
+        }
+        if (np.contains("required_disc_fp")) {
+            netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
+            for (char& c : netplay_required_disc_fp)
+                c = (char)std::tolower((unsigned char)c);
+        }
+    }
+
     // [recompiler]
     if (!cfg.contains("recompiler")) {
         throw std::runtime_error(
@@ -1279,6 +1330,20 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         for (const auto& a : arr)
             hot_funcs.push_back(parse_hex(a, "recompiler.hot_funcs"));
     }
+    // Optional emitter-level load-charge batching for VLC leaves.
+    bool load_charge_batch = false;
+    std::vector<uint32_t> load_charge_batch_funcs;
+    if (recomp.contains("load_charge_batch"))
+        load_charge_batch = toml::find<bool>(recomp, "load_charge_batch");
+    if (recomp.contains("load_charge_batch_funcs")) {
+        const auto& arr =
+            toml::find<std::vector<std::string>>(recomp, "load_charge_batch_funcs");
+        for (const auto& a : arr)
+            load_charge_batch_funcs.push_back(
+                parse_hex(a, "recompiler.load_charge_batch_funcs"));
+    }
+    if (load_charge_batch && load_charge_batch_funcs.empty())
+        load_charge_batch_funcs = hot_funcs;
     uint32_t vsync_query_func = 0;
     uint32_t vsync_counter_addr = 0;
     uint32_t vsync_gpustat_ptr_addr = 0;
@@ -1879,6 +1944,11 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_disc_crc*/     has_disc_crc,
         /*disc_crc*/         disc_crc,
         /*disc_sha1*/        disc_sha1,
+        /*netplay_require_cue*/ netplay_require_cue,
+        /*netplay_required_tracks*/ netplay_required_tracks,
+        /*has_netplay_required_leadout*/ has_netplay_required_leadout,
+        /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
+        /*netplay_required_disc_fp*/ netplay_required_disc_fp,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,
@@ -1895,6 +1965,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*data_shard_funcs*/      data_shard_funcs,
         /*mod_function_entry_funcs*/ mod_function_entry_funcs,
         /*hot_funcs*/             hot_funcs,
+        /*load_charge_batch*/     load_charge_batch,
+        /*load_charge_batch_funcs*/ load_charge_batch_funcs,
         /*vsync_query_func*/      vsync_query_func,
         /*vsync_counter_addr*/    vsync_counter_addr,
         /*vsync_gpustat_ptr_addr*/ vsync_gpustat_ptr_addr,
@@ -2211,39 +2283,64 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("controller")) {
         const toml::value& ct = toml::find(doc, "controller");
-        if (ct.contains("p1_device")) try_get([&]{
-            const auto v = toml::find<std::string>(ct, "p1_device");
-            if (!v.empty()) { s.p1_device = v; s.has_p1_device = true; }
+        static const char* kDevKeys[] = {
+            "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
+        static const char* kModeKeys[] = {
+            "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
+        static const char* kDzKeys[] = {
+            "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
+            "p5_deadzone"};
+        static const char* kAnalogKeys[] = {
+            "p1_analog", "p2_analog", "p3_analog", "p4_analog", "p5_analog"};
+        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+            if (ct.contains(kDevKeys[i])) try_get([&]{
+                const auto v = toml::find<std::string>(ct, kDevKeys[i]);
+                if (!v.empty()) {
+                    s.p_device[i] = v;
+                    s.has_p_device[i] = true;
+                }
+            });
+            // Legacy boolean form first (true->analog, false->digital); the
+            // string `*_mode` keys override when present.
+            if (ct.contains(kAnalogKeys[i])) try_get([&]{
+                s.p_mode[i] = toml::find<bool>(ct, kAnalogKeys[i])
+                                  ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+                s.has_p_mode[i] = true;
+            });
+            if (ct.contains(kModeKeys[i])) try_get([&]{
+                s.p_mode[i] = pad_mode_from_string(
+                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_HYBRID);
+                s.has_p_mode[i] = true;
+            });
+            if (ct.contains(kDzKeys[i])) try_get([&]{
+                const auto n = toml::find<int64_t>(ct, kDzKeys[i]);
+                if (n >= 0 && n <= 32767) {
+                    s.p_deadzone[i] = (int)n;
+                    s.has_p_deadzone[i] = true;
+                }
+            });
+        }
+        if (ct.contains("multitap")) try_get([&]{
+            s.multitap_enabled = toml::find<bool>(ct, "multitap");
+            s.has_multitap_enabled = true;
         });
-        if (ct.contains("p2_device")) try_get([&]{
-            const auto v = toml::find<std::string>(ct, "p2_device");
-            if (!v.empty()) { s.p2_device = v; s.has_p2_device = true; }
-        });
-        // Legacy boolean form first (true->analog, false->digital); the new
-        // string `*_mode` keys override when present.
-        if (ct.contains("p1_analog")) try_get([&]{
-            s.p1_mode = toml::find<bool>(ct, "p1_analog")
-                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-            s.has_p1_mode = true;
-        });
-        if (ct.contains("p2_analog")) try_get([&]{
-            s.p2_mode = toml::find<bool>(ct, "p2_analog")
-                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-            s.has_p2_mode = true;
-        });
-        if (ct.contains("p1_mode")) try_get([&]{
-            s.p1_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
-            s.has_p1_mode = true;
-        });
-        if (ct.contains("p2_mode")) try_get([&]{
-            s.p2_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
-            s.has_p2_mode = true;
+        if (ct.contains("multitap_analog")) try_get([&]{
+            s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            s.has_multitap_analog = true;
         });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
-            if (n >= 0 && n <= 32767) { s.deadzone = (int)n; s.has_deadzone = true; }
+            if (n >= 0 && n <= 32767) {
+                s.deadzone = (int)n;
+                s.has_deadzone = true;
+                /* Legacy global: fill any slot that was not given pN_deadzone. */
+                for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+                    if (!s.has_p_deadzone[i]) {
+                        s.p_deadzone[i] = s.deadzone;
+                        s.has_p_deadzone[i] = true;
+                    }
+                }
+            }
         });
     }
     return s;
@@ -2345,19 +2442,43 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "enable2 = " << (s.memcard2_enabled ? "true" : "false") << "\n";
     }
 
-    if (s.has_p1_device || s.has_p2_device || s.has_p1_mode || s.has_p2_mode ||
-        s.has_deadzone) {
-        f << "\n[controller]\n";
-        if (s.has_p1_device)
-            f << "p1_device = \"" << s.p1_device << "\"\n";
-        if (s.has_p1_mode)
-            f << "p1_mode   = \"" << pad_mode_to_string(s.p1_mode) << "\"\n";
-        if (s.has_p2_device)
-            f << "p2_device = \"" << s.p2_device << "\"\n";
-        if (s.has_p2_mode)
-            f << "p2_mode   = \"" << pad_mode_to_string(s.p2_mode) << "\"\n";
-        if (s.has_deadzone)
-            f << "deadzone  = " << s.deadzone << "\n";
+    {
+        bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
+                        s.has_multitap_analog;
+        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+            if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
+                any_ctrl = true;
+        }
+        if (any_ctrl) {
+            static const char* kDevKeys[] = {
+                "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
+            static const char* kModeKeys[] = {
+                "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
+            static const char* kDzKeys[] = {
+                "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
+                "p5_deadzone"};
+            f << "\n[controller]\n";
+            for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+                if (s.has_p_device[i])
+                    f << kDevKeys[i] << " = \"" << s.p_device[i] << "\"\n";
+                if (s.has_p_mode[i])
+                    f << kModeKeys[i] << "   = \""
+                      << pad_mode_to_string(s.p_mode[i]) << "\"\n";
+                if (s.has_p_deadzone[i])
+                    f << kDzKeys[i] << " = " << s.p_deadzone[i] << "\n";
+            }
+            if (s.has_multitap_enabled)
+                f << "multitap  = " << (s.multitap_enabled ? "true" : "false")
+                  << "\n";
+            if (s.has_multitap_analog)
+                f << "multitap_analog = "
+                  << (s.multitap_analog ? "true" : "false") << "\n";
+            /* Keep a global deadzone= for older readers (mirrors P1). */
+            if (s.has_deadzone || s.has_p_deadzone[0])
+                f << "deadzone  = "
+                  << (s.has_p_deadzone[0] ? s.p_deadzone[0] : s.deadzone)
+                  << "\n";
+        }
     }
 
     if (s.has_language) {
@@ -2375,6 +2496,104 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
+    return f.good();
+}
+
+bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
+                                      const char* key, bool value)
+{
+    if (!key || !key[0]) return false;
+    std::string text;
+    {
+        std::ifstream in(path);
+        if (in) {
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            text = ss.str();
+        }
+    }
+    const std::string val = value ? "true" : "false";
+    const std::string assign = std::string(key) + " = " + val;
+
+    auto is_section = [](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        return i < line.size() && line[i] == '[';
+    };
+    auto section_name = [](const std::string& line) -> std::string {
+        size_t a = line.find('[');
+        size_t b = line.find(']');
+        if (a == std::string::npos || b == std::string::npos || b <= a + 1)
+            return {};
+        return line.substr(a + 1, b - a - 1);
+    };
+    auto key_prefix = [&](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        if (i < line.size() && line[i] == '#') return false;
+        const std::string rest = line.substr(i);
+        return rest.rfind(std::string(key) + " =", 0) == 0 ||
+               rest.rfind(std::string(key) + "=", 0) == 0;
+    };
+
+    std::istringstream ls(text);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(ls, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+    }
+
+    int ctrl_start = -1, ctrl_end = -1;
+    for (int i = 0; i < (int)lines.size(); ++i) {
+        if (is_section(lines[i]) && section_name(lines[i]) == "controller") {
+            ctrl_start = i;
+            ctrl_end = (int)lines.size();
+            for (int j = i + 1; j < (int)lines.size(); ++j) {
+                if (is_section(lines[j])) {
+                    ctrl_end = j;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    if (ctrl_start < 0) {
+        if (!text.empty() && text.back() != '\n') text.push_back('\n');
+        text += "\n[controller]\n";
+        text += assign;
+        text += "\n";
+    } else {
+        int replace_at = -1;
+        for (int i = ctrl_start + 1; i < ctrl_end; ++i) {
+            if (key_prefix(lines[i])) {
+                replace_at = i;
+                break;
+            }
+        }
+        if (replace_at >= 0) {
+            lines[replace_at] = assign;
+        } else {
+            int insert_at = ctrl_end;
+            while (insert_at > ctrl_start + 1 &&
+                   lines[insert_at - 1].find_first_not_of(" \t") ==
+                       std::string::npos)
+                --insert_at;
+            lines.insert(lines.begin() + insert_at, assign);
+        }
+        std::ostringstream out;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            out << lines[i];
+            if (i + 1 < lines.size() || (!text.empty() && text.back() == '\n'))
+                out << '\n';
+        }
+        text = out.str();
+    }
+
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f << text;
     return f.good();
 }
 

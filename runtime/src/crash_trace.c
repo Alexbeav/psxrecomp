@@ -8,6 +8,10 @@
  *   - trap_crash
  *   - TCP "post_mortem_dump" command (future)
  *
+ * Soft-exit (SIGINT / SIGTERM / SIGUSR1, plus Windows console Ctrl handlers)
+ * calls exit(0) so atexit / __gcov_exit / LLVM profile writers flush — required
+ * for PGO train scripts that stop the process with kill.
+ *
  * Mirrors the sibling SuperMarioWorldRecomp project's src/post_mortem.c. The file
  * is OVERWRITTEN on each dump (last-write-wins, single file per run);
  * this is not a log per CLAUDE.md §3 — it's a one-shot final state
@@ -32,6 +36,7 @@
 #include <time.h>
 
 #include "cpu_state.h"
+#include "psx_bss.h"
 #include "crash_trace.h"
 #include "autocompile.h"   /* autocompile_degraded_reason — stamp a degraded
                             * (interpreter-only) run into its own report */

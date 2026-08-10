@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
@@ -2174,6 +2175,16 @@ EmitStats FullFunctionEmitter::emit(
     const std::vector<BiosAlias>&       bios_aliases)
 {
     EmitStats stats;
+
+    // Setup / RetComM zips omit generated/; create it before ofstream.
+    if (!out_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(out_dir, ec);
+        if (ec) {
+            throw std::runtime_error(
+                fmt::format("cannot create out_dir {}: {}", out_dir, ec.message()));
+        }
+    }
 
     // Namespace every symbol this emitter defines under the image's stem, so
     // two recompiled BIOSes can coexist in one binary (see g_sym_prefix).

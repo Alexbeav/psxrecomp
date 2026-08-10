@@ -961,6 +961,17 @@ int provider_commit(void*, const char* image_path) {
     return 1;
 }
 
+int provider_commit_netplay(void*, const char* image_path) {
+    (void)image_path;
+    std::string error;
+    if (!mod_runtime_clear_for_netplay(&error)) {
+        set_error(error);
+        return 0;
+    }
+    state().error.clear();
+    return 1;
+}
+
 const char* provider_error(void*) {
     return state().error.c_str();
 }
@@ -988,6 +999,9 @@ RecompLauncherCModProvider provider = {
     provider_feature_set_option,
     provider_diagnostic_count,
     provider_diagnostic_get,
+    nullptr, /* archive_extension — PSX defaults */
+    nullptr, /* archive_description */
+    provider_commit_netplay,
 };
 #endif
 
@@ -1031,6 +1045,28 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
         s.error.clear();
     }
     s.initialized = true;
+    return true;
+}
+
+bool mod_runtime_clear_for_netplay(std::string* error) {
+    RuntimeMods& s = state();
+    if (!s.initialized) {
+        if (error) error->clear();
+        return true;
+    }
+    s.plan = {};
+    s.validation = {};
+    s.raw_disc_index.clear();
+    s.user_disc_index.clear();
+    s.raw_overlay_index.clear();
+    s.user_overlay_index.clear();
+    s.effective_disc_path.clear();
+    s.main_applied = false;
+    s.disc_enabled = false;
+    s.disc_guard_failed = false;
+    s.error.clear();
+    if (error) error->clear();
+    std::fprintf(stdout, "psxrecomp: mods cleared for netplay (vanilla session)\n");
     return true;
 }
 

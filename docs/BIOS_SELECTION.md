@@ -23,16 +23,21 @@ OpenBIOS; then a retail BIOS is required and the player is prompted for one.
 
 ## What counts as "chosen"
 
-Only a deliberate act by the player:
+A deliberate act by the player:
 
 - `--bios <path>` on the command line, or
 - a BIOS selected in the launcher / settings, which is then remembered.
 
-**Finding a BIOS file on disk does not count.** Earlier versions searched
-directories near the executable and would quietly adopt whatever they found.
-That made behaviour depend on what happened to be lying around — two players
-with identical builds could get different BIOSes. Discovery is no longer a
-selection mechanism.
+**Setup / Generate first-run discovery.** When there is no `bios.cfg` yet (and
+no settings pick), install & build looks next to the executable / project for a
+validated retail dump (`SCPH1001.BIN` and common filename variants; size + CRC
+must match the compiled-in retail image). If found, that path is written to
+`bios.cfg` and used for Generate & Play. If not found, the build stays on
+**OpenBIOS** with no prompt.
+
+Discovery does **not** run when `bios.cfg` already exists — including after the
+player cleared the pick to OpenBIOS. Play-time resolution still never invents a
+BIOS from random files on disk once a choice has been recorded.
 
 A player who has chosen a BIOS can clear that choice and go back to OpenBIOS;
 the choice is not permanent.
