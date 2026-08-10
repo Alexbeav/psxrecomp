@@ -862,10 +862,17 @@ int run_emit_full(const fs::path& bios_path, const fs::path& out_dir,
         dr, sha, out_dir.string(), out_stem, bios_vectors, bios_aliases);
 
     std::fprintf(stdout,
-        "psxrecomp-bios: EMIT OK  emitted=%u  skipped=%u  instructions=%u  "
+        "psxrecomp-bios: EMIT OK  emitted=%u  interpreted=%u  skipped=%u  instructions=%u  "
         "dispatch_entries=%u\n",
-        stats.functions_emitted, stats.functions_skipped,
+        stats.functions_emitted, stats.functions_interpreted, stats.functions_skipped,
         stats.total_instructions, stats.dispatch_entries);
+
+    if (stats.functions_interpreted > 0) {
+        std::fprintf(stdout, "psxrecomp-bios: interpreter fallbacks:\n");
+        for (const auto& [addr, reason] : stats.interpreted) {
+            std::fprintf(stdout, "  0x%08X: %s\n", addr, reason.c_str());
+        }
+    }
 
     if (stats.functions_skipped > 0) {
         std::fprintf(stdout, "psxrecomp-bios: skipped functions:\n");
