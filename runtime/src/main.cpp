@@ -2046,14 +2046,23 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       bool requested_is_explicit) {
     const bool openbios_allowed = s_openbios_allowed;
     const PsxBiosBackend* bundled = psx_bios_bundled();
+    const bool player_bios_selectable = psx_bios_has_selectable() != 0;
+    const bool bundled_only =
+        openbios_allowed && bundled && !player_bios_selectable;
 
-    /* 1. An explicit choice: --bios, else a remembered pick. */
+    /* 1. An explicit choice: --bios, else a remembered pick. A product build
+     * with only its bundled backend has no meaningful player choice: ignore
+     * stale settings/bios.cfg paths instead of validating an image the hidden
+     * launcher row cannot clear. Setup hosts (registry_count == 0) retain their
+     * picker/generation flow. */
     std::filesystem::path chosen;
-    if (requested_is_explicit && requested && requested[0]) {
-        chosen = resolve_bios_path(requested, argv0);
-    } else {
-        std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
-        if (!cached.empty() && std::filesystem::exists(cached)) chosen = cached;
+    if (!bundled_only) {
+        if (requested_is_explicit && requested && requested[0]) {
+            chosen = resolve_bios_path(requested, argv0);
+        } else {
+            std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
+            if (!cached.empty() && std::filesystem::exists(cached)) chosen = cached;
+        }
     }
     if (!chosen.empty() && std::filesystem::exists(chosen)) {
         if (validate_bios_for_launch(chosen)) return chosen;   /* activates it */
@@ -9867,6 +9876,8 @@ int main(int argc, char** argv) {
             launcher_boot_timing_mark("host:after_sdl_init");
             recomp_launcher_set_preserve_sdl(1);
             int lr = 2; /* 0 = launch, 1 = quit, 2 = unavailable */
+            const bool bios_choice_supported =
+                psx_bios_has_selectable() != 0 || psx_bios_registry_count == 0;
             PSXRecompV4::UserSettings seed;
             seed.renderer = g_video_renderer;             seed.has_renderer = true;
             seed.supersampling = g_video_scale;           seed.has_supersampling = true;
@@ -9902,14 +9913,14 @@ int main(int argc, char** argv) {
                 seed.netplay_lobby_url = g_lnch_lobby_url;
                 seed.has_netplay_lobby_url = true;
             }
-            if (bios_explicit && bios_path && bios_path[0]) {
+            if (bios_choice_supported && bios_explicit && bios_path && bios_path[0]) {
                 seed.bios_path = bios_path;
                 seed.has_bios_path = true;
             }
             /* Hydrate launcher BIOS from bios.cfg when settings.toml has none,
              * and rewrite relative paths to absolute so reopen after generate
              * does not depend on cwd. */
-            if (!seed.has_bios_path) {
+            if (bios_choice_supported && !seed.has_bios_path) {
                 std::filesystem::path cached =
                     read_cached_path(argv[0], "bios.cfg");
                 if (!cached.empty()) {
@@ -9933,7 +9944,7 @@ int main(int argc, char** argv) {
             /* First-run setup: if nothing remembered, adopt a retail dump next
              * to the install (SCPH1001…). Missing → leave empty (OpenBIOS).
              * Never override an existing bios.cfg (including cleared OpenBIOS). */
-            if (!seed.has_bios_path) {
+            if (bios_choice_supported && !seed.has_bios_path) {
                 std::error_code ec;
                 const auto cfg = sidecar_cfg_path(argv[0], "bios.cfg");
                 if (!std::filesystem::exists(cfg, ec)) {
@@ -10333,7 +10344,7 @@ int main(int argc, char** argv) {
                  * picker is hidden, but a stale settings file could still
                  * carry one) — resolve_bios_for_runtime would reject it and
                  * the identity gate makes it meaningless. */
-                if (ls.bios_path[0] && !psx_bios_image.image_bundled) {
+                if (bios_choice_supported && ls.bios_path[0]) {
                     std::filesystem::path resolved =
                         resolve_bios_path(ls.bios_path, argv[0]);
                     std::error_code ec;
