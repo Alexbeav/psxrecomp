@@ -221,22 +221,49 @@ def verdict_lines(a, b):
     elif itp > nat:
         out.append("      >> Interpreter fallback EXCEEDS native dispatch.")
 
-    ac = b.get("autocompile_status", {})
-    degraded = ac.get("degraded")
-    reason = ac.get("degraded_reason")
+    # autocompile_status nests every compile field under "compile" (see
+    # handle_autocompile_status in debug_server.c). Reading them off the outer
+    # object yields 0 for all of them and no degraded flag -- i.e. it reports
+    # a healthy autocompile in exactly the case this section exists to catch.
+    # Reported by @Alexbeav on PR #131.
+    outer = b.get("autocompile_status", {}) or {}
+    ac = outer.get("compile")
     out.append("")
-    out.append("      autocompile: "
-               f"runs={num(ac,'runs')} fails={num(ac,'fails')} "
-               f"shard_ok={num(ac,'shard_ok')} "
-               f"shard_fail={num(ac,'shard_fail')} "
-               f"shard_skipped={num(ac,'shard_skipped')}")
-    if degraded:
-        out.append(f"      >> DEGRADED (interpreter-only): {reason}")
-    if num(ac, "shard_fail") > 0:
-        out.append("      >> Shards are FAILING to compile. The runtime parses")
-        out.append("         PSX_SHARD_RESULT from the provider, so this is the")
-        out.append("         real cause, not a symptom. Run compile_overlays.py")
-        out.append("         --check to see the compiler error itself.")
+    if not isinstance(ac, dict):
+        out.append("      autocompile: NO `compile` OBJECT IN THE RESPONSE.")
+        out.append("      >> Cannot report compile state. That is a protocol")
+        out.append("         mismatch between this tool and the runtime -- NOT")
+        out.append("         a healthy result. Do not read it as one.")
+    else:
+        configured = num(ac, "configured")
+        out.append("      autocompile: "
+                   f"configured={configured} state={ac.get('state','?')} "
+                   f"runs={num(ac,'runs')} fails={num(ac,'fails')} "
+                   f"consecutive_fails={num(ac,'consecutive_fails')} "
+                   f"last_exit={num(ac,'last_exit')}")
+        out.append("      shards:      "
+                   f"ok={num(ac,'shard_ok')} fail={num(ac,'shard_fail')} "
+                   f"skipped={num(ac,'shard_skipped')} "
+                   f"fail_total={num(ac,'shard_fail_total')} "
+                   f"result_seen={num(ac,'shard_result_seen')}")
+        if ac.get("degraded"):
+            out.append("      >> DEGRADED (interpreter-only): "
+                       f"{ac.get('degraded_reason')}")
+        if not configured:
+            out.append("      >> autocompile is NOT CONFIGURED, so these zeros")
+            out.append("         are expected rather than alarming. The cache")
+            out.append("         then only exists if you built it ahead of time")
+            out.append("         with compile_overlays.py.")
+        elif not num(ac, "shard_result_seen"):
+            out.append("      >> Configured, but no PSX_SHARD_RESULT has ever")
+            out.append("         been parsed from the provider, so the shard")
+            out.append("         counts above are MEANINGLESS rather than")
+            out.append("         healthy -- the provider most likely never got")
+            out.append("         far enough to emit one.")
+        if num(ac, "shard_fail") > 0 or num(ac, "shard_fail_total") > 0:
+            out.append("      >> Shards are FAILING to compile. That is the")
+            out.append("         real cause, not a symptom. Run")
+            out.append("         compile_overlays.py --check for the error.")
 
     dr = b.get("dirty_ram_stats", {})
     blocks = delta(a, b, "dirty_ram_stats", "blocks_run")
@@ -340,9 +367,19 @@ def report(a, b, span_ms, ring_err, gaps):
         L.append("      where the thread was; it does NOT prove that code was")
         L.append("      interpreted. Use [2] for interpretation evidence.")
 
-    pp = b.get("phase_profile", {})
+    # phase_profile sums a ring of the last PHASE_RING_SECS seconds, so it is
+    # a ROLLING WINDOW, not a since-boot total, and it does not align with this
+    # report's own window. Label it as what it is -- calling it cumulative
+    # invited exactly the wrong read. Reported by @Alexbeav on PR #131.
+    pp = b.get("phase_profile", {}) or {}
+    win_s = num(pp, "window_s")
     L.append("")
-    L.append("  [4] PHASE SHARES (cumulative since boot - for reference)")
+    L.append(f"  [4] PHASE SHARES (rolling {win_s or '?'}s window ending at the"
+             " last snapshot)")
+    L.append("      NOTE this window is the runtime's own and does NOT match")
+    L.append("      the report window above. Treat it as an approximation of")
+    L.append("      recent behaviour, not as evidence scoped to your session.")
+    L.append(f"      samples        {num(pp, 'samples')}")
     for k in ("interp_share", "static_share", "native_share", "gpu_share",
               "other_share", "exc_share"):
         if k in pp:
