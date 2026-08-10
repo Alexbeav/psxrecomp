@@ -18,16 +18,16 @@ for symbol in (
 ):
     assert symbol in HEADER, f"missing trusted-plugin controller API: {symbol}"
 
-reset = """g_mod_controller_mode_override[0] = -1;
-    g_mod_controller_mode_override[1] = -1;
-    mod_runtime_activate_plugins();"""
-apply = """if (g_mod_controller_mode_override[0] >= 0)
-        p1_mode = g_mod_controller_mode_override[0];
-    if (g_mod_controller_mode_override[1] >= 0)
-        p2_mode = g_mod_controller_mode_override[1];"""
+reset0 = "g_mod_controller_mode_override[0] = -1;"
+reset1 = "g_mod_controller_mode_override[1] = -1;"
+activate = "mod_runtime_activate_plugins();"
+apply0 = "player_mode[0] = g_mod_controller_mode_override[0];"
+apply1 = "player_mode[1] = g_mod_controller_mode_override[1];"
 
-assert reset in MAIN, "controller overrides must reset before every activation pass"
-assert apply in MAIN, "controller overrides must replace the resolved launch modes"
-assert MAIN.index(reset) < MAIN.index(apply), "reset/activate must precede application"
+for snippet in (reset0, reset1, activate, apply0, apply1):
+    assert snippet in MAIN, f"missing controller override lifecycle step: {snippet}"
+
+assert MAIN.index(reset0) < MAIN.index(activate) < MAIN.index(apply0)
+assert MAIN.index(reset1) < MAIN.index(activate) < MAIN.index(apply1)
 
 print("mod controller override lifecycle guard passed")

@@ -114,10 +114,9 @@ struct WidescreenAspectConeConfig {
     std::array<uint32_t, 3> queue_capacities{};
     std::array<uint32_t, 3> queue_type_masks{};
 };
-// Parse/format a pad mode. pad_mode_from_string accepts "hybrid"/"analog"/
-// "digital" (case-insensitive) and returns `fallback` for anything else.
-// Strict: for game.toml. THROWS on "hybrid" — the mode is mod-only and must
-// not be declared by a game.
+// Parse/format a pad mode. Strict game.toml parsing accepts "analog" or
+// "digital" (case-insensitive), returns `fallback` for unknown values, and
+// THROWS on "hybrid" — the mode is mod-only and must not be declared by a game.
 int         pad_mode_from_string(const std::string& s, int fallback);
 // Lenient: for a user's settings.toml, where a stale persisted "hybrid" must
 // migrate to analog rather than refuse to launch.
@@ -485,7 +484,6 @@ struct RuntimeConfig {
     bool                  has_default_mode = false;
     int                   default_p1_mode  = PAD_MODE_ANALOG;
     int                   default_p2_mode  = PAD_MODE_ANALOG;
-
 
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
     // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a

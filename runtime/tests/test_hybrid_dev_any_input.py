@@ -14,21 +14,21 @@ assert "e && (e[0] == '0'" not in MAIN, (
     "PSX_DEV_INPUT must not use the old default-on/explicit-disable predicate"
 )
 
-assert "hybrid_stick_active(const PlayerInput& p, bool dev_any)" in MAIN
-assert "hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any)" in MAIN
-assert "hybrid_stick_active(p, dev_here)" in MAIN
-assert "hybrid_dpad_active(p, player, dev_here)" in MAIN
+assert "hybrid_stick_active(const PlayerInput& p, const PadSources& src)" in MAIN
+assert "hybrid_dpad_active(const PlayerInput& p, int player," in MAIN
+assert "hybrid_stick_active(p, src)" in MAIN
+assert "hybrid_dpad_active(p, player, src)" in MAIN
 
 stick_body = MAIN.split(
-    "static bool hybrid_stick_active(const PlayerInput& p, bool dev_any)", 1
+    "static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src)", 1
 )[1].split("static bool hybrid_dpad_active", 1)[0]
 dpad_body = MAIN.split(
-    "static bool hybrid_dpad_active(const PlayerInput& p, int player, bool dev_any)",
+    "static bool hybrid_dpad_active(const PlayerInput& p, int player,",
     1,
 )[1].split("/* Sample each player's live device state", 1)[0]
 
 for name, body, detector in (
-    ("stick", stick_body, "controller_stick_active(handle)"),
+    ("stick", stick_body, "controller_stick_active(handle, controller_deadzone)"),
     ("D-pad", dpad_body, "controller_dpad_active(handle)"),
 ):
     assert "SDL_NumJoysticks()" in body, (
