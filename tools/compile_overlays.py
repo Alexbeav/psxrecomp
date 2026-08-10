@@ -373,6 +373,42 @@ CROSS_VARIANT_DONOR_REASONS = {
 # entry for these bytes and retain one of the classifier's local root reasons.
 HOSTED_OWNER_REASONS = EXACT_FRAGMENT_REASONS - {'DISPATCH_ROOT'}
 FATAL_SEED_REASONS = {'BRANCH_TARGET_ONLY', 'OBSERVED_PC_ONLY', 'UNKNOWN'}
+def recompiler_project_root_args(args) -> list:
+    """--project-root arguments for a psxrecomp-game invocation, or [].
+
+    Every recompiler spawn below runs with cwd = dirname(game.toml), because
+    the seeds/captures paths in the config are relative to it. That cwd is
+    also where the recompiler probes for the BIOS profile when the config has
+    no explicit [recompiler] bios_config — and for a PACKAGED game.toml
+    (packaging/release/game.toml) it holds neither bios/SCPH1001.toml nor a
+    vendored framework one level down. Every shard then died with
+    "FATAL: no BIOS profile found" and the cache silently failed to build,
+    which is what the recipe printed by package_release.ps1 used to tell
+    people to run (issue #72).
+
+    Default the root to the framework, derived from the required
+    --runtime-include (<framework>/runtime/include). Derivation is used ONLY
+    when it actually locates a profile, so this can fix a broken invocation
+    but never alter one that already worked.
+
+    Every lookup is defensive: in-process callers (the test suite, the
+    packager's importlib entry) build a lightweight args object that carries
+    only the fields their recipe needs, so a missing attribute must degrade to
+    "pass no flag" — today's behaviour — never raise.
+    """
+    explicit = getattr(args, 'project_root', None)
+    if explicit:
+        return ['--project-root', os.path.abspath(explicit)]
+    runtime_include = getattr(args, 'runtime_include', None)
+    if not runtime_include:
+        return []
+    derived = os.path.abspath(
+        os.path.join(os.path.abspath(runtime_include), '..', '..'))
+    if os.path.isfile(os.path.join(derived, 'bios', 'SCPH1001.toml')):
+        return ['--project-root', derived]
+    return []
+
+
 BIOS_RESIDENT_PRODUCER = 'bios_resident_manifest'
 BIOS_RESIDENT_MARKER = 'psxrecomp bios resident shard v1'
 
@@ -2875,6 +2911,7 @@ def generate_interior_fragment_static(interior: int, data: bytes,
         cmd = [args.recompiler, psx, '--seeds', seeds_path,
                '--out-dir', out_dir_tmp, '--overlay',
                '--ws-config', os.path.abspath(args.game_toml)]
+        cmd += recompiler_project_root_args(args)
         sub_env = dict(os.environ)
         if args.cps:
             sub_env['PSX_CPS'] = '1'
@@ -3740,6 +3777,7 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
         cmd = [args.recompiler, psx, '--seeds', seeds_path,
                '--out-dir', out_dir_tmp, '--overlay',
                '--ws-config', os.path.abspath(args.game_toml)]
+        cmd += recompiler_project_root_args(args)
         r = subprocess.run(cmd, capture_output=True, text=True,
                            cwd=os.path.dirname(os.path.abspath(args.game_toml)),
                            env=sub_env)
@@ -5130,6 +5168,14 @@ def main():
                     help='path to psxrecomp-game.exe')
     ap.add_argument('--runtime-include', required=True,
                     help='path to psxrecomp runtime/include dir')
+    ap.add_argument('--project-root',    default=None,
+                    help='root the recompiler resolves the BIOS profile against '
+                         '(bios/SCPH1001.toml, or <framework>/bios/SCPH1001.toml '
+                         'one level down). Defaults to the framework root derived '
+                         'from --runtime-include. Only needed when that '
+                         'derivation is wrong, because we spawn the recompiler '
+                         'with cwd = dirname(game.toml) and a PACKAGED game.toml '
+                         'lives in a directory with no BIOS profile under it.')
     ap.add_argument('--out-dir',         default='build-dev/cache',
                     help='cache root dir (default: build-dev/cache)')
     ap.add_argument('--gcc',             default='gcc',
@@ -5464,6 +5510,7 @@ def main():
                    # sites that resolve into overlay code) are applied. --ws-config
                    # only adopts the widescreen lists, not the game's exe/paths.
                    '--ws-config', os.path.abspath(args.game_toml)]
+            cmd += recompiler_project_root_args(args)
             print(f'  recompile: {args.recompiler} ...{" [CPS]" if args.cps else ""}')
             toml_dir = os.path.dirname(os.path.abspath(args.game_toml))
             sub_env = dict(os.environ)
