@@ -897,18 +897,39 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         message=f"Running psxrecomp-game -> {out_dir}",
     )
     cmd = [str(game_tool), "--config", str(config)]
+    # Product Generate: collapse reserved-opcode WARNING spam in the wizard log.
+    # The emitter also dedupes to once-per-PC unless PSXRECOMP_VERBOSE_RI_WARNINGS=1.
+    verbose_ri = os.environ.get("PSXRECOMP_VERBOSE_RI_WARNINGS", "").strip() not in (
+        "",
+        "0",
+    )
     proc = subprocess.run(
         cmd,
         cwd=str(project_root),
         capture_output=True,
         text=True,
     )
+    ri_warn = 0
     for stream in (proc.stdout, proc.stderr):
         if not stream:
             continue
         for line in stream.splitlines():
-            if line.strip():
-                progress.log(line)
+            if not line.strip():
+                continue
+            if (
+                not verbose_ri
+                and "WARNING: reserved opcode" in line
+                and "emitting guest RI" in line
+            ):
+                ri_warn += 1
+                continue
+            progress.log(line)
+    if ri_warn:
+        progress.log(
+            f"Note: suppressed {ri_warn} reserved-opcode WARNING line(s) "
+            "(data-as-code sites; RI raises still emitted). "
+            "Set PSXRECOMP_VERBOSE_RI_WARNINGS=1 for full detail."
+        )
     if proc.returncode != 0:
         progress.error(
             f"psxrecomp-game failed (exit {proc.returncode})", code=EXIT_ERROR
