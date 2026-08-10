@@ -434,7 +434,8 @@ Adaptive mid-match delay bumps are always on (no lobby disable).
 
 ### Tasks
 
-- [x] Netplay clears mods (`mod_runtime_clear_for_netplay` / launcher hook)
+- [x] Netplay clears mods (`mod_runtime_clear_for_netplay` / launcher hook;
+      main skips `mod_runtime_commit` when `net_cfg.enabled`)
 - [x] Same BIOS stem + disc identity on both peers (existing verify)
 - [x] Audit non-deterministic host clocks in sim path — **selfcheck-driven**
       (was soak-driven). `PSX_RB_SELFCHECK=1` (offline, single process,

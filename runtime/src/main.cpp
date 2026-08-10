@@ -10461,8 +10461,18 @@ int main(int argc, char** argv) {
     }
 
     {
+        /* Netplay must stay vanilla: launcher commit_netplay clears the plan,
+         * but a following offline-style commit would re-resolve enabled mods
+         * from disk. Skip commit entirely when this session is netplay. */
         std::string mod_error;
-        if (!PSXRecompV4::mod_runtime_commit(resolved_disc, &mod_error)) {
+        if (net_cfg.enabled) {
+            if (!PSXRecompV4::mod_runtime_clear_for_netplay(&mod_error)) {
+                std::fprintf(stderr,
+                             "psxrecomp: cannot clear mods for netplay: %s\n",
+                             mod_error.c_str());
+                return 1;
+            }
+        } else if (!PSXRecompV4::mod_runtime_commit(resolved_disc, &mod_error)) {
             std::fprintf(stderr, "psxrecomp: cannot launch with selected mods: %s\n",
                          mod_error.c_str());
             return 1;
@@ -11864,6 +11874,27 @@ soft_return_lobby:
                 default: g_video_aspect_num = 4;  g_video_aspect_den = 3; break;
             }
             g_video_win_w = ls.window_width > 0 ? ls.window_width : g_video_win_w;
+            {
+                std::string mod_error;
+                if (net_cfg.enabled) {
+                    if (!PSXRecompV4::mod_runtime_clear_for_netplay(&mod_error)) {
+                        std::fprintf(stderr,
+                                     "psxrecomp: cannot clear mods for netplay "
+                                     "rematch: %s\n",
+                                     mod_error.c_str());
+                        SDL_Quit();
+                        return 1;
+                    }
+                } else if (!PSXRecompV4::mod_runtime_commit(resolved_disc,
+                                                            &mod_error)) {
+                    std::fprintf(stderr,
+                                 "psxrecomp: cannot relaunch with selected "
+                                 "mods: %s\n",
+                                 mod_error.c_str());
+                    SDL_Quit();
+                    return 1;
+                }
+            }
             std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
                         net_cfg.enabled ? 1 : 0);
             std::fflush(stdout);

@@ -163,8 +163,9 @@ Generate & rebuild / prepare flows should point at the **`.cue`**, not a lone
   netplay.
 - **VERSION / lobby match pin:** peers should run the same release pin so
   generated code and protocol stay compatible.
-- **Mods:** netplay launches prefer a vanilla / synced mod plan (title-specific;
-  see launcher `commit_netplay` hooks).
+- **Mods:** disabled for all netplay sessions (lobby / LAN / direct / rematch).
+  Launcher `commit_netplay` and the runtime clear the in-session plan without
+  touching the user's offline mod selection. Synced mod plans are deferred.
 
 ---
 

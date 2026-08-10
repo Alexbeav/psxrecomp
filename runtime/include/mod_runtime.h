@@ -19,7 +19,8 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
 bool mod_runtime_commit(const std::filesystem::path& disc_path = {},
                         std::string* error = nullptr);
 /* Drop the in-session mod plan for a netplay launch without rewriting the
- * user's persisted offline selection on disk. */
+ * user's persisted offline selection on disk. Netplay is always vanilla for
+ * now (no synced mod plans). */
 bool mod_runtime_clear_for_netplay(std::string* error = nullptr);
 const std::string& mod_runtime_fingerprint();
 const std::filesystem::path& mod_runtime_effective_disc_path();
