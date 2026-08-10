@@ -10221,6 +10221,9 @@ int main(int argc, char** argv) {
             /* Local codegen: missing generated/ or MOTK_FORCE_SETUP opens the
              * generate & rebuild wizard (may also set prepare_required). */
             psx_game_codegen_setup_apply(&gi);
+            /* host_apply forces has_bios for OpenBIOS-only setup packages. */
+            if (gi.setup_wizard_supported)
+                gi.has_bios = 1;
 #endif
 #endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
