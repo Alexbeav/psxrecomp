@@ -6,13 +6,23 @@
  * of the box. Edit + restart (or rebind live in the launcher's Controls page) to
  * apply. See psx_keybinds.h for the API contract and the PSX pad-word bit layout.
  */
-#include "psx_keybinds.h"
+#include "psx_keybinds.h"   /* pulls in psx_sdl.h (SDL2/SDL3 shim) */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+
+/* Mouse-button pseudo-scancodes. Values sit above SDL's keyboard scancode
+ * space (SDL_NUM_SCANCODES == 512), so they flow through the existing
+ * bind/save/load/rebind machinery as ordinary SDL_Scancode values while
+ * held() resolves them against SDL_GetMouseState() instead of the keyboard
+ * array. INI names: Mouse1 (left) .. Mouse5 (X2), plus LMB/RMB/MMB aliases. */
+#define PSXKB_MOUSE_SC_BASE 512                       /* + SDL_BUTTON_* (1..5) */
+#define PSXKB_MOUSE_SC(btn) ((SDL_Scancode)(PSXKB_MOUSE_SC_BASE + (btn)))
+#define PSXKB_IS_MOUSE_SC(sc) \
+    ((int)(sc) > PSXKB_MOUSE_SC_BASE && (int)(sc) <= PSXKB_MOUSE_SC_BASE + 5)
 
 /* PSX pad word bits (active-low), standard DualShock layout. Matches the
  * PAD_* masks in main.cpp / beetle_main.cpp. */
@@ -71,6 +81,10 @@
 
 static PsxKeyBinds       s_binds         = PSXKB_DEFAULTS;
 static const PsxKeyBinds s_default_binds = PSXKB_DEFAULTS;
+/* Alternate bindings: zero-initialised = SDL_SCANCODE_UNKNOWN = no alt bound.
+ * Primary OR alt asserts the input; both persist to keybinds.ini as
+ * "primary, alt" on one line. */
+static PsxKeyBinds       s_alt_binds;
 
 typedef struct {
     const char *name;   /* ini key */
@@ -138,11 +152,25 @@ static SDL_Scancode name_to_scancode(const char *name) {
     if (!strcmp(buf, "escape") || !strcmp(buf, "esc"))    return SDL_SCANCODE_ESCAPE;
     if (!strcmp(buf, "backspace"))                        return SDL_SCANCODE_BACKSPACE;
     if (!strcmp(buf, "none") || !strcmp(buf, ""))         return SDL_SCANCODE_UNKNOWN;
+    /* Mouse buttons: Mouse1..Mouse5 (SDL button order: 1=left, 2=middle,
+     * 3=right, 4=X1, 5=X2) plus the common aliases. */
+    if (!strncmp(buf, "mouse", 5) && buf[5] >= '1' && buf[5] <= '5' && !buf[6])
+        return PSXKB_MOUSE_SC(buf[5] - '0');
+    if (!strcmp(buf, "lmb") || !strcmp(buf, "mouse left"))   return PSXKB_MOUSE_SC(SDL_BUTTON_LEFT);
+    if (!strcmp(buf, "mmb") || !strcmp(buf, "mouse middle")) return PSXKB_MOUSE_SC(SDL_BUTTON_MIDDLE);
+    if (!strcmp(buf, "rmb") || !strcmp(buf, "mouse right"))  return PSXKB_MOUSE_SC(SDL_BUTTON_RIGHT);
+    if (!strcmp(buf, "mouse x1"))                            return PSXKB_MOUSE_SC(SDL_BUTTON_X1);
+    if (!strcmp(buf, "mouse x2"))                            return PSXKB_MOUSE_SC(SDL_BUTTON_X2);
     return SDL_SCANCODE_UNKNOWN;
 }
 
 static const char *scancode_to_name(SDL_Scancode sc) {
     if (sc == SDL_SCANCODE_UNKNOWN) return "None";
+    if (PSXKB_IS_MOUSE_SC(sc)) {
+        static const char *mouse_names[5] =
+            { "Mouse1", "Mouse2", "Mouse3", "Mouse4", "Mouse5" };
+        return mouse_names[(int)sc - PSXKB_MOUSE_SC_BASE - 1];
+    }
     const char *name = SDL_GetScancodeName(sc);
     return (name && name[0]) ? name : "None";
 }
@@ -187,11 +215,18 @@ static void derive_ini_path(const char *exe_path) {
     snprintf(s_ini_path, sizeof(s_ini_path), "%skeybinds.ini", dir);
 }
 
-static void write_player_section(FILE *f, const char *section, const PsxPlayerBinds *pb) {
+static void write_player_section(FILE *f, const char *section,
+                                 const PsxPlayerBinds *pb,
+                                 const PsxPlayerBinds *alt) {
     fprintf(f, "[%s]\n", section);
     for (int i = 0; i < PSXKB_N; i++) {
-        SDL_Scancode sc = *(const SDL_Scancode *)((const char *)pb + s_buttons[i].offset);
-        fprintf(f, "%-9s = %s\n", s_buttons[i].name, scancode_to_name(sc));
+        SDL_Scancode sc = *(const SDL_Scancode *)((const char *)pb  + s_buttons[i].offset);
+        SDL_Scancode al = *(const SDL_Scancode *)((const char *)alt + s_buttons[i].offset);
+        if (al != SDL_SCANCODE_UNKNOWN)
+            fprintf(f, "%-9s = %s, %s\n", s_buttons[i].name,
+                    scancode_to_name(sc), scancode_to_name(al));
+        else
+            fprintf(f, "%-9s = %s\n", s_buttons[i].name, scancode_to_name(sc));
     }
     fprintf(f, "\n");
 }
@@ -205,6 +240,10 @@ static void write_ini(const char *path) {
         "# Use SDL key names. Common: A B C ... Z, 0-9, F1-F12, Up Down Left Right,\n"
         "# Return, Tab, Space, Left Shift, Right Shift, Left Ctrl, Right Ctrl,\n"
         "# Backspace, Escape, Backslash. Use \"None\" to leave an input unbound.\n"
+        "# Mouse buttons also bind: Mouse1 (left), Mouse2 (middle), Mouse3 (right),\n"
+        "# Mouse4/Mouse5 (side); aliases LMB, MMB, RMB.\n"
+        "# Each input accepts an optional SECOND binding after a comma - both\n"
+        "# assert the input:  cross = X, Mouse1\n"
         "#\n"
         "# Buttons: up/down/left/right, cross/circle/square/triangle, l1/r1/l2/r2,\n"
         "# l3/r3 (stick clicks), start/select. ls_* / rs_* are the left/right\n"
@@ -216,7 +255,8 @@ static void write_ini(const char *path) {
     for (int p = 0; p < PSXKB_MAX_PLAYERS; ++p) {
         char section[16];
         snprintf(section, sizeof(section), "player%d", p + 1);
-        write_player_section(f, section, &s_binds.player[p]);
+        write_player_section(f, section, &s_binds.player[p],
+                             &s_alt_binds.player[p]);
     }
     fclose(f);
     printf("[Keybinds] Wrote %s\n", path);
@@ -242,7 +282,7 @@ static void promote_empty_players(void) {
 static void load_ini(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return;
-    PsxPlayerBinds *current = NULL;
+    PsxPlayerBinds *current = NULL, *current_alt = NULL;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
         trim(line);
@@ -251,11 +291,13 @@ static void load_ini(const char *path) {
             char *end = strchr(line, ']');
             if (end) *end = '\0';
             const char *section = line + 1;
-            current = NULL;
+            current = NULL; current_alt = NULL;
             if (!strncmp(section, "player", 6)) {
                 int n = atoi(section + 6);
-                if (n >= 1 && n <= PSXKB_MAX_PLAYERS)
+                if (n >= 1 && n <= PSXKB_MAX_PLAYERS) {
                     current = &s_binds.player[n - 1];
+                    current_alt = &s_alt_binds.player[n - 1];
+                }
             }
             continue;
         }
@@ -266,9 +308,16 @@ static void load_ini(const char *path) {
         trim(key); trim(val);
         for (char *c = key; *c; c++) *c = (char)tolower((unsigned char)*c);
         if (!current) continue;
+        /* Optional alternate binding after a comma: "cross = X, Mouse1". */
+        char *comma = strchr(val, ',');
+        char *alt_val = NULL;
+        if (comma) { *comma = '\0'; alt_val = comma + 1; trim(val); trim(alt_val); }
         for (int i = 0; i < PSXKB_N; i++) {
             if (!strcmp(key, s_buttons[i].name)) {
-                *(SDL_Scancode *)((char *)current + s_buttons[i].offset) = name_to_scancode(val);
+                *(SDL_Scancode *)((char *)current + s_buttons[i].offset) =
+                    name_to_scancode(val);
+                *(SDL_Scancode *)((char *)current_alt + s_buttons[i].offset) =
+                    alt_val ? name_to_scancode(alt_val) : SDL_SCANCODE_UNKNOWN;
                 break;
             }
         }
@@ -298,10 +347,27 @@ static PsxPlayerBinds *player_binds(int player) {
     return &s_binds.player[player - 1];
 }
 
-/* Is the scancode at button-def index i currently held for this player? */
+/* Is this single scancode (keyboard or mouse pseudo-code) currently held?
+ * Mouse pseudo-scancodes MUST be checked before indexing keys[] — they sit
+ * beyond the keyboard state array (SDL_NUM_SCANCODES entries). */
+static int held_sc(const uint8_t *keys, SDL_Scancode sc) {
+    if (PSXKB_IS_MOUSE_SC(sc)) {
+        Uint32 m = SDL_GetMouseState(NULL, NULL);
+        return (m & SDL_BUTTON((int)sc - PSXKB_MOUSE_SC_BASE)) != 0;
+    }
+    return sc != SDL_SCANCODE_UNKNOWN && (int)sc < SDL_NUM_SCANCODES && keys[sc];
+}
+
+/* Is the input at button-def index i held for this player, via either its
+ * primary or its alternate binding? The alternate table uses the same player
+ * slot as the primary table. */
 static int held(const uint8_t *keys, const PsxPlayerBinds *pb, int i) {
-    SDL_Scancode sc = *(const SDL_Scancode *)((const char *)pb + s_buttons[i].offset);
-    return sc != SDL_SCANCODE_UNKNOWN && keys[sc];
+    ptrdiff_t slot = pb - &s_binds.player[0];
+    if (slot < 0 || slot >= PSXKB_MAX_PLAYERS) slot = 0;
+    const PsxPlayerBinds *alt = &s_alt_binds.player[slot];
+    SDL_Scancode p = *(const SDL_Scancode *)((const char *)pb  + s_buttons[i].offset);
+    SDL_Scancode a = *(const SDL_Scancode *)((const char *)alt + s_buttons[i].offset);
+    return held_sc(keys, p) || held_sc(keys, a);
 }
 
 uint16_t psx_keybinds_pad_word(const uint8_t *keys, int player) {
@@ -360,9 +426,26 @@ void psx_keybinds_set_button(int player, int button, SDL_Scancode sc) {
     *(SDL_Scancode *)((char *)player_binds(player) + s_buttons[button].offset) = sc;
 }
 
+static PsxPlayerBinds *player_alt_binds(int player) {
+    if (player < 1 || player > PSXKB_MAX_PLAYERS)
+        return &s_alt_binds.player[0];
+    return &s_alt_binds.player[player - 1];
+}
+
+SDL_Scancode psx_keybinds_get_button_alt(int player, int button) {
+    if (button < 0 || button >= PSXKB_N) return SDL_SCANCODE_UNKNOWN;
+    return *(SDL_Scancode *)((char *)player_alt_binds(player) + s_buttons[button].offset);
+}
+
+void psx_keybinds_set_button_alt(int player, int button, SDL_Scancode sc) {
+    if (button < 0 || button >= PSXKB_N) return;
+    *(SDL_Scancode *)((char *)player_alt_binds(player) + s_buttons[button].offset) = sc;
+}
+
 void psx_keybinds_reset_player(int player) {
     if (player < 1 || player > PSXKB_MAX_PLAYERS) return;
     *player_binds(player) = s_default_binds.player[0];
+    memset(player_alt_binds(player), 0, sizeof(PsxPlayerBinds)); /* alts: unbound */
 }
 
 void psx_keybinds_save(void) {

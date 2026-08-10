@@ -192,17 +192,41 @@ int pad_mode_from_string(const std::string& s, int fallback) {
     std::string l;
     l.reserve(s.size());
     for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
-    if (l == "hybrid")  return PAD_MODE_HYBRID;
+    /* "hybrid" is MOD-ONLY: reachable solely through
+     * psx_mod_set_controller_mode_override(). A game.toml that declares it is
+     * a configuration error, not something to silently coerce — coercion is
+     * how this mode kept reappearing in titles that never meant to ship it. */
+    if (l == "hybrid")
+        throw std::runtime_error(
+            "[controller] pad mode \"hybrid\" is not selectable. Hybrid is a "
+            "mod-only mode, requested at runtime by a trusted game plugin via "
+            "psx_mod_set_controller_mode_override(). Use \"analog\" or "
+            "\"digital\" here.");
+    if (l == "analog")  return PAD_MODE_ANALOG;
+    if (l == "digital") return PAD_MODE_DIGITAL;
+    return fallback;
+}
+
+/* Settings-file variant: a user's settings.toml may still carry a persisted
+ * "hybrid" from before the mode was removed from the selector. Migrate it to
+ * analog (what the old allow_hybrid clamp did) rather than refusing to
+ * launch over a value the user never typed. */
+int pad_mode_from_settings_string(const std::string& s, int fallback) {
+    std::string l;
+    l.reserve(s.size());
+    for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
+    if (l == "hybrid")  return PAD_MODE_ANALOG;
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;
     return fallback;
 }
 
 const char* pad_mode_to_string(int mode) {
+    /* Never writes "hybrid": the mod requests it at runtime and it is not
+     * persisted as a user preference. */
     switch (mode) {
-        case PAD_MODE_ANALOG:  return "analog";
         case PAD_MODE_DIGITAL: return "digital";
-        default:               return "hybrid";
+        default:               return "analog";
     }
 }
 
@@ -659,22 +683,19 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         // Preferred string form.
         if (ct.contains("default_mode")) {
             const int m = pad_mode_from_string(
-                toml::find<std::string>(ct, "default_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "default_mode"), PAD_MODE_ANALOG);
             rt.default_p1_mode = rt.default_p2_mode = m;
             rt.has_default_mode = true;
         }
         if (ct.contains("p1_mode")) {
             rt.default_p1_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
         }
         if (ct.contains("p2_mode")) {
             rt.default_p2_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
-        }
-        if (ct.contains("allow_hybrid")) {
-            rt.controller_allow_hybrid = toml::find<bool>(ct, "allow_hybrid");
         }
         if (ct.contains("lock_mode")) {
             rt.controller_lock_mode = toml::find<bool>(ct, "lock_mode");
@@ -2308,8 +2329,8 @@ UserSettings load_user_settings(const fs::path& path) {
                 s.has_p_mode[i] = true;
             });
             if (ct.contains(kModeKeys[i])) try_get([&]{
-                s.p_mode[i] = pad_mode_from_string(
-                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_HYBRID);
+                s.p_mode[i] = pad_mode_from_settings_string(
+                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_ANALOG);
                 s.has_p_mode[i] = true;
             });
             if (ct.contains(kDzKeys[i])) try_get([&]{
