@@ -127,6 +127,12 @@ device.
 
 Rollback and delay-sync both carry multitap pad bytes.
 
+**BIOS settle:** each peer advertises `bios_offer` on ready (can run
+OpenBIOS / SCPH-1001, and whether OpenBIOS is selected). At Start the host
+publishes `match_caps.session_bios` (`openbios` or `scph1001`). The session
+uses OpenBIOS unless every seated peer can run SCPH-1001 and nobody selected
+OpenBIOS. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
+
 ---
 
 ## Disc identity for multi-track titles

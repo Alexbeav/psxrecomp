@@ -6309,6 +6309,7 @@ namespace {
 
     static int ae_np_lan_occupied(const AeLanLobbyState& state);
     static int ae_np_lan_endpoint_port(const std::string& endpoint);
+    static bool ae_np_read_lan_file_state(AeLanLobbyState* state);
 
 #ifdef _WIN32
     using AeLanSock = SOCKET;
@@ -6501,9 +6502,23 @@ namespace {
 #endif
     }
 
-    /* Sync browse: broadcast BROWSE across the common lobby port range and
-     * collect BEACON replies for wait_ms. */
-    static void ae_np_lan_browse(uint32_t wait_ms) {
+    /* Async LAN browse: broadcast once, collect BEACONs across frames in
+     * ae_np_lan_browse_pump (no SDL_Delay busy-wait on the UI thread). */
+    static AeLanSock g_lan_browse_sock = kAeLanSockInvalid;
+    static uint32_t g_lan_browse_t0 = 0;
+    static uint32_t g_lan_browse_deadline = 0;
+    static int g_lan_browse_file_pending = 0;
+
+    static void ae_np_lan_browse_close(void) {
+        if (g_lan_browse_sock != kAeLanSockInvalid)
+            ae_np_lan_sock_close(&g_lan_browse_sock);
+        g_lan_browse_deadline = 0;
+        g_lan_browse_t0 = 0;
+    }
+
+    static void ae_np_lan_browse_start(uint32_t wait_ms) {
+        if (g_lan_browse_sock != kAeLanSockInvalid)
+            return; /* already collecting */
 #ifdef _WIN32
         WSADATA wsa;
         WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -6525,33 +6540,81 @@ namespace {
         }
 
         const char browse[] = "MOTK1 BROWSE\n";
-        const uint32_t t0 = SDL_GetTicks();
         for (int port = kAeLanBrowsePortLo; port <= kAeLanBrowsePortHi; ++port)
             ae_np_lan_broadcast_msg(s, port, browse);
 
-        const uint32_t deadline = t0 + (wait_ms ? wait_ms : 250u);
-        while ((int32_t)(deadline - SDL_GetTicks()) > 0) {
+        g_lan_browse_sock = s;
+        g_lan_browse_t0 = SDL_GetTicks();
+        g_lan_browse_deadline =
+            g_lan_browse_t0 + (wait_ms ? wait_ms : 250u);
+    }
+
+    static void ae_np_lan_file_promote_without_rtt(void) {
+        AeLanLobbyState st;
+        if (!ae_np_read_lan_file_state(&st) || st.started) {
+            g_lnch_lan_latency_ms = -1;
+            return;
+        }
+        g_lnch_lan_latency_ms = -1;
+        if (ae_np_lan_discovered_find(st.endpoint.c_str()) >= 0)
+            return;
+        AeLanDiscovered d{};
+        std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", st.endpoint.c_str());
+        std::snprintf(d.name, sizeof(d.name), "%s",
+                      st.name.empty() ? "LAN Lobby" : st.name.c_str());
+        std::snprintf(d.game, sizeof(d.game), "%s",
+                      st.game.empty() ? "PSX" : st.game.c_str());
+        d.player_count = ae_np_lan_occupied(st);
+        d.max_slots = st.max_slots >= 2 ? st.max_slots : 2;
+        d.has_password = st.password.empty() ? 0 : 1;
+        d.latency_ms = -1;
+        d.input_delay = g_lnch_lobby_input_delay;
+        d.input_prediction = g_lnch_lobby_input_prediction;
+        d.rollback = g_lnch_rollback ? 1 : 0;
+        d.session_id = st.session_id ? st.session_id : 1u;
+        d.last_seen_ms = SDL_GetTicks();
+        ae_np_lan_discovered_upsert(d);
+    }
+
+    static void ae_np_lan_browse_pump(void) {
+        if (g_lan_browse_sock == kAeLanSockInvalid) {
+            if (g_lan_browse_file_pending) {
+                g_lan_browse_file_pending = 0;
+                if (!g_lnch_hosting_lan && !g_lnch_joined_lan)
+                    ae_np_lan_file_promote_without_rtt();
+            }
+            return;
+        }
+
+        for (;;) {
             char buf[1024];
             sockaddr_in from{};
 #ifdef _WIN32
             int fromlen = (int)sizeof(from);
-            const int n = recvfrom(s, buf, (int)sizeof(buf) - 1, 0,
+            const int n = recvfrom(g_lan_browse_sock, buf, (int)sizeof(buf) - 1, 0,
                                    (sockaddr*)&from, &fromlen);
 #else
             socklen_t fromlen = sizeof(from);
-            const int n = (int)recvfrom(s, buf, sizeof(buf) - 1, 0,
+            const int n = (int)recvfrom(g_lan_browse_sock, buf, sizeof(buf) - 1, 0,
                                         (sockaddr*)&from, &fromlen);
 #endif
-            if (n > 0) {
-                buf[n] = '\0';
-                const int rtt = (int)(SDL_GetTicks() - t0);
-                (void)ae_np_lan_parse_beacon(buf, &from, rtt);
-            } else {
-                SDL_Delay(5);
-            }
+            if (n <= 0)
+                break;
+            buf[n] = '\0';
+            const int rtt = (int)(SDL_GetTicks() - g_lan_browse_t0);
+            (void)ae_np_lan_parse_beacon(buf, &from, rtt);
         }
-        ae_np_lan_sock_close(&s);
+
+        if ((int32_t)(g_lan_browse_deadline - SDL_GetTicks()) > 0)
+            return;
+
+        ae_np_lan_browse_close();
         ae_np_lan_prune_discovered();
+        if (g_lan_browse_file_pending) {
+            g_lan_browse_file_pending = 0;
+            if (!g_lnch_hosting_lan && !g_lnch_joined_lan)
+                ae_np_lan_file_promote_without_rtt();
+        }
     }
 
     static void ae_np_lan_apply_discovered_caps(const char* endpoint) {
@@ -7300,7 +7363,7 @@ namespace {
         if (g_lnch_hosting_lan) {
             g_lnch_lan_latency_ms = 0;
             /* Still browse so the host list can show other LAN rooms. */
-            ae_np_lan_browse(200u);
+            ae_np_lan_browse_start(200u);
             AeLanLobbyState self{};
             if (ae_np_read_lan_file_state(&self) && !self.started) {
                 AeLanDiscovered d{};
@@ -7325,39 +7388,11 @@ namespace {
         }
         if (g_lnch_joined_lan) return;
 
-        /* Cross-machine discovery: broadcast BROWSE, collect BEACONs. */
-        ae_np_lan_browse(300u);
-
-        /* Legacy same-machine file registry (shared cwd). */
-        AeLanLobbyState st;
-        if (!ae_np_read_lan_file_state(&st)) {
-            g_lnch_lan_latency_ms = -1;
-            return;
-        }
-        if (st.started) return;
-        g_lnch_lan_latency_ms = ae_np_lan_probe_rtt_ms(st.endpoint, 200u);
-        if (g_lnch_lan_latency_ms < 0) {
-            std::error_code ec;
-            std::filesystem::remove(ae_np_lan_file(), ec);
-        } else if (ae_np_lan_discovered_find(st.endpoint.c_str()) < 0) {
-            /* Promote file row into the discovered table so list_get is uniform. */
-            AeLanDiscovered d{};
-            std::snprintf(d.endpoint, sizeof(d.endpoint), "%s", st.endpoint.c_str());
-            std::snprintf(d.name, sizeof(d.name), "%s",
-                          st.name.empty() ? "LAN Lobby" : st.name.c_str());
-            std::snprintf(d.game, sizeof(d.game), "%s",
-                          st.game.empty() ? "PSX" : st.game.c_str());
-            d.player_count = ae_np_lan_occupied(st);
-            d.max_slots = st.max_slots >= 2 ? st.max_slots : 2;
-            d.has_password = st.password.empty() ? 0 : 1;
-            d.latency_ms = g_lnch_lan_latency_ms;
-            d.input_delay = g_lnch_lobby_input_delay;
-            d.input_prediction = g_lnch_lobby_input_prediction;
-            d.rollback = g_lnch_rollback ? 1 : 0;
-            d.session_id = st.session_id ? st.session_id : 1u;
-            d.last_seen_ms = SDL_GetTicks();
-            ae_np_lan_discovered_upsert(d);
-        }
+        /* Cross-machine discovery + legacy file row — non-blocking. */
+        g_lan_browse_file_pending = 1;
+        ae_np_lan_browse_start(300u);
+        /* If the browse socket failed to open, promote the file row now. */
+        ae_np_lan_browse_pump();
     }
 
     static bool ae_np_lan_list_visible(void) {
@@ -7377,6 +7412,48 @@ namespace {
         if (g_lnch_lan_discovered_n > 0)
             return g_lnch_lan_discovered_n;
         return ae_np_lan_list_visible() ? 1 : 0;
+    }
+
+    /* Advertise local BIOS capability for lobby settle (OpenBIOS vs SCPH-1001). */
+    static void ae_np_refresh_bios_offer(const char* launcher_bios_path) {
+        PsxLobbyBiosOffer offer{};
+        offer.valid = 1;
+        offer.can_openbios =
+            (s_openbios_allowed && psx_bios_bundled() != nullptr) ? 1 : 0;
+        const char* argv0 = g_lnch_argv0 ? g_lnch_argv0 : "";
+        auto path_is_retail = [&](const std::filesystem::path& p) -> bool {
+            std::error_code ec;
+            if (p.empty() || !std::filesystem::exists(p, ec)) return false;
+            const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
+            return b && b->image && !b->image->image_bundled;
+        };
+        bool has_dump = false;
+        if (launcher_bios_path && launcher_bios_path[0]) {
+            const auto p = resolve_bios_path(launcher_bios_path, argv0);
+            has_dump = path_is_retail(p);
+        }
+        if (!has_dump) has_dump = path_is_retail(read_cached_path(argv0, "bios.cfg"));
+        if (!has_dump) has_dump = path_is_retail(discover_retail_bios_near(argv0));
+        offer.can_scph1001 =
+            (psx_bios_has_selectable() && has_dump) ? 1 : 0;
+
+        /* Empty / bundled path = explicit OpenBIOS preference. */
+        offer.prefer_openbios = 1;
+        if (launcher_bios_path && launcher_bios_path[0]) {
+            const auto p = resolve_bios_path(launcher_bios_path, argv0);
+            if (path_is_retail(p))
+                offer.prefer_openbios = 0;
+        } else {
+            /* No launcher path — bios.cfg empty ⇒ OpenBIOS; retail path ⇒ SCPH. */
+            const auto cached = read_cached_path(argv0, "bios.cfg");
+            if (path_is_retail(cached)) offer.prefer_openbios = 0;
+        }
+        if (!offer.can_openbios && offer.can_scph1001) offer.prefer_openbios = 0;
+        psx_lobby_set_bios_offer(&offer);
+    }
+
+    static void ae_np_refresh_bios_offer_from_disk(void) {
+        ae_np_refresh_bios_offer(nullptr);
     }
 
     PsxLobbyMatchCaps ae_netplay_caps_from_settings(const RecompLauncherCSettings* s) {
@@ -7912,15 +7989,31 @@ namespace {
         }
     }
 
+    int ae_np_connecting(void*) {
+        return psx_lobby_connecting();
+    }
+
     void ae_np_pump(void*) {
         psx_lobby_pump();
+        ae_np_lan_browse_pump();
         ae_np_lan_udp_pump();
         /* Lobby UI has no Ready toggle; production WS still requires every
          * seated player ready before start. Keep seats ready while in-room
-         * (including after soft-return rematch clears ready). */
-        if (!g_lnch_hosting_lan && !g_lnch_joined_lan &&
-            psx_lobby_in_lobby() && !psx_lobby_local_ready()) {
-            (void)psx_lobby_set_ready(1);
+         * (including after soft-return rematch clears ready). Re-advertise
+         * when the local BIOS offer changes so settle stays current. */
+        if (!g_lnch_hosting_lan && !g_lnch_joined_lan && psx_lobby_in_lobby()) {
+            static PsxLobbyBiosOffer s_last_offer{};
+            ae_np_refresh_bios_offer_from_disk();
+            const PsxLobbyBiosOffer* cur = psx_lobby_bios_offer();
+            const int offer_changed =
+                !cur || !s_last_offer.valid ||
+                cur->can_openbios != s_last_offer.can_openbios ||
+                cur->can_scph1001 != s_last_offer.can_scph1001 ||
+                cur->prefer_openbios != s_last_offer.prefer_openbios;
+            if (!psx_lobby_local_ready() || offer_changed) {
+                (void)psx_lobby_set_ready(1);
+                if (cur) s_last_offer = *cur;
+            }
         }
     }
 
@@ -8470,6 +8563,9 @@ namespace {
                                     : 0;
             }
             out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
+            out->bios_offer_valid = mem.bios_offer_valid;
+            out->bios_can_scph1001 = mem.bios_can_scph1001;
+            out->bios_prefer_openbios = mem.bios_prefer_openbios;
             return 1;
         }
         if (ae_np_use_lan_members()) {
@@ -8486,6 +8582,9 @@ namespace {
                     out->is_host = (slot == state.host_slot) ? 1 : 0;
                     out->is_local = (slot == g_lnch_lan_my_slot) ? 1 : 0;
                     out->latency_ms = -1;
+                    out->bios_offer_valid = 0;
+                    out->bios_can_scph1001 = 0;
+                    out->bios_prefer_openbios = 0;
                     return 1;
                 }
                 ++seen;
@@ -8510,6 +8609,9 @@ namespace {
                                 : 0;
         }
         out->latency_ms = psx_lobby_member_latency_ms(mem.slot);
+        out->bios_offer_valid = mem.bios_offer_valid;
+        out->bios_can_scph1001 = mem.bios_can_scph1001;
+        out->bios_prefer_openbios = mem.bios_prefer_openbios;
         return 1;
     }
 
@@ -8569,7 +8671,11 @@ namespace {
 
     int ae_np_local_ready(void*) { return psx_lobby_local_ready(); }
     int ae_np_all_ready(void*) { return psx_lobby_all_ready(); }
-    int ae_np_set_ready(void*, int ready) { return psx_lobby_set_ready(ready); }
+    int ae_np_set_ready(void*, int ready) {
+        if (ready)
+            ae_np_refresh_bios_offer_from_disk();
+        return psx_lobby_set_ready(ready);
+    }
 
     int ae_np_request_start(void*, const RecompLauncherCSettings* settings) {
         if (g_lnch_hosting_lan) {
@@ -8600,9 +8706,17 @@ namespace {
             return 0;
         }
         if (!psx_lobby_is_host()) return -1;
-        /* Ensure host seat is ready even if pump hasn't run since rematch. */
+        /* Publish current BIOS offer, then ensure host seat is ready. */
+        if (settings && settings->bios_path[0])
+            ae_np_refresh_bios_offer(settings->bios_path);
+        else
+            ae_np_refresh_bios_offer_from_disk();
         (void)psx_lobby_set_ready(1);
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
+        (void)psx_lobby_settle_session_bios(caps.session_bios,
+                                            sizeof(caps.session_bios));
+        std::fprintf(stdout, "psxrecomp: lobby settled session BIOS = %s\n",
+                     caps.session_bios[0] ? caps.session_bios : "openbios");
         return psx_lobby_request_start(&caps);
     }
 
@@ -8804,7 +8918,96 @@ namespace {
         ae_np_input_prediction_set,
         ae_np_multitap_analog_get,
         ae_np_multitap_analog_set,
+        ae_np_connecting,
     };
+
+    /* Shared by first-boot launcher and soft-return rematch UI so capability
+     * flags (View mode / perspective / Skip FMVs / renderer labels) cannot
+     * drift apart — a bare launcher_profile_apply("psx") hides those rows. */
+    std::string g_rui_keybinds_path;
+    std::string g_rui_config_ini_path;
+    static const char* const kPsxRendererLabels[] = {
+        "Software",
+        "OpenGL (Recommended)",
+        "Vulkan",
+    };
+
+    void ae_rui_set_sidecar_paths(const char* argv0) {
+        const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
+        g_rui_keybinds_path = (exe / "keybinds.ini").string();
+        g_rui_config_ini_path = (exe / "config.ini").string();
+    }
+
+    void ae_fill_psx_launcher_game_info(
+        RecompLauncherCGameInfo* gi,
+        const char* game_name_c,
+        const char* region_c,
+        int game_players_n,
+        bool ws_offered_b,
+        bool ws_ultrawide_offered_b,
+        bool skip_fmv_offered_b,
+        bool turbo_loads_offered_b,
+        bool vulkan_offered_b,
+        bool ctrl_lock_mode_b,
+        bool ctrl_lock_device_b,
+        int locked_pad_mode_i,
+        const char* const* language_labels,
+        int num_languages,
+        int resume_netplay_room)
+    {
+        if (!gi) return;
+        launcher_profile_apply("psx", gi);
+        gi->name = game_name_c;
+        gi->region = region_c;
+        gi->keybinds_path =
+            g_rui_keybinds_path.empty() ? nullptr : g_rui_keybinds_path.c_str();
+        gi->config_path =
+            g_rui_config_ini_path.empty() ? nullptr : g_rui_config_ini_path.c_str();
+        gi->has_expected_crc = 0;
+        gi->num_known_sha256 = 0;
+        gi->widescreen_supported = ws_offered_b ? 1 : 0;
+        gi->num_players = game_players_n;
+        gi->msu1_supported = 0;
+        gi->sram_path = nullptr;
+        gi->has_bios = psx_bios_has_selectable();
+        gi->pad_mode_selectable = ctrl_lock_mode_b ? 0 : 1;
+        gi->locked_pad_mode = locked_pad_mode_i;
+        gi->lock_device = ctrl_lock_device_b ? 1 : 0;
+        gi->aspect_mask =
+            0x1 | (ws_offered_b ? 0x2 : 0) | (ws_ultrawide_offered_b ? 0x4 : 0);
+        gi->renderer_labels = kPsxRendererLabels;
+        gi->num_renderers = vulkan_offered_b ? 3 : 2;
+        gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
+        gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
+        gi->has_geometry_precision = 1;
+        if (language_labels && num_languages > 0) {
+            gi->language_labels = language_labels;
+            gi->num_languages = num_languages;
+        } else {
+            gi->language_labels = nullptr;
+            gi->num_languages = 0;
+        }
+        gi->disc_verify = ae_disc_verify;
+        gi->memcard_inspect = ae_memcard_inspect;
+        gi->mods = PSXRecompV4::mod_runtime_launcher_provider();
+        gi->bios_verify = ae_bios_verify;
+#if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
+        g_lnch_game_players = game_players_n;
+        gi->netplay_supported =
+            (game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS) ? 1 : 0;
+        gi->netplay = &g_lnch_netplay_callbacks;
+#else
+        gi->netplay_supported = 0;
+        gi->netplay = nullptr;
+#endif
+        gi->resume_netplay_room = resume_netplay_room ? 1 : 0;
+#if defined(PSX_HAS_LOBBY_CLIENT)
+        gi->resume_netplay_endpoint =
+            resume_netplay_room ? ae_np_lan_endpoint_cstr() : nullptr;
+#else
+        gi->resume_netplay_endpoint = nullptr;
+#endif
+    }
 }  // namespace
 #endif
 
@@ -9973,15 +10176,8 @@ int main(int argc, char** argv) {
             /* recomp-ui creates + owns its SDL2/GL window internally, so there
              * is no launcher window/context to manage here. */
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
-            /* Same path the runtime's psx_keybinds_init(argv0) reads — keep the
-             * launcher Controls page and in-game keyboard map on one file. */
-            static std::string s_rui_keybinds_path;
-            static std::string s_rui_config_ini_path;
-            s_rui_keybinds_path = (exe_dir_from_argv(argv[0]) / "keybinds.ini").string();
-            /* Same config.ini the runtime reads for [KeyMap] VolumeUp/Down —
-             * never cwd-relative "config.ini" (that drifted edits off the exe). */
-            s_rui_config_ini_path =
-                (exe_dir_from_argv(argv[0]) / "config.ini").string();
+            /* Same keybinds.ini / config.ini the runtime reads — never cwd. */
+            ae_rui_set_sidecar_paths(argv[0]);
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
                                      + " - Launcher";
@@ -10103,67 +10299,30 @@ int main(int argc, char** argv) {
             rui_lang_labels.reserve(lang_menu_options.size());
             for (const auto& lo : lang_menu_options) rui_lang_labels.push_back(lo.label.c_str());
 
-            RecompLauncherCGameInfo gi{};
-            static const char* const kPsxRendererLabels[] = {
-                "Software",
-                "OpenGL (Recommended)",
-                "Vulkan"
-            };
-            /* System identity + full PS1 settings-surface capability set (theme,
-             * platform label, rom_noun, pad-mode support, aspect mask base, and
-             * all has_* deep-settings flags) — one profile call keeps them from
-             * drifting apart across PSX titles. Per-game specifics below override
-             * only what the profile can't know. */
-            launcher_profile_apply("psx", &gi);
-            gi.name                 = game_name.empty() ? nullptr : game_name.c_str();
-            gi.region               = rui_region.empty() ? nullptr : rui_region.c_str();
-            gi.keybinds_path        = s_rui_keybinds_path.c_str();
-            gi.config_path          = s_rui_config_ini_path.c_str();
-            gi.has_expected_crc     = 0;      /* the launcher's simple file-CRC doesn't fit
-                                                  PSX multi-track discs — skip verification */
-            gi.num_known_sha256     = 0;
-            gi.widescreen_supported = ws_offered ? 1 : 0;
-            gi.num_players          = game_players;
-            gi.msu1_supported       = 0;
-            gi.sram_path            = nullptr;   /* PSX uses memory cards, not SRAM -> hide SAVES */
-            /* BIOS row: ask the registry, not psx_bios_image, which is not
-             * populated until a backend is activated. With OpenBIOS AND a
-             * retail image linked, choosing retail (and clearing back to
-             * bundled) is exactly what the row is for. */
-            gi.has_bios             = psx_bios_has_selectable();
-            /* Pad-mode + aspect capabilities sourced from game.toml
-             * [controller]/[widescreen] via GameConfig. PSX always has pad modes. */
-            gi.pad_mode_selectable  = ctrl_lock_mode ? 0 : 1;
-            gi.locked_pad_mode      = ctrl_locked_mode[0];  /* game-declared default_mode */
-            gi.lock_device          = ctrl_lock_device ? 1 : 0;
-            gi.aspect_mask          = 0x1 | (ws_offered ? 0x2 : 0) | (ws_ultrawide_offered ? 0x4 : 0);
-            gi.renderer_labels      = kPsxRendererLabels;
-            gi.num_renderers        = vulkan_offered ? 3 : 2;
-            gi.has_skip_fmv         = skip_fmv_offered ? 1 : 0;
-            gi.has_turbo_loads      = turbo_loads_offered ? 1 : 0;
-            /* Geometry precision is a property of the PS1 pipeline, not of any
-             * particular disc, so every PSX title exposes it. */
-            gi.has_geometry_precision = 1;
-            /* Localization menu: shown only when the game declares languages. */
-            if (!rui_lang_labels.empty()) {
-                gi.language_labels = rui_lang_labels.data();
-                gi.num_languages   = (int)rui_lang_labels.size();
-            }
-
-            /* Real disc-verify + memcard-inspect (identify_disc / memcard_summary_path
-             * via the ae_* callbacks). The launcher re-runs these whenever the
-             * user changes the disc or a memory card, so the verdict + block
-             * grids reflect the actual images.
-             * The expected serial/CRC ride on file-scope statics (the C-ABI
-             * callback can't capture these locals). */
+            /* Real disc-verify + memcard-inspect expect serial/CRC on file-scope
+             * statics (C-ABI callback can't capture these locals). */
             g_lnch_expected_serial = game_id;
             g_lnch_expected_crc    = game_disc_crc;
             g_lnch_has_crc         = game_has_disc_crc;
             g_lnch_argv0           = argv[0];
-            gi.disc_verify     = ae_disc_verify;
-            gi.memcard_inspect = ae_memcard_inspect;
-            gi.mods            = PSXRecompV4::mod_runtime_launcher_provider();
-            gi.bios_verify     = ae_bios_verify;
+
+            RecompLauncherCGameInfo gi{};
+            ae_fill_psx_launcher_game_info(
+                &gi,
+                game_name.empty() ? nullptr : game_name.c_str(),
+                rui_region.empty() ? nullptr : rui_region.c_str(),
+                game_players,
+                ws_offered,
+                ws_ultrawide_offered,
+                skip_fmv_offered,
+                turbo_loads_offered,
+                vulkan_offered,
+                ctrl_lock_mode,
+                ctrl_lock_device,
+                ctrl_locked_mode[0],
+                rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
+                (int)rui_lang_labels.size(),
+                /*resume_netplay_room=*/0);
 #if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
              * first-run wizard so players need not run the script by hand. */
@@ -10227,16 +10386,10 @@ int main(int argc, char** argv) {
 #endif
 #endif /* PSX_HAS_SETUP_WIZARD */
             launcher_boot_timing_mark("host:setup_checks_done");
-            /* Full netplay UI: only when this build linked recomp-net + lobby
-             * (-DPSX_NETPLAY=ON) and the title is multiplayer-capable. */
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
             g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
-            g_lnch_game_players = game_players;
             apply_offline_pad_count(game_players, multitap_enabled);
             psx_lobby_set_max_slots(game_players);
-            gi.netplay_supported =
-                (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
-            gi.netplay = &g_lnch_netplay_callbacks;
 #endif
 
             char rui_out_disc[1024] = {0};
@@ -10400,6 +10553,46 @@ int main(int argc, char** argv) {
                             seed.language = caps->language;
                             seed.has_language = true;
                         }
+                        /* Match BIOS settle (lobby bios_offer → session_bios). */
+                        if (caps->session_bios[0] &&
+                            std::strcmp(caps->session_bios, "openbios") == 0) {
+                            seed.bios_path.clear();
+                            seed.has_bios_path = false;
+                            std::fprintf(stdout,
+                                "psxrecomp: netplay session BIOS = OpenBIOS\n");
+                        } else if (caps->session_bios[0] &&
+                                   std::strcmp(caps->session_bios, "scph1001") == 0) {
+                            std::filesystem::path retail;
+                            std::error_code ec;
+                            auto try_retail = [&](const std::filesystem::path& p) {
+                                if (p.empty() || !std::filesystem::exists(p, ec))
+                                    return;
+                                const PsxBiosBackend* b =
+                                    bios_backend_for_file(p, nullptr, nullptr);
+                                if (b && b->image && !b->image->image_bundled)
+                                    retail = p;
+                            };
+                            if (seed.has_bios_path) try_retail(seed.bios_path);
+                            if (retail.empty() && ls.bios_path[0])
+                                try_retail(resolve_bios_path(ls.bios_path, argv[0]));
+                            if (retail.empty())
+                                try_retail(read_cached_path(argv[0], "bios.cfg"));
+                            if (retail.empty())
+                                try_retail(discover_retail_bios_near(argv[0]));
+                            if (!retail.empty()) {
+                                seed.bios_path = retail;
+                                seed.has_bios_path = true;
+                                std::fprintf(stdout,
+                                    "psxrecomp: netplay session BIOS = SCPH-1001 (%s)\n",
+                                    retail.string().c_str());
+                            } else {
+                                seed.bios_path.clear();
+                                seed.has_bios_path = false;
+                                std::fprintf(stderr,
+                                    "psxrecomp: session BIOS scph1001 settled but no "
+                                    "dump found — falling back to OpenBIOS\n");
+                            }
+                        }
                     }
                 }
 #endif
@@ -10482,12 +10675,17 @@ int main(int argc, char** argv) {
                     settings_bios_storage = seed.bios_path.string();
                     bios_path = settings_bios_storage.c_str();
                     bios_explicit = true;
+                    bios_from_cli = false; /* launcher pick supersedes argv --bios */
                     write_cached_path(argv[0], "bios.cfg", seed.bios_path);
-                } else if (!bios_from_cli) {
-                    /* Cleared to bundled OpenBIOS — drop any cached retail pick. */
+                } else {
+                    /* OpenBIOS: always clear, even when launched with --bios.
+                     * Write an empty bios.cfg (do not delete — missing triggers
+                     * first-run retail rediscovery). */
+                    bios_from_cli = false;
                     bios_explicit = false;
-                    std::error_code ec;
-                    std::filesystem::remove(sidecar_cfg_path(argv[0], "bios.cfg"), ec);
+                    settings_bios_storage.clear();
+                    bios_path = PSX_BUNDLED_BIOS_PATH;
+                    write_cached_path(argv[0], "bios.cfg", {});
                 }
                 if (seed.has_disc_path) {
                     seed.disc_path = normalize_disc_path_for_launch(seed.disc_path);
@@ -11686,29 +11884,67 @@ soft_return_lobby:
                                  + " - Launcher";
         std::string rui_initial_disc = disc_path_str;
 
+        ae_rui_set_sidecar_paths(argv[0]);
+        g_lnch_expected_serial = game_id;
+        g_lnch_expected_crc = game_disc_crc;
+        g_lnch_has_crc = game_has_disc_crc;
+        g_lnch_argv0 = argv[0];
+        g_lnch_netplay_game_name = game_name.empty() ? "PSX" : game_name;
+        psx_lobby_set_max_slots(game_players);
+
         RecompLauncherCSettings ls{};
         ls.output_method = 2;
         ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
         ls.fullscreen = g_fullscreen ? 1 : 0;
+        ls.ignore_aspect = 0;
+        ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
+        ls.widescreen =
+            (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
+        ls.widescreen_hud = ls.widescreen;
         ls.enable_audio = 1;
         ls.audio_freq = 44100;
         ls.volume = host_volume_get();
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
+        if (ls.renderer < 0 || ls.renderer > (vulkan_offered ? 2 : 1))
+            ls.renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
         ls.supersampling = g_video_scale;
         ls.antialiasing = g_video_aa ? 1 : 0;
         ls.texture_filter = g_video_texfilter;
+        ls.geometry_correction = g_video_geometry_correction ? 1 : 0;
+        ls.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
         ls.screen_kind = g_video_screen;
         ls.frame_interp = g_frame_interpolation ? 1 : 0;
         ls.frame_interp_fps = g_frame_interpolation_fps;
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
-        ls.auto_skip_fmv = g_auto_skip_fmv ? 1 : 0;
-        ls.turbo_loads = g_turbo_loads_enabled ? 1 : 0;
+        ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
+        ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
         ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
             : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
+        ls.language_index = 0;
+        for (size_t li = 0; li < lang_menu_options.size(); li++) {
+            if (lang_menu_options[li].code == resolved_language) {
+                ls.language_index = (int)li;
+                break;
+            }
+        }
         std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
                       psx_lobby_display_name());
-        std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s", bios_path_str.c_str());
+        /* Prefer absolute BIOS path so rematch does not depend on cwd. */
+        {
+            std::filesystem::path resolved =
+                resolve_bios_path(bios_path_str.c_str(), argv[0]);
+            std::error_code ec;
+            if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
+                auto abs = std::filesystem::weakly_canonical(resolved, ec);
+                if (ec) abs = std::filesystem::absolute(resolved, ec);
+                std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
+                              abs.string().c_str());
+            } else {
+                std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
+                              bios_path_str.c_str());
+            }
+        }
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
         ls.multitap_enabled = multitap_enabled ? 1 : 0;
 #endif
@@ -11725,7 +11961,8 @@ soft_return_lobby:
                 const std::string& d = player_device[i];
                 ls.player_src[i] =
                     PSXRecompV4::launcher_source_from_device(d);
-                ls.deadzone[i] = (player_deadzone[i] * 100 + 16383) / 32767;
+                ls.deadzone[i] =
+                    (player_deadzone[i] * 100 + 32767 / 2) / 32767;
                 ls.pad_mode[i] = (ls.player_src[i] == 1)
                                     ? PSXRecompV4::PAD_MODE_DIGITAL
                                     : player_mode[i];
@@ -11739,23 +11976,30 @@ soft_return_lobby:
             }
         }
 
+        const std::string rui_region =
+            !game_region.empty() ? game_region : region_label_from_serial(game_id);
+        std::vector<const char*> rui_lang_labels;
+        rui_lang_labels.reserve(lang_menu_options.size());
+        for (const auto& lo : lang_menu_options)
+            rui_lang_labels.push_back(lo.label.c_str());
+
         RecompLauncherCGameInfo gi{};
-        launcher_profile_apply("psx", &gi);
-        gi.name = game_name.empty() ? nullptr : game_name.c_str();
-        gi.num_players = game_players;
-        g_lnch_game_players = game_players;
-        psx_lobby_set_max_slots(game_players);
-        gi.netplay_supported =
-            (game_players >= 2 && game_players <= PSX_MAX_PLAYERS) ? 1 : 0;
-        gi.netplay = &g_lnch_netplay_callbacks;
-        gi.resume_netplay_room = 1;
-        gi.resume_netplay_endpoint = ae_np_lan_endpoint_cstr();
-        gi.disc_verify = ae_disc_verify;
-        gi.memcard_inspect = ae_memcard_inspect;
-        gi.mods = PSXRecompV4::mod_runtime_launcher_provider();
-        gi.pad_mode_selectable = ctrl_lock_mode ? 0 : 1;
-        gi.locked_pad_mode = ctrl_locked_mode[0];
-        gi.lock_device = ctrl_lock_device ? 1 : 0;
+        ae_fill_psx_launcher_game_info(
+            &gi,
+            game_name.empty() ? nullptr : game_name.c_str(),
+            rui_region.empty() ? nullptr : rui_region.c_str(),
+            game_players,
+            ws_offered,
+            ws_ultrawide_offered,
+            skip_fmv_offered,
+            turbo_loads_offered,
+            vulkan_offered,
+            ctrl_lock_mode,
+            ctrl_lock_device,
+            ctrl_locked_mode[0],
+            rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
+            (int)rui_lang_labels.size(),
+            /*resume_netplay_room=*/1);
 #if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)
         psx_game_codegen_setup_apply(&gi);
 #endif
@@ -11903,6 +12147,10 @@ soft_return_lobby:
                 us.has_antialiasing = true;
                 us.texture_filter = ls.texture_filter;
                 us.has_texture_filter = true;
+                us.geometry_correction = ls.geometry_correction != 0;
+                us.has_geometry_correction = true;
+                us.perspective_texturing = ls.perspective_texturing != 0;
+                us.has_perspective_texturing = true;
                 us.screen_kind = ls.screen_kind;
                 us.has_screen_kind = true;
                 us.frame_interpolation = ls.frame_interp != 0;
@@ -11912,9 +12160,9 @@ soft_return_lobby:
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
-                us.has_auto_skip_fmv = true;
+                us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
-                us.has_turbo_loads = true;
+                us.has_turbo_loads = turbo_loads_offered;
                 us.fullscreen = ls.fullscreen != 0;
                 us.has_fullscreen = true;
                 us.window_width = ls.window_width > 0 ? ls.window_width : g_video_win_w;
@@ -11925,15 +12173,22 @@ soft_return_lobby:
                     default: us.aspect_num = 4;  us.aspect_den = 3; break;
                 }
                 us.has_aspect_ratio = true;
+                if (ls.bios_path[0]) {
+                    us.bios_path = ls.bios_path;
+                    us.has_bios_path = true;
+                }
                 (void)PSXRecompV4::save_user_settings(settings_path, us);
             }
             g_video_renderer = ls.renderer;
             g_video_scale = ls.supersampling;
             g_video_aa = ls.antialiasing;
             g_video_texfilter = ls.texture_filter;
+            g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
+            g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;
             g_video_screen = ls.screen_kind;
-            g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
-            g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
+            g_auto_skip_fmv = skip_fmv_offered && ls.auto_skip_fmv ? 1 : 0;
+            g_turbo_loads_enabled =
+                turbo_loads_offered && ls.turbo_loads ? 1 : 0;
             g_fullscreen = ls.fullscreen != 0;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
@@ -11944,6 +12199,10 @@ soft_return_lobby:
                 default: g_video_aspect_num = 4;  g_video_aspect_den = 3; break;
             }
             g_video_win_w = ls.window_width > 0 ? ls.window_width : g_video_win_w;
+            if (ls.bios_path[0])
+                bios_path_str = ls.bios_path;
+            else
+                bios_path_str.clear();
             {
                 std::string mod_error;
                 if (net_cfg.enabled) {

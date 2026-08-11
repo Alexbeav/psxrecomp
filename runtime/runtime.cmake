@@ -1170,6 +1170,11 @@ function(psxrecomp_add_runtime_target target)
         if(OpenGL_FOUND)
             target_link_libraries(${target} PRIVATE OpenGL::GL)
         endif()
+        # Async lobby connect (psx_lobby_client.c) uses pthread on Unix.
+        if(PSXRECOMP_HAS_LOBBY_CLIENT)
+            find_package(Threads REQUIRED)
+            target_link_libraries(${target} PRIVATE Threads::Threads)
+        endif()
     endif()
 
     # ---- Vulkan backend (gpu_vk_renderer.c) --------------------------------
