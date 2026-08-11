@@ -1,12 +1,8 @@
 /*
  * test_netplay_input_hist.c — pad map, invent hold-last, promote.
  *
- *   gcc -std=c11 -Wall -Wextra -Werror -DPSX_HAS_RECOMP_NET=1 \
- *       -I../include -I../../lib/recomp-net/include \
- *       -o test_netplay_input_hist test_netplay_input_hist.c \
- *       ../src/netplay_input_hist.c \
- *       ../../lib/recomp-net/src/input/rnet_input_contract.c && \
- *   ./test_netplay_input_hist
+ * Build/run: ctest -R netplay_input_hist_test
+ * (needs the lib/recomp-net submodule; registration is conditional.)
  */
 #define PSX_HAS_RECOMP_NET 1
 #include "netplay_input_hist.h"

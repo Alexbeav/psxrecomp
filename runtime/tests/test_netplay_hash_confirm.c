@@ -1,9 +1,7 @@
 /*
  * test_netplay_hash_confirm.c — watermark advance / mismatch hold.
  *
- *   gcc -std=c11 -Wall -Wextra -Werror -I../include \
- *       -o test_netplay_hash_confirm test_netplay_hash_confirm.c \
- *       ../src/netplay_hash_confirm.c && ./test_netplay_hash_confirm
+ * Build/run: ctest -R netplay_hash_confirm_test
  */
 #include "netplay_hash_confirm.h"
 
