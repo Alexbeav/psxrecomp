@@ -6345,9 +6345,30 @@ namespace {
     int g_lnch_lan_my_slot = -1;
     std::string g_lnch_lan_player_id; /* local process identity for LAN seats */
 
+    /* Per-seat BIOS offers for LAN settle (mirrors online bios_offer). */
+    struct AeLanSlotBios {
+        int valid = 0;
+        int prefer_openbios = 1;
+        int can_openbios = 1;
+        int can_scph1001 = 0;
+    };
+    AeLanSlotBios g_lnch_lan_slot_bios[kAeLanMaxSlots]{};
+    /* Match-only BIOS token from lobby settle or LAN START ("openbios"|"scph1001"). */
+    char g_lnch_session_bios[16]{};
+
     static int ae_np_lan_occupied(const AeLanLobbyState& state);
     static int ae_np_lan_endpoint_port(const std::string& endpoint);
     static bool ae_np_read_lan_file_state(AeLanLobbyState* state);
+    static void ae_np_set_session_bios_token(const char* token);
+    static void ae_np_clear_session_bios_token(void);
+    static void ae_np_lan_clear_slot_bios(int slot);
+    static void ae_np_lan_store_slot_bios(int slot, int prefer_open, int can_open,
+                                         int can_scph);
+    static void ae_np_lan_sync_local_slot_bios(void);
+    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap);
+    static void ae_np_append_lan_bios_join(char* msg, size_t msg_cap, int* io_off);
+    static int ae_np_parse_lan_bios_tail(char* p, int* prefer_open, int* can_open,
+                                        int* can_scph);
 
 #ifdef _WIN32
     using AeLanSock = SOCKET;
@@ -7030,22 +7051,40 @@ namespace {
     static void ae_np_lan_send_update_to_peers(const AeLanLobbyState& state_in) {
         AeLanLobbyState state = state_in;
         ae_np_lan_sync_legacy_names(state);
-        char msg[1536];
-        int off = std::snprintf(msg, sizeof(msg),
-                                "MOTK3 UPDATE\n%d\n%d\n%d\n%u\n",
-                                state.max_slots, state.host_slot,
-                                state.started ? 1 : 0,
-                                (unsigned)(state.session_id ? state.session_id : 1u));
-        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots && off > 0 &&
-             off < (int)sizeof(msg) - 128; ++i) {
-            off += std::snprintf(msg + off, sizeof(msg) - (size_t)off, "%s\n%s\n",
-                                 state.slot_id[i].c_str(),
-                                 state.slot_name[i].c_str());
+        if (g_lnch_hosting_lan) ae_np_lan_sync_local_slot_bios();
+        char msg3[1536];
+        int off3 = std::snprintf(msg3, sizeof(msg3),
+                                 "MOTK3 UPDATE\n%d\n%d\n%d\n%u\n",
+                                 state.max_slots, state.host_slot,
+                                 state.started ? 1 : 0,
+                                 (unsigned)(state.session_id ? state.session_id : 1u));
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots && off3 > 0 &&
+             off3 < (int)sizeof(msg3) - 128; ++i) {
+            off3 += std::snprintf(msg3 + off3, sizeof(msg3) - (size_t)off3,
+                                  "%s\n%s\n", state.slot_id[i].c_str(),
+                                  state.slot_name[i].c_str());
         }
-        if (off <= 0) return;
+        /* MOTK4 carries per-seat bios_offer so guests can preview settle. */
+        char msg4[2048];
+        int off4 = std::snprintf(msg4, sizeof(msg4),
+                                 "MOTK4 UPDATE\n%d\n%d\n%d\n%u\n",
+                                 state.max_slots, state.host_slot,
+                                 state.started ? 1 : 0,
+                                 (unsigned)(state.session_id ? state.session_id : 1u));
+        for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots && off4 > 0 &&
+             off4 < (int)sizeof(msg4) - 160; ++i) {
+            const AeLanSlotBios& b = g_lnch_lan_slot_bios[i];
+            off4 += std::snprintf(
+                msg4 + off4, sizeof(msg4) - (size_t)off4, "%s\n%s\n%d\n%d\n%d\n%d\n",
+                state.slot_id[i].c_str(), state.slot_name[i].c_str(),
+                b.valid ? 1 : 0, b.prefer_openbios ? 1 : 0, b.can_openbios ? 1 : 0,
+                b.can_scph1001 ? 1 : 0);
+        }
+        if (off3 <= 0 && off4 <= 0) return;
         for (int i = 0; i < kAeLanMaxSlots; ++i) {
             if (!g_lnch_lan_peer_ok[i]) continue;
-            ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg);
+            if (off3 > 0) ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg3);
+            if (off4 > 0) ae_np_lan_udp_sendto(g_lnch_lan_peers[i], msg4);
         }
     }
 
@@ -7089,6 +7128,9 @@ namespace {
         g_lnch_hosting_lan = true;
         g_lnch_joined_lan = false;
         g_lnch_lan_endpoint = state.endpoint;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) g_lnch_lan_slot_bios[i] = {};
+        ae_np_clear_session_bios_token();
+        ae_np_lan_sync_local_slot_bios();
         static bool atexit_hooked = false;
         if (!atexit_hooked) {
             std::atexit(ae_np_lan_atexit_cleanup);
@@ -7245,6 +7287,62 @@ namespace {
         return 0;
     }
 
+    /* MOTK4 UPDATE: MOTK3 fields + per-slot bios_offer (valid/prefer/can_*). */
+    static int ae_np_lan_parse_motk4_update(char* body, AeLanLobbyState* out) {
+        if (!body || !out) return -1;
+        char* lines[8] = {};
+        char* p = body;
+        for (int i = 0; i < 4; ++i) {
+            lines[i] = p;
+            char* nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            p = nl + 1;
+        }
+        int max_slots = std::atoi(lines[0]);
+        int host_slot = std::atoi(lines[1]);
+        int started = std::atoi(lines[2]);
+        unsigned sid = (unsigned)std::strtoul(lines[3], nullptr, 10);
+        if (max_slots < 2) max_slots = 2;
+        if (max_slots > kAeLanMaxSlots) max_slots = kAeLanMaxSlots;
+        if (host_slot < 0 || host_slot >= max_slots) host_slot = 0;
+        out->max_slots = max_slots;
+        out->host_slot = host_slot;
+        out->started = started != 0;
+        out->session_id = sid ? (uint32_t)sid : 1u;
+        for (int i = 0; i < kAeLanMaxSlots; ++i) {
+            out->slot_name[i].clear();
+            out->slot_id[i].clear();
+            g_lnch_lan_slot_bios[i] = {};
+        }
+        for (int i = 0; i < max_slots; ++i) {
+            char* nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            out->slot_id[i] = p;
+            p = nl + 1;
+            nl = std::strchr(p, '\n');
+            if (!nl) return -1;
+            *nl = '\0';
+            out->slot_name[i] = p;
+            p = nl + 1;
+            int bios_lines[4] = {};
+            for (int b = 0; b < 4; ++b) {
+                nl = std::strchr(p, '\n');
+                if (!nl) return -1;
+                *nl = '\0';
+                bios_lines[b] = std::atoi(p);
+                p = nl + 1;
+            }
+            if (bios_lines[0]) {
+                ae_np_lan_store_slot_bios(i, bios_lines[1], bios_lines[2],
+                                         bios_lines[3]);
+            }
+        }
+        ae_np_lan_sync_legacy_names(*out);
+        return 0;
+    }
+
     /* MOTK3 UPDATE: header + (player_id, display_name) per slot. */
     static int ae_np_lan_parse_motk3_update(char* body, AeLanLobbyState* out) {
         if (!body || !out) return -1;
@@ -7307,9 +7405,10 @@ namespace {
         std::string me = psx_lobby_display_name();
         if (me.empty()) me = "Player";
         const char* my_id = ae_np_lan_local_player_id();
-        char msg[384];
-        std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n", my_id, me.c_str(),
-                      password ? password : "");
+        char msg[448];
+        int off = std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n", my_id,
+                                me.c_str(), password ? password : "");
+        ae_np_append_lan_bios_join(msg, sizeof(msg), &off);
         ae_np_lan_udp_sendto(to, msg);
 
         const uint32_t deadline = SDL_GetTicks() + 1000u;
@@ -7492,6 +7591,129 @@ namespace {
 
     static void ae_np_refresh_bios_offer_from_disk(void) {
         ae_np_refresh_bios_offer(nullptr);
+    }
+
+    static void ae_np_set_session_bios_token(const char* token) {
+        g_lnch_session_bios[0] = '\0';
+        if (!token || !token[0]) return;
+        if (std::strcmp(token, "openbios") != 0 &&
+            std::strcmp(token, "scph1001") != 0)
+            return;
+        std::snprintf(g_lnch_session_bios, sizeof(g_lnch_session_bios), "%s",
+                      token);
+    }
+
+    static void ae_np_clear_session_bios_token(void) {
+        g_lnch_session_bios[0] = '\0';
+    }
+
+    static void ae_np_lan_clear_slot_bios(int slot) {
+        if (slot < 0 || slot >= kAeLanMaxSlots) return;
+        g_lnch_lan_slot_bios[slot] = {};
+    }
+
+    static void ae_np_lan_store_slot_bios(int slot, int prefer_open, int can_open,
+                                         int can_scph) {
+        if (slot < 0 || slot >= kAeLanMaxSlots) return;
+        AeLanSlotBios& b = g_lnch_lan_slot_bios[slot];
+        b.valid = 1;
+        b.prefer_openbios = prefer_open ? 1 : 0;
+        b.can_openbios = can_open ? 1 : 0;
+        b.can_scph1001 = can_scph ? 1 : 0;
+        if (!b.can_openbios && !b.can_scph1001) b.can_openbios = 1;
+    }
+
+    static void ae_np_lan_sync_local_slot_bios(void) {
+        ae_np_refresh_bios_offer_from_disk();
+        const PsxLobbyBiosOffer* offer = psx_lobby_bios_offer();
+        int slot = -1;
+        if (g_lnch_hosting_lan) {
+            AeLanLobbyState st;
+            if (ae_np_read_lan_state(&st)) slot = st.host_slot;
+        } else {
+            slot = g_lnch_lan_my_slot;
+        }
+        if (slot < 0 || !offer || !offer->valid) return;
+        ae_np_lan_store_slot_bios(slot, offer->prefer_openbios, offer->can_openbios,
+                                  offer->can_scph1001);
+    }
+
+    /* Same settle rule as psx_lobby_settle_session_bios, over LAN seat offers. */
+    static int ae_np_lan_settle_session_bios(char* out, size_t out_cap) {
+        if (!out || out_cap < 9) return -1;
+        out[0] = '\0';
+        AeLanLobbyState st;
+        if (!ae_np_read_lan_state(&st)) {
+            std::strncpy(out, "openbios", out_cap - 1);
+            out[out_cap - 1] = '\0';
+            return 0;
+        }
+        ae_np_lan_sync_local_slot_bios();
+        int any_prefer_open = 0;
+        int any_cannot_scph = 0;
+        int saw_peer = 0;
+        for (int i = 0; i < st.max_slots && i < kAeLanMaxSlots; ++i) {
+            if (st.slot_name[i].empty()) continue;
+            saw_peer = 1;
+            const AeLanSlotBios& b = g_lnch_lan_slot_bios[i];
+            if (!b.valid) {
+                any_cannot_scph = 1;
+                continue;
+            }
+            if (b.prefer_openbios) any_prefer_open = 1;
+            if (!b.can_scph1001) any_cannot_scph = 1;
+        }
+        if (!saw_peer) any_cannot_scph = 1;
+        if (any_prefer_open || any_cannot_scph)
+            std::strncpy(out, "openbios", out_cap - 1);
+        else
+            std::strncpy(out, "scph1001", out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return 0;
+    }
+
+    static void ae_np_append_lan_bios_join(char* msg, size_t msg_cap, int* io_off) {
+        if (!msg || !io_off || *io_off < 0) return;
+        ae_np_refresh_bios_offer_from_disk();
+        const PsxLobbyBiosOffer* offer = psx_lobby_bios_offer();
+        const char* prefer = "openbios";
+        int can_open = 1;
+        int can_scph = 0;
+        if (offer && offer->valid) {
+            prefer = offer->prefer_openbios ? "openbios" : "scph1001";
+            can_open = offer->can_openbios ? 1 : 0;
+            can_scph = offer->can_scph1001 ? 1 : 0;
+        }
+        const int n = std::snprintf(msg + *io_off, msg_cap - (size_t)*io_off,
+                                    "%s\n%d\n%d\n", prefer, can_open, can_scph);
+        if (n > 0) *io_off += n;
+    }
+
+    /* Parse optional JOIN bios tail: prefer\ncan_open\ncan_scph\n */
+    static int ae_np_parse_lan_bios_tail(char* p, int* prefer_open, int* can_open,
+                                        int* can_scph) {
+        if (!p || !prefer_open || !can_open || !can_scph) return -1;
+        char* lines[3] = {};
+        for (int i = 0; i < 3; ++i) {
+            if (!p || !*p) return -1;
+            lines[i] = p;
+            char* nl = std::strchr(p, '\n');
+            if (nl) {
+                *nl = '\0';
+                p = nl + 1;
+            } else {
+                p = p + std::strlen(p);
+            }
+        }
+        if (std::strcmp(lines[0], "openbios") == 0)
+            *prefer_open = 1;
+        else if (std::strcmp(lines[0], "scph1001") == 0)
+            *prefer_open = 0;
+        else
+            return -1;
+        *can_open = (std::atoi(lines[1]) != 0) ? 1 : 0;
+        *can_scph = (std::atoi(lines[2]) != 0) ? 1 : 0;
+        return 0;
     }
 
     PsxLobbyMatchCaps ae_netplay_caps_from_settings(const RecompLauncherCSettings* s) {
@@ -7728,10 +7950,12 @@ namespace {
                     if (inet_pton(AF_INET, host, &to.sin_addr) == 1) {
                         std::string me = psx_lobby_display_name();
                         if (me.empty()) me = "Player";
-                        char msg[384];
-                        std::snprintf(msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n",
-                                      ae_np_lan_local_player_id(), me.c_str(),
-                                      g_lnch_remote_lan_state.password.c_str());
+                        char msg[448];
+                        int off = std::snprintf(
+                            msg, sizeof(msg), "MOTK3 JOIN\n%s\n%s\n%s\n",
+                            ae_np_lan_local_player_id(), me.c_str(),
+                            g_lnch_remote_lan_state.password.c_str());
+                        ae_np_append_lan_bios_join(msg, sizeof(msg), &off);
                         ae_np_lan_udp_sendto(to, msg);
                     }
                 }
@@ -7784,8 +8008,15 @@ namespace {
                 const char* name = p;
                 p = nl + 1;
                 nl = std::strchr(p, '\n');
-                if (nl) *nl = '\0';
-                const char* pass = p;
+                const char* pass;
+                char* bios_tail = nullptr;
+                if (nl) {
+                    *nl = '\0';
+                    pass = p;
+                    bios_tail = nl + 1;
+                } else {
+                    pass = p;
+                }
                 AeLanLobbyState st;
                 if (!ae_np_read_lan_state(&st)) continue;
                 if (st.password != pass) {
@@ -7796,6 +8027,15 @@ namespace {
                 if (slot < 0) {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
                     continue;
+                }
+                int prefer_open = 1, can_open = 1, can_scph = 0;
+                if (bios_tail &&
+                    ae_np_parse_lan_bios_tail(bios_tail, &prefer_open, &can_open,
+                                              &can_scph) == 0) {
+                    ae_np_lan_store_slot_bios(slot, prefer_open, can_open, can_scph);
+                } else {
+                    /* Legacy JOIN without bios_offer — cannot assume SCPH. */
+                    ae_np_lan_clear_slot_bios(slot);
                 }
                 st.started = false;
                 ae_np_lan_sync_legacy_names(st);
@@ -7832,6 +8072,8 @@ namespace {
                     ae_np_lan_udp_sendto(from, "MOTK1 ERR\nfull\n");
                     continue;
                 }
+                /* Legacy MOTK1 JOIN has no bios_offer. */
+                ae_np_lan_clear_slot_bios(slot);
                 st.started = false;
                 ae_np_lan_sync_legacy_names(st);
                 if (!ae_np_write_lan_state(st)) continue;
@@ -7867,6 +8109,7 @@ namespace {
                     if (cleared >= 0) {
                         st.slot_name[cleared].clear();
                         st.slot_id[cleared].clear();
+                        ae_np_lan_clear_slot_bios(cleared);
                     }
                 } else {
                     /* Legacy leave without name: drop first guest. */
@@ -7875,6 +8118,7 @@ namespace {
                         if (!st.slot_name[i].empty()) {
                             st.slot_name[i].clear();
                             st.slot_id[i].clear();
+                            ae_np_lan_clear_slot_bios(i);
                             cleared = i;
                             break;
                         }
@@ -7889,6 +8133,26 @@ namespace {
             }
 
             if (!g_lnch_remote_lan) continue;
+
+            if (std::strncmp(buf, "MOTK4 UPDATE\n", 13) == 0) {
+                AeLanLobbyState st = g_lnch_remote_lan_state;
+                if (ae_np_lan_parse_motk4_update(buf + 13, &st) != 0) continue;
+                st.endpoint = g_lnch_lan_endpoint;
+                g_lnch_remote_lan_state = st;
+                const int my_slot =
+                    ae_np_lan_find_slot_by_id(st, ae_np_lan_local_player_id());
+                if (my_slot < 0) {
+                    g_lnch_joined_lan = false;
+                    g_lnch_remote_lan = false;
+                    g_lnch_lan_endpoint.clear();
+                    g_lnch_lan_my_slot = -1;
+                    ae_np_lan_udp_close();
+                } else {
+                    g_lnch_lan_my_slot = my_slot;
+                    ae_np_lan_sync_local_slot_bios();
+                }
+                continue;
+            }
 
             if (std::strncmp(buf, "MOTK3 UPDATE\n", 13) == 0) {
                 AeLanLobbyState st = g_lnch_remote_lan_state;
@@ -7972,9 +8236,9 @@ namespace {
             }
             if (std::strncmp(buf, "MOTK1 START\n", 12) == 0) {
                 g_lnch_remote_lan_state.started = true;
-                /* MOTK1 START\n<session>\n[<delay>\n<prediction>\n<rollback>\n]
-                 * Trailing caps lines are host-authoritative (LAN had no
-                 * match_caps channel; guests used local UI defaults). */
+                /* MOTK1 START\n<session>\n[<delay>\n<prediction>\n<rollback>\n
+                 * [<session_bios>\n]]
+                 * Trailing caps are host-authoritative (incl. settled BIOS). */
                 char* p = buf + 12;
                 char* nl = std::strchr(p, '\n');
                 if (nl) *nl = '\0';
@@ -7987,8 +8251,8 @@ namespace {
                 }
                 if (nl) {
                     p = nl + 1;
-                    char* lines[3] = {};
-                    for (int i = 0; i < 3; ++i) {
+                    char* lines[4] = {};
+                    for (int i = 0; i < 4; ++i) {
                         if (!p || !*p) break;
                         lines[i] = p;
                         char* n2 = std::strchr(p, '\n');
@@ -8013,6 +8277,12 @@ namespace {
                     }
                     if (lines[2] && lines[2][0])
                         g_lnch_rollback = (std::atoi(lines[2]) != 0) ? 1 : 0;
+                    if (lines[3] && lines[3][0])
+                        ae_np_set_session_bios_token(lines[3]);
+                    else
+                        /* Legacy host: force OpenBIOS so mixed local prefs
+                         * cannot silently desync. */
+                        ae_np_set_session_bios_token("openbios");
                 }
                 continue;
             }
@@ -8620,9 +8890,13 @@ namespace {
                     out->is_host = (slot == state.host_slot) ? 1 : 0;
                     out->is_local = (slot == g_lnch_lan_my_slot) ? 1 : 0;
                     out->latency_ms = -1;
-                    out->bios_offer_valid = 0;
-                    out->bios_can_scph1001 = 0;
-                    out->bios_prefer_openbios = 0;
+                    if (out->is_local) ae_np_lan_sync_local_slot_bios();
+                    {
+                        const AeLanSlotBios& b = g_lnch_lan_slot_bios[slot];
+                        out->bios_offer_valid = b.valid;
+                        out->bios_can_scph1001 = b.can_scph1001;
+                        out->bios_prefer_openbios = b.prefer_openbios;
+                    }
                     return 1;
                 }
                 ++seen;
@@ -8692,6 +8966,7 @@ namespace {
             if (state.slot_name[slot].empty()) return -1;
             state.slot_name[slot].clear();
             state.slot_id[slot].clear();
+            ae_np_lan_clear_slot_bios(slot);
             state.started = false;
             ae_np_lan_sync_legacy_names(state);
             if (!ae_np_write_lan_state(state)) return -1;
@@ -8720,13 +8995,24 @@ namespace {
             AeLanLobbyState state;
             if (!ae_np_read_lan_state(&state) || ae_np_lan_occupied(state) < 2)
                 return -1;
+            if (settings && settings->bios_path[0])
+                ae_np_refresh_bios_offer(settings->bios_path);
+            else
+                ae_np_refresh_bios_offer_from_disk();
+            char session_bios[16] = {};
+            (void)ae_np_lan_settle_session_bios(session_bios, sizeof(session_bios));
+            ae_np_set_session_bios_token(session_bios[0] ? session_bios
+                                                        : "openbios");
+            std::fprintf(stdout, "psxrecomp: LAN settled session BIOS = %s\n",
+                         g_lnch_session_bios[0] ? g_lnch_session_bios
+                                               : "openbios");
             state.started = true;
             state.session_id += 1u;
             if (state.session_id == 0) state.session_id = 1;
             g_lnch_lan_session_id = state.session_id;
             if (!ae_np_write_lan_state(state)) return -1;
             ae_np_lan_send_update_to_peers(state);
-            char start_msg[96];
+            char start_msg[128];
             int delay = g_lnch_lobby_input_delay;
             int pred = g_lnch_lobby_input_prediction;
             if (delay < 2) delay = 2;
@@ -8734,9 +9020,11 @@ namespace {
             if (pred < 2) pred = 2;
             if (pred > 16) pred = 16;
             std::snprintf(start_msg, sizeof(start_msg),
-                          "MOTK1 START\n%u\n%d\n%d\n%d\n",
+                          "MOTK1 START\n%u\n%d\n%d\n%d\n%s\n",
                           (unsigned)state.session_id, delay, pred,
-                          g_lnch_rollback ? 1 : 0);
+                          g_lnch_rollback ? 1 : 0,
+                          g_lnch_session_bios[0] ? g_lnch_session_bios
+                                                : "openbios");
             for (int i = 0; i < kAeLanMaxSlots; ++i) {
                 if (g_lnch_lan_peer_ok[i])
                     ae_np_lan_udp_sendto(g_lnch_lan_peers[i], start_msg);
@@ -8753,6 +9041,8 @@ namespace {
         PsxLobbyMatchCaps caps = ae_netplay_caps_from_settings(settings);
         (void)psx_lobby_settle_session_bios(caps.session_bios,
                                             sizeof(caps.session_bios));
+        ae_np_set_session_bios_token(caps.session_bios[0] ? caps.session_bios
+                                                         : "openbios");
         std::fprintf(stdout, "psxrecomp: lobby settled session BIOS = %s\n",
                      caps.session_bios[0] ? caps.session_bios : "openbios");
         return psx_lobby_request_start(&caps);
@@ -8763,6 +9053,11 @@ namespace {
             !g_lnch_pending_direct_launch.enabled) {
             AeLanLobbyState state;
             if (ae_np_read_lan_state(&state) && state.started) {
+                /* Guests may see started=1 on UPDATE before MOTK1 START
+                 * delivers session_bios — wait so both peers boot the same BIOS. */
+                if (g_lnch_joined_lan && !g_lnch_session_bios[0])
+                    return g_lnch_pending_direct_launch.enabled ||
+                           psx_lobby_launch_pending();
                 /* Free the lobby UDP port before delay-sync binds it. */
                 ae_np_lan_udp_close();
                 g_lnch_lan_session_id = state.session_id ? state.session_id : 1u;
@@ -8820,6 +9115,7 @@ namespace {
     /* After a match soft-exit: keep seats, clear started/ready, rebind LAN UDP. */
     void ae_np_prepare_lobby_rematch(void) {
         g_lnch_pending_direct_launch = {};
+        ae_np_clear_session_bios_token();
         psx_lobby_set_ready(0);
         psx_lobby_clear_launch_pending();
         psx_lobby_clear_signals();
@@ -8907,6 +9203,8 @@ namespace {
         out->force_turn = caps->force_turn ? 1 : 0;
         out->rollback =
             (caps && caps->valid && caps->rollback) ? 1 : 0;
+        if (caps->session_bios[0])
+            ae_np_set_session_bios_token(caps->session_bios);
         return 1;
     }
 
@@ -10597,6 +10895,7 @@ int main(int argc, char** argv) {
                         /* Match BIOS settle (lobby bios_offer → session_bios).
                          * Ephemeral for this boot only — seed / bios.cfg keep
                          * the player's offline preference. */
+<<<<<<< HEAD
                         if (resolve_match_session_bios_path(
                                 caps->session_bios,
                                 seed.has_bios_path ? seed.bios_path
@@ -10620,6 +10919,44 @@ int main(int argc, char** argv) {
                                     match_session_bios_path.string().c_str());
                             }
                         }
+=======
+                        if (caps->session_bios[0])
+                            ae_np_set_session_bios_token(caps->session_bios);
+                    }
+                }
+                /* LAN START / lobby token — apply even when match_caps absent. */
+                if (ls.netplay_launch.enabled && g_lnch_session_bios[0] &&
+                    resolve_match_session_bios_path(
+                        g_lnch_session_bios,
+                        seed.has_bios_path ? seed.bios_path
+                                           : std::filesystem::path{},
+                        ls.bios_path, argv[0],
+                        &match_session_bios_path)) {
+                    match_session_bios_set = true;
+                    if (std::strcmp(g_lnch_session_bios, "scph1001") == 0 &&
+                        match_session_bios_path.empty()) {
+                        std::fprintf(stderr,
+                            "psxrecomp: session BIOS scph1001 required but no "
+                            "validated dump found — aborting launch (mixed "
+                            "OpenBIOS/SCPH would desync)\n");
+                        match_session_bios_set = false;
+                        ls.netplay_launch.enabled = 0;
+                        g_lnch_pending_direct_launch = {};
+                        ae_np_clear_session_bios_token();
+                        if (overlay_init_thread.joinable())
+                            overlay_init_thread.join();
+                        SDL_Quit();
+                        return 1;
+                    } else if (match_session_bios_path.empty()) {
+                        std::fprintf(stdout,
+                            "psxrecomp: netplay session BIOS = OpenBIOS "
+                            "(match only; preference unchanged)\n");
+                    } else {
+                        std::fprintf(stdout,
+                            "psxrecomp: netplay session BIOS = SCPH-1001 "
+                            "(%s; match only; preference unchanged)\n",
+                            match_session_bios_path.string().c_str());
+>>>>>>> fca7047 (bios hotfix)
                     }
                 }
 #endif
@@ -12260,6 +12597,7 @@ soft_return_lobby:
             }
             if (net_cfg.enabled) {
                 const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+<<<<<<< HEAD
                 std::filesystem::path session_path;
                 if (caps && caps->valid &&
                     resolve_match_session_bios_path(
@@ -12267,6 +12605,25 @@ soft_return_lobby:
                         ls.bios_path[0] ? std::filesystem::path(ls.bios_path)
                                         : std::filesystem::path{},
                         ls.bios_path, argv[0], &session_path)) {
+=======
+                if (caps && caps->valid && caps->session_bios[0])
+                    ae_np_set_session_bios_token(caps->session_bios);
+                std::filesystem::path session_path;
+                if (g_lnch_session_bios[0] &&
+                    resolve_match_session_bios_path(
+                        g_lnch_session_bios,
+                        ls.bios_path[0] ? std::filesystem::path(ls.bios_path)
+                                        : std::filesystem::path{},
+                        ls.bios_path, argv[0], &session_path)) {
+                    if (std::strcmp(g_lnch_session_bios, "scph1001") == 0 &&
+                        session_path.empty()) {
+                        std::fprintf(stderr,
+                            "psxrecomp: rematch session BIOS scph1001 required "
+                            "but no validated dump — aborting\n");
+                        SDL_Quit();
+                        return 1;
+                    }
+>>>>>>> fca7047 (bios hotfix)
                     if (session_path.empty()) {
                         std::filesystem::path ob =
                             resolve_bios_path(PSX_BUNDLED_BIOS_PATH, argv[0]);
