@@ -141,22 +141,14 @@ Settle rule (same for both):
   OpenBIOS.
 
 Every peer applies that session BIOS before boot. Mixed BIOSes are invalid for
-<<<<<<< HEAD
-rollback (kernel RAM layout differs).
-=======
 rollback (kernel RAM layout differs). If the session settles to SCPH-1001 but a
 peer has no validated dump, that peer **aborts the launch** rather than silently
 falling back to OpenBIOS (which would desync immediately).
->>>>>>> fca7047 (bios hotfix)
 
 Session BIOS is **ephemeral**: it affects only that match’s runtime boot. It
 does **not** rewrite `bios.cfg`, `settings.toml`, or the launcher Settings BIOS
 row. Soft-return shows the player’s durable preference again; the next Start
-<<<<<<< HEAD
-re-settles from `bios_offer` as usual.
-=======
 re-settles from offers as usual.
->>>>>>> fca7047 (bios hotfix)
 
 ## Why both are compiled in
 

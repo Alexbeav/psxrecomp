@@ -10895,31 +10895,6 @@ int main(int argc, char** argv) {
                         /* Match BIOS settle (lobby bios_offer → session_bios).
                          * Ephemeral for this boot only — seed / bios.cfg keep
                          * the player's offline preference. */
-<<<<<<< HEAD
-                        if (resolve_match_session_bios_path(
-                                caps->session_bios,
-                                seed.has_bios_path ? seed.bios_path
-                                                   : std::filesystem::path{},
-                                ls.bios_path, argv[0],
-                                &match_session_bios_path)) {
-                            match_session_bios_set = true;
-                            if (std::strcmp(caps->session_bios, "scph1001") == 0 &&
-                                match_session_bios_path.empty()) {
-                                std::fprintf(stderr,
-                                    "psxrecomp: session BIOS scph1001 settled but no "
-                                    "dump found — falling back to OpenBIOS\n");
-                            } else if (match_session_bios_path.empty()) {
-                                std::fprintf(stdout,
-                                    "psxrecomp: netplay session BIOS = OpenBIOS "
-                                    "(match only; preference unchanged)\n");
-                            } else {
-                                std::fprintf(stdout,
-                                    "psxrecomp: netplay session BIOS = SCPH-1001 "
-                                    "(%s; match only; preference unchanged)\n",
-                                    match_session_bios_path.string().c_str());
-                            }
-                        }
-=======
                         if (caps->session_bios[0])
                             ae_np_set_session_bios_token(caps->session_bios);
                     }
@@ -10956,7 +10931,6 @@ int main(int argc, char** argv) {
                             "psxrecomp: netplay session BIOS = SCPH-1001 "
                             "(%s; match only; preference unchanged)\n",
                             match_session_bios_path.string().c_str());
->>>>>>> fca7047 (bios hotfix)
                     }
                 }
 #endif
@@ -12597,15 +12571,6 @@ soft_return_lobby:
             }
             if (net_cfg.enabled) {
                 const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
-<<<<<<< HEAD
-                std::filesystem::path session_path;
-                if (caps && caps->valid &&
-                    resolve_match_session_bios_path(
-                        caps->session_bios,
-                        ls.bios_path[0] ? std::filesystem::path(ls.bios_path)
-                                        : std::filesystem::path{},
-                        ls.bios_path, argv[0], &session_path)) {
-=======
                 if (caps && caps->valid && caps->session_bios[0])
                     ae_np_set_session_bios_token(caps->session_bios);
                 std::filesystem::path session_path;
@@ -12623,7 +12588,6 @@ soft_return_lobby:
                         SDL_Quit();
                         return 1;
                     }
->>>>>>> fca7047 (bios hotfix)
                     if (session_path.empty()) {
                         std::filesystem::path ob =
                             resolve_bios_path(PSX_BUNDLED_BIOS_PATH, argv[0]);
