@@ -4,9 +4,7 @@
  * Soak class (rb-diag 2026-07-31): both peers POST@1007 (matched), tip-extend
  * to 1008, both POST@1008 (matched); initiator aborted local@1008 vs peer@1007.
  *
- *   gcc -std=c11 -Wall -Wextra -Werror -I../include \
- *       -o test_rb_post_tip_filter test_rb_post_tip_filter.c && \
- *       ./test_rb_post_tip_filter
+ * Build/run: ctest -R rb_post_tip_filter_test
  */
 #include "netplay_rb_post.h"
 
