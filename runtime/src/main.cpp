@@ -2050,14 +2050,23 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
                                                       bool requested_is_explicit) {
     const bool openbios_allowed = s_openbios_allowed;
     const PsxBiosBackend* bundled = psx_bios_bundled();
+    const bool player_bios_selectable = psx_bios_has_selectable() != 0;
+    const bool bundled_only =
+        openbios_allowed && bundled && !player_bios_selectable;
 
-    /* 1. An explicit choice: --bios, else a remembered pick. */
+    /* 1. An explicit choice: --bios, else a remembered pick. A product build
+     * with only its bundled backend has no meaningful player choice: ignore
+     * stale settings/bios.cfg paths instead of validating an image the hidden
+     * launcher row cannot clear. Setup hosts (registry_count == 0) retain their
+     * picker/generation flow. */
     std::filesystem::path chosen;
-    if (requested_is_explicit && requested && requested[0]) {
-        chosen = resolve_bios_path(requested, argv0);
-    } else {
-        std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
-        if (!cached.empty() && std::filesystem::exists(cached)) chosen = cached;
+    if (!bundled_only) {
+        if (requested_is_explicit && requested && requested[0]) {
+            chosen = resolve_bios_path(requested, argv0);
+        } else {
+            std::filesystem::path cached = read_cached_path(argv0, "bios.cfg");
+            if (!cached.empty() && std::filesystem::exists(cached)) chosen = cached;
+        }
     }
     if (!chosen.empty() && std::filesystem::exists(chosen)) {
         if (validate_bios_for_launch(chosen)) return chosen;   /* activates it */
@@ -6124,6 +6133,7 @@ namespace {
     uint32_t    g_lnch_expected_crc  = 0;
     bool        g_lnch_has_crc       = false;
     const char* g_lnch_argv0         = nullptr;
+    bool        g_lnch_netplay_available = false;
 
     int ae_bios_verify(const char* bios_path, RecompLauncherCBiosVerify* out) {
         if (!out) return 0;
@@ -6297,26 +6307,33 @@ namespace {
         PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
             disc_path, g_lnch_expected_serial, g_lnch_expected_crc,
             g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc,
-            &g_netplay_disc_expect);
+            g_lnch_netplay_available ? &g_netplay_disc_expect : nullptr);
         const std::string& serial = !id.detected_serial.empty()
             ? id.detected_serial : g_lnch_expected_serial;
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
-        out->track_count = id.track_count;
-        out->netplay_ok = id.netplay_ok ? 1 : 0;
-        std::snprintf(out->disc_fp, sizeof(out->disc_fp), "%s", id.disc_fp.c_str());
-        std::snprintf(out->netplay_detail, sizeof(out->netplay_detail), "%s",
-                      id.netplay_detail.c_str());
-        g_session_disc_fp = id.disc_fp;
-        g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
-        psx_lobby_set_disc_fp(id.disc_fp.c_str());
-        // Verdict shown by the launcher. TOC / [netplay] failures are warn so
-        // offline Play still works; online is gated by netplay_ok + disc_fp.
+        if (g_lnch_netplay_available) {
+            out->track_count = id.track_count;
+            out->netplay_ok = id.netplay_ok ? 1 : 0;
+            std::snprintf(out->disc_fp, sizeof(out->disc_fp), "%s",
+                          id.disc_fp.c_str());
+            std::snprintf(out->netplay_detail, sizeof(out->netplay_detail), "%s",
+                          id.netplay_detail.c_str());
+            g_session_disc_fp = id.disc_fp;
+            g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
+            psx_lobby_set_disc_fp(id.disc_fp.c_str());
+        } else {
+            g_session_disc_fp.clear();
+            g_session_netplay_disc_ok = false;
+        }
+        // Verdict shown by the launcher. TOC / [netplay] failures only affect
+        // netplay-capable titles; ordinary offline disc verification is
+        // strictly serial/header/optional-CRC based.
         if (!id.opened || !id.has_header)                            out->verdict = 3; // bad
         else if (id.expected_serial_given && !id.serial_matches)     out->verdict = 3; // wrong disc
         else if (id.expected_crc_given && id.crc_computed && !id.crc_matches) out->verdict = 2; // warn
-        else if (!id.netplay_ok)                                     out->verdict = 2; // TOC/cue
+        else if (g_lnch_netplay_available && !id.netplay_ok)         out->verdict = 2; // TOC/cue
         else                                                          out->verdict = 1; // ok
         return 1;
     }
@@ -9596,12 +9613,19 @@ int main(int argc, char** argv) {
     }
     bool ctrl_lock_mode    = false; /* game.toml [controller] lock_mode; true hides the whole pad-mode selector */
     bool ctrl_lock_device  = false; /* game.toml [controller] lock_device; true hides the Player controller cards entirely */
-    bool ws_offered = true; /* game.toml [widescreen] offer; false hides the launcher toggle + clamps 4:3 */
-    bool ws_ultrawide_offered = false;
-    bool ws_adaptive_view_supported = false;
-    bool frame_interpolation_offered = true;
-    bool skip_fmv_offered = true;
-    bool turbo_loads_offered = true;
+    /* Widescreen/View mode and Skip FMVs are mod-owned on PSX. Their legacy
+     * game.toml offer flags remain parseable for old projects but deliberately
+     * cannot expose generic launcher controls or activate the features. Trusted
+     * activation plugins apply them after launcher/settings resolution. */
+    constexpr bool ws_offered = false;
+    constexpr bool ws_ultrawide_offered = false;
+    constexpr bool frame_interpolation_offered = false;
+    constexpr bool skip_fmv_offered = false;
+    /* Load acceleration is likewise mod-owned (Fast Loading / CD Speed). The
+     * former game.toml `offer_turbo_loads` opt-out is deprecated and ignored:
+     * offering the generic switch is no longer possible for any title, so a
+     * config that forgot to migrate can no longer force turbo on. */
+    constexpr bool turbo_loads_offered = false;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     /* Legacy single deadzone (<0 => keep per-slot / input.ini defaults). */
     int  resolved_deadzone = -1;
@@ -9685,9 +9709,22 @@ int main(int argc, char** argv) {
             if (gc.runtime.has_instant_max_per_frame)
                 instant_rate = gc.runtime.instant_max_per_frame;
             warm_cd_routes = gc.runtime.warm_cd_routes;
-            if (gc.runtime.turbo_loads) {
-                g_turbo_loads_enabled = 1;
-                std::fprintf(stdout, "psxrecomp: turbo_loads enabled (opt-in)\n");
+            /* turbo_loads / offer_turbo_loads are deprecated and ignored. Load
+             * acceleration is owned by the Mods catalog (Fast Loading / CD
+             * Speed), which ships with every title and defaults off, so the
+             * legacy config key no longer enables anything. Say so loudly:
+             * MMX6 shipped `turbo_loads = true` in v1.0.4/v1.0.5 and players
+             * had no UI to turn it back off. */
+            if (gc.runtime.has_turbo_loads || gc.runtime.has_offer_turbo_loads) {
+                std::fprintf(stdout,
+                    "psxrecomp: game.toml [runtime] %s%s%s is DEPRECATED and "
+                    "ignored; load acceleration is off unless the player "
+                    "enables the \"Fast Loading (host pacing)\" mod. Remove "
+                    "the key from game.toml.\n",
+                    gc.runtime.has_turbo_loads ? "turbo_loads" : "",
+                    (gc.runtime.has_turbo_loads &&
+                     gc.runtime.has_offer_turbo_loads) ? " / " : "",
+                    gc.runtime.has_offer_turbo_loads ? "offer_turbo_loads" : "");
             }
             if (gc.runtime.turbo_audio_sink) {
                 g_turbo_audio_sink_enabled = 1;
@@ -9884,13 +9921,8 @@ int main(int argc, char** argv) {
             if (!gc.ws_cull_w_imms.empty() || !gc.ws_cull_h_imms.empty())
                 gpu_ws_set_cull_imms(gc.ws_cull_w_imms.data(), (int)gc.ws_cull_w_imms.size(),
                                      gc.ws_cull_h_imms.data(), (int)gc.ws_cull_h_imms.size());
-            ws_offered = gc.ws_offered;
-            ws_ultrawide_offered = gc.ws_ultrawide_offered;
-            ws_adaptive_view_supported = gc.ws_adaptive_view;
-            frame_interpolation_offered =
-                gc.runtime.video_offer_frame_interpolation;
-            skip_fmv_offered = gc.runtime.video_offer_skip_fmv;
-            turbo_loads_offered = gc.runtime.offer_turbo_loads;
+            /* gc.runtime.offer_turbo_loads is deprecated and ignored — see
+             * turbo_loads_offered above. Nothing to assign. */
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
              * interpreter applies the backdrop screenX squash on the interp
@@ -10079,7 +10111,20 @@ int main(int argc, char** argv) {
             g_video_perspective_texturing = us.perspective_texturing ? 1 : 0;
         if (us.has_screen_kind)    g_video_screen    = us.screen_kind;
         if (us.has_auto_skip_fmv)  g_auto_skip_fmv   = us.auto_skip_fmv ? 1 : 0;
-        if (us.has_turbo_loads)    g_turbo_loads_enabled = us.turbo_loads ? 1 : 0;
+        /* turbo_loads is deliberately NOT restored from settings.toml. It is a
+         * write-only latch: the launcher stopped drawing a Turbo loads row when
+         * load acceleration moved to the Mods catalog, so a persisted `true`
+         * was simultaneously authoritative and unreachable — one run of a build
+         * whose game.toml said true latched it forever and no later config
+         * change could undo it (MegaManX6Recomp#14). Report it and move on;
+         * write_user_settings no longer emits the key, so the stale row is
+         * dropped on the next save. */
+        if (us.has_turbo_loads && us.turbo_loads)
+            std::fprintf(stdout,
+                "psxrecomp: settings.toml [video] turbo_loads = true is "
+                "DEPRECATED and ignored; enable the \"Fast Loading (host "
+                "pacing)\" mod instead. The stale key is dropped on the next "
+                "settings save.\n");
         if (us.has_fast_boot)      fast_boot = us.fast_boot;
         if (us.has_bios_hle)       bios_hle  = us.bios_hle;
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
@@ -10156,22 +10201,25 @@ int main(int argc, char** argv) {
 #endif
         }
     }
-    /* A game may migrate Skip FMVs from generic Settings into its mod catalog.
-     * Clamp stale settings before seeding recomp-ui; an enabled activation
-     * plugin applies the feature after the final mod-plan commit. */
+    /* Skip FMVs is mod-owned on PSX. Clamp stale generic settings before
+     * seeding recomp-ui; an enabled activation plugin applies the feature
+     * after the final mod-plan commit. */
     if (!skip_fmv_offered && g_auto_skip_fmv) {
         std::fprintf(stdout,
-            "psxrecomp: Skip FMVs is mod-owned for this title; "
+            "psxrecomp: Skip FMVs is mod-owned on PSX; "
             "ignoring the legacy Settings value\n");
         g_auto_skip_fmv = 0;
     }
-    /* A game may likewise move load acceleration into its mod catalog. The
-     * activation plugin runs after final plan commit, so clear both the
-     * game.toml default and stale Settings value before the launcher is seeded. */
-    if (!turbo_loads_offered && g_turbo_loads_enabled) {
+    /* Load acceleration is mod-owned on PSX, unconditionally. Nothing upstream
+     * of this point is allowed to have enabled it (the game.toml and
+     * settings.toml keys are both deprecated and ignored), so this is a
+     * belt-and-braces clamp rather than the migration path it used to be — an
+     * enabled Fast Loading / CD Speed plugin turns it on further down, after
+     * the final mod-plan commit. */
+    if (g_turbo_loads_enabled) {
         std::fprintf(stdout,
-            "psxrecomp: Turbo loads is mod-owned for this title; "
-            "ignoring the legacy Settings value\n");
+            "psxrecomp: Turbo loads is mod-owned on PSX; "
+            "ignoring the legacy value\n");
         g_turbo_loads_enabled = 0;
     }
     /* Treat presentation interpolation the same way when a title moves it to
@@ -10186,13 +10234,11 @@ int main(int argc, char** argv) {
         g_frame_interpolation_fps = 0;
     }
 
-    /* [widescreen] offer=false: this title's widescreen is unported/unvalidated,
-     * so the launcher hides its toggle — and, same completeness treatment as
-     * lock_mode above, the runtime clamps the display aspect to native 4:3 here
-     * so a stale persisted 16:9 in settings.toml can't engage the hack in
-     * launcher-less builds either. */
+    /* Widescreen/View mode is mod-owned on PSX. Clamp the generic display
+     * aspect to native 4:3 so neither a legacy game.toml offer/default nor a
+     * stale settings.toml value can engage it before trusted mod activation. */
     if (!ws_offered && (g_video_aspect_num != 4 || g_video_aspect_den != 3)) {
-        std::fprintf(stdout, "psxrecomp: widescreen not offered for this title; "
+        std::fprintf(stdout, "psxrecomp: widescreen is mod-owned on PSX; "
                      "clamping display aspect %d:%d -> 4:3\n",
                      g_video_aspect_num, g_video_aspect_den);
         g_video_aspect_num = 4;
@@ -10462,6 +10508,8 @@ int main(int argc, char** argv) {
             launcher_boot_timing_mark("host:after_sdl_init");
             recomp_launcher_set_preserve_sdl(1);
             int lr = 2; /* 0 = launch, 1 = quit, 2 = unavailable */
+            const bool bios_choice_supported =
+                psx_bios_has_selectable() != 0 || psx_bios_registry_count == 0;
             PSXRecompV4::UserSettings seed;
             /* Netplay session BIOS is match-only; never overwrite seed/bios.cfg. */
             std::filesystem::path match_session_bios_path;
@@ -10500,14 +10548,14 @@ int main(int argc, char** argv) {
                 seed.netplay_lobby_url = g_lnch_lobby_url;
                 seed.has_netplay_lobby_url = true;
             }
-            if (bios_explicit && bios_path && bios_path[0]) {
+            if (bios_choice_supported && bios_explicit && bios_path && bios_path[0]) {
                 seed.bios_path = bios_path;
                 seed.has_bios_path = true;
             }
             /* Hydrate launcher BIOS from bios.cfg when settings.toml has none,
              * and rewrite relative paths to absolute so reopen after generate
              * does not depend on cwd. */
-            if (!seed.has_bios_path) {
+            if (bios_choice_supported && !seed.has_bios_path) {
                 std::filesystem::path cached =
                     read_cached_path(argv[0], "bios.cfg");
                 if (!cached.empty()) {
@@ -10531,7 +10579,7 @@ int main(int argc, char** argv) {
             /* First-run setup: if nothing remembered, adopt a retail dump next
              * to the install (SCPH1001…). Missing → leave empty (OpenBIOS).
              * Never override an existing bios.cfg (including cleared OpenBIOS). */
-            if (!seed.has_bios_path) {
+            if (bios_choice_supported && !seed.has_bios_path) {
                 std::error_code ec;
                 const auto cfg = sidecar_cfg_path(argv[0], "bios.cfg");
                 if (!std::filesystem::exists(cfg, ec)) {
@@ -10879,7 +10927,7 @@ int main(int argc, char** argv) {
                  * picker is hidden, but a stale settings file could still
                  * carry one) — resolve_bios_for_runtime would reject it and
                  * the identity gate makes it meaningless. */
-                if (ls.bios_path[0] && !psx_bios_image.image_bundled) {
+                if (bios_choice_supported && ls.bios_path[0]) {
                     std::filesystem::path resolved =
                         resolve_bios_path(ls.bios_path, argv[0]);
                     std::error_code ec;
@@ -12677,9 +12725,15 @@ soft_return_lobby:
             g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
             g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;
             g_video_screen = ls.screen_kind;
-            g_auto_skip_fmv = skip_fmv_offered && ls.auto_skip_fmv ? 1 : 0;
-            g_turbo_loads_enabled =
-                turbo_loads_offered && ls.turbo_loads ? 1 : 0;
+            /* Load acceleration and FMV skipping are mod-owned on PSX, and the
+             * launcher struct these come from was snapshotted BEFORE
+             * mod_runtime_activate_plugins() ran. Applying them here would
+             * clobber whatever the Fast Loading / CD Speed / Tweaks plugins
+             * decided with a stale pre-activation value — turning a player's
+             * enabled mod silently back off on the first in-game Apply. The
+             * offered flags are false for both, so leave both globals alone. */
+            if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
+            if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
             g_fullscreen = ls.fullscreen != 0;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;

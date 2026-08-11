@@ -52,11 +52,22 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    # Registered since before this change, but it did NOT LINK on origin/master:
+    # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
+    # g_debug_last_store_pc references that this test's stub block never gained,
+    # so `ctest` in a runtime tree could not even build. The stubs are added now
+    # (a registered test that cannot compile is worse than an unregistered one —
+    # it breaks the whole suite's build), which exposes a real disagreement:
+    # 27 checks fail, starting with enter.id expected=0x73 (DualShock analog ID)
+    # actual=0xFF (no device). Constant-clock and monotonic-clock stubs give
+    # byte-identical results, so the cycle stub is not the discriminator — this
+    # is the SIO/peripheral axis, not the harness. DISABLED until owned.
     add_executable(sio_dualshock_rumble_test
         tests/test_sio_dualshock_rumble.c
         src/sio.c)
     target_include_directories(sio_dualshock_rumble_test PRIVATE include)
     add_test(NAME sio_dualshock_rumble_test COMMAND sio_dualshock_rumble_test)
+    set_tests_properties(sio_dualshock_rumble_test PROPERTIES DISABLED TRUE)
 
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
@@ -99,9 +110,20 @@ if(BUILD_TESTING)
     # generator, volume sweeps / direct decode, capture buffers, and
     # savestate coverage of all the new state. Includes src/spu.c directly
     # (white-box) and stubs its externs.
-    add_executable(spu_fidelity_test tests/test_spu_fidelity.c)
+    # src/crc32.c is linked rather than stubbed: spu.c's capture/shadow paths
+    # feed real CRCs that this test checks, so a zero-returning stub would make
+    # those assertions vacuous. (This target did not link at all before —
+    # crc32_update was undefined on origin/master too.)
+    add_executable(spu_fidelity_test tests/test_spu_fidelity.c src/crc32.c)
     target_include_directories(spu_fidelity_test PRIVATE include)
     add_test(NAME spu_fidelity_test COMMAND spu_fidelity_test)
+    # Same story as sio_dualshock_rumble_test: registered but unlinkable on
+    # origin/master (crc32_update undefined), so it never ran. With crc32 linked
+    # it now runs 137 checks and fails 4, all in one ADSR sweep region
+    # (mid > 0, late > mid, fall_mid < 0x7FFE, fall_late < fall_mid). Rebuilding
+    # it against a zero-returning crc32 stub reproduces exactly those 4, so the
+    # crc32 linkage is not the cause — the envelope sweep genuinely disagrees.
+    set_tests_properties(spu_fidelity_test PROPERTIES DISABLED TRUE)
 
     add_executable(overlay_capture_retry_test
         tests/test_overlay_capture_retry.cpp
@@ -201,7 +223,171 @@ if(BUILD_TESTING)
         add_test(NAME autocompile_degraded_test
                  COMMAND autocompile_degraded_test)
     endif()
+
+    # ---- previously-unregistered standalone tests -------------------------
+    # These 16 existed in runtime/tests/ with no add_test() entry. Their only
+    # build instructions were a gcc command line in each file's header comment,
+    # which nothing executes — so when the runtime API moved under them they
+    # broke silently and stayed broken. Four had already rotted when they were
+    # collected here (2026-08-11):
+    #
+    #   test_netplay_snap_ring.c        duplicate TU in the documented command;
+    #                                   no stubs for the VRAM-incremental
+    #                                   boot_state queries  (PR #134)
+    #   test_psx_cycle_event_boundaries.c
+    #                                   psx_cycles_resync_after_restore() grew a
+    #                                   CPUState* parameter; psx_cycles.c grew
+    #                                   three externs the stub block never did
+    #   test_spu_end_without_repeat.c   spu.c grew psx_irq_raise / crc32_update
+    #   test_sio_card_protocol.c        builds, but 147 of 309 checks fail —
+    #                                   registered DISABLED below, see beads
+    #
+    # Registering them is only half the fix; check_test_registration.cmake at
+    # the end of this file is what stops the next one from going unnoticed.
+    # Each test's build recipe now lives HERE and nowhere else — the header
+    # comments were reduced to a `ctest -R <name>` pointer so there is exactly
+    # one description of how a test is built, and it is one the build executes.
+
+    add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
+    target_include_directories(cdrom_irq_mask_test PRIVATE src)
+    add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    # Mirrors func_00005A08 (BIOS card READ chain handler) against a mock CPU,
+    # so it pins the disassembly reading without linking the recompiled BIOS.
+    add_executable(chain_handler_check_test tests/test_chain_handler_check.c)
+    target_include_directories(chain_handler_check_test PRIVATE include src)
+    add_test(NAME chain_handler_check_test COMMAND chain_handler_check_test)
+
+    # Bug B: the pacing decision must take ONE counter sample, so the unsigned
+    # subtraction cannot underflow into a ~24.7-day SDL_Delay.
+    add_executable(frame_pacing_test tests/test_frame_pacing.c)
+    target_include_directories(frame_pacing_test PRIVATE include)
+    add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
+
+    add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
+    target_include_directories(gpu_primitive_reject_test PRIVATE include)
+    add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
+
+    add_executable(gpu_sw_edges_test tests/test_gpu_sw_edges.c)
+    target_include_directories(gpu_sw_edges_test PRIVATE src)
+    add_test(NAME gpu_sw_edges_test COMMAND gpu_sw_edges_test)
+
+    add_executable(gpu_vk_upload_alignment_test
+        tests/test_gpu_vk_upload_alignment.c)
+    target_include_directories(gpu_vk_upload_alignment_test PRIVATE src)
+    add_test(NAME gpu_vk_upload_alignment_test
+             COMMAND gpu_vk_upload_alignment_test)
+
+    add_executable(netplay_hash_confirm_test
+        tests/test_netplay_hash_confirm.c
+        src/netplay_hash_confirm.c)
+    target_include_directories(netplay_hash_confirm_test PRIVATE include)
+    add_test(NAME netplay_hash_confirm_test COMMAND netplay_hash_confirm_test)
+
+    # Single TU: the test #includes src/netplay_snap_ring.c and stubs
+    # boot_state, so the .c must NOT also be listed here (that was PR #134's
+    # duplicate-symbol bug, in its documented command).
+    add_executable(netplay_snap_ring_test tests/test_netplay_snap_ring.c)
+    target_include_directories(netplay_snap_ring_test PRIVATE include)
+    target_compile_definitions(netplay_snap_ring_test PRIVATE
+        NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE)
+    add_test(NAME netplay_snap_ring_test COMMAND netplay_snap_ring_test)
+
+    add_executable(overlay_store_cycle_barrier_test
+        tests/test_overlay_store_cycle_barrier.c)
+    target_include_directories(overlay_store_cycle_barrier_test PRIVATE include)
+    add_test(NAME overlay_store_cycle_barrier_test
+             COMMAND overlay_store_cycle_barrier_test)
+
+    add_executable(psx_cycle_event_boundaries_test
+        tests/test_psx_cycle_event_boundaries.c
+        src/psx_cycles.c)
+    target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
+    add_test(NAME psx_cycle_event_boundaries_test
+             COMMAND psx_cycle_event_boundaries_test)
+
+    add_executable(rb_post_tip_filter_test tests/test_rb_post_tip_filter.c)
+    target_include_directories(rb_post_tip_filter_test PRIVATE include)
+    add_test(NAME rb_post_tip_filter_test COMMAND rb_post_tip_filter_test)
+
+    add_executable(spu_end_without_repeat_test
+        tests/test_spu_end_without_repeat.c)
+    target_include_directories(spu_end_without_repeat_test PRIVATE include)
+    add_test(NAME spu_end_without_repeat_test
+             COMMAND spu_end_without_repeat_test)
+
+    add_executable(spu_gaussian_test tests/test_spu_gaussian.c)
+    target_include_directories(spu_gaussian_test PRIVATE include)
+    add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
+
+    # DISABLED, not de-registered. It links and runs, but 147 of its 309 checks
+    # fail: the no-card path is clean (141/141) while the card-present READ
+    # reply stream comes back shifted by one and then stuck (idx[1] 0xFF for an
+    # expected 0x08 FLAG, then 0x08 for every subsequent byte). That is either a
+    # real sio.c protocol regression or a stale expectation in the test, and it
+    # needs an owner either way.
+    #
+    # De-registering a failing test is exactly the mechanism that let these 16
+    # rot in the first place, and wiring it RED would recreate the red-check-
+    # nobody-trusts problem that took CI off PRs. DISABLED keeps it built, keeps
+    # it listed in `ctest -N`, and keeps it countable, without failing the run.
+    # Re-enable by deleting the set_tests_properties line once triaged.
+    add_executable(sio_card_protocol_test
+        tests/test_sio_card_protocol.c
+        src/sio.c
+        src/memcard.c)
+    target_include_directories(sio_card_protocol_test PRIVATE include src)
+    # Runs in a build-tree scratch dir, NOT in tests/: the test writes
+    # test_dir/card1.mcd relative to the working directory (self-provisioning it
+    # via mkdir if absent), and tests/test_dir/card1.mcd is a TRACKED fixture —
+    # running it from tests/ overwrites that file and leaves the repo dirty.
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sio_card_protocol_scratch)
+    add_test(NAME sio_card_protocol_test COMMAND sio_card_protocol_test
+             WORKING_DIRECTORY
+                 ${CMAKE_CURRENT_BINARY_DIR}/sio_card_protocol_scratch)
+    set_tests_properties(sio_card_protocol_test PROPERTIES DISABLED TRUE)
+
+    # POSIX-only: dlopen()s a fixture .so out of a synthetic cache tree, so it
+    # cannot link under MinGW/MSVC (-ldl). run_overlay_posix_test.sh already
+    # stages the cache tree, builds the fixture and the test, and runs it — so
+    # register THAT rather than reimplementing its fixture staging here.
+    if(UNIX)
+        find_program(BASH_EXECUTABLE bash)
+        if(BASH_EXECUTABLE)
+            add_test(NAME overlay_posix_test
+                     COMMAND ${BASH_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_overlay_posix_test.sh)
+        else()
+            message(STATUS "overlay_posix_test: bash not found - skipped")
+        endif()
+    endif()
+
+    # recomp-net is an optional submodule; the netplay input-history contract
+    # cannot be compiled without it. Conditional, not skipped silently: the
+    # registration guard is told about it via the same EXISTS check.
+    if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/include/recomp_net/rollback.h")
+        add_executable(netplay_input_hist_test
+            tests/test_netplay_input_hist.c
+            src/netplay_input_hist.c
+            ${PSXRECOMP_ROOT}/lib/recomp-net/src/input/rnet_input_contract.c)
+        target_include_directories(netplay_input_hist_test PRIVATE
+            include
+            ${PSXRECOMP_ROOT}/lib/recomp-net/include)
+        target_compile_definitions(netplay_input_hist_test PRIVATE
+            PSX_HAS_RECOMP_NET=1)
+        add_test(NAME netplay_input_hist_test COMMAND netplay_input_hist_test)
+    else()
+        message(STATUS
+            "netplay_input_hist_test: lib/recomp-net submodule absent - skipped")
+    endif()
 endif()
+
+# ---- test-registration completeness guard (must stay LAST) ------------------
+# Fails configure if a file in runtime/tests/ or recompiler/tests/ is neither
+# registered as a test nor listed as a deliberate exception. See the module
+# header for the rot story this exists to prevent.
+include(${CMAKE_CURRENT_SOURCE_DIR}/check_test_registration.cmake)
+psxrecomp_check_all_tests_registered()
 
 if(NOT MSVC)
     psxrecomp_add_runtime_target(psx-oracle

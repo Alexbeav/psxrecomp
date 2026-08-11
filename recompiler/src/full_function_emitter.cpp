@@ -150,9 +150,11 @@ bool FullFunctionEmitter::emit_function(
     uint32_t                    /* rom_end */,
     std::vector<ContinuationLabel>& out_continuations,
     const std::set<uint32_t>&   injected_cross_targets,
-    std::vector<ContinuationLabel>& out_cross_targets)
+    std::vector<ContinuationLabel>& out_cross_targets,
+    std::string*                out_interpreter_reason)
 {
     const uint32_t norm = func.normalized_addr;
+    if (out_interpreter_reason) out_interpreter_reason->clear();
 
     // RECURSION_BUG.md §25 — continuation-passing call/return (the universal fix
     // for the idle-freeze host-stack leak). When PSX_CPS is set at gen time,
@@ -292,10 +294,6 @@ bool FullFunctionEmitter::emit_function(
     // continuation entry-switch after we know which labels exist.
     std::string branch_decls;
     std::string body;
-    // Shadow 'out' with a reference to 'body' so all existing out+= lines
-    // write to the temporary buffer.  The real 'out' is assembled at the end.
-    std::string& func_out = body;
-    #define out func_out
 
     // --- Emit instructions in address order ---
     // Delay slots are emitted at their natural address (NOT inline with
@@ -499,6 +497,7 @@ bool FullFunctionEmitter::emit_function(
     };
     /* load addr -> {dest reg, flush writeback (vs discard)} */
     std::map<uint32_t, std::pair<int, bool>> ldd_sites;
+    std::string unmodeled_load_delay;
     for (const auto& [la, lw_raw] : addr_to_raw) {
         int dest = simple_load_dest(lw_raw);
         uint32_t lop = lw_raw >> 26;
@@ -516,10 +515,15 @@ bool FullFunctionEmitter::emit_function(
             if (f != addr_to_raw.end() && insn_reads_gpr(f->second, dep_reg)) dep = true;
             auto t = addr_to_raw.find(pb.target);
             if (pb.target && t != addr_to_raw.end() && insn_reads_gpr(t->second, dep_reg)) dep = true;
-            if (dep)
-                std::fprintf(stderr,
-                    "[load-delay] UNMODELED: load 0x%08X in delay slot with dependent successor (func 0x%08X)\n",
-                    la, func.entry_addr);
+            if (dep) {
+                unmodeled_load_delay = fmt::format(
+                    "load 0x{:08X} in a branch delay slot has a dependent successor", la);
+                if (out_interpreter_reason) {
+                    std::fprintf(stderr,
+                        "[load-delay] UNMODELED: load 0x%08X in delay slot with dependent successor (func 0x%08X)\n",
+                        la, func.entry_addr);
+                }
+            }
             continue;
         }
         auto nx = addr_to_raw.find(la + 4);
@@ -531,10 +535,15 @@ bool FullFunctionEmitter::emit_function(
             uint32_t nx_phys = (la + 4) & 0x1FFFFFFFu;
             if (nx_phys >= base_phys && nx_phys + 4 <= base_phys + rom.size()) {
                 uint32_t nx_raw = read_u32_le(rom, nx_phys - base_phys);
-                if (insn_reads_gpr(nx_raw, dep_reg))
-                    std::fprintf(stderr,
-                        "[load-delay] UNMODELED: dependent pair crosses fragment boundary after load 0x%08X rt=%d (func 0x%08X)\n",
-                        la, dep_reg, func.entry_addr);
+                if (insn_reads_gpr(nx_raw, dep_reg)) {
+                    unmodeled_load_delay = fmt::format(
+                        "dependent load pair crosses a fragment boundary after 0x{:08X}", la);
+                    if (out_interpreter_reason) {
+                        std::fprintf(stderr,
+                            "[load-delay] UNMODELED: dependent pair crosses fragment boundary after load 0x%08X rt=%d (func 0x%08X)\n",
+                            la, dep_reg, func.entry_addr);
+                    }
+                }
             }
             continue;
         }
@@ -547,20 +556,61 @@ bool FullFunctionEmitter::emit_function(
             uint32_t nop_ = nx->second >> 26, nrt = (nx->second >> 16) & 31;
             bool complementary = (nrt == (uint32_t)dep_reg) &&
                                  ((lop == 0x22 && nop_ == 0x26) || (lop == 0x26 && nop_ == 0x22));
-            if (!complementary)
-                std::fprintf(stderr,
-                    "[load-delay] UNMODELED: LWL/LWR 0x%08X with dependent successor (func 0x%08X)\n",
-                    la, func.entry_addr);
+            if (!complementary) {
+                unmodeled_load_delay = fmt::format(
+                    "LWL/LWR 0x{:08X} has a dependent non-complementary successor", la);
+                if (out_interpreter_reason) {
+                    std::fprintf(stderr,
+                        "[load-delay] UNMODELED: LWL/LWR 0x%08X with dependent successor (func 0x%08X)\n",
+                        la, func.entry_addr);
+                }
+            }
             continue;
         }
         if (block_leaders.count(la + 4)) {
-            std::fprintf(stderr,
-                "[load-delay] UNMODELED: dependent pair split by label at 0x%08X (func 0x%08X)\n",
-                la + 4, func.entry_addr);
+            unmodeled_load_delay = fmt::format(
+                "dependent load pair is split by a label at 0x{:08X}", la + 4);
+            if (out_interpreter_reason) {
+                std::fprintf(stderr,
+                    "[load-delay] UNMODELED: dependent pair split by label at 0x%08X (func 0x%08X)\n",
+                    la + 4, func.entry_addr);
+            }
             continue;
         }
         ldd_sites[la] = {dest, true};
     }
+    if (!unmodeled_load_delay.empty()) {
+        // dirty_ram_dispatch interprets live main-RAM bytes only. Relocated
+        // kernel/shell functions satisfy that contract; a pure ROM function
+        // does not. Never turn a correctness fallback into a later
+        // unknown-dispatch abort: stop generation if there is no interpreter
+        // backend capable of executing every instruction in this function.
+        const bool ram_backed = std::all_of(
+            addr_to_raw.begin(), addr_to_raw.end(),
+            [](const auto& insn) {
+                return (bios_runtime_pc(insn.first) & 0x1FFFFFFFu) <
+                       (2u * 1024u * 1024u);
+            });
+        if (!ram_backed) {
+            throw std::runtime_error(fmt::format(
+                "cannot safely emit BIOS function 0x{:08X}: {}; "
+                "the function is not RAM-backed, so interpreter fallback is unavailable",
+                func.entry_addr, unmodeled_load_delay));
+        }
+        if (out_interpreter_reason) {
+            *out_interpreter_reason = unmodeled_load_delay;
+            std::fprintf(stderr,
+                "[load-delay] FALLBACK: function 0x%08X excluded from native dispatch; using interpreter (%s)\n",
+                func.entry_addr, unmodeled_load_delay.c_str());
+        }
+        return false;
+    }
+
+    // Shadow 'out' with a reference to 'body' so all existing out+= lines
+    // write to the temporary buffer.  The real 'out' is assembled at the end.
+    std::string& func_out = body;
+    #define out func_out
+
     for (auto& [la, s] : ldd_sites) {
         uint32_t nw = addr_to_raw.at(la + 4);
         if (insn_writes_gpr(nw, static_cast<uint32_t>(s.first))) {
@@ -1793,7 +1843,10 @@ void FullFunctionEmitter::emit_dispatch(
                            g_sym_prefix, kb_count);
         out += kb;
         out += "};\n";
-        out += fmt::format("static const uint32_t {}psx_bios_kernel_body_count = {}u;\n\n",
+        // An enum is an integer constant expression in C. A const-qualified
+        // object is not, so MSVC rejects it in the file-scope backend
+        // initializer even though GCC and Clang accept it as an extension.
+        out += fmt::format("enum {{ {}psx_bios_kernel_body_count = {}u }};\n\n",
                            g_sym_prefix, kb_count);
     }
 
@@ -2302,7 +2355,7 @@ EmitStats FullFunctionEmitter::emit(
             std::string tmp;
             std::set<uint32_t> empty;
             (void)emit_function(tmp, fn, sfr, all_function_entries_norm, rom, base_addr, rom_end,
-                                dry_run_continuations, empty, dry_run_cross);
+                                dry_run_continuations, empty, dry_run_cross, nullptr);
         }
         for (const auto& cl : dry_run_cross) {
             auto ow = insn_owner.find(cl.rom_addr);
@@ -2348,9 +2401,15 @@ EmitStats FullFunctionEmitter::emit(
         }
 
         std::vector<ContinuationLabel> discard_cross;  /* PASS 2 cross is unused */
+        std::string interpreter_reason;
         bool ok = emit_function(full_c, fn, sfr, all_function_entries_norm, rom, base_addr, rom_end,
-                                all_continuations, injected, discard_cross);
+                                all_continuations, injected, discard_cross, &interpreter_reason);
         if (!ok) {
+            if (!interpreter_reason.empty()) {
+                stats.interpreted.emplace_back(fn.entry_addr, interpreter_reason);
+                stats.functions_interpreted++;
+                continue;
+            }
             stats.skipped.emplace_back(fn.entry_addr, "emit_function failed");
             stats.functions_skipped++;
             continue;
@@ -2434,6 +2493,25 @@ EmitStats FullFunctionEmitter::emit(
         }
         json += "]\n";
         std::string path = out_dir + "/" + out_stem + "_skipped_functions.json";
+        std::ofstream f(path, std::ios::binary);
+        if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
+        f.write(json.data(), static_cast<std::streamsize>(json.size()));
+    }
+
+    // Fail-closed functions are deliberately absent from native dispatch so
+    // the existing dispatch miss path executes their live bytes through the
+    // interpreter. Keep this separate from skipped_functions.json: skipped
+    // functions receive fatal diagnostic stubs, while these remain runnable.
+    if (!stats.interpreted.empty()) {
+        std::string json = "[\n";
+        for (size_t i = 0; i < stats.interpreted.size(); ++i) {
+            json += fmt::format("  {{\"address\": \"0x{:08X}\", \"reason\": \"{}\"}}",
+                                stats.interpreted[i].first, stats.interpreted[i].second);
+            if (i + 1 < stats.interpreted.size()) json += ",";
+            json += "\n";
+        }
+        json += "]\n";
+        std::string path = out_dir + "/" + out_stem + "_interpreted_functions.json";
         std::ofstream f(path, std::ios::binary);
         if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
         f.write(json.data(), static_cast<std::streamsize>(json.size()));

@@ -1,10 +1,7 @@
 /*
  * Pin cross-device causality at a scheduler deadline.
  *
- * Build from runtime/tests:
- *   gcc -std=c99 -Wall -Wextra -ffunction-sections -fdata-sections \
- *     -Wl,--gc-sections -I../include -o test_psx_cycle_event_boundaries \
- *     test_psx_cycle_event_boundaries.c ../src/psx_cycles.c
+ * Build/run: ctest -R psx_cycle_event_boundaries_test
  */
 
 #include "psx_cycles.h"
@@ -61,8 +58,14 @@ int psx_get_in_exception(void) { return 0; }
 void starvation_watchdog_check(void) {}
 void starvation_ring_pc_sample(void) {}
 
+int  psx_netplay_active(void) { return 0; }
+int  psx_selfcheck_enabled(void) { return 0; }
+void dirty_ram_ld_delay_discard(void) {}
+
 int main(void) {
-    psx_cycles_resync_after_restore();
+    /* NULL cpu: this test pins the scheduler boundary, not the CPU-state
+     * rewind. psx_cycles_resync_after_restore guards that block on `if (cpu)`. */
+    psx_cycles_resync_after_restore(NULL);
     psx_advance_cycles(5);
 
     if (psx_get_cycle_count() != 5) {

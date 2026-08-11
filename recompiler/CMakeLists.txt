@@ -311,6 +311,28 @@ if(BUILD_TESTING)
     target_link_libraries(recompiler_patch_test PRIVATE fmt rabbitizer)
     add_test(NAME recompiler_patch_test COMMAND recompiler_patch_test)
 
+    add_executable(full_function_emitter_test
+        tests/full_function_emitter_test.cpp
+        src/ps1_exe_parser.cpp
+        src/mips_decoder.cpp
+        src/strict_translator.cpp
+        src/bios_address_model.cpp
+        src/function_discovery.cpp
+        src/full_function_emitter.cpp
+        src/config_loader.cpp
+        src/recompiler_patch.cpp
+    )
+    target_include_directories(full_function_emitter_test PRIVATE
+        include
+        src
+        lib/rabbitizer/include
+        lib/rabbitizer/cplusplus/include
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(full_function_emitter_test PRIVATE fmt rabbitizer)
+    add_test(NAME full_function_emitter_test COMMAND full_function_emitter_test)
+
     add_executable(recompiler_patch_cxx17_header_test
         tests/recompiler_patch_cxx17_header_test.cpp
     )
@@ -380,6 +402,12 @@ if(BUILD_TESTING)
             NAME dirty_text_continuation_guards
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
+        add_test(
+            NAME bios_backend_constant_codegen
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
+                    --recompiler $<TARGET_FILE:psxrecomp-bios>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # ---- codegen tests that were written but never registered -----------
         # These existed in recompiler/tests/ with no add_test() entry, so they
@@ -402,6 +430,24 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
+        # test_aot_overlay_discovery.py had no add_test() entry at all. It runs
+        # far enough to exercise real discovery, then fails in
+        # check_real_batched_fragment_publication: that check reaches
+        # MOD.compile_fragment_batch, which spawns psxrecomp-game with cwd set
+        # to its own TemporaryDirectory, so BIOS-profile resolution (which
+        # probes bios/SCPH1001.toml relative to the working directory) finds
+        # nothing and returns "recompiler-error: no BIOS profile found". Every
+        # other subprocess in the same file passes cwd=str(ROOT) explicitly, so
+        # this looks like a missed cwd rather than a product defect — but it
+        # needs an owner, and DISABLED keeps it counted until then.
+        add_test(
+            NAME aot_overlay_discovery
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_overlay_discovery.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        set_tests_properties(aot_overlay_discovery PROPERTIES DISABLED TRUE)
+
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them
@@ -410,21 +456,11 @@ if(BUILD_TESTING)
         # configure before regenerating a BIOS. Each was run manually first;
         # all pass.
         #
-        # Deliberately NOT registered, because they currently FAIL — see
-        # docs/TESTING.md for the detail. Wiring a known-failing test would
-        # recreate the exact problem that took CI off PRs (a red check nobody
-        # trusts), so these need an owner's decision first:
-        #   test_interpreter_perf_guards.py   - psx_devices_mmio_sync's
-        #       recompute-deadline branch never clears g_psx_cycle_fast_limit,
-        #       and the guard also still names the pre-rename
-        #       s_next_service_cycle
-        #   test_runtime_perf_diag_guards.py  - asserts a substring no longer
-        #       present in the runtime source
-        #   test_overlay_pair_dedup_runtime.py - needs its companion harness
-        #       built; not a source-only guard
         foreach(_t IN ITEMS
+                bios_selection_guards
                 capture_history
                 default_renderer_guards
+                mod_owned_display_controls
                 fmv_quiet_guards
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
@@ -451,6 +487,38 @@ if(BUILD_TESTING)
                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
+
+        # ---- known-failing guards: DISABLED, not de-registered ---------------
+        # These three were previously left out of the list above with a comment
+        # explaining that they FAIL and that wiring a red check would recreate
+        # the problem that took CI off PRs. That reasoning is right; the remedy
+        # was not. De-registering is precisely how a test stops being counted,
+        # and it is the mechanism that let 16 C/C++ tests rot in runtime/tests/.
+        #
+        # ctest's DISABLED property is the intended tool: the test stays
+        # registered, stays visible in `ctest -N`, and is reported as Disabled
+        # rather than silently absent — without turning the run red. Delete the
+        # matching set_tests_properties line to re-enable one once it is fixed.
+        #
+        #   interpreter_perf_guards    psx_devices_mmio_sync's recompute-deadline
+        #                              branch never clears g_psx_cycle_fast_limit,
+        #                              and the guard still names the pre-rename
+        #                              s_next_service_cycle
+        #   runtime_perf_diag_guards   asserts a substring no longer present in
+        #                              the runtime source
+        #   overlay_pair_dedup_runtime needs its companion harness built; not a
+        #                              source-only guard
+        foreach(_t IN ITEMS
+                interpreter_perf_guards
+                runtime_perf_diag_guards
+                overlay_pair_dedup_runtime)
+            add_test(
+                NAME ${_t}
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_${_t}.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+            set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
+        endforeach()
     endif()
 endif()
 
@@ -466,6 +534,14 @@ target_include_directories(reachable_discovery_test PRIVATE
     lib/fmt/include
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
+
+# ---- test-registration completeness guard -----------------------------------
+# Reads both CMakeLists.txt files as text, so it catches an orphan in either
+# project from whichever one is being configured. Placed before the collision
+# guard, which must stay last because it needs every target declared; this one
+# inspects files on disk and has no such ordering requirement.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/check_test_registration.cmake)
+psxrecomp_check_all_tests_registered()
 
 # ---- output-name collision guard (must stay LAST) ---------------------------
 # Fails configure if any two targets here would write the same file on a

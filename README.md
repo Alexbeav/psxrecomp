@@ -748,9 +748,15 @@ seek delays as real hardware. On top of that faithful baseline, load-time
 acceleration is **opt-in**, per game, so the accurate path is never compromised:
 
 - **Turbo** — a hold-to-fast-forward key that compresses loads on demand.
-- **`[runtime] turbo_loads` / `idle_skip`** — automatic acceleration during load
-  waits, with `turbo_audio_sink` keeping the SPU timeline coherent through the
-  burst.
+- **The "Fast Loading (host pacing)" and "CD Speed" mods** — automatic
+  acceleration during load waits, shipped with every title and **off by
+  default**, with `turbo_audio_sink` keeping the SPU timeline coherent through
+  the burst. Host pacing only changes how fast real time is fed to a load, so
+  the guest cannot desync; CD speed changes when the game receives CD
+  interrupts. The former `[runtime] turbo_loads` config key is deprecated and
+  ignored — see `docs/config_schema.md`.
+- **`[runtime] idle_skip`** — proof-gated fast-forward through idle polling
+  loops, with guest time and device events still advancing exactly.
 - **Warm CD routes (`[[runtime.warm_cd_routes]]`)** — narrowly-scoped fast
   read cadence armed on a specific `SetLoc`, restoring authentic timing the
   moment the read pattern diverges.

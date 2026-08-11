@@ -15,9 +15,7 @@
  * not after three failed spawns - the point is to know before any compile is
  * attempted.
  *
- * Build (standalone):
- *   gcc -I ../include -o test_autocompile_degraded \
- *       test_autocompile_degraded.c ../src/autocompile.c
+ * Build/run: ctest -R autocompile_degraded_test
  */
 #include "autocompile.h"
 #include "overlay_loader.h"
