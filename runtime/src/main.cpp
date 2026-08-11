@@ -9023,7 +9023,11 @@ int main(int argc, char** argv) {
     constexpr bool ws_ultrawide_offered = false;
     constexpr bool frame_interpolation_offered = false;
     constexpr bool skip_fmv_offered = false;
-    bool turbo_loads_offered = true;
+    /* Load acceleration is likewise mod-owned (Fast Loading / CD Speed). The
+     * former game.toml `offer_turbo_loads` opt-out is deprecated and ignored:
+     * offering the generic switch is no longer possible for any title, so a
+     * config that forgot to migrate can no longer force turbo on. */
+    constexpr bool turbo_loads_offered = false;
     bool vulkan_offered = false; /* game.toml [video] offer_vulkan; developer opt-in for launcher visibility */
     /* Legacy single deadzone (<0 => keep per-slot / input.ini defaults). */
     int  resolved_deadzone = -1;
@@ -9107,9 +9111,22 @@ int main(int argc, char** argv) {
             if (gc.runtime.has_instant_max_per_frame)
                 instant_rate = gc.runtime.instant_max_per_frame;
             warm_cd_routes = gc.runtime.warm_cd_routes;
-            if (gc.runtime.turbo_loads) {
-                g_turbo_loads_enabled = 1;
-                std::fprintf(stdout, "psxrecomp: turbo_loads enabled (opt-in)\n");
+            /* turbo_loads / offer_turbo_loads are deprecated and ignored. Load
+             * acceleration is owned by the Mods catalog (Fast Loading / CD
+             * Speed), which ships with every title and defaults off, so the
+             * legacy config key no longer enables anything. Say so loudly:
+             * MMX6 shipped `turbo_loads = true` in v1.0.4/v1.0.5 and players
+             * had no UI to turn it back off. */
+            if (gc.runtime.has_turbo_loads || gc.runtime.has_offer_turbo_loads) {
+                std::fprintf(stdout,
+                    "psxrecomp: game.toml [runtime] %s%s%s is DEPRECATED and "
+                    "ignored; load acceleration is off unless the player "
+                    "enables the \"Fast Loading (host pacing)\" mod. Remove "
+                    "the key from game.toml.\n",
+                    gc.runtime.has_turbo_loads ? "turbo_loads" : "",
+                    (gc.runtime.has_turbo_loads &&
+                     gc.runtime.has_offer_turbo_loads) ? " / " : "",
+                    gc.runtime.has_offer_turbo_loads ? "offer_turbo_loads" : "");
             }
             if (gc.runtime.turbo_audio_sink) {
                 g_turbo_audio_sink_enabled = 1;
@@ -9306,7 +9323,8 @@ int main(int argc, char** argv) {
             if (!gc.ws_cull_w_imms.empty() || !gc.ws_cull_h_imms.empty())
                 gpu_ws_set_cull_imms(gc.ws_cull_w_imms.data(), (int)gc.ws_cull_w_imms.size(),
                                      gc.ws_cull_h_imms.data(), (int)gc.ws_cull_h_imms.size());
-            turbo_loads_offered = gc.runtime.offer_turbo_loads;
+            /* gc.runtime.offer_turbo_loads is deprecated and ignored — see
+             * turbo_loads_offered above. Nothing to assign. */
             vulkan_offered = gc.vulkan_offered;
             /* Register the [widescreen.backdrop] store PCs so the dirty-RAM
              * interpreter applies the backdrop screenX squash on the interp
@@ -9495,7 +9513,20 @@ int main(int argc, char** argv) {
             g_video_perspective_texturing = us.perspective_texturing ? 1 : 0;
         if (us.has_screen_kind)    g_video_screen    = us.screen_kind;
         if (us.has_auto_skip_fmv)  g_auto_skip_fmv   = us.auto_skip_fmv ? 1 : 0;
-        if (us.has_turbo_loads)    g_turbo_loads_enabled = us.turbo_loads ? 1 : 0;
+        /* turbo_loads is deliberately NOT restored from settings.toml. It is a
+         * write-only latch: the launcher stopped drawing a Turbo loads row when
+         * load acceleration moved to the Mods catalog, so a persisted `true`
+         * was simultaneously authoritative and unreachable — one run of a build
+         * whose game.toml said true latched it forever and no later config
+         * change could undo it (MegaManX6Recomp#14). Report it and move on;
+         * write_user_settings no longer emits the key, so the stale row is
+         * dropped on the next save. */
+        if (us.has_turbo_loads && us.turbo_loads)
+            std::fprintf(stdout,
+                "psxrecomp: settings.toml [video] turbo_loads = true is "
+                "DEPRECATED and ignored; enable the \"Fast Loading (host "
+                "pacing)\" mod instead. The stale key is dropped on the next "
+                "settings save.\n");
         if (us.has_fast_boot)      fast_boot = us.fast_boot;
         if (us.has_bios_hle)       bios_hle  = us.bios_hle;
         if (us.has_fullscreen)     g_fullscreen      = us.fullscreen;
@@ -9581,13 +9612,16 @@ int main(int argc, char** argv) {
             "ignoring the legacy Settings value\n");
         g_auto_skip_fmv = 0;
     }
-    /* A game may likewise move load acceleration into its mod catalog. The
-     * activation plugin runs after final plan commit, so clear both the
-     * game.toml default and stale Settings value before the launcher is seeded. */
-    if (!turbo_loads_offered && g_turbo_loads_enabled) {
+    /* Load acceleration is mod-owned on PSX, unconditionally. Nothing upstream
+     * of this point is allowed to have enabled it (the game.toml and
+     * settings.toml keys are both deprecated and ignored), so this is a
+     * belt-and-braces clamp rather than the migration path it used to be — an
+     * enabled Fast Loading / CD Speed plugin turns it on further down, after
+     * the final mod-plan commit. */
+    if (g_turbo_loads_enabled) {
         std::fprintf(stdout,
-            "psxrecomp: Turbo loads is mod-owned for this title; "
-            "ignoring the legacy Settings value\n");
+            "psxrecomp: Turbo loads is mod-owned on PSX; "
+            "ignoring the legacy value\n");
         g_turbo_loads_enabled = 0;
     }
     /* Treat presentation interpolation the same way when a title moves it to
@@ -11951,8 +11985,15 @@ soft_return_lobby:
             g_video_aa = ls.antialiasing;
             g_video_texfilter = ls.texture_filter;
             g_video_screen = ls.screen_kind;
-            g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
-            g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
+            /* Load acceleration and FMV skipping are mod-owned on PSX, and the
+             * launcher struct these come from was snapshotted BEFORE
+             * mod_runtime_activate_plugins() ran. Applying them here would
+             * clobber whatever the Fast Loading / CD Speed / Tweaks plugins
+             * decided with a stale pre-activation value — turning a player's
+             * enabled mod silently back off on the first in-game Apply. The
+             * offered flags are false for both, so leave both globals alone. */
+            if (skip_fmv_offered)     g_auto_skip_fmv = ls.auto_skip_fmv ? 1 : 0;
+            if (turbo_loads_offered)  g_turbo_loads_enabled = ls.turbo_loads ? 1 : 0;
             g_fullscreen = ls.fullscreen != 0;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
