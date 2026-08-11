@@ -2306,6 +2306,43 @@ static void lobby_cancel_connect_async(void)
         lobby_finish_connect_worker();
 }
 
+/* Connect/disconnect memset g_lc for a clean WS seat, but must keep the
+ * mount fingerprint + game pin. ae_np_connect used to set disc_fp then call
+ * connect, which wiped it — create stored "" and a later soft-return verify
+ * refilled the client, so leave+rejoin hit disc_mismatch (empty vs hash). */
+static void lobby_client_reset_keep_identity(void)
+{
+    char dname[PSX_LOBBY_NAME_LEN];
+    char disc_fp[65];
+    char filter_game_name[PSX_LOBBY_NAME_LEN];
+    char filter_game_version[PSX_LOBBY_VERSION_LEN];
+
+    strncpy(dname, g_lc.display_name, sizeof(dname) - 1);
+    dname[sizeof(dname) - 1] = '\0';
+    memcpy(disc_fp, g_lc.disc_fp, sizeof(disc_fp));
+    strncpy(filter_game_name, g_lc.filter_game_name, sizeof(filter_game_name) - 1);
+    filter_game_name[sizeof(filter_game_name) - 1] = '\0';
+    strncpy(filter_game_version, g_lc.filter_game_version,
+            sizeof(filter_game_version) - 1);
+    filter_game_version[sizeof(filter_game_version) - 1] = '\0';
+
+    memset(&g_lc, 0, sizeof(g_lc));
+    g_lc.fd = -1;
+    strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
+    memcpy(g_lc.disc_fp, disc_fp, sizeof(g_lc.disc_fp));
+    strncpy(g_lc.filter_game_name, filter_game_name,
+            sizeof(g_lc.filter_game_name) - 1);
+    if (filter_game_version[0]) {
+        strncpy(g_lc.filter_game_version, filter_game_version,
+                sizeof(g_lc.filter_game_version) - 1);
+    } else {
+        strncpy(g_lc.filter_game_version, PSX_GAME_VERSION,
+                sizeof(g_lc.filter_game_version) - 1);
+        g_lc.filter_game_version[sizeof(g_lc.filter_game_version) - 1] = '\0';
+    }
+    member_rtt_clear();
+}
+
 int psx_lobby_connect(const char *ws_url)
 {
 #if defined(_WIN32)
@@ -2341,15 +2378,7 @@ int psx_lobby_connect(const char *ws_url)
         close(g_lc.fd);
         g_lc.fd = -1;
     }
-    {
-        char dname[PSX_LOBBY_NAME_LEN];
-        strncpy(dname, g_lc.display_name, sizeof(dname) - 1);
-        dname[sizeof(dname) - 1] = '\0';
-        memset(&g_lc, 0, sizeof(g_lc));
-        g_lc.fd = -1;
-        strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
-        member_rtt_clear();
-    }
+    lobby_client_reset_keep_identity();
 
 #if defined(_WIN32)
     {
@@ -2410,14 +2439,7 @@ void psx_lobby_disconnect(void)
     if (g_lc.fd >= 0) {
         close(g_lc.fd);
     }
-    {
-        char dname[PSX_LOBBY_NAME_LEN];
-        strncpy(dname, g_lc.display_name, sizeof(dname) - 1);
-        memset(&g_lc, 0, sizeof(g_lc));
-        g_lc.fd = -1;
-        strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
-        member_rtt_clear();
-    }
+    lobby_client_reset_keep_identity();
 }
 
 int psx_lobby_connected(void)

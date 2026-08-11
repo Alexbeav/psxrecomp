@@ -7905,7 +7905,12 @@ namespace {
         psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
-        return psx_lobby_connect(ae_np_default_url(nullptr));
+        const int rc = psx_lobby_connect(ae_np_default_url(nullptr));
+        /* connect resets g_lc; re-apply so create/join never advertise "". */
+        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
+        psx_lobby_set_max_slots(g_lnch_game_players);
+        return rc;
     }
 
     int ae_np_connected(void*) {
@@ -8653,6 +8658,8 @@ namespace {
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
         psx_lobby_set_max_slots(max_slots);
+        /* Ensure TOC fp survives connect/reset before the lobby stores it. */
+        psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
                                 g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
                                 password ? password : "", endpoint, &caps);
@@ -8748,6 +8755,8 @@ namespace {
         g_lnch_remote_lan = false;
         g_lnch_remote_lan_state = {};
         g_lnch_lan_endpoint.clear();
+        /* Match host create: send the verified mount fp, not a wiped "". */
+        psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         return psx_lobby_join(lobby_id, password ? password : "", bind);
     }
 
