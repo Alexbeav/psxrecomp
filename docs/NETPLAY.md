@@ -131,7 +131,8 @@ Rollback and delay-sync both carry multitap pad bytes.
 OpenBIOS / SCPH-1001, and whether OpenBIOS is selected). At Start the host
 publishes `match_caps.session_bios` (`openbios` or `scph1001`). The session
 uses OpenBIOS unless every seated peer can run SCPH-1001 and nobody selected
-OpenBIOS. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
+OpenBIOS. That choice boots the match only — it does not change each peer’s
+saved BIOS preference. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
 
 ---
 

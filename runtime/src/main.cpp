@@ -2271,6 +2271,44 @@ static std::filesystem::path discover_retail_bios_near(const char* argv0) {
     return {};
 }
 
+/* Match-only BIOS from lobby `session_bios`. Never writes bios.cfg / settings.
+ * Returns true when session_bios is a known settle token.
+ * *out_path empty ⇒ OpenBIOS for this match; otherwise a validated retail dump. */
+static bool resolve_match_session_bios_path(
+    const char* session_bios,
+    const std::filesystem::path& preferred_hint,
+    const char* launcher_bios_path,
+    const char* argv0,
+    std::filesystem::path* out_path) {
+    if (!out_path || !session_bios || !session_bios[0])
+        return false;
+    if (std::strcmp(session_bios, "openbios") == 0) {
+        out_path->clear();
+        return true;
+    }
+    if (std::strcmp(session_bios, "scph1001") != 0)
+        return false;
+
+    std::filesystem::path retail;
+    std::error_code ec;
+    auto try_retail = [&](const std::filesystem::path& p) {
+        if (p.empty() || !std::filesystem::exists(p, ec))
+            return;
+        const PsxBiosBackend* b = bios_backend_for_file(p, nullptr, nullptr);
+        if (b && b->image && !b->image->image_bundled)
+            retail = p;
+    };
+    try_retail(preferred_hint);
+    if (retail.empty() && launcher_bios_path && launcher_bios_path[0])
+        try_retail(resolve_bios_path(launcher_bios_path, argv0));
+    if (retail.empty())
+        try_retail(read_cached_path(argv0, "bios.cfg"));
+    if (retail.empty())
+        try_retail(discover_retail_bios_near(argv0));
+    *out_path = std::move(retail); /* empty ⇒ caller falls back to OpenBIOS */
+    return true;
+}
+
 // Fallback memcard directory used when no game config (or its [runtime]
 // block) specifies one: the executable's directory (authoritative, never cwd —
 // see exe_dir_from_argv), so saves always live next to the binary.
@@ -10068,6 +10106,9 @@ int main(int argc, char** argv) {
             recomp_launcher_set_preserve_sdl(1);
             int lr = 2; /* 0 = launch, 1 = quit, 2 = unavailable */
             PSXRecompV4::UserSettings seed;
+            /* Netplay session BIOS is match-only; never overwrite seed/bios.cfg. */
+            std::filesystem::path match_session_bios_path;
+            bool match_session_bios_set = false;
             seed.renderer = g_video_renderer;             seed.has_renderer = true;
             seed.supersampling = g_video_scale;           seed.has_supersampling = true;
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
@@ -10553,44 +10594,30 @@ int main(int argc, char** argv) {
                             seed.language = caps->language;
                             seed.has_language = true;
                         }
-                        /* Match BIOS settle (lobby bios_offer → session_bios). */
-                        if (caps->session_bios[0] &&
-                            std::strcmp(caps->session_bios, "openbios") == 0) {
-                            seed.bios_path.clear();
-                            seed.has_bios_path = false;
-                            std::fprintf(stdout,
-                                "psxrecomp: netplay session BIOS = OpenBIOS\n");
-                        } else if (caps->session_bios[0] &&
-                                   std::strcmp(caps->session_bios, "scph1001") == 0) {
-                            std::filesystem::path retail;
-                            std::error_code ec;
-                            auto try_retail = [&](const std::filesystem::path& p) {
-                                if (p.empty() || !std::filesystem::exists(p, ec))
-                                    return;
-                                const PsxBiosBackend* b =
-                                    bios_backend_for_file(p, nullptr, nullptr);
-                                if (b && b->image && !b->image->image_bundled)
-                                    retail = p;
-                            };
-                            if (seed.has_bios_path) try_retail(seed.bios_path);
-                            if (retail.empty() && ls.bios_path[0])
-                                try_retail(resolve_bios_path(ls.bios_path, argv[0]));
-                            if (retail.empty())
-                                try_retail(read_cached_path(argv[0], "bios.cfg"));
-                            if (retail.empty())
-                                try_retail(discover_retail_bios_near(argv[0]));
-                            if (!retail.empty()) {
-                                seed.bios_path = retail;
-                                seed.has_bios_path = true;
-                                std::fprintf(stdout,
-                                    "psxrecomp: netplay session BIOS = SCPH-1001 (%s)\n",
-                                    retail.string().c_str());
-                            } else {
-                                seed.bios_path.clear();
-                                seed.has_bios_path = false;
+                        /* Match BIOS settle (lobby bios_offer → session_bios).
+                         * Ephemeral for this boot only — seed / bios.cfg keep
+                         * the player's offline preference. */
+                        if (resolve_match_session_bios_path(
+                                caps->session_bios,
+                                seed.has_bios_path ? seed.bios_path
+                                                   : std::filesystem::path{},
+                                ls.bios_path, argv[0],
+                                &match_session_bios_path)) {
+                            match_session_bios_set = true;
+                            if (std::strcmp(caps->session_bios, "scph1001") == 0 &&
+                                match_session_bios_path.empty()) {
                                 std::fprintf(stderr,
                                     "psxrecomp: session BIOS scph1001 settled but no "
                                     "dump found — falling back to OpenBIOS\n");
+                            } else if (match_session_bios_path.empty()) {
+                                std::fprintf(stdout,
+                                    "psxrecomp: netplay session BIOS = OpenBIOS "
+                                    "(match only; preference unchanged)\n");
+                            } else {
+                                std::fprintf(stdout,
+                                    "psxrecomp: netplay session BIOS = SCPH-1001 "
+                                    "(%s; match only; preference unchanged)\n",
+                                    match_session_bios_path.string().c_str());
                             }
                         }
                     }
@@ -10686,6 +10713,20 @@ int main(int argc, char** argv) {
                     settings_bios_storage.clear();
                     bios_path = PSX_BUNDLED_BIOS_PATH;
                     write_cached_path(argv[0], "bios.cfg", {});
+                }
+                /* Session settle overrides runtime BIOS only — preference already
+                 * written above. Use bios_explicit so resolve_bios_for_runtime
+                 * does not re-read bios.cfg and undo an OpenBIOS match. */
+                if (match_session_bios_set) {
+                    bios_from_cli = false;
+                    bios_explicit = true;
+                    if (match_session_bios_path.empty()) {
+                        settings_bios_storage = PSX_BUNDLED_BIOS_PATH;
+                        bios_path = settings_bios_storage.c_str();
+                    } else {
+                        settings_bios_storage = match_session_bios_path.string();
+                        bios_path = settings_bios_storage.c_str();
+                    }
                 }
                 if (seed.has_disc_path) {
                     seed.disc_path = normalize_disc_path_for_launch(seed.disc_path);
@@ -11930,19 +11971,24 @@ soft_return_lobby:
         }
         std::snprintf(ls.netplay_player_name, sizeof(ls.netplay_player_name), "%s",
                       psx_lobby_display_name());
-        /* Prefer absolute BIOS path so rematch does not depend on cwd. */
+        /* Soft-return shows the durable preference (bios.cfg), not the match
+         * session BIOS that may have temporarily overridden boot. */
         {
-            std::filesystem::path resolved =
-                resolve_bios_path(bios_path_str.c_str(), argv[0]);
-            std::error_code ec;
-            if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
-                auto abs = std::filesystem::weakly_canonical(resolved, ec);
-                if (ec) abs = std::filesystem::absolute(resolved, ec);
-                std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
-                              abs.string().c_str());
-            } else {
-                std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
-                              bios_path_str.c_str());
+            std::filesystem::path preferred = read_cached_path(argv[0], "bios.cfg");
+            ls.bios_path[0] = '\0';
+            if (!preferred.empty()) {
+                std::filesystem::path resolved =
+                    resolve_bios_path(preferred.string().c_str(), argv[0]);
+                std::error_code ec;
+                if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
+                    auto abs = std::filesystem::weakly_canonical(resolved, ec);
+                    if (ec) abs = std::filesystem::absolute(resolved, ec);
+                    std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
+                                  abs.string().c_str());
+                } else {
+                    std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
+                                  preferred.string().c_str());
+                }
             }
         }
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
@@ -12176,6 +12222,11 @@ soft_return_lobby:
                 if (ls.bios_path[0]) {
                     us.bios_path = ls.bios_path;
                     us.has_bios_path = true;
+                    write_cached_path(argv[0], "bios.cfg", us.bios_path);
+                } else {
+                    us.bios_path.clear();
+                    us.has_bios_path = false;
+                    write_cached_path(argv[0], "bios.cfg", {});
                 }
                 (void)PSXRecompV4::save_user_settings(settings_path, us);
             }
@@ -12199,10 +12250,40 @@ soft_return_lobby:
                 default: g_video_aspect_num = 4;  g_video_aspect_den = 3; break;
             }
             g_video_win_w = ls.window_width > 0 ? ls.window_width : g_video_win_w;
+            /* Preference for persistence; session settle may override boot path. */
             if (ls.bios_path[0])
                 bios_path_str = ls.bios_path;
-            else
-                bios_path_str.clear();
+            else {
+                std::filesystem::path ob =
+                    resolve_bios_path(PSX_BUNDLED_BIOS_PATH, argv[0]);
+                bios_path_str = ob.empty() ? PSX_BUNDLED_BIOS_PATH : ob.string();
+            }
+            if (net_cfg.enabled) {
+                const PsxLobbyMatchCaps* caps = psx_lobby_match_caps();
+                std::filesystem::path session_path;
+                if (caps && caps->valid &&
+                    resolve_match_session_bios_path(
+                        caps->session_bios,
+                        ls.bios_path[0] ? std::filesystem::path(ls.bios_path)
+                                        : std::filesystem::path{},
+                        ls.bios_path, argv[0], &session_path)) {
+                    if (session_path.empty()) {
+                        std::filesystem::path ob =
+                            resolve_bios_path(PSX_BUNDLED_BIOS_PATH, argv[0]);
+                        bios_path_str =
+                            ob.empty() ? PSX_BUNDLED_BIOS_PATH : ob.string();
+                        std::fprintf(stdout,
+                            "psxrecomp: rematch session BIOS = OpenBIOS "
+                            "(preference unchanged)\n");
+                    } else {
+                        bios_path_str = session_path.string();
+                        std::fprintf(stdout,
+                            "psxrecomp: rematch session BIOS = SCPH-1001 (%s; "
+                            "preference unchanged)\n",
+                            bios_path_str.c_str());
+                    }
+                }
+            }
             {
                 std::string mod_error;
                 if (net_cfg.enabled) {

@@ -134,8 +134,12 @@ single `match_caps.session_bios` at host Start:
   OpenBIOS.
 
 Every peer applies that session BIOS before boot. Mixed BIOSes are invalid for
-rollback (kernel RAM layout differs). Offline / single-player selection is
-unchanged by this rule.
+rollback (kernel RAM layout differs).
+
+Session BIOS is **ephemeral**: it affects only that match’s runtime boot. It
+does **not** rewrite `bios.cfg`, `settings.toml`, or the launcher Settings BIOS
+row. Soft-return shows the player’s durable preference again; the next Start
+re-settles from `bios_offer` as usual.
 
 ## Why both are compiled in
 
