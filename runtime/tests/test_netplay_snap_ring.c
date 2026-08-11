@@ -5,8 +5,8 @@
  * same-tick overwrite, and oldest-tick eviction at capacity.
  *
  * Build (from runtime/tests):
- *   gcc -std=c11 -Wall -Wextra -I../include -o test_netplay_snap_ring \
- *       test_netplay_snap_ring.c ../src/netplay_snap_ring.c \
+ *   gcc -std=c11 -Wall -Wextra -Werror -I../include \
+ *       -o test_netplay_snap_ring test_netplay_snap_ring.c \
  *       -DNETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE
  */
 #include <stdio.h>
@@ -39,6 +39,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
     (void)bios_checksum; (void)entry_pc; (void)cpu;
     return file && file_len == 4 && memcmp(file, "save", 4) == 0;
 }
+uint32_t boot_state_last_vram_dirty_rows(void) { return 0; }
+int boot_state_last_vram_incremental(void) { return 0; }
 #endif
 
 #include "../src/netplay_snap_ring.c"
