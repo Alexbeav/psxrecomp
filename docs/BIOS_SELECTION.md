@@ -122,6 +122,16 @@ refuse to load under a different one. Without that check, switching BIOS would
 silently corrupt a restored state — the only quiet failure mode in this design,
 which is why it is enforced rather than warned about.
 
+Slot files are also isolated on disk under the per-game memcard root:
+
+- `<memcard_dir>/openbios/state_*_slot*.pst`
+- `<memcard_dir>/scph1001/state_*_slot*.pst`
+
+On first configure, any legacy loose `<memcard_dir>/state_*_slot*.pst` files are
+moved once by `.pst` header `bios_checksum` (bundled OpenBIOS wordsum →
+`openbios/`, otherwise → `scph1001/`). Memory cards stay in `<memcard_dir>/`;
+netplay guest sandbox remains `<memcard_dir>/netplay/` (unscoped).
+
 ## Netplay lobby settle
 
 Online and LAN lobbies advertise a per-peer BIOS offer and freeze a single

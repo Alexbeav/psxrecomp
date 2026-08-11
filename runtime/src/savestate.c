@@ -12,6 +12,7 @@
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include "psx_scheduler.h"
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 #include <direct.h>
 #include <windows.h>
 #else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <time.h>
 #endif
@@ -39,6 +41,9 @@ static double savestate_mono_ms(void) {
 }
 
 static char     s_dir[512];
+static char     s_root[512];          /* memcard/save root (pre-token) */
+static char     s_bios_token[32];     /* "openbios" / "scph1001", or empty */
+static uint32_t s_openbios_wordsum;   /* bundled OpenBIOS wordsum for migrate */
 static uint32_t s_bios_checksum;
 static uint32_t s_entry_pc;
 static int      s_configured   = 0;
@@ -93,21 +98,219 @@ static void clear_load_blob(void) {
     s_load_blob_len = 0;
 }
 
-void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry_pc) {
-    if (dir && dir[0]) {
-        strncpy(s_dir, dir, sizeof(s_dir) - 1);
-        s_dir[sizeof(s_dir) - 1] = '\0';
-        ensure_dir(s_dir);
-    } else {
-        s_dir[0] = '\0';
+/* Peek .pst header bios_checksum (BOOT_STATE wire: magic, version, checksum). */
+static int pst_peek_bios_checksum(const char* path, uint32_t* out_cksum) {
+    FILE* f;
+    uint8_t hdr[12];
+    uint32_t magic, version, cksum;
+    if (!path || !out_cksum) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) {
+        fclose(f);
+        return 0;
     }
+    fclose(f);
+    magic   = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) | ((uint32_t)hdr[2] << 16) |
+              ((uint32_t)hdr[3] << 24);
+    version = (uint32_t)hdr[4] | ((uint32_t)hdr[5] << 8) | ((uint32_t)hdr[6] << 16) |
+              ((uint32_t)hdr[7] << 24);
+    cksum   = (uint32_t)hdr[8] | ((uint32_t)hdr[9] << 8) | ((uint32_t)hdr[10] << 16) |
+              ((uint32_t)hdr[11] << 24);
+    if (magic != BOOT_STATE_MAGIC) return 0;
+    if (version < BOOT_STATE_VERSION_MIN_READ || version > BOOT_STATE_VERSION)
+        return 0;
+    *out_cksum = cksum;
+    return 1;
+}
+
+static int is_legacy_pst_name(const char* name) {
+    const char* p;
+    int digits;
+    if (!name || strncmp(name, "state_", 6) != 0) return 0;
+    p = name + 6;
+    digits = 0;
+    while (isxdigit((unsigned char)*p)) {
+        digits++;
+        p++;
+    }
+    if (digits < 1 || digits > 8) return 0;
+    if (strncmp(p, "_slot", 5) != 0) return 0;
+    p += 5;
+    if (!isdigit((unsigned char)p[0]) || !isdigit((unsigned char)p[1])) return 0;
+    if (strcmp(p + 2, ".pst") != 0) return 0;
+    return 1;
+}
+
+static int path_exists(const char* path) {
+#ifdef _WIN32
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat st;
+    return stat(path, &st) == 0;
+#endif
+}
+
+/* One-shot: move loose <root>/state_*_slot*.pst into openbios/ or scph1001/
+ * by header bios_checksum. Unknown/unreadable → scph1001. */
+static void migrate_legacy_pst_by_bios(const char* root, uint32_t openbios_wordsum) {
+    char marker[560];
+    char src[600];
+    char dest_dir[560];
+    char dest[620];
+    int moved = 0;
+    int skipped = 0;
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char pattern[560];
+#else
+    DIR* d;
+    struct dirent* ent;
+#endif
+
+    if (!root || !root[0]) return;
+    snprintf(marker, sizeof(marker), "%s/.pst_bios_isolated", root);
+    if (path_exists(marker)) return;
+
+    ensure_dir(root);
+
+#ifdef _WIN32
+    snprintf(pattern, sizeof(pattern), "%s/state_*.pst", root);
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            const char* name = fd.cFileName;
+            uint32_t cksum = 0;
+            const char* token;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            if (!is_legacy_pst_name(name)) continue;
+            snprintf(src, sizeof(src), "%s/%s", root, name);
+            if (!pst_peek_bios_checksum(src, &cksum))
+                token = "scph1001";
+            else if (openbios_wordsum != 0 && cksum == openbios_wordsum)
+                token = "openbios";
+            else
+                token = "scph1001";
+            snprintf(dest_dir, sizeof(dest_dir), "%s/%s", root, token);
+            ensure_dir(dest_dir);
+            snprintf(dest, sizeof(dest), "%s/%s", dest_dir, name);
+            if (path_exists(dest)) {
+                skipped++;
+                continue;
+            }
+            if (MoveFileA(src, dest))
+                moved++;
+            else
+                skipped++;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    d = opendir(root);
+    if (d) {
+        while ((ent = readdir(d)) != NULL) {
+            const char* name = ent->d_name;
+            uint32_t cksum = 0;
+            const char* token;
+            if (!is_legacy_pst_name(name)) continue;
+            {
+                struct stat st;
+                snprintf(src, sizeof(src), "%s/%s", root, name);
+                if (stat(src, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            }
+            if (!pst_peek_bios_checksum(src, &cksum))
+                token = "scph1001";
+            else if (openbios_wordsum != 0 && cksum == openbios_wordsum)
+                token = "openbios";
+            else
+                token = "scph1001";
+            snprintf(dest_dir, sizeof(dest_dir), "%s/%s", root, token);
+            ensure_dir(dest_dir);
+            snprintf(dest, sizeof(dest), "%s/%s", dest_dir, name);
+            if (path_exists(dest)) {
+                skipped++;
+                continue;
+            }
+            if (rename(src, dest) == 0)
+                moved++;
+            else
+                skipped++;
+        }
+        closedir(d);
+    }
+#endif
+
+    {
+        FILE* mf = fopen(marker, "wb");
+        if (mf) {
+            fprintf(mf,
+                    "psxrecomp-pst-bios-isolated-v1\n"
+                    "moved=%d\n"
+                    "skipped=%d\n",
+                    moved, skipped);
+            fclose(mf);
+        }
+    }
+    if (moved > 0 || skipped > 0) {
+        printf("psxrecomp: savestate BIOS isolate — migrated %d legacy .pst "
+               "(skipped %d) under %s\n",
+               moved, skipped, root);
+        fflush(stdout);
+    }
+}
+
+void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry_pc,
+                         const char* bios_token, uint32_t openbios_wordsum) {
     s_bios_checksum = bios_checksum;
     s_entry_pc      = entry_pc;
     s_configured    = 1;
+
+    if (!dir || !dir[0]) {
+        s_dir[0] = '\0';
+        return;
+    }
+
+    if (bios_token && bios_token[0]) {
+        size_t n;
+        strncpy(s_root, dir, sizeof(s_root) - 1);
+        s_root[sizeof(s_root) - 1] = '\0';
+        n = strlen(s_root);
+        while (n > 1 && (s_root[n - 1] == '/' || s_root[n - 1] == '\\'))
+            s_root[--n] = '\0';
+        strncpy(s_bios_token, bios_token, sizeof(s_bios_token) - 1);
+        s_bios_token[sizeof(s_bios_token) - 1] = '\0';
+        s_openbios_wordsum = openbios_wordsum;
+        migrate_legacy_pst_by_bios(s_root, openbios_wordsum);
+        if (snprintf(s_dir, sizeof(s_dir), "%s/%s", s_root, bios_token) >=
+            (int)sizeof(s_dir)) {
+            strncpy(s_dir, s_root, sizeof(s_dir) - 1);
+            s_dir[sizeof(s_dir) - 1] = '\0';
+        }
+        ensure_dir(s_dir);
+    } else {
+        /* Netplay guest sandbox / already-scoped path: do not clear the
+         * personal root/token remembered from the last bios-scoped configure. */
+        strncpy(s_dir, dir, sizeof(s_dir) - 1);
+        s_dir[sizeof(s_dir) - 1] = '\0';
+        ensure_dir(s_dir);
+    }
 }
 
 const char* savestate_dir(void) {
     return s_dir;
+}
+
+const char* savestate_root_dir(void) {
+    return s_root;
+}
+
+const char* savestate_bios_token(void) {
+    return s_bios_token;
+}
+
+uint32_t savestate_openbios_wordsum(void) {
+    return s_openbios_wordsum;
 }
 
 void savestate_get_integrity(uint32_t* bios_checksum, uint32_t* entry_pc) {

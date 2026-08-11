@@ -169,7 +169,8 @@ int  psx_netplay_live_pad_buttons(uint16_t *out);
 /* 1 if INPUT_CONFIRM hash disagreement stalled the session. */
 int  psx_netplay_input_desync(uint32_t *tick, uint32_t *local_hash, uint32_t *remote_hash);
 
-/* 1 if peer sent BYE or went silent for ~timeout_ms (default 1500). */
+/* 1 if peer sent BYE or went silent for ~timeout_ms (default 1500).
+ * Pass 0 for BYE-only (load barrier / LINKING before HELLO). */
 int  psx_netplay_peer_disconnected(uint32_t timeout_ms);
 
 /*

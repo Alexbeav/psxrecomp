@@ -4516,6 +4516,11 @@ static void netplay_barrier_admit(int override) {
     SDL_FlushEvent(SDL_QUIT);
     static int desync_logged = 0;
     const Uint64 barrier_t0 = SDL_GetTicks64();
+    /* Rematch session_reboot is asymmetric: the faster peer reaches admit
+     * while the slower is still in BIOS/GL bring-up. Do not arm the 20s
+     * admit-stall / 1.5s silence clocks until RUNNING (HELLO exchanged).
+     * progress_t0 is set on the first RUNNING sample. */
+    Uint64 progress_t0 = 0;
     Uint64 last_stall_log_ms = barrier_t0;
     const uint64_t admit_t0 =
         netplay_timing_on() ? SDL_GetPerformanceCounter() : 0;
@@ -4527,12 +4532,16 @@ static void netplay_barrier_admit(int override) {
     for (;;) {
         uint32_t dt = 0, lh = 0, rh = 0;
         const Uint64 now_ms = SDL_GetTicks64();
+        const int running = psx_netplay_is_running();
+        if (running && progress_t0 == 0)
+            progress_t0 = now_ms;
         /* Load apply/ready suppresses INPUT (and can sit silent for seconds on
          * a hash-match .pst). timeout=0 still honors BYE (peer_gone) but does
          * not treat rx silence as disconnect — that was kicking both peers to
-         * the lobby mid-load. */
+         * the lobby mid-load. Same BYE-only policy while LINKING so a rematch
+         * peer still booting cannot be false-disconnected at 15s. */
         if (psx_netplay_peer_disconnected(
-                psx_netplay_in_load_barrier() ? 0u : 1500u)) {
+                (psx_netplay_in_load_barrier() || !running) ? 0u : 1500u)) {
             netplay_soft_exit("netplay_peer_disconnect");
             if (psx_return_to_lobby_requested()) return;
         }
@@ -4545,7 +4554,9 @@ static void netplay_barrier_admit(int override) {
         /* Mutual INPUT/CONFIRM stall still refreshes last_peer_rx — detect
          * "no sim progress" separately (common rematch + TURN loss mode).
          * Save/load/memcard probe+chunk xfer uses a longer budget (TURN +
-         * ~1.4MB .pst). The old 20s admit timeout killed SAVE mid-transfer. */
+         * ~1.4MB .pst). The old 20s admit timeout killed SAVE mid-transfer.
+         * Link phase (not RUNNING yet) uses its own 90s backstop so a dead
+         * peer still returns to lobby without blaming admit progress. */
         if (psx_netplay_in_load_barrier() && now_ms - barrier_t0 >= 90000u) {
             char stall[96];
             uint32_t sim = 0;
@@ -4557,8 +4568,20 @@ static void netplay_barrier_admit(int override) {
                          (unsigned)sim, stall[0] ? stall : "?", lead);
             netplay_soft_exit("netplay_load_stall");
             if (psx_return_to_lobby_requested()) return;
-        } else if (!psx_netplay_in_load_barrier() &&
-                   now_ms - barrier_t0 >= 20000u) {
+        } else if (!psx_netplay_in_load_barrier() && !running &&
+                   now_ms - barrier_t0 >= 90000u) {
+            char stall[64];
+            uint32_t sim = 0;
+            int lead = 0;
+            psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
+            std::fprintf(stderr,
+                         "psxrecomp: netplay link stall timeout sim=%u "
+                         "stall=%s lead=%d — returning to lobby\n",
+                         (unsigned)sim, stall[0] ? stall : "?", lead);
+            netplay_soft_exit("netplay_link_stall");
+            if (psx_return_to_lobby_requested()) return;
+        } else if (!psx_netplay_in_load_barrier() && running &&
+                   progress_t0 != 0 && now_ms - progress_t0 >= 20000u) {
             char stall[64];
             uint32_t sim = 0;
             int lead = 0;
@@ -4573,12 +4596,14 @@ static void netplay_barrier_admit(int override) {
             char stall[96];
             uint32_t sim = 0;
             int lead = 0;
+            const Uint64 clock0 = running && progress_t0 ? progress_t0 : barrier_t0;
             psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
             std::fprintf(stderr,
                          "psxrecomp: netplay admit waiting sim=%u stall=%s "
-                         "lead=%d (%llums)\n",
+                         "lead=%d (%llums%s)\n",
                          (unsigned)sim, stall[0] ? stall : "?", lead,
-                         (unsigned long long)(now_ms - barrier_t0));
+                         (unsigned long long)(now_ms - clock0),
+                         running ? "" : ", linking");
             last_stall_log_ms = now_ms;
         }
         psx_lobby_pump();
@@ -6303,7 +6328,7 @@ namespace {
     int g_lnch_force_turn = 0;
     /* Lobby default on; host “Disable Rollback” clears this → delay_sync. */
     int g_lnch_rollback = 1;
-    int g_lnch_multitap_analog = 0;
+    int g_lnch_multitap_analog = 1;
     int g_lnch_host_max_slots = 2;
 
     /* Delay-sync READY/START waits for every seat in slot_count. Use seated
@@ -9523,7 +9548,7 @@ int main(int argc, char** argv) {
     bool memcard1_enabled = true;
     bool memcard2_enabled = true;
     bool multitap_enabled = true; /* [controller] multitap; 3+ seats offline */
-    bool multitap_analog = false; /* DualShock-on-tap hack; game.toml/settings */
+    bool multitap_analog = true;  /* DualShock-on-tap hack; game.toml/settings */
     /* [controller] device routing (defaults: P1 keyboard/digital, P2 none). */
     /* Dev builds default Player 1 to the first connected controller ("auto").
      * PSX_DEV_INPUT=1 additionally merges every other controller and the
@@ -11946,12 +11971,20 @@ session_reboot:
         }
     }
 
-    /* User save states (F1-F12 / Shift+F1-F12): slots live in the per-game
-     * memcard/save dir, keyed by entry_pc + guarded by the boot_state integrity
-     * key (codegen hash/abi/ver) so a stale/foreign state can never load. */
+    /* User save states (F1-F12 / Shift+F1-F12): slots live under
+     * <memcard>/<openbios|scph1001>/, keyed by entry_pc + boot_state integrity
+     * (codegen hash/abi/ver). Memory cards stay in the memcard root. */
     if (game_entry_pc != 0) {
+        const char* bios_token =
+            psx_bios_image.image_bundled ? "openbios" : "scph1001";
+        uint32_t openbios_ws = 0;
+        if (const PsxBiosBackend* bundled = psx_bios_bundled()) {
+            if (bundled->image)
+                openbios_ws = bundled->image->image_wordsum;
+        }
         savestate_configure(memcard_dir.string().c_str(),
-                            memory_get_bios_checksum(), game_entry_pc);
+                            memory_get_bios_checksum(), game_entry_pc,
+                            bios_token, openbios_ws);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
          * at the next safe block boundary after boot. */
         if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {

@@ -1127,7 +1127,10 @@ static int np_xfer_busy(void)
 
 static void np_enter_guest_sandbox(void)
 {
-    const char *dir = savestate_dir();
+    /* Prefer memcard/save ROOT (pre-BIOS-token). savestate_dir() may already
+     * be <root>/openbios|scph1001 — nesting netplay under that is wrong. */
+    const char *root = savestate_root_dir();
+    const char *dir = (root && root[0]) ? root : savestate_dir();
     const char *p0 = NULL;
     const char *p1 = NULL;
     uint32_t bios = 0, entry = 0;
@@ -1156,7 +1159,8 @@ static void np_enter_guest_sandbox(void)
         snprintf(sandbox, sizeof(sandbox), "%s", NP_SANDBOX_FALLBACK);
     }
 
-    savestate_configure(sandbox, bios, entry);
+    /* NULL bios_token: use sandbox path as-is (no further BIOS subdir). */
+    savestate_configure(sandbox, bios, entry, NULL, 0);
     (void)memcard_rebind_dir(sandbox);
     g_np.guest_sandbox = 1;
     printf("psxrecomp: netplay guest sandbox -> %s\n", sandbox);
@@ -1171,8 +1175,13 @@ static void np_leave_guest_sandbox(void)
         g_np.personal_mc0[0] ? g_np.personal_mc0 : NULL,
         g_np.personal_mc1[0] ? g_np.personal_mc1 : NULL);
     (void)memcard_reload_bound();
-    if (g_np.personal_save_dir[0])
-        savestate_configure(g_np.personal_save_dir, g_np.bios_checksum, g_np.entry_pc);
+    if (g_np.personal_save_dir[0]) {
+        const char *token = savestate_bios_token();
+        savestate_configure(g_np.personal_save_dir, g_np.bios_checksum,
+                            g_np.entry_pc,
+                            (token && token[0]) ? token : NULL,
+                            savestate_openbios_wordsum());
+    }
     g_np.guest_sandbox = 0;
 }
 

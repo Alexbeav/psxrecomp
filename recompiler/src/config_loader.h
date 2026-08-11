@@ -513,11 +513,11 @@ struct RuntimeConfig {
     bool                  has_multitap_port = false;
     int                   multitap_port     = 1;
 
-    // multitap_analog: opt-in DualShock-on-tap hack (default false). When true,
+    // multitap_analog: DualShock-on-tap hack (default true). When true,
     // multitap bulk seats may report 0x73 + stick bytes; when false (faithful),
     // tap seats stay plain digital. Overridable by settings.toml / match_caps.
     bool                  has_multitap_analog = false;
-    bool                  multitap_analog     = false;
+    bool                  multitap_analog     = true;
 
     // legacy_pad_config: per-game pad-protocol compatibility opt-in. false (default)
     // = the modern DualShock config state machine (proper 0x43 enter/exit, config id
@@ -1129,8 +1129,8 @@ struct UserSettings {
     // seats always arm multitap in the runtime regardless.
     bool has_multitap_enabled = false; bool multitap_enabled = true;
     // DualShock-on-tap hack (settings.toml [controller] multitap_analog).
-    // Default off when unset; game.toml [controller] multitap_analog seeds it.
-    bool has_multitap_analog = false; bool multitap_analog = false;
+    // Default on when unset; game.toml / global prefs may override.
+    bool has_multitap_analog = false; bool multitap_analog = true;
     // Localization: the launcher's chosen language code (feeds RuntimeConfig
     // .language / g_lang). "off"/"jp"/"" = untranslated native game. Persisted to
     // settings.toml [localization].language.
