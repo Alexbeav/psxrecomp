@@ -119,6 +119,19 @@ sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/sr
 powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
 ```
 
+**Migrate an older title** (e.g. `psxrecomp-v4` / prebuilt `packaging/`) onto
+setup-host with Project Studio — audit → plan → apply (CLI or GUI). Releases
+stay setup-host only (no prebuilt game C):
+
+```bash
+python3 tools/new_project_layout/migrate_project.py audit --root ~/src/MyGameRecomp
+python3 tools/new_project_layout/migrate_project.py apply --root ~/src/MyGameRecomp --dry-run
+python3 tools/new_project_layout/migrate_project.py gui
+```
+
+Details: [`tools/new_project_layout/README.md`](tools/new_project_layout/README.md)
+and [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
 Launcher features that are still in active development are **opt-in at
 configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
 

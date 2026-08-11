@@ -137,6 +137,36 @@ python3 tools/new_project_layout/probe_disc.py disc/game.cue \
 Prefer a **full multi-track** Redump cue. A single-TRACK dump will warn and will
 fail online multi-track gates (see `[NETPLAY.md](NETPLAY.md)`).
 
+### Project Studio — migrate / update existing titles
+
+Older titles (e.g. `psxrecomp-v4` submodule, `psxrecomp_add_runtime_target`,
+`packaging/` prebuilt zips) can be audited and migrated onto this layout with
+**Project Studio**. Releases remain **setup-host only** — the tool does not
+create prebuilt generated-C packages.
+
+| Entry | Role |
+| ----- | ---- |
+| `tools/new_project_layout/migrate_project.py` | CLI: `audit` / `plan` / `apply` / `gui` / `ops` |
+| `tools/new_project_layout/project_studio_gui.py` | Tkinter GUI |
+| `tools/new_project_layout/project_studio/` | Shared detect / plan / ops library |
+| `tools/new_project_layout/README.md` | Short usage |
+
+```bash
+# From a psxrecomp checkout (or any title that vendors this toolkit path):
+python3 tools/new_project_layout/migrate_project.py audit --root ~/src/ApeEscapeRecomp
+python3 tools/new_project_layout/migrate_project.py apply --root ~/src/ApeEscapeRecomp --dry-run
+python3 tools/new_project_layout/migrate_project.py gui
+```
+
+Typical apply order: rename `psxrecomp-v4` → emit `codegen_setup` → rewrite
+CMake (`psxrecomp_add_game_runtime` + wizard) → setup-host packager + CI →
+optional `probe_disc` / pins. CMake rewrites keep
+`CMakeLists.txt.pre_migrate.bak` plus `CMakeLists.migrate_extras.txt` when the
+old file had tests / `EXTRAS_SOURCES` / mod `POST_BUILD` hooks.
+
+`apply` always enables **recomp-ui + setup wizard** (required for
+`PSXRECOMP_FORCE_SETUP_HOST`). Netplay stays opt-in (`--enable-netplay` / GUI).
+
 ### After scaffold (still not automatic)
 
 If you answered Y to boxart + Generate (+ optional build), you get a local
