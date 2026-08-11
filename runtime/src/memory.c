@@ -333,6 +333,17 @@ void psx_kernel_bless_resync_after_restore(void) {
     memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
 }
 
+void psx_kernel_bless_reset_for_boot(void) {
+    /* SCPH and OpenBIOS use different kbless_rom_off / span. The one-shot
+     * latch in kbless_on() survives soft-return, so rematch BIOS switches
+     * would bless against the wrong ROM slice. */
+    kbless_enabled = -1;
+    s_kb_lo = 0;
+    s_kb_span = 0;
+    s_kb_rom_off = 0;
+    memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
+}
+
 static inline void dirty_ram_mark_kernel_write(uint32_t phys) {
     if (phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return;
     dirty_ram_mark_page(phys);
@@ -973,6 +984,8 @@ void memory_init(const char* bios_path) {
     i_mask = 0;
     /* Host dirty/text/overlay bitmaps survive memset(ram) and fork dig0. */
     dirty_ram_reset_for_boot();
+    /* Re-latch kbless window from the newly activated psx_bios_image. */
+    psx_kernel_bless_reset_for_boot();
 
     FILE* f = fopen(bios_path, "rb");
     if (!f) {

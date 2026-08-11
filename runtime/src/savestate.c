@@ -11,6 +11,7 @@
 #include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
+#include "psx_netplay_rb.h"
 #include "psx_scheduler.h"
 #include <ctype.h>
 #include <errno.h>
@@ -51,8 +52,43 @@ static int      s_save_pending = -1;   /* slot, or -1 */
 static int      s_load_pending = -1;
 static int      s_load_completed = 0;
 static int      s_load_failed = 0;
+static int      s_save_failed = 0;
+static uint32_t s_last_save_pc = 0;
+static int      s_save_defer_slot = -1;
+static double   s_save_defer_t0 = 0.0;
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
+
+/* Mid-FMV / present-edge IRQ fast paths often pass resume_pc=0 (cpu->pc is
+ * parked). Prefer sticky BB / compiled latches over writing a null resume. */
+static uint32_t savestate_resolve_resume_pc(const CPUState* cpu, uint32_t hint)
+{
+    const uint32_t cands[6] = {
+        hint,
+        cpu ? cpu->pc : 0u,
+        psx_compiled_irq_resume_pc(),
+        psx_last_irq_check_pc(),
+        psx_netplay_rb_sticky_bb_pc(),
+        cpu ? cpu->gpr[31] : 0u,
+    };
+    int i;
+    for (i = 0; i < 6; ++i) {
+        uint32_t pc = cands[i];
+        if (!pc || (pc & 3u) != 0u)
+            continue;
+        if (pc == 0x80000080u || pc == 0xbfc00180u || pc == 0x80000000u)
+            continue;
+        if (psx_is_dispatchable(pc))
+            return pc;
+    }
+    return 0;
+}
+
+static int savestate_resume_pc_ok(uint32_t pc)
+{
+    return pc != 0u && (pc & 3u) == 0u && psx_is_dispatchable(pc) &&
+           pc != 0x80000080u && pc != 0xbfc00180u && pc != 0x80000000u;
+}
 
 extern int psx_hle_scheduler_enabled(void);
 
@@ -444,6 +480,9 @@ static int netplay_user_blocked(void) {
 static int request_save_inner(int slot) {
     if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
+    s_save_failed = 0;
+    s_last_save_pc = 0; /* block netplay transfer until this write stamps a PC */
+    s_save_defer_slot = -1;
     s_save_pending = slot;
     return 1;
 }
@@ -528,24 +567,76 @@ int savestate_take_load_failed(void) {
     return v;
 }
 
+int savestate_take_save_failed(void) {
+    int v = s_save_failed;
+    s_save_failed = 0;
+    return v;
+}
+
+uint32_t savestate_last_save_pc(void) {
+    return s_last_save_pc;
+}
+
 void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
     if (s_save_pending < 0 && s_load_pending < 0) return;   /* hot path: nothing staged */
 
     if (s_save_pending >= 0) {
         int slot = s_save_pending;
-        s_save_pending = -1;
         char path[600];
-        if (savestate_slot_path(slot, path, sizeof(path))) {
-            /* Save the exact resume PC (cpu->pc is 0 mid-block; resume_pc is the
-             * block leader the interrupt path would resume at). */
-            CPUState snap = *cpu;
-            snap.pc = resume_pc;
-            int ok = boot_state_save(&snap, s_bios_checksum, s_entry_pc, path);
-            fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
-                    ok ? "SAVED" : "SAVE FAILED", slot, (unsigned)resume_pc, path);
-            psx_frontend_on_savestate_notify(0, slot, ok);
-        } else {
+        uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
+        if (!savestate_resume_pc_ok(pc)) {
+            /* FMV/present edges often poll with hint=0; wait briefly for a
+             * sticky BB / IRQ latch rather than writing pc=0 poison. */
+            const double now = savestate_mono_ms();
+            if (s_save_defer_slot != slot) {
+                s_save_defer_slot = slot;
+                s_save_defer_t0 = now;
+                fprintf(stderr,
+                        "savestate: deferring slot %d — no safe resume PC "
+                        "(hint=0x%08X)\n",
+                        slot, (unsigned)resume_pc);
+            }
+            if (now - s_save_defer_t0 < 2000.0)
+                return;
+            s_save_pending = -1;
+            s_save_defer_slot = -1;
+            s_last_save_pc = 0;
+            s_save_failed = 1;
+            fprintf(stderr,
+                    "savestate: SAVE FAILED slot %d — no safe resume PC "
+                    "(hint=0x%08X)\n",
+                    slot, (unsigned)resume_pc);
             psx_frontend_on_savestate_notify(0, slot, 0);
+        } else {
+            s_save_pending = -1;
+            s_save_defer_slot = -1;
+            if (pc != resume_pc && resume_pc == 0u) {
+                fprintf(stderr,
+                        "savestate: slot %d resume_pc was 0 — using fallback "
+                        "pc=0x%08X\n",
+                        slot, (unsigned)pc);
+            }
+            if (savestate_slot_path(slot, path, sizeof(path))) {
+                /* Save the exact resume PC (cpu->pc is 0 mid-block; resume_pc is
+                 * the block leader the interrupt path would resume at). */
+                CPUState snap = *cpu;
+                snap.pc = pc;
+                int ok = boot_state_save(&snap, s_bios_checksum, s_entry_pc, path);
+                if (ok) {
+                    s_last_save_pc = pc;
+                    s_save_failed = 0;
+                } else {
+                    s_last_save_pc = 0;
+                    s_save_failed = 1;
+                }
+                fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
+                        ok ? "SAVED" : "SAVE FAILED", slot, (unsigned)pc, path);
+                psx_frontend_on_savestate_notify(0, slot, ok);
+            } else {
+                s_last_save_pc = 0;
+                s_save_failed = 1;
+                psx_frontend_on_savestate_notify(0, slot, 0);
+            }
         }
     }
 
@@ -581,6 +672,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             }
         } else {
             fprintf(stderr, "savestate: LOAD FAILED slot %d (no path)\n", slot);
+            s_load_failed = 1;
+            psx_frontend_on_savestate_notify(1, slot, 0);
+        }
+        if (loaded && !savestate_resume_pc_ok(cpu->pc)) {
+            fprintf(stderr,
+                    "savestate: LOAD FAILED slot %d — resume pc=0x%08X "
+                    "(null/undispatchable)%s\n",
+                    slot, (unsigned)cpu->pc, path[0] ? "" : " [blob]");
+            loaded = 0;
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }

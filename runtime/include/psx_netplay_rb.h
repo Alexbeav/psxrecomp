@@ -36,6 +36,9 @@ typedef struct PsxNetplayRbBindings {
 void psx_netplay_rb_bind(const PsxNetplayRbBindings *b);
 void psx_netplay_rb_start(void);
 void psx_netplay_rb_shutdown(void);
+/* Soft-return / rematch: wipe RB host residue that rb_shutdown leaves
+ * (follow-NACK, tip-dense FIFO, episode wire, dig0 latch). Safe with no session. */
+void psx_netplay_rb_cold_reset(void);
 
 /* Safe BB-edge poll (mirror savestate_poll). Saves pending snap / applies load
  * without longjmp. Call psx_netplay_rb_flush_resume() afterward from a C BB-edge
@@ -121,6 +124,14 @@ int  psx_netplay_rb_fmv_unlock_grace_active(void);
 
 /* Drain peer RB_* + drive Seal/Baseline/Replay/Verify. Call from pump. */
 void psx_netplay_rb_pump(void);
+
+/* 1 while Live should not leave dig0: local dig0 not published yet, or peer
+ * dig0 not received. Latches open once both digests match (sticky latches —
+ * HC ring may age tick-0 out; must not re-stall after sync). */
+int  psx_netplay_rb_boot_dig0_gate(void);
+/* Record dig0 cores outside the HC ring (emit / peer FC drain). */
+void psx_netplay_rb_boot_dig0_note_local(uint32_t core);
+void psx_netplay_rb_boot_dig0_note_peer(uint32_t core);
 
 /* 1 while episode is active (seal/baseline/replay/verify). */
 int  psx_netplay_rb_active(void);

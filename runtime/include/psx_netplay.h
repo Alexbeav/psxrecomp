@@ -91,6 +91,10 @@ int  psx_netplay_diag_snapshot(char *arch_out, size_t arch_cap,
 
 int  psx_netplay_start(const PsxNetplayConfig *cfg);
 void psx_netplay_shutdown(void);
+/* Soft-return rematch / new lobby opponent: make host sim state match a cold
+ * process peer. Call from session_reboot (rematch) and after BYE teardown.
+ * Does not replace device *_init — orchestrates sticky host statics. */
+void psx_netplay_cold_reset(void);
 
 /*
  * After savestate_configure + memcard_init: refresh RB integrity keys from
@@ -172,6 +176,13 @@ int  psx_netplay_input_desync(uint32_t *tick, uint32_t *local_hash, uint32_t *re
 /* 1 if peer sent BYE or went silent for ~timeout_ms (default 1500).
  * Pass 0 for BYE-only (load barrier / LINKING before HELLO). */
 int  psx_netplay_peer_disconnected(uint32_t timeout_ms);
+
+/* Re-arm RUNNING silence clock after a pump (admit barrier entry). */
+void psx_netplay_touch_peer_liveness(void);
+
+/* RUNNING peer_disconnected timeout. 0 = BYE-only (early sim / boot tip wait /
+ * pcap_freeze — rematch dig0 can exceed 1.5s without INPUT). */
+uint32_t psx_netplay_running_liveness_timeout_ms(void);
 
 /*
  * Ingress / lobby / INPUT retransmit without try_admit. Used while the

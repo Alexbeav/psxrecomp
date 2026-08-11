@@ -94,6 +94,14 @@ int savestate_take_load_completed(void);
  * Clears. Netplay uses this to abort the load barrier instead of hanging. */
 int savestate_take_load_failed(void);
 
+/* 1 once after a staged save failed in savestate_poll (no safe resume PC,
+ * I/O error, etc.). Clears. Netplay aborts SAVE coord instead of transferring
+ * a stale/null-PC .pst. */
+int savestate_take_save_failed(void);
+
+/* Resume PC stamped into the last successful slot save (0 if none / failed). */
+uint32_t savestate_last_save_pc(void);
+
 /* Frontend hook (main.cpp): restage VRAM present path after a successful load. */
 void psx_frontend_on_savestate_loaded(void);
 /* Rollback snap apply: depth24 hold clear + restage without FMV cutover thrash. */

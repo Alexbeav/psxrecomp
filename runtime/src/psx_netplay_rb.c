@@ -5,6 +5,7 @@
 void psx_netplay_rb_bind(const PsxNetplayRbBindings *b) { (void)b; }
 void psx_netplay_rb_start(void) {}
 void psx_netplay_rb_shutdown(void) {}
+void psx_netplay_rb_cold_reset(void) {}
 void psx_netplay_rb_poll(struct CPUState *cpu, uint32_t resume_pc)
 {
     (void)cpu;
@@ -55,6 +56,9 @@ void psx_netplay_rb_poll_replay_stall(void) {}
 int psx_netplay_rb_take_promote_sweep(void) { return 0; }
 int psx_netplay_rb_fmv_unlock_grace_active(void) { return 0; }
 void psx_netplay_rb_pump(void) {}
+int psx_netplay_rb_boot_dig0_gate(void) { return 0; }
+void psx_netplay_rb_boot_dig0_note_local(uint32_t core) { (void)core; }
+void psx_netplay_rb_boot_dig0_note_peer(uint32_t core) { (void)core; }
 int psx_netplay_rb_active(void) { return 0; }
 int psx_netplay_rb_is_resimulating(void) { return 0; }
 int psx_netplay_rb_tip_holding(void) { return 0; }
@@ -122,6 +126,7 @@ uint32_t psx_netplay_rb_rtt_estimate_ms(void) { return 0; }
 #include "gpu_vram_dirty.h"
 #include "interrupts.h"
 #include "mdec.h"
+#include "sio.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
 #include "savestate.h"
@@ -157,6 +162,13 @@ static uint64_t g_stat_replay_ticks;
 static uint64_t g_stat_replay_ticks_total;
 static int g_pending_save_valid;
 static uint32_t g_pending_save_tick;
+/* Cleared in rb_start — function-locals survived rematch and hid snap logs. */
+static int s_snap_fail_logged;
+static int s_snap_ok_logged;
+static int s_snap_pc_reject_logged;
+static int s_snap_stale_logged;
+
+/* Cleared in rb_start — function-locals survived rematch and hid snap logs. */
 static int g_pending_load_valid;
 static uint32_t g_pending_load_tick;
 /* §75: highest tick whose ring snap was written by sealed Replay (or an
@@ -299,6 +311,18 @@ static uint64_t g_verify_wait_ms;
 static uint32_t g_rb_rtt_ema_ms;
 static uint64_t g_replay_progress_ms; /* last arm / finish_frame */
 static uint32_t g_last_good_bb_pc; /* sticky BB-edge resume for snaps / digest */
+/* Once both peers publish dig0, stay open even if HC later drops tick-0
+ * (hc_prime / episode abort). Re-checking HC caused sim=25 boot_dig0_wait hangs. */
+static int g_boot_dig0_synced;
+static int g_boot_dig0_mismatch_logged;
+/* Sticky dig0 cores — HC ring is only 128 deep and rematch invent/FC flood
+ * can reuse slot 0 before the peer's dig0 lands. Gate must not depend on HC. */
+static uint32_t g_boot_dig0_local_core;
+static uint8_t g_boot_dig0_local_valid;
+static uint32_t g_boot_dig0_peer_core;
+static uint8_t g_boot_dig0_peer_valid;
+static uint32_t g_boot_dig0_last_rexmit_ms;
+static int g_boot_dig0_wait_kind_logged;
 static int g_follow_nack_pending;
 static uint32_t g_follow_nack_epoch;
 static uint32_t g_follow_nack_mismatch;
@@ -1432,6 +1456,25 @@ static uint32_t rb_canonicalize_resume_pc(uint32_t pc)
     return pc;
 }
 
+static int rb_pc_is_bios(uint32_t pc)
+{
+    return ((pc & 0xfff00000u) == 0xbfc00000u) ? 1 : 0;
+}
+
+/* Tick-0 / dig0 snaps must resume in BIOS ROM. Prior-match game IRQ/$ra
+ * latches are still rb_resume_pc_ok and would otherwise poison the pin
+ * (live dig clears PC → dig0 match; baseline hashes snap.pc → abort). */
+static int rb_boot_snap_tick(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    if (sim == 0u)
+        return 1;
+    if (g_pending_save_valid && g_pending_save_tick == 0u)
+        return 1;
+    return 0;
+}
+
 /* Prefer BB-edge / IRQ check PCs — finish_frame often sees cpu->pc==0 while the
  * guest is parked in the vblank present path. IRQ/sticky/$ra first: bare
  * function-entry snaps picked short jr-$ra leaves (0x8006A9F8) whose top-level
@@ -1446,7 +1489,16 @@ static uint32_t pick_snap_resume_pc(const CPUState *c, uint32_t hint)
         hint,
         c ? c->pc : 0u,
     };
+    const int boot0 = rb_boot_snap_tick();
     int i;
+    if (boot0) {
+        for (i = 0; i < 6; ++i) {
+            if (rb_resume_pc_ok(cands[i]) && rb_pc_is_bios(cands[i]))
+                return rb_canonicalize_resume_pc(cands[i]);
+        }
+        /* Defer rather than stamp main-RAM residue into dig0. */
+        return 0;
+    }
     for (i = 0; i < 6; ++i) {
         if (rb_resume_pc_ok(cands[i]))
             return rb_canonicalize_resume_pc(cands[i]);
@@ -5623,9 +5675,12 @@ void psx_netplay_rb_start(void)
     RNetSession *s = sess();
     int delay;
 
-    psx_netplay_rb_shutdown();
+    psx_netplay_rb_shutdown(); /* also clears IRQ resume latches */
     if (!g_bound || !s)
         return;
+    /* Rematch: belt-and-suspenders with interrupts_init (shutdown already
+     * cleared; re-clear after recreate path in case bind raced). */
+    psx_irq_clear_resume_latches();
 
     /* §96: dirty-VRAM tracking only while RB netplay is live. */
     gpu_vram_dirty_set_tracking(1);
@@ -5728,11 +5783,65 @@ void psx_netplay_rb_start(void)
     g_peer_nack_floor = 0u; /* §62 */
     clear_baseline_pin();
     clear_episode_wire_state();
+    s_snap_fail_logged = 0;
+    s_snap_ok_logged = 0;
+    s_snap_pc_reject_logged = 0;
+    s_snap_stale_logged = 0;
     fprintf(stderr,
             "psxrecomp: rb snap ring ready depth=%u snap_interval=%u "
             "tip_dense=%u\n",
             (unsigned)netplay_snap_ring_depth(g_snaps),
             (unsigned)snap_interval(), (unsigned)tip_dense_window());
+}
+
+void psx_netplay_rb_cold_reset(void)
+{
+    /* Residue rb_shutdown historically left until the next rb_start — a
+     * rematch host in lobby + cold-boot guest then forked dig0/sim~14. */
+    tip_dense_reset();
+    clear_episode_wire_state();
+    clear_baseline_pin();
+    g_boot_dig0_synced = 0;
+    g_boot_dig0_mismatch_logged = 0;
+    g_boot_dig0_local_core = 0;
+    g_boot_dig0_local_valid = 0;
+    g_boot_dig0_peer_core = 0;
+    g_boot_dig0_peer_valid = 0;
+    g_boot_dig0_last_rexmit_ms = 0;
+    g_boot_dig0_wait_kind_logged = 0;
+    g_follow_nack_pending = 0;
+    g_follow_nack_epoch = 0;
+    g_follow_nack_mismatch = 0;
+    g_follow_nack_load = 0;
+    g_follow_nack_target = 0;
+    g_follow_nack_slot = 0;
+    g_follow_nack_sends = 0;
+    g_stash_bl_valid = 0;
+    g_stash_bl_epoch = 0;
+    g_stash_bl_load = 0;
+    g_stash_bl_dig_m = 0;
+    g_stash_bl_dig_a = 0;
+    g_stash_bl_dig_b = 0;
+    g_stash_bl_dig_c = 0;
+    g_stash_bl_logged = 0;
+    g_stat_replay_ticks = 0;
+    g_stat_replay_ticks_total = 0;
+    g_pending_save_valid = 0;
+    g_pending_load_valid = 0;
+    g_pending_resume_valid = 0;
+    g_live_realign_pending = 0;
+    g_was_in_fmv = 0;
+    g_fmv_settle_until = 0;
+    g_fmv_lockstep_until = 0;
+    g_fmv_media_end_sim = 0;
+    g_fmv_core_match_streak = 0;
+    g_fmv_lockstep_released = 0;
+    g_fmv_dense_through = 0;
+    g_fmv_media_lo = 0;
+    g_fmv_media_hi = 0;
+    g_fmv_unmatched_desync = 0;
+    g_fmv_unmatched_desync_arm_sim = 0;
+    g_last_good_bb_pc = 0;
 }
 
 void psx_netplay_rb_shutdown(void)
@@ -5745,6 +5854,10 @@ void psx_netplay_rb_shutdown(void)
         netplay_snap_ring_destroy(g_snaps);
         g_snaps = NULL;
     }
+    /* BYE / soft-exit: drop resume latches before lobby rematch so dig0 cannot
+     * see a prior-match game PC between shutdown and interrupts_init. */
+    psx_irq_clear_resume_latches();
+    psx_netplay_rb_cold_reset();
     gpu_vram_dirty_set_tracking(0);
     boot_state_vram_mirror_reset();
     clear_baseline_pin();
@@ -6045,8 +6158,20 @@ static int try_apply_pending_load(CPUState *cpu_in)
             g_live_realign_pending = 0;
             resim_audit_cache_invalidate(); /* §67: guest state replaced */
             /* Prefer the snap's stored PC when already safe — host sticky /
-             * IRQ hints can re-introduce MotK wait-loop edge forks. */
-            if (rb_resume_pc_ok(snap_pc))
+             * IRQ hints can re-introduce MotK wait-loop edge forks.
+             * Tick-0 must stay in BIOS even if a poisoned ring snap carried
+             * prior-match main-RAM PC (rematch dig0 baseline mismatch). */
+            if (loaded_tick == 0u && rb_resume_pc_ok(snap_pc) &&
+                !rb_pc_is_bios(snap_pc)) {
+                pc = pick_snap_resume_pc(cpu_in, snap_pc);
+                if (!pc)
+                    pc = 0xbfc00000u; /* reset vector — better than game PC */
+                fprintf(stderr,
+                        "psxrecomp: rb snap tick=0 rejected game pc=0x%08x "
+                        "-> 0x%08x\n",
+                        (unsigned)snap_pc, (unsigned)pc);
+                fflush(stderr);
+            } else if (rb_resume_pc_ok(snap_pc))
                 pc = snap_pc;
             else
                 pc = pick_snap_resume_pc(cpu_in, snap_pc);
@@ -6293,14 +6418,28 @@ void psx_netplay_rb_flush_resume(void)
 
 void psx_netplay_rb_poll(struct CPUState *cpu_in, uint32_t resume_pc)
 {
-    static int s_snap_fail_logged;
-    static int s_snap_ok_logged;
-    static int s_snap_pc_reject_logged;
     uint32_t pc;
 
     if (!g_snaps || !cpu_in)
         return;
 
+    if (g_pending_save_valid && g_b.bios_checksum && g_b.entry_pc) {
+        RNetSession *s_pend = sess();
+        uint32_t sim_now = s_pend ? rnet_session_sim_tick(s_pend) : 0u;
+        /* Deferred tick-T snap must not capture sim>T state (rematch: tick-0
+         * pending across boot_tip_wait / dig while IRQ PC latch was stale). */
+        if (sim_now > g_pending_save_tick) {
+            if (!s_snap_stale_logged) {
+                fprintf(stderr,
+                        "psxrecomp: rb snap save DROP tick=%u — sim advanced to "
+                        "%u before a dispatchable PC (stale defer)\n",
+                        (unsigned)g_pending_save_tick, (unsigned)sim_now);
+                fflush(stderr);
+                s_snap_stale_logged = 1;
+            }
+            g_pending_save_valid = 0;
+        }
+    }
     if (g_pending_save_valid && g_b.bios_checksum && g_b.entry_pc) {
         pc = pick_snap_resume_pc(cpu_in, resume_pc);
         if (!pc) {
@@ -6318,6 +6457,12 @@ void psx_netplay_rb_poll(struct CPUState *cpu_in, uint32_t resume_pc)
         } else {
             CPUState snap = *cpu_in;
             snap.pc = pc;
+            /* Tick-0 pin must not embed peer-local pad FSM / DualShock residue
+             * (baseline core matched; ext forked on sio pads after rematch). */
+            if (g_pending_save_tick == 0u) {
+                int seats = g_b.slot_count ? *g_b.slot_count : 2;
+                sio_netplay_canonicalize_session_pads(seats);
+            }
             if (netplay_snap_ring_save(g_snaps, g_pending_save_tick, &snap,
                                        *g_b.bios_checksum, *g_b.entry_pc)) {
                 note_good_bb_pc(pc);
@@ -8429,6 +8574,100 @@ void psx_netplay_rb_pump(void)
     }
 
     poll_tip_hold_finalize();
+}
+
+void psx_netplay_rb_boot_dig0_note_local(uint32_t core)
+{
+    g_boot_dig0_local_core = core;
+    g_boot_dig0_local_valid = 1u;
+}
+
+void psx_netplay_rb_boot_dig0_note_peer(uint32_t core)
+{
+    g_boot_dig0_peer_core = core;
+    g_boot_dig0_peer_valid = 1u;
+}
+
+static void boot_dig0_rexmit_local(void)
+{
+    RNetSession *s;
+    uint32_t now;
+    if (!g_boot_dig0_local_valid || g_boot_dig0_synced)
+        return;
+    s = (g_bound && g_b.session) ? *g_b.session : NULL;
+    if (!s)
+        return;
+    now = (uint32_t)psx_host_mono_ms();
+    if (g_boot_dig0_last_rexmit_ms != 0u &&
+        (uint32_t)(now - g_boot_dig0_last_rexmit_ms) < 100u)
+        return;
+    g_boot_dig0_last_rexmit_ms = now ? now : 1u;
+    (void)rnet_session_send_rb_frame_commit(s, 0u, g_boot_dig0_local_core);
+}
+
+int psx_netplay_rb_boot_dig0_gate(void)
+{
+    uint32_t ld = 0u;
+    uint32_t pd = 0u;
+    if (g_boot_dig0_synced)
+        return 0;
+    if (!g_bound || !g_b.hc || !g_snaps)
+        return 0;
+    /* Prefer sticky latches; fall back to HC while rematch FC is in flight. */
+    if (g_boot_dig0_local_valid)
+        ld = g_boot_dig0_local_core;
+    else if (!netplay_hc_local_digest(g_b.hc, 0u, &ld)) {
+        if (!g_boot_dig0_wait_kind_logged) {
+            g_boot_dig0_wait_kind_logged = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb boot dig0 wait — local dig0 not published\n");
+            fflush(stderr);
+        }
+        return 1;
+    } else {
+        g_boot_dig0_local_core = ld;
+        g_boot_dig0_local_valid = 1u;
+    }
+    if (g_boot_dig0_peer_valid)
+        pd = g_boot_dig0_peer_core;
+    else if (!netplay_hc_peer_digest(g_b.hc, 0u, &pd)) {
+        if (!g_boot_dig0_wait_kind_logged) {
+            g_boot_dig0_wait_kind_logged = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb boot dig0 wait — peer dig0 missing "
+                    "(rexmit local=%08x)\n",
+                    (unsigned)ld);
+            fflush(stderr);
+        }
+        boot_dig0_rexmit_local();
+        return 1;
+    } else {
+        g_boot_dig0_peer_core = pd;
+        g_boot_dig0_peer_valid = 1u;
+    }
+    if (ld != pd) {
+        boot_dig0_rexmit_local();
+        if (!g_boot_dig0_mismatch_logged) {
+            g_boot_dig0_mismatch_logged = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb boot dig0 MISMATCH local=%08x peer=%08x "
+                    "(hold; rematch BIOS backend / HLE plan?)\n",
+                    (unsigned)ld, (unsigned)pd);
+            fflush(stderr);
+        }
+        return 1;
+    }
+    g_boot_dig0_mismatch_logged = 0;
+    g_boot_dig0_wait_kind_logged = 0;
+    /* One more send after we saw peer dig0 — the slower peer may still be
+     * waiting (guest often syncs first; host then needs this rexmit). */
+    g_boot_dig0_last_rexmit_ms = 0;
+    boot_dig0_rexmit_local();
+    g_boot_dig0_synced = 1;
+    fprintf(stderr,
+            "psxrecomp: rb boot dig0 synced core=%08x\n", (unsigned)ld);
+    fflush(stderr);
+    return 0;
 }
 
 int psx_netplay_rb_active(void)

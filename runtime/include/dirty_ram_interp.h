@@ -109,6 +109,9 @@ int      psx_kernel_bless_dispatchable(uint32_t phys);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[6]);
 void     psx_kernel_bless_resync_after_restore(void);
+/* Soft-return rematch / BIOS switch: drop latched SCPH↔OpenBIOS window +
+ * CLEAN/MISMATCH so the next kbless_on() re-reads psx_bios_image. */
+void     psx_kernel_bless_reset_for_boot(void);
 
 /* Capture/candidate window membership. Kernel window and overlay region are
  * unconditional; main-EXE text [KERNEL_WINDOW_END, FLOOR) is included only

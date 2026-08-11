@@ -40,6 +40,7 @@
 #include "gpu.h"
 #include "interrupts.h"
 #include "mdec.h"
+#include "overlay_loader.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
 #include "spu.h"
@@ -176,18 +177,12 @@ static void force_session_pads_connected(int slot_count)
 
 void psx_netplay_release_pads(void)
 {
-    int i;
     int n = g_np_slot_count;
     if (n < 2) n = 2;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
-    force_session_pads_connected(n);
-    for (i = 0; i < n; ++i) {
-        sio_set_pad_state_slot(i, 0xFFFFu);
-        sio_set_pad_sticks(i, 0x80, 0x80, 0x80, 0x80);
-        /* Linking placeholder: digital until tip/hist publishes the real type.
-         * Forcing DualShock here broke MotK (game.toml default_mode=digital). */
-        sio_request_pad_type(i, 0);
-    }
+    /* Immediate digital + idle bus (not deferred type_req). Rematch dig0
+     * baseline_ext was forking on pads when a DualShock host kept analog=1. */
+    sio_netplay_canonicalize_session_pads(n);
 }
 
 /* ---- Start cadence bisect (always linked; PSX_START_BISECT=1) ---- */
@@ -404,6 +399,7 @@ int  psx_netplay_start(const PsxNetplayConfig *cfg)
     return -1;
 }
 void psx_netplay_shutdown(void) {}
+void psx_netplay_cold_reset(void) {}
 void psx_netplay_stage_local(const PsxNetPad *pad) { (void)pad; }
 void psx_netplay_pad_trace_dev(int card, int fallback, int sdl_start,
                                uint16_t buttons)
@@ -441,6 +437,8 @@ int  psx_netplay_peer_disconnected(uint32_t timeout_ms)
     (void)timeout_ms;
     return 0;
 }
+void psx_netplay_touch_peer_liveness(void) {}
+uint32_t psx_netplay_running_liveness_timeout_ms(void) { return 1500u; }
 void psx_netplay_bind_guest_saves(void) {}
 int  psx_netplay_is_host(void) { return 0; }
 int  psx_netplay_request_save(int slot) { (void)slot; return 0; }
@@ -953,6 +951,8 @@ static void np_drain_peer_frame_commits(void)
         if (g_np.rollback &&
             psx_netplay_rb_ignore_peer_frame_commit(through, hash))
             continue;
+        if (through == 0u)
+            psx_netplay_rb_boot_dig0_note_peer(hash);
         netplay_hc_note_peer(&g_np.hc, through, hash);
     }
     /* FIRST CORE can stick the watermark forever once that tick ages out of
@@ -1014,6 +1014,8 @@ static void np_emit_frame_commit(uint32_t tick)
     }
     np_part_ring_put(tick, &parts, av, cd, spu, mdec, aux);
     netplay_hc_note_local(&g_np.hc, tick, parts.core);
+    if (tick == 0u)
+        psx_netplay_rb_boot_dig0_note_local(parts.core);
     (void)rnet_session_send_rb_frame_commit(g_np.session, tick, parts.core);
     (void)netplay_hc_heal_stale_gap(&g_np.hc);
     /* Breadcrumbs so both peers' logs line up by sim tick. Tag is local-only
@@ -1340,13 +1342,28 @@ static void np_guest_handle_probe(void)
             fflush(stdout);
         }
         if (savestate_pending()) return;
+        if (savestate_take_save_failed()) {
+            (void)rnet_session_state_probe_reply(g_np.session, 0);
+            printf("psxrecomp: netplay guest save slot=%u — local write failed "
+                   "(no safe resume PC) — aborting\n",
+                   (unsigned)slot);
+            fflush(stdout);
+            g_np.xfer = NP_XFER_NONE;
+            g_np.local_save_staged = 0;
+            g_np.local_save_acked = 0;
+            return;
+        }
         if (!g_np.local_save_staged || !savestate_slot_exists((int)slot)) return;
+        if (!savestate_last_save_pc()) {
+            /* Stale slot on disk from a prior match — wait for a real write. */
+            return;
+        }
         if (!g_np.local_save_acked) {
             g_np.local_save_acked = 1;
             (void)rnet_session_state_probe_reply(g_np.session, 1);
             printf("psxrecomp: netplay guest save slot=%u — local write done "
-                   "@ target sim (frozen until hash probe)\n",
-                   (unsigned)slot);
+                   "@ target sim pc=0x%08X (frozen until hash probe)\n",
+                   (unsigned)slot, (unsigned)savestate_last_save_pc());
             fflush(stdout);
         }
         return;
@@ -1463,13 +1480,24 @@ static void np_host_drive_xfer(void)
         /* Host + guest both stage at save_target_tick; wait for local write
          * and guest ACK before hashing. */
         if (savestate_pending()) return;
+        if (savestate_take_save_failed()) {
+            printf("psxrecomp: netplay save slot=%d — local write failed "
+                   "(no safe resume PC) — aborting\n",
+                   g_np.xfer_slot);
+            fflush(stdout);
+            g_np.xfer = NP_XFER_NONE;
+            g_np.local_save_staged = 0;
+            return;
+        }
         if (!g_np.local_save_staged || !savestate_slot_exists(g_np.xfer_slot))
+            return;
+        if (!savestate_last_save_pc())
             return;
         if (!rnet_session_state_probe_take_reply(g_np.session, &match))
             return;
         rnet_session_state_probe_finish(g_np.session);
         if (!match) {
-            /* Guest failed to save — still ship host blob. */
+            /* Guest failed to save — still ship host blob if it has a PC. */
         }
         if (!np_slot_crc(g_np.xfer_slot, &size, &crc) ||
             rnet_session_state_probe(g_np.session, RNET_STATE_OP_SAVE, (rnet_u8)g_np.xfer_slot, size,
@@ -1479,8 +1507,8 @@ static void np_host_drive_xfer(void)
             g_np.xfer = NP_XFER_NONE;
             return;
         }
-        printf("psxrecomp: netplay save slot=%d — hash probe (%u bytes)\n", g_np.xfer_slot,
-               (unsigned)size);
+        printf("psxrecomp: netplay save slot=%d — hash probe (%u bytes, pc=0x%08X)\n",
+               g_np.xfer_slot, (unsigned)size, (unsigned)savestate_last_save_pc());
         fflush(stdout);
         g_np.xfer = NP_XFER_SAVE_PROBE;
         return;
@@ -1497,6 +1525,13 @@ static void np_host_drive_xfer(void)
             np_note_save_complete();
             return;
         }
+        if (!savestate_last_save_pc()) {
+            printf("psxrecomp: netplay save slot=%d — refusing null-PC transfer\n",
+                   g_np.xfer_slot);
+            fflush(stdout);
+            g_np.xfer = NP_XFER_NONE;
+            return;
+        }
         if (!savestate_read_slot(g_np.xfer_slot, &buf, &n) || !buf ||
             rnet_session_state_begin(g_np.session, RNET_STATE_OP_SAVE, (rnet_u8)g_np.xfer_slot, buf,
                                      n) != 0) {
@@ -1506,8 +1541,9 @@ static void np_host_drive_xfer(void)
             g_np.xfer = NP_XFER_NONE;
             return;
         }
-        printf("psxrecomp: netplay save slot=%d — transferring %zu bytes to guest\n",
-               g_np.xfer_slot, n);
+        printf("psxrecomp: netplay save slot=%d — transferring %zu bytes to guest "
+               "(pc=0x%08X)\n",
+               g_np.xfer_slot, n, (unsigned)savestate_last_save_pc());
         fflush(stdout);
         free(buf);
         g_np.xfer = NP_XFER_SAVE_SEND;
@@ -3178,6 +3214,31 @@ int psx_netplay_peer_disconnected(uint32_t timeout_ms)
     return rnet_session_peer_disconnected(g_np.session, (rnet_u64)timeout_ms);
 }
 
+void psx_netplay_touch_peer_liveness(void)
+{
+    if (!psx_netplay_active() || !g_np.session) return;
+    rnet_session_touch_peer_liveness(g_np.session);
+}
+
+uint32_t psx_netplay_running_liveness_timeout_ms(void)
+{
+    uint32_t sim;
+    const char *tag;
+    if (!psx_netplay_active() || !g_np.session)
+        return 1500u;
+    sim = rnet_session_sim_tick(g_np.session);
+    tag = np_sched_admit_stall_tag();
+    if (tag && tag[0] &&
+        (strcmp(tag, "boot_tip_wait") == 0 ||
+         strcmp(tag, "boot_dig0_wait") == 0 ||
+         strcmp(tag, "pcap_freeze") == 0))
+        return 0u;
+    /* Free-run + tick-0 dig publish no INPUT; rematch dig can exceed 1.5s. */
+    if (sim < 48u)
+        return 0u;
+    return 1500u;
+}
+
 static void np_diag_capture(const PsxNetplayConfig *cfg, int slots)
 {
     const char *arch = "p2p";
@@ -3767,6 +3828,46 @@ static int np_starv_runway_ok(void)
     return lead >= delay + hr_lead;
 }
 
+void psx_netplay_cold_reset(void)
+{
+    /* Host-only statics that survive soft-return (BSS-zero on a cold peer).
+     * Device *_init / rb_start still run on session_reboot — this is the
+     * gap between BYE teardown and the next match. */
+    {
+        int i;
+        for (i = 0; i < PSX_MAX_PLAYERS; ++i) {
+            g_sio_pad_prev[i] = 0xFFFFu;
+            g_sio_pad_have[i] = 0;
+            g_inv_pad_prev[i] = 0xFFFFu;
+            g_inv_pad_have[i] = 0;
+        }
+    }
+    g_local_pad_prev = 0xFFFFu;
+    g_local_pad_have = 0;
+    g_live_trace_prev = 0xFFFFu;
+    g_live_trace_have = 0;
+    g_dev_trace_prev = 0xFFFFu;
+    g_dev_trace_have = 0;
+    g_tip_trace_prev = 0xFFFFu;
+    g_tip_trace_have = 0;
+    memset(g_sio_apply_sim, 0, sizeof(g_sio_apply_sim));
+    memset(g_sio_apply_btn, 0, sizeof(g_sio_apply_btn));
+    memset(g_sio_apply_n, 0, sizeof(g_sio_apply_n));
+    memset(g_sio_apply_have, 0, sizeof(g_sio_apply_have));
+    g_start_gest_down_sim = 0;
+    g_start_gest_up_sim = 0;
+    g_start_gest_down_valid = 0;
+    g_start_gest_up_valid = 0;
+    g_start_gest_last_stage_down_sim = 0xFFFFFFFFu;
+    s_cd_bisect_arm_until = 0;
+    s_cd_bisect_last_tick = 0xffffffffu;
+    np_part_ring_reset();
+    np_starv_reset();
+    psx_netplay_rb_cold_reset();
+    overlay_loader_clear_lazy_miss();
+    psx_irq_clear_resume_latches();
+}
+
 void psx_netplay_shutdown(void)
 {
     if (g_diag_file) {
@@ -3783,6 +3884,8 @@ void psx_netplay_shutdown(void)
     }
     psx_netplay_rb_shutdown();
     psx_netplay_rb_bind(NULL);
+    /* Drop cushion/timesync/tip statics so soft-return rematch starts clean. */
+    np_sched_bind(NULL);
     np_leave_guest_sandbox();
     {
         CPUState *saved_cpu = g_np.cpu;
@@ -3792,6 +3895,8 @@ void psx_netplay_shutdown(void)
         np_part_ring_reset();
     }
     np_starv_reset();
+    /* Lobby idle + rematch: wipe pad/CD/overlay residue a cold peer lacks. */
+    psx_netplay_cold_reset();
 }
 
 int psx_netplay_is_host(void)

@@ -488,6 +488,9 @@ static void smooth_60_reset(void) {
     g_smooth_60_state.previous_was_duplicate = false;
 }
 
+/* Declared early: present_session_reset zeros it on rematch. */
+static int sdl_audio_fadein_left = 0;
+
 static void present_session_reset(void) {
     s_disabled_frame_presented = false;
     s_force_present_after_load = false;
@@ -504,6 +507,7 @@ static void present_session_reset(void) {
     s_d24_prev_mdec = 0;
     s_d24_saw_gap = 0;
     s_d24_cutover_blank = 0;
+    sdl_audio_fadein_left = 0;
     /* Soft-exit can leave deferred present / flush reentrancy armed; gpu_init
      * does not clear them. Rematch then no-ops every flush → black window. */
     gpu_vblank_clear_deferred_present();
@@ -2437,9 +2441,9 @@ static void sdl_audio_gain_ramp(int16_t* buf, int frames, float g0, float g1) {
 /* Fade-in state: samples of rising ramp still to apply after an unmute.
  * Consumed by sdl_audio_pump across however many pump calls it spans.
  * MUST fit sdl_audio_buf (2048 frames): the fade-out tail renders this many
- * frames in one spu_render call. 1764 frames = 40 ms. */
+ * frames in one spu_render call. 1764 frames = 40 ms.
+ * sdl_audio_fadein_left is declared with present_session_reset. */
 static const int sdl_audio_fade_samples = 44100 * 40 / 1000;  /* 40 ms */
-static int       sdl_audio_fadein_left  = 0;
 
 static void sdl_audio_pump(bool discard_output = false) {
     /* Guest-cycle SPU advance must not depend on host audio device/backpressure.
@@ -4529,19 +4533,31 @@ static void netplay_barrier_admit(int override) {
         s_np_guest_ticks += admit_t0 - s_np_last_admit_end;
         s_np_timing_frames++;
     }
+    int liveness_rearamed = 0;
     for (;;) {
         uint32_t dt = 0, lh = 0, rh = 0;
         const Uint64 now_ms = SDL_GetTicks64();
         const int running = psx_netplay_is_running();
         if (running && progress_t0 == 0)
             progress_t0 = now_ms;
+        /* Pump before liveness: free-run between vblanks (and tick-0 dig CRCs)
+         * does not call poll_admit, so last_peer_rx can age past 1.5s while
+         * peer FRAME_COMMIT/INPUT sit in the UDP socket. Checking disconnect
+         * first false-killed rematch right after enter-guest. */
+        psx_netplay_pump();
+        if (!liveness_rearamed) {
+            psx_netplay_touch_peer_liveness();
+            liveness_rearamed = 1;
+        }
         /* Load apply/ready suppresses INPUT (and can sit silent for seconds on
          * a hash-match .pst). timeout=0 still honors BYE (peer_gone) but does
          * not treat rx silence as disconnect — that was kicking both peers to
          * the lobby mid-load. Same BYE-only policy while LINKING so a rematch
          * peer still booting cannot be false-disconnected at 15s. */
         if (psx_netplay_peer_disconnected(
-                (psx_netplay_in_load_barrier() || !running) ? 0u : 1500u)) {
+                (psx_netplay_in_load_barrier() || !running)
+                    ? 0u
+                    : psx_netplay_running_liveness_timeout_ms())) {
             netplay_soft_exit("netplay_peer_disconnect");
             if (psx_return_to_lobby_requested()) return;
         }
@@ -7676,7 +7692,10 @@ namespace {
         ae_np_lan_sync_local_slot_bios();
         int any_prefer_open = 0;
         int any_cannot_scph = 0;
+        int host_prefer_scph = 0;
         int saw_peer = 0;
+        const int host_slot =
+            (st.host_slot >= 0 && st.host_slot < kAeLanMaxSlots) ? st.host_slot : 0;
         for (int i = 0; i < st.max_slots && i < kAeLanMaxSlots; ++i) {
             if (st.slot_name[i].empty()) continue;
             saw_peer = 1;
@@ -7687,9 +7706,15 @@ namespace {
             }
             if (b.prefer_openbios) any_prefer_open = 1;
             if (!b.can_scph1001) any_cannot_scph = 1;
+            if (i == host_slot && !b.prefer_openbios && b.can_scph1001)
+                host_prefer_scph = 1;
         }
         if (!saw_peer) any_cannot_scph = 1;
-        if (any_prefer_open || any_cannot_scph)
+        if (any_cannot_scph)
+            std::strncpy(out, "openbios", out_cap - 1);
+        else if (host_prefer_scph)
+            std::strncpy(out, "scph1001", out_cap - 1);
+        else if (any_prefer_open)
             std::strncpy(out, "openbios", out_cap - 1);
         else
             std::strncpy(out, "scph1001", out_cap - 1);
@@ -11231,13 +11256,44 @@ session_reboot:
     psx_cycles_reset_for_boot();
     starvation_ring_reset();
     present_session_reset();
+    /* Rematch ≈ cold start for netplay sim residue a cold peer lacks
+     * (pad edges, dig0 latch, tip densify, FMV flags, IRQ resume).
+     * Idempotent with BYE teardown; device *_init still runs below. */
+    psx_netplay_cold_reset();
     {
         extern uint64_t s_frame_count;
         extern uint32_t g_debug_current_func_addr;
         extern uint32_t g_debug_last_store_pc;
+        extern int g_call_unit_depth;
+        extern int g_psx_dispatch_depth;
         s_frame_count = 0;
         g_debug_current_func_addr = 0;
         g_debug_last_store_pc = 0;
+        /* Soft-exit mid-call can skip the depth restore if the longjmp path
+         * was not taken; sticky depth suppresses overlay IRQ delivery and
+         * freezes rematch after lockstep armed. */
+        g_call_unit_depth = 0;
+        g_psx_dispatch_depth = 0;
+    }
+    /* Cold start activates via resolve_bios_for_runtime before this label.
+     * Rematch only rewrites bios_path_str — without re-activate, memory_init
+     * loads new ROM bytes against the prior match's linked backend (e.g.
+     * SCPH-1001 dump + sticky OPENBIOS) and dig0 never publishes cleanly. */
+    if (!validate_bios_for_launch(std::filesystem::path(bios_path_str))) {
+        std::fprintf(stderr, "psxrecomp: BIOS activate failed for %s%s\n",
+                     bios_path_str.c_str(),
+                     rematch_session ? " (rematch)" : "");
+        return 1;
+    }
+    if (rematch_session) {
+        std::fprintf(stdout,
+            "psxrecomp: rematch BIOS activated id=%s bundled=%d "
+            "deliver_event_ret=0x%x shell_entry=0x%x\n",
+            psx_bios_image.image_id ? psx_bios_image.image_id : "?",
+            psx_bios_image.image_bundled ? 1 : 0,
+            (unsigned)psx_bios_image.deliver_event_ret,
+            (unsigned)psx_bios_image.shell_entry_phys);
+        std::fflush(stdout);
     }
     memory_init(bios_path_str.c_str());
 #ifndef PSX_HAVE_VULKAN
@@ -11387,14 +11443,24 @@ session_reboot:
      * LoadExe pad bring-up for titles that expect a lone digital pad. Offline
      * 3+ player builds arm it after game entry (see vblank path); netplay arms
      * it from psx_netplay when slot_count >= 3. */
-    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
-        /* Dev-any-input keeps P1 connected even with no assigned controller so the
-         * keyboard / any plugged-in controller can drive port 1 standalone. */
-        const bool dev_p1 = (dev_any_input_enabled() && s == 0);
-        const int mode = effective_player_mode_for_sio(g_players[s], s);
-        sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
-        sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
+    if (net_cfg.enabled) {
+        /* Netplay BIOS boot must not mirror per-peer DualShock vs keyboard —
+         * that forked dig0 snap sio/pads (baseline ext) on rematch. Session
+         * start also re-canonicalizes; seed here so early boot is identical. */
+        int np_slots = net_cfg.slot_count;
+        if (np_slots < 2) np_slots = 2;
+        if (np_slots > PSX_MAX_PLAYERS) np_slots = PSX_MAX_PLAYERS;
+        sio_netplay_canonicalize_session_pads(np_slots);
+    } else {
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
+            /* Dev-any-input keeps P1 connected even with no assigned controller so the
+             * keyboard / any plugged-in controller can drive port 1 standalone. */
+            const bool dev_p1 = (dev_any_input_enabled() && s == 0);
+            const int mode = effective_player_mode_for_sio(g_players[s], s);
+            sio_set_pad_connected(s, (g_players[s].kind != 0 || dev_p1) ? 1 : 0);
+            sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
+            sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
+        }
     }
     /* SPU float-shadow gate must be set before spu_init() (which runs
      * spu_shadow_reset()). Default OFF; PSX_AUDIO_SHADOW env overrides. */
@@ -11945,10 +12011,12 @@ session_reboot:
                 psx_bios_image.image_id);
         }
         psx_bios_hle_configure(plan.call_hle, plan.boot_skip);
-        std::fprintf(stdout, "psxrecomp: bios_backend=%s  bios_boot=%s\n",
+        std::fprintf(stdout,
+                     "psxrecomp: bios_backend=%s  bios_boot=%s  image=%s\n",
                      psx_bios_hle_backend_name(),
                      psx_bios_hle_boot_skip_enabled()
-                         ? "HLE (shell skipped)" : "LLE (real intro)");
+                         ? "HLE (shell skipped)" : "LLE (real intro)",
+                     psx_bios_image.image_id ? psx_bios_image.image_id : "?");
     }
 
     /* R3000A reset state. */
@@ -12190,6 +12258,25 @@ session_reboot:
         std::printf("psxrecomp: netplay lockstep armed (sim_tick=%u, vsync off)\n",
                     (unsigned)psx_netplay_sim_tick());
         std::fflush(stdout);
+        /* Rematch: dump sticky guards once before guest entry (soft-exit can
+         * leave device_service / call_unit elevated if a path skipped the
+         * longjmp fixup). */
+        if (rematch_session) {
+            extern int psx_in_device_service;
+            extern int g_call_unit_depth;
+            char stall[96];
+            uint32_t sim = 0;
+            int lead = 0;
+            stall[0] = '\0';
+            psx_netplay_admit_wait_info(stall, sizeof(stall), &sim, &lead);
+            std::fprintf(stderr,
+                "psxrecomp: rematch enter-guest sim=%u stall=%s lead=%d "
+                "device_svc=%d call_unit=%d cyc=%llu\n",
+                (unsigned)sim, stall[0] ? stall : "-", lead,
+                psx_in_device_service, g_call_unit_depth,
+                (unsigned long long)psx_get_cycle_count());
+            std::fflush(stderr);
+        }
     }
 
     psx_scheduler_run(&cpu);

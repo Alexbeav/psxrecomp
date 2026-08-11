@@ -99,6 +99,9 @@ int psx_get_in_exception(void);
  * Used by the post-savestate freeze probe (vblank-time "where was the game"). */
 uint32_t psx_last_irq_check_pc(void);
 uint32_t psx_compiled_irq_resume_pc(void);
+/* Soft-return / netplay BYE: drop sticky resume latches so rematch dig0 snaps
+ * cannot inherit a prior-match game PC (see pick_snap_resume_pc). */
+void psx_irq_clear_resume_latches(void);
 uint64_t psx_last_irq_check_cycle(void);
 uint64_t psx_interrupt_total_checks(void);
 uint32_t psx_interrupt_fast_maintenance(void);

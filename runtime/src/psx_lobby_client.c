@@ -3164,6 +3164,7 @@ int psx_lobby_settle_session_bios(char *out, size_t out_cap)
     int i;
     int any_prefer_open = 0;
     int any_cannot_scph = 0;
+    int host_prefer_scph = 0;
     int saw_peer = 0;
     if (!out || out_cap < 9) return -1;
     out[0] = '\0';
@@ -3181,6 +3182,9 @@ int psx_lobby_settle_session_bios(char *out, size_t out_cap)
         if (!m->bios_can_scph1001) any_cannot_scph = 1;
         if (!m->bios_can_openbios && !m->bios_can_scph1001)
             any_cannot_scph = 1;
+        if (psx_lobby_member_is_host(m) && !m->bios_prefer_openbios &&
+            m->bios_can_scph1001)
+            host_prefer_scph = 1;
     }
 
     /* Include local offer even before lobby_update echoes it. */
@@ -3188,11 +3192,20 @@ int psx_lobby_settle_session_bios(char *out, size_t out_cap)
         saw_peer = 1;
         if (g_lc.bios_offer.prefer_openbios) any_prefer_open = 1;
         if (!g_lc.bios_offer.can_scph1001) any_cannot_scph = 1;
+        if (g_lc.is_host && !g_lc.bios_offer.prefer_openbios &&
+            g_lc.bios_offer.can_scph1001)
+            host_prefer_scph = 1;
     } else if (!saw_peer) {
         any_cannot_scph = 1;
     }
 
-    if (any_prefer_open || any_cannot_scph || !saw_peer)
+    /* Capability first: without universal SCPH support, OpenBIOS is required.
+     * Otherwise the host's retail pick wins over guest OpenBIOS preferences. */
+    if (any_cannot_scph || !saw_peer)
+        strncpy(out, "openbios", out_cap - 1);
+    else if (host_prefer_scph)
+        strncpy(out, "scph1001", out_cap - 1);
+    else if (any_prefer_open)
         strncpy(out, "openbios", out_cap - 1);
     else
         strncpy(out, "scph1001", out_cap - 1);

@@ -16,6 +16,7 @@
 #if !defined(PSX_HAS_RECOMP_NET)
 /* Single-player / PSX_NETPLAY=OFF: no recomp-net. Match psx_netplay_rb.c. */
 void np_sched_bind(const PsxNpSchedBridge *bridge) { (void)bridge; }
+void np_sched_reset_session(void) {}
 uint32_t np_sched_wire_for_sim(uint32_t sim_tick) { return sim_tick; }
 int np_sched_real_delay_enabled(void) { return 0; }
 void np_sched_sync_delay_from_session(void) {}
@@ -69,8 +70,17 @@ void np_sched_arm_absurd_invent_catchup(void) {}
 
 static PsxNpSchedBridge g_sb;
 
+/* Timesync throttle wire tracking — file-scope so rematch can clear it. */
+static uint32_t g_ts_last_wire;
+static uint32_t g_ts_last_wire_ms;
+static uint32_t g_ts_stall_until;
+static uint8_t  g_ts_stall_logged;
+
 void np_sched_bind(const PsxNpSchedBridge *bridge)
 {
+    /* Always drop prior-match policy — bind happens at every psx_netplay_start
+     * and (with NULL) on shutdown after soft-return. */
+    np_sched_reset_session();
     if (bridge)
         g_sb = *bridge;
     else
@@ -170,6 +180,10 @@ void np_sched_sync_delay_from_session(void)
 /* ------------------------------------------------------------------ */
 /* Invent-grace RTT estimate                                           */
 /* ------------------------------------------------------------------ */
+
+/* Rematch boot gates — cleared in np_sched_reset_session (not function-static). */
+static int g_boot_tip_logged;
+static int g_boot_dig0_logged;
 
 /* After episode commit: refuse invent until remote tip rebuilds most of D. */
 static int g_cushion_rebuild;
@@ -756,10 +770,6 @@ static void np_phase_ctrl_maybe_log(uint32_t now, rnet_u32 sim, int remote_lead)
  * was 3). */
 static int np_timesync_throttle(uint32_t wire)
 {
-    static uint32_t s_last_wire;
-    static uint32_t s_last_wire_ms;
-    static uint32_t s_stall_until;
-    static uint8_t  s_logged;
     uint32_t now;
 
     np_timesync_check_enabled();
@@ -769,41 +779,41 @@ static int np_timesync_throttle(uint32_t wire)
      * the ceiling; do not stack timesync shaves on top). */
     if (psx_netplay_rb_fmv_media_active()) {
         g_ts_debt_ms = 0u;
-        s_stall_until = 0u;
-        s_logged = 0;
+        g_ts_stall_until = 0u;
+        g_ts_stall_logged = 0;
         return 0;
     }
     now = sched_mono_ms();
-    if (wire != s_last_wire) {
-        if (s_last_wire != 0u && wire == s_last_wire + 1u) {
-            uint32_t dt = now - s_last_wire_ms;
+    if (wire != g_ts_last_wire) {
+        if (g_ts_last_wire != 0u && wire == g_ts_last_wire + 1u) {
+            uint32_t dt = now - g_ts_last_wire_ms;
             if (dt >= 1u && dt <= 250u)
                 g_ts_tick_ema_ms = g_ts_tick_ema_ms
                                        ? (7u * g_ts_tick_ema_ms + dt) / 8u
                                        : dt;
         }
-        s_last_wire = wire;
-        s_last_wire_ms = now;
+        g_ts_last_wire = wire;
+        g_ts_last_wire_ms = now;
         if (g_ts_debt_ms > 0u) {
             uint32_t slice = g_ts_debt_ms > 6u ? 6u : g_ts_debt_ms;
             g_ts_debt_ms -= slice;
             if (g_ts_debt_ms == 0u)
-                s_logged = 0;
-            s_stall_until = now + slice;
-            if (!s_logged) {
+                g_ts_stall_logged = 0;
+            g_ts_stall_until = now + slice;
+            if (!g_ts_stall_logged) {
                 fprintf(stderr,
                         "psxrecomp: rb timesync pacing (debt=%u ms tick=%u ms — "
                         "shaving <=6 ms/tick)\n",
                         (unsigned)(g_ts_debt_ms + slice),
                         (unsigned)g_ts_tick_ema_ms);
                 fflush(stderr);
-                s_logged = 1;
+                g_ts_stall_logged = 1;
             }
         }
     }
-    if (s_stall_until != 0u && (int32_t)(now - s_stall_until) < 0)
+    if (g_ts_stall_until != 0u && (int32_t)(now - g_ts_stall_until) < 0)
         return 1;
-    s_stall_until = 0u;
+    g_ts_stall_until = 0u;
     return 0;
 }
 
@@ -1556,6 +1566,25 @@ int np_sched_pre_admit(uint32_t sim, uint32_t wire, const RNetSessionStats *st)
      * the gap1 Case A/B split has a real cadence to judge freshness by. */
     np_tip_track_advance(st->highest_remote_wire);
 
+    /* Rematch dig0 sync: hold only the first step past dig0 (sim==1) until
+     * both peers published tick-0 digests. Gate latches open; do not re-arm
+     * for sim<48 after HC drops dig0 (soak: hung at sim=25 post-replay). */
+    if (sim == 1u && !psx_netplay_rb_active() &&
+        psx_netplay_rb_boot_dig0_gate()) {
+        if (!g_boot_dig0_logged) {
+            g_boot_dig0_logged = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb boot dig0 wait sim=%u wire=%u "
+                    "remote_tip=%u (hold until peer dig0)\n",
+                    (unsigned)sim, (unsigned)wire,
+                    (unsigned)st->highest_remote_wire);
+            fflush(stderr);
+        }
+        np_sched_set_admit_stall("boot_dig0_wait");
+        np_cross_os_maybe_log(sched_mono_ms(), sim, st);
+        return 1;
+    }
+
     /* Phase alignment: the ahead peer paces down a few ms/tick so remote
      * rows arrive before the seal (kills invent-mispredict episodes at the
      * source). Never engages during episodes/lockstep — only live admits. */
@@ -1687,6 +1716,32 @@ int np_sched_on_remote_miss(int slot, uint32_t sim, uint32_t wire,
         if (reason_out)
             *reason_out = why;
         return 1;
+    }
+    /* Rematch / asymmetric dig0: faster peer finishes tick-0 CRC and reaches
+     * the first missing wire while the slower peer is still in present dig
+     * (no tip publishes). Inventing here races into pcap_freeze then 1.5s
+     * silence-disconnect. Wait until peer tip advances past the delay-prefix
+     * production tip (sim0 tip == D) before inventing. */
+    {
+        int d = sched_delay();
+        if (d < 2)
+            d = 2;
+        if (st->highest_remote_wire <= (rnet_u32)d) {
+            if (!g_boot_tip_logged) {
+                g_boot_tip_logged = 1;
+                fprintf(stderr,
+                        "psxrecomp: rb boot tip wait sim=%u wire=%u "
+                        "remote_tip=%u D=%d (no invent until peer past "
+                        "delay-prefix — rematch dig asymmetry)\n",
+                        (unsigned)sim, (unsigned)wire,
+                        (unsigned)st->highest_remote_wire, d);
+                fflush(stderr);
+            }
+            np_sched_set_admit_stall("boot_tip_wait");
+            if (reason_out)
+                *reason_out = "boot_tip_wait";
+            return 1;
+        }
     }
     /* Stall when invent would run more than P ahead of remote tip (freeze +
      * refill; adaptive delay may bump D on sustained freeze enters — §22). */
@@ -1911,6 +1966,94 @@ void np_sched_post_admit(int any_invent)
         rnet_session_get_stats(s, &st);
         np_cross_os_maybe_log(now, st.sim_tick, &st);
     }
+}
+
+void np_sched_reset_session(void)
+{
+    /* Invent / cushion / tip cadence from the prior match must not gate the
+     * next soft-return rematch (lockstep armed → no frames). */
+    g_boot_tip_logged = 0;
+    g_boot_dig0_logged = 0;
+    g_cushion_rebuild = 0;
+    g_cushion_rebuild_since_ms = 0u;
+    g_absurd_catchup_until_ms = 0u;
+
+    g_ad_ticks = 0u;
+    g_ad_lead_sum = 0;
+    g_ad_miss = 0u;
+    g_ad_late_n = 0u;
+    g_ad_late_sum_ms = 0u;
+    g_ad_late_max_ms = 0u;
+    g_ad_miss_pending = 0;
+    g_ad_miss_t0_ms = 0u;
+    g_transit_x16 = 0u;
+    g_transit_have = 0;
+
+    g_gap1_shrink_until_ms = 0u;
+    g_gap1_expire_invent_streak = 0u;
+
+    g_tip_last_highest = 0u;
+    g_tip_last_advance_ms = 0u;
+    g_tip_arrival_ema_ms = 0u;
+    g_tip_have_advance = 0;
+
+    /* Keep g_ts_enabled / g_adapt_delay_enabled latched (−1 = unread). */
+    g_ts_tick_ema_ms = 0u;
+    g_ts_debt_ms = 0u;
+    g_ts_pegged_streak = 0u;
+    g_ts_off_until_ms = 0u;
+    g_ts_mispredict_count = 0u;
+    g_ts_mispredict_age_sum = 0ull;
+    g_ts_mispredict_age_max = 0u;
+    g_ts_note_late_applied = 0u;
+    g_ts_note_late_suppressed_rb = 0u;
+    g_ts_note_late_suppressed_off = 0u;
+    g_ts_debt_added_ms = 0u;
+    g_ts_lead_sum = 0;
+    g_ts_lead_n = 0u;
+    g_ts_lead_min = 0;
+    g_ts_lead_max = 0;
+    g_ts_lead_have = 0;
+    g_ts_last_wire = 0u;
+    g_ts_last_wire_ms = 0u;
+    g_ts_stall_until = 0u;
+    g_ts_stall_logged = 0;
+
+    g_admit_invent_gap1 = 0u;
+    g_admit_invent_gap2 = 0u;
+    g_admit_invent_gap3p = 0u;
+    g_admit_gap1_grace = 0u;
+    g_admit_pcap_stalls = 0u;
+    g_admit_pcap_enters = 0u;
+    g_pcap_frozen = 0;
+    g_pcap_freeze_enters_window = 0u;
+    g_pcap_window_t0_ms = 0u;
+    g_pcap_last_enter_ms = 0u;
+    g_adapt_last_bump_ms = 0u;
+    g_admit_stats_last_log_ms = 0u;
+    g_admit_invent_runway_empty = 0u;
+    g_admit_invent_tip_stale = 0u;
+    g_admit_invent_gap1_legacy = 0u;
+    g_admit_cushion_wait = 0u;
+    g_admit_gap1_case_a = 0u;
+    g_admit_gap1_case_b = 0u;
+
+    g_sc_window_t0_ms = 0u;
+    g_sc_ep0 = 0u;
+    g_sc_rt0 = 0ull;
+    g_sc_gap1_0 = 0u;
+    g_sc_tip_stale0 = 0u;
+    g_sc_lead_sum = 0;
+    g_sc_lead_n = 0u;
+    g_sc_lead_min = 0;
+    g_sc_lead_max = 0;
+    g_sc_slack_sum = 0ull;
+    g_sc_slack_n = 0u;
+    g_sc_slack_min = 0u;
+    g_sc_slack_max = 0u;
+    g_sc_miss_at_need = 0u;
+
+    g_admit_stall_tag[0] = '\0';
 }
 
 #endif /* PSX_HAS_RECOMP_NET */

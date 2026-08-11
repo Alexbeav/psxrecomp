@@ -245,8 +245,10 @@ const PsxLobbyBiosOffer *psx_lobby_bios_offer(void);
 
 /*
  * Settle session BIOS from seated peers' bios_offer (+ local offer):
- *   OpenBIOS if anyone prefers OpenBIOS or anyone cannot run SCPH-1001
- *   (missing offer ⇒ cannot); else SCPH-1001 when everyone can.
+ *   OpenBIOS if anyone cannot run SCPH-1001 (missing offer ⇒ cannot);
+ *   else SCPH-1001 when the host prefers retail and every peer can;
+ *   else OpenBIOS if anyone prefers OpenBIOS; else SCPH-1001.
+ * Host preference wins over guest OpenBIOS picks when all can SCPH.
  * Writes "openbios" or "scph1001" into out. Returns 0 on success.
  */
 int  psx_lobby_settle_session_bios(char *out, size_t out_cap);

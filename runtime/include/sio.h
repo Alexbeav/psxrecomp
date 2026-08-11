@@ -122,6 +122,13 @@ void sio_request_pad_type(int slot, int analog);
 void sio_connect_pad(int slot);
 void sio_set_pad_connected(int slot, int connected);
 
+/* Netplay / rematch: force a peer-identical pad topology + idle bus.
+ * Immediate digital (not deferred type_req), connected seats 0..slot_count-1,
+ * pad FSM IDLE, cleared response buffer. Call at session start and before
+ * dig0 snap so baseline_ext/sio pads cannot fork on local DualShock vs
+ * keyboard seeding. */
+void sio_netplay_canonicalize_session_pads(int slot_count);
+
 /* Declare whether the pad on a logical slot is a config-capable DualShock (1)
  * or a plain digital controller (0). A real digital controller (SCPH-1080,
  * poll id 0x41) does NOT answer the config-mode commands (0x43/0x44/0x45/
