@@ -278,20 +278,61 @@ if(BUILD_TESTING)
     add_test(NAME gpu_vk_upload_alignment_test
              COMMAND gpu_vk_upload_alignment_test)
 
-    add_executable(netplay_hash_confirm_test
-        tests/test_netplay_hash_confirm.c
-        src/netplay_hash_confirm.c)
-    target_include_directories(netplay_hash_confirm_test PRIVATE include)
-    add_test(NAME netplay_hash_confirm_test COMMAND netplay_hash_confirm_test)
+    # Portable rollback helpers (retcomm-rbengine) — required for MotK netplay
+    # unit tests that use the netplay_* compatibility shims.
+    set(_RBE_ROOT "${PSXRECOMP_ROOT}/lib/retcomm-rbengine")
+    set(_RNET_ROOT "${PSXRECOMP_ROOT}/lib/recomp-net")
+    if(EXISTS "${_RBE_ROOT}/CMakeLists.txt" AND EXISTS "${_RNET_ROOT}/CMakeLists.txt")
+        if(NOT TARGET recomp_net)
+            set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+            set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(RNET_ENABLE_ICE OFF CACHE BOOL "" FORCE)
+            add_subdirectory("${_RNET_ROOT}" "${CMAKE_BINARY_DIR}/recomp-net-tests")
+        endif()
+        if(NOT TARGET retcomm_rbengine)
+            set(RBE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(RECOMP_NET_ROOT "${_RNET_ROOT}" CACHE PATH "" FORCE)
+            add_subdirectory("${_RBE_ROOT}" "${CMAKE_BINARY_DIR}/retcomm-rbengine-tests")
+        endif()
+        set(PSXRECOMP_TEST_HAS_RBENGINE TRUE)
+    else()
+        set(PSXRECOMP_TEST_HAS_RBENGINE FALSE)
+        message(STATUS
+            "netplay_*_tests: lib/retcomm-rbengine or lib/recomp-net absent - skipped")
+    endif()
 
-    # Single TU: the test #includes src/netplay_snap_ring.c and stubs
-    # boot_state, so the .c must NOT also be listed here (that was PR #134's
-    # duplicate-symbol bug, in its documented command).
-    add_executable(netplay_snap_ring_test tests/test_netplay_snap_ring.c)
-    target_include_directories(netplay_snap_ring_test PRIVATE include)
-    target_compile_definitions(netplay_snap_ring_test PRIVATE
-        NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE)
-    add_test(NAME netplay_snap_ring_test COMMAND netplay_snap_ring_test)
+    if(PSXRECOMP_TEST_HAS_RBENGINE)
+        add_executable(netplay_hash_confirm_test
+            tests/test_netplay_hash_confirm.c)
+        target_include_directories(netplay_hash_confirm_test PRIVATE include)
+        target_link_libraries(netplay_hash_confirm_test PRIVATE retcomm_rbengine)
+        add_test(NAME netplay_hash_confirm_test COMMAND netplay_hash_confirm_test)
+
+        # save/load glue #included from the test; ring ops come from rbengine.
+        add_executable(netplay_snap_ring_test tests/test_netplay_snap_ring.c)
+        target_include_directories(netplay_snap_ring_test PRIVATE include)
+        target_compile_definitions(netplay_snap_ring_test PRIVATE
+            NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE
+            PSX_HAS_RECOMP_NET=1)
+        target_link_libraries(netplay_snap_ring_test PRIVATE retcomm_rbengine)
+        add_test(NAME netplay_snap_ring_test COMMAND netplay_snap_ring_test)
+
+        add_executable(rb_post_tip_filter_test tests/test_rb_post_tip_filter.c)
+        target_include_directories(rb_post_tip_filter_test PRIVATE include)
+        target_link_libraries(rb_post_tip_filter_test PRIVATE retcomm_rbengine)
+        add_test(NAME rb_post_tip_filter_test COMMAND rb_post_tip_filter_test)
+
+        add_executable(netplay_input_hist_test
+            tests/test_netplay_input_hist.c
+            src/netplay_input_hist.c)
+        target_include_directories(netplay_input_hist_test PRIVATE
+            include
+            ${_RNET_ROOT}/include)
+        target_compile_definitions(netplay_input_hist_test PRIVATE
+            PSX_HAS_RECOMP_NET=1)
+        target_link_libraries(netplay_input_hist_test PRIVATE retcomm_rbengine)
+        add_test(NAME netplay_input_hist_test COMMAND netplay_input_hist_test)
+    endif()
 
     add_executable(overlay_store_cycle_barrier_test
         tests/test_overlay_store_cycle_barrier.c)
@@ -305,10 +346,6 @@ if(BUILD_TESTING)
     target_include_directories(psx_cycle_event_boundaries_test PRIVATE include)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
-
-    add_executable(rb_post_tip_filter_test tests/test_rb_post_tip_filter.c)
-    target_include_directories(rb_post_tip_filter_test PRIVATE include)
-    add_test(NAME rb_post_tip_filter_test COMMAND rb_post_tip_filter_test)
 
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)
@@ -360,25 +397,6 @@ if(BUILD_TESTING)
         else()
             message(STATUS "overlay_posix_test: bash not found - skipped")
         endif()
-    endif()
-
-    # recomp-net is an optional submodule; the netplay input-history contract
-    # cannot be compiled without it. Conditional, not skipped silently: the
-    # registration guard is told about it via the same EXISTS check.
-    if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/include/recomp_net/rollback.h")
-        add_executable(netplay_input_hist_test
-            tests/test_netplay_input_hist.c
-            src/netplay_input_hist.c
-            ${PSXRECOMP_ROOT}/lib/recomp-net/src/input/rnet_input_contract.c)
-        target_include_directories(netplay_input_hist_test PRIVATE
-            include
-            ${PSXRECOMP_ROOT}/lib/recomp-net/include)
-        target_compile_definitions(netplay_input_hist_test PRIVATE
-            PSX_HAS_RECOMP_NET=1)
-        add_test(NAME netplay_input_hist_test COMMAND netplay_input_hist_test)
-    else()
-        message(STATUS
-            "netplay_input_hist_test: lib/recomp-net submodule absent - skipped")
     endif()
 endif()
 

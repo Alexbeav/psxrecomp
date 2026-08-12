@@ -259,7 +259,6 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_snap_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_state_digest.c
-    ${PSXRECOMP_ROOT}/runtime/src/netplay_hash_confirm.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_input_hist.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_rb.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_sched.c
@@ -374,6 +373,43 @@ else()
     else()
         message(STATUS "psxrecomp: PSX_NETPLAY=OFF — netplay TUs compile as stubs "
                        "(no recomp-net)")
+    endif()
+endif()
+
+# Portable rollback host policy (sched/hist/hash_confirm/snap). Sits next to
+# recomp-net; MotK keeps thin PSX glue (pad↔frame, boot_state, FMV/dig0 gates).
+set(RECOMP_RBENGINE_ROOT "" CACHE PATH "Path to retcomm-rbengine; empty = auto-discover")
+if(PSXRECOMP_HAS_RECOMP_NET AND NOT RECOMP_RBENGINE_ROOT)
+    foreach(_cand
+            "${PSXRECOMP_ROOT}/lib/retcomm-rbengine"
+            "${CMAKE_SOURCE_DIR}/../retcomm-rbengine"
+            "${PSXRECOMP_ROOT}/../retcomm-rbengine")
+        get_filename_component(_abs "${_cand}" ABSOLUTE)
+        if(EXISTS "${_abs}/CMakeLists.txt")
+            set(RECOMP_RBENGINE_ROOT "${_abs}" CACHE PATH
+                "Path to retcomm-rbengine; empty = auto-discover" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+if(PSXRECOMP_HAS_RECOMP_NET AND RECOMP_RBENGINE_ROOT
+   AND EXISTS "${RECOMP_RBENGINE_ROOT}/CMakeLists.txt")
+    if(NOT TARGET retcomm_rbengine)
+        set(RBE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        # recomp_net already added above; rbengine skips nested add_subdirectory.
+        set(RECOMP_NET_ROOT "${RECOMP_NET_ROOT}" CACHE PATH "" FORCE)
+        add_subdirectory("${RECOMP_RBENGINE_ROOT}"
+                         "${CMAKE_BINARY_DIR}/retcomm-rbengine")
+    endif()
+    set(PSXRECOMP_HAS_RBENGINE TRUE)
+    message(STATUS "psxrecomp: retcomm-rbengine enabled (${RECOMP_RBENGINE_ROOT})")
+else()
+    set(PSXRECOMP_HAS_RBENGINE FALSE)
+    if(PSXRECOMP_HAS_RECOMP_NET)
+        message(FATAL_ERROR
+            "psxrecomp: PSX_NETPLAY needs retcomm-rbengine.\n"
+            "  git submodule update --init lib/retcomm-rbengine\n"
+            "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine")
     endif()
 endif()
 
@@ -1076,6 +1112,9 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRECOMP_HAS_RECOMP_NET)
         target_compile_definitions(${target} PRIVATE PSX_HAS_RECOMP_NET=1)
         target_link_libraries(${target} PRIVATE recomp_net)
+        if(PSXRECOMP_HAS_RBENGINE)
+            target_link_libraries(${target} PRIVATE retcomm_rbengine)
+        endif()
     endif()
     if(PSXRECOMP_HAS_LOBBY_CLIENT)
         target_compile_definitions(${target} PRIVATE PSX_HAS_LOBBY_CLIENT=1)

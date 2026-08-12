@@ -630,6 +630,9 @@ fi
 if [ "$ENABLE_NETPLAY" -eq 1 ] && [ ! -f psxrecomp/lib/recomp-net/CMakeLists.txt ]; then
     echo "warning: netplay enabled but psxrecomp/lib/recomp-net missing after recursive update." >&2
 fi
+if [ "$ENABLE_NETPLAY" -eq 1 ] && [ ! -f psxrecomp/lib/retcomm-rbengine/CMakeLists.txt ]; then
+    echo "warning: netplay enabled but psxrecomp/lib/retcomm-rbengine missing after recursive update." >&2
+fi
 
 echo "== Packager stub =="
 fill_template "$TEMPLATE_DIR/package_setup_release.sh.in" \

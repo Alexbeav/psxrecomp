@@ -46,6 +46,7 @@ path_for() {
     psxrecomp) echo psxrecomp ;;
     recomp-ui) echo recomp-ui ;;
     recomp-net) echo psxrecomp/lib/recomp-net ;;
+    retcomm-rbengine) echo psxrecomp/lib/retcomm-rbengine ;;
     *) echo "" ;;
   esac
 }
