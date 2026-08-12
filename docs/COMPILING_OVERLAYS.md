@@ -198,6 +198,22 @@ dev config lands under a different tag and the shipped runtime will not read
 it. `--project-root` is what lets you do that without also having to move the
 BIOS profile.
 
+**Is the cache actually being USED?** Shards on disk prove nothing — the loader
+can reject them. `tools/stall_report.py` answers that, plus interpreter
+attribution, in one command against a running title:
+
+```sh
+py -3 tools/stall_report.py --port <debug port> snap            # since boot
+py -3 tools/stall_report.py --port <debug port> run --secs 60   # windowed
+```
+
+It is a passive ring consumer: no arming, no pausing, no stepping. It reads
+cumulative counters (two snapshots → a window by subtraction) and the always-on
+PC-sample ring, so you can attach long after the interesting thing happened.
+`dispatch_native` vs `dispatch_interp_fallback` is the verdict; the
+instructions-per-dispatcher-round-trip ratio tells you whether interpreted code
+is chaining locally or thrashing per-block.
+
 **Verify, don't assume.** Run the preflight and read the result line:
 
 ```sh
