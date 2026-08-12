@@ -54,6 +54,13 @@ python3 tools/new_project_layout/migrate_project.py git ensure-submodules \
   --psxrecomp-branch master --recomp-ui-branch master
 python3 tools/new_project_layout/migrate_project.py git set-branch \
   --root /path/to/ApeEscapeRecomp --submodule psxrecomp --branch master
+python3 tools/new_project_layout/migrate_project.py git ensure-nested \
+  --root /path/to/ApeEscapeRecomp \
+  --recomp-net-branch main --rbengine-branch main
+python3 tools/new_project_layout/migrate_project.py git update-nested \
+  --root /path/to/ApeEscapeRecomp --remote
+python3 tools/new_project_layout/migrate_project.py git commit-nested \
+  --root /path/to/ApeEscapeRecomp -m "chore: bump nested modules"
 python3 tools/new_project_layout/migrate_project.py git update-submodules \
   --root /path/to/ApeEscapeRecomp --remote
 python3 tools/new_project_layout/migrate_project.py git commit \
@@ -65,6 +72,9 @@ python3 tools/new_project_layout/migrate_project.py git release \
 ```
 
 Git ops shell out to `git` / `gh` (no force-push, amend, or hook skips). Submodule **branch** in `.gitmodules` is for `update --remote`; CI builds the committed **gitlink SHAs**.
+
+For **bulk ops across many titles / platforms**, use the sibling tool
+`retcomm-studio` (`~/…/GitHub/retcomm-studio` — catalog-backed CLI + plugin API).
 
 ### Ops (subset)
 

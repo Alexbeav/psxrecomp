@@ -16,6 +16,7 @@ extern "C" {
 typedef enum HostKeymapAction {
     HOST_KEYMAP_VOLUME_UP = 0,
     HOST_KEYMAP_VOLUME_DOWN,
+    HOST_KEYMAP_REWIND,           /* default F8 — steals savestate slot 7 unless rebound */
     HOST_KEYMAP_ACTION_COUNT
 } HostKeymapAction;
 

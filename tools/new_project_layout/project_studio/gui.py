@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -347,6 +348,7 @@ class ProjectStudioApp:
         self.root.minsize(900, 640)
 
         self.root_var = tk.StringVar(value=str(initial_root) if initial_root else "")
+        self.repo_label_var = tk.StringVar(value="(add a repo…)")
         self.disc_var = tk.StringVar()
         self.players_var = tk.StringVar(value="2")
         self.zip_var = tk.StringVar()
@@ -360,20 +362,45 @@ class ProjectStudioApp:
         self.git_branch_var = tk.StringVar()
         self.git_psx_branch_var = tk.StringVar(value="master")
         self.git_ui_branch_var = tk.StringVar(value="master")
+        self.git_net_branch_var = tk.StringVar(value="main")
+        self.git_rb_branch_var = tk.StringVar(value="main")
         self.git_msg_var = tk.StringVar()
+        self.git_sub_msg_var = tk.StringVar(value="chore: update submodule")
+        self.git_nested_msg_var = tk.StringVar(
+            value="chore: bump recomp-net + retcomm-rbengine"
+        )
+        self.git_libs_msg_var = tk.StringVar(value="chore: update nested lib")
         self.git_remote_update_var = tk.BooleanVar(value=False)
         self.release_version_var = tk.StringVar()
         self.release_bump_var = tk.StringVar(value="patch")
         self.release_publish_var = tk.BooleanVar(value=True)
         self.release_reuse_var = tk.BooleanVar(value=True)
 
+        self.build_dir_var = tk.StringVar(value="build-release")
+        self.build_type_var = tk.StringVar(value="Release")
+        self.build_target_var = tk.StringVar(value="psx-runtime")
+        self.build_generator_var = tk.StringVar(value="")
+        self.build_jobs_var = tk.StringVar(value="")
+        self.build_extra_cmake_var = tk.StringVar()
+        self.build_exe_var = tk.StringVar()
+        self.build_launch_args_var = tk.StringVar()
+        self.build_status_var = tk.StringVar(value="Open a game repo to build.")
+        self._build_busy = False
+        self._build_env_default = (
+            "# KEY=VALUE pairs (space or newline separated)\n"
+            "# Example:\n"
+            "# RBE_CROSS_OS_PACING_DIAG=1 PSX_RB_ZERO_DELAY=0\n"
+        )
+
         self._report = None
         self._plan = None
         self._step_vars: dict[str, tk.BooleanVar] = {}
         self._git_status = None
+        self._repo_index = None
 
         self._build()
-        if initial_root:
+        self._repo_index_load(initial_root=initial_root)
+        if self.root_var.get().strip():
             self.refresh_audit()
 
     def mainloop(self) -> None:
@@ -400,12 +427,21 @@ class ProjectStudioApp:
         path_row = ctk.CTkFrame(root, fg_color="transparent")
         path_row.pack(fill="x", padx=16, pady=4)
         ctk.CTkLabel(path_row, text="Game repo", width=88, anchor="w").pack(side="left")
-        ctk.CTkEntry(path_row, textvariable=self.root_var, height=34).pack(
-            side="left", fill="x", expand=True, padx=(0, 8)
+        self.repo_menu = ctk.CTkOptionMenu(
+            path_row,
+            variable=self.repo_label_var,
+            values=["(add a repo…)"],
+            width=320,
+            height=34,
+            command=self._on_repo_selected,
         )
+        self.repo_menu.pack(side="left", padx=(0, 8))
         ctk.CTkButton(
-            path_row, text="Browse…", width=90, height=34, command=self._browse_root
+            path_row, text="Add…", width=70, height=34, command=self._repo_add
         ).pack(side="left")
+        ctk.CTkButton(
+            path_row, text="Remove", width=80, height=34, command=self._repo_remove
+        ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(
             path_row,
             text="Audit",
@@ -415,14 +451,25 @@ class ProjectStudioApp:
             command=self.refresh_audit,
         ).pack(side="left", padx=(8, 0))
 
+        self.repo_path_label = ctk.CTkLabel(
+            root,
+            textvariable=self.root_var,
+            text_color=("gray40", "gray65"),
+            font=ctk.CTkFont(size=12),
+            anchor="w",
+        )
+        self.repo_path_label.pack(fill="x", padx=16 + 88, pady=(0, 2))
+
         tabs = ctk.CTkTabview(root, corner_radius=10)
         tabs.pack(fill="both", expand=True, padx=16, pady=8)
         tab_migrate = tabs.add("Migrate")
         tab_git = tabs.add("Git / GitHub")
+        tab_build = tabs.add("Build")
         self._tabs = tabs
 
         self._build_migrate_tab(tab_migrate)
         self._build_git_tab(tab_git)
+        self._build_build_tab(tab_build)
 
         log_wrap = ctk.CTkFrame(root, corner_radius=10)
         log_wrap.pack(fill="both", expand=False, padx=16, pady=(0, 16))
@@ -454,6 +501,9 @@ class ProjectStudioApp:
         ctk.CTkButton(
             disc_row, text="Browse…", width=90, height=32, command=self._browse_disc
         ).pack(side="left")
+        ctk.CTkButton(
+            disc_row, text="Clear", width=70, height=32, command=self._clear_disc
+        ).pack(side="left", padx=(6, 0))
 
         row2 = ctk.CTkFrame(opts, fg_color="transparent")
         row2.pack(fill="x", padx=12, pady=4)
@@ -554,6 +604,13 @@ class ProjectStudioApp:
         ctk.CTkButton(
             head, text="Refresh", width=90, height=30, command=self.refresh_git
         ).pack(side="right")
+        ctk.CTkButton(
+            head,
+            text="Fetch branches",
+            width=120,
+            height=30,
+            command=self._git_fetch_branches,
+        ).pack(side="right", padx=(0, 8))
         ctk.CTkSwitch(
             head, text="Dry-run", variable=self.dry_run_var, width=100
         ).pack(side="right", padx=12)
@@ -573,9 +630,14 @@ class ProjectStudioApp:
         ctk.CTkLabel(branch_row, text="Game branch", width=100, anchor="w").pack(
             side="left"
         )
-        ctk.CTkEntry(branch_row, textvariable=self.git_branch_var, width=160, height=30).pack(
-            side="left", padx=(0, 8)
+        self.git_branch_menu = ctk.CTkOptionMenu(
+            branch_row,
+            variable=self.git_branch_var,
+            values=["(refresh)"],
+            width=180,
+            height=30,
         )
+        self.git_branch_menu.pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             branch_row,
             text="Checkout",
@@ -590,6 +652,22 @@ class ProjectStudioApp:
             branch_row, text="Push", width=70, height=30, command=self._git_push
         ).pack(side="left")
 
+        game_commit = ctk.CTkFrame(top, fg_color="transparent")
+        game_commit.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkEntry(
+            game_commit,
+            textvariable=self.git_msg_var,
+            placeholder_text="Commit message for game repo",
+            height=30,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            game_commit,
+            text="Commit",
+            width=90,
+            height=30,
+            command=self._git_commit,
+        ).pack(side="left")
+
         sub_wrap = ctk.CTkFrame(tab, corner_radius=10)
         sub_wrap.pack(fill="both", expand=True, padx=4, pady=4)
         ctk.CTkLabel(
@@ -600,14 +678,24 @@ class ProjectStudioApp:
 
         cfg = ctk.CTkFrame(sub_wrap, fg_color="transparent")
         cfg.pack(fill="x", padx=12, pady=4)
-        ctk.CTkLabel(cfg, text="psxrecomp branch", width=130, anchor="w").pack(side="left")
-        ctk.CTkEntry(cfg, textvariable=self.git_psx_branch_var, width=120, height=28).pack(
-            side="left", padx=(0, 12)
+        ctk.CTkLabel(cfg, text="psxrecomp", width=90, anchor="w").pack(side="left")
+        self.git_psx_branch_menu = ctk.CTkOptionMenu(
+            cfg,
+            variable=self.git_psx_branch_var,
+            values=["master"],
+            width=150,
+            height=28,
         )
-        ctk.CTkLabel(cfg, text="recomp-ui branch", width=130, anchor="w").pack(side="left")
-        ctk.CTkEntry(cfg, textvariable=self.git_ui_branch_var, width=120, height=28).pack(
-            side="left", padx=(0, 12)
+        self.git_psx_branch_menu.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(cfg, text="recomp-ui", width=80, anchor="w").pack(side="left")
+        self.git_ui_branch_menu = ctk.CTkOptionMenu(
+            cfg,
+            variable=self.git_ui_branch_var,
+            values=["master"],
+            width=150,
+            height=28,
         )
+        self.git_ui_branch_menu.pack(side="left", padx=(0, 12))
         ctk.CTkButton(
             cfg,
             text="Ensure both",
@@ -638,28 +726,141 @@ class ProjectStudioApp:
             height=30,
             command=self._git_update_submodules,
         ).pack(side="left", padx=12)
+        ctk.CTkButton(
+            actions, text="Pull", width=70, height=30, command=self._git_pull_modules
+        ).pack(side="left")
+        ctk.CTkButton(
+            actions, text="Push", width=70, height=30, command=self._git_push_modules
+        ).pack(side="left", padx=6)
 
-        self.git_sub_list = ctk.CTkScrollableFrame(sub_wrap, fg_color="transparent", height=140)
-        self.git_sub_list.pack(fill="both", expand=True, padx=8, pady=(0, 10))
-
-        commit_wrap = ctk.CTkFrame(tab, corner_radius=10)
-        commit_wrap.pack(fill="x", padx=4, pady=4)
-        ctk.CTkLabel(
-            commit_wrap,
-            text="Commit  ·  no force-push / amend",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        msg_row = ctk.CTkFrame(commit_wrap, fg_color="transparent")
-        msg_row.pack(fill="x", padx=12, pady=(0, 10))
+        sub_commit = ctk.CTkFrame(sub_wrap, fg_color="transparent")
+        sub_commit.pack(fill="x", padx=12, pady=(0, 4))
         ctk.CTkEntry(
-            msg_row,
-            textvariable=self.git_msg_var,
-            placeholder_text="Commit message",
-            height=32,
+            sub_commit,
+            textvariable=self.git_sub_msg_var,
+            placeholder_text="Commit inside psxrecomp + recomp-ui",
+            height=30,
         ).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(
-            msg_row, text="Commit all", width=110, height=32, command=self._git_commit
+            sub_commit,
+            text="Commit modules",
+            width=140,
+            height=30,
+            command=self._git_commit_modules,
         ).pack(side="left")
+
+        self.git_sub_list = ctk.CTkScrollableFrame(sub_wrap, fg_color="transparent", height=100)
+        self.git_sub_list.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+
+        nested_wrap = ctk.CTkFrame(tab, corner_radius=10)
+        nested_wrap.pack(fill="both", expand=True, padx=4, pady=4)
+        ctk.CTkLabel(
+            nested_wrap,
+            text="Nested in psxrecomp  ·  recomp-net + retcomm-rbengine",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        ncfg = ctk.CTkFrame(nested_wrap, fg_color="transparent")
+        ncfg.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(ncfg, text="recomp-net", width=100, anchor="w").pack(side="left")
+        self.git_net_branch_menu = ctk.CTkOptionMenu(
+            ncfg,
+            variable=self.git_net_branch_var,
+            values=["main"],
+            width=150,
+            height=28,
+        )
+        self.git_net_branch_menu.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(ncfg, text="rbengine", width=80, anchor="w").pack(side="left")
+        self.git_rb_branch_menu = ctk.CTkOptionMenu(
+            ncfg,
+            variable=self.git_rb_branch_var,
+            values=["main"],
+            width=150,
+            height=28,
+        )
+        self.git_rb_branch_menu.pack(side="left", padx=(0, 12))
+        ctk.CTkButton(
+            ncfg,
+            text="Ensure nested",
+            width=120,
+            height=28,
+            command=self._git_ensure_nested,
+        ).pack(side="left")
+        ctk.CTkButton(
+            ncfg,
+            text="Save nested branches",
+            width=150,
+            height=28,
+            command=self._git_save_nested_branches,
+        ).pack(side="left", padx=8)
+
+        nact = ctk.CTkFrame(nested_wrap, fg_color="transparent")
+        nact.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkButton(
+            nact,
+            text="Update nested",
+            width=130,
+            height=30,
+            command=self._git_update_nested,
+        ).pack(side="left")
+        ctk.CTkButton(
+            nact, text="Pull libs", width=90, height=30, command=self._git_pull_nested
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            nact, text="Push libs", width=90, height=30, command=self._git_push_nested
+        ).pack(side="left")
+
+        libs_commit = ctk.CTkFrame(nested_wrap, fg_color="transparent")
+        libs_commit.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkEntry(
+            libs_commit,
+            textvariable=self.git_libs_msg_var,
+            placeholder_text="Commit inside recomp-net + rbengine",
+            height=30,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            libs_commit,
+            text="Commit libs",
+            width=120,
+            height=30,
+            command=self._git_commit_nested_libs,
+        ).pack(side="left")
+
+        nact2 = ctk.CTkFrame(nested_wrap, fg_color="transparent")
+        nact2.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkEntry(
+            nact2,
+            textvariable=self.git_nested_msg_var,
+            placeholder_text="psxrecomp commit message (gitlinks)",
+            height=30,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            nact2,
+            text="Commit in psxrecomp",
+            width=150,
+            height=30,
+            command=self._git_commit_nested,
+        ).pack(side="left")
+        ctk.CTkButton(
+            nact2,
+            text="Pull psxrecomp",
+            width=120,
+            height=30,
+            command=self._git_pull_psxrecomp,
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            nact2,
+            text="Push psxrecomp",
+            width=120,
+            height=30,
+            command=self._git_push_psxrecomp,
+        ).pack(side="left")
+
+        self.git_nested_list = ctk.CTkScrollableFrame(
+            nested_wrap, fg_color="transparent", height=90
+        )
+        self.git_nested_list.pack(fill="both", expand=True, padx=8, pady=(0, 10))
 
         rel = ctk.CTkFrame(tab, corner_radius=10)
         rel.pack(fill="x", padx=4, pady=(4, 8))
@@ -702,6 +903,397 @@ class ProjectStudioApp:
             command=self._git_run_release,
         ).pack(anchor="w", padx=12, pady=(4, 12))
 
+    def _build_build_tab(self, tab) -> None:
+        from .buildops import (
+            default_generator,
+            detect_host,
+            find_runtime_exe,
+            resolve_build_dir,
+        )
+
+        ctk = self.ctk
+        host = detect_host()
+        if not self.build_generator_var.get().strip():
+            self.build_generator_var.set(default_generator(host))
+        if not self.build_jobs_var.get().strip():
+            self.build_jobs_var.set(str(host.jobs))
+
+        top = ctk.CTkFrame(tab, corner_radius=10)
+        top.pack(fill="x", padx=4, pady=4)
+        head = ctk.CTkFrame(top, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            head,
+            text=f"Local CMake build  ·  host OS: {host.label} ({host.system})",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            head, text="Refresh exe", width=110, height=30, command=self._build_refresh_exe
+        ).pack(side="right")
+
+        cmake_note = "cmake: OK" if host.cmake else "cmake: MISSING"
+        ninja_note = "ninja: OK" if host.ninja else "ninja: (optional)"
+        ctk.CTkLabel(
+            top,
+            text=f"{cmake_note}  ·  {ninja_note}  ·  default jobs={host.jobs}",
+            text_color=("gray30", "gray70"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkLabel(
+            top,
+            textvariable=self.build_status_var,
+            text_color=("gray30", "gray70"),
+            anchor="w",
+            wraplength=980,
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        cfg = ctk.CTkFrame(tab, corner_radius=10)
+        cfg.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            cfg,
+            text="Configure  ·  cmake -S . -B <dir>",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        row1 = ctk.CTkFrame(cfg, fg_color="transparent")
+        row1.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row1, text="Build dir", width=90, anchor="w").pack(side="left")
+        ctk.CTkEntry(row1, textvariable=self.build_dir_var, width=160, height=30).pack(
+            side="left", padx=(0, 12)
+        )
+        ctk.CTkLabel(row1, text="Type", width=50, anchor="w").pack(side="left")
+        ctk.CTkOptionMenu(
+            row1,
+            values=["Release", "RelWithDebInfo", "Debug", "MinSizeRel"],
+            variable=self.build_type_var,
+            width=140,
+            height=30,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(row1, text="Generator", width=80, anchor="w").pack(side="left")
+        gens: list[str] = []
+        if host.ninja:
+            gens.append("Ninja")
+        if host.label == "windows":
+            gens.extend(["", "Ninja", "Visual Studio 17 2022", "NMake Makefiles"])
+        else:
+            gens.extend(["Ninja", "Unix Makefiles", ""])
+        seen: set[str] = set()
+        gen_values: list[str] = []
+        for g in gens:
+            key = g if g else "(default)"
+            if key in seen:
+                continue
+            seen.add(key)
+            gen_values.append(g if g else "(default)")
+        display_gen = self.build_generator_var.get() or "(default)"
+        if display_gen not in gen_values and display_gen != "(default)":
+            gen_values.insert(0, display_gen)
+        self._build_gen_display = tk.StringVar(
+            value=display_gen if display_gen in gen_values else gen_values[0]
+        )
+        ctk.CTkOptionMenu(
+            row1,
+            values=gen_values or ["(default)"],
+            variable=self._build_gen_display,
+            width=180,
+            height=30,
+        ).pack(side="left")
+
+        row2 = ctk.CTkFrame(cfg, fg_color="transparent")
+        row2.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row2, text="Extra cmake", width=90, anchor="w").pack(side="left")
+        ctk.CTkEntry(
+            row2,
+            textvariable=self.build_extra_cmake_var,
+            placeholder_text="-DMOTK_NATIVE=ON -DPSX_NETPLAY=ON …",
+            height=30,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            row2, text="Configure", width=110, height=30, command=self._build_configure
+        ).pack(side="left")
+
+        build_box = ctk.CTkFrame(tab, corner_radius=10)
+        build_box.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            build_box,
+            text="Build  ·  cmake --build",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        brow = ctk.CTkFrame(build_box, fg_color="transparent")
+        brow.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(brow, text="Target", width=90, anchor="w").pack(side="left")
+        ctk.CTkEntry(brow, textvariable=self.build_target_var, width=140, height=30).pack(
+            side="left", padx=(0, 12)
+        )
+        ctk.CTkLabel(brow, text="Jobs", width=50, anchor="w").pack(side="left")
+        ctk.CTkEntry(brow, textvariable=self.build_jobs_var, width=70, height=30).pack(
+            side="left", padx=(0, 12)
+        )
+        ctk.CTkButton(
+            brow, text="Build", width=100, height=30, command=self._build_run_build
+        ).pack(side="left")
+        ctk.CTkButton(
+            brow,
+            text="Configure + Build",
+            width=150,
+            height=30,
+            command=self._build_configure_and_build,
+        ).pack(side="left", padx=8)
+
+        launch_box = ctk.CTkFrame(tab, corner_radius=10)
+        launch_box.pack(fill="both", expand=True, padx=4, pady=4)
+        ctk.CTkLabel(
+            launch_box,
+            text="Launch  ·  local product binary + env",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        erow = ctk.CTkFrame(launch_box, fg_color="transparent")
+        erow.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(erow, text="Executable", width=90, anchor="w").pack(side="left")
+        ctk.CTkEntry(
+            erow,
+            textvariable=self.build_exe_var,
+            placeholder_text="(auto-detect after build)",
+            height=30,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        arow = ctk.CTkFrame(launch_box, fg_color="transparent")
+        arow.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(arow, text="Args", width=90, anchor="w").pack(side="left")
+        ctk.CTkEntry(
+            arow,
+            textvariable=self.build_launch_args_var,
+            placeholder_text="optional CLI args for the game",
+            height=30,
+        ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            launch_box,
+            text="Environment variables (KEY=VALUE …)",
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(6, 2))
+        self.build_env_box = ctk.CTkTextbox(launch_box, height=100, font=ctk.CTkFont(size=12))
+        self.build_env_box.pack(fill="x", padx=12, pady=(0, 6))
+        self.build_env_box.insert("1.0", self._build_env_default)
+
+        lrow = ctk.CTkFrame(launch_box, fg_color="transparent")
+        lrow.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(
+            lrow,
+            text="Launch",
+            width=110,
+            height=34,
+            fg_color=("#2e7d32", "#1b5e20"),
+            hover_color=("#256628", "#14401a"),
+            command=self._build_launch,
+        ).pack(side="left")
+        ctk.CTkButton(
+            lrow, text="Stop", width=90, height=34, command=self._build_stop
+        ).pack(side="left", padx=8)
+        ctk.CTkSwitch(
+            lrow, text="Dry-run", variable=self.dry_run_var, width=100
+        ).pack(side="left", padx=12)
+
+        try:
+            root_s = self.root_var.get().strip()
+            if root_s:
+                bdir = resolve_build_dir(
+                    Path(root_s), self.build_dir_var.get().strip() or "build-release"
+                )
+                exe = find_runtime_exe(bdir)
+                if exe:
+                    self.build_exe_var.set(str(exe))
+                    self.build_status_var.set(f"Found {exe.name} under {bdir.name}")
+        except Exception:
+            pass
+
+    def _build_generator_value(self) -> str:
+        raw = ""
+        if hasattr(self, "_build_gen_display"):
+            raw = self._build_gen_display.get().strip()
+        else:
+            raw = self.build_generator_var.get().strip()
+        if not raw or raw == "(default)":
+            return ""
+        self.build_generator_var.set(raw)
+        return raw
+
+    def _build_extra_args(self) -> list[str]:
+        import shlex
+
+        raw = self.build_extra_cmake_var.get().strip()
+        if not raw:
+            return []
+        try:
+            return shlex.split(raw, posix=os.name != "nt")
+        except ValueError:
+            return raw.split()
+
+    def _build_jobs(self) -> int | None:
+        raw = self.build_jobs_var.get().strip()
+        if not raw:
+            return None
+        try:
+            n = int(raw)
+            return n if n > 0 else None
+        except ValueError:
+            return None
+
+    def _build_env_text(self) -> str:
+        if hasattr(self, "build_env_box"):
+            return self.build_env_box.get("1.0", "end")
+        return ""
+
+    def _build_run_bg(self, label: str, fn) -> None:
+        if self._build_busy:
+            messagebox.showinfo(
+                "Project Studio",
+                "A build operation is already running.",
+                parent=self.root,
+            )
+            return
+
+        def worker() -> None:
+            self._build_busy = True
+            try:
+                self.root.after(0, lambda: self.build_status_var.set(f"{label}…"))
+                r = fn()
+                self.root.after(0, lambda: self._log_cmd(r))
+                self.root.after(
+                    0,
+                    lambda: self.build_status_var.set(
+                        f"{'OK' if r.ok else 'FAIL'}: {r.message}"
+                    ),
+                )
+                if r.ok:
+                    self.root.after(0, self._build_refresh_exe)
+            finally:
+                self._build_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _build_configure(self) -> None:
+        from .buildops import configure
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            return configure(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                build_type=self.build_type_var.get().strip() or "Release",
+                generator=self._build_generator_value(),
+                extra_args=self._build_extra_args(),
+                dry_run=self._git_dry(),
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Configure", go)
+
+    def _build_run_build(self) -> None:
+        from .buildops import build
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            return build(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                target=self.build_target_var.get().strip() or "psx-runtime",
+                jobs=self._build_jobs(),
+                dry_run=self._git_dry(),
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Build", go)
+
+    def _build_configure_and_build(self) -> None:
+        from .buildops import build, configure
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            r = configure(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                build_type=self.build_type_var.get().strip() or "Release",
+                generator=self._build_generator_value(),
+                extra_args=self._build_extra_args(),
+                dry_run=self._git_dry(),
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+            if not r.ok:
+                return r
+            self.root.after(0, lambda: self._log_cmd(r))
+            return build(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                target=self.build_target_var.get().strip() or "psx-runtime",
+                jobs=self._build_jobs(),
+                dry_run=self._git_dry(),
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Configure + Build", go)
+
+    def _build_refresh_exe(self) -> None:
+        from .buildops import find_runtime_exe, launch_status, resolve_build_dir
+
+        root_s = self.root_var.get().strip()
+        if not root_s:
+            return
+        root = Path(root_s).expanduser().resolve()
+        bdir = resolve_build_dir(
+            root, self.build_dir_var.get().strip() or "build-release"
+        )
+        exe = find_runtime_exe(bdir)
+        if exe:
+            self.build_exe_var.set(str(exe))
+            self.build_status_var.set(f"{exe}  ·  {launch_status()}")
+            self._log(f"Runtime exe: {exe}")
+        else:
+            self.build_status_var.set(f"No exe under {bdir}  ·  {launch_status()}")
+
+    def _build_launch(self) -> None:
+        from .buildops import launch
+
+        root = self._game_root()
+        if root is None:
+            return
+        import shlex
+
+        args_raw = self.build_launch_args_var.get().strip()
+        try:
+            extra = shlex.split(args_raw, posix=os.name != "nt") if args_raw else []
+        except ValueError:
+            extra = args_raw.split()
+        exe_s = self.build_exe_var.get().strip()
+        r = launch(
+            root,
+            build_dir=self.build_dir_var.get().strip() or "build-release",
+            exe=Path(exe_s) if exe_s else None,
+            env_text=self._build_env_text(),
+            extra_args=extra,
+            dry_run=self._git_dry(),
+            log=self._log,
+        )
+        self._log_cmd(r)
+        self.build_status_var.set(r.message)
+
+    def _build_stop(self) -> None:
+        from .buildops import stop_launch
+
+        r = stop_launch()
+        self._log_cmd(r)
+        self.build_status_var.set(r.message)
+
     def _game_root(self) -> Path | None:
         root_s = self.root_var.get().strip()
         if not root_s:
@@ -725,17 +1317,173 @@ class ProjectStudioApp:
                 self._log(f"  {line}")
 
     def _browse_root(self) -> None:
+        """Legacy alias — Add uses the native picker and indexes the path."""
+        self._repo_add()
+
+    def _repo_index_load(self, *, initial_root: Path | None = None) -> None:
+        from .repo_index import add_repo, load_index, looks_like_game_repo
+
+        idx = load_index()
+        self._repo_index = idx
+        chosen = ""
+        if initial_root is not None:
+            root = initial_root.expanduser().resolve()
+            if looks_like_game_repo(root) or root.is_dir():
+                add_repo(idx, root)
+                chosen = str(root)
+        if not chosen and idx.last and any(r.path == idx.last for r in idx.repos):
+            chosen = idx.last
+        if not chosen and idx.repos:
+            chosen = idx.repos[0].path
+        self._repo_refresh_menu(select_path=chosen or None)
+
+    def _apply_repo_cue(self, root_path: str | None = None) -> None:
+        """Load indexed / discovered .cue into the Migrate disc field."""
+        from .repo_index import discover_cue
+
+        idx = self._repo_index
+        path = (root_path or self.root_var.get()).strip()
+        if not path:
+            self.disc_var.set("")
+            return
+        cue = ""
+        if idx is not None:
+            entry = idx.find(path)
+            if entry is not None:
+                if entry.cue:
+                    cue = entry.cue
+                else:
+                    cue = discover_cue(Path(path))
+                    if cue:
+                        from .repo_index import set_repo_cue
+
+                        set_repo_cue(idx, path, cue)
+                        self._log(f"Indexed disc .cue: {cue}")
+        if not cue:
+            cue = discover_cue(Path(path))
+        self.disc_var.set(cue if cue and Path(cue).is_file() else (cue or ""))
+        if self.disc_var.get().strip():
+            self.probe_var.set(True)
+
+    def _repo_refresh_menu(self, *, select_path: str | None = None) -> None:
+        from .repo_index import labels_for, path_for_label, set_last
+
+        idx = self._repo_index
+        if idx is None:
+            return
+        labels = labels_for(idx)
+        if not labels:
+            labels = ["(add a repo…)"]
+            self.repo_menu.configure(values=labels)
+            self.repo_label_var.set(labels[0])
+            self.root_var.set("")
+            self.disc_var.set("")
+            return
+        self.repo_menu.configure(values=labels)
+        pick = select_path or self.root_var.get().strip() or idx.last
+        label = labels[0]
+        if pick:
+            try:
+                pick_res = str(Path(pick).expanduser().resolve())
+            except OSError:
+                pick_res = pick
+            for lab, entry in zip(labels, idx.repos):
+                if entry.path == pick or entry.path == pick_res:
+                    label = lab
+                    break
+        self.repo_label_var.set(label)
+        path = path_for_label(idx, label)
+        if path:
+            self.root_var.set(path)
+            set_last(idx, path)
+            self._apply_repo_cue(path)
+
+    def _on_repo_selected(self, label: str) -> None:
+        from .repo_index import path_for_label, set_last
+
+        idx = self._repo_index
+        if idx is None:
+            return
+        if label.startswith("("):
+            return
+        path = path_for_label(idx, label)
+        if not path:
+            return
+        self.root_var.set(path)
+        set_last(idx, path)
+        self._apply_repo_cue(path)
+        self._log(f"Selected repo: {path}")
+        self.refresh_audit()
+
+    def _repo_add(self) -> None:
+        from .repo_index import add_repo, load_index, looks_like_game_repo
+
+        idx = self._repo_index
+        if idx is None:
+            idx = load_index()
+            self._repo_index = idx
         start = self.root_var.get().strip() or None
         path = _pick_directory(
-            title="Select game repository root",
+            title="Add game repository root",
             parent=self.root,
             initialdir=start,
         )
-        if path:
-            self.root_var.set(path)
+        if not path:
+            return
+        root = Path(path).expanduser().resolve()
+        if not root.is_dir():
+            messagebox.showerror(
+                "Project Studio", f"Not a directory:\n{root}", parent=self.root
+            )
+            return
+        if not looks_like_game_repo(root):
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"This folder does not look like a game repo "
+                f"(no game.toml / CMakeLists+psxrecomp):\n{root}\n\n"
+                "Add it anyway?",
+                parent=self.root,
+            ):
+                return
+        entry = add_repo(idx, root)
+        self._log(f"Indexed repo: {entry.name} → {entry.path}")
+        self._repo_refresh_menu(select_path=entry.path)
+        self.refresh_audit()
+
+    def _repo_remove(self) -> None:
+        from .repo_index import path_for_label, remove_repo
+
+        idx = self._repo_index
+        if idx is None or not idx.repos:
+            messagebox.showinfo(
+                "Project Studio", "No indexed repos to remove.", parent=self.root
+            )
+            return
+        label = self.repo_label_var.get().strip()
+        path = path_for_label(idx, label) or self.root_var.get().strip()
+        if not path or label.startswith("("):
+            messagebox.showinfo(
+                "Project Studio", "Select a repo to remove.", parent=self.root
+            )
+            return
+        if not messagebox.askyesno(
+            "Project Studio",
+            f"Remove from index (does not delete files)?\n\n{path}",
+            parent=self.root,
+        ):
+            return
+        remove_repo(idx, path)
+        self._log(f"Removed from index: {path}")
+        next_path = idx.last or (idx.repos[0].path if idx.repos else None)
+        self._repo_refresh_menu(select_path=next_path)
+        if self.root_var.get().strip():
             self.refresh_audit()
+        else:
+            self.status_var.set("Add a game repo to begin.")
 
     def _browse_disc(self) -> None:
+        from .repo_index import set_repo_cue
+
         start = self.disc_var.get().strip() or self.root_var.get().strip() or None
         if start and Path(start).is_file():
             start = str(Path(start).parent)
@@ -746,8 +1494,29 @@ class ProjectStudioApp:
             filetypes=[("Cue sheet", "*.cue"), ("All", "*.*")],
         )
         if path:
-            self.disc_var.set(path)
+            cue = str(Path(path).expanduser().resolve())
+            self.disc_var.set(cue)
             self.probe_var.set(True)
+            root = self.root_var.get().strip()
+            idx = self._repo_index
+            if root and idx is not None:
+                if idx.find(root) is None:
+                    from .repo_index import add_repo
+
+                    add_repo(idx, Path(root), cue=cue)
+                else:
+                    set_repo_cue(idx, root, cue)
+                self._log(f"Indexed disc .cue for repo: {cue}")
+
+    def _clear_disc(self) -> None:
+        from .repo_index import clear_repo_cue
+
+        self.disc_var.set("")
+        self.probe_var.set(False)
+        root = self.root_var.get().strip()
+        idx = self._repo_index
+        if root and idx is not None and clear_repo_cue(idx, root):
+            self._log("Cleared indexed disc .cue")
 
     def _migrate_options(self) -> MigrateOptions:
         return MigrateOptions(
@@ -777,6 +1546,18 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
+        # Persist typed/browsed .cue into the repo index when present.
+        cue = self.disc_var.get().strip()
+        idx = self._repo_index
+        if cue and idx is not None and Path(cue).is_file():
+            from .repo_index import add_repo, set_repo_cue
+
+            if idx.find(root) is None:
+                add_repo(idx, root, cue=cue)
+            else:
+                entry = idx.find(root)
+                if entry is not None and entry.cue != str(Path(cue).resolve()):
+                    set_repo_cue(idx, root, cue)
         self._report = audit_project(root)
         self._clear_children(self.audit_list)
         for c in self._report.checks:
@@ -924,6 +1705,7 @@ class ProjectStudioApp:
         if not st.is_git:
             self.git_summary_var.set("Not a git repository.")
             self._clear_children(self.git_sub_list)
+            self._clear_children(self.git_nested_list)
             ctk.CTkLabel(
                 self.git_sub_list,
                 text="Initialize git in this folder first.",
@@ -955,41 +1737,168 @@ class ProjectStudioApp:
                 self.git_ui_branch_var.set(s.branch)
 
         self._clear_children(self.git_sub_list)
+        self._clear_children(self.git_nested_list)
         for s in st.submodules:
-            row = ctk.CTkFrame(self.git_sub_list, fg_color=("gray90", "gray17"), corner_radius=8)
-            row.pack(fill="x", pady=3, padx=2)
-            mark = "OK" if s.present else "MISS"
-            color = "#3dd68c" if s.present else "#f07178"
-            ctk.CTkLabel(
-                row,
-                text=mark,
-                text_color=color,
-                font=ctk.CTkFont(size=11, weight="bold"),
-                width=48,
-            ).pack(side="left", padx=(10, 6), pady=8)
-            body = ctk.CTkFrame(row, fg_color="transparent")
-            body.pack(side="left", fill="x", expand=True, padx=(0, 10), pady=6)
-            ctk.CTkLabel(
-                body,
-                text=s.path,
-                font=ctk.CTkFont(size=13, weight="bold"),
-                anchor="w",
-            ).pack(fill="x")
-            detail = (
-                f"branch={s.branch or '-'}  sha={s.sha or '-'}  "
-                f"{s.url or '(no url)'}"
-            )
-            ctk.CTkLabel(
-                body,
-                text=detail,
+            self._git_module_row(self.git_sub_list, s)
+        for s in st.nested_submodules:
+            if s.path == "lib/recomp-net" and s.branch:
+                self.git_net_branch_var.set(s.branch)
+            if s.path == "lib/retcomm-rbengine" and s.branch:
+                self.git_rb_branch_var.set(s.branch)
+            self._git_module_row(self.git_nested_list, s)
+        if not st.nested_submodules:
+            self.ctk.CTkLabel(
+                self.git_nested_list,
+                text="No psxrecomp checkout / nested modules yet.",
                 text_color=("gray40", "gray65"),
-                font=ctk.CTkFont(size=11),
-                anchor="w",
-                wraplength=900,
-                justify="left",
-            ).pack(fill="x")
+            ).pack(anchor="w", padx=4, pady=6)
+        self._refresh_branch_menus(root, st, fetch=False)
         if not quiet:
             self._log(f"Git status: {st.branch} ({dirty})")
+
+    def _set_branch_menu(self, menu, var: tk.StringVar, branches: list[str]) -> None:
+        current = var.get().strip()
+        values = [b for b in branches if b and not b.startswith("(")]
+        if current and current not in values and not current.startswith("("):
+            values = [current, *values]
+        if not values:
+            values = ["(none)"]
+        menu.configure(values=values)
+        if current in values:
+            var.set(current)
+        else:
+            var.set(values[0])
+
+    def _refresh_branch_menus(self, root: Path, st, *, fetch: bool) -> None:
+        from .gitops import (
+            DEFAULT_PSXRECOMP_URL,
+            DEFAULT_RECOMP_NET_URL,
+            DEFAULT_RECOMP_UI_URL,
+            DEFAULT_RBENGINE_URL,
+            list_branches,
+            list_module_branches,
+        )
+
+        self._set_branch_menu(
+            self.git_branch_menu,
+            self.git_branch_var,
+            list_branches(root, remotes=True, fetch=fetch),
+        )
+        url_by_path = {s.path: s.url for s in st.submodules}
+        nested_url = {s.path: s.url for s in st.nested_submodules}
+        self._set_branch_menu(
+            self.git_psx_branch_menu,
+            self.git_psx_branch_var,
+            list_module_branches(
+                root,
+                "psxrecomp",
+                fetch=fetch,
+                url_fallback=url_by_path.get("psxrecomp") or DEFAULT_PSXRECOMP_URL,
+            ),
+        )
+        self._set_branch_menu(
+            self.git_ui_branch_menu,
+            self.git_ui_branch_var,
+            list_module_branches(
+                root,
+                "recomp-ui",
+                fetch=fetch,
+                url_fallback=url_by_path.get("recomp-ui") or DEFAULT_RECOMP_UI_URL,
+            ),
+        )
+        self._set_branch_menu(
+            self.git_net_branch_menu,
+            self.git_net_branch_var,
+            list_module_branches(
+                root,
+                "lib/recomp-net",
+                nested=True,
+                fetch=fetch,
+                url_fallback=nested_url.get("lib/recomp-net") or DEFAULT_RECOMP_NET_URL,
+            ),
+        )
+        self._set_branch_menu(
+            self.git_rb_branch_menu,
+            self.git_rb_branch_var,
+            list_module_branches(
+                root,
+                "lib/retcomm-rbengine",
+                nested=True,
+                fetch=fetch,
+                url_fallback=nested_url.get("lib/retcomm-rbengine")
+                or DEFAULT_RBENGINE_URL,
+            ),
+        )
+
+    def _git_fetch_branches(self) -> None:
+        root = self._game_root()
+        if root is None:
+            return
+        from .gitops import repo_status
+
+        self._log("Fetching branch lists (git fetch / ls-remote)…")
+        st = repo_status(root)
+        self._git_status = st
+        if not st.is_git:
+            messagebox.showerror("Project Studio", "Not a git repository.", parent=self.root)
+            return
+        # Keep current tracking selections from status
+        for s in st.submodules:
+            if s.path == "psxrecomp" and s.branch:
+                self.git_psx_branch_var.set(s.branch)
+            if s.path == "recomp-ui" and s.branch:
+                self.git_ui_branch_var.set(s.branch)
+        for s in st.nested_submodules:
+            if s.path == "lib/recomp-net" and s.branch:
+                self.git_net_branch_var.set(s.branch)
+            if s.path == "lib/retcomm-rbengine" and s.branch:
+                self.git_rb_branch_var.set(s.branch)
+        if st.branch:
+            self.git_branch_var.set(st.branch)
+        self._refresh_branch_menus(root, st, fetch=True)
+        self._log("Branch menus updated.")
+
+    def _valid_branch_selection(self, value: str) -> str | None:
+        v = (value or "").strip()
+        if not v or v.startswith("("):
+            return None
+        return v
+
+    def _git_module_row(self, parent, s) -> None:
+        ctk = self.ctk
+        row = ctk.CTkFrame(parent, fg_color=("gray90", "gray17"), corner_radius=8)
+        row.pack(fill="x", pady=3, padx=2)
+        mark = "OK" if s.present else "MISS"
+        color = "#3dd68c" if s.present else "#f07178"
+        ctk.CTkLabel(
+            row,
+            text=mark,
+            text_color=color,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=48,
+        ).pack(side="left", padx=(10, 6), pady=8)
+        body = ctk.CTkFrame(row, fg_color="transparent")
+        body.pack(side="left", fill="x", expand=True, padx=(0, 10), pady=6)
+        ctk.CTkLabel(
+            body,
+            text=s.path,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        ).pack(fill="x")
+        head = s.checkout_branch or ("detached" if s.present else "-")
+        detail = (
+            f"HEAD={head}  track={s.branch or '-'}  sha={s.sha or '-'}  "
+            f"{s.url or '(no url)'}"
+        )
+        ctk.CTkLabel(
+            body,
+            text=detail,
+            text_color=("gray40", "gray65"),
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+            wraplength=900,
+            justify="left",
+        ).pack(fill="x")
 
     def _git_checkout_branch(self) -> None:
         from .gitops import set_repo_branch
@@ -997,9 +1906,9 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        branch = self.git_branch_var.get().strip()
+        branch = self._valid_branch_selection(self.git_branch_var.get())
         if not branch:
-            messagebox.showerror("Project Studio", "Enter a branch name.", parent=self.root)
+            messagebox.showerror("Project Studio", "Select a branch first.", parent=self.root)
             return
         r = set_repo_branch(root, branch, dry_run=self._git_dry())
         self._log_cmd(r)
@@ -1013,8 +1922,10 @@ class ProjectStudioApp:
             return
         results = ensure_known_submodules(
             root,
-            psxrecomp_branch=self.git_psx_branch_var.get().strip() or "master",
-            recomp_ui_branch=self.git_ui_branch_var.get().strip() or "master",
+            psxrecomp_branch=self._valid_branch_selection(self.git_psx_branch_var.get())
+            or "master",
+            recomp_ui_branch=self._valid_branch_selection(self.git_ui_branch_var.get())
+            or "master",
             dry_run=self._git_dry(),
         )
         for r in results:
@@ -1031,7 +1942,7 @@ class ProjectStudioApp:
             ("psxrecomp", self.git_psx_branch_var),
             ("recomp-ui", self.git_ui_branch_var),
         ):
-            branch = var.get().strip()
+            branch = self._valid_branch_selection(var.get())
             if not branch:
                 continue
             r = set_submodule_branch(root, path, branch, dry_run=self._git_dry())
@@ -1063,6 +1974,266 @@ class ProjectStudioApp:
         self._log_cmd(r)
         self.refresh_git()
 
+    def _log_module_results(self, results) -> bool:
+        ok = True
+        for r in results:
+            self._log_cmd(r)
+            if not r.ok:
+                ok = False
+        return ok
+
+    def _git_pull_modules(self) -> None:
+        from .gitops import pull_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        self._log_module_results(
+            pull_modules(root, nested=False, dry_run=self._git_dry())
+        )
+        self.refresh_git()
+
+    def _git_push_modules(self) -> None:
+        from .gitops import push_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        if not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                "Push HEAD → origin for psxrecomp and recomp-ui?\n\n"
+                "If a checkout is detached, uses the branch selected above.\n"
+                "(no force-push)",
+                parent=self.root,
+            ):
+                return
+        branches = {
+            "psxrecomp": self._valid_branch_selection(self.git_psx_branch_var.get())
+            or "",
+            "recomp-ui": self._valid_branch_selection(self.git_ui_branch_var.get())
+            or "",
+        }
+        self._log_module_results(
+            push_modules(
+                root,
+                nested=False,
+                branch_by_path=branches,
+                dry_run=self._git_dry(),
+            )
+        )
+        self.refresh_git()
+
+    def _git_commit_modules(self) -> None:
+        from .gitops import commit_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        msg = self.git_sub_msg_var.get().strip()
+        if not msg:
+            messagebox.showerror(
+                "Project Studio",
+                "Enter a commit message for psxrecomp / recomp-ui.",
+                parent=self.root,
+            )
+            return
+        if not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Commit inside psxrecomp and recomp-ui?\n\n{msg}",
+                parent=self.root,
+            ):
+                return
+        self._log_module_results(
+            commit_modules(root, msg, nested=False, dry_run=self._git_dry())
+        )
+        self.refresh_git()
+
+    def _git_ensure_nested(self) -> None:
+        from .gitops import ensure_nested_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        results = ensure_nested_modules(
+            root,
+            recomp_net_branch=self._valid_branch_selection(self.git_net_branch_var.get())
+            or "main",
+            rbengine_branch=self._valid_branch_selection(self.git_rb_branch_var.get())
+            or "main",
+            dry_run=self._git_dry(),
+        )
+        for r in results:
+            self._log_cmd(r)
+        self.refresh_git()
+
+    def _git_save_nested_branches(self) -> None:
+        from .gitops import set_nested_branch
+
+        root = self._game_root()
+        if root is None:
+            return
+        for path, var in (
+            ("lib/recomp-net", self.git_net_branch_var),
+            ("lib/retcomm-rbengine", self.git_rb_branch_var),
+        ):
+            branch = self._valid_branch_selection(var.get())
+            if not branch:
+                continue
+            r = set_nested_branch(root, path, branch, dry_run=self._git_dry())
+            self._log_cmd(r)
+        self.refresh_git()
+
+    def _git_update_nested(self) -> None:
+        from .gitops import update_nested_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        remote = bool(self.git_remote_update_var.get())
+        if remote and not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                "Update nested modules inside psxrecomp to remote tips?\n\n"
+                "Stages gitlinks in psxrecomp — use Commit in psxrecomp, then "
+                "bump the game's psxrecomp gitlink.",
+                parent=self.root,
+            ):
+                return
+        r = update_nested_modules(
+            root, remote=remote, stage=True, dry_run=self._git_dry()
+        )
+        self._log_cmd(r)
+        self.refresh_git()
+
+    def _git_pull_nested(self) -> None:
+        from .gitops import pull_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        self._log_module_results(
+            pull_modules(root, nested=True, dry_run=self._git_dry())
+        )
+        self.refresh_git()
+
+    def _git_push_nested(self) -> None:
+        from .gitops import push_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        if not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                "Push HEAD → origin for recomp-net and retcomm-rbengine?\n\n"
+                "If a checkout is detached, uses the branch selected above.\n"
+                "(no force-push)",
+                parent=self.root,
+            ):
+                return
+        branches = {
+            "lib/recomp-net": self._valid_branch_selection(self.git_net_branch_var.get())
+            or "",
+            "lib/retcomm-rbengine": self._valid_branch_selection(
+                self.git_rb_branch_var.get()
+            )
+            or "",
+        }
+        self._log_module_results(
+            push_modules(
+                root,
+                nested=True,
+                branch_by_path=branches,
+                dry_run=self._git_dry(),
+            )
+        )
+        self.refresh_git()
+
+    def _git_commit_nested_libs(self) -> None:
+        from .gitops import commit_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        msg = self.git_libs_msg_var.get().strip()
+        if not msg:
+            messagebox.showerror(
+                "Project Studio",
+                "Enter a commit message for nested libs.",
+                parent=self.root,
+            )
+            return
+        if not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Commit inside recomp-net and retcomm-rbengine?\n\n{msg}",
+                parent=self.root,
+            ):
+                return
+        self._log_module_results(
+            commit_modules(root, msg, nested=True, dry_run=self._git_dry())
+        )
+        self.refresh_git()
+
+    def _git_pull_psxrecomp(self) -> None:
+        from .gitops import pull_psxrecomp
+
+        root = self._game_root()
+        if root is None:
+            return
+        self._log_cmd(pull_psxrecomp(root, dry_run=self._git_dry()))
+        self.refresh_git()
+
+    def _git_push_psxrecomp(self) -> None:
+        from .gitops import push_psxrecomp
+
+        root = self._game_root()
+        if root is None:
+            return
+        branch = self._valid_branch_selection(self.git_psx_branch_var.get()) or ""
+        if not self._git_dry():
+            extra = (
+                f"\nDetached HEAD will push to origin/{branch}."
+                if branch
+                else "\nDetached HEAD needs a branch selected above."
+            )
+            if not messagebox.askyesno(
+                "Project Studio",
+                "Push the psxrecomp checkout to origin?\n\n"
+                f"(no force-push){extra}",
+                parent=self.root,
+            ):
+                return
+        self._log_cmd(
+            push_psxrecomp(root, branch=branch, dry_run=self._git_dry())
+        )
+        self.refresh_git()
+
+    def _git_commit_nested(self) -> None:
+        from .gitops import commit_nested
+
+        root = self._game_root()
+        if root is None:
+            return
+        msg = self.git_nested_msg_var.get().strip()
+        if not msg:
+            messagebox.showerror(
+                "Project Studio", "Enter a psxrecomp commit message.", parent=self.root
+            )
+            return
+        if not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Commit inside psxrecomp checkout?\n\n{msg}",
+                parent=self.root,
+            ):
+                return
+        r = commit_nested(root, msg, dry_run=self._git_dry())
+        self._log_cmd(r)
+        self.refresh_git()
+
     def _git_pull(self) -> None:
         from .gitops import pull
 
@@ -1086,7 +2257,7 @@ class ProjectStudioApp:
         if not self._git_dry():
             if not messagebox.askyesno(
                 "Project Studio",
-                f"Commit all changes in:\n{root}\n\n{msg}",
+                f"Commit all changes in the game repo?\n{root}\n\n{msg}",
                 parent=self.root,
             ):
                 return
@@ -1102,15 +2273,16 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
+        branch = self._valid_branch_selection(self.git_branch_var.get()) or ""
         if not self._git_dry():
             if not messagebox.askyesno(
                 "Project Studio",
-                f"Push HEAD to origin for:\n{root}\n\n"
-                "(ff-only remote expected; no force-push)",
+                f"Push game repo to origin?\n{root}\n\n"
+                "(no force-push; detached HEAD uses selected game branch)",
                 parent=self.root,
             ):
                 return
-        r = push(root, dry_run=self._git_dry())
+        r = push(root, branch=branch, dry_run=self._git_dry())
         self._log_cmd(r)
         self.refresh_git()
 

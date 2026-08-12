@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -185,6 +186,8 @@ def cmd_git_status(args: argparse.Namespace) -> int:
     print(f"  dirty:    {st.dirty}  (staged={st.staged} unstaged={st.unstaged} untracked={st.untracked})")
     print(f"  origin:   {st.remote_url or '(none)'}")
     print(f"  gh:       {st.gh_repo or ('available' if st.gh_available else 'missing')}")
+    if st.psxrecomp_root:
+        print(f"  psxrecomp: {st.psxrecomp_root}")
     print()
     print("Submodules:")
     for s in st.submodules:
@@ -193,6 +196,15 @@ def cmd_git_status(args: argparse.Namespace) -> int:
             f"  [{mark}] {s.path:<12} branch={s.branch or '-':<16} "
             f"sha={s.sha or '-':<12} {s.url}"
         )
+    if st.nested_submodules and st.psxrecomp_root != st.root:
+        print()
+        print("Nested (inside psxrecomp):")
+        for s in st.nested_submodules:
+            mark = "OK" if s.present else "MISSING"
+            print(
+                f"  [{mark}] {s.path:<22} branch={s.branch or '-':<16} "
+                f"sha={s.sha or '-':<12} {s.url}"
+            )
     if st.short_status:
         print()
         print("Status:")
@@ -224,13 +236,44 @@ def cmd_git_ensure_submodules(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
-def cmd_git_set_branch(args: argparse.Namespace) -> int:
-    from project_studio.gitops import set_repo_branch, set_submodule_branch
+def cmd_git_ensure_nested(args: argparse.Namespace) -> int:
+    from project_studio.gitops import ensure_nested_modules
 
     root = _root_or_die(args)
     if root is None:
         return 2
-    if args.submodule:
+    results = ensure_nested_modules(
+        root,
+        recomp_net_branch=args.recomp_net_branch,
+        rbengine_branch=args.rbengine_branch,
+        dry_run=args.dry_run,
+    )
+    failed = 0
+    for r in results:
+        print(f"  [{'OK' if r.ok else 'FAIL'}] {r.message}")
+        if r.detail:
+            print(f"         {r.detail}")
+        if not r.ok:
+            failed += 1
+    return 1 if failed else 0
+
+
+def cmd_git_set_branch(args: argparse.Namespace) -> int:
+    from project_studio.gitops import (
+        set_nested_branch,
+        set_repo_branch,
+        set_submodule_branch,
+    )
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    if args.nested:
+        if not args.submodule:
+            print("error: --nested requires --submodule PATH", file=sys.stderr)
+            return 2
+        r = set_nested_branch(root, args.submodule, args.branch, dry_run=args.dry_run)
+    elif args.submodule:
         r = set_submodule_branch(
             root, args.submodule, args.branch, dry_run=args.dry_run
         )
@@ -260,12 +303,76 @@ def cmd_git_update_submodules(args: argparse.Namespace) -> int:
     return 0 if r.ok else 1
 
 
-def cmd_git_pull(args: argparse.Namespace) -> int:
-    from project_studio.gitops import pull
+def cmd_git_update_nested(args: argparse.Namespace) -> int:
+    from project_studio.gitops import update_nested_modules
 
     root = _root_or_die(args)
     if root is None:
         return 2
+    paths = [p.strip() for p in (args.paths or "").split(",") if p.strip()] or None
+    r = update_nested_modules(
+        root,
+        paths=paths,
+        remote=args.remote,
+        stage=not args.no_stage,
+        dry_run=args.dry_run,
+    )
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    if r.detail:
+        print(r.detail)
+    return 0 if r.ok else 1
+
+
+def cmd_git_commit_nested(args: argparse.Namespace) -> int:
+    from project_studio.gitops import commit_nested
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    r = commit_nested(root, args.message, dry_run=args.dry_run)
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    if r.detail:
+        print(r.detail)
+    return 0 if r.ok else 1
+
+
+def _module_paths_from_args(args: argparse.Namespace) -> list[str] | None:
+    raw = getattr(args, "paths", None) or ""
+    paths = [p.strip() for p in raw.split(",") if p.strip()]
+    return paths or None
+
+
+def _print_module_results(results: list) -> int:
+    failed = 0
+    for r in results:
+        print(f"  [{'OK' if r.ok else 'FAIL'}] {r.message}")
+        if r.detail:
+            print(f"         {r.detail}")
+        if not r.ok:
+            failed += 1
+    return 1 if failed else 0
+
+
+def cmd_git_pull(args: argparse.Namespace) -> int:
+    from project_studio.gitops import pull, pull_modules, pull_psxrecomp
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    if getattr(args, "psxrecomp", False):
+        r = pull_psxrecomp(root, dry_run=args.dry_run)
+        print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+        if r.detail:
+            print(r.detail)
+        return 0 if r.ok else 1
+    if getattr(args, "modules", False) or getattr(args, "nested", False):
+        results = pull_modules(
+            root,
+            paths=_module_paths_from_args(args),
+            nested=bool(getattr(args, "nested", False)),
+            dry_run=args.dry_run,
+        )
+        return _print_module_results(results)
     r = pull(root, dry_run=args.dry_run)
     print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
     if r.detail:
@@ -274,11 +381,20 @@ def cmd_git_pull(args: argparse.Namespace) -> int:
 
 
 def cmd_git_commit(args: argparse.Namespace) -> int:
-    from project_studio.gitops import commit_all
+    from project_studio.gitops import commit_all, commit_modules
 
     root = _root_or_die(args)
     if root is None:
         return 2
+    if getattr(args, "modules", False) or getattr(args, "nested", False):
+        results = commit_modules(
+            root,
+            args.message,
+            paths=_module_paths_from_args(args),
+            nested=bool(getattr(args, "nested", False)),
+            dry_run=args.dry_run,
+        )
+        return _print_module_results(results)
     r = commit_all(root, args.message, dry_run=args.dry_run)
     print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
     if r.detail:
@@ -287,12 +403,38 @@ def cmd_git_commit(args: argparse.Namespace) -> int:
 
 
 def cmd_git_push(args: argparse.Namespace) -> int:
-    from project_studio.gitops import push
+    from project_studio.gitops import push, push_modules, push_psxrecomp
 
     root = _root_or_die(args)
     if root is None:
         return 2
-    r = push(root, dry_run=args.dry_run)
+    branch = (getattr(args, "branch", None) or "").strip()
+    if getattr(args, "psxrecomp", False):
+        r = push_psxrecomp(root, branch=branch, dry_run=args.dry_run)
+        print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+        if r.detail:
+            print(r.detail)
+        return 0 if r.ok else 1
+    if getattr(args, "modules", False) or getattr(args, "nested", False):
+        paths = _module_paths_from_args(args)
+        branch_by_path = None
+        if branch and paths and len(paths) == 1:
+            branch_by_path = {paths[0]: branch}
+        elif branch and not paths:
+            # Apply same branch hint to all default paths (detached rescue).
+            nested = bool(getattr(args, "nested", False))
+            from project_studio.gitops import default_module_paths
+
+            branch_by_path = {p: branch for p in default_module_paths(nested=nested)}
+        results = push_modules(
+            root,
+            paths=paths,
+            nested=bool(getattr(args, "nested", False)),
+            branch_by_path=branch_by_path,
+            dry_run=args.dry_run,
+        )
+        return _print_module_results(results)
+    r = push(root, branch=branch, dry_run=args.dry_run)
     print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
     if r.detail:
         print(r.detail)
@@ -317,6 +459,101 @@ def cmd_git_release(args: argparse.Namespace) -> int:
     if r.detail:
         print(r.detail)
     return 0 if r.ok else 1
+
+
+def cmd_build_configure(args: argparse.Namespace) -> int:
+    import shlex
+
+    from project_studio.buildops import configure
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    extra = shlex.split(args.extra, posix=os.name != "nt") if args.extra else []
+    r = configure(
+        root,
+        build_dir=args.build_dir,
+        build_type=args.build_type,
+        generator=args.generator if args.generator is not None else None,
+        extra_args=extra,
+        dry_run=args.dry_run,
+        log=print,
+    )
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    return 0 if r.ok else 1
+
+
+def cmd_build_compile(args: argparse.Namespace) -> int:
+    from project_studio.buildops import build
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    r = build(
+        root,
+        build_dir=args.build_dir,
+        target=args.target,
+        jobs=args.jobs or None,
+        dry_run=args.dry_run,
+        log=print,
+    )
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    return 0 if r.ok else 1
+
+
+def cmd_build_run(args: argparse.Namespace) -> int:
+    import shlex
+    from pathlib import Path
+
+    from project_studio.buildops import launch
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    extra = shlex.split(args.args, posix=os.name != "nt") if args.args else []
+    r = launch(
+        root,
+        build_dir=args.build_dir,
+        exe=Path(args.exe) if args.exe else None,
+        env_text=args.env or "",
+        extra_args=extra,
+        dry_run=args.dry_run,
+        log=print,
+    )
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    return 0 if r.ok else 1
+
+
+def cmd_build_stop(args: argparse.Namespace) -> int:
+    from project_studio.buildops import stop_launch
+
+    r = stop_launch()
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    return 0 if r.ok else 1
+
+
+def cmd_build_status(args: argparse.Namespace) -> int:
+    from project_studio.buildops import (
+        detect_host,
+        find_runtime_exe,
+        launch_status,
+        resolve_build_dir,
+    )
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    host = detect_host()
+    bdir = resolve_build_dir(root, args.build_dir)
+    exe = find_runtime_exe(bdir)
+    print(f"host:      {host.label} ({host.system})")
+    print(f"cmake:     {host.cmake or '(missing)'}")
+    print(f"ninja:     {host.ninja or '(missing)'}")
+    print(f"jobs:      {host.jobs}")
+    print(f"build_dir: {bdir}  exists={bdir.is_dir()}")
+    print(f"exe:       {exe or '(not found)'}")
+    print(f"launch:    {launch_status()}")
+    return 0 if exe else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -404,6 +641,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_ge.add_argument("--recomp-ui-branch", default="master")
     p_ge.set_defaults(func=cmd_git_ensure_submodules)
 
+    p_gen = git_sub.add_parser(
+        "ensure-nested",
+        help="Add lib/recomp-net + lib/retcomm-rbengine inside psxrecomp",
+    )
+    add_git_root(p_gen)
+    p_gen.add_argument("--recomp-net-branch", default="main")
+    p_gen.add_argument("--rbengine-branch", default="main")
+    p_gen.set_defaults(func=cmd_git_ensure_nested)
+
     p_gb = git_sub.add_parser(
         "set-branch",
         help="Set game branch (checkout) or submodule tracking branch",
@@ -413,6 +659,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_gb.add_argument(
         "--submodule",
         help="Submodule path (e.g. psxrecomp). Omit to checkout game branch.",
+    )
+    p_gb.add_argument(
+        "--nested",
+        action="store_true",
+        help="Treat --submodule as a path inside psxrecomp (e.g. lib/recomp-net)",
     )
     p_gb.add_argument(
         "--create",
@@ -431,17 +682,105 @@ def build_parser() -> argparse.ArgumentParser:
     p_gu.add_argument("--paths", help="Comma-separated submodule paths")
     p_gu.set_defaults(func=cmd_git_update_submodules)
 
-    p_gpull = git_sub.add_parser("pull", help="git pull --ff-only")
+    p_gun = git_sub.add_parser(
+        "update-nested",
+        help="Update nested modules inside psxrecomp (recomp-net, rbengine)",
+    )
+    add_git_root(p_gun)
+    p_gun.add_argument("--remote", action="store_true")
+    p_gun.add_argument("--paths", help="Comma-separated nested paths")
+    p_gun.add_argument(
+        "--no-stage",
+        action="store_true",
+        help="Do not git-add nested gitlinks inside psxrecomp",
+    )
+    p_gun.set_defaults(func=cmd_git_update_nested)
+
+    p_gcn = git_sub.add_parser(
+        "commit-nested",
+        help="Commit inside psxrecomp (after update-nested)",
+    )
+    add_git_root(p_gcn)
+    p_gcn.add_argument("-m", "--message", required=True)
+    p_gcn.set_defaults(func=cmd_git_commit_nested)
+
+    p_gpull = git_sub.add_parser(
+        "pull",
+        help="git pull --ff-only (game root, --modules, --nested, or --psxrecomp)",
+    )
     add_git_root(p_gpull)
+    p_gpull.add_argument(
+        "--modules",
+        action="store_true",
+        help="Pull game submodules (psxrecomp, recomp-ui)",
+    )
+    p_gpull.add_argument(
+        "--nested",
+        action="store_true",
+        help="Pull nested libs inside psxrecomp (recomp-net, rbengine)",
+    )
+    p_gpull.add_argument(
+        "--psxrecomp",
+        action="store_true",
+        help="Pull the psxrecomp checkout itself",
+    )
+    p_gpull.add_argument(
+        "--paths",
+        help="Comma-separated module paths (defaults depend on --modules/--nested)",
+    )
     p_gpull.set_defaults(func=cmd_git_pull)
 
-    p_gc = git_sub.add_parser("commit", help="git add -A && git commit")
+    p_gc = git_sub.add_parser(
+        "commit",
+        help="git add -A && git commit (game root, --modules, or --nested)",
+    )
     add_git_root(p_gc)
     p_gc.add_argument("-m", "--message", required=True)
+    p_gc.add_argument(
+        "--modules",
+        action="store_true",
+        help="Commit inside game submodules (psxrecomp, recomp-ui)",
+    )
+    p_gc.add_argument(
+        "--nested",
+        action="store_true",
+        help="Commit inside nested libs (recomp-net, rbengine)",
+    )
+    p_gc.add_argument(
+        "--paths",
+        help="Comma-separated module paths (defaults depend on --modules/--nested)",
+    )
     p_gc.set_defaults(func=cmd_git_commit)
 
-    p_gpush = git_sub.add_parser("push", help="git push -u origin HEAD")
+    p_gpush = git_sub.add_parser(
+        "push",
+        help="git push -u origin HEAD (game root, --modules, --nested, or --psxrecomp)",
+    )
     add_git_root(p_gpush)
+    p_gpush.add_argument(
+        "--modules",
+        action="store_true",
+        help="Push game submodules (psxrecomp, recomp-ui)",
+    )
+    p_gpush.add_argument(
+        "--nested",
+        action="store_true",
+        help="Push nested libs inside psxrecomp (recomp-net, rbengine)",
+    )
+    p_gpush.add_argument(
+        "--psxrecomp",
+        action="store_true",
+        help="Push the psxrecomp checkout itself",
+    )
+    p_gpush.add_argument(
+        "--paths",
+        help="Comma-separated module paths (defaults depend on --modules/--nested)",
+    )
+    p_gpush.add_argument(
+        "--branch",
+        default="",
+        help="Branch name for detached-HEAD pushes (HEAD:refs/heads/BRANCH)",
+    )
     p_gpush.set_defaults(func=cmd_git_push)
 
     p_gr = git_sub.add_parser("release", help="gh workflow run release.yml")
@@ -453,6 +792,46 @@ def build_parser() -> argparse.ArgumentParser:
     p_gr.add_argument("--no-publish", action="store_true")
     p_gr.add_argument("--no-reuse-cached-emitters", action="store_true")
     p_gr.set_defaults(func=cmd_git_release)
+
+    # --- local cmake build / launch ---
+    p_build = sub.add_parser("build", help="Local CMake configure / build / launch")
+    build_sub = p_build.add_subparsers(dest="build_cmd", required=True)
+
+    def add_build_root(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--root", required=True, help="Game repository root")
+        p.add_argument("--dry-run", action="store_true")
+        p.add_argument("--build-dir", default="build-release")
+
+    p_bc = build_sub.add_parser("configure", help="cmake -S . -B <dir>")
+    add_build_root(p_bc)
+    p_bc.add_argument("--build-type", default="Release")
+    p_bc.add_argument("--generator", default=None, help="Empty = auto")
+    p_bc.add_argument("--extra", default="", help="Extra cmake args (shell-quoted)")
+    p_bc.set_defaults(func=cmd_build_configure)
+
+    p_bb = build_sub.add_parser("compile", help="cmake --build (alias: build)")
+    add_build_root(p_bb)
+    p_bb.add_argument("--target", default="psx-runtime")
+    p_bb.add_argument("--jobs", type=int, default=0)
+    p_bb.set_defaults(func=cmd_build_compile)
+
+    p_br = build_sub.add_parser("run", help="Launch product binary with env")
+    add_build_root(p_br)
+    p_br.add_argument("--exe", default="", help="Override executable path")
+    p_br.add_argument(
+        "--env",
+        default="",
+        help='Env pairs, e.g. \'RBE_CROSS_OS_PACING_DIAG=1 FOO="bar baz"\'',
+    )
+    p_br.add_argument("--args", default="", help="Extra CLI args for the game")
+    p_br.set_defaults(func=cmd_build_run)
+
+    p_bs = build_sub.add_parser("stop", help="Stop Studio-launched process")
+    p_bs.set_defaults(func=cmd_build_stop)
+
+    p_bst = build_sub.add_parser("status", help="Host + exe detection")
+    add_build_root(p_bst)
+    p_bst.set_defaults(func=cmd_build_status)
 
     return ap
 

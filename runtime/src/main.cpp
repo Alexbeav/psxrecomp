@@ -21,6 +21,7 @@
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
+#include "psx_rewind.h"
 #include "host_osd.h"
 #include "host_keymap.h"
 #include "overlay_capture.h"
@@ -2377,6 +2378,7 @@ static void shutdown_runtime(void) {
     /* (sljit removed 2026-07-15: overlay_compile_worker_stop joined the
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
+    psx_rewind_shutdown();
     memcard_flush_all();
     /* Stop and join the active external compiler before capture/debug teardown.
      * Otherwise closing the window can leave cmd/python/gcc running against
@@ -2401,6 +2403,7 @@ static void shutdown_runtime(void) {
 static void teardown_game_session_keep_lobby(void) {
     netplay_host_present_restore();
     psx_netplay_shutdown();
+    psx_rewind_shutdown();
     memcard_flush_all();
     if (sdl_audio_device) {
         psx_sdl_audio_clear(sdl_audio_device);
@@ -5103,6 +5106,106 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
     }
 }
 
+static int rewind_toggle_buttons_down(void) {
+    SDL_GameController *h = g_players[0].handle;
+    if (!h)
+        return 0;
+    return SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK) ||
+           SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_LEFTSTICK);
+}
+
+static void rewind_poll_toggle_buttons(void) {
+    static int was_down;
+    int down = rewind_toggle_buttons_down();
+    if (down && !was_down && !psx_rewind_is_open())
+        psx_rewind_toggle();
+    was_down = down;
+}
+
+static void rewind_poll_nav(uint32_t now_ms) {
+    const Uint8 *keys = SDL_GetKeyboardState(NULL);
+    int left = keys[SDL_SCANCODE_LEFT] ? 1 : 0;
+    int right = keys[SDL_SCANCODE_RIGHT] ? 1 : 0;
+    int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE] ||
+               keys[SDL_SCANCODE_Z]) ? 1 : 0;
+    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE]) ? 1 : 0;
+    SDL_GameController *h = g_players[0].handle;
+    if (h) {
+        const Sint16 lx =
+            SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTX);
+        const int dz = 16000;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+            lx < -dz)
+            left = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
+            lx > dz)
+            right = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A))
+            acc = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_LEFTSTICK))
+            can = 1;
+    }
+    psx_rewind_nav_held(left, right, acc, can, now_ms);
+}
+
+static void rewind_pause_present(void) {
+    psx_rewind_present_tick((uint32_t)SDL_GetTicks());
+#ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active) {
+        gl_renderer_set_interpolation_suspended(1);
+        (void)gl_renderer_present_hold_last();
+    } else if (g_vk_active) {
+        vk_renderer_present_blank();
+    } else if (sdl_renderer) {
+        SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer);
+        if (sdl_texture && s_sw_hold_valid)
+            SDL_RenderCopy(sdl_renderer, sdl_texture, &s_sw_hold_src,
+                           &s_sw_hold_dst);
+        host_osd_draw_sdl(sdl_renderer);
+        SDL_RenderPresent(sdl_renderer);
+    }
+#endif
+}
+
+/* Freeze guest in vblank present while the rewind filmstrip is open. */
+static void rewind_host_pause_loop(void) {
+    while (psx_rewind_is_open()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const Uint16 mod = ev.key.keysym.mod;
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                if (!repeat &&
+                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    psx_rewind_toggle();
+                }
+            }
+        }
+        rewind_poll_nav((uint32_t)SDL_GetTicks());
+        rewind_pause_present();
+        SDL_Delay(8);
+    }
+}
+
 /* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
  * is destroyed — episode snap load longjmps via psx_netplay_rb_flush_resume and
  * must not cross non-trivial destructors (UB / guest crash). */
@@ -5269,18 +5372,26 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const int key_repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const int key_repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (key == SDLK_ESCAPE && psx_netplay_active()) {
                     netplay_soft_exit("netplay_escape");
                     return ep;
                 }
+                if (!key_repeat &&
+                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    psx_rewind_toggle();
+                }
                 /* Save states: Shift+F1-F12 = save slot 0-11, F1-F12 = load.
                  * (F11 is a save slot per the user's spec, so fullscreen is
-                 * Alt+Enter / Cmd+Ctrl+F only — no F11.) */
-                if (key >= SDLK_F1 && key <= SDLK_F12) {
+                 * Alt+Enter / Cmd+Ctrl+F only — no F11.)
+                 * F8 is Rewind by default — skip slot 7 unless Rewind is rebound. */
+                else if (key >= SDLK_F1 && key <= SDLK_F12 &&
+                         !psx_rewind_is_open()) {
                     int slot = (int)(key - SDLK_F1);   /* 0..11 */
                     if (psx_netplay_active()) {
                         /* Match host only — guest F-keys must not initiate. */
@@ -5338,6 +5449,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 }
             }
         }
+        rewind_poll_toggle_buttons();
+        psx_rewind_note_frame();
+        psx_rewind_present_tick((uint32_t)SDL_GetTicks());
+        if (psx_rewind_is_open())
+            rewind_host_pause_loop();
     }
 
     /* Sample each player's device and feed the matching SIO pad slot.
@@ -12105,6 +12221,7 @@ session_reboot:
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
+        psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
          * at the next safe block boundary after boot. */
         if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {

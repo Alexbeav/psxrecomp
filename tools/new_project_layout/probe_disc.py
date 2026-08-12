@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Probe a Redump-style PS1 .cue (+ bins) and emit identity for game.toml / catalog.
 
-Used by tools/new_project_layout/setup_project.{sh,ps1} after staging disc/.
+Used by tools/new_project_layout/setup_project.{sh,ps1}. Prefer probing the
+source cue in place (external dumps); optionally extract only the boot EXE
+with ``--write-boot-exe``. Full cue+bin staging into ``disc/`` is optional
+(``setup_project --stage-disc``).
 
 Writes:
   - JSON to stdout (or --json-out)
   - Optional game.toml (--write-game-toml)
   - Optional catalog_identity.json (--write-catalog)
   - Optional seeds/ghidra_funcs.txt (--write-seeds): entry + in-image JAL targets
+  - Optional boot EXE file (--write-boot-exe DIR)
 
 Does not require a pre-filled game.toml. Derives serial / boot EXE from
 SYSTEM.CNF, EXE header fields from the PS-X EXE, digests from data Track 01,
@@ -66,6 +70,8 @@ class DiscProbe:
     seed_addrs: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Not serialized — used by --write-boot-exe
+    boot_exe_bytes: bytes = field(default=b"", repr=False, compare=False)
 
 
 def file_hashes(path: Path) -> tuple[str, str, int]:
@@ -461,6 +467,7 @@ def probe(cue_path: Path) -> DiscProbe:
         seed_addrs=[f"0x{a:08X}" for a in seeds],
         warnings=warnings,
         notes=notes,
+        boot_exe_bytes=exe,
     )
 
 
@@ -595,12 +602,17 @@ def main() -> int:
     ap.add_argument(
         "--disc-rel",
         default="",
-        help="game.disc path relative to project root (default: disc/<cue>)",
+        help="game.disc path in game.toml (relative or absolute; default: disc/<cue>)",
     )
     ap.add_argument(
         "--out-dir",
         default="disc",
         help="prepare_disc.out_dir / exe parent (default: disc)",
+    )
+    ap.add_argument(
+        "--write-boot-exe",
+        default="",
+        help="Write extracted boot EXE into this directory (small; not full dump)",
     )
     ap.add_argument("--players", type=int, default=2, help="game.players default")
     ap.add_argument(
@@ -628,10 +640,10 @@ def main() -> int:
 
     disc_rel = args.disc_rel or f"{args.out_dir.rstrip('/')}/{p.cue_name}"
 
-    # Drop bulky seed address list from default JSON unless writing seeds-focused dump
+    # Drop bulky / binary fields from JSON dumps
     payload = asdict(p)
-    if not args.json_out:
-        payload.pop("seed_addrs", None)
+    payload.pop("seed_addrs", None)
+    payload.pop("boot_exe_bytes", None)
 
     if args.json_out:
         Path(args.json_out).write_text(
@@ -646,6 +658,16 @@ def main() -> int:
         )
         Path(args.write_game_toml).write_text(text, encoding="utf-8")
         print(f"  wrote {args.write_game_toml}", file=sys.stderr)
+
+    if args.write_boot_exe:
+        if not p.boot_exe_bytes:
+            print("error: no boot EXE bytes to write", file=sys.stderr)
+            return 1
+        dest_dir = Path(args.write_boot_exe).expanduser()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / p.boot_exe
+        dest.write_bytes(p.boot_exe_bytes)
+        print(f"  wrote boot EXE {dest} ({len(p.boot_exe_bytes)} bytes)", file=sys.stderr)
 
     if args.write_catalog:
         Path(args.write_catalog).write_text(

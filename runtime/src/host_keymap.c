@@ -81,6 +81,8 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_VOLUME_UP, (int)SDLK_KP_PLUS, 0);
     if (s_actions[HOST_KEYMAP_VOLUME_DOWN].count == 0)
         add_bind(HOST_KEYMAP_VOLUME_DOWN, (int)SDLK_KP_MINUS, 0);
+    if (s_actions[HOST_KEYMAP_REWIND].count == 0)
+        add_bind(HOST_KEYMAP_REWIND, (int)SDLK_F8, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -131,6 +133,7 @@ static void parse_value(HostKeymapAction action, const char *value) {
 static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "VolumeUp")) return HOST_KEYMAP_VOLUME_UP;
     if (ieq(name, "VolumeDown")) return HOST_KEYMAP_VOLUME_DOWN;
+    if (ieq(name, "Rewind")) return HOST_KEYMAP_REWIND;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 

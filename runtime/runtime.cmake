@@ -266,6 +266,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
     ${PSXRECOMP_ROOT}/runtime/src/host_keymap.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
@@ -378,14 +379,15 @@ endif()
 
 # Portable rollback host policy (sched/hist/hash_confirm/snap). Sits next to
 # recomp-net; MotK keeps thin PSX glue (pad↔frame, boot_state, FMV/dig0 gates).
+# Snap ring is also used for local rewind without linking full rbengine/recomp-net.
 set(RECOMP_RBENGINE_ROOT "" CACHE PATH "Path to retcomm-rbengine; empty = auto-discover")
-if(PSXRECOMP_HAS_RECOMP_NET AND NOT RECOMP_RBENGINE_ROOT)
+if(NOT RECOMP_RBENGINE_ROOT)
     foreach(_cand
             "${PSXRECOMP_ROOT}/lib/retcomm-rbengine"
             "${CMAKE_SOURCE_DIR}/../retcomm-rbengine"
             "${PSXRECOMP_ROOT}/../retcomm-rbengine")
         get_filename_component(_abs "${_cand}" ABSOLUTE)
-        if(EXISTS "${_abs}/CMakeLists.txt")
+        if(EXISTS "${_abs}/include/retcomm_rbengine/snap_ring.h")
             set(RECOMP_RBENGINE_ROOT "${_abs}" CACHE PATH
                 "Path to retcomm-rbengine; empty = auto-discover" FORCE)
             break()
@@ -411,6 +413,22 @@ else()
             "  git submodule update --init lib/retcomm-rbengine\n"
             "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine")
     endif()
+endif()
+
+# Local rewind: full rbengine when netplay is on; otherwise compile snap_ring.c
+# only (no recomp-net / sched / hash_confirm). Never both — duplicate symbols.
+set(PSXRECOMP_HAS_RBENGINE_SNAP FALSE)
+set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "")
+if(PSXRECOMP_HAS_RBENGINE)
+    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+elseif(RECOMP_RBENGINE_ROOT
+       AND EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c"
+       AND EXISTS "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h")
+    list(APPEND PSXRECOMP_RUNTIME_SOURCES
+        ${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c)
+    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+    set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "${RECOMP_RBENGINE_ROOT}/include")
+    message(STATUS "psxrecomp: rewind snap_ring (${RECOMP_RBENGINE_ROOT})")
 endif()
 
 # Lobby WebSocket client helpers are vendored under runtime/src/lobby_ws/
@@ -442,6 +460,9 @@ set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
 )
 if(PSXRECOMP_LOBBY_INCLUDE_DIR)
     list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_LOBBY_INCLUDE_DIR})
+endif()
+if(PSXRECOMP_RBENGINE_SNAP_INCLUDE)
+    list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_RBENGINE_SNAP_INCLUDE})
 endif()
 
 # Which recompiled BIOSes the runtime links. A build carries every image it
@@ -1115,6 +1136,9 @@ function(psxrecomp_add_runtime_target target)
         if(PSXRECOMP_HAS_RBENGINE)
             target_link_libraries(${target} PRIVATE retcomm_rbengine)
         endif()
+    endif()
+    if(PSXRECOMP_HAS_RBENGINE_SNAP)
+        target_compile_definitions(${target} PRIVATE PSX_HAS_RBENGINE_SNAP=1)
     endif()
     if(PSXRECOMP_HAS_LOBBY_CLIENT)
         target_compile_definitions(${target} PRIVATE PSX_HAS_LOBBY_CLIENT=1)
