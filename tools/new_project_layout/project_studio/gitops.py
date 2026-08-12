@@ -597,6 +597,192 @@ def set_submodule_branch(
     return CmdResult(True, f"Set {path} tracking branch → {branch}")
 
 
+def resolve_default_branch(root: Path, *, remote: str = "origin") -> str | None:
+    """Best-effort default branch for a checkout (``origin/HEAD``, else main/master)."""
+    root = root.expanduser().resolve()
+    if not _is_git_repo(root):
+        return None
+    code, out, _err = _git(
+        root,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        f"refs/remotes/{remote}/HEAD",
+    )
+    if code == 0:
+        ref = (out or "").strip()
+        if ref:
+            # origin/main → main
+            if "/" in ref:
+                return ref.split("/", 1)[-1]
+            return ref
+    for name in ("main", "master"):
+        code, _o, _e = _git(
+            root, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{name}"
+        )
+        if code == 0:
+            return name
+        code, _o, _e = _git(
+            root, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}"
+        )
+        if code == 0:
+            return name
+    code, out, _err = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    if code == 0:
+        head = (out or "").strip()
+        if head and head != "HEAD":
+            return head
+    return None
+
+
+def is_default_branch_token(branch: str | None) -> bool:
+    """True for empty / ``(default)`` / similar UI sentinels."""
+    s = (branch or "").strip().lower()
+    if not s:
+        return True
+    if s.startswith("(") and "default" in s:
+        return True
+    return s in ("default", "auto")
+
+
+def _git_switch(
+    cwd: Path,
+    *args: str,
+    dry_run: bool = False,
+) -> tuple[int, str, str]:
+    """Run ``git switch``; fall back to ``git checkout`` on older Git."""
+    code, out, err = _git(cwd, "switch", *args, dry_run=dry_run)
+    if dry_run or code == 0:
+        return code, out, err
+    err_l = f"{err}\n{out}".lower()
+    if "not a git command" not in err_l and "unknown command" not in err_l:
+        return code, out, err
+    checkout_args: list[str] = []
+    i = 0
+    a = list(args)
+    while i < len(a):
+        if a[i] in ("--guess", "--no-guess"):
+            i += 1
+            continue
+        if a[i] == "-c":
+            checkout_args.append("-b")
+            i += 1
+            continue
+        if a[i] == "-C":
+            checkout_args.append("-B")
+            i += 1
+            continue
+        if a[i] == "--track" and i + 1 < len(a):
+            checkout_args.extend(["--track", a[i + 1]])
+            i += 2
+            continue
+        checkout_args.append(a[i])
+        i += 1
+    return _git(cwd, "checkout", *checkout_args, dry_run=False)
+
+
+def switch_branch(
+    root: Path,
+    branch: str,
+    *,
+    create: bool = False,
+    dry_run: bool = False,
+    prefer_default: bool = True,
+) -> CmdResult:
+    """``git switch`` onto ``branch`` (guess remote-tracking; optional ``-c``).
+
+    Empty / ``(default)`` resolves each repo's default branch (``origin/HEAD``,
+    else main/master). When ``prefer_default`` is set and a named branch is
+    missing, falls back to that default instead of failing.
+    """
+    root = root.expanduser().resolve()
+    if not _is_git_repo(root):
+        return CmdResult(False, "Not a git repository")
+
+    requested = (branch or "").strip()
+    used_default_token = is_default_branch_token(requested)
+    if used_default_token:
+        resolved = resolve_default_branch(root)
+        if not resolved:
+            return CmdResult(
+                False,
+                "Could not resolve default branch (fetch remotes / set origin/HEAD)",
+            )
+        target = resolved
+        note = "default"
+    else:
+        target = requested
+        note = ""
+
+    current = current_branch(root)
+    if current == target:
+        suffix = f" ({note})" if note else ""
+        return CmdResult(True, f"Already on {target}{suffix}")
+
+    verb = "Would switch" if dry_run else "Switched"
+    if dry_run:
+        # Validate the ref exists so dry-run matches real switch + default fallback.
+        code_v, _, _ = _git(
+            root, "rev-parse", "--verify", "--quiet", f"refs/heads/{target}"
+        )
+        if code_v != 0:
+            code_v, _, _ = _git(
+                root,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                f"refs/remotes/origin/{target}",
+            )
+        if code_v == 0:
+            suffix = f" ({note})" if note else ""
+            return CmdResult(True, f"{verb} to {target}{suffix}")
+        # fall through to create / prefer_default handling below
+        code, out, err = 1, "", f"fatal: invalid reference: {target}"
+    else:
+        code, out, err = _git_switch(root, "--guess", target, dry_run=False)
+        if code == 0:
+            suffix = f" ({note})" if note else ""
+            return CmdResult(True, f"{verb} to {target}{suffix}", out)
+
+    if create and not used_default_token:
+        code2, out2, err2 = _git_switch(root, "-c", target, dry_run=dry_run)
+        if code2 == 0:
+            return CmdResult(True, f"{verb} to new branch {target}", out2)
+        return CmdResult(
+            False,
+            f"Could not create/switch to {target}",
+            err2 or out2 or err or out,
+        )
+
+    # Named branch missing → prefer this checkout's default branch.
+    if prefer_default and not used_default_token and not create:
+        fallback = resolve_default_branch(root)
+        if fallback and fallback != target:
+            if current == fallback:
+                return CmdResult(
+                    True,
+                    f"Already on {fallback} (default; {target} missing)",
+                )
+            if dry_run:
+                return CmdResult(
+                    True,
+                    f"{verb} to {fallback} (default; {target} missing)",
+                )
+            code_f, out_f, err_f = _git_switch(
+                root, "--guess", fallback, dry_run=False
+            )
+            if code_f == 0:
+                return CmdResult(
+                    True,
+                    f"{verb} to {fallback} (default; {target} missing)",
+                    out_f or err or out,
+                )
+            err = err_f or out_f or err
+
+    hint = " (enable Create / --create to start a new branch)"
+    return CmdResult(False, f"Could not switch to {target}{hint}", err or out)
+
+
 def set_repo_branch(
     root: Path,
     branch: str,
@@ -604,21 +790,8 @@ def set_repo_branch(
     create: bool = False,
     dry_run: bool = False,
 ) -> CmdResult:
-    root = root.expanduser().resolve()
-    branch = branch.strip()
-    if not branch:
-        return CmdResult(False, "Branch name required")
-    code, current, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
-    if code == 0 and current == branch:
-        return CmdResult(True, f"Already on {branch}")
-    args = ["checkout"]
-    if create:
-        args.append("-B")
-    args.append(branch)
-    code, out, err = _git(root, *args, dry_run=dry_run)
-    if code != 0:
-        return CmdResult(False, f"Could not checkout {branch}", err or out)
-    return CmdResult(True, f"Checked out {branch}", out)
+    """Switch the repo working tree (``git switch``). Kept for CLI compatibility."""
+    return switch_branch(root, branch, create=create, dry_run=dry_run)
 
 
 def list_branches(
@@ -747,12 +920,130 @@ def update_submodules(
     return CmdResult(True, f"Updated submodules ({mode})", out)
 
 
-def pull(root: Path, *, dry_run: bool = False) -> CmdResult:
+# pull() strategies — used by CLI/GUI for game root, submodules, and nested libs.
+PULL_MODES = ("ff-only", "rebase", "merge", "reset")
+PULL_DIRTY = ("fail", "stash", "discard")
+
+
+def _upstream_ref(root: Path) -> str | None:
+    """Return @{upstream} rev-parse, or origin/<branch> if branch tracks nothing yet."""
+    code, out, _ = _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if code == 0:
+        ref = out.strip()
+        if ref:
+            return ref
+    branch = current_branch(root)
+    if branch:
+        return f"origin/{branch}"
+    return None
+
+
+def _working_tree_dirty(root: Path) -> bool:
+    code, out, _ = _git(root, "status", "--porcelain")
+    return code == 0 and bool(out.strip())
+
+
+def pull(
+    root: Path,
+    *,
+    mode: str = "ff-only",
+    dirty: str = "fail",
+    dry_run: bool = False,
+) -> CmdResult:
+    """Pull (or reset-to-upstream) for a git checkout.
+
+    ``mode``:
+      - ``ff-only`` (default): ``git pull --ff-only``
+      - ``rebase``: ``git pull --rebase``
+      - ``merge``: ``git pull --no-rebase``
+      - ``reset``: ``git fetch`` + ``git reset --hard <upstream>`` (match GH tip)
+
+    ``dirty`` (ignored for ``reset``, which always hard-resets):
+      - ``fail`` (default): leave tree alone; git aborts if it would overwrite
+      - ``stash``: ``stash push -u`` before pull, ``stash pop`` after
+      - ``discard``: ``git reset --hard HEAD`` before pull (drops local edits)
+    """
     root = root.expanduser().resolve()
-    code, out, err = _git(root, "pull", "--ff-only", dry_run=dry_run)
+    mode = (mode or "ff-only").strip().lower().replace("_", "-")
+    dirty = (dirty or "fail").strip().lower()
+    if mode == "no-rebase":
+        mode = "merge"
+    if mode not in PULL_MODES:
+        return CmdResult(
+            False,
+            f"Unknown pull mode {mode!r} (want: {', '.join(PULL_MODES)})",
+        )
+    if dirty not in PULL_DIRTY:
+        return CmdResult(
+            False,
+            f"Unknown dirty policy {dirty!r} (want: {', '.join(PULL_DIRTY)})",
+        )
+    if not _is_git_repo(root):
+        return CmdResult(False, "Not a git repository")
+
+    # --- reset: make local HEAD match upstream tip (discards local commits+edits) ---
+    if mode == "reset":
+        code, out, err = _git(root, "fetch", "origin", dry_run=dry_run)
+        if code != 0 and not dry_run:
+            return CmdResult(False, "Fetch failed", err or out)
+        upstream = _upstream_ref(root)
+        if not upstream:
+            return CmdResult(
+                False,
+                "No upstream branch (set upstream or checkout a branch tracking origin)",
+            )
+        code, out, err = _git(root, "reset", "--hard", upstream, dry_run=dry_run)
+        if code != 0:
+            return CmdResult(False, f"reset --hard {upstream} failed", err or out)
+        return CmdResult(True, f"Reset to {upstream}", out)
+
+    # --- dirty working tree handling before pull ---
+    stashed = False
+    if dirty == "discard" and (_working_tree_dirty(root) or dry_run):
+        code, out, err = _git(root, "reset", "--hard", "HEAD", dry_run=dry_run)
+        if code != 0:
+            return CmdResult(False, "discard (reset --hard HEAD) failed", err or out)
+    elif dirty == "stash" and (_working_tree_dirty(root) or dry_run):
+        code, out, err = _git(
+            root, "stash", "push", "-u", "-m", "project-studio pull", dry_run=dry_run
+        )
+        if code != 0:
+            return CmdResult(False, "stash before pull failed", err or out)
+        stashed = True
+    elif dirty == "fail" and _working_tree_dirty(root) and not dry_run:
+        return CmdResult(
+            False,
+            "Pull blocked: working tree dirty "
+            "(commit, or pass dirty=stash|discard, or mode=reset)",
+        )
+
+    if mode == "ff-only":
+        pull_args = ("pull", "--ff-only")
+        label = "ff-only"
+    elif mode == "rebase":
+        pull_args = ("pull", "--rebase")
+        label = "rebase"
+    else:  # merge
+        pull_args = ("pull", "--no-rebase")
+        label = "merge"
+
+    code, out, err = _git(root, *pull_args, dry_run=dry_run)
     if code != 0:
-        return CmdResult(False, "Pull failed (ff-only)", err or out)
-    return CmdResult(True, "Pulled (ff-only)", out)
+        if stashed and not dry_run:
+            _git(root, "stash", "pop")
+        return CmdResult(False, f"Pull failed ({label})", err or out)
+
+    detail = out
+    if stashed and not dry_run:
+        sc, so, se = _git(root, "stash", "pop")
+        if sc != 0:
+            return CmdResult(
+                False,
+                f"Pulled ({label}) but stash pop failed",
+                (detail + "\n" + (se or so)).strip(),
+            )
+        detail = (detail + "\n" + so).strip()
+    return CmdResult(True, f"Pulled ({label})", detail)
 
 
 def commit_all(
@@ -820,15 +1111,15 @@ def push(
         return CmdResult(False, f"Push failed (detached → {target})", err or out)
     # Best-effort: attach local checkout to that branch so later pushes are normal
     if not dry_run:
-        _git(root, "switch", "-C", target)
+        _git_switch(root, "-C", target)
         return CmdResult(
             True,
-            f"Pushed detached HEAD → origin/{target} (checked out {target})",
+            f"Pushed detached HEAD → origin/{target} (switched to {target})",
             out,
         )
     return CmdResult(
         True,
-        f"Would push detached HEAD → origin/{target} and checkout {target}",
+        f"Would push detached HEAD → origin/{target} and switch to {target}",
         out,
     )
 
@@ -869,14 +1160,117 @@ def default_module_paths(*, nested: bool = False) -> tuple[str, ...]:
     return NESTED_PATHS if nested else KNOWN_SUBMODULES
 
 
+def _tracking_branch_for(owner: Path, path: str) -> str:
+    cp = _read_gitmodules(owner)
+    section = _section_for_path(cp, path)
+    if not section:
+        return ""
+    return cp.get(section, "branch", fallback="").strip()
+
+
+def switch_modules(
+    root: Path,
+    *,
+    paths: list[str] | None = None,
+    nested: bool = False,
+    branch_by_path: dict[str, str] | None = None,
+    create: bool = False,
+    set_tracking: bool = True,
+    dry_run: bool = False,
+) -> list[CmdResult]:
+    """``git switch`` inside each module checkout.
+
+    ``branch_by_path`` overrides .gitmodules tracking. When a path has no
+    explicit branch, tracking is used, then the checkout's default branch.
+    ``(default)`` always means each module's own default. ``set_tracking``
+    also writes ``branch =`` in .gitmodules so ``update --remote`` stays aligned.
+    """
+    want = paths or list(default_module_paths(nested=nested))
+    branches = {
+        _normalize_module_path(k, nested=nested): (v or "").strip()
+        for k, v in (branch_by_path or {}).items()
+    }
+    results: list[CmdResult] = []
+    owner: Path | None = None
+    if nested:
+        owner = resolve_psxrecomp_dir(root)
+    else:
+        owner = root.expanduser().resolve()
+    for path in want:
+        path = _normalize_module_path(path, nested=nested)
+        branch = (branches.get(path) or "").strip()
+        if is_default_branch_token(branch):
+            # Blank override → prefer .gitmodules tracking, else default.
+            if not branch and owner is not None:
+                tracked = _tracking_branch_for(owner, path)
+                if tracked and not is_default_branch_token(tracked):
+                    branch = tracked
+                else:
+                    branch = "(default)"
+            else:
+                branch = "(default)"
+        if not branch:
+            results.append(CmdResult(False, f"{path}: no branch to switch to"))
+            continue
+        sub = resolve_module_dir(root, path, nested=nested)
+        if sub is None:
+            results.append(CmdResult(False, f"{path}: checkout missing"))
+            continue
+        r = switch_branch(sub, branch, create=create, dry_run=dry_run)
+        msg = f"{path}: {r.message}"
+        if r.ok and set_tracking:
+            # Track the branch we actually landed on (may be default fallback).
+            actual = ""
+            if not dry_run:
+                actual = current_branch(sub) or ""
+            if not actual:
+                # dry-run: derive from switch message when possible
+                for token in ("Switched to ", "Would switch to ", "Already on "):
+                    if token in (r.message or ""):
+                        rest = (r.message or "").split(token, 1)[1]
+                        actual = rest.split()[0] if rest else ""
+                        break
+            if not actual:
+                actual = (
+                    resolve_default_branch(sub)
+                    if is_default_branch_token(branch)
+                    else branch
+                )
+            if nested:
+                tr = set_nested_branch(root, path, actual, dry_run=dry_run)
+            else:
+                tr = set_submodule_branch(root, path, actual, dry_run=dry_run)
+            detail = "\n".join(x for x in (r.detail, tr.message) if x)
+            results.append(CmdResult(tr.ok, f"{msg}; {tr.message}", detail))
+        else:
+            results.append(CmdResult(r.ok, msg, r.detail))
+    return results
+
+
+def switch_psxrecomp(
+    root: Path,
+    branch: str,
+    *,
+    create: bool = False,
+    dry_run: bool = False,
+) -> CmdResult:
+    psx = resolve_psxrecomp_dir(root)
+    if psx is None:
+        return CmdResult(False, "No psxrecomp checkout found")
+    r = switch_branch(psx, branch, create=create, dry_run=dry_run)
+    return CmdResult(r.ok, f"psxrecomp: {r.message}", r.detail)
+
+
 def pull_modules(
     root: Path,
     *,
     paths: list[str] | None = None,
     nested: bool = False,
+    mode: str = "ff-only",
+    dirty: str = "fail",
     dry_run: bool = False,
 ) -> list[CmdResult]:
-    """``git pull --ff-only`` inside each module checkout."""
+    """Pull inside each module checkout (see ``pull`` for mode/dirty)."""
     want = paths or list(default_module_paths(nested=nested))
     results: list[CmdResult] = []
     for path in want:
@@ -885,7 +1279,7 @@ def pull_modules(
         if sub is None:
             results.append(CmdResult(False, f"{path}: checkout missing"))
             continue
-        r = pull(sub, dry_run=dry_run)
+        r = pull(sub, mode=mode, dirty=dirty, dry_run=dry_run)
         results.append(CmdResult(r.ok, f"{path}: {r.message}", r.detail))
     return results
 
@@ -938,11 +1332,17 @@ def commit_modules(
     return results
 
 
-def pull_psxrecomp(root: Path, *, dry_run: bool = False) -> CmdResult:
+def pull_psxrecomp(
+    root: Path,
+    *,
+    mode: str = "ff-only",
+    dirty: str = "fail",
+    dry_run: bool = False,
+) -> CmdResult:
     psx = resolve_psxrecomp_dir(root)
     if psx is None:
         return CmdResult(False, "No psxrecomp checkout found")
-    r = pull(psx, dry_run=dry_run)
+    r = pull(psx, mode=mode, dirty=dirty, dry_run=dry_run)
     return CmdResult(r.ok, f"psxrecomp: {r.message}", r.detail)
 
 
@@ -957,6 +1357,171 @@ def push_psxrecomp(
         return CmdResult(False, "No psxrecomp checkout found")
     r = push(psx, branch=branch, dry_run=dry_run)
     return CmdResult(r.ok, f"psxrecomp: {r.message}", r.detail)
+
+
+def install_and_push_release_ci(
+    root: Path,
+    *,
+    zip_prefix: str = "",
+    force: bool = False,
+    push_remote: bool = True,
+    dry_run: bool = False,
+) -> CmdResult:
+    """Write psxrecomp setup-release.yml (+ packager), commit, and push.
+
+    Uses the same template as ``setup_project --enable-ci`` /
+    ``op_emit_ci_workflow``. After push, best-effort checks that Actions has
+    registered ``release.yml`` (nudge commit if needed).
+    """
+    from .models import MigrateOptions
+    from .ops import op_emit_ci_workflow, op_emit_packager
+
+    root = root.expanduser().resolve()
+    if not _is_git_repo(root):
+        return CmdResult(False, "Not a git repository")
+
+    opts = MigrateOptions(
+        zip_prefix=zip_prefix.strip() or None,
+        enable_ci=True,
+        force=force,
+        dry_run=dry_run,
+    )
+    pack = op_emit_packager(root, opts)
+    if not pack.ok:
+        return CmdResult(False, f"Packager: {pack.message}")
+    ci = op_emit_ci_workflow(root, opts)
+    if not ci.ok:
+        return CmdResult(False, f"CI workflow: {ci.message}")
+
+    paths = sorted({*pack.changed_paths, *ci.changed_paths})
+    if not paths and not dry_run:
+        # Already present — still allow push of any uncommitted workflow edits.
+        wf = root / ".github" / "workflows" / "release.yml"
+        pkg = root / "scripts" / "package_setup_release.sh"
+        for p in (wf, pkg):
+            if p.is_file():
+                rel = str(p.relative_to(root)).replace("\\", "/")
+                if rel not in paths:
+                    paths.append(rel)
+
+    if dry_run:
+        return CmdResult(
+            True,
+            "dry-run: would install CI + commit + push\n"
+            + "\n".join(f"  {p}" for p in paths),
+        )
+
+    if not paths:
+        return CmdResult(False, "No CI files to commit")
+
+    code, out, err = _git(root, "add", "--", *paths)
+    if code != 0:
+        return CmdResult(False, "git add failed", err or out)
+
+    code, porcelain, _ = _git(root, "diff", "--cached", "--name-only")
+    staged = [ln.strip() for ln in porcelain.splitlines() if ln.strip()]
+    if not staged:
+        # Nothing new staged — still try push so remote gets existing commits.
+        detail = f"{pack.op_id}: {pack.message}; {ci.op_id}: {ci.message}"
+        if not push_remote:
+            return CmdResult(True, "CI already up to date (nothing to commit)", detail)
+        push_r = push(root, dry_run=False)
+        if not push_r.ok:
+            return CmdResult(
+                True,
+                "CI already up to date locally; push skipped/failed",
+                (detail + "\n" + push_r.message).strip(),
+            )
+        nudge = ensure_actions_registers_release_yml(root)
+        msg = "CI already up to date; pushed existing commits"
+        if nudge.message:
+            msg += f"\n{nudge.message}"
+        return CmdResult(True, msg, detail)
+
+    code, out, err = _git(
+        root,
+        "commit",
+        "-m",
+        "ci: add setup-host release.yml (psxrecomp template)",
+    )
+    if code != 0:
+        return CmdResult(False, "git commit failed", err or out)
+
+    if not push_remote:
+        return CmdResult(True, "Installed + committed release CI (not pushed)", out)
+
+    push_r = push(root, dry_run=False)
+    if not push_r.ok:
+        return CmdResult(False, f"Committed CI but push failed: {push_r.message}", push_r.detail)
+
+    nudge = ensure_actions_registers_release_yml(root)
+    msg = f"Installed + pushed release CI\n{push_r.message}"
+    if nudge.message:
+        msg += f"\n{nudge.message}"
+    return CmdResult(True, msg, out)
+
+
+def ensure_actions_registers_release_yml(root: Path) -> CmdResult:
+    """Poll Actions for release.yml; nudge with an empty commit if missing.
+
+    Mirrors setup_project.sh ensure_actions_registers_release_yml.
+    """
+    root = root.expanduser().resolve()
+    if not _which_gh():
+        return CmdResult(False, "gh CLI not found — skip Actions registration check")
+
+    wf_path = ".github/workflows/release.yml"
+    if not (root / wf_path).is_file():
+        return CmdResult(False, "release.yml missing locally")
+
+    import time
+
+    for _ in range(6):
+        name = release_workflow_name(root)
+        if name:
+            return CmdResult(
+                True,
+                f"Actions workflow registered: {name}\n"
+                "(runs on workflow_dispatch or push of v* tags)",
+            )
+        time.sleep(2)
+
+    # Nudge: empty commit touching the workflow mtime via amend-free empty commit
+    code, out, err = _git(
+        root,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "ci: nudge Actions to register release.yml",
+    )
+    if code != 0:
+        return CmdResult(
+            False,
+            "Actions has not listed release.yml yet; nudge commit failed",
+            err or out,
+        )
+    push_r = push(root, dry_run=False)
+    if not push_r.ok:
+        return CmdResult(
+            False,
+            "Nudge committed but push failed",
+            push_r.detail or push_r.message,
+        )
+
+    for _ in range(8):
+        time.sleep(2)
+        name = release_workflow_name(root)
+        if name:
+            return CmdResult(
+                True,
+                f"Actions workflow registered after nudge: {name}\n"
+                "(runs on workflow_dispatch or push of v* tags)",
+            )
+    return CmdResult(
+        False,
+        "release.yml nudged but Actions still has not listed it; "
+        "open the repo Actions tab or re-run Install & push CI later",
+    )
 
 
 def release_workflow_name(root: Path) -> str | None:

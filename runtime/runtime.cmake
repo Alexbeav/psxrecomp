@@ -161,6 +161,25 @@ if(_psx_sdl_backend STREQUAL "SDL3")
             list(APPEND _psx_sdl3_timestamp_args
                 DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
         endif()
+        # CI (tools/ci/prefetch_sdl3.sh) pre-extracts with curl --http1.1 to
+        # avoid intermittent GitHub HTTP/2 REFUSED_STREAM failures from
+        # CMake's file(DOWNLOAD). Prefer that tree when present.
+        set(_psx_sdl3_src "")
+        if(DEFINED FETCHCONTENT_SOURCE_DIR_SDL3 AND
+           NOT FETCHCONTENT_SOURCE_DIR_SDL3 STREQUAL "" AND
+           EXISTS "${FETCHCONTENT_SOURCE_DIR_SDL3}/CMakeLists.txt")
+            set(_psx_sdl3_src "${FETCHCONTENT_SOURCE_DIR_SDL3}")
+        elseif(DEFINED ENV{PSX_SDL3_SOURCE_DIR} AND
+               NOT "$ENV{PSX_SDL3_SOURCE_DIR}" STREQUAL "" AND
+               EXISTS "$ENV{PSX_SDL3_SOURCE_DIR}/CMakeLists.txt")
+            set(_psx_sdl3_src "$ENV{PSX_SDL3_SOURCE_DIR}")
+            set(FETCHCONTENT_SOURCE_DIR_SDL3 "${_psx_sdl3_src}" CACHE PATH
+                "Pre-fetched SDL3 source (skip download)" FORCE)
+        endif()
+        if(_psx_sdl3_src)
+            message(STATUS
+                "psxrecomp: using pre-fetched SDL3 source ${_psx_sdl3_src}")
+        endif()
         FetchContent_Declare(SDL3
             URL
                 "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
@@ -168,6 +187,7 @@ if(_psx_sdl_backend STREQUAL "SDL3")
                 "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
             ${_psx_sdl3_timestamp_args})
         FetchContent_MakeAvailable(SDL3)
+        unset(_psx_sdl3_src)
     endif()
     if(NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR

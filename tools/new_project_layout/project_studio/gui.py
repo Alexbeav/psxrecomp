@@ -16,6 +16,12 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
+_LOG_OK = "#3dd68c"
+_LOG_WARN = "#e6b450"
+_LOG_ERROR = "#f07178"
+_LOG_INFO = "#8a9199"
+_DEFAULT_LOG_HEIGHT = 160
+
 from .detect import audit_project
 from .models import CheckStatus, MigrateOptions
 from .ops import apply_plan
@@ -33,6 +39,18 @@ _VENV_DIR = _TOOLKIT / ".venv"
 _REQS = _TOOLKIT / "requirements-gui.txt"
 _STAMP = _VENV_DIR / ".project_studio_gui_deps"
 _BOOTSTRAP_ENV = "PROJECT_STUDIO_GUI_BOOTSTRAPPED"
+
+
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False)) or os.environ.get(
+        "RETCOMM_STUDIO_FROZEN", ""
+    ).strip() in ("1", "true", "yes")
+
+
+def _toolkit_root() -> Path:
+    from .paths import toolkit_dir
+
+    return toolkit_dir()
 
 
 def _pick_directory(*, title: str, parent=None, initialdir: str | None = None) -> str:
@@ -209,7 +227,8 @@ def _venv_python(venv_dir: Path = _VENV_DIR) -> Path:
 
 
 def _reqs_stamp() -> str:
-    raw = _REQS.read_bytes() if _REQS.is_file() else b"customtkinter>=5.2\n"
+    reqs = _toolkit_root() / "requirements-gui.txt"
+    raw = reqs.read_bytes() if reqs.is_file() else b"customtkinter>=5.2\n"
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -271,25 +290,38 @@ def _ensure_gui_deps() -> str | None:
     Returns an error message on failure, or None when customtkinter is ready
     in the current interpreter (possibly after re-exec).
     """
-    in_venv = _running_in_venv()
+    if _is_frozen():
+        if _ctk_importable():
+            return None
+        return (
+            "Frozen RetComM Studio build is missing customtkinter.\n"
+            "Reinstall from a release package, or run from source."
+        )
+
+    toolkit = _toolkit_root()
+    venv_dir = toolkit / ".venv"
+    reqs = toolkit / "requirements-gui.txt"
+    stamp_path = venv_dir / ".project_studio_gui_deps"
+
+    in_venv = _running_in_venv(venv_dir)
     if _ctk_importable():
         # Refresh managed venv when the stamp drifts and we are already in it.
         if in_venv:
-            if _STAMP.is_file() and _STAMP.read_text(encoding="utf-8").strip() == _reqs_stamp():
+            if stamp_path.is_file() and stamp_path.read_text(encoding="utf-8").strip() == _reqs_stamp():
                 return None
         else:
             return None
 
-    if not _REQS.is_file():
+    if not reqs.is_file():
         return (
-            f"Missing {_REQS} — cannot bootstrap GUI deps.\n"
+            f"Missing {reqs} — cannot bootstrap GUI deps.\n"
             "CLI still works: migrate_project.py audit|plan|apply"
         )
 
-    venv_py = _venv_python()
+    venv_py = _venv_python(venv_dir)
     stamp = _reqs_stamp()
     need_venv = not venv_py.is_file()
-    stamp_ok = _STAMP.is_file() and _STAMP.read_text(encoding="utf-8").strip() == stamp
+    stamp_ok = stamp_path.is_file() and stamp_path.read_text(encoding="utf-8").strip() == stamp
     need_install = need_venv or not stamp_ok or not _venv_can_import_ctk(venv_py)
 
     if need_venv:
@@ -297,10 +329,10 @@ def _ensure_gui_deps() -> str | None:
             "Project Studio GUI: creating local .venv (first run)…",
             file=sys.stderr,
         )
-        err = _run([sys.executable, "-m", "venv", str(_VENV_DIR)], label="python -m venv")
+        err = _run([sys.executable, "-m", "venv", str(venv_dir)], label="python -m venv")
         if err:
             return err
-        venv_py = _venv_python()
+        venv_py = _venv_python(venv_dir)
         if not venv_py.is_file():
             return (
                 f"venv created but interpreter missing: {venv_py}\n"
@@ -313,14 +345,15 @@ def _ensure_gui_deps() -> str | None:
             file=sys.stderr,
         )
         err = _run(
-            [str(venv_py), "-m", "pip", "install", "-r", str(_REQS)],
+            [str(venv_py), "-m", "pip", "install", "-r", str(reqs)],
             label="pip install",
         )
         if err:
             return err
-        _STAMP.write_text(stamp + "\n", encoding="utf-8")
+        stamp_path.parent.mkdir(parents=True, exist_ok=True)
+        stamp_path.write_text(stamp + "\n", encoding="utf-8")
 
-    if _running_in_venv():
+    if _running_in_venv(venv_dir):
         if _ctk_importable():
             return None
         return (
@@ -343,9 +376,12 @@ class ProjectStudioApp:
     def __init__(self, ctk, *, initial_root: Path | None = None) -> None:
         self.ctk = ctk
         self.root = ctk.CTk()
-        self.root.title("PSXRecomp Project Studio")
+        self.root.title("RetComM Studio")
         self.root.geometry("1100x820")
         self.root.minsize(900, 640)
+        # Maximize after the first map so WMs honor zoomed/fullscreen hints.
+        self.root.after(0, self._maximize_window)
+        self.root.after(50, self._apply_app_icon)
 
         self.root_var = tk.StringVar(value=str(initial_root) if initial_root else "")
         self.repo_label_var = tk.StringVar(value="(add a repo…)")
@@ -357,7 +393,10 @@ class ProjectStudioApp:
         self.probe_var = tk.BooleanVar(value=False)
         self.dry_run_var = tk.BooleanVar(value=True)
         self.force_var = tk.BooleanVar(value=False)
+        self.catalog_only_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Open a game repo and Audit.")
+        self._repo_menu_entries: list = []
+        self._netplay_detected = False
 
         self.git_branch_var = tk.StringVar()
         self.git_psx_branch_var = tk.StringVar(value="master")
@@ -371,6 +410,62 @@ class ProjectStudioApp:
         )
         self.git_libs_msg_var = tk.StringVar(value="chore: update nested lib")
         self.git_remote_update_var = tk.BooleanVar(value=False)
+        self.git_create_branch_var = tk.BooleanVar(value=False)
+        self.git_pull_mode_var = tk.StringVar(value="ff-only")
+        self.git_pull_dirty_var = tk.StringVar(value="fail")
+        self.bulk_tgt_game_var = tk.BooleanVar(value=True)
+        self.bulk_tgt_modules_var = tk.BooleanVar(value=False)
+        self.bulk_tgt_psx_var = tk.BooleanVar(value=False)
+        self.bulk_tgt_nested_var = tk.BooleanVar(value=False)
+        self.bulk_msg_var = tk.StringVar(value="chore: sync")
+        self.bulk_set_tracking_var = tk.BooleanVar(value=True)
+        self.bulk_jobs_var = tk.StringVar(value="2")
+        self._bulk_busy = False
+        # Dedicated Bulk branch picks (do not share Git-tab vars — refresh
+        # there used to overwrite bulk switch selections).
+        self.bulk_game_branch_var = tk.StringVar(value="(default)")
+        self.bulk_psx_branch_var = tk.StringVar(value="(default)")
+        self.bulk_ui_branch_var = tk.StringVar(value="(default)")
+        self.bulk_net_branch_var = tk.StringVar(value="(default)")
+        self.bulk_rb_branch_var = tk.StringVar(value="(default)")
+        self.bulk_branch_status_var = tk.StringVar(value="")
+        self._bulk_branch_fetch_busy = False
+        self._bulk_vars: dict[str, tk.BooleanVar] = {}
+        self._newproj_busy = False
+        self.np_name_var = tk.StringVar()
+        self.np_parent_var = tk.StringVar(
+            value=str(Path.home() / "Documents" / "GitHub")
+        )
+        self.np_disc_var = tk.StringVar()
+        self.np_bios_var = tk.StringVar()
+        self.np_players_var = tk.StringVar(value="2")
+        self.np_zip_var = tk.StringVar()
+        self.np_desc_var = tk.StringVar()
+        self.np_publisher_var = tk.StringVar()
+        self.np_year_var = tk.StringVar()
+        self.np_region_var = tk.StringVar(value="USA")
+        self.np_lobby_var = tk.StringVar(value="netplay.retcomm.net")
+        self.np_ui_var = tk.BooleanVar(value=True)
+        self.np_wizard_var = tk.BooleanVar(value=True)
+        # Netplay follows players (≥2 on); GitHub stays off. All other flags on.
+        self.np_netplay_var = tk.BooleanVar(value=True)  # players default = 2
+        self.np_ci_var = tk.BooleanVar(value=True)
+        self.np_boxart_var = tk.BooleanVar(value=True)
+        self.np_stage_var = tk.BooleanVar(value=True)
+        self.np_generate_var = tk.BooleanVar(value=True)
+        self.np_build_var = tk.BooleanVar(value=True)
+        self.np_github_var = tk.BooleanVar(value=False)
+        self.np_gh_vis_var = tk.StringVar(value="private")
+        self.np_psx_ref_var = tk.StringVar(value="master")
+        self.np_ui_ref_var = tk.StringVar(value="master")
+        self.np_net_ref_var = tk.StringVar(value="(default)")
+        self.np_rb_ref_var = tk.StringVar(value="(default)")
+        self.np_status_var = tk.StringVar(
+            value="Fill disc + name, then Create project."
+        )
+        self.np_branch_status_var = tk.StringVar(value="")
+        self._np_autofill_busy = False
+        self._np_branch_refresh_busy = False
         self.release_version_var = tk.StringVar()
         self.release_bump_var = tk.StringVar(value="patch")
         self.release_publish_var = tk.BooleanVar(value=True)
@@ -386,6 +481,7 @@ class ProjectStudioApp:
         self.build_launch_args_var = tk.StringVar()
         self.build_status_var = tk.StringVar(value="Open a game repo to build.")
         self._build_busy = False
+        self._build_settings_root = ""  # path whose Build fields are loaded
         self._build_env_default = (
             "# KEY=VALUE pairs (space or newline separated)\n"
             "# Example:\n"
@@ -397,11 +493,17 @@ class ProjectStudioApp:
         self._step_vars: dict[str, tk.BooleanVar] = {}
         self._git_status = None
         self._repo_index = None
+        self._log_pane = None
+        self._log_height = _DEFAULT_LOG_HEIGHT
+        self._log_sash_job = None
 
         self._build()
         self._repo_index_load(initial_root=initial_root)
         if self.root_var.get().strip():
             self.refresh_audit()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Startup update check (studio app + shared retcomm-toolchain).
+        self.root.after(1200, self._startup_update_check)
 
     def mainloop(self) -> None:
         self.root.mainloop()
@@ -414,7 +516,7 @@ class ProjectStudioApp:
         header.pack(fill="x", padx=16, pady=(16, 8))
         ctk.CTkLabel(
             header,
-            text="Project Studio",
+            text="RetComM Studio",
             font=ctk.CTkFont(size=22, weight="bold"),
         ).pack(side="left")
         ctk.CTkLabel(
@@ -423,6 +525,21 @@ class ProjectStudioApp:
             text_color=("gray40", "gray65"),
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=(12, 0), pady=(6, 0))
+        ctk.CTkButton(
+            header,
+            text="Check for updates",
+            width=140,
+            height=32,
+            command=self._on_check_updates,
+        ).pack(side="right")
+        self._update_status_var = tk.StringVar(value="")
+        ctk.CTkLabel(
+            header,
+            textvariable=self._update_status_var,
+            text_color=("gray40", "gray65"),
+            font=ctk.CTkFont(size=11),
+            anchor="e",
+        ).pack(side="right", padx=(0, 10))
 
         path_row = ctk.CTkFrame(root, fg_color="transparent")
         path_row.pack(fill="x", padx=16, pady=4)
@@ -450,6 +567,13 @@ class ProjectStudioApp:
             fg_color=("#3a7ebf", "#1f538d"),
             command=self.refresh_audit,
         ).pack(side="left", padx=(8, 0))
+        ctk.CTkSwitch(
+            path_row,
+            text="Catalog only",
+            variable=self.catalog_only_var,
+            command=self._on_catalog_only_toggle,
+            width=120,
+        ).pack(side="left", padx=(12, 0))
 
         self.repo_path_label = ctk.CTkLabel(
             root,
@@ -460,26 +584,69 @@ class ProjectStudioApp:
         )
         self.repo_path_label.pack(fill="x", padx=16 + 88, pady=(0, 2))
 
-        tabs = ctk.CTkTabview(root, corner_radius=10)
-        tabs.pack(fill="both", expand=True, padx=16, pady=8)
+        mode = ""
+        try:
+            mode = str(ctk.get_appearance_mode() or "")
+        except Exception:
+            mode = ""
+        sash_bg = "#3d3d3d" if mode.lower() == "dark" else "#c4c4c4"
+        pane = tk.PanedWindow(
+            root,
+            orient=tk.VERTICAL,
+            sashwidth=8,
+            sashrelief=tk.FLAT,
+            bd=0,
+            bg=sash_bg,
+            opaqueresize=True,
+        )
+        pane.pack(fill="both", expand=True, padx=16, pady=(8, 16))
+        self._log_pane = pane
+
+        tabs_host = ctk.CTkFrame(pane, fg_color="transparent", corner_radius=0)
+        tabs = ctk.CTkTabview(tabs_host, corner_radius=10)
+        tabs.pack(fill="both", expand=True)
         tab_migrate = tabs.add("Migrate")
+        tab_new = tabs.add("New Project")
         tab_git = tabs.add("Git / GitHub")
+        tab_bulk = tabs.add("Bulk")
         tab_build = tabs.add("Build")
         self._tabs = tabs
 
-        self._build_migrate_tab(tab_migrate)
-        self._build_git_tab(tab_git)
-        self._build_build_tab(tab_build)
+        self._build_migrate_tab(self._scrollable_tab(tab_migrate))
+        self._build_new_project_tab(self._scrollable_tab(tab_new))
+        self._build_git_tab(self._scrollable_tab(tab_git))
+        self._build_bulk_tab(self._scrollable_tab(tab_bulk))
+        self._build_build_tab(self._scrollable_tab(tab_build))
 
-        log_wrap = ctk.CTkFrame(root, corner_radius=10)
-        log_wrap.pack(fill="both", expand=False, padx=16, pady=(0, 16))
+        log_wrap = ctk.CTkFrame(pane, corner_radius=10)
+        head = ctk.CTkFrame(log_wrap, fg_color="transparent")
+        head.pack(fill="x", padx=12, pady=(8, 2))
         ctk.CTkLabel(
-            log_wrap,
+            head,
             text="Log",
             font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(8, 2))
-        self.log = ctk.CTkTextbox(log_wrap, height=120, font=ctk.CTkFont(size=12))
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head,
+            text="drag the bar above to resize",
+            text_color=("gray45", "gray60"),
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=(10, 0), pady=(2, 0))
+        self.log = ctk.CTkTextbox(log_wrap, height=_DEFAULT_LOG_HEIGHT, font=ctk.CTkFont(size=12))
         self.log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._setup_log_tags()
+
+        pane.add(tabs_host, minsize=220, stretch="always")
+        pane.add(log_wrap, minsize=100, stretch="never")
+        pane.bind("<ButtonRelease-1>", self._on_log_sash, add="+")
+        self.root.after(80, self._apply_log_sash)
+
+    def _scrollable_tab(self, tab):
+        """Fill a Tabview page with a vertical scroller so long tabs stay reachable."""
+        ctk = self.ctk
+        body = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=0, pady=0)
+        return body
 
     def _build_migrate_tab(self, tab) -> None:
         ctk = self.ctk
@@ -514,6 +681,7 @@ class ProjectStudioApp:
             variable=self.players_var,
             width=72,
             height=32,
+            command=self._on_players_changed,
         ).pack(side="left")
         ctk.CTkLabel(row2, text="Zip prefix", width=80, anchor="e").pack(
             side="left", padx=(16, 8)
@@ -544,8 +712,9 @@ class ProjectStudioApp:
             justify="left",
         ).pack(anchor="w", padx=12, pady=(2, 10))
 
-        mid = ctk.CTkFrame(tab, fg_color="transparent")
-        mid.pack(fill="both", expand=True, padx=4, pady=4)
+        mid = ctk.CTkFrame(tab, fg_color="transparent", height=320)
+        mid.pack(fill="x", padx=4, pady=4)
+        mid.pack_propagate(False)
         mid.grid_columnconfigure(0, weight=1)
         mid.grid_columnconfigure(1, weight=1)
         mid.grid_rowconfigure(0, weight=1)
@@ -591,6 +760,806 @@ class ProjectStudioApp:
             anchor="w",
         ).pack(side="left", fill="x", expand=True)
 
+    def _build_new_project_tab(self, tab) -> None:
+        """Wizard that drives setup_project.sh / .ps1 then indexes the result."""
+        ctk = self.ctk
+        from .newproject import is_windows, setup_script_paths
+
+        sh, ps1 = setup_script_paths()
+        script = ps1.name if is_windows() else sh.name
+
+        head = ctk.CTkFrame(tab, corner_radius=10)
+        head.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            head,
+            text="New Project  ·  end-to-end setup_project wizard",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        ctk.CTkLabel(
+            head,
+            text=f"Routes to {script} on this OS with --yes / -Yes (no TTY prompts).",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        def row(parent, label: str, widget_fn) -> None:
+            r = ctk.CTkFrame(parent, fg_color="transparent")
+            r.pack(fill="x", padx=12, pady=3)
+            ctk.CTkLabel(r, text=label, width=110, anchor="w").pack(side="left")
+            widget_fn(r)
+
+        paths = ctk.CTkFrame(tab, corner_radius=10)
+        paths.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            paths, text="Paths", font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        def parent_widgets(r):
+            ctk.CTkEntry(r, textvariable=self.np_parent_var, height=30).pack(
+                side="left", fill="x", expand=True, padx=(0, 8)
+            )
+            ctk.CTkButton(
+                r, text="Browse…", width=80, height=30, command=self._np_browse_parent
+            ).pack(side="left")
+
+        def name_widgets(r):
+            ctk.CTkEntry(
+                r,
+                textvariable=self.np_name_var,
+                placeholder_text="MyGameRecomp",
+                height=30,
+            ).pack(side="left", fill="x", expand=True)
+
+        def disc_widgets(r):
+            ctk.CTkEntry(r, textvariable=self.np_disc_var, height=30).pack(
+                side="left", fill="x", expand=True, padx=(0, 8)
+            )
+            ctk.CTkButton(
+                r, text="Browse…", width=80, height=30, command=self._np_browse_disc
+            ).pack(side="left", padx=(0, 6))
+            ctk.CTkButton(
+                r,
+                text="Autofill meta",
+                width=110,
+                height=30,
+                command=self._np_autofill_meta,
+            ).pack(side="left")
+
+        def bios_widgets(r):
+            ctk.CTkEntry(
+                r,
+                textvariable=self.np_bios_var,
+                placeholder_text="optional SCPH1001.BIN",
+                height=30,
+            ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+            ctk.CTkButton(
+                r, text="Browse…", width=80, height=30, command=self._np_browse_bios
+            ).pack(side="left")
+
+        row(paths, "Parent dir", parent_widgets)
+        row(paths, "Name", name_widgets)
+        row(paths, "Disc (.cue)", disc_widgets)
+        row(paths, "BIOS", bios_widgets)
+        ctk.CTkLabel(
+            paths,
+            text="Autofill uses Track-01 CRC/MD5/SHA1 → Redump + libretro "
+            "(romhacks often miss). Runs automatically after Browse.",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+            wraplength=960,
+        ).pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkFrame(paths, fg_color="transparent", height=2).pack()
+
+        meta = ctk.CTkFrame(tab, corner_radius=10)
+        meta.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            meta, text="Game", font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        def players_widgets(r):
+            ctk.CTkOptionMenu(
+                r,
+                values=[str(i) for i in range(1, 9)],
+                variable=self.np_players_var,
+                width=72,
+                height=30,
+                command=self._np_on_players_changed,
+            ).pack(side="left")
+            ctk.CTkLabel(r, text="Zip prefix", width=80, anchor="e").pack(
+                side="left", padx=(16, 8)
+            )
+            ctk.CTkEntry(r, textvariable=self.np_zip_var, width=140, height=30).pack(
+                side="left"
+            )
+            ctk.CTkLabel(r, text="Region", width=60, anchor="e").pack(
+                side="left", padx=(12, 8)
+            )
+            ctk.CTkEntry(r, textvariable=self.np_region_var, width=80, height=30).pack(
+                side="left"
+            )
+
+        def desc_widgets(r):
+            ctk.CTkEntry(r, textvariable=self.np_desc_var, height=30).pack(
+                side="left", fill="x", expand=True
+            )
+
+        def pub_widgets(r):
+            ctk.CTkEntry(r, textvariable=self.np_publisher_var, height=30).pack(
+                side="left", fill="x", expand=True, padx=(0, 8)
+            )
+            ctk.CTkLabel(r, text="Year", width=40, anchor="e").pack(side="left")
+            ctk.CTkEntry(r, textvariable=self.np_year_var, width=80, height=30).pack(
+                side="left", padx=(8, 0)
+            )
+
+        row(meta, "Players", players_widgets)
+        row(meta, "Description", desc_widgets)
+        row(meta, "Publisher", pub_widgets)
+        ctk.CTkFrame(meta, fg_color="transparent", height=6).pack()
+
+        feats = ctk.CTkFrame(tab, corner_radius=10)
+        feats.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            feats, text="Features", font=ctk.CTkFont(size=13, weight="bold")
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        toggles = ctk.CTkFrame(feats, fg_color="transparent")
+        toggles.pack(fill="x", padx=12, pady=(0, 4))
+        for text, var in (
+            ("recomp-ui", self.np_ui_var),
+            ("Wizard", self.np_wizard_var),
+            ("Netplay", self.np_netplay_var),
+            ("CI", self.np_ci_var),
+            ("Boxart", self.np_boxart_var),
+            ("Stage disc", self.np_stage_var),
+            ("Generate", self.np_generate_var),
+            ("Build", self.np_build_var),
+            ("GitHub", self.np_github_var),
+        ):
+            ctk.CTkCheckBox(toggles, text=text, variable=var, width=100).pack(
+                side="left", padx=(0, 6), pady=2
+            )
+
+        def lobby_widgets(r):
+            ctk.CTkEntry(r, textvariable=self.np_lobby_var, height=30).pack(
+                side="left", fill="x", expand=True, padx=(0, 8)
+            )
+            ctk.CTkLabel(r, text="GH vis", width=50, anchor="e").pack(side="left")
+            ctk.CTkOptionMenu(
+                r,
+                values=["private", "public", "internal"],
+                variable=self.np_gh_vis_var,
+                width=100,
+                height=30,
+            ).pack(side="left", padx=(8, 0))
+
+        row(feats, "Lobby URL", lobby_widgets)
+        ctk.CTkFrame(feats, fg_color="transparent", height=6).pack()
+
+        refs = ctk.CTkFrame(tab, corner_radius=10)
+        refs.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            refs,
+            text="Submodule / nested branches",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            refs,
+            text="Pick a public remote head (git ls-remote). "
+            "net/rb “(default)” keeps the script’s pin.",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+            wraplength=960,
+        ).pack(fill="x", padx=12, pady=(0, 4))
+
+        # Compact select-only menus in a left→right wrapping row.
+        wrap = ctk.CTkFrame(refs, fg_color="transparent")
+        wrap.pack(fill="x", padx=12, pady=2)
+        self._np_ref_wrap = wrap
+        self._np_ref_cells: list = []
+
+        def ref_menu(label: str, var: tk.StringVar, menu_attr: str, values: list[str]):
+            cell = ctk.CTkFrame(wrap, fg_color="transparent")
+            ctk.CTkLabel(cell, text=label, anchor="w").pack(anchor="w")
+            menu = ctk.CTkOptionMenu(
+                cell,
+                variable=var,
+                values=values,
+                width=150,
+                height=28,
+            )
+            menu.pack(anchor="w", pady=(2, 0))
+            setattr(self, menu_attr, menu)
+            self._np_ref_cells.append(cell)
+            return menu
+
+        ref_menu("psxrecomp", self.np_psx_ref_var, "np_psx_ref_menu", ["master"])
+        ref_menu("recomp-ui", self.np_ui_ref_var, "np_ui_ref_menu", ["master"])
+        ref_menu(
+            "recomp-net",
+            self.np_net_ref_var,
+            "np_net_ref_menu",
+            ["(default)"],
+        )
+        ref_menu(
+            "rbengine",
+            self.np_rb_ref_var,
+            "np_rb_ref_menu",
+            ["(default)"],
+        )
+        wrap.bind("<Configure>", self._np_reflow_ref_menus)
+        self.root.after(50, self._np_reflow_ref_menus)
+
+        bref = ctk.CTkFrame(refs, fg_color="transparent")
+        bref.pack(fill="x", padx=12, pady=(4, 8))
+        ctk.CTkButton(
+            bref,
+            text="Refresh remote branches",
+            width=180,
+            height=30,
+            command=self._np_refresh_remote_branches,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            bref,
+            textvariable=self.np_branch_status_var,
+            text_color=("gray40", "gray65"),
+            anchor="w",
+        ).pack(side="left", padx=12)
+        self.root.after(200, self._np_refresh_remote_branches)
+
+        actions = ctk.CTkFrame(tab, corner_radius=10)
+        actions.pack(fill="x", padx=4, pady=4)
+        brow = ctk.CTkFrame(actions, fg_color="transparent")
+        brow.pack(fill="x", padx=12, pady=12)
+        ctk.CTkButton(
+            brow,
+            text="Create project",
+            width=160,
+            height=36,
+            fg_color=("#2ecc71", "#1e8449"),
+            hover_color=("#27ae60", "#196f3d"),
+            command=self._np_create,
+        ).pack(side="left")
+        ctk.CTkSwitch(
+            brow, text="Dry-run", variable=self.dry_run_var, width=100
+        ).pack(side="left", padx=16)
+        ctk.CTkLabel(
+            brow,
+            textvariable=self.np_status_var,
+            text_color=("gray30", "gray70"),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
+    def _np_on_players_changed(self, value: str) -> None:
+        """Auto netplay from player count; keep the checkbox always clickable."""
+        try:
+            n = int(value or self.np_players_var.get() or "2")
+        except ValueError:
+            n = 2
+        if n >= 2:
+            self.np_netplay_var.set(True)
+        else:
+            # 1P → turn off, but do not grey out (user may still toggle on).
+            self.np_netplay_var.set(False)
+
+    def _maximize_window(self) -> None:
+        """Maximize the main window (cross-platform best-effort)."""
+        try:
+            self.root.state("zoomed")
+            return
+        except tk.TclError:
+            pass
+        try:
+            self.root.attributes("-zoomed", True)
+            return
+        except tk.TclError:
+            pass
+        try:
+            sw = int(self.root.winfo_screenwidth())
+            sh = int(self.root.winfo_screenheight())
+            self.root.geometry(f"{sw}x{sh}+0+0")
+        except tk.TclError:
+            pass
+
+    def _apply_app_icon(self) -> None:
+        """Window / taskbar icon from assets (PNG / ICO)."""
+        from .paths import assets_dir
+
+        base = assets_dir()
+        if base is None:
+            return
+        ico = base / "retcomm-studio.ico"
+        png = base / "retcomm-studio.png"
+        try:
+            if sys.platform == "win32" and ico.is_file():
+                self.root.iconbitmap(default=str(ico))
+                return
+        except tk.TclError:
+            pass
+        try:
+            if png.is_file():
+                img = tk.PhotoImage(file=str(png))
+                self.root.iconphoto(True, img)
+                self._app_icon_image = img  # keep ref
+        except tk.TclError:
+            pass
+
+    def _startup_update_check(self) -> None:
+        from .updater import check_updates_on_startup_enabled
+
+        if not check_updates_on_startup_enabled():
+            return
+        self._run_update_check(prompt_if_available=True, silent_if_current=True)
+
+    def _on_check_updates(self) -> None:
+        self._run_update_check(prompt_if_available=True, silent_if_current=False)
+
+    def _run_update_check(
+        self, *, prompt_if_available: bool, silent_if_current: bool
+    ) -> None:
+        if getattr(self, "_update_check_busy", False):
+            return
+        self._update_check_busy = True
+        if hasattr(self, "_update_status_var"):
+            self._update_status_var.set("Checking…")
+        self._log("--- Check for updates (Studio + toolchain) ---")
+
+        def on_progress(msg: str) -> None:
+            self.root.after(0, lambda m=msg: self._update_status_var.set(m[:80]))
+
+        def on_done(result) -> None:
+            def apply() -> None:
+                self._update_check_busy = False
+                self._log(result.studio.message)
+                self._log(result.toolchain.message)
+                if hasattr(self, "_update_status_var"):
+                    if result.studio.available or result.toolchain.available:
+                        self._update_status_var.set("Updates available")
+                    else:
+                        self._update_status_var.set("Up to date")
+                any_avail = result.studio.available or result.toolchain.available
+                if any_avail and prompt_if_available:
+                    self._prompt_apply_updates(result)
+                elif not silent_if_current:
+                    messagebox.showinfo(
+                        "RetComM Studio",
+                        result.message or "Everything is up to date.",
+                        parent=self.root,
+                    )
+
+            self.root.after(0, apply)
+
+        from .updater import check_updates_async
+
+        check_updates_async(on_done, on_progress=on_progress)
+
+    def _prompt_apply_updates(self, result) -> None:
+        lines = []
+        if result.studio.available:
+            lines.append(f"• Studio: {result.studio.current} → {result.studio.latest}")
+        if result.toolchain.available:
+            lines.append(
+                f"• Toolchain: {result.toolchain.current} → {result.toolchain.latest}"
+            )
+        body = (
+            "Updates are available:\n\n"
+            + "\n".join(lines)
+            + "\n\nApply now?\n"
+            "(Toolchain installs into the shared RetComM cache used by the "
+            "launcher and game apps.)"
+        )
+        if not messagebox.askyesno("RetComM Studio", body, parent=self.root):
+            return
+
+        update_studio = bool(result.studio.available)
+        update_toolchain = bool(result.toolchain.available)
+        # If both, ask whether to do both or just one — keep it simple: both.
+        self._update_status_var.set("Updating…")
+        self._log("--- Applying updates ---")
+
+        def worker() -> None:
+            from .updater import apply_updates
+
+            def prog(msg: str) -> None:
+                self.root.after(0, lambda m=msg: self._update_status_var.set(m[:80]))
+                self.root.after(0, lambda m=msg: self._log(m))
+
+            summary, should_exit = apply_updates(
+                result,
+                update_studio=update_studio,
+                update_toolchain=update_toolchain,
+                on_progress=prog,
+            )
+
+            def done() -> None:
+                self._log(summary)
+                self._update_status_var.set("Update done" if not should_exit else "Restarting…")
+                if should_exit:
+                    messagebox.showinfo(
+                        "RetComM Studio",
+                        summary + "\n\nStudio will exit to finish the update.",
+                        parent=self.root,
+                    )
+                    self.root.after(300, self.root.destroy)
+                else:
+                    messagebox.showinfo(
+                        "RetComM Studio", summary, parent=self.root
+                    )
+
+            self.root.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_reflow_ref_menus(self, _event=None) -> None:
+        """Lay out New Project branch menus left→right, wrapping when needed."""
+        wrap = getattr(self, "_np_ref_wrap", None)
+        cells = getattr(self, "_np_ref_cells", None)
+        if wrap is None or not cells:
+            return
+        width = max(int(wrap.winfo_width()), 1)
+        # Each cell ≈ OptionMenu 150 + padding; keep at least one column.
+        cell_w = 170
+        cols = max(1, width // cell_w)
+        if getattr(self, "_np_ref_cols", None) == cols:
+            return
+        self._np_ref_cols = cols
+        for i, cell in enumerate(cells):
+            cell.grid(row=i // cols, column=i % cols, sticky="nw", padx=(0, 16), pady=4)
+
+    @staticmethod
+    def _np_ref_choice(raw: str) -> str:
+        """Map OptionMenu sentinel labels to empty / concrete branch names."""
+        v = (raw or "").strip()
+        if not v or v.startswith("("):
+            return ""
+        return v
+
+    def _np_browse_parent(self) -> None:
+        path = _pick_directory(
+            title="Parent directory for new project",
+            parent=self.root,
+            initialdir=self.np_parent_var.get().strip() or None,
+        )
+        if path:
+            self.np_parent_var.set(path)
+
+    def _np_browse_disc(self) -> None:
+        start = self.np_disc_var.get().strip() or self.np_parent_var.get().strip() or None
+        if start and Path(start).is_file():
+            start = str(Path(start).parent)
+        path = _pick_open_file(
+            title="Select Redump .cue",
+            parent=self.root,
+            initialdir=start,
+            filetypes=[("Cue sheet", "*.cue"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        cue = str(Path(path).expanduser().resolve())
+        self.np_disc_var.set(cue)
+        self._np_populate_name_from_disc(cue, only_empty=True)
+        self._np_autofill_meta(only_empty=True)
+
+    def _np_populate_name_from_disc(self, cue: str, *, only_empty: bool = True) -> None:
+        """Set project name from cue stem (and later Redump title via autofill)."""
+        if only_empty and self.np_name_var.get().strip():
+            return
+        from .discmeta import suggest_project_name
+
+        guess = suggest_project_name(Path(cue).stem)
+        if guess:
+            self.np_name_var.set(guess)
+            self._np_name_from_disc = True
+
+    def _np_browse_bios(self) -> None:
+        start = self.np_bios_var.get().strip() or self.np_parent_var.get().strip() or None
+        if start and Path(start).is_file():
+            start = str(Path(start).parent)
+        path = _pick_open_file(
+            title="Select SCPH1001 BIOS",
+            parent=self.root,
+            initialdir=start,
+            filetypes=[("BIOS", "*.bin *.BIN"), ("All files", "*.*")],
+        )
+        if path:
+            self.np_bios_var.set(str(Path(path).expanduser().resolve()))
+
+    def _np_refresh_remote_branches(self) -> None:
+        """Populate New Project branch ComboBoxes via git ls-remote."""
+        if getattr(self, "_np_branch_refresh_busy", False):
+            return
+        self._np_branch_refresh_busy = True
+        self.np_branch_status_var.set("Fetching remote heads…")
+
+        def worker() -> None:
+            from .gitops import (
+                DEFAULT_PSXRECOMP_URL,
+                DEFAULT_RECOMP_NET_URL,
+                DEFAULT_RECOMP_UI_URL,
+                DEFAULT_RBENGINE_URL,
+                list_remote_head_branches,
+            )
+
+            try:
+                results = {
+                    "psx": list_remote_head_branches(DEFAULT_PSXRECOMP_URL),
+                    "ui": list_remote_head_branches(DEFAULT_RECOMP_UI_URL),
+                    "net": list_remote_head_branches(DEFAULT_RECOMP_NET_URL),
+                    "rb": list_remote_head_branches(DEFAULT_RBENGINE_URL),
+                }
+                err = ""
+            except Exception as exc:
+                results = {"psx": [], "ui": [], "net": [], "rb": []}
+                err = str(exc)
+
+            def apply() -> None:
+                self._np_branch_refresh_busy = False
+                required = (
+                    ("psx", self.np_psx_ref_var, getattr(self, "np_psx_ref_menu", None)),
+                    ("ui", self.np_ui_ref_var, getattr(self, "np_ui_ref_menu", None)),
+                )
+                optional = (
+                    ("net", self.np_net_ref_var, getattr(self, "np_net_ref_menu", None)),
+                    ("rb", self.np_rb_ref_var, getattr(self, "np_rb_ref_menu", None)),
+                )
+                counts = []
+                for key, var, menu in required:
+                    branches = results.get(key) or []
+                    if menu is None:
+                        continue
+                    self._set_branch_menu(menu, var, branches)
+                    counts.append(f"{key}:{len(branches)}")
+                for key, var, menu in optional:
+                    branches = results.get(key) or []
+                    if menu is None:
+                        continue
+                    current = self._np_ref_choice(var.get())
+                    values = ["(default)"] + [b for b in branches if b]
+                    if current and current not in values:
+                        values = ["(default)", current, *[b for b in branches if b and b != current]]
+                    menu.configure(values=values)
+                    target = current if current in values else "(default)"
+                    var.set(target)
+                    try:
+                        menu.set(target)
+                    except Exception:
+                        pass
+                    counts.append(f"{key}:{len(branches)}")
+                if err:
+                    self.np_branch_status_var.set(f"Branch fetch error: {err}")
+                    self._log(f"New Project branch refresh failed: {err}")
+                else:
+                    self.np_branch_status_var.set(
+                        "Remote heads: " + ", ".join(counts)
+                    )
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_autofill_meta(self, only_empty: bool = False) -> None:
+        """Cross-reference disc digests with Redump / libretro / catalog."""
+        cue = self.np_disc_var.get().strip()
+        if not cue:
+            messagebox.showinfo(
+                "Project Studio",
+                "Select a disc .cue first.",
+                parent=self.root,
+            )
+            return
+        if not Path(cue).expanduser().is_file():
+            messagebox.showerror(
+                "Project Studio",
+                f"Disc not found:\n{cue}",
+                parent=self.root,
+            )
+            return
+        if getattr(self, "_np_autofill_busy", False):
+            return
+        self._np_autofill_busy = True
+        self.np_status_var.set("Looking up disc metadata…")
+        self._log(f"Autofill meta for {cue}")
+
+        def worker() -> None:
+            from .discmeta import lookup_cue, suggest_project_name
+
+            try:
+                hit = lookup_cue(cue)
+                err = ""
+            except Exception as exc:
+                hit = None
+                err = str(exc)
+
+            def apply() -> None:
+                self._np_autofill_busy = False
+                if hit is None:
+                    self.np_status_var.set(f"Autofill failed: {err}")
+                    self._log(f"Autofill failed: {err}")
+                    messagebox.showerror(
+                        "Project Studio",
+                        f"Metadata lookup failed:\n{err}",
+                        parent=self.root,
+                    )
+                    return
+                for note in hit.notes:
+                    self._log(f"  meta: {note}")
+
+                def set_if(var: tk.StringVar, value: str) -> bool:
+                    if not value:
+                        return False
+                    if only_empty and var.get().strip():
+                        return False
+                    var.set(value)
+                    return True
+
+                filled: list[str] = []
+                if hit.players is not None:
+                    cur = (self.np_players_var.get() or "").strip()
+                    if (not only_empty) or cur in ("", "2"):
+                        self.np_players_var.set(str(hit.players))
+                        filled.append(f"players={hit.players}")
+                if set_if(self.np_desc_var, hit.description):
+                    filled.append("description")
+                if set_if(self.np_publisher_var, hit.publisher):
+                    filled.append("publisher")
+                if set_if(self.np_year_var, str(hit.year or "")):
+                    filled.append(f"year={hit.year}")
+                if set_if(self.np_region_var, hit.region):
+                    filled.append(f"region={hit.region}")
+                if hit.name:
+                    guess = suggest_project_name(hit.name)
+                    cur = self.np_name_var.get().strip()
+                    # Prefer Redump/catalog title over a cue-stem autosuggest.
+                    if guess and (
+                        not only_empty
+                        or not cur
+                        or getattr(self, "_np_name_from_disc", False)
+                    ):
+                        self.np_name_var.set(guess)
+                        self._np_name_from_disc = True
+                        filled.append("name")
+                elif not self.np_name_var.get().strip():
+                    cue_guess = suggest_project_name(Path(cue).stem)
+                    if cue_guess:
+                        self.np_name_var.set(cue_guess)
+                        self._np_name_from_disc = True
+                        filled.append("name")
+
+                # Keep netplay in sync when players were autofilled.
+                self._np_on_players_changed(self.np_players_var.get())
+
+                src = hit.source or "none"
+                if filled:
+                    msg = f"Autofill ({src}): " + ", ".join(filled)
+                elif src == "none":
+                    msg = "Autofill: no match (romhack / non-Redump?)"
+                else:
+                    msg = f"Autofill ({src}): fields already set"
+                self.np_status_var.set(msg)
+                self._log(msg)
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _np_options(self):
+        from .newproject import NewProjectOptions
+
+        try:
+            players = int(self.np_players_var.get() or "2")
+        except ValueError:
+            players = 2
+        return NewProjectOptions(
+            name=self.np_name_var.get().strip(),
+            disc=self.np_disc_var.get().strip(),
+            parent_dir=self.np_parent_var.get().strip() or ".",
+            bios=self.np_bios_var.get().strip(),
+            players=players,
+            zip_prefix=self.np_zip_var.get().strip(),
+            description=self.np_desc_var.get().strip(),
+            publisher=self.np_publisher_var.get().strip(),
+            year=self.np_year_var.get().strip(),
+            region=self.np_region_var.get().strip() or "USA",
+            enable_recomp_ui=bool(self.np_ui_var.get()),
+            enable_wizard=bool(self.np_wizard_var.get()),
+            enable_netplay=bool(self.np_netplay_var.get()),
+            lobby_url=self.np_lobby_var.get().strip() or "netplay.retcomm.net",
+            enable_ci=bool(self.np_ci_var.get()),
+            fetch_boxart=bool(self.np_boxart_var.get()),
+            stage_disc=bool(self.np_stage_var.get()),
+            do_generate=bool(self.np_generate_var.get()),
+            do_build=bool(self.np_build_var.get()),
+            create_github=bool(self.np_github_var.get()),
+            github_visibility=self.np_gh_vis_var.get().strip() or "private",
+            psxrecomp_ref=self._np_ref_choice(self.np_psx_ref_var.get()) or "master",
+            recomp_ui_ref=self._np_ref_choice(self.np_ui_ref_var.get()) or "master",
+            recomp_net_ref=self._np_ref_choice(self.np_net_ref_var.get()),
+            rbengine_ref=self._np_ref_choice(self.np_rb_ref_var.get()),
+            dry_run=self._git_dry(),
+        )
+
+    def _np_create(self) -> None:
+        from .newproject import (
+            index_new_project,
+            project_root_for,
+            run_new_project,
+            validate_options,
+        )
+
+        if self._newproj_busy:
+            messagebox.showinfo(
+                "Project Studio",
+                "A new-project run is already in progress.",
+                parent=self.root,
+            )
+            return
+        opts = self._np_options()
+        errs = validate_options(opts)
+        if errs:
+            messagebox.showerror(
+                "Project Studio",
+                "Fix these before creating:\n\n• " + "\n• ".join(errs),
+                parent=self.root,
+            )
+            return
+        dest = project_root_for(opts)
+        if not opts.dry_run:
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Create new project?\n\n{dest}\n\n"
+                f"disc={opts.disc}\n"
+                f"players={opts.players}  ui={opts.enable_recomp_ui}  "
+                f"wizard={opts.enable_wizard}  netplay={opts.enable_netplay}\n"
+                f"generate={opts.do_generate}  build={opts.do_build}  "
+                f"github={opts.create_github}",
+                parent=self.root,
+            ):
+                return
+
+        def worker() -> None:
+            self._newproj_busy = True
+
+            def log_line(msg: str) -> None:
+                self.root.after(0, lambda m=msg: self._log(m))
+
+            try:
+                self.root.after(
+                    0, lambda: self.np_status_var.set("Running setup_project…")
+                )
+                self.root.after(
+                    0, lambda: self._log("--- New project setup ---")
+                )
+                r = run_new_project(opts, on_line=log_line)
+                self.root.after(0, lambda: self._log_cmd(r))
+                if r.ok and not opts.dry_run:
+                    root = project_root_for(opts)
+                    ir = index_new_project(
+                        root, name=opts.name, cue=opts.disc
+                    )
+                    self.root.after(0, lambda: self._log_cmd(ir))
+
+                    def finish() -> None:
+                        # Reload index from disk (add_repo already saved)
+                        self._repo_index_load(initial_root=root)
+                        self.np_status_var.set(f"Created {root.name}")
+                        messagebox.showinfo(
+                            "Project Studio",
+                            f"Project ready:\n{root}\n\nIndexed in Studio.",
+                            parent=self.root,
+                        )
+
+                    self.root.after(0, finish)
+                else:
+                    self.root.after(
+                        0,
+                        lambda: self.np_status_var.set(
+                            f"{'OK' if r.ok else 'FAIL'}: {r.message}"
+                        ),
+                    )
+            finally:
+                self._newproj_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _build_git_tab(self, tab) -> None:
         ctk = self.ctk
 
@@ -615,6 +1584,37 @@ class ProjectStudioApp:
             head, text="Dry-run", variable=self.dry_run_var, width=100
         ).pack(side="right", padx=12)
 
+        pull_opts = ctk.CTkFrame(top, fg_color="transparent")
+        pull_opts.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkLabel(pull_opts, text="Pull mode", width=80, anchor="w").pack(
+            side="left"
+        )
+        self.git_pull_mode_menu = ctk.CTkComboBox(
+            pull_opts,
+            variable=self.git_pull_mode_var,
+            values=["ff-only", "rebase", "merge", "reset"],
+            width=120,
+            height=28,
+        )
+        self.git_pull_mode_menu.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(pull_opts, text="If dirty", width=70, anchor="w").pack(
+            side="left"
+        )
+        self.git_pull_dirty_menu = ctk.CTkComboBox(
+            pull_opts,
+            variable=self.git_pull_dirty_var,
+            values=["fail", "stash", "discard"],
+            width=110,
+            height=28,
+        )
+        self.git_pull_dirty_menu.pack(side="left")
+        ctk.CTkLabel(
+            pull_opts,
+            text="reset = match origin  ·  discard drops local edits",
+            text_color=("gray40", "gray60"),
+            anchor="w",
+        ).pack(side="left", padx=(12, 0))
+
         self.git_summary_var = tk.StringVar(value="Open a game repo, then Refresh.")
         ctk.CTkLabel(
             top,
@@ -630,20 +1630,20 @@ class ProjectStudioApp:
         ctk.CTkLabel(branch_row, text="Game branch", width=100, anchor="w").pack(
             side="left"
         )
-        self.git_branch_menu = ctk.CTkOptionMenu(
+        self.git_branch_menu = ctk.CTkComboBox(
             branch_row,
             variable=self.git_branch_var,
             values=["(refresh)"],
-            width=180,
+            width=200,
             height=30,
         )
         self.git_branch_menu.pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             branch_row,
-            text="Checkout",
-            width=90,
+            text="Switch",
+            width=80,
             height=30,
-            command=self._git_checkout_branch,
+            command=self._git_switch_branch,
         ).pack(side="left")
         ctk.CTkButton(
             branch_row, text="Pull", width=70, height=30, command=self._git_pull
@@ -651,6 +1651,12 @@ class ProjectStudioApp:
         ctk.CTkButton(
             branch_row, text="Push", width=70, height=30, command=self._git_push
         ).pack(side="left")
+        ctk.CTkSwitch(
+            branch_row,
+            text="Create branch",
+            variable=self.git_create_branch_var,
+            width=130,
+        ).pack(side="left", padx=(12, 0))
 
         game_commit = ctk.CTkFrame(top, fg_color="transparent")
         game_commit.pack(fill="x", padx=12, pady=(0, 10))
@@ -669,17 +1675,17 @@ class ProjectStudioApp:
         ).pack(side="left")
 
         sub_wrap = ctk.CTkFrame(tab, corner_radius=10)
-        sub_wrap.pack(fill="both", expand=True, padx=4, pady=4)
+        sub_wrap.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(
             sub_wrap,
-            text="Submodules  ·  CI pins gitlink SHAs; branch is for --remote updates",
+            text="Submodules  ·  Switch moves HEAD; Save only writes .gitmodules tracking",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(10, 4))
 
         cfg = ctk.CTkFrame(sub_wrap, fg_color="transparent")
         cfg.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(cfg, text="psxrecomp", width=90, anchor="w").pack(side="left")
-        self.git_psx_branch_menu = ctk.CTkOptionMenu(
+        self.git_psx_branch_menu = ctk.CTkComboBox(
             cfg,
             variable=self.git_psx_branch_var,
             values=["master"],
@@ -688,7 +1694,7 @@ class ProjectStudioApp:
         )
         self.git_psx_branch_menu.pack(side="left", padx=(0, 12))
         ctk.CTkLabel(cfg, text="recomp-ui", width=80, anchor="w").pack(side="left")
-        self.git_ui_branch_menu = ctk.CTkOptionMenu(
+        self.git_ui_branch_menu = ctk.CTkComboBox(
             cfg,
             variable=self.git_ui_branch_var,
             values=["master"],
@@ -705,11 +1711,18 @@ class ProjectStudioApp:
         ).pack(side="left")
         ctk.CTkButton(
             cfg,
-            text="Save branches",
+            text="Switch modules",
+            width=130,
+            height=28,
+            command=self._git_switch_modules,
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(
+            cfg,
+            text="Save tracking",
             width=120,
             height=28,
             command=self._git_save_submodule_branches,
-        ).pack(side="left", padx=8)
+        ).pack(side="left")
 
         actions = ctk.CTkFrame(sub_wrap, fg_color="transparent")
         actions.pack(fill="x", padx=12, pady=(0, 4))
@@ -749,11 +1762,13 @@ class ProjectStudioApp:
             command=self._git_commit_modules,
         ).pack(side="left")
 
-        self.git_sub_list = ctk.CTkScrollableFrame(sub_wrap, fg_color="transparent", height=100)
-        self.git_sub_list.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        # Plain frame (not ScrollableFrame): grows with module rows so the
+        # tab-level scroller owns the wheel, not nested section scrollbars.
+        self.git_sub_list = ctk.CTkFrame(sub_wrap, fg_color="transparent")
+        self.git_sub_list.pack(fill="x", padx=8, pady=(0, 6))
 
         nested_wrap = ctk.CTkFrame(tab, corner_radius=10)
-        nested_wrap.pack(fill="both", expand=True, padx=4, pady=4)
+        nested_wrap.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(
             nested_wrap,
             text="Nested in psxrecomp  ·  recomp-net + retcomm-rbengine",
@@ -763,7 +1778,7 @@ class ProjectStudioApp:
         ncfg = ctk.CTkFrame(nested_wrap, fg_color="transparent")
         ncfg.pack(fill="x", padx=12, pady=4)
         ctk.CTkLabel(ncfg, text="recomp-net", width=100, anchor="w").pack(side="left")
-        self.git_net_branch_menu = ctk.CTkOptionMenu(
+        self.git_net_branch_menu = ctk.CTkComboBox(
             ncfg,
             variable=self.git_net_branch_var,
             values=["main"],
@@ -772,7 +1787,7 @@ class ProjectStudioApp:
         )
         self.git_net_branch_menu.pack(side="left", padx=(0, 12))
         ctk.CTkLabel(ncfg, text="rbengine", width=80, anchor="w").pack(side="left")
-        self.git_rb_branch_menu = ctk.CTkOptionMenu(
+        self.git_rb_branch_menu = ctk.CTkComboBox(
             ncfg,
             variable=self.git_rb_branch_var,
             values=["main"],
@@ -789,11 +1804,18 @@ class ProjectStudioApp:
         ).pack(side="left")
         ctk.CTkButton(
             ncfg,
-            text="Save nested branches",
-            width=150,
+            text="Switch nested",
+            width=130,
+            height=28,
+            command=self._git_switch_nested,
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(
+            ncfg,
+            text="Save tracking",
+            width=120,
             height=28,
             command=self._git_save_nested_branches,
-        ).pack(side="left", padx=8)
+        ).pack(side="left")
 
         nact = ctk.CTkFrame(nested_wrap, fg_color="transparent")
         nact.pack(fill="x", padx=12, pady=(0, 4))
@@ -857,10 +1879,8 @@ class ProjectStudioApp:
             command=self._git_push_psxrecomp,
         ).pack(side="left")
 
-        self.git_nested_list = ctk.CTkScrollableFrame(
-            nested_wrap, fg_color="transparent", height=90
-        )
-        self.git_nested_list.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        self.git_nested_list = ctk.CTkFrame(nested_wrap, fg_color="transparent")
+        self.git_nested_list.pack(fill="x", padx=8, pady=(0, 10))
 
         rel = ctk.CTkFrame(tab, corner_radius=10)
         rel.pack(fill="x", padx=4, pady=(4, 8))
@@ -893,15 +1913,339 @@ class ProjectStudioApp:
         ctk.CTkSwitch(
             rel_row, text="Reuse emitters", variable=self.release_reuse_var, width=130
         ).pack(side="left")
+        rel_btns = ctk.CTkFrame(rel, fg_color="transparent")
+        rel_btns.pack(fill="x", padx=12, pady=(4, 4))
         ctk.CTkButton(
-            rel,
+            rel_btns,
             text="Run release workflow",
             width=180,
             height=34,
             fg_color=("#c0392b", "#922b21"),
             hover_color=("#a93226", "#7b241c"),
             command=self._git_run_release,
-        ).pack(anchor="w", padx=12, pady=(4, 12))
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            rel_btns,
+            text="Install & push CI",
+            width=160,
+            height=34,
+            command=self._git_install_push_ci,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            rel,
+            text="Install & push CI writes psxrecomp setup-release.yml → "
+            ".github/workflows/release.yml, commits, pushes, and registers Actions.",
+            text_color=("gray30", "gray70"),
+            anchor="w",
+            wraplength=980,
+        ).pack(fill="x", padx=12, pady=(0, 10))
+
+    def _build_bulk_tab(self, tab) -> None:
+        """Multi-repo Git/GitHub ops against the indexed game list."""
+        ctk = self.ctk
+
+        head = ctk.CTkFrame(tab, corner_radius=10)
+        head.pack(fill="x", padx=4, pady=4)
+        ctk.CTkLabel(
+            head,
+            text="Bulk  ·  run Git/GitHub ops on selected indexed repos (parallel 1–4)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            head,
+            text="Uses the same Pull mode / If dirty / Dry-run settings as the Git tab.",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        opts = ctk.CTkFrame(head, fg_color="transparent")
+        opts.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(opts, text="Pull mode", width=80, anchor="w").pack(side="left")
+        ctk.CTkComboBox(
+            opts,
+            variable=self.git_pull_mode_var,
+            values=["ff-only", "rebase", "merge", "reset"],
+            width=120,
+            height=28,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(opts, text="If dirty", width=70, anchor="w").pack(side="left")
+        ctk.CTkComboBox(
+            opts,
+            variable=self.git_pull_dirty_var,
+            values=["fail", "stash", "discard"],
+            width=110,
+            height=28,
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkSwitch(
+            opts, text="Dry-run", variable=self.dry_run_var, width=100
+        ).pack(side="left")
+        ctk.CTkLabel(opts, text="Parallel", width=70, anchor="e").pack(
+            side="left", padx=(12, 4)
+        )
+        ctk.CTkOptionMenu(
+            opts,
+            variable=self.bulk_jobs_var,
+            values=["1", "2", "3", "4"],
+            width=64,
+            height=28,
+            command=self._on_bulk_jobs_changed,
+        ).pack(side="left")
+
+        tgt = ctk.CTkFrame(head, fg_color="transparent")
+        tgt.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(tgt, text="Targets", width=80, anchor="w").pack(side="left")
+        ctk.CTkCheckBox(
+            tgt, text="Game root", variable=self.bulk_tgt_game_var, width=100
+        ).pack(side="left")
+        ctk.CTkCheckBox(
+            tgt, text="Modules", variable=self.bulk_tgt_modules_var, width=90
+        ).pack(side="left")
+        ctk.CTkCheckBox(
+            tgt, text="psxrecomp", variable=self.bulk_tgt_psx_var, width=100
+        ).pack(side="left")
+        ctk.CTkCheckBox(
+            tgt, text="Nested libs", variable=self.bulk_tgt_nested_var, width=110
+        ).pack(side="left")
+        ctk.CTkButton(
+            tgt,
+            text="Game only",
+            width=90,
+            height=26,
+            command=self._bulk_targets_game_only,
+        ).pack(side="left", padx=(16, 4))
+        ctk.CTkButton(
+            tgt,
+            text="Engine libs",
+            width=100,
+            height=26,
+            command=self._bulk_targets_engine,
+        ).pack(side="left")
+
+        br = ctk.CTkFrame(head, fg_color="transparent")
+        br.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkLabel(br, text="Branches", width=80, anchor="w").pack(side="left")
+        ctk.CTkLabel(br, text="game", width=40, anchor="e").pack(side="left")
+        self.bulk_game_branch_menu = ctk.CTkComboBox(
+            br,
+            variable=self.bulk_game_branch_var,
+            values=["(default)", "main", "master"],
+            width=120,
+            height=28,
+        )
+        self.bulk_game_branch_menu.pack(side="left", padx=(4, 8))
+        ctk.CTkLabel(br, text="psx", width=28, anchor="e").pack(side="left")
+        self.bulk_psx_branch_menu = ctk.CTkComboBox(
+            br,
+            variable=self.bulk_psx_branch_var,
+            values=["(default)", "master", "feat/rbengine"],
+            width=130,
+            height=28,
+        )
+        self.bulk_psx_branch_menu.pack(side="left", padx=(4, 8))
+        ctk.CTkLabel(br, text="ui", width=22, anchor="e").pack(side="left")
+        self.bulk_ui_branch_menu = ctk.CTkComboBox(
+            br,
+            variable=self.bulk_ui_branch_var,
+            values=["(default)", "master"],
+            width=120,
+            height=28,
+        )
+        self.bulk_ui_branch_menu.pack(side="left", padx=(4, 0))
+
+        br2 = ctk.CTkFrame(head, fg_color="transparent")
+        br2.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(br2, text="", width=80, anchor="w").pack(side="left")
+        ctk.CTkLabel(br2, text="net", width=40, anchor="e").pack(side="left")
+        self.bulk_net_branch_menu = ctk.CTkComboBox(
+            br2,
+            variable=self.bulk_net_branch_var,
+            values=["(default)", "main"],
+            width=120,
+            height=28,
+        )
+        self.bulk_net_branch_menu.pack(side="left", padx=(4, 8))
+        ctk.CTkLabel(br2, text="rb", width=28, anchor="e").pack(side="left")
+        self.bulk_rb_branch_menu = ctk.CTkComboBox(
+            br2,
+            variable=self.bulk_rb_branch_var,
+            values=["(default)", "main"],
+            width=130,
+            height=28,
+        )
+        self.bulk_rb_branch_menu.pack(side="left", padx=(4, 8))
+        ctk.CTkSwitch(
+            br2,
+            text="Create branch",
+            variable=self.git_create_branch_var,
+            width=120,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkSwitch(
+            br2,
+            text="Set tracking",
+            variable=self.bulk_set_tracking_var,
+            width=120,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            br2,
+            text="Fetch branches",
+            width=120,
+            height=28,
+            command=self._bulk_fetch_branches,
+        ).pack(side="left", padx=(12, 0))
+
+        br_help = ctk.CTkFrame(head, fg_color="transparent")
+        br_help.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(
+            br_help,
+            text="Branch switch: enable Targets (Game / Modules / Nested), pick "
+            "branches, then Switch branches. Fetch loads remote heads + "
+            "union of selected game branches.",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+            wraplength=980,
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            br_help,
+            textvariable=self.bulk_branch_status_var,
+            text_color=("gray40", "gray65"),
+            anchor="e",
+        ).pack(side="right", padx=(8, 0))
+
+        list_wrap = ctk.CTkFrame(tab, corner_radius=10)
+        list_wrap.pack(fill="both", expand=True, padx=4, pady=4)
+        list_head = ctk.CTkFrame(list_wrap, fg_color="transparent")
+        list_head.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            list_head,
+            text="Indexed repos",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkButton(
+            list_head, text="All", width=60, height=28, command=self._bulk_select_all
+        ).pack(side="right")
+        ctk.CTkButton(
+            list_head,
+            text="None",
+            width=60,
+            height=28,
+            command=self._bulk_select_none,
+        ).pack(side="right", padx=(0, 6))
+        ctk.CTkButton(
+            list_head,
+            text="Catalog",
+            width=80,
+            height=28,
+            command=self._bulk_select_catalog,
+        ).pack(side="right", padx=(0, 6))
+        ctk.CTkButton(
+            list_head,
+            text="Cat+contrib",
+            width=110,
+            height=28,
+            command=self._bulk_select_catalog_contributor,
+        ).pack(side="right", padx=(0, 6))
+        ctk.CTkButton(
+            list_head,
+            text="Contributor",
+            width=100,
+            height=28,
+            command=self._bulk_select_contributor,
+        ).pack(side="right", padx=(0, 6))
+        ctk.CTkButton(
+            list_head,
+            text="Refresh",
+            width=80,
+            height=28,
+            command=self._bulk_refresh_list,
+        ).pack(side="right", padx=(0, 6))
+
+        self.bulk_repo_list = ctk.CTkScrollableFrame(
+            list_wrap, fg_color="transparent", height=220
+        )
+        self.bulk_repo_list.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+
+        actions = ctk.CTkFrame(tab, corner_radius=10)
+        actions.pack(fill="x", padx=4, pady=4)
+        row = ctk.CTkFrame(actions, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(10, 6))
+        ctk.CTkButton(
+            row, text="Status", width=90, height=34, command=self._bulk_status
+        ).pack(side="left")
+        ctk.CTkButton(
+            row, text="Pull", width=90, height=34, command=self._bulk_pull
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(
+            row, text="Push", width=90, height=34, command=self._bulk_push
+        ).pack(side="left")
+        ctk.CTkButton(
+            row,
+            text="Switch branches",
+            width=140,
+            height=34,
+            command=self._bulk_switch,
+        ).pack(side="left", padx=8)
+
+        crow = ctk.CTkFrame(actions, fg_color="transparent")
+        crow.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkEntry(
+            crow,
+            textvariable=self.bulk_msg_var,
+            placeholder_text="Commit message for selected targets",
+            height=34,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            crow, text="Commit", width=100, height=34, command=self._bulk_commit
+        ).pack(side="left")
+
+        rel = ctk.CTkFrame(actions, fg_color="transparent")
+        rel.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkLabel(rel, text="Release CI", width=80, anchor="w").pack(side="left")
+        ctk.CTkEntry(
+            rel,
+            textvariable=self.release_version_var,
+            placeholder_text="version (empty = auto-bump each repo)",
+            width=220,
+            height=30,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkOptionMenu(
+            rel,
+            values=["patch", "minor", "major"],
+            variable=self.release_bump_var,
+            width=90,
+            height=30,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkSwitch(
+            rel, text="Publish", variable=self.release_publish_var, width=90
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkSwitch(
+            rel, text="Reuse emitters", variable=self.release_reuse_var, width=120
+        ).pack(side="left")
+
+        relb = ctk.CTkFrame(actions, fg_color="transparent")
+        relb.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(
+            relb,
+            text="Run release CI",
+            width=140,
+            height=34,
+            fg_color=("#c0392b", "#922b21"),
+            hover_color=("#a93226", "#7b241c"),
+            command=self._bulk_release,
+        ).pack(side="left")
+        ctk.CTkButton(
+            relb,
+            text="Install & push CI",
+            width=150,
+            height=34,
+            command=self._bulk_install_ci,
+        ).pack(side="left", padx=8)
+        ctk.CTkLabel(
+            relb,
+            text="Dispatches release.yml per selected game repo (gh). "
+            "Empty version auto-bumps independently.",
+            text_color=("gray40", "gray65"),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
 
     def _build_build_tab(self, tab) -> None:
         from .buildops import (
@@ -1010,7 +2354,27 @@ class ProjectStudioApp:
         ).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(
             row2, text="Configure", width=110, height=30, command=self._build_configure
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            row2,
+            text="Ensure OpenBIOS",
+            width=140,
+            height=30,
+            command=self._build_ensure_bios,
         ).pack(side="left")
+
+        ctk.CTkLabel(
+            cfg,
+            text=(
+                "Configure auto-regens missing OpenBIOS under psxrecomp/generated "
+                "(bundled MIT). Use Ensure OpenBIOS to force regen; SCPH1001 only "
+                "if bios/SCPH1001.BIN is present."
+            ),
+            text_color=("gray30", "gray70"),
+            anchor="w",
+            wraplength=980,
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(0, 10))
 
         build_box = ctk.CTkFrame(tab, corner_radius=10)
         build_box.pack(fill="x", padx=4, pady=4)
@@ -1041,7 +2405,7 @@ class ProjectStudioApp:
         ).pack(side="left", padx=8)
 
         launch_box = ctk.CTkFrame(tab, corner_radius=10)
-        launch_box.pack(fill="both", expand=True, padx=4, pady=4)
+        launch_box.pack(fill="x", padx=4, pady=4)
         ctk.CTkLabel(
             launch_box,
             text="Launch  ·  local product binary + env",
@@ -1141,8 +2505,11 @@ class ProjectStudioApp:
             return None
 
     def _build_env_text(self) -> str:
-        if hasattr(self, "build_env_box"):
-            return self.build_env_box.get("1.0", "end")
+        if hasattr(self, "build_env_box") and self.build_env_box is not None:
+            try:
+                return self.build_env_box.get("1.0", "end")
+            except tk.TclError:
+                return ""
         return ""
 
     def _build_run_bg(self, label: str, fn) -> None:
@@ -1192,6 +2559,23 @@ class ProjectStudioApp:
             )
 
         self._build_run_bg("Configure", go)
+
+    def _build_ensure_bios(self) -> None:
+        from .buildops import ensure_bios_backends
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            return ensure_bios_backends(
+                root,
+                force=True,
+                dry_run=self._git_dry(),
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Ensure OpenBIOS", go)
 
     def _build_run_build(self) -> None:
         from .buildops import build
@@ -1258,8 +2642,11 @@ class ProjectStudioApp:
             self.build_exe_var.set(str(exe))
             self.build_status_var.set(f"{exe}  ·  {launch_status()}")
             self._log(f"Runtime exe: {exe}")
+            self._save_build_settings_for_current()
         else:
+            self.build_exe_var.set("")
             self.build_status_var.set(f"No exe under {bdir}  ·  {launch_status()}")
+            self._save_build_settings_for_current()
 
     def _build_launch(self) -> None:
         from .buildops import launch
@@ -1286,6 +2673,7 @@ class ProjectStudioApp:
         )
         self._log_cmd(r)
         self.build_status_var.set(r.message)
+        self._save_build_settings_for_current()
 
     def _build_stop(self) -> None:
         from .buildops import stop_launch
@@ -1293,6 +2681,114 @@ class ProjectStudioApp:
         r = stop_launch()
         self._log_cmd(r)
         self.build_status_var.set(r.message)
+
+    def _save_build_settings_for_current(self) -> None:
+        """Persist Build-tab fields into the repo index for the active project."""
+        from .repo_index import set_repo_build
+
+        idx = self._repo_index
+        root_s = (self._build_settings_root or self.root_var.get()).strip()
+        if idx is None or not root_s:
+            return
+        if idx.find(root_s) is None:
+            return
+        gen = ""
+        if hasattr(self, "_build_gen_display") and self._build_gen_display is not None:
+            gen = self._build_gen_display.get().strip()
+            if gen == "(default)":
+                gen = ""
+        else:
+            gen = self.build_generator_var.get().strip()
+        settings = {
+            "build_dir": self.build_dir_var.get().strip() or "build-release",
+            "build_type": self.build_type_var.get().strip() or "Release",
+            "generator": gen,
+            "target": self.build_target_var.get().strip() or "psx-runtime",
+            "jobs": self.build_jobs_var.get().strip(),
+            "extra_cmake": self.build_extra_cmake_var.get().strip(),
+            "exe": self.build_exe_var.get().strip(),
+            "launch_args": self.build_launch_args_var.get().strip(),
+            "env": self._build_env_text().strip(),
+        }
+        set_repo_build(idx, root_s, settings)
+
+    def _clear_build_fields(self) -> None:
+        self.build_dir_var.set("build-release")
+        self.build_type_var.set("Release")
+        self.build_target_var.set("psx-runtime")
+        self.build_generator_var.set("")
+        if hasattr(self, "_build_gen_display") and self._build_gen_display is not None:
+            self._build_gen_display.set("(default)")
+        self.build_jobs_var.set("")
+        self.build_extra_cmake_var.set("")
+        self.build_exe_var.set("")
+        self.build_launch_args_var.set("")
+        self.build_status_var.set("Open a game repo to build.")
+        if hasattr(self, "build_env_box") and self.build_env_box is not None:
+            try:
+                self.build_env_box.delete("1.0", "end")
+                self.build_env_box.insert("1.0", self._build_env_default)
+            except tk.TclError:
+                pass
+
+    def _load_build_settings_for(self, root_path: str) -> None:
+        """Restore Build-tab fields for ``root_path`` (or clear + discover exe)."""
+        from .buildops import find_runtime_exe, resolve_build_dir
+        from .repo_index import get_repo_build
+
+        self._save_build_settings_for_current()
+        self._clear_build_fields()
+        self._build_settings_root = ""
+        path = (root_path or "").strip()
+        if not path:
+            return
+        self._build_settings_root = path
+        idx = self._repo_index
+        settings = get_repo_build(idx, path) if idx is not None else {}
+        if settings.get("build_dir"):
+            self.build_dir_var.set(str(settings["build_dir"]))
+        if settings.get("build_type"):
+            self.build_type_var.set(str(settings["build_type"]))
+        if settings.get("target"):
+            self.build_target_var.set(str(settings["target"]))
+        if "jobs" in settings and settings["jobs"] is not None:
+            self.build_jobs_var.set(str(settings["jobs"]))
+        if settings.get("extra_cmake"):
+            self.build_extra_cmake_var.set(str(settings["extra_cmake"]))
+        gen = str(settings.get("generator") or "").strip()
+        self.build_generator_var.set(gen)
+        if hasattr(self, "_build_gen_display") and self._build_gen_display is not None:
+            self._build_gen_display.set(gen if gen else "(default)")
+        if settings.get("launch_args"):
+            self.build_launch_args_var.set(str(settings["launch_args"]))
+        env = str(settings.get("env") or "").strip()
+        if hasattr(self, "build_env_box") and self.build_env_box is not None:
+            try:
+                self.build_env_box.delete("1.0", "end")
+                self.build_env_box.insert("1.0", env if env else self._build_env_default)
+            except tk.TclError:
+                pass
+        exe_s = str(settings.get("exe") or "").strip()
+        if exe_s and Path(exe_s).is_file():
+            self.build_exe_var.set(exe_s)
+            self.build_status_var.set(f"Restored exe for this project: {Path(exe_s).name}")
+        else:
+            try:
+                root = Path(path).expanduser().resolve()
+                bdir = resolve_build_dir(
+                    root, self.build_dir_var.get().strip() or "build-release"
+                )
+                exe = find_runtime_exe(bdir)
+                if exe:
+                    self.build_exe_var.set(str(exe))
+                    self.build_status_var.set(f"Found {exe.name} under {bdir.name}")
+                else:
+                    self.build_exe_var.set("")
+                    self.build_status_var.set(f"No exe under {bdir.name} yet")
+            except OSError:
+                self.build_exe_var.set("")
+                self.build_status_var.set("Select a project to build.")
+        self._save_build_settings_for_current()
 
     def _game_root(self) -> Path | None:
         root_s = self.root_var.get().strip()
@@ -1310,11 +2806,42 @@ class ProjectStudioApp:
     def _git_dry(self) -> bool:
         return bool(self.dry_run_var.get())
 
+    def _log_textbox(self):
+        return getattr(self.log, "_textbox", self.log)
+
+    def _setup_log_tags(self) -> None:
+        tb = self._log_textbox()
+        try:
+            tb.tag_configure("ok", foreground=_LOG_OK)
+            tb.tag_configure("warn", foreground=_LOG_WARN)
+            tb.tag_configure("error", foreground=_LOG_ERROR)
+            tb.tag_configure("info", foreground=_LOG_INFO)
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _log_tag_for(msg: str) -> str:
+        s = (msg or "").strip()
+        low = s.lower()
+        if s.startswith("[FAIL]") or low.startswith("error:") or " error:" in low:
+            return "error"
+        if s.startswith("[OK]"):
+            return "ok"
+        if (
+            low.startswith("warning")
+            or low.startswith("warn:")
+            or "warning:" in low
+            or low.startswith("[warn]")
+        ):
+            return "warn"
+        return "info"
+
     def _log_cmd(self, r) -> None:
-        self._log(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+        tag = "ok" if getattr(r, "ok", False) else "error"
+        self._log(f"[{'OK' if r.ok else 'FAIL'}] {r.message}", tag=tag)
         if r.detail:
             for line in str(r.detail).splitlines()[:20]:
-                self._log(f"  {line}")
+                self._log(f"  {line}", tag=tag)
 
     def _browse_root(self) -> None:
         """Legacy alias — Add uses the native picker and indexes the path."""
@@ -1325,6 +2852,15 @@ class ProjectStudioApp:
 
         idx = load_index()
         self._repo_index = idx
+        self._log_height = int(getattr(idx, "log_height", 0) or _DEFAULT_LOG_HEIGHT)
+        self.catalog_only_var.set(bool(getattr(idx, "catalog_only", False)))
+        jobs = int(getattr(idx, "bulk_jobs", 2) or 2)
+        if jobs < 1:
+            jobs = 1
+        if jobs > 4:
+            jobs = 4
+        self.bulk_jobs_var.set(str(jobs))
+        self.root.after(120, self._apply_log_sash)
         chosen = ""
         if initial_root is not None:
             root = initial_root.expanduser().resolve()
@@ -1336,6 +2872,41 @@ class ProjectStudioApp:
         if not chosen and idx.repos:
             chosen = idx.repos[0].path
         self._repo_refresh_menu(select_path=chosen or None)
+
+    def _visible_repo_entries(self):
+        """Indexed repos for the Game-repo dropdown (optional catalog filter)."""
+        from .bulkops import repo_has_catalog_entry, resolve_catalog_root, find_studio_toml
+        from .repo_index import RepoEntry
+
+        idx = self._repo_index
+        if idx is None:
+            return []
+        entries: list[RepoEntry] = list(idx.repos)
+        if not self.catalog_only_var.get():
+            return entries
+        studio = find_studio_toml()
+        cat = resolve_catalog_root(studio)
+        return [
+            e
+            for e in entries
+            if repo_has_catalog_entry(e, catalog_root=cat, studio_toml=studio)
+        ]
+
+    def _on_catalog_only_toggle(self) -> None:
+        from .repo_index import save_index
+
+        idx = self._repo_index
+        if idx is not None:
+            idx.catalog_only = bool(self.catalog_only_var.get())
+            save_index(idx)
+        self._repo_refresh_menu(select_path=self.root_var.get().strip() or None)
+        on = self.catalog_only_var.get()
+        visible = self._visible_repo_entries()
+        total = len(idx.repos) if idx is not None else 0
+        if on:
+            self._log(f"Catalog only: showing {len(visible)} of {total} indexed repos")
+        else:
+            self._log(f"Showing all {total} indexed repos")
 
     def _apply_repo_cue(self, root_path: str | None = None) -> None:
         """Load indexed / discovered .cue into the Migrate disc field."""
@@ -1365,19 +2936,80 @@ class ProjectStudioApp:
         if self.disc_var.get().strip():
             self.probe_var.set(True)
 
+    def _apply_repo_players(self, root_path: str | None = None) -> None:
+        """Load Migrate players + toggles from the selected game repo."""
+        self._apply_repo_migrate_settings(root_path)
+
+    def _on_players_changed(self, value: str) -> None:
+        """When netplay isn't already in the project, default it from player count."""
+        if self._netplay_detected:
+            return
+        try:
+            n = int(value or "2")
+        except ValueError:
+            n = 2
+        self.netplay_var.set(n >= 2)
+
+    def _apply_repo_migrate_settings(self, root_path: str | None = None) -> None:
+        """Set Players / Netplay / CI / Probe from existing project settings."""
+        from .naming import (
+            ci_workflow_present,
+            configured_players,
+            disc_probe_configured,
+            netplay_configured,
+        )
+
+        path = (root_path or self.root_var.get()).strip()
+        if not path:
+            self.players_var.set("2")
+            self._netplay_detected = False
+            self.netplay_var.set(True)  # default players=2 → netplay on
+            self.ci_var.set(True)
+            self.probe_var.set(False)
+            return
+
+        root = Path(path)
+        n = configured_players(root, default=2)
+        self.players_var.set(str(n))
+
+        detected_netplay = netplay_configured(root)
+        self._netplay_detected = detected_netplay
+        if detected_netplay:
+            self.netplay_var.set(True)
+        else:
+            # Not configured yet: enable by default for multiplayer titles.
+            self.netplay_var.set(n >= 2)
+
+        # Mirror existing release.yml. Turn on manually if you want migrate to emit one.
+        self.ci_var.set(ci_workflow_present(root))
+
+        # Probe: on when cue is selected or disc identity already exists.
+        has_cue = bool(self.disc_var.get().strip())
+        self.probe_var.set(has_cue or disc_probe_configured(root))
+
     def _repo_refresh_menu(self, *, select_path: str | None = None) -> None:
-        from .repo_index import labels_for, path_for_label, set_last
+        from .repo_index import labels_for_repos, path_for_label, set_last
 
         idx = self._repo_index
         if idx is None:
             return
-        labels = labels_for(idx)
+        entries = self._visible_repo_entries()
+        self._repo_menu_entries = entries
+        labels = labels_for_repos(entries)
         if not labels:
-            labels = ["(add a repo…)"]
+            empty = (
+                "(no catalog matches…)"
+                if self.catalog_only_var.get() and idx.repos
+                else "(add a repo…)"
+            )
+            labels = [empty]
             self.repo_menu.configure(values=labels)
             self.repo_label_var.set(labels[0])
             self.root_var.set("")
             self.disc_var.set("")
+            self._apply_repo_migrate_settings("")
+            self._load_build_settings_for("")
+            self._bulk_refresh_list()
             return
         self.repo_menu.configure(values=labels)
         pick = select_path or self.root_var.get().strip() or idx.last
@@ -1387,16 +3019,19 @@ class ProjectStudioApp:
                 pick_res = str(Path(pick).expanduser().resolve())
             except OSError:
                 pick_res = pick
-            for lab, entry in zip(labels, idx.repos):
+            for lab, entry in zip(labels, entries):
                 if entry.path == pick or entry.path == pick_res:
                     label = lab
                     break
         self.repo_label_var.set(label)
-        path = path_for_label(idx, label)
+        path = path_for_label(idx, label, repos=entries)
         if path:
             self.root_var.set(path)
             set_last(idx, path)
             self._apply_repo_cue(path)
+            self._apply_repo_players(path)
+            self._load_build_settings_for(path)
+        self._bulk_refresh_list()
 
     def _on_repo_selected(self, label: str) -> None:
         from .repo_index import path_for_label, set_last
@@ -1406,12 +3041,14 @@ class ProjectStudioApp:
             return
         if label.startswith("("):
             return
-        path = path_for_label(idx, label)
+        path = path_for_label(idx, label, repos=self._repo_menu_entries or None)
         if not path:
             return
         self.root_var.set(path)
         set_last(idx, path)
         self._apply_repo_cue(path)
+        self._apply_repo_players(path)
+        self._load_build_settings_for(path)
         self._log(f"Selected repo: {path}")
         self.refresh_audit()
 
@@ -1509,11 +3146,15 @@ class ProjectStudioApp:
                 self._log(f"Indexed disc .cue for repo: {cue}")
 
     def _clear_disc(self) -> None:
+        from .naming import disc_probe_configured
         from .repo_index import clear_repo_cue
 
         self.disc_var.set("")
-        self.probe_var.set(False)
         root = self.root_var.get().strip()
+        if root and disc_probe_configured(Path(root)):
+            self.probe_var.set(True)
+        else:
+            self.probe_var.set(False)
         idx = self._repo_index
         if root and idx is not None and clear_repo_cue(idx, root):
             self._log("Cleared indexed disc .cue")
@@ -1533,9 +3174,99 @@ class ProjectStudioApp:
             force=bool(self.force_var.get()),
         )
 
-    def _log(self, msg: str) -> None:
-        self.log.insert("end", msg + "\n")
-        self.log.see("end")
+    def _log(self, msg: str, *, tag: str | None = None) -> None:
+        level = tag or self._log_tag_for(msg)
+        try:
+            self.log.insert("end", msg + "\n", level)
+        except TypeError:
+            self.log.insert("end", msg + "\n")
+            tb = self._log_textbox()
+            try:
+                tb.tag_add(level, "end-2l", "end-1c")
+            except tk.TclError:
+                pass
+        try:
+            self.log.see("end")
+        except tk.TclError:
+            pass
+
+    def _desired_log_height(self) -> int:
+        h = int(self._log_height or _DEFAULT_LOG_HEIGHT)
+        if h < 100:
+            return 100
+        if h > 800:
+            return 800
+        return h
+
+    def _apply_log_sash(self) -> None:
+        pane = self._log_pane
+        if pane is None:
+            return
+        try:
+            pane.update_idletasks()
+            total = int(pane.winfo_height())
+        except tk.TclError:
+            return
+        if total <= 1:
+            self.root.after(120, self._apply_log_sash)
+            return
+        log_h = self._desired_log_height()
+        sash_y = total - log_h - 8
+        if sash_y < 220:
+            sash_y = 220
+        try:
+            pane.sash_place(0, 0, sash_y)
+        except tk.TclError:
+            pass
+
+    def _read_log_sash_height(self) -> int | None:
+        pane = self._log_pane
+        if pane is None:
+            return None
+        try:
+            total = int(pane.winfo_height())
+            sash_y = int(pane.sash_coord(0)[1])
+        except (tk.TclError, IndexError, TypeError):
+            return None
+        if total <= 1:
+            return None
+        h = total - sash_y
+        if h < 100:
+            h = 100
+        if h > 800:
+            h = 800
+        return h
+
+    def _persist_log_height(self) -> None:
+        h = self._read_log_sash_height()
+        if h is None:
+            return
+        self._log_height = h
+        idx = self._repo_index
+        if idx is None:
+            return
+        if int(getattr(idx, "log_height", 0) or 0) == h:
+            return
+        idx.log_height = h
+        from .repo_index import save_index
+
+        save_index(idx)
+
+    def _on_log_sash(self, _event=None) -> None:
+        if self._log_sash_job is not None:
+            try:
+                self.root.after_cancel(self._log_sash_job)
+            except tk.TclError:
+                pass
+        self._log_sash_job = self.root.after(200, self._persist_log_height)
+
+    def _on_close(self) -> None:
+        try:
+            self._persist_log_height()
+            self._save_build_settings_for_current()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def _clear_children(self, frame) -> None:
         for child in frame.winfo_children():
@@ -1757,17 +3488,33 @@ class ProjectStudioApp:
             self._log(f"Git status: {st.branch} ({dirty})")
 
     def _set_branch_menu(self, menu, var: tk.StringVar, branches: list[str]) -> None:
-        current = var.get().strip()
+        current = (var.get() or "").strip()
+        try:
+            typed = (menu.get() or "").strip()
+            if typed:
+                current = typed
+        except Exception:
+            pass
+        keep_default = current.lower() == "(default)" or (
+            current.startswith("(") and "default" in current.lower()
+        )
         values = [b for b in branches if b and not b.startswith("(")]
-        if current and current not in values and not current.startswith("("):
+        if keep_default:
+            values = ["(default)", *values]
+        elif current and current not in values and not current.startswith("("):
             values = [current, *values]
         if not values:
-            values = ["(none)"]
+            values = ["(default)", "(none)"]
         menu.configure(values=values)
-        if current in values:
-            var.set(current)
+        if keep_default:
+            target = "(default)"
         else:
-            var.set(values[0])
+            target = current if current in values else values[0]
+        var.set(target)
+        try:
+            menu.set(target)
+        except Exception:
+            pass
 
     def _refresh_branch_menus(self, root: Path, st, *, fetch: bool) -> None:
         from .gitops import (
@@ -1829,6 +3576,60 @@ class ProjectStudioApp:
                 or DEFAULT_RBENGINE_URL,
             ),
         )
+        # Merge Git-tab branch names into Bulk dropdown lists without
+        # overwriting the Bulk tab's independent branch selections.
+        for src, dst, bvar in (
+            (
+                self.git_branch_menu,
+                getattr(self, "bulk_game_branch_menu", None),
+                getattr(self, "bulk_game_branch_var", None),
+            ),
+            (
+                self.git_psx_branch_menu,
+                getattr(self, "bulk_psx_branch_menu", None),
+                getattr(self, "bulk_psx_branch_var", None),
+            ),
+            (
+                self.git_ui_branch_menu,
+                getattr(self, "bulk_ui_branch_menu", None),
+                getattr(self, "bulk_ui_branch_var", None),
+            ),
+            (
+                self.git_net_branch_menu,
+                getattr(self, "bulk_net_branch_menu", None),
+                getattr(self, "bulk_net_branch_var", None),
+            ),
+            (
+                self.git_rb_branch_menu,
+                getattr(self, "bulk_rb_branch_menu", None),
+                getattr(self, "bulk_rb_branch_var", None),
+            ),
+        ):
+            if dst is None:
+                continue
+            try:
+                incoming = [b for b in (src.cget("values") or []) if b and not str(b).startswith("(")]
+                if not incoming:
+                    continue
+                existing = [b for b in (dst.cget("values") or []) if b and not str(b).startswith("(")]
+                merged = list(dict.fromkeys([*existing, *incoming]))
+                keep = ""
+                if bvar is not None:
+                    keep = (bvar.get() or "").strip()
+                if not keep:
+                    try:
+                        keep = (dst.get() or "").strip()
+                    except Exception:
+                        keep = ""
+                if keep and keep not in merged:
+                    merged = [keep, *merged]
+                dst.configure(values=merged or ["(none)"])
+                if keep:
+                    if bvar is not None:
+                        bvar.set(keep)
+                    dst.set(keep)
+            except Exception:
+                pass
 
     def _git_fetch_branches(self) -> None:
         root = self._game_root()
@@ -1860,9 +3661,25 @@ class ProjectStudioApp:
 
     def _valid_branch_selection(self, value: str) -> str | None:
         v = (value or "").strip()
-        if not v or v.startswith("("):
+        if not v:
+            return None
+        # Allow Bulk "(default)" sentinel through to switch_branch.
+        low = v.lower()
+        if low == "(default)" or (v.startswith("(") and "default" in low):
+            return "(default)"
+        if v.startswith("("):
             return None
         return v
+
+    def _combo_branch(self, menu, var: tk.StringVar) -> str | None:
+        try:
+            typed = (menu.get() or "").strip()
+        except Exception:
+            typed = ""
+        return self._valid_branch_selection(typed or var.get())
+
+    def _git_create(self) -> bool:
+        return bool(self.git_create_branch_var.get())
 
     def _git_module_row(self, parent, s) -> None:
         ctk = self.ctk
@@ -1900,18 +3717,97 @@ class ProjectStudioApp:
             justify="left",
         ).pack(fill="x")
 
-    def _git_checkout_branch(self) -> None:
-        from .gitops import set_repo_branch
+    def _git_switch_branch(self) -> None:
+        from .gitops import switch_branch
 
         root = self._game_root()
         if root is None:
             return
-        branch = self._valid_branch_selection(self.git_branch_var.get())
+        branch = self._combo_branch(self.git_branch_menu, self.git_branch_var)
         if not branch:
-            messagebox.showerror("Project Studio", "Select a branch first.", parent=self.root)
+            messagebox.showerror(
+                "Project Studio",
+                "Pick or type a branch name, then Switch.",
+                parent=self.root,
+            )
             return
-        r = set_repo_branch(root, branch, dry_run=self._git_dry())
+        r = switch_branch(
+            root,
+            branch,
+            create=self._git_create(),
+            dry_run=self._git_dry(),
+        )
         self._log_cmd(r)
+        self.refresh_git()
+
+    def _git_switch_modules(self) -> None:
+        from .gitops import switch_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        branches = {
+            "psxrecomp": self._combo_branch(
+                self.git_psx_branch_menu, self.git_psx_branch_var
+            )
+            or "",
+            "recomp-ui": self._combo_branch(
+                self.git_ui_branch_menu, self.git_ui_branch_var
+            )
+            or "",
+        }
+        if not any(branches.values()):
+            messagebox.showerror(
+                "Project Studio",
+                "Pick or type a branch for psxrecomp / recomp-ui.",
+                parent=self.root,
+            )
+            return
+        self._log_module_results(
+            switch_modules(
+                root,
+                nested=False,
+                branch_by_path=branches,
+                create=self._git_create(),
+                set_tracking=True,
+                dry_run=self._git_dry(),
+            )
+        )
+        self.refresh_git()
+
+    def _git_switch_nested(self) -> None:
+        from .gitops import switch_modules
+
+        root = self._game_root()
+        if root is None:
+            return
+        branches = {
+            "lib/recomp-net": self._combo_branch(
+                self.git_net_branch_menu, self.git_net_branch_var
+            )
+            or "",
+            "lib/retcomm-rbengine": self._combo_branch(
+                self.git_rb_branch_menu, self.git_rb_branch_var
+            )
+            or "",
+        }
+        if not any(branches.values()):
+            messagebox.showerror(
+                "Project Studio",
+                "Pick or type a branch for recomp-net / rbengine.",
+                parent=self.root,
+            )
+            return
+        self._log_module_results(
+            switch_modules(
+                root,
+                nested=True,
+                branch_by_path=branches,
+                create=self._git_create(),
+                set_tracking=True,
+                dry_run=self._git_dry(),
+            )
+        )
         self.refresh_git()
 
     def _git_ensure_submodules(self) -> None:
@@ -1922,9 +3818,13 @@ class ProjectStudioApp:
             return
         results = ensure_known_submodules(
             root,
-            psxrecomp_branch=self._valid_branch_selection(self.git_psx_branch_var.get())
+            psxrecomp_branch=self._combo_branch(
+                self.git_psx_branch_menu, self.git_psx_branch_var
+            )
             or "master",
-            recomp_ui_branch=self._valid_branch_selection(self.git_ui_branch_var.get())
+            recomp_ui_branch=self._combo_branch(
+                self.git_ui_branch_menu, self.git_ui_branch_var
+            )
             or "master",
             dry_run=self._git_dry(),
         )
@@ -1938,11 +3838,11 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        for path, var in (
-            ("psxrecomp", self.git_psx_branch_var),
-            ("recomp-ui", self.git_ui_branch_var),
+        for path, menu, var in (
+            ("psxrecomp", self.git_psx_branch_menu, self.git_psx_branch_var),
+            ("recomp-ui", self.git_ui_branch_menu, self.git_ui_branch_var),
         ):
-            branch = self._valid_branch_selection(var.get())
+            branch = self._combo_branch(menu, var)
             if not branch:
                 continue
             r = set_submodule_branch(root, path, branch, dry_run=self._git_dry())
@@ -1982,14 +3882,719 @@ class ProjectStudioApp:
                 ok = False
         return ok
 
+    def _git_pull_kwargs(self) -> dict:
+        mode = (self.git_pull_mode_var.get() or "ff-only").strip()
+        dirty = (self.git_pull_dirty_var.get() or "fail").strip()
+        return {"mode": mode, "dirty": dirty, "dry_run": self._git_dry()}
+
+    def _bulk_targets(self) -> dict:
+        return {
+            "game": bool(self.bulk_tgt_game_var.get()),
+            "modules": bool(self.bulk_tgt_modules_var.get()),
+            "psxrecomp": bool(self.bulk_tgt_psx_var.get()),
+            "nested": bool(self.bulk_tgt_nested_var.get()),
+        }
+
+    def _bulk_targets_game_only(self) -> None:
+        self.bulk_tgt_game_var.set(True)
+        self.bulk_tgt_modules_var.set(False)
+        self.bulk_tgt_psx_var.set(False)
+        self.bulk_tgt_nested_var.set(False)
+
+    def _bulk_targets_engine(self) -> None:
+        """Modules + nested libs (psxrecomp / recomp-ui / net / rbengine)."""
+        self.bulk_tgt_game_var.set(False)
+        self.bulk_tgt_modules_var.set(True)
+        self.bulk_tgt_psx_var.set(False)
+        self.bulk_tgt_nested_var.set(True)
+
+    def _bulk_refresh_list(self) -> None:
+        ctk = self.ctk
+        frame = getattr(self, "bulk_repo_list", None)
+        if frame is None:
+            return
+        prev = {
+            path: bool(var.get())
+            for path, var in getattr(self, "_bulk_vars", {}).items()
+        }
+        self._clear_children(frame)
+        self._bulk_vars = {}
+        idx = self._repo_index
+        if idx is None or not idx.repos:
+            ctk.CTkLabel(
+                frame,
+                text="No indexed repos — use Add… in the header.",
+                text_color=("gray40", "gray65"),
+            ).pack(anchor="w", padx=4, pady=8)
+            return
+        for entry in idx.repos:
+            path = entry.path
+            checked = prev.get(path, True)
+            var = tk.BooleanVar(value=checked)
+            self._bulk_vars[path] = var
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(fill="x", padx=2, pady=2)
+            ctk.CTkCheckBox(
+                row,
+                text=entry.label(),
+                variable=var,
+            ).pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(
+                row,
+                text=path,
+                text_color=("gray45", "gray60"),
+                font=ctk.CTkFont(size=11),
+                anchor="e",
+            ).pack(side="right", padx=(8, 0))
+
+    def _bulk_select_all(self) -> None:
+        for var in self._bulk_vars.values():
+            var.set(True)
+
+    def _bulk_select_none(self) -> None:
+        for var in self._bulk_vars.values():
+            var.set(False)
+
+    def _bulk_apply_path_selection(self, paths: set[str]) -> int:
+        """Check only repos whose index path is in ``paths``. Returns count selected."""
+        n = 0
+        for path, var in self._bulk_vars.items():
+            on = path in paths
+            var.set(on)
+            if on:
+                n += 1
+        return n
+
+    def _bulk_select_catalog(self) -> None:
+        from .bulkops import filter_indexed_catalog
+
+        hits, note = filter_indexed_catalog(self._repo_index)
+        paths = {e.path for e in hits}
+        n = self._bulk_apply_path_selection(paths)
+        self._log(f"--- Bulk select catalog ({n} of {len(self._bulk_vars)}) · {note} ---")
+        if n == 0:
+            messagebox.showinfo(
+                "Project Studio",
+                "No indexed repos matched a retcomm-catalog entry.\n"
+                f"({note})",
+                parent=self.root,
+            )
+
+    def _bulk_select_contributor(self) -> None:
+        from .bulkops import filter_indexed_contributors
+
+        self._log("--- Bulk select contributor (querying gh viewerPermission) ---")
+        self.root.update_idletasks()
+        hits, logs = filter_indexed_contributors(self._repo_index)
+        for line in logs:
+            self._log(f"  {line}")
+        paths = {e.path for e in hits}
+        n = self._bulk_apply_path_selection(paths)
+        self._log(f"Selected {n} repo(s) with WRITE/MAINTAIN/ADMIN")
+        if n == 0:
+            messagebox.showinfo(
+                "Project Studio",
+                "No indexed repos reported contributor (WRITE+) privilege.\n"
+                "Requires authenticated `gh` and a GitHub remote.",
+                parent=self.root,
+            )
+
+    def _bulk_select_catalog_contributor(self) -> None:
+        """Select repos that are both catalog-backed and WRITE+ (drops catalog-only)."""
+        from .bulkops import filter_indexed_catalog_contributors
+
+        self._log(
+            "--- Bulk select catalog ∩ contributor "
+            "(catalog filter, then gh viewerPermission) ---"
+        )
+        self.root.update_idletasks()
+        hits, note, logs = filter_indexed_catalog_contributors(self._repo_index)
+        for line in logs:
+            self._log(f"  {line}")
+        paths = {e.path for e in hits}
+        n = self._bulk_apply_path_selection(paths)
+        self._log(
+            f"Selected {n} of {len(self._bulk_vars)} "
+            f"(catalog ∩ WRITE/MAINTAIN/ADMIN) · {note}"
+        )
+        if n == 0:
+            messagebox.showinfo(
+                "Project Studio",
+                "No indexed repos matched both a catalog entry and "
+                "contributor (WRITE+) privilege.\n"
+                f"({note})\n"
+                "Requires authenticated `gh` and a GitHub remote.",
+                parent=self.root,
+            )
+
+    def _bulk_selected_repos(self) -> list[tuple[str, Path]]:
+        idx = self._repo_index
+        if idx is None:
+            return []
+        out: list[tuple[str, Path]] = []
+        for entry in idx.repos:
+            var = self._bulk_vars.get(entry.path)
+            if var is None or not var.get():
+                continue
+            try:
+                root = entry.resolved()
+            except OSError:
+                continue
+            if root.is_dir():
+                out.append((entry.label(), root))
+        return out
+
+    def _bulk_require_selection(self) -> list[tuple[str, Path]] | None:
+        repos = self._bulk_selected_repos()
+        if not repos:
+            messagebox.showinfo(
+                "Project Studio",
+                "Select at least one indexed repo on the Bulk tab.",
+                parent=self.root,
+            )
+            return None
+        return repos
+
+    def _bulk_require_targets(self, *, need_commit: bool = False) -> dict | None:
+        t = self._bulk_targets()
+        if need_commit:
+            if not (t["game"] or t["modules"] or t["nested"]):
+                messagebox.showinfo(
+                    "Project Studio",
+                    "Enable at least one commit target: Game root, Modules, "
+                    "or Nested libs.",
+                    parent=self.root,
+                )
+                return None
+        elif not any(t.values()):
+            messagebox.showinfo(
+                "Project Studio",
+                "Enable at least one target: Game root, Modules, "
+                "psxrecomp, or Nested libs.",
+                parent=self.root,
+            )
+            return None
+        return t
+
+    def _bulk_jobs(self) -> int:
+        from .bulkops import clamp_bulk_jobs
+
+        return clamp_bulk_jobs(self.bulk_jobs_var.get())
+
+    def _on_bulk_jobs_changed(self, _value: str | None = None) -> None:
+        from .bulkops import clamp_bulk_jobs
+        from .repo_index import save_index
+
+        jobs = clamp_bulk_jobs(self.bulk_jobs_var.get())
+        self.bulk_jobs_var.set(str(jobs))
+        idx = self._repo_index
+        if idx is not None:
+            idx.bulk_jobs = jobs
+            save_index(idx)
+
+    def _bulk_stream_repo(self, results) -> None:
+        """Marshal per-repo CmdResult batches onto the UI activity log."""
+
+        def go(rs=results) -> None:
+            self._log_module_results(rs)
+
+        self.root.after(0, go)
+
+    def _bulk_run_bg(
+        self,
+        title: str,
+        fn,
+        *,
+        refresh_git: bool = False,
+        done_info: str | None = None,
+        done_warn_prefix: str | None = None,
+        status_var_set=None,
+    ) -> None:
+        """Run a bulkops call off the UI thread with parallel workers + live log."""
+        if self._bulk_busy:
+            messagebox.showinfo(
+                "Project Studio",
+                "A bulk operation is already running.",
+                parent=self.root,
+            )
+            return
+        jobs = self._bulk_jobs()
+        self._log(f"--- {title} (parallel={jobs}) ---")
+        self._bulk_busy = True
+
+        def worker() -> None:
+            results = []
+            err: str | None = None
+            try:
+                results = fn(jobs=jobs, on_repo=self._bulk_stream_repo) or []
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)
+            finally:
+                self._bulk_busy = False
+
+            def done() -> None:
+                if err:
+                    self._log(f"[FAIL] Bulk error: {err}", tag="error")
+                    messagebox.showerror(
+                        "Project Studio",
+                        f"Bulk operation failed:\n{err}",
+                        parent=self.root,
+                    )
+                    return
+                ok = sum(1 for r in results if getattr(r, "ok", False))
+                fail = len(results) - ok
+                self._log(f"--- done: {ok} ok, {fail} fail ---")
+                if callable(status_var_set):
+                    status_var_set(ok, fail, results)
+                if refresh_git:
+                    self.refresh_git(quiet=True)
+                if fail and done_warn_prefix:
+                    messagebox.showwarning(
+                        "Project Studio",
+                        f"{done_warn_prefix}\n{fail} failed — see activity log.",
+                        parent=self.root,
+                    )
+                elif done_info and not self._git_dry() and fail == 0:
+                    messagebox.showinfo(
+                        "Project Studio", done_info, parent=self.root
+                    )
+
+            self.root.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bulk_status(self) -> None:
+        from .bulkops import bulk_status
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_status(repos, jobs=jobs, on_repo=on_repo)
+
+        self._bulk_run_bg(f"Bulk status ({len(repos)} repos)", run)
+
+    def _bulk_pull(self) -> None:
+        from .bulkops import bulk_pull
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        targets = self._bulk_require_targets()
+        if targets is None:
+            return
+        names = ", ".join(lab for lab, _ in repos)
+        if not self._git_confirm_pull(f"{len(repos)} repo(s):\n{names}"):
+            return
+        pull_kw = self._git_pull_kwargs()
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_pull(
+                repos, **targets, **pull_kw, jobs=jobs, on_repo=on_repo
+            )
+
+        self._bulk_run_bg(
+            f"Bulk pull ({len(repos)} repos)", run, refresh_git=True
+        )
+
+    def _bulk_push(self) -> None:
+        from .bulkops import bulk_push
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        targets = self._bulk_require_targets()
+        if targets is None:
+            return
+        if not self._git_dry():
+            names = "\n".join(f"• {lab}" for lab, _ in repos)
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Push selected targets for {len(repos)} repo(s)?\n\n"
+                f"{names}\n\n(no force-push)",
+                parent=self.root,
+            ):
+                return
+        dry = self._git_dry()
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_push(
+                repos, **targets, dry_run=dry, jobs=jobs, on_repo=on_repo
+            )
+
+        self._bulk_run_bg(
+            f"Bulk push ({len(repos)} repos)", run, refresh_git=True
+        )
+
+    def _bulk_commit(self) -> None:
+        from .bulkops import bulk_commit
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        targets = self._bulk_require_targets(need_commit=True)
+        if targets is None:
+            return
+        msg = self.bulk_msg_var.get().strip()
+        if not msg:
+            messagebox.showerror(
+                "Project Studio",
+                "Enter a commit message.",
+                parent=self.root,
+            )
+            return
+        # psxrecomp-only is not a commit target in bulkops
+        commit_targets = {
+            "game": targets["game"],
+            "modules": targets["modules"],
+            "nested": targets["nested"],
+        }
+        if not self._git_dry():
+            names = "\n".join(f"• {lab}" for lab, _ in repos)
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Commit in {len(repos)} repo(s)?\n\n{names}\n\n{msg}",
+                parent=self.root,
+            ):
+                return
+        dry = self._git_dry()
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_commit(
+                repos,
+                msg,
+                **commit_targets,
+                dry_run=dry,
+                jobs=jobs,
+                on_repo=on_repo,
+            )
+
+        self._bulk_run_bg(
+            f"Bulk commit ({len(repos)} repos)", run, refresh_git=True
+        )
+
+    def _bulk_switch(self) -> None:
+        from .bulkops import bulk_switch
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        targets = self._bulk_require_targets()
+        if targets is None:
+            return
+        game_br = (
+            self._combo_branch(self.bulk_game_branch_menu, self.bulk_game_branch_var)
+            or ""
+        )
+        psx_br = (
+            self._combo_branch(self.bulk_psx_branch_menu, self.bulk_psx_branch_var)
+            or ""
+        )
+        ui_br = (
+            self._combo_branch(self.bulk_ui_branch_menu, self.bulk_ui_branch_var)
+            or ""
+        )
+        net_br = (
+            self._combo_branch(self.bulk_net_branch_menu, self.bulk_net_branch_var)
+            or ""
+        )
+        rb_br = (
+            self._combo_branch(self.bulk_rb_branch_menu, self.bulk_rb_branch_var)
+            or ""
+        )
+        # Empty / (default) is OK — each checkout uses its own default branch.
+        if targets["game"] and not game_br:
+            game_br = "(default)"
+        if targets["modules"] and not (psx_br or ui_br):
+            psx_br = psx_br or "(default)"
+            ui_br = ui_br or "(default)"
+        if targets["psxrecomp"] and not targets["modules"] and not psx_br:
+            psx_br = "(default)"
+        if targets["nested"] and not (net_br or rb_br):
+            net_br = net_br or "(default)"
+            rb_br = rb_br or "(default)"
+        if not self._git_dry():
+            names = "\n".join(f"• {lab}" for lab, _ in repos)
+            bits = []
+            if targets["game"]:
+                bits.append(f"game→{game_br}")
+            if targets["modules"]:
+                bits.append(f"psx→{psx_br or '(track)'} ui→{ui_br or '(track)'}")
+            elif targets["psxrecomp"]:
+                bits.append(f"psx→{psx_br}")
+            if targets["nested"]:
+                bits.append(f"net→{net_br or '(track)'} rb→{rb_br or '(track)'}")
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"git switch on {len(repos)} repo(s)?\n\n{names}\n\n"
+                + " · ".join(bits),
+                parent=self.root,
+            ):
+                return
+        create = self._git_create()
+        set_tracking = bool(self.bulk_set_tracking_var.get())
+        dry = self._git_dry()
+        bits = []
+        if targets["game"]:
+            bits.append(f"game->{game_br}")
+        if targets["modules"]:
+            bits.append(f"psx->{psx_br or '(skip)'} ui->{ui_br or '(skip)'}")
+        elif targets["psxrecomp"]:
+            bits.append(f"psx->{psx_br}")
+        if targets["nested"]:
+            bits.append(f"net->{net_br or '(skip)'} rb->{rb_br or '(skip)'}")
+        self._log("  " + " · ".join(bits))
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_switch(
+                repos,
+                game=targets["game"],
+                modules=targets["modules"],
+                psxrecomp=targets["psxrecomp"],
+                nested=targets["nested"],
+                game_branch=game_br,
+                psxrecomp_branch=psx_br,
+                recomp_ui_branch=ui_br,
+                recomp_net_branch=net_br,
+                rbengine_branch=rb_br,
+                create=create,
+                set_tracking=set_tracking,
+                dry_run=dry,
+                jobs=jobs,
+                on_repo=on_repo,
+            )
+
+        def status(ok: int, fail: int, results) -> None:
+            self.bulk_branch_status_var.set(
+                f"Switch done: {ok}/{ok + fail} ok"
+            )
+
+        self._bulk_run_bg(
+            f"Bulk switch ({len(repos)} repos)",
+            run,
+            refresh_git=True,
+            status_var_set=status,
+        )
+
+    def _bulk_fetch_branches(self) -> None:
+        """Populate Bulk branch ComboBoxes from remotes + selected game repos."""
+        if getattr(self, "_bulk_branch_fetch_busy", False):
+            return
+        self._bulk_branch_fetch_busy = True
+        self.bulk_branch_status_var.set("Fetching branches…")
+        selected = self._bulk_selected_repos()
+        # If nothing checked, use all indexed rows for game-branch union.
+        game_roots = [root for _, root in selected] if selected else []
+        if not game_roots:
+            from .bulkops import indexed_repos
+            from .repo_index import load_index
+
+            idx = getattr(self, "_repo_index", None) or load_index()
+            game_roots = [root for _, root in indexed_repos(index=idx)]
+
+        def worker() -> None:
+            from .gitops import (
+                DEFAULT_PSXRECOMP_URL,
+                DEFAULT_RECOMP_NET_URL,
+                DEFAULT_RECOMP_UI_URL,
+                DEFAULT_RBENGINE_URL,
+                list_branches,
+                list_remote_head_branches,
+            )
+
+            game_names: list[str] = []
+            seen: set[str] = set()
+            for root in game_roots:
+                try:
+                    for b in list_branches(root, remotes=True, fetch=False):
+                        if b and b not in seen:
+                            seen.add(b)
+                            game_names.append(b)
+                except Exception:
+                    continue
+            try:
+                results = {
+                    "game": game_names,
+                    "psx": list_remote_head_branches(DEFAULT_PSXRECOMP_URL),
+                    "ui": list_remote_head_branches(DEFAULT_RECOMP_UI_URL),
+                    "net": list_remote_head_branches(DEFAULT_RECOMP_NET_URL),
+                    "rb": list_remote_head_branches(DEFAULT_RBENGINE_URL),
+                }
+                err = ""
+            except Exception as exc:
+                results = {
+                    "game": game_names,
+                    "psx": [],
+                    "ui": [],
+                    "net": [],
+                    "rb": [],
+                }
+                err = str(exc)
+
+            def apply() -> None:
+                self._bulk_branch_fetch_busy = False
+                pairs = (
+                    ("game", self.bulk_game_branch_var, getattr(self, "bulk_game_branch_menu", None)),
+                    ("psx", self.bulk_psx_branch_var, getattr(self, "bulk_psx_branch_menu", None)),
+                    ("ui", self.bulk_ui_branch_var, getattr(self, "bulk_ui_branch_menu", None)),
+                    ("net", self.bulk_net_branch_var, getattr(self, "bulk_net_branch_menu", None)),
+                    ("rb", self.bulk_rb_branch_var, getattr(self, "bulk_rb_branch_menu", None)),
+                )
+                counts = []
+                for key, var, menu in pairs:
+                    branches = results.get(key) or []
+                    if menu is None:
+                        continue
+                    self._set_branch_menu(menu, var, branches)
+                    counts.append(f"{key}:{len(branches)}")
+                if err:
+                    self.bulk_branch_status_var.set(f"Fetch error: {err}")
+                    self._log(f"Bulk branch fetch failed: {err}")
+                else:
+                    msg = "Branches: " + ", ".join(counts)
+                    self.bulk_branch_status_var.set(msg)
+                    self._log(f"--- Bulk fetch branches ---\n  {msg}")
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bulk_release(self) -> None:
+        from .bulkops import bulk_release
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        version = self.release_version_var.get().strip()
+        bump = self.release_bump_var.get().strip() or "patch"
+        publish = bool(self.release_publish_var.get())
+        reuse = bool(self.release_reuse_var.get())
+        detail = (
+            f"version={version or '(auto per repo)'} bump={bump} "
+            f"publish={publish} reuse_cached_emitters={reuse}"
+        )
+        if not self._git_dry():
+            names = "\n".join(f"* {lab}" for lab, _ in repos)
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Dispatch release.yml on {len(repos)} repo(s)?\n\n"
+                f"{names}\n\n{detail}",
+                parent=self.root,
+            ):
+                return
+        self._log(detail)
+        dry = self._git_dry()
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_release(
+                repos,
+                version=version,
+                bump=bump,
+                publish=publish,
+                reuse_cached_emitters=reuse,
+                dry_run=dry,
+                jobs=jobs,
+                on_repo=on_repo,
+            )
+
+        self._bulk_run_bg(
+            f"Bulk release CI ({len(repos)} repos)",
+            run,
+            done_info="Release workflows dispatched — see activity log.",
+            done_warn_prefix="Release dispatch finished with failures.",
+        )
+
+    def _bulk_install_ci(self) -> None:
+        from .bulkops import bulk_install_ci
+
+        repos = self._bulk_require_selection()
+        if repos is None:
+            return
+        existing = [
+            lab
+            for lab, root in repos
+            if (root / ".github" / "workflows" / "release.yml").is_file()
+        ]
+        force = False
+        if existing and not self._git_dry():
+            preview = "\n".join(f"* {n}" for n in existing[:12])
+            extra = "" if len(existing) <= 12 else f"\n... +{len(existing) - 12} more"
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"{len(existing)} selected repo(s) already have release.yml.\n"
+                f"Overwrite from the current psxrecomp template, commit, and push?\n\n"
+                f"{preview}{extra}",
+                parent=self.root,
+            ):
+                return
+            force = True
+        elif not self._git_dry():
+            names = "\n".join(f"* {lab}" for lab, _ in repos)
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"Install release.yml + package script, commit, and push for "
+                f"{len(repos)} repo(s)?\n\n{names}",
+                parent=self.root,
+            ):
+                return
+
+        dry = self._git_dry()
+
+        def run(*, jobs: int, on_repo) -> list:
+            return bulk_install_ci(
+                repos,
+                force=force,
+                push_remote=True,
+                dry_run=dry,
+                jobs=jobs,
+                on_repo=on_repo,
+            )
+
+        self._bulk_run_bg(
+            f"Bulk install CI ({len(repos)} repos) force={force}",
+            run,
+            refresh_git=True,
+            done_info="Install CI finished — see activity log.",
+            done_warn_prefix="Install CI finished with failures.",
+        )
+
+    def _git_confirm_pull(self, scope: str) -> bool:
+        """Confirm destructive pull modes. Returns False if user cancels."""
+        if self._git_dry():
+            return True
+        mode = (self.git_pull_mode_var.get() or "ff-only").strip()
+        dirty = (self.git_pull_dirty_var.get() or "fail").strip()
+        if mode == "reset":
+            return bool(
+                messagebox.askyesno(
+                    "Project Studio",
+                    f"Reset {scope} to match origin (discard local commits "
+                    f"and edits)?\n\nmode=reset",
+                    parent=self.root,
+                )
+            )
+        if dirty == "discard":
+            return bool(
+                messagebox.askyesno(
+                    "Project Studio",
+                    f"Discard uncommitted edits in {scope}, then pull "
+                    f"({mode})?",
+                    parent=self.root,
+                )
+            )
+        return True
+
     def _git_pull_modules(self) -> None:
         from .gitops import pull_modules
 
         root = self._game_root()
         if root is None:
             return
+        if not self._git_confirm_pull("psxrecomp + recomp-ui"):
+            return
         self._log_module_results(
-            pull_modules(root, nested=False, dry_run=self._git_dry())
+            pull_modules(root, nested=False, **self._git_pull_kwargs())
         )
         self.refresh_git()
 
@@ -2009,9 +4614,13 @@ class ProjectStudioApp:
             ):
                 return
         branches = {
-            "psxrecomp": self._valid_branch_selection(self.git_psx_branch_var.get())
+            "psxrecomp": self._combo_branch(
+                self.git_psx_branch_menu, self.git_psx_branch_var
+            )
             or "",
-            "recomp-ui": self._valid_branch_selection(self.git_ui_branch_var.get())
+            "recomp-ui": self._combo_branch(
+                self.git_ui_branch_menu, self.git_ui_branch_var
+            )
             or "",
         }
         self._log_module_results(
@@ -2058,9 +4667,13 @@ class ProjectStudioApp:
             return
         results = ensure_nested_modules(
             root,
-            recomp_net_branch=self._valid_branch_selection(self.git_net_branch_var.get())
+            recomp_net_branch=self._combo_branch(
+                self.git_net_branch_menu, self.git_net_branch_var
+            )
             or "main",
-            rbengine_branch=self._valid_branch_selection(self.git_rb_branch_var.get())
+            rbengine_branch=self._combo_branch(
+                self.git_rb_branch_menu, self.git_rb_branch_var
+            )
             or "main",
             dry_run=self._git_dry(),
         )
@@ -2074,11 +4687,11 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        for path, var in (
-            ("lib/recomp-net", self.git_net_branch_var),
-            ("lib/retcomm-rbengine", self.git_rb_branch_var),
+        for path, menu, var in (
+            ("lib/recomp-net", self.git_net_branch_menu, self.git_net_branch_var),
+            ("lib/retcomm-rbengine", self.git_rb_branch_menu, self.git_rb_branch_var),
         ):
-            branch = self._valid_branch_selection(var.get())
+            branch = self._combo_branch(menu, var)
             if not branch:
                 continue
             r = set_nested_branch(root, path, branch, dry_run=self._git_dry())
@@ -2113,8 +4726,10 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
+        if not self._git_confirm_pull("nested libs (recomp-net, rbengine)"):
+            return
         self._log_module_results(
-            pull_modules(root, nested=True, dry_run=self._git_dry())
+            pull_modules(root, nested=True, **self._git_pull_kwargs())
         )
         self.refresh_git()
 
@@ -2134,10 +4749,12 @@ class ProjectStudioApp:
             ):
                 return
         branches = {
-            "lib/recomp-net": self._valid_branch_selection(self.git_net_branch_var.get())
+            "lib/recomp-net": self._combo_branch(
+                self.git_net_branch_menu, self.git_net_branch_var
+            )
             or "",
-            "lib/retcomm-rbengine": self._valid_branch_selection(
-                self.git_rb_branch_var.get()
+            "lib/retcomm-rbengine": self._combo_branch(
+                self.git_rb_branch_menu, self.git_rb_branch_var
             )
             or "",
         }
@@ -2183,7 +4800,9 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        self._log_cmd(pull_psxrecomp(root, dry_run=self._git_dry()))
+        if not self._git_confirm_pull("psxrecomp"):
+            return
+        self._log_cmd(pull_psxrecomp(root, **self._git_pull_kwargs()))
         self.refresh_git()
 
     def _git_push_psxrecomp(self) -> None:
@@ -2192,7 +4811,9 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        branch = self._valid_branch_selection(self.git_psx_branch_var.get()) or ""
+        branch = (
+            self._combo_branch(self.git_psx_branch_menu, self.git_psx_branch_var) or ""
+        )
         if not self._git_dry():
             extra = (
                 f"\nDetached HEAD will push to origin/{branch}."
@@ -2240,7 +4861,9 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        r = pull(root, dry_run=self._git_dry())
+        if not self._git_confirm_pull("game repo"):
+            return
+        r = pull(root, **self._git_pull_kwargs())
         self._log_cmd(r)
         self.refresh_git()
 
@@ -2273,7 +4896,7 @@ class ProjectStudioApp:
         root = self._game_root()
         if root is None:
             return
-        branch = self._valid_branch_selection(self.git_branch_var.get()) or ""
+        branch = self._combo_branch(self.git_branch_menu, self.git_branch_var) or ""
         if not self._git_dry():
             if not messagebox.askyesno(
                 "Project Studio",
@@ -2316,6 +4939,47 @@ class ProjectStudioApp:
             dry_run=self._git_dry(),
         )
         self._log_cmd(r)
+        if r.ok and not self._git_dry():
+            messagebox.showinfo("Project Studio", r.message, parent=self.root)
+        else:
+            messagebox.showwarning("Project Studio", r.message, parent=self.root)
+
+    def _git_install_push_ci(self) -> None:
+        from .gitops import install_and_push_release_ci
+
+        root = self._game_root()
+        if root is None:
+            return
+        zip_prefix = self.zip_var.get().strip()
+        force = False
+        wf = root / ".github" / "workflows" / "release.yml"
+        if wf.is_file():
+            if not messagebox.askyesno(
+                "Project Studio",
+                f"release.yml already exists:\n{wf}\n\n"
+                "Overwrite from the current psxrecomp template, commit, and push?",
+                parent=self.root,
+            ):
+                return
+            force = True
+        elif not self._git_dry():
+            if not messagebox.askyesno(
+                "Project Studio",
+                "Install psxrecomp setup-release.yml as .github/workflows/release.yml,\n"
+                "commit, push to origin, and register Actions?\n\n"
+                f"{root}",
+                parent=self.root,
+            ):
+                return
+        r = install_and_push_release_ci(
+            root,
+            zip_prefix=zip_prefix,
+            force=force,
+            push_remote=True,
+            dry_run=self._git_dry(),
+        )
+        self._log_cmd(r)
+        self.refresh_git()
         if r.ok:
             messagebox.showinfo("Project Studio", r.message, parent=self.root)
         else:
