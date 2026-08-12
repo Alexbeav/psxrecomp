@@ -5,6 +5,7 @@
 #include "boot_state.h"
 #include "cdrom.h"
 #include "gpu.h"
+#include "host_keymap.h"
 #include "host_osd.h"
 #include "interrupts.h"
 #include "mdec.h"
@@ -745,7 +746,8 @@ static void rasterize_panel(void)
     uint32_t *d = s_panel;
     int i, n, card_w, card_h, gap, x, y, sel_w, sel_h;
     int center_x, origin;
-    char buf[64];
+    char buf[96];
+    char hk[32];
 
     for (i = 0; i < RW_PANEL_W * RW_PANEL_H; i++)
         d[i] = 0xE0101218u;
@@ -759,8 +761,11 @@ static void rasterize_panel(void)
     } else {
         draw_text(d, RW_PANEL_W, 120, 8, "NO SNAPSHOTS YET", 0xFF888888u);
     }
-    draw_text(d, RW_PANEL_W, 12, RW_PANEL_H - 16,
-              "LEFT/RIGHT  A LOAD  B CLOSE  F8", 0xFFAAAAAAu);
+    host_keymap_label(HOST_KEYMAP_REWIND, hk, sizeof(hk));
+    /* Overlay font is uppercase-only; keep PS labels dual for pad + KB users. */
+    snprintf(buf, sizeof(buf),
+             "LEFT/RIGHT  A / CROSS LOAD  B / CIRCLE CLOSE  %s", hk);
+    draw_text(d, RW_PANEL_W, 12, RW_PANEL_H - 16, buf, 0xFFAAAAAAu);
 
     n = (int)s_count;
     if (n <= 0) {

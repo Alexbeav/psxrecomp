@@ -197,3 +197,34 @@ int host_keymap_match(HostKeymapAction action, int keycode, int mod) {
     }
     return 0;
 }
+
+const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
+    const HostKeyAction *a;
+    const HostKeyBind *b;
+    const char *keyname;
+    size_t n = 0;
+    if (!out || cap == 0) return "";
+    out[0] = 0;
+    if (action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return out;
+    a = &s_actions[action];
+    if (a->count <= 0) {
+        if (action == HOST_KEYMAP_REWIND)
+            snprintf(out, cap, "F8");
+        return out;
+    }
+    b = &a->binds[0];
+    if (b->mods & KMOD_CTRL) {
+        n += (size_t)snprintf(out + n, cap > n ? cap - n : 0, "Ctrl+");
+    }
+    if (b->mods & KMOD_ALT) {
+        n += (size_t)snprintf(out + n, cap > n ? cap - n : 0, "Alt+");
+    }
+    if (b->mods & KMOD_SHIFT) {
+        n += (size_t)snprintf(out + n, cap > n ? cap - n : 0, "Shift+");
+    }
+    keyname = SDL_GetKeyName((SDL_Keycode)b->keycode);
+    if (!keyname || !keyname[0])
+        keyname = "?";
+    snprintf(out + n, cap > n ? cap - n : 0, "%s", keyname);
+    return out;
+}
