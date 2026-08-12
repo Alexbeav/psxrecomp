@@ -75,7 +75,8 @@ shards up automatically.
 | `--captures` | The `overlay_captures.json` to read. If the runtime set `PSX_OVERLAY_CAPTURES`, that wins; for a manual run pass this explicitly. |
 | `--game-toml` | Reads the game id (used in the cache path) and the `[widescreen]` site lists. |
 | `--recompiler` | `psxrecomp-game.exe`. **Must be built from the same source tree** — a stale binary is rejected up front (see "Staleness guard"). |
-| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version + hash that namespace the cache. |
+| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version + hash that namespace the cache. Also supplies the default `--project-root`. |
+| `--project-root` | The root the recompiler resolves the BIOS profile against. Defaults to the framework root derived from `--runtime-include`, which is right for every normal invocation — pass it only if that derivation is wrong. See "Packaged configs" below. |
 | `--out-dir` | Cache root. Point it at the `cache` folder next to the exe. |
 | `--gcc` | Absolute path to your mingw gcc, e.g. `C:/msys64/mingw64/bin/gcc.exe`. gcc gives the best-optimized shards. |
 | `--cps` | **Required** so the generated code matches a CPS runtime build. If the runtime is CPS and you omit this, the DLLs misbehave. Match the runtime. |
@@ -144,6 +145,89 @@ cmake --build psxrecomp/recompiler/build --target psxrecomp-game
 ```
 
 Rebuild the recompiler from the current tree, then re-run.
+
+---
+
+## Packaged configs, and `FATAL: no BIOS profile found`
+
+If every shard fails with
+
+```
+psxrecomp-game: FATAL: no BIOS profile found. Searched '<dir>' for
+bios/SCPH1001.toml and <framework>/bios/SCPH1001.toml. ...
+```
+
+then the recompiler could not locate a BIOS profile, and the `<dir>` in the
+message is where it looked. It needs one because the profile supplies the BIOS
+address model that codegen folds jump tables through — there are no built-in
+windows.
+
+Two things make this easy to hit, and neither is a mistake on your part:
+
+1. **We spawn the recompiler with `cwd = dirname(game.toml)`,** because the
+   seeds and capture paths in the config are relative to it. You cannot
+   override that cwd from the command line.
+2. **`--ws-config` deliberately does not adopt the config's paths,** so a
+   `[recompiler] bios_config` in your `game.toml` is *not* consulted for
+   overlay compiles — only the `[widescreen]` site lists are.
+
+Together those mean the profile is resolved by probing a directory, and for a
+**packaged** config (`packaging/release/game.toml`) that directory contains
+neither `bios/SCPH1001.toml` nor a vendored framework one level down. Every
+shard then dies and the cache silently fails to build — the run still exits,
+so the only symptom is that the game ships with no cache and every player's
+first session runs interpreted. This was [issue #72][i72].
+
+`--project-root` is the fix, and it **defaults to the framework root derived
+from `--runtime-include`**, so a normal invocation needs nothing new. Pass it
+explicitly only when that derivation is wrong:
+
+```sh
+python psxrecomp/tools/compile_overlays.py \
+    --game-toml       packaging/release/game.toml \
+    --recompiler      psxrecomp/recompiler/build/psxrecomp-game.exe \
+    --runtime-include psxrecomp/runtime/include \
+    --project-root    psxrecomp \
+    --out-dir         <exe-dir>/cache \
+    --gcc             C:/msys64/mingw64/bin/gcc.exe
+```
+
+Building against the packaged `game.toml` is **required**, not optional: the
+config half of the cache tag is derived from it, so a cache built against the
+dev config lands under a different tag and the shipped runtime will not read
+it. `--project-root` is what lets you do that without also having to move the
+BIOS profile.
+
+**Is the cache actually being USED?** Shards on disk prove nothing — the loader
+can reject them. `tools/stall_report.py` answers that, plus interpreter
+attribution, in one command against a running title:
+
+```sh
+py -3 tools/stall_report.py --port <debug port> snap            # since boot
+py -3 tools/stall_report.py --port <debug port> run --secs 60   # windowed
+```
+
+It is a passive ring consumer: no arming, no pausing, no stepping. It reads
+cumulative counters (two snapshots → a window by subtraction) and the always-on
+PC-sample ring, so you can attach long after the interesting thing happened.
+`dispatch_native` vs `dispatch_interp_fallback` is the verdict; the
+instructions-per-dispatcher-round-trip ratio tells you whether interpreted code
+is chaining locally or thrashing per-block.
+
+**Verify, don't assume.** Run the preflight and read the result line:
+
+```sh
+python psxrecomp/tools/compile_overlays.py ... --check
+```
+
+`--check` builds every shard into a throwaway temp dir, never touches the real
+cache, and exits non-zero if any shard that should build fails. Watch for
+`PSX_SHARD_RESULT ok=N failed=M skipped=K`. The runtime also parses that line
+out of the provider's output, so `autocompile_status` reports
+`shard_ok` / `shard_fail` / `shard_skipped` over the TCP debug server — a
+shard-compile failure is visible in-game, not only in the provider's console.
+
+[i72]: https://github.com/mstan/psxrecomp/issues/72
 
 ---
 
