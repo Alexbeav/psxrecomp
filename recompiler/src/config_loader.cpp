@@ -2220,7 +2220,7 @@ UserSettings load_user_settings(const fs::path& path) {
         });
         if (v.contains("rewind_depth")) try_get([&]{
             int d = toml::find<int>(v, "rewind_depth");
-            static const int opts[4] = {25, 50, 75, 100};
+            static const int opts[4] = {50, 100, 150, 200};
             int best = opts[0];
             int best_d = d > best ? d - best : best - d;
             for (int i = 1; i < 4; ++i) {
@@ -2229,6 +2229,18 @@ UserSettings load_user_settings(const fs::path& path) {
             }
             s.rewind_depth = best;
             s.has_rewind_depth = true;
+        });
+        if (v.contains("rewind_interval")) try_get([&]{
+            int d = toml::find<int>(v, "rewind_interval");
+            static const int opts[5] = {1, 4, 8, 12, 15};
+            int best = opts[0];
+            int best_d = d > best ? d - best : best - d;
+            for (int i = 1; i < 5; ++i) {
+                int dd = d > opts[i] ? d - opts[i] : opts[i] - d;
+                if (dd < best_d) { best_d = dd; best = opts[i]; }
+            }
+            s.rewind_interval = best;
+            s.has_rewind_interval = true;
         });
     }
     if (doc.contains("audio")) {
@@ -2455,6 +2467,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
     if (s.has_rewind_depth)
         f << "rewind_depth      = " << s.rewind_depth << "\n";
+    if (s.has_rewind_interval)
+        f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";

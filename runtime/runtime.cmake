@@ -1001,8 +1001,10 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     # Per-game netplay/local pad ceiling. Default 2 (MotK / dual-shock path).
-    # Games that need multitap N-player (e.g. Bomberman Party Edition) pass
-    # MAX_PLAYERS 5. Clamped to the framework absolute max of 5.
+    # Single-player titles (Tomba, Ape Escape, …) pass MAX_PLAYERS 1 so rewind
+    # / rbengine still link without advertising multiplayer. Multitap N-player
+    # (Bomberman Party Edition) uses 5; dual SCPH-1070 uses 8. Range matches
+    # sio.h (1..8).
     if(NOT PSXRT_MAX_PLAYERS)
         if(DEFINED PSX_MAX_PLAYERS AND NOT PSX_MAX_PLAYERS STREQUAL "")
             set(PSXRT_MAX_PLAYERS "${PSX_MAX_PLAYERS}")
@@ -1010,9 +1012,9 @@ function(psxrecomp_add_runtime_target target)
             set(PSXRT_MAX_PLAYERS 2)
         endif()
     endif()
-    if(PSXRT_MAX_PLAYERS LESS 2 OR PSXRT_MAX_PLAYERS GREATER 5)
+    if(PSXRT_MAX_PLAYERS LESS 1 OR PSXRT_MAX_PLAYERS GREATER 8)
         message(FATAL_ERROR
-            "MAX_PLAYERS must be in 2..5 (got ${PSXRT_MAX_PLAYERS})")
+            "MAX_PLAYERS must be in 1..8 (got ${PSXRT_MAX_PLAYERS})")
     endif()
     message(STATUS "psxrecomp ${target}: PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}")
 

@@ -24,7 +24,7 @@
 
 #define RW_THUMB_W     128
 #define RW_THUMB_H      96
-#define RW_MAX_DEPTH   100
+#define RW_MAX_DEPTH   200
 #define RW_DEF_DEPTH    50
 #define RW_DEF_INTERVAL 15
 /* Match netplay §96 FMV media snaps (default 4; MEDIA_KF uses 2). */
@@ -102,6 +102,7 @@ static const uint8_t FONT8[59][8] = {
 #if !defined(PSX_HAS_RBENGINE_SNAP)
 
 void psx_rewind_set_depth(uint32_t depth) { (void)depth; }
+void psx_rewind_set_interval(uint32_t interval) { (void)interval; }
 void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc)
 {
     (void)bios_checksum;
@@ -151,6 +152,7 @@ static uint32_t s_interval = RW_DEF_INTERVAL;
 static uint32_t s_fmv_interval = RW_DEF_FMV_INTERVAL;
 static uint32_t s_depth = RW_DEF_DEPTH;
 static int s_depth_pref = -1; /* -1 = unset; else from settings.toml / launcher */
+static int s_interval_pref = -1;
 static uint32_t s_frame;
 static uint32_t s_last_capture_frame = 0xffffffffu;
 static int s_capture_due;
@@ -190,14 +192,31 @@ static uint32_t env_u32(const char *name, uint32_t def, uint32_t lo, uint32_t hi
     return v;
 }
 
-/* UI offers 25/50/75/100; nearest match keeps hand-edited toml values sane. */
+/* UI offers 50/100/150/200; nearest match keeps hand-edited toml values sane. */
 static uint32_t normalize_rewind_depth(uint32_t v)
 {
-    static const uint32_t opts[4] = {25u, 50u, 75u, 100u};
+    static const uint32_t opts[4] = {50u, 100u, 150u, 200u};
     uint32_t best = opts[0];
     uint32_t best_d = v > best ? v - best : best - v;
     unsigned i;
     for (i = 1; i < 4; i++) {
+        uint32_t d = v > opts[i] ? v - opts[i] : opts[i] - v;
+        if (d < best_d) {
+            best_d = d;
+            best = opts[i];
+        }
+    }
+    return best;
+}
+
+/* UI offers 1/4/8/12/15. */
+static uint32_t normalize_rewind_interval(uint32_t v)
+{
+    static const uint32_t opts[5] = {1u, 4u, 8u, 12u, 15u};
+    uint32_t best = opts[0];
+    uint32_t best_d = v > best ? v - best : best - v;
+    unsigned i;
+    for (i = 1; i < 5; i++) {
         uint32_t d = v > opts[i] ? v - opts[i] : opts[i] - v;
         if (d < best_d) {
             best_d = d;
@@ -215,6 +234,13 @@ void psx_rewind_set_depth(uint32_t depth)
         s_depth = (uint32_t)s_depth_pref;
 }
 
+void psx_rewind_set_interval(uint32_t interval)
+{
+    s_interval_pref = (int)normalize_rewind_interval(interval);
+    if (s_enabled >= 0)
+        s_interval = (uint32_t)s_interval_pref;
+}
+
 static int rewind_wanted(void)
 {
     const char *e;
@@ -224,7 +250,12 @@ static int rewind_wanted(void)
             s_enabled = 0;
         else
             s_enabled = 1;
-        s_interval = env_u32("PSX_REWIND_INTERVAL", RW_DEF_INTERVAL, 1u, 60u);
+        {
+            uint32_t iv_def = s_interval_pref > 0 ? (uint32_t)s_interval_pref
+                                                  : RW_DEF_INTERVAL;
+            s_interval = normalize_rewind_interval(
+                env_u32("PSX_REWIND_INTERVAL", iv_def, 1u, 60u));
+        }
         s_fmv_interval =
             env_u32("PSX_REWIND_FMV_INTERVAL", RW_DEF_FMV_INTERVAL, 1u, 16u);
         {
@@ -251,7 +282,10 @@ static int rewind_fmv_media_active(void)
 
 static uint32_t rewind_capture_interval(void)
 {
-    return rewind_fmv_media_active() ? s_fmv_interval : s_interval;
+    if (!rewind_fmv_media_active())
+        return s_interval;
+    /* FMV densifies toward s_fmv_interval but never sparser than the user pick. */
+    return s_interval < s_fmv_interval ? s_interval : s_fmv_interval;
 }
 
 static int resume_pc_ok(uint32_t pc)

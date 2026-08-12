@@ -1104,8 +1104,11 @@ struct UserSettings {
                                      int  aspect_den     = 3; // (4:3 = native)
     bool has_adaptive_view  = false; bool adaptive_view  = false;
     // [video] rewind_depth: local rewind snap-ring capacity. UI offers
-    // 25 / 50 / 75 / 100 (default 50). Runtime clamps + snaps to those steps.
+    // 50 / 100 / 150 / 200 (default 50). Runtime clamps + snaps to those steps.
     bool has_rewind_depth   = false; int  rewind_depth   = 50;
+    // [video] rewind_interval: frames between local rewind snaps. UI offers
+    // 1 / 4 / 8 / 12 / 15 (default 15).
+    bool has_rewind_interval = false; int rewind_interval = 15;
     // [audio]
     bool has_spu_hq         = false; bool spu_hq         = false;
     // [bios] / [disc] / [memcard]
