@@ -9405,10 +9405,14 @@ namespace {
         gi->bios_verify = ae_bios_verify;
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
         g_lnch_game_players = game_players_n;
-        gi->netplay_supported =
-            (game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS) ? 1 : 0;
-        gi->netplay = &g_lnch_netplay_callbacks;
+        /* ae_disc_verify only fills netplay_ok/disc_fp when this is true. */
+        g_lnch_netplay_available =
+            game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS;
+        gi->netplay_supported = g_lnch_netplay_available ? 1 : 0;
+        gi->netplay = g_lnch_netplay_available
+            ? &g_lnch_netplay_callbacks : nullptr;
 #else
+        g_lnch_netplay_available = false;
         gi->netplay_supported = 0;
         gi->netplay = nullptr;
 #endif
