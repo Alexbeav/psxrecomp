@@ -5,6 +5,7 @@ Examples:
   python3 tools/new_project_layout/migrate_project.py audit --root ~/src/ApeEscapeRecomp
   python3 tools/new_project_layout/migrate_project.py plan  --root ~/src/ApeEscapeRecomp
   python3 tools/new_project_layout/migrate_project.py apply --root ~/src/ApeEscapeRecomp --dry-run
+  python3 tools/new_project_layout/migrate_project.py git status --root ~/src/ApeEscapeRecomp
   python3 tools/new_project_layout/migrate_project.py gui
 """
 

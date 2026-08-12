@@ -68,8 +68,10 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
 #include "host_osd.h"
+#include "psx_savestate_menu.h"
 #include "host_time.h"
 #include "latency_ring.h"
+#include "psx_rewind.h"
 
 #include "psx_sdl.h"
 #if defined(PSX_SDL3)
@@ -3942,6 +3944,17 @@ static void gl_swap_with_osd(void) {
                 int vy = (wh > dh) ? ((wh - dh) / 2) : margin;
                 gl_draw_osd_image(px, ow, oh, dw, dh, vx, vy, ww, wh);
             }
+            if (psx_rewind_overlay_image(&px, &ow, &oh) && px) {
+                float slide = psx_rewind_slide();
+                int dw = ww;
+                int dh = (wh * oh) / 480;
+                int vy;
+                if (dh < 8) dh = oh;
+                vy = wh - (int)((float)dh * slide + 0.5f);
+                gl_draw_osd_image(px, ow, oh, dw, dh, 0, vy, ww, wh);
+            }
+            if (psx_savestate_menu_overlay_image(&px, &ow, &oh) && px)
+                gl_draw_osd_image(px, ow, oh, ww, wh, 0, 0, ww, wh);
         }
     }
     host_osd_present_done();

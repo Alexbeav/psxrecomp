@@ -30,6 +30,12 @@ cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
 
 Template: [`templates/setup-release.yml`](templates/setup-release.yml)
 
+**Versioning:** `workflow_dispatch` with an empty `version` auto-bumps the next
+`X.Y.Z` from the latest `v*.*.*` git tag (`bump`: patch / minor / major; default
+patch). Pass an explicit version to override. Shared helper:
+`tools/ci/normalize_version.sh --next [patch|minor|major]`.
+
+
 **Host-only model / player updates:** [`HOST_ONLY_RELEASES.md`](HOST_ONLY_RELEASES.md)
 (CI never ships game C; RetComM Update reuses codegen-cache for host/UI bumps;
 `reuse_cached_emitters` + ccache speed up release jobs when the `psxrecomp` pin
@@ -47,7 +53,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 
 | Script | Role |
 |--------|------|
-| `ci/normalize_version.sh` | Normalize / write `VERSION` + `TAG` |
+| `ci/normalize_version.sh` | Normalize / write `VERSION` + `TAG`; `--next` auto-bumps from latest tag |
 | `ci/clear_generated.sh` | Clear `generated/` for setup-host CI |
 | `ci/record_pins.sh` | Log `psxrecomp` / `recomp-ui` / `recomp-net` SHAs (CI + scaffold) |
 | `ci/verify_pins.sh` | Optional local check vs `framework_pins.txt` (not used by release CI) |

@@ -1,15 +1,18 @@
 # New Project Layout scaffolding (Windows).
 #
 # Path params (pass on the CLI — tab-complete in your shell):
-#   -Disc <cue>           REQUIRED legal Redump .cue
+#   -Disc <cue>           REQUIRED legal Redump .cue (kept on your dump drive)
 #   -Dir <parent>         Parent directory (default: .)
 #   -Bios <SCPH1001.BIN>  Optional retail BIOS for Generate
+#   -StageDisc            Copy full cue+bins into repo disc/ (large; optional)
+#   Default: probe in place and extract boot EXE only into disc/
 #
 # Other options are prompted when interactive, or set via switches / -Yes.
 #
 # Usage:
 #   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue
 #   powershell -File setup_project.ps1 -Disc game.cue -Name Foo -Yes
+#   powershell -File setup_project.ps1 -Disc game.cue -StageDisc
 
 [CmdletBinding()]
 param(
@@ -43,6 +46,7 @@ param(
     [string]$Region = "",
     [switch]$Yes,
     [string]$Bios = "",
+    [switch]$StageDisc,
     # mstan/psxrecomp and recomp-ui both use master (not main).
     [string]$PsxrecompRef = "master",
     [string]$RecompUiRef = "master",
@@ -444,7 +448,14 @@ if ($DiscBasename -notmatch '\.cue$') {
 }
 $DiscOut = Join-Path $Root "disc"
 New-Item -ItemType Directory -Force -Path $DiscOut | Out-Null
-$py = @'
+
+$ProbeCue = $DiscAbs
+$DiscTomlPath = $DiscAbs
+$GenDiscHint = $DiscAbs
+
+if ($StageDisc) {
+    Write-Host "== Staging full disc dump into disc/ (optional; large) =="
+    $py = @'
 import re, shutil, sys
 from pathlib import Path
 cue = Path(sys.argv[1])
@@ -464,22 +475,29 @@ for m in re.finditer(r'FILE\s+"([^"]+)"', text, re.I):
         print(f"  warning: cue FILE missing: {src}", file=sys.stderr)
 print("  disc staged under disc/ (gitignored — never commit dumps)")
 '@
-$pyFile = Join-Path $env:TEMP "psxrecomp_stage_disc.py"
-Set-Content -Encoding UTF8 -Path $pyFile -Value $py
-python $pyFile $DiscAbs $DiscOut
+    $pyFile = Join-Path $env:TEMP "psxrecomp_stage_disc.py"
+    Set-Content -Encoding UTF8 -Path $pyFile -Value $py
+    python $pyFile $DiscAbs $DiscOut
+    $ProbeCue = Join-Path $DiscOut $DiscBasename
+    $DiscTomlPath = "disc/$DiscBasename"
+    } else {
+    Write-Host "== External disc (no full copy) =="
+    Write-Host "  cue remains at: $DiscAbs"
+    Write-Host "  will extract boot EXE only into disc/"
+}
 
 $Probed = $false
 $SeedCount = 0
 if ($DiscBasename -match '\.cue$') {
     Write-Host "== Probing disc (identity + seeds + TOC fp) =="
-    $StagedCue = Join-Path $DiscOut $DiscBasename
     try {
-        python $ProbeDisc $StagedCue `
+        python $ProbeDisc $ProbeCue `
             --json-out (Join-Path $Root "disc_probe.json") `
             --write-game-toml (Join-Path $Root "game.toml") `
             --write-catalog (Join-Path $Root "catalog_identity.json") `
             --write-seeds (Join-Path $Root "seeds\ghidra_funcs.txt") `
-            --disc-rel "disc/$DiscBasename" `
+            --write-boot-exe $DiscOut `
+            --disc-rel $DiscTomlPath `
             --out-dir disc `
             --players $Players `
             --display-name $GameName `
@@ -514,6 +532,10 @@ print(m.group(1) if m else '')
             Fill-Template (Join-Path $TemplateDir "symbols.toml.in") (Join-Path $Root "symbols.toml")
             Write-Host "  symbols.toml BootEntry → $EntryPc"
         }
+        if (-not $StageDisc) {
+            Write-Host "  game.toml disc → $DiscTomlPath"
+            Write-Host "  (local absolute path — do not commit machine-specific dumps)"
+        }
     } catch {
         Write-Warning "Disc probe failed — left template game.toml; fill by hand."
     }
@@ -521,21 +543,6 @@ print(m.group(1) if m else '')
     Write-Warning "-Disc is not a .cue; skipped probe autofill."
 }
 
-if ($doBoxart) {
-    Write-Host "== Fetching libretro boxart =="
-    try {
-        python $FetchBoxartPy `
-            --out (Join-Path $Root "launcher_assets\img\boxart.tga") `
-            --cue-stem $DiscBasename `
-            --display-name $GameName
-        $HasBoxart = $true
-        Set-Content -Encoding UTF8 -Path $BoxartBlockFile -Value '    LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
-        Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
-        Write-Host "  wired LAUNCHER_BOXART in CMakeLists.txt"
-    } catch {
-        Write-Warning "Boxart fetch failed — leave LAUNCHER_BOXART commented."
-    }
-}
 
 Write-Host "== Sync symbols header =="
 Push-Location $Root
@@ -600,7 +607,6 @@ if ($createGithub) {
     }
 }
 
-$GenDiscHint = "disc/$DiscBasename"
 $GeneratedOk = $false
 $BuildOk = $false
 if ($doGenerate) {

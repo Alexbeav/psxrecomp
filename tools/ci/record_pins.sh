@@ -36,3 +36,4 @@ pin() {
 pin psxrecomp psxrecomp
 pin recomp-ui recomp-ui
 pin recomp-net psxrecomp/lib/recomp-net
+pin retcomm-rbengine psxrecomp/lib/retcomm-rbengine

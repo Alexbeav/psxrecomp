@@ -1040,10 +1040,12 @@ void psx_check_interrupts(CPUState* cpu) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_rewind_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
                 /* MotK FMV/VLC live here — must flush pending RB snaps too. */
                 psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
                 psx_selfcheck_poll(cpu, s_compiled_interrupt_resume_pc);
+                psx_rewind_poll(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
             PSX_CHECK_INTERRUPTS_RETURN();
@@ -1092,9 +1094,11 @@ void psx_check_interrupts(CPUState* cpu) {
                 extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
                 extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
+                extern void psx_rewind_poll(CPUState* cpu, uint32_t resume_pc);
                 savestate_poll(cpu, s_compiled_interrupt_resume_pc);
                 psx_netplay_poll_snap(cpu, s_compiled_interrupt_resume_pc);
                 psx_selfcheck_poll(cpu, s_compiled_interrupt_resume_pc);
+                psx_rewind_poll(cpu, s_compiled_interrupt_resume_pc);
                 debug_server_poll();
             }
             PSX_CHECK_INTERRUPTS_RETURN();
@@ -1119,11 +1123,13 @@ void psx_check_interrupts(CPUState* cpu) {
             extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
             extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
             extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
+            extern void psx_rewind_poll(CPUState* cpu, uint32_t resume_pc);
             savestate_poll(cpu, check_pc);
             /* Sticky CD/VBlank mid-path is MotK's FMV hot edge — without this
              * the RB snap ring never fills (pending save never polled). */
             psx_netplay_poll_snap(cpu, check_pc);
             psx_selfcheck_poll(cpu, check_pc);
+            psx_rewind_poll(cpu, check_pc);
             debug_server_poll();
         }
         goto irq_deliver_eval;
@@ -1176,9 +1182,11 @@ void psx_check_interrupts(CPUState* cpu) {
         extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
         extern void psx_netplay_poll_snap(CPUState* cpu, uint32_t resume_pc);
         extern void psx_selfcheck_poll(CPUState* cpu, uint32_t resume_pc);
+        extern void psx_rewind_poll(CPUState* cpu, uint32_t resume_pc);
         savestate_poll(cpu, s_last_interrupt_check_pc);
         psx_netplay_poll_snap(cpu, s_last_interrupt_check_pc);
         psx_selfcheck_poll(cpu, s_last_interrupt_check_pc);
+        psx_rewind_poll(cpu, s_last_interrupt_check_pc);
     }
 
     /* Deferred cooperative thread switch: honor at the next real thread-save

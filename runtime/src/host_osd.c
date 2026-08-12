@@ -4,6 +4,8 @@
  * remains available for headless / launcher-less builds. */
 
 #include "host_osd.h"
+#include "psx_rewind.h"
+#include "psx_savestate_menu.h"
 #include "psx_sdl.h"
 
 #include <stdio.h>
@@ -157,6 +159,12 @@ static int          s_sdl_th;
 static SDL_Texture *s_sdl_vol_tex;
 static int          s_sdl_vol_tw;
 static int          s_sdl_vol_th;
+static SDL_Texture *s_sdl_rw_tex;
+static int          s_sdl_rw_tw;
+static int          s_sdl_rw_th;
+static SDL_Texture *s_sdl_ssm_tex;
+static int          s_sdl_ssm_tw;
+static int          s_sdl_ssm_th;
 static SDL_Renderer *s_sdl_ren;
 #endif
 
@@ -362,6 +370,8 @@ int host_volume_adjust(int delta) {
 }
 
 int host_osd_needs_present(void) {
+    if (psx_rewind_needs_present()) return 1;
+    if (psx_savestate_menu_needs_present()) return 1;
 #if !HOST_OSD_VISUAL
     return 0;
 #else
@@ -421,13 +431,10 @@ void host_osd_present_done(void) {
 }
 
 void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
-#if !HOST_OSD_VISUAL
-    (void)renderer;
-    return;
-#else
 #ifndef PSX_SDL_NO_RENDER
     if (!renderer) return;
     s_sdl_ren = renderer;
+#if HOST_OSD_VISUAL
     {
         const uint32_t *px;
         int w, h;
@@ -451,8 +458,31 @@ void host_osd_draw_sdl(struct SDL_Renderer *renderer) {
         }
     }
     host_osd_present_done();
+#endif
+    {
+        const uint32_t *px = NULL;
+        int w = 0, h = 0;
+        if (psx_rewind_overlay_image(&px, &w, &h) && px) {
+            int lw = 640, lh = 480;
+            float slide;
+            int dw, dh, y;
+            sdl_logical_size(renderer, &lw, &lh);
+            slide = psx_rewind_slide();
+            dw = lw;
+            dh = (lh * h) / 480;
+            if (dh < 8) dh = h;
+            y = lh - (int)((float)dh * slide + 0.5f);
+            sdl_blit_argb(renderer, &s_sdl_rw_tex, &s_sdl_rw_tw, &s_sdl_rw_th,
+                          px, w, h, 0, y, dw, dh);
+        }
+        if (psx_savestate_menu_overlay_image(&px, &w, &h) && px) {
+            int lw = 640, lh = 480;
+            sdl_logical_size(renderer, &lw, &lh);
+            sdl_blit_argb(renderer, &s_sdl_ssm_tex, &s_sdl_ssm_tw,
+                          &s_sdl_ssm_th, px, w, h, 0, 0, lw, lh);
+        }
+    }
 #else
     (void)renderer;
 #endif /* PSX_SDL_NO_RENDER */
-#endif /* HOST_OSD_VISUAL */
 }

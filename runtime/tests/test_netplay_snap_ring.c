@@ -21,12 +21,16 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 
+#ifndef PSX_HAS_RECOMP_NET
+#  define PSX_HAS_RECOMP_NET 1
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Stub boot_state so the ring TU links without the full runtime. */
+/* Stub boot_state so the MotK save/load glue links without the full runtime. */
 #ifdef NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE
 #include "cpu_state.h"
 int boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
@@ -55,6 +59,7 @@ uint32_t boot_state_last_vram_dirty_rows(void) { return 0; }
 int boot_state_last_vram_incremental(void) { return 0; }
 #endif
 
+#include "netplay_snap_ring.h"
 #include "../src/netplay_snap_ring.c"
 
 static int failures;

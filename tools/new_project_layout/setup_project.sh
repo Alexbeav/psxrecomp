@@ -2,10 +2,12 @@
 # New Project Layout scaffolding (Linux / macOS).
 #
 # Path flags (pass on the CLI — use your shell's path completion):
-#   --disc <cue>          REQUIRED legal Redump .cue
+#   --disc <cue>          REQUIRED legal Redump .cue (kept on your dump drive)
 #   --dir <parent>        Parent directory for the new repo (default: .)
 #   --bios <SCPH1001.BIN> Optional retail BIOS for --generate / generate prompt
 #   --boot-exe <name>     Optional override until disc probe runs
+#   --stage-disc          Copy full cue+bins into repo disc/ (large; optional)
+#   --no-stage-disc       Default: probe in place, extract boot EXE only
 #   --psxrecomp-ref / --recomp-ui-ref / --recomp-net-ref / URLs
 #
 # Everything else is prompted on a TTY (or passed via flags / --yes defaults):
@@ -17,6 +19,10 @@
 #   boolean opts stay off unless explicitly flagged; lobby URL defaults to
 #   netplay.retcomm.net when netplay is enabled.
 #
+# Disc layout (default): game.toml disc= absolute path to your Redump cue;
+#   only the small boot EXE is written under disc/. Use --stage-disc to copy
+#   the full multi-track dump into the repo (gitignored) instead.
+#
 # GitHub publish order (avoids competing "initial" commits / missing CI):
 #   scaffold + CI workflow → commit → gh repo create (no push) → generate/build
 #   → single git push -u origin HEAD → verify Actions workflows if CI enabled.
@@ -24,6 +30,7 @@
 # Usage:
 #   sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue
 #   sh tools/new_project_layout/setup_project.sh --disc game.cue --name Foo --yes
+#   sh tools/new_project_layout/setup_project.sh --disc game.cue --stage-disc
 
 set -eu
 
@@ -80,9 +87,10 @@ SET_DESCRIPTION=0
 SET_PUBLISHER=0
 SET_YEAR=0
 SET_REGION=0
+STAGE_DISC=0
 
 usage() {
-    sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -181,6 +189,8 @@ while [ $# -gt 0 ]; do
         --region) REGION=$2; SET_REGION=1; shift 2 ;;
         --bios) BIOS_PATH=$2; shift 2 ;;
         --yes|-y) YES_MODE=1; shift ;;
+        --stage-disc) STAGE_DISC=1; shift ;;
+        --no-stage-disc) STAGE_DISC=0; shift ;;
         --psxrecomp-ref) PSXRECOMP_REF=$2; shift 2 ;;
         --recomp-ui-ref) RECOMP_UI_REF=$2; shift 2 ;;
         --recomp-net-ref) RECOMP_NET_REF=$2; shift 2 ;;
@@ -670,7 +680,14 @@ case "$DISC" in
         echo "warning: prefer a Redump-style .cue (with sibling .bin tracks)." >&2
         ;;
 esac
-python3 - "$DISC_ABS" "$ROOT/disc" <<'PY'
+
+PROBE_CUE="$DISC_ABS"
+DISC_TOML_PATH="$DISC_ABS"
+GEN_DISC_HINT="$DISC_ABS"
+
+if [ "$STAGE_DISC" -eq 1 ]; then
+    echo "== Staging full disc dump into disc/ (optional; large) =="
+    python3 - "$DISC_ABS" "$ROOT/disc" <<'PY'
 import re, shutil, sys
 from pathlib import Path
 cue = Path(sys.argv[1])
@@ -690,17 +707,25 @@ for m in re.finditer(r'FILE\s+"([^"]+)"', text, re.I):
         print(f"  warning: cue FILE missing: {src}", file=sys.stderr)
 print("  disc staged under disc/ (gitignored — never commit dumps)")
 PY
+    PROBE_CUE="$ROOT/disc/$DISC_BASENAME"
+    DISC_TOML_PATH="disc/$DISC_BASENAME"
+    GEN_DISC_HINT="disc/$DISC_BASENAME"
+else
+    echo "== External disc (no full copy) =="
+    echo "  cue remains at: $DISC_ABS"
+    echo "  will extract boot EXE only into disc/"
+fi
 
-STAGED_CUE="$ROOT/disc/$DISC_BASENAME"
 case "$DISC_BASENAME" in
     *.cue|*.CUE)
         echo "== Probing disc (identity + seeds + TOC fp) =="
-        if python3 "$PROBE_DISC" "$STAGED_CUE" \
+        if python3 "$PROBE_DISC" "$PROBE_CUE" \
             --json-out "$ROOT/disc_probe.json" \
             --write-game-toml "$ROOT/game.toml" \
             --write-catalog "$ROOT/catalog_identity.json" \
             --write-seeds "$ROOT/seeds/ghidra_funcs.txt" \
-            --disc-rel "disc/$DISC_BASENAME" \
+            --write-boot-exe "$ROOT/disc" \
+            --disc-rel "$DISC_TOML_PATH" \
             --out-dir disc \
             --players "$PLAYERS" \
             --display-name "$GAME_NAME" \
@@ -732,6 +757,10 @@ print(m.group(1) if m else "")
                 ENTRY_PC="$ENTRY_FROM_TOML"
                 fill_template "$TEMPLATE_DIR/symbols.toml.in" "$ROOT/symbols.toml"
                 echo "  symbols.toml BootEntry → $ENTRY_PC"
+            fi
+            if [ "$STAGE_DISC" -eq 0 ]; then
+                echo "  game.toml disc → $DISC_TOML_PATH"
+                echo "  (local absolute path — do not commit machine-specific dumps)"
             fi
         else
             echo "warning: disc probe failed — left template game.toml; fill by hand." >&2
@@ -820,7 +849,7 @@ if [ "${CREATE_GITHUB:-0}" -eq 1 ]; then
     fi
 fi
 
-GEN_DISC_HINT="disc/$DISC_BASENAME"
+GEN_DISC_HINT="${GEN_DISC_HINT:-disc/$DISC_BASENAME}"
 GENERATED_OK=0
 BUILD_OK=0
 if [ "$DO_GENERATE" -eq 1 ]; then

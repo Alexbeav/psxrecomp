@@ -128,3 +128,7 @@ runtime/tests/test_*
 # transient split-gen build dirs
 recompiler/build-splitgen/
 recompiler/build-*/
+
+# Project Studio GUI venv (customtkinter)
+tools/new_project_layout/.venv/
+tools/new_project_layout/project_studio_repos.json

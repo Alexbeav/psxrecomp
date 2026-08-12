@@ -30,15 +30,23 @@ endif()
 # SOURCE + compiler + flags (content, not mtime), so those recompiles collapse to
 # near-instant cache hits after any branch op. Completely no-op when ccache is not
 # on PATH, so builds still work without it. Set once, before any target is added.
+# RetComM cmake-clang-v1 packs ship bin/ccache and prepend that dir to PATH;
+# also HINT RETCOMM_TOOLCHAIN_DIR for wizards that only set the env override.
 if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER)
-    find_program(CCACHE_PROGRAM ccache)
+    set(_psx_ccache_hints "")
+    if(DEFINED ENV{RETCOMM_TOOLCHAIN_DIR} AND NOT "$ENV{RETCOMM_TOOLCHAIN_DIR}" STREQUAL "")
+        list(APPEND _psx_ccache_hints "$ENV{RETCOMM_TOOLCHAIN_DIR}/bin")
+    endif()
+    find_program(CCACHE_PROGRAM NAMES ccache ccache.exe HINTS ${_psx_ccache_hints})
+    unset(_psx_ccache_hints)
     if(CCACHE_PROGRAM)
         set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
         set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
         message(STATUS "psxrecomp: ccache enabled (${CCACHE_PROGRAM}) — mtime-proof rebuilds")
     else()
         message(STATUS "psxrecomp: ccache not found; generated-C rebuilds after git "
-                       "branch ops will be slow. Install ccache on PATH to fix.")
+                       "branch ops will be slow. Install ccache on PATH (or update "
+                       "cmake-clang-v1) to fix.")
     endif()
 endif()
 
@@ -251,7 +259,6 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/boot_state.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_snap_ring.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_state_digest.c
-    ${PSXRECOMP_ROOT}/runtime/src/netplay_hash_confirm.c
     ${PSXRECOMP_ROOT}/runtime/src/netplay_input_hist.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_rb.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_netplay_sched.c
@@ -259,6 +266,8 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle.c
     ${PSXRECOMP_ROOT}/runtime/src/bios_hle_plan.c
     ${PSXRECOMP_ROOT}/runtime/src/savestate.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_savestate_menu.c
+    ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
     ${PSXRECOMP_ROOT}/runtime/src/host_keymap.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
@@ -369,6 +378,60 @@ else()
     endif()
 endif()
 
+# Portable rollback host policy (sched/hist/hash_confirm/snap). Sits next to
+# recomp-net; MotK keeps thin PSX glue (pad↔frame, boot_state, FMV/dig0 gates).
+# Snap ring is also used for local rewind without linking full rbengine/recomp-net.
+set(RECOMP_RBENGINE_ROOT "" CACHE PATH "Path to retcomm-rbengine; empty = auto-discover")
+if(NOT RECOMP_RBENGINE_ROOT)
+    foreach(_cand
+            "${PSXRECOMP_ROOT}/lib/retcomm-rbengine"
+            "${CMAKE_SOURCE_DIR}/../retcomm-rbengine"
+            "${PSXRECOMP_ROOT}/../retcomm-rbengine")
+        get_filename_component(_abs "${_cand}" ABSOLUTE)
+        if(EXISTS "${_abs}/include/retcomm_rbengine/snap_ring.h")
+            set(RECOMP_RBENGINE_ROOT "${_abs}" CACHE PATH
+                "Path to retcomm-rbengine; empty = auto-discover" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+if(PSXRECOMP_HAS_RECOMP_NET AND RECOMP_RBENGINE_ROOT
+   AND EXISTS "${RECOMP_RBENGINE_ROOT}/CMakeLists.txt")
+    if(NOT TARGET retcomm_rbengine)
+        set(RBE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        # recomp_net already added above; rbengine skips nested add_subdirectory.
+        set(RECOMP_NET_ROOT "${RECOMP_NET_ROOT}" CACHE PATH "" FORCE)
+        add_subdirectory("${RECOMP_RBENGINE_ROOT}"
+                         "${CMAKE_BINARY_DIR}/retcomm-rbengine")
+    endif()
+    set(PSXRECOMP_HAS_RBENGINE TRUE)
+    message(STATUS "psxrecomp: retcomm-rbengine enabled (${RECOMP_RBENGINE_ROOT})")
+else()
+    set(PSXRECOMP_HAS_RBENGINE FALSE)
+    if(PSXRECOMP_HAS_RECOMP_NET)
+        message(FATAL_ERROR
+            "psxrecomp: PSX_NETPLAY needs retcomm-rbengine.\n"
+            "  git submodule update --init lib/retcomm-rbengine\n"
+            "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine")
+    endif()
+endif()
+
+# Local rewind: full rbengine when netplay is on; otherwise compile snap_ring.c
+# only (no recomp-net / sched / hash_confirm). Never both — duplicate symbols.
+set(PSXRECOMP_HAS_RBENGINE_SNAP FALSE)
+set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "")
+if(PSXRECOMP_HAS_RBENGINE)
+    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+elseif(RECOMP_RBENGINE_ROOT
+       AND EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c"
+       AND EXISTS "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h")
+    list(APPEND PSXRECOMP_RUNTIME_SOURCES
+        ${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c)
+    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+    set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "${RECOMP_RBENGINE_ROOT}/include")
+    message(STATUS "psxrecomp: rewind snap_ring (${RECOMP_RBENGINE_ROOT})")
+endif()
+
 # Lobby WebSocket client helpers are vendored under runtime/src/lobby_ws/
 # (protocol talks to the proprietary recomp-net-server, not recomp-net).
 set(PSXRECOMP_LOBBY_WS_DIR "${PSXRECOMP_ROOT}/runtime/src/lobby_ws")
@@ -398,6 +461,9 @@ set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
 )
 if(PSXRECOMP_LOBBY_INCLUDE_DIR)
     list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_LOBBY_INCLUDE_DIR})
+endif()
+if(PSXRECOMP_RBENGINE_SNAP_INCLUDE)
+    list(APPEND PSXRECOMP_RUNTIME_INCLUDE_DIRS ${PSXRECOMP_RBENGINE_SNAP_INCLUDE})
 endif()
 
 # Which recompiled BIOSes the runtime links. A build carries every image it
@@ -936,8 +1002,10 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     # Per-game netplay/local pad ceiling. Default 2 (MotK / dual-shock path).
-    # Games that need multitap N-player (e.g. Bomberman Party Edition) pass
-    # MAX_PLAYERS 5. Clamped to the framework absolute max of 5.
+    # Single-player titles (Tomba, Ape Escape, …) pass MAX_PLAYERS 1 so rewind
+    # / rbengine still link without advertising multiplayer. Multitap N-player
+    # (Bomberman Party Edition) uses 5; dual SCPH-1070 uses 8. Range matches
+    # sio.h (1..8).
     if(NOT PSXRT_MAX_PLAYERS)
         if(DEFINED PSX_MAX_PLAYERS AND NOT PSX_MAX_PLAYERS STREQUAL "")
             set(PSXRT_MAX_PLAYERS "${PSX_MAX_PLAYERS}")
@@ -945,9 +1013,9 @@ function(psxrecomp_add_runtime_target target)
             set(PSXRT_MAX_PLAYERS 2)
         endif()
     endif()
-    if(PSXRT_MAX_PLAYERS LESS 2 OR PSXRT_MAX_PLAYERS GREATER 5)
+    if(PSXRT_MAX_PLAYERS LESS 1 OR PSXRT_MAX_PLAYERS GREATER 8)
         message(FATAL_ERROR
-            "MAX_PLAYERS must be in 2..5 (got ${PSXRT_MAX_PLAYERS})")
+            "MAX_PLAYERS must be in 1..8 (got ${PSXRT_MAX_PLAYERS})")
     endif()
     message(STATUS "psxrecomp ${target}: PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}")
 
@@ -1068,6 +1136,12 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRECOMP_HAS_RECOMP_NET)
         target_compile_definitions(${target} PRIVATE PSX_HAS_RECOMP_NET=1)
         target_link_libraries(${target} PRIVATE recomp_net)
+        if(PSXRECOMP_HAS_RBENGINE)
+            target_link_libraries(${target} PRIVATE retcomm_rbengine)
+        endif()
+    endif()
+    if(PSXRECOMP_HAS_RBENGINE_SNAP)
+        target_compile_definitions(${target} PRIVATE PSX_HAS_RBENGINE_SNAP=1)
     endif()
     if(PSXRECOMP_HAS_LOBBY_CLIENT)
         target_compile_definitions(${target} PRIVATE PSX_HAS_LOBBY_CLIENT=1)

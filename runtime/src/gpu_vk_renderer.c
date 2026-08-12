@@ -22,6 +22,8 @@
 #include "gpu_vk_renderer.h"
 #include "gpu_sw_renderer.h"
 #include "host_osd.h"
+#include "psx_savestate_menu.h"
+#include "psx_rewind.h"
 #include "crash_trace.h"
 #include "gpu_vk_upload.h"
 
@@ -1549,11 +1551,14 @@ static void vk_osd_copy_rect(VkCommandBuffer cb, VkImage sc,
 }
 
 static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
-    const uint32_t *text_px = NULL, *vol_px = NULL;
-    int tw = 0, th = 0, vw = 0, vh = 0;
+    const uint32_t *text_px = NULL, *vol_px = NULL, *rw_px = NULL, *ssm_px = NULL;
+    int tw = 0, th = 0, vw = 0, vh = 0, rw = 0, rh = 0, sw = 0, sh = 0;
     const int have_text = host_osd_image(&text_px, &tw, &th) && text_px;
     const int have_vol = host_osd_volume_image(&vol_px, &vw, &vh) && vol_px;
-    if (!have_text && !have_vol) {
+    const int have_rw = psx_rewind_overlay_image(&rw_px, &rw, &rh) && rw_px;
+    const int have_ssm =
+        psx_savestate_menu_overlay_image(&ssm_px, &sw, &sh) && ssm_px;
+    if (!have_text && !have_vol && !have_rw && !have_ssm) {
         host_osd_present_done();
         return;
     }
@@ -1567,7 +1572,11 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
         have_text ? (VkDeviceSize)tw * (VkDeviceSize)th * 4u : 0;
     VkDeviceSize vol_bytes =
         have_vol ? (VkDeviceSize)vw * (VkDeviceSize)vh * 4u : 0;
-    VkDeviceSize bytes = text_bytes + vol_bytes;
+    VkDeviceSize rw_bytes =
+        have_rw ? (VkDeviceSize)rw * (VkDeviceSize)rh * 4u : 0;
+    VkDeviceSize ssm_bytes =
+        have_ssm ? (VkDeviceSize)sw * (VkDeviceSize)sh * 4u : 0;
+    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes;
     if (bytes > s_osd_cap) {
         p_vkQueueWaitIdle(s_queue);
         osd_staging_free();
@@ -1591,6 +1600,25 @@ static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
                     ? (((int)s_sc_extent.height - vh) / 2)
                     : margin;
         vk_osd_copy_rect(cb, sc, vol_px, vw, vh, x, y, off);
+        off += vol_bytes;
+    }
+    if (have_rw) {
+        float slide = psx_rewind_slide();
+        int x = ((int)s_sc_extent.width > rw)
+                    ? (((int)s_sc_extent.width - rw) / 2)
+                    : 0;
+        int y = (int)s_sc_extent.height - (int)((float)rh * slide + 0.5f);
+        vk_osd_copy_rect(cb, sc, rw_px, rw, rh, x, y, off);
+        off += rw_bytes;
+    }
+    if (have_ssm) {
+        int x = ((int)s_sc_extent.width > sw)
+                    ? (((int)s_sc_extent.width - sw) / 2)
+                    : 0;
+        int y = ((int)s_sc_extent.height > sh)
+                    ? (((int)s_sc_extent.height - sh) / 2)
+                    : 0;
+        vk_osd_copy_rect(cb, sc, ssm_px, sw, sh, x, y, off);
     }
     host_osd_present_done();
 }

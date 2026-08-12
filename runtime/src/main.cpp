@@ -21,6 +21,8 @@
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
+#include "psx_rewind.h"
+#include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
 #include "overlay_capture.h"
@@ -879,9 +881,14 @@ static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
 /* Called from savestate_poll after a successful restore (before scheduler
  * longjmp). Clears present latches and forces the next vblank to show the
  * restored VRAM — including a blank if display was disabled in the snapshot. */
+static void savestate_input_guard_arm(void);
 extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) {
     char buf[64];
-    const int disp = slot + 1; /* F1 = slot 1 */
+    const int disp = slot + 1;
+    if (!is_load && ok)
+        psx_savestate_menu_note_slots_changed();
+    if (is_load && ok)
+        savestate_input_guard_arm();
     if (is_load) {
         if (ok)
             snprintf(buf, sizeof(buf), "Loaded slot %d", disp);
@@ -1058,6 +1065,12 @@ static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitr
 static int           g_video_win_w    = 1280; /* window width (height follows aspect) */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
+static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
+static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
+static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
+static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
+static uint32_t      g_savestate_input_guard_min_until = 0;
+static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
@@ -2377,6 +2390,7 @@ static void shutdown_runtime(void) {
     /* (sljit removed 2026-07-15: overlay_compile_worker_stop joined the
      * off-thread JIT worker here; the worker no longer exists.) */
     psx_netplay_shutdown();
+    psx_rewind_shutdown();
     memcard_flush_all();
     /* Stop and join the active external compiler before capture/debug teardown.
      * Otherwise closing the window can leave cmd/python/gcc running against
@@ -2401,6 +2415,7 @@ static void shutdown_runtime(void) {
 static void teardown_game_session_keep_lobby(void) {
     netplay_host_present_restore();
     psx_netplay_shutdown();
+    psx_rewind_shutdown();
     memcard_flush_all();
     if (sdl_audio_device) {
         psx_sdl_audio_clear(sdl_audio_device);
@@ -3614,7 +3629,7 @@ static void update_controller_rumble(void) {
         const char* e = std::getenv("PSX_RUMBLE_TRACE");
         return e && e[0] && e[0] != '0';
     }();
-    for (int s = 0; s < 2; s++) {
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         PlayerInput& p = g_players[s];
         uint8_t small = 0, large = 0;
         sio_get_pad_rumble(s, &small, &large);
@@ -4131,6 +4146,59 @@ static void dev_any_controller_sticks(uint8_t st[4]) {
     }
 }
 
+static void savestate_input_guard_arm(void) {
+    uint32_t now = (uint32_t)SDL_GetTicks();
+    g_savestate_input_guard_min_until = now + 90u;
+    g_savestate_input_guard_max_until = now + 700u;
+}
+
+static int any_controller_button_down(void) {
+    const int n = SDL_NumJoysticks();
+    for (int i = 0; i < n; i++) {
+        if (!SDL_IsGameController(i)) continue;
+        SDL_JoystickID inst = SDL_JoystickGetDeviceInstanceID(i);
+        SDL_GameController* h = SDL_GameControllerFromInstanceID(inst);
+        if (!h) h = SDL_GameControllerOpen(i);
+        if (!h) continue;
+        for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++) {
+            if (SDL_GameControllerGetButton(h, (SDL_GameControllerButton)b))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static int savestate_resume_inputs_held(void) {
+    const Uint8* keys = SDL_GetKeyboardState(NULL);
+    if (keys) {
+        if (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_KP_ENTER] ||
+            keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_L])
+            return 1;
+        if (pad_from_keyboard(1) != 0xFFFFu)
+            return 1;
+    }
+    return any_controller_button_down();
+}
+
+static int savestate_input_guard_active(void) {
+    uint32_t now;
+    if (g_savestate_input_guard_max_until == 0)
+        return 0;
+    now = (uint32_t)SDL_GetTicks();
+    if ((int32_t)(now - g_savestate_input_guard_max_until) >= 0) {
+        g_savestate_input_guard_min_until = 0;
+        g_savestate_input_guard_max_until = 0;
+        return 0;
+    }
+    if ((int32_t)(now - g_savestate_input_guard_min_until) >= 0 &&
+        !savestate_resume_inputs_held()) {
+        g_savestate_input_guard_min_until = 0;
+        g_savestate_input_guard_max_until = 0;
+        return 0;
+    }
+    return 1;
+}
+
 /* Debug-server input injection: drive the SAME pad model as a physical
  * device. The old path set only the button word and returned, which left the
  * pad type/sticks at whatever the real device last was — a hybrid P1 stayed
@@ -4225,6 +4293,13 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
         else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
+    }
+    if (savestate_input_guard_active()) {
+        out->buttons = 0xFFFFu;
+        out->lx = out->ly = out->rx = out->ry = 0x80u;
+        out->analog = eff_analog ? 1u : 0u;
+        out->connected = 1;
+        return 1;
     }
 
     /* Buttons: merge the assigned device with the keyboard (PSX pad word is
@@ -5103,6 +5178,410 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
     }
 }
 
+enum {
+    PSX_ASSIST_BIND_REWIND = 0,
+    PSX_ASSIST_BIND_SAVE_STATE_MENU,
+    PSX_ASSIST_BIND_COUNT
+};
+
+#define PSX_HOTKEY_PAD_BUTTON(code) (1 + (int)(code))
+#define PSX_HOTKEY_PAD_BUTTON_COMBO(mask) (1000 + (int)(mask))
+#define PSX_HOTKEY_PAD_IS_BUTTON(value) ((value) > 0 && (value) < 100)
+#define PSX_HOTKEY_PAD_IS_AXIS(value) ((value) >= 100 && (value) < 1000)
+#define PSX_HOTKEY_PAD_IS_BUTTON_COMBO(value) ((value) >= 1000)
+#define PSX_HOTKEY_PAD_BUTTON_CODE(value) ((value) - 1)
+#define PSX_HOTKEY_PAD_AXIS_CODE(value) (((value) - 100) / 2)
+#define PSX_HOTKEY_PAD_AXIS_POSITIVE(value) (((value) - 100) & 1)
+#define PSX_HOTKEY_PAD_BUTTON_COMBO_MASK(value) ((value) - 1000)
+#define PSX_HOTKEY_PAD_SELECT_R3 \
+    PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
+                                ((uint32_t)1u << SDL_CONTROLLER_BUTTON_RIGHTSTICK))
+#define PSX_HOTKEY_PAD_SELECT_R1 \
+    PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
+                                ((uint32_t)1u << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))
+
+static int normalize_hotkey_pad_binding(int binding, int fallback) {
+    if (PSX_HOTKEY_PAD_IS_BUTTON(binding)) {
+        int code = PSX_HOTKEY_PAD_BUTTON_CODE(binding);
+        if (code >= 0 && code < SDL_CONTROLLER_BUTTON_MAX)
+            return binding;
+    } else if (PSX_HOTKEY_PAD_IS_BUTTON_COMBO(binding)) {
+        int mask = PSX_HOTKEY_PAD_BUTTON_COMBO_MASK(binding);
+        if (mask > 0)
+            return binding;
+    } else if (PSX_HOTKEY_PAD_IS_AXIS(binding)) {
+        int code = PSX_HOTKEY_PAD_AXIS_CODE(binding);
+        if (code >= 0 && code < SDL_CONTROLLER_AXIS_MAX)
+            return binding;
+    } else if (binding == 0) {
+        return 0;
+    }
+    return fallback;
+}
+
+static int hotkey_pad_binding_down(int binding) {
+    SDL_GameController *h = g_players[0].handle;
+    if (!h || binding == 0)
+        return 0;
+    if (PSX_HOTKEY_PAD_IS_BUTTON_COMBO(binding)) {
+        uint32_t mask = (uint32_t)PSX_HOTKEY_PAD_BUTTON_COMBO_MASK(binding);
+        if (!mask)
+            return 0;
+        for (int code = 0; code < SDL_CONTROLLER_BUTTON_MAX && code < 32; ++code) {
+            if ((mask & ((uint32_t)1u << code)) == 0)
+                continue;
+            if (!SDL_GameControllerGetButton(
+                    h, (SDL_GameControllerButton)code))
+                return 0;
+        }
+        return 1;
+    }
+    if (!SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK))
+        return 0;
+    if (PSX_HOTKEY_PAD_IS_BUTTON(binding)) {
+        int code = PSX_HOTKEY_PAD_BUTTON_CODE(binding);
+        if (code < 0 || code >= SDL_CONTROLLER_BUTTON_MAX)
+            return 0;
+        return SDL_GameControllerGetButton(h, (SDL_GameControllerButton)code) != 0;
+    }
+    if (PSX_HOTKEY_PAD_IS_AXIS(binding)) {
+        int code = PSX_HOTKEY_PAD_AXIS_CODE(binding);
+        Sint16 v;
+        if (code < 0 || code >= SDL_CONTROLLER_AXIS_MAX)
+            return 0;
+        v = SDL_GameControllerGetAxis(h, (SDL_GameControllerAxis)code);
+        return PSX_HOTKEY_PAD_AXIS_POSITIVE(binding)
+            ? (v > 16000)
+            : (v < -16000);
+    }
+    return 0;
+}
+
+static int savestate_menu_open = 0;
+static int savestate_menu_slot = 0;
+static int savestate_menu_ignore_toggle_release = 0;
+static SDL_Keycode savestate_menu_open_key = 0;
+
+static void savestate_menu_sync_overlay(void) {
+    psx_savestate_menu_set_state(savestate_menu_open, savestate_menu_slot);
+}
+
+static void savestate_menu_close(void) {
+    savestate_menu_open = 0;
+    savestate_menu_sync_overlay();
+    host_osd_push("Save states closed", 800);
+}
+
+static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
+    if (psx_rewind_is_open())
+        return;
+    if (savestate_menu_open) {
+        savestate_menu_close();
+        return;
+    }
+    savestate_menu_open = 1;
+    savestate_menu_ignore_toggle_release = 1;
+    savestate_menu_open_key = opened_by_key;
+    savestate_menu_sync_overlay();
+}
+
+static void savestate_menu_move(int delta) {
+    savestate_menu_slot += delta;
+    while (savestate_menu_slot < 0)
+        savestate_menu_slot += 12;
+    while (savestate_menu_slot >= 12)
+        savestate_menu_slot -= 12;
+    savestate_menu_sync_overlay();
+}
+
+static void savestate_menu_submit(int save) {
+    const int slot = savestate_menu_slot;
+    if (!save && !savestate_slot_exists(slot)) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "Slot %d is empty", slot + 1);
+        host_osd_push(msg, 1200);
+        return;
+    }
+    if (!save)
+        savestate_input_guard_arm();
+    if (psx_netplay_active()) {
+        if (!psx_netplay_is_host()) {
+            host_osd_push("Save states are host-only in netplay", 1500);
+            return;
+        }
+        if (save)
+            (void)psx_netplay_request_save(slot);
+        else
+            (void)psx_netplay_request_load(slot);
+    } else if (save) {
+        (void)savestate_request_save(slot);
+    } else {
+        (void)savestate_request_load(slot);
+    }
+    savestate_menu_open = 0;
+    savestate_menu_sync_overlay();
+}
+
+static int savestate_menu_slot_from_key(SDL_Keycode key) {
+    if (key >= SDLK_1 && key <= SDLK_9)
+        return (int)(key - SDLK_1);
+    if (key == SDLK_0)
+        return 9;
+    if (key == SDLK_MINUS)
+        return 10;
+    if (key == SDLK_EQUALS)
+        return 11;
+    return -1;
+}
+
+static void savestate_menu_handle_key(SDL_Keycode key, int mod, int repeat) {
+    int slot;
+    if (repeat)
+        return;
+    if (savestate_menu_open_key && key == savestate_menu_open_key)
+        return;
+    slot = savestate_menu_slot_from_key(key);
+    if (slot >= 0) {
+        savestate_menu_slot = slot;
+        savestate_menu_sync_overlay();
+        return;
+    }
+    if (host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU, (int)key, mod) ||
+        key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
+        savestate_menu_close();
+    } else if (key == SDLK_LEFT || key == SDLK_UP) {
+        savestate_menu_move(-1);
+    } else if (key == SDLK_RIGHT || key == SDLK_DOWN) {
+        savestate_menu_move(+1);
+    } else if (key == SDLK_s) {
+        savestate_menu_submit(1);
+    } else if (key == SDLK_l) {
+        savestate_menu_submit(0);
+    } else if (key == SDLK_RETURN || key == SDLK_SPACE) {
+        savestate_menu_submit((mod & KMOD_SHIFT) != 0);
+    }
+}
+
+static void savestate_menu_poll_nav(uint32_t now_ms) {
+    static int prev_load, prev_save, prev_cancel, prev_toggle;
+    static int held_dir, last_step_ms;
+    int prev = 0, next = 0, load = 0, save = 0, cancel = 0;
+    int dir = 0;
+
+    SDL_GameController *h = g_players[0].handle;
+    if (h) {
+        const Sint16 lx =
+            SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTX);
+        const int dz = 16000;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
+            lx < -dz)
+            prev = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_DOWN) ||
+            lx > dz)
+            next = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A))
+            load = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_X))
+            save = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B))
+            cancel = 1;
+    }
+
+    const int toggle = hotkey_pad_binding_down(g_hotkey_pad_save_state_menu);
+    if (savestate_menu_ignore_toggle_release) {
+        if (!toggle)
+            savestate_menu_ignore_toggle_release = 0;
+    } else if (toggle && !prev_toggle) {
+        cancel = 1;
+    }
+    prev_toggle = toggle;
+
+    if (load && !prev_load)
+        savestate_menu_submit(0);
+    if (save && !prev_save)
+        savestate_menu_submit(1);
+    if (cancel && !prev_cancel)
+        savestate_menu_close();
+    prev_load = load;
+    prev_save = save;
+    prev_cancel = cancel;
+
+    if (!savestate_menu_open)
+        return;
+
+    dir = next ? +1 : prev ? -1 : 0;
+    if (!dir) {
+        held_dir = 0;
+        return;
+    }
+    if (dir != held_dir || (int32_t)(now_ms - (uint32_t)last_step_ms) >= 160) {
+        savestate_menu_move(dir);
+        held_dir = dir;
+        last_step_ms = (int)now_ms;
+    }
+}
+
+static int rewind_toggle_buttons_down(void) {
+    return hotkey_pad_binding_down(g_hotkey_pad_rewind);
+}
+
+static void rewind_poll_toggle_buttons(void) {
+    static int was_down;
+    int down = rewind_toggle_buttons_down();
+    if (down && !was_down && !psx_rewind_is_open())
+        psx_rewind_toggle();
+    was_down = down;
+}
+
+static void savestate_menu_poll_toggle_buttons(void) {
+    static int was_down;
+    int down = hotkey_pad_binding_down(g_hotkey_pad_save_state_menu);
+    if (down && !was_down && !psx_rewind_is_open())
+        savestate_menu_toggle(0);
+    was_down = down;
+}
+
+static void rewind_poll_nav(uint32_t now_ms) {
+    const Uint8 *keys = SDL_GetKeyboardState(NULL);
+    int left = keys[SDL_SCANCODE_LEFT] ? 1 : 0;
+    int right = keys[SDL_SCANCODE_RIGHT] ? 1 : 0;
+    /* Overlay: A/Cross load, B/Circle close. Also Enter/Space/Esc. */
+    int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE] ||
+               keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_A]) ? 1 : 0;
+    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE] ||
+               keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_B]) ? 1 : 0;
+    /* Honor remapped Cross/Circle (and Select/R3) via the same pad path as
+     * gameplay — GameController A/B alone miss keyboard-as-pad and remaps. */
+    uint16_t btn = pad_buttons_for(g_players[0], 1, true);
+    if ((btn & PAD_LEFT) == 0)
+        left = 1;
+    if ((btn & PAD_RIGHT) == 0)
+        right = 1;
+    if ((btn & PAD_CROSS) == 0)
+        acc = 1;
+    if ((btn & PAD_CIRCLE) == 0 || (btn & PAD_SELECT) == 0 ||
+        (btn & PAD_R3) == 0)
+        can = 1;
+    SDL_GameController *h = g_players[0].handle;
+    if (h) {
+        const Sint16 lx =
+            SDL_GameControllerGetAxis(h, SDL_CONTROLLER_AXIS_LEFTX);
+        const int dz = 16000;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+            lx < -dz)
+            left = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
+            lx > dz)
+            right = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A))
+            acc = 1;
+        if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK) ||
+            SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_RIGHTSTICK))
+            can = 1;
+    }
+    psx_rewind_nav_held(left, right, acc, can, now_ms);
+}
+
+static void rewind_pause_present(void) {
+    psx_rewind_present_tick((uint32_t)SDL_GetTicks());
+#ifndef PSX_SDL_NO_RENDER
+    if (g_gl_active) {
+        gl_renderer_set_interpolation_suspended(1);
+        (void)gl_renderer_present_hold_last();
+    } else if (g_vk_active) {
+        vk_renderer_present_blank();
+    } else if (sdl_renderer) {
+        SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(sdl_renderer);
+        if (sdl_texture && s_sw_hold_valid)
+            SDL_RenderCopy(sdl_renderer, sdl_texture, &s_sw_hold_src,
+                           &s_sw_hold_dst);
+        host_osd_draw_sdl(sdl_renderer);
+        SDL_RenderPresent(sdl_renderer);
+    }
+#endif
+}
+
+/* Freeze guest in vblank present while the rewind filmstrip is open. */
+static void rewind_host_pause_loop(void) {
+    while (psx_rewind_is_open()) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const Uint16 mod = ev.key.keysym.mod;
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                if (!repeat &&
+                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    psx_rewind_toggle();
+                }
+            }
+        }
+        rewind_poll_nav((uint32_t)SDL_GetTicks());
+        rewind_pause_present();
+        SDL_Delay(8);
+    }
+}
+
+/* Freeze guest in vblank present while the save-state slot menu is open. */
+static void savestate_menu_host_pause_loop(void) {
+    while (savestate_menu_open) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const Uint16 mod = ev.key.keysym.mod;
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                savestate_menu_handle_key(key, (int)mod, repeat);
+            } else if (ev.type == SDL_KEYUP) {
+#if defined(PSX_SDL3)
+                const SDL_Keycode key = ev.key.key;
+#else
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (savestate_menu_open_key == key)
+                    savestate_menu_open_key = 0;
+            }
+        }
+        savestate_menu_poll_nav((uint32_t)SDL_GetTicks());
+        rewind_pause_present();
+        SDL_Delay(8);
+    }
+}
+
 /* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
  * is destroyed — episode snap load longjmps via psx_netplay_rb_flush_resume and
  * must not cross non-trivial destructors (UB / guest crash). */
@@ -5269,33 +5748,24 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const int key_repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const int key_repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (key == SDLK_ESCAPE && psx_netplay_active()) {
                     netplay_soft_exit("netplay_escape");
                     return ep;
                 }
-                /* Save states: Shift+F1-F12 = save slot 0-11, F1-F12 = load.
-                 * (F11 is a save slot per the user's spec, so fullscreen is
-                 * Alt+Enter / Cmd+Ctrl+F only — no F11.) */
-                if (key >= SDLK_F1 && key <= SDLK_F12) {
-                    int slot = (int)(key - SDLK_F1);   /* 0..11 */
-                    if (psx_netplay_active()) {
-                        /* Match host only — guest F-keys must not initiate. */
-                        if (!psx_netplay_is_host()) {
-                            /* ignore */
-                        } else if (mod & KMOD_SHIFT) {
-                            (void)psx_netplay_request_save(slot);
-                        } else {
-                            (void)psx_netplay_request_load(slot);
-                        }
-                    } else if (mod & KMOD_SHIFT) {
-                        savestate_request_save(slot);
-                    } else {
-                        savestate_request_load(slot);
-                    }
+                if (!key_repeat &&
+                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    psx_rewind_toggle();
+                }
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU,
+                                           (int)key, (int)mod)) {
+                    savestate_menu_toggle(key);
                 }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
@@ -5338,6 +5808,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 }
             }
         }
+        savestate_menu_poll_toggle_buttons();
+        rewind_poll_toggle_buttons();
+        psx_rewind_note_frame();
+        psx_rewind_present_tick((uint32_t)SDL_GetTicks());
+        if (savestate_menu_open)
+            savestate_menu_host_pause_loop();
+        if (psx_rewind_is_open())
+            rewind_host_pause_loop();
     }
 
     /* Sample each player's device and feed the matching SIO pad slot.
@@ -6324,6 +6802,7 @@ namespace {
             g_session_netplay_disc_ok = id.netplay_ok && !id.disc_fp.empty();
             psx_lobby_set_disc_fp(id.disc_fp.c_str());
         } else {
+            out->netplay_ok = 1;
             g_session_disc_fp.clear();
             g_session_netplay_disc_ok = false;
         }
@@ -9343,6 +9822,10 @@ namespace {
         "OpenGL (Recommended)",
         "Vulkan",
     };
+    static const char* const kPsxHostShortcutLabels[] = {
+        "Rewind",
+        "Save states",
+    };
 
     void ae_rui_set_sidecar_paths(const char* argv0) {
         const auto exe = exe_dir_from_argv(argv0 ? argv0 : "");
@@ -9368,6 +9851,8 @@ namespace {
         int resume_netplay_room)
     {
         if (!gi) return;
+        (void)ws_offered_b;
+        (void)ws_ultrawide_offered_b;
         launcher_profile_apply("psx", gi);
         gi->name = game_name_c;
         gi->region = region_c;
@@ -9377,7 +9862,9 @@ namespace {
             g_rui_config_ini_path.empty() ? nullptr : g_rui_config_ini_path.c_str();
         gi->has_expected_crc = 0;
         gi->num_known_sha256 = 0;
-        gi->widescreen_supported = ws_offered_b ? 1 : 0;
+        /* PSX display-view controls are owned by trusted mods. Do not expose
+         * the generic Display -> View mode launcher row. */
+        gi->widescreen_supported = 0;
         gi->num_players = game_players_n;
         gi->msu1_supported = 0;
         gi->sram_path = nullptr;
@@ -9385,13 +9872,16 @@ namespace {
         gi->pad_mode_selectable = ctrl_lock_mode_b ? 0 : 1;
         gi->locked_pad_mode = locked_pad_mode_i;
         gi->lock_device = ctrl_lock_device_b ? 1 : 0;
-        gi->aspect_mask =
-            0x1 | (ws_offered_b ? 0x2 : 0) | (ws_ultrawide_offered_b ? 0x4 : 0);
+        gi->aspect_mask = 0;
         gi->renderer_labels = kPsxRendererLabels;
         gi->num_renderers = vulkan_offered_b ? 3 : 2;
+        gi->settings_bindings = 1;
+        gi->assist_binding_labels = kPsxHostShortcutLabels;
+        gi->assist_binding_count = PSX_ASSIST_BIND_COUNT;
         gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
         gi->has_geometry_precision = 1;
+        gi->has_rewind_depth = 1;
         if (language_labels && num_languages > 0) {
             gi->language_labels = language_labels;
             gi->num_languages = num_languages;
@@ -9405,10 +9895,14 @@ namespace {
         gi->bios_verify = ae_bios_verify;
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
         g_lnch_game_players = game_players_n;
-        gi->netplay_supported =
-            (game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS) ? 1 : 0;
-        gi->netplay = &g_lnch_netplay_callbacks;
+        /* ae_disc_verify only fills netplay_ok/disc_fp when this is true. */
+        g_lnch_netplay_available =
+            game_players_n >= 2 && game_players_n <= PSX_MAX_PLAYERS;
+        gi->netplay_supported = g_lnch_netplay_available ? 1 : 0;
+        gi->netplay = g_lnch_netplay_available
+            ? &g_lnch_netplay_callbacks : nullptr;
 #else
+        g_lnch_netplay_available = false;
         gi->netplay_supported = 0;
         gi->netplay = nullptr;
 #endif
@@ -10133,6 +10627,16 @@ int main(int argc, char** argv) {
             g_video_aspect_den = us.aspect_den;
         }
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
+        if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
+        if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
+        if (us.has_hotkey_pad_rewind)
+            g_hotkey_pad_rewind = normalize_hotkey_pad_binding(
+                us.hotkey_pad_rewind,
+                PSX_HOTKEY_PAD_SELECT_R3);
+        if (us.has_hotkey_pad_save_state_menu)
+            g_hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
+                us.hotkey_pad_save_state_menu,
+                PSX_HOTKEY_PAD_SELECT_R1);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
             settings_bios_storage = us.bios_path.string();
             bios_path = settings_bios_storage.c_str();
@@ -10539,6 +11043,12 @@ int main(int argc, char** argv) {
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
+            seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
+            seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
+            seed.hotkey_pad_rewind = g_hotkey_pad_rewind;
+            seed.has_hotkey_pad_rewind = true;
+            seed.hotkey_pad_save_state_menu = g_hotkey_pad_save_state_menu;
+            seed.has_hotkey_pad_save_state_menu = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
                 seed.netplay_player_name = netplay_player_name;
@@ -10691,6 +11201,14 @@ int main(int argc, char** argv) {
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
+            ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
+            ls.rewind_interval   = seed.rewind_interval > 0 ? seed.rewind_interval : 15;
+            ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_rewind,
+                    PSX_HOTKEY_PAD_SELECT_R3);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_save_state_menu,
+                    PSX_HOTKEY_PAD_SELECT_R1);
             ls.auto_skip_fmv      = seed.auto_skip_fmv ? 1 : 0;
             ls.turbo_loads        = seed.turbo_loads ? 1 : 0;
             /* Localization: index of resolved_language within lang_menu_options
@@ -10918,6 +11436,18 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
+                seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
+                seed.has_rewind_depth      = true;
+                seed.rewind_interval       = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
+                seed.has_rewind_interval   = true;
+                seed.hotkey_pad_rewind = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
+                    PSX_HOTKEY_PAD_SELECT_R3);
+                seed.has_hotkey_pad_rewind = true;
+                seed.hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
+                    PSX_HOTKEY_PAD_SELECT_R1);
+                seed.has_hotkey_pad_save_state_menu = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = skip_fmv_offered;
                 seed.turbo_loads = ls.turbo_loads != 0;
@@ -11115,6 +11645,16 @@ int main(int argc, char** argv) {
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
                 g_audio_spu_hq    = seed.spu_hq;
+                g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
+                    ? seed.rewind_depth : 50;
+                g_rewind_interval = seed.has_rewind_interval && seed.rewind_interval > 0
+                    ? seed.rewind_interval : 15;
+                g_hotkey_pad_rewind = seed.has_hotkey_pad_rewind
+                    ? seed.hotkey_pad_rewind
+                    : PSX_HOTKEY_PAD_SELECT_R3;
+                g_hotkey_pad_save_state_menu = seed.has_hotkey_pad_save_state_menu
+                    ? seed.hotkey_pad_save_state_menu
+                    : PSX_HOTKEY_PAD_SELECT_R1;
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
@@ -12087,7 +12627,7 @@ session_reboot:
         }
     }
 
-    /* User save states (F1-F12 / Shift+F1-F12): slots live under
+    /* User save states: slots live under
      * <memcard>/<openbios|scph1001>/, keyed by entry_pc + boot_state integrity
      * (codegen hash/abi/ver). Memory cards stay in the memcard root. */
     if (game_entry_pc != 0) {
@@ -12101,6 +12641,9 @@ session_reboot:
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
+        psx_rewind_set_depth((uint32_t)g_rewind_depth);
+        psx_rewind_set_interval((uint32_t)g_rewind_interval);
+        psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
          * at the next safe block boundary after boot. */
         if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {
@@ -12448,6 +12991,16 @@ soft_return_lobby:
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
         ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
         ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
+        ls.rewind_depth = g_rewind_depth;
+        ls.rewind_interval = g_rewind_interval;
+        ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
+            normalize_hotkey_pad_binding(
+                g_hotkey_pad_rewind,
+                PSX_HOTKEY_PAD_SELECT_R3);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU] =
+            normalize_hotkey_pad_binding(
+                g_hotkey_pad_save_state_menu,
+                PSX_HOTKEY_PAD_SELECT_R1);
         ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
             : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.language_index = 0;
@@ -12693,6 +13246,18 @@ soft_return_lobby:
                 us.has_frame_interpolation_fps = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
+                us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
+                us.has_rewind_depth = true;
+                us.rewind_interval = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
+                us.has_rewind_interval = true;
+                us.hotkey_pad_rewind = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
+                    PSX_HOTKEY_PAD_SELECT_R3);
+                us.has_hotkey_pad_rewind = true;
+                us.hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
+                    PSX_HOTKEY_PAD_SELECT_R1);
+                us.has_hotkey_pad_save_state_menu = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
@@ -12738,6 +13303,20 @@ soft_return_lobby:
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
             g_audio_spu_hq = ls.spu_hq != 0;
+            if (ls.rewind_depth > 0) {
+                g_rewind_depth = ls.rewind_depth;
+                psx_rewind_set_depth((uint32_t)g_rewind_depth);
+            }
+            if (ls.rewind_interval > 0) {
+                g_rewind_interval = ls.rewind_interval;
+                psx_rewind_set_interval((uint32_t)g_rewind_interval);
+            }
+            g_hotkey_pad_rewind = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
+                PSX_HOTKEY_PAD_SELECT_R3);
+            g_hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
+                PSX_HOTKEY_PAD_SELECT_R1);
             switch (ls.aspect_index) {
                 case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
                 case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;
