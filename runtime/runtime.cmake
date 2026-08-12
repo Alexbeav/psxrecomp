@@ -30,15 +30,23 @@ endif()
 # SOURCE + compiler + flags (content, not mtime), so those recompiles collapse to
 # near-instant cache hits after any branch op. Completely no-op when ccache is not
 # on PATH, so builds still work without it. Set once, before any target is added.
+# RetComM cmake-clang-v1 packs ship bin/ccache and prepend that dir to PATH;
+# also HINT RETCOMM_TOOLCHAIN_DIR for wizards that only set the env override.
 if(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER)
-    find_program(CCACHE_PROGRAM ccache)
+    set(_psx_ccache_hints "")
+    if(DEFINED ENV{RETCOMM_TOOLCHAIN_DIR} AND NOT "$ENV{RETCOMM_TOOLCHAIN_DIR}" STREQUAL "")
+        list(APPEND _psx_ccache_hints "$ENV{RETCOMM_TOOLCHAIN_DIR}/bin")
+    endif()
+    find_program(CCACHE_PROGRAM NAMES ccache ccache.exe HINTS ${_psx_ccache_hints})
+    unset(_psx_ccache_hints)
     if(CCACHE_PROGRAM)
         set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
         set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}" CACHE STRING "compiler launcher")
         message(STATUS "psxrecomp: ccache enabled (${CCACHE_PROGRAM}) — mtime-proof rebuilds")
     else()
         message(STATUS "psxrecomp: ccache not found; generated-C rebuilds after git "
-                       "branch ops will be slow. Install ccache on PATH to fix.")
+                       "branch ops will be slow. Install ccache on PATH (or update "
+                       "cmake-clang-v1) to fix.")
     endif()
 endif()
 
