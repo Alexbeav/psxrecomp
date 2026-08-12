@@ -450,7 +450,6 @@ int  psx_netplay_poll_admit(void) { return 1; }
 void psx_netplay_finish_frame(void) {}
 int  psx_netplay_remote_lead(void) { return 0; }
 int  psx_netplay_input_delay(void) { return 2; }
-void psx_netplay_timesync_on_episode_boundary(void) {}
 int  psx_netplay_catchup_budget(void) { return 0; }
 void psx_netplay_catchup_consume_frame(void) {}
 void psx_netplay_wait_recv(int timeout_ms) { (void)timeout_ms; }
