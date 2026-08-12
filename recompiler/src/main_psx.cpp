@@ -86,6 +86,12 @@ int main(int argc, char** argv) {
         fmt::print("Usage: {} --config <game.toml>\n", argv[0]);
         fmt::print("       {} <PS1-EXE file> [--seeds <file>] [--out-dir <dir>] [--strict] [--inspect]\n", argv[0]);
         fmt::print("Example: {} SCUS_942.36 --seeds seeds/functions.txt --out-dir generated --strict\n", argv[0]);
+        fmt::print("\n");
+        fmt::print("  --project-root <dir>  Resolve the BIOS profile (bios/SCPH1001.toml, or\n");
+        fmt::print("                        <framework>/bios/SCPH1001.toml one level down) against\n");
+        fmt::print("                        <dir> instead of the CWD. Required whenever the caller\n");
+        fmt::print("                        cannot choose its own CWD — e.g. compile_overlays.py,\n");
+        fmt::print("                        which runs us with cwd = dirname(game.toml).\n");
     };
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -134,6 +140,15 @@ int main(int argc, char** argv) {
     // backdrop) whose addresses live in overlay code — the overlay path is
     // positional (no --config), so this is the channel for those sites.
     std::filesystem::path ws_config_path;
+    // --project-root <dir>: the directory to resolve the BIOS profile against
+    // when no explicit [recompiler] bios_config is in play. Without it the
+    // probe below uses the process CWD, which is wrong for every caller that
+    // cannot choose its own CWD — notably compile_overlays.py, which spawns us
+    // with cwd = dirname(game.toml). For a PACKAGED config (packaging/release/
+    // game.toml) that directory holds neither bios/SCPH1001.toml nor a vendored
+    // framework, so every shard died with "no BIOS profile found" and the whole
+    // overlay cache silently failed to build (issue #72).
+    std::filesystem::path project_root;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--config" && i + 1 < argc) {
@@ -151,6 +166,23 @@ int main(int argc, char** argv) {
         if (a.rfind("--ws-config=", 0) == 0) {
             ws_config_path = a.substr(std::string("--ws-config=").size());
             break;
+        }
+    }
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--project-root" && i + 1 < argc) { project_root = argv[i + 1]; break; }
+        if (a.rfind("--project-root=", 0) == 0) {
+            project_root = a.substr(std::string("--project-root=").size());
+            break;
+        }
+    }
+    if (!project_root.empty()) {
+        std::error_code prec;
+        if (!std::filesystem::is_directory(project_root, prec)) {
+            fmt::print(stderr,
+                "psxrecomp-game: FATAL: --project-root '{}' is not a directory\n",
+                project_root.string());
+            return 1;
         }
     }
 
@@ -290,6 +322,11 @@ int main(int argc, char** argv) {
                  * with psxrecomp-bios and project scripts. */
             } else if (arg == "--inspect") {
                 inspect_mode = true;
+            } else if (arg == "--project-root" && i + 1 < argc) {
+                /* Already parsed in the pre-scan above (the BIOS-profile probe
+                 * needs it before this loop runs). Consume the value here so it
+                 * is never mistaken for another flag's argument. */
+                ++i;
             } else if (arg == "--overlay") {
                 /* Overlay-compilation contract: this input is a runtime-captured
                  * overlay with execution evidence, so discovery is evidence-scoped
@@ -355,20 +392,41 @@ int main(int argc, char** argv) {
      * No profile -> fatal: there are no built-in windows. */
     static PSXRecompV4::BiosAddressModel s_bios_model;
     {
+        /* The directory the profile probe walks. --project-root when given,
+         * else the CWD (unchanged legacy behaviour). Named in every failure
+         * below, because "no BIOS profile found" without the directory it
+         * searched sends you looking for an unset key that is in fact set —
+         * or, worse, reads as a config error when it is a CWD error. */
+        const std::filesystem::path search_root =
+            project_root.empty() ? std::filesystem::path(".") : project_root;
+
         std::filesystem::path prof = bios_profile_path;
         /* An explicit bios_config that does not resolve is a different failure
          * from having none at all — say which, or the message sends you looking
-         * for an unset key that is in fact set. */
+         * for an unset key that is in fact set. A relative bios_config is
+         * documented as relative to the game project root, so resolve it there
+         * first when we were told what the root is; fall back to the bare path
+         * so callers that already relied on CWD keep working. */
         if (!prof.empty() && !std::filesystem::exists(prof)) {
-            fmt::print(stderr,
-                "psxrecomp-game: FATAL: [recompiler] bios_config = '{}' does "
-                "not exist (path is relative to the game project root)\n",
-                prof.string());
-            return 1;
+            std::filesystem::path rooted;
+            if (!project_root.empty() && prof.is_relative()) {
+                rooted = project_root / prof;
+            }
+            if (!rooted.empty() && std::filesystem::exists(rooted)) {
+                prof = rooted;
+            } else {
+                fmt::print(stderr,
+                    "psxrecomp-game: FATAL: [recompiler] bios_config = '{}' does "
+                    "not exist (path is relative to the game project root; "
+                    "searched '{}')\n",
+                    prof.string(),
+                    std::filesystem::absolute(search_root).string());
+                return 1;
+            }
         }
         if (prof.empty()) {
-            if (std::filesystem::exists("bios/SCPH1001.toml")) {
-                prof = "bios/SCPH1001.toml";          /* framework checkout */
+            if (std::filesystem::exists(search_root / "bios/SCPH1001.toml")) {
+                prof = search_root / "bios/SCPH1001.toml"; /* framework checkout */
             } else {
                 /* Game repo vendoring the framework. Do NOT assume the
                  * directory is named "psxrecomp": ApeEscapeRecomp vendors it as
@@ -378,7 +436,7 @@ int main(int argc, char** argv) {
                 std::vector<std::filesystem::path> found;
                 std::error_code ec;
                 for (const auto& de :
-                         std::filesystem::directory_iterator(".", ec)) {
+                         std::filesystem::directory_iterator(search_root, ec)) {
                     if (ec) break;
                     if (!de.is_directory(ec) || ec) continue;
                     auto cand = de.path() / "bios" / "SCPH1001.toml";
@@ -390,10 +448,12 @@ int main(int argc, char** argv) {
         }
         if (prof.empty()) {
             fmt::print(stderr,
-                "psxrecomp-game: FATAL: no BIOS profile found (set "
-                "[recompiler] bios_config in game.toml, or run from a root "
-                "containing bios/SCPH1001.toml or <framework>/bios/"
-                "SCPH1001.toml)\n");
+                "psxrecomp-game: FATAL: no BIOS profile found. Searched '{}' "
+                "for bios/SCPH1001.toml and <framework>/bios/SCPH1001.toml. "
+                "Fix by setting [recompiler] bios_config in game.toml, passing "
+                "--project-root <dir> (the framework or game-project root), or "
+                "running from a root that contains one of those paths.\n",
+                std::filesystem::absolute(search_root).string());
             return 1;
         }
         const auto bios_cfg = PSXRecompV4::load_bios_config(prof);
