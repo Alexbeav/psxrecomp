@@ -7,8 +7,10 @@
 #include "gpu.h"
 #include "host_osd.h"
 #include "interrupts.h"
+#include "mdec.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
+#include "psx_netplay_rb.h"
 #include "psx_scheduler.h"
 #include "savestate.h"
 
@@ -25,6 +27,9 @@
 #define RW_MAX_DEPTH   100
 #define RW_DEF_DEPTH    50
 #define RW_DEF_INTERVAL 15
+/* Match netplay §96 FMV media snaps (default 4; MEDIA_KF uses 2). */
+#define RW_DEF_FMV_INTERVAL 4
+#define RW_FMV_MDEC_HYSTERESIS 8u
 #define RW_PANEL_W     640
 #define RW_PANEL_H     176
 #define RW_SLIDE_MS    180u
@@ -143,6 +148,7 @@ static int s_enabled = -1;
 static uint32_t s_bios;
 static uint32_t s_entry;
 static uint32_t s_interval = RW_DEF_INTERVAL;
+static uint32_t s_fmv_interval = RW_DEF_FMV_INTERVAL;
 static uint32_t s_depth = RW_DEF_DEPTH;
 static int s_depth_pref = -1; /* -1 = unset; else from settings.toml / launcher */
 static uint32_t s_frame;
@@ -219,6 +225,8 @@ static int rewind_wanted(void)
         else
             s_enabled = 1;
         s_interval = env_u32("PSX_REWIND_INTERVAL", RW_DEF_INTERVAL, 1u, 60u);
+        s_fmv_interval =
+            env_u32("PSX_REWIND_FMV_INTERVAL", RW_DEF_FMV_INTERVAL, 1u, 16u);
         {
             uint32_t depth_def = s_depth_pref > 0 ? (uint32_t)s_depth_pref
                                                   : RW_DEF_DEPTH;
@@ -229,10 +237,47 @@ static int rewind_wanted(void)
     return s_enabled;
 }
 
+/* Same heuristic as netplay rb_fmv_media_active — denser snaps while media runs. */
+static int rewind_fmv_media_active(void)
+{
+    if (gpu_display_is_depth24())
+        return 1;
+    if (mdec_recently_active(RW_FMV_MDEC_HYSTERESIS))
+        return 1;
+    if (cdrom_xa_stream_active())
+        return 1;
+    return 0;
+}
+
+static uint32_t rewind_capture_interval(void)
+{
+    return rewind_fmv_media_active() ? s_fmv_interval : s_interval;
+}
+
 static int resume_pc_ok(uint32_t pc)
 {
     return pc != 0u && (pc & 3u) == 0u && psx_is_dispatchable(pc) &&
            pc != 0x80000080u && pc != 0xbfc00180u && pc != 0x80000000u;
+}
+
+/* Mid-FMV / present-edge IRQ paths often pass hint=0 — same latch walk as
+ * savestate_resolve_resume_pc / selfcheck sc_pick_snap_pc. */
+static uint32_t rewind_resolve_resume_pc(const CPUState *cpu, uint32_t hint)
+{
+    const uint32_t cands[6] = {
+        hint,
+        cpu ? cpu->pc : 0u,
+        psx_compiled_irq_resume_pc(),
+        psx_last_irq_check_pc(),
+        psx_netplay_rb_sticky_bb_pc(),
+        cpu ? cpu->gpr[31] : 0u,
+    };
+    int i;
+    for (i = 0; i < 6; ++i) {
+        if (resume_pc_ok(cands[i]))
+            return cands[i];
+    }
+    return 0u;
 }
 
 static void capture_thumb(uint32_t *dst)
@@ -322,8 +367,9 @@ void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc)
     s_count = 0;
     s_sel = 0;
     fprintf(stderr,
-            "psxrecomp: rewind on (interval=%u depth=%u ~%.1fs) — F8 / View / L3\n",
-            (unsigned)s_interval, (unsigned)s_depth,
+            "psxrecomp: rewind on (interval=%u fmv=%u depth=%u ~%.1fs) — "
+            "F8 / View / L3\n",
+            (unsigned)s_interval, (unsigned)s_fmv_interval, (unsigned)s_depth,
             (double)s_interval * (double)s_depth / 60.0);
 }
 
@@ -362,11 +408,13 @@ int psx_rewind_needs_present(void)
 
 void psx_rewind_note_frame(void)
 {
+    uint32_t iv;
     if (!psx_rewind_enabled() || s_open || psx_netplay_active())
         return;
     s_frame++;
+    iv = rewind_capture_interval();
     if (s_last_capture_frame == 0xffffffffu ||
-        s_frame - s_last_capture_frame >= s_interval)
+        s_frame - s_last_capture_frame >= iv)
         s_capture_due = 1;
 }
 
@@ -377,13 +425,15 @@ static int do_capture(CPUState *cpu, uint32_t resume_pc)
     uint32_t thumb[RW_THUMB_W * RW_THUMB_H];
     CPUState snap;
     uint32_t tick = s_frame;
+    uint32_t pc;
 
     if (!cpu || !s_ring)
         return 0;
-    if (!resume_pc_ok(resume_pc))
+    pc = rewind_resolve_resume_pc(cpu, resume_pc);
+    if (!resume_pc_ok(pc))
         return 0;
     snap = *cpu;
-    snap.pc = resume_pc;
+    snap.pc = pc;
     if (!boot_state_save_buffer_raw(&snap, s_bios, s_entry, &blob, &len) ||
         !blob || !len)
         return 0;

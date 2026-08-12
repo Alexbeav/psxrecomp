@@ -11,6 +11,7 @@
  * While open: D-pad / left-stick Left/Right, Cross/A load, Circle/B/Back close.
  *
  * Env: PSX_REWIND=0 disables; PSX_REWIND_INTERVAL (frames, default 15);
+ *      PSX_REWIND_FMV_INTERVAL (frames while depth24/MDEC/XA, default 4);
  *      PSX_REWIND_DEPTH (snaps; UI offers 25/50/75/100, default 50, max 100).
  * settings.toml [video] rewind_depth overrides the default (env still wins).
  */
