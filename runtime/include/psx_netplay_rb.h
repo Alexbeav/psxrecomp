@@ -15,14 +15,16 @@ extern "C" {
 
 struct CPUState;
 struct RNetSession;
-struct NetplayInputHist;
-struct NetplayHashConfirm;
+/* Alias Rbe* — not `struct Netplay*`; that tag is a distinct incomplete type
+ * from `typedef RbeHashConfirm NetplayHashConfirm` in the MotK shims. */
+typedef struct RbeInputHist NetplayInputHist;
+typedef struct RbeHashConfirm NetplayHashConfirm;
 
 typedef struct PsxNetplayRbBindings {
     struct RNetSession **session;
     struct CPUState **cpu;
-    struct NetplayInputHist *ih;
-    struct NetplayHashConfirm *hc;
+    NetplayInputHist *ih;
+    NetplayHashConfirm *hc;
     uint32_t *bios_checksum;
     uint32_t *entry_pc;
     int *slot_count;

@@ -33,6 +33,7 @@ void np_sched_clear_admit_stall(void) {}
 const char *np_sched_admit_stall_tag(void) { return ""; }
 void np_sched_note_mispredict(uint32_t age) { (void)age; }
 void np_sched_note_episode_boundary(void) {}
+void psx_netplay_timesync_on_episode_boundary(void) {}
 void np_sched_arm_absurd_invent_catchup(void) {}
 
 #else /* PSX_HAS_RECOMP_NET */
@@ -216,6 +217,11 @@ void np_sched_note_mispredict(uint32_t age)
 void np_sched_note_episode_boundary(void)
 {
     rbe_sched_note_episode_boundary();
+}
+
+void psx_netplay_timesync_on_episode_boundary(void)
+{
+    np_sched_note_episode_boundary();
 }
 
 void np_sched_arm_absurd_invent_catchup(void)
