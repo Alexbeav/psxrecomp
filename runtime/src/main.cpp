@@ -1059,6 +1059,7 @@ static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitr
 static int           g_video_win_w    = 1280; /* window width (height follows aspect) */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
+static int           g_rewind_depth  = 50;  /* local rewind snap count (25/50/75/100) */
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
@@ -9508,6 +9509,7 @@ namespace {
         gi->has_skip_fmv = skip_fmv_offered_b ? 1 : 0;
         gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;
         gi->has_geometry_precision = 1;
+        gi->has_rewind_depth = 1;
         if (language_labels && num_languages > 0) {
             gi->language_labels = language_labels;
             gi->num_languages = num_languages;
@@ -10253,6 +10255,7 @@ int main(int argc, char** argv) {
             g_video_aspect_den = us.aspect_den;
         }
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
+        if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
             settings_bios_storage = us.bios_path.string();
             bios_path = settings_bios_storage.c_str();
@@ -10659,6 +10662,7 @@ int main(int argc, char** argv) {
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
+            seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
                 seed.netplay_player_name = netplay_player_name;
@@ -10811,6 +10815,7 @@ int main(int argc, char** argv) {
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
+            ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
             ls.auto_skip_fmv      = seed.auto_skip_fmv ? 1 : 0;
             ls.turbo_loads        = seed.turbo_loads ? 1 : 0;
             /* Localization: index of resolved_language within lang_menu_options
@@ -11038,6 +11043,8 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
+                seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
+                seed.has_rewind_depth      = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = skip_fmv_offered;
                 seed.turbo_loads = ls.turbo_loads != 0;
@@ -11235,6 +11242,8 @@ int main(int argc, char** argv) {
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
                 g_audio_spu_hq    = seed.spu_hq;
+                g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
+                    ? seed.rewind_depth : 50;
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
@@ -12221,6 +12230,7 @@ session_reboot:
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
+        psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
         /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
          * at the next safe block boundary after boot. */
@@ -12814,6 +12824,8 @@ soft_return_lobby:
                 us.has_frame_interpolation_fps = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
+                us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
+                us.has_rewind_depth = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
@@ -12859,6 +12871,10 @@ soft_return_lobby:
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
             g_audio_spu_hq = ls.spu_hq != 0;
+            if (ls.rewind_depth > 0) {
+                g_rewind_depth = ls.rewind_depth;
+                psx_rewind_set_depth((uint32_t)g_rewind_depth);
+            }
             switch (ls.aspect_index) {
                 case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
                 case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;

@@ -22,9 +22,9 @@
 
 #define RW_THUMB_W     128
 #define RW_THUMB_H      96
-#define RW_MAX_DEPTH    80
-#define RW_DEF_DEPTH    32
-#define RW_DEF_INTERVAL  8
+#define RW_MAX_DEPTH   100
+#define RW_DEF_DEPTH    50
+#define RW_DEF_INTERVAL 15
 #define RW_PANEL_W     640
 #define RW_PANEL_H     176
 #define RW_SLIDE_MS    180u
@@ -96,6 +96,7 @@ static const uint8_t FONT8[59][8] = {
 
 #if !defined(PSX_HAS_RBENGINE_SNAP)
 
+void psx_rewind_set_depth(uint32_t depth) { (void)depth; }
 void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc)
 {
     (void)bios_checksum;
@@ -143,6 +144,7 @@ static uint32_t s_bios;
 static uint32_t s_entry;
 static uint32_t s_interval = RW_DEF_INTERVAL;
 static uint32_t s_depth = RW_DEF_DEPTH;
+static int s_depth_pref = -1; /* -1 = unset; else from settings.toml / launcher */
 static uint32_t s_frame;
 static uint32_t s_last_capture_frame = 0xffffffffu;
 static int s_capture_due;
@@ -182,6 +184,31 @@ static uint32_t env_u32(const char *name, uint32_t def, uint32_t lo, uint32_t hi
     return v;
 }
 
+/* UI offers 25/50/75/100; nearest match keeps hand-edited toml values sane. */
+static uint32_t normalize_rewind_depth(uint32_t v)
+{
+    static const uint32_t opts[4] = {25u, 50u, 75u, 100u};
+    uint32_t best = opts[0];
+    uint32_t best_d = v > best ? v - best : best - v;
+    unsigned i;
+    for (i = 1; i < 4; i++) {
+        uint32_t d = v > opts[i] ? v - opts[i] : opts[i] - v;
+        if (d < best_d) {
+            best_d = d;
+            best = opts[i];
+        }
+    }
+    return best;
+}
+
+void psx_rewind_set_depth(uint32_t depth)
+{
+    s_depth_pref = (int)normalize_rewind_depth(depth);
+    /* Apply immediately if prefs are already resolved (reconfigure path). */
+    if (s_enabled >= 0)
+        s_depth = (uint32_t)s_depth_pref;
+}
+
 static int rewind_wanted(void)
 {
     const char *e;
@@ -192,7 +219,12 @@ static int rewind_wanted(void)
         else
             s_enabled = 1;
         s_interval = env_u32("PSX_REWIND_INTERVAL", RW_DEF_INTERVAL, 1u, 60u);
-        s_depth = env_u32("PSX_REWIND_DEPTH", RW_DEF_DEPTH, 4u, RW_MAX_DEPTH);
+        {
+            uint32_t depth_def = s_depth_pref > 0 ? (uint32_t)s_depth_pref
+                                                  : RW_DEF_DEPTH;
+            s_depth = normalize_rewind_depth(
+                env_u32("PSX_REWIND_DEPTH", depth_def, 4u, RW_MAX_DEPTH));
+        }
     }
     return s_enabled;
 }

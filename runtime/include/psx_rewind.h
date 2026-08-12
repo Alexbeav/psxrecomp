@@ -10,8 +10,9 @@
  * Keyboard: F8 (config.ini [KeyMap] Rewind). Controller: View/Back or L3.
  * While open: D-pad / left-stick Left/Right, Cross/A load, Circle/B/Back close.
  *
- * Env: PSX_REWIND=0 disables; PSX_REWIND_INTERVAL (frames, default 8);
- *      PSX_REWIND_DEPTH (snaps, default 32, max 80).
+ * Env: PSX_REWIND=0 disables; PSX_REWIND_INTERVAL (frames, default 15);
+ *      PSX_REWIND_DEPTH (snaps; UI offers 25/50/75/100, default 50, max 100).
+ * settings.toml [video] rewind_depth overrides the default (env still wins).
  */
 
 #include <stdint.h>
@@ -20,6 +21,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Snap count kept in the local rewind ring. UI values: 25 / 50 / 75 / 100. */
+void psx_rewind_set_depth(uint32_t depth);
 
 void psx_rewind_configure(uint32_t bios_checksum, uint32_t entry_pc);
 void psx_rewind_shutdown(void);
