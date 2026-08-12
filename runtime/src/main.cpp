@@ -3619,7 +3619,7 @@ static void update_controller_rumble(void) {
         const char* e = std::getenv("PSX_RUMBLE_TRACE");
         return e && e[0] && e[0] != '0';
     }();
-    for (int s = 0; s < 2; s++) {
+    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
         PlayerInput& p = g_players[s];
         uint8_t small = 0, large = 0;
         sio_get_pad_rumble(s, &small, &large);
@@ -5128,9 +5128,23 @@ static void rewind_poll_nav(uint32_t now_ms) {
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
     int left = keys[SDL_SCANCODE_LEFT] ? 1 : 0;
     int right = keys[SDL_SCANCODE_RIGHT] ? 1 : 0;
+    /* Overlay: A/Cross load, B/Circle close. Also Enter/Space/Esc. */
     int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE] ||
-               keys[SDL_SCANCODE_Z]) ? 1 : 0;
-    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE]) ? 1 : 0;
+               keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_A]) ? 1 : 0;
+    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE] ||
+               keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_B]) ? 1 : 0;
+    /* Honor remapped Cross/Circle (and Select/L3) via the same pad path as
+     * gameplay — GameController A/B alone miss keyboard-as-pad and remaps. */
+    uint16_t btn = pad_buttons_for(g_players[0], 1, true);
+    if ((btn & PAD_LEFT) == 0)
+        left = 1;
+    if ((btn & PAD_RIGHT) == 0)
+        right = 1;
+    if ((btn & PAD_CROSS) == 0)
+        acc = 1;
+    if ((btn & PAD_CIRCLE) == 0 || (btn & PAD_SELECT) == 0 ||
+        (btn & PAD_L3) == 0)
+        can = 1;
     SDL_GameController *h = g_players[0].handle;
     if (h) {
         const Sint16 lx =

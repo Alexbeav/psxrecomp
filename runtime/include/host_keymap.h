@@ -27,7 +27,8 @@ void host_keymap_load(const char *config_ini_path);
 /* 1 if (keycode, mod) matches a binding for `action`. */
 int host_keymap_match(HostKeymapAction action, int keycode, int mod);
 
-/* Format the primary bind for `action` into out (e.g. "F8", "Ctrl+R").
+/* Format the primary bind for `action` into out (e.g. "F8", "Ctrl+R",
+ * "GRAVE"). Punctuation key names are tokenized for the rewind overlay font.
  * Returns out, or "F8" / "" on empty action. Always NUL-terminates. */
 const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap);
 

@@ -764,7 +764,7 @@ static void rasterize_panel(void)
     host_keymap_label(HOST_KEYMAP_REWIND, hk, sizeof(hk));
     /* Overlay font is uppercase-only; keep PS labels dual for pad + KB users. */
     snprintf(buf, sizeof(buf),
-             "LEFT/RIGHT  A / CROSS LOAD  B / CIRCLE CLOSE  %s", hk);
+             "LEFT/RIGHT  A/CROSS LOAD  B/CIRCLE CLOSE  %s", hk);
     draw_text(d, RW_PANEL_W, 12, RW_PANEL_H - 16, buf, 0xFFAAAAAAu);
 
     n = (int)s_count;

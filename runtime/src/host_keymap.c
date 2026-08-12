@@ -198,6 +198,52 @@ int host_keymap_match(HostKeymapAction action, int keycode, int mod) {
     return 0;
 }
 
+/* Rewind overlay FONT8 only draws ASCII 32..90 (space..Z); lowercase is
+ * uppercased by the drawer. Map punctuation / odd SDL single-glyph names to
+ * short tokens so binds like backtick don't render as "?". */
+static const char *overlay_safe_key_token(const char *keyname) {
+    if (!keyname || !keyname[0])
+        return "?";
+    if (!keyname[1]) {
+        switch (keyname[0]) {
+        case '`': case '~': return "GRAVE";
+        case '-': case '_': return "MINUS";
+        case '=': return "EQUAL";
+        case '+': return "PLUS";
+        case '[': case '{': return "LBRK";
+        case ']': case '}': return "RBRK";
+        case '\\': case '|': return "BSLH";
+        case ';': case ':': return "SEMI";
+        case '\'': case '"': return "APOS";
+        case ',': case '<': return "COMMA";
+        case '.': case '>': return "DOT";
+        case '/': case '?': return "SLASH";
+        default: break;
+        }
+    }
+    return keyname;
+}
+
+/* Copy SDL key name into dst, uppercasing a-z and replacing any byte outside
+ * the overlay glyph range with '?'. */
+static void append_overlay_safe(char *out, size_t cap, size_t *n,
+                                const char *keyname) {
+    const char *tok = overlay_safe_key_token(keyname);
+    size_t i;
+    for (i = 0; tok[i] && *n + 1 < cap; i++) {
+        unsigned char c = (unsigned char)tok[i];
+        if (c >= 'a' && c <= 'z')
+            c = (unsigned char)(c - 32);
+        if (c < 32 || c > 90)
+            c = '?';
+        out[(*n)++] = (char)c;
+    }
+    if (*n < cap)
+        out[*n] = 0;
+    else if (cap)
+        out[cap - 1] = 0;
+}
+
 const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
     const HostKeyAction *a;
     const HostKeyBind *b;
@@ -223,8 +269,6 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
         n += (size_t)snprintf(out + n, cap > n ? cap - n : 0, "Shift+");
     }
     keyname = SDL_GetKeyName((SDL_Keycode)b->keycode);
-    if (!keyname || !keyname[0])
-        keyname = "?";
-    snprintf(out + n, cap > n ? cap - n : 0, "%s", keyname);
+    append_overlay_safe(out, cap, &n, keyname);
     return out;
 }
