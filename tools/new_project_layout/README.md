@@ -14,7 +14,14 @@ See [`docs/GAME_PROJECT_SETUP.md`](../../docs/GAME_PROJECT_SETUP.md).
 
 ## Project Studio (migrate / update)
 
-Shared Python library under `project_studio/` with CLI + tkinter GUI.
+Shared Python library under `project_studio/` with CLI + CustomTkinter GUI.
+CLI stays stdlib-only. First GUI launch auto-creates
+`tools/new_project_layout/.venv` and installs `requirements-gui.txt`
+(network once); later launches are silent.
+
+```bash
+python3 tools/new_project_layout/project_studio_gui.py
+```
 
 ```bash
 # Audit layout gaps
@@ -34,11 +41,30 @@ python3 tools/new_project_layout/migrate_project.py apply \
   --root /path/to/ApeEscapeRecomp \
   --disc /path/to/game.cue
 
-# GUI
+# GUI (auto-bootstraps .venv + customtkinter on first run)
 python3 tools/new_project_layout/migrate_project.py gui
 # or
 python3 tools/new_project_layout/project_studio_gui.py
+
+# Git / GitHub (also available as the GUI "Git / GitHub" tab)
+python3 tools/new_project_layout/migrate_project.py git status \
+  --root /path/to/ApeEscapeRecomp
+python3 tools/new_project_layout/migrate_project.py git ensure-submodules \
+  --root /path/to/ApeEscapeRecomp \
+  --psxrecomp-branch master --recomp-ui-branch master
+python3 tools/new_project_layout/migrate_project.py git set-branch \
+  --root /path/to/ApeEscapeRecomp --submodule psxrecomp --branch master
+python3 tools/new_project_layout/migrate_project.py git update-submodules \
+  --root /path/to/ApeEscapeRecomp --remote
+python3 tools/new_project_layout/migrate_project.py git commit \
+  --root /path/to/ApeEscapeRecomp -m "chore: bump submodules"
+python3 tools/new_project_layout/migrate_project.py git push \
+  --root /path/to/ApeEscapeRecomp
+python3 tools/new_project_layout/migrate_project.py git release \
+  --root /path/to/ApeEscapeRecomp --bump patch
 ```
+
+Git ops shell out to `git` / `gh` (no force-push, amend, or hook skips). Submodule **branch** in `.gitmodules` is for `update --remote`; CI builds the committed **gitlink SHAs**.
 
 ### Ops (subset)
 
