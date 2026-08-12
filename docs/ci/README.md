@@ -15,6 +15,10 @@ writes `scripts/package_setup_release.sh`, `README.md`, and an optional
 `--enable-wizard` / `--enable-netplay`. Release CI pins via submodule gitlinks
 and only logs SHAs with `record_pins.sh` (no `verify_pins` gate).
 
+**Migrating an older title** onto this CI shape: Project Studio
+(`tools/new_project_layout/migrate_project.py apply` / `gui`) emits the same
+packager + filled `release.yml`. Setup-host only — no prebuilt game-C zips.
+
 Manual:
 
 ```bash
@@ -25,6 +29,11 @@ cp psxrecomp/docs/ci/templates/setup-release.yml .github/workflows/release.yml
 ```
 
 Template: [`templates/setup-release.yml`](templates/setup-release.yml)
+
+**Host-only model / player updates:** [`HOST_ONLY_RELEASES.md`](HOST_ONLY_RELEASES.md)
+(CI never ships game C; RetComM Update reuses codegen-cache for host/UI bumps;
+`reuse_cached_emitters` + ccache speed up release jobs when the `psxrecomp` pin
+is unchanged).
 
 Matrix: `ubuntu-24.04` (linux-x64), `windows-2022` (windows-x64),
 `macos-15` (macos-arm64), `macos-15-intel` (macos-x64).

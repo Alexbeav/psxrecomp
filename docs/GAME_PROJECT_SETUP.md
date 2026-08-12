@@ -137,6 +137,36 @@ python3 tools/new_project_layout/probe_disc.py disc/game.cue \
 Prefer a **full multi-track** Redump cue. A single-TRACK dump will warn and will
 fail online multi-track gates (see `[NETPLAY.md](NETPLAY.md)`).
 
+### Project Studio — migrate / update existing titles
+
+Older titles (e.g. `psxrecomp-v4` submodule, `psxrecomp_add_runtime_target`,
+`packaging/` prebuilt zips) can be audited and migrated onto this layout with
+**Project Studio**. Releases remain **setup-host only** — the tool does not
+create prebuilt generated-C packages.
+
+| Entry | Role |
+| ----- | ---- |
+| `tools/new_project_layout/migrate_project.py` | CLI: `audit` / `plan` / `apply` / `gui` / `ops` |
+| `tools/new_project_layout/project_studio_gui.py` | Tkinter GUI |
+| `tools/new_project_layout/project_studio/` | Shared detect / plan / ops library |
+| `tools/new_project_layout/README.md` | Short usage |
+
+```bash
+# From a psxrecomp checkout (or any title that vendors this toolkit path):
+python3 tools/new_project_layout/migrate_project.py audit --root ~/src/ApeEscapeRecomp
+python3 tools/new_project_layout/migrate_project.py apply --root ~/src/ApeEscapeRecomp --dry-run
+python3 tools/new_project_layout/migrate_project.py gui
+```
+
+Typical apply order: rename `psxrecomp-v4` → emit `codegen_setup` → rewrite
+CMake (`psxrecomp_add_game_runtime` + wizard) → setup-host packager + CI →
+optional `probe_disc` / pins. CMake rewrites keep
+`CMakeLists.txt.pre_migrate.bak` plus `CMakeLists.migrate_extras.txt` when the
+old file had tests / `EXTRAS_SOURCES` / mod `POST_BUILD` hooks.
+
+`apply` always enables **recomp-ui + setup wizard** (required for
+`PSXRECOMP_FORCE_SETUP_HOST`). Netplay stays opt-in (`--enable-netplay` / GUI).
+
 ### After scaffold (still not automatic)
 
 If you answered Y to boxart + Generate (+ optional build), you get a local
@@ -335,12 +365,24 @@ embedded `toolchain/`. The zip includes:
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
-run Generate & rebuild locally. RetComM / the wizard download
-`cmake-clang-v1` from
+run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
+RetComM / the wizard download `cmake-clang-v1` from
 [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
 (or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
+
+### Player updates (after first Generate)
+
+| Action | Meaning |
+|--------|---------|
+| **Update** (RetComM) | New setup-host zip → refresh source → cmake rebuild. Skips disc→C when `codegen-cache` fingerprints (ROM/BIOS/emitters) still match. |
+| **Generate & Rebuild** | Force regenerate game C from the disc, then rebuild. Use when emit inputs change or cache is wrong. |
+
+Ordinary host/UI releases do **not** require Generate & Rebuild. Details:
+[`ci/HOST_ONLY_RELEASES.md`](ci/HOST_ONLY_RELEASES.md). CI tip: leave the
+`psxrecomp` gitlink pinned and use `reuse_cached_emitters` so release jobs skip
+rebuilding emitters when only host sources moved.
 
 Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`.
 
@@ -496,7 +538,12 @@ Use this before tagging a setup-host release that matches other titles
 - [ ] After rebuild, game launches; saves/settings land beside the exe
 - [ ] RetComM install/update (if you publish a catalog entry) uses this **same**
   ```
-  zip — no separate tools pack required
+  zip — no separate tools pack required; Update rebuilds via codegen-cache
+  (not raw zip extract over a Play binary)
+  ```
+- [ ] Release notes: first Generate once; later Updates are host/UI rebuilds
+  ```
+  unless emitters/ROM/BIOS fingerprints change (see ci/HOST_ONLY_RELEASES.md)
   ```
 
 ### Publish

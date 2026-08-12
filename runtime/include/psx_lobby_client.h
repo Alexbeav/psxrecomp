@@ -43,7 +43,23 @@ typedef struct PsxLobbyMember {
     char player_id[PSX_LOBBY_ID_LEN];
     char display_name[PSX_LOBBY_NAME_LEN];
     int  ready;
+    /* Peer BIOS capability from set_ready bios_offer (0 if legacy/missing). */
+    int  bios_offer_valid;
+    int  bios_can_openbios;   /* linked OpenBIOS backend */
+    int  bios_can_scph1001;   /* linked retail + validated dump available */
+    int  bios_prefer_openbios; /* explicit OpenBIOS pick (not retail) */
 } PsxLobbyMember;
+
+/*
+ * Local BIOS capability advertised on set_ready (see docs/BIOS_SELECTION.md
+ * netplay settle rule). Updated by the host runtime via psx_lobby_set_bios_offer.
+ */
+typedef struct PsxLobbyBiosOffer {
+    int  valid;
+    int  can_openbios;
+    int  can_scph1001;
+    int  prefer_openbios; /* 1 = OpenBIOS selected; 0 = retail / willing SCPH */
+} PsxLobbyBiosOffer;
 
 /*
  * Host-authoritative sim settings negotiated over the lobby.
@@ -65,6 +81,8 @@ typedef struct PsxLobbyMatchCaps {
     /* DualShock-on-multitap-tap hack (0/1). Host-authoritative for the match. */
     int  multitap_analog;
     char language[PSX_LOBBY_LANG_LEN];
+    /* Settled match BIOS: "openbios" | "scph1001" | "" (unset / legacy). */
+    char session_bios[16];
 } PsxLobbyMatchCaps;
 
 typedef struct PsxLobbyJoinInfo {
@@ -87,9 +105,11 @@ typedef struct PsxLobbyJoinInfo {
  *   3) ws://netplay.retcomm.net:8765 */
 const char *psx_lobby_default_url(void);
 
-int  psx_lobby_connect(const char *ws_url); /* 0 ok */
+int  psx_lobby_connect(const char *ws_url); /* 0 = connected or connect started */
 void psx_lobby_disconnect(void);
 int  psx_lobby_connected(void);
+/* 1 while DNS/TCP/WebSocket upgrade runs off the UI thread. */
+int  psx_lobby_connecting(void);
 
 void psx_lobby_set_display_name(const char *name);
 const char *psx_lobby_display_name(void);
@@ -216,8 +236,22 @@ int  psx_lobby_local_ready(void);
 /* True when every seated player is ready and player_count >= 2. */
 int  psx_lobby_all_ready(void);
 
-/* Toggle ready in the current lobby. */
+/* Toggle ready in the current lobby (attaches current bios_offer). */
 int  psx_lobby_set_ready(int ready);
+
+/* Local BIOS offer used on the next set_ready (and included in settle). */
+void psx_lobby_set_bios_offer(const PsxLobbyBiosOffer *offer);
+const PsxLobbyBiosOffer *psx_lobby_bios_offer(void);
+
+/*
+ * Settle session BIOS from seated peers' bios_offer (+ local offer):
+ *   OpenBIOS if anyone cannot run SCPH-1001 (missing offer ⇒ cannot);
+ *   else SCPH-1001 when the host prefers retail and every peer can;
+ *   else OpenBIOS if anyone prefers OpenBIOS; else SCPH-1001.
+ * Host preference wins over guest OpenBIOS picks when all can SCPH.
+ * Writes "openbios" or "scph1001" into out. Returns 0 on success.
+ */
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap);
 
 /*
  * Host: ask server to broadcast launch. When match_caps is non-NULL and valid,

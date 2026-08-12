@@ -1085,6 +1085,63 @@ void sio_connect_pad(int slot) {
         pad_connected |= (uint8_t)(1u << slot);
 }
 
+void sio_netplay_canonicalize_session_pads(int slot_count)
+{
+    int i;
+    if (slot_count < 2)
+        slot_count = 2;
+    if (slot_count > PSX_MAX_PLAYERS)
+        slot_count = PSX_MAX_PLAYERS;
+
+    if (slot_count >= 3)
+        sio_set_multitap(1);
+    else
+        sio_set_multitap(0);
+
+    /* Idle the pad bus — dig0 snaps otherwise capture mid-poll FSM / response
+     * bytes that differ when peers finish present dig at different host times. */
+    pad_state = PAD_IDLE;
+    selected_slot = 0;
+    pad_active_logical = 0;
+    pad_response_len = 0;
+    pad_response_idx = 0;
+    pad_current_cmd = 0;
+    pad_mtap_addr = 0x01;
+    memset(pad_response, 0, sizeof(pad_response));
+    mtap_next_mode[0] = mtap_next_mode[1] = MTAP_NEXT_SLOT_A;
+    mtap_returned[0] = mtap_returned[1] = MTAP_NEXT_SLOT_A;
+    mtap_req_this[0] = mtap_req_this[1] = 0;
+    if (active_device == DEV_PAD)
+        active_device = DEV_NONE;
+
+    for (i = 0; i < PSX_MAX_PLAYERS; i++) {
+        if (i < slot_count) {
+            sio_connect_pad(i);
+            /* Immediate digital — sio_request_pad_type is deferred and left
+             * rematch hosts (local DualShock seed) analog=1 through dig0. */
+            sio_set_pad_analog(i, 0, 0x80, 0x80, 0x80, 0x80);
+            sio_set_pad_state_slot(i, 0xFFFFu);
+            {
+                const int force_dig =
+                    sio_pad_on_multitap(i) && !sio_get_multitap_analog();
+                sio_set_pad_config_capable(i, force_dig ? 0 : 1);
+            }
+            pad_in_config[i] = 0;
+            analog_mode_locked[i] = 0;
+            pad_type_req[i] = -1;
+            memset(pad_rumble_map[i], 0xFF, sizeof(pad_rumble_map[i]));
+            pad_rumble_small[i] = 0;
+            pad_rumble_large[i] = 0;
+        } else {
+            sio_set_pad_connected(i, 0);
+            sio_set_pad_analog(i, 0, 0x80, 0x80, 0x80, 0x80);
+            sio_set_pad_state_slot(i, 0xFFFFu);
+            pad_in_config[i] = 0;
+            pad_type_req[i] = -1;
+        }
+    }
+}
+
 void sio_set_pad_connected(int slot, int connected) {
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) return;
     if (connected) {

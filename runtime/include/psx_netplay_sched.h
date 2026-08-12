@@ -46,6 +46,12 @@ typedef struct PsxNpSchedBridge {
 
 void np_sched_bind(const PsxNpSchedBridge *bridge);
 
+/* Clear session-scoped pacing/invent state (cushion rebuild, pcap freeze,
+ * timesync debt, tip cadence). Soft-return rematch reuses the process; without
+ * this, a mid-match episode can leave cushion_rebuild/debt armed and freeze
+ * the next session after lockstep armed. Called from np_sched_bind. */
+void np_sched_reset_session(void);
+
 /* sim→wire CONSUMPTION mapping. §44 real delay (default): guest tick T plays
  * the wire row T; the local sample taken at admit(T) is stored at wire T+D
  * (rnet_session_prepare_local_tip), so a press surfaces D ticks later and the

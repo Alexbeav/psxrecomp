@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@ const char *psx_lobby_default_url(void)
 int  psx_lobby_connect(const char *ws_url) { (void)ws_url; return -1; }
 void psx_lobby_disconnect(void) {}
 int  psx_lobby_connected(void) { return 0; }
+int  psx_lobby_connecting(void) { return 0; }
 void psx_lobby_set_display_name(const char *name) { (void)name; }
 const char *psx_lobby_display_name(void) { return ""; }
 const char *psx_lobby_player_id(void) { return ""; }
@@ -93,6 +95,19 @@ const PsxLobbyTurnCredentials *psx_lobby_turn_credentials(void)
 int  psx_lobby_local_ready(void) { return 0; }
 int  psx_lobby_all_ready(void) { return 0; }
 int  psx_lobby_set_ready(int ready) { (void)ready; return -1; }
+void psx_lobby_set_bios_offer(const PsxLobbyBiosOffer *offer) { (void)offer; }
+const PsxLobbyBiosOffer *psx_lobby_bios_offer(void)
+{
+    static PsxLobbyBiosOffer z;
+    return &z;
+}
+int  psx_lobby_settle_session_bios(char *out, size_t out_cap)
+{
+    if (!out || out_cap < 9) return -1;
+    strncpy(out, "openbios", out_cap - 1);
+    out[out_cap - 1] = '\0';
+    return 0;
+}
 int  psx_lobby_request_start(const PsxLobbyMatchCaps *c) { (void)c; return -1; }
 int  psx_lobby_launch_pending(void) { return 0; }
 void psx_lobby_clear_launch_pending(void) {}
@@ -112,12 +127,15 @@ void psx_lobby_clear_launch_pending(void) {}
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <process.h>
 #define close closesocket
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -165,6 +183,7 @@ typedef struct {
     int all_ready;
     int launch_pending;
     PsxLobbyMatchCaps match_caps;
+    PsxLobbyBiosOffer bios_offer;
     char pending_tx[8][2048];
     int pending_n;
     /* Inbound ICE signals (WS op:signal). */
@@ -1271,6 +1290,12 @@ static void parse_match_caps_object(const char *obj, PsxLobbyMatchCaps *out)
     out->rollback = json_get_bool(obj, "rollback", 0);
     out->multitap_analog = json_get_bool(obj, "multitap_analog", 0);
     json_get_str(obj, "language", out->language, sizeof(out->language));
+    json_get_str(obj, "session_bios", out->session_bios, sizeof(out->session_bios));
+    /* Normalize settled BIOS id. */
+    if (out->session_bios[0] &&
+        strcmp(out->session_bios, "openbios") != 0 &&
+        strcmp(out->session_bios, "scph1001") != 0)
+        out->session_bios[0] = '\0';
     out->valid = 1;
 }
 
@@ -1295,24 +1320,29 @@ static int append_match_caps_json(char *dst, size_t dst_cap, const PsxLobbyMatch
     }
     lang[o] = '\0';
     if (!lang[0]) strncpy(lang, "en", sizeof(lang) - 1);
-    return snprintf(dst, dst_cap,
-                    ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
-                    "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
-                    "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
-                    "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
-                    "\"multitap_analog\":%s,\"language\":\"%s\"}",
-                    caps->aspect_num, caps->aspect_den,
-                    caps->turbo_loads ? "true" : "false",
-                    caps->bios_hle ? "true" : "false",
-                    caps->fast_boot ? "true" : "false",
-                    caps->auto_skip_fmv ? "true" : "false",
-                    caps->input_delay,
-                    caps->input_prediction,
-                    caps->force_input_relay ? "true" : "false",
-                    caps->force_turn ? "true" : "false",
-                    caps->rollback ? "true" : "false",
-                    caps->multitap_analog ? "true" : "false",
-                    lang);
+    {
+        const char *sb = caps->session_bios;
+        if (!sb[0] || (strcmp(sb, "openbios") != 0 && strcmp(sb, "scph1001") != 0))
+            sb = "";
+        return snprintf(dst, dst_cap,
+                        ",\"match_caps\":{\"v\":1,\"aspect_num\":%d,\"aspect_den\":%d,"
+                        "\"turbo_loads\":%s,\"bios_hle\":%s,\"fast_boot\":%s,"
+                        "\"auto_skip_fmv\":%s,\"input_delay\":%d,\"input_prediction\":%d,"
+                        "\"force_input_relay\":%s,\"force_turn\":%s,\"rollback\":%s,"
+                        "\"multitap_analog\":%s,\"language\":\"%s\",\"session_bios\":\"%s\"}",
+                        caps->aspect_num, caps->aspect_den,
+                        caps->turbo_loads ? "true" : "false",
+                        caps->bios_hle ? "true" : "false",
+                        caps->fast_boot ? "true" : "false",
+                        caps->auto_skip_fmv ? "true" : "false",
+                        caps->input_delay,
+                        caps->input_prediction,
+                        caps->force_input_relay ? "true" : "false",
+                        caps->force_turn ? "true" : "false",
+                        caps->rollback ? "true" : "false",
+                        caps->multitap_analog ? "true" : "false",
+                        lang, sb);
+    }
 }
 
 static void queue_send(const char *json)
@@ -1457,19 +1487,33 @@ static void parse_slots_array(const char *json)
                 ++end;
             } while (*end && depth > 0);
             {
-                char chunk[512];
+                char chunk[768];
+                char offer[512];
                 size_t len = (size_t)(end - obj);
                 if (len >= sizeof(chunk)) {
                     len = sizeof(chunk) - 1;
                 }
                 memcpy(chunk, obj, len);
                 chunk[len] = '\0';
+                memset(&g_lc.members[n], 0, sizeof(g_lc.members[n]));
                 g_lc.members[n].slot = json_get_int(chunk, "slot", n);
                 json_get_str(chunk, "player_id", g_lc.members[n].player_id,
                              sizeof(g_lc.members[n].player_id));
                 json_get_str(chunk, "display_name", g_lc.members[n].display_name,
                              sizeof(g_lc.members[n].display_name));
                 g_lc.members[n].ready = json_get_bool(chunk, "ready", 0);
+                if (json_extract_object(chunk, "bios_offer", offer, sizeof(offer))) {
+                    char prefer[24];
+                    prefer[0] = '\0';
+                    g_lc.members[n].bios_offer_valid = 1;
+                    g_lc.members[n].bios_can_openbios =
+                        json_get_bool(offer, "can_openbios", 1);
+                    g_lc.members[n].bios_can_scph1001 =
+                        json_get_bool(offer, "can_scph1001", 0);
+                    json_get_str(offer, "prefer", prefer, sizeof(prefer));
+                    g_lc.members[n].bios_prefer_openbios =
+                        (strcmp(prefer, "openbios") == 0) ? 1 : 0;
+                }
                 if (g_lc.player_id[0] &&
                     strcmp(g_lc.members[n].player_id, g_lc.player_id) == 0) {
                     g_lc.local_ready = g_lc.members[n].ready;
@@ -1998,17 +2042,344 @@ static int set_nonblock(int fd)
 #endif
 }
 
-int psx_lobby_connect(const char *ws_url)
+static int set_block(int fd)
+{
+#if defined(_WIN32)
+    u_long mode = 0;
+    return ioctlsocket(fd, FIONBIO, &mode);
+#else
+    int fl = fcntl(fd, F_GETFL, 0);
+    return fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+#endif
+}
+
+/* Off-thread DNS + TCP + WS upgrade so the launcher UI never blocks on
+ * getaddrinfo / connect (common multi-second freeze on Windows). */
+enum { PSX_LOBBY_CONNECT_TIMEOUT_MS = 3000 };
+
+static int g_lc_tcp_connecting;
+static unsigned g_connect_gen;
+static volatile int g_connect_cancel;
+static volatile int g_connect_worker_done;
+static volatile int g_connect_worker_rc;
+static volatile unsigned g_connect_worker_gen;
+static int g_connect_worker_fd;
+#if defined(_WIN32)
+static HANDLE g_connect_thread;
+#else
+static pthread_t g_connect_thread;
+static int g_connect_thread_valid;
+#endif
+
+static int socket_connect_in_progress(void)
+{
+#if defined(_WIN32)
+    const int e = WSAGetLastError();
+    return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS;
+#else
+    return errno == EINPROGRESS || errno == EWOULDBLOCK;
+#endif
+}
+
+static int wait_socket_connected(int fd, int timeout_ms)
+{
+    fd_set wfds;
+    fd_set efds;
+    struct timeval tv;
+    int soerr = 0;
+#if defined(_WIN32)
+    int len = (int)sizeof(soerr);
+#else
+    socklen_t len = sizeof(soerr);
+#endif
+    int r;
+
+    FD_ZERO(&wfds);
+    FD_ZERO(&efds);
+#if defined(_WIN32)
+    FD_SET((SOCKET)fd, &wfds);
+    FD_SET((SOCKET)fd, &efds);
+#else
+    FD_SET(fd, &wfds);
+    FD_SET(fd, &efds);
+#endif
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (long)(timeout_ms % 1000) * 1000;
+#if defined(_WIN32)
+    r = select(0, NULL, &wfds, &efds, &tv);
+#else
+    r = select(fd + 1, NULL, &wfds, &efds, &tv);
+#endif
+    if (r <= 0)
+        return -1;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&soerr, &len) != 0 || soerr != 0)
+        return -1;
+    return 0;
+}
+
+static int lobby_tcp_connect(const char *host, int port, int *out_fd)
 {
     struct addrinfo hints, *res = NULL, *rp;
     char portstr[16];
     int fd = -1;
+
+    if (!host || !out_fd)
+        return -2;
+    *out_fd = -1;
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0)
+        return -2;
+    for (rp = res; rp; rp = rp->ai_next) {
+        int rc;
+        if (g_connect_cancel)
+            break;
+        fd = (int)socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0)
+            continue;
+        set_nonblock(fd);
+        rc = connect(fd, rp->ai_addr, (int)rp->ai_addrlen);
+        if (rc == 0)
+            break;
+        if (socket_connect_in_progress()) {
+            if (wait_socket_connected(fd, PSX_LOBBY_CONNECT_TIMEOUT_MS) == 0)
+                break;
+        }
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    if (fd < 0)
+        return -3;
+    set_block(fd);
+    *out_fd = fd;
+    return 0;
+}
+
+static int lobby_send_ws_upgrade(int fd, const char *host, int port, const char *path)
+{
     char key_raw[16];
     char key_b64[32];
     char req[512];
     int i;
+    static const char *B64 =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int o = 0;
 
-    psx_lobby_disconnect();
+    for (i = 0; i < 16; ++i)
+        key_raw[i] = (char)(rand() & 0xff);
+    for (i = 0; i < 16; i += 3) {
+        unsigned v = ((unsigned char)key_raw[i] << 16);
+        if (i + 1 < 16)
+            v |= ((unsigned char)key_raw[i + 1] << 8);
+        if (i + 2 < 16)
+            v |= (unsigned char)key_raw[i + 2];
+        key_b64[o++] = B64[(v >> 18) & 63];
+        key_b64[o++] = B64[(v >> 12) & 63];
+        key_b64[o++] = (i + 1 < 16) ? B64[(v >> 6) & 63] : '=';
+        key_b64[o++] = (i + 2 < 16) ? B64[v & 63] : '=';
+    }
+    key_b64[o] = '\0';
+    snprintf(req, sizeof(req),
+             "GET %s HTTP/1.1\r\n"
+             "Host: %s:%d\r\n"
+             "Upgrade: websocket\r\n"
+             "Connection: Upgrade\r\n"
+             "Sec-WebSocket-Key: %s\r\n"
+             "Sec-WebSocket-Version: 13\r\n\r\n",
+             path && path[0] ? path : "/", host, port, key_b64);
+    if (send(fd, req, (int)strlen(req), 0) < 0)
+        return -4;
+    return 0;
+}
+
+#if defined(_WIN32)
+static unsigned __stdcall lobby_connect_worker(void *arg)
+#else
+static void *lobby_connect_worker(void *arg)
+#endif
+{
+    const unsigned gen = (unsigned)(uintptr_t)arg;
+    int fd = -1;
+    int rc;
+
+    rc = lobby_tcp_connect(g_lc.host, g_lc.port, &fd);
+    if (rc == 0 && !g_connect_cancel && gen == g_connect_gen)
+        rc = lobby_send_ws_upgrade(fd, g_lc.host, g_lc.port, g_lc.path);
+    if (g_connect_cancel || gen != g_connect_gen) {
+        if (fd >= 0)
+            close(fd);
+        g_connect_worker_fd = -1;
+        g_connect_worker_rc = -1;
+    } else if (rc != 0) {
+        if (fd >= 0)
+            close(fd);
+        g_connect_worker_fd = -1;
+        g_connect_worker_rc = rc;
+    } else {
+        g_connect_worker_fd = fd;
+        g_connect_worker_rc = 0;
+    }
+    g_connect_worker_gen = gen;
+    g_connect_worker_done = 1;
+#if defined(_WIN32)
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static void lobby_join_connect_worker(void)
+{
+#if defined(_WIN32)
+    if (g_connect_thread) {
+        WaitForSingleObject(g_connect_thread, INFINITE);
+        CloseHandle(g_connect_thread);
+        g_connect_thread = NULL;
+    }
+#else
+    if (g_connect_thread_valid) {
+        pthread_join(g_connect_thread, NULL);
+        g_connect_thread_valid = 0;
+    }
+#endif
+}
+
+static int lobby_connect_thread_active(void)
+{
+#if defined(_WIN32)
+    return g_connect_thread != NULL;
+#else
+    return g_connect_thread_valid != 0;
+#endif
+}
+
+/* Join a finished worker and adopt the socket when the generation still
+ * matches. Never call this while the worker is mid-DNS/connect from the UI
+ * thread — that would reintroduce the hang. */
+static void lobby_finish_connect_worker(void)
+{
+    int fd;
+    int rc;
+    unsigned gen;
+
+    if (!g_connect_worker_done)
+        return;
+    lobby_join_connect_worker();
+    fd = g_connect_worker_fd;
+    rc = g_connect_worker_rc;
+    gen = g_connect_worker_gen;
+    g_connect_worker_fd = -1;
+    g_connect_worker_done = 0;
+    g_lc_tcp_connecting = 0;
+
+    if (gen != g_connect_gen || rc != 0 || fd < 0) {
+        if (fd >= 0)
+            close(fd);
+        return;
+    }
+
+    g_lc.fd = fd;
+    set_nonblock(fd);
+    lobby_store_connected_peer_ip(fd);
+    if (g_lc.connected_peer_ip[0] &&
+        strcmp(g_lc.connected_peer_ip, g_lc.host) != 0) {
+        fprintf(stderr, "psx_lobby: WS connected peer %s (url host %s)\n",
+                g_lc.connected_peer_ip, g_lc.host);
+    }
+    g_lc.connected = 1;
+    g_lc.handshake_done = 0;
+    g_lc.rx_http_len = 0;
+}
+
+static void lobby_cancel_connect_async(void)
+{
+    g_connect_cancel = 1;
+    g_connect_gen++;
+    if (g_connect_gen == 0)
+        g_connect_gen = 1;
+    g_lc_tcp_connecting = 0;
+    /* Reap only if the worker already finished; otherwise pump() joins later. */
+    if (g_connect_worker_done)
+        lobby_finish_connect_worker();
+}
+
+/* Connect/disconnect memset g_lc for a clean WS seat, but must keep the
+ * mount fingerprint + game pin. ae_np_connect used to set disc_fp then call
+ * connect, which wiped it — create stored "" and a later soft-return verify
+ * refilled the client, so leave+rejoin hit disc_mismatch (empty vs hash). */
+static void lobby_client_reset_keep_identity(void)
+{
+    char dname[PSX_LOBBY_NAME_LEN];
+    char disc_fp[65];
+    char filter_game_name[PSX_LOBBY_NAME_LEN];
+    char filter_game_version[PSX_LOBBY_VERSION_LEN];
+
+    strncpy(dname, g_lc.display_name, sizeof(dname) - 1);
+    dname[sizeof(dname) - 1] = '\0';
+    memcpy(disc_fp, g_lc.disc_fp, sizeof(disc_fp));
+    strncpy(filter_game_name, g_lc.filter_game_name, sizeof(filter_game_name) - 1);
+    filter_game_name[sizeof(filter_game_name) - 1] = '\0';
+    strncpy(filter_game_version, g_lc.filter_game_version,
+            sizeof(filter_game_version) - 1);
+    filter_game_version[sizeof(filter_game_version) - 1] = '\0';
+
+    memset(&g_lc, 0, sizeof(g_lc));
+    g_lc.fd = -1;
+    strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
+    memcpy(g_lc.disc_fp, disc_fp, sizeof(g_lc.disc_fp));
+    strncpy(g_lc.filter_game_name, filter_game_name,
+            sizeof(g_lc.filter_game_name) - 1);
+    if (filter_game_version[0]) {
+        strncpy(g_lc.filter_game_version, filter_game_version,
+                sizeof(g_lc.filter_game_version) - 1);
+    } else {
+        strncpy(g_lc.filter_game_version, PSX_GAME_VERSION,
+                sizeof(g_lc.filter_game_version) - 1);
+        g_lc.filter_game_version[sizeof(g_lc.filter_game_version) - 1] = '\0';
+    }
+    member_rtt_clear();
+}
+
+int psx_lobby_connect(const char *ws_url)
+{
+#if defined(_WIN32)
+    uintptr_t th;
+#else
+    int prc;
+#endif
+
+    if (psx_lobby_connected())
+        return 0;
+    /* Already starting a wanted connect — UI may call connect+list every frame. */
+    if (g_lc_tcp_connecting)
+        return 0;
+
+    /* One worker slot: if a cancelled connect is still in DNS/TCP, wait for it
+     * before starting another (bounded by PSX_LOBBY_CONNECT_TIMEOUT_MS). */
+    if (lobby_connect_thread_active()) {
+        g_connect_cancel = 1;
+        if (!g_connect_worker_done)
+            lobby_join_connect_worker();
+        if (g_connect_worker_done)
+            lobby_finish_connect_worker();
+    }
+
+    g_lc.ice_rtt_suspended = 0;
+    lobby_ice_rtt_close();
+    lobby_rtt_close();
+    lobby_list_rtt_close();
+    lobby_lan_beacon_close_all();
+    lobby_host_advertise_reset();
+    g_list_rtt_on_next_list = 0;
+    if (g_lc.fd >= 0) {
+        close(g_lc.fd);
+        g_lc.fd = -1;
+    }
+    lobby_client_reset_keep_identity();
+
 #if defined(_WIN32)
     {
         static int wsa;
@@ -2023,80 +2394,41 @@ int psx_lobby_connect(const char *ws_url)
                      &g_lc.port, g_lc.path, sizeof(g_lc.path)) != 0) {
         return -1;
     }
-    snprintf(portstr, sizeof(portstr), "%d", g_lc.port);
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(g_lc.host, portstr, &hints, &res) != 0) {
-        return -2;
-    }
-    for (rp = res; rp; rp = rp->ai_next) {
-        fd = (int)socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0) {
-            continue;
-        }
-        if (connect(fd, rp->ai_addr, (int)rp->ai_addrlen) == 0) {
-            break;
-        }
-        close(fd);
-        fd = -1;
-    }
-    freeaddrinfo(res);
-    if (fd < 0) {
+
+    g_connect_cancel = 0;
+    g_connect_worker_done = 0;
+    g_connect_worker_rc = -1;
+    g_connect_worker_fd = -1;
+    g_connect_gen++;
+    if (g_connect_gen == 0)
+        g_connect_gen = 1;
+    g_lc_tcp_connecting = 1;
+
+#if defined(_WIN32)
+    th = _beginthreadex(NULL, 0, lobby_connect_worker,
+                        (void *)(uintptr_t)g_connect_gen, 0, NULL);
+    if (!th) {
+        g_lc_tcp_connecting = 0;
         return -3;
     }
-    g_lc.fd = fd;
-    lobby_store_connected_peer_ip(fd);
-    if (g_lc.connected_peer_ip[0] &&
-        strcmp(g_lc.connected_peer_ip, g_lc.host) != 0) {
-        fprintf(stderr, "psx_lobby: WS connected peer %s (url host %s)\n",
-                g_lc.connected_peer_ip, g_lc.host);
+    g_connect_thread = (HANDLE)th;
+#else
+    prc = pthread_create(&g_connect_thread, NULL, lobby_connect_worker,
+                         (void *)(uintptr_t)g_connect_gen);
+    if (prc != 0) {
+        g_lc_tcp_connecting = 0;
+        return -3;
     }
-    for (i = 0; i < 16; ++i) {
-        key_raw[i] = (char)(rand() & 0xff);
-    }
-    /* base64 16 bytes -> 24 chars; reuse server-side style via sha1 helper file's b64? */
-    {
-        static const char *B64 =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        int o = 0;
-        for (i = 0; i < 16; i += 3) {
-            unsigned v = ((unsigned char)key_raw[i] << 16);
-            if (i + 1 < 16) {
-                v |= ((unsigned char)key_raw[i + 1] << 8);
-            }
-            if (i + 2 < 16) {
-                v |= (unsigned char)key_raw[i + 2];
-            }
-            key_b64[o++] = B64[(v >> 18) & 63];
-            key_b64[o++] = B64[(v >> 12) & 63];
-            key_b64[o++] = (i + 1 < 16) ? B64[(v >> 6) & 63] : '=';
-            key_b64[o++] = (i + 2 < 16) ? B64[v & 63] : '=';
-        }
-        key_b64[o] = '\0';
-    }
-    snprintf(req, sizeof(req),
-             "GET %s HTTP/1.1\r\n"
-             "Host: %s:%d\r\n"
-             "Upgrade: websocket\r\n"
-             "Connection: Upgrade\r\n"
-             "Sec-WebSocket-Key: %s\r\n"
-             "Sec-WebSocket-Version: 13\r\n\r\n",
-             g_lc.path, g_lc.host, g_lc.port, key_b64);
-    if (send(fd, req, (int)strlen(req), 0) < 0) {
-        close(fd);
-        g_lc.fd = -1;
-        return -4;
-    }
-    set_nonblock(fd);
-    g_lc.connected = 1;
-    g_lc.handshake_done = 0;
-    g_lc.rx_http_len = 0;
+    g_connect_thread_valid = 1;
+#endif
     return 0;
 }
 
 void psx_lobby_disconnect(void)
 {
+    /* Never block the UI on DNS/connect — cancel and let pump reap. */
+    lobby_cancel_connect_async();
+
     g_lc.ice_rtt_suspended = 0;
     lobby_ice_rtt_close();
     lobby_rtt_close();
@@ -2107,19 +2439,17 @@ void psx_lobby_disconnect(void)
     if (g_lc.fd >= 0) {
         close(g_lc.fd);
     }
-    {
-        char dname[PSX_LOBBY_NAME_LEN];
-        strncpy(dname, g_lc.display_name, sizeof(dname) - 1);
-        memset(&g_lc, 0, sizeof(g_lc));
-        g_lc.fd = -1;
-        strncpy(g_lc.display_name, dname, sizeof(g_lc.display_name) - 1);
-        member_rtt_clear();
-    }
+    lobby_client_reset_keep_identity();
 }
 
 int psx_lobby_connected(void)
 {
     return g_lc.connected && g_lc.fd >= 0;
+}
+
+int psx_lobby_connecting(void)
+{
+    return g_lc_tcp_connecting || lobby_connect_thread_active() || g_connect_worker_done;
 }
 
 void psx_lobby_set_display_name(const char *name)
@@ -2443,6 +2773,8 @@ void psx_lobby_pump(void)
 #else
     ssize_t n;
 #endif
+    if (g_connect_worker_done)
+        lobby_finish_connect_worker();
     if (!psx_lobby_connected()) {
         return;
     }
@@ -2748,8 +3080,8 @@ const PsxLobbyMatchCaps *psx_lobby_match_caps(void)
 
 int psx_lobby_set_match_caps(const PsxLobbyMatchCaps *caps)
 {
-    char msg[768];
-    char caps_json[512];
+    char msg[896];
+    char caps_json[640];
     int n;
     if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host || !caps || !caps->valid)
         return -1;
@@ -2808,13 +3140,100 @@ int psx_lobby_all_ready(void)
     return g_lc.all_ready != 0 && g_lc.in_lobby && g_lc.join.player_count >= 2;
 }
 
+void psx_lobby_set_bios_offer(const PsxLobbyBiosOffer *offer)
+{
+    if (!offer) {
+        memset(&g_lc.bios_offer, 0, sizeof(g_lc.bios_offer));
+        return;
+    }
+    g_lc.bios_offer = *offer;
+    if (g_lc.bios_offer.valid) {
+        /* OpenBIOS is always expected when the title allows it; keep the flag. */
+        if (!g_lc.bios_offer.can_openbios && !g_lc.bios_offer.can_scph1001)
+            g_lc.bios_offer.can_openbios = 1;
+    }
+}
+
+const PsxLobbyBiosOffer *psx_lobby_bios_offer(void)
+{
+    return &g_lc.bios_offer;
+}
+
+int psx_lobby_settle_session_bios(char *out, size_t out_cap)
+{
+    int i;
+    int any_prefer_open = 0;
+    int any_cannot_scph = 0;
+    int host_prefer_scph = 0;
+    int saw_peer = 0;
+    if (!out || out_cap < 9) return -1;
+    out[0] = '\0';
+
+    for (i = 0; i < g_lc.member_count; ++i) {
+        const PsxLobbyMember *m = &g_lc.members[i];
+        if (!m->player_id[0] && !m->display_name[0]) continue;
+        saw_peer = 1;
+        if (!m->bios_offer_valid) {
+            /* Legacy client / not ready yet — cannot assume SCPH. */
+            any_cannot_scph = 1;
+            continue;
+        }
+        if (m->bios_prefer_openbios) any_prefer_open = 1;
+        if (!m->bios_can_scph1001) any_cannot_scph = 1;
+        if (!m->bios_can_openbios && !m->bios_can_scph1001)
+            any_cannot_scph = 1;
+        if (psx_lobby_member_is_host(m) && !m->bios_prefer_openbios &&
+            m->bios_can_scph1001)
+            host_prefer_scph = 1;
+    }
+
+    /* Include local offer even before lobby_update echoes it. */
+    if (g_lc.bios_offer.valid) {
+        saw_peer = 1;
+        if (g_lc.bios_offer.prefer_openbios) any_prefer_open = 1;
+        if (!g_lc.bios_offer.can_scph1001) any_cannot_scph = 1;
+        if (g_lc.is_host && !g_lc.bios_offer.prefer_openbios &&
+            g_lc.bios_offer.can_scph1001)
+            host_prefer_scph = 1;
+    } else if (!saw_peer) {
+        any_cannot_scph = 1;
+    }
+
+    /* Capability first: without universal SCPH support, OpenBIOS is required.
+     * Otherwise the host's retail pick wins over guest OpenBIOS preferences. */
+    if (any_cannot_scph || !saw_peer)
+        strncpy(out, "openbios", out_cap - 1);
+    else if (host_prefer_scph)
+        strncpy(out, "scph1001", out_cap - 1);
+    else if (any_prefer_open)
+        strncpy(out, "openbios", out_cap - 1);
+    else
+        strncpy(out, "scph1001", out_cap - 1);
+    out[out_cap - 1] = '\0';
+    return 0;
+}
+
 int psx_lobby_set_ready(int ready)
 {
-    char msg[64];
+    char msg[384];
+    int n;
     if (!psx_lobby_connected() || !g_lc.in_lobby) {
         return -1;
     }
-    snprintf(msg, sizeof(msg), "{\"op\":\"set_ready\",\"ready\":%s}", ready ? "true" : "false");
+    if (g_lc.bios_offer.valid) {
+        n = snprintf(msg, sizeof(msg),
+                     "{\"op\":\"set_ready\",\"ready\":%s,"
+                     "\"bios_offer\":{\"v\":1,\"prefer\":\"%s\","
+                     "\"can_openbios\":%s,\"can_scph1001\":%s}}",
+                     ready ? "true" : "false",
+                     g_lc.bios_offer.prefer_openbios ? "openbios" : "scph1001",
+                     g_lc.bios_offer.can_openbios ? "true" : "false",
+                     g_lc.bios_offer.can_scph1001 ? "true" : "false");
+    } else {
+        n = snprintf(msg, sizeof(msg), "{\"op\":\"set_ready\",\"ready\":%s}",
+                     ready ? "true" : "false");
+    }
+    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
@@ -2822,16 +3241,21 @@ int psx_lobby_set_ready(int ready)
 
 int psx_lobby_request_start(const PsxLobbyMatchCaps *match_caps)
 {
-    char msg[768];
-    char caps_json[512];
+    char msg[896];
+    char caps_json[640];
+    PsxLobbyMatchCaps caps_local;
     int n;
     if (!psx_lobby_connected() || !g_lc.in_lobby || !g_lc.is_host) {
         return -1;
     }
     caps_json[0] = '\0';
     if (match_caps && match_caps->valid) {
-        g_lc.match_caps = *match_caps;
-        append_match_caps_json(caps_json, sizeof(caps_json), match_caps);
+        caps_local = *match_caps;
+        if (!caps_local.session_bios[0])
+            (void)psx_lobby_settle_session_bios(caps_local.session_bios,
+                                                sizeof(caps_local.session_bios));
+        g_lc.match_caps = caps_local;
+        append_match_caps_json(caps_json, sizeof(caps_json), &caps_local);
     }
     n = snprintf(msg, sizeof(msg), "{\"op\":\"start\"%s}", caps_json);
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;

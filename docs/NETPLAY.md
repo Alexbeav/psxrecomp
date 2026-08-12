@@ -127,6 +127,15 @@ device.
 
 Rollback and delay-sync both carry multitap pad bytes.
 
+**BIOS settle:** each peer advertises a BIOS offer (can run OpenBIOS /
+SCPH-1001, and whether OpenBIOS is selected) — online on ready, LAN on JOIN.
+At Start the host freezes one session BIOS (`openbios` or `scph1001`) via
+`match_caps.session_bios` (online) or the `MOTK1 START` line (LAN). The session
+uses OpenBIOS unless every seated peer can run SCPH-1001 and nobody selected
+OpenBIOS. Peers that cannot apply a settled SCPH-1001 abort instead of falling
+back. That choice boots the match only — it does not change each peer’s saved
+BIOS preference. See `docs/BIOS_SELECTION.md` (Netplay lobby settle).
+
 ---
 
 ## Disc identity for multi-track titles
