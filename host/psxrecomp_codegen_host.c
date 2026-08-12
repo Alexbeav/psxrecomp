@@ -945,6 +945,65 @@ static int resolve_host_exe_dir(char* out, size_t cap) {
     return dirname_copy(out, cap, exe);
 }
 
+/* Last path segment of `path` (points into `path`; not nul-trimmed copy). */
+static const char* path_base_name(const char* path) {
+    const char* base = path ? path : "";
+    for (const char* p = base; *p; ++p) {
+        if ((*p == '/' || *p == '\\') && p[1])
+            base = p + 1;
+    }
+    return base;
+}
+
+static int name_is_releases(const char* name) {
+    if (!name || !name[0]) return 0;
+#if defined(_WIN32)
+    return _stricmp(name, "releases") == 0;
+#else
+    return strcmp(name, "releases") == 0;
+#endif
+}
+
+/* RetComM stages Play under apps/<title>/releases/<tag>/ while the generate
+ * tree lives at apps/<title>/src/current/. Walking parents of the release dir
+ * never visits that sibling — probe it explicitly. */
+static int try_retcomm_src_current(const char* start, char* out, size_t cap) {
+    char cur[1024];
+    if (!start || !start[0] || !out || cap < 2)
+        return 0;
+    snprintf(cur, sizeof(cur), "%s", start);
+    for (int i = 0; i < 8; ++i) {
+        char parent[1024];
+        if (!dirname_copy(parent, sizeof(parent), cur))
+            break;
+
+        char cand[1100];
+        /* …/releases  →  …/src/current */
+        if (name_is_releases(path_base_name(cur))) {
+            if (join_path(cand, sizeof(cand), parent, "src/current") &&
+                looks_like_project_root(cand)) {
+                snprintf(out, cap, "%s", cand);
+                return 1;
+            }
+        }
+        /* …/releases/<tag>  →  …/src/current */
+        if (name_is_releases(path_base_name(parent))) {
+            char install[1024];
+            if (dirname_copy(install, sizeof(install), parent) &&
+                join_path(cand, sizeof(cand), install, "src/current") &&
+                looks_like_project_root(cand)) {
+                snprintf(out, cap, "%s", cand);
+                return 1;
+            }
+        }
+
+        if (strcmp(parent, cur) == 0)
+            break;
+        snprintf(cur, sizeof(cur), "%s", parent);
+    }
+    return 0;
+}
+
 static int discover_project_root(char* out, size_t cap) {
     const char* env_name =
         cfg_or(g_cfg->project_root_env, "PSXRECOMP_PROJECT_ROOT");
@@ -965,11 +1024,16 @@ static int discover_project_root(char* out, size_t cap) {
 #endif
     if (start[0] && walk_up_for_project_root(start, out, cap))
         return 1;
+    if (start[0] && try_retcomm_src_current(start, out, cap))
+        return 1;
 
     /* 2) exe dir (GUI double-click: cwd is often $HOME / Desktop). */
     char exe_dir[1024];
     if (resolve_host_exe_dir(exe_dir, sizeof(exe_dir)) &&
         walk_up_for_project_root(exe_dir, out, cap))
+        return 1;
+    if (resolve_host_exe_dir(exe_dir, sizeof(exe_dir)) &&
+        try_retcomm_src_current(exe_dir, out, cap))
         return 1;
 
     return 0;

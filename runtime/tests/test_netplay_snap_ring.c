@@ -4,11 +4,23 @@
  * Stores synthetic blobs via netplay_snap_ring_store and checks has/peek,
  * same-tick overwrite, and oldest-tick eviction at capacity.
  *
- * Build (from runtime/tests):
- *   gcc -std=c11 -Wall -Wextra -I../include -o test_netplay_snap_ring \
- *       test_netplay_snap_ring.c ../src/netplay_snap_ring.c \
- *       -DNETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE
+ * Build/run: ctest -R netplay_snap_ring_test
+ * (registered in runtime/CMakeLists.txt, which owns the source list and the
+ *  NETPLAY_SNAP_RING_TEST_STUB_BOOT_STATE define. This file deliberately does
+ *  not repeat a gcc recipe: an unexecuted recipe in a comment is what let this
+ *  harness rot — it kept listing ../src/netplay_snap_ring.c, which the file
+ *  already #includes, long after that became a duplicate-symbol error.)
  */
+
+/* This TU pulls in ../src/netplay_snap_ring.c at the bottom, and that file
+ * calls clock_gettime/CLOCK_MONOTONIC on non-Windows. The equivalent define in
+ * netplay_snap_ring.c itself is too late here: <stdio.h> below already latched
+ * glibc's <features.h>, so under a strict -std=cNN the POSIX declarations stay
+ * hidden and the build dies on an implicit declaration. Must stay first. */
+#ifndef _POSIX_C_SOURCE
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -39,6 +51,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
     (void)bios_checksum; (void)entry_pc; (void)cpu;
     return file && file_len == 4 && memcmp(file, "save", 4) == 0;
 }
+uint32_t boot_state_last_vram_dirty_rows(void) { return 0; }
+int boot_state_last_vram_incremental(void) { return 0; }
 #endif
 
 #include "../src/netplay_snap_ring.c"

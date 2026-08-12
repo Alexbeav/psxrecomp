@@ -546,6 +546,13 @@ uint64_t psx_last_irq_check_cycle(void) { return s_last_interrupt_check_cycle; }
 uint64_t psx_interrupt_total_checks(void) { return total_checks; }
 uint32_t psx_interrupt_fast_maintenance(void) { return s_fast_maintenance; }
 
+void psx_irq_clear_resume_latches(void)
+{
+    s_compiled_interrupt_resume_pc = 0;
+    s_last_interrupt_check_pc = 0;
+    s_last_interrupt_check_cycle = UINT64_MAX;
+}
+
 /* Deferred cooperative thread switch from nested exception delivery.
  *
  * A genuine in-exception ChangeThread (kind-30, escape site below) must be
@@ -706,6 +713,22 @@ void interrupts_init(void) {
     s_defer_switch_pending = 0;
     s_defer_switch_target = 0;
     s_defer_switch_from = 0;
+    /* Rematch soft-return: sticky BB/IRQ resume latches survive process lifetime.
+     * pick_snap_resume_pc prefers them for tick-0 snaps → dig0 RAM + prior-match
+     * game PC (host baseline pc=0x8006… vs guest BIOS 0xbfc0…) → hc-fork abort. */
+    psx_irq_clear_resume_latches();
+    /* Same host-only ambient as interrupts_resync_after_restore — soft-return
+     * rematch is not a snap load, so resync is not called; cold peers start
+     * with BSS zeros here. */
+    g_exception_real_epc = 0;
+    g_exc_escape_reason = PSX_EXC_ESCAPE_NONE;
+    g_rfe_escape_pending = 0;
+    g_pending_exception_longjmp = 0;
+    s_fast_maintenance = 0;
+    {
+        extern uint32_t g_dirty_safe_resume_pc;
+        g_dirty_safe_resume_pc = 0;
+    }
 }
 
 void interrupts_resync_after_restore(void) {

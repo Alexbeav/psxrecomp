@@ -119,6 +119,19 @@ sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/sr
 powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
 ```
 
+**Migrate an older title** (e.g. `psxrecomp-v4` / prebuilt `packaging/`) onto
+setup-host with Project Studio — audit → plan → apply (CLI or GUI). Releases
+stay setup-host only (no prebuilt game C):
+
+```bash
+python3 tools/new_project_layout/migrate_project.py audit --root ~/src/MyGameRecomp
+python3 tools/new_project_layout/migrate_project.py apply --root ~/src/MyGameRecomp --dry-run
+python3 tools/new_project_layout/migrate_project.py gui
+```
+
+Details: [`tools/new_project_layout/README.md`](tools/new_project_layout/README.md)
+and [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
 Launcher features that are still in active development are **opt-in at
 configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
 
@@ -735,9 +748,15 @@ seek delays as real hardware. On top of that faithful baseline, load-time
 acceleration is **opt-in**, per game, so the accurate path is never compromised:
 
 - **Turbo** — a hold-to-fast-forward key that compresses loads on demand.
-- **`[runtime] turbo_loads` / `idle_skip`** — automatic acceleration during load
-  waits, with `turbo_audio_sink` keeping the SPU timeline coherent through the
-  burst.
+- **The "Fast Loading (host pacing)" and "CD Speed" mods** — automatic
+  acceleration during load waits, shipped with every title and **off by
+  default**, with `turbo_audio_sink` keeping the SPU timeline coherent through
+  the burst. Host pacing only changes how fast real time is fed to a load, so
+  the guest cannot desync; CD speed changes when the game receives CD
+  interrupts. The former `[runtime] turbo_loads` config key is deprecated and
+  ignored — see `docs/config_schema.md`.
+- **`[runtime] idle_skip`** — proof-gated fast-forward through idle polling
+  loops, with guest time and device events still advancing exactly.
 - **Warm CD routes (`[[runtime.warm_cd_routes]]`)** — narrowly-scoped fast
   read cadence armed on a specific `SetLoc`, restoring authentic timing the
   moment the read pattern diverges.

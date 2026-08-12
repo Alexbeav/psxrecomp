@@ -1,3 +1,13 @@
+/* clock_gettime/CLOCK_MONOTONIC are POSIX, not ISO C. Under a strict -std=cNN
+ * (no GNU extensions) glibc hides them unless _POSIX_C_SOURCE is set, so this
+ * TU fails to compile — loudly under -Werror, silently as an implicit
+ * declaration without it. The runtime build happens to use -std=gnu99, which
+ * is why this never surfaced there. Must precede the first libc header:
+ * glibc's <features.h> latches the feature-test macros on first inclusion. */
+#ifndef _POSIX_C_SOURCE
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "netplay_snap_ring.h"
 #include "boot_state.h"
 
