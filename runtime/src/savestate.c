@@ -1,4 +1,5 @@
-/* savestate.c — user save states (Shift+F1-F12 save, F1-F12 load). See savestate.h.
+/* savestate.c — user save states. The runtime UI opens from the save-state menu.
+ * See savestate.h.
  *
  * Wraps boot_state.c's full-machine serializer. Requests are staged by the SDL
  * key handler / debug server and executed by savestate_poll at a block-leader
@@ -8,6 +9,7 @@
 #include "savestate.h"
 #include "boot_state.h"
 #include "cdrom.h"
+#include "gpu.h"
 #include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_netplay.h"
@@ -18,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
@@ -58,6 +61,12 @@ static int      s_save_defer_slot = -1;
 static double   s_save_defer_t0 = 0.0;
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
+
+typedef struct SavestateThumbHeader {
+    char magic[4];
+    uint32_t w;
+    uint32_t h;
+} SavestateThumbHeader;
 
 /* Mid-FMV / present-edge IRQ fast paths often pass resume_pc=0 (cpu->pc is
  * parked). Prefer sticky BB / compiled latches over writing a null resume. */
@@ -364,6 +373,14 @@ int savestate_slot_path(int slot, char* out, size_t cap) {
     return 1;
 }
 
+static int savestate_thumb_path(int slot, char* out, size_t cap) {
+    if (!s_configured || !out || cap == 0) return 0;
+    if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
+    snprintf(out, cap, "%s%sstate_%08X_slot%02d.thumb",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc, slot);
+    return 1;
+}
+
 int savestate_slot_exists(int slot) {
     char path[600];
     FILE* f;
@@ -375,6 +392,92 @@ int savestate_slot_exists(int slot) {
     sz = ftell(f);
     fclose(f);
     return sz > 0;
+}
+
+int savestate_slot_mtime(int slot, int64_t* out_time) {
+    char path[600];
+    if (out_time) *out_time = 0;
+    if (!savestate_slot_path(slot, path, sizeof(path))) return 0;
+#ifdef _WIN32
+    {
+        struct _stat64 st;
+        if (_stat64(path, &st) != 0 || st.st_size <= 0) return 0;
+        if (out_time) *out_time = (int64_t)st.st_mtime;
+        return 1;
+    }
+#else
+    {
+        struct stat st;
+        if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
+        if (out_time) *out_time = (int64_t)st.st_mtime;
+        return 1;
+    }
+#endif
+}
+
+int savestate_capture_thumb(int slot) {
+    char path[600];
+    FILE* f;
+    SavestateThumbHeader hdr;
+    uint32_t thumb[SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
+    GpuDisplayInfo di;
+    uint32_t dw, dh, x, y;
+    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
+    gpu_get_display_info(&di);
+    dw = di.width ? di.width : 320u;
+    dh = di.height ? di.height : 240u;
+    for (y = 0; y < SAVESTATE_THUMB_H; y++) {
+        uint32_t sy = y * dh / SAVESTATE_THUMB_H;
+        for (x = 0; x < SAVESTATE_THUMB_W; x++) {
+            uint32_t sx = x * dw / SAVESTATE_THUMB_W;
+            thumb[y * SAVESTATE_THUMB_W + x] = di.disabled
+                ? 0xFF000000u
+                : (gpu_display_pixel_argb(&di, sx, sy) | 0xFF000000u);
+        }
+    }
+    hdr.magic[0] = 'P';
+    hdr.magic[1] = 'S';
+    hdr.magic[2] = 'T';
+    hdr.magic[3] = 'H';
+    hdr.w = SAVESTATE_THUMB_W;
+    hdr.h = SAVESTATE_THUMB_H;
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    if (fwrite(&hdr, 1, sizeof(hdr), f) != sizeof(hdr) ||
+        fwrite(thumb, sizeof(uint32_t),
+               SAVESTATE_THUMB_W * SAVESTATE_THUMB_H, f) !=
+            SAVESTATE_THUMB_W * SAVESTATE_THUMB_H) {
+        fclose(f);
+        remove(path);
+        return 0;
+    }
+    return fclose(f) == 0;
+}
+
+int savestate_read_thumb(int slot, uint32_t* out_argb, int out_w, int out_h) {
+    char path[600];
+    FILE* f;
+    SavestateThumbHeader hdr;
+    size_t pixels;
+    if (!out_argb || out_w != SAVESTATE_THUMB_W ||
+        out_h != SAVESTATE_THUMB_H)
+        return 0;
+    if (!savestate_thumb_path(slot, path, sizeof(path))) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fread(&hdr, 1, sizeof(hdr), f) != sizeof(hdr) ||
+        memcmp(hdr.magic, "PSTH", 4) != 0 ||
+        hdr.w != SAVESTATE_THUMB_W || hdr.h != SAVESTATE_THUMB_H) {
+        fclose(f);
+        return 0;
+    }
+    pixels = (size_t)SAVESTATE_THUMB_W * (size_t)SAVESTATE_THUMB_H;
+    if (fread(out_argb, sizeof(uint32_t), pixels, f) != pixels) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return 1;
 }
 
 int savestate_slot_compatible(int slot, char* reason, size_t reason_cap) {
@@ -625,6 +728,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 if (ok) {
                     s_last_save_pc = pc;
                     s_save_failed = 0;
+                    (void)savestate_capture_thumb(slot);
                 } else {
                     s_last_save_pc = 0;
                     s_save_failed = 1;

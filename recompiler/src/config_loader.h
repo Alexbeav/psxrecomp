@@ -1109,6 +1109,10 @@ struct UserSettings {
     // [video] rewind_interval: frames between local rewind snaps. UI offers
     // 1 / 4 / 8 / 12 / 15 (default 15).
     bool has_rewind_interval = false; int rewind_interval = 15;
+    // [hotkeys] controller-only host shortcuts. Values use recomp-ui's
+    // RECOMP_LAUNCHER_PAD_* encoding (0 = unbound, 1+button, 100+axis).
+    bool has_hotkey_pad_rewind = false; int hotkey_pad_rewind = 1272; /* select+r3 */
+    bool has_hotkey_pad_save_state_menu = false; int hotkey_pad_save_state_menu = 2040; /* select+r1 */
     // [audio]
     bool has_spu_hq         = false; bool spu_hq         = false;
     // [bios] / [disc] / [memcard]
