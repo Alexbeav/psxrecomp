@@ -2,6 +2,10 @@
 
 Cross-platform (Windows / macOS / Linux). No force flags; builds stay under
 the chosen build directory (default ``build-release``).
+
+Before configure, missing OpenBIOS generated C under ``psxrecomp/generated/``
+is regenerated (MIT OpenBIOS — no retail dump required) so runtime.cmake can
+link a BIOS backend.
 """
 
 from __future__ import annotations
@@ -21,6 +25,10 @@ from .gitops import CmdResult
 DEFAULT_BUILD_DIR = "build-release"
 DEFAULT_TARGET = "psx-runtime"
 DEFAULT_BUILD_TYPE = "Release"
+OPENBIOS_PROFILE = "bios/OpenBIOS.toml"
+OPENBIOS_STEM = "OpenBIOS"
+SCPH1001_PROFILE = "bios/SCPH1001.toml"
+SCPH1001_STEM = "SCPH1001"
 LogFn = Callable[[str], None]
 
 
@@ -155,6 +163,403 @@ def _run_stream(
     return CmdResult(True, "OK", detail)
 
 
+def resolve_framework_root(root: Path) -> Path | None:
+    """Return the psxrecomp framework root (bios/ + recompiler/), or None."""
+    root = root.expanduser().resolve()
+    for cand in (root / "psxrecomp", root):
+        if (cand / "bios" / "OpenBIOS.toml").is_file() and (cand / "recompiler").is_dir():
+            return cand
+    return None
+
+
+_MAX_PLAYERS_CMAKE_RE = re.compile(
+    r"^\s*MAX_PLAYERS\s+(\d+)\s*$", re.MULTILINE | re.IGNORECASE
+)
+_MAX_PLAYERS_RANGE_RE = re.compile(
+    r"MAX_PLAYERS must be in\s+(\d+)\.\.(\d+)", re.IGNORECASE
+)
+
+
+def project_max_players(root: Path) -> int | None:
+    """``MAX_PLAYERS N`` from the game ``CMakeLists.txt``, if present."""
+    cmake = root / "CMakeLists.txt"
+    if not cmake.is_file():
+        return None
+    try:
+        text = cmake.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = _MAX_PLAYERS_CMAKE_RE.search(text)
+    return int(m.group(1)) if m else None
+
+
+def framework_max_players_range(fw: Path) -> tuple[int, int] | None:
+    """``(lo, hi)`` from runtime.cmake's FATAL_ERROR range check, if found."""
+    cmake = fw / "runtime" / "runtime.cmake"
+    if not cmake.is_file():
+        return None
+    try:
+        text = cmake.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = _MAX_PLAYERS_RANGE_RE.search(text)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def preflight_max_players(root: Path) -> CmdResult | None:
+    """Fail fast when the game asks for MAX_PLAYERS the nested framework rejects.
+
+    Single-player titles (Ape Escape, Tomba, …) use ``MAX_PLAYERS 1``. Older
+    psxrecomp pins only allowed 2..5 and abort configure with a cryptic
+    FATAL_ERROR. Detect that before running cmake.
+    """
+    players = project_max_players(root)
+    if players is None:
+        return None
+    fw = resolve_framework_root(root)
+    if fw is None:
+        return None
+    rng = framework_max_players_range(fw)
+    if rng is None:
+        return None
+    lo, hi = rng
+    if lo <= players <= hi:
+        return None
+    pins = root / "framework_pins.txt"
+    pin_hint = ""
+    if pins.is_file():
+        pin_hint = f" Check {pins.name} vs the checked-out psxrecomp commit."
+    return CmdResult(
+        False,
+        f"MAX_PLAYERS {players} is outside nested psxrecomp range {lo}..{hi}. "
+        f"Update the psxrecomp submodule to a pin that allows 1..8 "
+        f"(runtime.cmake after single-player / rewind support).{pin_hint}",
+    )
+
+
+def diagnose_configure_failure(detail: str, root: Path) -> str | None:
+    """Extra hint appended to a failed cmake configure message."""
+    blob = detail or ""
+    if "MAX_PLAYERS must be in" in blob and "got" in blob:
+        pre = preflight_max_players(root)
+        if pre is not None:
+            return pre.message
+        return (
+            "MAX_PLAYERS rejected by nested psxrecomp. Single-player titles need "
+            "a framework pin whose runtime.cmake allows 1..8 — update the "
+            "psxrecomp submodule (and framework_pins.txt)."
+        )
+    if "generated" in blob.lower() and (
+        "GEN_MARKER" in blob or "dispatch.c" in blob or "missing" in blob.lower()
+    ):
+        return (
+            "Game generated C may be missing — run Generate (disc→C) before "
+            "Configure, or ensure generated/<boot>_dispatch.c exists."
+        )
+    return None
+
+
+def bios_backend_present(fw: Path, stem: str) -> bool:
+    """True when generated/<stem>_{full,dispatch}.c look linkable."""
+    dispatch = fw / "generated" / f"{stem}_dispatch.c"
+    full = fw / "generated" / f"{stem}_full.c"
+    if not dispatch.is_file() or not full.is_file():
+        return False
+    try:
+        text = dispatch.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return f"{stem}_psx_bios_backend" in text
+
+
+def _allow_no_bios(extra_args: list[str] | None) -> bool:
+    if not extra_args:
+        return False
+    blob = " ".join(extra_args)
+    return (
+        "PSXRECOMP_ALLOW_NO_BIOS=ON" in blob
+        or "PSXRECOMP_ALLOW_NO_BIOS:BOOL=ON" in blob
+        or "PSXRECOMP_ALLOW_NO_BIOS=1" in blob
+    )
+
+
+def _find_psxrecomp_bios(fw: Path, game_root: Path | None = None) -> Path | None:
+    names = ("psxrecomp-bios.exe", "psxrecomp-bios")
+    dirs: list[Path] = [
+        fw / "recompiler" / "build",
+        fw / "recompiler" / "build-t2",
+    ]
+    if game_root is not None:
+        dirs.append(game_root / "build-recompiler")
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for name in names:
+            p = d / name
+            if p.is_file():
+                return p
+        # Nested generator layouts (e.g. Debug/Release on MSVC)
+        for sub in d.iterdir():
+            if not sub.is_dir():
+                continue
+            for name in names:
+                p = sub / name
+                if p.is_file():
+                    return p
+    return None
+
+
+def _recompiler_build_usable(build_dir: Path) -> bool:
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return False
+    try:
+        text = cache.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    gen = ""
+    for line in text.splitlines():
+        if line.startswith("CMAKE_GENERATOR:INTERNAL="):
+            gen = line.split("=", 1)[1].strip()
+            break
+    if gen.startswith("Ninja"):
+        return (build_dir / "build.ninja").is_file()
+    if "Makefiles" in gen:
+        return (build_dir / "Makefile").is_file()
+    if gen.startswith("Visual Studio"):
+        return any(build_dir.glob("*.sln"))
+    # Unknown generator — trust the cache and let cmake --build diagnose.
+    return True
+
+
+def _iter_recompiler_build_dirs(fw: Path) -> list[Path]:
+    src = fw / "recompiler"
+    if not src.is_dir():
+        return []
+    dirs: list[Path] = []
+    for name in ("build-t2", "build"):
+        dirs.append(src / name)
+    dirs.extend(sorted(src.glob("cmake-build*")))
+    return dirs
+
+
+def _any_usable_recompiler_build(fw: Path) -> bool:
+    return any(_recompiler_build_usable(d) for d in _iter_recompiler_build_dirs(fw))
+
+
+def ensure_bios_emitter(
+    fw: Path,
+    *,
+    game_root: Path | None = None,
+    build_type: str = DEFAULT_BUILD_TYPE,
+    dry_run: bool = False,
+    log: LogFn | None = None,
+) -> CmdResult:
+    """Configure ``recompiler/build`` and build ``psxrecomp-bios`` if needed."""
+    host = detect_host()
+    if not host.cmake:
+        return CmdResult(False, "cmake not found on PATH (needed to build psxrecomp-bios)")
+
+    existing = _find_psxrecomp_bios(fw, game_root)
+    if existing is not None and not dry_run:
+        if log:
+            log(f"BIOS emitter ready: {existing}")
+        return CmdResult(True, f"BIOS emitter ready: {existing.name}")
+
+    src = fw / "recompiler"
+    if not (src / "CMakeLists.txt").is_file():
+        return CmdResult(False, f"recompiler sources missing under {src}")
+
+    # Prefer an already-finished tree (matches regen_bios.sh discovery order).
+    build_dir = src / "build"
+    for cand in _iter_recompiler_build_dirs(fw):
+        if _recompiler_build_usable(cand):
+            build_dir = cand
+            break
+
+    gen = default_generator(host)
+    cfg = [host.cmake, "-S", str(src), "-B", str(build_dir)]
+    if gen:
+        cfg.extend(["-G", gen])
+    cfg.append(f"-DCMAKE_BUILD_TYPE={build_type}")
+
+    if dry_run:
+        msg = "dry-run: " + " ".join(cfg)
+        if log:
+            log(msg)
+            log(f"dry-run: {host.cmake} --build {build_dir} --target psxrecomp-bios")
+        return CmdResult(True, msg)
+
+    if not _recompiler_build_usable(build_dir):
+        if log:
+            log("Configuring recompiler for psxrecomp-bios…")
+        build_dir.mkdir(parents=True, exist_ok=True)
+        r = _run_stream(cfg, fw, log=log)
+        if not r.ok:
+            return CmdResult(
+                False,
+                "Failed to configure recompiler (needed for OpenBIOS regen)",
+                r.detail,
+            )
+
+    jobs = str(host.jobs)
+    build_cmd = [
+        host.cmake,
+        "--build",
+        str(build_dir),
+        "--target",
+        "psxrecomp-bios",
+        "-j",
+        jobs,
+    ]
+    if log:
+        log("Building psxrecomp-bios…")
+    r = _run_stream(build_cmd, fw, log=log)
+    if not r.ok:
+        return CmdResult(False, "Failed to build psxrecomp-bios", r.detail)
+
+    bios = _find_psxrecomp_bios(fw, game_root)
+    if bios is None:
+        return CmdResult(
+            False,
+            f"psxrecomp-bios not found after build under {build_dir}",
+        )
+    return CmdResult(True, f"Built BIOS emitter: {bios.name}")
+
+
+def _regen_bios_profile(
+    fw: Path,
+    profile_rel: str,
+    *,
+    game_root: Path | None = None,
+    dry_run: bool = False,
+    log: LogFn | None = None,
+) -> CmdResult:
+    """Regen one BIOS profile into ``fw/generated/`` (canonical regen_bios.sh)."""
+    profile = fw / profile_rel
+    if not profile.is_file():
+        return CmdResult(False, f"BIOS profile missing: {profile}")
+
+    script = fw / "tools" / "regen_bios.sh"
+    bash = shutil.which("bash") or shutil.which("bash.exe")
+
+    if script.is_file() and bash:
+        cmd = [bash, str(script), "--config", profile_rel]
+        if dry_run:
+            msg = "dry-run: " + " ".join(cmd) + f"  (cwd={fw})"
+            if log:
+                log(msg)
+            return CmdResult(True, msg)
+        return _run_stream(cmd, fw, log=log)
+
+    # Fallback without bash: invoke emitter + optional fingerprint helper.
+    r = ensure_bios_emitter(fw, game_root=game_root, dry_run=dry_run, log=log)
+    if not r.ok:
+        return r
+    if dry_run:
+        return CmdResult(True, f"dry-run: psxrecomp-bios --config {profile_rel}")
+
+    bios = _find_psxrecomp_bios(fw, game_root)
+    if bios is None:
+        return CmdResult(False, "psxrecomp-bios missing after ensure")
+    (fw / "generated").mkdir(parents=True, exist_ok=True)
+    r = _run_stream([str(bios), "--config", profile_rel], fw, log=log)
+    if not r.ok:
+        return CmdResult(False, f"psxrecomp-bios failed for {profile_rel}", r.detail)
+
+    # Best-effort fingerprint (staleness WARN in runtime.cmake).
+    fp = fw / "tools" / "bios_emitter_fingerprint.sh"
+    if fp.is_file() and bash:
+        stem = OPENBIOS_STEM if "OpenBIOS" in profile_rel else SCPH1001_STEM
+        try:
+            proc = subprocess.run(
+                [bash, str(fp), profile_rel],
+                cwd=str(fw),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                out = fw / "generated" / f"{stem}.emitter.sha"
+                out.write_text(proc.stdout, encoding="utf-8")
+                if log:
+                    log(f"Wrote fingerprint {out.name}")
+        except OSError:
+            pass
+    return CmdResult(True, f"Regenerated BIOS profile {profile_rel}")
+
+
+def ensure_bios_backends(
+    root: Path,
+    *,
+    force: bool = False,
+    include_scph1001: bool = True,
+    dry_run: bool = False,
+    log: LogFn | None = None,
+) -> CmdResult:
+    """Ensure linkable OpenBIOS (and optional SCPH1001) under ``psxrecomp/generated``.
+
+    OpenBIOS is bundled and MIT-licensed. SCPH1001 is regenerated only when the
+    retail dump ``bios/SCPH1001.BIN`` is already present beside the profile.
+    """
+    root = root.expanduser().resolve()
+    fw = resolve_framework_root(root)
+    if fw is None:
+        return CmdResult(True, "No psxrecomp framework — skipping BIOS ensure")
+
+    needed: list[tuple[str, str]] = []
+    if force or not bios_backend_present(fw, OPENBIOS_STEM):
+        needed.append((OPENBIOS_STEM, OPENBIOS_PROFILE))
+    elif log:
+        log(f"OpenBIOS backend already present under {fw / 'generated'}")
+
+    scph_rom = fw / "bios" / "SCPH1001.BIN"
+    if include_scph1001 and scph_rom.is_file():
+        if force or not bios_backend_present(fw, SCPH1001_STEM):
+            needed.append((SCPH1001_STEM, SCPH1001_PROFILE))
+        elif log:
+            log("SCPH1001 backend already present")
+
+    if not needed:
+        return CmdResult(True, "BIOS backends already generated")
+
+    # Prefer regen_bios.sh (builds emitter + fingerprints). It does not configure
+    # the recompiler — ensure a usable tree (or a found binary) first.
+    script = fw / "tools" / "regen_bios.sh"
+    bash = shutil.which("bash") or shutil.which("bash.exe")
+    need_emitter_setup = not (
+        _any_usable_recompiler_build(fw) or _find_psxrecomp_bios(fw, root) is not None
+    )
+    if need_emitter_setup or not (script.is_file() and bash):
+        r = ensure_bios_emitter(fw, game_root=root, dry_run=dry_run, log=log)
+        if not r.ok:
+            return r
+
+    done: list[str] = []
+    for stem, profile in needed:
+        if log:
+            log(f"Regenerating {stem} via {profile}…")
+        r = _regen_bios_profile(
+            fw, profile, game_root=root, dry_run=dry_run, log=log
+        )
+        if not r.ok:
+            return CmdResult(
+                False,
+                f"Failed to regenerate {stem}: {r.message}",
+                r.detail,
+            )
+        if not dry_run and not bios_backend_present(fw, stem):
+            return CmdResult(
+                False,
+                f"Regen finished but {stem} backend still missing under {fw / 'generated'}",
+            )
+        done.append(stem)
+
+    return CmdResult(True, "BIOS ready: " + ", ".join(done))
+
+
 def configure(
     root: Path,
     *,
@@ -164,6 +569,7 @@ def configure(
     extra_args: list[str] | None = None,
     dry_run: bool = False,
     log: LogFn | None = None,
+    ensure_bios: bool = True,
 ) -> CmdResult:
     root = root.expanduser().resolve()
     host = detect_host()
@@ -171,6 +577,19 @@ def configure(
         return CmdResult(False, "cmake not found on PATH")
     if not (root / "CMakeLists.txt").is_file():
         return CmdResult(False, f"No CMakeLists.txt in {root}")
+
+    if ensure_bios and not _allow_no_bios(extra_args):
+        bios_r = ensure_bios_backends(root, dry_run=dry_run, log=log)
+        if not bios_r.ok:
+            return bios_r
+        if log and bios_r.message:
+            log(bios_r.message)
+
+    pre = preflight_max_players(root)
+    if pre is not None:
+        if log:
+            log(pre.message)
+        return pre
 
     bdir = Path(build_dir)
     if not bdir.is_absolute():
@@ -191,7 +610,18 @@ def configure(
 
     r = _run_stream(cmd, root, log=log)
     if r.ok:
-        r = CmdResult(True, f"Configured {bdir.name} ({build_type}" + (f", {gen}" if gen else "") + ")", r.detail)
+        r = CmdResult(
+            True,
+            f"Configured {bdir.name} ({build_type}" + (f", {gen}" if gen else "") + ")",
+            r.detail,
+        )
+        return r
+    hint = diagnose_configure_failure(r.detail or "", root)
+    if hint:
+        msg = f"{r.message}\n{hint}"
+        if log:
+            log(hint)
+        return CmdResult(False, msg, r.detail)
     return r
 
 

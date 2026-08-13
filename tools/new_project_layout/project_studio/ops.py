@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from .naming import (
     window_title_from_cmake,
     window_title_from_name,
 )
-from .paths import ci_setup_release_template, templates_dir, toolkit_dir
+from .paths import ci_setup_release_template, psxrecomp_root_from_toolkit, templates_dir, toolkit_dir
 
 
 def _run(cmd: list[str], cwd: Path, dry_run: bool) -> tuple[bool, str]:
@@ -70,6 +71,100 @@ def _is_real_psxrecomp(path: Path) -> bool:
     return (path / "runtime" / "runtime.cmake").is_file()
 
 
+def _strip_gitmodules_submodule(text: str, name: str) -> str:
+    """Remove a ``[submodule "name"]`` block (and its indented keys) from .gitmodules."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    skipping = False
+    header = f'[submodule "{name}"]'
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[submodule ") and stripped.endswith("]"):
+            skipping = stripped == header
+            if skipping:
+                continue
+        if skipping:
+            # Indented key = value lines belong to the skipped block.
+            if line[:1] in (" ", "\t") or stripped == "":
+                continue
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "".join(out)
+
+
+def _remove_psxrecomp_v4(root: Path, options: MigrateOptions) -> tuple[bool, str, list[str]]:
+    """Drop legacy ``psxrecomp-v4`` (submodule or plain tree). Prefer keeping ``psxrecomp/``."""
+    v4 = root / "psxrecomp-v4"
+    changed: list[str] = []
+    if not v4.exists():
+        return True, "psxrecomp-v4 already absent", changed
+
+    notes: list[str] = []
+    if options.dry_run:
+        return True, "dry-run: remove psxrecomp-v4 (deinit/rm or rmtree)", ["psxrecomp-v4"]
+
+    # Registered submodule: deinit + git rm cleans the gitlink and worktree.
+    gm = root / ".gitmodules"
+    gm_text = gm.read_text(encoding="utf-8") if gm.is_file() else ""
+    registered = 'path = psxrecomp-v4' in gm_text or '[submodule "psxrecomp-v4"]' in gm_text
+
+    if registered or (v4 / ".git").exists():
+        ok, out = _run(
+            ["git", "submodule", "deinit", "-f", "psxrecomp-v4"], root, False
+        )
+        if out:
+            notes.append(out if ok else f"deinit: {out}")
+        ok_rm, out_rm = _run(["git", "rm", "-f", "psxrecomp-v4"], root, False)
+        if ok_rm:
+            notes.append(out_rm or "git rm psxrecomp-v4")
+            changed.append("psxrecomp-v4")
+        else:
+            # Fallback: force-remove the directory if git rm refused (untracked tree).
+            notes.append(f"git rm: {out_rm}")
+            try:
+                if v4.is_symlink() or v4.is_file():
+                    v4.unlink()
+                elif v4.is_dir():
+                    shutil.rmtree(v4)
+                changed.append("psxrecomp-v4")
+                notes.append("removed psxrecomp-v4 via rmtree")
+            except OSError as exc:
+                return False, f"could not remove psxrecomp-v4: {exc}", changed
+    else:
+        try:
+            if v4.is_symlink() or v4.is_file():
+                v4.unlink()
+            elif v4.is_dir():
+                shutil.rmtree(v4)
+            changed.append("psxrecomp-v4")
+            notes.append("removed untracked psxrecomp-v4/")
+        except OSError as exc:
+            return False, f"could not remove psxrecomp-v4: {exc}", changed
+
+    # Ensure .gitmodules no longer lists the legacy path (git rm usually does this).
+    if gm.is_file():
+        text = gm.read_text(encoding="utf-8")
+        new = _strip_gitmodules_submodule(text, "psxrecomp-v4")
+        new = new.replace("path = psxrecomp-v4\n", "")
+        if new != text:
+            _write(gm, new, False)
+            if ".gitmodules" not in changed:
+                changed.append(".gitmodules")
+            notes.append("stripped psxrecomp-v4 from .gitmodules")
+
+    # Drop stale git modules metadata if present.
+    mod_meta = root / ".git" / "modules" / "psxrecomp-v4"
+    if mod_meta.is_dir():
+        try:
+            shutil.rmtree(mod_meta)
+            notes.append("removed .git/modules/psxrecomp-v4")
+        except OSError:
+            pass
+
+    return True, "; ".join(n for n in notes if n) or "removed psxrecomp-v4", changed
+
+
 def _resolve_tokens(root: Path, options: MigrateOptions) -> dict[str, str]:
     name = options.project_name or infer_project_name(root)
     boot = (
@@ -82,6 +177,12 @@ def _resolve_tokens(root: Path, options: MigrateOptions) -> dict[str, str]:
         detected = players_from_cmake(root / "CMakeLists.txt")
         if detected is not None:
             players = detected
+        else:
+            from .naming import players_from_game_toml
+
+            detected = players_from_game_toml(root / "game.toml")
+            if detected is not None:
+                players = detected
     title = options.window_title or window_title_from_cmake(root / "CMakeLists.txt")
     if not title:
         # Prefer game.toml window_title
@@ -124,11 +225,36 @@ def _resolve_tokens(root: Path, options: MigrateOptions) -> dict[str, str]:
 
 
 def op_rename_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Consolidate on ``psxrecomp/``: promote v4 if needed, always delete leftover v4."""
     v4 = root / "psxrecomp-v4"
     dest = root / "psxrecomp"
     changed: list[str] = []
+    parts: list[str] = []
 
     if not v4.exists() and _is_real_psxrecomp(dest):
+        # Still scrub orphan .gitmodules / CMake references to the old name.
+        scrubbed: list[str] = []
+        gm = root / ".gitmodules"
+        if gm.is_file():
+            text = gm.read_text(encoding="utf-8")
+            new = _strip_gitmodules_submodule(text, "psxrecomp-v4")
+            if new != text:
+                _write(gm, new, options.dry_run)
+                scrubbed.append(".gitmodules")
+        cmake = root / "CMakeLists.txt"
+        if cmake.is_file():
+            text = cmake.read_text(encoding="utf-8")
+            new = text.replace("psxrecomp-v4", "psxrecomp")
+            if new != text:
+                _write(cmake, new, options.dry_run)
+                scrubbed.append("CMakeLists.txt")
+        if scrubbed:
+            return ApplyResult(
+                "rename_psxrecomp_submodule",
+                True,
+                "Already using psxrecomp/; scrubbed leftover psxrecomp-v4 refs",
+                scrubbed,
+            )
         return ApplyResult("rename_psxrecomp_submodule", True, "Already using psxrecomp/", [])
 
     if not v4.exists():
@@ -136,43 +262,71 @@ def op_rename_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyR
             "rename_psxrecomp_submodule", False, "psxrecomp-v4 not found", []
         )
 
-    if dest.exists() and not _is_real_psxrecomp(dest):
-        stub_bak = root / "psxrecomp.stub.bak"
-        if options.dry_run:
-            msg = f"dry-run: move stub {dest} → {stub_bak}, then {v4} → {dest}"
-        else:
-            if stub_bak.exists():
-                shutil.rmtree(stub_bak)
-            dest.rename(stub_bak)
-            changed.append(str(stub_bak.relative_to(root)))
-            msg = f"Moved stub psxrecomp/ → {stub_bak.name}"
-    elif dest.exists() and _is_real_psxrecomp(dest):
-        # Real tree already — drop v4 submodule entry if possible
-        msg = "psxrecomp/ already real; will update .gitmodules and leave v4 for manual removal"
-    else:
-        msg = ""
-
-    if not dest.exists() or not _is_real_psxrecomp(dest):
-        ok, out = _run(["git", "mv", "psxrecomp-v4", "psxrecomp"], root, options.dry_run)
+    # Case A: real psxrecomp/ already — keep it, remove legacy v4 entirely.
+    if dest.exists() and _is_real_psxrecomp(dest):
+        ok, out, ch = _remove_psxrecomp_v4(root, options)
+        changed.extend(ch)
+        parts.append(out)
         if not ok:
-            # Fallback without git mv
+            return ApplyResult("rename_psxrecomp_submodule", False, out, changed)
+        # Removing v4 often deletes .git/modules/psxrecomp-v4 while psxrecomp/.git
+        # still points there — repair into a real submodule checkout.
+        if not options.dry_run and not _psxrecomp_git_ok(dest):
+            fix = op_repair_psxrecomp_submodule(root, options)
+            changed.extend(fix.changed_paths)
+            parts.append(fix.message)
+            if not fix.ok:
+                return ApplyResult(
+                    "rename_psxrecomp_submodule", False, "; ".join(parts), changed
+                )
+    else:
+        # Case B: stub or missing psxrecomp/ — promote v4 into place.
+        if dest.exists() and not _is_real_psxrecomp(dest):
+            stub_bak = root / "psxrecomp.stub.bak"
             if options.dry_run:
-                out = "dry-run: shutil.move psxrecomp-v4 → psxrecomp"
+                parts.append(f"dry-run: move stub {dest} → {stub_bak}")
             else:
-                shutil.move(str(v4), str(dest))
-                out = "Moved psxrecomp-v4 → psxrecomp (without git mv)"
-        changed.append("psxrecomp")
-        msg = (msg + "; " if msg else "") + out
+                if stub_bak.exists():
+                    shutil.rmtree(stub_bak)
+                dest.rename(stub_bak)
+                changed.append(str(stub_bak.relative_to(root)))
+                parts.append(f"Moved stub psxrecomp/ → {stub_bak.name}")
 
-    # Rewrite .gitmodules
+        if not dest.exists() or not _is_real_psxrecomp(dest):
+            ok, out = _run(
+                ["git", "mv", "psxrecomp-v4", "psxrecomp"], root, options.dry_run
+            )
+            if not ok:
+                if options.dry_run:
+                    out = "dry-run: shutil.move psxrecomp-v4 → psxrecomp"
+                else:
+                    shutil.move(str(v4), str(dest))
+                    out = "Moved psxrecomp-v4 → psxrecomp (without git mv)"
+            changed.append("psxrecomp")
+            parts.append(out)
+
+        # After promote, any leftover v4 path must still go (rare dual gitlink).
+        if v4.exists():
+            ok, out, ch = _remove_psxrecomp_v4(root, options)
+            changed.extend(ch)
+            parts.append(out)
+            if not ok:
+                return ApplyResult("rename_psxrecomp_submodule", False, out, changed)
+
+    # Rewrite .gitmodules: rename v4 → psxrecomp if still named v4, then strip orphans.
     gm = root / ".gitmodules"
     if gm.is_file():
         text = gm.read_text(encoding="utf-8")
         new = text.replace('path = psxrecomp-v4', "path = psxrecomp")
         new = new.replace('[submodule "psxrecomp-v4"]', '[submodule "psxrecomp"]')
+        # If both names somehow remain, drop the legacy block.
+        if '[submodule "psxrecomp-v4"]' in new or "path = psxrecomp-v4" in new:
+            new = _strip_gitmodules_submodule(new, "psxrecomp-v4")
         if new != text:
             _write(gm, new, options.dry_run)
-            changed.append(".gitmodules")
+            if ".gitmodules" not in changed:
+                changed.append(".gitmodules")
+            parts.append("updated .gitmodules")
 
     # Patch CMakeLists PSXRECOMP_ROOT path if present
     cmake = root / "CMakeLists.txt"
@@ -182,13 +336,51 @@ def op_rename_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyR
         if new != text:
             _write(cmake, new, options.dry_run)
             changed.append("CMakeLists.txt")
+            parts.append("rewrote CMakeLists psxrecomp-v4 → psxrecomp")
 
-    return ApplyResult("rename_psxrecomp_submodule", True, msg or "Renamed submodule", changed)
+    msg = "; ".join(p for p in parts if p) or "Consolidated on psxrecomp/"
+    return ApplyResult("rename_psxrecomp_submodule", True, msg, changed)
+
+
+def _gitmodules_psxrecomp_url_branch(root: Path) -> tuple[str, str]:
+    """Return (url, branch) for the game's psxrecomp submodule entry."""
+    url = "https://github.com/mstan/psxrecomp.git"
+    branch = "master"
+    gm = root / ".gitmodules"
+    if not gm.is_file():
+        return url, branch
+    text = gm.read_text(encoding="utf-8")
+    for block in re.split(r"(?=\[submodule)", text):
+        if not re.search(r"^\s*path\s*=\s*psxrecomp\s*$", block, re.M):
+            continue
+        m = re.search(r"^\s*url\s*=\s*(\S+)", block, re.M)
+        if m:
+            url = m.group(1)
+        m = re.search(r"^\s*branch\s*=\s*(\S+)", block, re.M)
+        if m:
+            branch = m.group(1)
+        break
+    return url, branch
+
+
+def _psxrecomp_git_ok(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    ok, out = _run(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        path.parent,
+        False,
+    )
+    return ok and out.strip() == "true"
 
 
 def op_ensure_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyResult:
-    if _is_real_psxrecomp(root / "psxrecomp"):
+    dest = root / "psxrecomp"
+    if _is_real_psxrecomp(dest) and _psxrecomp_git_ok(dest):
         return ApplyResult("ensure_psxrecomp_submodule", True, "Already present", [])
+    if _is_real_psxrecomp(dest) and not _psxrecomp_git_ok(dest):
+        # Tree on disk but broken gitdir — repair, don't no-op.
+        return op_repair_psxrecomp_submodule(root, options)
     url = "https://github.com/mstan/psxrecomp.git"
     ok, out = _run(
         ["git", "submodule", "add", "-b", "master", url, "psxrecomp"],
@@ -207,6 +399,162 @@ def op_ensure_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyR
         ok2,
         out2 or out or "Added psxrecomp submodule",
         ["psxrecomp", ".gitmodules"],
+    )
+
+
+def op_repair_psxrecomp_submodule(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Re-establish ``psxrecomp/`` as a real git submodule after a broken gitdir.
+
+    Moves the on-disk tree aside (``psxrecomp.broken.bak``), clears absorbed
+    index entries, then ``submodule update --init`` / ``submodule add``.
+    """
+    dest = root / "psxrecomp"
+    changed: list[str] = []
+    parts: list[str] = []
+
+    if not dest.is_dir():
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            False,
+            "psxrecomp/ missing — use ensure_psxrecomp_submodule instead",
+            [],
+        )
+
+    if _is_real_psxrecomp(dest) and _psxrecomp_git_ok(dest):
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            True,
+            "psxrecomp/ checkout already healthy",
+            [],
+        )
+
+    url, branch = _gitmodules_psxrecomp_url_branch(root)
+    if options.dry_run:
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            True,
+            f"dry-run: move psxrecomp/ aside, re-init submodule from {url}@{branch}",
+            ["psxrecomp", ".gitmodules"],
+        )
+
+    # Ensure .gitmodules lists the canonical submodule before re-init.
+    gm = root / ".gitmodules"
+    gm_text = gm.read_text(encoding="utf-8") if gm.is_file() else ""
+    if 'path = psxrecomp' not in gm_text and 'path=psxrecomp' not in gm_text:
+        block = (
+            f'[submodule "psxrecomp"]\n'
+            f"\tpath = psxrecomp\n"
+            f"\turl = {url}\n"
+            f"\tbranch = {branch}\n"
+        )
+        _write(gm, (gm_text.rstrip() + "\n\n" if gm_text.strip() else "") + block, False)
+        changed.append(".gitmodules")
+        parts.append("wrote .gitmodules psxrecomp entry")
+    else:
+        # Make sure url/branch are present on the existing block (best-effort).
+        if url and url not in gm_text:
+            parts.append(f"using url {url}")
+
+    bak = root / "psxrecomp.broken.bak"
+    if bak.exists():
+        n = 1
+        while (root / f"psxrecomp.broken.bak.{n}").exists():
+            n += 1
+        bak = root / f"psxrecomp.broken.bak.{n}"
+
+    # Drop absorbed tree from the index (mode 100644 flood) so a gitlink can land.
+    ok_rm, out_rm = _run(["git", "rm", "-rf", "--cached", "psxrecomp"], root, False)
+    if ok_rm:
+        parts.append(out_rm or "git rm --cached psxrecomp")
+    elif out_rm:
+        parts.append(f"git rm --cached: {out_rm}")
+
+    try:
+        dest.rename(bak)
+        changed.append(bak.name)
+        parts.append(f"moved broken tree → {bak.name}")
+    except OSError as exc:
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            False,
+            f"could not move broken psxrecomp/: {exc}",
+            changed,
+        )
+
+    # Prefer update --init when .gitmodules already declares the path.
+    _run(["git", "submodule", "sync", "--", "psxrecomp"], root, False)
+    ok_up, out_up = _run(
+        [
+            "git",
+            "submodule",
+            "update",
+            "--init",
+            "--force",
+            "--recursive",
+            "psxrecomp",
+        ],
+        root,
+        False,
+    )
+    if ok_up and _psxrecomp_git_ok(dest) and _is_real_psxrecomp(dest):
+        changed.append("psxrecomp")
+        parts.append(out_up or "submodule update --init psxrecomp")
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            True,
+            "; ".join(parts),
+            changed,
+        )
+
+    # Fresh add (works when no gitlink was ever recorded).
+    if dest.exists():
+        try:
+            shutil.rmtree(dest)
+        except OSError:
+            pass
+    ok_add, out_add = _run(
+        ["git", "submodule", "add", "-b", branch, "--force", url, "psxrecomp"],
+        root,
+        False,
+    )
+    if not ok_add:
+        # Restore bak so the user keeps a buildable tree.
+        if bak.exists() and not dest.exists():
+            try:
+                bak.rename(dest)
+                parts.append("restored broken tree after failed add")
+            except OSError:
+                pass
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            False,
+            f"submodule add failed: {out_add}; update: {out_up}",
+            changed,
+        )
+
+    _run(
+        ["git", "submodule", "update", "--init", "--recursive", "psxrecomp"],
+        root,
+        False,
+    )
+    if not (_psxrecomp_git_ok(dest) and _is_real_psxrecomp(dest)):
+        return ApplyResult(
+            "repair_psxrecomp_submodule",
+            False,
+            "re-init finished but psxrecomp/ still not a healthy checkout",
+            changed,
+        )
+
+    changed.append("psxrecomp")
+    if ".gitmodules" not in changed:
+        changed.append(".gitmodules")
+    parts.append(out_add or f"submodule add {url}")
+    parts.append(f"old tree kept at {bak.name} (delete when satisfied)")
+    return ApplyResult(
+        "repair_psxrecomp_submodule",
+        True,
+        "; ".join(parts),
+        changed,
     )
 
 
@@ -258,6 +606,13 @@ def op_emit_codegen_setup(root: Path, options: MigrateOptions) -> ApplyResult:
 
 
 def op_emit_version(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Write starter VERSION only when missing.
+
+    Never bump VERSION here — a newer VERSION without a rebuild leaves
+    PSX_GAME_VERSION sticky in CMakeCache / an old binary, which breaks
+    netplay lobby list filters. Releases must pin VERSION then rebuild with
+    -DPSX_GAME_VERSION=<pin> (CI / package_setup_host enforce the stamp).
+    """
     dst = root / "VERSION"
     if dst.is_file() and not options.force:
         return ApplyResult("emit_version", True, "VERSION already exists", [])
@@ -431,6 +786,58 @@ def op_emit_boxart_stub(root: Path, options: MigrateOptions) -> ApplyResult:
         True,
         "Created launcher_assets/img (add boxart.tga later)",
         ["launcher_assets/img/.gitkeep"],
+    )
+
+
+def _app_icon_source_dir(root: Path) -> Path | None:
+    """Prefer game submodule assets, then toolkit-adjacent psxrecomp checkout."""
+    for cand in (
+        root / "psxrecomp" / "assets",
+        root / "psxrecomp-v4" / "assets",
+    ):
+        if (cand / "psxrecomp.ico").is_file() or (cand / "psxrecomp.svg").is_file():
+            return cand
+    pr = psxrecomp_root_from_toolkit()
+    if pr is not None:
+        cand = pr / "assets"
+        if (cand / "psxrecomp.ico").is_file() or (cand / "psxrecomp.svg").is_file():
+            return cand
+    return None
+
+
+def op_ensure_app_icon(root: Path, options: MigrateOptions) -> ApplyResult:
+    dest_dir = root / "assets"
+    dest_ico = dest_dir / "psxrecomp.ico"
+    if dest_ico.is_file() and not options.force:
+        return ApplyResult("ensure_app_icon", True, "assets/psxrecomp.ico already present", [])
+    src_dir = _app_icon_source_dir(root)
+    if src_dir is None:
+        return ApplyResult(
+            "ensure_app_icon",
+            False,
+            "No psxrecomp/assets icon source (add psxrecomp submodule or update toolkit)",
+            [],
+        )
+    names = [n for n in ("psxrecomp.svg", "psxrecomp.png", "psxrecomp.ico") if (src_dir / n).is_file()]
+    if not names:
+        return ApplyResult("ensure_app_icon", False, f"Empty icon source: {src_dir}", [])
+    if options.dry_run:
+        return ApplyResult(
+            "ensure_app_icon",
+            True,
+            f"dry-run: copy {', '.join(names)} → assets/",
+            [f"assets/{n}" for n in names],
+        )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    changed: list[str] = []
+    for name in names:
+        shutil.copy2(src_dir / name, dest_dir / name)
+        changed.append(f"assets/{name}")
+    return ApplyResult(
+        "ensure_app_icon",
+        True,
+        f"Installed app icon from {src_dir.name}/ ({', '.join(names)})",
+        changed,
     )
 
 
@@ -676,6 +1083,7 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
 _OPS = {
     "rename_psxrecomp_submodule": op_rename_psxrecomp_submodule,
     "ensure_psxrecomp_submodule": op_ensure_psxrecomp_submodule,
+    "repair_psxrecomp_submodule": op_repair_psxrecomp_submodule,
     "ensure_recomp_ui_submodule": op_ensure_recomp_ui_submodule,
     "emit_codegen_setup": op_emit_codegen_setup,
     "emit_version": op_emit_version,
@@ -685,6 +1093,7 @@ _OPS = {
     "emit_mods_preloaded": op_emit_mods_preloaded,
     "relocate_boxart": op_relocate_boxart,
     "emit_boxart_stub": op_emit_boxart_stub,
+    "ensure_app_icon": op_ensure_app_icon,
     "rewrite_cmake_setup_host": op_rewrite_cmake_setup_host,
     "emit_packager": op_emit_packager,
     "emit_ci_workflow": op_emit_ci_workflow,

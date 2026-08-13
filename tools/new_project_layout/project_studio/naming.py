@@ -282,6 +282,10 @@ def build_token_map(
             '    # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
         )
 
+    app_icon = (
+        '    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"'
+    )
+
     return {
         "PROJECT_CMAKE_NAME": cmake_name,
         "WINDOW_TITLE": title,
@@ -302,6 +306,7 @@ def build_token_map(
         "NETPLAY_LOBBY_URL_ARG": netplay_lobby,
         "WIZARD_RUNTIME_ARG": wizard_runtime,
         "BOXART_CMAKE_ARG": boxart,
+        "APP_ICON_CMAKE_ARG": app_icon,
         "NETPLAY_CMAKE_BLOCK": netplay_block,
         "WIZARD_CMAKE_BLOCK": wizard_block,
         "RECOMP_UI_CMAKE_BLOCK": recomp_ui_block,

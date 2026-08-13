@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PSXRecomp">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a2332"/>
+      <stop offset="100%" stop-color="#0d121a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="100%" stop-color="#2dd4bf"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Classic pad silhouette (outline only) -->
+  <path fill="none" stroke="url(#accent)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"
+        d="M156 210 C156 178 178 156 210 156 H302 C334 156 356 178 356 210 V248 C356 268 348 286 334 298 L372 360 C380 374 372 392 356 392 H328 C312 392 300 382 294 368 L278 328 H234 L218 368 C212 382 200 392 184 392 H156 C140 392 132 374 140 360 L178 298 C164 286 156 268 156 248 Z"/>
+  <!-- D-pad -->
+  <path fill="none" stroke="url(#accent)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"
+        d="M214 236 V268 M198 252 H230"/>
+  <!-- Face buttons -->
+  <circle cx="298" cy="236" r="10" fill="url(#accent)"/>
+  <circle cx="318" cy="252" r="10" fill="url(#accent)" opacity="0.85"/>
+  <circle cx="298" cy="268" r="10" fill="url(#accent)" opacity="0.7"/>
+  <circle cx="278" cy="252" r="10" fill="url(#accent)" opacity="0.85"/>
+</svg>

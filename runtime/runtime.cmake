@@ -733,6 +733,7 @@ function(psxrecomp_add_runtime_target target)
         EXE_NAME
         GAME_VERSION
         MAX_PLAYERS
+        APP_ICON
     )
     # GAME_GENERATED_FULL_C is a list (not a single value): the split-TU build
     # writes the recompiled game as N full_NN.c shards instead of one
@@ -873,6 +874,39 @@ function(psxrecomp_add_runtime_target target)
         set(_psxrt_exe_name "${_psxrt_exe_name}_oracle")
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
+
+    # ---- Windows / desktop app icon ---------------------------------------
+    # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
+    # the framework default shipped in psxrecomp/assets (RetComM-themed pad).
+    if(NOT PSXRT_APP_ICON)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico")
+            set(PSXRT_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico")
+        elseif(EXISTS "${PSXRECOMP_ROOT}/assets/psxrecomp.ico")
+            set(PSXRT_APP_ICON "${PSXRECOMP_ROOT}/assets/psxrecomp.ico")
+        endif()
+    endif()
+    if(PSXRT_APP_ICON AND EXISTS "${PSXRT_APP_ICON}")
+        if(WIN32)
+            string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
+            set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
+            file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
+            target_sources(${target} PRIVATE "${_psxrt_rc}")
+            message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON}")
+        endif()
+        # Stage PNG beside the exe when present (AppImage / desktop / docs).
+        get_filename_component(_psxrt_ico_dir "${PSXRT_APP_ICON}" DIRECTORY)
+        set(_psxrt_png "${_psxrt_ico_dir}/psxrecomp.png")
+        if(EXISTS "${_psxrt_png}")
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target}>/assets"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_psxrt_png}"
+                    "$<TARGET_FILE_DIR:${target}>/assets/psxrecomp.png"
+                COMMENT "Staging psxrecomp.png app icon"
+                VERBATIM)
+        endif()
+    endif()
 
     # ---- overlay codegen hash (auto cache key) -----------------------------
     # Hash the recompiler's codegen sources into runtime/include/overlay_codegen_hash.h
@@ -1053,6 +1087,19 @@ function(psxrecomp_add_runtime_target target)
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
+    )
+
+    # Stamp the lobby pin next to the exe (and in the build tree). Packagers
+    # must ship VERSION == this stamp — rewriting VERSION after the build
+    # caused Twisted Metal 4 installs where VERSION said 0.3.8 but the binary
+    # still filtered lobbies as 0.3.7.
+    file(GENERATE
+        OUTPUT "$<TARGET_FILE_DIR:${target}>/psx_game_version.txt"
+        CONTENT "${PSXRT_GAME_VERSION}\n"
+    )
+    file(GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/psx_game_version.txt"
+        CONTENT "${PSXRT_GAME_VERSION}\n"
     )
 
     # OpenBIOS is part of the native runtime product, not a developer-machine
@@ -1450,6 +1497,7 @@ endfunction()
 #     CODEGEN_SETUP_SOURCES codegen_setup.c
 #     DEFAULT_GAME_CONFIG_PATH "game.toml"
 #     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
+#     APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
 #     MAX_PLAYERS 2
 #     ENABLE_NETPLAY_IF_PRESENT
 #     ENABLE_SETUP_WIZARD
@@ -1520,6 +1568,17 @@ function(psxrecomp_add_game_runtime target)
     message(STATUS
         "psxrecomp game_version: ${PSX_GAME_VERSION} "
         "(from VERSION=${_psxg_release_version})")
+    if(NOT "${PSX_GAME_VERSION}" STREQUAL ""
+       AND NOT "${PSX_GAME_VERSION}" MATCHES "\\$<"
+       AND NOT "${_psxg_release_version}" STREQUAL ""
+       AND NOT "${_psxg_release_version}" STREQUAL "0.0.0"
+       AND NOT "${PSX_GAME_VERSION}" STREQUAL "${_psxg_release_version}")
+        message(WARNING
+            "PSX_GAME_VERSION=${PSX_GAME_VERSION} differs from VERSION file "
+            "(${_psxg_release_version}). Sticky CMakeCache after a VERSION bump "
+            "causes netplay lobby list mismatches. Reconfigure with "
+            "-DPSX_GAME_VERSION=${_psxg_release_version} or delete the build cache.")
+    endif()
 
     # Prefer game-root recomp-ui (runtime.cmake also auto-discovers this).
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")

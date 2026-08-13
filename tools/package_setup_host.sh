@@ -20,10 +20,14 @@
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
 # Env:
-#   RELEASE_VERSION / <version-env> / VERSION file
+#   RELEASE_VERSION / <version-env> / VERSION file  (must match binary stamp)
 #   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR  (only with --embed-toolchain)
 #   PSXRECOMP_EMBED_TOOLCHAIN=1  same as --embed-toolchain
 #   PSXRECOMP_RUNTIME_BIN_DIR | BPE_RUNTIME_BIN_DIR  (Windows MinGW DLL search)
+#
+# Lobby pin: the host exe must have been built with current runtime.cmake so
+# $<TARGET_FILE_DIR>/psx_game_version.txt exists. This script refuses to ship a
+# VERSION file that disagrees with that stamp (netplay list filter bug).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -108,35 +112,28 @@ if [[ ${#PROJECT_FILES[@]} -eq 0 && ${#PROJECT_DIRS[@]} -eq 0 ]]; then
   done
 fi
 
-# Resolve version.
-VERSION=""
+# Resolve *requested* version from env / VERSION file (may be empty until stamp).
+REQUESTED=""
 if [[ -n "${VERSION_ENV}" ]]; then
-  VERSION="${!VERSION_ENV:-}"
+  REQUESTED="${!VERSION_ENV:-}"
 fi
-if [[ -z "${VERSION}" && -n "${RELEASE_VERSION:-}" ]]; then
-  VERSION="${RELEASE_VERSION}"
+if [[ -z "${REQUESTED}" && -n "${RELEASE_VERSION:-}" ]]; then
+  REQUESTED="${RELEASE_VERSION}"
 fi
-if [[ -z "${VERSION}" && -n "${BPE_RELEASE_VERSION:-}" ]]; then
-  VERSION="${BPE_RELEASE_VERSION}"
+if [[ -z "${REQUESTED}" && -n "${BPE_RELEASE_VERSION:-}" ]]; then
+  REQUESTED="${BPE_RELEASE_VERSION}"
 fi
-if [[ -z "${VERSION}" && -f "${ROOT}/VERSION" ]]; then
-  VERSION="$(tr -d '[:space:]' <"${ROOT}/VERSION")"
+if [[ -z "${REQUESTED}" && -f "${ROOT}/VERSION" ]]; then
+  REQUESTED="$(tr -d '[:space:]' <"${ROOT}/VERSION")"
 fi
-VERSION="$(printf '%s' "${VERSION}" | tr -d '[:space:]')"
-VERSION="${VERSION#v}"
-if [[ -z "${VERSION}" ]]; then
-  echo "error: VERSION empty (set ${VERSION_ENV} / RELEASE_VERSION or write VERSION)" >&2
-  exit 1
-fi
-printf '%s\n' "${VERSION}" >"${ROOT}/VERSION"
+REQUESTED="$(printf '%s' "${REQUESTED}" | tr -d '[:space:]')"
+REQUESTED="${REQUESTED#v}"
 
 DIST="${ROOT}/dist"
 STAGE="${DIST}/stage-setup-${ARTIFACT}"
-ZIP_NAME="${ZIP_PREFIX}-${VERSION}-${ARTIFACT}.zip"
 
 rm -rf "${STAGE}"
 mkdir -p "${STAGE}" "${DIST}"
-rm -f "${DIST}/${ZIP_NAME}"
 
 EXE=""
 for cand in \
@@ -155,7 +152,51 @@ if [[ -z "${EXE}" ]]; then
   exit 1
 fi
 
+# Authoritative lobby pin = stamp written at compile time next to the exe
+# (see runtime.cmake file(GENERATE) psx_game_version.txt). Never invent a
+# newer VERSION for the zip than what was baked into PSX_GAME_VERSION.
+normalize_ver() {
+  local v
+  v="$(printf '%s' "${1:-}" | tr -d '[:space:]')"
+  v="${v#v}"
+  printf '%s' "${v}"
+}
+BUILT=""
+for stamp in \
+  "$(dirname "${EXE}")/psx_game_version.txt" \
+  "${BUILD_DIR}/psx_game_version.txt" \
+  "${BUILD_DIR}/Release/psx_game_version.txt"
+do
+  if [[ -f "${stamp}" ]]; then
+    BUILT="$(normalize_ver "$(cat "${stamp}")")"
+    echo "lobby pin stamp: ${stamp} -> ${BUILT}"
+    break
+  fi
+done
+if [[ -z "${BUILT}" ]]; then
+  echo "error: missing psx_game_version.txt next to ${EXE}" >&2
+  echo "  Rebuild with current psxrecomp runtime.cmake so the lobby pin is stamped." >&2
+  echo "  Refusing to package (VERSION file alone can drift from PSX_GAME_VERSION)." >&2
+  exit 1
+fi
+if [[ -n "${REQUESTED}" && "${REQUESTED}" != "${BUILT}" ]]; then
+  echo "error: RELEASE_VERSION/VERSION=${REQUESTED} but binary stamp=${BUILT}" >&2
+  echo "  Rebuild with -DPSX_GAME_VERSION=${REQUESTED} (or pin VERSION then reconfigure)," >&2
+  echo "  then re-run this packager. Shipping mismatched pins breaks netplay lobby lists." >&2
+  exit 1
+fi
+VERSION="${BUILT}"
+printf '%s\n' "${VERSION}" >"${ROOT}/VERSION"
+ZIP_NAME="${ZIP_PREFIX}-${VERSION}-${ARTIFACT}.zip"
+rm -f "${DIST}/${ZIP_NAME}"
+
 cp -a "${EXE}" "${STAGE}/"
+# Ship the stamp beside the exe so installers / RetComM can prefer it over VERSION.
+if [[ -f "$(dirname "${EXE}")/psx_game_version.txt" ]]; then
+  cp -a "$(dirname "${EXE}")/psx_game_version.txt" "${STAGE}/psx_game_version.txt"
+else
+  printf '%s\n' "${VERSION}" >"${STAGE}/psx_game_version.txt"
+fi
 EXE_BASENAME="$(basename "${EXE}")"
 EXE_DIR="$(dirname "${EXE}")"
 

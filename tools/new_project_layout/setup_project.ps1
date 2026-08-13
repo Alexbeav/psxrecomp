@@ -304,6 +304,8 @@ set(PSX_SETUP_WIZARD ON CACHE BOOL
 
 Set-Content -Encoding UTF8 -Path $BoxartBlockFile -Value '    # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
 $HasBoxart = $false
+$AppIconBlockFile = Join-Path $env:TEMP "psxrecomp_app_icon_block.cmake"
+Set-Content -Encoding UTF8 -Path $AppIconBlockFile -Value '    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"'
 
 function Fill-Template([string]$src, [string]$dst) {
     python $FillTokens $src $dst `
@@ -326,6 +328,7 @@ function Fill-Template([string]$src, [string]$dst) {
         --set "NETPLAY_LOBBY_URL_ARG=$NetplayLobbyUrlArg" `
         --set "WIZARD_RUNTIME_ARG=$WizardRuntimeArg" `
         --set-file "BOXART_CMAKE_ARG=$BoxartBlockFile" `
+        --set-file "APP_ICON_CMAKE_ARG=$AppIconBlockFile" `
         --set-file "NETPLAY_CMAKE_BLOCK=$NetplayBlockFile" `
         --set-file "WIZARD_CMAKE_BLOCK=$WizardBlockFile" `
         --set-file "RECOMP_UI_CMAKE_BLOCK=$RecompUiBlockFile" `
@@ -366,6 +369,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Root "launcher_assets\img"
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "scripts") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "tools") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "mods\preloaded\packages") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "assets") | Out-Null
 # Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
 @'
 # Preloaded mods
@@ -392,8 +396,24 @@ if ($useRecompUi) {
 }
 git submodule update --init --recursive
 
+# RetComM-themed default app icon (Windows .ico + PNG for packaging).
+$iconSrc = Join-Path $Root "psxrecomp\assets"
+$iconDst = Join-Path $Root "assets"
+if (Test-Path $iconSrc) {
+    New-Item -ItemType Directory -Force -Path $iconDst | Out-Null
+    foreach ($name in @("psxrecomp.svg", "psxrecomp.png", "psxrecomp.ico")) {
+        $src = Join-Path $iconSrc $name
+        if (Test-Path $src) {
+            Copy-Item -Force $src (Join-Path $iconDst $name)
+        }
+    }
+}
+
 git -C psxrecomp checkout --detach -q HEAD
 git add psxrecomp
+if (Test-Path $iconDst) {
+    git add assets 2>$null
+}
 if ($useRecompUi) {
     git -C recomp-ui checkout --detach -q HEAD
     git add recomp-ui

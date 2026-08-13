@@ -458,9 +458,10 @@ fi
 NETPLAY_BLOCK_FILE=$(mktemp)
 WIZARD_BLOCK_FILE=$(mktemp)
 BOXART_BLOCK_FILE=$(mktemp)
+APP_ICON_BLOCK_FILE=$(mktemp)
 RECOMP_UI_BLOCK_FILE=$(mktemp)
 CODEGEN_ARG_FILE=$(mktemp)
-trap 'rm -f "$NETPLAY_BLOCK_FILE" "$WIZARD_BLOCK_FILE" "$BOXART_BLOCK_FILE" "$RECOMP_UI_BLOCK_FILE" "$CODEGEN_ARG_FILE"' EXIT
+trap 'rm -f "$NETPLAY_BLOCK_FILE" "$WIZARD_BLOCK_FILE" "$BOXART_BLOCK_FILE" "$APP_ICON_BLOCK_FILE" "$RECOMP_UI_BLOCK_FILE" "$CODEGEN_ARG_FILE"' EXIT
 
 if [ "$ENABLE_RECOMP_UI" -eq 1 ]; then
     printf '%s\n' '# recomp-ui submodule present (PSX_RECOMP_UI defaults ON).' \
@@ -512,6 +513,8 @@ fi
 printf '%s\n' '    # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"' \
     >"$BOXART_BLOCK_FILE"
 HAS_BOXART=0
+printf '%s\n' '    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"' \
+    >"$APP_ICON_BLOCK_FILE"
 
 fill_template() {
     src=$1
@@ -536,6 +539,7 @@ fill_template() {
         --set "NETPLAY_LOBBY_URL_ARG=$NETPLAY_LOBBY_URL_ARG" \
         --set "WIZARD_RUNTIME_ARG=$WIZARD_RUNTIME_ARG" \
         --set-file "BOXART_CMAKE_ARG=$BOXART_BLOCK_FILE" \
+        --set-file "APP_ICON_CMAKE_ARG=$APP_ICON_BLOCK_FILE" \
         --set-file "NETPLAY_CMAKE_BLOCK=$NETPLAY_BLOCK_FILE" \
         --set-file "WIZARD_CMAKE_BLOCK=$WIZARD_BLOCK_FILE" \
         --set-file "RECOMP_UI_CMAKE_BLOCK=$RECOMP_UI_BLOCK_FILE" \
@@ -574,7 +578,7 @@ fill_template "$TEMPLATE_DIR/VERSION.in" "$ROOT/VERSION"
 fill_template "$TEMPLATE_DIR/README.md.in" "$ROOT/README.md"
 fill_template "$TEMPLATE_DIR/symbols.toml.in" "$ROOT/symbols.toml"
 mkdir -p "$ROOT/seeds" "$ROOT/launcher_assets/img" "$ROOT/scripts" "$ROOT/tools" \
-    "$ROOT/mods/preloaded/packages"
+    "$ROOT/mods/preloaded/packages" "$ROOT/assets"
 cp "$SCRIPT_DIR/sync_symbols.py" "$ROOT/tools/sync_symbols.py"
 chmod +x "$ROOT/tools/sync_symbols.py"
 # Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
@@ -602,8 +606,21 @@ if [ "$ENABLE_RECOMP_UI" -eq 1 ]; then
 fi
 git submodule update --init --recursive
 
+# RetComM-themed default app icon (Windows .ico + PNG for packaging).
+if [ -d psxrecomp/assets ]; then
+    mkdir -p "$ROOT/assets"
+    for _icon in psxrecomp.svg psxrecomp.png psxrecomp.ico; do
+        if [ -f "psxrecomp/assets/$_icon" ]; then
+            cp -f "psxrecomp/assets/$_icon" "$ROOT/assets/$_icon"
+        fi
+    done
+fi
+
 git -C psxrecomp checkout --detach -q HEAD
 git add psxrecomp
+if [ -d "$ROOT/assets" ]; then
+    git add assets 2>/dev/null || true
+fi
 if [ "$ENABLE_RECOMP_UI" -eq 1 ]; then
     git -C recomp-ui checkout --detach -q HEAD
     git add recomp-ui

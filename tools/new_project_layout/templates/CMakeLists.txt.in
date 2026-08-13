@@ -21,6 +21,7 @@ psxrecomp_add_game_runtime(psx-runtime
     DEFAULT_GAME_CONFIG_PATH "game.toml"
     MAX_PLAYERS @PLAYERS@
 @BOXART_CMAKE_ARG@
+@APP_ICON_CMAKE_ARG@
     GEN_MARKER "generated/@BOOT_EXE@_dispatch.c"
     GEN_FULL_GLOB "generated/@BOOT_EXE@_full_*.c"
 @CODEGEN_SETUP_ARG@

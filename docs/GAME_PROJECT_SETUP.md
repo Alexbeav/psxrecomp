@@ -257,6 +257,10 @@ YourGameRecomp/                 # your git repo
 ├── framework_pins.txt          # optional scaffold snapshot (gitlinks are authoritative)
 ├── README.md                   # scaffold stub (legal + quick start)
 ├── VERSION                     # release pin (e.g. 0.1.0)
+├── assets/
+│   ├── psxrecomp.ico           # default Windows app icon (RetComM-themed pad)
+│   ├── psxrecomp.png           # staged beside exe / packaging
+│   └── psxrecomp.svg           # source mark (see psxrecomp/assets/)
 ├── seeds/ghidra_funcs.txt      # probe: boot-EXE JAL seeds (grow over time)
 ├── codegen_setup.c / .h        # title PsxrecompCodegenHostConfig (+ apply hooks)
 ├── launcher_assets/img/
@@ -296,6 +300,7 @@ psxrecomp_add_game_runtime(psx-runtime
   CODEGEN_SETUP_SOURCES codegen_setup.c
   DEFAULT_GAME_CONFIG_PATH "game.toml"
   LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
+  APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
 )
 ```
 
