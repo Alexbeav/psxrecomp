@@ -105,7 +105,7 @@ else
   exit 1
 fi
 
-SYSTEM_DLL_RE='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|WINMM|IMM32|SETUPAPI|VERSION|OPENGL32|COMCTL32|COMDLG32|RPCRT4|SHLWAPI|CRYPT32|BCRYPT|IPHLPAPI|NSI|DNSAPI|MSVCRT|UCRTBASE|VCRUNTIME|API-MS-).*\.DLL$'
+SYSTEM_DLL_RE='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|WINMM|IMM32|SETUPAPI|VERSION|OPENGL32|COMCTL32|COMDLG32|RPCRT4|SHLWAPI|CRYPT32|BCRYPT|IPHLPAPI|NSI|DNSAPI|MSVCRT|UCRTBASE|VCRUNTIME|DBGHELP|API-MS-).*\.DLL$'
 
 PROBE_DLLS=(
   SDL2.dll
@@ -118,10 +118,70 @@ PROBE_DLLS=(
   libssp-0.dll
 )
 
+# Always ship these next to MinGW GCC-built hosts when any GCC runtime is imported.
+# libssp-0 is often needed for stack-smashing builds even when not listed on the
+# main PE import table (pulled in via fortify / -fstack-protector).
+ALWAYS_RUNTIME_DLLS=(
+  libgcc_s_seh-1.dll
+  libstdc++-6.dll
+  libwinpthread-1.dll
+  libssp-0.dll
+)
+
+dll_name_eq() {
+  local a b
+  a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  b="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+  [[ "${a}" == "${b}" ]]
+}
+
+is_always_runtime_dll() {
+  local dll="$1" cand
+  for cand in "${ALWAYS_RUNTIME_DLLS[@]}"; do
+    if dll_name_eq "${cand}" "${dll}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Avoid `objdump | grep -q` under pipefail: grep -q exits early → objdump SIGPIPE
+# → pipeline fails even when the DLL Name line matched.
+list_exe_imports() {
+  local exe="$1"
+  # shellcheck disable=SC2016
+  "${OBJDUMP}" -p "${exe}" 2>/dev/null \
+    | awk '/DLL Name:/{print $3}' \
+    || true
+}
+
 exe_imports_dll() {
   local exe="$1"
   local dll="$2"
-  "${OBJDUMP}" -p "${exe}" 2>/dev/null | grep -qi "DLL Name:[[:space:]]*${dll}"
+  local name
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    if dll_name_eq "${name}" "${dll}"; then
+      return 0
+    fi
+  done < <(list_exe_imports "${exe}")
+  return 1
+}
+
+exe_needs_mingw_runtime() {
+  local exe="$1" dll
+  for dll in "${ALWAYS_RUNTIME_DLLS[@]}"; do
+    if exe_imports_dll "${exe}" "${dll}"; then
+      return 0
+    fi
+  done
+  # Common GCC runtime names even if ALWAYS list changes.
+  for dll in libgcc_s_seh-1.dll libstdc++-6.dll; do
+    if exe_imports_dll "${exe}" "${dll}"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 bundle_one() {
@@ -132,6 +192,7 @@ bundle_one() {
   local -a needed=()
   local -a unique=()
   local -a candidates=()
+  local -a imported=()
   local -A seen=()
 
   if [[ ! -f "${exe}" ]]; then
@@ -146,13 +207,19 @@ bundle_one() {
   fi
   mkdir -p "${dest_dir}"
 
+  mapfile -t imported < <(list_exe_imports "${exe}")
   mapfile -t needed < <(
-    "${OBJDUMP}" -p "${exe}" 2>/dev/null \
-      | awk '/DLL Name:/{print $3}' \
+    printf '%s\n' "${imported[@]}" \
       | grep -viE "${SYSTEM_DLL_RE}" \
       | sort -u || true
   )
   needed+=("${PROBE_DLLS[@]}")
+  needed+=("${ALWAYS_RUNTIME_DLLS[@]}")
+
+  local ship_mingw_rt=0
+  if exe_needs_mingw_runtime "${exe}"; then
+    ship_mingw_rt=1
+  fi
 
   for dll in "${needed[@]}"; do
     [[ -n "${dll}" ]] || continue
@@ -165,7 +232,11 @@ bundle_one() {
   done
 
   for dll in "${unique[@]}"; do
-    if ! exe_imports_dll "${exe}" "${dll}"; then
+    if exe_imports_dll "${exe}" "${dll}"; then
+      :
+    elif [[ "${ship_mingw_rt}" -eq 1 ]] && is_always_runtime_dll "${dll}"; then
+      : # companion MinGW runtime (e.g. libssp-0) even if not on PE import table
+    else
       continue
     fi
     src=""
@@ -229,11 +300,16 @@ for dll in "${REQUIRE[@]}"; do
     if [[ -z "${dest}" ]]; then
       dest="$(dirname "${exe}")"
     fi
-    if ! exe_imports_dll "${exe}" "${dll}"; then
+    # --require on ALWAYS_RUNTIME_DLLS: enforce whenever the PE needs MinGW RT.
+    if exe_imports_dll "${exe}" "${dll}"; then
+      :
+    elif is_always_runtime_dll "${dll}" && exe_needs_mingw_runtime "${exe}"; then
+      :
+    else
       continue
     fi
     if [[ ! -f "${dest}/${dll}" ]]; then
-      echo "error: $(basename "${exe}") imported ${dll} but it is missing under ${dest}" >&2
+      echo "error: $(basename "${exe}") needs ${dll} but it is missing under ${dest}" >&2
       exit 1
     fi
   done
