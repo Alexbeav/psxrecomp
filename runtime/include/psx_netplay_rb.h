@@ -86,7 +86,8 @@ int  psx_netplay_rb_fmv_media_active(void);
 
 /* 1 during FMV media + short settle (§26) — admit waits for remote wire.
  * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle.
- * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires). */
+ * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires).
+ * §111: post-FMV heal sticky invent-hold only while remote_lead > 0. */
 int  psx_netplay_rb_lockstep_no_invent(void);
 
 /* §93/§94: 1 while MAX-unmatched DESYNC invent-hold is armed (not media/settle).
@@ -104,6 +105,9 @@ void psx_netplay_rb_request_post_fmv_heal_kf(void);
 /* §110: 1 while post-FMV lockstep, DESYNC hold, or heal sticky — hc-fork
  * may open apply-only KF even when invent is held. */
 int  psx_netplay_rb_post_fmv_heal_eligible(void);
+
+/* §111: 1 while heal sticky window is live (invent hold may be tip-lead only). */
+int  psx_netplay_rb_post_fmv_heal_sticky(void);
 
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
  * hold). Begin/follow/hc-fork must not open episodes that load there.

@@ -1241,11 +1241,39 @@ static int rb_in_fmv_defer_rewind_window(void)
     return sim < g_fmv_settle_until;
 }
 
+/* §111: sticky invent hold only when we would invent *ahead* of the peer
+ * (absurd catch-up through a soft fork). Tip-starved lead<=0 must invent or
+ * admit deadlocks (Win↔Linux loading-screen soak: follow NACK + lead=-1 →
+ * stall=fmv_settle → lobby). */
+static int rb_post_fmv_heal_sticky_invent_hold(uint32_t sim)
+{
+    RNetSession *s;
+    RNetSessionStats st;
+    if (g_post_fmv_heal_sticky_until == 0u || sim >= g_post_fmv_heal_sticky_until)
+        return 0;
+    s = sess();
+    if (!s)
+        return 1;
+    memset(&st, 0, sizeof(st));
+    rnet_session_get_stats(s, &st);
+    /* remote_lead > 0 → invent would catch up through the fork — hold.
+     * lead <= 0 → fill tip hole; allow invent. */
+    return (st.remote_lead > 0) ? 1 : 0;
+}
+
+static int rb_post_fmv_heal_sticky_active(uint32_t sim)
+{
+    return (g_post_fmv_heal_sticky_until > 0u && sim < g_post_fmv_heal_sticky_until)
+               ? 1
+               : 0;
+}
+
 /* Admit no-invent gate (§26): media + short settle only.
  * §100: invent stays OFF during live media even with MEDIA_KF — GAP1 invent
  * was opening ~3.7 MB KF transfers mid-intro FMV. Wait for wire; real
  * rewinds still open episodes (defer_rewind allows MEDIA_KF). Settle +
- * DESYNC invent-hold unchanged. */
+ * DESYNC invent-hold unchanged.
+ * §110/§111: heal sticky invent hold only while remote_lead > 0. */
 static int rb_in_fmv_lockstep_window(void)
 {
     RNetSession *s = sess();
@@ -1256,8 +1284,7 @@ static int rb_in_fmv_lockstep_window(void)
         return 1;
     if (g_fmv_unmatched_desync)
         return 1;
-    /* §110: invent hold through heal sticky (post-FMV loading hitch). */
-    if (g_post_fmv_heal_sticky_until > 0u && sim < g_post_fmv_heal_sticky_until)
+    if (rb_post_fmv_heal_sticky_invent_hold(sim))
         return 1;
     return sim < g_fmv_settle_until;
 }
@@ -6760,6 +6787,13 @@ int psx_netplay_rb_post_fmv_heal_eligible(void)
     return rb_post_fmv_heal_eligible();
 }
 
+int psx_netplay_rb_post_fmv_heal_sticky(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    return rb_post_fmv_heal_sticky_active(sim);
+}
+
 void psx_netplay_rb_request_post_fmv_heal_kf(void)
 {
     if (!rb_post_fmv_heal_eligible())
@@ -8025,23 +8059,30 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
         return;
     }
     (void)rb_in_fmv_defer_rewind_window();
-    /* Same policy as begin: do not follow into media/lockstep tip episodes. */
-    if (rb_in_fmv_lockstep_window()) {
-        fprintf(stderr,
-                "psxrecomp: rb follow REFUSED epoch=%u load=%u — FMV lockstep%s\n",
-                (unsigned)epoch, (unsigned)load,
-                g_fmv_unmatched_desync ? " [DESYNC hold]" : "");
-        fflush(stderr);
-        g_follow_nack_pending = 1;
-        g_follow_nack_epoch = epoch;
-        g_follow_nack_mismatch = mismatch;
-        g_follow_nack_load = load;
-        g_follow_nack_target = target;
-        g_follow_nack_slot = slot;
-        g_follow_nack_sends = 0;
-        send_follow_nack(epoch, mismatch, load, target, slot, 1);
-        g_follow_nack_sends = 1;
-        return;
+    /* Same policy as begin (§109/§111): refuse tip episodes through
+     * media/lockstep/sticky, but allow MEDIA_KF / post-FMV heal follows —
+     * NACKing heal while sticky invent-held tip-starves both peers. */
+    {
+        int media_ep = (wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
+                       rb_want_heal_kf(mismatch, load);
+        if (rb_in_fmv_lockstep_window() &&
+            !(rb_media_kf_enabled() && media_ep)) {
+            fprintf(stderr,
+                    "psxrecomp: rb follow REFUSED epoch=%u load=%u — FMV lockstep%s\n",
+                    (unsigned)epoch, (unsigned)load,
+                    g_fmv_unmatched_desync ? " [DESYNC hold]" : "");
+            fflush(stderr);
+            g_follow_nack_pending = 1;
+            g_follow_nack_epoch = epoch;
+            g_follow_nack_mismatch = mismatch;
+            g_follow_nack_load = load;
+            g_follow_nack_target = target;
+            g_follow_nack_slot = slot;
+            g_follow_nack_sends = 0;
+            send_follow_nack(epoch, mismatch, load, target, slot, 1);
+            g_follow_nack_sends = 1;
+            return;
+        }
     }
     /* §93 refuse / §97 MEDIA_KF follow into prior FMV bout. */
     {

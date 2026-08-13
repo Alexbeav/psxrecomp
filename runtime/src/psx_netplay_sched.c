@@ -95,6 +95,8 @@ static const char *np_gate_lockstep_stall_tag(void *ctx)
         return "fmv_media";
     if (psx_netplay_rb_fmv_desync_hold())
         return "fmv_desync_hold";
+    if (psx_netplay_rb_post_fmv_heal_sticky())
+        return "heal_sticky";
     return "fmv_settle";
 }
 
