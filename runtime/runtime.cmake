@@ -1101,13 +1101,21 @@ function(psxrecomp_add_runtime_target target)
         PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"
         PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
-        PSX_BUILD_REV="${PSX_GIT_REV}"
-        PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
+    )
+    # Version / git rev change often on package updates. Keep them off the
+    # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+    )
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_BUILD_REV=\"${PSX_GIT_REV}\""
     )
 
     # Stamp the lobby pin next to the exe (and, on multi-config, in the build

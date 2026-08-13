@@ -180,6 +180,11 @@ static uint32_t g_auth_snap_through;
 /* Set after apply-from-pump/admit; flushed via psx_netplay_rb_flush_resume. */
 static int g_pending_resume_valid;
 static uint32_t g_pending_resume_pc;
+/* §112: load==target (apply-only / post-FMV heal) — defer enter_verify_at_tip
+ * until flush_resume so longjmp arms top-level resume before Verify/Live.
+ * Entering Verify first blocked flush (Replay-only gate) then finalize cleared
+ * pending → leaf PC=0 / "execution completed" (Win↔Linux TM4 loading). */
+static int g_empty_span_verify_pending;
 /* 1 only after a successful ring load for this episode — blocks baseline/replay
  * until restore (peer BASELINE can arrive while we are still sealing). */
 static int g_episode_snap_applied;
@@ -2153,6 +2158,7 @@ static void abort_episode(const char *why)
     if (!g_live_realign_pending)
         g_pending_load_valid = 0;
     g_pending_resume_valid = 0;
+    g_empty_span_verify_pending = 0;
     g_episode_snap_applied = 0;
     g_needs_advance = 0;
     g_episode_baseline_matched = 0;
@@ -3980,6 +3986,7 @@ static void enter_awaiting_baseline(void)
     g_pending_load_tick = load;
     g_pending_load_valid = 1;
     g_pending_resume_valid = 0;
+    g_empty_span_verify_pending = 0;
     g_baseline_rexmit_logged = 0;
     g_wait_peer_bl_logged = 0;
     fprintf(stderr, "psxrecomp: rb episode load_tick=%u (snap pending)\n", (unsigned)load);
@@ -4437,7 +4444,17 @@ static void arm_rereplay_after_load(uint32_t reload_tick)
     if (first > target) {
         rnet_session_set_sim_tick(s, reload_tick);
         g_needs_advance = 0;
-        enter_verify_at_tip(reload_tick);
+        /* §112: if resume still pending, stay Replay until flush_resume. */
+        if (g_pending_resume_valid) {
+            g_empty_span_verify_pending = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb rereplay empty span load=target=%u "
+                    "(defer verify; resume_pending=1)\n",
+                    (unsigned)reload_tick);
+            fflush(stderr);
+        } else {
+            enter_verify_at_tip(reload_tick);
+        }
         return;
     }
     /* Reset Live tip clock — TipHold invent may sit past the prior tip; arming
@@ -4693,7 +4710,10 @@ static void maybe_enter_replay(void)
         uint32_t target = rnet_rb_get_target_tick(g_rb);
         uint32_t first = load + 1u;
         if (first > target) {
-            /* Seal span empty — restored tip is already the target. */
+            /* Seal span empty — restored tip is already the target.
+             * §112: stay in Replay when resume is pending so flush_resume can
+             * longjmp (and enter Verify) before Live. Immediate enter_verify
+             * blocked flush then finalize cleared pending → PC=0 exit. */
             rnet_session_set_sim_tick(s, load);
             g_needs_advance = 0;
             fprintf(stderr,
@@ -4702,7 +4722,15 @@ static void maybe_enter_replay(void)
                     (unsigned)load, g_pending_resume_valid, g_peer_baseline_ready,
                     follower);
             fflush(stderr);
-            enter_verify_at_tip(load);
+            if (g_pending_resume_valid) {
+                g_empty_span_verify_pending = 1;
+                fprintf(stderr,
+                        "psxrecomp: rb empty span defer verify "
+                        "(flush_resume will POST)\n");
+                fflush(stderr);
+            } else {
+                enter_verify_at_tip(load);
+            }
         } else {
             rnet_session_set_sim_tick(s, first);
             /* Arm before flush_resume: after longjmp the guest runs to the
@@ -4916,7 +4944,9 @@ static void ownership_chain_next_span(uint32_t tip, uint32_t frontier)
     /* §51 Layer 3: continue from matched tip — restore pin on apply (§70). */
     g_ownership_skip_snap = g_pin_valid && g_pin_tick == tip ? 1 : 0;
     g_episode_snap_applied = 0;
-    g_pending_resume_valid = 0;
+    /* §112: do not clear g_pending_resume_valid — empty-span heal may still
+     * owe flush_resume; next begin/apply re-arms or flush consumes it. */
+    g_empty_span_verify_pending = 0;
     g_episode_baseline_matched = 0;
     clear_episode_wire_state();
     /* Keep g_pin — do not clear_baseline_pin(). */
@@ -5483,7 +5513,10 @@ static void finalize_tip_hold(void)
     clear_tip_extend_prime();
     g_needs_advance = 0;
     g_episode_snap_applied = 0;
-    g_pending_resume_valid = 0;
+    /* §112: keep pending_resume across tip-hold Live so apply-only / empty-span
+     * heal can still flush_resume (live_realign gate once episode inactive).
+     * Normal Replay already cleared it before POST. */
+    g_empty_span_verify_pending = 0;
     g_episode_baseline_matched = 0;
     clear_episode_wire_state();
     clear_baseline_pin();
@@ -6094,6 +6127,7 @@ void psx_netplay_rb_shutdown(void)
     g_pending_load_valid = 0;
     g_auth_snap_through = 0; /* §75 */
     g_pending_resume_valid = 0;
+    g_empty_span_verify_pending = 0;
     g_episode_snap_applied = 0;
     g_needs_advance = 0;
     g_live_realign_pending = 0;
@@ -6587,11 +6621,26 @@ void psx_netplay_rb_flush_resume(void)
         fflush(stderr);
         if (!alt) {
             g_pending_resume_valid = 0;
+            g_empty_span_verify_pending = 0;
             abort_episode("flush_resume: no safe resume pc");
             return;
         }
         pc = alt;
         g_pending_resume_pc = alt;
+    }
+    /* §112: empty-span POST while still on the flush path — enter_verify may
+     * immediately ownership_exit_to_live/finalize (clears pending); we still
+     * longjmp below with the captured pc so top-level resume is armed. */
+    if (g_empty_span_verify_pending && g_rb &&
+        rnet_rb_get_phase(g_rb) == nRNetRbPhaseReplay) {
+        uint32_t tip = rnet_rb_get_target_tick(g_rb);
+        g_empty_span_verify_pending = 0;
+        fprintf(stderr,
+                "psxrecomp: rb flush_resume empty-span verify tip=%u "
+                "pc=0x%08x\n",
+                (unsigned)tip, (unsigned)pc);
+        fflush(stderr);
+        enter_verify_at_tip(tip);
     }
     g_pending_resume_valid = 0;
     g_replay_progress_ms = rb_mono_ms();
@@ -7606,6 +7655,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
+    g_empty_span_verify_pending = 0;
     g_needs_advance = 0;
     g_seal_export_logged = 0;
     /* §85: freeze catch-up at this begin's target (before mid-Replay wire). */
@@ -8271,6 +8321,7 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
+    g_empty_span_verify_pending = 0;
     g_needs_advance = 0;
     g_seal_export_logged = 0;
     g_follow_nack_pending = 0;
