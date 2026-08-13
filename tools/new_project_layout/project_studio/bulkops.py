@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -86,9 +87,17 @@ def map_repos(
 
     all_results: list[CmdResult] = []
     lock = threading.Lock()
+
+    def run_staggered(index: int, label: str, root: Path) -> list[CmdResult]:
+        # Spread HTTPS/DNS starts so parallel=4 bulk pull is less likely to flake.
+        if index > 0:
+            time.sleep(0.2 * (index % jobs))
+        return run_one(label, root)
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
-            pool.submit(run_one, label, root): (label, root) for label, root in repos
+            pool.submit(run_staggered, i, label, root): (label, root)
+            for i, (label, root) in enumerate(repos)
         }
         for fut in as_completed(futures):
             batch = fut.result()

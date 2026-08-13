@@ -10,6 +10,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -106,8 +107,103 @@ def _run(
     return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
 
 
-def _git(cwd: Path, *args: str, dry_run: bool = False) -> tuple[int, str, str]:
-    return _run(["git", *args], cwd, dry_run=dry_run)
+# Git verbs / patterns that talk to a remote (DNS / TLS / HTTP).
+_GIT_NETWORK_VERBS = frozenset(
+    {"fetch", "pull", "push", "clone", "ls-remote"}
+)
+
+# Transient reachability failures (DNS blips, TLS resets, GitHub 5xx/429, etc.).
+_TRANSIENT_GIT_NETWORK_MARKERS = (
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "nodename nor servname provided",
+    "failed to connect",
+    "failed to connect to",
+    "connection timed out",
+    "connection refused",
+    "connection reset by peer",
+    "network is unreachable",
+    "no route to host",
+    # Note: do not match bare "unable to access" — that also covers 401/403 auth.
+    "the remote end hung up unexpectedly",
+    "ssl_error_syscall",
+    "ssl connection timeout",
+    "tls handshake timeout",
+    "gnutls_handshake",
+    "openssl ssl_read",
+    "openssl ssl_connect",
+    "empty reply from server",
+    "operation timed out",
+    "transfer closed with outstanding read data remaining",
+    "rpc failed",
+    "recv failure",
+    "early eof",
+    "http/2 stream",
+    "http 429",
+    "http 502",
+    "http 503",
+    "http 504",
+    "error: 429",
+    "error: 502",
+    "error: 503",
+    "error: 504",
+    "server aborted the request",
+)
+
+# Default: 4 attempts with 1s / 2s / 4s backoff (covers bulk-pull DNS flakes).
+_GIT_NETWORK_ATTEMPTS = 4
+_GIT_NETWORK_BASE_DELAY_S = 1.0
+
+
+def _git_args_need_network(args: tuple[str, ...]) -> bool:
+    for i, a in enumerate(args):
+        if a in _GIT_NETWORK_VERBS:
+            return True
+        if a == "submodule" and i + 1 < len(args) and args[i + 1] in (
+            "update",
+            "add",
+        ):
+            return True
+        if a == "remote" and i + 1 < len(args) and args[i + 1] == "update":
+            return True
+    return False
+
+
+def _is_transient_git_network_error(stdout: str, stderr: str) -> bool:
+    blob = f"{stdout}\n{stderr}".lower()
+    return any(m in blob for m in _TRANSIENT_GIT_NETWORK_MARKERS)
+
+
+def _git(
+    cwd: Path,
+    *args: str,
+    dry_run: bool = False,
+    network_attempts: int | None = None,
+) -> tuple[int, str, str]:
+    """Run git. Network-touching verbs retry on transient DNS/connect errors."""
+    if dry_run or not _git_args_need_network(args):
+        return _run(["git", *args], cwd, dry_run=dry_run)
+
+    attempts = (
+        _GIT_NETWORK_ATTEMPTS if network_attempts is None else max(1, int(network_attempts))
+    )
+    code, out, err = 1, "", ""
+    for attempt in range(1, attempts + 1):
+        code, out, err = _run(["git", *args], cwd, dry_run=False)
+        if code == 0:
+            if attempt > 1:
+                note = f"(git network: succeeded on attempt {attempt}/{attempts})"
+                out = f"{out}\n{note}".strip() if out else note
+            return code, out, err
+        if attempt < attempts and _is_transient_git_network_error(out, err):
+            time.sleep(_GIT_NETWORK_BASE_DELAY_S * (2 ** (attempt - 1)))
+            continue
+        if attempt > 1 and _is_transient_git_network_error(out, err):
+            note = f"(git network: failed after {attempts} attempts)"
+            err = f"{err}\n{note}".strip() if err else note
+        return code, out, err
+    return code, out, err
 
 
 def current_branch(root: Path) -> str | None:
@@ -835,7 +931,7 @@ def list_remote_head_branches(url: str) -> list[str]:
     url = (url or "").strip()
     if not url:
         return []
-    code, out, _ = _run(["git", "ls-remote", "--heads", url], Path.cwd())
+    code, out, _ = _git(Path.cwd(), "ls-remote", "--heads", url)
     if code != 0:
         return []
     names: set[str] = set()
