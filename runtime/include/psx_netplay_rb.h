@@ -97,6 +97,10 @@ int  psx_netplay_rb_fmv_desync_hold(void);
  * when the hold expires. Episode media-range refuse is unchanged. */
 void psx_netplay_rb_clear_fmv_desync_hold(const char *why);
 
+/* §109: next begin_rewind is an apply-only MEDIA_KF heal (target=load).
+ * Call from hc-fork / resim-diverge escalate before begin_rewind. */
+void psx_netplay_rb_request_post_fmv_heal_kf(void);
+
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
  * hold). Begin/follow/hc-fork must not open episodes that load there.
  * §97 MEDIA_KF (default on): returns 0 for media-range — episodes allowed. */

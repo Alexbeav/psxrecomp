@@ -38,6 +38,7 @@ int psx_netplay_rb_fmv_media_active(void) { return 0; }
 int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
 int psx_netplay_rb_fmv_desync_hold(void) { return 0; }
 void psx_netplay_rb_clear_fmv_desync_hold(const char *why) { (void)why; }
+void psx_netplay_rb_request_post_fmv_heal_kf(void) {}
 int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick) { (void)tick; return 0; }
 int psx_netplay_rb_media_kf_probe_match(uint32_t size, uint32_t crc)
 {
@@ -414,11 +415,16 @@ static int g_pin_valid;
  * before Replay (probe CRC, transfer on miss). Default ON; set
  * PSX_NET_FMV_MEDIA_KF=0 to restore §93 refuse / invent-off during media.
  * §100: invent stays off during live media (lockstep); KF still heals real
- * rewinds. Present hold-last while probe/xfer runs. */
+ * rewinds. Present hold-last while probe/xfer runs.
+ * §109: also armed for post-FMV silent hc-fork (apply-only target=load). */
 static int g_media_kf_episode;
 static int g_media_kf_ready;      /* pin holds authoritative KF for load */
 static int g_media_kf_host_armed; /* host started probe/send for this episode */
 static int g_media_kf_sending;    /* host transfer in flight */
+/* §109: this episode is a post-FMV / DESYNC apply-only heal (no resim span). */
+static int g_post_fmv_heal_kf;
+/* §109: hc-fork / resim-escalate asked for apply-only heal on next begin. */
+static int g_request_post_fmv_heal;
 
 /* §100: recent FMV media snap CRCs — prefer choose_load ticks we already
  * sealed, and let probe_match confirm without a ring edge-case miss. */
@@ -887,6 +893,19 @@ static void ownership_exit_to_live(uint32_t tip, uint32_t frontier,
             "psxrecomp: rb ownership Live tip=%u frontier=%u (%s) — no TipHold\n",
             (unsigned)tip, (unsigned)frontier, why ? why : "?");
     fflush(stderr);
+    /* §109: apply-only heal converged — drop DESYNC invent-hold / heal flag. */
+    if (g_post_fmv_heal_kf) {
+        rb_clear_fmv_desync_hold("post-FMV heal KF Live");
+        g_post_fmv_heal_kf = 0;
+        g_fmv_core_match_streak = RB_FMV_LOCKSTEP_CONFIRM;
+        if (!g_fmv_lockstep_released) {
+            g_fmv_lockstep_released = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb FMV lockstep RELEASE (post-FMV heal KF tip=%u)\n",
+                    (unsigned)tip);
+            fflush(stderr);
+        }
+    }
     if (g_stash_begin_valid && g_rb &&
         g_stash_begin_epoch == rnet_rb_get_epoch_id(g_rb)) {
         g_stash_begin_valid = 0;
@@ -1601,6 +1620,9 @@ static void clear_episode_wire_state(void)
     g_media_kf_ready = 0;
     g_media_kf_host_armed = 0;
     g_media_kf_sending = 0;
+    /* §109: g_post_fmv_heal_kf survives wire clear — begin sets it before
+     * clear and re-arms MEDIA_KF from it afterward. Cleared when a new
+     * begin starts without heal, or episode ends. */
 }
 
 /* §97: default ON — invent/episodes into FMV media with host keyframe. */
@@ -1612,6 +1634,44 @@ static int rb_media_kf_enabled(void)
         latched = (e && e[0] == '0') ? 0 : 1;
     }
     return latched;
+}
+
+/* §109: post-FMV dense lockstep / DESYNC-hold window — tip-snap SPAN cannot
+ * heal silent core forks (Win↔Linux soak: digs match @2368, FIRST CORE @2380,
+ * resim diverge same tick, media_kf=0 → MAX unmatched). Force MEDIA_KF. */
+static int rb_post_fmv_lockstep_active(void)
+{
+    RNetSession *s;
+    uint32_t sim;
+    uint32_t cap;
+    if (!g_fmv_media_end_sim)
+        return 0;
+    if (rb_fmv_media_active())
+        return 0;
+    if (g_fmv_unmatched_desync)
+        return 1;
+    if (g_fmv_lockstep_released)
+        return 0;
+    s = sess();
+    sim = s ? rnet_session_sim_tick(s) : 0u;
+    cap = g_fmv_media_end_sim + RB_FMV_LOCKSTEP_MAX + RB_FMV_UNLOCK_GRACE;
+    if (g_fmv_lockstep_until > cap)
+        cap = g_fmv_lockstep_until + RB_FMV_UNLOCK_GRACE;
+    return sim <= cap ? 1 : 0;
+}
+
+/* §109/§97: arm host keyframe for media-range OR requested post-FMV heal. */
+static int rb_want_heal_kf(uint32_t mismatch, uint32_t load)
+{
+    if (!rb_media_kf_enabled())
+        return 0;
+    if (rb_fmv_tick_unsafe_for_episode(load) ||
+        rb_fmv_tick_unsafe_for_episode(mismatch))
+        return 1;
+    /* Only when hc-fork / escalate asked — not every post-FMV pad episode. */
+    if (g_request_post_fmv_heal || g_post_fmv_heal_kf)
+        return 1;
+    return 0;
 }
 
 static void clear_baseline_pin(void);
@@ -2187,6 +2247,38 @@ static void abort_episode_realign(const char *why)
                         (unsigned)g_bl_fork_cap);
                 fflush(stderr);
             }
+        }
+        /* §109: first post-FMV tip-SPAN resim diverge → request apply-only
+         * heal KF instead of burning the load into fork_cap / storming. */
+        if (g_resim_diverge_streak == 1u && !g_post_fmv_heal_kf &&
+            rb_media_kf_enabled() &&
+            (rb_post_fmv_lockstep_active() || g_fmv_unmatched_desync)) {
+            uint32_t failed_load = g_rb ? rnet_rb_get_load_tick(g_rb) : 0u;
+            fprintf(stderr,
+                    "psxrecomp: rb post-FMV heal escalate "
+                    "(resim diverge sim=%u load=%u — next begin apply-only KF)\n",
+                    (unsigned)g_resim_diverge_tick, (unsigned)failed_load);
+            fflush(stderr);
+            /* Undo fork_cap raise so heal can reload the same pin. */
+            if (failed_load > 0u && g_bl_fork_cap == failed_load)
+                g_bl_fork_cap = 0u;
+            g_request_post_fmv_heal = 1;
+            g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
+            g_abort_wire_realign_tick = 0u;
+            abort_episode(why);
+            clear_rewind_cooldown("post-FMV heal escalate");
+            /* Host reopens immediately as apply-only KF; guest FOLLOWs. */
+            {
+                int local = g_b.local_slot ? *g_b.local_slot : 0;
+                int remote = (local == 0) ? 1 : 0;
+                int n = g_b.slot_count ? *g_b.slot_count : 0;
+                if (n < 2)
+                    remote = local;
+                if (local == 0 && g_resim_diverge_tick > 0u)
+                    (void)psx_netplay_rb_begin_rewind(g_resim_diverge_tick,
+                                                      remote);
+            }
+            return;
         }
         if (g_resim_diverge_streak >= RB_RESIM_DIVERGE_STORM_LIMIT) {
             fprintf(stderr,
@@ -3285,9 +3377,8 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
          * every fmv_media_snap_interval. Raise the walk to mismatch-1 so
          * Start-during-FMV loads ~tip; probe/transfer makes the pin identical. */
         int media_kf_near = 0;
-        if (rb_media_kf_enabled() &&
-            (rb_fmv_tick_unsafe_for_episode(mismatch) ||
-             rb_fmv_tick_unsafe_for_episode(mismatch - 1u)))
+        /* §97 media bout + §109 post-FMV heal: tip snaps are mutual under KF. */
+        if (rb_want_heal_kf(mismatch, mismatch > 0u ? mismatch - 1u : 0u))
             media_kf_near = 1;
         if (hi > mismatch - 1u)
             hi = mismatch - 1u;
@@ -3379,9 +3470,8 @@ static int choose_load_tick_inner(uint32_t mismatch, uint32_t *out_load)
     /* §99/§100: tip-slack with FMV media interval when MEDIA_KF covers the
      * bout. Prefer ticks whose CRC we already cached (peer more likely to
      * hash-match and skip the 3.7 MB xfer). */
-    if (rb_media_kf_enabled() && mismatch > 0u &&
-        (rb_fmv_tick_unsafe_for_episode(mismatch) ||
-         rb_fmv_tick_unsafe_for_episode(mismatch - 1u))) {
+    if (rb_want_heal_kf(mismatch, mismatch > 0u ? mismatch - 1u : 0u) &&
+        mismatch > 0u) {
         uint32_t miv = fmv_media_snap_interval();
         uint32_t mcap = mismatch - 1u;
         uint32_t fallback = 0u;
@@ -4861,6 +4951,20 @@ static void ownership_on_post_match(uint32_t tip)
             (unsigned)tip, (unsigned)frontier, (unsigned)min_ahead);
     fflush(stderr);
     ownership_clear_chain_budget();
+    /* §109: heal KF reached tip with no confirmed ahead — still converged. */
+    if (g_post_fmv_heal_kf) {
+        rb_clear_fmv_desync_hold("post-FMV heal KF tip-hold");
+        g_post_fmv_heal_kf = 0;
+        g_fmv_core_match_streak = RB_FMV_LOCKSTEP_CONFIRM;
+        if (!g_fmv_lockstep_released) {
+            g_fmv_lockstep_released = 1;
+            fprintf(stderr,
+                    "psxrecomp: rb FMV lockstep RELEASE "
+                    "(post-FMV heal KF tip-hold tip=%u)\n",
+                    (unsigned)tip);
+            fflush(stderr);
+        }
+    }
     /* §61: discard any stashed BEGIN for this episode (rexmit) so Live does
      * not reopen it. */
     if (g_stash_begin_valid && g_rb &&
@@ -6553,13 +6657,28 @@ void psx_netplay_rb_clear_fmv_desync_hold(const char *why)
     rb_clear_fmv_desync_hold(why);
 }
 
+void psx_netplay_rb_request_post_fmv_heal_kf(void)
+{
+    if (!rb_media_kf_enabled())
+        return;
+    if (!rb_post_fmv_lockstep_active() && !g_fmv_unmatched_desync)
+        return;
+    g_request_post_fmv_heal = 1;
+    fprintf(stderr,
+            "psxrecomp: rb post-FMV heal KF requested "
+            "(hc-fork / silent core fork)\n");
+    fflush(stderr);
+}
+
 int psx_netplay_rb_fmv_episode_unsafe(uint32_t tick)
 {
     (void)rb_in_fmv_defer_rewind_window();
-    /* §97: MEDIA_KF allows episodes into media-range (begin arms keyframe).
-     * DESYNC invent-hold still blocks. */
-    if (rb_media_kf_enabled() && !g_fmv_unmatched_desync)
+    /* §97/§109: MEDIA_KF allows episodes into media-range and post-FMV /
+     * DESYNC-hold silent-fork heals (begin arms keyframe). Without KF,
+     * DESYNC invent-hold and media-range still block. */
+    if (rb_media_kf_enabled())
         return 0;
+    (void)tick;
     return rb_fmv_tick_unsafe_for_episode(tick);
 }
 
@@ -7035,8 +7154,11 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
      * §103: ownership SPAN after MEDIA-KF must continue through re-armed
      * settle (session 142: tip=776 frontier=835 refused → tip-hold hang). */
     (void)rb_in_fmv_defer_rewind_window();
+    /* §109: MEDIA_KF heal may open through media/settle/DESYNC hold. */
     if (rb_in_fmv_lockstep_window() && !g_ownership_chain &&
-        !(g_media_kf_episode && rb_media_kf_enabled())) {
+        !(rb_media_kf_enabled() &&
+          (g_media_kf_episode || g_request_post_fmv_heal || g_post_fmv_heal_kf ||
+           (g_fmv_unmatched_desync && g_request_post_fmv_heal)))) {
         static uint32_t s_fmv_refuse_sim;
         if (s_fmv_refuse_sim != sim) {
             fprintf(stderr,
@@ -7278,6 +7400,28 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         fflush(stderr);
         target = load + RB_MAX_RESIM_SPAN;
     }
+    /* §109: hc-fork / escalate requested apply-only heal — host KF at load,
+     * no resim span (Replay re-forks Win↔Linux at the same tick). Ordinary
+     * pad-mispredict begins in the post-FMV window still SPAN with MEDIA_KF. */
+    if (g_request_post_fmv_heal && rb_media_kf_enabled() &&
+        (rb_post_fmv_lockstep_active() || g_fmv_unmatched_desync) &&
+        !rb_fmv_media_active()) {
+        if (target > load) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin post-FMV heal KF CAP target %u→%u "
+                    "(apply-only; mismatch=%u load=%u)\n",
+                    (unsigned)target, (unsigned)load,
+                    (unsigned)mismatch_tick, (unsigned)load);
+            fflush(stderr);
+            target = load;
+        }
+        g_post_fmv_heal_kf = 1;
+        g_request_post_fmv_heal = 0;
+        g_ownership_chain = 0;
+        g_ownership_chain_frontier = 0;
+        ownership_clear_chain_budget();
+        g_peer_ahead_light_episode = 0;
+    }
 
     memset(&corr, 0, sizeof(corr));
     /* Slot-partitioned epoch id: (counter << bits) | initiator_slot. Dual
@@ -7296,7 +7440,7 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
      * ceiling comes from the session's configured light_tip_max_depth
      * (== RB_MOTK_TIP_RUNWAY), not the library default — see
      * psx_netplay_rb_start(). §93/§97: never light-tip into/near FMV media. */
-    if (g_agreed_valid &&
+    if (g_agreed_valid && !g_post_fmv_heal_kf &&
         !rb_fmv_tick_unsafe_for_episode(load) &&
         !rb_fmv_tick_unsafe_for_episode(target) &&
         rnet_rb_is_light_tip_candidate_ex(load, target, g_agreed_through,
@@ -7307,14 +7451,24 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     rnet_rb_begin_episode(g_rb, &corr);
     psx_netplay_timesync_on_episode_boundary();
     clear_episode_wire_state();
-    /* §97: arm MEDIA_KF after wire clear (clear resets the flag). */
-    if (rb_media_kf_enabled() &&
-        (rb_fmv_tick_unsafe_for_episode(load) ||
-         rb_fmv_tick_unsafe_for_episode(mismatch_tick))) {
-        g_media_kf_episode = 1;
-        g_media_kf_ready = 0;
-        g_media_kf_host_armed = 0;
-        g_media_kf_sending = 0;
+    /* §97/§109: arm MEDIA_KF after wire clear (clear resets media_kf_*). */
+    {
+        int post_heal = (rb_post_fmv_lockstep_active() || g_fmv_unmatched_desync) &&
+                        !rb_fmv_media_active() &&
+                        !rb_fmv_tick_unsafe_for_episode(load) &&
+                        !rb_fmv_tick_unsafe_for_episode(mismatch_tick);
+        /* g_post_fmv_heal_kf may already be set when we CAP'd target=load. */
+        if (g_post_fmv_heal_kf)
+            post_heal = 1;
+        if (rb_want_heal_kf(mismatch_tick, load) || post_heal) {
+            g_media_kf_episode = 1;
+            g_media_kf_ready = 0;
+            g_media_kf_host_armed = 0;
+            g_media_kf_sending = 0;
+            g_post_fmv_heal_kf = post_heal ? 1 : 0;
+        } else {
+            g_post_fmv_heal_kf = 0;
+        }
     }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;
@@ -7341,9 +7495,10 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
     export_local_seals();
     fprintf(stderr,
             "psxrecomp: rb begin epoch=%u mismatch=%u load=%u target=%u slot=%d "
-            "light=%u media_kf=%d (snaps=%u %u..%u local_slot=%d)\n",
+            "light=%u media_kf=%d heal=%d (snaps=%u %u..%u local_slot=%d)\n",
             (unsigned)corr.epoch_id, (unsigned)mismatch_tick, (unsigned)load, (unsigned)target,
             slot, (unsigned)rnet_rb_recommend_light_tip(g_rb), g_media_kf_episode,
+            g_post_fmv_heal_kf,
             (unsigned)snap_n, (unsigned)snap_lo, (unsigned)snap_hi,
             g_b.local_slot ? *g_b.local_slot : -1);
     fflush(stderr);
@@ -7791,8 +7946,7 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     /* §93 refuse / §97 MEDIA_KF follow into prior FMV bout. */
     {
         int media_ep = (wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
-                       rb_fmv_tick_unsafe_for_episode(load) ||
-                       rb_fmv_tick_unsafe_for_episode(mismatch);
+                       rb_want_heal_kf(mismatch, load);
         if (media_ep && !rb_media_kf_enabled() &&
             !(wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF)) {
             fprintf(stderr,
@@ -7844,8 +7998,7 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
                        load == g_agreed_through);
         int media_kf_ok = rb_media_kf_enabled() &&
                           ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
-                           rb_fmv_tick_unsafe_for_episode(load) ||
-                           rb_fmv_tick_unsafe_for_episode(mismatch));
+                           rb_want_heal_kf(mismatch, load));
         if (!skip_ok && !media_kf_ok) {
             fprintf(stderr,
                     "psxrecomp: rb follow REFUSED epoch=%u load=%u — snap missing "
@@ -7959,12 +8112,19 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     clear_episode_wire_state();
     if (rb_media_kf_enabled() &&
         ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) ||
-         rb_fmv_tick_unsafe_for_episode(load) ||
-         rb_fmv_tick_unsafe_for_episode(mismatch))) {
+         rb_want_heal_kf(mismatch, load))) {
         g_media_kf_episode = 1;
         g_media_kf_ready = 0;
         g_media_kf_host_armed = 0;
         g_media_kf_sending = 0;
+        /* §109: apply-only heal when initiator CAP'd target to load. */
+        g_post_fmv_heal_kf =
+            ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) && target == load &&
+             (rb_post_fmv_lockstep_active() || g_fmv_unmatched_desync))
+                ? 1
+                : 0;
+    } else {
+        g_post_fmv_heal_kf = 0;
     }
     g_episode_snap_applied = 0;
     g_pending_resume_valid = 0;

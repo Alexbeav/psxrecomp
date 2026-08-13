@@ -4835,3 +4835,41 @@ ICE-relay vs SFU). Too many signals for CGNAT reachability SFU already covers.
 **Re-soak watch:** start logs `use_sfu=true reason=always_sfu`; both peers
 `server input relay — LAN transport to …`; no `ice_p2p` / `ice_required`
 on online MotK; no-ICE Desktop guests connect; Force TURN only affects D floor.
+
+## 109. Post-FMV silent hc-fork → apply-only MEDIA_KF heal (2026-08-13)
+
+**Soak (TM4 Win↔CachyOS 2P session 26):** digs matched through sim 2368 after
+FMV settle; `FIRST CORE DIVERGE @2380` with **no pad mispredict**; host opened
+`begin … load=2368 media_kf=0`; both `ABORT — resim core diverge @2380`; then
+`DESYNC — FMV lockstep MAX unmatched`. Transport/admit stayed up — tip-snap
+SPAN cannot heal undigested / cross-OS forks once sealed Replay re-diverges.
+
+**Root cause:** §54 hc-fork after settle used mutual tip snaps without a host
+keyframe. §26 unlocks invent/hc-fork after settle (24) while dense lockstep
+CONFIRM still runs to MIN=180 — so the doomed SPAN fires inside the confirm
+window. `media_kf=0` because load was past the media/settle unsafe range.
+
+**What landed (§109):**
+
+1. **`psx_netplay_rb_request_post_fmv_heal_kf`** — hc-fork (and first post-FMV
+   resim-diverge escalate) request an apply-only heal on the next begin.
+2. **Begin** — when requested: arm `MEDIA_KF`, **CAP target→load** (no Replay
+   span), wire `RNET_RB_SYNC_FLAG_MEDIA_KF`. Host transfers raw snap; both
+   install pin and Verify at load.
+3. **choose_load / follow** — treat post-FMV lockstep + DESYNC hold like
+   media-range for MEDIA_KF mutual snaps / missing-snap OK.
+4. **hc-fork gate** — allow through DESYNC invent-hold when MEDIA_KF can heal;
+   still block live media + settle.
+5. **On heal Live/tip-hold** — clear DESYNC invent-hold and RELEASE lockstep.
+6. **Pad-mispredict** begins in the post-FMV window still SPAN (optionally with
+   MEDIA_KF via `rb_want_heal_kf`); only silent-fork recovery is apply-only.
+
+**Re-soak watch (Win↔Linux 2P through title FMV):**
+
+- After settle expect `post-FMV heal KF requested` then
+  `begin … media_kf=1 heal=1` / `post-FMV heal KF CAP target …→load`.
+- `MEDIA-KF probe` / hash match or transfer; `post sent tip=<load>`;
+  `FMV lockstep RELEASE (post-FMV heal KF …)`.
+- No `ABORT — resim core diverge` on that heal episode; no
+  `DESYNC — FMV lockstep MAX unmatched` from the same cutover.
+- Linux↔Linux control still clean; 3P WIRE_HOLE is a separate bug class.
