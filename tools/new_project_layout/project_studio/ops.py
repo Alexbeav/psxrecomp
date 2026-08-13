@@ -464,6 +464,11 @@ def op_rewrite_cmake_setup_host(root: Path, options: MigrateOptions) -> ApplyRes
 
     _fill(templates_dir() / "CMakeLists.txt.in", cmake, tokens, options.dry_run)
 
+    go = root / "game_options.toml"
+    if not go.is_file():
+        _fill(templates_dir() / "game_options.toml.in", go, tokens, options.dry_run)
+        changed.append("game_options.toml")
+
     if extras_bits and not options.dry_run:
         extras_note.write_text(
             "Preserved notes after setup-host CMake rewrite:\n\n"

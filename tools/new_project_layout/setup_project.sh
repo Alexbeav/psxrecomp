@@ -566,6 +566,7 @@ git init -q
 
 fill_template "$TEMPLATE_DIR/CMakeLists.txt.in" "$ROOT/CMakeLists.txt"
 fill_template "$TEMPLATE_DIR/game.toml.in" "$ROOT/game.toml"
+fill_template "$TEMPLATE_DIR/game_options.toml.in" "$ROOT/game_options.toml"
 fill_template "$TEMPLATE_DIR/codegen_setup.c.in" "$ROOT/codegen_setup.c"
 fill_template "$TEMPLATE_DIR/codegen_setup.h.in" "$ROOT/codegen_setup.h"
 fill_template "$TEMPLATE_DIR/gitignore.in" "$ROOT/.gitignore"

@@ -354,6 +354,7 @@ git init -q
 
 Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
 Fill-Template (Join-Path $TemplateDir "game.toml.in") (Join-Path $Root "game.toml")
+Fill-Template (Join-Path $TemplateDir "game_options.toml.in") (Join-Path $Root "game_options.toml")
 Fill-Template (Join-Path $TemplateDir "codegen_setup.c.in") (Join-Path $Root "codegen_setup.c")
 Fill-Template (Join-Path $TemplateDir "codegen_setup.h.in") (Join-Path $Root "codegen_setup.h")
 Fill-Template (Join-Path $TemplateDir "gitignore.in") (Join-Path $Root ".gitignore")
