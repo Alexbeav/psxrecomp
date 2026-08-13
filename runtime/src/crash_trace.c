@@ -58,6 +58,10 @@ static const char *kBuildId = PSX_BUILD_REV " (" __DATE__ " " __TIME__ ")";
 /* CPU state pointer (set by debug server at init). */
 extern CPUState *debug_cpu_ptr;
 
+/* Main RAM (2 MiB) and scratchpad — peeks in the crash report, no MMIO. */
+extern uint8_t *g_psx_ram;
+extern uint8_t *memory_get_scratchpad_ptr(void);
+
 /* Frame counter from debug_server.c (non-static). */
 extern uint64_t s_frame_count;
 
@@ -123,6 +127,51 @@ static void json_escape(const char *in, char *out, size_t outcap) {
         else if (ch >= 0x20)         { out[o++] = (char)ch; }
     }
     out[o] = 0;
+}
+
+/* Copy `len` guest bytes at `vaddr` into `dst`. DRAM (2 MiB, mirrored across
+ * the first 8 MiB of each KSEG) or scratchpad only — never MMIO. Returns
+ * bytes copied (0 if the address is not in those regions). */
+static int crash_peek_guest(uint32_t vaddr, uint8_t *dst, int len) {
+    uint32_t phys = vaddr & 0x1FFFFFFFu;
+    if (len <= 0) return 0;
+    if (phys >= 0x1F800000u && phys < 0x1F800400u) {
+        uint8_t *sp = memory_get_scratchpad_ptr();
+        if (!sp) return 0;
+        uint32_t off = phys - 0x1F800000u;
+        if (off + (uint32_t)len > 0x400u) len = (int)(0x400u - off);
+        memcpy(dst, sp + off, (size_t)len);
+        return len;
+    }
+    if (phys < 0x00800000u && g_psx_ram) {
+        uint32_t folded = phys & 0x1FFFFFu;
+        if (folded + (uint32_t)len > 0x200000u) len = (int)(0x200000u - folded);
+        if (len <= 0) return 0;
+        memcpy(dst, g_psx_ram + folded, (size_t)len);
+        return len;
+    }
+    return 0;
+}
+
+static void append_hex_bytes(char *buf, size_t cap, size_t *pos,
+                             const uint8_t *p, int n) {
+    static const char hexd[] = "0123456789abcdef";
+    for (int i = 0; i < n && *pos + 2 < cap; i++) {
+        buf[(*pos)++] = hexd[(p[i] >> 4) & 0xF];
+        buf[(*pos)++] = hexd[p[i] & 0xF];
+    }
+    if (*pos < cap) buf[*pos] = 0;
+}
+
+static void append_ram_peek(char *buf, size_t cap, size_t *pos,
+                            const char *key, uint32_t vaddr, int want, int comma) {
+    uint8_t tmp[64];
+    int n = crash_peek_guest(vaddr, tmp, want);
+    append_fmt(buf, cap, pos,
+               "%s\"%s\":{\"addr\":\"0x%08X\",\"len\":%d,\"hex\":\"",
+               comma ? "," : "", key, vaddr, n);
+    if (n > 0) append_hex_bytes(buf, cap, pos, tmp, n);
+    append_str(buf, cap, pos, "\"}");
 }
 
 /* Serialize a single uint32_t hex value as a JSON string. */
@@ -458,6 +507,29 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, "  \"cpu\": null,\n");
     }
 
+    /* DRAM around $ra (overlay jalr caller) and $s0 (object that supplied
+     * the target word), plus the full 1 KB scratchpad. Direct DRAM reads. */
+    {
+        uint32_t ra = 0, s0 = 0;
+        if (debug_cpu_ptr) {
+            ra = debug_cpu_ptr->gpr[31] & ~3u;
+            s0 = debug_cpu_ptr->gpr[16] & ~3u;
+        }
+        append_str(buf, sizeof(buf), &pos, "  \"ram_peeks\": {");
+        append_ram_peek(buf, sizeof(buf), &pos, "ra", ra, 64, 0);
+        append_ram_peek(buf, sizeof(buf), &pos, "s0", s0, 32, 1);
+        {
+            uint8_t spad[1024];
+            int nsp = crash_peek_guest(0x1F800000u, spad, 1024);
+            append_fmt(buf, sizeof(buf), &pos,
+                       ",\"scratchpad\":{\"addr\":\"0x1F800000\",\"len\":%d,\"hex\":\"",
+                       nsp);
+            if (nsp > 0) append_hex_bytes(buf, sizeof(buf), &pos, spad, nsp);
+            append_str(buf, sizeof(buf), &pos, "\"}");
+        }
+        append_str(buf, sizeof(buf), &pos, "},\n");
+    }
+
     /* Recursion fingerprint (build-independent GUEST addresses): the func entered
      * when the native stack guard tripped, plus the recent recompiled-function-
      * entry ring — for a runaway, recent_fn's tail repeats the recursing func, so
@@ -731,8 +803,9 @@ static BOOL WINAPI psx_console_ctrl_handler(DWORD type) {
 #endif
 
 static void psx_atexit_handler(void) {
-    /* Only dump if no crash dump has been written yet. We can't easily
-     * detect that, so just always overwrite — last write wins. */
+    /* FAIL-FAST / SEH already wrote the real report. Overwriting with
+     * reason "atexit" destroyed the jalr dump. */
+    if (g_psx_fatal_reason) return;
     psx_crash_trace_dump("atexit", NULL);
 }
 
