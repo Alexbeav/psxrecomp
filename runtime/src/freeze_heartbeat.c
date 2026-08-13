@@ -373,12 +373,25 @@ static int hb_append_ram_peek(char *out, int n, size_t cap, uint32_t vaddr, int 
  * the BIOS A0/B0/C0 function index while the guest is parked in a kernel-call
  * poll — i.e. "which B0 function is it waiting on" with no extra plumbing.
  * Emitting the GPRs in the same shape as psx_last_run_report.json's "cpu"
- * means existing analysis tooling reads it unchanged. */
+ * means existing analysis tooling reads it unchanged. COP0 sr/cause/epc
+ * (plus IEc / IM2) are required to tell a VSync wait from a stuck IRQ
+ * gate — R3000A has no EXL; IEc=0 is "cannot take VBlank". */
 static int hb_format_cpu_scratchpad(char *out, size_t cap) {
     if (cap < 64) { if (cap) out[0] = 0; return 0; }
     const CPUState *cpu = debug_cpu_ptr;
-    int n = snprintf(out, cap, "  \"cpu\":{\"pc\":\"0x%08X\",\"gpr\":[",
-                     cpu ? cpu->pc : 0u);
+    uint32_t sr = cpu ? cpu->cop0[12] : 0u;
+    int n = snprintf(out, cap,
+                     "  \"cpu\":{\"pc\":\"0x%08X\",\"hi\":\"0x%08X\",\"lo\":\"0x%08X\","
+                     "\"sr\":\"0x%08X\",\"cause\":\"0x%08X\",\"epc\":\"0x%08X\","
+                     "\"iec\":%u,\"im2\":%u,\"gpr\":[",
+                     cpu ? cpu->pc : 0u,
+                     cpu ? cpu->hi : 0u,
+                     cpu ? cpu->lo : 0u,
+                     sr,
+                     cpu ? cpu->cop0[13] : 0u,
+                     cpu ? cpu->cop0[14] : 0u,
+                     (sr & 1u) ? 1u : 0u,
+                     (sr & (1u << 10)) ? 1u : 0u);
     for (int i = 0; i < 32 && n > 0 && (size_t)n < cap; i++) {
         int m = snprintf(out + n, cap - (size_t)n, "%s\"0x%08X\"",
                          i ? "," : "", cpu ? cpu->gpr[i] : 0u);

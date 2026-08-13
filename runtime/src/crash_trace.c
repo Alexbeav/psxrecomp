@@ -495,9 +495,13 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             "    \"sr\": \"0x%08X\",\n"
             "    \"cause\": \"0x%08X\",\n"
             "    \"epc\": \"0x%08X\",\n"
+            "    \"iec\": %u,\n"
+            "    \"im2\": %u,\n"
             "    \"gpr\": [",
             cpu->pc, cpu->hi, cpu->lo,
-            cpu->cop0[12], cpu->cop0[13], cpu->cop0[14]);
+            cpu->cop0[12], cpu->cop0[13], cpu->cop0[14],
+            (cpu->cop0[12] & 1u) ? 1u : 0u,
+            (cpu->cop0[12] & (1u << 10)) ? 1u : 0u);
         for (int i = 0; i < 32; i++) {
             append_fmt(buf, sizeof(buf), &pos,
                 "%s\"0x%08X\"", i == 0 ? "" : ",", cpu->gpr[i]);
