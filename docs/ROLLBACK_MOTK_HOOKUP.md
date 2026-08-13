@@ -4863,6 +4863,9 @@ window. `media_kf=0` because load was past the media/settle unsafe range.
 5. **On heal Live/tip-hold** — clear DESYNC invent-hold and RELEASE lockstep.
 6. **Pad-mispredict** begins in the post-FMV window still SPAN (optionally with
    MEDIA_KF via `rb_want_heal_kf`); only silent-fork recovery is apply-only.
+7. **POST match → Live** — `ownership_on_post_match` treats heal like
+   peer-ahead light: no ownership SPAN hop (session 28: matched POST @826
+   then chain target=850 hung guest wait-FOLLOW → disconnect).
 
 **Re-soak watch (Win↔Linux 2P through title FMV):**
 

@@ -4888,6 +4888,19 @@ static void ownership_on_post_match(uint32_t tip)
         ownership_exit_to_live(tip, frontier, "peer-ahead light", 1);
         return;
     }
+    /* §109: apply-only post-FMV heal KF — POST already matched at load.
+     * Do NOT ownership-chain SPAN through the soft-fork window (soak session
+     * 28: heal POST tip=826 matched, then chain hop target=850 hung guest
+     * wait-FOLLOW → peer disconnect). */
+    if (g_post_fmv_heal_kf) {
+        fprintf(stderr,
+                "psxrecomp: rb post-FMV heal KF tip=%u frontier=%u → Live "
+                "(no ownership chain)\n",
+                (unsigned)tip, (unsigned)frontier);
+        fflush(stderr);
+        ownership_exit_to_live(tip, frontier, "post-FMV heal KF", 1);
+        return;
+    }
     /* §48/§49/§73/§86/§87 B/§104: micro frontiers at/below min_ahead do not
      * chain. min_ahead = max(6, D-1) — delay cushion is not catch-up backlog,
      * but tip+D still chains once (D-1 headroom) instead of tip-hold every
