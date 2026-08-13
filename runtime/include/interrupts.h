@@ -102,6 +102,9 @@ uint32_t psx_compiled_irq_resume_pc(void);
 /* Soft-return / netplay BYE: drop sticky resume latches so rematch dig0 snaps
  * cannot inherit a prior-match game PC (see pick_snap_resume_pc). */
 void psx_irq_clear_resume_latches(void);
+/* Arm compiled IRQ resume before top-level flush_resume / savestate dispatch
+ * so a latched I_STAT cannot take LEGACY_SENTINEL with take_pc=0. */
+void psx_irq_arm_compiled_resume_pc(uint32_t pc);
 uint64_t psx_last_irq_check_cycle(void);
 uint64_t psx_interrupt_total_checks(void);
 uint32_t psx_interrupt_fast_maintenance(void);

@@ -4927,3 +4927,54 @@ old CD54 hold gated on host `s_present_pending`.
 **Re-soak watch:** through title FMV → settle → tip+1 must keep matched
 `audit fin` cyc (no ±1) and no `FIRST CORE DIVERGE` / heal-verify abort at
 the first post-settle frame. Linux↔Linux control still clean.
+
+## 112. Post-snap LEGACY_SENTINEL tip+1 (loading screen) (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §111):** matched through settle@1354 and live
+dig@1472; soft fork **sim=1480**. Tip **1479** matched (`core=f9e21305`,
+resume `pc=0x800756e0`, `i_stat=00000001`). Heal verify fin@1480 cyc Δ4;
+Win abort irqctx `same_thr=0 reason=3 exit_pc=0 epc=80000048` at arm cycle
+(`PSX_EXC_ESCAPE_LEGACY_SENTINEL`).
+
+**Cause:** `interrupts_resync_after_restore` zeros compiled/dirty resume
+latches. Sticky VBlank then delivered on the first post-`flush_resume`
+check with `take_pc=0` → sentinel EPC / cross-thread restore, while a peer
+that latched the BB PC first took the real same-thread path.
+
+**What landed (§112):**
+
+1. **`psx_irq_arm_compiled_resume_pc`** — publish resume PC (+ last-check edge).
+2. **`psx_scheduler_resume_at` + RESUME_CURRENT dispatch** arm before
+   `psx_dispatch`.
+3. **Delivery fallback** — if latches still 0 under top-level resume, use
+   `cpu->pc` instead of the sentinel.
+
+**Re-soak watch:** loading-screen tip+1 — no Win `irqctx … reason=3
+epc=80000048` on heal abort; fin cyc match; no `FIRST CORE DIVERGE` at the
+first post-settle loading frame.
+
+
+## 113. Win↔UNIX post-FMV invent + ahead-tip pacing (2026-08-13)
+
+**Soak:** after §111/§112 accuracy work, Win↔Cachy still showed chronic
+cadence skew through loading: Win `phase ctrl lead≈+7..8` / `debt_ms=0`,
+Cachy `GAP1_LEGACY` / `RUNWAY_EMPTY` invents. Soft fork @1480 sat **before**
+`dense_lockstep min=1510` while invent had already unlocked at settle@1354.
+
+**What landed (§113):**
+
+1. **Invent hold through lockstep MIN** — `rb_in_fmv_lockstep_window` now
+   gates invent until `g_fmv_lockstep_until` (media_end+MIN), matching the
+   gate comment that already said invent stays off through MIN. Stall tag
+   `fmv_lockstep` after settle; settle log `invent_hold=` reports MIN.
+2. **Ahead-of-tip timesync** — `np_timesync_note_ahead_skew`: when
+   `remote_lead < 0` for ~8 admits outside media/lockstep, add ~½-tick debt
+   so the inventing seat paces before GAP1 (BattleShip cross-OS pattern).
+3. **Gap1 LAN grace cap 12→20 ms** — more room for a mid-flight tip row on
+   LAN Win↔UNIX before inventing.
+
+**Re-soak watch:** `RBE_CROSS_OS_PACING_DIAG=1` — through FMV→loading,
+`stall=fmv_lockstep` (not invent) until MIN; `debt_ms` rises on the
+ahead-of-tip seat; fewer `GAP1_LEGACY` / `RUNWAY_EMPTY` before tip+1.
+Accuracy (§112 arm) still required for matched fin cyc at tip+1.
+

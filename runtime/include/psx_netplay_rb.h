@@ -84,11 +84,14 @@ int  psx_netplay_rb_fmv_defer_rewind(void);
 /* 1 while depth24 or recent MDEC (not settle). */
 int  psx_netplay_rb_fmv_media_active(void);
 
-/* 1 during FMV media + short settle (§26) — admit waits for remote wire.
- * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle.
+/* 1 during FMV media + post-FMV lockstep MIN (§26/§113) — admit waits for
+ * remote wire through loading tip+1 (not settle-only). Ticks FMV→settle→MIN.
  * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires).
  * §111: post-FMV heal sticky invent-hold only while remote_lead > 0. */
 int  psx_netplay_rb_lockstep_no_invent(void);
+
+/* 1 while sim is still inside the short post-FMV settle tail (before MIN). */
+int  psx_netplay_rb_fmv_settle_active(void);
 
 /* §93/§94: 1 while MAX-unmatched DESYNC invent-hold is armed (not media/settle).
  * Stall tag should say fmv_desync_hold, not fmv_settle. */

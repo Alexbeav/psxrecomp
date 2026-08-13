@@ -553,6 +553,18 @@ void psx_irq_clear_resume_latches(void)
     s_last_interrupt_check_cycle = UINT64_MAX;
 }
 
+/* Publish the known resume PC before the first post-load / flush_resume
+ * dispatch. interrupts_resync zeros the latches; a sticky I_STAT.VBlank can
+ * then deliver with take_pc=0 → LEGACY_SENTINEL / same_thr=0 and fork peers
+ * (MotK loading-screen tip+1 @1480, Win irqctx reason=3 epc=sentinel). */
+void psx_irq_arm_compiled_resume_pc(uint32_t pc)
+{
+    if (pc == 0u || (pc & 3u) != 0u)
+        return;
+    s_compiled_interrupt_resume_pc = pc;
+    s_last_interrupt_check_pc = pc;
+}
+
 /* Deferred cooperative thread switch from nested exception delivery.
  *
  * A genuine in-exception ChangeThread (kind-30, escape site below) must be
@@ -1455,6 +1467,20 @@ irq_deliver_eval:
     {
         uint32_t real_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
                                                   : s_compiled_interrupt_resume_pc;
+        /* Top-level flush_resume / savestate: resync cleared the latches and
+         * the first IRQ may fire before any BB edge republishes them. Prefer
+         * cpu->pc (already set to the resume target) over the sentinel so
+         * EPC/saved_gpr stay on the real same-thread path. */
+        if (real_pc == 0u) {
+            extern int psx_scheduler_top_level_resume_active(void);
+            if (psx_scheduler_top_level_resume_active() &&
+                cpu->pc != 0u && (cpu->pc & 3u) == 0u) {
+                uint32_t phys = cpu->pc & 0x1FFFFFFFu;
+                if (phys < 0x00200000u ||
+                    (phys >= 0x1FC00000u && phys < 0x1FC80000u))
+                    real_pc = cpu->pc;
+            }
+        }
         /* Accept the real resume PC from guest RAM (<2MB) OR the BIOS ROM
          * window. The old RAM-only guard rejected ROM-space block leaders
          * (e.g. OpenBIOS mcWaitForStatus spinning at 0xBFC076xx during a

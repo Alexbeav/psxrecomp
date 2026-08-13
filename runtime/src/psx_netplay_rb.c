@@ -36,6 +36,7 @@ int psx_netplay_rb_rewind_suppressed(void) { return 0; }
 int psx_netplay_rb_fmv_defer_rewind(void) { return 0; }
 int psx_netplay_rb_fmv_media_active(void) { return 0; }
 int psx_netplay_rb_lockstep_no_invent(void) { return 0; }
+int psx_netplay_rb_fmv_settle_active(void) { return 0; }
 int psx_netplay_rb_fmv_desync_hold(void) { return 0; }
 void psx_netplay_rb_clear_fmv_desync_hold(const char *why) { (void)why; }
 void psx_netplay_rb_request_post_fmv_heal_kf(void) {}
@@ -1095,7 +1096,7 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
                               : ((sim >= cap) ? "; MAX" : "; cores matched"),
                 max_unmatched
                     ? "DESYNC hold — invent off until rematch"
-                    : "invent already on after settle §26");
+                    : "invent off through unlock_grace §113");
         fflush(stderr);
         (void)prev_until;
         return;
@@ -1194,9 +1195,10 @@ static void rb_fmv_tick_settle(void)
         fprintf(stderr,
                 "psxrecomp: rb FMV settle until sim=%u invent_hold=%u "
                 "dense_lockstep min=%u max=%u confirm=%u "
-                "(no invent through settle; then invent+resim §26; hc primed)\n",
+                "(no invent through lockstep MIN — covers loading tip+1; "
+                "hc primed)\n",
                 (unsigned)g_fmv_settle_until,
-                (unsigned)g_fmv_settle_until,
+                (unsigned)g_fmv_lockstep_until,
                 (unsigned)g_fmv_lockstep_until,
                 (unsigned)(sim + RB_FMV_LOCKSTEP_MAX),
                 (unsigned)RB_FMV_LOCKSTEP_CONFIRM);
@@ -1303,11 +1305,13 @@ static int rb_post_fmv_heal_sticky_active(uint32_t sim)
                : 0;
 }
 
-/* Admit no-invent gate (§26): media + short settle only.
+/* Admit no-invent gate (§26/§113): media + post-FMV lockstep MIN.
  * §100: invent stays OFF during live media even with MEDIA_KF — GAP1 invent
  * was opening ~3.7 MB KF transfers mid-intro FMV. Wait for wire; real
- * rewinds still open episodes (defer_rewind allows MEDIA_KF). Settle +
- * DESYNC invent-hold unchanged.
+ * rewinds still open episodes (defer_rewind allows MEDIA_KF).
+ * §113: invent_hold used to end at settle (24 ticks) while dense_lockstep
+ * MIN started ~180 later — Win↔Linux invent was free in the loading tip+1
+ * window (fork@1480 before min=1510). Hold invent through lockstep_until.
  * §110/§111: heal sticky invent hold only while remote_lead > 0. */
 static int rb_in_fmv_lockstep_window(void)
 {
@@ -1321,7 +1325,7 @@ static int rb_in_fmv_lockstep_window(void)
         return 1;
     if (rb_post_fmv_heal_sticky_invent_hold(sim))
         return 1;
-    return sim < g_fmv_settle_until;
+    return sim < g_fmv_lockstep_until;
 }
 
 static void rb_media_crc_note(uint32_t tick, uint32_t size, uint32_t crc)
@@ -6862,10 +6866,18 @@ int psx_netplay_rb_fmv_media_active(void)
 
 int psx_netplay_rb_lockstep_no_invent(void)
 {
-    /* Media + settle (§26). Post-FMV title menus invent+resim.
+    /* Media + post-FMV lockstep MIN (§26/§113). Invent after MIN/RELEASE.
      * §93/§94: also hold after MAX-unmatched DESYNC until rematch,
      * invent-hold expire, or netplay save complete. */
     return rb_in_fmv_lockstep_window();
+}
+
+int psx_netplay_rb_fmv_settle_active(void)
+{
+    RNetSession *s = sess();
+    uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
+    rb_fmv_tick_settle();
+    return (sim < g_fmv_settle_until) ? 1 : 0;
 }
 
 int psx_netplay_rb_fmv_desync_hold(void)
@@ -7023,8 +7035,9 @@ int psx_netplay_rb_fmv_unlock_grace_active(void)
 {
     RNetSession *s = sess();
     uint32_t sim = s ? rnet_session_sim_tick(s) : 0u;
-    /* RELEASE arms dense_until = sim+UNLOCK_GRACE; invent is already on
-     * after settle, so this window is reconcile-only (soft-promote). */
+    /* RELEASE arms dense_until = sim+UNLOCK_GRACE. §113: invent stays off
+     * through lockstep_until; this flag still marks the post-RELEASE
+     * reconcile / soft-promote window. */
     return g_fmv_lockstep_released && g_fmv_lockstep_until > 0u &&
            sim < g_fmv_lockstep_until;
 }
