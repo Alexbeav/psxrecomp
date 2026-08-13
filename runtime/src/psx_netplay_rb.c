@@ -1558,11 +1558,17 @@ static int rb_resume_pc_ok(uint32_t pc)
  * Always store the post-present edge so both peers pin the same resume. */
 #define RB_MOTK_WAIT_A 0x8006CD54u
 #define RB_MOTK_WAIT_B 0x8006CDA0u
+/* Post-FMV overlay wait (dirty-interp hole @0x80076880..). Same class: IRQ at
+ * 0x800768C8 left v0=1 while the snap/resume edge is 0x80076880. */
+#define RB_MOTK_WAIT2_A 0x800768C8u
+#define RB_MOTK_WAIT2_B 0x80076880u
 
 static uint32_t rb_canonicalize_resume_pc(uint32_t pc)
 {
     if (pc == RB_MOTK_WAIT_A || pc == RB_MOTK_WAIT_B)
         return RB_MOTK_WAIT_B;
+    if (pc == RB_MOTK_WAIT2_A || pc == RB_MOTK_WAIT2_B)
+        return RB_MOTK_WAIT2_B;
     return pc;
 }
 

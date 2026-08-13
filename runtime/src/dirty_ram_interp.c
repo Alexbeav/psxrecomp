@@ -54,6 +54,11 @@ uint64_t g_dirty_ram_native_handoffs = 0;
 uint64_t g_dirty_pump_max_gap_insns = 0;
 uint64_t g_dirty_pump_count         = 0;
 static uint64_t s_last_dirty_irq_pump_insns = 0;
+/* Host-only stride for the no-pending IRQ entry throttle. NOT in the snap —
+ * peers that drifted apart through FMV entered the post-FMV dirty wait with
+ * different phases and forked tip+1 (Win↔Linux ±1 cyc / swapped cores). Reset
+ * on restore; when an IRQ is already deliverable, poll every entry instead. */
+static uint32_t s_interp_entry_poll = 0;
 
 /* EPC de-overload signal (Tomba 2 frame-1997 fix). Set to the committed guest PC
  * immediately around a dirty-pump psx_check_interrupts() call, 0 otherwise. When
@@ -341,6 +346,13 @@ void dirty_ram_ld_delay_discard(void) {
     s_ld_pend_age   = 0;
     s_ld_pend_rt    = 0;
     s_ld_pend_val   = 0;
+}
+
+void dirty_ram_irq_ambient_resync_after_restore(void) {
+    /* Re-anchor host-only IRQ pump ambient at the restored timeline so both
+     * peers take the first post-load dirty entry poll from the same phase. */
+    s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
+    s_interp_entry_poll = 0;
 }
 
 uint32_t g_insn_gate_lo = 0;       /* extra always-log phys range [lo,hi)      */
@@ -2767,20 +2779,39 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * per-invocation `(insns_executed & 0xFFF)` gate below can fire — so a
      * pending, IEc+IM2-enabled interrupt is never taken and the loop spins for
      * seconds while the CD IRQ that would set its wait-flag is never serviced.
-     * Poll on a GLOBAL invocation counter so short-block loops still yield to
-     * interrupts (this is the interpreter analogue of a block-leader poll in
-     * static code). psx_check_interrupts runs the handler and returns with
+     * When an IRQ is already deliverable, poll EVERY entry (guest-deterministic;
+     * MotK post-FMV overlay wait @0x80076880 with latched I_STAT.VBlank forked
+     * Win↔Linux on a host-only %%64 stride). Otherwise throttle on the global
+     * invocation counter. psx_check_interrupts runs the handler and returns with
      * registers restored, so continuing the loop afterward is safe. */
     {
-        static uint32_t s_interp_entry_poll = 0;
         static int s_entry_poll_enabled = -1;   /* DIAGNOSTIC toggle (590c236 x kind-30 escape regression hunt) */
         if (s_entry_poll_enabled < 0) {
             const char* e = getenv("PSX_DIRTY_ENTRY_POLL");
             s_entry_poll_enabled = (e && e[0] == '0') ? 0 : 1;
         }
-        if (s_entry_poll_enabled && (++s_interp_entry_poll & 0x3Fu) == 0) {
-            cpu->pc = pc;
-            psx_check_interrupts(cpu);
+        if (s_entry_poll_enabled) {
+            extern uint32_t i_stat;
+            uint32_t sr = cpu->cop0[12];
+            int deliverable =
+                ((i_stat & i_mask) != 0u) &&
+                !psx_get_in_exception() &&
+                (sr & 0x1u) != 0u &&
+                (sr & (1u << 10)) != 0u;
+            if (deliverable || (++s_interp_entry_poll & 0x3Fu) == 0) {
+                cpu->pc = pc;
+                s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
+                psx_check_interrupts(cpu);
+                if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
+                    /* Handler resumed elsewhere — surface to dispatch. */
+                    g_dirty_ram_blocks_run++;
+                    if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                    g_dirty_interp_chain_target = cpu->pc;
+                    OV_FPLOG_RET1();
+                }
+                if (cpu->pc == 0u)
+                    cpu->pc = pc;
+            }
         }
     }
     for (int i = 0; i < MAX_INSNS_PER_DISPATCH; i++) {

@@ -4900,3 +4900,30 @@ RELEASE dropped eligibility; invent free-ran through the soft fork.
 re-fork expect `heal KF requested … sticky_until=` then apply-only again —
 not `begin … media_kf=0 heal=0` / resim storm. Digs rematch →
 `heal sticky cleared (cores rematched…)`.
+
+## 111. Post-FMV tip+1 ±1-cycle Win↔Linux (dirty entry poll) (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §110b verify heal):** tip **870** matched
+(`core=1d304d69`, MEDIA-KF CRC match, resume `pc=0x80076880`,
+`i_stat=00000001`). Resim fin@871: Win `cyc=492226568` vs Cachy
+`492226569` (±1); cpu/clk/tim/ram fork; hc-fork `no pad mispredict`.
+
+**Cause:** post-FMV wait lives in a dirty-interp hole (not in static emit).
+Dirty entry used a host-only `s_interp_entry_poll %% 64` stride to pump IRQs.
+Peers that drifted through FMV entered the wait with opposite phases while
+VBlank was already latched — one delivered immediately, the other after a
+few wait-loop instructions (`exit_pc=0x800768C8`, `v0=1`). Same class as the
+old CD54 hold gated on host `s_present_pending`.
+
+**What landed (§111):**
+
+1. **Deliverable → poll every dirty entry** (guest-deterministic). Keep the
+   %%64 throttle only when no IRQ is deliverable.
+2. **`dirty_ram_irq_ambient_resync_after_restore`** — reset entry-poll stride
+   + 4096-insn pump gap from `psx_cycles_resync_after_restore`.
+3. **Second MotK wait pair** `0x800768C8` (hold A) ↔ `0x80076880` (canonical
+   B) for IRQ hold / present gate / snap resume canonicalize.
+
+**Re-soak watch:** through title FMV → settle → tip+1 must keep matched
+`audit fin` cyc (no ±1) and no `FIRST CORE DIVERGE` / heal-verify abort at
+the first post-settle frame. Linux↔Linux control still clean.

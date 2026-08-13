@@ -1006,20 +1006,21 @@ void psx_check_interrupts(CPUState* cpu) {
 #define COSIM_IRQ_NOTE(kind_) cosim_irq_note(cpu, (kind_), COSIM_IRQ_TAKE_PC(), g_dirty_safe_resume_pc, s_compiled_interrupt_resume_pc, cpu->cop0[COP0_SR])
 #endif
 
-    /* MotK wait CD54 + VBlank-only I_STAT: never deliver at the CD54 edge in
-     * netplay — hold until CDA0. Delivering at CD54 leaves v0=slt(1) while a
-     * peer that hit CDA0 first delivers with countdown in v0 (soak: non-det
-     * fin@946/@902 CD54 vs CDA0, cyc ±1 VB, on identical baseline+pads).
-     * UNCONDITIONAL on the edge PC — the earlier gate also required
-     * gpu_vblank_present_pending(), but s_present_pending is host-only state
-     * (not in the snap), so replay delivery timing forked across peers.
-     * Edge PC + I_STAT are guest-deterministic; the wait ping-pong reaches
-     * CDA0 a few instructions later, so no starvation. */
+    /* MotK wait CD54 / post-FMV 768C8 + VBlank-only I_STAT: never deliver at
+     * the "A" edge in netplay — hold until the canonical B edge. Delivering at
+     * A leaves v0=slt(1) while a peer that hit B first delivers with countdown
+     * in v0 (soak: non-det fin@946/@902 CD54 vs CDA0; post-FMV tip+1 @871
+     * 768C8 vs 76880, cyc ±1). UNCONDITIONAL on the edge PC — the earlier gate
+     * also required gpu_vblank_present_pending(), but s_present_pending is
+     * host-only state (not in the snap), so replay delivery timing forked
+     * across peers. Edge PC + I_STAT are guest-deterministic; the wait
+     * ping-pong reaches B a few instructions later, so no starvation. */
     if (!in_exception && psx_netplay_active()) {
         const uint32_t wait_a = 0x8006CD54u;
+        const uint32_t wait2_a = 0x800768C8u;
         uint32_t edge = s_last_interrupt_check_pc;
         uint32_t pend = i_stat & i_mask;
-        if (edge == wait_a && pend != 0u &&
+        if ((edge == wait_a || edge == wait2_a) && pend != 0u &&
             (pend & ~(1u << IRQ_VBLANK)) == 0u) {
             PSX_CHECK_INTERRUPTS_RETURN();
         }
