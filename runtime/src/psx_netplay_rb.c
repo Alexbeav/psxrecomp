@@ -430,14 +430,18 @@ static int g_media_kf_episode;
 static int g_media_kf_ready;      /* pin holds authoritative KF for load */
 static int g_media_kf_host_armed; /* host started probe/send for this episode */
 static int g_media_kf_sending;    /* host transfer in flight */
-/* §109: this episode is a post-FMV / DESYNC apply-only heal (no resim span). */
+/* §109: this episode is a post-FMV / DESYNC heal (MEDIA_KF + short verify
+ * span past the silent fork; historically apply-only target=load). */
 static int g_post_fmv_heal_kf;
-/* §109: hc-fork / resim-escalate asked for apply-only heal on next begin. */
+/* §109: hc-fork / resim-escalate asked for heal on next begin. */
 static int g_request_post_fmv_heal;
 /* §110: sim < until → re-heal eligible + invent hold after heal RELEASE. */
 static uint32_t g_post_fmv_heal_sticky_until;
-/* §110: mismatch tick of last apply-only heal (diagnostics / sticky arm). */
+/* §110: mismatch tick of last heal (diagnostics / sticky arm / loop cap). */
 static uint32_t g_post_fmv_heal_fork_tick;
+/* §110b: consecutive heal begins at g_post_fmv_heal_loop_fork. */
+static uint32_t g_post_fmv_heal_loop_fork;
+static uint32_t g_post_fmv_heal_loop_count;
 
 /* §100: recent FMV media snap CRCs — prefer choose_load ticks we already
  * sealed, and let probe_match confirm without a ring edge-case miss. */
@@ -553,6 +557,14 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
  * many ticks so loading-screen hitch hc-fork cannot open a tip-SPAN (session 3:
  * heal@2494 → RELEASE → invent catch-up → hc-fork heal=0 → resim storm). */
 #define RB_FMV_HEAL_STICKY_TICKS 300u
+/* §110b: post-FMV silent fork is tip+1. Empty-span tip KF rematches tip and
+ * falsely clears sticky (Win↔Linux soak: heal@978 → rematch streak@978 →
+ * invent → FIRST CORE @979 forever). Heal episodes resim this many ticks
+ * past load so tip+1 is verified before Live/sticky success. */
+#define RB_FMV_HEAL_VERIFY_SPAN 4u
+/* §110b: apply-only/verify heal loops at the same fork tick before DESYNC
+ * keep-live (empty KF cannot fix a tip+1 platform fork). */
+#define RB_FMV_HEAL_LOOP_LIMIT 3u
 /* MotK TipHold: quiet window so press→release→D-pad coalesce in one episode.
  * §27: seal slack uses library default (2) so Live may invent tip+1..tip+2
  * during tip-hold — FORCE0 parked presentation at the tip (mini delay-sync).
@@ -1001,14 +1013,32 @@ static void rb_fmv_update_lockstep_gate(uint32_t sim)
                 rb_clear_fmv_desync_hold(why);
             }
         }
-        /* §110: drop heal sticky once cores rematch CONFIRM after RELEASE. */
+        /* §110: drop heal sticky once cores rematch CONFIRM after RELEASE.
+         * §110b: tip rematch alone is not enough — apply-only / tip KF only
+         * proves tip; the silent fork is tip+1. Require a confirmed walk
+         * past the fork tick before dropping sticky (else heal storm). */
         if (g_post_fmv_heal_sticky_until > 0u &&
             g_fmv_core_match_streak >= RB_FMV_LOCKSTEP_CONFIRM) {
-            char why[96];
-            snprintf(why, sizeof(why),
-                     "cores rematched streak=%u sim=%u",
-                     (unsigned)g_fmv_core_match_streak, (unsigned)sim);
-            rb_clear_post_fmv_heal_sticky(why);
+            if (g_post_fmv_heal_fork_tick > 0u &&
+                sim <= g_post_fmv_heal_fork_tick) {
+                static uint32_t s_sticky_hold_log_sim;
+                if (sim != s_sticky_hold_log_sim) {
+                    s_sticky_hold_log_sim = sim;
+                    fprintf(stderr,
+                            "psxrecomp: rb post-FMV heal sticky hold "
+                            "(tip rematch sim=%u fork=%u — need walk past "
+                            "fork before clear)\n",
+                            (unsigned)sim,
+                            (unsigned)g_post_fmv_heal_fork_tick);
+                    fflush(stderr);
+                }
+            } else {
+                char why[96];
+                snprintf(why, sizeof(why),
+                         "cores rematched streak=%u sim=%u",
+                         (unsigned)g_fmv_core_match_streak, (unsigned)sim);
+                rb_clear_post_fmv_heal_sticky(why);
+            }
         }
         return;
     }
@@ -1768,6 +1798,8 @@ static void rb_clear_post_fmv_heal_sticky(const char *why)
     fflush(stderr);
     g_post_fmv_heal_sticky_until = 0u;
     g_post_fmv_heal_fork_tick = 0u;
+    g_post_fmv_heal_loop_fork = 0u;
+    g_post_fmv_heal_loop_count = 0u;
 }
 
 /* §109/§97: arm host keyframe for media-range OR requested post-FMV heal. */
@@ -2162,6 +2194,10 @@ static void abort_episode(const char *why)
     g_episode_snap_applied = 0;
     g_needs_advance = 0;
     g_episode_baseline_matched = 0;
+    /* §110b: heal episode aborted mid-verify — clear episode heal mark so
+     * escalate's !g_post_fmv_heal_kf gate works. Keep g_request_post_fmv_heal
+     * (escalate sets it before abort then begin_rewind). */
+    g_post_fmv_heal_kf = 0;
     g_tip_hold_until = 0;
     g_tip_hold_quiet_t0_ms = 0ull;
     g_tip_hold_block_quiet = 0;
@@ -2359,15 +2395,21 @@ static void abort_episode_realign(const char *why)
                 fflush(stderr);
             }
         }
-        /* §109: first post-FMV tip-SPAN resim diverge → request apply-only
-         * heal KF instead of burning the load into fork_cap / storming. */
+        /* §109/§110b: first post-FMV tip-SPAN resim diverge → short MEDIA_KF
+         * verify heal. Do NOT re-request when this fork already healed (empty
+         * tip KF / verify re-loop cannot fix tip+1 platform nondeterminism —
+         * Win↔Linux soak: heal@978 forever). Fall through to storm/abort. */
         if (g_resim_diverge_streak == 1u && !g_post_fmv_heal_kf &&
-            rb_post_fmv_heal_eligible()) {
+            rb_post_fmv_heal_eligible() &&
+            g_post_fmv_heal_fork_tick != g_resim_diverge_tick &&
+            g_post_fmv_heal_loop_count == 0u) {
             uint32_t failed_load = g_rb ? rnet_rb_get_load_tick(g_rb) : 0u;
             fprintf(stderr,
                     "psxrecomp: rb post-FMV heal escalate "
-                    "(resim diverge sim=%u load=%u — next begin apply-only KF)\n",
-                    (unsigned)g_resim_diverge_tick, (unsigned)failed_load);
+                    "(resim diverge sim=%u load=%u — next begin verify KF "
+                    "span=%u)\n",
+                    (unsigned)g_resim_diverge_tick, (unsigned)failed_load,
+                    (unsigned)RB_FMV_HEAL_VERIFY_SPAN);
             fflush(stderr);
             /* Undo fork_cap raise so heal can reload the same pin. */
             if (failed_load > 0u && g_bl_fork_cap == failed_load)
@@ -2377,7 +2419,7 @@ static void abort_episode_realign(const char *why)
             g_abort_wire_realign_tick = 0u;
             abort_episode(why);
             clear_rewind_cooldown("post-FMV heal escalate");
-            /* Host reopens immediately as apply-only KF; guest FOLLOWs. */
+            /* Host reopens immediately as verify KF; guest FOLLOWs. */
             {
                 int local = g_b.local_slot ? *g_b.local_slot : 0;
                 int remote = (local == 0) ? 1 : 0;
@@ -6101,6 +6143,8 @@ void psx_netplay_rb_cold_reset(void)
     g_fmv_unmatched_desync_arm_sim = 0;
     g_post_fmv_heal_sticky_until = 0u;
     g_post_fmv_heal_fork_tick = 0u;
+    g_post_fmv_heal_loop_fork = 0u;
+    g_post_fmv_heal_loop_count = 0u;
     g_request_post_fmv_heal = 0;
     g_post_fmv_heal_kf = 0;
     g_last_good_bb_pc = 0;
@@ -6847,11 +6891,17 @@ void psx_netplay_rb_request_post_fmv_heal_kf(void)
 {
     if (!rb_post_fmv_heal_eligible())
         return;
+    /* §110b: refuse further heal requests once this fork exhausted the loop
+     * budget (DESYNC keep-live already armed from begin). */
+    if (g_post_fmv_heal_loop_count > RB_FMV_HEAL_LOOP_LIMIT &&
+        g_post_fmv_heal_loop_fork > 0u)
+        return;
     g_request_post_fmv_heal = 1;
     fprintf(stderr,
             "psxrecomp: rb post-FMV heal KF requested "
-            "(hc-fork / silent core fork; sticky_until=%u)\n",
-            (unsigned)g_post_fmv_heal_sticky_until);
+            "(hc-fork / silent core fork; sticky_until=%u loop=%u)\n",
+            (unsigned)g_post_fmv_heal_sticky_until,
+            (unsigned)g_post_fmv_heal_loop_count);
     fflush(stderr);
 }
 
@@ -7585,18 +7635,71 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
         fflush(stderr);
         target = load + RB_MAX_RESIM_SPAN;
     }
-    /* §109: hc-fork / escalate requested apply-only heal — host KF at load,
-     * no resim span (Replay re-forks Win↔Linux at the same tick). Ordinary
-     * pad-mispredict begins in the post-FMV window still SPAN with MEDIA_KF. */
+    /* §109/§110b: hc-fork requested MEDIA_KF verify heal — resim a short
+     * span past load so tip+1 is checked. Empty-span tip KF rematches tip
+     * and storms (Win↔Linux soak). Cap loops at the same fork → DESYNC. */
     if (g_request_post_fmv_heal && rb_post_fmv_heal_eligible()) {
-        if (target > load) {
+        if (mismatch_tick == g_post_fmv_heal_loop_fork &&
+            g_post_fmv_heal_loop_fork > 0u)
+            g_post_fmv_heal_loop_count++;
+        else {
+            g_post_fmv_heal_loop_fork = mismatch_tick;
+            g_post_fmv_heal_loop_count = 1u;
+        }
+        if (g_post_fmv_heal_loop_count > RB_FMV_HEAL_LOOP_LIMIT) {
+            RNetSession *s = sess();
+            uint32_t live =
+                s ? rnet_session_sim_tick(s) : (mismatch_tick > 0u ? mismatch_tick : load);
             fprintf(stderr,
-                    "psxrecomp: rb begin post-FMV heal KF CAP target %u→%u "
-                    "(apply-only; mismatch=%u load=%u)\n",
-                    (unsigned)target, (unsigned)load,
-                    (unsigned)mismatch_tick, (unsigned)load);
+                    "psxrecomp: rb DESYNC — post-FMV heal loop storm "
+                    "fork=%u (%u×) — tip KF cannot fix tip+1; keep-live, "
+                    "cooldown %u ticks\n",
+                    (unsigned)mismatch_tick,
+                    (unsigned)g_post_fmv_heal_loop_count,
+                    (unsigned)RB_FORK_STORM_COOLDOWN_TICKS);
             fflush(stderr);
-            target = load;
+            g_request_post_fmv_heal = 0;
+            g_post_fmv_heal_kf = 0;
+            /* Keep loop_count/fork so request refuses further heals at this
+             * fork until a real sticky clear past the fork (or cold reset). */
+            if (g_post_fmv_heal_sticky_until > 0u) {
+                fprintf(stderr,
+                        "psxrecomp: rb post-FMV heal sticky cleared "
+                        "(heal loop storm)\n");
+                fflush(stderr);
+                g_post_fmv_heal_sticky_until = 0u;
+            }
+            g_fmv_unmatched_desync = 1;
+            g_fmv_unmatched_desync_arm_sim = live;
+            arm_rewind_cooldown_ticks(live, RB_FORK_STORM_COOLDOWN_TICKS,
+                                      "DESYNC post-FMV heal loop storm");
+            return 0;
+        }
+        {
+            uint32_t verify = load + RB_FMV_HEAL_VERIFY_SPAN;
+            if (verify < load)
+                verify = load;
+            if (target > verify) {
+                fprintf(stderr,
+                        "psxrecomp: rb begin post-FMV heal KF CAP target %u→%u "
+                        "(verify span=%u; mismatch=%u load=%u loop=%u)\n",
+                        (unsigned)target, (unsigned)verify,
+                        (unsigned)RB_FMV_HEAL_VERIFY_SPAN,
+                        (unsigned)mismatch_tick, (unsigned)load,
+                        (unsigned)g_post_fmv_heal_loop_count);
+                fflush(stderr);
+                target = verify;
+            } else if (target < load) {
+                target = load;
+            } else {
+                fprintf(stderr,
+                        "psxrecomp: rb begin post-FMV heal KF verify "
+                        "load=%u target=%u mismatch=%u loop=%u\n",
+                        (unsigned)load, (unsigned)target,
+                        (unsigned)mismatch_tick,
+                        (unsigned)g_post_fmv_heal_loop_count);
+                fflush(stderr);
+            }
         }
         g_post_fmv_heal_kf = 1;
         g_post_fmv_heal_fork_tick = mismatch_tick;
@@ -8308,10 +8411,14 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
         g_media_kf_ready = 0;
         g_media_kf_host_armed = 0;
         g_media_kf_sending = 0;
-        /* §109: apply-only heal when initiator CAP'd target to load. */
+        /* §109/§110b: heal when initiator MEDIA_KF + short verify (or empty)
+         * span past load. Follower must arm heal sticky on success even when
+         * target > load (verify span). */
         g_post_fmv_heal_kf =
-            ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) && target == load &&
-             rb_post_fmv_heal_eligible())
+            ((wire_flags & RNET_RB_SYNC_FLAG_MEDIA_KF) &&
+             target >= load &&
+             target <= load + RB_FMV_HEAL_VERIFY_SPAN &&
+             mismatch > load && rb_post_fmv_heal_eligible())
                 ? 1
                 : 0;
         if (g_post_fmv_heal_kf)

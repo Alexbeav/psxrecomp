@@ -731,7 +731,8 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
             (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim),
             fork_cap ? "; fork_cap backoff" : "");
     fflush(stderr);
-    /* §109: silent fork → apply-only host KF (tip-snap SPAN re-diverges). */
+    /* §109: silent fork → MEDIA_KF verify heal (short span past tip; empty
+     * tip KF rematches tip and storms on tip+1). */
     psx_netplay_rb_request_post_fmv_heal_kf();
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
 }
