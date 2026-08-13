@@ -698,12 +698,14 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
      * started the persist clock, so tip-extend abandon → Live opened a
      * second hc-fork recovery with zero Live gap (soak: epoch 8 → 16,
      * "persisted 39 ticks"). */
-    /* §109: allow hc-fork through DESYNC invent-hold when MEDIA_KF can heal
-     * (fmv_episode_unsafe is 0 with KF on). Keep blocking media+settle. */
+    /* §109/§110: allow hc-fork through DESYNC invent-hold or heal sticky when
+     * MEDIA_KF can heal. Keep blocking live media+settle invent-hold. */
     if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
         psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
-        (psx_netplay_rb_fmv_defer_rewind() && !psx_netplay_rb_fmv_desync_hold()) ||
-        (psx_netplay_rb_lockstep_no_invent() && !psx_netplay_rb_fmv_desync_hold()) ||
+        (psx_netplay_rb_fmv_defer_rewind() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
+        (psx_netplay_rb_lockstep_no_invent() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
         psx_netplay_rb_fmv_episode_unsafe(fork_tick))
         return;
     sim = rnet_session_sim_tick(g_np.session);

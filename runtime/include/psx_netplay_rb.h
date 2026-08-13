@@ -101,6 +101,10 @@ void psx_netplay_rb_clear_fmv_desync_hold(const char *why);
  * Call from hc-fork / resim-diverge escalate before begin_rewind. */
 void psx_netplay_rb_request_post_fmv_heal_kf(void);
 
+/* §110: 1 while post-FMV lockstep, DESYNC hold, or heal sticky — hc-fork
+ * may open apply-only KF even when invent is held. */
+int  psx_netplay_rb_post_fmv_heal_eligible(void);
+
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
  * hold). Begin/follow/hc-fork must not open episodes that load there.
  * §97 MEDIA_KF (default on): returns 0 for media-range — episodes allowed. */

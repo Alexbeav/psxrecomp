@@ -4876,3 +4876,27 @@ window. `media_kf=0` because load was past the media/settle unsafe range.
 - No `ABORT — resim core diverge` on that heal episode; no
   `DESYNC — FMV lockstep MAX unmatched` from the same cutover.
 - Linux↔Linux control still clean; 3P WIRE_HOLE is a separate bug class.
+
+## 110. Post-FMV heal sticky + invent hold (session 3 loading hitch) (2026-08-13)
+
+**Soak (TM4 Win↔CachyOS session 3):** §109 heal POST matched @2494 → Live →
+`FMV lockstep RELEASE`. Loading-screen hitch kept HC forked at 2495; absurd
+lead + invent catch-up; second `hc-fork` with `heal=0` tip-SPAN →
+`resim core diverge @2495` → storm DESYNC.
+
+**Cause:** `request_post_fmv_heal_kf` gated on pre-RELEASE lockstep only.
+RELEASE dropped eligibility; invent free-ran through the soft fork.
+
+**What landed (§110):**
+
+1. **Heal sticky** (`RB_FMV_HEAL_STICKY_TICKS=300`) armed on heal Live/tip-hold
+   — `rb_post_fmv_heal_eligible` stays true through sticky (and DESYNC /
+   lockstep). Re-heal hc-fork keeps `media_kf=1 heal=1`.
+2. **Invent hold** during sticky via `lockstep_no_invent` — no GAP1 invent
+   catch-up until sticky expires or cores rematch CONFIRM.
+3. Early sticky clear when post-RELEASE HC streak hits CONFIRM.
+
+**Re-soak watch:** after heal expect `heal sticky until sim=…`; on hitch
+re-fork expect `heal KF requested … sticky_until=` then apply-only again —
+not `begin … media_kf=0 heal=0` / resim storm. Digs rematch →
+`heal sticky cleared (cores rematched…)`.
