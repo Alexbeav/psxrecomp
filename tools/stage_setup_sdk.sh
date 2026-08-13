@@ -240,7 +240,12 @@ else
 fi
 
 # Windows MinGW DLL bundling for host + emitters.
-BUNDLE="${FW_TOOLS}/bundle_mingw_dlls.sh"
+# Studio MinGW package exports PSXRECOMP_BUNDLE_MINGW_DLLS so a stale
+# game-submodule copy is not used.
+BUNDLE="${PSXRECOMP_BUNDLE_MINGW_DLLS:-}"
+if [[ -z "${BUNDLE}" || ! -f "${BUNDLE}" ]]; then
+  BUNDLE="${FW_TOOLS}/bundle_mingw_dlls.sh"
+fi
 if [[ ! -f "${BUNDLE}" ]]; then
   # Staged copy (after sdk overlay) may own the helper.
   if [[ -f "${STAGE}/psxrecomp/tools/bundle_mingw_dlls.sh" ]]; then
