@@ -731,8 +731,7 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
             (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim),
             fork_cap ? "; fork_cap backoff" : "");
     fflush(stderr);
-    /* §109: silent fork → MEDIA_KF verify heal (short span past tip; empty
-     * tip KF rematches tip and storms on tip+1). */
+    /* §109/§114: silent fork → apply-only MEDIA_KF heal (target=load). */
     psx_netplay_rb_request_post_fmv_heal_kf();
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
 }
@@ -4756,6 +4755,10 @@ int psx_netplay_catchup_budget(void)
     if (!psx_netplay_active())
         return 0;
     if (psx_start_bisect_no_catchup())
+        return 0;
+    /* §114: during post-FMV DESYNC / heal sticky, do not turbo catch-up —
+     * absurd lead after heal abort + catchup widens platform tip+1 skew. */
+    if (psx_netplay_rb_fmv_desync_hold() || psx_netplay_rb_post_fmv_heal_sticky())
         return 0;
     cap = np_starv_env_int("PSX_NET_CATCHUP_CAP", PSX_CATCHUP_CAP_DEFAULT);
     if (cap <= 0 && g_starv.recovery_amount <= 0)

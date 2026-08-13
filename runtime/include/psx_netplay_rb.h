@@ -102,7 +102,9 @@ int  psx_netplay_rb_fmv_desync_hold(void);
 void psx_netplay_rb_clear_fmv_desync_hold(const char *why);
 
 /* §109: next begin_rewind is an apply-only MEDIA_KF heal (target=load).
- * Call from hc-fork / resim-diverge escalate before begin_rewind. */
+ * Call from hc-fork / resim-diverge escalate before begin_rewind.
+ * §114: tip+1 verify-span abandoned (platform nondet); heal Live arms
+ * invent-off + KF stream instead of lockstep RELEASE. */
 void psx_netplay_rb_request_post_fmv_heal_kf(void);
 
 /* §110: 1 while post-FMV lockstep, DESYNC hold, or heal sticky — hc-fork
