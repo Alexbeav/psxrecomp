@@ -3,8 +3,9 @@
 #
 # Title packagers (BPE/MotK setup zips) call this for Windows PEs that still
 # import non-system DLLs (typically the MSYS2-built setup host + SDL2).
+# Walks the exe *and* each copied DLL (zlib1.dll → libssp-0.dll, etc.).
 # Emitters built with llvm-mingw + PSXRECOMP_STATIC_CLI should import none of
-# the GCC runtimes; this script only copies DLLs each exe actually imports.
+# the GCC runtimes.
 #
 # Usage:
 #   bundle_mingw_dlls.sh [options] --exe <path> [--dest <dir>] [--label <name>] ...
@@ -118,9 +119,9 @@ PROBE_DLLS=(
   libssp-0.dll
 )
 
-# Always ship these next to MinGW GCC-built hosts when any GCC runtime is imported.
-# libssp-0 is often needed for stack-smashing builds even when not listed on the
-# main PE import table (pulled in via fortify / -fstack-protector).
+# Companion GCC/MinGW runtimes. Copied when the PE or any already-copied DLL
+# imports them (direct or transitive). libssp-0 is pulled in by zlib1.dll even
+# when the host exe itself is -static-libgcc.
 ALWAYS_RUNTIME_DLLS=(
   libgcc_s_seh-1.dll
   libstdc++-6.dll
@@ -133,6 +134,11 @@ dll_name_eq() {
   a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   b="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
   [[ "${a}" == "${b}" ]]
+}
+
+is_system_dll() {
+  local name="$1"
+  printf '%s' "${name}" | grep -qiE "${SYSTEM_DLL_RE}"
 }
 
 is_always_runtime_dll() {
@@ -149,7 +155,6 @@ is_always_runtime_dll() {
 # → pipeline fails even when the DLL Name line matched.
 list_exe_imports() {
   local exe="$1"
-  # shellcheck disable=SC2016
   "${OBJDUMP}" -p "${exe}" 2>/dev/null \
     | awk '/DLL Name:/{print $3}' \
     || true
@@ -168,19 +173,51 @@ exe_imports_dll() {
   return 1
 }
 
-exe_needs_mingw_runtime() {
-  local exe="$1" dll
-  for dll in "${ALWAYS_RUNTIME_DLLS[@]}"; do
-    if exe_imports_dll "${exe}" "${dll}"; then
+find_dll_src() {
+  local dll="$1"
+  local exe="$2"
+  local dest_dir="$3"
+  local cand d
+  local -a candidates=(
+    "$(dirname "${exe}")/${dll}"
+    "${dest_dir}/${dll}"
+    "/mingw64/bin/${dll}"
+    "/usr/x86_64-w64-mingw32/bin/${dll}"
+  )
+  for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
+    candidates+=("${d}/${dll}")
+  done
+  for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
+    candidates+=("${d}/${dll}")
+  done
+  for cand in "${candidates[@]}"; do
+    [[ -n "${cand}" ]] || continue
+    if [[ -f "${cand}" ]]; then
+      printf '%s' "${cand}"
       return 0
     fi
   done
-  # Common GCC runtime names even if ALWAYS list changes.
-  for dll in libgcc_s_seh-1.dll libstdc++-6.dll; do
-    if exe_imports_dll "${exe}" "${dll}"; then
+  return 1
+}
+
+# True if exe or any PE already in dest imports dll (direct).
+tree_imports_dll() {
+  local exe="$1"
+  local dest_dir="$2"
+  local dll="$3"
+  local pe
+  if exe_imports_dll "${exe}" "${dll}"; then
+    return 0
+  fi
+  shopt -s nullglob
+  for pe in "${dest_dir}"/*.dll "${dest_dir}"/*.DLL "${dest_dir}"/*.exe "${dest_dir}"/*.EXE; do
+    [[ -f "${pe}" ]] || continue
+    if exe_imports_dll "${pe}" "${dll}"; then
+      shopt -u nullglob
       return 0
     fi
   done
+  shopt -u nullglob
   return 1
 }
 
@@ -188,12 +225,9 @@ bundle_one() {
   local exe="$1"
   local dest_dir="$2"
   local label="$3"
-  local dll src key cand d
-  local -a needed=()
-  local -a unique=()
-  local -a candidates=()
-  local -a imported=()
-  local -A seen=()
+  local dll src key name dest_file src_res dest_res
+  local -a queue=()
+  local -A queued=()
 
   if [[ ! -f "${exe}" ]]; then
     echo "error: cannot bundle DLLs; missing ${exe}" >&2
@@ -207,58 +241,37 @@ bundle_one() {
   fi
   mkdir -p "${dest_dir}"
 
-  mapfile -t imported < <(list_exe_imports "${exe}")
-  mapfile -t needed < <(
-    printf '%s\n' "${imported[@]}" \
-      | grep -viE "${SYSTEM_DLL_RE}" \
-      | sort -u || true
-  )
-  needed+=("${PROBE_DLLS[@]}")
-  needed+=("${ALWAYS_RUNTIME_DLLS[@]}")
-
-  local ship_mingw_rt=0
-  if exe_needs_mingw_runtime "${exe}"; then
-    ship_mingw_rt=1
-  fi
-
-  for dll in "${needed[@]}"; do
-    [[ -n "${dll}" ]] || continue
-    key="$(printf '%s' "${dll}" | tr '[:upper:]' '[:lower:]')"
-    if [[ -n "${seen[$key]:-}" ]]; then
-      continue
+  enqueue() {
+    local n="$1"
+    local k
+    [[ -n "${n}" ]] || return 0
+    if is_system_dll "${n}"; then
+      return 0
     fi
-    seen[$key]=1
-    unique+=("${dll}")
+    k="$(printf '%s' "${n}" | tr '[:upper:]' '[:lower:]')"
+    if [[ -n "${queued[$k]:-}" ]]; then
+      return 0
+    fi
+    queued[$k]=1
+    queue+=("${n}")
+  }
+
+  while IFS= read -r name; do
+    enqueue "${name}"
+  done < <(list_exe_imports "${exe}")
+
+  # Probe names the exe actually imports (covers case / alias mismatches).
+  for dll in "${PROBE_DLLS[@]}" "${ALWAYS_RUNTIME_DLLS[@]}"; do
+    if exe_imports_dll "${exe}" "${dll}"; then
+      enqueue "${dll}"
+    fi
   done
 
-  for dll in "${unique[@]}"; do
-    if exe_imports_dll "${exe}" "${dll}"; then
-      :
-    elif [[ "${ship_mingw_rt}" -eq 1 ]] && is_always_runtime_dll "${dll}"; then
-      : # companion MinGW runtime (e.g. libssp-0) even if not on PE import table
-    else
-      continue
-    fi
-    src=""
-    candidates=(
-      "$(dirname "${exe}")/${dll}"
-      "${dest_dir}/${dll}"
-      "/mingw64/bin/${dll}"
-      "/usr/x86_64-w64-mingw32/bin/${dll}"
-    )
-    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
-      candidates+=("${d}/${dll}")
-    done
-    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
-      candidates+=("${d}/${dll}")
-    done
-    for cand in "${candidates[@]}"; do
-      [[ -n "${cand}" ]] || continue
-      if [[ -f "${cand}" ]]; then
-        src="${cand}"
-        break
-      fi
-    done
+  local i=0
+  while [[ "${i}" -lt "${#queue[@]}" ]]; do
+    dll="${queue[$i]}"
+    i=$((i + 1))
+    src="$(find_dll_src "${dll}" "${exe}" "${dest_dir}" || true)"
     if [[ -z "${src}" ]]; then
       echo "error: required DLL missing for ${label}: ${dll}" >&2
       echo "  exe: ${exe}" >&2
@@ -272,19 +285,29 @@ bundle_one() {
       exit 1
     fi
     dest_file="${dest_dir}/${dll}"
-    # MSYS2/Windows cp fails when source and dest are the same file.
     if [[ -f "${dest_file}" ]] && [[ "${src}" -ef "${dest_file}" ]]; then
       echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
-      continue
+    else
+      src_res="$(cd "$(dirname "${src}")" && pwd)/$(basename "${src}")"
+      dest_res="$(cd "${dest_dir}" && pwd)/${dll}"
+      if [[ "${src_res}" == "${dest_res}" ]]; then
+        echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
+      else
+        cp -f "${src}" "${dest_dir}/"
+        echo "bundled ${dll} → ${dest_dir}/ (${label})"
+        dest_file="${dest_dir}/${dll}"
+      fi
     fi
-    src_res="$(cd "$(dirname "${src}")" && pwd)/$(basename "${src}")"
-    dest_res="$(cd "${dest_dir}" && pwd)/${dll}"
-    if [[ "${src_res}" == "${dest_res}" ]]; then
-      echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
-      continue
+    # Recurse: zlib1.dll imports libssp-0.dll even when the host does not.
+    if [[ -f "${dest_file}" ]]; then
+      while IFS= read -r name; do
+        enqueue "${name}"
+      done < <(list_exe_imports "${dest_file}")
+    elif [[ -f "${src}" ]]; then
+      while IFS= read -r name; do
+        enqueue "${name}"
+      done < <(list_exe_imports "${src}")
     fi
-    cp -f "${src}" "${dest_dir}/"
-    echo "bundled ${dll} → ${dest_dir}/ (${label})"
   done
 }
 
@@ -300,12 +323,7 @@ for dll in "${REQUIRE[@]}"; do
     if [[ -z "${dest}" ]]; then
       dest="$(dirname "${exe}")"
     fi
-    # --require on ALWAYS_RUNTIME_DLLS: enforce whenever the PE needs MinGW RT.
-    if exe_imports_dll "${exe}" "${dll}"; then
-      :
-    elif is_always_runtime_dll "${dll}" && exe_needs_mingw_runtime "${exe}"; then
-      :
-    else
+    if ! tree_imports_dll "${exe}" "${dest}" "${dll}"; then
       continue
     fi
     if [[ ! -f "${dest}/${dll}" ]]; then
