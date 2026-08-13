@@ -79,6 +79,7 @@ void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
     cfg->local_slot = 0;
     cfg->slot_count = 2;
     cfg->player_count = 0;
+    cfg->occupied_mask = 0;
     cfg->input_player = -1;
     cfg->input_delay = 2;
     cfg->input_prediction = 4;
@@ -3395,6 +3396,25 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         rcfg.input_delay = 5u;
     }
     rcfg.session_id = cfg->session_id ? cfg->session_id : 1u;
+    {
+        uint32_t mask = cfg->occupied_mask;
+        if (mask == 0u) {
+            mask = (slots >= 32) ? 0xffffffffu : ((1u << slots) - 1u);
+        } else {
+            /* Always treat the local seat as occupied; clamp to session width. */
+            mask |= (1u << (unsigned)local);
+            if (slots < 32)
+                mask &= (1u << slots) - 1u;
+        }
+        rcfg.occupied_mask = mask;
+        if (mask != ((slots >= 32) ? 0xffffffffu : ((1u << slots) - 1u))) {
+            fprintf(stderr,
+                    "psx_netplay: occupied_mask=0x%x (sparse seats get "
+                    "local neutral inputs)\n",
+                    (unsigned)mask);
+            fflush(stderr);
+        }
+    }
 
     /* Host resolves auto (-1) before start; accept 0..PSX_MAX_PLAYERS-1. */
     in_player = cfg->input_player;

@@ -48,6 +48,10 @@ typedef struct PsxNetplayConfig {
     int         local_slot;    /* 0 .. slot_count-1 */
     int         slot_count;    /* 2 .. PSX_MAX_PLAYERS (session pad count) */
     int         player_count;  /* seated players at launch (0 = use slot_count) */
+    /* Bit i = lobby seat i occupied. 0 = all seats occupied (legacy). Sparse
+     * rooms (moved seats leaving a hole) must set this so recomp-net does not
+     * wait forever on empty remotes. */
+    uint32_t    occupied_mask;
     int         input_player;  /* host device index; -1 = auto */
     int         input_delay;
     /* Rollback invent runway (phase_lock / P). Clamped 2..16. Unused in delay-sync. */
