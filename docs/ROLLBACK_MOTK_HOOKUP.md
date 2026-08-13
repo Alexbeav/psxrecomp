@@ -4978,3 +4978,41 @@ Cachy `GAP1_LEGACY` / `RUNWAY_EMPTY` invents. Soft fork @1480 sat **before**
 ahead-of-tip seat; fewer `GAP1_LEGACY` / `RUNWAY_EMPTY` before tip+1.
 Accuracy (§112 arm) still required for matched fin cyc at tip+1.
 
+
+## 114. Platform tip+1 apply-only heal + KF stream (2026-08-13)
+
+**Problem:** matched-baseline tip+1 after post-FMV loading is Win↔Linux
+platform nondeterminism (cpu/clk/tim/ram diverge with matched dirty). Verify
+span past load always aborted; empty tip KF rematched tip and stormed.
+
+**What landed (§114):**
+
+1. Apply-only MEDIA_KF heal (`target=load`) — no tip+1 resim.
+2. Heal Live → invent off + `g_post_fmv_platform_nondet` + initiator KF stream
+   every 16 sim ticks (dense snaps).
+3. Heal loop CAP → same keep-live stream instead of hard DESYNC abort.
+
+**Gap:** stream always rewound to HC's stuck tip+1 fork (`resolved+1`), so
+`choose_load` re-pinned keep forever → loading-screen livelock (no DESYNC).
+
+## 115. Platform KF stream escape / host-tip ride (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §114):** `FIRST CORE DIVERGE sim=1112`, heal
+pin `1111` / `pc=0x800768e8`, then hundreds of `§114 KF stream begin
+fork=1112` + `heal KF CAP →1111` with `invent off until rematch`. No DESYNC;
+loading never advanced. HC `peek_mismatch` stays at tip+1 while
+`resolved_through=keep`.
+
+**What landed (§115):**
+
+1. **Host-tip ride** — when HC fork is the known platform tip+1 and
+   `sim > fork`, stream `begin_rewind(sim)` so MEDIA-KF pins near host tip.
+2. **Accept on advance** — heal Live/tip-hold with `tip > keep` primes HC
+   past the soft fork, clears invent-hold/stream, sets
+   `g_platform_accepted_fork` (hc-fork / begin refuse re-heal).
+3. **Stream CAP** (`RB_FMV_PLATFORM_KF_STREAM_LIMIT=6`) — same stale fork
+   without escape → force accept.
+
+**Re-soak watch:** after first post-FMV tip+1 diverge, logs
+`§115 KF stream ride host tip` and/or `§115 platform fork accepted`; sim
+advances past keep; no endless `snap applied tick=<keep>`; loading completes.

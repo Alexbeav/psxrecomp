@@ -693,6 +693,9 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         return;
     if (g_np.local_slot != 0)
         return; /* initiator side only */
+    /* §115: tip+1 soft fork already accepted — stay Live. */
+    if (psx_netplay_rb_platform_fork_accepted(fork_tick))
+        return;
     /* §64: do not bookkeep persist while an episode / tip-hold / load is
      * in flight. Previously fork_tick advances during tip-extend rereplay
      * started the persist clock, so tip-extend abandon → Live opened a

@@ -114,6 +114,10 @@ int  psx_netplay_rb_post_fmv_heal_eligible(void);
 /* §111: 1 while heal sticky window is live (invent hold may be tip-lead only). */
 int  psx_netplay_rb_post_fmv_heal_sticky(void);
 
+/* §115: 1 if this tip+1 fork was accepted (HC primed past it) — hc-fork /
+ * begin must not re-open apply-only heal for it. */
+int  psx_netplay_rb_platform_fork_accepted(uint32_t fork_tick);
+
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
  * hold). Begin/follow/hc-fork must not open episodes that load there.
  * §97 MEDIA_KF (default on): returns 0 for media-range — episodes allowed. */

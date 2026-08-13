@@ -216,6 +216,8 @@ static void rb_clear_post_fmv_heal_sticky(const char *why);
 static void rb_post_fmv_platform_nondet_enter(uint32_t keep_tick, uint32_t fork_tick,
                                              uint32_t live_sim, const char *why);
 static void rb_clear_post_fmv_platform_nondet(const char *why);
+static void rb_post_fmv_platform_accept(uint32_t through, uint32_t fork,
+                                       const char *why);
 static int rb_post_fmv_heal_eligible(void);
 static int rb_fmv_media_active(void); /* §96 — used by ownership budget during FMV */
 
@@ -452,6 +454,10 @@ static uint32_t g_post_fmv_heal_loop_count;
 static int g_post_fmv_platform_nondet;
 static uint32_t g_post_fmv_platform_keep_tick;
 static uint32_t g_platform_kf_next_sim;
+/* §115: KF stream opens while still pinned at keep_tick (livelock counter). */
+static uint32_t g_platform_kf_stream_count;
+/* §115: tip+1 fork accepted (HC primed past it) — refuse re-heal/stream. */
+static uint32_t g_platform_accepted_fork;
 
 /* §100: recent FMV media snap CRCs — prefer choose_load ticks we already
  * sealed, and let probe_match confirm without a ring edge-case miss. */
@@ -579,6 +585,9 @@ static uint32_t g_last_begin_mismatch = 0xffffffffu;
  * MEDIA_KF this often (sim ticks) so both peers ride the host timeline
  * through loading instead of Live-walking a forked tip+1. */
 #define RB_FMV_PLATFORM_KF_IV 16u
+/* §115: same keep_tick re-stream limit — beyond this, prime HC past the
+ * tip+1 fork and clear invent-hold (Win↔Linux loading-screen livelock). */
+#define RB_FMV_PLATFORM_KF_STREAM_LIMIT 6u
 /* MotK TipHold: quiet window so press→release→D-pad coalesce in one episode.
  * §27: seal slack uses library default (2) so Live may invent tip+1..tip+2
  * during tip-hold — FORCE0 parked presentation at the tip (mini delay-sync).
@@ -936,18 +945,24 @@ static void ownership_exit_to_live(uint32_t tip, uint32_t frontier,
             "psxrecomp: rb ownership Live tip=%u frontier=%u (%s) — no TipHold\n",
             (unsigned)tip, (unsigned)frontier, why ? why : "?");
     fflush(stderr);
-    /* §109/§114: apply-only heal converged — keep invent OFF (all leads) and
-     * stream KF through tip+1. §111 sticky alone only holds when lead>0, so
-     * the tip-starved peer invents into platform nondet (Win↔Linux soak).
-     * Do not lockstep RELEASE here. */
+    /* §109/§114/§115: apply-only heal converged. First pin at the soft-fork
+     * keep → invent OFF + KF stream. Once a later host-tip KF advances past
+     * the keep/fork, accept the timeline (§115) instead of re-pinning forever. */
     if (g_post_fmv_heal_kf) {
         uint32_t fork = g_last_begin_mismatch;
         if (fork == 0xffffffffu)
             fork = g_post_fmv_heal_fork_tick;
         g_post_fmv_heal_kf = 0;
         g_fmv_core_match_streak = 0; /* need fresh CONFIRM after Live walk */
-        rb_post_fmv_platform_nondet_enter(tip, fork, tip,
-                                         "post-FMV heal KF Live");
+        if (g_post_fmv_platform_nondet &&
+            g_post_fmv_platform_keep_tick > 0u &&
+            tip > g_post_fmv_platform_keep_tick) {
+            rb_post_fmv_platform_accept(tip, fork,
+                                       "heal Live past platform keep");
+        } else {
+            rb_post_fmv_platform_nondet_enter(tip, fork, tip,
+                                             "post-FMV heal KF Live");
+        }
     }
     if (g_stash_begin_valid && g_rb &&
         g_stash_begin_epoch == rnet_rb_get_epoch_id(g_rb)) {
@@ -1873,6 +1888,44 @@ static void rb_clear_post_fmv_platform_nondet(const char *why)
     g_post_fmv_platform_nondet = 0;
     g_post_fmv_platform_keep_tick = 0u;
     g_platform_kf_next_sim = 0u;
+    g_platform_kf_stream_count = 0u;
+}
+
+/* §115: accept a tip+1 platform fork — prime HC past it, drop invent-hold /
+ * KF stream, and refuse re-heal for that fork tick. */
+static void rb_post_fmv_platform_accept(uint32_t through, uint32_t fork,
+                                       const char *why)
+{
+    uint32_t prime = through;
+    if (fork > prime)
+        prime = fork;
+    if (g_b.hc && prime > 0u)
+        netplay_hc_prime_after(g_b.hc, prime);
+    if (fork > 0u)
+        g_platform_accepted_fork = fork;
+    else if (through > 0u)
+        g_platform_accepted_fork = through;
+    g_request_post_fmv_heal = 0;
+    g_post_fmv_heal_kf = 0;
+    g_platform_kf_stream_count = 0u;
+    rb_clear_post_fmv_platform_nondet(why ? why : "§115 platform accept");
+    rb_clear_post_fmv_heal_sticky(why ? why : "§115 platform accept");
+    if (g_fmv_unmatched_desync)
+        rb_clear_fmv_desync_hold(why ? why : "§115 platform accept");
+    psx_netplay_hc_fork_recovery_clear();
+    fprintf(stderr,
+            "psxrecomp: rb §115 platform fork accepted through=%u fork=%u "
+            "(%s) — invent unlocked; no re-heal for this tip+1\n",
+            (unsigned)through, (unsigned)fork, why ? why : "?");
+    fflush(stderr);
+}
+
+int psx_netplay_rb_platform_fork_accepted(uint32_t fork_tick)
+{
+    return (g_platform_accepted_fork != 0u &&
+            fork_tick == g_platform_accepted_fork)
+               ? 1
+               : 0;
 }
 
 /* §109/§97: arm host keyframe for media-range OR requested post-FMV heal. */
@@ -5246,15 +5299,23 @@ static void ownership_on_post_match(uint32_t tip)
     fflush(stderr);
     ownership_clear_chain_budget();
     /* §109/§114: heal KF reached tip with no confirmed ahead — still
-     * converged; keep invent off + KF stream (do not RELEASE). */
+     * converged; keep invent off + KF stream (do not RELEASE). §115: if the
+     * pin already advanced past the original keep, accept instead. */
     if (g_post_fmv_heal_kf) {
         uint32_t fork = g_last_begin_mismatch;
         if (fork == 0xffffffffu)
             fork = g_post_fmv_heal_fork_tick;
         g_post_fmv_heal_kf = 0;
         g_fmv_core_match_streak = 0;
-        rb_post_fmv_platform_nondet_enter(tip, fork, tip,
-                                         "post-FMV heal KF tip-hold");
+        if (g_post_fmv_platform_nondet &&
+            g_post_fmv_platform_keep_tick > 0u &&
+            tip > g_post_fmv_platform_keep_tick) {
+            rb_post_fmv_platform_accept(tip, fork,
+                                       "heal tip-hold past platform keep");
+        } else {
+            rb_post_fmv_platform_nondet_enter(tip, fork, tip,
+                                             "post-FMV heal KF tip-hold");
+        }
     }
     /* §61: discard any stashed BEGIN for this episode (rexmit) so Live does
      * not reopen it. */
@@ -6248,6 +6309,8 @@ void psx_netplay_rb_cold_reset(void)
     g_post_fmv_platform_nondet = 0;
     g_post_fmv_platform_keep_tick = 0u;
     g_platform_kf_next_sim = 0u;
+    g_platform_kf_stream_count = 0u;
+    g_platform_accepted_fork = 0u;
     g_last_good_bb_pc = 0;
 }
 
@@ -7456,6 +7519,21 @@ int psx_netplay_rb_begin_rewind(uint32_t mismatch_tick, int slot)
 
     if (!g_rb || !s)
         return 0;
+    /* §115: tip+1 platform fork already accepted — do not re-heal it. */
+    if (g_platform_accepted_fork != 0u &&
+        mismatch_tick == g_platform_accepted_fork) {
+        static uint32_t s_accept_refuse_log;
+        if (s_accept_refuse_log != mismatch_tick) {
+            fprintf(stderr,
+                    "psxrecomp: rb begin REFUSED mismatch=%u — §115 platform "
+                    "fork already accepted\n",
+                    (unsigned)mismatch_tick);
+            fflush(stderr);
+            s_accept_refuse_log = mismatch_tick;
+        }
+        g_request_post_fmv_heal = 0;
+        return 0;
+    }
     /* Prefer tip-extend over refusing while an episode is already open.
      * Span-cap TipHold commit leaves the session inactive — fall through to
      * open a fresh episode for this mismatch (symmetric with peer). */
@@ -8563,16 +8641,19 @@ static void begin_follower(uint32_t epoch, uint32_t mismatch, uint32_t load, uin
     }
 }
 
-/* §114: initiator re-opens apply-only MEDIA_KF while platform nondet is
- * armed and cores still disagree — keeps peers on the host timeline. */
+/* §114/§115: initiator re-opens apply-only MEDIA_KF while platform nondet is
+ * armed and cores still disagree. Prefer host *current* tip when HC is stuck
+ * on the known tip+1 fork so the pin advances; cap same-keep streams. */
 static void rb_post_fmv_platform_kf_stream_poll(void)
 {
     RNetSession *s = sess();
     uint32_t sim;
     uint32_t fork = 0u;
+    uint32_t stream_mm;
     int local;
     int remote;
     int n;
+    int stale_platform_fork;
 
     if (!g_post_fmv_platform_nondet && !g_fmv_unmatched_desync)
         return;
@@ -8595,6 +8676,48 @@ static void rb_post_fmv_platform_kf_stream_poll(void)
     }
     if (fork == 0u)
         fork = (sim > 0u) ? sim : 1u;
+    if (g_platform_accepted_fork != 0u && fork == g_platform_accepted_fork) {
+        g_platform_kf_next_sim = sim + RB_FMV_PLATFORM_KF_IV;
+        return;
+    }
+
+    stale_platform_fork =
+        (g_post_fmv_heal_fork_tick != 0u && fork == g_post_fmv_heal_fork_tick) ||
+        (g_post_fmv_platform_keep_tick != 0u &&
+         fork == g_post_fmv_platform_keep_tick + 1u);
+
+    /* §115: HC stays stuck at tip+1 forever (resolved=keep). Streaming that
+     * fork only re-applies keep. Ride host sim so choose_load pins near tip. */
+    stream_mm = fork;
+    if (stale_platform_fork && sim > fork) {
+        stream_mm = sim;
+        fprintf(stderr,
+                "psxrecomp: rb §115 KF stream ride host tip fork=%u→%u "
+                "sim=%u (stale tip+1)\n",
+                (unsigned)fork, (unsigned)stream_mm, (unsigned)sim);
+        fflush(stderr);
+    }
+
+    if (stale_platform_fork) {
+        g_platform_kf_stream_count++;
+        if (g_platform_kf_stream_count > RB_FMV_PLATFORM_KF_STREAM_LIMIT) {
+            uint32_t through = g_post_fmv_platform_keep_tick;
+            if (sim > through)
+                through = (sim > 0u) ? (sim - 1u) : fork;
+            fprintf(stderr,
+                    "psxrecomp: rb §115 KF stream CAP fork=%u count=%u "
+                    "sim=%u — accept platform tip+1\n",
+                    (unsigned)fork, (unsigned)g_platform_kf_stream_count,
+                    (unsigned)sim);
+            fflush(stderr);
+            rb_post_fmv_platform_accept(through, fork,
+                                       "KF stream limit at stale tip+1");
+            return;
+        }
+    } else {
+        g_platform_kf_stream_count = 0u;
+    }
+
     n = g_b.slot_count ? *g_b.slot_count : 0;
     remote = (local == 0) ? 1 : 0;
     if (n < 2)
@@ -8603,11 +8726,12 @@ static void rb_post_fmv_platform_kf_stream_poll(void)
     g_post_fmv_heal_loop_count = 0u;
     g_platform_kf_next_sim = sim + RB_FMV_PLATFORM_KF_IV;
     fprintf(stderr,
-            "psxrecomp: rb §114 KF stream begin fork=%u sim=%u "
-            "(platform nondet)\n",
-            (unsigned)fork, (unsigned)sim);
+            "psxrecomp: rb §114 KF stream begin fork=%u stream_mm=%u sim=%u "
+            "(platform nondet; stream=%u)\n",
+            (unsigned)fork, (unsigned)stream_mm, (unsigned)sim,
+            (unsigned)g_platform_kf_stream_count);
     fflush(stderr);
-    (void)psx_netplay_rb_begin_rewind(fork, remote);
+    (void)psx_netplay_rb_begin_rewind(stream_mm, remote);
 }
 
 void psx_netplay_rb_pump(void)
