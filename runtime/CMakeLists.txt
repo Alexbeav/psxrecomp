@@ -52,6 +52,17 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    add_executable(host_keymap_test
+        tests/test_host_keymap.c
+        src/host_keymap.c)
+    target_include_directories(host_keymap_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(host_keymap_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME host_keymap_test COMMAND host_keymap_test)
+
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
     # g_debug_last_store_pc references that this test's stub block never gained,

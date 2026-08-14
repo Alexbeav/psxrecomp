@@ -2103,6 +2103,10 @@ GameOptions load_game_options(const fs::path& path) {
 
 // ---- UserSettings (settings.toml) — launcher-written override layer ----
 
+static bool valid_user_audio_freq(int n) {
+    return n == 32040 || n == 32000 || n == 44100 || n == 48000;
+}
+
 UserSettings load_user_settings(const fs::path& path) {
     UserSettings s;
     std::error_code ec;
@@ -2245,6 +2249,13 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
+        if (a.contains("frequency")) try_get([&]{
+            const auto n = toml::find<int64_t>(a, "frequency");
+            if (valid_user_audio_freq((int)n)) {
+                s.audio_freq = (int)n;
+                s.has_audio_freq = true;
+            }
+        });
         if (a.contains("spu_hq")) try_get([&]{
             s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
         });
@@ -2487,6 +2498,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (s.has_rewind_interval)
         f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
+    if (s.has_audio_freq)
+        f << "frequency = " << s.audio_freq << "\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu) {

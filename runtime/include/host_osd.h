@@ -19,6 +19,9 @@ extern "C" {
 /* Top-left text toast. duration_ms <= 0 uses 2000. */
 void host_osd_push(const char *msg, int duration_ms);
 
+/* Persistent top-left status text. Passing NULL/empty clears it. */
+void host_osd_set_status(const char *msg);
+
 /* Right-side vertical volume bar (percent clamped 0..100). */
 void host_osd_show_volume(int percent, int duration_ms);
 

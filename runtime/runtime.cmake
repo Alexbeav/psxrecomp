@@ -441,18 +441,34 @@ endif()
 
 # Local rewind: full rbengine when netplay is on; otherwise compile snap_ring.c
 # only (no recomp-net / sched / hash_confirm). Never both — duplicate symbols.
+# Defaults ON because local rewind is useful for every PSX title. If a title
+# deliberately opts out with -DPSX_REWIND=OFF, recomp-ui hides the Rewind
+# controls instead of exposing dead hotkeys.
+option(PSX_REWIND "Build and expose local rewind support" ON)
 set(PSXRECOMP_HAS_RBENGINE_SNAP FALSE)
 set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "")
-if(PSXRECOMP_HAS_RBENGINE)
-    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
-elseif(RECOMP_RBENGINE_ROOT
-       AND EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c"
-       AND EXISTS "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h")
-    list(APPEND PSXRECOMP_RUNTIME_SOURCES
-        ${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c)
-    set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
-    set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "${RECOMP_RBENGINE_ROOT}/include")
-    message(STATUS "psxrecomp: rewind snap_ring (${RECOMP_RBENGINE_ROOT})")
+if(PSX_REWIND)
+    if(PSXRECOMP_HAS_RBENGINE)
+        set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+    elseif(RECOMP_RBENGINE_ROOT
+           AND EXISTS "${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c"
+           AND EXISTS "${RECOMP_RBENGINE_ROOT}/include/retcomm_rbengine/snap_ring.h")
+        list(APPEND PSXRECOMP_RUNTIME_SOURCES
+            ${RECOMP_RBENGINE_ROOT}/src/snap/rbe_snap_ring.c)
+        set(PSXRECOMP_HAS_RBENGINE_SNAP TRUE)
+        set(PSXRECOMP_RBENGINE_SNAP_INCLUDE "${RECOMP_RBENGINE_ROOT}/include")
+        message(STATUS "psxrecomp: rewind snap_ring (${RECOMP_RBENGINE_ROOT})")
+    endif()
+    if(NOT PSXRECOMP_HAS_RBENGINE_SNAP)
+        message(FATAL_ERROR
+            "psxrecomp: PSX_REWIND=ON exposes the Rewind launcher controls "
+            "but no retcomm-rbengine snap-ring backend was found.\n"
+            "  git submodule update --init lib/retcomm-rbengine\n"
+            "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine\n"
+            "  or configure with -DPSX_REWIND=OFF to hide Rewind.")
+    endif()
+else()
+    message(STATUS "psxrecomp: local rewind disabled (PSX_REWIND=OFF)")
 endif()
 
 # Lobby WebSocket client helpers are vendored under runtime/src/lobby_ws/
@@ -1358,6 +1374,8 @@ function(psxrecomp_add_runtime_target target)
             list(APPEND _psx_recomp_ui_args BRAND "${PSXRT_LAUNCHER_BRAND}")
         endif()
         recomp_target_launcher_ui(${target} ${_psx_recomp_ui_args})
+        target_compile_definitions(${target} PRIVATE
+            RECOMP_UI_PSX_HAS_REWIND=$<BOOL:${PSXRECOMP_HAS_RBENGINE_SNAP}>)
     endif()
 
     if(WIN32 OR MINGW)

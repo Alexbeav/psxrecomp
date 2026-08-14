@@ -18,6 +18,7 @@
 
 typedef struct HostKeyBind {
     int keycode;
+    int scancode;
     int mods; /* KMOD_CTRL | KMOD_ALT | KMOD_SHIFT subset */
 } HostKeyBind;
 
@@ -65,32 +66,44 @@ static void clear_all(void) {
     memset(s_actions, 0, sizeof(s_actions));
 }
 
-static void add_bind(HostKeymapAction action, int keycode, int mods) {
+static void add_bind(HostKeymapAction action, int keycode, int scancode, int mods) {
     HostKeyAction *a;
     if (action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return;
     if (keycode == 0 || keycode == SDLK_UNKNOWN) return;
     a = &s_actions[action];
     if (a->count >= HOST_KEYMAP_MAX_BINDS) return;
     a->binds[a->count].keycode = keycode;
+    a->binds[a->count].scancode = scancode;
     a->binds[a->count].mods = mods;
     a->count++;
 }
 
 static void apply_defaults(void) {
+    if (s_actions[HOST_KEYMAP_FULLSCREEN].count == 0) {
+        add_bind(HOST_KEYMAP_FULLSCREEN, (int)SDLK_RETURN, (int)SDL_SCANCODE_RETURN, KMOD_ALT);
+        add_bind(HOST_KEYMAP_FULLSCREEN, (int)SDLK_f, (int)SDL_SCANCODE_F, KMOD_CTRL);
+    }
+    if (s_actions[HOST_KEYMAP_TURBO].count == 0)
+        add_bind(HOST_KEYMAP_TURBO, (int)SDLK_TAB, (int)SDL_SCANCODE_TAB, 0);
     if (s_actions[HOST_KEYMAP_VOLUME_UP].count == 0)
-        add_bind(HOST_KEYMAP_VOLUME_UP, (int)SDLK_KP_PLUS, 0);
+        add_bind(HOST_KEYMAP_VOLUME_UP, (int)SDLK_KP_PLUS, (int)SDL_SCANCODE_KP_PLUS, 0);
     if (s_actions[HOST_KEYMAP_VOLUME_DOWN].count == 0)
-        add_bind(HOST_KEYMAP_VOLUME_DOWN, (int)SDLK_KP_MINUS, 0);
+        add_bind(HOST_KEYMAP_VOLUME_DOWN, (int)SDLK_KP_MINUS, (int)SDL_SCANCODE_KP_MINUS, 0);
+    if (s_actions[HOST_KEYMAP_DISPLAY_PERF].count == 0)
+        add_bind(HOST_KEYMAP_DISPLAY_PERF, (int)SDLK_f, (int)SDL_SCANCODE_F, 0);
+#if defined(PSX_HAS_RBENGINE_SNAP)
     if (s_actions[HOST_KEYMAP_REWIND].count == 0)
-        add_bind(HOST_KEYMAP_REWIND, (int)SDLK_F8, 0);
+        add_bind(HOST_KEYMAP_REWIND, (int)SDLK_F8, (int)SDL_SCANCODE_F8, 0);
+#endif
     if (s_actions[HOST_KEYMAP_SAVE_STATE_MENU].count == 0)
-        add_bind(HOST_KEYMAP_SAVE_STATE_MENU, (int)SDLK_F7, 0);
+        add_bind(HOST_KEYMAP_SAVE_STATE_MENU, (int)SDLK_F7, (int)SDL_SCANCODE_F7, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
 static void parse_one_token(HostKeymapAction action, char *tok) {
     int mods = 0;
     SDL_Keycode key;
+    SDL_Scancode sc;
     trim_inplace(tok);
     if (!tok[0] || ieq(tok, "(unbound)") || ieq(tok, "None")) return;
     for (;;) {
@@ -114,7 +127,8 @@ static void parse_one_token(HostKeymapAction action, char *tok) {
         fprintf(stderr, "host_keymap: unknown key '%s'\n", tok);
         return;
     }
-    add_bind(action, (int)key, mods);
+    sc = SDL_GetScancodeFromName(tok);
+    add_bind(action, (int)key, (int)sc, mods);
 }
 
 static void parse_value(HostKeymapAction action, const char *value) {
@@ -133,8 +147,11 @@ static void parse_value(HostKeymapAction action, const char *value) {
 }
 
 static HostKeymapAction action_for_key(const char *name) {
+    if (ieq(name, "Fullscreen")) return HOST_KEYMAP_FULLSCREEN;
+    if (ieq(name, "Turbo")) return HOST_KEYMAP_TURBO;
     if (ieq(name, "VolumeUp")) return HOST_KEYMAP_VOLUME_UP;
     if (ieq(name, "VolumeDown")) return HOST_KEYMAP_VOLUME_DOWN;
+    if (ieq(name, "DisplayPerf")) return HOST_KEYMAP_DISPLAY_PERF;
     if (ieq(name, "Rewind")) return HOST_KEYMAP_REWIND;
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
     return HOST_KEYMAP_ACTION_COUNT;
@@ -201,6 +218,21 @@ int host_keymap_match(HostKeymapAction action, int keycode, int mod) {
     return 0;
 }
 
+int host_keymap_down(HostKeymapAction action, const uint8_t *keys, int mod) {
+    const HostKeyAction *a;
+    const int relevant = (int)(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT);
+    int i;
+    if (!keys || action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return 0;
+    a = &s_actions[action];
+    for (i = 0; i < a->count; i++) {
+        const int sc = a->binds[i].scancode;
+        if (sc <= 0 || sc >= SDL_NUM_SCANCODES) continue;
+        if (!keys[sc]) continue;
+        if ((mod & relevant) == a->binds[i].mods) return 1;
+    }
+    return 0;
+}
+
 /* Rewind overlay FONT8 only draws ASCII 32..90 (space..Z); lowercase is
  * uppercased by the drawer. Map punctuation / odd SDL single-glyph names to
  * short tokens so binds like backtick don't render as "?". */
@@ -257,9 +289,12 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
     if (action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return out;
     a = &s_actions[action];
     if (a->count <= 0) {
+#if defined(PSX_HAS_RBENGINE_SNAP)
         if (action == HOST_KEYMAP_REWIND)
             snprintf(out, cap, "F8");
-        else if (action == HOST_KEYMAP_SAVE_STATE_MENU)
+        else
+#endif
+        if (action == HOST_KEYMAP_SAVE_STATE_MENU)
             snprintf(out, cap, "F7");
         return out;
     }

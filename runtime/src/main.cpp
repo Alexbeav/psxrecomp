@@ -465,6 +465,7 @@ static int post_load_probe_env_on(void) {
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
 static std::string s_fps_base_title;
+static int      s_fps_telemetry_enabled = -1; /* -1 = unread env */
 static FramePacer s_frame_pacer = { 0 };
 static int      s_turbo_present_skip = 0;
 static int      s_fmv_skip_present_skip = 0;
@@ -515,6 +516,27 @@ static void present_session_reset(void) {
      * does not clear them. Rematch then no-ops every flush → black window. */
     gpu_vblank_clear_deferred_present();
     smooth_60_reset();
+}
+
+static int fps_telemetry_enabled(void) {
+    if (s_fps_telemetry_enabled < 0) {
+        const char *e = std::getenv("PSX_FPS_TELEMETRY");
+        s_fps_telemetry_enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    return s_fps_telemetry_enabled;
+}
+
+static void fps_telemetry_toggle(void) {
+    const int enabled = fps_telemetry_enabled() ? 0 : 1;
+    s_fps_telemetry_enabled = enabled;
+    s_fps_last_time = 0;
+    s_fps_last_frame = 0;
+    if (!enabled && sdl_window && !s_fps_base_title.empty())
+        SDL_SetWindowTitle(sdl_window, s_fps_base_title.c_str());
+    if (!enabled)
+        host_osd_set_status(NULL);
+    s_fps_base_title.clear();
+    host_osd_push(enabled ? "FPS readout on" : "FPS readout off", 1500);
 }
 
 static void post_load_probe_stall_pc_note(uint32_t pc) {
@@ -1065,6 +1087,7 @@ static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderle
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
 static int           g_video_win_w    = 1280; /* window width (height follows aspect) */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
+static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
@@ -5635,14 +5658,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * than presents so turbo and skipped-frame modes still report game speed.
      * Skip during netplay post-load barrier — admit is stalled and the window
      * is not updating, so a climbing FPS line is misleading. */
-    if (!psx_netplay_in_load_barrier()) {
+    if (fps_telemetry_enabled() && !psx_netplay_in_load_barrier()) {
         extern uint64_t s_frame_count;
         const Uint64 now = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
         if (!s_fps_last_time) {
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
-            if (sdl_window) {
+            if (sdl_window && s_fps_base_title.empty()) {
                 const char *title = SDL_GetWindowTitle(sdl_window);
                 if (title) s_fps_base_title = title;
             }
@@ -5655,6 +5678,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 snprintf(title, sizeof(title), "%s  [%.0f fps %.2fx]",
                          s_fps_base_title.c_str(), fps, speed);
                 SDL_SetWindowTitle(sdl_window, title);
+            }
+            if (!g_headless) {
+                char osd[64];
+                snprintf(osd, sizeof(osd), "FPS %.0f  %.2fx", fps, speed);
+                host_osd_set_status(osd);
             }
             if (netplay_timing_on() && s_np_timing_frames > 0) {
                 const double invf = 1000.0 / (double)frequency;
@@ -5773,6 +5801,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     debug_force_cd_reinsert();
                     host_osd_push("CD reinsert", 1500);
                 }
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)key,
+                                           (int)mod)) {
+                    fps_telemetry_toggle();
+                }
                 /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
                  * (defaults: keypad +/-). 5% steps; shows right-side bar. */
                 else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
@@ -5790,8 +5823,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * set in both SDL_WINDOW_FULLSCREEN and
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
-                else if ((key == SDLK_RETURN && (mod & KMOD_ALT)) ||
-                         (key == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)key,
+                                           (int)mod)) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
@@ -6004,7 +6038,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         const int TURBO_PRESENT_EVERY = 30;
-        if (keys[SDL_SCANCODE_TAB]) {
+        if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
             turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
             if (turbo_skip != 0) {
                 ep.skip_pace = 1;
@@ -10657,6 +10691,7 @@ int main(int argc, char** argv) {
             g_video_aspect_num = us.aspect_num;
             g_video_aspect_den = us.aspect_den;
         }
+        if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
         if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
@@ -11073,6 +11108,7 @@ int main(int argc, char** argv) {
             seed.has_frame_interpolation_fps = true;
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
+            seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
             seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
             seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
@@ -11178,7 +11214,7 @@ int main(int argc, char** argv) {
             ls.widescreen     = (seed.aspect_num == 16 && seed.aspect_den == 9) ? 1 : 0;
             ls.widescreen_hud = ls.widescreen;
             ls.enable_audio   = 1;
-            ls.audio_freq     = 44100;
+            ls.audio_freq     = seed.audio_freq;
             ls.volume         = host_volume_get();
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
@@ -11466,6 +11502,7 @@ int main(int argc, char** argv) {
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
+                seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 seed.has_rewind_depth      = true;
@@ -11677,6 +11714,7 @@ int main(int argc, char** argv) {
                 g_frame_interpolation_fps = seed.frame_interpolation_fps;
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
+                g_audio_freq      = seed.audio_freq;
                 g_audio_spu_hq    = seed.spu_hq;
                 g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
                     ? seed.rewind_depth : 50;
@@ -12250,7 +12288,7 @@ session_reboot:
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
         PsxSdlAudioSpec want = {};
         PsxSdlAudioSpec have = {};
-        want.freq = 44100;
+        want.freq = g_audio_freq;
         want.format = AUDIO_S16SYS;
         want.channels = 2;
         want.samples = 1024;
@@ -13008,7 +13046,7 @@ soft_return_lobby:
             (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.widescreen_hud = ls.widescreen;
         ls.enable_audio = 1;
-        ls.audio_freq = 44100;
+        ls.audio_freq = g_audio_freq;
         ls.volume = host_volume_get();
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
@@ -13279,6 +13317,8 @@ soft_return_lobby:
                 us.has_frame_interpolation = true;
                 us.frame_interpolation_fps = ls.frame_interp_fps;
                 us.has_frame_interpolation_fps = true;
+                us.audio_freq = ls.audio_freq;
+                us.has_audio_freq = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
                 us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
@@ -13337,6 +13377,7 @@ soft_return_lobby:
             g_fullscreen = ls.fullscreen != 0;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
+            g_audio_freq = ls.audio_freq;
             g_audio_spu_hq = ls.spu_hq != 0;
             if (ls.rewind_depth > 0) {
                 g_rewind_depth = ls.rewind_depth;

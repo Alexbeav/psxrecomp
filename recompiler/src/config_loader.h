@@ -1115,6 +1115,7 @@ struct UserSettings {
     bool has_hotkey_pad_save_state_menu = false; int hotkey_pad_save_state_menu = 2040; /* select+r1 */
     // [audio]
     bool has_spu_hq         = false; bool spu_hq         = false;
+    bool has_audio_freq     = false; int  audio_freq     = 44100;
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;
