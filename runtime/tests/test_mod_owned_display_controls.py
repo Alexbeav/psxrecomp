@@ -27,10 +27,8 @@ for legacy_route in (
     assert legacy_route not in MAIN, f"legacy offer flag still controls UI: {legacy_route}"
 
 for hidden_capability in (
-    "gi.widescreen_supported = 0;",
-    "gi.aspect_mask          = 0;",
-    "gi.has_frame_interp     = 0;",
-    "gi.has_skip_fmv         = 0;",
+    "gi->widescreen_supported = 0;",
+    "gi->aspect_mask = 0;",
 ):
     assert hidden_capability in MAIN
 

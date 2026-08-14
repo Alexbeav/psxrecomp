@@ -83,6 +83,8 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_VOLUME_DOWN, (int)SDLK_KP_MINUS, 0);
     if (s_actions[HOST_KEYMAP_REWIND].count == 0)
         add_bind(HOST_KEYMAP_REWIND, (int)SDLK_F8, 0);
+    if (s_actions[HOST_KEYMAP_SAVE_STATE_MENU].count == 0)
+        add_bind(HOST_KEYMAP_SAVE_STATE_MENU, (int)SDLK_F7, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -134,6 +136,7 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "VolumeUp")) return HOST_KEYMAP_VOLUME_UP;
     if (ieq(name, "VolumeDown")) return HOST_KEYMAP_VOLUME_DOWN;
     if (ieq(name, "Rewind")) return HOST_KEYMAP_REWIND;
+    if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 
@@ -256,6 +259,8 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
     if (a->count <= 0) {
         if (action == HOST_KEYMAP_REWIND)
             snprintf(out, cap, "F8");
+        else if (action == HOST_KEYMAP_SAVE_STATE_MENU)
+            snprintf(out, cap, "F7");
         return out;
     }
     b = &a->binds[0];

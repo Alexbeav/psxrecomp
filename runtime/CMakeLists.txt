@@ -357,6 +357,13 @@ if(BUILD_TESTING)
     target_include_directories(spu_gaussian_test PRIVATE include)
     add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
 
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME rewind_toggle_combo_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rewind_toggle_combo.py)
+    endif()
+
     # DISABLED, not de-registered. It links and runs, but 147 of its 309 checks
     # fail: the no-card path is clean (141/141) while the card-present READ
     # reply stream comes back shifted by one and then stuck (idx[1] 0xFF for an

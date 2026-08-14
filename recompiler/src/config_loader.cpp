@@ -2249,6 +2249,23 @@ UserSettings load_user_settings(const fs::path& path) {
             s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
         });
     }
+    if (doc.contains("hotkeys")) {
+        const toml::value& h = toml::find(doc, "hotkeys");
+        if (h.contains("rewind_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "rewind_pad");
+            if (n >= 0 && n < 256) {
+                s.hotkey_pad_rewind = (int)n;
+                s.has_hotkey_pad_rewind = true;
+            }
+        });
+        if (h.contains("save_state_menu_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "save_state_menu_pad");
+            if (n >= 0 && n < 256) {
+                s.hotkey_pad_save_state_menu = (int)n;
+                s.has_hotkey_pad_save_state_menu = true;
+            }
+        });
+    }
     if (doc.contains("launcher")) {
         const toml::value& l = toml::find(doc, "launcher");
         if (l.contains("skip_launcher")) try_get([&]{
@@ -2472,6 +2489,14 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     f << "\n[audio]\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
+    if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu) {
+        f << "\n[hotkeys]\n";
+        if (s.has_hotkey_pad_rewind)
+            f << "rewind_pad = " << s.hotkey_pad_rewind << "\n";
+        if (s.has_hotkey_pad_save_state_menu)
+            f << "save_state_menu_pad = "
+              << s.hotkey_pad_save_state_menu << "\n";
+    }
     if (s.has_skip_launcher)
         f << "\n[launcher]\nskip_launcher = " << (s.skip_launcher ? "true" : "false") << "\n";
     if ((s.has_netplay_player_name && !s.netplay_player_name.empty()) ||

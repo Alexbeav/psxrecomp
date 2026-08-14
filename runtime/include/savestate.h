@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /*
- * User save states (Shift+F1-F12 save, F1-F12 load; 12 slots).
+ * User save states (F7 save-state menu by default; 12 slots).
  *
  * A thin wrapper over boot_state.c's complete full-machine serializer
  * (boot_state_save / boot_state_load — CPU/RAM/scratchpad/VRAM/SPU/CDROM/DMA/SIO/
@@ -23,6 +23,8 @@ extern "C" {
  */
 
 #define SAVESTATE_SLOTS 12
+#define SAVESTATE_THUMB_W 128
+#define SAVESTATE_THUMB_H 96
 
 /* Configure the slot directory + integrity key (from main, after config load).
  *
@@ -61,6 +63,14 @@ int savestate_write_slot(int slot, const void* data, size_t size);
 
 /* 1 if the slot file exists and is non-empty. */
 int savestate_slot_exists(int slot);
+
+/* Slot file modified time, seconds since the Unix epoch. */
+int savestate_slot_mtime(int slot, int64_t* out_time);
+
+/* Per-slot screenshot thumbnails captured after a successful save. */
+int savestate_capture_thumb(int slot);
+int savestate_read_thumb(int slot, uint32_t* out_argb,
+                         int out_w, int out_h);
 
 /* 1 if the slot .pst header matches this build's integrity key (BIOS/entry/
  * codegen). 0 + optional reason when missing or stale — use before netplay
@@ -108,7 +118,7 @@ void psx_frontend_on_savestate_loaded(void);
 void psx_frontend_on_rb_snap_loaded(void);
 
 /* Frontend hook (main.cpp): host OSD toast after a user save/load settles.
- * is_load: 0 = save, 1 = load. slot is 0-based (F1 = 0). ok: 1 on success. */
+ * is_load: 0 = save, 1 = load. slot is 0-based. ok: 1 on success. */
 void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
 
 /* Called every block from psx_check_interrupts (in_exception == 0). If a save is

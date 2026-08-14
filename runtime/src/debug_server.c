@@ -7937,8 +7937,9 @@ static void handle_mmx6_freshfix(int id, const char *json)
              id, gpu_ws_mmx6_freshfix_get(), gpu_ws_mmx6_refill_cols(), total, bad);
 }
 
-/* Save-state save/load via the debug server (mirrors the F1-F12 / Shift+F1-F12
- * keys) so the flow can be driven headlessly. {"cmd":"savestate","op":"save"|
+/* Save-state save/load via the debug server. Player-facing hotkeys route
+ * through the F7 save-state menu; this command keeps the flow headless.
+ * {"cmd":"savestate","op":"save"|
  * "load","slot":N}. The request is staged and runs at the next block boundary
  * (savestate_poll); a load unwinds the guest, so the ack is sent before it. */
 static void handle_savestate(int id, const char *json)
