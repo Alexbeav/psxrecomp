@@ -355,8 +355,27 @@ static int hb_append_ram_peek(char *out, int n, size_t cap, uint32_t vaddr, int 
         out[n++] = hexd[src[i] & 0xF];
     }
     if ((size_t)(n + 2) < cap) { out[n++] = '"'; out[n++] = '}'; }
-    out[n] = 0;
     return n;
+}
+
+/* If the insn at $ra-8 is j/jal, return its target (live RAM, not AOT). */
+static uint32_t hb_jal_target_from_ra(uint32_t ra) {
+    uint32_t pc, phys, insn, op;
+    const uint8_t *src = NULL;
+    if (ra < 8u) return 0;
+    pc = (ra - 8u) & ~3u;
+    phys = pc & 0x1FFFFFFFu;
+    if (phys >= 0x1F800000u && phys + 4u <= 0x1F800400u) {
+        uint8_t *sp = memory_get_scratchpad_ptr();
+        if (sp) src = sp + (phys - 0x1F800000u);
+    } else if (phys < 0x00800000u && g_psx_ram) {
+        src = g_psx_ram + (phys & 0x1FFFFFu);
+    }
+    if (!src) return 0;
+    memcpy(&insn, src, 4);
+    op = (insn >> 26) & 0x3Fu;
+    if (op != 2u && op != 3u) return 0; /* j / jal */
+    return (pc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2);
 }
 
 /* Format the CPU register file (pc + all 32 GPRs) and the full 1 KB
@@ -412,18 +431,26 @@ static int hb_format_cpu_scratchpad(char *out, size_t cap) {
     }
     if ((size_t)(n + 2) < cap) out[n++] = '"';
 
-    /* DRAM slices around $ra (caller) and $s0 (typical overlay object).
-     * Direct DRAM/scratchpad reads — no MMIO. Word-align the start. */
+    /* DRAM slices: $ra-32 (jalr at ra-8), $s0-16, j/jal target, overlay page. */
     {
         uint32_t ra = cpu ? (cpu->gpr[31] & ~3u) : 0u;
         uint32_t s0 = cpu ? (cpu->gpr[16] & ~3u) : 0u;
+        uint32_t ra_peek = (ra >= 32u) ? (ra - 32u) : ra;
+        uint32_t s0_peek = (s0 >= 16u) ? (s0 - 16u) : s0;
+        uint32_t jal_tgt = hb_jal_target_from_ra(ra);
         int m = snprintf(out + n, cap - (size_t)n,
                          ",\n  \"ram_peeks\":{\"ra\":");
         if (m > 0) n += m;
-        n = hb_append_ram_peek(out, n, cap, ra, 64);
+        n = hb_append_ram_peek(out, n, cap, ra_peek, 64);
         m = snprintf(out + n, cap - (size_t)n, ",\"s0\":");
         if (m > 0) n += m;
-        n = hb_append_ram_peek(out, n, cap, s0, 32);
+        n = hb_append_ram_peek(out, n, cap, s0_peek, 48);
+        m = snprintf(out + n, cap - (size_t)n, ",\"jal_target\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, jal_tgt, jal_tgt ? 64 : 0);
+        m = snprintf(out + n, cap - (size_t)n, ",\"overlay_80165000\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, 0x80165000u, 64);
         if ((size_t)(n + 2) < cap) out[n++] = '}';
     }
 
@@ -622,7 +649,7 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
 #endif
 
     {
-        static char cs_buf[5120];
+        static char cs_buf[6144];
         hb_format_cpu_scratchpad(cs_buf, sizeof(cs_buf));
         fputs(",\n", f);
         fputs(cs_buf, f);

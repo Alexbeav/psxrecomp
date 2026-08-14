@@ -62,6 +62,28 @@ extern CPUState *debug_cpu_ptr;
 extern uint8_t *g_psx_ram;
 extern uint8_t *memory_get_scratchpad_ptr(void);
 
+/* Overlay loader snapshot (post-FMV splash miss vs resim load freeze). */
+extern uint32_t overlay_loader_get_inprogress(void);
+extern int      overlay_loader_load_frozen(void);
+extern int      overlay_loader_registered_count(void);
+extern void     overlay_loader_get_status(int *active, int *registered,
+                                          int *regions_checked,
+                                          char *cache_dir_out, int cache_dir_len,
+                                          char *game_id_out, int game_id_len,
+                                          uint32_t *checked_out, int checked_max,
+                                          int *checked_written,
+                                          uint32_t *last_crc_out,
+                                          int *last_file_found_out);
+extern void     overlay_loader_get_counters(uint32_t *loads, uint32_t *invalidations,
+                                            uint32_t *unregistered,
+                                            uint64_t *disp_native, uint64_t *disp_interp,
+                                            uint64_t *stale_blocked,
+                                            uint32_t *last_write_pc,
+                                            uint32_t *last_write_addr,
+                                            uint32_t *last_write_size,
+                                            int *regions, uint32_t *revalidations);
+extern int      psx_netplay_is_resimulating(void);
+
 /* Frame counter from debug_server.c (non-static). */
 extern uint64_t s_frame_count;
 
@@ -172,6 +194,20 @@ static void append_ram_peek(char *buf, size_t cap, size_t *pos,
                comma ? "," : "", key, vaddr, n);
     if (n > 0) append_hex_bytes(buf, cap, pos, tmp, n);
     append_str(buf, cap, pos, "\"}");
+}
+
+/* If the insn at $ra-8 is j/jal, return its target (live RAM, not AOT). */
+static uint32_t crash_jal_target_from_ra(uint32_t ra) {
+    uint8_t b[4];
+    uint32_t pc, insn, op;
+    if (ra < 8u) return 0;
+    pc = (ra - 8u) & ~3u;
+    if (crash_peek_guest(pc, b, 4) != 4) return 0;
+    insn = (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+           ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    op = (insn >> 26) & 0x3Fu;
+    if (op != 2u && op != 3u) return 0; /* j / jal */
+    return (pc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2);
 }
 
 /* Serialize a single uint32_t hex value as a JSON string. */
@@ -342,6 +378,9 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         ac_escaped[w] = '\0';
     }
 
+    char reason_esc[384];
+    json_escape(reason, reason_esc, sizeof(reason_esc));
+
     append_fmt(buf, sizeof(buf), &pos,
         "{\n"
         "  \"reason\": \"%s\",\n"
@@ -368,7 +407,7 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         "    \"entry_sp\": \"0x%08X\",\n"
         "    \"insns_into_block\": %u\n"
         "  },\n",
-        reason ? reason : "(unknown)",
+        reason_esc[0] ? reason_esc : "(unknown)",
         s_exit_origin,
         ac_degraded ? 1 : 0,
         ac_degraded ? ac_escaped : "",
@@ -511,17 +550,28 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
         append_str(buf, sizeof(buf), &pos, "  \"cpu\": null,\n");
     }
 
-    /* DRAM around $ra (overlay jalr caller) and $s0 (object that supplied
-     * the target word), plus the full 1 KB scratchpad. Direct DRAM reads. */
+    /* DRAM around $ra-32 (catches jalr at ra-8) and $s0-16, plus the overlay
+     * page that held the TM4 splash caller (0x80165000), the j/jal target at
+     * ra-8 (boot-text hole vs overwrite), and full scratchpad. */
     {
         uint32_t ra = 0, s0 = 0;
         if (debug_cpu_ptr) {
             ra = debug_cpu_ptr->gpr[31] & ~3u;
             s0 = debug_cpu_ptr->gpr[16] & ~3u;
         }
+        uint32_t ra_peek = (ra >= 32u) ? (ra - 32u) : ra;
+        uint32_t s0_peek = (s0 >= 16u) ? (s0 - 16u) : s0;
+        uint32_t jal_tgt = crash_jal_target_from_ra(ra);
         append_str(buf, sizeof(buf), &pos, "  \"ram_peeks\": {");
-        append_ram_peek(buf, sizeof(buf), &pos, "ra", ra, 64, 0);
-        append_ram_peek(buf, sizeof(buf), &pos, "s0", s0, 32, 1);
+        append_ram_peek(buf, sizeof(buf), &pos, "ra", ra_peek, 64, 0);
+        append_ram_peek(buf, sizeof(buf), &pos, "s0", s0_peek, 48, 1);
+        if (jal_tgt)
+            append_ram_peek(buf, sizeof(buf), &pos, "jal_target", jal_tgt, 64, 1);
+        else
+            append_str(buf, sizeof(buf), &pos,
+                       ",\"jal_target\":{\"addr\":\"0x00000000\",\"len\":0,\"hex\":\"\"}");
+        append_ram_peek(buf, sizeof(buf), &pos, "overlay_80165000",
+                        0x80165000u, 64, 1);
         {
             uint8_t spad[1024];
             int nsp = crash_peek_guest(0x1F800000u, spad, 1024);
@@ -532,6 +582,51 @@ void psx_crash_trace_dump(const char *reason, void *seh_info) {
             append_str(buf, sizeof(buf), &pos, "\"}");
         }
         append_str(buf, sizeof(buf), &pos, "},\n");
+    }
+
+    /* Host overlay-DLL / resim gate at FAIL-FAST. Distinguishes "CD DMA never
+     * finished" from "rollback froze registration mid-splash load". */
+    {
+        int active = 0, valid = 0, regions = 0, last_found = 0;
+        uint32_t last_crc = 0;
+        overlay_loader_get_status(&active, &valid, &regions,
+                                  NULL, 0, NULL, 0, NULL, 0, NULL,
+                                  &last_crc, &last_found);
+        uint64_t disp_native = 0, disp_interp = 0, stale_blocked = 0;
+        uint32_t loads = 0, invalidations = 0, revalidations = 0;
+        overlay_loader_get_counters(&loads, &invalidations, NULL,
+                                    &disp_native, &disp_interp, &stale_blocked,
+                                    NULL, NULL, NULL, NULL, &revalidations);
+        int frozen = overlay_loader_load_frozen();
+        int resim = psx_netplay_is_resimulating();
+        append_fmt(buf, sizeof(buf), &pos,
+            "  \"overlay_loader\": {\n"
+            "    \"inprogress\": \"0x%08X\",\n"
+            "    \"load_freeze\": %d,\n"
+            "    \"resimulating\": %d,\n"
+            "    \"loads_allowed\": %d,\n"
+            "    \"active\": %d,\n"
+            "    \"valid_count\": %d,\n"
+            "    \"registered\": %d,\n"
+            "    \"regions_checked\": %d,\n"
+            "    \"last_crc\": \"0x%08X\",\n"
+            "    \"last_file_found\": %d,\n"
+            "    \"loads\": %u,\n"
+            "    \"invalidations\": %u,\n"
+            "    \"revalidations\": %u,\n"
+            "    \"stale_blocked\": %llu,\n"
+            "    \"disp_native\": %llu,\n"
+            "    \"disp_interp\": %llu\n"
+            "  },\n",
+            overlay_loader_get_inprogress(),
+            frozen, resim,
+            (!frozen && !resim) ? 1 : 0,
+            active, valid, overlay_loader_registered_count(), regions,
+            last_crc, last_found,
+            loads, invalidations, revalidations,
+            (unsigned long long)stale_blocked,
+            (unsigned long long)disp_native,
+            (unsigned long long)disp_interp);
     }
 
     /* Recursion fingerprint (build-independent GUEST addresses): the func entered

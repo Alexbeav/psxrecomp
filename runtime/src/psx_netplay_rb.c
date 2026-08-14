@@ -2312,7 +2312,10 @@ static void abort_episode(const char *why)
     g_abort_wire_class = RNET_RB_ABORT_CLASS_ABORT;
     g_abort_wire_realign_tick = 0u;
     psx_netplay_timesync_on_episode_boundary();
-    /* Preserve a queued Live realign load; clear only episode baseline loads. */
+    /* Preserve a queued Live realign load; clear only episode baseline loads.
+     * The next enter_awaiting_baseline consumes leftover live_realign so a
+     * follow-up episode (NACK realign → peer-ahead reopen) takes the
+     * snap-applied handshake, not the live-realign early return. */
     if (!g_live_realign_pending)
         g_pending_load_valid = 0;
     g_pending_resume_valid = 0;
@@ -4185,6 +4188,11 @@ static void enter_awaiting_baseline(void)
     g_episode_snap_applied = 0;
     g_pending_load_tick = load;
     g_pending_load_valid = 1;
+    /* Episode now owns pending_load. A leftover live_realign from abort/
+     * NACK would make try_apply_pending_load early-return without
+     * g_episode_snap_applied / maybe_send_baseline() — both peers stall
+     * on rb_baseline (TM4 soak: epoch 49 load 15184). */
+    g_live_realign_pending = 0;
     g_pending_resume_valid = 0;
     g_empty_span_verify_pending = 0;
     g_baseline_rexmit_logged = 0;
@@ -6755,6 +6763,23 @@ static int try_apply_pending_load(CPUState *cpu_in)
                         (unsigned)netplay_core_digest(cpu_in),
                         (unsigned)netplay_cdrom_digest());
                 fflush(stderr);
+                /* If this realign is also the active episode's load (NACK
+                 * leftover flag, or poll_snap raced enter_awaiting_baseline),
+                 * complete the baseline handshake. Live realign outside an
+                 * episode, or at a different tick, stays apply-only. */
+                if (g_rb && rnet_rb_is_active(g_rb) &&
+                    rnet_rb_get_phase(g_rb) == nRNetRbPhaseAwaitingBaseline &&
+                    loaded_tick == rnet_rb_get_load_tick(g_rb)) {
+                    g_episode_snap_applied = 1;
+                    g_episode_load_tick = loaded_tick;
+                    pin_baseline_from_ring(loaded_tick);
+                    fprintf(stderr,
+                            "psxrecomp: rb realign also episode snap load=%u "
+                            "(handshake)\n",
+                            (unsigned)loaded_tick);
+                    fflush(stderr);
+                    maybe_send_baseline();
+                }
                 return 1;
             }
             if (g_tip_extend_rereplay) {
