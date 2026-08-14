@@ -732,6 +732,12 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
     /* longjmp abandons every mid-block CPS frame — sentinel RFE must not
      * treat the new top-level dispatch as a continuable live chain. */
     g_sched_top_level_resume = 1;
+    /* Publish before the longjmp lands in dispatch: sticky I_STAT can deliver
+     * on the first edge with take_pc=0 otherwise (LEGACY_SENTINEL fork). */
+    {
+        extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
+        psx_irq_arm_compiled_resume_pc(resume_pc);
+    }
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
 }
 
@@ -849,10 +855,12 @@ void psx_scheduler_run(CPUState* cpu)
         }
 
         uint32_t run_pc;
+        int from_top_resume = 0;
         if (g_sched_escape.reason == PSX_RUN_RESUME_CURRENT &&
             g_sched_escape.resume_pc != 0u) {
             /* Same-thread RFE: GPRs already committed by the RFE; just re-dispatch. */
             run_pc = g_sched_escape.resume_pc;
+            from_top_resume = 1;
         } else {
             uint32_t cur = psx_current_tcb_ptr(cpu);
             if (psx_is_valid_tcb(cpu, cur)) {
@@ -872,6 +880,12 @@ void psx_scheduler_run(CPUState* cpu)
 
         cpu->pc = run_pc;
         g_sched_escape.reason = PSX_RUN_CONTINUE;
+        /* Re-arm on the dispatch that consumes RESUME_CURRENT (covers
+         * recover_null_pc continues that skip resume_at). */
+        if (from_top_resume) {
+            extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
+            psx_irq_arm_compiled_resume_pc(run_pc);
+        }
         psx_dispatch(cpu, run_pc);
 
         /* psx_dispatch returned with NO structured escape => the outermost

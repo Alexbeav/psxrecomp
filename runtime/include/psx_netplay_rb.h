@@ -84,10 +84,14 @@ int  psx_netplay_rb_fmv_defer_rewind(void);
 /* 1 while depth24 or recent MDEC (not settle). */
 int  psx_netplay_rb_fmv_media_active(void);
 
-/* 1 during FMV media + short settle (§26) — admit waits for remote wire.
- * Post-FMV digest lockstep no longer blocks invent. Ticks FMV→settle.
- * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires). */
+/* 1 during FMV media + post-FMV lockstep MIN (§26/§113) — admit waits for
+ * remote wire through loading tip+1 (not settle-only). Ticks FMV→settle→MIN.
+ * Also 1 while §93 MAX-unmatched DESYNC invent-hold is armed (expires).
+ * §111: post-FMV heal sticky invent-hold only while remote_lead > 0. */
 int  psx_netplay_rb_lockstep_no_invent(void);
+
+/* 1 while sim is still inside the short post-FMV settle tail (before MIN). */
+int  psx_netplay_rb_fmv_settle_active(void);
 
 /* §93/§94: 1 while MAX-unmatched DESYNC invent-hold is armed (not media/settle).
  * Stall tag should say fmv_desync_hold, not fmv_settle. */
@@ -98,8 +102,21 @@ int  psx_netplay_rb_fmv_desync_hold(void);
 void psx_netplay_rb_clear_fmv_desync_hold(const char *why);
 
 /* §109: next begin_rewind is an apply-only MEDIA_KF heal (target=load).
- * Call from hc-fork / resim-diverge escalate before begin_rewind. */
+ * Call from hc-fork / resim-diverge escalate before begin_rewind.
+ * §114: tip+1 verify-span abandoned (platform nondet); heal Live arms
+ * invent-off + KF stream instead of lockstep RELEASE. */
 void psx_netplay_rb_request_post_fmv_heal_kf(void);
+
+/* §110: 1 while post-FMV lockstep, DESYNC hold, or heal sticky — hc-fork
+ * may open apply-only KF even when invent is held. */
+int  psx_netplay_rb_post_fmv_heal_eligible(void);
+
+/* §111: 1 while heal sticky window is live (invent hold may be tip-lead only). */
+int  psx_netplay_rb_post_fmv_heal_sticky(void);
+
+/* §115: 1 if this tip+1 fork was accepted (HC primed past it) — hc-fork /
+ * begin must not re-open apply-only heal for it. */
+int  psx_netplay_rb_platform_fork_accepted(uint32_t fork_tick);
 
 /* §93: 1 if tick sits in the last FMV media bout / settle tail (or DESYNC
  * hold). Begin/follow/hc-fork must not open episodes that load there.

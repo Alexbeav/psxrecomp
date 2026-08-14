@@ -95,7 +95,12 @@ static const char *np_gate_lockstep_stall_tag(void *ctx)
         return "fmv_media";
     if (psx_netplay_rb_fmv_desync_hold())
         return "fmv_desync_hold";
-    return "fmv_settle";
+    if (psx_netplay_rb_post_fmv_heal_sticky())
+        return "heal_sticky";
+    /* §113: invent hold runs through lockstep MIN (loading), not settle-only. */
+    if (psx_netplay_rb_fmv_settle_active())
+        return "fmv_settle";
+    return "fmv_lockstep";
 }
 
 static uint32_t np_gate_episode_count(void *ctx)

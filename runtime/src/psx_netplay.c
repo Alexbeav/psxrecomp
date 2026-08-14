@@ -693,17 +693,22 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         return;
     if (g_np.local_slot != 0)
         return; /* initiator side only */
+    /* §115: tip+1 soft fork already accepted — stay Live. */
+    if (psx_netplay_rb_platform_fork_accepted(fork_tick))
+        return;
     /* §64: do not bookkeep persist while an episode / tip-hold / load is
      * in flight. Previously fork_tick advances during tip-extend rereplay
      * started the persist clock, so tip-extend abandon → Live opened a
      * second hc-fork recovery with zero Live gap (soak: epoch 8 → 16,
      * "persisted 39 ticks"). */
-    /* §109: allow hc-fork through DESYNC invent-hold when MEDIA_KF can heal
-     * (fmv_episode_unsafe is 0 with KF on). Keep blocking media+settle. */
+    /* §109/§110: allow hc-fork through DESYNC invent-hold or heal sticky when
+     * MEDIA_KF can heal. Keep blocking live media+settle invent-hold. */
     if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
         psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
-        (psx_netplay_rb_fmv_defer_rewind() && !psx_netplay_rb_fmv_desync_hold()) ||
-        (psx_netplay_rb_lockstep_no_invent() && !psx_netplay_rb_fmv_desync_hold()) ||
+        (psx_netplay_rb_fmv_defer_rewind() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
+        (psx_netplay_rb_lockstep_no_invent() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
         psx_netplay_rb_fmv_episode_unsafe(fork_tick))
         return;
     sim = rnet_session_sim_tick(g_np.session);
@@ -729,7 +734,7 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
             (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim),
             fork_cap ? "; fork_cap backoff" : "");
     fflush(stderr);
-    /* §109: silent fork → apply-only host KF (tip-snap SPAN re-diverges). */
+    /* §109/§114: silent fork → apply-only MEDIA_KF heal (target=load). */
     psx_netplay_rb_request_post_fmv_heal_kf();
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
 }
@@ -4753,6 +4758,10 @@ int psx_netplay_catchup_budget(void)
     if (!psx_netplay_active())
         return 0;
     if (psx_start_bisect_no_catchup())
+        return 0;
+    /* §114: during post-FMV DESYNC / heal sticky, do not turbo catch-up —
+     * absurd lead after heal abort + catchup widens platform tip+1 skew. */
+    if (psx_netplay_rb_fmv_desync_hold() || psx_netplay_rb_post_fmv_heal_sticky())
         return 0;
     cap = np_starv_env_int("PSX_NET_CATCHUP_CAP", PSX_CATCHUP_CAP_DEFAULT);
     if (cap <= 0 && g_starv.recovery_amount <= 0)
