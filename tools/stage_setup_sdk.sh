@@ -299,12 +299,17 @@ if [[ "${need_dlls}" -eq 1 ]]; then
   )
   # Host (MSYS2 GCC) still needs these when imported. llvm-mingw static
   # emitters typically import neither — --require is skipped per-exe then.
+  # zlib1.dll is a savestate (ZLIB::ZLIB) import; PSX_STATIC_RUNTIME does not
+  # fold it, and --require of only GCC runtimes was a no-op on static-libgcc
+  # hosts so CI shipped zips that died on clean Windows ("zlib1.dll not found").
   if [[ -n "${HOST_EXE}" && -f "${HOST_EXE}" ]]; then
     args+=(
       --require libgcc_s_seh-1.dll
       --require libstdc++-6.dll
       --require libwinpthread-1.dll
       --require libssp-0.dll
+      --require zlib1.dll
+      --require z.dll
     )
   fi
   bash "${BUNDLE}" "${args[@]}"

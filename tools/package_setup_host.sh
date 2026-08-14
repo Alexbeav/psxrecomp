@@ -200,6 +200,20 @@ fi
 EXE_BASENAME="$(basename "${EXE}")"
 EXE_DIR="$(dirname "${EXE}")"
 
+# Windows: CMake may already have placed imported runtime DLLs (zlib1.dll)
+# next to the host. Copy siblings into the stage before MinGW bundling —
+# this packager used to copy only the .exe, so a missed PE-import walk
+# shipped hosts that die on clean machines with "zlib1.dll was not found".
+if [[ "${EXE_BASENAME}" == *.exe ]]; then
+  shopt -s nullglob
+  for dll in "${EXE_DIR}"/*.dll "${EXE_DIR}"/*.DLL; do
+    [[ -f "${dll}" ]] || continue
+    cp -a "${dll}" "${STAGE}/"
+    echo "staged sibling DLL $(basename "${dll}")"
+  done
+  shopt -u nullglob
+fi
+
 if [[ ! -d "${EXE_DIR}/assets/fonts" || ! -d "${EXE_DIR}/assets/img" ]]; then
   echo "error: ${EXE_DIR}/assets/{fonts,img} missing — rebuild psx-runtime" >&2
   exit 1

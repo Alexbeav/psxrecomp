@@ -75,6 +75,8 @@ endif()
 # 0xc000007b failure mode becomes structurally impossible. Default ON for
 # MinGW Release/MinSizeRel (the configs used to cut releases); override
 # with -DPSX_STATIC_RUNTIME=OFF to force dynamic linking.
+# zlib is folded the same way (static libz / zlibstatic) so Windows CI
+# hosts do not import zlib1.dll — packagers still bundle it if a PE does.
 if(MINGW AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
     option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" ON)
 else()
@@ -671,8 +673,25 @@ function(psxrecomp_ensure_zlib)
             endif()
         endforeach()
     endif()
+    # PSX_STATIC_RUNTIME promises no non-system DLL imports. MSYS2's
+    # ZLIB::ZLIB is usually shared (zlib1.dll); find_package would leave
+    # that import in the host even with -static-libgcc.
+    set(_psx_zlib_saved_suffixes "")
+    if(PSX_STATIC_RUNTIME)
+        set(ZLIB_USE_STATIC_LIBS ON)
+        if(MINGW)
+            set(_psx_zlib_saved_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+            set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+        endif()
+    endif()
     find_package(ZLIB QUIET)
+    if(NOT "${_psx_zlib_saved_suffixes}" STREQUAL "")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES "${_psx_zlib_saved_suffixes}")
+    endif()
     if(TARGET ZLIB::ZLIB)
+        if(PSX_STATIC_RUNTIME)
+            message(STATUS "psxrecomp: ZLIB static (PSX_STATIC_RUNTIME)")
+        endif()
         return()
     endif()
     if(NOT PSX_ZLIB_FETCH)
@@ -697,11 +716,17 @@ function(psxrecomp_ensure_zlib)
             "SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
         ${_psx_zlib_timestamp_args})
     FetchContent_MakeAvailable(psx_zlib)
+    # madler/zlib builds zlibstatic even when a shared zlib target exists.
+    # Prefer static when PSX_STATIC_RUNTIME so the host does not import zlib1.dll.
+    if(PSX_STATIC_RUNTIME AND TARGET zlibstatic AND NOT TARGET ZLIB::ZLIB)
+        add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        message(STATUS "psxrecomp: ZLIB via FetchContent (zlibstatic)")
+        return()
+    endif()
     if(TARGET ZLIB::ZLIB)
         message(STATUS "psxrecomp: ZLIB via FetchContent (ZLIB::ZLIB)")
         return()
     endif()
-    # madler/zlib builds zlibstatic even when a shared zlib target exists.
     if(TARGET zlibstatic)
         add_library(ZLIB::ZLIB ALIAS zlibstatic)
         message(STATUS "psxrecomp: ZLIB via FetchContent (zlibstatic)")

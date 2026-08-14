@@ -177,18 +177,30 @@ find_dll_src() {
   local dll="$1"
   local exe="$2"
   local dest_dir="$3"
-  local cand d
-  local -a candidates=(
-    "$(dirname "${exe}")/${dll}"
-    "${dest_dir}/${dll}"
-    "/mingw64/bin/${dll}"
-    "/usr/x86_64-w64-mingw32/bin/${dll}"
-  )
-  for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
-    candidates+=("${d}/${dll}")
-  done
-  for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
-    candidates+=("${d}/${dll}")
+  local cand d name
+  local -a names=("${dll}")
+  local -a candidates=()
+  local lower
+  lower="$(printf '%s' "${dll}" | tr '[:upper:]' '[:lower:]')"
+  # MSVC/vcpkg: zlib1.dll; some MinGW layouts: z.dll / zlib.dll.
+  case "${lower}" in
+    z.dll) names+=("zlib1.dll" "zlib.dll") ;;
+    zlib1.dll) names+=("z.dll" "zlib.dll") ;;
+    zlib.dll) names+=("zlib1.dll" "z.dll") ;;
+  esac
+  for name in "${names[@]}"; do
+    candidates+=(
+      "$(dirname "${exe}")/${name}"
+      "${dest_dir}/${name}"
+      "/mingw64/bin/${name}"
+      "/usr/x86_64-w64-mingw32/bin/${name}"
+    )
+    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
+    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
   done
   for cand in "${candidates[@]}"; do
     [[ -n "${cand}" ]] || continue
@@ -293,9 +305,9 @@ bundle_one() {
       if [[ "${src_res}" == "${dest_res}" ]]; then
         echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
       else
-        cp -f "${src}" "${dest_dir}/"
+        # Copy to the PE import name (zlib1.dll source may satisfy z.dll).
+        cp -f "${src}" "${dest_file}"
         echo "bundled ${dll} → ${dest_dir}/ (${label})"
-        dest_file="${dest_dir}/${dll}"
       fi
     fi
     # Recurse: zlib1.dll imports libssp-0.dll even when the host does not.
