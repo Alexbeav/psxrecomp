@@ -137,6 +137,9 @@ static int    s_sym_initialized = 0;
 #define DUMP_CAP_RESTORE_TRACE 65536u
 #define DUMP_CAP_FN_ENTRY      65536u
 #define DUMP_CAP_DIRTY_BLOCK  262144u
+#define DUMP_CAP_DMA_TRACE       2048u
+#define DUMP_CAP_MDEC_TRACE      1024u
+#define DUMP_CAP_IRQ_TRACE       2048u
 
 /* Pre-freeze history ring. Each entry = a snapshot taken at one heartbeat
  * tick (~100 ms). When the runtime freezes, all the "now" values stop
@@ -527,7 +530,8 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
         "  \"wedge_kind_name\":\"%s\",\n"
         "  \"caps\":{\"wtrace_all\":%u,\"wtrace\":%u,\"frames\":%u,"
                   "\"sio_pc\":%u,\"thread\":%u,\"restore\":%u,\"fn_entry\":%u,"
-                  "\"dirty_block\":%u},\n",
+                  "\"dirty_block\":%u,\"dma_trace\":%u,"
+                  "\"mdec_trace\":%u,\"irq_trace\":%u},\n",
         s_backend, wall,
         (unsigned long long)frame, (unsigned long long)cyc,
         cur_fn, last_store,
@@ -564,7 +568,10 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
         (unsigned)DUMP_CAP_THREAD_TRACE,
         (unsigned)DUMP_CAP_RESTORE_TRACE,
         (unsigned)DUMP_CAP_FN_ENTRY,
-        (unsigned)DUMP_CAP_DIRTY_BLOCK);
+        (unsigned)DUMP_CAP_DIRTY_BLOCK,
+        (unsigned)DUMP_CAP_DMA_TRACE,
+        (unsigned)DUMP_CAP_MDEC_TRACE,
+        (unsigned)DUMP_CAP_IRQ_TRACE);
 
     fputs("  \"heartbeat_ring\":[\n", f);
     uint32_t avail = s_ring_count;
@@ -592,6 +599,26 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
             (i + 1 < avail) ? "," : "");
     }
     fputs("  ],\n", f);
+
+    fputs("  \"dma_state\":", f);
+    debug_server_freeze_dump_dma_state_json(f);
+    fputs(",\n", f);
+
+    fputs("  \"dma_trace\":", f);
+    debug_server_freeze_dump_dma_trace_json(f, DUMP_CAP_DMA_TRACE);
+    fputs(",\n", f);
+
+    fputs("  \"mdec_state\":", f);
+    debug_server_freeze_dump_mdec_state_json(f);
+    fputs(",\n", f);
+
+    fputs("  \"mdec_trace\":", f);
+    debug_server_freeze_dump_mdec_trace_json(f, DUMP_CAP_MDEC_TRACE);
+    fputs(",\n", f);
+
+    fputs("  \"irq_trace\":", f);
+    debug_server_freeze_dump_irq_trace_json(f, DUMP_CAP_IRQ_TRACE);
+    fputs(",\n", f);
 
     fputs("  \"wtrace_all\":", f);
     debug_server_freeze_dump_wtrace_all_json(f, DUMP_CAP_WTRACE_ALL);

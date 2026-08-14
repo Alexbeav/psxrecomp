@@ -5911,7 +5911,8 @@ static void handle_dma_trace_dump(int id, const char *json)
         if (e->seq != seq) continue;
         pos += snprintf(buf + pos, bufsz - pos,
                         "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"ch\":%u,"
-                        "\"words\":%u,\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
+                        "\"words\":%u,\"addr\":\"0x%08X\",\"val\":\"0x%08X\","
+                        "\"mask\":\"0x%08X\",\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
                         "\"chcr\":\"0x%08X\",\"dpcr\":\"0x%08X\","
                         "\"dicr_before\":\"0x%08X\",\"dicr_after\":\"0x%08X\","
                         "\"i_stat_before\":\"0x%08X\",\"i_stat_after\":\"0x%08X\","
@@ -5919,7 +5920,8 @@ static void handle_dma_trace_dump(int id, const char *json)
                         emitted ? "," : "",
                         (unsigned long long)e->seq, e->frame,
                         dma_trace_kind_name(e->kind), e->channel,
-                        e->total_words, e->madr, e->bcr, e->chcr, e->dpcr,
+                        e->total_words, e->addr, e->val, e->mask,
+                        e->madr, e->bcr, e->chcr, e->dpcr,
                         e->dicr_before, e->dicr_after,
                         e->i_stat_before, e->i_stat_after,
                         e->func, e->pc);
@@ -11084,6 +11086,123 @@ static const char *mdec_event_kind_name(uint32_t kind)
     case 11: return "read_underflow";
     default: return "unknown";
     }
+}
+
+void debug_server_freeze_dump_dma_state_json(FILE *f)
+{
+    DMADebugState s;
+    dma_debug_get_state(&s);
+    fprintf(f, "{\"dpcr\":\"0x%08X\",\"dicr\":\"0x%08X\",\"channels\":[",
+            s.dpcr, s.dicr);
+    for (uint32_t i = 0; i < 7; i++) {
+        const DMAChannelDebugState *c = &s.channels[i];
+        fprintf(f, "%s{\"ch\":%u,\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
+                   "\"chcr\":\"0x%08X\",\"active\":%u,\"remaining_words\":%u,"
+                   "\"cycles_accum\":%u}",
+                i ? "," : "", i, c->madr, c->bcr, c->chcr, c->active,
+                c->remaining_words, c->cycles_accum);
+    }
+    fputs("]}", f);
+}
+
+void debug_server_freeze_dump_dma_trace_json(FILE *f, uint32_t max_count)
+{
+    const DMATraceEntry *entries = NULL;
+    uint64_t total = dma_debug_get_trace(&entries);
+    uint64_t oldest = (total > DMA_TRACE_CAP) ? total - DMA_TRACE_CAP : 0;
+    if (max_count > DMA_TRACE_CAP) max_count = DMA_TRACE_CAP;
+    uint64_t start = (total > max_count) ? total - max_count : 0;
+    if (start < oldest) start = oldest;
+    fprintf(f, "{\"total\":%llu,\"oldest\":%llu,\"entries\":[",
+            (unsigned long long)total, (unsigned long long)oldest);
+    uint32_t emitted = 0;
+    for (uint64_t seq = start; seq < total; seq++) {
+        const DMATraceEntry *e = &entries[seq % DMA_TRACE_CAP];
+        if (e->seq != seq) continue;
+        fprintf(f, "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"ch\":%u,"
+                   "\"words\":%u,\"addr\":\"0x%08X\",\"val\":\"0x%08X\","
+                   "\"mask\":\"0x%08X\",\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
+                   "\"chcr\":\"0x%08X\",\"dpcr\":\"0x%08X\","
+                   "\"dicr_before\":\"0x%08X\",\"dicr_after\":\"0x%08X\","
+                   "\"i_stat_before\":\"0x%08X\",\"i_stat_after\":\"0x%08X\","
+                   "\"func\":\"0x%08X\",\"pc\":\"0x%08X\"}",
+                emitted ? "," : "", (unsigned long long)e->seq, e->frame,
+                dma_trace_kind_name(e->kind), e->channel, e->total_words,
+                e->addr, e->val, e->mask, e->madr, e->bcr, e->chcr, e->dpcr,
+                e->dicr_before, e->dicr_after, e->i_stat_before, e->i_stat_after,
+                e->func, e->pc);
+        emitted++;
+    }
+    fprintf(f, "],\"emitted\":%u}", emitted);
+}
+
+void debug_server_freeze_dump_mdec_state_json(FILE *f)
+{
+    MDECDebugState s;
+    mdec_debug_get_state(&s);
+    fprintf(f, "{\"command\":\"0x%08X\",\"expected_halfwords\":%u,"
+               "\"input_count\":%u,\"output_size\":%u,\"output_pos\":%u,"
+               "\"output_depth\":%u,\"output_signed\":%u,\"output_bit15\":%u,"
+               "\"busy\":%u,\"input_full\":%u,\"enable_dma_in\":%u,"
+               "\"enable_dma_out\":%u,\"last_status\":\"0x%08X\","
+               "\"decode_macroblocks\":%u,\"decode_blocks\":%u,"
+               "\"decode_stop_reason\":%u,\"decode_input_pos\":%u,"
+               "\"decode_input_end\":%u,\"dma_in_words\":%u,"
+               "\"dma_out_words\":%u,\"dma_read_underflows\":%u}",
+            s.command, s.expected_halfwords, s.input_count, s.output_size,
+            s.output_pos, s.output_depth, s.output_signed, s.output_bit15,
+            s.busy, s.input_full, s.enable_dma_in, s.enable_dma_out,
+            s.last_status, s.decode_macroblocks, s.decode_blocks,
+            s.decode_stop_reason, s.decode_input_pos, s.decode_input_end,
+            s.dma_in_words, s.dma_out_words, s.dma_read_underflows);
+}
+
+void debug_server_freeze_dump_mdec_trace_json(FILE *f, uint32_t max_count)
+{
+    uint64_t total = mdec_debug_get_event_total();
+    uint64_t oldest = (total > 4096ull) ? total - 4096ull : 0;
+    if (max_count > 4096u) max_count = 4096u;
+    uint64_t start = (total > max_count) ? total - max_count : 0;
+    if (start < oldest) start = oldest;
+    MDECDebugEvent *events = max_count
+        ? (MDECDebugEvent *)malloc((size_t)max_count * sizeof(*events)) : NULL;
+    uint32_t n = events ? mdec_debug_copy_events(start, total, events, max_count) : 0;
+    fprintf(f, "{\"total\":%llu,\"oldest\":%llu,\"entries\":[",
+            (unsigned long long)total, (unsigned long long)oldest);
+    for (uint32_t i = 0; i < n; i++) {
+        const MDECDebugEvent *e = &events[i];
+        fprintf(f, "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\","
+                   "\"value\":\"0x%08X\",\"command\":\"0x%08X\","
+                   "\"input_count\":%u,\"expected_halfwords\":%u,"
+                   "\"output_size\":%u,\"output_pos\":%u,\"macroblocks\":%u,"
+                   "\"blocks\":%u,\"stop_reason\":%u,\"underruns\":%u}",
+                i ? "," : "", (unsigned long long)e->seq, e->frame,
+                mdec_event_kind_name(e->kind), e->value, e->command,
+                e->input_count, e->expected_halfwords, e->output_size,
+                e->output_pos, e->macroblocks, e->blocks, e->stop_reason,
+                e->underruns);
+    }
+    fprintf(f, "],\"emitted\":%u}", n);
+    free(events);
+}
+
+void debug_server_freeze_dump_irq_trace_json(FILE *f, uint32_t max_count)
+{
+    DevEvent *events = max_count
+        ? (DevEvent *)malloc((size_t)max_count * sizeof(*events)) : NULL;
+    uint32_t n = events ? device_trace_get(events, max_count) : 0;
+    fprintf(f, "{\"total\":%llu,\"armed\":%d,\"entries\":[",
+            (unsigned long long)device_trace_total(), device_trace_is_armed());
+    for (uint32_t i = 0; i < n; i++) {
+        const DevEvent *e = &events[i];
+        fprintf(f, "%s{\"seq\":%llu,\"cycle\":%llu,\"frame\":%u,"
+                   "\"srcn\":%u,\"src\":\"%s\",\"detail\":%u}",
+                i ? "," : "", (unsigned long long)e->seq,
+                (unsigned long long)e->cycle, e->frame, e->source,
+                device_source_str(e->source), e->detail);
+    }
+    fprintf(f, "],\"emitted\":%u}", n);
+    free(events);
 }
 
 static void handle_mdec_state(int id, const char *json)
