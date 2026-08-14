@@ -2595,11 +2595,10 @@ void gpu_vblank_flush_present(void) {
         if (psx_netplay_active() && sio_hold_present_for_card())
             return;
     }
-    /* MotK menu wait (0x8006CD54↔0x8006CDA0): present ONLY at an explicit
-     * CDA0 edge. Never present on a CD54 edge (sticky CDA0 must not allow
-     * that — soak ep3 non-det fin@946). Non-wait edges (FMV / cutover) must
-     * present even if sticky still names the wait loop — treating sticky as
-     * in_wait blocked deferred present for the whole FMV1→FMV2 gap. */
+    /* MotK menu wait (0x8006CD54↔0x8006CDA0) and post-FMV overlay wait
+     * (0x800768C8↔0x80076880): present ONLY at an explicit B edge. Never
+     * present on an A edge (sticky B must not allow that). Non-wait edges
+     * (FMV / cutover) must present even if sticky still names the wait loop. */
     {
         extern int psx_netplay_active(void);
         extern uint32_t psx_compiled_irq_resume_pc(void);
@@ -2608,18 +2607,20 @@ void gpu_vblank_flush_present(void) {
         if (psx_netplay_active()) {
             const uint32_t wait_a = 0x8006CD54u;
             const uint32_t wait_b = 0x8006CDA0u;
+            const uint32_t wait2_a = 0x800768C8u;
+            const uint32_t wait2_b = 0x80076880u;
             uint32_t pc = psx_compiled_irq_resume_pc();
             uint32_t last = psx_last_irq_check_pc();
             uint32_t sticky = psx_netplay_rb_sticky_bb_pc();
             uint32_t edge = pc ? pc : last;
-            if (edge == wait_a)
+            if (edge == wait_a || edge == wait2_a)
                 return;
-            if (edge == wait_b || edge != 0u) {
-                /* CDA0, or non-wait (FMV/cutover) — present; ignore sticky */
-            } else if (sticky == wait_a) {
-                return; /* latch cleared, sticky CD54 — defer */
+            if (edge == wait_b || edge == wait2_b || edge != 0u) {
+                /* B edge, or non-wait (FMV/cutover) — present; ignore sticky */
+            } else if (sticky == wait_a || sticky == wait2_a) {
+                return; /* latch cleared, sticky A — defer */
             }
-            /* sticky CDA0 or unrelated/0 — present */
+            /* sticky B or unrelated/0 — present */
         }
     }
     s_flushing_present = 1;

@@ -4835,3 +4835,184 @@ ICE-relay vs SFU). Too many signals for CGNAT reachability SFU already covers.
 **Re-soak watch:** start logs `use_sfu=true reason=always_sfu`; both peers
 `server input relay — LAN transport to …`; no `ice_p2p` / `ice_required`
 on online MotK; no-ICE Desktop guests connect; Force TURN only affects D floor.
+
+## 109. Post-FMV silent hc-fork → apply-only MEDIA_KF heal (2026-08-13)
+
+**Soak (TM4 Win↔CachyOS 2P session 26):** digs matched through sim 2368 after
+FMV settle; `FIRST CORE DIVERGE @2380` with **no pad mispredict**; host opened
+`begin … load=2368 media_kf=0`; both `ABORT — resim core diverge @2380`; then
+`DESYNC — FMV lockstep MAX unmatched`. Transport/admit stayed up — tip-snap
+SPAN cannot heal undigested / cross-OS forks once sealed Replay re-diverges.
+
+**Root cause:** §54 hc-fork after settle used mutual tip snaps without a host
+keyframe. §26 unlocks invent/hc-fork after settle (24) while dense lockstep
+CONFIRM still runs to MIN=180 — so the doomed SPAN fires inside the confirm
+window. `media_kf=0` because load was past the media/settle unsafe range.
+
+**What landed (§109):**
+
+1. **`psx_netplay_rb_request_post_fmv_heal_kf`** — hc-fork (and first post-FMV
+   resim-diverge escalate) request an apply-only heal on the next begin.
+2. **Begin** — when requested: arm `MEDIA_KF`, **CAP target→load** (no Replay
+   span), wire `RNET_RB_SYNC_FLAG_MEDIA_KF`. Host transfers raw snap; both
+   install pin and Verify at load.
+3. **choose_load / follow** — treat post-FMV lockstep + DESYNC hold like
+   media-range for MEDIA_KF mutual snaps / missing-snap OK.
+4. **hc-fork gate** — allow through DESYNC invent-hold when MEDIA_KF can heal;
+   still block live media + settle.
+5. **On heal Live/tip-hold** — clear DESYNC invent-hold and RELEASE lockstep.
+6. **Pad-mispredict** begins in the post-FMV window still SPAN (optionally with
+   MEDIA_KF via `rb_want_heal_kf`); only silent-fork recovery is apply-only.
+7. **POST match → Live** — `ownership_on_post_match` treats heal like
+   peer-ahead light: no ownership SPAN hop (session 28: matched POST @826
+   then chain target=850 hung guest wait-FOLLOW → disconnect).
+
+**Re-soak watch (Win↔Linux 2P through title FMV):**
+
+- After settle expect `post-FMV heal KF requested` then
+  `begin … media_kf=1 heal=1` / `post-FMV heal KF CAP target …→load`.
+- `MEDIA-KF probe` / hash match or transfer; `post sent tip=<load>`;
+  `FMV lockstep RELEASE (post-FMV heal KF …)`.
+- No `ABORT — resim core diverge` on that heal episode; no
+  `DESYNC — FMV lockstep MAX unmatched` from the same cutover.
+- Linux↔Linux control still clean; 3P WIRE_HOLE is a separate bug class.
+
+## 110. Post-FMV heal sticky + invent hold (session 3 loading hitch) (2026-08-13)
+
+**Soak (TM4 Win↔CachyOS session 3):** §109 heal POST matched @2494 → Live →
+`FMV lockstep RELEASE`. Loading-screen hitch kept HC forked at 2495; absurd
+lead + invent catch-up; second `hc-fork` with `heal=0` tip-SPAN →
+`resim core diverge @2495` → storm DESYNC.
+
+**Cause:** `request_post_fmv_heal_kf` gated on pre-RELEASE lockstep only.
+RELEASE dropped eligibility; invent free-ran through the soft fork.
+
+**What landed (§110):**
+
+1. **Heal sticky** (`RB_FMV_HEAL_STICKY_TICKS=300`) armed on heal Live/tip-hold
+   — `rb_post_fmv_heal_eligible` stays true through sticky (and DESYNC /
+   lockstep). Re-heal hc-fork keeps `media_kf=1 heal=1`.
+2. **Invent hold** during sticky via `lockstep_no_invent` — no GAP1 invent
+   catch-up until sticky expires or cores rematch CONFIRM.
+3. Early sticky clear when post-RELEASE HC streak hits CONFIRM.
+
+**Re-soak watch:** after heal expect `heal sticky until sim=…`; on hitch
+re-fork expect `heal KF requested … sticky_until=` then apply-only again —
+not `begin … media_kf=0 heal=0` / resim storm. Digs rematch →
+`heal sticky cleared (cores rematched…)`.
+
+## 111. Post-FMV tip+1 ±1-cycle Win↔Linux (dirty entry poll) (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §110b verify heal):** tip **870** matched
+(`core=1d304d69`, MEDIA-KF CRC match, resume `pc=0x80076880`,
+`i_stat=00000001`). Resim fin@871: Win `cyc=492226568` vs Cachy
+`492226569` (±1); cpu/clk/tim/ram fork; hc-fork `no pad mispredict`.
+
+**Cause:** post-FMV wait lives in a dirty-interp hole (not in static emit).
+Dirty entry used a host-only `s_interp_entry_poll %% 64` stride to pump IRQs.
+Peers that drifted through FMV entered the wait with opposite phases while
+VBlank was already latched — one delivered immediately, the other after a
+few wait-loop instructions (`exit_pc=0x800768C8`, `v0=1`). Same class as the
+old CD54 hold gated on host `s_present_pending`.
+
+**What landed (§111):**
+
+1. **Deliverable → poll every dirty entry** (guest-deterministic). Keep the
+   %%64 throttle only when no IRQ is deliverable.
+2. **`dirty_ram_irq_ambient_resync_after_restore`** — reset entry-poll stride
+   + 4096-insn pump gap from `psx_cycles_resync_after_restore`.
+3. **Second MotK wait pair** `0x800768C8` (hold A) ↔ `0x80076880` (canonical
+   B) for IRQ hold / present gate / snap resume canonicalize.
+
+**Re-soak watch:** through title FMV → settle → tip+1 must keep matched
+`audit fin` cyc (no ±1) and no `FIRST CORE DIVERGE` / heal-verify abort at
+the first post-settle frame. Linux↔Linux control still clean.
+
+## 112. Post-snap LEGACY_SENTINEL tip+1 (loading screen) (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §111):** matched through settle@1354 and live
+dig@1472; soft fork **sim=1480**. Tip **1479** matched (`core=f9e21305`,
+resume `pc=0x800756e0`, `i_stat=00000001`). Heal verify fin@1480 cyc Δ4;
+Win abort irqctx `same_thr=0 reason=3 exit_pc=0 epc=80000048` at arm cycle
+(`PSX_EXC_ESCAPE_LEGACY_SENTINEL`).
+
+**Cause:** `interrupts_resync_after_restore` zeros compiled/dirty resume
+latches. Sticky VBlank then delivered on the first post-`flush_resume`
+check with `take_pc=0` → sentinel EPC / cross-thread restore, while a peer
+that latched the BB PC first took the real same-thread path.
+
+**What landed (§112):**
+
+1. **`psx_irq_arm_compiled_resume_pc`** — publish resume PC (+ last-check edge).
+2. **`psx_scheduler_resume_at` + RESUME_CURRENT dispatch** arm before
+   `psx_dispatch`.
+3. **Delivery fallback** — if latches still 0 under top-level resume, use
+   `cpu->pc` instead of the sentinel.
+
+**Re-soak watch:** loading-screen tip+1 — no Win `irqctx … reason=3
+epc=80000048` on heal abort; fin cyc match; no `FIRST CORE DIVERGE` at the
+first post-settle loading frame.
+
+
+## 113. Win↔UNIX post-FMV invent + ahead-tip pacing (2026-08-13)
+
+**Soak:** after §111/§112 accuracy work, Win↔Cachy still showed chronic
+cadence skew through loading: Win `phase ctrl lead≈+7..8` / `debt_ms=0`,
+Cachy `GAP1_LEGACY` / `RUNWAY_EMPTY` invents. Soft fork @1480 sat **before**
+`dense_lockstep min=1510` while invent had already unlocked at settle@1354.
+
+**What landed (§113):**
+
+1. **Invent hold through lockstep MIN** — `rb_in_fmv_lockstep_window` now
+   gates invent until `g_fmv_lockstep_until` (media_end+MIN), matching the
+   gate comment that already said invent stays off through MIN. Stall tag
+   `fmv_lockstep` after settle; settle log `invent_hold=` reports MIN.
+2. **Ahead-of-tip timesync** — `np_timesync_note_ahead_skew`: when
+   `remote_lead < 0` for ~8 admits outside media/lockstep, add ~½-tick debt
+   so the inventing seat paces before GAP1 (BattleShip cross-OS pattern).
+3. **Gap1 LAN grace cap 12→20 ms** — more room for a mid-flight tip row on
+   LAN Win↔UNIX before inventing.
+
+**Re-soak watch:** `RBE_CROSS_OS_PACING_DIAG=1` — through FMV→loading,
+`stall=fmv_lockstep` (not invent) until MIN; `debt_ms` rises on the
+ahead-of-tip seat; fewer `GAP1_LEGACY` / `RUNWAY_EMPTY` before tip+1.
+Accuracy (§112 arm) still required for matched fin cyc at tip+1.
+
+
+## 114. Platform tip+1 apply-only heal + KF stream (2026-08-13)
+
+**Problem:** matched-baseline tip+1 after post-FMV loading is Win↔Linux
+platform nondeterminism (cpu/clk/tim/ram diverge with matched dirty). Verify
+span past load always aborted; empty tip KF rematched tip and stormed.
+
+**What landed (§114):**
+
+1. Apply-only MEDIA_KF heal (`target=load`) — no tip+1 resim.
+2. Heal Live → invent off + `g_post_fmv_platform_nondet` + initiator KF stream
+   every 16 sim ticks (dense snaps).
+3. Heal loop CAP → same keep-live stream instead of hard DESYNC abort.
+
+**Gap:** stream always rewound to HC's stuck tip+1 fork (`resolved+1`), so
+`choose_load` re-pinned keep forever → loading-screen livelock (no DESYNC).
+
+## 115. Platform KF stream escape / host-tip ride (2026-08-13)
+
+**Soak (MotK Win↔CachyOS after §114):** `FIRST CORE DIVERGE sim=1112`, heal
+pin `1111` / `pc=0x800768e8`, then hundreds of `§114 KF stream begin
+fork=1112` + `heal KF CAP →1111` with `invent off until rematch`. No DESYNC;
+loading never advanced. HC `peek_mismatch` stays at tip+1 while
+`resolved_through=keep`.
+
+**What landed (§115):**
+
+1. **Host-tip ride** — when HC fork is the known platform tip+1 and
+   `sim > fork`, stream `begin_rewind(sim)` so MEDIA-KF pins near host tip.
+2. **Accept on advance** — heal Live/tip-hold with `tip > keep` primes HC
+   past the soft fork, clears invent-hold/stream, sets
+   `g_platform_accepted_fork` (hc-fork / begin refuse re-heal).
+3. **Stream CAP** (`RB_FMV_PLATFORM_KF_STREAM_LIMIT=6`) — same stale fork
+   without escape → force accept.
+
+**Re-soak watch:** after first post-FMV tip+1 diverge, logs
+`§115 KF stream ride host tip` and/or `§115 platform fork accepted`; sim
+advances past keep; no endless `snap applied tick=<keep>`; loading completes.

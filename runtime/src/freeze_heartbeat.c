@@ -70,6 +70,7 @@ extern int      g_present_vsync_disabled;
  * debug_cpu_ptr (CPUState*) is declared in debug_server.h; CPUState layout
  * (gpr[32], pc) in cpu_state.h — both already included above. */
 extern uint8_t *memory_get_scratchpad_ptr(void);   /* memory.c */
+extern uint8_t *g_psx_ram;                         /* memory.c — 2 MiB DRAM */
 
 static int s_started = 0;
 static char s_backend[32] = "psx-runtime";
@@ -314,6 +315,69 @@ static void freeze_dump_main_stack_samples_json(FILE *f, int n) {
  * in wins; the loser skips (same rings either way). */
 static volatile long s_dump_in_progress = 0;
 
+static void freeze_dump_unlock(void) {
+#ifdef _WIN32
+    InterlockedExchange((volatile LONG *)&s_dump_in_progress, 0);
+#else
+    __sync_lock_release(&s_dump_in_progress);
+#endif
+}
+
+/* Guest DRAM or scratchpad bytes at `vaddr`, as a JSON object. No MMIO.
+ * 2 MiB RAM is mirrored across the first 8 MiB of each KSEG. */
+static int hb_append_ram_peek(char *out, int n, size_t cap, uint32_t vaddr, int len) {
+    static const char hexd[] = "0123456789abcdef";
+    uint32_t phys = vaddr & 0x1FFFFFFFu;
+    const uint8_t *src = NULL;
+    int ncopy = len;
+    if (ncopy < 0) ncopy = 0;
+    if (phys >= 0x1F800000u && phys < 0x1F800400u) {
+        uint8_t *sp = memory_get_scratchpad_ptr();
+        if (sp) {
+            uint32_t off = phys - 0x1F800000u;
+            src = sp + off;
+            if (off + (uint32_t)ncopy > 0x400u)
+                ncopy = (int)(0x400u - off);
+        }
+    } else if (phys < 0x00800000u && g_psx_ram) {
+        uint32_t folded = phys & 0x1FFFFFu;
+        src = g_psx_ram + folded;
+        if (folded + (uint32_t)ncopy > 0x200000u)
+            ncopy = (int)(0x200000u - folded);
+    }
+    if (!src) ncopy = 0;
+    int m = snprintf(out + n, cap - (size_t)n,
+                     "{\"addr\":\"0x%08X\",\"len\":%d,\"hex\":\"",
+                     vaddr, ncopy);
+    if (m > 0) n += m;
+    for (int i = 0; i < ncopy && (size_t)(n + 3) < cap; i++) {
+        out[n++] = hexd[(src[i] >> 4) & 0xF];
+        out[n++] = hexd[src[i] & 0xF];
+    }
+    if ((size_t)(n + 2) < cap) { out[n++] = '"'; out[n++] = '}'; }
+    return n;
+}
+
+/* If the insn at $ra-8 is j/jal, return its target (live RAM, not AOT). */
+static uint32_t hb_jal_target_from_ra(uint32_t ra) {
+    uint32_t pc, phys, insn, op;
+    const uint8_t *src = NULL;
+    if (ra < 8u) return 0;
+    pc = (ra - 8u) & ~3u;
+    phys = pc & 0x1FFFFFFFu;
+    if (phys >= 0x1F800000u && phys + 4u <= 0x1F800400u) {
+        uint8_t *sp = memory_get_scratchpad_ptr();
+        if (sp) src = sp + (phys - 0x1F800000u);
+    } else if (phys < 0x00800000u && g_psx_ram) {
+        src = g_psx_ram + (phys & 0x1FFFFFu);
+    }
+    if (!src) return 0;
+    memcpy(&insn, src, 4);
+    op = (insn >> 26) & 0x3Fu;
+    if (op != 2u && op != 3u) return 0; /* j / jal */
+    return (pc & 0xF0000000u) | ((insn & 0x03FFFFFFu) << 2);
+}
+
 /* Format the CPU register file (pc + all 32 GPRs) and the full 1 KB
  * scratchpad as JSON into `out`. Returns bytes written (NUL-terminated,
  * clamped to cap). Shared by the small per-tick heartbeat and the big
@@ -328,12 +392,25 @@ static volatile long s_dump_in_progress = 0;
  * the BIOS A0/B0/C0 function index while the guest is parked in a kernel-call
  * poll — i.e. "which B0 function is it waiting on" with no extra plumbing.
  * Emitting the GPRs in the same shape as psx_last_run_report.json's "cpu"
- * means existing analysis tooling reads it unchanged. */
+ * means existing analysis tooling reads it unchanged. COP0 sr/cause/epc
+ * (plus IEc / IM2) are required to tell a VSync wait from a stuck IRQ
+ * gate — R3000A has no EXL; IEc=0 is "cannot take VBlank". */
 static int hb_format_cpu_scratchpad(char *out, size_t cap) {
     if (cap < 64) { if (cap) out[0] = 0; return 0; }
     const CPUState *cpu = debug_cpu_ptr;
-    int n = snprintf(out, cap, "  \"cpu\":{\"pc\":\"0x%08X\",\"gpr\":[",
-                     cpu ? cpu->pc : 0u);
+    uint32_t sr = cpu ? cpu->cop0[12] : 0u;
+    int n = snprintf(out, cap,
+                     "  \"cpu\":{\"pc\":\"0x%08X\",\"hi\":\"0x%08X\",\"lo\":\"0x%08X\","
+                     "\"sr\":\"0x%08X\",\"cause\":\"0x%08X\",\"epc\":\"0x%08X\","
+                     "\"iec\":%u,\"im2\":%u,\"gpr\":[",
+                     cpu ? cpu->pc : 0u,
+                     cpu ? cpu->hi : 0u,
+                     cpu ? cpu->lo : 0u,
+                     sr,
+                     cpu ? cpu->cop0[13] : 0u,
+                     cpu ? cpu->cop0[14] : 0u,
+                     (sr & 1u) ? 1u : 0u,
+                     (sr & (1u << 10)) ? 1u : 0u);
     for (int i = 0; i < 32 && n > 0 && (size_t)n < cap; i++) {
         int m = snprintf(out + n, cap - (size_t)n, "%s\"0x%08X\"",
                          i ? "," : "", cpu ? cpu->gpr[i] : 0u);
@@ -353,6 +430,30 @@ static int hb_format_cpu_scratchpad(char *out, size_t cap) {
         }
     }
     if ((size_t)(n + 2) < cap) out[n++] = '"';
+
+    /* DRAM slices: $ra-32 (jalr at ra-8), $s0-16, j/jal target, overlay page. */
+    {
+        uint32_t ra = cpu ? (cpu->gpr[31] & ~3u) : 0u;
+        uint32_t s0 = cpu ? (cpu->gpr[16] & ~3u) : 0u;
+        uint32_t ra_peek = (ra >= 32u) ? (ra - 32u) : ra;
+        uint32_t s0_peek = (s0 >= 16u) ? (s0 - 16u) : s0;
+        uint32_t jal_tgt = hb_jal_target_from_ra(ra);
+        int m = snprintf(out + n, cap - (size_t)n,
+                         ",\n  \"ram_peeks\":{\"ra\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, ra_peek, 64);
+        m = snprintf(out + n, cap - (size_t)n, ",\"s0\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, s0_peek, 48);
+        m = snprintf(out + n, cap - (size_t)n, ",\"jal_target\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, jal_tgt, jal_tgt ? 64 : 0);
+        m = snprintf(out + n, cap - (size_t)n, ",\"overlay_80165000\":");
+        if (m > 0) n += m;
+        n = hb_append_ram_peek(out, n, cap, 0x80165000u, 64);
+        if ((size_t)(n + 2) < cap) out[n++] = '}';
+    }
+
     out[n] = 0;
     return n;
 }
@@ -384,7 +485,7 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
              "psx_freeze_dump_%s_%lld.json", s_backend, wall);
 
     FILE *f = fopen(path, "wb");
-    if (!f) { s_dump_in_progress = 0; return; }
+    if (!f) { freeze_dump_unlock(); return; }
 
     /* Large stdio buffer so multi-MB JSON arrays write efficiently. */
     static char io_buf[1 << 16];
@@ -548,7 +649,7 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
 #endif
 
     {
-        static char cs_buf[4096];
+        static char cs_buf[6144];
         hb_format_cpu_scratchpad(cs_buf, sizeof(cs_buf));
         fputs(",\n", f);
         fputs(cs_buf, f);
@@ -557,6 +658,7 @@ static void freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
 
     fputs("}\n", f);
     fclose(f);
+    freeze_dump_unlock();
 }
 
 /* Full ring dump for deliberate fatal sites (psx_fatal_halt). Runs ON the
@@ -731,6 +833,26 @@ static void heartbeat_write(void) {
     uint64_t bl_count = 0;
     psx_bail_ledger_top(&bl_site_ra, &bl_wild, &bl_ssp, &bl_gsp, &bl_count, &bl_uniq);
 
+    /* FAIL-FAST reasons contain raw newlines; unescaped they break this JSON
+     * (psx_freeze_heartbeat.json.tmp was invalid on the TM4 jalr dumps). */
+    char fatal_esc[384];
+    fatal_esc[0] = 0;
+    if (g_psx_fatal_reason) {
+        size_t w = 0;
+        for (const char *p = g_psx_fatal_reason; *p && w + 2 < sizeof(fatal_esc); p++) {
+            unsigned char ch = (unsigned char)*p;
+            if (ch == '\\' || ch == '"') {
+                fatal_esc[w++] = '\\';
+                fatal_esc[w++] = (char)ch;
+            } else if (ch >= 0x20) {
+                fatal_esc[w++] = (char)ch;
+            } else {
+                fatal_esc[w++] = ' ';
+            }
+        }
+        fatal_esc[w] = 0;
+    }
+
     /* Buffer sized for current-state JSON + ring (~256B per ring entry). */
     static char buf[64 * 1024];
     int n = snprintf(buf, sizeof(buf),
@@ -853,7 +975,7 @@ static void heartbeat_write(void) {
         (unsigned long long)g_psx_bail_flattened,
         (unsigned long long)g_psx_bail_anomaly,
         g_psx_fatal_reason ? "\"" : "",
-        g_psx_fatal_reason ? g_psx_fatal_reason : "null",
+        g_psx_fatal_reason ? fatal_esc : "null",
         g_psx_fatal_reason ? "\"" : "");
 
     if (n <= 0 || n >= (int)sizeof(buf)) return;

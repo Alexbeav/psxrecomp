@@ -79,6 +79,7 @@ void psx_netplay_config_defaults(PsxNetplayConfig *cfg)
     cfg->local_slot = 0;
     cfg->slot_count = 2;
     cfg->player_count = 0;
+    cfg->occupied_mask = 0;
     cfg->input_player = -1;
     cfg->input_delay = 2;
     cfg->input_prediction = 4;
@@ -692,14 +693,22 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
         return;
     if (g_np.local_slot != 0)
         return; /* initiator side only */
+    /* §115: tip+1 soft fork already accepted — stay Live. */
+    if (psx_netplay_rb_platform_fork_accepted(fork_tick))
+        return;
     /* §64: do not bookkeep persist while an episode / tip-hold / load is
      * in flight. Previously fork_tick advances during tip-extend rereplay
      * started the persist clock, so tip-extend abandon → Live opened a
      * second hc-fork recovery with zero Live gap (soak: epoch 8 → 16,
      * "persisted 39 ticks"). */
+    /* §109/§110: allow hc-fork through DESYNC invent-hold or heal sticky when
+     * MEDIA_KF can heal. Keep blocking live media+settle invent-hold. */
     if (psx_netplay_rb_active() || psx_netplay_rb_tip_holding() ||
         psx_netplay_rb_load_pending() || psx_netplay_rb_rewind_suppressed() ||
-        psx_netplay_rb_fmv_defer_rewind() || psx_netplay_rb_lockstep_no_invent() ||
+        (psx_netplay_rb_fmv_defer_rewind() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
+        (psx_netplay_rb_lockstep_no_invent() && !psx_netplay_rb_fmv_desync_hold() &&
+         !psx_netplay_rb_post_fmv_heal_eligible()) ||
         psx_netplay_rb_fmv_episode_unsafe(fork_tick))
         return;
     sim = rnet_session_sim_tick(g_np.session);
@@ -725,6 +734,8 @@ static void np_try_hc_fork_recovery(uint32_t fork_tick)
             (unsigned)fork_tick, (unsigned)(sim - s_fork_first_sim),
             fork_cap ? "; fork_cap backoff" : "");
     fflush(stderr);
+    /* §109/§114: silent fork → apply-only MEDIA_KF heal (target=load). */
+    psx_netplay_rb_request_post_fmv_heal_kf();
     (void)psx_netplay_rb_begin_rewind(fork_tick, remote);
 }
 
@@ -3395,6 +3406,25 @@ int psx_netplay_start(const PsxNetplayConfig *cfg)
         rcfg.input_delay = 5u;
     }
     rcfg.session_id = cfg->session_id ? cfg->session_id : 1u;
+    {
+        uint32_t mask = cfg->occupied_mask;
+        if (mask == 0u) {
+            mask = (slots >= 32) ? 0xffffffffu : ((1u << slots) - 1u);
+        } else {
+            /* Always treat the local seat as occupied; clamp to session width. */
+            mask |= (1u << (unsigned)local);
+            if (slots < 32)
+                mask &= (1u << slots) - 1u;
+        }
+        rcfg.occupied_mask = mask;
+        if (mask != ((slots >= 32) ? 0xffffffffu : ((1u << slots) - 1u))) {
+            fprintf(stderr,
+                    "psx_netplay: occupied_mask=0x%x (sparse seats get "
+                    "local neutral inputs)\n",
+                    (unsigned)mask);
+            fflush(stderr);
+        }
+    }
 
     /* Host resolves auto (-1) before start; accept 0..PSX_MAX_PLAYERS-1. */
     in_player = cfg->input_player;
@@ -4728,6 +4758,10 @@ int psx_netplay_catchup_budget(void)
     if (!psx_netplay_active())
         return 0;
     if (psx_start_bisect_no_catchup())
+        return 0;
+    /* §114: during post-FMV DESYNC / heal sticky, do not turbo catch-up —
+     * absurd lead after heal abort + catchup widens platform tip+1 skew. */
+    if (psx_netplay_rb_fmv_desync_hold() || psx_netplay_rb_post_fmv_heal_sticky())
         return 0;
     cap = np_starv_env_int("PSX_NET_CATCHUP_CAP", PSX_CATCHUP_CAP_DEFAULT);
     if (cap <= 0 && g_starv.recovery_amount <= 0)

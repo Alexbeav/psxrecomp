@@ -11,6 +11,9 @@ framework pins. It never ships retail discs, BIOS dumps, or `generated/` game C.
 3. Configure with `-DPSXRECOMP_FORCE_SETUP_HOST=ON` + wizard flags; build the
    host binary only.
 4. `package_setup_host.sh` — lean zip (no embedded toolchain by default).
+   Requires `psx_game_version.txt` beside the host exe (stamped at compile
+   time). Refuses to ship if `RELEASE_VERSION` / `VERSION` disagree with that
+   stamp — a mismatched pin makes netplay lobby browsers filter each other out.
 
 Template: [`templates/setup-release.yml`](templates/setup-release.yml).
 

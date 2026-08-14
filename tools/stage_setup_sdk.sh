@@ -105,11 +105,17 @@ fi
 
 find_tool_bin() {
   local name="$1"
+  local prefer_exe="${2:-0}"
   local dir cand
   local -a roots=()
   local r
   for r in "${RECOMPILER_BUILDS[@]+"${RECOMPILER_BUILDS[@]}"}"; do
-    roots+=("$(cd "${r}" && pwd)")
+    [[ -n "${r}" ]] || continue
+    if [[ ! -d "${r}" ]]; then
+      echo "error: --recompiler-build not a directory: ${r}" >&2
+      exit 1
+    fi
+    roots+=("$(cd -- "${r}" && pwd)")
   done
   roots+=(
     "${STAGE}/psxrecomp/recompiler/build"
@@ -118,29 +124,63 @@ find_tool_bin() {
   )
   for dir in "${roots[@]}"; do
     [[ -d "${dir}" ]] || continue
-    for cand in \
-      "${dir}/${name}" \
-      "${dir}/${name}.exe" \
-      "${dir}/Release/${name}.exe"
-    do
-      if [[ -f "${cand}" ]]; then
-        echo "${cand}"
-        return 0
-      fi
-    done
+    if [[ "${prefer_exe}" -eq 1 ]]; then
+      for cand in \
+        "${dir}/${name}.exe" \
+        "${dir}/Release/${name}.exe" \
+        "${dir}/${name}"
+      do
+        if [[ -f "${cand}" ]]; then
+          echo "${cand}"
+          return 0
+        fi
+      done
+    else
+      for cand in \
+        "${dir}/${name}" \
+        "${dir}/${name}.exe" \
+        "${dir}/Release/${name}.exe"
+      do
+        if [[ -f "${cand}" ]]; then
+          echo "${cand}"
+          return 0
+        fi
+      done
+    fi
   done
   return 1
 }
 
-GAME_BIN="$(find_tool_bin psxrecomp-game || true)"
-BIOS_BIN="$(find_tool_bin psxrecomp-bios || true)"
+WANT_WIN_EMITTERS=0
+if [[ -n "${HOST_EXE}" && "${HOST_EXE}" == *.exe ]]; then
+  WANT_WIN_EMITTERS=1
+fi
+
+GAME_BIN="$(find_tool_bin psxrecomp-game "${WANT_WIN_EMITTERS}" || true)"
+BIOS_BIN="$(find_tool_bin psxrecomp-bios "${WANT_WIN_EMITTERS}" || true)"
 if [[ -z "${GAME_BIN}" ]]; then
   echo "error: psxrecomp-game not found (pass --recompiler-build)" >&2
+  if [[ "${WANT_WIN_EMITTERS}" -eq 1 ]]; then
+    echo "  Windows setup zip needs psxrecomp-game.exe (MinGW cross-build)," >&2
+    echo "  not a Linux ELF from build-recompiler." >&2
+  fi
   exit 1
 fi
 if [[ -z "${BIOS_BIN}" ]]; then
   echo "error: psxrecomp-bios not found (required for OpenBIOS regen)" >&2
   exit 1
+fi
+if [[ "${WANT_WIN_EMITTERS}" -eq 1 ]]; then
+  if [[ "${GAME_BIN}" != *.exe || "${BIOS_BIN}" != *.exe ]]; then
+    echo "error: Windows setup host requires MinGW emitter .exes, found:" >&2
+    echo "  game: ${GAME_BIN}" >&2
+    echo "  bios: ${BIOS_BIN}" >&2
+    echo "  Build with: cmake -S psxrecomp/recompiler -B build-recompiler-mingw \\" >&2
+    echo "    -DCMAKE_TOOLCHAIN_FILE=psxrecomp/cmake/toolchain-mingw-w64.cmake \\" >&2
+    echo "    -DPSXRECOMP_STATIC_CLI=ON && cmake --build build-recompiler-mingw \\" >&2
+    echo "    --target psxrecomp-game psxrecomp-bios" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "${STAGE}/psxrecomp/recompiler/build"
@@ -200,7 +240,12 @@ else
 fi
 
 # Windows MinGW DLL bundling for host + emitters.
-BUNDLE="${FW_TOOLS}/bundle_mingw_dlls.sh"
+# Studio MinGW package exports PSXRECOMP_BUNDLE_MINGW_DLLS so a stale
+# game-submodule copy is not used.
+BUNDLE="${PSXRECOMP_BUNDLE_MINGW_DLLS:-}"
+if [[ -z "${BUNDLE}" || ! -f "${BUNDLE}" ]]; then
+  BUNDLE="${FW_TOOLS}/bundle_mingw_dlls.sh"
+fi
 if [[ ! -f "${BUNDLE}" ]]; then
   # Staged copy (after sdk overlay) may own the helper.
   if [[ -f "${STAGE}/psxrecomp/tools/bundle_mingw_dlls.sh" ]]; then
@@ -254,10 +299,17 @@ if [[ "${need_dlls}" -eq 1 ]]; then
   )
   # Host (MSYS2 GCC) still needs these when imported. llvm-mingw static
   # emitters typically import neither — --require is skipped per-exe then.
+  # zlib1.dll is a savestate (ZLIB::ZLIB) import; PSX_STATIC_RUNTIME does not
+  # fold it, and --require of only GCC runtimes was a no-op on static-libgcc
+  # hosts so CI shipped zips that died on clean Windows ("zlib1.dll not found").
   if [[ -n "${HOST_EXE}" && -f "${HOST_EXE}" ]]; then
     args+=(
       --require libgcc_s_seh-1.dll
       --require libstdc++-6.dll
+      --require libwinpthread-1.dll
+      --require libssp-0.dll
+      --require zlib1.dll
+      --require z.dll
     )
   fi
   bash "${BUNDLE}" "${args[@]}"

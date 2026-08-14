@@ -11,6 +11,7 @@ from .models import AuditReport, LayoutClass, MigrateOptions, Plan, PlanStep
 # Topological order for apply. Ops not listed are appended at the end.
 _OP_ORDER = [
     "rename_psxrecomp_submodule",
+    "repair_psxrecomp_submodule",
     "ensure_psxrecomp_submodule",
     "ensure_recomp_ui_submodule",
     "emit_codegen_setup",
@@ -21,6 +22,7 @@ _OP_ORDER = [
     "emit_mods_preloaded",
     "relocate_boxart",
     "emit_boxart_stub",
+    "ensure_app_icon",
     "rewrite_cmake_setup_host",
     "emit_packager",
     "emit_ci_workflow",
@@ -30,7 +32,8 @@ _OP_ORDER = [
 ]
 
 _OP_TITLES = {
-    "rename_psxrecomp_submodule": "Rename psxrecomp-v4 → psxrecomp",
+    "rename_psxrecomp_submodule": "Consolidate on psxrecomp/ (remove psxrecomp-v4)",
+    "repair_psxrecomp_submodule": "Repair broken psxrecomp/ git checkout",
     "ensure_psxrecomp_submodule": "Add psxrecomp submodule",
     "ensure_recomp_ui_submodule": "Add recomp-ui submodule",
     "emit_codegen_setup": "Emit codegen_setup.c / .h",
@@ -41,6 +44,7 @@ _OP_TITLES = {
     "emit_mods_preloaded": "Stub mods/preloaded catalog",
     "relocate_boxart": "Relocate boxart → launcher_assets/",
     "emit_boxart_stub": "Create launcher_assets stub dir",
+    "ensure_app_icon": "Install assets/psxrecomp app icon",
     "rewrite_cmake_setup_host": "Rewrite CMakeLists.txt (setup-host)",
     "emit_packager": "Emit scripts/package_setup_release.sh",
     "emit_ci_workflow": "Emit setup-host release.yml",

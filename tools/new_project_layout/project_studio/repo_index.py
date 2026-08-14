@@ -15,6 +15,9 @@ class RepoEntry:
     path: str
     name: str = ""
     cue: str = ""  # absolute path to Redump .cue when known
+    # Per-project Build tab state (exe / dir / launch) — keyed by repo path so
+    # switching projects never leaks another title's binary.
+    build: dict | None = None
 
     def resolved(self) -> Path:
         return Path(self.path).expanduser().resolve()
@@ -44,17 +47,45 @@ class RepoEntry:
             return p
         return p if p.is_file() else p
 
+    def build_settings(self) -> dict:
+        return dict(self.build) if isinstance(self.build, dict) else {}
+
 
 @dataclass
 class RepoIndex:
     repos: list[RepoEntry]
     last: str = ""
     path: Path = DEFAULT_INDEX_PATH
+    log_height: int = 160  # Studio activity-log pane height (px)
+    catalog_only: bool = False  # Filter Game-repo dropdown to catalog titles
+    bulk_jobs: int = 2  # Parallel workers for Bulk tab (1–4)
 
     def to_dict(self) -> dict:
+        repos_out: list[dict] = []
+        for r in self.repos:
+            d = asdict(r)
+            if not d.get("build"):
+                d.pop("build", None)
+            if not d.get("cue"):
+                # Keep empty cue for compatibility with existing index files.
+                pass
+            repos_out.append(d)
+        h = int(self.log_height) if self.log_height else 160
+        if h < 100:
+            h = 100
+        if h > 800:
+            h = 800
+        jobs = int(self.bulk_jobs) if self.bulk_jobs else 2
+        if jobs < 1:
+            jobs = 1
+        if jobs > 4:
+            jobs = 4
         return {
             "last": self.last,
-            "repos": [asdict(r) for r in self.repos],
+            "log_height": h,
+            "catalog_only": bool(self.catalog_only),
+            "bulk_jobs": jobs,
+            "repos": repos_out,
         }
 
     def find(self, root: Path | str) -> RepoEntry | None:
@@ -161,11 +192,13 @@ def looks_like_game_repo(root: Path) -> bool:
 def load_index(path: Path | None = None) -> RepoIndex:
     path = path or DEFAULT_INDEX_PATH
     if not path.is_file():
-        return RepoIndex(repos=[], last="", path=path)
+        return RepoIndex(
+            repos=[], last="", path=path, log_height=160, catalog_only=False, bulk_jobs=2
+        )
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return RepoIndex(repos=[], last="", path=path)
+        return RepoIndex(repos=[], last="", path=path, log_height=160)
     repos: list[RepoEntry] = []
     seen: set[str] = set()
     for raw in data.get("repos") or []:
@@ -173,10 +206,13 @@ def load_index(path: Path | None = None) -> RepoIndex:
             p = raw
             name = ""
             cue = ""
+            build = None
         elif isinstance(raw, dict):
             p = str(raw.get("path") or "").strip()
             name = str(raw.get("name") or "").strip()
             cue = str(raw.get("cue") or raw.get("disc") or "").strip()
+            raw_build = raw.get("build")
+            build = dict(raw_build) if isinstance(raw_build, dict) else None
         else:
             continue
         if not p:
@@ -204,14 +240,40 @@ def load_index(path: Path | None = None) -> RepoIndex:
                 pass
         elif root_p.is_dir():
             cue = discover_cue(root_p)
-        repos.append(RepoEntry(path=key, name=name, cue=cue))
+        repos.append(RepoEntry(path=key, name=name, cue=cue, build=build))
     last = str(data.get("last") or "").strip()
     if last:
         try:
             last = str(Path(last).expanduser().resolve())
         except OSError:
             pass
-    return RepoIndex(repos=repos, last=last, path=path)
+    log_height = 160
+    try:
+        log_height = int(data.get("log_height") or 160)
+    except (TypeError, ValueError):
+        log_height = 160
+    if log_height < 100:
+        log_height = 100
+    if log_height > 800:
+        log_height = 800
+    catalog_only = bool(data.get("catalog_only"))
+    bulk_jobs = 2
+    try:
+        bulk_jobs = int(data.get("bulk_jobs") or 2)
+    except (TypeError, ValueError):
+        bulk_jobs = 2
+    if bulk_jobs < 1:
+        bulk_jobs = 1
+    if bulk_jobs > 4:
+        bulk_jobs = 4
+    return RepoIndex(
+        repos=repos,
+        last=last,
+        path=path,
+        log_height=log_height,
+        catalog_only=catalog_only,
+        bulk_jobs=bulk_jobs,
+    )
 
 
 def save_index(index: RepoIndex) -> None:
@@ -289,6 +351,37 @@ def clear_repo_cue(index: RepoIndex, root: Path | str) -> bool:
     return True
 
 
+def set_repo_build(
+    index: RepoIndex,
+    root: Path | str,
+    settings: dict | None,
+) -> RepoEntry | None:
+    """Persist Build-tab settings for one indexed repo (or clear with None/{})."""
+    entry = index.find(root)
+    if entry is None:
+        return None
+    if not settings:
+        entry.build = None
+    else:
+        clean: dict = {}
+        for key, val in settings.items():
+            if val is None:
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            clean[str(key)] = val.strip() if isinstance(val, str) else val
+        entry.build = clean or None
+    save_index(index)
+    return entry
+
+
+def get_repo_build(index: RepoIndex, root: Path | str) -> dict:
+    entry = index.find(root)
+    if entry is None:
+        return {}
+    return entry.build_settings()
+
+
 def remove_repo(index: RepoIndex, root: Path | str) -> bool:
     try:
         key = str(Path(str(root)).expanduser().resolve())
@@ -314,13 +407,13 @@ def set_last(index: RepoIndex, root: Path | str) -> None:
         save_index(index)
 
 
-def labels_for(index: RepoIndex) -> list[str]:
+def labels_for_repos(repos: list[RepoEntry]) -> list[str]:
     """Build unique dropdown labels; disambiguate duplicate names with parent."""
     counts: dict[str, int] = {}
-    for r in index.repos:
+    for r in repos:
         counts[r.display()] = counts.get(r.display(), 0) + 1
     labels: list[str] = []
-    for r in index.repos:
+    for r in repos:
         base = r.display()
         if counts[base] > 1:
             parent = Path(r.path).parent.name
@@ -339,12 +432,22 @@ def labels_for(index: RepoIndex) -> list[str]:
     return out
 
 
-def path_for_label(index: RepoIndex, label: str) -> str | None:
-    labs = labels_for(index)
-    for lab, entry in zip(labs, index.repos):
+def labels_for(index: RepoIndex) -> list[str]:
+    return labels_for_repos(index.repos)
+
+
+def path_for_label(
+    index: RepoIndex,
+    label: str,
+    *,
+    repos: list[RepoEntry] | None = None,
+) -> str | None:
+    entries = list(repos) if repos is not None else index.repos
+    labs = labels_for_repos(entries)
+    for lab, entry in zip(labs, entries):
         if lab == label:
             return entry.path
-    for entry in index.repos:
+    for entry in entries:
         if entry.display() == label or entry.path == label:
             return entry.path
     return None

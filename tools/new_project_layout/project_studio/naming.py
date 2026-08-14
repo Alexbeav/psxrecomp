@@ -96,6 +96,101 @@ def players_from_cmake(cmake: Path) -> int | None:
     return None
 
 
+def players_from_game_toml(game_toml: Path) -> int | None:
+    """Best-effort parse of ``[game].players`` from game.toml."""
+    if not game_toml.is_file():
+        return None
+    text = game_toml.read_text(encoding="utf-8", errors="replace")
+    in_game = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            in_game = s == "[game]"
+            continue
+        if not in_game or "=" not in s or s.startswith("#"):
+            continue
+        key, _, val = s.partition("=")
+        if key.strip() != "players":
+            continue
+        raw = val.strip().strip('"').strip("'")
+        try:
+            n = int(raw)
+        except ValueError:
+            return None
+        return n
+    return None
+
+
+def configured_players(root: Path, *, default: int = 2) -> int:
+    """Players from game.toml, else CMakeLists MAX_PLAYERS, else ``default``.
+
+    Clamped to 1..8 to match the Migrate UI and sio pad slots.
+    """
+    root = root.expanduser().resolve()
+    n = players_from_game_toml(root / "game.toml")
+    if n is None:
+        n = players_from_cmake(root / "CMakeLists.txt")
+    if n is None:
+        n = default
+    if n < 1:
+        n = 1
+    if n > 8:
+        n = 8
+    return n
+
+
+def netplay_configured(root: Path) -> bool:
+    """True if the game repo already opts into netplay (CMake and/or game.toml)."""
+    root = root.expanduser().resolve()
+    cmake = root / "CMakeLists.txt"
+    if cmake.is_file():
+        try:
+            text = cmake.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if "ENABLE_NETPLAY_IF_PRESENT" in s:
+                return True
+            if re.search(r"set\s*\(\s*PSX_NETPLAY\s+ON\b", s, re.IGNORECASE):
+                return True
+            if "NETPLAY_LOBBY_URL" in s:
+                return True
+    game_toml = root / "game.toml"
+    if game_toml.is_file():
+        try:
+            gtext = game_toml.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            gtext = ""
+        if re.search(r"^\[netplay\]\s*$", gtext, re.MULTILINE):
+            return True
+    return False
+
+
+def ci_workflow_present(root: Path) -> bool:
+    """True if setup-host ``.github/workflows/release.yml`` exists."""
+    root = root.expanduser().resolve()
+    return (root / ".github" / "workflows" / "release.yml").is_file()
+
+
+def disc_probe_configured(root: Path) -> bool:
+    """True if catalog/disc probe artifacts already exist."""
+    root = root.expanduser().resolve()
+    has_catalog = (root / "catalog_identity.json").is_file()
+    game_toml = root / "game.toml"
+    has_prepare = False
+    if game_toml.is_file():
+        try:
+            has_prepare = "[prepare_disc]" in game_toml.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            has_prepare = False
+    return has_catalog or has_prepare
+
+
 def window_title_from_cmake(cmake: Path) -> str | None:
     if not cmake.is_file():
         return None
@@ -187,6 +282,10 @@ def build_token_map(
             '    # LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"'
         )
 
+    app_icon = (
+        '    APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"'
+    )
+
     return {
         "PROJECT_CMAKE_NAME": cmake_name,
         "WINDOW_TITLE": title,
@@ -207,6 +306,7 @@ def build_token_map(
         "NETPLAY_LOBBY_URL_ARG": netplay_lobby,
         "WIZARD_RUNTIME_ARG": wizard_runtime,
         "BOXART_CMAKE_ARG": boxart,
+        "APP_ICON_CMAKE_ARG": app_icon,
         "NETPLAY_CMAKE_BLOCK": netplay_block,
         "WIZARD_CMAKE_BLOCK": wizard_block,
         "RECOMP_UI_CMAKE_BLOCK": recomp_ui_block,

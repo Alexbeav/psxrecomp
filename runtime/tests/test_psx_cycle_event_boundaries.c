@@ -61,6 +61,7 @@ void starvation_ring_pc_sample(void) {}
 int  psx_netplay_active(void) { return 0; }
 int  psx_selfcheck_enabled(void) { return 0; }
 void dirty_ram_ld_delay_discard(void) {}
+void dirty_ram_irq_ambient_resync_after_restore(void) {}
 
 int main(void) {
     /* NULL cpu: this test pins the scheduler boundary, not the CPU-state

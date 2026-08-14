@@ -595,6 +595,12 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
         extern void dirty_ram_ld_delay_discard(void);
         dirty_ram_ld_delay_discard();
     }
+    /* Entry-poll %%64 stride + 4096-insn pump gap are host-only; reset so
+     * both peers take the first post-load dirty wait IRQ on the same phase. */
+    {
+        extern void dirty_ram_irq_ambient_resync_after_restore(void);
+        dirty_ram_irq_ambient_resync_after_restore();
+    }
 }
 
 void psx_cycles_reset_for_boot(void) {

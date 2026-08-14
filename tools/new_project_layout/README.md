@@ -80,7 +80,8 @@ For **bulk ops across many titles / platforms**, use the sibling tool
 
 | Op | Purpose |
 |----|---------|
-| `rename_psxrecomp_submodule` | `psxrecomp-v4` → `psxrecomp` |
+| `rename_psxrecomp_submodule` | Promote/keep `psxrecomp/`; delete leftover `psxrecomp-v4` |
+| `repair_psxrecomp_submodule` | Re-clone when `psxrecomp/.git` gitdir is broken / absorbed |
 | `ensure_recomp_ui_submodule` | Add `recomp-ui` |
 | `emit_codegen_setup` | Thin `codegen_setup.c/.h` |
 | `rewrite_cmake_setup_host` | `psxrecomp_add_game_runtime` + wizard |

@@ -3,8 +3,9 @@
 #
 # Title packagers (BPE/MotK setup zips) call this for Windows PEs that still
 # import non-system DLLs (typically the MSYS2-built setup host + SDL2).
+# Walks the exe *and* each copied DLL (zlib1.dll → libssp-0.dll, etc.).
 # Emitters built with llvm-mingw + PSXRECOMP_STATIC_CLI should import none of
-# the GCC runtimes; this script only copies DLLs each exe actually imports.
+# the GCC runtimes.
 #
 # Usage:
 #   bundle_mingw_dlls.sh [options] --exe <path> [--dest <dir>] [--label <name>] ...
@@ -105,7 +106,7 @@ else
   exit 1
 fi
 
-SYSTEM_DLL_RE='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|WINMM|IMM32|SETUPAPI|VERSION|OPENGL32|COMCTL32|COMDLG32|RPCRT4|SHLWAPI|CRYPT32|BCRYPT|IPHLPAPI|NSI|DNSAPI|MSVCRT|UCRTBASE|VCRUNTIME|API-MS-).*\.DLL$'
+SYSTEM_DLL_RE='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|WINMM|IMM32|SETUPAPI|VERSION|OPENGL32|COMCTL32|COMDLG32|RPCRT4|SHLWAPI|CRYPT32|BCRYPT|IPHLPAPI|NSI|DNSAPI|MSVCRT|UCRTBASE|VCRUNTIME|DBGHELP|API-MS-).*\.DLL$'
 
 PROBE_DLLS=(
   SDL2.dll
@@ -118,21 +119,127 @@ PROBE_DLLS=(
   libssp-0.dll
 )
 
+# Companion GCC/MinGW runtimes. Copied when the PE or any already-copied DLL
+# imports them (direct or transitive). libssp-0 is pulled in by zlib1.dll even
+# when the host exe itself is -static-libgcc.
+ALWAYS_RUNTIME_DLLS=(
+  libgcc_s_seh-1.dll
+  libstdc++-6.dll
+  libwinpthread-1.dll
+  libssp-0.dll
+)
+
+dll_name_eq() {
+  local a b
+  a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  b="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+  [[ "${a}" == "${b}" ]]
+}
+
+is_system_dll() {
+  local name="$1"
+  printf '%s' "${name}" | grep -qiE "${SYSTEM_DLL_RE}"
+}
+
+is_always_runtime_dll() {
+  local dll="$1" cand
+  for cand in "${ALWAYS_RUNTIME_DLLS[@]}"; do
+    if dll_name_eq "${cand}" "${dll}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Avoid `objdump | grep -q` under pipefail: grep -q exits early → objdump SIGPIPE
+# → pipeline fails even when the DLL Name line matched.
+list_exe_imports() {
+  local exe="$1"
+  "${OBJDUMP}" -p "${exe}" 2>/dev/null \
+    | awk '/DLL Name:/{print $3}' \
+    || true
+}
+
 exe_imports_dll() {
   local exe="$1"
   local dll="$2"
-  "${OBJDUMP}" -p "${exe}" 2>/dev/null | grep -qi "DLL Name:[[:space:]]*${dll}"
+  local name
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    if dll_name_eq "${name}" "${dll}"; then
+      return 0
+    fi
+  done < <(list_exe_imports "${exe}")
+  return 1
+}
+
+find_dll_src() {
+  local dll="$1"
+  local exe="$2"
+  local dest_dir="$3"
+  local cand d name
+  local -a names=("${dll}")
+  local -a candidates=()
+  local lower
+  lower="$(printf '%s' "${dll}" | tr '[:upper:]' '[:lower:]')"
+  # MSVC/vcpkg: zlib1.dll; some MinGW layouts: z.dll / zlib.dll.
+  case "${lower}" in
+    z.dll) names+=("zlib1.dll" "zlib.dll") ;;
+    zlib1.dll) names+=("z.dll" "zlib.dll") ;;
+    zlib.dll) names+=("zlib1.dll" "z.dll") ;;
+  esac
+  for name in "${names[@]}"; do
+    candidates+=(
+      "$(dirname "${exe}")/${name}"
+      "${dest_dir}/${name}"
+      "/mingw64/bin/${name}"
+      "/usr/x86_64-w64-mingw32/bin/${name}"
+    )
+    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
+    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
+  done
+  for cand in "${candidates[@]}"; do
+    [[ -n "${cand}" ]] || continue
+    if [[ -f "${cand}" ]]; then
+      printf '%s' "${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# True if exe or any PE already in dest imports dll (direct).
+tree_imports_dll() {
+  local exe="$1"
+  local dest_dir="$2"
+  local dll="$3"
+  local pe
+  if exe_imports_dll "${exe}" "${dll}"; then
+    return 0
+  fi
+  shopt -s nullglob
+  for pe in "${dest_dir}"/*.dll "${dest_dir}"/*.DLL "${dest_dir}"/*.exe "${dest_dir}"/*.EXE; do
+    [[ -f "${pe}" ]] || continue
+    if exe_imports_dll "${pe}" "${dll}"; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
 }
 
 bundle_one() {
   local exe="$1"
   local dest_dir="$2"
   local label="$3"
-  local dll src key cand d
-  local -a needed=()
-  local -a unique=()
-  local -a candidates=()
-  local -A seen=()
+  local dll src key name dest_file src_res dest_res
+  local -a queue=()
+  local -A queued=()
 
   if [[ ! -f "${exe}" ]]; then
     echo "error: cannot bundle DLLs; missing ${exe}" >&2
@@ -146,48 +253,37 @@ bundle_one() {
   fi
   mkdir -p "${dest_dir}"
 
-  mapfile -t needed < <(
-    "${OBJDUMP}" -p "${exe}" 2>/dev/null \
-      | awk '/DLL Name:/{print $3}' \
-      | grep -viE "${SYSTEM_DLL_RE}" \
-      | sort -u || true
-  )
-  needed+=("${PROBE_DLLS[@]}")
-
-  for dll in "${needed[@]}"; do
-    [[ -n "${dll}" ]] || continue
-    key="$(printf '%s' "${dll}" | tr '[:upper:]' '[:lower:]')"
-    if [[ -n "${seen[$key]:-}" ]]; then
-      continue
+  enqueue() {
+    local n="$1"
+    local k
+    [[ -n "${n}" ]] || return 0
+    if is_system_dll "${n}"; then
+      return 0
     fi
-    seen[$key]=1
-    unique+=("${dll}")
+    k="$(printf '%s' "${n}" | tr '[:upper:]' '[:lower:]')"
+    if [[ -n "${queued[$k]:-}" ]]; then
+      return 0
+    fi
+    queued[$k]=1
+    queue+=("${n}")
+  }
+
+  while IFS= read -r name; do
+    enqueue "${name}"
+  done < <(list_exe_imports "${exe}")
+
+  # Probe names the exe actually imports (covers case / alias mismatches).
+  for dll in "${PROBE_DLLS[@]}" "${ALWAYS_RUNTIME_DLLS[@]}"; do
+    if exe_imports_dll "${exe}" "${dll}"; then
+      enqueue "${dll}"
+    fi
   done
 
-  for dll in "${unique[@]}"; do
-    if ! exe_imports_dll "${exe}" "${dll}"; then
-      continue
-    fi
-    src=""
-    candidates=(
-      "$(dirname "${exe}")/${dll}"
-      "${dest_dir}/${dll}"
-      "/mingw64/bin/${dll}"
-      "/usr/x86_64-w64-mingw32/bin/${dll}"
-    )
-    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
-      candidates+=("${d}/${dll}")
-    done
-    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
-      candidates+=("${d}/${dll}")
-    done
-    for cand in "${candidates[@]}"; do
-      [[ -n "${cand}" ]] || continue
-      if [[ -f "${cand}" ]]; then
-        src="${cand}"
-        break
-      fi
-    done
+  local i=0
+  while [[ "${i}" -lt "${#queue[@]}" ]]; do
+    dll="${queue[$i]}"
+    i=$((i + 1))
+    src="$(find_dll_src "${dll}" "${exe}" "${dest_dir}" || true)"
     if [[ -z "${src}" ]]; then
       echo "error: required DLL missing for ${label}: ${dll}" >&2
       echo "  exe: ${exe}" >&2
@@ -201,19 +297,29 @@ bundle_one() {
       exit 1
     fi
     dest_file="${dest_dir}/${dll}"
-    # MSYS2/Windows cp fails when source and dest are the same file.
     if [[ -f "${dest_file}" ]] && [[ "${src}" -ef "${dest_file}" ]]; then
       echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
-      continue
+    else
+      src_res="$(cd "$(dirname "${src}")" && pwd)/$(basename "${src}")"
+      dest_res="$(cd "${dest_dir}" && pwd)/${dll}"
+      if [[ "${src_res}" == "${dest_res}" ]]; then
+        echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
+      else
+        # Copy to the PE import name (zlib1.dll source may satisfy z.dll).
+        cp -f "${src}" "${dest_file}"
+        echo "bundled ${dll} → ${dest_dir}/ (${label})"
+      fi
     fi
-    src_res="$(cd "$(dirname "${src}")" && pwd)/$(basename "${src}")"
-    dest_res="$(cd "${dest_dir}" && pwd)/${dll}"
-    if [[ "${src_res}" == "${dest_res}" ]]; then
-      echo "bundled ${dll} → ${dest_dir}/ (${label}; already present)"
-      continue
+    # Recurse: zlib1.dll imports libssp-0.dll even when the host does not.
+    if [[ -f "${dest_file}" ]]; then
+      while IFS= read -r name; do
+        enqueue "${name}"
+      done < <(list_exe_imports "${dest_file}")
+    elif [[ -f "${src}" ]]; then
+      while IFS= read -r name; do
+        enqueue "${name}"
+      done < <(list_exe_imports "${src}")
     fi
-    cp -f "${src}" "${dest_dir}/"
-    echo "bundled ${dll} → ${dest_dir}/ (${label})"
   done
 }
 
@@ -229,11 +335,11 @@ for dll in "${REQUIRE[@]}"; do
     if [[ -z "${dest}" ]]; then
       dest="$(dirname "${exe}")"
     fi
-    if ! exe_imports_dll "${exe}" "${dll}"; then
+    if ! tree_imports_dll "${exe}" "${dest}" "${dll}"; then
       continue
     fi
     if [[ ! -f "${dest}/${dll}" ]]; then
-      echo "error: $(basename "${exe}") imported ${dll} but it is missing under ${dest}" >&2
+      echo "error: $(basename "${exe}") needs ${dll} but it is missing under ${dest}" >&2
       exit 1
     fi
   done

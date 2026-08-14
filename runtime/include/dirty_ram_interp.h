@@ -52,6 +52,11 @@ void dirty_ram_ld_delay_flush(CPUState* cpu);
  * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
 void dirty_ram_ld_delay_discard(void);
 
+/* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
+ * gap) after snap restore. Not in boot_state — peers that drifted through FMV
+ * otherwise entered the post-FMV dirty wait on opposite poll phases. */
+void dirty_ram_irq_ambient_resync_after_restore(void);
+
 /* Overlay-cache windows — the address ranges eligible for capture, offline
  * recompilation, and per-entry-validated native execution (Rule 18 code that
  * does not exist in any compile-time image):

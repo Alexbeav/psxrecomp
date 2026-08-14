@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from .models import (
@@ -52,6 +53,57 @@ def _is_real_psxrecomp_tree(path: Path) -> bool:
     return (path / "runtime" / "runtime.cmake").is_file()
 
 
+def _git_checkout_ok(path: Path) -> bool:
+    """True when ``git -C path rev-parse`` sees a live work tree."""
+    if not path.is_dir():
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
+def diagnose_psxrecomp_checkout(root: Path) -> str | None:
+    """Return a human reason when ``psxrecomp/`` is present but not a usable git checkout.
+
+    Common after consolidating away ``psxrecomp-v4``: ``psxrecomp/.git`` still
+    points at ``../.git/modules/psxrecomp-v4`` (deleted), so Studio module ops
+    report ``checkout missing`` even though ``runtime.cmake`` is on disk.
+    """
+    dest = root / "psxrecomp"
+    if not dest.is_dir():
+        return None
+    if not _is_real_psxrecomp_tree(dest):
+        return None
+    if _git_checkout_ok(dest):
+        return None
+
+    git_file = dest / ".git"
+    if git_file.is_file():
+        text = _read(git_file).strip()
+        if text.lower().startswith("gitdir:"):
+            rel = text.split(":", 1)[1].strip()
+            target = (dest / rel).resolve() if rel else None
+            if target is not None and not target.exists():
+                return (
+                    f"psxrecomp/.git points at missing gitdir ({rel}) — "
+                    "broken submodule metadata (often leftover psxrecomp-v4)."
+                )
+            return f"psxrecomp/.git gitdir is unusable ({rel or text})."
+    if git_file.is_dir():
+        return "psxrecomp/.git exists but git rev-parse fails."
+    return (
+        "psxrecomp/ has runtime.cmake but is not a git checkout "
+        "(absorbed into the parent tree or missing .git)."
+    )
+
+
 def _cmake_has(text: str, needle: str) -> bool:
     return needle in text
 
@@ -91,7 +143,10 @@ def audit_project(root: Path) -> AuditReport:
                 title="Root psxrecomp/ submodule",
                 status=CheckStatus.WARN,
                 severity=Severity.REQUIRED,
-                detail="Both psxrecomp/ and psxrecomp-v4 present — consolidate to psxrecomp/.",
+                detail=(
+                    "Both psxrecomp/ and psxrecomp-v4 present — keep psxrecomp/ "
+                    "and delete the legacy psxrecomp-v4 tree."
+                ),
                 fix_op="rename_psxrecomp_submodule",
             )
         )
@@ -107,15 +162,28 @@ def audit_project(root: Path) -> AuditReport:
             )
         )
     elif has_psx:
-        checks.append(
-            CheckResult(
-                id="submodule_psxrecomp",
-                title="Root psxrecomp/ submodule",
-                status=CheckStatus.PASS,
-                severity=Severity.REQUIRED,
-                detail="psxrecomp/ present with runtime.cmake.",
+        broken = diagnose_psxrecomp_checkout(root)
+        if broken:
+            checks.append(
+                CheckResult(
+                    id="submodule_psxrecomp",
+                    title="Root psxrecomp/ submodule",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=broken + " Repair re-clones as a real submodule.",
+                    fix_op="repair_psxrecomp_submodule",
+                )
             )
-        )
+        else:
+            checks.append(
+                CheckResult(
+                    id="submodule_psxrecomp",
+                    title="Root psxrecomp/ submodule",
+                    status=CheckStatus.PASS,
+                    severity=Severity.REQUIRED,
+                    detail="psxrecomp/ present with runtime.cmake.",
+                )
+            )
     else:
         checks.append(
             CheckResult(
@@ -382,14 +450,16 @@ def audit_project(root: Path) -> AuditReport:
         )
 
     # VERSION
+    ver_text = ""
     if (root / "VERSION").is_file():
+        ver_text = _read(root / "VERSION").strip()
         checks.append(
             CheckResult(
                 id="version_file",
                 title="VERSION",
                 status=CheckStatus.PASS,
                 severity=Severity.RECOMMENDED,
-                detail=_read(root / "VERSION").strip() or "(empty)",
+                detail=ver_text or "(empty)",
             )
         )
     else:
@@ -403,6 +473,48 @@ def audit_project(root: Path) -> AuditReport:
                 fix_op="emit_version",
             )
         )
+
+    # Lobby pin stamp vs VERSION (build tree) — drift breaks netplay lists.
+    stamp_hits: list[tuple[str, str]] = []
+    for build in sorted(root.glob("build*")):
+        if not build.is_dir():
+            continue
+        for stamp in (
+            build / "psx_game_version.txt",
+            build / "Release" / "psx_game_version.txt",
+        ):
+            if stamp.is_file():
+                stamp_hits.append(
+                    (str(stamp.relative_to(root)).replace("\\", "/"),
+                     _read(stamp).strip())
+                )
+    if ver_text and stamp_hits:
+        bad = [(p, s) for p, s in stamp_hits if s and s.lstrip("vV") != ver_text.lstrip("vV")]
+        if bad:
+            detail = "; ".join(f"{p}={s} (VERSION={ver_text})" for p, s in bad[:3])
+            checks.append(
+                CheckResult(
+                    id="version_stamp_match",
+                    title="Lobby pin stamp",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=(
+                        "psx_game_version.txt disagrees with VERSION — "
+                        "rebuild with -DPSX_GAME_VERSION matching VERSION before "
+                        "packaging/releasing. " + detail
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                CheckResult(
+                    id="version_stamp_match",
+                    title="Lobby pin stamp",
+                    status=CheckStatus.PASS,
+                    severity=Severity.RECOMMENDED,
+                    detail="Build stamp matches VERSION.",
+                )
+            )
 
     # symbols
     if (root / "symbols.toml").is_file():
@@ -524,6 +636,30 @@ def audit_project(root: Path) -> AuditReport:
                 severity=Severity.OPTIONAL,
                 detail="No boxart found (optional).",
                 fix_op="emit_boxart_stub",
+            )
+        )
+
+    # Default RetComM-themed app icon (Windows .ico + PNG)
+    app_ico = root / "assets" / "psxrecomp.ico"
+    if app_ico.is_file():
+        checks.append(
+            CheckResult(
+                id="app_icon",
+                title="assets/psxrecomp app icon",
+                status=CheckStatus.PASS,
+                severity=Severity.OPTIONAL,
+                detail="assets/psxrecomp.ico present.",
+            )
+        )
+    else:
+        checks.append(
+            CheckResult(
+                id="app_icon",
+                title="assets/psxrecomp app icon",
+                status=CheckStatus.WARN,
+                severity=Severity.RECOMMENDED,
+                detail="Missing assets/psxrecomp.ico (RetComM-themed default pad icon).",
+                fix_op="ensure_app_icon",
             )
         )
 

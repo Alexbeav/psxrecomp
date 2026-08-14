@@ -76,6 +76,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "disc_path.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
+#include "psx_window_icon.h"
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
@@ -8448,12 +8449,12 @@ namespace {
     }
 
     int ae_np_connect(void*) {
-        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), psx_lobby_game_version());
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
         const int rc = psx_lobby_connect(ae_np_default_url(nullptr));
         /* connect resets g_lc; re-apply so create/join never advertise "". */
-        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), psx_lobby_game_version());
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
         return rc;
@@ -9207,7 +9208,7 @@ namespace {
         /* Ensure TOC fp survives connect/reset before the lobby stores it. */
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
-                                g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
+                                g_lnch_netplay_game_name.c_str(), psx_lobby_game_version(),
                                 password ? password : "", endpoint, &caps);
     }
 
@@ -9642,6 +9643,23 @@ namespace {
                 g_lnch_pending_direct_launch.force_turn = 0;
                 g_lnch_pending_direct_launch.rollback = g_lnch_rollback ? 1 : 0;
                 g_lnch_pending_direct_launch.player_count = ae_np_lan_occupied(state);
+                {
+                    uint32_t occ = 0;
+                    int high = g_lnch_pending_direct_launch.local_slot;
+                    for (int i = 0; i < state.max_slots && i < kAeLanMaxSlots; ++i) {
+                        if (state.slot_name[i].empty() && state.slot_id[i].empty())
+                            continue;
+                        occ |= (1u << (unsigned)i);
+                        if (i > high) high = i;
+                    }
+                    if (high + 1 > g_lnch_pending_direct_launch.player_count)
+                        g_lnch_pending_direct_launch.player_count = high + 1;
+                    if (occ == 0u) {
+                        const int n = g_lnch_pending_direct_launch.player_count;
+                        occ = (n >= 32) ? 0xffffffffu : ((1u << n) - 1u);
+                    }
+                    g_lnch_pending_direct_launch.occupied_mask = occ;
+                }
                 if (g_lnch_hosting_lan) {
                     const size_t colon = state.endpoint.rfind(':');
                     const char* port = colon == std::string::npos
@@ -9728,16 +9746,29 @@ namespace {
         {
             int seated = ji->player_count > 0 ? ji->player_count : 0;
             int high = ji->local_slot;
+            uint32_t occ = 0;
             const int mc = psx_lobby_member_count();
             for (int i = 0; i < mc; ++i) {
                 PsxLobbyMember mem{};
                 if (!psx_lobby_member_get(i, &mem)) continue;
                 if (mem.slot > high) high = mem.slot;
+                if (mem.slot >= 0 && mem.slot < 32)
+                    occ |= (1u << (unsigned)mem.slot);
             }
+            if (ji->local_slot >= 0 && ji->local_slot < 32)
+                occ |= (1u << (unsigned)ji->local_slot);
             if (high + 1 > seated) seated = high + 1;
             if (seated < 2) seated = out->max_slots;
             if (seated > out->max_slots) seated = out->max_slots;
             out->player_count = seated;
+            /* Sparse rooms leave holes in 0..seated-1; tell netplay which
+             * seats are real so READY/admit do not wait on phantoms. */
+            if (occ == 0u) {
+                occ = (seated >= 32) ? 0xffffffffu : ((1u << seated) - 1u);
+            } else if (seated < 32) {
+                occ &= (1u << seated) - 1u;
+            }
+            out->occupied_mask = occ;
         }
         /* §108: online launch always SFU. Prefer caps.force_input_relay from
          * relay_endpoint rewrite; also infer when host==guest advertise. */
@@ -11614,14 +11645,16 @@ int main(int argc, char** argv) {
                         ls.netplay_launch.local_slot, game_players);
                     if (net_cfg.player_count <= 0)
                         net_cfg.player_count = net_cfg.slot_count;
+                    net_cfg.occupied_mask = ls.netplay_launch.occupied_mask;
                     std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                                   ls.netplay_launch.bind_hostport);
                     std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",
                                   ls.netplay_launch.peer_hostport);
                     g_netplay_from_lobby = 1;
                     std::fprintf(stdout,
-                        "psxrecomp: launcher netplay slot=%d slots=%d bind=%s peer=%s session=%u\n",
-                        net_cfg.local_slot, net_cfg.slot_count, net_cfg.bind_hostport,
+                        "psxrecomp: launcher netplay slot=%d slots=%d mask=0x%x bind=%s peer=%s session=%u\n",
+                        net_cfg.local_slot, net_cfg.slot_count,
+                        (unsigned)net_cfg.occupied_mask, net_cfg.bind_hostport,
                         net_cfg.peer_hostport, (unsigned)net_cfg.session_id);
                     std::fflush(stdout);
                 } else {
@@ -12273,6 +12306,7 @@ session_reboot:
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
+    psx_apply_window_icon(sdl_window, argv[0]);
 
     /* Sync-to-host-refresh: with SDL PRESENTVSYNC on, a fixed 59.94 Hz wall-clock
      * pacer fights a 60.00 Hz panel — rendered frames slip onto an uneven vblank
@@ -13157,6 +13191,7 @@ soft_return_lobby:
                     ls.netplay_launch.local_slot, game_players);
                 if (net_cfg.player_count <= 0)
                     net_cfg.player_count = net_cfg.slot_count;
+                net_cfg.occupied_mask = ls.netplay_launch.occupied_mask;
                 std::snprintf(net_cfg.bind_hostport, sizeof(net_cfg.bind_hostport), "%s",
                               ls.netplay_launch.bind_hostport);
                 std::snprintf(net_cfg.peer_hostport, sizeof(net_cfg.peer_hostport), "%s",

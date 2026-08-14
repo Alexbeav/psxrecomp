@@ -75,6 +75,8 @@ endif()
 # 0xc000007b failure mode becomes structurally impossible. Default ON for
 # MinGW Release/MinSizeRel (the configs used to cut releases); override
 # with -DPSX_STATIC_RUNTIME=OFF to force dynamic linking.
+# zlib is folded the same way (static libz / zlibstatic) so Windows CI
+# hosts do not import zlib1.dll — packagers still bundle it if a PE does.
 if(MINGW AND (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
     option(PSX_STATIC_RUNTIME "Statically link SDL + libgcc/libstdc++ for a self-contained exe" ON)
 else()
@@ -161,6 +163,25 @@ if(_psx_sdl_backend STREQUAL "SDL3")
             list(APPEND _psx_sdl3_timestamp_args
                 DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
         endif()
+        # CI (tools/ci/prefetch_sdl3.sh) pre-extracts with curl --http1.1 to
+        # avoid intermittent GitHub HTTP/2 REFUSED_STREAM failures from
+        # CMake's file(DOWNLOAD). Prefer that tree when present.
+        set(_psx_sdl3_src "")
+        if(DEFINED FETCHCONTENT_SOURCE_DIR_SDL3 AND
+           NOT FETCHCONTENT_SOURCE_DIR_SDL3 STREQUAL "" AND
+           EXISTS "${FETCHCONTENT_SOURCE_DIR_SDL3}/CMakeLists.txt")
+            set(_psx_sdl3_src "${FETCHCONTENT_SOURCE_DIR_SDL3}")
+        elseif(DEFINED ENV{PSX_SDL3_SOURCE_DIR} AND
+               NOT "$ENV{PSX_SDL3_SOURCE_DIR}" STREQUAL "" AND
+               EXISTS "$ENV{PSX_SDL3_SOURCE_DIR}/CMakeLists.txt")
+            set(_psx_sdl3_src "$ENV{PSX_SDL3_SOURCE_DIR}")
+            set(FETCHCONTENT_SOURCE_DIR_SDL3 "${_psx_sdl3_src}" CACHE PATH
+                "Pre-fetched SDL3 source (skip download)" FORCE)
+        endif()
+        if(_psx_sdl3_src)
+            message(STATUS
+                "psxrecomp: using pre-fetched SDL3 source ${_psx_sdl3_src}")
+        endif()
         FetchContent_Declare(SDL3
             URL
                 "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
@@ -168,6 +189,7 @@ if(_psx_sdl_backend STREQUAL "SDL3")
                 "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
             ${_psx_sdl3_timestamp_args})
         FetchContent_MakeAvailable(SDL3)
+        unset(_psx_sdl3_src)
     endif()
     if(NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR
@@ -228,6 +250,7 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
@@ -651,8 +674,25 @@ function(psxrecomp_ensure_zlib)
             endif()
         endforeach()
     endif()
+    # PSX_STATIC_RUNTIME promises no non-system DLL imports. MSYS2's
+    # ZLIB::ZLIB is usually shared (zlib1.dll); find_package would leave
+    # that import in the host even with -static-libgcc.
+    set(_psx_zlib_saved_suffixes "")
+    if(PSX_STATIC_RUNTIME)
+        set(ZLIB_USE_STATIC_LIBS ON)
+        if(MINGW)
+            set(_psx_zlib_saved_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+            set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+        endif()
+    endif()
     find_package(ZLIB QUIET)
+    if(NOT "${_psx_zlib_saved_suffixes}" STREQUAL "")
+        set(CMAKE_FIND_LIBRARY_SUFFIXES "${_psx_zlib_saved_suffixes}")
+    endif()
     if(TARGET ZLIB::ZLIB)
+        if(PSX_STATIC_RUNTIME)
+            message(STATUS "psxrecomp: ZLIB static (PSX_STATIC_RUNTIME)")
+        endif()
         return()
     endif()
     if(NOT PSX_ZLIB_FETCH)
@@ -677,11 +717,17 @@ function(psxrecomp_ensure_zlib)
             "SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
         ${_psx_zlib_timestamp_args})
     FetchContent_MakeAvailable(psx_zlib)
+    # madler/zlib builds zlibstatic even when a shared zlib target exists.
+    # Prefer static when PSX_STATIC_RUNTIME so the host does not import zlib1.dll.
+    if(PSX_STATIC_RUNTIME AND TARGET zlibstatic AND NOT TARGET ZLIB::ZLIB)
+        add_library(ZLIB::ZLIB ALIAS zlibstatic)
+        message(STATUS "psxrecomp: ZLIB via FetchContent (zlibstatic)")
+        return()
+    endif()
     if(TARGET ZLIB::ZLIB)
         message(STATUS "psxrecomp: ZLIB via FetchContent (ZLIB::ZLIB)")
         return()
     endif()
-    # madler/zlib builds zlibstatic even when a shared zlib target exists.
     if(TARGET zlibstatic)
         add_library(ZLIB::ZLIB ALIAS zlibstatic)
         message(STATUS "psxrecomp: ZLIB via FetchContent (zlibstatic)")
@@ -714,6 +760,7 @@ function(psxrecomp_add_runtime_target target)
         EXE_NAME
         GAME_VERSION
         MAX_PLAYERS
+        APP_ICON
     )
     # GAME_GENERATED_FULL_C is a list (not a single value): the split-TU build
     # writes the recompiled game as N full_NN.c shards instead of one
@@ -854,6 +901,59 @@ function(psxrecomp_add_runtime_target target)
         set(_psxrt_exe_name "${_psxrt_exe_name}_oracle")
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
+
+    # ---- Windows / desktop app icon ---------------------------------------
+    # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
+    # the framework default shipped in psxrecomp/assets (RetComM-themed pad).
+    if(NOT PSXRT_APP_ICON)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico")
+            set(PSXRT_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico")
+        elseif(EXISTS "${PSXRECOMP_ROOT}/assets/psxrecomp.ico")
+            set(PSXRT_APP_ICON "${PSXRECOMP_ROOT}/assets/psxrecomp.ico")
+        endif()
+    endif()
+    if(PSXRT_APP_ICON AND EXISTS "${PSXRT_APP_ICON}")
+        if(WIN32)
+            # clang/llvm-mingw CI needs an RC compiler or the .rc is ignored and
+            # the PE ships without an embedded icon.
+            enable_language(RC)
+            if(NOT CMAKE_RC_COMPILER)
+                find_program(CMAKE_RC_COMPILER
+                    NAMES llvm-rc llvm-windres windres
+                    HINTS
+                        "$ENV{RETCOMM_TOOLCHAIN}/bin"
+                        "$ENV{CMAKE_CLANG_V1}/bin"
+                    DOC "Windows resource compiler for APP_ICON .rc")
+            endif()
+            if(CMAKE_RC_COMPILER)
+                string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
+                set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
+                file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
+                target_sources(${target} PRIVATE "${_psxrt_rc}")
+                message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
+            else()
+                message(WARNING
+                    "psxrecomp ${target}: APP_ICON set but no RC compiler "
+                    "(llvm-rc/windres) — PE will have no embedded icon; "
+                    "runtime still loads assets/psxrecomp.png via SDL")
+            endif()
+        else()
+            message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (window icon via PNG)")
+        endif()
+        # Stage PNG beside the exe when present (AppImage / desktop / SDL icon).
+        get_filename_component(_psxrt_ico_dir "${PSXRT_APP_ICON}" DIRECTORY)
+        set(_psxrt_png "${_psxrt_ico_dir}/psxrecomp.png")
+        if(EXISTS "${_psxrt_png}")
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_FILE_DIR:${target}>/assets"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_psxrt_png}"
+                    "$<TARGET_FILE_DIR:${target}>/assets/psxrecomp.png"
+                COMMENT "Staging psxrecomp.png app icon"
+                VERBATIM)
+        endif()
+    endif()
 
     # ---- overlay codegen hash (auto cache key) -----------------------------
     # Hash the recompiler's codegen sources into runtime/include/overlay_codegen_hash.h
@@ -1027,14 +1127,43 @@ function(psxrecomp_add_runtime_target target)
         PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"
         PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
-        PSX_BUILD_REV="${PSX_GIT_REV}"
-        PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
+    # Version / git rev change often on package updates. Keep them off the
+    # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+    )
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_BUILD_REV=\"${PSX_GIT_REV}\""
+    )
+
+    # Stamp the lobby pin next to the exe (and, on multi-config, in the build
+    # root). Packagers must ship VERSION == this stamp — rewriting VERSION after
+    # the build caused Twisted Metal 4 installs where VERSION said 0.3.8 but the
+    # binary still filtered lobbies as 0.3.7.
+    #
+    # Single-config (Ninja/Make/MinGW): TARGET_FILE_DIR == CMAKE_BINARY_DIR, so a
+    # second GENERATE to the same path is rejected ("Files to be generated by
+    # multiple different commands"). Multi-config (VS): exe lives in Release/,
+    # so also drop a copy at the build root for packager lookup.
+    file(GENERATE
+        OUTPUT "$<TARGET_FILE_DIR:${target}>/psx_game_version.txt"
+        CONTENT "${PSXRT_GAME_VERSION}\n"
+    )
+    get_property(_psxrt_ver_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_psxrt_ver_multi)
+        file(GENERATE
+            OUTPUT "${CMAKE_BINARY_DIR}/psx_game_version.txt"
+            CONTENT "${PSXRT_GAME_VERSION}\n"
+        )
+    endif()
 
     # OpenBIOS is part of the native runtime product, not a developer-machine
     # prerequisite. Stage both the exact ROM consumed by the compiled backend
@@ -1431,6 +1560,7 @@ endfunction()
 #     CODEGEN_SETUP_SOURCES codegen_setup.c
 #     DEFAULT_GAME_CONFIG_PATH "game.toml"
 #     LAUNCHER_BOXART "${CMAKE_CURRENT_SOURCE_DIR}/launcher_assets/img/boxart.tga"
+#     APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/psxrecomp.ico"
 #     MAX_PLAYERS 2
 #     ENABLE_NETPLAY_IF_PRESENT
 #     ENABLE_SETUP_WIZARD
@@ -1501,6 +1631,17 @@ function(psxrecomp_add_game_runtime target)
     message(STATUS
         "psxrecomp game_version: ${PSX_GAME_VERSION} "
         "(from VERSION=${_psxg_release_version})")
+    if(NOT "${PSX_GAME_VERSION}" STREQUAL ""
+       AND NOT "${PSX_GAME_VERSION}" MATCHES "\\$<"
+       AND NOT "${_psxg_release_version}" STREQUAL ""
+       AND NOT "${_psxg_release_version}" STREQUAL "0.0.0"
+       AND NOT "${PSX_GAME_VERSION}" STREQUAL "${_psxg_release_version}")
+        message(WARNING
+            "PSX_GAME_VERSION=${PSX_GAME_VERSION} differs from VERSION file "
+            "(${_psxg_release_version}). Sticky CMakeCache after a VERSION bump "
+            "causes netplay lobby list mismatches. Reconfigure with "
+            "-DPSX_GAME_VERSION=${_psxg_release_version} or delete the build cache.")
+    endif()
 
     # Prefer game-root recomp-ui (runtime.cmake also auto-discovers this).
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
