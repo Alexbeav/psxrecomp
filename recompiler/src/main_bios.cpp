@@ -45,6 +45,7 @@
 #include "full_function_emitter.h"
 #include "function_discovery.h"
 #include "mips_decoder.h"
+#include "write_if_changed.h"
 
 namespace fs = std::filesystem;
 
@@ -185,19 +186,8 @@ std::vector<uint8_t> load_file_strict(const fs::path& p, size_t expected_size) {
 }
 
 void write_file(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
-    const fs::path tmp = p.string() + ".tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            throw std::runtime_error(fmt::format("cannot open output file for write: {}", tmp.string()));
-        }
-        f.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!f) {
-            throw std::runtime_error(fmt::format("write error on: {}", tmp.string()));
-        }
-    }
-    fs::rename(tmp, p);
+    // Preserve mtime when bytes match (Ninja incremental after regen).
+    (void)write_file_if_changed(p, content);
 }
 
 // ----- Output emission ---------------------------------------------------

@@ -17,6 +17,7 @@
 #include "fmt/format.h"
 #include "mips_decoder.h"
 #include "strict_translator.h"
+#include "write_if_changed.h"
 #include "../../runtime/include/psx_instr_cost.h"  /* single-source CPU cycle cost (shared with interp + game emitter) */
 
 namespace PSXRecompV4 {
@@ -2464,9 +2465,7 @@ EmitStats FullFunctionEmitter::emit(
     // Write <stem>_full.c
     {
         std::string path = out_dir + "/" + out_stem + "_full.c";
-        std::ofstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
-        f.write(full_c.data(), static_cast<std::streamsize>(full_c.size()));
+        write_file_if_changed(path, full_c);
     }
 
     // Emit and write <stem>_dispatch.c
@@ -2475,9 +2474,7 @@ EmitStats FullFunctionEmitter::emit(
         emit_dispatch(dispatch_c, dr, emitted_normalized, unique_continuations,
                       bios_sha256, rom, base_addr, bios_vectors, bios_aliases);
         std::string path = out_dir + "/" + out_stem + "_dispatch.c";
-        std::ofstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
-        f.write(dispatch_c.data(), static_cast<std::streamsize>(dispatch_c.size()));
+        write_file_if_changed(path, dispatch_c);
     }
 
     // Write <stem>_skipped_functions.json. Stemmed like the C outputs: two
@@ -2493,9 +2490,7 @@ EmitStats FullFunctionEmitter::emit(
         }
         json += "]\n";
         std::string path = out_dir + "/" + out_stem + "_skipped_functions.json";
-        std::ofstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
-        f.write(json.data(), static_cast<std::streamsize>(json.size()));
+        write_file_if_changed(path, json);
     }
 
     // Fail-closed functions are deliberately absent from native dispatch so
@@ -2512,9 +2507,7 @@ EmitStats FullFunctionEmitter::emit(
         }
         json += "]\n";
         std::string path = out_dir + "/" + out_stem + "_interpreted_functions.json";
-        std::ofstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error(fmt::format("cannot write {}", path));
-        f.write(json.data(), static_cast<std::streamsize>(json.size()));
+        write_file_if_changed(path, json);
     }
 
     return stats;

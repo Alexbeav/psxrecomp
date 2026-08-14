@@ -75,6 +75,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "disc_path.h"
 #include "iso_reader.h"      /* text-image guard: extract the boot EXE from the disc */
 #include "psx_keybinds.h"    /* configurable keyboard->DualShock keybinds (keybinds.ini) */
+#include "psx_window_icon.h"
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
@@ -8101,12 +8102,12 @@ namespace {
     }
 
     int ae_np_connect(void*) {
-        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), psx_lobby_game_version());
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
         const int rc = psx_lobby_connect(ae_np_default_url(nullptr));
         /* connect resets g_lc; re-apply so create/join never advertise "". */
-        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION);
+        psx_lobby_set_game_identity(g_lnch_netplay_game_name.c_str(), psx_lobby_game_version());
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         psx_lobby_set_max_slots(g_lnch_game_players);
         return rc;
@@ -8860,7 +8861,7 @@ namespace {
         /* Ensure TOC fp survives connect/reset before the lobby stores it. */
         psx_lobby_set_disc_fp(g_session_disc_fp.c_str());
         return psx_lobby_create(lobby_name && lobby_name[0] ? lobby_name : "Netplay Lobby",
-                                g_lnch_netplay_game_name.c_str(), PSX_GAME_VERSION,
+                                g_lnch_netplay_game_name.c_str(), psx_lobby_game_version(),
                                 password ? password : "", endpoint, &caps);
     }
 
@@ -11916,6 +11917,7 @@ session_reboot:
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 1;
     }
+    psx_apply_window_icon(sdl_window, argv[0]);
 
     /* Sync-to-host-refresh: with SDL PRESENTVSYNC on, a fixed 59.94 Hz wall-clock
      * pacer fights a 60.00 Hz panel — rendered frames slip onto an uneven vblank

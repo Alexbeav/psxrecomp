@@ -248,6 +248,7 @@ endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
+    ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
@@ -887,13 +888,33 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSXRT_APP_ICON AND EXISTS "${PSXRT_APP_ICON}")
         if(WIN32)
-            string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
-            set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
-            file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
-            target_sources(${target} PRIVATE "${_psxrt_rc}")
-            message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON}")
+            # clang/llvm-mingw CI needs an RC compiler or the .rc is ignored and
+            # the PE ships without an embedded icon.
+            enable_language(RC)
+            if(NOT CMAKE_RC_COMPILER)
+                find_program(CMAKE_RC_COMPILER
+                    NAMES llvm-rc llvm-windres windres
+                    HINTS
+                        "$ENV{RETCOMM_TOOLCHAIN}/bin"
+                        "$ENV{CMAKE_CLANG_V1}/bin"
+                    DOC "Windows resource compiler for APP_ICON .rc")
+            endif()
+            if(CMAKE_RC_COMPILER)
+                string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
+                set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
+                file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
+                target_sources(${target} PRIVATE "${_psxrt_rc}")
+                message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
+            else()
+                message(WARNING
+                    "psxrecomp ${target}: APP_ICON set but no RC compiler "
+                    "(llvm-rc/windres) — PE will have no embedded icon; "
+                    "runtime still loads assets/psxrecomp.png via SDL")
+            endif()
+        else()
+            message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (window icon via PNG)")
         endif()
-        # Stage PNG beside the exe when present (AppImage / desktop / docs).
+        # Stage PNG beside the exe when present (AppImage / desktop / SDL icon).
         get_filename_component(_psxrt_ico_dir "${PSXRT_APP_ICON}" DIRECTORY)
         set(_psxrt_png "${_psxrt_ico_dir}/psxrecomp.png")
         if(EXISTS "${_psxrt_png}")
@@ -1080,13 +1101,21 @@ function(psxrecomp_add_runtime_target target)
         PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"
         PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
-        PSX_BUILD_REV="${PSX_GIT_REV}"
-        PSX_GAME_VERSION="${PSXRT_GAME_VERSION}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
+    )
+    # Version / git rev change often on package updates. Keep them off the
+    # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/psx_lobby_client.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_GAME_VERSION=\"${PSXRT_GAME_VERSION}\""
+    )
+    set_source_files_properties(
+        "${PSXRECOMP_ROOT}/runtime/src/crash_trace.c"
+        PROPERTIES COMPILE_DEFINITIONS "PSX_BUILD_REV=\"${PSX_GIT_REV}\""
     )
 
     # Stamp the lobby pin next to the exe (and, on multi-config, in the build
