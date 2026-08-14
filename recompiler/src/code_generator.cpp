@@ -1500,17 +1500,21 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                     const std::string gte_read = fmt::format(
                         "\n#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_gte_read(cpu, {});\n#endif\n    ", rt);
                     if (cop_op == 0x00) { // MFC2 - move from COP2 data
-                        if (PSXRecompGTERegisters::data_read_needs_helper(static_cast<uint8_t>(rd))) {
-                            code = gte_read + fmt::format("{} = gte_read_data(cpu, {});  /* mfc2 */", reg_name(rt), rd);
-                        } else {
-                            code = gte_read + fmt::format("{} = cpu->gte_data[{}];  /* mfc2 */", reg_name(rt), rd);
-                        }
+                        const std::string value =
+                            PSXRecompGTERegisters::data_read_needs_helper(static_cast<uint8_t>(rd))
+                                ? fmt::format("gte_read_data(cpu, {})", rd)
+                                : fmt::format("cpu->gte_data[{}]", rd);
+                        code = gte_read + (rt == 0
+                            ? fmt::format("(void){};  /* mfc2 to $zero: read preserved, write discarded */", value)
+                            : fmt::format("{} = {};  /* mfc2 */", reg_name(rt), value));
                     } else if (cop_op == 0x02) { // CFC2 - move from COP2 control
-                        if (PSXRecompGTERegisters::ctrl_read_needs_helper(static_cast<uint8_t>(rd))) {
-                            code = gte_read + fmt::format("{} = gte_read_ctrl(cpu, {});  /* cfc2 */", reg_name(rt), rd);
-                        } else {
-                            code = gte_read + fmt::format("{} = cpu->gte_ctrl[{}];  /* cfc2 */", reg_name(rt), rd);
-                        }
+                        const std::string value =
+                            PSXRecompGTERegisters::ctrl_read_needs_helper(static_cast<uint8_t>(rd))
+                                ? fmt::format("gte_read_ctrl(cpu, {})", rd)
+                                : fmt::format("cpu->gte_ctrl[{}]", rd);
+                        code = gte_read + (rt == 0
+                            ? fmt::format("(void){};  /* cfc2 to $zero: read preserved, write discarded */", value)
+                            : fmt::format("{} = {};  /* cfc2 */", reg_name(rt), value));
                     } else if (cop_op == 0x04) { // MTC2 - move to COP2 data
                         if (PSXRecompGTERegisters::data_write_needs_helper(static_cast<uint8_t>(rd))) {
                             code = gte_stall + fmt::format("gte_write_data(cpu, {}, {});  /* mtc2 */", rd, reg_name(rt));
