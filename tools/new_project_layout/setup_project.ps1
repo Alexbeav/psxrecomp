@@ -257,7 +257,7 @@ $CodegenArgFile = Join-Path $env:TEMP "psxrecomp_codegen_arg.cmake"
 
 if ($useRecompUi) {
     Set-Content -Encoding UTF8 -Path $RecompUiBlockFile -Value "# recomp-ui submodule present (PSX_RECOMP_UI defaults ON)."
-    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value "    # CODEGEN_SETUP_SOURCES -- add with recomp-ui / wizard later"
+    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value '    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"'
 } else {
     Set-Content -Encoding UTF8 -Path $RecompUiBlockFile -Value @"
 set(PSX_RECOMP_UI OFF CACHE BOOL
