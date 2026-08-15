@@ -11,14 +11,14 @@
 
 #define SSM_W 640
 #define SSM_H 480
-#define SSM_ROW_H 132
-#define SSM_ROW_GAP 8
-#define SSM_ROWS_Y 56
+#define SSM_ROW_H 108
+#define SSM_ROW_GAP 6
+#define SSM_ROWS_Y 58
 #define SSM_ROWS_X 28
 #define SSM_ROWS_W 584
 #define SSM_VISIBLE_ROWS 3
-#define SSM_THUMB_W 168
-#define SSM_THUMB_H 126
+#define SSM_THUMB_W 136
+#define SSM_THUMB_H 102
 
 /* Public-domain 8x8 ASCII 32..90 subset from font8x8_basic. */
 static const uint8_t FONT8[59][8] = {
@@ -80,6 +80,68 @@ static void stroke_rect(uint32_t *dst, int x, int y, int w, int h, uint32_t col)
     fill_rect(dst, x, y + h - 1, w, 1, col);
     fill_rect(dst, x, y, 1, h, col);
     fill_rect(dst, x + w - 1, y, 1, h, col);
+}
+
+static void fill_disc(uint32_t *dst, int cx, int cy, int r, uint32_t col)
+{
+    int x, y;
+    const int rr = r * r;
+    for (y = -r; y <= r; y++) {
+        for (x = -r; x <= r; x++) {
+            if (x * x + y * y > rr) continue;
+            fill_rect(dst, cx + x, cy + y, 1, 1, col);
+        }
+    }
+}
+
+static void draw_line(uint32_t *dst, int x0, int y0, int x1, int y1,
+                      int thickness, uint32_t col)
+{
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    int inset = thickness / 2;
+
+    for (;;) {
+        fill_rect(dst, x0 - inset, y0 - inset, thickness, thickness, col);
+        if (x0 == x1 && y0 == y1)
+            break;
+        {
+            int e2 = err * 2;
+            if (e2 >= dy) {
+                err += dy;
+                x0 += sx;
+            }
+            if (e2 <= dx) {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+}
+
+static void draw_psx_button(uint32_t *dst, int x, int y, char kind)
+{
+    switch (kind) {
+    case 'x':
+        draw_line(dst, x + 4, y + 4, x + 14, y + 14, 2, 0xFF5FA8FFu);
+        draw_line(dst, x + 14, y + 4, x + 4, y + 14, 2, 0xFF5FA8FFu);
+        break;
+    case 's':
+        stroke_rect(dst, x + 3, y + 3, 13, 13, 0xFFFF7EB6u);
+        stroke_rect(dst, x + 4, y + 4, 11, 11, 0xFFFF7EB6u);
+        break;
+    case 'o':
+        fill_disc(dst, x + 9, y + 9, 8, 0xFFFF6B6Bu);
+        fill_disc(dst, x + 9, y + 9, 5, 0xFF171B25u);
+        break;
+    default:
+        fill_rect(dst, x + 7, y + 2, 5, 15, 0xFFD7DCE6u);
+        fill_rect(dst, x + 2, y + 7, 15, 5, 0xFFD7DCE6u);
+        break;
+    }
 }
 
 static void draw_char(uint32_t *dst, int x0, int y0, char c,
@@ -203,15 +265,27 @@ static void rasterize_panel(void)
                       SSM_THUMB_W, SSM_THUMB_H, 0xFF242A35u);
             stroke_rect(s_panel, SSM_ROWS_X + 118, y + 3,
                         SSM_THUMB_W, SSM_THUMB_H, 0xFF3A4352u);
-            draw_text(s_panel, SSM_ROWS_X + 180, y + 58, "NEW",
+            draw_text(s_panel, SSM_ROWS_X + 169, y + 46, "NEW",
                       0xFF707887u, 1);
         }
         format_slot_status(i, buf, sizeof(buf));
-        draw_text(s_panel, SSM_ROWS_X + 314, y + 50, buf, sub, 1);
+        draw_text(s_panel, SSM_ROWS_X + 278, y + 42, buf, sub, 1);
         if (sel)
-            draw_text(s_panel, SSM_ROWS_X + SSM_ROWS_W - 88, y + 100,
+            draw_text(s_panel, SSM_ROWS_X + SSM_ROWS_W - 88, y + 82,
                       "SELECT", 0xFFFFD24Du, 1);
     }
+
+    fill_rect(s_panel, 0, 410, SSM_W, 70, 0xFF171B25u);
+    draw_psx_button(s_panel, 32, 424, 'd');
+    draw_text(s_panel, 56, 428, "SLOT", 0xFFE2E5EBu, 1);
+    draw_psx_button(s_panel, 132, 424, 'x');
+    draw_text(s_panel, 156, 428, "LOAD", 0xFFE2E5EBu, 1);
+    draw_psx_button(s_panel, 230, 424, 's');
+    draw_text(s_panel, 254, 428, "SAVE", 0xFFE2E5EBu, 1);
+    draw_psx_button(s_panel, 328, 424, 'o');
+    draw_text(s_panel, 352, 428, "BACK", 0xFFE2E5EBu, 1);
+    draw_text(s_panel, 32, 454, "KEYS: ARROWS SLOT  ENTER/L LOAD  SHIFT+ENTER/S SAVE  ESC BACK",
+              0xFFB8BDC8u, 1);
     s_dirty = 0;
 }
 

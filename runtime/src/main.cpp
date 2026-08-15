@@ -539,6 +539,25 @@ static void fps_telemetry_toggle(void) {
     host_osd_push(enabled ? "FPS readout on" : "FPS readout off", 1500);
 }
 
+static int manual_fast_forward_multiplier(void) {
+    static int value = -2; /* -2 = unread, -1 = max/unbounded */
+    if (value == -2) {
+        const char *e = std::getenv("PSX_FAST_FORWARD_SPEED");
+        value = 4;
+        if (e && e[0]) {
+            if (std::strcmp(e, "max") == 0 || std::strcmp(e, "MAX") == 0 ||
+                std::strcmp(e, "0") == 0) {
+                value = -1;
+            } else {
+                int parsed = std::atoi(e);
+                if (parsed >= 2 && parsed <= 16)
+                    value = parsed;
+            }
+        }
+    }
+    return value;
+}
+
 static void post_load_probe_stall_pc_note(uint32_t pc) {
     if (!pc) return;
     for (int i = 0; i < s_stall_pc_used; i++) {
@@ -5318,20 +5337,19 @@ static void savestate_menu_move(int delta) {
     savestate_menu_sync_overlay();
 }
 
-static void savestate_menu_submit(int save) {
-    const int slot = savestate_menu_slot;
+static int savestate_submit_slot(int slot, int save) {
     if (!save && !savestate_slot_exists(slot)) {
         char msg[32];
         snprintf(msg, sizeof(msg), "Slot %d is empty", slot + 1);
         host_osd_push(msg, 1200);
-        return;
+        return 0;
     }
     if (!save)
         savestate_input_guard_arm();
     if (psx_netplay_active()) {
         if (!psx_netplay_is_host()) {
             host_osd_push("Save states are host-only in netplay", 1500);
-            return;
+            return 0;
         }
         if (save)
             (void)psx_netplay_request_save(slot);
@@ -5342,8 +5360,14 @@ static void savestate_menu_submit(int save) {
     } else {
         (void)savestate_request_load(slot);
     }
-    savestate_menu_open = 0;
-    savestate_menu_sync_overlay();
+    return 1;
+}
+
+static void savestate_menu_submit(int save) {
+    if (savestate_submit_slot(savestate_menu_slot, save) && savestate_menu_open) {
+        savestate_menu_open = 0;
+        savestate_menu_sync_overlay();
+    }
 }
 
 static int savestate_menu_slot_from_key(SDL_Keycode key) {
@@ -5673,15 +5697,34 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
             const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
             const double speed = fps / 59.94;
+            double display_fps = 0.0;
+            if (g_frame_interpolation && g_gl_active) {
+                display_fps = g_frame_interpolation_fps > 0
+                    ? (double)g_frame_interpolation_fps
+                    : g_host_refresh_hz;
+            }
             if (!g_headless && sdl_window) {
                 char title[256];
-                snprintf(title, sizeof(title), "%s  [%.0f fps %.2fx]",
-                         s_fps_base_title.c_str(), fps, speed);
+                if (display_fps > 0.0) {
+                    snprintf(title, sizeof(title),
+                             "%s  [Game %.0f fps %.2fx | Display %.0f fps]",
+                             s_fps_base_title.c_str(), fps, speed, display_fps);
+                } else {
+                    snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
+                             s_fps_base_title.c_str(), fps, speed);
+                }
                 SDL_SetWindowTitle(sdl_window, title);
             }
             if (!g_headless) {
-                char osd[64];
-                snprintf(osd, sizeof(osd), "FPS %.0f  %.2fx", fps, speed);
+                char osd[96];
+                if (display_fps > 0.0) {
+                    snprintf(osd, sizeof(osd),
+                             "Game %.0f FPS  %.2fx | Display %.0f FPS",
+                             fps, speed, display_fps);
+                } else {
+                    snprintf(osd, sizeof(osd), "Game %.0f FPS  %.2fx",
+                             fps, speed);
+                }
                 host_osd_set_status(osd);
             }
             if (netplay_timing_on() && s_np_timing_frames > 0) {
@@ -6029,23 +6072,45 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
 #endif
 
-    /* Turbo mode: while TAB is held, skip both VRAM->ARGB conversion and
-     * SDL_RenderPresent. The recompiled BIOS still advances simulated
-     * cycles every vblank, so the BIOS proceeds at whatever rate the host
-     * CPU sustains without graphics-driver vsync overhead. Present once
-     * every TURBO_PRESENT_EVERY frames so the user sees visual progress. */
+    bool manual_turbo_active = false;
+    bool turbo_load_paced = false;
+
+    /* Manual fast-forward: bounded by default so the game visibly advances and
+     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..16 changes the cap;
+     * PSX_FAST_FORWARD_SPEED=max restores the old unbounded simulation rate. */
     {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
-        const int TURBO_PRESENT_EVERY = 30;
+        static int turbo_was_down = 0;
         if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
-            turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
+            const int mult = manual_fast_forward_multiplier();
+            const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
+            manual_turbo_active = true;
+            if (!turbo_was_down) {
+                char msg[40];
+                if (mult < 0)
+                    snprintf(msg, sizeof(msg), "Fast forward: max");
+                else
+                    snprintf(msg, sizeof(msg), "Fast forward: %dx", mult);
+                host_osd_push(msg, 900);
+            }
+            turbo_was_down = 1;
+            if (mult >= 2 && g_frame_period_ms > 0.0) {
+                uint64_t perf_start = runtime_perf_section_begin();
+                frame_pacer_wait(&s_frame_pacer,
+                                 g_frame_period_ms / (double)mult);
+                runtime_perf_section_end(perf_start,
+                                         &g_runtime_perf.pacer_ticks);
+                latency_ring_mark(LAT_PACED);
+            }
+            turbo_skip = (turbo_skip + 1) % present_every;
             if (turbo_skip != 0) {
                 ep.skip_pace = 1;
                 return ep;  /* skip render this frame */
             }
         } else {
             turbo_skip = 0;
+            turbo_was_down = 0;
         }
     }
 
@@ -6057,7 +6122,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * real time (2.2-4.8 sectors/frame against a 32-256 IRQ budget), so
      * host-speed execution is the lever that compresses load wall-time.
      * Presents 1-in-30 so visual progress stays visible. */
-    bool turbo_load_paced = false;
     if (turbo_loads_active) {
         g_turbo_loads_frames++;
         /* A mod may request a bounded wall-clock multiplier instead of the
@@ -6130,7 +6194,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * replay runs uncapped like netplay resim. */
     if (!psx_netplay_active() && !psx_selfcheck_resim_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
-        if (!turbo_load_paced && g_frame_period_ms > 0.0)
+        if (!manual_turbo_active && !turbo_load_paced && g_frame_period_ms > 0.0)
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
@@ -12716,14 +12780,14 @@ session_reboot:
         psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_set_interval((uint32_t)g_rewind_interval);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
-        /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
+        /* Headless / agent load: PSX_LOAD_SLOT=N stages slot load (0..11)
          * at the next safe block boundary after boot. */
         if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {
             int slot = atoi(ls);
             if (slot >= 0 && slot < 12) {
                 if (psx_netplay_active()) {
                     std::fprintf(stdout,
-                        "psxrecomp: PSX_LOAD_SLOT=%d ignored (use host F1–F12 after netplay starts)\n",
+                        "psxrecomp: PSX_LOAD_SLOT=%d ignored (use the save-state menu after netplay starts)\n",
                         slot);
                 } else if (savestate_request_load(slot)) {
                     std::fprintf(stdout, "psxrecomp: PSX_LOAD_SLOT=%d staged\n", slot);

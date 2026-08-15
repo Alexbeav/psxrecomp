@@ -25,6 +25,8 @@ assert (
 ) not in MAIN
 assert "HOST_KEYMAP_SAVE_STATE_MENU" in MAIN
 assert "key >= SDLK_F1 && key <= SDLK_F12" not in MAIN
+assert "savestate_slot_from_function_key" not in MAIN
+assert "savestate_submit_slot(f_slot" not in MAIN
 assert "savestate_input_guard_arm();" in MAIN
 assert "savestate_input_guard_active()" in MAIN
 assert "out->buttons = 0xFFFFu;" in MAIN
@@ -33,5 +35,9 @@ assert "savestate_menu_ignore_toggle_release" in MAIN
 assert "savestate_menu_open_key" in MAIN
 assert "savestate_menu_toggle(key)" in MAIN
 assert "savestate_menu_toggle(0)" in MAIN
+assert 'std::getenv("PSX_FAST_FORWARD_SPEED")' in MAIN
+assert "bool manual_turbo_active = false;" in MAIN
+assert "Fast forward: %dx" in MAIN
+assert "g_frame_period_ms / (double)mult" in MAIN
 
 print("host shortcut guard passed")
