@@ -814,6 +814,19 @@ void gte_codegen_classification_tests() {
                 all_ok = false;
             }
         };
+        const auto expect_zero_destination = [&](uint32_t word,
+                                                 const std::string& read,
+                                                 const char *kind) {
+            const std::string code = generate_first_instruction(word, {}, false);
+            if (code.find("cpu->gpr[0] =") != std::string::npos ||
+                code.find(read) == std::string::npos ||
+                code.find("psx_gte_read(cpu, 0)") == std::string::npos) {
+                fmt::print(stderr,
+                           "FAIL  full-game GTE {} reg {} writes $zero or drops read/timing\n",
+                           kind, reg);
+                all_ok = false;
+            }
+        };
 
         const uint32_t cop2 = 0x12u << 26;
         expect(cop2 | (0x00u << 21) | (2u << 16) | (uint32_t(reg) << 11),
@@ -822,6 +835,18 @@ void gte_codegen_classification_tests() {
         expect(cop2 | (0x02u << 21) | (2u << 16) | (uint32_t(reg) << 11),
                fmt::format("gte_read_ctrl(cpu, {})", reg),
                PSXRecompGTERegisters::ctrl_read_needs_helper(reg), "CFC2");
+        expect_zero_destination(
+            cop2 | (0x00u << 21) | (0u << 16) | (uint32_t(reg) << 11),
+            PSXRecompGTERegisters::data_read_needs_helper(reg)
+                ? fmt::format("gte_read_data(cpu, {})", reg)
+                : fmt::format("cpu->gte_data[{}]", reg),
+            "MFC2");
+        expect_zero_destination(
+            cop2 | (0x02u << 21) | (0u << 16) | (uint32_t(reg) << 11),
+            PSXRecompGTERegisters::ctrl_read_needs_helper(reg)
+                ? fmt::format("gte_read_ctrl(cpu, {})", reg)
+                : fmt::format("cpu->gte_ctrl[{}]", reg),
+            "CFC2");
         expect(cop2 | (0x04u << 21) | (2u << 16) | (uint32_t(reg) << 11),
                fmt::format("gte_write_data(cpu, {}", reg),
                PSXRecompGTERegisters::data_write_needs_helper(reg), "MTC2");
