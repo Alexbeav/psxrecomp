@@ -89,6 +89,14 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #endif
 #include "psx_sdl.h"
+#if defined(PSX_SDL3)
+/*
+ * SDL_main.h is a single-header implementation in SDL3. Keep it in the one
+ * translation unit that defines main(); including it through psx_sdl.h makes
+ * every SDL-using source emit WinMain under MinGW.
+ */
+#include <SDL3/SDL_main.h>
+#endif
 #include "psx_sdl_audio.h"
 #if defined(PSX_WEB)
 #include <emscripten/emscripten.h>
