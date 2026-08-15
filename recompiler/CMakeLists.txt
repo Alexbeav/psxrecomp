@@ -403,6 +403,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
         add_test(
+            NAME dirty_text_admission_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_admission_guards.py)
+        add_test(
             NAME bios_backend_constant_codegen
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_backend_constant_codegen.py
