@@ -22,6 +22,33 @@ constexpr size_t RAW_DATA_OFFSET = 24;
 // Primary Volume Descriptor location
 constexpr uint32_t PVD_SECTOR = 16;
 
+constexpr uint32_t CD_FRAMES_PER_SECOND = 75;
+constexpr uint32_t CD_FRAMES_PER_MINUTE = 60 * CD_FRAMES_PER_SECOND;
+constexpr uint32_t CD_LEAD_IN_FRAMES = 2 * CD_FRAMES_PER_SECOND;
+
+static bool valid_bcd(uint8_t value) {
+    return (value & 0x0f) <= 9 && (value >> 4) <= 9;
+}
+
+static uint32_t bcd_to_binary(uint8_t value) {
+    return (value >> 4) * 10u + (value & 0x0f);
+}
+
+static uint8_t binary_to_bcd(uint32_t value) {
+    return static_cast<uint8_t>(((value / 10u) << 4) | (value % 10u));
+}
+
+static uint16_t subq_crc(const uint8_t* data) {
+    uint16_t crc = 0;
+    for (int i = 0; i < 10; ++i) {
+        crc ^= static_cast<uint16_t>(data[i]) << 8;
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021)
+                                : static_cast<uint16_t>(crc << 1);
+    }
+    return static_cast<uint16_t>(~crc);
+}
+
 enum class CHDTrackMode {
     Mode1,
     Mode1Raw,
@@ -236,6 +263,10 @@ bool ISOReader::Open(const std::string& filename) {
             root_dir_.lba = 0;
             root_dir_.size = 0;
         }
+        if (!LoadSBICompanion(filename)) {
+            Close();
+            return false;
+        }
         return true;
     }
 
@@ -337,6 +368,11 @@ bool ISOReader::Open(const std::string& filename) {
         root_dir_.size = 0;
     }
 
+    if (!LoadSBICompanion(filename)) {
+        Close();
+        return false;
+    }
+
     return true;
 }
 
@@ -349,11 +385,85 @@ void ISOReader::Close() {
     }
     segments_.clear();
     tracks_.clear();
+    subq_replacements_.clear();
     bin_path_.clear();
     volume_id_.clear();
     root_dir_.lba = 0;
     root_dir_.size = 0;
     is_open_ = false;
+}
+
+bool ISOReader::LoadSBICompanion(const std::string& image_path) {
+    std::filesystem::path path(image_path);
+    path.replace_extension(".sbi");
+    if (!std::filesystem::exists(path)) return true;
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return false;
+    char header[4] = {};
+    file.read(header, sizeof(header));
+    if (file.gcount() != sizeof(header) ||
+        std::memcmp(header, "SBI\0", sizeof(header)) != 0) {
+        return false;
+    }
+
+    while (true) {
+        uint8_t record[14] = {};
+        file.read(reinterpret_cast<char*>(record), sizeof(record));
+        if (file.gcount() == 0 && file.eof()) break;
+        if (file.gcount() != sizeof(record) || record[3] != 1 ||
+            !valid_bcd(record[0]) || !valid_bcd(record[1]) ||
+            !valid_bcd(record[2])) {
+            return false;
+        }
+        const uint32_t absolute_frame =
+            bcd_to_binary(record[0]) * CD_FRAMES_PER_MINUTE +
+            bcd_to_binary(record[1]) * CD_FRAMES_PER_SECOND +
+            bcd_to_binary(record[2]);
+        if (absolute_frame < CD_LEAD_IN_FRAMES) return false;
+        const uint32_t lba = absolute_frame - CD_LEAD_IN_FRAMES;
+        std::array<uint8_t, 12> subq = {};
+        std::memcpy(subq.data(), record + 4, 10);
+        const uint16_t invalid_crc = static_cast<uint16_t>(subq_crc(subq.data()) ^ 0xffff);
+        subq[10] = static_cast<uint8_t>(invalid_crc);
+        subq[11] = static_cast<uint8_t>(invalid_crc >> 8);
+        if (!subq_replacements_.emplace(lba, subq).second) return false;
+    }
+    return !subq_replacements_.empty();
+}
+
+bool ISOReader::ReadSubChannelQ(uint32_t lba, uint8_t* buffer, bool* valid) const {
+    if (!buffer || !valid || !is_open_) return false;
+    const auto replacement = subq_replacements_.find(lba);
+    if (replacement != subq_replacements_.end()) {
+        std::memcpy(buffer, replacement->second.data(), replacement->second.size());
+        *valid = false;
+        return true;
+    }
+
+    int track = 1;
+    for (const CDTrack& candidate : tracks_) {
+        if (candidate.start_lba > lba) break;
+        track = candidate.number;
+    }
+    const uint32_t track_lba = TrackStartLBA(track);
+    const uint32_t relative = lba >= track_lba ? lba - track_lba : 0;
+    const uint32_t absolute = lba + 150;
+    std::memset(buffer, 0, 12);
+    buffer[0] = TrackIsAudio(track) ? 0x01 : 0x41;
+    buffer[1] = binary_to_bcd(static_cast<uint32_t>(track));
+    buffer[2] = 0x01;
+    buffer[3] = binary_to_bcd(relative / CD_FRAMES_PER_MINUTE);
+    buffer[4] = binary_to_bcd((relative / CD_FRAMES_PER_SECOND) % 60);
+    buffer[5] = binary_to_bcd(relative % CD_FRAMES_PER_SECOND);
+    buffer[6] = binary_to_bcd(absolute / CD_FRAMES_PER_MINUTE);
+    buffer[7] = binary_to_bcd((absolute / CD_FRAMES_PER_SECOND) % 60);
+    buffer[8] = binary_to_bcd(absolute % CD_FRAMES_PER_SECOND);
+    const uint16_t crc = subq_crc(buffer);
+    buffer[10] = static_cast<uint8_t>(crc);
+    buffer[11] = static_cast<uint8_t>(crc >> 8);
+    *valid = true;
+    return true;
 }
 
 BinSegment* ISOReader::SegmentForLBA(uint32_t lba) {
