@@ -1,6 +1,6 @@
 # New Project Layout scaffolding (Windows).
 #
-# Path params (pass on the CLI — tab-complete in your shell):
+# Path params (pass on the CLI -- tab-complete in your shell):
 #   -Disc <cue>           REQUIRED legal Redump .cue (kept on your dump drive)
 #   -Dir <parent>         Parent directory (default: .)
 #   -Bios <SCPH1001.BIN>  Optional retail BIOS for Generate
@@ -10,7 +10,7 @@
 # Other options are prompted when interactive, or set via switches / -Yes.
 #
 # Usage:
-#   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue
+#   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue t
 #   powershell -File setup_project.ps1 -Disc game.cue -Name Foo -Yes
 #   powershell -File setup_project.ps1 -Disc game.cue -StageDisc
 
@@ -129,7 +129,7 @@ if ($Players -eq 0) {
     }
 }
 if ($Players -lt 1 -or $Players -gt 8) {
-    throw "Players must be 1–8 (got: $Players)"
+    throw "Players must be 1-8 (got: $Players)"
 }
 
 $env:PYTHONPATH = "$ScriptDir" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
@@ -171,21 +171,21 @@ $useWizard = $false
 $useNetplay = $false
 if (-not $useRecompUi) {
     if ($EnableWizard -or $EnableNetplay) {
-        Write-Warning "Wizard/netplay require recomp-ui — forcing both off."
+        Write-Warning "Wizard/netplay require recomp-ui -- forcing both off."
     }
-    Write-Host "  (recomp-ui declined — skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
+    Write-Host "  (recomp-ui declined -- skipping wizard/netplay; PSX_RECOMP_UI=OFF)"
 } else {
     # Default ON (interactive + non-interactive): setup-host CI needs the wizard.
     $useWizard = Resolve-BoolOpt -Enable:$EnableWizard -No:$NoWizard -PromptDefault:$true `
         -Question "Enable first-run setup wizard + Generate & rebuild?"
     if (-not $interactive -and -not $NoWizard) { $useWizard = $true }
-    # 1-player titles cannot use multiplayer netplay — skip prompts entirely.
+    # 1-player titles cannot use multiplayer netplay -- skip prompts entirely.
     if ($Players -eq 1) {
         if ($EnableNetplay) {
             Write-Warning "-EnableNetplay ignored for 1-player title."
         }
         $useNetplay = $false
-        Write-Host "  (1-player title — netplay skipped)"
+        Write-Host "  (1-player title -- netplay skipped)"
     } else {
         $useNetplay = Resolve-BoolOpt -Enable:$EnableNetplay -No:$NoNetplay -PromptDefault:$false `
             -Question "Enable netplay UI (needs nested recomp-net)?"
@@ -196,7 +196,7 @@ $NetplayLobbyWs = ""
 if ($useNetplay) {
     if (-not $LobbyUrl) {
         if ($interactive) {
-            $LobbyUrl = Prompt-Line "Netplay lobby server URL (host or ws://…)" $DefaultLobbyHost
+            $LobbyUrl = Prompt-Line "Netplay lobby server URL (host or ws://...)" $DefaultLobbyHost
         } else {
             $LobbyUrl = $DefaultLobbyHost
         }
@@ -216,7 +216,7 @@ if ($doGenerate) {
     $doBuild = Resolve-BoolOpt -Enable:$EnableBuild -No:$NoBuild -PromptDefault:$true `
         -Question "Configure & build psx-runtime after Generate?"
 } elseif ($EnableBuild) {
-    Write-Warning "-EnableBuild requires Generate — enabling Generate"
+    Write-Warning "-EnableBuild requires Generate -- enabling Generate"
     $doGenerate = $true
     $doBuild = $true
 }
@@ -242,8 +242,8 @@ $GameName = $GameName.Trim()
 if (-not $GameName) { $GameName = $Name }
 $DiscHint = "your legally owned $GameName disc"
 $EntryPc = "0x80010000"
-$PublisherDisp = if ($Publisher) { $Publisher } else { "—" }
-$YearDisp = if ($Year) { $Year } else { "—" }
+$PublisherDisp = if ($Publisher) { $Publisher } else { "-" }
+$YearDisp = if ($Year) { $Year } else { "-" }
 $DescriptionMd = if ($Description) { $Description } else { "_Add a short pitch in catalog_identity.json / README._" }
 
 $Root = Join-Path (Resolve-Path $Dir) $Name
@@ -257,13 +257,13 @@ $CodegenArgFile = Join-Path $env:TEMP "psxrecomp_codegen_arg.cmake"
 
 if ($useRecompUi) {
     Set-Content -Encoding UTF8 -Path $RecompUiBlockFile -Value "# recomp-ui submodule present (PSX_RECOMP_UI defaults ON)."
-    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value '    CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"'
+    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value "    # CODEGEN_SETUP_SOURCES -- add with recomp-ui / wizard later"
 } else {
     Set-Content -Encoding UTF8 -Path $RecompUiBlockFile -Value @"
 set(PSX_RECOMP_UI OFF CACHE BOOL
     "No recomp-ui submodule in this scaffold" FORCE)
 "@
-    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value "    # CODEGEN_SETUP_SOURCES — add with recomp-ui / wizard later"
+    Set-Content -Encoding UTF8 -Path $CodegenArgFile -Value "    # CODEGEN_SETUP_SOURCES -- add with recomp-ui / wizard later"
 }
 
 if ($useNetplay) {
@@ -279,9 +279,9 @@ endif()
     $NetplayLobbyUrlArg = "    NETPLAY_LOBBY_URL `"$NetplayLobbyWs`""
 } else {
     Set-Content -Encoding UTF8 -Path $NetplayBlockFile -Value @"
-# Full netplay UI — enable after adding recomp-ui + testing:
+# Full netplay UI -- enable after adding recomp-ui + testing:
 # if(EXISTS "`${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
-#     set(PSX_NETPLAY ON CACHE BOOL "…" FORCE)
+#     set(PSX_NETPLAY ON CACHE BOOL "..." FORCE)
 # endif()
 "@
     $NetplayRuntimeArg = "    # ENABLE_NETPLAY_IF_PRESENT"
@@ -296,8 +296,8 @@ set(PSX_SETUP_WIZARD ON CACHE BOOL
     $WizardRuntimeArg = "    ENABLE_SETUP_WIZARD"
 } else {
     Set-Content -Encoding UTF8 -Path $WizardBlockFile -Value @"
-# First-run setup wizard — enable after testing:
-# set(PSX_SETUP_WIZARD ON CACHE BOOL "…" FORCE)
+# First-run setup wizard -- enable after testing:
+# set(PSX_SETUP_WIZARD ON CACHE BOOL "..." FORCE)
 "@
     $WizardRuntimeArg = "    # ENABLE_SETUP_WIZARD"
 }
@@ -370,7 +370,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Root "scripts") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "tools") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "mods\preloaded\packages") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "assets") | Out-Null
-# Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
+# Empty mod catalog tree (runtime copies mods/preloaded -> beside the exe as mods/).
 @'
 # Preloaded mods
 
@@ -379,7 +379,7 @@ Ship reviewed, default-disabled packages here:
 ```text
 packages/<package-id>/<version>/
   manifest.toml
-  …
+  ...
 ```
 
 Build wiring copies `mods/preloaded` next to the game executable as `mods/`.
@@ -456,7 +456,7 @@ if ($useCi) {
             --set "WINDOW_TITLE=$WindowTitle"
         Write-Host "  wrote .github/workflows/release.yml"
     } else {
-        Write-Warning "Missing $WfSrc — skipped CI workflow copy"
+        Write-Warning "Missing $WfSrc -- skipped CI workflow copy"
     }
 } else {
     Write-Host "== CI workflow skipped =="
@@ -494,7 +494,7 @@ for m in re.finditer(r'FILE\s+"([^"]+)"', text, re.I):
             print(f"  copied track: {src.name}")
     else:
         print(f"  warning: cue FILE missing: {src}", file=sys.stderr)
-print("  disc staged under disc/ (gitignored — never commit dumps)")
+print("  disc staged under disc/ (gitignored -- never commit dumps)")
 '@
     $pyFile = Join-Path $env:TEMP "psxrecomp_stage_disc.py"
     Set-Content -Encoding UTF8 -Path $pyFile -Value $py
@@ -546,19 +546,19 @@ print(m.group(1) if m else '')
             $BootExe = $BootFromToml
             Fill-Template (Join-Path $TemplateDir "CMakeLists.txt.in") (Join-Path $Root "CMakeLists.txt")
             Fill-Template (Join-Path $TemplateDir "codegen_setup.c.in") (Join-Path $Root "codegen_setup.c")
-            Write-Host "  synced boot EXE → $BootExe (CMake / codegen)"
+            Write-Host "  synced boot EXE -> $BootExe (CMake / codegen)"
         }
         if ($EntryFromToml) {
             $EntryPc = $EntryFromToml
             Fill-Template (Join-Path $TemplateDir "symbols.toml.in") (Join-Path $Root "symbols.toml")
-            Write-Host "  symbols.toml BootEntry → $EntryPc"
+            Write-Host "  symbols.toml BootEntry -> $EntryPc"
         }
         if (-not $StageDisc) {
-            Write-Host "  game.toml disc → $DiscTomlPath"
-            Write-Host "  (local absolute path — do not commit machine-specific dumps)"
+            Write-Host "  game.toml disc -> $DiscTomlPath"
+            Write-Host "  (local absolute path -- do not commit machine-specific dumps)"
         }
     } catch {
-        Write-Warning "Disc probe failed — left template game.toml; fill by hand."
+        Write-Warning "Disc probe failed -- left template game.toml; fill by hand."
     }
 } else {
     Write-Warning "-Disc is not a .cue; skipped probe autofill."
@@ -589,17 +589,17 @@ try {
         commit -q -m "Initial New Project Layout scaffold"
     $committed = $true
 } catch {
-    Write-Host "  (skipped initial commit — commit manually when ready)"
+    Write-Host "  (skipped initial commit -- commit manually when ready)"
 }
 
 # Create the GitHub repo + origin now; push deferred until after generate/build.
 $githubCreated = $false
 if ($createGithub) {
-    Write-Host "== GitHub repo (gh, create only — push deferred) =="
+    Write-Host "== GitHub repo (gh, create only -- push deferred) =="
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        Write-Warning "gh not installed — skip create; push manually later."
+        Write-Warning "gh not installed -- skip create; push manually later."
     } elseif (-not $committed) {
-        Write-Warning "no initial commit — skip gh repo create."
+        Write-Warning "no initial commit -- skip gh repo create."
     } else {
         $vis = switch ($GithubVisibility) {
             "public" { "--public" }
@@ -611,13 +611,13 @@ if ($createGithub) {
             Write-Host "  created origin ($GithubVisibility); push deferred until end"
             $githubCreated = $true
         } catch {
-            Write-Warning "gh repo create failed — if the repo already exists, add origin and push at the end."
+            Write-Warning "gh repo create failed -- if the repo already exists, add origin and push at the end."
             if (-not (git remote get-url origin 2>$null)) {
                 try {
                     $ghUrl = (gh repo view $Name --json url -q .url 2>$null)
                     if ($ghUrl) {
                         git remote add origin $ghUrl
-                        Write-Host "  attached existing origin → $ghUrl"
+                        Write-Host "  attached existing origin -> $ghUrl"
                         $githubCreated = $true
                     }
                 } catch {}
@@ -647,9 +647,9 @@ if ($doGenerate) {
         }
         python @genArgs
         $GeneratedOk = $true
-        Write-Host "  generate OK (generated/ is gitignored — not committed)"
+        Write-Host "  generate OK (generated/ is gitignored -- not committed)"
     } catch {
-        Write-Warning "Generate failed — fix seeds/disc and re-run generate by hand."
+        Write-Warning "Generate failed -- fix seeds/disc and re-run generate by hand."
         $doBuild = $false
     } finally {
         Pop-Location
@@ -663,9 +663,9 @@ if ($doBuild -and $GeneratedOk) {
         cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
         cmake --build build-release --target psx-runtime
         $BuildOk = $true
-        Write-Host "  build OK → build-release/ (gitignored)"
+        Write-Host "  build OK -> build-release/ (gitignored)"
     } catch {
-        Write-Warning "Build failed — fix and re-run cmake by hand."
+        Write-Warning "Build failed -- fix and re-run cmake by hand."
     } finally {
         Pop-Location
     }
@@ -700,7 +700,7 @@ function Ensure-ActionsRegistersReleaseYml([string]$OwnerRepo) {
         if ($i -lt 4) { Start-Sleep -Seconds 2 }
     }
 
-    Write-Host "  Actions has not listed release.yml yet — nudging with a follow-up commit…"
+    Write-Host "  Actions has not listed release.yml yet -- nudging with a follow-up commit..."
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mmZ")
     Add-Content -Encoding utf8 -Path $wfPath -Value "`n# Actions registration nudge ($stamp UTC)"
     git add $wfPath 2>$null
@@ -732,7 +732,7 @@ if ($createGithub -and (git remote get-url origin 2>$null)) {
         try {
             git push -u origin HEAD
             $githubPushed = $true
-            Write-Host "  pushed $(git rev-parse --abbrev-ref HEAD) → origin"
+            Write-Host "  pushed $(git rev-parse --abbrev-ref HEAD) -> origin"
             if ($useCi -and (Test-Path (Join-Path $Root ".github\workflows\release.yml"))) {
                 try {
                     $ownerRepo = (gh repo view --json nameWithOwner -q .nameWithOwner 2>$null)
@@ -740,7 +740,7 @@ if ($createGithub -and (git remote get-url origin 2>$null)) {
                 } catch {}
             }
         } catch {
-            Write-Warning "git push failed — fetch/rebase or force-push manually if origin already has a different initial commit."
+            Write-Warning "git push failed -- fetch/rebase or force-push manually if origin already has a different initial commit."
         }
     }
 }
@@ -751,7 +751,7 @@ $Step1 = if ($Probed) {
     "Edit game.toml / re-run probe_disc.py --write-seeds."
 }
 $Step2 = if ($BuildOk) {
-    "Runtime already built under build-release/ — soak offline boot."
+    "Runtime already built under build-release/ -- soak offline boot."
 } elseif ($GeneratedOk) {
 @"
 Build playable runtime:
@@ -771,15 +771,15 @@ Build emitters, Generate, then playable runtime:
 }
 $CiNote = if ($useCi) {
     $n = "CI: .github/workflows/release.yml ready (zip prefix=$ZipPrefix; submodule gitlinks pin the build)."
-    if ($githubPushed) { $n += " Pushed — open Actions → Release builds (workflow_dispatch)." }
+    if ($githubPushed) { $n += " Pushed -- open Actions -> Release builds (workflow_dispatch)." }
     $n
 } else {
     "CI workflow not installed (declined)."
 }
 $GhNote = if ($createGithub) {
     if ($githubPushed) { "GitHub: created/attached origin and pushed ($GithubVisibility)." }
-    elseif ($githubCreated) { "GitHub: origin ready but push failed — see warnings above." }
-    else { "GitHub: create/push did not complete — check gh auth / remote." }
+    elseif ($githubCreated) { "GitHub: origin ready but push failed -- see warnings above." }
+    else { "GitHub: create/push did not complete -- check gh auth / remote." }
 } else {
     "GitHub remote not created (declined)."
 }
@@ -791,11 +791,11 @@ Write-Host @"
 Next steps:
   1. $Step1
   2. $Step2
-  3. Label symbols in symbols.toml → python tools/sync_symbols.py
-  4. Soak offline boot → netplay QA (if enabled) → tag vX.Y.Z.
+  3. Label symbols in symbols.toml -> python tools/sync_symbols.py
+  4. Soak offline boot -> netplay QA (if enabled) -> tag vX.Y.Z.
   5. $CiNote
      Pins: submodule gitlinks (framework_pins.txt is an optional snapshot)
   6. $GhNote
 
-Docs: psxrecomp\docs\GAME_PROJECT_SETUP.md · psxrecomp\docs\SYMBOLS.md
+Docs: psxrecomp\docs\GAME_PROJECT_SETUP.md ; psxrecomp\docs\SYMBOLS.md
 "@
