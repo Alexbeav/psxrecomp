@@ -10,7 +10,7 @@
 # Other options are prompted when interactive, or set via switches / -Yes.
 #
 # Usage:
-#   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue t
+#   powershell -File setup_project.ps1 -Disc C:\dumps\game.cue
 #   powershell -File setup_project.ps1 -Disc game.cue -Name Foo -Yes
 #   powershell -File setup_project.ps1 -Disc game.cue -StageDisc
 
