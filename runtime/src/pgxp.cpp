@@ -644,6 +644,16 @@ extern "C" void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3,
     s_gte[15] = *pv;                           /* SXYP mirrors SXY2           */
 }
 
+extern "C" int pgxp_get_gte_sxy(uint32_t index, int32_t *x16, int32_t *y16) {
+    if (index >= 4) return 0;
+    const PGXPValue *pv = &s_gte[12 + index];
+    if (!pv_live(pv) || (pv->flags & PGXP_F_VXY) != PGXP_F_VXY)
+        return 0;
+    if (x16) *x16 = pv->x16;
+    if (y16) *y16 = pv->y16;
+    return 1;
+}
+
 extern "C" void pgxp_gte_reg_written(int reg, uint32_t value) {
     /* Invalidation-class bookkeeping: runs even with the engine disarmed so
      * seeded/leftover shadows can never outlive a guest register write. Only

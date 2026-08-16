@@ -929,15 +929,17 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
     int32_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
     int32_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
     int32_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
+    int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0, px2 = 0, py2 = 0;
     if (gpu_ws_precise_nclip_enabled() &&
-        s_precise_sxy[0].valid && s_precise_sxy[1].valid &&
-        s_precise_sxy[2].valid) {
-        sx0 = s_precise_sxy[0].x16 >> 16;
-        sy0 = s_precise_sxy[0].y16 >> 16;
-        sx1 = s_precise_sxy[1].x16 >> 16;
-        sy1 = s_precise_sxy[1].y16 >> 16;
-        sx2 = s_precise_sxy[2].x16 >> 16;
-        sy2 = s_precise_sxy[2].y16 >> 16;
+        pgxp_get_gte_sxy(0, &px0, &py0) &&
+        pgxp_get_gte_sxy(1, &px1, &py1) &&
+        pgxp_get_gte_sxy(2, &px2, &py2)) {
+        sx0 = px0 >> 16;
+        sy0 = py0 >> 16;
+        sx1 = px1 >> 16;
+        sy1 = py1 >> 16;
+        sx2 = px2 >> 16;
+        sy2 = py2 >> 16;
     }
     int64_t mac0 = (int64_t)sx0 * (sy1 - sy2) +
                    (int64_t)sx1 * (sy2 - sy0) +

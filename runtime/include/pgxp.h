@@ -55,6 +55,10 @@ void pgxp_suppress_end(void);
  * sees. Shifts the shadow FIFO exactly like push_sxy (regs 12..15). */
 void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3, uint32_t packed);
 
+/* Current SXY FIFO shadow (index 0..3 selects GTE data regs 12..15).
+ * Returns nonzero when the shadow is live and carries X/Y precision. */
+int pgxp_get_gte_sxy(uint32_t index, int32_t *x16, int32_t *y16);
+
 /* Guest write to a GTE data register outside gte_execute (MTC2/CTC2 handled
  * by psx_pgxp_cop2; this is for direct gte_write_data paths): reg 15 performs
  * the SXYP FIFO push on the shadows, others just invalidate/overwrite. */
