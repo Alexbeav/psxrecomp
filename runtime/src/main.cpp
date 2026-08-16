@@ -10504,6 +10504,10 @@ int main(int argc, char** argv) {
                     if (i >= 2) player_mode[i] = gc.runtime.default_p1_mode;
                 }
             }
+            if (gc.runtime.has_default_p1_device)
+                player_device[0] = gc.runtime.default_p1_device;
+            if (PSX_MAX_PLAYERS >= 2 && gc.runtime.has_default_p2_device)
+                player_device[1] = gc.runtime.default_p2_device;
             for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
                 ctrl_locked_mode[i] = player_mode[i];
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;

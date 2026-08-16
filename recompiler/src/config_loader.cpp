@@ -329,10 +329,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
         }
     }
-    if (!cfg.contains("runtime")) return rt;
-    const toml::value& runtime = toml::find(cfg, "runtime");
-    if (runtime.contains("language"))  // [runtime].language convenience alias
-        rt.language = toml::find<std::string>(runtime, "language");
+    if (cfg.contains("runtime")) {
+        const toml::value& runtime = toml::find(cfg, "runtime");
+        if (runtime.contains("language"))  // [runtime].language convenience alias
+            rt.language = toml::find<std::string>(runtime, "language");
 
     if (runtime.contains("debug_port")) {
         const auto port = toml::find<int64_t>(runtime, "debug_port");
@@ -504,9 +504,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_backend")) {
         rt.overlay_backend = toml::find<std::string>(runtime, "overlay_backend");
     }
-    if (runtime.contains("overlay_native_block")) {
-        for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
-            rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+        if (runtime.contains("overlay_native_block")) {
+            for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
+                rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+            }
         }
     }
 
@@ -703,6 +704,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.default_p2_mode = pad_mode_from_string(
                 toml::find<std::string>(ct, "p2_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
+        }
+        if (ct.contains("p1_device")) {
+            rt.default_p1_device = toml::find<std::string>(ct, "p1_device");
+            if (!rt.default_p1_device.empty())
+                rt.has_default_p1_device = true;
+        }
+        if (ct.contains("p2_device")) {
+            rt.default_p2_device = toml::find<std::string>(ct, "p2_device");
+            if (!rt.default_p2_device.empty())
+                rt.has_default_p2_device = true;
         }
         if (ct.contains("lock_mode")) {
             rt.controller_lock_mode = toml::find<bool>(ct, "lock_mode");

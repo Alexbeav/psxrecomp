@@ -142,6 +142,22 @@ buffer_ms = 60
     check(audio_config.runtime.audio_buffer_ms == 60,
           "parser preserves per-game audio buffer target");
 
+    const auto controller_defaults = write_config(root, "controller-defaults", R"toml(
+[controller]
+p1_device = "keyboard"
+p2_device = "gamepad"
+p2_mode = "digital"
+)toml");
+    const auto controller_defaults_config =
+        PSXRecompV4::load_game_config(controller_defaults);
+    check(controller_defaults_config.runtime.has_default_p1_device &&
+              controller_defaults_config.runtime.default_p1_device == "keyboard" &&
+              controller_defaults_config.runtime.has_default_p2_device &&
+              controller_defaults_config.runtime.default_p2_device == "gamepad" &&
+              controller_defaults_config.runtime.default_p2_mode ==
+                  PSXRecompV4::PAD_MODE_DIGITAL,
+          "parser preserves per-game controller device defaults");
+
     const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
 [runtime]
 

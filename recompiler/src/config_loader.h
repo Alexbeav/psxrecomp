@@ -497,6 +497,15 @@ struct RuntimeConfig {
     int                   default_p1_mode  = PAD_MODE_ANALOG;
     int                   default_p2_mode  = PAD_MODE_ANALOG;
 
+    // p1_device / p2_device: optional per-game default input sources for
+    // fresh settings and launcher-less boots. Same vocabulary as settings.toml:
+    // "none", "keyboard", "auto"/"gamepad"/"controller", or an SDL GUID.
+    // Per-install settings.toml still overrides these defaults.
+    bool                  has_default_p1_device = false;
+    bool                  has_default_p2_device = false;
+    std::string           default_p1_device;
+    std::string           default_p2_device;
+
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
     // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
     // game that supports exactly one pad type — e.g. Tomba 2, whose driver only
