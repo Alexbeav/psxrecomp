@@ -1387,6 +1387,7 @@ static bool          g_ws_hud_sprt = false;
 /* Runtime-only transition cleanup; kept out of gpu.h because generated game
  * units include that ABI header and do not need this frontend-only setter. */
 extern "C" void gpu_ws_set_clear_reveal(int on);
+extern "C" void gpu_ws_set_precise_nclip(int on);
 extern "C" void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
 extern "C" void gpu_ws_set_signed_x_bound_sites(const uint32_t*, const uint32_t*, int);
 /* Widescreen engages at game entry (fntrace_is_game_started): the BIOS boot
@@ -10345,6 +10346,7 @@ int main(int argc, char** argv) {
                                   gc.ws_bg2d_packet_cap);
             /* [widescreen] gte_game_mode — 3D-title gameplay detector (Ape). */
             gpu_ws_set_gte_game_mode(gc.ws_gte_game_mode ? 1 : 0);
+            gpu_ws_set_precise_nclip(gc.ws_precise_nclip ? 1 : 0);
             gpu_ws_set_gameplay_state_gate(
                 gc.ws_gameplay_state_addr,
                 gc.ws_gameplay_state_values.data(),
@@ -12048,6 +12050,8 @@ session_reboot:
      * the draw path is the faithful integer one, unchanged. */
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
+    gte_precision_tracking_set(g_video_geometry_correction ||
+                               g_video_perspective_texturing);
     if (g_video_geometry_correction || g_video_perspective_texturing) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",

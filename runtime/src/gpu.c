@@ -86,6 +86,7 @@ static uint32_t ws_anchor_addr = 0;          /* scratchpad addr of anchor SXY */
 static int      ws_hud_sprt = 0;             /* edge-anchor untagged HUD SPRTs */
 static int      ws_auto_ui_squash;
 static int      ws_auto_ui_dense;
+static int      ws_active(void);
 static uint64_t ws_auto_ui_candidate_count;
 static uint64_t ws_auto_ui_transform_count;
 #define WS_UI_PREPASS_MAX 2048u
@@ -166,6 +167,7 @@ static int      ws_gte_game_mode_cfg = 0;
 static uint32_t ws_gte_frame = (uint32_t)-1;
 static uint32_t ws_gte_count = 0;
 static uint32_t ws_last_gte_stamp = (uint32_t)-1000;
+static int ws_precise_nclip_cfg = 0;
 #define WS_GAMEPLAY_STATE_VALUES_MAX 16
 static uint32_t ws_gameplay_state_addr = 0;
 static uint32_t ws_gameplay_state_values[WS_GAMEPLAY_STATE_VALUES_MAX];
@@ -180,6 +182,8 @@ static int ws_gameplay_state_value_count = 0;
  * this many consecutive frames (save/options/memory-card) — reverts to 4:3. */
 #define WS_GTE_GAME_MODE_HYSTERESIS 45u
 void gpu_ws_set_gte_game_mode(int on) { ws_gte_game_mode_cfg = on ? 1 : 0; }
+void gpu_ws_set_precise_nclip(int on) { ws_precise_nclip_cfg = on ? 1 : 0; }
+int gpu_ws_precise_nclip_enabled(void) { return ws_precise_nclip_cfg && ws_active(); }
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues) {
     if (nvalues < 0) nvalues = 0;
@@ -2977,9 +2981,11 @@ uint32_t gpu_texture_correction_hits(void) {
  * triangle match prevents screen-space HUD/sprites that happen to share one
  * coordinate from receiving world-geometry correction. The integer delta
  * folds in draw offsets and any widescreen adjustment already applied. */
-static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
+static void prepare_precise_triangle(int i0, int i1, int i2,
+                                     uint32_t w0, uint32_t w1, uint32_t w2,
                                      const int32_t vx[3], const int32_t vy[3]) {
     uint32_t words[3] = { w0, w1, w2 };
+    int word_indices[3] = { i0, i1, i2 };
     int32_t fx[3], fy[3];
     const int geometry_enabled = gte_geometry_correction_enabled();
     gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
@@ -2990,7 +2996,16 @@ static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
     for (int i = 0; i < 3; i++) {
         int32_t raw_x, raw_y;
         parse_vertex(words[i], &raw_x, &raw_y);
-        if (!gte_geometry_correction_lookup(words[i], &fx[i], &fy[i])) {
+        int found = 0;
+        if (gp0_cmd_source_addr != 0xFFFFFFFFu) {
+            uint32_t addr = (gp0_cmd_source_addr +
+                             (uint32_t)word_indices[i] * 4u) & 0x1FFFFCu;
+            found = gte_precision_load_word(addr, words[i], &fx[i], &fy[i],
+                                            NULL);
+        }
+        if (!found)
+            found = gte_geometry_correction_lookup(words[i], &fx[i], &fy[i]);
+        if (!found) {
             gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
             return;
         }
@@ -3209,7 +3224,8 @@ static void gp0_exec_mono_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_buf[3],
+    prepare_precise_triangle(1, 2, 3,
+                             gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_buf[3],
                              vx, vy);
     gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
 }
@@ -3275,14 +3291,16 @@ static void gp0_exec_mono_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
+        prepare_precise_triangle(1, 2, 3,
+                                 gp0_cmd_buf[1], gp0_cmd_buf[2],
                                  gp0_cmd_buf[3], tx, ty);
         gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[3], gp0_cmd_buf[2],
+        prepare_precise_triangle(3, 2, 4,
+                                 gp0_cmd_buf[3], gp0_cmd_buf[2],
                                  gp0_cmd_buf[4], tx, ty);
         gr_draw_flat_triangle(vx[2], vy[2], vx[1], vy[1], vx[3], vy[3], color);
     }
@@ -3306,7 +3324,8 @@ static void gp0_exec_shaded_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
+                             gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
                              vx, vy);
     gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                              vx[1], vy[1], c[1],
@@ -3352,7 +3371,8 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+        prepare_precise_triangle(1, 3, 5,
+                                 gp0_cmd_buf[1], gp0_cmd_buf[3],
                                  gp0_cmd_buf[5], tx, ty);
         gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                                  vx[1], vy[1], c[1],
@@ -3361,7 +3381,8 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
+        prepare_precise_triangle(5, 3, 7,
+                                 gp0_cmd_buf[5], gp0_cmd_buf[3],
                                  gp0_cmd_buf[7], tx, ty);
         gr_draw_gouraud_triangle(vx[2], vy[2], c[2],
                                  vx[1], vy[1], c[1],
@@ -3433,7 +3454,8 @@ static void gp0_exec_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     setup_textured_draw(color24, semi_trans, raw_texture);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
+                             gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
                              vx, vy);
     prepare_texture_triangle(1, 3, 5);
     gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
@@ -3515,7 +3537,8 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
+        prepare_precise_triangle(1, 3, 5,
+                                 gp0_cmd_buf[1], gp0_cmd_buf[3],
                                  gp0_cmd_buf[5], tx, ty);
         prepare_texture_triangle(1, 3, 5);
         gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
@@ -3526,7 +3549,8 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
+        prepare_precise_triangle(5, 3, 7,
+                                 gp0_cmd_buf[5], gp0_cmd_buf[3],
                                  gp0_cmd_buf[7], tx, ty);
         prepare_texture_triangle(5, 3, 7);
         gr_draw_textured_triangle(vx[2], vy[2], u[2], v[2],
@@ -3569,7 +3593,8 @@ static void gp0_exec_shaded_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4], gp0_cmd_buf[7],
+    prepare_precise_triangle(1, 4, 7,
+                             gp0_cmd_buf[1], gp0_cmd_buf[4], gp0_cmd_buf[7],
                              vx, vy);
     prepare_texture_triangle(1, 4, 7);
     gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
@@ -3620,7 +3645,8 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
+        prepare_precise_triangle(1, 4, 7,
+                                 gp0_cmd_buf[1], gp0_cmd_buf[4],
                                  gp0_cmd_buf[7], tx, ty);
         prepare_texture_triangle(1, 4, 7);
         gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
@@ -3631,7 +3657,8 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[7], gp0_cmd_buf[4],
+        prepare_precise_triangle(7, 4, 10,
+                                 gp0_cmd_buf[7], gp0_cmd_buf[4],
                                  gp0_cmd_buf[10], tx, ty);
         prepare_texture_triangle(7, 4, 10);
         gr_draw_shaded_textured_triangle(vx[2], vy[2], u[2], v[2], c[2],

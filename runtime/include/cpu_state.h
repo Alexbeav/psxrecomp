@@ -205,6 +205,7 @@ extern void     gte_precision_timeline_invalidate(void);
 extern void     gte_precision_speculative_begin(void);
 extern void     gte_precision_speculative_end(void);
 extern void     gte_precision_store_word(uint32_t addr, uint8_t reg);
+extern void     gte_precision_tracking_set(int enabled);
 /* Sub-pixel vertex precision ([video] geometry_correction). Enables the side
  * cache that retains the 16.16 projection fraction the GTE discards when it
  * saturates SXY to integer screen pixels. Guest-visible GTE state is

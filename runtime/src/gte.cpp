@@ -7,6 +7,7 @@
 #include <cstring>
 
 extern "C" uint32_t psx_read_word(uint32_t addr);
+extern "C" int gpu_ws_precise_nclip_enabled(void);
 
 namespace PSXRecomp {
 namespace GTE {
@@ -982,12 +983,22 @@ void gte_rtpt(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 void gte_nclip(GTEState* gte, uint32_t instr) {
     gte->FLAG = 0;
-    int16_t sx0 = static_cast<int16_t>(gte->SXY[0] & 0xFFFF);
-    int16_t sy0 = static_cast<int16_t>(gte->SXY[0] >> 16);
-    int16_t sx1 = static_cast<int16_t>(gte->SXY[1] & 0xFFFF);
-    int16_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
-    int16_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
-    int16_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
+    int32_t sx0 = static_cast<int16_t>(gte->SXY[0] & 0xFFFF);
+    int32_t sy0 = static_cast<int16_t>(gte->SXY[0] >> 16);
+    int32_t sx1 = static_cast<int16_t>(gte->SXY[1] & 0xFFFF);
+    int32_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
+    int32_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
+    int32_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
+    if (gpu_ws_precise_nclip_enabled() &&
+        s_precise_sxy[0].valid && s_precise_sxy[1].valid &&
+        s_precise_sxy[2].valid) {
+        sx0 = s_precise_sxy[0].x16 >> 16;
+        sy0 = s_precise_sxy[0].y16 >> 16;
+        sx1 = s_precise_sxy[1].x16 >> 16;
+        sy1 = s_precise_sxy[1].y16 >> 16;
+        sx2 = s_precise_sxy[2].x16 >> 16;
+        sy2 = s_precise_sxy[2].y16 >> 16;
+    }
     int64_t mac0 = (int64_t)sx0 * (sy1 - sy2) +
                    (int64_t)sx1 * (sy2 - sy0) +
                    (int64_t)sx2 * (sy0 - sy1);

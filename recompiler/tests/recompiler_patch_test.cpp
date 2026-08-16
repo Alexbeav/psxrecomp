@@ -206,6 +206,15 @@ negsub_sites = ["0x80012340"]
               std::vector<uint32_t>{0x80012340u},
           "parser preserves negsub cull sites");
 
+    const auto branch_keep = write_config(root, "branch-keep", R"toml(
+[widescreen.cull]
+branch_keep_sites = ["0x80012340"]
+)toml");
+    const auto branch_keep_config = PSXRecompV4::load_game_config(branch_keep);
+    check(branch_keep_config.ws_cull_branch_keep_sites ==
+              std::vector<uint32_t>{0x80012340u},
+          "parser preserves branch keep sites");
+
     const auto vxrange = write_config(root, "vxrange", R"toml(
 [widescreen.cull]
 vxrange_sites = ["0x80012340"]
@@ -679,6 +688,16 @@ void codegen_tests() {
               "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
               std::string::npos,
           "activation bias gains the same isolated resident-object lead");
+
+    PSXRecomp::CodeGenConfig branch_keep_config;
+    branch_keep_config.ws_cull_branch_keep_sites.insert(0x80010000u);
+    const std::string branch_keep = generate_first_instruction(
+        0x14400002u, {}, false, branch_keep_config); // bne v0,zero,+2
+    check(branch_keep.find(
+              "psx_ws_x_margin() > 0 ? 0 : (cpu->gpr[2] != cpu->gpr[0])") !=
+              std::string::npos &&
+              branch_keep.find("ws branch keep") != std::string::npos,
+          "codegen emits guarded branch keep predicate");
 
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);

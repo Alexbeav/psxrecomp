@@ -812,6 +812,14 @@ struct GameConfig {
     // scissor clips the overflow and wrapped off-left coords pass); the
     // vanilla loaded value at 4:3. Empty by default; regen required.
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    // Exact `bltz MAC0, reject`-style NCLIP/backface rejects that are forced
+    // not-taken only while widescreen reveals extra world. This is deliberately
+    // separate from bltz_sites, whose helper adjusts screen-X edge thresholds.
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    // Exact branch PCs whose reject path is forced not-taken only while
+    // widescreen reveals extra world. Use only after screenshot-validated
+    // evidence that the target is a visibility reject.
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     // Exact comparison sites whose result is forced only while widescreen
     // reveals extra world. Used for proven object/model participation gates
     // where maximal overdraw is preferable to range guessing. Each entry is
@@ -903,6 +911,14 @@ struct GameConfig {
     // (native-wide engages); genuine full-2D screens (save/options) still
     // pillarbox 4:3. Runtime-only — no regen required. Off by default.
     bool ws_gte_game_mode = false;
+
+    // [widescreen] precise_nclip — use the runtime's unsaturated GTE projection
+    // provenance for NCLIP/backface tests while classic adaptive widescreen is
+    // active. This is for 3D titles whose wide side geometry otherwise hits the
+    // PS1 SXY +/-1024 clamp and then disappears from game-side visibility tests.
+    // Runtime-only; off by default.
+    bool ws_precise_nclip = false;
+
     // Optional authoritative game-state gate for titles whose menus also
     // render enough 3D geometry to fool gte_game_mode. When configured,
     // native-wide is active only while the guest word matches one listed

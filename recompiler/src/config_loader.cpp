@@ -72,6 +72,8 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_depth", c.ws_cull_depth_sites);
     h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
     h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
+    h.words("cull_nclip_keep", c.ws_cull_nclip_keep_sites);
+    h.words("cull_branch_keep", c.ws_cull_branch_keep_sites);
     h.words("cull_w_imms", c.ws_cull_w_imms);
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
@@ -1307,6 +1309,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
+    bool ws_precise_nclip = false;
     uint32_t ws_gameplay_state_addr = 0;
     std::vector<uint32_t> ws_gameplay_state_values;
     bool ws_native_wide = true;
@@ -1454,6 +1457,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
             ws_gte_game_mode = toml::find<bool>(ws, "gte_game_mode");
+        if (ws.contains("precise_nclip"))
+            ws_precise_nclip = toml::find<bool>(ws, "precise_nclip");
         const bool has_gameplay_state_addr = ws.contains("gameplay_state_addr");
         const bool has_gameplay_state_values = ws.contains("gameplay_state_values");
         if (has_gameplay_state_addr != has_gameplay_state_values)
@@ -1556,6 +1561,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_depth_sites;
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -1589,6 +1596,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("depth_sites", ws_cull_depth_sites);
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
+            load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
+            load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -2013,6 +2022,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_depth_sites*/   ws_cull_depth_sites,
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
+        /*ws_cull_nclip_keep_sites*/ ws_cull_nclip_keep_sites,
+        /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
         /*ws_aspect_cone*/         ws_aspect_cone,
@@ -2027,6 +2038,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_auto_backdrop_preload*/ ws_auto_backdrop_preload,
         /*ws_full_2d*/            ws_full_2d,
         /*ws_gte_game_mode*/      ws_gte_game_mode,
+        /*ws_precise_nclip*/      ws_precise_nclip,
         /*ws_gameplay_state_addr*/ ws_gameplay_state_addr,
         /*ws_gameplay_state_values*/ ws_gameplay_state_values,
         /*ws_native_wide*/        ws_native_wide,
