@@ -205,6 +205,7 @@ extern void     gte_precision_timeline_invalidate(void);
 extern void     gte_precision_speculative_begin(void);
 extern void     gte_precision_speculative_end(void);
 extern void     gte_precision_store_word(uint32_t addr, uint8_t reg);
+extern void     gte_precision_tracking_set(int enabled);
 /* Sub-pixel vertex precision ([video] geometry_correction). Enables the side
  * cache that retains the 16.16 projection fraction the GTE discards when it
  * saturates SXY to integer screen pixels. Guest-visible GTE state is
@@ -219,6 +220,12 @@ extern uint32_t gte_geometry_correction_hits(void);
 extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
                                               uint32_t *miss_unrecorded,
                                               uint32_t *miss_ambiguous);
+
+/* PGXP dataflow-shadowing hook macros (PGXP_LOAD/STORE/ALU/MULDIV/COP2).
+ * The emitter writes them unconditionally; they expand to real calls only
+ * under -DPSX_PGXP=1 (the pgxp build variant) and to ((void)0) otherwise.
+ * Pulled in here so every generated translation unit sees them. */
+#include "pgxp_hooks.h"
 
 /* ============================================================================
  * Dispatch call contract (Bug D / wild-return family fix)

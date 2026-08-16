@@ -32,6 +32,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "pgxp.h"
 #include "interrupts.h"
 #include "present_ring.h"
 #include "load_transition_ring.h"
@@ -89,6 +90,14 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #endif
 #include "psx_sdl.h"
+#if defined(PSX_SDL3)
+/*
+ * SDL_main.h is a single-header implementation in SDL3. Keep it in the one
+ * translation unit that defines main(); including it through psx_sdl.h makes
+ * every SDL-using source emit WinMain under MinGW.
+ */
+#include <SDL3/SDL_main.h>
+#endif
 #include "psx_sdl_audio.h"
 #if defined(PSX_WEB)
 #include <emscripten/emscripten.h>
@@ -465,6 +474,7 @@ static int post_load_probe_env_on(void) {
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
 static std::string s_fps_base_title;
+static int      s_fps_telemetry_enabled = -1; /* -1 = unread env */
 static FramePacer s_frame_pacer = { 0 };
 static int      s_turbo_present_skip = 0;
 static int      s_fmv_skip_present_skip = 0;
@@ -515,6 +525,46 @@ static void present_session_reset(void) {
      * does not clear them. Rematch then no-ops every flush → black window. */
     gpu_vblank_clear_deferred_present();
     smooth_60_reset();
+}
+
+static int fps_telemetry_enabled(void) {
+    if (s_fps_telemetry_enabled < 0) {
+        const char *e = std::getenv("PSX_FPS_TELEMETRY");
+        s_fps_telemetry_enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    return s_fps_telemetry_enabled;
+}
+
+static void fps_telemetry_toggle(void) {
+    const int enabled = fps_telemetry_enabled() ? 0 : 1;
+    s_fps_telemetry_enabled = enabled;
+    s_fps_last_time = 0;
+    s_fps_last_frame = 0;
+    if (!enabled && sdl_window && !s_fps_base_title.empty())
+        SDL_SetWindowTitle(sdl_window, s_fps_base_title.c_str());
+    if (!enabled)
+        host_osd_set_status(NULL);
+    s_fps_base_title.clear();
+    host_osd_push(enabled ? "FPS readout on" : "FPS readout off", 1500);
+}
+
+static int manual_fast_forward_multiplier(void) {
+    static int value = -2; /* -2 = unread, -1 = max/unbounded */
+    if (value == -2) {
+        const char *e = std::getenv("PSX_FAST_FORWARD_SPEED");
+        value = 4;
+        if (e && e[0]) {
+            if (std::strcmp(e, "max") == 0 || std::strcmp(e, "MAX") == 0 ||
+                std::strcmp(e, "0") == 0) {
+                value = -1;
+            } else {
+                int parsed = std::atoi(e);
+                if (parsed >= 2 && parsed <= 16)
+                    value = parsed;
+            }
+        }
+    }
+    return value;
 }
 
 static void post_load_probe_stall_pc_note(uint32_t pc) {
@@ -1059,12 +1109,15 @@ static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
  * SXY readback are untouched. Default off = the faithful floor. */
 static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
+static int           g_video_pgxp_cpu_mode         = 0;
+static float         g_video_pgxp_tolerance        = 0.5f;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
 static int           g_video_win_w    = 1280; /* window width (height follows aspect) */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
+static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
 static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
@@ -1172,6 +1225,13 @@ static int           g_video_aspect_den = 3;
 static bool          g_ws_adaptive_view = false;
 static int           g_ws_adaptive_max_num = 16;
 static int           g_ws_adaptive_max_den = 9;
+/* game.toml [netplay] local_viewport = "vertical_split": during real netplay,
+ * present only this peer's native split-screen half and stretch it to the
+ * window. Presentation-only; the guest still renders the original framebuffer. */
+static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
+/* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
+ * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
+static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
 
 extern "C" int psx_mod_set_fixed_display_aspect(
     uint32_t numerator, uint32_t denominator) {
@@ -1374,6 +1434,10 @@ static bool          g_ws_hud_sprt = false;
 /* Runtime-only transition cleanup; kept out of gpu.h because generated game
  * units include that ABI header and do not need this frontend-only setter. */
 extern "C" void gpu_ws_set_clear_reveal(int on);
+extern "C" void gpu_ws_set_precise_nclip(int on);
+extern "C" void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
+extern "C" int gpu_ws_netplay_local_viewport_base_x(void);
+extern "C" int gpu_ws_netplay_local_viewport_width(void);
 extern "C" void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
 extern "C" void gpu_ws_set_signed_x_bound_sites(const uint32_t*, const uint32_t*, int);
 /* Widescreen engages at game entry (fntrace_is_game_started): the BIOS boot
@@ -1409,6 +1473,87 @@ static int aspect_gcd(int a, int b) {
     return a > 0 ? a : 1;
 }
 
+static int64_t aspect_gcd64(int64_t a, int64_t b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b) { int64_t t = a % b; a = b; b = t; }
+    return a > 0 ? a : 1;
+}
+
+static void netplay_local_viewport_projection_aspect(
+    int present_num, int present_den, int* proj_num, int* proj_den) {
+    if (!proj_num || !proj_den) return;
+    *proj_num = present_num;
+    *proj_den = present_den;
+
+    if (g_netplay_local_viewport != 1 ||
+        !psx_netplay_active() ||
+        !gpu_last_frame_vertical_split_screen() ||
+        present_num * 3 <= present_den * 4) {
+        return;
+    }
+
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 2 || di.height == 0)
+        return;
+
+    /* The normal widescreen squash assumes a 4:3 source. A split-screen peer
+     * source is only half the display width, so derive the equivalent aspect
+     * that produces source_aspect / target_aspect as the X squash factor:
+     *
+     *   source = (display_w / 2) / display_h
+     *   effective = (4:3) * target / source
+     */
+    int64_t n = (int64_t)present_num * 8 * (int64_t)di.height;
+    int64_t d = (int64_t)present_den * 3 * (int64_t)di.width;
+    if (n <= 0 || d <= 0) return;
+    int64_t gcd = aspect_gcd64(n, d);
+    n /= gcd;
+    d /= gcd;
+    if (n <= 0 || d <= 0 || n > INT32_MAX || d > INT32_MAX)
+        return;
+
+    *proj_num = (int)n;
+    *proj_den = (int)d;
+}
+
+static int g_ws_projection_num = 4;
+static int g_ws_projection_den = 3;
+static int g_ws_projection_mode = -1;
+static void refresh_widescreen_projection() {
+    if (!g_ws_engaged) return;
+
+    const bool wide = g_video_aspect_num * 3 != g_video_aspect_den * 4;
+    const bool local_native_wide =
+        g_netplay_local_viewport == 1 && psx_netplay_active() &&
+        gpu_last_frame_vertical_split_screen();
+    const bool native_wide = (g_netplay_local_viewport == 1)
+        ? local_native_wide
+        : (g_ws_native_wide != 0);
+    const int mode = wide ? (native_wide ? 2 : 1) : 0;
+    int proj_num = g_video_aspect_num;
+    int proj_den = g_video_aspect_den;
+    if (mode == 1) {
+        netplay_local_viewport_projection_aspect(
+            g_video_aspect_num, g_video_aspect_den, &proj_num, &proj_den);
+    }
+
+    if (mode == g_ws_projection_mode &&
+        proj_num == g_ws_projection_num &&
+        proj_den == g_ws_projection_den) {
+        return;
+    }
+
+    g_ws_projection_mode = mode;
+    g_ws_projection_num = proj_num;
+    g_ws_projection_den = proj_den;
+    gte_set_display_aspect(mode == 1 ? proj_num : 4,
+                           mode == 1 ? proj_den : 3);
+    gpu_ws_configure(proj_num, proj_den, g_ws_anchor_addr,
+                     g_ws_hud_sprt ? 1 : 0, mode);
+}
+
 /* Follow the host window without feeding its absolute pixel size into guest
  * rendering. Only the ratio matters: gpu_ws_configure derives the PSX-native
  * sidecar width from it, just as the fixed 16:9/21:9 modes do. */
@@ -1441,14 +1586,7 @@ static void update_adaptive_widescreen() {
         SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
     }
 
-    if (g_ws_engaged) {
-        const bool wide = num * 3 != den * 4;
-        const int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
-        gte_set_display_aspect(mode == 1 ? num : 4,
-                               mode == 1 ? den : 3);
-        gpu_ws_configure(num, den, g_ws_anchor_addr,
-                         g_ws_hud_sprt ? 1 : 0, mode);
-    }
+    refresh_widescreen_projection();
 }
 
 /* SDL GL attributes are global inputs to the next context creation.  Set the
@@ -1466,13 +1604,8 @@ static void configure_core_gl_context_attributes() {
  * Re-engages with the chosen mode in place if widescreen is already running. */
 extern "C" void psx_ws_set_native_wide(int on) {
     g_ws_native_wide = on ? 1 : 0;
-    if (g_ws_engaged && g_video_aspect_num * 3 != g_video_aspect_den * 4) {
-        int mode = g_ws_native_wide ? 2 : 1;
-        gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                               mode == 1 ? g_video_aspect_den : 3);
-        gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
-                         g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
-    }
+    g_ws_projection_mode = -1;
+    refresh_widescreen_projection();
 }
 extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
@@ -2361,6 +2494,31 @@ static void shutdown_runtime(void);
  * there instead of killing the process. */
 static int g_netplay_from_lobby = 0;
 static int g_netplay_vsync_forced_off = 0;
+
+static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
+    if (!netplay_enabled ||
+        g_netplay_local_viewport != 1 ||
+        g_netplay_local_viewport_aspect == 0) {
+        gpu_ws_set_netplay_local_viewport(0, 0);
+        return;
+    }
+
+    gpu_ws_set_netplay_local_viewport(1, psx_netplay_local_slot());
+    switch (g_netplay_local_viewport_aspect) {
+        case 1:
+            (void)psx_mod_set_fixed_display_aspect(16u, 9u);
+            break;
+        case 2:
+            (void)psx_mod_set_fixed_display_aspect(21u, 9u);
+            break;
+        case 3:
+            (void)psx_mod_set_fixed_display_aspect(16u, 9u);
+            (void)psx_mod_set_adaptive_display_aspect(21u, 9u);
+            break;
+        default:
+            break;
+    }
+}
 
 /* Host-only: lockstep already couples peers. Driver vsync on top of the
  * wall-clock pacer double-blocks the vblank callback (present is before the
@@ -4659,6 +4817,36 @@ static void netplay_note_present(void) {
     s_present_last_ms = now ? now : 1ull;
 }
 
+static int netplay_local_viewport_slot(void) {
+    if (g_netplay_local_viewport != 1 || !psx_netplay_active())
+        return -1;
+    if (!gpu_last_frame_vertical_split_screen())
+        return -1;
+    int slot = psx_netplay_local_slot();
+    return (slot == 0 || slot == 1) ? slot : -1;
+}
+
+static int crop_present_to_netplay_local_viewport(uint32_t* pixels,
+                                                  int* width,
+                                                  int height) {
+    if (!pixels || !width || *width < 2 || height <= 0)
+        return 0;
+    const int slot = netplay_local_viewport_slot();
+    if (slot < 0)
+        return 0;
+
+    const int src_w = *width;
+    const int crop_w = src_w / 2;
+    const int crop_x = slot == 0 ? 0 : (src_w - crop_w);
+    for (int y = 0; y < height; ++y) {
+        uint32_t* dst = pixels + (size_t)y * (size_t)crop_w;
+        uint32_t* src = pixels + (size_t)y * (size_t)src_w + crop_x;
+        memmove(dst, src, (size_t)crop_w * sizeof(uint32_t));
+    }
+    *width = crop_w;
+    return 1;
+}
+
 static void netplay_present_gap_stats(uint32_t *p95_out, uint32_t *max_out) {
     unsigned n = s_present_gaps_n;
     unsigned idx;
@@ -5373,20 +5561,19 @@ static void savestate_menu_move(int delta) {
     savestate_menu_sync_overlay();
 }
 
-static void savestate_menu_submit(int save) {
-    const int slot = savestate_menu_slot;
+static int savestate_submit_slot(int slot, int save) {
     if (!save && !savestate_slot_exists(slot)) {
         char msg[32];
         snprintf(msg, sizeof(msg), "Slot %d is empty", slot + 1);
         host_osd_push(msg, 1200);
-        return;
+        return 0;
     }
     if (!save)
         savestate_input_guard_arm();
     if (psx_netplay_active()) {
         if (!psx_netplay_is_host()) {
             host_osd_push("Save states are host-only in netplay", 1500);
-            return;
+            return 0;
         }
         if (save)
             (void)psx_netplay_request_save(slot);
@@ -5397,8 +5584,14 @@ static void savestate_menu_submit(int save) {
     } else {
         (void)savestate_request_load(slot);
     }
-    savestate_menu_open = 0;
-    savestate_menu_sync_overlay();
+    return 1;
+}
+
+static void savestate_menu_submit(int save) {
+    if (savestate_submit_slot(savestate_menu_slot, save) && savestate_menu_open) {
+        savestate_menu_open = 0;
+        savestate_menu_sync_overlay();
+    }
 }
 
 static int savestate_menu_slot_from_key(SDL_Keycode key) {
@@ -5713,14 +5906,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * than presents so turbo and skipped-frame modes still report game speed.
      * Skip during netplay post-load barrier — admit is stalled and the window
      * is not updating, so a climbing FPS line is misleading. */
-    if (!psx_netplay_in_load_barrier()) {
+    if (fps_telemetry_enabled() && !psx_netplay_in_load_barrier()) {
         extern uint64_t s_frame_count;
         const Uint64 now = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
         if (!s_fps_last_time) {
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
-            if (sdl_window) {
+            if (sdl_window && s_fps_base_title.empty()) {
                 const char *title = SDL_GetWindowTitle(sdl_window);
                 if (title) s_fps_base_title = title;
             }
@@ -5728,11 +5921,35 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
             const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
             const double speed = fps / 59.94;
+            double display_fps = 0.0;
+            if (g_frame_interpolation && g_gl_active) {
+                display_fps = g_frame_interpolation_fps > 0
+                    ? (double)g_frame_interpolation_fps
+                    : g_host_refresh_hz;
+            }
             if (!g_headless && sdl_window) {
                 char title[256];
-                snprintf(title, sizeof(title), "%s  [%.0f fps %.2fx]",
-                         s_fps_base_title.c_str(), fps, speed);
+                if (display_fps > 0.0) {
+                    snprintf(title, sizeof(title),
+                             "%s  [Game %.0f fps %.2fx | Display %.0f fps]",
+                             s_fps_base_title.c_str(), fps, speed, display_fps);
+                } else {
+                    snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
+                             s_fps_base_title.c_str(), fps, speed);
+                }
                 SDL_SetWindowTitle(sdl_window, title);
+            }
+            if (!g_headless) {
+                char osd[96];
+                if (display_fps > 0.0) {
+                    snprintf(osd, sizeof(osd),
+                             "Game %.0f FPS  %.2fx | Display %.0f FPS",
+                             fps, speed, display_fps);
+                } else {
+                    snprintf(osd, sizeof(osd), "Game %.0f FPS  %.2fx",
+                             fps, speed);
+                }
+                host_osd_set_status(osd);
             }
             if (netplay_timing_on() && s_np_timing_frames > 0) {
                 const double invf = 1000.0 / (double)frequency;
@@ -5851,6 +6068,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     debug_force_cd_reinsert();
                     host_osd_push("CD reinsert", 1500);
                 }
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)key,
+                                           (int)mod)) {
+                    fps_telemetry_toggle();
+                }
                 /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
                  * (defaults: keypad +/-). 5% steps; shows right-side bar. */
                 else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
@@ -5868,8 +6090,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * set in both SDL_WINDOW_FULLSCREEN and
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
-                else if ((key == SDLK_RETURN && (mod & KMOD_ALT)) ||
-                         (key == SDLK_f && (mod & (KMOD_GUI | KMOD_CTRL)))) {
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)key,
+                                           (int)mod)) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
@@ -6073,23 +6296,45 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     }
 #endif
 
-    /* Turbo mode: while TAB is held, skip both VRAM->ARGB conversion and
-     * SDL_RenderPresent. The recompiled BIOS still advances simulated
-     * cycles every vblank, so the BIOS proceeds at whatever rate the host
-     * CPU sustains without graphics-driver vsync overhead. Present once
-     * every TURBO_PRESENT_EVERY frames so the user sees visual progress. */
+    bool manual_turbo_active = false;
+    bool turbo_load_paced = false;
+
+    /* Manual fast-forward: bounded by default so the game visibly advances and
+     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..16 changes the cap;
+     * PSX_FAST_FORWARD_SPEED=max restores the old unbounded simulation rate. */
     {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
-        const int TURBO_PRESENT_EVERY = 30;
-        if (keys[SDL_SCANCODE_TAB]) {
-            turbo_skip = (turbo_skip + 1) % TURBO_PRESENT_EVERY;
+        static int turbo_was_down = 0;
+        if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
+            const int mult = manual_fast_forward_multiplier();
+            const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
+            manual_turbo_active = true;
+            if (!turbo_was_down) {
+                char msg[40];
+                if (mult < 0)
+                    snprintf(msg, sizeof(msg), "Fast forward: max");
+                else
+                    snprintf(msg, sizeof(msg), "Fast forward: %dx", mult);
+                host_osd_push(msg, 900);
+            }
+            turbo_was_down = 1;
+            if (mult >= 2 && g_frame_period_ms > 0.0) {
+                uint64_t perf_start = runtime_perf_section_begin();
+                frame_pacer_wait(&s_frame_pacer,
+                                 g_frame_period_ms / (double)mult);
+                runtime_perf_section_end(perf_start,
+                                         &g_runtime_perf.pacer_ticks);
+                latency_ring_mark(LAT_PACED);
+            }
+            turbo_skip = (turbo_skip + 1) % present_every;
             if (turbo_skip != 0) {
                 ep.skip_pace = 1;
                 return ep;  /* skip render this frame */
             }
         } else {
             turbo_skip = 0;
+            turbo_was_down = 0;
         }
     }
 
@@ -6101,7 +6346,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * real time (2.2-4.8 sectors/frame against a 32-256 IRQ budget), so
      * host-speed execution is the lever that compresses load wall-time.
      * Presents 1-in-30 so visual progress stays visible. */
-    bool turbo_load_paced = false;
     if (turbo_loads_active) {
         g_turbo_loads_frames++;
         /* A mod may request a bounded wall-clock multiplier instead of the
@@ -6176,7 +6420,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * resim. */
     if (!psx_netplay_active() && !psx_selfcheck_resim_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
-        if (!turbo_load_paced && present_should_wall_pace())
+        if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
@@ -6214,14 +6458,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         extern int fntrace_is_game_started(void);
         if (fntrace_is_game_started()) {
             g_ws_engaged = true;
-            int mode = g_ws_native_wide ? 2 : 1;
-            /* Native-wide: GTE drawn un-squashed — feed it the 4:3 ratio
-             * (identity squash). Squash mode: feed the real wide aspect. */
-            gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                                   mode == 1 ? g_video_aspect_den : 3);
-            gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
-                             g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
+            g_ws_projection_mode = -1;
+            refresh_widescreen_projection();
         }
+    } else {
+        refresh_widescreen_projection();
     }
 
     /* Rollback resim (§33/§47): short catch-up keeps hold-last; long catch-up
@@ -6276,6 +6517,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool pin_43    = false;  /* pillarbox this present (FMV, or a native-wide
                                 game frame that could not present wide) */
     bool depth24_frame = false;
+    bool local_viewport_crop_applied = false;
     if (s_force_present_after_load && g_gl_active)
         gl_renderer_flush_cpu_uploads();
     {
@@ -6330,6 +6572,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (g_gl_active)
             gl_renderer_set_interpolation_suspended(
                 fmv_frame || mdec_recently_active(2));
+        const int local_viewport_slot = netplay_local_viewport_slot();
+        const bool local_viewport_crop = local_viewport_slot >= 0;
+        bool local_viewport_wide =
+            local_viewport_crop && g_ws_engaged && ws_native_wide_active() &&
+            gr_wide_supported() && gpu_ws_netplay_local_viewport_width() > 0;
 
         /* Canonical present width. Native-wide does NOT widen the canonical read
          * (that bled across adjacent framebuffers); it composites into a separate
@@ -6340,8 +6587,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * wide compositor, present the wider surface (canonical width + EXTRA)
          * from the displayed buffer's surface. FMV/menu frames stay 4:3. */
         bool wide_present = (!fmv_frame && !di.depth24 && g_ws_engaged &&
-                             ws_native_wide_active() && gr_wide_supported());
-        if (wide_present) present_w = w + (uint32_t)ws_nw_extra();
+                             ws_native_wide_active() && gr_wide_supported() &&
+                             (!local_viewport_crop || local_viewport_wide));
+        if (wide_present) {
+            present_w = local_viewport_wide
+                ? (uint32_t)gpu_ws_netplay_local_viewport_width()
+                : (w + (uint32_t)ws_nw_extra());
+        }
 
         /* Native-wide invariant: canonical (320-wide) content is NEVER
          * stretched across the wide window — a game frame that cannot present
@@ -6366,7 +6618,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * do NOT flush_cpu_uploads (MDEC already wrote the CPU mirror; forcing
          * FBO uploads every frame cut MotK intro from ~50 to ~30 FPS). */
 #ifndef PSX_SDL_NO_RENDER
-        if (g_gl_active && g_gl_fbo_present && !di.depth24) {
+        if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
+            !local_viewport_crop) {
             if (wide_present) {
                 /* GPU-direct native-wide present: blit the displayed buffer's
                  * wide FBO straight to the window (GPU-side, like the canonical
@@ -6393,7 +6646,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * VRAM image (deterministic blit, no readback), mirroring the GL path;
          * 24-bit (FMV) frames go through the CPU present (Phase 3). The Vulkan
          * window has no SDL_Renderer, so we must never fall through below. */
-        if (g_vk_active) {
+        if (g_vk_active && !local_viewport_crop) {
             if (di.depth24) {
                 /* 24-bit (FMV): packed RGB lives in the CPU mirror — do NOT
                  * sync_cpu (FBO readback clobbers RGB888). Batch per-scanline
@@ -6443,12 +6696,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
              * hires path if the displayed buffer has no surface yet. */
             int s = gr_scale();
             int sw = (int)present_w * s;
+            int base_x = local_viewport_wide
+                ? gpu_ws_netplay_local_viewport_base_x()
+                : (int)di.display_x;
             int n = gr_render_wide_display(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
-                                           (int)di.display_x, (int)di.display_y, (int)h);
+                                           base_x, (int)di.display_y, (int)h);
             if (n > 0) {
                 active_scale = s;
             } else {
                 wide_present = false;
+                local_viewport_wide = false;
                 present_w = w;
                 pres_entry->path          = PRES_PATH_CANONICAL;
                 pres_entry->wide_fellback = 1;
@@ -6489,9 +6746,19 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
                                          di.display_x);
 
+        int present_px_w = (int)present_w * active_scale;
+        int present_px_h = (int)h * active_scale;
+        if (!local_viewport_wide &&
+            crop_present_to_netplay_local_viewport(sdl_pixel_buf,
+                                                   &present_px_w,
+                                                   present_px_h)) {
+            pin_43 = false;
+            local_viewport_crop_applied = true;
+        }
+
         smooth_60_present(sdl_pixel_buf,
-                          present_w * (uint32_t)active_scale,
-                          h * (uint32_t)active_scale,
+                          (uint32_t)present_px_w,
+                          (uint32_t)present_px_h,
                           !g_gl_active && !g_vk_active && !di.depth24 && !fmv_frame);
 
         /* Frame blending (CRT-persistence masker for 30fps double-buffered
@@ -6516,7 +6783,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 !g_smooth_60fps.load(std::memory_order_acquire)) {
                 static uint32_t prev_buf[640 * 512];
                 static uint32_t prev_px = 0;
-                const uint32_t npx = present_w * h;
+                const uint32_t npx = local_viewport_crop_applied
+                                       ? (uint32_t)(present_px_w * present_px_h)
+                                       : present_w * h;
                 if (npx <= (uint32_t)(640 * 512)) {
                     if (prev_px == npx) {
                         for (uint32_t i = 0; i < npx; i++) {
@@ -6544,6 +6813,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #ifndef PSX_SDL_NO_RENDER
     int src_w = (int)present_w * active_scale;
     int src_h = (int)h * active_scale;
+    if (local_viewport_crop_applied && src_w >= 2)
+        src_w /= 2;
     if (g_gl_active) {
         /* OpenGL present: upload the active display rect and draw a full-screen
          * quad. Either SwapWindow vsync OR the wall-clock pacer owns timing,
@@ -10298,6 +10569,12 @@ int main(int argc, char** argv) {
             g_netplay_disc_expect.required_leadout_lba =
                 gc.netplay_required_leadout_lba;
             g_netplay_disc_expect.required_disc_fp = gc.netplay_required_disc_fp;
+            g_netplay_local_viewport =
+                (gc.netplay_local_viewport == "vertical_split") ? 1 : 0;
+            g_netplay_local_viewport_aspect =
+                (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
+                (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
+                (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -10358,6 +10635,8 @@ int main(int argc, char** argv) {
                 gc.runtime.video_geometry_correction ? 1 : 0;
             g_video_perspective_texturing =
                 gc.runtime.video_perspective_texturing ? 1 : 0;
+            g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
+            g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
@@ -10391,6 +10670,7 @@ int main(int argc, char** argv) {
                                   gc.ws_bg2d_packet_cap);
             /* [widescreen] gte_game_mode — 3D-title gameplay detector (Ape). */
             gpu_ws_set_gte_game_mode(gc.ws_gte_game_mode ? 1 : 0);
+            gpu_ws_set_precise_nclip(gc.ws_precise_nclip ? 1 : 0);
             gpu_ws_set_gameplay_state_gate(
                 gc.ws_gameplay_state_addr,
                 gc.ws_gameplay_state_values.data(),
@@ -10548,6 +10828,10 @@ int main(int argc, char** argv) {
                     if (i >= 2) player_mode[i] = gc.runtime.default_p1_mode;
                 }
             }
+            if (gc.runtime.has_default_p1_device)
+                player_device[0] = gc.runtime.default_p1_device;
+            if (PSX_MAX_PLAYERS >= 2 && gc.runtime.has_default_p2_device)
+                player_device[1] = gc.runtime.default_p2_device;
             for (int i = 0; i < PSX_MAX_PLAYERS; ++i)
                 ctrl_locked_mode[i] = player_mode[i];
             ctrl_lock_mode    = gc.runtime.controller_lock_mode;
@@ -10737,6 +11021,7 @@ int main(int argc, char** argv) {
             g_video_aspect_num = us.aspect_num;
             g_video_aspect_den = us.aspect_den;
         }
+        if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
         if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
@@ -11154,6 +11439,7 @@ int main(int argc, char** argv) {
             seed.has_frame_interpolation_fps = true;
             seed.aspect_num = g_video_aspect_num;
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
+            seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
             seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
             seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
@@ -11259,7 +11545,7 @@ int main(int argc, char** argv) {
             ls.widescreen     = (seed.aspect_num == 16 && seed.aspect_den == 9) ? 1 : 0;
             ls.widescreen_hud = ls.widescreen;
             ls.enable_audio   = 1;
-            ls.audio_freq     = 44100;
+            ls.audio_freq     = seed.audio_freq;
             ls.volume         = host_volume_get();
             {
                 const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
@@ -11547,6 +11833,7 @@ int main(int argc, char** argv) {
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
+                seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 seed.has_rewind_depth      = true;
@@ -11758,6 +12045,7 @@ int main(int argc, char** argv) {
                 g_frame_interpolation_fps = seed.frame_interpolation_fps;
                 g_video_aspect_num = seed.aspect_num;
                 g_video_aspect_den = seed.aspect_den;
+                g_audio_freq      = seed.audio_freq;
                 g_audio_spu_hq    = seed.spu_hq;
                 g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
                     ? seed.rewind_depth : 50;
@@ -11875,6 +12163,7 @@ int main(int argc, char** argv) {
         g_turbo_loads_enabled = 0;
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     mod_runtime_activate_plugins();
+    apply_netplay_local_viewport_aspect(net_cfg.enabled);
     if (g_mod_controller_mode_override[0] >= 0)
         player_mode[0] = g_mod_controller_mode_override[0];
     if (g_mod_controller_mode_override[1] >= 0)
@@ -12089,8 +12378,20 @@ session_reboot:
     /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
      * with both off every setter below leaves the tracking caches disabled and
      * the draw path is the faithful integer one, unchanged. */
+    /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
+     * corrections from process start so free-running (headless) boots can be
+     * measured from the first projected vertex — a TCP toggle always arrives
+     * after the interesting window. '0' = off, anything else = on. */
+    if (const char* e = std::getenv("PSX_GEOMETRY_CORRECTION"))
+        g_video_geometry_correction = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PERSPECTIVE_TEXTURING"))
+        g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
+        g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
+    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
+    pgxp_set_tolerance(g_video_pgxp_tolerance);
     if (g_video_geometry_correction || g_video_perspective_texturing) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
@@ -12331,7 +12632,7 @@ session_reboot:
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
         PsxSdlAudioSpec want = {};
         PsxSdlAudioSpec have = {};
-        want.freq = 44100;
+        want.freq = g_audio_freq;
         want.format = AUDIO_S16SYS;
         want.channels = 2;
         want.samples = 1024;
@@ -12633,6 +12934,7 @@ session_reboot:
                 nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
             return 1;
         }
+        apply_netplay_local_viewport_aspect(net_cfg.enabled);
         std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
                     "force_turn=%d bind=%s peer=%s session=%u\n",
                     psx_netplay_transport_name(),
@@ -12757,14 +13059,14 @@ session_reboot:
         psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_set_interval((uint32_t)g_rewind_interval);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
-        /* Headless / agent load: PSX_LOAD_SLOT=N stages F1..F12 load (0..11)
+        /* Headless / agent load: PSX_LOAD_SLOT=N stages slot load (0..11)
          * at the next safe block boundary after boot. */
         if (const char *ls = std::getenv("PSX_LOAD_SLOT")) {
             int slot = atoi(ls);
             if (slot >= 0 && slot < 12) {
                 if (psx_netplay_active()) {
                     std::fprintf(stdout,
-                        "psxrecomp: PSX_LOAD_SLOT=%d ignored (use host F1–F12 after netplay starts)\n",
+                        "psxrecomp: PSX_LOAD_SLOT=%d ignored (use the save-state menu after netplay starts)\n",
                         slot);
                 } else if (savestate_request_load(slot)) {
                     std::fprintf(stdout, "psxrecomp: PSX_LOAD_SLOT=%d staged\n", slot);
@@ -13087,7 +13389,7 @@ soft_return_lobby:
             (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.widescreen_hud = ls.widescreen;
         ls.enable_audio = 1;
-        ls.audio_freq = 44100;
+        ls.audio_freq = g_audio_freq;
         ls.volume = host_volume_get();
         ls.window_width = g_video_win_w;
         ls.renderer = g_video_renderer;
@@ -13358,6 +13660,8 @@ soft_return_lobby:
                 us.has_frame_interpolation = true;
                 us.frame_interpolation_fps = ls.frame_interp_fps;
                 us.has_frame_interpolation_fps = true;
+                us.audio_freq = ls.audio_freq;
+                us.has_audio_freq = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
                 us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
@@ -13416,6 +13720,7 @@ soft_return_lobby:
             g_fullscreen = ls.fullscreen != 0;
             g_frame_interpolation = ls.frame_interp ? 1 : 0;
             g_frame_interpolation_fps = ls.frame_interp_fps;
+            g_audio_freq = ls.audio_freq;
             g_audio_spu_hq = ls.spu_hq != 0;
             if (ls.rewind_depth > 0) {
                 g_rewind_depth = ls.rewind_depth;
@@ -13502,6 +13807,7 @@ soft_return_lobby:
                     return 1;
                 }
             }
+            apply_netplay_local_viewport_aspect(net_cfg.enabled);
             std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
                         net_cfg.enabled ? 1 : 0);
             std::fflush(stdout);

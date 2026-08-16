@@ -122,13 +122,17 @@ static void test_user_settings_read() {
     fs::path p = write_temp("psxrecomp_pgxp_settings.toml",
         "[video]\n"
         "geometry_correction = true\n"
-        "perspective_texturing = false\n");
+        "perspective_texturing = false\n"
+        "[audio]\n"
+        "frequency = 48000\n");
     auto us = PSXRecompV4::load_user_settings(p);
     check(!us.parse_error, "settings.toml parses");
     check(us.has_geometry_correction && us.geometry_correction,
           "settings.toml geometry_correction = true read");
     check(us.has_perspective_texturing && !us.perspective_texturing,
           "settings.toml perspective_texturing = false read (explicit off)");
+    check(us.has_audio_freq && us.audio_freq == 48000,
+          "settings.toml audio frequency read");
     fs::remove(p);
 }
 
@@ -150,6 +154,7 @@ static void test_user_settings_round_trip() {
     PSXRecompV4::UserSettings out;
     out.geometry_correction = true;   out.has_geometry_correction = true;
     out.perspective_texturing = true; out.has_perspective_texturing = true;
+    out.audio_freq = 48000;           out.has_audio_freq = true;
 
     fs::path p = fs::temp_directory_path() / "psxrecomp_pgxp_roundtrip.toml";
     check(PSXRecompV4::save_user_settings(p, out), "save_user_settings writes");
@@ -160,6 +165,8 @@ static void test_user_settings_round_trip() {
           "geometry_correction survives a save/load round trip");
     check(back.has_perspective_texturing && back.perspective_texturing,
           "perspective_texturing survives a save/load round trip");
+    check(back.has_audio_freq && back.audio_freq == 48000,
+          "audio frequency survives a save/load round trip");
     fs::remove(p);
 }
 

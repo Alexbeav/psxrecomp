@@ -38,10 +38,11 @@ extern "C" {
 #define BOOT_STATE_MAGIC   0x50535842u  /* "PSXB" */
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
- * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed). */
-#define BOOT_STATE_VERSION 4u
-/* Older readers reject v4; load still accepts v3 uncompressed blobs. */
-#define BOOT_STATE_VERSION_MIN_READ 3u
+ * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
+ * v5 = v4 + CD-ROM Sub-Q replacement state. */
+#define BOOT_STATE_VERSION 5u
+/* v5 intentionally breaks older savestates after the CD-ROM wire grew. */
+#define BOOT_STATE_VERSION_MIN_READ 5u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 

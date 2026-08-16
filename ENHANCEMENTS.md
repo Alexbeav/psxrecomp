@@ -766,3 +766,104 @@ defect, which is the whole finding of G1.1–G1.8.
 
 The withdrawn row, the full post-mortem, the mechanism that would fix it, and the
 re-test protocol are preserved on `park/pgxp-geometry-correction` (see its G1.9).
+
+### G1.10 — PGXP value-propagation engine LANDED, phases 0+1 (2026-08-15)
+
+The G1.2/G1.3 mechanism — precision travelling WITH the data — now exists
+(`feat/pgxp-dataflow`, tracked as `beads-eio.3.48`). **Clean-room**: the
+vendored `duckstation/` tree is CC BY-NC-ND (NoDerivatives) and `beetle-psx/`
+is GPL, both incompatible with this project's PolyForm Noncommercial license,
+so NO code was ported from either; they remain black-box behavioral oracles
+only. The engine implements the publicly documented technique from psx-spx +
+our own G1 analysis.
+
+**What exists now:**
+
+- `runtime/src/pgxp.cpp` + `runtime/include/pgxp.h`: per-word RAM+scratchpad
+  shadows (~10 MB, lazily allocated, fail-closed), per-GPR (+HI/LO) and
+  per-GTE-data-reg shadows. Each `PGXPValue` records the sub-pixel 16.16
+  screen X/Y, the projected SZ depth, per-half validity flags, and the exact
+  guest word it describes. **The one safety invariant: a shadow is only
+  believed after validating that word against reality.** Overwrite-and-
+  validate only — no side-effect modelling, so DMA/memcpy/untracked writers
+  need no hooks at all (their stale shadows fail validation at use). The
+  plain-store `gte_precision_invalidate_word` calls in memory.c are removed
+  as redundant under this model (a small store-path win).
+- Hook funnel (`runtime/include/pgxp_hooks.h`): 5 entry points
+  (`psx_pgxp_load/store/alu/muldiv/cop2`) taking the raw instruction word.
+  Generated code will call them via `PGXP_*()` macros that expand to nothing
+  unless compiled with `-DPSX_PGXP=1` — the G1.3 codegen-time gate, as a
+  preprocessor define over ONE generated tree (no flavour drift, base objects
+  byte-identical). `OverlayCallbacks` gained an appended-last `PGXPHooks*`
+  table (NULL-tolerant); the ABI bump arrives with the Phase-2 emitter change.
+- Both interpreters (`dirty_ram_interp.c`, `psx_interpreter.c`) call the
+  hooks directly on loads/stores/COP2 transfers and the precision-carrying
+  arithmetic (moves, add/sub, or-merge, 16-bit shifts, LUI, HI/LO). Ops that
+  merely destroy precision are deliberately NOT hooked — validation already
+  drops their stale shadows.
+- `pgxp_cpu_mode` (tier-2 arithmetic propagation, default off, matching the
+  references' default) and `pgxp_tolerance` (sub-pixel clamp, default off)
+  are new `[video]` keys and live-tunable via the TCP `pgxp` verb, which also
+  live-toggles `geometry`/`texture` for same-scene A/B (the G1.6 method rule
+  no longer needs a restart between arms).
+- GPU consumption is now PER-VERTEX (`pgxp_get_precise_vertex`): dataflow
+  shadow first (validated against the actual packet word), the G1.4 exact
+  ambiguity-gated position cache second (never carries depth), native
+  integers last. Two safeguards on every precise vertex: truncation agreement
+  (integer part must equal the native 11-bit parse) and the tolerance clamp.
+  Mixed precise/native triangles are correct — a native vertex sits exactly
+  where the uncorrected pipeline put it, bounding any seam to < 1px of
+  sub-pixel fraction (the G1.1 cracks came from wrong-vertex substitution and
+  all-or-nothing triangles, both gone). Geometry and perspective UVs now
+  share one provenance source and compose per triangle.
+- Census: `geom_correction` grew a `pgxp` object (dataflow_hit /
+  fallback_hit / native / value_mismatch / trunc_reject / tolerance_reject /
+  w_valid). The G1.9 gate now reads: dataflow-hit share must be dramatically
+  above the 5.2% position-cache ceiling before any launcher surface returns.
+- Tests: `pgxp_test` (roundtrips, half-word semantics, validate-on-read,
+  DMA-overwrite rejection, repack arithmetic, suppression bracket,
+  safeguards) + `gte_register_access_test` updated to the precise
+  invalidation contract. 33/33 enabled runtime tests green.
+
+**Not yet (Phase 2+):** emitter macros at the ~47 sites, the `-DPSX_PGXP`
+dual link targets + flavor-namespaced shard caches + ABI bump, BIOS regen,
+and the Ape/Crash/Tomba2 census + `screenshot_hires` A/B campaign. Until the
+emitter lands, compiled code feeds the engine only through the v14 swc2
+sites, so dataflow coverage on a running title comes from interpreted code
+paths; the full-coverage census gate is a Phase-2/3 measurement.
+
+Incidental fixes while landing this: the per-target `psx_game_version.txt`
+`file(GENERATE)` collision that broke every fresh single-config configure
+(runtime.cmake once-only stamp), and `overlay_capture_retry_test` not
+compiling under the SDL3 default (SDL_SetMainReady gone + inverted SDL_Init
+check — it now uses `psx_sdl_init`).
+
+**First real-title census (Ape Escape, 2026-08-15) — the G1.9 gate is
+PASSED.** Worktree build against this branch (`_wt-ape-pgxp`,
+`-DPSX_PGXP_VARIANT=ON -DPSX_DEBUG_TOOLS=ON`, game C regenerated), memory-mode
+only (`pgxp_cpu_mode` off), boot → title → attract, per-10s windows:
+**79–90% dataflow hits** (vs the 5.2% position-cache ceiling of G1.4),
+fallback ≤0.4%, `value_mismatch` 0, `trunc_reject` ~0, and every dataflow hit
+carried a usable depth. The residual native share is 2D HUD/sprite content,
+which is exactly what must stay native. Still to run before any ship surface:
+the windowed `screenshot_hires` off/on A/B (headless has NO hi-res mirror —
+`scale:1` fallback, the same blind-instrument trap G1.5 documented), on Ape +
+Crash with Tomba 2 as the 2D negative control; the hook-overhead FPS measure
+(pgxp build, feature off, vs base); and pgxp-flavour (`_f2`) overlay-shard
+autocompile validation. Validation-build notes: title Release builds default
+`PSX_DEBUG_TOOLS=OFF` (no TCP), and a title launched without `--game` binds
+the framework default port 4370.
+
+**Interactive visual isolation, USER-VALIDATED (Ape Escape, in-game,
+2026-08-15).** Same scene, one toggle at a time, player observing live:
+OFF = baseline vertex jiggle; geometry ON unclamped = jiggle largely gone but
+sparse hairline background-bleed seams (a <1px disagreement along a long
+shared edge between a corrected triangle and an uncorrected neighbour — the
+THPS2 line class, NOT wild vertices; both reported artifacts vanished with
+the toggle off); geometry ON with `pgxp_tolerance = 0.5` = **seams gone**,
+only sub-half-pixel misalignment remains. 0.5 is therefore the shipped
+default (config_loader.h), live-tunable via the `pgxp` TCP verb. Known
+tooling defect found on the way: `screenshot_hires` produces a tiled/black
+PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
+the census + the player's own captures carried the session; fix it before
+the formal Crash/Tomba2 A/B.

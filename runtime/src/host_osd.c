@@ -130,6 +130,10 @@ static Uint32   s_expire_ms;
 static int      s_active;
 static int      s_img_dirty = 1;
 
+static char     s_status_msg[OSD_MAX_CHARS];
+static int      s_status_active;
+static int      s_status_dirty = 1;
+
 static int      s_volume = 100;          /* host master 0..100 */
 static int      s_vol_pct = 100;         /* last shown bar fill */
 static Uint32   s_vol_expire_ms;
@@ -197,8 +201,8 @@ static int vol_visible(void) {
     return 1;
 }
 
-static void rasterize_text(void) {
-    int n = (int)strlen(s_msg);
+static void rasterize_text(const char *msg) {
+    int n = (int)strlen(msg);
     if (n > OSD_MAX_CHARS) n = OSD_MAX_CHARS;
     s_img_w = (OSD_PAD_X * 2 + n * OSD_GLYPH_W) * OSD_SCALE;
     s_img_h = (OSD_PAD_Y * 2 + OSD_GLYPH_H) * OSD_SCALE;
@@ -211,7 +215,7 @@ static void rasterize_text(void) {
         s_img[i] = 0xFF202020u;
 
     for (int ci = 0; ci < n; ci++) {
-        unsigned char ch = (unsigned char)s_msg[ci];
+        unsigned char ch = (unsigned char)msg[ci];
         if (ch < 32 || ch > 126) ch = '?';
         const uint8_t *g = FONT8X8[ch - 32];
         for (int row = 0; row < OSD_GLYPH_H; row++) {
@@ -338,6 +342,25 @@ void host_osd_push(const char *msg, int duration_ms) {
 #endif
 }
 
+void host_osd_set_status(const char *msg) {
+#if !HOST_OSD_VISUAL
+    (void)msg;
+    return;
+#else
+    if (!msg || !msg[0]) {
+        if (s_status_active) s_needs_clear = 1;
+        s_status_msg[0] = '\0';
+        s_status_active = 0;
+        s_status_dirty = 1;
+        return;
+    }
+    snprintf(s_status_msg, sizeof(s_status_msg), "%s", msg);
+    s_status_active = 1;
+    s_status_dirty = 1;
+    s_needs_clear = 0;
+#endif
+}
+
 void host_osd_show_volume(int percent, int duration_ms) {
 #if !HOST_OSD_VISUAL
     (void)percent;
@@ -375,7 +398,7 @@ int host_osd_needs_present(void) {
 #if !HOST_OSD_VISUAL
     return 0;
 #else
-    if (msg_visible() || vol_visible()) return 1;
+    if (msg_visible() || s_status_active || vol_visible()) return 1;
     return s_needs_clear;
 #endif
 }
@@ -387,13 +410,21 @@ int host_osd_image(const uint32_t **pixels, int *w, int *h) {
     if (h) *h = 0;
     return 0;
 #else
-    if (!msg_visible()) {
+    const int show_msg = msg_visible();
+    if (!show_msg && !s_status_active) {
         if (pixels) *pixels = NULL;
         if (w) *w = 0;
         if (h) *h = 0;
         return 0;
     }
-    if (s_img_dirty) rasterize_text();
+    if (show_msg) {
+        if (s_img_dirty) rasterize_text(s_msg);
+    } else {
+        if (s_status_dirty || s_img_dirty) {
+            rasterize_text(s_status_msg);
+            s_status_dirty = 0;
+        }
+    }
     if (pixels) *pixels = s_img;
     if (w) *w = s_img_w;
     if (h) *h = s_img_h;
@@ -426,7 +457,7 @@ void host_osd_present_done(void) {
 #if !HOST_OSD_VISUAL
     return;
 #else
-    if (!s_active && !s_vol_active) s_needs_clear = 0;
+    if (!s_active && !s_status_active && !s_vol_active) s_needs_clear = 0;
 #endif
 }
 

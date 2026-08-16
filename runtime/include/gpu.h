@@ -75,6 +75,11 @@ typedef struct {
     int32_t offset_x, offset_y;
 } GpuDrawArea;
 void gpu_get_draw_area(GpuDrawArea* out);
+/* Non-zero when the frame that just reached vblank used two side-by-side draw
+ * areas. Presentation-only helpers use this to expand a local split-screen
+ * viewport without changing the underlying framebuffer or netplay hashes. */
+int  gpu_last_frame_vertical_split_screen(void);
+void gpu_vertical_split_debug(int *active, int *left_age, int *right_age);
 uint16_t gpu_vram_peek(int x, int y);
 
 /* Shaded quad vertex capture (Phase 4.5 debug). */
@@ -207,6 +212,10 @@ void psx_ws_sprite_tag(struct CPUState* cpu);
  * by this; 0 when native-wide is inactive). */
 int  ws_native_wide_active(void);
 int  ws_nw_extra(void);
+int  ws_nw_present_width(void);
+void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
+int  gpu_ws_netplay_local_viewport_base_x(void);
+int  gpu_ws_netplay_local_viewport_width(void);
 /* True when the current frame must present at native 4:3 (FMV video or a
  * full-2D menu/title screen), so the squash is suppressed and content drawn
  * pixel-native. The present path uses the same predicate to pillarbox. */
@@ -310,12 +319,14 @@ int  psx_ws_auto_cull_on(void);
  * tracking it needs, so a polygon only qualifies when every position word in
  * its DMA packet was written by a GTE projection store. Default off. */
 void gpu_texture_correction_set(int enabled);
+int gpu_texture_correction_enabled(void);
 /* Triangles drawn with perspective-correct UVs since startup. */
 uint32_t gpu_texture_correction_hits(void);
 /* GTE-activity gameplay detector ([widescreen] gte_game_mode) for 3D titles
  * with no sprite-tag helper: gte.cpp notes every RTPS/RTPT projection; a frame
  * that projects enough vertices is stamped as gameplay. */
 void gpu_ws_set_gte_game_mode(int on);
+void gpu_ws_set_precise_nclip(int on);
 void psx_ws_note_gte_project(int nverts);
 /* Optional authoritative gameplay-state gate. When configured, it replaces
  * heuristic gameplay classification for native-wide presentation. */

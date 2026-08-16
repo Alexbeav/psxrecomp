@@ -1,12 +1,14 @@
 #include "gte.h"
 #include "cpu_state.h"
 #include "nd_intro_ot.h"
+#include "pgxp.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
 extern "C" uint32_t psx_read_word(uint32_t addr);
+extern "C" int gpu_ws_precise_nclip_enabled(void);
 
 namespace PSXRecomp {
 namespace GTE {
@@ -222,37 +224,15 @@ static uint32_t s_geom_lookups = 0;      /* lookups attempted                  *
 static uint32_t s_geom_miss_unrec = 0;   /* nothing was ever recorded here     */
 static uint32_t s_geom_miss_ambig = 0;   /* recorded, but not unambiguously    */
 
-/* Exact GTE projection provenance for perspective texture correction. The
- * recompiler/interpreters call gte_precision_store after SWC2 writes an SXY
- * register into guest RAM. GPU DMA later supplies that exact RAM address, so
- * depth lookup follows the packet rather than guessing from rounded X/Y. */
-struct PreciseProjection {
-    uint32_t packed;
-    int32_t x16, y16;
-    uint16_t z;
-    uint8_t valid;
-};
-static PreciseProjection s_precise_sxy[4] = {};
-
-#define PRECISION_STORE_SIZE 65536u
-struct PrecisionStoreEntry {
-    uint32_t addr;
-    PreciseProjection projection;
-    uint32_t generation;
-};
-static PrecisionStoreEntry s_precision_store[PRECISION_STORE_SIZE];
-static uint32_t s_precision_generation = 1;
-static int s_precision_tracking = 0;
-static PreciseProjection s_speculative_saved_sxy[4];
+/* Exact GTE projection provenance now lives in the PGXP value-propagation
+ * engine (pgxp.cpp): per-word RAM/scratchpad shadows plus per-GPR and per-GTE-
+ * register shadows, validated on read (ENHANCEMENTS.md G1.2/G1.3). The
+ * gte_precision_* entry points below are kept as the stable emit/ABI surface
+ * (v14 swc2 sites, tests) and forward into that engine. The hashed
+ * s_precision_store table and the s_precise_sxy FIFO it fed are retired —
+ * the GTE register shadows ARE the FIFO now. */
 static uint32_t s_speculative_depth = 0;
 static int s_speculative_timeline_invalidated = 0;
-
-static void gte_precision_generation_advance(void) {
-    if (++s_precision_generation == 0) {
-        std::memset(s_precision_store, 0, sizeof(s_precision_store));
-        s_precision_generation = 1;
-    }
-}
 
 static void gte_geom_generation_advance(void) {
     if (++s_geom_generation == 0) {
@@ -263,95 +243,63 @@ static void gte_geom_generation_advance(void) {
 }
 
 extern "C" void gte_precision_timeline_invalidate(void) {
-    for (int i = 0; i < 4; ++i) s_precise_sxy[i].valid = 0;
     /* Raw machine-state restore is authoritative even if host polling reached
      * it during a speculative validation pass. Defer the generation advance
-     * until the outer transaction ends so old provenance cannot be restored. */
+     * until the outer transaction ends so old provenance cannot be restored.
+     * (pgxp_invalidate_all defers the same way behind its suppress bracket.) */
+    pgxp_invalidate_all();
     if (s_speculative_depth != 0) {
         s_speculative_timeline_invalidated = 1;
         return;
     }
-    gte_precision_generation_advance();
     gte_geom_generation_advance();
 }
 
 extern "C" void gte_precision_speculative_begin(void) {
-    if (s_speculative_depth++ == 0) {
-        std::memcpy(s_speculative_saved_sxy, s_precise_sxy,
-                    sizeof(s_precise_sxy));
+    if (s_speculative_depth++ == 0)
         s_speculative_timeline_invalidated = 0;
-    }
+    /* The speculative pass runs real GTE commands and hooks on state that is
+     * rolled back afterwards: suppress all shadow recording so the shadows
+     * still describe the restored timeline when the bracket closes. */
+    pgxp_suppress_begin();
 }
 
 extern "C" void gte_precision_speculative_end(void) {
     if (s_speculative_depth == 0) return;
+    pgxp_suppress_end();
     if (--s_speculative_depth == 0) {
         if (s_speculative_timeline_invalidated) {
-            gte_precision_generation_advance();
             gte_geom_generation_advance();
             s_speculative_timeline_invalidated = 0;
-        } else {
-            std::memcpy(s_precise_sxy, s_speculative_saved_sxy,
-                        sizeof(s_precise_sxy));
         }
     }
 }
 
-static inline uint32_t precision_hash(uint32_t addr) {
-    addr >>= 2;
-    addr ^= addr >> 11;
-    return (addr * 2654435761u) & (PRECISION_STORE_SIZE - 1u);
-}
-
-static inline int precision_ram_address(uint32_t addr, uint32_t *physical) {
-    uint32_t mapped = addr & 0x1FFFFFFFu;
-    if (mapped >= 0x00800000u) return 0;
-    *physical = mapped & 0x1FFFFCu;
-    return 1;
-}
-
 extern "C" void gte_precision_tracking_set(int enabled) {
-    s_precision_tracking = enabled ? 1 : 0;
-    gte_precision_generation_advance();
+    pgxp_set_enabled(enabled);
 }
 
+/* v14 ABI emit surface: every swc2 site (all backends, overlay DLLs) calls
+ * this. The pgxp engine copies the GTE register shadow to the RAM shadow;
+ * the GPU-side lookup validates against the actual packet word, so a stale
+ * register shadow can never be believed. */
 extern "C" void gte_precision_store_word(uint32_t addr, uint8_t reg) {
-    if (s_speculative_depth != 0 || s_gte_replay_sandbox || !s_precision_tracking ||
-        reg < 12 || reg > 15) return;
-    int index = reg == 15 ? 2 : (int)reg - 12;
-    const PreciseProjection &projection = s_precise_sxy[index];
-    if (!projection.valid) return;
-    uint32_t physical;
-    if (!precision_ram_address(addr, &physical)) return;
-    PrecisionStoreEntry &entry = s_precision_store[precision_hash(physical)];
-    entry.addr = physical;
-    entry.projection = projection;
-    entry.generation = s_precision_generation;
+    if (s_gte_replay_sandbox || reg < 12 || reg > 15) return;
+    pgxp_store_gte_reg(addr, reg);
 }
 
+/* Retired: plain-store invalidation is unnecessary under validate-on-read
+ * (the GPU compares the tracked word against the actual packet word). Kept
+ * as a no-op for link compatibility. */
 extern "C" void gte_precision_invalidate_word(uint32_t addr) {
-    if (s_speculative_depth != 0 || s_gte_replay_sandbox || !s_precision_tracking) return;
-    uint32_t physical;
-    if (!precision_ram_address(addr, &physical)) return;
-    PrecisionStoreEntry &entry = s_precision_store[precision_hash(physical)];
-    if (entry.generation == s_precision_generation && entry.addr == physical)
-        entry.generation = 0;
+    (void)addr;
 }
 
 extern "C" int gte_precision_load_word(uint32_t addr, uint32_t packed,
                                         int32_t *x16, int32_t *y16,
                                         uint16_t *z) {
-    if (s_speculative_depth != 0 || !s_precision_tracking) return 0;
-    uint32_t physical;
-    if (!precision_ram_address(addr, &physical)) return 0;
-    const PrecisionStoreEntry &entry = s_precision_store[precision_hash(physical)];
-    if (entry.generation != s_precision_generation || entry.addr != physical ||
-        !entry.projection.valid || entry.projection.packed != packed)
-        return 0;
-    if (x16) *x16 = entry.projection.x16;
-    if (y16) *y16 = entry.projection.y16;
-    if (z) *z = entry.projection.z;
-    return entry.projection.z != 0;
+    if (s_speculative_depth != 0) return 0;
+    return pgxp_load_precise_word(addr, packed, x16, y16, z);
 }
 
 /* Exact slot for a packed SXY pair, or -1 if it is outside the representable
@@ -940,16 +888,9 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     int64_t sx = sx16 >> 16;
     int64_t sy = sy16 >> 16;
     gte->push_sxy(sx, sy);
-    if (!s_gte_replay_sandbox) {
-        s_precise_sxy[0] = s_precise_sxy[1];
-        s_precise_sxy[1] = s_precise_sxy[2];
-        s_precise_sxy[2].packed = (uint32_t)gte->SXY[2];
-        s_precise_sxy[2].x16 = (int32_t)sx16;
-        s_precise_sxy[2].y16 = (int32_t)sy16;
-        s_precise_sxy[2].z = gte->SZ[3];
-        s_precise_sxy[2].valid = gte->SZ[3] != 0;
-        s_precise_sxy[3] = s_precise_sxy[2];
-    }
+    if (!s_gte_replay_sandbox)
+        pgxp_gte_push_sxy((int32_t)sx16, (int32_t)sy16, gte->SZ[3],
+                          (uint32_t)gte->SXY[2]);
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
 
     // Step 5: Depth cueing (MAC0/IR0) — only for last vertex of RTPT or RTPS
@@ -982,12 +923,24 @@ void gte_rtpt(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 void gte_nclip(GTEState* gte, uint32_t instr) {
     gte->FLAG = 0;
-    int16_t sx0 = static_cast<int16_t>(gte->SXY[0] & 0xFFFF);
-    int16_t sy0 = static_cast<int16_t>(gte->SXY[0] >> 16);
-    int16_t sx1 = static_cast<int16_t>(gte->SXY[1] & 0xFFFF);
-    int16_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
-    int16_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
-    int16_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
+    int32_t sx0 = static_cast<int16_t>(gte->SXY[0] & 0xFFFF);
+    int32_t sy0 = static_cast<int16_t>(gte->SXY[0] >> 16);
+    int32_t sx1 = static_cast<int16_t>(gte->SXY[1] & 0xFFFF);
+    int32_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
+    int32_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
+    int32_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
+    int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0, px2 = 0, py2 = 0;
+    if (gpu_ws_precise_nclip_enabled() &&
+        pgxp_get_gte_sxy(0, &px0, &py0) &&
+        pgxp_get_gte_sxy(1, &px1, &py1) &&
+        pgxp_get_gte_sxy(2, &px2, &py2)) {
+        sx0 = px0 >> 16;
+        sy0 = py0 >> 16;
+        sx1 = px1 >> 16;
+        sy1 = py1 >> 16;
+        sx2 = px2 >> 16;
+        sy2 = py2 >> 16;
+    }
     int64_t mac0 = (int64_t)sx0 * (sy1 - sy2) +
                    (int64_t)sx1 * (sy2 - sy0) +
                    (int64_t)sx2 * (sy0 - sy1);
@@ -2054,24 +2007,32 @@ extern "C" void gte_write_data(CPUState* cpu, uint8_t reg, uint32_t val) {
                 cpu->gte_data[29] = packed;
             }
             break;
+        /* Guest writes to the SXY FIFO drop the affected register shadows:
+         * we never model FIFO side effects on shadows — the shifted regs 12/13
+         * now describe words their shadows no longer match, and validation
+         * drops those on next use. */
         case 12: case 13:
             cpu->gte_data[reg] = val;
             if (!PSXRecomp::GTE::s_gte_replay_sandbox)
-                for (int i = 0; i < 4; ++i) PSXRecomp::GTE::s_precise_sxy[i].valid = 0;
+                pgxp_gte_reg_written(reg, val);
             break;
         case 14:
             cpu->gte_data[14] = val;
             cpu->gte_data[15] = val;
-            if (!PSXRecomp::GTE::s_gte_replay_sandbox)
-                for (int i = 0; i < 4; ++i) PSXRecomp::GTE::s_precise_sxy[i].valid = 0;
+            if (!PSXRecomp::GTE::s_gte_replay_sandbox) {
+                pgxp_gte_reg_written(14, val);
+                pgxp_gte_reg_written(15, val);
+            }
             break;
         case 15:
             cpu->gte_data[12] = cpu->gte_data[13];
             cpu->gte_data[13] = cpu->gte_data[14];
             cpu->gte_data[14] = val;
             cpu->gte_data[15] = val;
-            if (!PSXRecomp::GTE::s_gte_replay_sandbox)
-                for (int i = 0; i < 4; ++i) PSXRecomp::GTE::s_precise_sxy[i].valid = 0;
+            if (!PSXRecomp::GTE::s_gte_replay_sandbox) {
+                pgxp_gte_reg_written(14, val);
+                pgxp_gte_reg_written(15, val);
+            }
             break;
         case 23:
             cpu->gte_data[23] = 0;
@@ -2134,26 +2095,31 @@ extern "C" void gte_canonicalize_cpu_state(CPUState* cpu) {
 }
 
 #ifdef PSX_GTE_REGISTER_TEST
+/* The precise-projection FIFO is the pgxp GTE register shadow (regs 12..15);
+ * these keep the historical test entry points working over it. */
 extern "C" void gte_test_set_precise_valid_mask(uint32_t mask) {
     for (uint32_t i = 0; i < 4; ++i)
-        PSXRecomp::GTE::s_precise_sxy[i].valid = (mask >> i) & 1u;
+        pgxp_test_seed_gte_sxy(i, 0, 0, 0, 1, (mask >> i) & 1u);
 }
 
 extern "C" uint32_t gte_test_get_precise_valid_mask(void) {
     uint32_t mask = 0;
-    for (uint32_t i = 0; i < 4; ++i)
-        mask |= (PSXRecomp::GTE::s_precise_sxy[i].valid ? 1u : 0u) << i;
+    for (uint32_t i = 0; i < 4; ++i) {
+        uint8_t valid = 0;
+        pgxp_test_get_gte_sxy(i, nullptr, nullptr, nullptr, nullptr, &valid);
+        mask |= (valid ? 1u : 0u) << i;
+    }
     return mask;
 }
 
 extern "C" void gte_test_set_timeline_generations(uint32_t precision,
                                                     uint32_t geometry) {
-    PSXRecomp::GTE::s_precision_generation = precision;
+    pgxp_test_set_generation(precision);
     PSXRecomp::GTE::s_geom_generation = geometry;
 }
 
 extern "C" uint32_t gte_test_get_precision_generation(void) {
-    return PSXRecomp::GTE::s_precision_generation;
+    return pgxp_test_generation();
 }
 
 extern "C" uint32_t gte_test_get_geometry_generation(void) {
@@ -2165,13 +2131,7 @@ extern "C" void gte_test_seed_precise_projection(uint32_t index,
                                                     int32_t x16,
                                                     int32_t y16,
                                                     uint16_t z) {
-    if (index >= 4) return;
-    auto &p = PSXRecomp::GTE::s_precise_sxy[index];
-    p.packed = packed;
-    p.x16 = x16;
-    p.y16 = y16;
-    p.z = z;
-    p.valid = 1;
+    pgxp_test_seed_gte_sxy(index, packed, x16, y16, z, 1);
 }
 
 extern "C" void gte_test_get_precise_projection(uint32_t index,
@@ -2180,13 +2140,7 @@ extern "C" void gte_test_get_precise_projection(uint32_t index,
                                                   int32_t* y16,
                                                   uint16_t* z,
                                                   uint8_t* valid) {
-    if (index >= 4) return;
-    const auto &p = PSXRecomp::GTE::s_precise_sxy[index];
-    if (packed) *packed = p.packed;
-    if (x16) *x16 = p.x16;
-    if (y16) *y16 = p.y16;
-    if (z) *z = p.z;
-    if (valid) *valid = p.valid;
+    pgxp_test_get_gte_sxy(index, packed, x16, y16, z, valid);
 }
 
 extern "C" void gte_test_seed_geometry(uint32_t packed, int32_t x16,

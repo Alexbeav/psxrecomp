@@ -387,6 +387,24 @@ struct RuntimeConfig {
     // [video] perspective_texturing = true.
     bool                  video_perspective_texturing = false;
 
+    // pgxp_cpu_mode: propagate sub-pixel precision through CPU arithmetic as
+    // well as memory moves (the PGXP engine's tier-2 hooks). Off by default —
+    // the same default as the reference implementations — because some games
+    // deliberately rely on integer truncation in their own math; value
+    // validation keeps it SAFE either way, this only trades coverage.
+    // Meaningful only in a pgxp-flavour build; live-tunable over TCP.
+    bool                  video_pgxp_cpu_mode = false;
+
+    // pgxp_tolerance: reject a corrected vertex whose sub-pixel offset from
+    // the native integer position exceeds this many pixels (the truncation-
+    // agreement check already bounds offsets to < 1px; this narrows them
+    // further). Default 0.5 — user-validated on Ape Escape (2026-08-15):
+    // unclamped, sparse hairline background-bleed seams appear where a
+    // corrected triangle borders an uncorrected one; at 0.5 the seams are
+    // gone and only sub-half-pixel misalignment remains. Negative disables
+    // the clamp. Live-tunable over TCP (pgxp verb).
+    double                video_pgxp_tolerance = 0.5;
+
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.
@@ -496,6 +514,15 @@ struct RuntimeConfig {
     bool                  has_default_mode = false;
     int                   default_p1_mode  = PAD_MODE_ANALOG;
     int                   default_p2_mode  = PAD_MODE_ANALOG;
+
+    // p1_device / p2_device: optional per-game default input sources for
+    // fresh settings and launcher-less boots. Same vocabulary as settings.toml:
+    // "none", "keyboard", "auto"/"gamepad"/"controller", or an SDL GUID.
+    // Per-install settings.toml still overrides these defaults.
+    bool                  has_default_p1_device = false;
+    bool                  has_default_p2_device = false;
+    std::string           default_p1_device;
+    std::string           default_p2_device;
 
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
     // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
@@ -676,6 +703,15 @@ struct GameConfig {
     bool                  has_netplay_required_leadout = false;
     uint32_t              netplay_required_leadout_lba = 0;
     std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+    // local_viewport = "vertical_split": while real netplay is active, crop
+    // presentation to this peer's left/right split-screen half. This is a
+    // presentation-only helper for titles that still render native split-screen
+    // in netplay; unset keeps every peer seeing the full framebuffer.
+    std::string           netplay_local_viewport;
+    // Optional display aspect to use with local_viewport. Accepted values:
+    // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
+    // Unset keeps netplay at the title's normal mod-cleared aspect.
+    std::string           netplay_local_viewport_aspect;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
@@ -812,6 +848,14 @@ struct GameConfig {
     // scissor clips the overflow and wrapped off-left coords pass); the
     // vanilla loaded value at 4:3. Empty by default; regen required.
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    // Exact `bltz MAC0, reject`-style NCLIP/backface rejects that are forced
+    // not-taken only while widescreen reveals extra world. This is deliberately
+    // separate from bltz_sites, whose helper adjusts screen-X edge thresholds.
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    // Exact branch PCs whose reject path is forced not-taken only while
+    // widescreen reveals extra world. Use only after screenshot-validated
+    // evidence that the target is a visibility reject.
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     // Exact comparison sites whose result is forced only while widescreen
     // reveals extra world. Used for proven object/model participation gates
     // where maximal overdraw is preferable to range guessing. Each entry is
@@ -903,6 +947,14 @@ struct GameConfig {
     // (native-wide engages); genuine full-2D screens (save/options) still
     // pillarbox 4:3. Runtime-only — no regen required. Off by default.
     bool ws_gte_game_mode = false;
+
+    // [widescreen] precise_nclip — use the runtime's unsaturated GTE projection
+    // provenance for NCLIP/backface tests while classic adaptive widescreen is
+    // active. This is for 3D titles whose wide side geometry otherwise hits the
+    // PS1 SXY +/-1024 clamp and then disappears from game-side visibility tests.
+    // Runtime-only; off by default.
+    bool ws_precise_nclip = false;
+
     // Optional authoritative game-state gate for titles whose menus also
     // render enough 3D geometry to fool gte_game_mode. When configured,
     // native-wide is active only while the guest word matches one listed
@@ -1115,6 +1167,7 @@ struct UserSettings {
     bool has_hotkey_pad_save_state_menu = false; int hotkey_pad_save_state_menu = 2040; /* select+r1 */
     // [audio]
     bool has_spu_hq         = false; bool spu_hq         = false;
+    bool has_audio_freq     = false; int  audio_freq     = 44100;
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;

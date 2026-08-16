@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <fstream>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 /**
@@ -111,6 +113,14 @@ public:
     bool ReadRawSector(uint32_t lba, uint8_t* buffer);
 
     /**
+     * Read generated or SBI-replacement subchannel Q for a disc LBA.
+     * SBI records intentionally carry invalid CRC data; valid is false for
+     * those sectors so the CD controller can retain its last valid Q packet.
+     */
+    bool ReadSubChannelQ(uint32_t lba, uint8_t* buffer, bool* valid) const;
+    bool HasSubChannelReplacements() const { return !subq_replacements_.empty(); }
+
+    /**
      * Check if a file is currently open
      * @return true if file is open
      */
@@ -215,6 +225,8 @@ private:
      */
     BinSegment* SegmentForLBA(uint32_t lba);
 
+    bool LoadSBICompanion(const std::string& image_path);
+
     bool is_open_;
     std::string volume_id_;
     std::string bin_path_;          // first (data) segment; kept for callers
@@ -222,6 +234,7 @@ private:
     std::vector<CDTrack> tracks_;   // from the .cue TOC; >=1 entry after Open()
     std::vector<BinSegment> segments_;  // cue FILE entries in disc order; >=1 after Open()
     std::unique_ptr<CHDState> chd_; // present only for a directly mounted CHD
+    std::unordered_map<uint32_t, std::array<uint8_t, 12>> subq_replacements_;
 };
 
 } // namespace PS1

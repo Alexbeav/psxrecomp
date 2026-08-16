@@ -488,7 +488,15 @@ int test_precise_sxy_invalidation() {
     for (uint8_t reg = 0; reg < 32; ++reg) {
         gte_test_set_precise_valid_mask(0xFu);
         gte_write_data(&cpu, reg, 0x12345678u);
-        const uint32_t expected = (reg >= 12 && reg <= 15) ? 0u : 0xFu;
+        /* The PGXP shadow drops exactly the register(s) the guest wrote:
+         * SXY0/SXY1 clear their own slot; SXY2 and SXYP clear both mirrors
+         * (regs 14+15). The untouched slots stay live — their register
+         * values did not change (SXYP's hardware FIFO shift makes 12/13
+         * stale in VALUE, which validate-on-read handles at use; liveness
+         * alone is not a correctness claim). */
+        uint32_t expected = 0xFu;
+        if (reg == 12 || reg == 13) expected &= ~(1u << (reg - 12));
+        else if (reg == 14 || reg == 15) expected &= ~0xCu;
         const uint32_t actual = gte_test_get_precise_valid_mask();
         if (actual != expected)
             return fail_value("precise SXY invalidation", 0, reg,

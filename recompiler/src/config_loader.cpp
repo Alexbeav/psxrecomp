@@ -72,6 +72,8 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_depth", c.ws_cull_depth_sites);
     h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
     h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
+    h.words("cull_nclip_keep", c.ws_cull_nclip_keep_sites);
+    h.words("cull_branch_keep", c.ws_cull_branch_keep_sites);
     h.words("cull_w_imms", c.ws_cull_w_imms);
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
@@ -327,10 +329,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
         }
     }
-    if (!cfg.contains("runtime")) return rt;
-    const toml::value& runtime = toml::find(cfg, "runtime");
-    if (runtime.contains("language"))  // [runtime].language convenience alias
-        rt.language = toml::find<std::string>(runtime, "language");
+    if (cfg.contains("runtime")) {
+        const toml::value& runtime = toml::find(cfg, "runtime");
+        if (runtime.contains("language"))  // [runtime].language convenience alias
+            rt.language = toml::find<std::string>(runtime, "language");
 
     if (runtime.contains("debug_port")) {
         const auto port = toml::find<int64_t>(runtime, "debug_port");
@@ -502,9 +504,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_backend")) {
         rt.overlay_backend = toml::find<std::string>(runtime, "overlay_backend");
     }
-    if (runtime.contains("overlay_native_block")) {
-        for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
-            rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+        if (runtime.contains("overlay_native_block")) {
+            for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
+                rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+            }
         }
     }
 
@@ -570,6 +573,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("perspective_texturing")) {
             rt.video_perspective_texturing =
                 toml::find<bool>(video, "perspective_texturing");
+        }
+        if (video.contains("pgxp_cpu_mode")) {
+            rt.video_pgxp_cpu_mode = toml::find<bool>(video, "pgxp_cpu_mode");
+        }
+        if (video.contains("pgxp_tolerance")) {
+            rt.video_pgxp_tolerance =
+                toml::find<double>(video, "pgxp_tolerance");
         }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
@@ -701,6 +711,16 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.default_p2_mode = pad_mode_from_string(
                 toml::find<std::string>(ct, "p2_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
+        }
+        if (ct.contains("p1_device")) {
+            rt.default_p1_device = toml::find<std::string>(ct, "p1_device");
+            if (!rt.default_p1_device.empty())
+                rt.has_default_p1_device = true;
+        }
+        if (ct.contains("p2_device")) {
+            rt.default_p2_device = toml::find<std::string>(ct, "p2_device");
+            if (!rt.default_p2_device.empty())
+                rt.has_default_p2_device = true;
         }
         if (ct.contains("lock_mode")) {
             rt.controller_lock_mode = toml::find<bool>(ct, "lock_mode");
@@ -1180,6 +1200,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool has_netplay_required_leadout = false;
     uint32_t netplay_required_leadout_lba = 0;
     std::string netplay_required_disc_fp;
+    std::string netplay_local_viewport;
+    std::string netplay_local_viewport_aspect;
     if (cfg.contains("netplay")) {
         const toml::value& np = toml::find(cfg, "netplay");
         if (np.contains("require_cue"))
@@ -1195,6 +1217,37 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
             for (char& c : netplay_required_disc_fp)
                 c = (char)std::tolower((unsigned char)c);
+        }
+        if (np.contains("local_viewport")) {
+            netplay_local_viewport = toml::find<std::string>(np, "local_viewport");
+            for (char& c : netplay_local_viewport)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport.empty() &&
+                netplay_local_viewport != "vertical_split") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport must be \"vertical_split\", got '{}'",
+                    netplay_local_viewport));
+            }
+        }
+        if (np.contains("local_viewport_aspect")) {
+            netplay_local_viewport_aspect =
+                toml::find<std::string>(np, "local_viewport_aspect");
+            for (char& c : netplay_local_viewport_aspect)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport_aspect != "16:9" &&
+                netplay_local_viewport_aspect != "21:9" &&
+                netplay_local_viewport_aspect != "adaptive") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_aspect must be \"16:9\", "
+                    "\"21:9\", or \"adaptive\", got '{}'",
+                    netplay_local_viewport_aspect));
+            }
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_aspect requires local_viewport");
+            }
         }
     }
 
@@ -1307,6 +1360,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
+    bool ws_precise_nclip = false;
     uint32_t ws_gameplay_state_addr = 0;
     std::vector<uint32_t> ws_gameplay_state_values;
     bool ws_native_wide = true;
@@ -1454,6 +1508,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
             ws_gte_game_mode = toml::find<bool>(ws, "gte_game_mode");
+        if (ws.contains("precise_nclip"))
+            ws_precise_nclip = toml::find<bool>(ws, "precise_nclip");
         const bool has_gameplay_state_addr = ws.contains("gameplay_state_addr");
         const bool has_gameplay_state_values = ws.contains("gameplay_state_values");
         if (has_gameplay_state_addr != has_gameplay_state_values)
@@ -1556,6 +1612,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_depth_sites;
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -1589,6 +1647,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("depth_sites", ws_cull_depth_sites);
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
+            load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
+            load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -1975,6 +2035,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_netplay_required_leadout*/ has_netplay_required_leadout,
         /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
         /*netplay_required_disc_fp*/ netplay_required_disc_fp,
+        /*netplay_local_viewport*/ netplay_local_viewport,
+        /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,
@@ -2013,6 +2075,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_depth_sites*/   ws_cull_depth_sites,
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
+        /*ws_cull_nclip_keep_sites*/ ws_cull_nclip_keep_sites,
+        /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
         /*ws_aspect_cone*/         ws_aspect_cone,
@@ -2027,6 +2091,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_auto_backdrop_preload*/ ws_auto_backdrop_preload,
         /*ws_full_2d*/            ws_full_2d,
         /*ws_gte_game_mode*/      ws_gte_game_mode,
+        /*ws_precise_nclip*/      ws_precise_nclip,
         /*ws_gameplay_state_addr*/ ws_gameplay_state_addr,
         /*ws_gameplay_state_values*/ ws_gameplay_state_values,
         /*ws_native_wide*/        ws_native_wide,
@@ -2102,6 +2167,10 @@ GameOptions load_game_options(const fs::path& path) {
 }
 
 // ---- UserSettings (settings.toml) — launcher-written override layer ----
+
+static bool valid_user_audio_freq(int n) {
+    return n == 32040 || n == 32000 || n == 44100 || n == 48000;
+}
 
 UserSettings load_user_settings(const fs::path& path) {
     UserSettings s;
@@ -2245,6 +2314,13 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
+        if (a.contains("frequency")) try_get([&]{
+            const auto n = toml::find<int64_t>(a, "frequency");
+            if (valid_user_audio_freq((int)n)) {
+                s.audio_freq = (int)n;
+                s.has_audio_freq = true;
+            }
+        });
         if (a.contains("spu_hq")) try_get([&]{
             s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
         });
@@ -2487,6 +2563,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (s.has_rewind_interval)
         f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
+    if (s.has_audio_freq)
+        f << "frequency = " << s.audio_freq << "\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
     if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu) {

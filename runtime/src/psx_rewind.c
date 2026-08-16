@@ -702,6 +702,80 @@ static void blit_thumb(uint32_t *dst, int dw, int x0, int y0, int tw, int th,
     }
 }
 
+static void glyph_fill_rect(uint32_t *dst, int dw, int x0, int y0,
+                            int w, int h, uint32_t col)
+{
+    int x, y;
+    if (x0 < 0) { w += x0; x0 = 0; }
+    if (y0 < 0) { h += y0; y0 = 0; }
+    if (x0 + w > dw) w = dw - x0;
+    if (y0 + h > RW_PANEL_H) h = RW_PANEL_H - y0;
+    if (w <= 0 || h <= 0) return;
+    for (y = y0; y < y0 + h; y++)
+        for (x = x0; x < x0 + w; x++)
+            dst[y * dw + x] = col;
+}
+
+static void glyph_fill_disc(uint32_t *dst, int dw, int cx, int cy,
+                            int r, uint32_t col)
+{
+    int x, y;
+    const int rr = r * r;
+    for (y = -r; y <= r; y++) {
+        for (x = -r; x <= r; x++) {
+            if (x * x + y * y > rr) continue;
+            glyph_fill_rect(dst, dw, cx + x, cy + y, 1, 1, col);
+        }
+    }
+}
+
+static void glyph_line(uint32_t *dst, int dw, int x0, int y0, int x1, int y1,
+                       int thickness, uint32_t col)
+{
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    int inset = thickness / 2;
+
+    for (;;) {
+        glyph_fill_rect(dst, dw, x0 - inset, y0 - inset, thickness, thickness,
+                        col);
+        if (x0 == x1 && y0 == y1)
+            break;
+        {
+            int e2 = err * 2;
+            if (e2 >= dy) {
+                err += dy;
+                x0 += sx;
+            }
+            if (e2 <= dx) {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+}
+
+static void draw_psx_button(uint32_t *dst, int dw, int x, int y, char kind)
+{
+    switch (kind) {
+    case 'x':
+        glyph_line(dst, dw, x + 4, y + 4, x + 14, y + 14, 2, 0xFF5FA8FFu);
+        glyph_line(dst, dw, x + 14, y + 4, x + 4, y + 14, 2, 0xFF5FA8FFu);
+        break;
+    case 'o':
+        glyph_fill_disc(dst, dw, x + 9, y + 9, 8, 0xFFFF6B6Bu);
+        glyph_fill_disc(dst, dw, x + 9, y + 9, 5, 0xE0101218u);
+        break;
+    default:
+        glyph_fill_rect(dst, dw, x + 7, y + 2, 5, 15, 0xFFD7DCE6u);
+        glyph_fill_rect(dst, dw, x + 2, y + 7, 15, 5, 0xFFD7DCE6u);
+        break;
+    }
+}
+
 static void draw_char(uint32_t *dst, int dw, int x0, int y0, char c, uint32_t col)
 {
     const uint8_t *g;
@@ -745,6 +819,7 @@ static void rasterize_panel(void)
 {
     uint32_t *d = s_panel;
     int i, n, card_w, card_h, gap, x, y, sel_w, sel_h;
+    int fy;
     int center_x, origin;
     char buf[96];
     char hk[32];
@@ -762,10 +837,15 @@ static void rasterize_panel(void)
         draw_text(d, RW_PANEL_W, 120, 8, "NO SNAPSHOTS YET", 0xFF888888u);
     }
     host_keymap_label(HOST_KEYMAP_REWIND, hk, sizeof(hk));
-    /* Overlay font is uppercase-only; keep PS labels dual for pad + KB users. */
-    snprintf(buf, sizeof(buf),
-             "LEFT/RIGHT  A/CROSS LOAD  B/CIRCLE CLOSE  %s", hk);
-    draw_text(d, RW_PANEL_W, 12, RW_PANEL_H - 16, buf, 0xFFAAAAAAu);
+    fy = RW_PANEL_H - 22;
+    draw_psx_button(d, RW_PANEL_W, 12, fy, 'd');
+    draw_text(d, RW_PANEL_W, 36, fy + 5, "SEEK", 0xFFE2E5EBu);
+    draw_psx_button(d, RW_PANEL_W, 116, fy, 'x');
+    draw_text(d, RW_PANEL_W, 140, fy + 5, "LOAD", 0xFFE2E5EBu);
+    draw_psx_button(d, RW_PANEL_W, 216, fy, 'o');
+    draw_text(d, RW_PANEL_W, 240, fy + 5, "CLOSE", 0xFFE2E5EBu);
+    snprintf(buf, sizeof(buf), "%s MENU", hk[0] ? hk : "F8");
+    draw_text(d, RW_PANEL_W, 512, fy + 5, buf, 0xFFAAAAAAu);
 
     n = (int)s_count;
     if (n <= 0) {
