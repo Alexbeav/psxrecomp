@@ -12123,6 +12123,16 @@ session_reboot:
     /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
      * with both off every setter below leaves the tracking caches disabled and
      * the draw path is the faithful integer one, unchanged. */
+    /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
+     * corrections from process start so free-running (headless) boots can be
+     * measured from the first projected vertex — a TCP toggle always arrives
+     * after the interesting window. '0' = off, anything else = on. */
+    if (const char* e = std::getenv("PSX_GEOMETRY_CORRECTION"))
+        g_video_geometry_correction = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PERSPECTIVE_TEXTURING"))
+        g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
+        g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
     pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);

@@ -17,6 +17,23 @@ psxrecomp_add_runtime_target(psx-runtime
     EXE_NAME "PSXRecomp"
 )
 
+# PGXP variant of the framework runtime (ENHANCEMENTS.md G1.10): the same
+# recompiled BIOS compiled with -DPSX_PGXP=1 so the emitted PGXP_*() hook
+# macros arm the value-propagation engine. Framework-dev validation surface
+# (LLE boot logo is real GTE content); titles get theirs via
+# PSX_PGXP_VARIANT in psxrecomp_add_game_runtime.
+option(PSX_PGXP_VARIANT
+    "Also build the _pgxp PGXP precision-shadowing variant" OFF)
+if(PSX_PGXP_VARIANT)
+    psxrecomp_add_runtime_target(psx-runtime-pgxp
+        PGXP
+        DEBUG_PORT 4370
+        WINDOW_TITLE "psxrecomp - BIOS"
+        DEFAULT_BIOS_PATH "${PSXRECOMP_ROOT}/bios/SCPH1001.BIN"
+        EXE_NAME "PSXRecomp"
+    )
+endif()
+
 if(BUILD_TESTING)
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)

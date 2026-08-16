@@ -631,6 +631,7 @@ extern "C" void psx_pgxp_muldiv(struct CPUState *cpu, uint32_t instr,
 extern "C" void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3,
                                   uint32_t packed) {
     if (!g_pgxp_active) return;
+    s_stats.produced++;
     s_gte[12] = s_gte[13];
     s_gte[13] = s_gte[14];
     PGXPValue *pv = &s_gte[14];
@@ -735,6 +736,7 @@ extern "C" void pgxp_store_gte_reg(uint32_t addr, uint8_t reg) {
     if (!dst) return;
     const PGXPValue *src = &s_gte[reg & 31u];
     if (src->gen != s_gen) return;
+    s_stats.swc2_stores++;
     *dst = *src;
 }
 
@@ -768,6 +770,9 @@ extern "C" void pgxp_test_get_gte_sxy(uint32_t index, uint32_t *packed,
 }
 
 extern "C" uint32_t pgxp_test_generation(void) { return s_gen; }
+
+extern "C" uint32_t pgxp_test_suppress_depth(void) { return s_suppress; }
+extern "C" int pgxp_test_active(void) { return g_pgxp_active; }
 
 extern "C" void pgxp_test_set_generation(uint32_t gen) { s_gen = gen; }
 

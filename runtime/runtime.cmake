@@ -761,7 +761,13 @@ function(psxrecomp_ensure_zlib)
 endfunction()
 
 function(psxrecomp_add_runtime_target target)
-    set(options ORACLE COSIM)
+    # PGXP: build this target's objects with -DPSX_PGXP=1 so the PGXP_*()
+    # hook macros the emitter writes into ALL generated C become real calls
+    # into the value-propagation engine (pgxp_hooks.h; ENHANCEMENTS.md G1.10),
+    # and stamp the pgxp overlay flavor so the shard cache and the ABI gate
+    # keep pgxp and base DLLs fully separate. The base target is untouched —
+    # the macros preprocess away without the define.
+    set(options ORACLE COSIM PGXP)
     set(oneValueArgs
         GAME_GENERATED_DISPATCH_C
         GAME_OVERLAY_STATIC_C
@@ -916,6 +922,15 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSXRT_ORACLE)
         set(_psxrt_exe_name "${_psxrt_exe_name}_oracle")
+    endif()
+    if(PSXRT_PGXP)
+        # Distinct binary beside the base one; the launcher (or the player)
+        # picks the variant. Same debug port as the base build — run one at a
+        # time (the A/B protocol is one-toggle-per-run anyway).
+        set(_psxrt_exe_name "${_psxrt_exe_name}_pgxp")
+        target_compile_definitions(${target} PRIVATE
+            PSX_PGXP=1
+            PSX_OVERLAY_FLAVOR=2)   # PSX_OVERLAY_FLAVOR_PGXP (overlay_api.h)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
 
@@ -1790,20 +1805,41 @@ function(psxrecomp_add_game_runtime target)
             GAME_GENERATED_DISPATCH_C "${_psxg_marker}"
             ${_psxg_rt_args}
         )
+        set(_psxg_targets ${target})
+        # PGXP variant (ENHANCEMENTS.md G1.10): the SAME generated sources
+        # compiled a second time with -DPSX_PGXP=1 into <exe>_pgxp.exe. The
+        # emitted PGXP_*() macros become real hook calls, arming true
+        # geometry correction; the base target is byte-for-byte the
+        # pre-feature build. Opt-in per configure — it roughly doubles the
+        # generated-C compile time.
+        option(PSX_PGXP_VARIANT
+            "Also build the <exe>_pgxp PGXP precision-shadowing variant" OFF)
+        if(PSX_PGXP_VARIANT)
+            psxrecomp_add_runtime_target(${target}-pgxp
+                PGXP
+                GAME_GENERATED_FULL_C ${_psxg_full_list}
+                GAME_GENERATED_DISPATCH_C "${_psxg_marker}"
+                ${_psxg_rt_args}
+            )
+            list(APPEND _psxg_targets ${target}-pgxp)
+        endif()
     else()
         message(STATUS
             "psxrecomp: setup host (no game C, no BIOS backends) — "
             "first-run Generate & rebuild")
         psxrecomp_add_runtime_target(${target} ${_psxg_rt_args})
+        set(_psxg_targets ${target})
     endif()
 
-    target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_CODEGEN=1)
+    foreach(_psxg_t IN LISTS _psxg_targets)
+        target_compile_definitions(${_psxg_t} PRIVATE PSX_HAS_GAME_CODEGEN=1)
 
-    if(PSX_NET_LOBBY_DEFAULT_URL)
-        # Stringify for C: PSX_NET_LOBBY_DEFAULT_URL="ws://..."
-        target_compile_definitions(${target} PRIVATE
-            "PSX_NET_LOBBY_DEFAULT_URL=\"${PSX_NET_LOBBY_DEFAULT_URL}\"")
-    endif()
+        if(PSX_NET_LOBBY_DEFAULT_URL)
+            # Stringify for C: PSX_NET_LOBBY_DEFAULT_URL="ws://..."
+            target_compile_definitions(${_psxg_t} PRIVATE
+                "PSX_NET_LOBBY_DEFAULT_URL=\"${PSX_NET_LOBBY_DEFAULT_URL}\"")
+        endif()
+    endforeach()
 
     # Include the portable codegen host. Do NOT add CMAKE_CURRENT_SOURCE_DIR
     # wholesale to -I: on case-insensitive macOS, #include <version> can pick
@@ -1816,5 +1852,7 @@ function(psxrecomp_add_game_runtime target)
     if(RECOMP_UI_ROOT)
         list(APPEND _psxg_inc "${RECOMP_UI_ROOT}/src")
     endif()
-    target_include_directories(${target} PRIVATE ${_psxg_inc})
+    foreach(_psxg_t IN LISTS _psxg_targets)
+        target_include_directories(${_psxg_t} PRIVATE ${_psxg_inc})
+    endforeach()
 endfunction()

@@ -28,6 +28,8 @@ set(PSXRECOMP_CODEGEN_HASH_SRCS
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/full_function_emitter.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/strict_translator.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/strict_translator.h
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/pgxp_hook_emitter.cpp
+    ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/pgxp_hook_emitter.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.cpp
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/src/function_discovery.h
     ${PSXRECOMP_CODEGEN_HASH_ROOT}/recompiler/include/gte_register_classification.h

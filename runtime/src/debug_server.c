@@ -5212,7 +5212,8 @@ static void handle_geom_correction(int id, const char *json)
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
              "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
-             "\"tolerance_reject\":%llu,\"w_valid\":%llu}}",
+             "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
+             "\"produced\":%llu,\"swc2_stores\":%llu}}",
              id,
              gte_geometry_correction_enabled(),
              (unsigned)hits,
@@ -5226,7 +5227,9 @@ static void handle_geom_correction(int id, const char *json)
              (unsigned long long)ps.value_mismatch,
              (unsigned long long)ps.trunc_reject,
              (unsigned long long)ps.tolerance_reject,
-             (unsigned long long)ps.w_valid);
+             (unsigned long long)ps.w_valid,
+             (unsigned long long)ps.produced,
+             (unsigned long long)ps.swc2_stores);
 }
 
 /* pgxp — live-tune the value-propagation engine for one-toggle isolation runs
@@ -5260,8 +5263,9 @@ static void handle_pgxp(int id, const char *json)
             pgxp_set_tolerance((float)strtod(p, NULL));
     }
     send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"cpu_mode\":%d,"
-             "\"tolerance\":%.3f}",
-             id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance());
+             "\"tolerance\":%.3f,\"suppress\":%u,\"active\":%d}",
+             id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             (unsigned)pgxp_test_suppress_depth(), pgxp_test_active());
 }
 
 static void handle_gpu_state(int id, const char *json)

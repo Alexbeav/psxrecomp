@@ -92,6 +92,8 @@ typedef struct PGXPStats {
     uint64_t trunc_reject;       /* integer part disagreed with native parse */
     uint64_t tolerance_reject;
     uint64_t w_valid;            /* lookups that also carried a usable depth */
+    uint64_t produced;           /* RTPS/RTPT projections pushed into shadows */
+    uint64_t swc2_stores;        /* GTE reg shadows copied to RAM shadows     */
 } PGXPStats;
 
 void pgxp_get_stats(PGXPStats *out);
@@ -115,6 +117,8 @@ void pgxp_test_get_gte_sxy(uint32_t index, uint32_t *packed,
                            int32_t *x16, int32_t *y16, uint16_t *z,
                            uint8_t *valid);
 uint32_t pgxp_test_generation(void);
+uint32_t pgxp_test_suppress_depth(void);
+int      pgxp_test_active(void);
 void     pgxp_test_set_generation(uint32_t gen);
 
 #ifdef __cplusplus
