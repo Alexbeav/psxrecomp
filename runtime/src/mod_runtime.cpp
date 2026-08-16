@@ -1364,6 +1364,9 @@ extern "C" int psx_mod_register_function_override(
     for (int i = 0; i < n_words; ++i) plugin.guard[i] = expected_words[i];
     plugin.n_guard = n_words;
     plugins.push_back(plugin);
+    /* Mark the id available to the package resolver so a manifest can gate
+     * an override-only plugin (multiple overrides may share one id). */
+    mod_register_function_override_marker(id);
     return 1;
 }
 
