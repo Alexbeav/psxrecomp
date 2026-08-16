@@ -1148,7 +1148,12 @@ static int           g_fmv_skip_no_xa_hold  = 4;
  * the pad AFTER the wall-clock pacer (just before present) so the next CPU frame
  * reads near-fresh input. g_video_vsync controls the GL swap interval
  * (1=vsync/tear-free, 0=immediate/lowest display latency+tearing, -1=adaptive);
- * it trims the display-side scanout latency the CPU-side ring can't see. */
+ * it trims the display-side scanout latency the CPU-side ring can't see.
+ *
+ * Driver vsync and the wall-clock pacer are XOR. Waiting on both (pacer then
+ * FIFO SwapBuffers) double-blocks on Linux compositors: ~16.7 ms + ~16.7 ms
+ * = 30 Hz / 0.50x with the CPU idle. ~60 Hz panels may use vsync as the clock;
+ * otherwise the pacer holds 59.94 Hz and present must not wait on the swap. */
 static int           g_low_latency_input = 1;
 static int           g_video_vsync        = 1;
 static int           g_frame_interpolation = 0;
@@ -1174,6 +1179,11 @@ static int           g_mod_load_wall_multiplier = -1;
 static int           g_mod_load_release_frames = -1;
 static int           g_mod_disc_speed_divisor = -1;
 static int           g_mod_disc_instant_rate = -1;
+
+static int present_vsync_owns_cadence(void);
+static int present_effective_swap_interval(void);
+static int present_should_wall_pace(void);
+static void apply_present_cadence(void);
 
 /* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
  * window-fullscreen flag: used both to open the window in that mode and to
@@ -1644,7 +1654,8 @@ static int ensure_sw_sdl_present(void) {
         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 #endif
         Uint32 rflags = SDL_RENDERER_ACCELERATED |
-                        (g_video_vsync != 0 ? SDL_RENDERER_PRESENTVSYNC : 0u);
+                        (present_effective_swap_interval() != 0
+                             ? SDL_RENDERER_PRESENTVSYNC : 0u);
         sdl_renderer = SDL_CreateRenderer(sdl_window, -1, rflags);
         if (!sdl_renderer)
             sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
@@ -2513,21 +2524,89 @@ static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
  * wall-clock pacer double-blocks the vblank callback (present is before the
  * guest resumes), which shows up as MotK FMV ~30–40 FPS in netplay vs ~50+
  * offline. Force immediate swaps for the session; restore on soft-exit. */
-static void netplay_host_present_uncap(void) {
+static int host_refresh_is_approx_60hz(void) {
+    return g_host_refresh_hz >= 58.8 && g_host_refresh_hz <= 61.2;
+}
+
+static int present_vsync_owns_cadence(void) {
+    if (g_video_vsync == 0 || g_present_vsync_disabled)
+        return 0;
+    if (g_frame_period_ms <= 0.0)
+        return 0;
+    if (g_frame_interpolation)
+        return 0;
+    if (g_netplay_vsync_forced_off || psx_netplay_active())
+        return 0;
+    return host_refresh_is_approx_60hz();
+}
+
+static int present_effective_swap_interval(void) {
+    if (g_netplay_vsync_forced_off || psx_netplay_active())
+        return 0;
+    if (g_frame_interpolation)
+        return 0;
+    if (g_frame_period_ms <= 0.0)
+        return 0;
+    if (present_vsync_owns_cadence())
+        return g_video_vsync;
+    return 0;
+}
+
+static int present_should_wall_pace(void) {
+    return g_frame_period_ms > 0.0 && !present_vsync_owns_cadence();
+}
+
+static void apply_present_cadence(void) {
 #ifndef PSX_SDL_NO_RENDER
-    if (g_gl_active) gl_renderer_set_swap_interval(0);
-    if (g_vk_active) vk_renderer_set_present_mode(0);
+    const int interval = present_effective_swap_interval();
+    if (g_gl_active)
+        gl_renderer_set_swap_interval(interval);
+    if (g_vk_active)
+        vk_renderer_set_present_mode(interval);
+    if (sdl_renderer)
+        (void)SDL_RenderSetVSync(sdl_renderer, interval != 0 ? 1 : 0);
+    latency_ring_set_present_mode(interval);
 #endif
+}
+
+static void log_present_cadence(void) {
+    if (present_vsync_owns_cadence()) {
+        std::printf("psxrecomp: present cadence: driver vsync (%.1f Hz panel, "
+                    "wall-clock pacer skipped)\n",
+                    g_host_refresh_hz);
+    } else if (g_frame_period_ms > 0.0) {
+        if (g_video_vsync != 0 && !g_frame_interpolation &&
+            !g_netplay_vsync_forced_off) {
+            if (g_host_refresh_hz > 0.0) {
+                std::printf("psxrecomp: present cadence: wall-clock pacer "
+                            "(%.4f ms/frame); driver vsync off on %.0f Hz panel\n",
+                            g_frame_period_ms, g_host_refresh_hz);
+            } else {
+                std::printf("psxrecomp: present cadence: wall-clock pacer "
+                            "(%.4f ms/frame); driver vsync off "
+                            "(host refresh unknown)\n",
+                            g_frame_period_ms);
+            }
+        } else {
+            std::printf("psxrecomp: present cadence: wall-clock pacer "
+                        "(%.4f ms/frame)\n",
+                        g_frame_period_ms);
+        }
+    } else {
+        std::printf("psxrecomp: present cadence: uncapped "
+                    "(no pacer, no vsync)\n");
+    }
+}
+
+static void netplay_host_present_uncap(void) {
     g_netplay_vsync_forced_off = 1;
+    apply_present_cadence();
 }
 
 static void netplay_host_present_restore(void) {
     if (!g_netplay_vsync_forced_off) return;
-#ifndef PSX_SDL_NO_RENDER
-    if (g_gl_active) gl_renderer_set_swap_interval(g_video_vsync);
-    if (g_vk_active) vk_renderer_set_present_mode(g_video_vsync);
-#endif
     g_netplay_vsync_forced_off = 0;
+    apply_present_cadence();
 }
 
 static void netplay_soft_exit(const char *origin) {
@@ -5075,14 +5154,13 @@ static void sample_headless_pad_into_sio(int override) {
  * speed it can — typically several × realtime — and audio glitches.
  *
  * The wall-clock pacer target; nudged to the host display refresh at
- * window-creation time (sync-to-host-refresh) so the pacer and SDL PRESENTVSYNC
- * do not fight — a fixed 59.94 pacer against a 60.00 Hz panel makes rendered
- * frames land on an uneven vblank count (a 2/3/1 beat) that reads as
- * moving-object judder/flicker. See g_frame_period_ms. */
+ * window-creation time when the panel is ~60 Hz. Driver vsync and this pacer
+ * are XOR (see present_vsync_owns_cadence): both at once double-blocks on
+ * Linux compositors to 30 Hz. See g_frame_period_ms. */
 /* Live pacer period (ms). Defaults to the PSX rate; set to the host refresh
- * period when the panel is within ~2% of 60 Hz so 30fps content pads evenly to
- * two host refreshes. Left at the PSX rate on non-~60Hz panels to avoid running
- * the sim at the wrong speed. Declared with the early video/mod globals. */
+ * period when the panel is within ~2% of 60 Hz. Left at the PSX rate on
+ * non-~60Hz / unknown-refresh panels so vsync cannot run the sim fast.
+ * Declared with the early video/mod globals. */
 
 /* §33/§35/§47: re-present last Live frame on a wall-clock cadence while guest
  * sim is frozen (short resim) or TipHold invent-cap stall (admit spin). */
@@ -6335,12 +6413,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         s_netplay_depth24_present_skip = 0;
     }
 
-    /* Offline wall-clock pacing before present. Netplay paces in the epilogue
-     * AFTER present so Swap overlaps the peer's guest quantum. Self-check
-     * replay runs uncapped like netplay resim. */
+    /* Offline wall-clock pacing before present. Skipped when driver vsync
+     * owns cadence (~60 Hz panel) so the two waits cannot double-block.
+     * Netplay paces in the epilogue AFTER present so Swap overlaps the
+     * peer's guest quantum. Self-check replay runs uncapped like netplay
+     * resim. */
     if (!psx_netplay_active() && !psx_selfcheck_resim_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
-        if (!manual_turbo_active && !turbo_load_paced && g_frame_period_ms > 0.0)
+        if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())
             frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
@@ -6737,8 +6817,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         src_w /= 2;
     if (g_gl_active) {
         /* OpenGL present: upload the active display rect and draw a full-screen
-         * quad. SDL_GL_SwapWindow handles vsync; the wall-clock pacer above
-         * still owns timing. 24-bit (FMV) frames pin to native 4:3. */
+         * quad. Either SwapWindow vsync OR the wall-clock pacer owns timing,
+         * never both. 24-bit (FMV) frames pin to native 4:3. */
         /* FMV: nearest present — linear filtering fringes the right edge of
          * low-res 24-bit scanouts into adjacent (often garbage) texels. */
         gl_renderer_present(sdl_pixel_buf, src_w, src_h,
@@ -6808,15 +6888,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     s_sw_hold_dst = dst;
     s_sw_hold_valid = 1;
 
-    /* Vsync self-heal. The renderer is created with PRESENTVSYNC for
-     * tear-free output, but the wall-clock pacer above already holds
-     * 59.94 Hz, so driver vsync is redundant for timing. Under some
+    /* Vsync self-heal. PRESENTVSYNC is only armed when driver vsync owns
+     * cadence; the wall-clock pacer otherwise holds 59.94 Hz. Under some
      * driver states (observed: NVIDIA GL with the swap queue wedged)
      * SwapBuffers blocks ~1.5 s per present, dragging the whole
      * emulation to ~0.7 fps for minutes (freeze dump 1781045865:
      * 8/8 main-thread samples inside wglSwapBuffers). If presents
      * block pathologically several times in a row, drop driver vsync
-     * for the rest of the session; our own pacing keeps the rate. */
+     * for the rest of the session; wall-clock pacing takes over. */
     {
         latency_ring_mark(LAT_SWAP_BEGIN);
         const Uint64 t0 = SDL_GetPerformanceCounter();
@@ -6861,7 +6940,8 @@ static void sdl_vblank_present(void) {
         return;
     }
     uint64_t perf_start = runtime_perf_section_begin();
-    frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+    if (present_should_wall_pace())
+        frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
     runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
     latency_ring_mark(LAT_PACED);
 }
@@ -11072,7 +11152,8 @@ int main(int argc, char** argv) {
     }
 
     /* Latency knobs: env overrides win over config (for A/B measurement).
-     * PSX_LOW_LATENCY_INPUT=0/1 ; PSX_VSYNC=1(vsync)/0(immediate)/-1(adaptive);
+     * PSX_LOW_LATENCY_INPUT=0/1 ; PSX_VSYNC=1(vsync)/0(immediate)/-1(adaptive)
+     * (vsync XOR wall-clock pacer — vsync clocks only ~60 Hz panels);
      * PSX_FRAME_INTERPOLATION=0/1; PSX_FRAME_INTERPOLATION_FPS=0|90+. */
     if (const char *e = std::getenv("PSX_LOW_LATENCY_INPUT")) g_low_latency_input = atoi(e) ? 1 : 0;
     if (const char *e = std::getenv("PSX_VSYNC"))             g_video_vsync       = atoi(e);
@@ -12609,13 +12690,10 @@ session_reboot:
     }
     psx_apply_window_icon(sdl_window, argv[0]);
 
-    /* Sync-to-host-refresh: with SDL PRESENTVSYNC on, a fixed 59.94 Hz wall-clock
-     * pacer fights a 60.00 Hz panel — rendered frames slip onto an uneven vblank
-     * count (2/3/1 beat) that reads as moving-object judder. If the panel is
-     * within ~2% of 60 Hz, nudge the pacer to the exact panel period so the pacer
-     * and vsync agree and 30fps content pads to a steady 2 refreshes each.
-     * Non-~60Hz panels keep the PSX rate (vsync then governs; wrong-speed sim is
-     * worse than a benign slow beat). */
+    /* Host refresh: if the panel is within ~2% of 60 Hz, record it so driver
+     * vsync can own cadence (pacer skipped). Non-~60 Hz and unknown refresh
+     * (common on Wayland) keep PSX 59.94 Hz pacing and force swap interval 0
+     * — vsync as the clock would run the sim at the panel rate. */
     {
         SDL_DisplayMode dm;
         int disp_idx = SDL_GetWindowDisplayIndex(sdl_window);
@@ -12637,7 +12715,7 @@ session_reboot:
      * facade back to software (rasterization already runs through software in
      * this phase) and fall through to the SDL_Renderer present path below. */
     if (g_video_renderer == 1) {
-        gl_renderer_set_swap_interval(g_video_vsync);   /* applied at context init */
+        gl_renderer_set_swap_interval(present_effective_swap_interval()); /* applied at context init */
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
         if (!g_gl_active) {
             gr_set_backend(GR_BACKEND_SOFTWARE);
@@ -12670,14 +12748,14 @@ session_reboot:
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init
      * already initialized the software renderer on the shared VRAM array). */
     if (g_video_renderer == 2) {
-        vk_renderer_set_present_mode(g_video_vsync);
+        vk_renderer_set_present_mode(present_effective_swap_interval());
         g_vk_active = (vk_renderer_init_context(sdl_window) != 0);
         if (!g_vk_active) gr_set_backend(GR_BACKEND_SOFTWARE);
         if (!netplay_cpu_auth_gpu())
             g_video_scale = gr_scale();
     }
     latency_ring_set_backend(g_vk_active ? "vulkan" : g_gl_active ? "opengl" : "software");
-    latency_ring_set_present_mode(g_video_vsync);
+    latency_ring_set_present_mode(present_effective_swap_interval());
     /* Title bar shows the clean game title (set at window creation); the active
      * renderer is reported via the debug server / config, not appended here. */
 
@@ -12712,10 +12790,11 @@ session_reboot:
 #ifdef _WIN32
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 #endif
-    /* Vsync off (g_video_vsync==0) drops PRESENTVSYNC for lowest display
-     * latency; the wall-clock pacer still holds 59.94Hz (may tear). */
+    /* PRESENTVSYNC only when driver vsync owns cadence; otherwise the
+     * wall-clock pacer holds 59.94Hz (may tear). */
     Uint32 rflags = SDL_RENDERER_ACCELERATED |
-                    (g_video_vsync != 0 ? SDL_RENDERER_PRESENTVSYNC : 0u);
+                    (present_effective_swap_interval() != 0
+                         ? SDL_RENDERER_PRESENTVSYNC : 0u);
     sdl_renderer = SDL_CreateRenderer(sdl_window, -1, rflags);
     if (!sdl_renderer)
         sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED);
@@ -12764,7 +12843,7 @@ session_reboot:
     SDL_SetTextureScaleMode(sdl_texture,
                             g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
   }
-  }
+    log_present_cadence();
 
     /* Register vblank presentation callback. */
     gpu_set_vblank_callback(sdl_vblank_present);
