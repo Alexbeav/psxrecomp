@@ -73,6 +73,7 @@ set(PSXRECOMP_GAME_SOURCES
     src/control_flow.cpp
     src/function_analysis.cpp
     src/code_generator.cpp
+    src/pgxp_hook_emitter.cpp
     src/bios_address_model.cpp
     src/annotations.cpp
     src/config_loader.cpp
@@ -182,6 +183,7 @@ add_executable(psxrecomp-bios
     src/ps1_exe_parser.cpp
     src/mips_decoder.cpp
     src/strict_translator.cpp
+    src/pgxp_hook_emitter.cpp
     src/bios_slice_walker.cpp
     src/bios_address_model.cpp
     src/function_discovery.cpp
@@ -261,6 +263,7 @@ add_executable(l2_structural_test
     src/mips_decoder.cpp
     src/ps1_exe_parser.cpp
     src/strict_translator.cpp
+    src/pgxp_hook_emitter.cpp
 )
 target_include_directories(l2_structural_test PRIVATE
     include
@@ -294,6 +297,7 @@ if(BUILD_TESTING)
         src/control_flow.cpp
         src/function_analysis.cpp
         src/code_generator.cpp
+        src/pgxp_hook_emitter.cpp
         src/annotations.cpp
         src/bios_address_model.cpp
         src/config_loader.cpp
@@ -316,6 +320,7 @@ if(BUILD_TESTING)
         src/ps1_exe_parser.cpp
         src/mips_decoder.cpp
         src/strict_translator.cpp
+        src/pgxp_hook_emitter.cpp
         src/bios_address_model.cpp
         src/function_discovery.cpp
         src/full_function_emitter.cpp
@@ -402,6 +407,10 @@ if(BUILD_TESTING)
             NAME dirty_text_continuation_guards
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_continuation_guards.py)
+        add_test(
+            NAME dirty_text_admission_guards
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_dirty_text_admission_guards.py)
         add_test(
             NAME bios_backend_constant_codegen
             COMMAND ${Python3_EXECUTABLE}

@@ -1727,9 +1727,9 @@ static void warn_on_cgtag_mismatch(const char *tier) {
     snprintf(base, sizeof base, "%s/%s/%s/%s",
              s_cache_dir, s_game_id, tier, PSX_OVERLAY_ARCH_ABI);
     char expect[64];
-    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x",
+    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x_f%u",
              PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
-             (unsigned)s_config_hash);
+             (unsigned)s_config_hash, (unsigned)PSX_OVERLAY_FLAVOR);
     snprintf(pattern, sizeof pattern, "%s/cg*", base);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
@@ -1755,9 +1755,9 @@ static void warn_on_cgtag_mismatch(const char *tier) {
     char base[768], expect[64], found[256];
     snprintf(base, sizeof base, "%s/%s/%s/%s",
              s_cache_dir, s_game_id, tier, PSX_OVERLAY_ARCH_ABI);
-    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x",
+    snprintf(expect, sizeof expect, "cg%d_%08x_gc%08x_f%u",
              PSX_OVERLAY_CODEGEN_VER, (unsigned)PSX_OVERLAY_CODEGEN_HASH,
-             (unsigned)s_config_hash);
+             (unsigned)s_config_hash, (unsigned)PSX_OVERLAY_FLAVOR);
     if (psx_overlay_posix_find_other_cache_tag(base, expect, found,
                                                sizeof(found))) {
         loader_log("*** OVERLAY CACHE HASH MISMATCH: this build reads %s/%s but "
@@ -1906,14 +1906,16 @@ static void scan_cache_dir(void) {
     /* Index both tiers and every immutable artifact. Runtime selection prefers
      * usable GCC over TCC; an invalid GCC artifact cannot suppress a valid TCC
      * fallback merely because its filename was enumerated first. */
-    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x_gc%08x",
+    snprintf(dir, sizeof(dir), "%s/%s/gcc/%s/cg%d_%08x_gc%08x_f%u",
              s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash);
+             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
+             (unsigned)PSX_OVERLAY_FLAVOR);
     scan_one_cache_dir(dir, CACHE_TIER_GCC);
     abi_preflight_sweep(dir);
-    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x_gc%08x",
+    snprintf(dir, sizeof(dir), "%s/%s/tcc/%s/cg%d_%08x_gc%08x_f%u",
              s_cache_dir, s_game_id, PSX_OVERLAY_ARCH_ABI, PSX_OVERLAY_CODEGEN_VER,
-             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash);
+             (unsigned)PSX_OVERLAY_CODEGEN_HASH, (unsigned)s_config_hash,
+             (unsigned)PSX_OVERLAY_FLAVOR);
     scan_one_cache_dir(dir, CACHE_TIER_TCC);
     abi_preflight_sweep(dir);
 
@@ -2354,6 +2356,21 @@ static void init_callbacks(void) {
         {
             extern uint32_t psx_ws_angle_widen(uint32_t vanilla);
             s_callbacks.ws_angle_widen = psx_ws_angle_widen;
+        }
+        /* PGXP dataflow-shadowing hook table (pgxp_hooks.h, appended last).
+         * Referenced only by pgxp-flavour shards; the flavor half of the ABI
+         * tag already rejects any host/DLL flavor mix, and a NULL table on an
+         * older host makes every hook a no-op (visual-only, never
+         * load-bearing). */
+        {
+            static const PGXPHooks pgxp_hooks_table = {
+                psx_pgxp_load,
+                psx_pgxp_store,
+                psx_pgxp_alu,
+                psx_pgxp_muldiv,
+                psx_pgxp_cop2,
+            };
+            s_callbacks.pgxp = &pgxp_hooks_table;
         }
     }
 }

@@ -408,6 +408,7 @@ static uint16_t texel_fetch_bilinear(float fu, float fv, uint16_t texpage,
     if (fy > 128) fy = 128;
 
     uint16_t c00 = bl_fetch(iu, iv, texpage, clut_x, clut_y);
+    if (c00 == 0) return 0x0000;
     uint16_t c10 = bl_fetch(iu + su, iv, texpage, clut_x, clut_y);
     uint16_t c01 = bl_fetch(iu, iv + sv, texpage, clut_x, clut_y);
     uint16_t c11 = bl_fetch(iu + su, iv + sv, texpage, clut_x, clut_y);
@@ -417,7 +418,6 @@ static uint16_t texel_fetch_bilinear(float fu, float fv, uint16_t texpage,
     int w01 = (c01 ? 1 : 0) * (256 - fx) * fy;
     int w11 = (c11 ? 1 : 0) * fx * fy;
     int opac = w00 + w10 + w01 + w11;
-    if (opac < 32768) return 0x0000;    /* opacity < 0.5: transparent */
 
     int r = ((c00 & 0x1F) * w00 + (c10 & 0x1F) * w10
            + (c01 & 0x1F) * w01 + (c11 & 0x1F) * w11) / opac;
@@ -429,6 +429,11 @@ static uint16_t texel_fetch_bilinear(float fu, float fv, uint16_t texpage,
              + ((c01 >> 15) & 1) * w01 + ((c11 >> 15) & 1) * w11) * 2 >= opac;
 
     return (uint16_t)(r | (g << 5) | (b << 10) | (stp ? 0x8000 : 0));
+}
+
+static inline float bilinear_center_shift_for_target(const RTarget *t) {
+    int s = (t && t->s > 0) ? t->s : 1;
+    return 0.5f / (float)s - 1.0f / 64.0f;
 }
 
 /* uv sampling bounds (see g_uv_lim): the shared PS1 uv model in gpu_uv.h.
@@ -982,10 +987,16 @@ static void raster_textured_triangle(const RTarget *t,
                 }
             }
 
-            uint16_t texel = g_texture_filter
-                ? texel_fetch_bilinear(fu, fv, texpage, clut_x, clut_y)
-                : texel_fetch((int)fu & 0xFF, (int)fv & 0xFF, texpage, clut_x, clut_y);
-            put_textured(t, x, y, texel, g_mod_r, g_mod_g, g_mod_b, g_raw_texture);
+            if (g_texture_filter) {
+                float sh = bilinear_center_shift_for_target(t);
+                uint16_t texel = texel_fetch_bilinear(fu + sh, fv + sh,
+                                                      texpage, clut_x, clut_y);
+                put_textured(t, x, y, texel, g_mod_r, g_mod_g, g_mod_b, g_raw_texture);
+            } else {
+                uint16_t texel = texel_fetch((int)fu & 0xFF, (int)fv & 0xFF,
+                                             texpage, clut_x, clut_y);
+                put_textured(t, x, y, texel, g_mod_r, g_mod_g, g_mod_b, g_raw_texture);
+            }
         }
     }
 }
@@ -1161,10 +1172,16 @@ static void raster_shaded_textured_triangle(const RTarget *t,
             if (mg < 0) mg = 0; if (mg > 31) mg = 31;
             if (mb < 0) mb = 0; if (mb > 31) mb = 31;
 
-            uint16_t texel = g_texture_filter
-                ? texel_fetch_bilinear(fu, fv, texpage, clut_x, clut_y)
-                : texel_fetch((int)fu & 0xFF, (int)fv & 0xFF, texpage, clut_x, clut_y);
-            put_textured(t, x, y, texel, mr, mg, mb, raw_texture);
+            if (g_texture_filter) {
+                float sh = bilinear_center_shift_for_target(t);
+                uint16_t texel = texel_fetch_bilinear(fu + sh, fv + sh,
+                                                      texpage, clut_x, clut_y);
+                put_textured(t, x, y, texel, mr, mg, mb, raw_texture);
+            } else {
+                uint16_t texel = texel_fetch((int)fu & 0xFF, (int)fv & 0xFF,
+                                             texpage, clut_x, clut_y);
+                put_textured(t, x, y, texel, mr, mg, mb, raw_texture);
+            }
         }
     }
 }
@@ -1300,7 +1317,8 @@ static void raster_textured_rect(const RTarget *t, int x, int y, int w, int h,
             uint16_t texel;
             if (g_texture_filter) {
                 float fu = (float)u + (float)col / (float)s;
-                texel = texel_fetch_bilinear(fu, fv, texpage, clut_x, clut_y);
+                float sh = bilinear_center_shift_for_target(t);
+                texel = texel_fetch_bilinear(fu + sh, fv + sh, texpage, clut_x, clut_y);
             } else {
                 int tu = (u + col / s) & 0xFF;
                 texel = texel_fetch(tu, tv, texpage, clut_x, clut_y);
@@ -1391,7 +1409,8 @@ static void raster_textured_rect_scaled(const RTarget *t, int x, int y,
             uint16_t texel;
             if (g_texture_filter) {
                 float fu = (float)u0 + (float)du * (float)col / (float)w;
-                texel = texel_fetch_bilinear(fu, fv, texpage, clut_x, clut_y);
+                float sh = bilinear_center_shift_for_target(t);
+                texel = texel_fetch_bilinear(fu + sh, fv + sh, texpage, clut_x, clut_y);
             } else {
                 int tu = (int)(u0 + ((int64_t)du * col) / w) & 0xFF;
                 texel = texel_fetch(tu, tv, texpage, clut_x, clut_y);

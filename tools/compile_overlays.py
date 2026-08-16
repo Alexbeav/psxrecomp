@@ -4068,6 +4068,9 @@ def _compile_dll_tcc(c_path: str, out_dll: str, include_dirs, flavor: int,
            '-DPSX_NO_DEBUG_TOOLS',
            '-DPSX_ENABLE_BLOCK_CYCLES=1',
            f'-DPSX_OVERLAY_FLAVOR={int(flavor)}',
+           # PGXP flavor bit (overlay_api.h PSX_OVERLAY_FLAVOR_PGXP): arm the
+           # PGXP_*() hook macros the emitter writes into every overlay C.
+           *(['-DPSX_PGXP=1'] if int(flavor) & 2 else []),
            native_path(c_path), '-o', native_path(out_dll)]
     for d in include_dirs:
         cmd.append('-I' + native_path(_bom_free_incdir(d)))
@@ -4116,6 +4119,9 @@ def _compile_dll_direct(c_path: str, out_dll: str, include_dirs: list[str],
         # cache and a base cache can never cross-contaminate even if they share
         # a directory (they key by guest-bytes CRC, which is flavor-blind).
         f'-DPSX_OVERLAY_FLAVOR={int(flavor)}',
+        # PGXP flavor bit (overlay_api.h PSX_OVERLAY_FLAVOR_PGXP): arm the
+        # PGXP_*() hook macros the emitter writes into every overlay C.
+        *(['-DPSX_PGXP=1'] if int(flavor) & 2 else []),
         c_path,
         '-o', out_dll,
         *includes,
@@ -5303,7 +5309,7 @@ def main():
         ch = codegen_hash(args.runtime_include)
         gh = overlay_config_hash(args.recompiler, args.game_toml)
         cache_dir = os.path.join(args.out_dir, game_id, args.compiler, cache_arch_abi(),
-                                 f'cg{cg}_{ch:08x}_gc{gh:08x}')
+                                 f'cg{cg}_{ch:08x}_gc{gh:08x}_f{int(args.flavor)}')
         os.makedirs(cache_dir, exist_ok=True)
         print(f'Cache dir: {cache_dir}  '
               f'(codegen ver {cg}, emitter {ch:08x}, config {gh:08x})')

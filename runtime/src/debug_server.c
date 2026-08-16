@@ -24,6 +24,7 @@
 #include "code_provider.h"
 #include "overlay_backend.h"
 #include "cpu_state.h"
+#include "pgxp.h"
 #include "dma.h"
 #include "gpu.h"
 #include "gpu_render.h"   /* gr_scale + gr_render_display_hires (screenshot_hires) */
@@ -5196,16 +5197,75 @@ static void handle_geom_correction(int id, const char *json)
      * distinct vertices are landing on the same pixel. */
     uint32_t lookups = 0, hits = 0, unrec = 0, ambig = 0;
     gte_geometry_correction_stats(&lookups, &hits, &unrec, &ambig);
+    /* PGXP dataflow census (per-vertex): the primary provenance source.
+     * dataflow_hit is the number that had to move — the G1.9 gate is a
+     * dataflow-hit share dramatically above the 5.2% the position table
+     * measured on its own. value_mismatch counts shadows that were present
+     * but described a different word (stale = provenance hole to hunt). */
+    PGXPStats ps;
+    pgxp_get_stats(&ps);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"geometry_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
-             "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u}",
+             "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
+             "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
+             "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
+             "\"native\":%llu,\"value_mismatch\":%llu,\"trunc_reject\":%llu,"
+             "\"tolerance_reject\":%llu,\"w_valid\":%llu,"
+             "\"produced\":%llu,\"swc2_stores\":%llu}}",
              id,
              gte_geometry_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
-             (unsigned)lookups, (unsigned)unrec, (unsigned)ambig);
+             (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
+             pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             (unsigned long long)ps.lookups,
+             (unsigned long long)ps.dataflow_hit,
+             (unsigned long long)ps.fallback_hit,
+             (unsigned long long)ps.native,
+             (unsigned long long)ps.value_mismatch,
+             (unsigned long long)ps.trunc_reject,
+             (unsigned long long)ps.tolerance_reject,
+             (unsigned long long)ps.w_valid,
+             (unsigned long long)ps.produced,
+             (unsigned long long)ps.swc2_stores);
+}
+
+/* pgxp — live-tune the value-propagation engine for one-toggle isolation runs
+ * without a rebuild: {"cmd":"pgxp","cpu_mode":0|1,"tolerance":F}. Fields are
+ * optional; the reply echoes the resulting state (same shape as
+ * geom_correction's "pgxp" object, flattened). */
+static void handle_pgxp(int id, const char *json)
+{
+    /* Live toggles for the one-toggle-at-a-time A/B protocol (ENHANCEMENTS.md
+     * G1.6 method rule): same scene, flip one knob, screenshot_hires. */
+    int geom = json_get_int(json, "geometry", -1);
+    if (geom >= 0)
+        gte_geometry_correction_set(geom != 0);
+    int tex = json_get_int(json, "texture", -1);
+    if (tex >= 0)
+        gpu_texture_correction_set(tex != 0);
+    if (geom >= 0 && tex < 0) {
+        /* keep the engine armed consistently with both flags */
+        gpu_texture_correction_set(gpu_texture_correction_enabled());
+    }
+    int cm = json_get_int(json, "cpu_mode", -1);
+    if (cm >= 0)
+        pgxp_set_cpu_mode(cm != 0);
+    /* tolerance is fractional (sub-pixel), so scan it directly — json_get_int
+     * would truncate 0.5 to 0. */
+    const char *p = strstr(json, "\"tolerance\"");
+    if (p) {
+        p += 11;
+        while (*p == ' ' || *p == ':' || *p == '"') p++;
+        if (*p == '-' || (*p >= '0' && *p <= '9') || *p == '.')
+            pgxp_set_tolerance((float)strtod(p, NULL));
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"enabled\":%d,\"cpu_mode\":%d,"
+             "\"tolerance\":%.3f,\"suppress\":%u,\"active\":%d}",
+             id, pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
+             (unsigned)pgxp_test_suppress_depth(), pgxp_test_active());
 }
 
 static void handle_gpu_state(int id, const char *json)
@@ -13167,6 +13227,7 @@ static const CmdEntry s_commands[] = {
     { "write_ram",         handle_write_ram },
     { "gpu_state",         handle_gpu_state },
     { "geom_correction",   handle_geom_correction },
+    { "pgxp",              handle_pgxp },
     { "ws_aspect_cone_site", handle_ws_aspect_cone_site },
     { "ws_margin",         handle_ws_margin },
     { "ws_hud_mode",       handle_ws_hud_mode },

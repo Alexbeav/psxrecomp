@@ -124,8 +124,13 @@ extern "C" uint32_t crc32_compute(const uint8_t *data, size_t size) {
 }
 
 int main() {
-    SDL_SetMainReady();
-    if (SDL_Init(0) != 0) {
+    /* psx_sdl_init: 0 on success under BOTH backends. SDL3's SDL.h no longer
+     * pulls SDL_main.h, and its SDL_Init returns bool (true = success), so
+     * the previous SDL_SetMainReady() + `SDL_Init(0) != 0` rotted twice over
+     * when the default backend moved to SDL3: it did not compile, and the
+     * check was inverted. SDL_SetMainReady is unnecessary here — this test
+     * never uses SDL_main. */
+    if (psx_sdl_init(0) != 0) {
         std::fprintf(stderr, "FAIL: SDL_Init: %s\n", SDL_GetError());
         return 1;
     }

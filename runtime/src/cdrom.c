@@ -36,6 +36,9 @@
 extern void* iso_open(const char* path);
 extern int iso_read_sector(void* handle, uint32_t lba, uint8_t* buffer, int size);
 extern int iso_read_raw_sector(void* handle, uint32_t lba, uint8_t* buffer, int size);
+extern int iso_read_subq(void* handle, uint32_t lba, uint8_t* buffer, int size,
+                         int* valid);
+extern int iso_has_subq_replacements(void* handle);
 extern uint32_t iso_sector_count(void* handle);
 extern void iso_close(void* handle);
 /* Multi-track TOC accessors (CD-DA / multi-track discs). track is 1-based. */
@@ -684,6 +687,18 @@ static void exec_command(uint8_t cmd);
 
 /* ISO reader */
 static void* iso_handle = NULL;
+static uint8_t last_valid_subq[12];
+static int last_valid_subq_available;
+static int subq_replacements_active;
+
+static void update_last_valid_subq(uint32_t lba) {
+    uint8_t subq[12];
+    int valid = 0;
+    if (iso_read_subq(iso_handle, lba, subq, sizeof(subq), &valid) && valid) {
+        memcpy(last_valid_subq, subq, sizeof(last_valid_subq));
+        last_valid_subq_available = 1;
+    }
+}
 
 static CDROMTraceEntry cdrom_trace[CDROM_TRACE_CAP];
 static uint64_t cdrom_trace_seq;
@@ -1316,6 +1331,7 @@ static int read_sector_at(int min, int sec, int sect) {
         } else if (!iso_read_sector(iso_handle, lba, user_data, SECTOR_SIZE)) {
             memset(user_data, 0, sizeof(user_data));
         }
+        if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
     } else {
         memset(user_data, 0, sizeof(user_data));
     }
@@ -2013,18 +2029,23 @@ static void exec_command(uint8_t cmd) {
         } else {
             lba = msf_to_lba(seek_min, seek_sec, seek_sect);
         }
-        int rm, rs, rf;
-        int am, as, af;
-        lba_to_msf(lba - track_lba, 0, &rm, &rs, &rf);
-        lba_to_msf(lba, 150, &am, &as, &af);
-        response_push(bin_to_bcd(track));
-        response_push(0x01);
-        response_push(bin_to_bcd(rm));
-        response_push(bin_to_bcd(rs));
-        response_push(bin_to_bcd(rf));
-        response_push(bin_to_bcd(am));
-        response_push(bin_to_bcd(as));
-        response_push(bin_to_bcd(af));
+        if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
+        if (subq_replacements_active && last_valid_subq_available) {
+            for (int i = 1; i <= 8; ++i) response_push(last_valid_subq[i]);
+        } else {
+            int rm, rs, rf;
+            int am, as, af;
+            lba_to_msf(lba - track_lba, 0, &rm, &rs, &rf);
+            lba_to_msf(lba, 150, &am, &as, &af);
+            response_push(bin_to_bcd(track));
+            response_push(0x01);
+            response_push(bin_to_bcd(rm));
+            response_push(bin_to_bcd(rs));
+            response_push(bin_to_bcd(rf));
+            response_push(bin_to_bcd(am));
+            response_push(bin_to_bcd(as));
+            response_push(bin_to_bcd(af));
+        }
         set_irq(CDIRQ_ACK);
         break;
     }
@@ -2478,6 +2499,9 @@ void cdrom_init(const char* cue_path) {
             iso_handle = NULL;
         }
         iso_handle = iso_open(cue_path);
+        last_valid_subq_available = 0;
+        subq_replacements_active = iso_has_subq_replacements(iso_handle);
+        if (subq_replacements_active) update_last_valid_subq(0);
     }
 
     stat_reg = has_disc() ? CDSTAT_MOTOR : CDSTAT_SHELL;
@@ -2924,6 +2948,7 @@ static int cdrom_snap_emit(PstW *w) {
     WB(response_fifo); WI(response_read); WI(response_count);
     WB(sector_buffer); WI(sector_read_pos); WI(sector_available); WI(sector_size);
     WB(last_sector_buffer); WI(last_sector_lba); WI(last_sector_size);
+    WB(last_valid_subq); WI(last_valid_subq_available);
     /* last_sector_frame is host s_frame_count — zero on the wire so netplay
      * digests/pins are not forked by present-skip / FPS skew. */
     WU(0u); W8(last_sector_mode); W8(last_sector_have_raw);
@@ -2971,6 +2996,7 @@ static int cdrom_snap_parse(PstR *r) {
     RB(response_fifo); RI(response_read); RI(response_count);
     RB(sector_buffer); RI(sector_read_pos); RI(sector_available); RI(sector_size);
     RB(last_sector_buffer); RI(last_sector_lba); RI(last_sector_size);
+    RB(last_valid_subq); RI(last_valid_subq_available);
     RU(last_sector_frame); R8(last_sector_mode); R8(last_sector_have_raw);
     R8(last_sector_raw_mode); R8(last_sector_xa_file); R8(last_sector_xa_channel);
     R8(last_sector_xa_submode); R8(last_sector_xa_coding);
