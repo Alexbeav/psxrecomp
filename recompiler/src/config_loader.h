@@ -396,10 +396,14 @@ struct RuntimeConfig {
     bool                  video_pgxp_cpu_mode = false;
 
     // pgxp_tolerance: reject a corrected vertex whose sub-pixel offset from
-    // the native integer position exceeds this many pixels (a last-ditch
-    // visual clamp; the truncation-agreement check already bounds offsets to
-    // < 1px). Negative disables the clamp (default). Live-tunable over TCP.
-    double                video_pgxp_tolerance = -1.0;
+    // the native integer position exceeds this many pixels (the truncation-
+    // agreement check already bounds offsets to < 1px; this narrows them
+    // further). Default 0.5 — user-validated on Ape Escape (2026-08-15):
+    // unclamped, sparse hairline background-bleed seams appear where a
+    // corrected triangle borders an uncorrected one; at 0.5 the seams are
+    // gone and only sub-half-pixel misalignment remains. Negative disables
+    // the clamp. Live-tunable over TCP (pgxp verb).
+    double                video_pgxp_tolerance = 0.5;
 
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per

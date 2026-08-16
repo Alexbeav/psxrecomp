@@ -74,7 +74,7 @@ static PGXPValue  s_gte[32];                  /* GTE data registers           */
 static uint32_t s_gen = 1;
 static int      s_enabled = 0;
 static int      s_cpu_mode = 0;
-static float    s_tolerance = -1.0f;
+static float    s_tolerance = 0.5f;   /* user-validated seam clamp (G1.10) */
 static uint32_t s_suppress = 0;
 static int      s_deferred_invalidate = 0;
 

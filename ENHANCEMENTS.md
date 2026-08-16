@@ -853,3 +853,17 @@ Crash with Tomba 2 as the 2D negative control; the hook-overhead FPS measure
 autocompile validation. Validation-build notes: title Release builds default
 `PSX_DEBUG_TOOLS=OFF` (no TCP), and a title launched without `--game` binds
 the framework default port 4370.
+
+**Interactive visual isolation, USER-VALIDATED (Ape Escape, in-game,
+2026-08-15).** Same scene, one toggle at a time, player observing live:
+OFF = baseline vertex jiggle; geometry ON unclamped = jiggle largely gone but
+sparse hairline background-bleed seams (a <1px disagreement along a long
+shared edge between a corrected triangle and an uncorrected neighbour — the
+THPS2 line class, NOT wild vertices; both reported artifacts vanished with
+the toggle off); geometry ON with `pgxp_tolerance = 0.5` = **seams gone**,
+only sub-half-pixel misalignment remains. 0.5 is therefore the shipped
+default (config_loader.h), live-tunable via the `pgxp` TCP verb. Known
+tooling defect found on the way: `screenshot_hires` produces a tiled/black
+PNG at 768x480 scale-2 windowed (row-pitch bug in the hires readback) —
+the census + the player's own captures carried the session; fix it before
+the formal Crash/Tomba2 A/B.
