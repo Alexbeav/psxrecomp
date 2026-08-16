@@ -1585,6 +1585,22 @@ function(psxrecomp_add_runtime_target target)
             COMMENT "Staging trusted xdelta3 decoder for derived-disc mods"
             VERBATIM)
     endif()
+
+    # PGXP variant auto-clone (ENHANCEMENTS.md G1.10): with
+    # -DPSX_PGXP_VARIANT=ON, every primary runtime target grows an
+    # <exe>_pgxp sibling — the SAME arguments (same generated C, extras,
+    # ports) compiled with -DPSX_PGXP=1 (see the PGXP option above). Done
+    # HERE, at the end, by replaying ARGN recursively, so it works for
+    # every caller — titles that call this function directly (Ape) and
+    # the psxrecomp_add_game_runtime wrapper alike. Oracle/cosim targets
+    # and the clone itself are excluded.
+    if(NOT PSXRT_PGXP AND NOT PSXRT_ORACLE AND NOT PSXRT_COSIM)
+        option(PSX_PGXP_VARIANT
+            "Also build the <exe>_pgxp PGXP precision-shadowing variant" OFF)
+        if(PSX_PGXP_VARIANT)
+            psxrecomp_add_runtime_target(${target}-pgxp PGXP ${ARGN})
+        endif()
+    endif()
 endfunction()
 
 # Compatibility for early v4 game projects that used the longer helper name.
@@ -1805,22 +1821,11 @@ function(psxrecomp_add_game_runtime target)
             GAME_GENERATED_DISPATCH_C "${_psxg_marker}"
             ${_psxg_rt_args}
         )
+        # psxrecomp_add_runtime_target auto-clones a ${target}-pgxp sibling
+        # when PSX_PGXP_VARIANT is ON; fold it into the tail configuration
+        # below so it gets the same game-codegen defines and includes.
         set(_psxg_targets ${target})
-        # PGXP variant (ENHANCEMENTS.md G1.10): the SAME generated sources
-        # compiled a second time with -DPSX_PGXP=1 into <exe>_pgxp.exe. The
-        # emitted PGXP_*() macros become real hook calls, arming true
-        # geometry correction; the base target is byte-for-byte the
-        # pre-feature build. Opt-in per configure — it roughly doubles the
-        # generated-C compile time.
-        option(PSX_PGXP_VARIANT
-            "Also build the <exe>_pgxp PGXP precision-shadowing variant" OFF)
-        if(PSX_PGXP_VARIANT)
-            psxrecomp_add_runtime_target(${target}-pgxp
-                PGXP
-                GAME_GENERATED_FULL_C ${_psxg_full_list}
-                GAME_GENERATED_DISPATCH_C "${_psxg_marker}"
-                ${_psxg_rt_args}
-            )
+        if(TARGET ${target}-pgxp)
             list(APPEND _psxg_targets ${target}-pgxp)
         endif()
     else()
