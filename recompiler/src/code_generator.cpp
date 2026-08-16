@@ -1,4 +1,5 @@
 #include "code_generator.h"
+#include "pgxp_hook_emitter.h"
 #include "control_flow.h"
 #include "gte_register_classification.h"
 #include "../src/bios_address_model.h"
@@ -1572,12 +1573,19 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                         ? reg_name(rs)
                         : fmt::format("{} + {}", reg_name(rs), offset);
                     bool special = PSXRecompGTERegisters::data_write_needs_helper(static_cast<uint8_t>(rt));
+                    /* The raw loaded word is captured for the PGXP hook: the
+                     * register may hold a MASKED value (write helper), and
+                     * the shadow must validate against the word as loaded. */
                     if (special) {
-                        code = gte_stall + fmt::format("gte_write_data(cpu, {}, psx_cyc_lwc2_read(cpu, {}));  /* lwc2 gte[{}] */",
-                                           rt, addr, rt);
+                        code = gte_stall + fmt::format(
+                            "{{ uint32_t _pgxa = {}; uint32_t _pgxv = psx_cyc_lwc2_read(cpu, _pgxa); "
+                            "gte_write_data(cpu, {}, _pgxv); PGXP_COP2(0x{:08X}u, _pgxv, _pgxa); }}  /* lwc2 gte[{}] */",
+                            addr, rt, instr, rt);
                     } else {
-                        code = gte_stall + fmt::format("cpu->gte_data[{}] = psx_cyc_lwc2_read(cpu, {});  /* lwc2 gte[{}], ({}) */",
-                                          rt, addr, rt, addr);
+                        code = gte_stall + fmt::format(
+                            "{{ uint32_t _pgxa = {}; uint32_t _pgxv = psx_cyc_lwc2_read(cpu, _pgxa); "
+                            "cpu->gte_data[{}] = _pgxv; PGXP_COP2(0x{:08X}u, _pgxv, _pgxa); }}  /* lwc2 gte[{}], ({}) */",
+                            addr, rt, instr, rt, addr);
                     }
                 }
                 break;
@@ -1593,16 +1601,15 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
                         ? fmt::format("gte_read_data(cpu, {})", rt)
                         : fmt::format("cpu->gte_data[{}]", rt);
                     std::string swc2_store_pc = fmt::format("g_debug_last_store_pc = 0x{:08X}u; ", addr);
-                    if (offset == 0) {
-                        code = gte_stall + swc2_store_pc + fmt::format(
-                            "psx_store_cycle_barrier(); cpu->write_word({}, {}); gte_precision_store_word({}, {});  /* swc2 gte[{}], ({}) */",
-                            reg_name(rs), value, reg_name(rs), rt, rt, reg_name(rs));
-                    } else {
-                        code = gte_stall + swc2_store_pc + fmt::format(
-                            "psx_store_cycle_barrier(); cpu->write_word({} + {}, {}); gte_precision_store_word({} + {}, {});  /* swc2 gte[{}], {}({}) */",
-                            reg_name(rs), offset, value, reg_name(rs), offset, rt,
-                            rt, offset, reg_name(rs));
-                    }
+                    std::string swc2_addr = (offset == 0)
+                        ? reg_name(rs)
+                        : fmt::format("{} + {}", reg_name(rs), offset);
+                    code = gte_stall + swc2_store_pc + fmt::format(
+                        "{{ uint32_t _pgxa = {}; uint32_t _pgxv = {}; "
+                        "psx_store_cycle_barrier(); cpu->write_word(_pgxa, _pgxv); "
+                        "gte_precision_store_word(_pgxa, {}); "
+                        "PGXP_COP2(0x{:08X}u, _pgxv, _pgxa); }}  /* swc2 gte[{}], {}({}) */",
+                        swc2_addr, value, rt, instr, rt, offset, reg_name(rs));
                 }
                 break;
             default:
@@ -1610,6 +1617,7 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
         }
     }
 
+    PSXRecomp::append_pgxp_hooks(instr, code);
     return config_.indent + code + comment;
 }
 

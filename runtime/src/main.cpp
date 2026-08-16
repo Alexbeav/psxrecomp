@@ -32,6 +32,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "pgxp.h"
 #include "interrupts.h"
 #include "present_ring.h"
 #include "load_transition_ring.h"
@@ -1108,6 +1109,8 @@ static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
  * SXY readback are untouched. Default off = the faithful floor. */
 static int           g_video_geometry_correction   = 0;
 static int           g_video_perspective_texturing = 0;
+static int           g_video_pgxp_cpu_mode         = 0;
+static float         g_video_pgxp_tolerance        = 0.5f;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
@@ -10384,6 +10387,8 @@ int main(int argc, char** argv) {
                 gc.runtime.video_geometry_correction ? 1 : 0;
             g_video_perspective_texturing =
                 gc.runtime.video_perspective_texturing ? 1 : 0;
+            g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
+            g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
@@ -12118,8 +12123,20 @@ session_reboot:
     /* Sub-pixel vertex precision + perspective-correct UVs. Both default off;
      * with both off every setter below leaves the tracking caches disabled and
      * the draw path is the faithful integer one, unchanged. */
+    /* Env overrides (debug/validation path, like PSX_BIOS_HLE): arm the
+     * corrections from process start so free-running (headless) boots can be
+     * measured from the first projected vertex — a TCP toggle always arrives
+     * after the interesting window. '0' = off, anything else = on. */
+    if (const char* e = std::getenv("PSX_GEOMETRY_CORRECTION"))
+        g_video_geometry_correction = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PERSPECTIVE_TEXTURING"))
+        g_video_perspective_texturing = (*e && *e != '0') ? 1 : 0;
+    if (const char* e = std::getenv("PSX_PGXP_CPU_MODE"))
+        g_video_pgxp_cpu_mode = (*e && *e != '0') ? 1 : 0;
     gte_geometry_correction_set(g_video_geometry_correction);
     gpu_texture_correction_set(g_video_perspective_texturing);
+    pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
+    pgxp_set_tolerance(g_video_pgxp_tolerance);
     if (g_video_geometry_correction || g_video_perspective_texturing) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",
