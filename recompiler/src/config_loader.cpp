@@ -571,6 +571,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             rt.video_perspective_texturing =
                 toml::find<bool>(video, "perspective_texturing");
         }
+        if (video.contains("pgxp_cpu_mode")) {
+            rt.video_pgxp_cpu_mode = toml::find<bool>(video, "pgxp_cpu_mode");
+        }
+        if (video.contains("pgxp_tolerance")) {
+            rt.video_pgxp_tolerance =
+                toml::find<double>(video, "pgxp_tolerance");
+        }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
             if      (mode == "raw")       rt.video_screen_kind = 0;

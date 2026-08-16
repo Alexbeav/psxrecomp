@@ -83,6 +83,7 @@ if(BUILD_TESTING)
     add_executable(gte_register_access_test
         tests/test_gte_register_access.cpp
         src/gte.cpp
+        src/pgxp.cpp
     )
     target_include_directories(gte_register_access_test PRIVATE include)
     target_compile_definitions(gte_register_access_test PRIVATE
@@ -90,6 +91,16 @@ if(BUILD_TESTING)
         PSX_GTE_REGISTER_TEST=1
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME gte_register_access_test COMMAND gte_register_access_test)
+
+    # PGXP value-propagation engine (ENHANCEMENTS.md G1.2/G1.3): shadow
+    # load/store/COP2 roundtrips, half-word semantics, validate-on-read
+    # (foreign overwrite + DMA-overwrite rejection), MOVE/repack arithmetic,
+    # suppression bracket, invalidate-all, and GetPreciseVertex safeguards
+    # (truncation agreement + tolerance clamp). White-box: includes src/pgxp.cpp
+    # and stubs the gte.cpp fallback-cache extern.
+    add_executable(pgxp_test tests/test_pgxp.cpp src/pgxp.cpp)
+    target_include_directories(pgxp_test PRIVATE include)
+    add_test(NAME pgxp_test COMMAND pgxp_test)
 
     add_executable(psx_instr_cost_test tests/test_psx_instr_cost.cpp)
     target_include_directories(psx_instr_cost_test PRIVATE include)

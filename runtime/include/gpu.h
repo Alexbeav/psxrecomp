@@ -310,6 +310,7 @@ int  psx_ws_auto_cull_on(void);
  * tracking it needs, so a polygon only qualifies when every position word in
  * its DMA packet was written by a GTE projection store. Default off. */
 void gpu_texture_correction_set(int enabled);
+int gpu_texture_correction_enabled(void);
 /* Triangles drawn with perspective-correct UVs since startup. */
 uint32_t gpu_texture_correction_hits(void);
 /* GTE-activity gameplay detector ([widescreen] gte_game_mode) for 3D titles

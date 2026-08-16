@@ -387,6 +387,20 @@ struct RuntimeConfig {
     // [video] perspective_texturing = true.
     bool                  video_perspective_texturing = false;
 
+    // pgxp_cpu_mode: propagate sub-pixel precision through CPU arithmetic as
+    // well as memory moves (the PGXP engine's tier-2 hooks). Off by default —
+    // the same default as the reference implementations — because some games
+    // deliberately rely on integer truncation in their own math; value
+    // validation keeps it SAFE either way, this only trades coverage.
+    // Meaningful only in a pgxp-flavour build; live-tunable over TCP.
+    bool                  video_pgxp_cpu_mode = false;
+
+    // pgxp_tolerance: reject a corrected vertex whose sub-pixel offset from
+    // the native integer position exceeds this many pixels (a last-ditch
+    // visual clamp; the truncation-agreement check already bounds offsets to
+    // < 1px). Negative disables the clamp (default). Live-tunable over TCP.
+    double                video_pgxp_tolerance = -1.0;
+
     // offer_vulkan: expose the experimental Vulkan renderer in the launcher.
     // Defaults false even for Vulkan-enabled builds; developers must opt in per
     // game once visuals are validated.

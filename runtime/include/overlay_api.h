@@ -8,6 +8,7 @@
  */
 
 #include "cpu_state.h"
+#include "pgxp_hooks.h"
 #include <stdint.h>
 
 /* ABI version exported by every overlay DLL as `overlay_abi()`.  The loader
@@ -291,6 +292,15 @@ typedef struct {
 
     /* Aspect-scaled terrain-frustum angle helper (ABI v21). */
     uint32_t (*ws_angle_widen)(uint32_t vanilla);
+
+    /* PGXP dataflow-shadowing hook table (pgxp_hooks.h). Only pgxp-flavour
+     * shards (PSX_OVERLAY_FLAVOR pgxp bit, compiled with -DPSX_PGXP=1) emit
+     * calls to psx_pgxp_*; their preamble forwards through this table. Base-
+     * flavour shards never reference it. Appended LAST; NULL on an older host
+     * no-ops every hook — precision shadowing is visual-only, never
+     * load-bearing. The ABI version bump that arms this ships with the
+     * emitter change (Phase 2 of ENHANCEMENTS.md G1 value propagation). */
+    const PGXPHooks *pgxp;
 } OverlayCallbacks;
 
 #ifdef __cplusplus
