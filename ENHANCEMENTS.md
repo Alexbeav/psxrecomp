@@ -837,3 +837,19 @@ Incidental fixes while landing this: the per-target `psx_game_version.txt`
 (runtime.cmake once-only stamp), and `overlay_capture_retry_test` not
 compiling under the SDL3 default (SDL_SetMainReady gone + inverted SDL_Init
 check — it now uses `psx_sdl_init`).
+
+**First real-title census (Ape Escape, 2026-08-15) — the G1.9 gate is
+PASSED.** Worktree build against this branch (`_wt-ape-pgxp`,
+`-DPSX_PGXP_VARIANT=ON -DPSX_DEBUG_TOOLS=ON`, game C regenerated), memory-mode
+only (`pgxp_cpu_mode` off), boot → title → attract, per-10s windows:
+**79–90% dataflow hits** (vs the 5.2% position-cache ceiling of G1.4),
+fallback ≤0.4%, `value_mismatch` 0, `trunc_reject` ~0, and every dataflow hit
+carried a usable depth. The residual native share is 2D HUD/sprite content,
+which is exactly what must stay native. Still to run before any ship surface:
+the windowed `screenshot_hires` off/on A/B (headless has NO hi-res mirror —
+`scale:1` fallback, the same blind-instrument trap G1.5 documented), on Ape +
+Crash with Tomba 2 as the 2D negative control; the hook-overhead FPS measure
+(pgxp build, feature off, vs base); and pgxp-flavour (`_f2`) overlay-shard
+autocompile validation. Validation-build notes: title Release builds default
+`PSX_DEBUG_TOOLS=OFF` (no TCP), and a title launched without `--game` binds
+the framework default port 4370.
