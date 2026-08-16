@@ -1425,6 +1425,9 @@ static bool          g_ws_hud_sprt = false;
  * units include that ABI header and do not need this frontend-only setter. */
 extern "C" void gpu_ws_set_clear_reveal(int on);
 extern "C" void gpu_ws_set_precise_nclip(int on);
+extern "C" void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
+extern "C" int gpu_ws_netplay_local_viewport_base_x(void);
+extern "C" int gpu_ws_netplay_local_viewport_width(void);
 extern "C" void gpu_ws_set_nw_textured_edges(int on, int scale_pct);
 extern "C" void gpu_ws_set_signed_x_bound_sites(const uint32_t*, const uint32_t*, int);
 /* Widescreen engages at game entry (fntrace_is_game_started): the BIOS boot
@@ -1512,7 +1515,13 @@ static void refresh_widescreen_projection() {
     if (!g_ws_engaged) return;
 
     const bool wide = g_video_aspect_num * 3 != g_video_aspect_den * 4;
-    const int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
+    const bool local_native_wide =
+        g_netplay_local_viewport == 1 && psx_netplay_active() &&
+        gpu_last_frame_vertical_split_screen();
+    const bool native_wide = (g_netplay_local_viewport == 1)
+        ? local_native_wide
+        : (g_ws_native_wide != 0);
+    const int mode = wide ? (native_wide ? 2 : 1) : 0;
     int proj_num = g_video_aspect_num;
     int proj_den = g_video_aspect_den;
     if (mode == 1) {
@@ -2479,9 +2488,11 @@ static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
     if (!netplay_enabled ||
         g_netplay_local_viewport != 1 ||
         g_netplay_local_viewport_aspect == 0) {
+        gpu_ws_set_netplay_local_viewport(0, 0);
         return;
     }
 
+    gpu_ws_set_netplay_local_viewport(1, psx_netplay_local_slot());
     switch (g_netplay_local_viewport_aspect) {
         case 1:
             (void)psx_mod_set_fixed_display_aspect(16u, 9u);
@@ -6426,6 +6437,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool pin_43    = false;  /* pillarbox this present (FMV, or a native-wide
                                 game frame that could not present wide) */
     bool depth24_frame = false;
+    bool local_viewport_crop_applied = false;
     if (s_force_present_after_load && g_gl_active)
         gl_renderer_flush_cpu_uploads();
     {
@@ -6480,8 +6492,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (g_gl_active)
             gl_renderer_set_interpolation_suspended(
                 fmv_frame || mdec_recently_active(2));
-        const bool local_viewport_crop = netplay_local_viewport_slot() >= 0;
-        bool local_viewport_crop_applied = false;
+        const int local_viewport_slot = netplay_local_viewport_slot();
+        const bool local_viewport_crop = local_viewport_slot >= 0;
+        bool local_viewport_wide =
+            local_viewport_crop && g_ws_engaged && ws_native_wide_active() &&
+            gr_wide_supported() && gpu_ws_netplay_local_viewport_width() > 0;
 
         /* Canonical present width. Native-wide does NOT widen the canonical read
          * (that bled across adjacent framebuffers); it composites into a separate
@@ -6493,8 +6508,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * from the displayed buffer's surface. FMV/menu frames stay 4:3. */
         bool wide_present = (!fmv_frame && !di.depth24 && g_ws_engaged &&
                              ws_native_wide_active() && gr_wide_supported() &&
-                             !local_viewport_crop);
-        if (wide_present) present_w = w + (uint32_t)ws_nw_extra();
+                             (!local_viewport_crop || local_viewport_wide));
+        if (wide_present) {
+            present_w = local_viewport_wide
+                ? (uint32_t)gpu_ws_netplay_local_viewport_width()
+                : (w + (uint32_t)ws_nw_extra());
+        }
 
         /* Native-wide invariant: canonical (320-wide) content is NEVER
          * stretched across the wide window — a game frame that cannot present
@@ -6597,12 +6616,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
              * hires path if the displayed buffer has no surface yet. */
             int s = gr_scale();
             int sw = (int)present_w * s;
+            int base_x = local_viewport_wide
+                ? gpu_ws_netplay_local_viewport_base_x()
+                : (int)di.display_x;
             int n = gr_render_wide_display(sdl_pixel_buf, (int)(sw * sizeof(uint32_t)),
-                                           (int)di.display_x, (int)di.display_y, (int)h);
+                                           base_x, (int)di.display_y, (int)h);
             if (n > 0) {
                 active_scale = s;
             } else {
                 wide_present = false;
+                local_viewport_wide = false;
                 present_w = w;
                 pres_entry->path          = PRES_PATH_CANONICAL;
                 pres_entry->wide_fellback = 1;
@@ -6645,7 +6668,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
         int present_px_w = (int)present_w * active_scale;
         int present_px_h = (int)h * active_scale;
-        if (crop_present_to_netplay_local_viewport(sdl_pixel_buf,
+        if (!local_viewport_wide &&
+            crop_present_to_netplay_local_viewport(sdl_pixel_buf,
                                                    &present_px_w,
                                                    present_px_h)) {
             pin_43 = false;
@@ -6709,7 +6733,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #ifndef PSX_SDL_NO_RENDER
     int src_w = (int)present_w * active_scale;
     int src_h = (int)h * active_scale;
-    if (netplay_local_viewport_slot() >= 0 && src_w >= 2)
+    if (local_viewport_crop_applied && src_w >= 2)
         src_w /= 2;
     if (g_gl_active) {
         /* OpenGL present: upload the active display rect and draw a full-screen
@@ -12831,6 +12855,7 @@ session_reboot:
                 nrc, net_cfg.local_slot, net_cfg.bind_hostport, net_cfg.peer_hostport);
             return 1;
         }
+        apply_netplay_local_viewport_aspect(net_cfg.enabled);
         std::printf("psxrecomp: netplay transport=%s slot=%d input_player=%d delay=%d "
                     "force_turn=%d bind=%s peer=%s session=%u\n",
                     psx_netplay_transport_name(),

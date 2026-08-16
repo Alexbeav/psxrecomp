@@ -212,6 +212,10 @@ void psx_ws_sprite_tag(struct CPUState* cpu);
  * by this; 0 when native-wide is inactive). */
 int  ws_native_wide_active(void);
 int  ws_nw_extra(void);
+int  ws_nw_present_width(void);
+void gpu_ws_set_netplay_local_viewport(int enabled, int slot);
+int  gpu_ws_netplay_local_viewport_base_x(void);
+int  gpu_ws_netplay_local_viewport_width(void);
 /* True when the current frame must present at native 4:3 (FMV video or a
  * full-2D menu/title screen), so the squash is suppressed and content drawn
  * pixel-native. The present path uses the same predicate to pillarbox. */

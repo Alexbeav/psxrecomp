@@ -128,6 +128,7 @@ static int ws_engaged(void) { return ws_mode != 0; }
 
 /* Forward decls: defined later but used by psx_ws_backdrop_x above them. */
 static int32_t ws_scale_about(int32_t x, int32_t ax);
+static int32_t ws_disp_x(void);
 static int32_t ws_disp_w(void);
 static void ws_clear_all_reveal_margins(void);
 
@@ -349,8 +350,48 @@ int ws_native_wide_active(void) {
 static int ws_native_wide_configured(void) {
     return ws_mode == 2 && ws_cfg_num * 3 > ws_cfg_den * 4;
 }
+
+static int ws_local_viewport_cfg = 0;
+static int ws_local_viewport_slot = 0;
+static int ws_local_viewport_draw_target(int *base_x);
+static int ws_vertical_split_active(void);
+void gpu_ws_set_netplay_local_viewport(int enabled, int slot) {
+    ws_local_viewport_cfg = enabled ? 1 : 0;
+    ws_local_viewport_slot = slot == 1 ? 1 : 0;
+    ws_nw_sync_target();
+}
+
+static int ws_local_viewport_layout(int *base_x, int *source_w,
+                                    int *wide_w, int *offset) {
+    if (!ws_local_viewport_cfg || !ws_native_wide_configured() ||
+        !ws_vertical_split_active())
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 2 || di.height == 0)
+        return 0;
+    if ((di.width & 1u) != 0)
+        return 0;
+
+    int src_w = (int)di.width / 2;
+    int target_w = ((int)di.height * ws_cfg_num + ws_cfg_den / 2) / ws_cfg_den;
+    if (target_w < src_w)
+        target_w = src_w;
+    int off = (target_w - src_w) / 2;
+    int final_w = src_w + off * 2;
+
+    if (base_x) *base_x = (int)di.display_x + (ws_local_viewport_slot ? src_w : 0);
+    if (source_w) *source_w = src_w;
+    if (wide_w) *wide_w = final_w;
+    if (offset) *offset = off;
+    return final_w > src_w && off > 0;
+}
+
 static int ws_nw_configured_offset(void) {
     if (!ws_native_wide_configured()) return 0;
+    int local_offset = 0;
+    if (ws_local_viewport_layout(NULL, NULL, NULL, &local_offset))
+        return local_offset;
     int numr = 3 * ws_cfg_num - 4 * ws_cfg_den;
     int w = (int)ws_disp_w();
     return (w * numr + 4 * ws_cfg_den) / (8 * ws_cfg_den);
@@ -360,6 +401,23 @@ static int ws_nw_offset(void) {
     return ws_nw_configured_offset();
 }
 int ws_nw_extra(void) { return 2 * ws_nw_offset(); }
+
+int ws_nw_present_width(void) {
+    int wide_w = 0;
+    if (ws_local_viewport_layout(NULL, NULL, &wide_w, NULL))
+        return wide_w;
+    return (int)ws_disp_w() + ws_nw_extra();
+}
+
+int gpu_ws_netplay_local_viewport_base_x(void) {
+    int base = 0;
+    return ws_local_viewport_layout(&base, NULL, NULL, NULL) ? base : 0;
+}
+
+int gpu_ws_netplay_local_viewport_width(void) {
+    int wide_w = 0;
+    return ws_local_viewport_layout(NULL, NULL, &wide_w, NULL) ? wide_w : 0;
+}
 
 /* Per-side X cull margin in screen/world units (the game's draw classifier
  * works in objX-camX where 1 unit ~= 1 native-4:3 screen pixel). The squash
@@ -1413,14 +1471,15 @@ int psx_ws_cull_bltz_at(const uint32_t *words, int n, int idx) {
  * x is the int16 screenX the handler was about to store. */
 int psx_ws_backdrop_x(int x) {
     if (ws_native_wide_active()) {
+        int32_t X = ws_disp_x();
         int32_t W = (int32_t)ws_disp_w();
         int32_t extra = ws_nw_extra();
         int32_t cx = W / 2;
-        int32_t d = (int16_t)x - cx;
-        return (int)(cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W);
+        int32_t d = (int16_t)x - X - cx;
+        return (int)(X + cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W);
     }
     if (!ws_active()) return (int16_t)x;
-    int32_t cx = ws_disp_w() / 2;                 /* screen centre (=160 @ 320) */
+    int32_t cx = ws_disp_x() + ws_disp_w() / 2;   /* screen centre (=160 @ 320) */
     return ws_scale_about((int16_t)x, cx);
 }
 
@@ -1828,8 +1887,20 @@ static int32_t ws_scale_len(int32_t w) {
     return s < 1 ? 1 : s;
 }
 
-/* Horizontal display width in drawing space (e.g. 320). */
+/* Horizontal display viewport in drawing space (e.g. 320). For a selected
+ * netplay-local split viewport this is that player's authored half, not the
+ * whole composed display. */
+static int32_t ws_disp_x(void) {
+    int base = 0;
+    if (ws_local_viewport_layout(&base, NULL, NULL, NULL))
+        return (int32_t)base;
+    return 0;
+}
+
 static int32_t ws_disp_w(void) {
+    int src_w = 0;
+    if (ws_local_viewport_layout(NULL, &src_w, NULL, NULL))
+        return (int32_t)src_w;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
     return di.width ? (int32_t)di.width : 320;
@@ -1846,8 +1917,8 @@ static int32_t ws_disp_h(void) {
  * display; ordinary world-space rectangles remain untouched. */
 static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
     if (!ws_native_wide_active()) return;
-    int W = (int)ws_disp_w(), H = (int)ws_disp_h();
-    if (*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) {
+    int X = (int)ws_disp_x(), W = (int)ws_disp_w(), H = (int)ws_disp_h();
+    if (*x <= X && *x + *w >= X + W && y <= 0 && y + h >= H) {
         int off = ws_nw_offset();
         *x -= off;
         *w += 2 * off;
@@ -1862,11 +1933,12 @@ static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
  * one zone, so its pieces share a pivot and stay aligned. (Full-2D menu
  * screens never reach here — they get zero squash + 4:3 pillarbox instead.) */
 static int32_t ws_hud_pivot(int32_t x, int32_t w) {
+    int32_t X = ws_disp_x();
     int32_t W = ws_disp_w();
-    int32_t cx = 2 * x + w;            /* 2*centre, avoids losing the half */
-    if (3 * cx < 2 * W) return 0;
-    if (3 * cx > 4 * W) return W;
-    return W / 2;
+    int32_t cx = 2 * (x - X) + w;      /* 2*centre, avoids losing the half */
+    if (3 * cx < 2 * W) return X;
+    if (3 * cx > 4 * W) return X + W;
+    return X + W / 2;
 }
 
 /* Automatic UI correction is deliberately tied to draw provenance, not to
@@ -1938,8 +2010,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
         if (vy[i] > max_y) max_y = vy[i];
     }
     int32_t width = max_x - min_x, height = max_y - min_y;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((min_x <= 0 && max_x >= W && min_y <= 0 && max_y >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((min_x <= X && max_x >= X + W && min_y <= 0 && max_y >= H) ||
         (width > W / 2 && height > H / 4))
         return 0;
 
@@ -1953,8 +2025,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t y, int *w, int h) {
     if (!x || !w || *w <= 0 || psx_ws_prim_is_tagged())
         return 0;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((*x <= X && *x + *w >= X + W && y <= 0 && y + h >= H) ||
         (*w > W / 2 && h > H / 4))
         return 0;
     int32_t anchor;
@@ -2031,8 +2103,9 @@ static int32_t ws_nw_hud_shift(int32_t x, int32_t w) {
      * for live A/B: some HUD composites (Tomba's AP counter) render through
      * the tagged sprite funnel and stay inset without it. */
     if (ws_anchor_addr && !ws_nw_hud_tag_rects && psx_ws_prim_is_tagged()) return 0;
+    int32_t X  = ws_disp_x();
     int32_t W  = ws_disp_w();
-    int32_t cx = 2 * x + w;            /* 2*centre, avoids losing the half */
+    int32_t cx = 2 * (x - X) + w;      /* 2*centre, avoids losing the half */
     if (3 * cx < 2 * W) return -off;   /* left third  -> pull to left edge  */
     if (3 * cx > 4 * W) return  off;   /* right third -> push to right edge */
     return 0;                          /* middle third -> stay centred      */
@@ -2077,6 +2150,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
     if (!ws_nw_backdrop || !ws_native_wide_active()) return 0;
     int32_t extra = ws_nw_extra();
     if (extra <= 0) return 0;
+    int32_t X = ws_disp_x();
     int32_t W = ws_disp_w();
     const int32_t EDGE = 24;                 /* slack for "touches the frame edge" */
     int32_t minx = vx[0], maxx = vx[0], miny = vy[0], maxy = vy[0];
@@ -2087,7 +2161,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
         if (vy[i] > maxy) maxy = vy[i];
     }
     /* Must span the full display width and a real vertical extent. */
-    if (minx > EDGE || maxx < W - EDGE || (maxy - miny) < 64) return 0;
+    if (minx > X + EDGE || maxx < X + W - EDGE || (maxy - miny) < 64) return 0;
     /* Axis-aligned: every vertex X sits at either the min or the max edge, and
      * every Y at the top or bottom edge (a true screen-space rectangle). */
     for (int i = 0; i < 4; i++) {
@@ -2097,7 +2171,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
     }
     /* Stretch X about the display centre by (W+extra)/W so [0,W] -> [-off, W+off],
      * which the wide compositor (+off) maps onto the full [0, W+extra] surface. */
-    int32_t cx = W / 2;
+    int32_t cx = X + W / 2;
     for (int i = 0; i < 4; i++) {
         int32_t d = vx[i] - cx;
         vx[i] = cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W;
@@ -2169,6 +2243,45 @@ static uint32_t texture_disable;   /* bit 15 */
 /* Draw area (set by GP0(E3h)/GP0(E4h)) */
 static uint32_t draw_area_left, draw_area_top;
 static uint32_t draw_area_right, draw_area_bottom;
+
+static int draw_area_intersects_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0)
+        return 0;
+    int r = x + w - 1;
+    int b = y + h - 1;
+    return !((int)draw_area_right < x ||
+             (int)draw_area_left > r ||
+             (int)draw_area_bottom < y ||
+             (int)draw_area_top > b);
+}
+
+static int ws_local_viewport_draw_target(int *base_x) {
+    int base = 0, src_w = 0;
+    if (!ws_local_viewport_layout(&base, &src_w, NULL, NULL))
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (draw_area_intersects_rect(base, (int)di.display_y,
+                                  src_w, (int)di.height)) {
+        if (base_x) *base_x = base;
+        return 1;
+    }
+    return 0;
+}
+
+static int ws_display_viewport_draw_target(int *base_x) {
+    if (!ws_native_wide_active())
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width == 0 || di.height == 0)
+        return 0;
+    if (!draw_area_intersects_rect((int)di.display_x, (int)di.display_y,
+                                   (int)di.width, (int)di.height))
+        return 0;
+    if (base_x) *base_x = (int)di.display_x;
+    return 1;
+}
 
 typedef struct GpuVerticalSplitTrace {
     uint8_t left_seen;
@@ -2293,8 +2406,12 @@ static void split_trace_note_draw_area(void) {
     }
 }
 
-int gpu_last_frame_vertical_split_screen(void) {
+static int ws_vertical_split_active(void) {
     return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+}
+
+int gpu_last_frame_vertical_split_screen(void) {
+    return ws_vertical_split_active();
 }
 
 void gpu_vertical_split_debug(int *active, int *left_age, int *right_age) {
@@ -2308,7 +2425,18 @@ void gpu_vertical_split_debug(int *active, int *left_age, int *right_age) {
  * disable mirroring for this draw. Called when the draw env changes. */
 static void ws_nw_sync_target(void) {
     if (!ws_native_wide_active()) { gr_wide_disable_target(); return; }
-    gr_wide_configure((int)ws_disp_w() + ws_nw_extra(), ws_nw_offset());
+    gr_wide_configure(ws_nw_present_width(), ws_nw_offset());
+    int local_base = 0;
+    if (ws_local_viewport_draw_target(&local_base)) {
+        gr_wide_set_target(local_base);
+        return;
+    }
+    if (ws_local_viewport_cfg) { gr_wide_disable_target(); return; }
+    int display_base = 0;
+    if (ws_display_viewport_draw_target(&display_base)) {
+        gr_wide_set_target(display_base);
+        return;
+    }
     uint32_t base = draw_area_left;
     if (ws_is_fb_base(base)) gr_wide_set_target((int)base);
     else                     gr_wide_disable_target();
@@ -3175,7 +3303,11 @@ static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
  * https://github.com/mstan/psxrecomp/pull/73
  * Keep that credit with this guarded framebuffer-target variant. */
 static inline int32_t draw_area_wide_x_margin(void) {
-    if (!ws_native_wide_active() || !ws_is_fb_base(draw_area_left)) return 0;
+    int local_base = 0;
+    if (!ws_native_wide_active()) return 0;
+    if (ws_local_viewport_draw_target(&local_base)) return (int32_t)ws_nw_offset();
+    if (ws_display_viewport_draw_target(NULL)) return (int32_t)ws_nw_offset();
+    if (!ws_is_fb_base(draw_area_left)) return 0;
     return (int32_t)ws_nw_offset();
 }
 
@@ -3971,7 +4103,11 @@ static void gp0_exec_fill_rect(void) {
     /* Native-wide: when the game clears a display buffer, clear the full width
      * of that buffer's wide surface over the same rows — refreshing the centred
      * content region and keeping the revealed margins clean. */
-    if (ws_native_wide_active() && ws_is_fb_base(dst_x)) {
+    int local_base = 0;
+    if (ws_native_wide_active() &&
+        (ws_is_fb_base(dst_x) ||
+         (ws_local_viewport_draw_target(&local_base) &&
+          dst_x == (uint32_t)local_base))) {
         gr_wide_clear((int)dst_x, (int)dst_y, (int)height, color16);
     }
 }
@@ -4362,15 +4498,15 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
     }
 
     int32_t width = max_x - min_x, height = max_y - min_y;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((min_x <= 0 && max_x >= W && min_y <= 0 && max_y >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((min_x <= X && max_x >= X + W && min_y <= 0 && max_y >= H) ||
         (width > W / 2 && height > H / 4))
         return;
 
     WsUiPrepassItem *item = &ws_ui_prepass[ws_ui_prepass_count++];
     item->group.key =
         ws_auto_ui_group_key_words(words, op, min_y, height);
-    item->group.x = min_x;
+    item->group.x = min_x - X;
     item->group.width = width;
     item->group.anchor = 0;
     item->src_addr = source_addr & 0x1FFFFCu;
@@ -4463,13 +4599,14 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = ws_ui_prepass_count >= 32u && !ws_gte_game_mode_cfg;
     if (ws_ui_prepass_count == 0) return;
 
+    const int32_t group_origin = ws_disp_x();
     WsUiGroupItem groups[WS_UI_PREPASS_MAX];
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         groups[i] = ws_ui_prepass[i].group;
     ws_ui_group_assign(groups, ws_ui_prepass_count, ws_disp_w(),
                        ws_auto_ui_dense);
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
-        ws_ui_prepass[i].group.anchor = groups[i].anchor;
+        ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
 }
 
 /* Per-opcode execution counters (exposed via gpu_get_opcode_stats) */
