@@ -26,6 +26,22 @@ int psx_mod_register_function_entry_plugin(
 /* Called only from generated functions explicitly listed by the game config. */
 void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
 
+/*
+ * Package-gated function override (see runtime/include/func_override.h for
+ * the full contract). Registration queues the override under the plugin id;
+ * it is ARMED into the dispatcher tier only when a resolved package plan
+ * selects that plugin — the same gating as vblank/activation callbacks. The
+ * callback obeys the guest ABI (args cpu->gpr[4..7], result cpu->gpr[2]);
+ * return 1 = handled (guest resumes at $ra), 0 = decline (original runs).
+ * Wrap semantics via func_override_call_original(); optional residency
+ * guard via expected_words (NULL/0 = unguarded).
+ */
+typedef int (*PSXModFunctionOverrideFn)(struct CPUState* cpu);
+int psx_mod_register_function_override(const char* id, uint32_t address,
+                                       PSXModFunctionOverrideFn fn,
+                                       const uint32_t* expected_words,
+                                       int n_words);
+
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);
 uint8_t psx_mod_read_byte(uint32_t address);

@@ -8877,6 +8877,41 @@ static void handle_wide_full(int id, const char *json)
              id, path, W, H);
 }
 
+/* Function-override tier introspection (func_override.h): count + per-entry
+ * {id, addr, calls, guard_misses}. calls == 0 = never reached (wrong address
+ * or path never ran); guard_misses = consults declined by the residency
+ * guard. */
+static void handle_func_override(int id, const char *json)
+{
+    extern int func_override_count(void);
+    extern int func_override_get_ex(int index, char *id_out,
+                                    uint32_t *addr_out, uint64_t *calls_out,
+                                    uint64_t *guard_misses_out,
+                                    int *guarded_out);
+    (void)json;
+    char buf[16 * 1024];
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"id\":%d,\"ok\":true,\"count\":%d,\"overrides\":[",
+                     id, func_override_count());
+    for (int i = 0; i < func_override_count(); i++) {
+        char oid[64];
+        uint32_t addr = 0;
+        uint64_t calls = 0, misses = 0;
+        int guarded = 0;
+        if (!func_override_get_ex(i, oid, &addr, &calls, &misses, &guarded))
+            break;
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n,
+                      "%s{\"id\":\"%s\",\"addr\":\"0x%08X\",\"calls\":%llu,"
+                      "\"guard_misses\":%llu,\"guarded\":%d}",
+                      i ? "," : "", oid, addr,
+                      (unsigned long long)calls, (unsigned long long)misses,
+                      guarded);
+        if ((size_t)n >= sizeof(buf) - 256) break;
+    }
+    snprintf(buf + n, sizeof(buf) - (size_t)n, "]}");
+    send_fmt("%s", buf);
+}
+
 static void handle_vram_peek(int id, const char *json)
 {
     int x = json_get_int(json, "x", 0);
@@ -13271,6 +13306,7 @@ static const CmdEntry s_commands[] = {
     { "mmx6_freshfix",     handle_mmx6_freshfix },
     { "mem_words",         handle_mem_words },
     { "vram_peek",         handle_vram_peek },
+    { "func_override",     handle_func_override },
     { "gl_coh_ring",       handle_gl_coh_ring },
     { "gl_present_ring",   handle_gl_present_ring },
     { "present_ring",      handle_present_ring },

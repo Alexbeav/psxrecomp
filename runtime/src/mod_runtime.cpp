@@ -1,6 +1,7 @@
 #include "mod_runtime.h"
 
 #include "disc_path.h"
+#include "func_override.h"
 #include "iso_reader.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
@@ -83,6 +84,23 @@ struct FunctionEntryPlugin {
 
 std::vector<FunctionEntryPlugin>& function_entry_plugins() {
     static std::vector<FunctionEntryPlugin> value;
+    return value;
+}
+
+/* Function overrides queue here at constructor time and are ARMED into the
+ * func_override tier only for plugins the resolved package plan selects —
+ * the same gating as vblank/activation callbacks. */
+struct FunctionOverridePlugin {
+    std::string id;
+    uint32_t address = 0;
+    PSXModFunctionOverrideFn fn = nullptr;
+    uint32_t guard[FO_MAX_GUARD_WORDS] = {0, 0, 0, 0};
+    int n_guard = 0;
+    bool armed = false;
+};
+
+std::vector<FunctionOverridePlugin>& function_override_plugins() {
+    static std::vector<FunctionOverridePlugin> value;
     return value;
 }
 
@@ -1209,6 +1227,29 @@ extern "C" void mod_runtime_activate_plugins(void) {
     if (!s.initialized || !s.plan.ok) return;
     for (const ModResolution::Plugin& plugin : s.plan.plugins)
         mod_invoke_activation_plugin(plugin.id);
+    /* Arm the package-gated function overrides for plan-selected plugin
+     * ids, then (re)install the dispatcher hook. func_override_add refuses
+     * duplicate addresses; a refusal here means two active plugins claim
+     * one function, which the resolver should have prevented — the armed
+     * flag stays false and the `func_override` TCP command shows the gap. */
+    for (FunctionOverridePlugin& pending : function_override_plugins()) {
+        if (pending.armed) continue;
+        const bool selected = std::any_of(
+            s.plan.plugins.begin(), s.plan.plugins.end(),
+            [&](const ModResolution::Plugin& plugin) {
+                return plugin.id == pending.id;
+            });
+        if (!selected) continue;
+        const int rc =
+            pending.n_guard
+                ? func_override_add_guarded(pending.id.c_str(),
+                                            pending.address, pending.fn,
+                                            pending.guard, pending.n_guard)
+                : func_override_add(pending.id.c_str(), pending.address,
+                                    pending.fn);
+        pending.armed = (rc == FO_OK);
+    }
+    func_override_install();
 }
 
 extern "C" void mod_runtime_on_vblank(void) {
@@ -1299,6 +1340,30 @@ extern "C" int psx_mod_register_function_entry_plugin(
         });
     if (duplicate != plugins.end()) return 0;
     plugins.push_back(FunctionEntryPlugin{id, address, callback});
+    return 1;
+}
+
+extern "C" int psx_mod_register_function_override(
+    const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
+    const uint32_t* expected_words, int n_words) {
+    using namespace PSXRecompV4;
+    if (!id || !*id || !address || !fn) return 0;
+    if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return 0;
+    if (n_words > 0 && !expected_words) return 0;
+    auto& plugins = function_override_plugins();
+    const auto duplicate = std::find_if(
+        plugins.begin(), plugins.end(),
+        [&](const FunctionOverridePlugin& item) {
+            return item.id == id && item.address == address;
+        });
+    if (duplicate != plugins.end()) return 0;
+    FunctionOverridePlugin plugin;
+    plugin.id = id;
+    plugin.address = address;
+    plugin.fn = fn;
+    for (int i = 0; i < n_words; ++i) plugin.guard[i] = expected_words[i];
+    plugin.n_guard = n_words;
+    plugins.push_back(plugin);
     return 1;
 }
 
