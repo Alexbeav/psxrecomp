@@ -1185,6 +1185,13 @@ static int           g_video_aspect_den = 3;
 static bool          g_ws_adaptive_view = false;
 static int           g_ws_adaptive_max_num = 16;
 static int           g_ws_adaptive_max_den = 9;
+/* game.toml [netplay] local_viewport = "vertical_split": during real netplay,
+ * present only this peer's native split-screen half and stretch it to the
+ * window. Presentation-only; the guest still renders the original framebuffer. */
+static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
+/* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
+ * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
+static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
 
 extern "C" int psx_mod_set_fixed_display_aspect(
     uint32_t numerator, uint32_t denominator) {
@@ -1423,6 +1430,81 @@ static int aspect_gcd(int a, int b) {
     return a > 0 ? a : 1;
 }
 
+static int64_t aspect_gcd64(int64_t a, int64_t b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b) { int64_t t = a % b; a = b; b = t; }
+    return a > 0 ? a : 1;
+}
+
+static void netplay_local_viewport_projection_aspect(
+    int present_num, int present_den, int* proj_num, int* proj_den) {
+    if (!proj_num || !proj_den) return;
+    *proj_num = present_num;
+    *proj_den = present_den;
+
+    if (g_netplay_local_viewport != 1 ||
+        !psx_netplay_active() ||
+        !gpu_last_frame_vertical_split_screen() ||
+        present_num * 3 <= present_den * 4) {
+        return;
+    }
+
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 2 || di.height == 0)
+        return;
+
+    /* The normal widescreen squash assumes a 4:3 source. A split-screen peer
+     * source is only half the display width, so derive the equivalent aspect
+     * that produces source_aspect / target_aspect as the X squash factor:
+     *
+     *   source = (display_w / 2) / display_h
+     *   effective = (4:3) * target / source
+     */
+    int64_t n = (int64_t)present_num * 8 * (int64_t)di.height;
+    int64_t d = (int64_t)present_den * 3 * (int64_t)di.width;
+    if (n <= 0 || d <= 0) return;
+    int64_t gcd = aspect_gcd64(n, d);
+    n /= gcd;
+    d /= gcd;
+    if (n <= 0 || d <= 0 || n > INT32_MAX || d > INT32_MAX)
+        return;
+
+    *proj_num = (int)n;
+    *proj_den = (int)d;
+}
+
+static int g_ws_projection_num = 4;
+static int g_ws_projection_den = 3;
+static int g_ws_projection_mode = -1;
+static void refresh_widescreen_projection() {
+    if (!g_ws_engaged) return;
+
+    const bool wide = g_video_aspect_num * 3 != g_video_aspect_den * 4;
+    const int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
+    int proj_num = g_video_aspect_num;
+    int proj_den = g_video_aspect_den;
+    if (mode == 1) {
+        netplay_local_viewport_projection_aspect(
+            g_video_aspect_num, g_video_aspect_den, &proj_num, &proj_den);
+    }
+
+    if (mode == g_ws_projection_mode &&
+        proj_num == g_ws_projection_num &&
+        proj_den == g_ws_projection_den) {
+        return;
+    }
+
+    g_ws_projection_mode = mode;
+    g_ws_projection_num = proj_num;
+    g_ws_projection_den = proj_den;
+    gte_set_display_aspect(mode == 1 ? proj_num : 4,
+                           mode == 1 ? proj_den : 3);
+    gpu_ws_configure(proj_num, proj_den, g_ws_anchor_addr,
+                     g_ws_hud_sprt ? 1 : 0, mode);
+}
+
 /* Follow the host window without feeding its absolute pixel size into guest
  * rendering. Only the ratio matters: gpu_ws_configure derives the PSX-native
  * sidecar width from it, just as the fixed 16:9/21:9 modes do. */
@@ -1455,14 +1537,7 @@ static void update_adaptive_widescreen() {
         SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
     }
 
-    if (g_ws_engaged) {
-        const bool wide = num * 3 != den * 4;
-        const int mode = wide ? (g_ws_native_wide ? 2 : 1) : 0;
-        gte_set_display_aspect(mode == 1 ? num : 4,
-                               mode == 1 ? den : 3);
-        gpu_ws_configure(num, den, g_ws_anchor_addr,
-                         g_ws_hud_sprt ? 1 : 0, mode);
-    }
+    refresh_widescreen_projection();
 }
 
 /* SDL GL attributes are global inputs to the next context creation.  Set the
@@ -1480,13 +1555,8 @@ static void configure_core_gl_context_attributes() {
  * Re-engages with the chosen mode in place if widescreen is already running. */
 extern "C" void psx_ws_set_native_wide(int on) {
     g_ws_native_wide = on ? 1 : 0;
-    if (g_ws_engaged && g_video_aspect_num * 3 != g_video_aspect_den * 4) {
-        int mode = g_ws_native_wide ? 2 : 1;
-        gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                               mode == 1 ? g_video_aspect_den : 3);
-        gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
-                         g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
-    }
+    g_ws_projection_mode = -1;
+    refresh_widescreen_projection();
 }
 extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
@@ -2374,13 +2444,6 @@ static void shutdown_runtime(void);
  * there instead of killing the process. */
 static int g_netplay_from_lobby = 0;
 static int g_netplay_vsync_forced_off = 0;
-/* game.toml [netplay] local_viewport = "vertical_split": during real netplay,
- * present only this peer's native split-screen half and stretch it to the
- * window. Presentation-only; the guest still renders the original framebuffer. */
-static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
-/* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
- * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
-static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
 
 static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
     if (!netplay_enabled ||
@@ -6229,14 +6292,11 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         extern int fntrace_is_game_started(void);
         if (fntrace_is_game_started()) {
             g_ws_engaged = true;
-            int mode = g_ws_native_wide ? 2 : 1;
-            /* Native-wide: GTE drawn un-squashed — feed it the 4:3 ratio
-             * (identity squash). Squash mode: feed the real wide aspect. */
-            gte_set_display_aspect(mode == 1 ? g_video_aspect_num : 4,
-                                   mode == 1 ? g_video_aspect_den : 3);
-            gpu_ws_configure(g_video_aspect_num, g_video_aspect_den,
-                             g_ws_anchor_addr, g_ws_hud_sprt ? 1 : 0, mode);
+            g_ws_projection_mode = -1;
+            refresh_widescreen_projection();
         }
+    } else {
+        refresh_widescreen_projection();
     }
 
     /* Rollback resim (§33/§47): short catch-up keeps hold-last; long catch-up
