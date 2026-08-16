@@ -738,6 +738,12 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     uint32_t opcode = (instr >> 26) & 0x3F;
     uint32_t rs = get_rs(instr);
     uint32_t rt = get_rt(instr);
+    auto keep_branch_if_wide = [&](std::string cond) {
+        if (!config_.ws_cull_branch_keep_sites.count(addr))
+            return cond;
+        return fmt::format("psx_ws_x_margin() > 0 ? 0 : ({}) /* ws branch keep */",
+                           cond);
+    };
 
     // REGIMM branches. R3000A hardware decodes EVERY rt value here, not just
     // the four assembler mnemonics: the branch sense is rt bit 0 (0 = bltz,
@@ -759,9 +765,14 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
                 (ws_cull_bltz_pcs_.count(addr) || config_.ws_cull_bltz_sites.count(addr)))
                 return fmt::format("psx_ws_cull_bltz({}) /* ws cull (left edge) */",
                                    reg_name(rs));
-            return fmt::format("(int32_t){} < 0", reg_name(rs));
+            if (regimm_op == 0x00 && config_.ws_cull_nclip_keep_sites.count(addr))
+                return fmt::format("psx_ws_x_margin() > 0 ? 0 : ((int32_t){} < 0) /* ws nclip keep */",
+                                   reg_name(rs));
+            return keep_branch_if_wide(
+                fmt::format("(int32_t){} < 0", reg_name(rs)));
         } else {                            // bgez family (incl. bgezal + undefined mirrors)
-            return fmt::format("(int32_t){} >= 0", reg_name(rs));
+            return keep_branch_if_wide(
+                fmt::format("(int32_t){} >= 0", reg_name(rs)));
         }
     }
 
@@ -769,22 +780,26 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
     switch (opcode) {
         case 0x04: // beq
         case 0x14: // beql
-            return fmt::format("{} == {}", reg_name(rs), reg_name(rt));
+            return keep_branch_if_wide(
+                fmt::format("{} == {}", reg_name(rs), reg_name(rt)));
 
         case 0x05: // bne
         case 0x15: // bnel
-            return fmt::format("{} != {}", reg_name(rs), reg_name(rt));
+            return keep_branch_if_wide(
+                fmt::format("{} != {}", reg_name(rs), reg_name(rt)));
 
         case 0x06: // blez
         case 0x16: // blezl
-            return fmt::format("(int32_t){} <= 0", reg_name(rs));
+            return keep_branch_if_wide(
+                fmt::format("(int32_t){} <= 0", reg_name(rs)));
 
         case 0x07: // bgtz
         case 0x17: // bgtzl
-            return fmt::format("(int32_t){} > 0", reg_name(rs));
+            return keep_branch_if_wide(
+                fmt::format("(int32_t){} > 0", reg_name(rs)));
     }
 
-    return "0 /* unknown branch condition: defaults to not-taken */";
+    return keep_branch_if_wide("0 /* unknown branch condition: defaults to not-taken */");
 }
 
 std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) {

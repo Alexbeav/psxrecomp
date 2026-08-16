@@ -75,6 +75,11 @@ typedef struct {
     int32_t offset_x, offset_y;
 } GpuDrawArea;
 void gpu_get_draw_area(GpuDrawArea* out);
+/* Non-zero when the frame that just reached vblank used two side-by-side draw
+ * areas. Presentation-only helpers use this to expand a local split-screen
+ * viewport without changing the underlying framebuffer or netplay hashes. */
+int  gpu_last_frame_vertical_split_screen(void);
+void gpu_vertical_split_debug(int *active, int *left_age, int *right_age);
 uint16_t gpu_vram_peek(int x, int y);
 
 /* Shaded quad vertex capture (Phase 4.5 debug). */
@@ -317,6 +322,7 @@ uint32_t gpu_texture_correction_hits(void);
  * with no sprite-tag helper: gte.cpp notes every RTPS/RTPT projection; a frame
  * that projects enough vertices is stamped as gameplay. */
 void gpu_ws_set_gte_game_mode(int on);
+void gpu_ws_set_precise_nclip(int on);
 void psx_ws_note_gte_project(int nverts);
 /* Optional authoritative gameplay-state gate. When configured, it replaces
  * heuristic gameplay classification for native-wide presentation. */

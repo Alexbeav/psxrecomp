@@ -142,6 +142,36 @@ buffer_ms = 60
     check(audio_config.runtime.audio_buffer_ms == 60,
           "parser preserves per-game audio buffer target");
 
+    const auto controller_defaults = write_config(root, "controller-defaults", R"toml(
+[controller]
+p1_device = "keyboard"
+p2_device = "gamepad"
+p2_mode = "digital"
+)toml");
+    const auto controller_defaults_config =
+        PSXRecompV4::load_game_config(controller_defaults);
+    check(controller_defaults_config.runtime.has_default_p1_device &&
+              controller_defaults_config.runtime.default_p1_device == "keyboard" &&
+              controller_defaults_config.runtime.has_default_p2_device &&
+              controller_defaults_config.runtime.default_p2_device == "gamepad" &&
+              controller_defaults_config.runtime.default_p2_mode ==
+                  PSXRecompV4::PAD_MODE_DIGITAL,
+          "parser preserves per-game controller device defaults");
+
+    const auto netplay_viewport = write_config(root, "netplay-viewport", R"toml(
+[runtime]
+
+[netplay]
+local_viewport = "vertical_split"
+local_viewport_aspect = "adaptive"
+)toml");
+    const auto netplay_viewport_config =
+        PSXRecompV4::load_game_config(netplay_viewport);
+    check(netplay_viewport_config.netplay_local_viewport == "vertical_split",
+          "parser preserves netplay local viewport mode");
+    check(netplay_viewport_config.netplay_local_viewport_aspect == "adaptive",
+          "parser preserves netplay local viewport aspect");
+
     const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
 [runtime]
 
@@ -205,6 +235,15 @@ negsub_sites = ["0x80012340"]
     check(negsub_config.ws_cull_negsub_sites ==
               std::vector<uint32_t>{0x80012340u},
           "parser preserves negsub cull sites");
+
+    const auto branch_keep = write_config(root, "branch-keep", R"toml(
+[widescreen.cull]
+branch_keep_sites = ["0x80012340"]
+)toml");
+    const auto branch_keep_config = PSXRecompV4::load_game_config(branch_keep);
+    check(branch_keep_config.ws_cull_branch_keep_sites ==
+              std::vector<uint32_t>{0x80012340u},
+          "parser preserves branch keep sites");
 
     const auto vxrange = write_config(root, "vxrange", R"toml(
 [widescreen.cull]
@@ -679,6 +718,16 @@ void codegen_tests() {
               "(psx_ws_x_margin() > 0 ? psx_ws_x_margin() + 256 : 0)") !=
               std::string::npos,
           "activation bias gains the same isolated resident-object lead");
+
+    PSXRecomp::CodeGenConfig branch_keep_config;
+    branch_keep_config.ws_cull_branch_keep_sites.insert(0x80010000u);
+    const std::string branch_keep = generate_first_instruction(
+        0x14400002u, {}, false, branch_keep_config); // bne v0,zero,+2
+    check(branch_keep.find(
+              "psx_ws_x_margin() > 0 ? 0 : (cpu->gpr[2] != cpu->gpr[0])") !=
+              std::string::npos &&
+              branch_keep.find("ws branch keep") != std::string::npos,
+          "codegen emits guarded branch keep predicate");
 
     PSXRecomp::CodeGenConfig plane_nx_config;
     plane_nx_config.ws_cull_plane_nx_sites.insert(0x80010000u);

@@ -515,6 +515,15 @@ struct RuntimeConfig {
     int                   default_p1_mode  = PAD_MODE_ANALOG;
     int                   default_p2_mode  = PAD_MODE_ANALOG;
 
+    // p1_device / p2_device: optional per-game default input sources for
+    // fresh settings and launcher-less boots. Same vocabulary as settings.toml:
+    // "none", "keyboard", "auto"/"gamepad"/"controller", or an SDL GUID.
+    // Per-install settings.toml still overrides these defaults.
+    bool                  has_default_p1_device = false;
+    bool                  has_default_p2_device = false;
+    std::string           default_p1_device;
+    std::string           default_p2_device;
+
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
     // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
     // game that supports exactly one pad type — e.g. Tomba 2, whose driver only
@@ -694,6 +703,15 @@ struct GameConfig {
     bool                  has_netplay_required_leadout = false;
     uint32_t              netplay_required_leadout_lba = 0;
     std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+    // local_viewport = "vertical_split": while real netplay is active, crop
+    // presentation to this peer's left/right split-screen half. This is a
+    // presentation-only helper for titles that still render native split-screen
+    // in netplay; unset keeps every peer seeing the full framebuffer.
+    std::string           netplay_local_viewport;
+    // Optional display aspect to use with local_viewport. Accepted values:
+    // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
+    // Unset keeps netplay at the title's normal mod-cleared aspect.
+    std::string           netplay_local_viewport_aspect;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)
@@ -830,6 +848,14 @@ struct GameConfig {
     // scissor clips the overflow and wrapped off-left coords pass); the
     // vanilla loaded value at 4:3. Empty by default; regen required.
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    // Exact `bltz MAC0, reject`-style NCLIP/backface rejects that are forced
+    // not-taken only while widescreen reveals extra world. This is deliberately
+    // separate from bltz_sites, whose helper adjusts screen-X edge thresholds.
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    // Exact branch PCs whose reject path is forced not-taken only while
+    // widescreen reveals extra world. Use only after screenshot-validated
+    // evidence that the target is a visibility reject.
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     // Exact comparison sites whose result is forced only while widescreen
     // reveals extra world. Used for proven object/model participation gates
     // where maximal overdraw is preferable to range guessing. Each entry is
@@ -921,6 +947,14 @@ struct GameConfig {
     // (native-wide engages); genuine full-2D screens (save/options) still
     // pillarbox 4:3. Runtime-only — no regen required. Off by default.
     bool ws_gte_game_mode = false;
+
+    // [widescreen] precise_nclip — use the runtime's unsaturated GTE projection
+    // provenance for NCLIP/backface tests while classic adaptive widescreen is
+    // active. This is for 3D titles whose wide side geometry otherwise hits the
+    // PS1 SXY +/-1024 clamp and then disappears from game-side visibility tests.
+    // Runtime-only; off by default.
+    bool ws_precise_nclip = false;
+
     // Optional authoritative game-state gate for titles whose menus also
     // render enough 3D geometry to fool gte_game_mode. When configured,
     // native-wide is active only while the guest word matches one listed
