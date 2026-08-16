@@ -4343,7 +4343,16 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             ws_ui_prepass[out++] = ws_ui_prepass[i];
     }
     ws_ui_prepass_count = out;
-    ws_auto_ui_dense = ws_ui_prepass_count >= 32u;
+    /*
+     * A high final-layer primitive count is a good "dense 2D menu" signal for
+     * titles without an explicit gameplay detector, where grouping everything
+     * around the centre avoids tearing text grids apart. For GTE-gated 3D
+     * titles, though, reaching this path already means a gameplay frame is
+     * being stretched. WipEout 3's race HUD is dense enough to trip the old
+     * threshold, which pinned every HUD group to the 4:3 centre. Keep edge
+     * groups edge-anchored in those frames so the HUD adapts to the wide view.
+     */
+    ws_auto_ui_dense = ws_ui_prepass_count >= 32u && !ws_gte_game_mode_cfg;
     if (ws_ui_prepass_count == 0) return;
 
     WsUiGroupItem groups[WS_UI_PREPASS_MAX];
