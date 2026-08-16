@@ -685,6 +685,15 @@ struct GameConfig {
     bool                  has_netplay_required_leadout = false;
     uint32_t              netplay_required_leadout_lba = 0;
     std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+    // local_viewport = "vertical_split": while real netplay is active, crop
+    // presentation to this peer's left/right split-screen half. This is a
+    // presentation-only helper for titles that still render native split-screen
+    // in netplay; unset keeps every peer seeing the full framebuffer.
+    std::string           netplay_local_viewport;
+    // Optional display aspect to use with local_viewport. Accepted values:
+    // "16:9", "21:9", or "adaptive" (initial 16:9, live-window capped 21:9).
+    // Unset keeps netplay at the title's normal mod-cleared aspect.
+    std::string           netplay_local_viewport_aspect;
 
     // [recompiler] block
     std::filesystem::path seeds_path;     // absolute path to seeds (text or json)

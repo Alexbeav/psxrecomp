@@ -2169,6 +2169,20 @@ static uint32_t texture_disable;   /* bit 15 */
 static uint32_t draw_area_left, draw_area_top;
 static uint32_t draw_area_right, draw_area_bottom;
 
+typedef struct GpuVerticalSplitTrace {
+    uint8_t left_seen;
+    uint8_t right_seen;
+    uint16_t display_w;
+    uint16_t display_h;
+} GpuVerticalSplitTrace;
+
+static GpuVerticalSplitTrace split_trace_this;
+static GpuVerticalSplitTrace split_trace_last;
+static uint8_t split_recent_left_age = 255;
+static uint8_t split_recent_right_age = 255;
+static uint16_t split_recent_display_w = 0;
+static uint16_t split_recent_display_h = 0;
+
 /* Draw offset (set by GP0(E5h)) */
 static int32_t draw_offset_x, draw_offset_y;
 /* Instrumentation: per-vblank range/count of GP0(E5) draw-offset-Y sets. If a
@@ -2235,6 +2249,59 @@ static int ws_is_fb_base(uint32_t bx) {
     for (int i = 0; i < ws_fb_n; i++) if (ws_fb_base[i] == bx) return 1;
     return 0;
 }
+
+static void split_trace_reset(GpuVerticalSplitTrace *trace) {
+    memset(trace, 0, sizeof(*trace));
+}
+
+static void split_trace_note_draw_area(void) {
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 256 || di.height < 128)
+        return;
+    if ((di.width & 1u) != 0)
+        return;
+    if (di.display_x + di.width > 1024u || di.display_y + di.height > 512u)
+        return;
+    if (draw_area_right <= draw_area_left || draw_area_bottom <= draw_area_top)
+        return;
+
+    const int disp_l = (int)di.display_x;
+    const int disp_r = (int)(di.display_x + di.width - 1u);
+    const int mid = disp_l + (int)(di.width / 2u);
+    const int tol = (int)di.width / 32 > 8 ? (int)di.width / 32 : 8;
+
+    const int area_l = (int)draw_area_left;
+    const int area_r = (int)draw_area_right;
+
+    if (split_trace_this.display_w != 0 &&
+        (split_trace_this.display_w != (uint16_t)di.width ||
+         split_trace_this.display_h != (uint16_t)di.height)) {
+        split_trace_reset(&split_trace_this);
+    }
+    split_trace_this.display_w = (uint16_t)di.width;
+    split_trace_this.display_h = (uint16_t)di.height;
+
+    if (area_l <= disp_l + tol &&
+        area_r >= mid - 1 - tol && area_r <= mid - 1 + tol) {
+        split_trace_this.left_seen = 1;
+    }
+    if (area_l >= mid - tol && area_l <= mid + tol &&
+        area_r >= disp_r - tol) {
+        split_trace_this.right_seen = 1;
+    }
+}
+
+int gpu_last_frame_vertical_split_screen(void) {
+    return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+}
+
+void gpu_vertical_split_debug(int *active, int *left_age, int *right_age) {
+    if (active) *active = gpu_last_frame_vertical_split_screen();
+    if (left_age) *left_age = split_recent_left_age;
+    if (right_age) *right_age = split_recent_right_age;
+}
+
 /* Point the renderer's wide mirror at the current back buffer (draw_area_left)
  * when native-wide is active and that buffer is a known display buffer; else
  * disable mirroring for this draw. Called when the draw env changes. */
@@ -2366,6 +2433,12 @@ static void gpu_reset_state(int clear_vram) {
     draw_area_top = 0;
     draw_area_right = 0;
     draw_area_bottom = 0;
+    split_trace_reset(&split_trace_this);
+    split_trace_reset(&split_trace_last);
+    split_recent_left_age = 255;
+    split_recent_right_age = 255;
+    split_recent_display_w = 0;
+    split_recent_display_h = 0;
     draw_offset_x = 0;
     draw_offset_y = 0;
     texture_window_value = 0;
@@ -2658,6 +2731,26 @@ void gpu_vblank_tick(void) {
         g_doff_cnt_last = g_doff_cnt_this;
     }
     g_doff_min_this = 0x7fffffff; g_doff_max_this = -0x7fffffff; g_doff_cnt_this = 0;
+    split_trace_last = split_trace_this;
+    if (split_trace_this.display_w != 0 &&
+        (split_recent_display_w != split_trace_this.display_w ||
+         split_recent_display_h != split_trace_this.display_h)) {
+        split_recent_left_age = 255;
+        split_recent_right_age = 255;
+        split_recent_display_w = split_trace_this.display_w;
+        split_recent_display_h = split_trace_this.display_h;
+    }
+    if (split_trace_this.left_seen) {
+        split_recent_left_age = 0;
+    } else if (split_recent_left_age < 255) {
+        split_recent_left_age++;
+    }
+    if (split_trace_this.right_seen) {
+        split_recent_right_age = 0;
+    } else if (split_recent_right_age < 255) {
+        split_recent_right_age++;
+    }
+    split_trace_reset(&split_trace_this);
     gpustat_poll_count = 0;
     /* Trusted package-selected plugins run on guest VBlank, independent of
      * host presentation, pacing, turbo, or skipped frames. */
@@ -3934,6 +4027,7 @@ static void gp0_exec_draw_area_tl(void) {
     uint32_t param = gp0_cmd_buf[0] & 0x00FFFFFFu;
     draw_area_left = param & 0x3FF;
     draw_area_top  = (param >> 10) & 0x3FF;
+    split_trace_note_draw_area();
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
     ws_nw_sync_target();  /* back buffer (draw_area_left) → wide mirror surface */
@@ -3946,6 +4040,7 @@ static void gp0_exec_draw_area_br(void) {
     uint32_t param = gp0_cmd_buf[0] & 0x00FFFFFFu;
     draw_area_right  = param & 0x3FF;
     draw_area_bottom = (param >> 10) & 0x3FF;
+    split_trace_note_draw_area();
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
     ws_nw_sync_target();  /* back buffer (draw_area_left) → wide mirror surface */

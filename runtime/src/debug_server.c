@@ -5221,6 +5221,8 @@ static void handle_gpu_state(int id, const char *json)
     gpu_get_draw_area(&da);
     uint64_t nop, fill, draw, env, copy;
     gpu_get_gp0_stats(&nop, &fill, &draw, &env, &copy);
+    int split_active = 0, split_left_age = 0, split_right_age = 0;
+    gpu_vertical_split_debug(&split_active, &split_left_age, &split_right_age);
     GpuWsDebug ws;
     gpu_ws_get_debug(&ws);
     send_fmt("{\"id\":%d,\"ok\":true,"
@@ -5235,6 +5237,7 @@ static void handle_gpu_state(int id, const char *json)
              "\"gp0_nop\":%llu,\"gp0_fill\":%llu,\"gp0_draw\":%llu,\"gp0_env\":%llu,\"gp0_copy\":%llu,"
              "\"draw_area\":[%u,%u,%u,%u],"
              "\"draw_offset\":[%d,%d],"
+             "\"vertical_split\":{\"active\":%d,\"left_age\":%d,\"right_age\":%d},"
              "\"ws\":{\"configured\":%d,\"active\":%d,\"game_mode\":%d,"
              "\"present_native_43\":%d,\"x_margin\":%d,"
              "\"activation_margin\":%d,\"squash\":[%d,%d],"
@@ -5263,6 +5266,7 @@ static void handle_gpu_state(int id, const char *json)
              (unsigned long long)copy,
              da.left, da.top, da.right, da.bottom,
              da.offset_x, da.offset_y,
+             split_active, split_left_age, split_right_age,
              ws.configured, ws.active, ws.game_mode,
              ws.present_native_43, ws.x_margin, ws.activation_margin,
              ws.xnum, ws.xden,

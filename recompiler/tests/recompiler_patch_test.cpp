@@ -158,6 +158,20 @@ p2_mode = "digital"
                   PSXRecompV4::PAD_MODE_DIGITAL,
           "parser preserves per-game controller device defaults");
 
+    const auto netplay_viewport = write_config(root, "netplay-viewport", R"toml(
+[runtime]
+
+[netplay]
+local_viewport = "vertical_split"
+local_viewport_aspect = "adaptive"
+)toml");
+    const auto netplay_viewport_config =
+        PSXRecompV4::load_game_config(netplay_viewport);
+    check(netplay_viewport_config.netplay_local_viewport == "vertical_split",
+          "parser preserves netplay local viewport mode");
+    check(netplay_viewport_config.netplay_local_viewport_aspect == "adaptive",
+          "parser preserves netplay local viewport aspect");
+
     const auto bad_audio_buffer = write_config(root, "bad-audio-buffer", R"toml(
 [runtime]
 

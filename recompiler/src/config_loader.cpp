@@ -1193,6 +1193,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool has_netplay_required_leadout = false;
     uint32_t netplay_required_leadout_lba = 0;
     std::string netplay_required_disc_fp;
+    std::string netplay_local_viewport;
+    std::string netplay_local_viewport_aspect;
     if (cfg.contains("netplay")) {
         const toml::value& np = toml::find(cfg, "netplay");
         if (np.contains("require_cue"))
@@ -1208,6 +1210,37 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
             for (char& c : netplay_required_disc_fp)
                 c = (char)std::tolower((unsigned char)c);
+        }
+        if (np.contains("local_viewport")) {
+            netplay_local_viewport = toml::find<std::string>(np, "local_viewport");
+            for (char& c : netplay_local_viewport)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport.empty() &&
+                netplay_local_viewport != "vertical_split") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport must be \"vertical_split\", got '{}'",
+                    netplay_local_viewport));
+            }
+        }
+        if (np.contains("local_viewport_aspect")) {
+            netplay_local_viewport_aspect =
+                toml::find<std::string>(np, "local_viewport_aspect");
+            for (char& c : netplay_local_viewport_aspect)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport_aspect != "16:9" &&
+                netplay_local_viewport_aspect != "21:9" &&
+                netplay_local_viewport_aspect != "adaptive") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_aspect must be \"16:9\", "
+                    "\"21:9\", or \"adaptive\", got '{}'",
+                    netplay_local_viewport_aspect));
+            }
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_aspect requires local_viewport");
+            }
         }
     }
 
@@ -1995,6 +2028,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_netplay_required_leadout*/ has_netplay_required_leadout,
         /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
         /*netplay_required_disc_fp*/ netplay_required_disc_fp,
+        /*netplay_local_viewport*/ netplay_local_viewport,
+        /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,

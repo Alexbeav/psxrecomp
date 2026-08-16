@@ -2374,6 +2374,36 @@ static void shutdown_runtime(void);
  * there instead of killing the process. */
 static int g_netplay_from_lobby = 0;
 static int g_netplay_vsync_forced_off = 0;
+/* game.toml [netplay] local_viewport = "vertical_split": during real netplay,
+ * present only this peer's native split-screen half and stretch it to the
+ * window. Presentation-only; the guest still renders the original framebuffer. */
+static int g_netplay_local_viewport = 0; /* 0 off, 1 vertical split */
+/* Optional aspect for netplay local-view extraction. Mirrors trusted mod aspect
+ * activation, but remains game.toml opt-in so normal netplay stays vanilla. */
+static int g_netplay_local_viewport_aspect = 0; /* 0 off, 1 16:9, 2 21:9, 3 adaptive */
+
+static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
+    if (!netplay_enabled ||
+        g_netplay_local_viewport != 1 ||
+        g_netplay_local_viewport_aspect == 0) {
+        return;
+    }
+
+    switch (g_netplay_local_viewport_aspect) {
+        case 1:
+            (void)psx_mod_set_fixed_display_aspect(16u, 9u);
+            break;
+        case 2:
+            (void)psx_mod_set_fixed_display_aspect(21u, 9u);
+            break;
+        case 3:
+            (void)psx_mod_set_fixed_display_aspect(16u, 9u);
+            (void)psx_mod_set_adaptive_display_aspect(21u, 9u);
+            break;
+        default:
+            break;
+    }
+}
 
 /* Host-only: lockstep already couples peers. Driver vsync on top of the
  * wall-clock pacer double-blocks the vblank callback (present is before the
@@ -4604,6 +4634,36 @@ static void netplay_note_present(void) {
     s_present_last_ms = now ? now : 1ull;
 }
 
+static int netplay_local_viewport_slot(void) {
+    if (g_netplay_local_viewport != 1 || !psx_netplay_active())
+        return -1;
+    if (!gpu_last_frame_vertical_split_screen())
+        return -1;
+    int slot = psx_netplay_local_slot();
+    return (slot == 0 || slot == 1) ? slot : -1;
+}
+
+static int crop_present_to_netplay_local_viewport(uint32_t* pixels,
+                                                  int* width,
+                                                  int height) {
+    if (!pixels || !width || *width < 2 || height <= 0)
+        return 0;
+    const int slot = netplay_local_viewport_slot();
+    if (slot < 0)
+        return 0;
+
+    const int src_w = *width;
+    const int crop_w = src_w / 2;
+    const int crop_x = slot == 0 ? 0 : (src_w - crop_w);
+    for (int y = 0; y < height; ++y) {
+        uint32_t* dst = pixels + (size_t)y * (size_t)crop_w;
+        uint32_t* src = pixels + (size_t)y * (size_t)src_w + crop_x;
+        memmove(dst, src, (size_t)crop_w * sizeof(uint32_t));
+    }
+    *width = crop_w;
+    return 1;
+}
+
 static void netplay_present_gap_stats(uint32_t *p95_out, uint32_t *max_out) {
     unsigned n = s_present_gaps_n;
     unsigned idx;
@@ -6285,6 +6345,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (g_gl_active)
             gl_renderer_set_interpolation_suspended(
                 fmv_frame || mdec_recently_active(2));
+        const bool local_viewport_crop = netplay_local_viewport_slot() >= 0;
+        bool local_viewport_crop_applied = false;
 
         /* Canonical present width. Native-wide does NOT widen the canonical read
          * (that bled across adjacent framebuffers); it composites into a separate
@@ -6295,7 +6357,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * wide compositor, present the wider surface (canonical width + EXTRA)
          * from the displayed buffer's surface. FMV/menu frames stay 4:3. */
         bool wide_present = (!fmv_frame && !di.depth24 && g_ws_engaged &&
-                             ws_native_wide_active() && gr_wide_supported());
+                             ws_native_wide_active() && gr_wide_supported() &&
+                             !local_viewport_crop);
         if (wide_present) present_w = w + (uint32_t)ws_nw_extra();
 
         /* Native-wide invariant: canonical (320-wide) content is NEVER
@@ -6321,7 +6384,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * do NOT flush_cpu_uploads (MDEC already wrote the CPU mirror; forcing
          * FBO uploads every frame cut MotK intro from ~50 to ~30 FPS). */
 #ifndef PSX_SDL_NO_RENDER
-        if (g_gl_active && g_gl_fbo_present && !di.depth24) {
+        if (g_gl_active && g_gl_fbo_present && !di.depth24 &&
+            !local_viewport_crop) {
             if (wide_present) {
                 /* GPU-direct native-wide present: blit the displayed buffer's
                  * wide FBO straight to the window (GPU-side, like the canonical
@@ -6348,7 +6412,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * VRAM image (deterministic blit, no readback), mirroring the GL path;
          * 24-bit (FMV) frames go through the CPU present (Phase 3). The Vulkan
          * window has no SDL_Renderer, so we must never fall through below. */
-        if (g_vk_active) {
+        if (g_vk_active && !local_viewport_crop) {
             if (di.depth24) {
                 /* 24-bit (FMV): packed RGB lives in the CPU mirror — do NOT
                  * sync_cpu (FBO readback clobbers RGB888). Batch per-scanline
@@ -6444,9 +6508,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
                                          di.display_x);
 
+        int present_px_w = (int)present_w * active_scale;
+        int present_px_h = (int)h * active_scale;
+        if (crop_present_to_netplay_local_viewport(sdl_pixel_buf,
+                                                   &present_px_w,
+                                                   present_px_h)) {
+            pin_43 = false;
+            local_viewport_crop_applied = true;
+        }
+
         smooth_60_present(sdl_pixel_buf,
-                          present_w * (uint32_t)active_scale,
-                          h * (uint32_t)active_scale,
+                          (uint32_t)present_px_w,
+                          (uint32_t)present_px_h,
                           !g_gl_active && !g_vk_active && !di.depth24 && !fmv_frame);
 
         /* Frame blending (CRT-persistence masker for 30fps double-buffered
@@ -6471,7 +6544,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 !g_smooth_60fps.load(std::memory_order_acquire)) {
                 static uint32_t prev_buf[640 * 512];
                 static uint32_t prev_px = 0;
-                const uint32_t npx = present_w * h;
+                const uint32_t npx = local_viewport_crop_applied
+                                       ? (uint32_t)(present_px_w * present_px_h)
+                                       : present_w * h;
                 if (npx <= (uint32_t)(640 * 512)) {
                     if (prev_px == npx) {
                         for (uint32_t i = 0; i < npx; i++) {
@@ -6499,6 +6574,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #ifndef PSX_SDL_NO_RENDER
     int src_w = (int)present_w * active_scale;
     int src_h = (int)h * active_scale;
+    if (netplay_local_viewport_slot() >= 0 && src_w >= 2)
+        src_w /= 2;
     if (g_gl_active) {
         /* OpenGL present: upload the active display rect and draw a full-screen
          * quad. SDL_GL_SwapWindow handles vsync; the wall-clock pacer above
@@ -10253,6 +10330,12 @@ int main(int argc, char** argv) {
             g_netplay_disc_expect.required_leadout_lba =
                 gc.netplay_required_leadout_lba;
             g_netplay_disc_expect.required_disc_fp = gc.netplay_required_disc_fp;
+            g_netplay_local_viewport =
+                (gc.netplay_local_viewport == "vertical_split") ? 1 : 0;
+            g_netplay_local_viewport_aspect =
+                (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
+                (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
+                (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -11838,6 +11921,7 @@ int main(int argc, char** argv) {
         g_turbo_loads_enabled = 0;
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     mod_runtime_activate_plugins();
+    apply_netplay_local_viewport_aspect(net_cfg.enabled);
     if (g_mod_controller_mode_override[0] >= 0)
         player_mode[0] = g_mod_controller_mode_override[0];
     if (g_mod_controller_mode_override[1] >= 0)
@@ -13472,6 +13556,7 @@ soft_return_lobby:
                     return 1;
                 }
             }
+            apply_netplay_local_viewport_aspect(net_cfg.enabled);
             std::printf("psxrecomp: rematch from lobby (netplay=%d)\n",
                         net_cfg.enabled ? 1 : 0);
             std::fflush(stdout);
