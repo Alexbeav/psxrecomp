@@ -8701,7 +8701,9 @@ static void handle_screenshot_hires(int id, const char *json)
         strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
 
-    uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
+    /* calloc, not malloc: any pixel a resolve declines to touch must be a
+     * deterministic black, never whatever the allocator handed back. */
+    uint32_t *argb = (uint32_t *)calloc((size_t)ow * oh, sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
     /* Renderer pitches are byte strides (the live SDL presentation path uses
      * the same contract). Passing `ow` here advanced each row by only one
@@ -8711,15 +8713,25 @@ static void handle_screenshot_hires(int id, const char *json)
                                       (int)(ow * sizeof(*argb)),
                                       (int)di.display_x,
                                       (int)di.display_y, (int)w, (int)h);
-    if (!got) {
-        /* No hi-res surface (scale 1, or a backend without one): resolve the
-         * native display instead and say so, rather than emitting a blank. */
+    /* The resolves return the pixel COUNT they wrote, and a partial cover is a
+     * real case: gr_scale() reports the GL backend's internal scale, but
+     * sw_render_display_hires falls back to the native resolve when the CPU
+     * hi-res mirror does not exist (gpu_sw_renderer.c: !g_hr || g_scale <= 1).
+     * That fills w*h of an ow*oh buffer and still returns non-zero, so testing
+     * `!got` alone would emit a PNG that is mostly untouched allocation. Demand
+     * full cover, else redo it honestly at native size. */
+    if (got < (int)((size_t)ow * oh)) {
+        /* No hi-res surface (scale 1, a backend without one, or a partial
+         * cover): resolve the native display instead and say so, rather than
+         * emitting a blank. */
         scale = 1; ow = w; oh = h;
         got = gr_render_display(argb,
                                 (int)(ow * sizeof(*argb)),
                                 (int)di.display_x,
                                 (int)di.display_y, (int)w, (int)h);
-        if (!got) { free(argb); send_err(id, "no display surface"); return; }
+        if (got < (int)((size_t)ow * oh)) {
+            free(argb); send_err(id, "no display surface"); return;
+        }
     }
 
     uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
@@ -8741,6 +8753,56 @@ static void handle_screenshot_hires(int id, const char *json)
 
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
              "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
+/* present_shot — PNG of the COMPOSED renderer output: the frame after SDL fits
+ * the display buffer into the logical surface, i.e. at the aspect the player is
+ * actually looking at.
+ *
+ * The three buffer-level captures above (screenshot / screenshot_file /
+ * screenshot_hires) all resolve the display buffer BEFORE that fit. On a 508x256
+ * display in a 4:3 window they answer 508x256 while the window shows 640x480 —
+ * the same pixels at a different shape. That is correct for faithfulness work
+ * and WRONG for anything aspect-shaped: a widescreen change alters the GTE
+ * squash and the present fit, so validating it against a pre-fit buffer measures
+ * the one stage the change does not touch.
+ *
+ * Staged and fulfilled in the present path (see present_shot_request in
+ * main.cpp), so the ack means "queued", not "written" — the PNG lands on the
+ * next present. Sample `present_shot_seq` before staging and poll it until the
+ * counter moves; `wrote` in that reply says whether a file actually landed.
+ *
+ * Refused up front on headless (no present surface) and on the Vulkan backend,
+ * which presents through its own swapchain and has no readback hook — accepting
+ * there would leave a request nothing can ever fulfil. */
+static void handle_present_shot(int id, const char *json)
+{
+    extern int present_shot_request(const char *path);
+    extern int present_shot_seq(void);
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_present_shot.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    if (!present_shot_request(path)) {
+        send_err(id, "present_shot unavailable (headless, or the Vulkan backend "
+                     "which has no present readback)");
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"staged\":true,\"seq\":%d}",
+             id, path, present_shot_seq());
+}
+
+/* present_shot_seq — completion counter for the staged capture above. Sample it
+ * before present_shot and poll until it changes; the counter advances on every
+ * completion, success or not, so the poll always terminates. `wrote` reports
+ * whether that completion actually produced a PNG. */
+static void handle_present_shot_seq(int id, const char *json)
+{
+    extern int present_shot_seq(void);
+    extern int present_shot_ok(void);
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"seq\":%d,\"wrote\":%d}",
+             id, present_shot_seq(), present_shot_ok());
 }
 
 /* dump_buffer: dump a raw 512x240 VRAM region starting at display Y = `y` to a
@@ -13619,6 +13681,8 @@ static const CmdEntry s_commands[] = {
     { "screenshot",        handle_present_screenshot },
     { "screenshot_file",   handle_screenshot_file },
     { "screenshot_hires",  handle_screenshot_hires },
+    { "present_shot",      handle_present_shot },
+    { "present_shot_seq",  handle_present_shot_seq },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },

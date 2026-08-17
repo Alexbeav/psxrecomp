@@ -25,6 +25,7 @@
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
+#include "png_write.h"       /* png_write_rgb — present_shot readback */
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -114,6 +115,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <cctype>
 #include <cmath>
@@ -438,6 +440,7 @@ static bool     s_force_present_after_load = false;
 static int s_sw_hold_valid = 0;
 static SDL_Rect s_sw_hold_src;
 static SDL_Rect s_sw_hold_dst;
+
 /* After LOADED: optional freeze probe (PSX_POST_LOAD_PROBE=1). Off by default. */
 static int      s_post_load_probe_enabled = -1; /* -1 = unread env */
 static int      s_post_load_probe_left = 0;
@@ -1167,6 +1170,7 @@ static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
  * movie's per-movie total minus 3; writing the current movie's total down to
@@ -1708,6 +1712,77 @@ extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
 static bool          g_gl_active = false;    /* GL context live -> GL present path */
 static bool          g_vk_active = false;    /* Vulkan context live -> VK present path */
+
+/* present_shot — capture the COMPOSED present surface, i.e. the frame after the
+ * backend has fitted the display buffer to the window, so the PNG carries the
+ * aspect the player is actually looking at.
+ *
+ * screenshot / screenshot_file / screenshot_hires all resolve the display
+ * buffer BEFORE that fit: on a 508x256 display in a 4:3 window they answer
+ * 508x256 while the window shows 640x480. Correct for faithfulness work, wrong
+ * for anything aspect-shaped — a widescreen change moves the GTE squash and the
+ * present fit, which is exactly the stage those captures skip.
+ *
+ * Staged here and fulfilled by whichever backend owns the present: the SDL
+ * software path reads back via SDL_RenderReadPixels, the GL path via
+ * glReadPixels before SwapWindow (gpu_gl_renderer.c).
+ *
+ * THREADING: the request is written from a debug-server command handler on the
+ * emu thread (debug_server_poll safe point), but GL fulfilment can run on the
+ * frame-interpolation thread (gpu_gl_renderer.c interp_present -> gl_swap_with_osd),
+ * so the path buffer and the pending flag are mutex-guarded and the counters are
+ * atomic. present_shot_take() CLAIMS the request under the lock, so two present
+ * paths can never fulfil the same shot.
+ *
+ * A staged shot is OVERWRITTEN by a later request rather than refused (the same
+ * choice savestate's request_save_inner makes). A present that never arrives —
+ * a static frame, a backend that stops presenting — therefore cannot wedge the
+ * command: the next request simply replaces it. */
+static std::mutex       s_present_shot_mtx;
+static char             s_present_shot_path[512];
+static bool             s_present_shot_pending = false;
+static std::atomic<int> s_present_shot_seq{0};   /* bumps on every completion */
+static std::atomic<int> s_present_shot_ok{0};    /* 1 = last completion wrote a PNG */
+
+extern "C" int present_shot_request(const char *path)
+{
+    if (!path || !*path) return 0;
+    if (g_headless)  return 0;   /* no present surface to read back */
+    /* Vulkan owns its own swapchain present (see the g_vk_active branch in
+     * sdl_vblank_present_body) and has no readback hook, so nothing would ever
+     * fulfil the request. Refuse honestly instead of accepting a shot that can
+     * never complete — CLAUDE.md rule 15. */
+    if (g_vk_active) return 0;
+    {
+        std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+        std::snprintf(s_present_shot_path, sizeof(s_present_shot_path), "%s", path);
+        s_present_shot_pending = true;
+    }
+    return 1;
+}
+
+/* Backend hook: atomically claim a staged shot (returns 1 and fills `out`),
+ * then call present_shot_done(ok) once the PNG is written — or not written. */
+extern "C" int present_shot_take(char *out, int n)
+{
+    if (!out || n <= 0) return 0;
+    std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+    if (!s_present_shot_pending) return 0;
+    std::snprintf(out, (size_t)n, "%s", s_present_shot_path);
+    s_present_shot_pending = false;   /* claimed */
+    return 1;
+}
+
+/* ok = 1 only when a PNG actually landed on disk. seq advances either way so a
+ * client polling it always terminates; ok tells it whether the file exists. */
+extern "C" void present_shot_done(int ok)
+{
+    s_present_shot_ok.store(ok ? 1 : 0, std::memory_order_release);
+    s_present_shot_seq.fetch_add(1, std::memory_order_release);
+}
+
+extern "C" int present_shot_seq(void) { return s_present_shot_seq.load(std::memory_order_acquire); }
+extern "C" int present_shot_ok(void)  { return s_present_shot_ok.load(std::memory_order_acquire); }
 /* Present straight from the FBO (fast, no readback). Set PSX_GL_FORCE_CPU_PRESENT=1
  * to force the software readout path instead — a diagnostic/fallback that also
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
@@ -7072,6 +7147,66 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
     host_osd_draw_sdl(sdl_renderer);
+    /* Fulfil a staged present_shot here: after RenderCopy + OSD, before
+     * RenderPresent, the renderer holds exactly the composed frame the player
+     * sees — including the logical-size aspect fit that every buffer-level
+     * capture misses. Reading back costs a GPU sync, so it only runs when a
+     * shot was explicitly requested. */
+    char shot_path[512];
+    if (present_shot_take(shot_path, (int)sizeof(shot_path))) {
+        int ow = 0, oh = 0;
+        uint8_t *packed = NULL;
+#if defined(PSX_SDL3)
+        SDL_Surface *surf = SDL_RenderReadPixels(sdl_renderer, NULL);
+        if (surf) {
+            SDL_Surface *conv = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGB24);
+            SDL_DestroySurface(surf);
+            if (conv) {
+                ow = conv->w; oh = conv->h;
+                packed = (uint8_t *)std::malloc((size_t)ow * oh * 3);
+                if (packed) {
+                    /* SDL rows are pitch-aligned; png_write_rgb wants packed. */
+                    for (int y = 0; y < oh; y++)
+                        std::memcpy(packed + (size_t)y * ow * 3,
+                                    (const uint8_t *)conv->pixels + (size_t)y * conv->pitch,
+                                    (size_t)ow * 3);
+                }
+                SDL_DestroySurface(conv);
+            }
+        }
+#else
+        /* Size the buffer from the renderer's REAL output, not from a
+         * viewport*scale reconstruction: SDL_RenderReadPixels(NULL) fills the
+         * current viewport, and deriving that region from
+         * SDL_RenderGetViewport x SDL_RenderGetScale rounds independently of
+         * what SDL actually writes. The output size is a hard upper bound, so
+         * a full-output allocation cannot be overrun whatever SDL picks. */
+        int rw = 0, rh = 0;
+        if (SDL_GetRendererOutputSize(sdl_renderer, &rw, &rh) == 0 && rw > 0 && rh > 0) {
+            SDL_Rect vp; SDL_RenderGetViewport(sdl_renderer, &vp);
+            float sx = 1.0f, sy = 1.0f; SDL_RenderGetScale(sdl_renderer, &sx, &sy);
+            ow = (int)(vp.w * sx); oh = (int)(vp.h * sy);
+            if (ow <= 0 || ow > rw) ow = rw;
+            if (oh <= 0 || oh > rh) oh = rh;
+            packed = (uint8_t *)std::malloc((size_t)rw * rh * 3);   /* upper bound */
+            if (packed && SDL_RenderReadPixels(sdl_renderer, NULL,
+                                               SDL_PIXELFORMAT_RGB24,
+                                               packed, ow * 3) != 0) {
+                std::free(packed); packed = NULL;
+            }
+        }
+#endif
+        int wrote = 0;
+        if (packed && ow > 0 && oh > 0) {
+            FILE *pf = std::fopen(shot_path, "wb");
+            if (pf) {
+                wrote = png_write_rgb(pf, packed, (uint32_t)ow, (uint32_t)oh);
+                std::fclose(pf);
+            }
+        }
+        std::free(packed);
+        present_shot_done(wrote);
+    }
     /* §33: remember active rect for resim hold-last (not full 640x512). */
     s_sw_hold_src = src;
     s_sw_hold_dst = dst;
