@@ -125,6 +125,16 @@ static struct {
     uint32_t rank;        /* admitted, then dropped by the max_rank filter */
 } ws_ui_reject;
 
+/* Geometry of the primitives the max_rank filter discarded. A count alone
+ * cannot say whether those are stray world geometry (fine to drop) or HUD
+ * marks belonging to a cluster that IS being squashed (not fine -- they are
+ * left behind at their 4:3 X). Small fixed ring; the filter typically drops a
+ * handful. */
+#define WS_UI_RANKDROP_MAX 8
+static struct { int32_t x, y, w, h; uint16_t rank; uint8_t op; }
+    ws_ui_rankdrop[WS_UI_RANKDROP_MAX];
+static uint32_t ws_ui_rankdrop_count;
+
 /* Wide-aspect mode: 0 = off (4:3 identity), 1 = squash (legacy hack — compress
  * a wider FOV into the 320 frame, present stretched), 2 = native-wide (render
  * the wider FOV into an actually wider frame and present 1:1; the GTE is NOT
@@ -1630,13 +1640,22 @@ int psx_ws_ui_groups_json(char *buf, int cap) {
         "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,"
         "\"rejected\":{\"opcode\":%u,\"not_axis\":%u,\"degenerate\":%u,"
         "\"too_big\":%u,\"cap\":%u,\"rank\":%u},"
-        "\"n\":%u,\"items\":[",
+        "\"n\":%u,",
         ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
         ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
         ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP,
         ws_ui_reject.opcode, ws_ui_reject.not_axis, ws_ui_reject.degenerate,
         ws_ui_reject.too_big, ws_ui_reject.cap, ws_ui_reject.rank,
         ws_ui_prepass_count);
+    off += snprintf(buf + off, (size_t)(cap - off), "\"rank_dropped\":[");
+    for (uint32_t i = 0; i < ws_ui_rankdrop_count && off < cap - 120; i++) {
+        off += snprintf(buf + off, (size_t)(cap - off),
+            "%s{\"op\":\"%02x\",\"rank\":%u,\"x\":%d,\"w\":%d,\"y\":%d,\"h\":%d}",
+            i ? "," : "", ws_ui_rankdrop[i].op, ws_ui_rankdrop[i].rank,
+            ws_ui_rankdrop[i].x, ws_ui_rankdrop[i].w,
+            ws_ui_rankdrop[i].y, ws_ui_rankdrop[i].h);
+    }
+    off += snprintf(buf + off, (size_t)(cap - off), "],\"items\":[");
     for (uint32_t i = 0; i < ws_ui_prepass_count && off < cap - 220; i++) {
         const WsUiPrepassItem *it = &ws_ui_prepass[i];
         /* Recover the key components so a split is attributable. Mirrors
@@ -4043,6 +4062,16 @@ static void gp0_exec_mono_rect(void) {
     if (w > 1023) w = 1023;
     if (h > 511)  h = 511;
     ws_expand_fullscreen_rect(&x0, y0, &w, h);
+    /* Same auto_ui squash the textured rect path gets. Without it a flat
+     * -coloured HUD mark keeps its 4:3 X while the textured primitives of the
+     * same widget move toward their anchor, so at a wide aspect it is left
+     * behind in open screen. Untouched when the prepass did not admit this
+     * primitive, and rects never carry GTE output. */
+    if (ws_active() && w > 0) {
+        int corrected_w = w;
+        if (ws_auto_ui_transform_rect(&x0, y0, &corrected_w, h))
+            w = corrected_w;
+    }
     x0 += ws_nw_hud_shift(x0, w);   /* native-wide HUD corner re-anchor (no-op else) */
     x0 += draw_offset_x; y0 += draw_offset_y;
     if (draw_area_out_rect(x0, y0, w, h)) return;
@@ -4107,6 +4136,7 @@ static void gp0_exec_mono_dot(void) {
     uint16_t color = rgb888_to_rgb555(gp0_cmd_buf[0] & 0xFFFFFFu);
     int32_t x, y;
     parse_vertex(gp0_cmd_buf[1], &x, &y);
+    ws_sprt_fixed_transform(&x, y, 1);   /* auto_ui squash; no-op when unadmitted */
     x += ws_nw_hud_shift(x, 1);
     x += draw_offset_x; y += draw_offset_y;
     if (draw_area_out_point(x, y)) return;
@@ -4148,11 +4178,15 @@ static void gp0_exec_mono_8x8(void) {
     uint16_t color = rgb888_to_rgb555(gp0_cmd_buf[0] & 0xFFFFFFu);
     int32_t x0, y0;
     parse_vertex(gp0_cmd_buf[1], &x0, &y0);
+    int ws_w = ws_sprt_fixed_transform(&x0, y0, 8);
     x0 += ws_nw_hud_shift(x0, 8);
     x0 += draw_offset_x; y0 += draw_offset_y;
-    if (draw_area_out_rect(x0, y0, 8, 8)) return;
-    gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    gr_draw_flat_rect(x0, y0, 8, 8, color);
+    {
+        int dw = (ws_w && ws_w != 8) ? ws_w : 8;
+        if (draw_area_out_rect(x0, y0, dw, 8)) return;
+        gr_set_semi_transparency(semi_trans, (int)semi_transparency);
+        gr_draw_flat_rect(x0, y0, dw, 8, color);
+    }
 }
 
 /* Execute 16x16 textured sprite (GP0 0x7C-0x7F) */
@@ -4589,16 +4623,35 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
             if (vy[i] < min_y) min_y = vy[i];
             if (vy[i] > max_y) max_y = vy[i];
         }
-    } else if ((op >= 0x64u && op <= 0x67u) ||
-               (op >= 0x74u && op <= 0x77u) ||
-               (op >= 0x7Cu && op <= 0x7Fu)) {
+    } else if (op >= 0x60u && op <= 0x7Fu) {
+        /* GP0 rectangle / sprite. Bits 4-3 select the size (00 variable,
+         * 01 1x1, 10 8x8, 11 16x16) and bit 2 whether it is textured.
+         *
+         * Only the TEXTURED families used to be admitted here, which silently
+         * dropped every flat-coloured HUD mark. Those then kept their raw 4:3
+         * X while the textured primitives beside them were squashed toward an
+         * anchor -- so at a wide aspect they were left stranded in open screen,
+         * to the left of the cluster they belong to. A GP0 rectangle is always
+         * screen-space and never carries GTE output, so admitting the whole
+         * range cannot reach world geometry. */
+        const unsigned size_sel = (op >> 3) & 3u;
+        const int textured = (op >> 2) & 1;
         parse_vertex(words[1], &min_x, &min_y);
         int32_t width, height;
-        if (op >= 0x64u && op <= 0x67u) {
-            width = (int32_t)(words[3] & 0x3FFu);
-            height = (int32_t)((words[3] >> 16) & 0x1FFu);
+        if (size_sel == 0u) {
+            if (textured) {
+                width  = (int32_t)(words[3] & 0x3FFu);
+                height = (int32_t)((words[3] >> 16) & 0x1FFu);
+            } else {
+                /* Mirrors gp0_exec_mono_rect: the full 16-bit field, then
+                 * clamped to the hardware maximum. */
+                width  = (int32_t)(words[2] & 0xFFFFu);
+                height = (int32_t)((words[2] >> 16) & 0xFFFFu);
+                if (width > 1023) width = 1023;
+                if (height > 511)  height = 511;
+            }
         } else {
-            width = height = op >= 0x7Cu ? 16 : 8;
+            width = height = size_sel == 1u ? 1 : (size_sel == 2u ? 8 : 16);
         }
         if (width <= 0 || height <= 0) { ws_ui_reject.degenerate++; return; }
         max_x = min_x + width;
@@ -4638,6 +4691,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_auto_ui_dense = 0;
     ws_ui_reject.opcode = ws_ui_reject.not_axis = ws_ui_reject.degenerate =
         ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank = 0;
+    ws_ui_rankdrop_count = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
     uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
@@ -4704,8 +4758,18 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
 
     uint32_t out = 0;
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
-        if (ws_ui_prepass[i].ot_rank == max_rank)
+        if (ws_ui_prepass[i].ot_rank == max_rank) {
             ws_ui_prepass[out++] = ws_ui_prepass[i];
+        } else if (ws_ui_rankdrop_count < WS_UI_RANKDROP_MAX) {
+            const WsUiPrepassItem *it = &ws_ui_prepass[i];
+            ws_ui_rankdrop[ws_ui_rankdrop_count].x    = it->group.x;
+            ws_ui_rankdrop[ws_ui_rankdrop_count].w    = it->group.width;
+            ws_ui_rankdrop[ws_ui_rankdrop_count].y    = it->y;
+            ws_ui_rankdrop[ws_ui_rankdrop_count].h    = it->h;
+            ws_ui_rankdrop[ws_ui_rankdrop_count].rank = it->ot_rank;
+            ws_ui_rankdrop[ws_ui_rankdrop_count].op   = it->op;
+            ws_ui_rankdrop_count++;
+        }
     }
     ws_ui_reject.rank = ws_ui_prepass_count - out;
     ws_ui_prepass_count = out;
@@ -5116,9 +5180,12 @@ static void gp0_execute_command(void) {
             uint16_t color = rgb888_to_rgb555(gp0_cmd_buf[0] & 0xFFFFFFu);
             int32_t x0, y0;
             parse_vertex(gp0_cmd_buf[1], &x0, &y0);
+            int ws_w = ws_sprt_fixed_transform(&x0, y0, 16);
+            x0 += ws_nw_hud_shift(x0, 16);
             x0 += draw_offset_x; y0 += draw_offset_y;
             gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-            gr_draw_flat_rect(x0, y0, 16, 16, color);
+            gr_draw_flat_rect(x0, y0, (ws_w && ws_w != 16) ? ws_w : 16, 16,
+                              color);
             break;
         }
         case 0x7C: case 0x7D: case 0x7E: case 0x7F:
