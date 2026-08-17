@@ -287,6 +287,21 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
 
+    # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
+    # clear another device's pending source — pinned on SPU (I_STAT bit 9)
+    # staying set across card ACK delivery until the guest acknowledges it.
+    # Scratch working dir for the same reason as sio_card_protocol_test: the
+    # test self-provisions test_dir/card1.mcd relative to its cwd.
+    add_executable(sio_spu_istat_ownership_test
+        tests/test_sio_spu_istat_ownership.c
+        src/sio.c
+        src/memcard.c)
+    target_include_directories(sio_spu_istat_ownership_test PRIVATE include src)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
+    add_test(NAME sio_spu_istat_ownership_test COMMAND sio_spu_istat_ownership_test
+             WORKING_DIRECTORY
+                 ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
+
     # Mirrors func_00005A08 (BIOS card READ chain handler) against a mock CPU,
     # so it pins the disassembly reading without linking the recompiled BIOS.
     add_executable(chain_handler_check_test tests/test_chain_handler_check.c)
