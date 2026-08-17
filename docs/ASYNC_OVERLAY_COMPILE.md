@@ -1,5 +1,29 @@
 # Async background overlay compilation — implementation plan
 
+> **SUPERSEDED IN PART — the sljit tier described below no longer exists.**
+>
+> This document was written while sljit was the toolchain-free fallback. That
+> tier was replaced by tcc in `c2a3f6ad` (2026-06-25) and removed outright in
+> `5b7e69b4` (2026-07-15), which deleted `lib/sljit/`, `overlay_sljit.{c,h}` and
+> `overlay_compile_worker.{c,h}`.
+>
+> **The backend tiers today are `static → gcc → tcc`** (`docs/ARCHITECTURE.md`):
+> gcc is the development default when it is on `PATH`, and TinyCC is bundled
+> beside the shipped executable in `overlay_toolchain/` so players need no
+> compiler. Both are external compilers invoked as a subprocess that produce a
+> **DLL**; neither is an in-process JIT.
+>
+> That difference matters when reading this file: every passage below about
+> serializing a `.sljit` blob, `overlay_sljit_deserialize`, `try_sljit_region`,
+> `register_sljit_candidate`, or a per-fragment in-memory JIT registry describes
+> a mechanism that was never how tcc works and no longer exists at all. Those
+> passages are **not** transferable to the tcc tier by substituting the name.
+> Read them as history. The async worker/file-handoff architecture, the
+> gcc-versus-fallback mutual exclusivity, and the CPS work are still accurate.
+>
+> Current behaviour lives in `runtime/src/overlay_backend.c`,
+> `runtime/src/code_provider.c` and `tools/compile_overlays.py`.
+
 Status: **LARGELY ALREADY BUILT + VALIDATED under CPS (2026-06-18).** The "planned" feature below
 turned out to mostly exist: `overlay_capture.c` (`overlay_autocapture_tick` — autocapture on
 interp pressure, ON whenever the cache is on) + `autocompile.c` (background compile: probes for a

@@ -13,14 +13,24 @@ Normal runtime builds stage it automatically so players supply only a disc;
 `bios/OpenBIOS.LICENSE` always rides alongside the shipped image.
 
 
-## sljit — stack-less JIT compiler (Tier-2 in-process overlay backend)
+## TinyCC (TCC) — toolchain-free overlay compiler shipped to players
 
-[sljit](https://github.com/zherczeg/sljit) by Zoltan Herczeg, licensed
-**BSD-2-Clause**. Vendored at `lib/sljit/` (source `lib/sljit/sljit_src/`,
-license `lib/sljit/LICENSE`) and compiled into the runtime as the self-contained
-Tier-2 overlay JIT backend (`runtime/src/overlay_sljit.c`). No external toolchain
-dependency; sljit auto-detects the host architecture. See `SLJIT.md` (repo root /
-workspace) for the backend design.
+[TinyCC](https://bellard.org/tcc/) by Fabrice Bellard and contributors, licensed
+**LGPL-2.1**. Not vendored in this repository — no TinyCC source or binary is
+tracked here. It is invoked as a **separate subprocess** by
+`tools/compile_overlays.py` (`--compiler tcc`, `--tcc &lt;binary&gt;`) to build overlay
+shards into a DLL, so players need no compiler of their own. Nothing in the
+runtime links against libtcc, so this is aggregation with a separate program
+rather than LGPL linkage.
+
+The runtime expects an end-user bundle at
+`&lt;exe_dir&gt;/overlay_toolchain/{python/, tcc/tcc.exe, compile_overlays.py, …}`
+(`runtime/src/main.cpp`). **No script in this repository populates that
+directory**, so if release packaging supplies it, that step lives outside this
+repo and the TinyCC license notice must be shipped alongside it there.
+
+Developers with `gcc` on `PATH` use the gcc tier instead; the bundled tcc matters
+only for end-user release packages (`docs/BUILDING.md`).
 
 ## JRickey / gba-recomp — verified-enhancement shadow + screen color science
 
