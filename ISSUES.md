@@ -515,8 +515,16 @@ discovery seeds). Either way, then close Issue #3 alongside.
 
 ## Issue #7 — sljit live execution is unvalidated (pure-live save-load wedge)
 
-**Status:** open, root-caused — fix in progress (branch `feat/sljit-backend`)
+**Status:** CLOSED — superseded, not fixed. The sljit Tier-2 backend this issue
+describes was removed wholesale in `5b7e69b4` (2026-07-15), which deleted
+`lib/sljit/`, `overlay_sljit.{c,h}` and the sljit paths in `code_provider.c` /
+`overlay_loader.c`. The toolchain-free role it filled is now served by the
+bundled TinyCC tier (introduced `c2a3f6ad`, 2026-06-25), which compiles to a DLL
+through a subprocess rather than JITting in-process, so it does not share this
+defect's live-execution/save-load shape. Nothing here is actionable; retained as
+history.
 **Date opened:** 2026-06-15
+**Date closed:** 2026-07-15 (by removal of the subsystem)
 **Area:** overlay Tier-2 sljit backend (`runtime/src/overlay_loader.c`,
 `overlay_sljit.c`, `code_provider.c`, `overlay_sljit.c` resolution)
 

@@ -38,5 +38,8 @@ behind a specific subsystem.
 - [`BACKDROP_PRELOAD.md`](BACKDROP_PRELOAD.md) — widescreen backdrop preload.
 
 ## Overlay cache internals
-- [`SLJIT_PERSIST_CACHE.md`](SLJIT_PERSIST_CACHE.md) — persisted overlay-shard
-  cache design.
+- `SLJIT_PERSIST_CACHE.md` — **removed.** It described the persisted shard cache
+  of the sljit Tier-2 backend, which was deleted in `5b7e69b4` (2026-07-15).
+  For the current model see `runtime/src/overlay_loader.c` (per-entry candidate
+  validity), `tools/compile_overlays.py` (shard formation and the `.ranges`
+  manifest), and [`../COMPILING_OVERLAYS.md`](../COMPILING_OVERLAYS.md).
