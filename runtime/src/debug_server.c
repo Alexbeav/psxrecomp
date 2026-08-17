@@ -7848,6 +7848,31 @@ static void handle_ws_backdrop_ring(int id, const char *json)
     free(buf);
 }
 
+/* ws_ui_groups: dump the auto_ui_squash partition for the last UI prepass —
+ * per primitive its op / key / raw key inputs (y, h, derived band and family) /
+ * union-find root / final anchor.
+ *
+ * auto_ui_squash squashes each spatial run about its own anchor, so a HUD
+ * element split across two runs gets two anchors and comes apart as the frame
+ * widens (elements drifting to opposite edges, glyphs sliding off their
+ * background box). Diagnosing that needed to know which run each primitive
+ * landed in, and nothing exposed it: `key` is a hash, so unequal keys do not
+ * say WHICH of CLUT/texpage/band/family differed, and `anchor` takes only three
+ * values, so equal anchors do not prove two prims actually co-grouped.
+ * Read-only; sized for the 2048-entry prepass cap. */
+static void handle_ws_ui_groups(int id, const char *json)
+{
+    (void)json;
+    size_t cap = 1u << 19;                 /* 512 KB: 2048 items * ~180 chars */
+    char *buf = (char *)malloc(cap);
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int hdr  = snprintf(buf, cap, "{\"id\":%d,\"ok\":true,", id);
+    int body = psx_ws_ui_groups_json(buf + hdr, (int)cap - hdr - 4);
+    snprintf(buf + hdr + body, cap - (size_t)(hdr + body), "}");
+    debug_server_send_line(buf);
+    free(buf);
+}
+
 /* ws_backdrop_margin [m=<N>]: live-tune the far-backdrop widen strategy without
  * a rebuild. m<0 = whole-row preload, m=0 = off, m>0 = widen N columns each side.
  * No m= just reports the current value. */
@@ -13493,6 +13518,7 @@ static const CmdEntry s_commands[] = {
     { "ws_aspect",         handle_ws_aspect },
     { "ws_nw",             handle_ws_nw },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
+    { "ws_ui_groups",      handle_ws_ui_groups },
     { "ws_backdrop_margin", handle_ws_backdrop_margin },
     { "ws_backdrop_stretch", handle_ws_backdrop_stretch },
     { "ws_dbg_stretch",    handle_ws_dbg_stretch },

@@ -383,6 +383,12 @@ void psx_ws_backdrop_ring_note(uint32_t pc, int kind, int wcols, uint32_t orig,
                                uint32_t base, uint32_t dl);
 int  psx_ws_backdrop_ring_json(char *buf, int cap);
 
+/* auto_ui_squash partition dump (`ws_ui_groups`). Reports, for the last UI
+ * prepass, each primitive's raw key inputs (CLUT/texpage band/family via op,
+ * y, h) alongside its union-find root and final anchor — enough to tell whether
+ * two HUD primitives shared a run, and which key component split them if not. */
+int  psx_ws_ui_groups_json(char *buf, int cap);
+
 /* Live-tunable backdrop widen amount (ws_backdrop_margin command): <0 whole-row,
  * 0 off, >0 N-column widen. g_ws_bd_from_interp is the interp's one-shot
  * "I will record the rich entry myself" flag (see gpu.c / dirty_ram_interp.c). */

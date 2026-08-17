@@ -95,6 +95,13 @@ typedef struct {
     WsUiGroupItem group;
     uint32_t src_addr;
     uint16_t ot_rank;
+    /* Diagnostic only (ws_ui_groups): the key is a hash, so a dump of keys
+     * alone says two prims differ without saying WHICH component differed.
+     * Keep the raw inputs so an observer can attribute a split to the CLUT,
+     * the texpage, the 24px Y band, or the poly-vs-rect family. */
+    int32_t  y;
+    int32_t  h;
+    uint8_t  op;
 } WsUiPrepassItem;
 static WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
 static uint32_t ws_ui_prepass_count;
@@ -1583,6 +1590,43 @@ int psx_ws_backdrop_ring_json(char *buf, int cap) {
             i ? "," : "", e->frame, e->pc, e->kind, e->wcols,
             (int)(int16_t)e->orig, (int)(int16_t)e->finalv, e->extent, e->camx, e->count,
             e->base, e->dl);
+    }
+    off += snprintf(buf + off, (size_t)(cap - off), "]");
+    return off;
+}
+
+/* ws_ui_groups — dump the auto_ui_squash partition for the LAST prepass.
+ *
+ * auto_ui_squash squashes each spatial run about its own anchor, so a HUD
+ * element that lands in two runs gets two anchors and comes apart as the frame
+ * widens. Nothing exposed which run a primitive ended up in, which made that
+ * failure mode guesswork: the key is a hash of CLUT/texpage/Y-band/family, so
+ * comparing keys tells you two prims differ without telling you why, and the
+ * anchor takes only three values so anchor equality cannot prove co-grouping.
+ *
+ * This reports both the raw key inputs and the union-find root, which together
+ * answer "did these two merge, and if not, which component split them". */
+int psx_ws_ui_groups_json(char *buf, int cap) {
+    int off = snprintf(buf, (size_t)cap,
+        "\"active\":%d,\"squash\":%d,\"dense\":%d,\"rank\":%d,"
+        "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,\"n\":%u,\"items\":[",
+        ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
+        ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
+        ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP, ws_ui_prepass_count);
+    for (uint32_t i = 0; i < ws_ui_prepass_count && off < cap - 220; i++) {
+        const WsUiPrepassItem *it = &ws_ui_prepass[i];
+        /* Recover the key components so a split is attributable. Mirrors
+         * ws_auto_ui_group_key_words; kept in step with it by construction. */
+        int32_t centre_y = it->y + it->h / 2;
+        unsigned band = (unsigned)((centre_y < 0 ? 0 : centre_y / 24) & 0x1F);
+        unsigned family = it->op < 0x60u ? 1u : 2u;
+        off += snprintf(buf + off, (size_t)(cap - off),
+            "%s{\"i\":%u,\"op\":\"%02x\",\"key\":\"%08x\",\"root\":%u,"
+            "\"x\":%d,\"w\":%d,\"y\":%d,\"h\":%d,"
+            "\"band\":%u,\"family\":%u,\"anchor\":%d,\"src\":\"%08x\"}",
+            i ? "," : "", i, it->op, it->group.key, it->group.root,
+            it->group.x, it->group.width, it->y, it->h,
+            band, family, it->group.anchor, it->src_addr);
     }
     off += snprintf(buf + off, (size_t)(cap - off), "]");
     return off;
@@ -4520,8 +4564,12 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
     item->group.x = min_x - X;
     item->group.width = width;
     item->group.anchor = 0;
+    item->group.root = ws_ui_prepass_count - 1u;
     item->src_addr = source_addr & 0x1FFFFCu;
     item->ot_rank = rank;
+    item->y  = min_y;
+    item->h  = height;
+    item->op = (uint8_t)op;
 }
 
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {

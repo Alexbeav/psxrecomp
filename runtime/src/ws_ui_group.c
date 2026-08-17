@@ -31,8 +31,10 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
                         int32_t display_width, int dense_menu) {
     if (!items || count == 0 || display_width <= 0) return;
     if (dense_menu) {
-        for (size_t i = 0; i < count; i++)
+        for (size_t i = 0; i < count; i++) {
             items[i].anchor = display_width / 2;
+            items[i].root = (uint32_t)i;   /* diag: no runs formed */
+        }
         return;
     }
 
@@ -41,6 +43,7 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
         for (size_t i = 0; i < count; i++) {
             items[i].anchor = ws_ui_anchor_for_bounds(
                 items[i].x, items[i].width, display_width);
+            items[i].root = (uint32_t)i;   /* diag: each item stands alone */
         }
         return;
     }
@@ -71,6 +74,7 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
         }
         items[i].anchor =
             ws_ui_anchor_for_bounds(min_x, max_x - min_x, display_width);
+        items[i].root = (uint32_t)root;
     }
     free(parent);
 }

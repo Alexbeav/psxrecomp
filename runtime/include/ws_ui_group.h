@@ -15,6 +15,14 @@ typedef struct {
     int32_t x;
     int32_t width;
     int32_t anchor;
+    /* Diagnostic only: index of the union-find representative this item
+     * merged into, so an observer can tell "these two share an anchor because
+     * they are one run" from "these two happen to land on the same third".
+     * Anchor equality cannot distinguish those — there are only three anchor
+     * values — and that distinction is the whole question when a HUD element
+     * splits apart under the squash. Written by ws_ui_group_assign; never read
+     * by the transform path. */
+    uint32_t root;
 } WsUiGroupItem;
 
 /* Assign one thirds anchor to each complete spatial run. Items with the same
