@@ -71,6 +71,11 @@ struct CodeGenConfig {
     // addresses (MotK VLC leaves, etc.). Host locality hint only.
     std::set<uint32_t> hot_funcs;
 
+    // [recompiler] load_charge_batch(_funcs): install a function-local
+    // cycle accumulator so load charges skip deadline probes until IRQ/MMIO
+    // / function exit. Guest totals at those barriers are unchanged.
+    std::set<uint32_t> load_charge_batch_funcs;
+
     // [load_accel.vsync_query] verified PsyQ VSync functions whose mode=-1
     // path may bypass its unused GPUSTAT/Timer1 reads.  The map value is the
     // guest RAM VBlank counter returned by that query path.  Empty = inert.
@@ -140,6 +145,14 @@ struct CodeGenConfig {
     // xclip_load_sites). The configured lw routes through the runtime helper
     // (INT32_MAX while revealed, vanilla at 4:3); empty by default.
     std::set<uint32_t> ws_cull_xclip_load_sites;
+
+    // Exact `bltz MAC0, reject`-style NCLIP/backface rejects to suppress while
+    // widescreen reveals extra world. 4:3 keeps the original branch predicate.
+    std::set<uint32_t> ws_cull_nclip_keep_sites;
+
+    // Exact branch PCs whose reject target is suppressed while widescreen
+    // reveals extra world. 4:3 keeps the original branch predicate.
+    std::set<uint32_t> ws_cull_branch_keep_sites;
 
     // Exact, full-word-guarded comparison sites whose result is forced only
     // while widescreen reveals extra world. 4:3 evaluates the original compare.

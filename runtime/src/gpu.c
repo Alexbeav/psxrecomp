@@ -11,9 +11,11 @@
  */
 
 #include "gpu.h"
+#include "pgxp.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
 #include "gpu_sw_renderer.h"
+#include "gpu_vram_dirty.h"
 #include "gpu_render.h"
 #include "text_xlate.h"
 #include "crash_trace.h"
@@ -22,6 +24,7 @@
 #include "event_ring.h"
 #include "color_lut.h"
 #include "mod_runtime.h"
+#include "sio.h"
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
@@ -84,6 +87,7 @@ static uint32_t ws_anchor_addr = 0;          /* scratchpad addr of anchor SXY */
 static int      ws_hud_sprt = 0;             /* edge-anchor untagged HUD SPRTs */
 static int      ws_auto_ui_squash;
 static int      ws_auto_ui_dense;
+static int      ws_active(void);
 static uint64_t ws_auto_ui_candidate_count;
 static uint64_t ws_auto_ui_transform_count;
 #define WS_UI_PREPASS_MAX 2048u
@@ -124,6 +128,7 @@ static int ws_engaged(void) { return ws_mode != 0; }
 
 /* Forward decls: defined later but used by psx_ws_backdrop_x above them. */
 static int32_t ws_scale_about(int32_t x, int32_t ax);
+static int32_t ws_disp_x(void);
 static int32_t ws_disp_w(void);
 static void ws_clear_all_reveal_margins(void);
 
@@ -164,6 +169,7 @@ static int      ws_gte_game_mode_cfg = 0;
 static uint32_t ws_gte_frame = (uint32_t)-1;
 static uint32_t ws_gte_count = 0;
 static uint32_t ws_last_gte_stamp = (uint32_t)-1000;
+static int ws_precise_nclip_cfg = 0;
 #define WS_GAMEPLAY_STATE_VALUES_MAX 16
 static uint32_t ws_gameplay_state_addr = 0;
 static uint32_t ws_gameplay_state_values[WS_GAMEPLAY_STATE_VALUES_MAX];
@@ -178,6 +184,8 @@ static int ws_gameplay_state_value_count = 0;
  * this many consecutive frames (save/options/memory-card) — reverts to 4:3. */
 #define WS_GTE_GAME_MODE_HYSTERESIS 45u
 void gpu_ws_set_gte_game_mode(int on) { ws_gte_game_mode_cfg = on ? 1 : 0; }
+void gpu_ws_set_precise_nclip(int on) { ws_precise_nclip_cfg = on ? 1 : 0; }
+int gpu_ws_precise_nclip_enabled(void) { return ws_precise_nclip_cfg && ws_active(); }
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues) {
     if (nvalues < 0) nvalues = 0;
@@ -342,8 +350,48 @@ int ws_native_wide_active(void) {
 static int ws_native_wide_configured(void) {
     return ws_mode == 2 && ws_cfg_num * 3 > ws_cfg_den * 4;
 }
+
+static int ws_local_viewport_cfg = 0;
+static int ws_local_viewport_slot = 0;
+static int ws_local_viewport_draw_target(int *base_x);
+static int ws_vertical_split_active(void);
+void gpu_ws_set_netplay_local_viewport(int enabled, int slot) {
+    ws_local_viewport_cfg = enabled ? 1 : 0;
+    ws_local_viewport_slot = slot == 1 ? 1 : 0;
+    ws_nw_sync_target();
+}
+
+static int ws_local_viewport_layout(int *base_x, int *source_w,
+                                    int *wide_w, int *offset) {
+    if (!ws_local_viewport_cfg || !ws_native_wide_configured() ||
+        !ws_vertical_split_active())
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 2 || di.height == 0)
+        return 0;
+    if ((di.width & 1u) != 0)
+        return 0;
+
+    int src_w = (int)di.width / 2;
+    int target_w = ((int)di.height * ws_cfg_num + ws_cfg_den / 2) / ws_cfg_den;
+    if (target_w < src_w)
+        target_w = src_w;
+    int off = (target_w - src_w) / 2;
+    int final_w = src_w + off * 2;
+
+    if (base_x) *base_x = (int)di.display_x + (ws_local_viewport_slot ? src_w : 0);
+    if (source_w) *source_w = src_w;
+    if (wide_w) *wide_w = final_w;
+    if (offset) *offset = off;
+    return final_w > src_w && off > 0;
+}
+
 static int ws_nw_configured_offset(void) {
     if (!ws_native_wide_configured()) return 0;
+    int local_offset = 0;
+    if (ws_local_viewport_layout(NULL, NULL, NULL, &local_offset))
+        return local_offset;
     int numr = 3 * ws_cfg_num - 4 * ws_cfg_den;
     int w = (int)ws_disp_w();
     return (w * numr + 4 * ws_cfg_den) / (8 * ws_cfg_den);
@@ -353,6 +401,23 @@ static int ws_nw_offset(void) {
     return ws_nw_configured_offset();
 }
 int ws_nw_extra(void) { return 2 * ws_nw_offset(); }
+
+int ws_nw_present_width(void) {
+    int wide_w = 0;
+    if (ws_local_viewport_layout(NULL, NULL, &wide_w, NULL))
+        return wide_w;
+    return (int)ws_disp_w() + ws_nw_extra();
+}
+
+int gpu_ws_netplay_local_viewport_base_x(void) {
+    int base = 0;
+    return ws_local_viewport_layout(&base, NULL, NULL, NULL) ? base : 0;
+}
+
+int gpu_ws_netplay_local_viewport_width(void) {
+    int wide_w = 0;
+    return ws_local_viewport_layout(NULL, NULL, &wide_w, NULL) ? wide_w : 0;
+}
 
 /* Per-side X cull margin in screen/world units (the game's draw classifier
  * works in objX-camX where 1 unit ~= 1 native-4:3 screen pixel). The squash
@@ -1406,14 +1471,15 @@ int psx_ws_cull_bltz_at(const uint32_t *words, int n, int idx) {
  * x is the int16 screenX the handler was about to store. */
 int psx_ws_backdrop_x(int x) {
     if (ws_native_wide_active()) {
+        int32_t X = ws_disp_x();
         int32_t W = (int32_t)ws_disp_w();
         int32_t extra = ws_nw_extra();
         int32_t cx = W / 2;
-        int32_t d = (int16_t)x - cx;
-        return (int)(cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W);
+        int32_t d = (int16_t)x - X - cx;
+        return (int)(X + cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W);
     }
     if (!ws_active()) return (int16_t)x;
-    int32_t cx = ws_disp_w() / 2;                 /* screen centre (=160 @ 320) */
+    int32_t cx = ws_disp_x() + ws_disp_w() / 2;   /* screen centre (=160 @ 320) */
     return ws_scale_about((int16_t)x, cx);
 }
 
@@ -1821,8 +1887,20 @@ static int32_t ws_scale_len(int32_t w) {
     return s < 1 ? 1 : s;
 }
 
-/* Horizontal display width in drawing space (e.g. 320). */
+/* Horizontal display viewport in drawing space (e.g. 320). For a selected
+ * netplay-local split viewport this is that player's authored half, not the
+ * whole composed display. */
+static int32_t ws_disp_x(void) {
+    int base = 0;
+    if (ws_local_viewport_layout(&base, NULL, NULL, NULL))
+        return (int32_t)base;
+    return 0;
+}
+
 static int32_t ws_disp_w(void) {
+    int src_w = 0;
+    if (ws_local_viewport_layout(NULL, &src_w, NULL, NULL))
+        return (int32_t)src_w;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
     return di.width ? (int32_t)di.width : 320;
@@ -1839,8 +1917,8 @@ static int32_t ws_disp_h(void) {
  * display; ordinary world-space rectangles remain untouched. */
 static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
     if (!ws_native_wide_active()) return;
-    int W = (int)ws_disp_w(), H = (int)ws_disp_h();
-    if (*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) {
+    int X = (int)ws_disp_x(), W = (int)ws_disp_w(), H = (int)ws_disp_h();
+    if (*x <= X && *x + *w >= X + W && y <= 0 && y + h >= H) {
         int off = ws_nw_offset();
         *x -= off;
         *w += 2 * off;
@@ -1855,11 +1933,12 @@ static void ws_expand_fullscreen_rect(int32_t *x, int32_t y, int *w, int h) {
  * one zone, so its pieces share a pivot and stay aligned. (Full-2D menu
  * screens never reach here — they get zero squash + 4:3 pillarbox instead.) */
 static int32_t ws_hud_pivot(int32_t x, int32_t w) {
+    int32_t X = ws_disp_x();
     int32_t W = ws_disp_w();
-    int32_t cx = 2 * x + w;            /* 2*centre, avoids losing the half */
-    if (3 * cx < 2 * W) return 0;
-    if (3 * cx > 4 * W) return W;
-    return W / 2;
+    int32_t cx = 2 * (x - X) + w;      /* 2*centre, avoids losing the half */
+    if (3 * cx < 2 * W) return X;
+    if (3 * cx > 4 * W) return X + W;
+    return X + W / 2;
 }
 
 /* Automatic UI correction is deliberately tied to draw provenance, not to
@@ -1931,8 +2010,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
         if (vy[i] > max_y) max_y = vy[i];
     }
     int32_t width = max_x - min_x, height = max_y - min_y;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((min_x <= 0 && max_x >= W && min_y <= 0 && max_y >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((min_x <= X && max_x >= X + W && min_y <= 0 && max_y >= H) ||
         (width > W / 2 && height > H / 4))
         return 0;
 
@@ -1946,8 +2025,8 @@ static int ws_auto_ui_transform_quad(int32_t vx[4], const int32_t vy[4]) {
 static int ws_auto_ui_transform_rect(int32_t *x, int32_t y, int *w, int h) {
     if (!x || !w || *w <= 0 || psx_ws_prim_is_tagged())
         return 0;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((*x <= 0 && *x + *w >= W && y <= 0 && y + h >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((*x <= X && *x + *w >= X + W && y <= 0 && y + h >= H) ||
         (*w > W / 2 && h > H / 4))
         return 0;
     int32_t anchor;
@@ -2024,8 +2103,9 @@ static int32_t ws_nw_hud_shift(int32_t x, int32_t w) {
      * for live A/B: some HUD composites (Tomba's AP counter) render through
      * the tagged sprite funnel and stay inset without it. */
     if (ws_anchor_addr && !ws_nw_hud_tag_rects && psx_ws_prim_is_tagged()) return 0;
+    int32_t X  = ws_disp_x();
     int32_t W  = ws_disp_w();
-    int32_t cx = 2 * x + w;            /* 2*centre, avoids losing the half */
+    int32_t cx = 2 * (x - X) + w;      /* 2*centre, avoids losing the half */
     if (3 * cx < 2 * W) return -off;   /* left third  -> pull to left edge  */
     if (3 * cx > 4 * W) return  off;   /* right third -> push to right edge */
     return 0;                          /* middle third -> stay centred      */
@@ -2070,6 +2150,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
     if (!ws_nw_backdrop || !ws_native_wide_active()) return 0;
     int32_t extra = ws_nw_extra();
     if (extra <= 0) return 0;
+    int32_t X = ws_disp_x();
     int32_t W = ws_disp_w();
     const int32_t EDGE = 24;                 /* slack for "touches the frame edge" */
     int32_t minx = vx[0], maxx = vx[0], miny = vy[0], maxy = vy[0];
@@ -2080,7 +2161,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
         if (vy[i] > maxy) maxy = vy[i];
     }
     /* Must span the full display width and a real vertical extent. */
-    if (minx > EDGE || maxx < W - EDGE || (maxy - miny) < 64) return 0;
+    if (minx > X + EDGE || maxx < X + W - EDGE || (maxy - miny) < 64) return 0;
     /* Axis-aligned: every vertex X sits at either the min or the max edge, and
      * every Y at the top or bottom edge (a true screen-space rectangle). */
     for (int i = 0; i < 4; i++) {
@@ -2090,7 +2171,7 @@ static int ws_nw_backdrop_stretch_quad(int32_t *vx, const int32_t *vy) {
     }
     /* Stretch X about the display centre by (W+extra)/W so [0,W] -> [-off, W+off],
      * which the wide compositor (+off) maps onto the full [0, W+extra] surface. */
-    int32_t cx = W / 2;
+    int32_t cx = X + W / 2;
     for (int i = 0; i < 4; i++) {
         int32_t d = vx[i] - cx;
         vx[i] = cx + (d * (W + extra) + (d >= 0 ? W / 2 : -W / 2)) / W;
@@ -2163,6 +2244,59 @@ static uint32_t texture_disable;   /* bit 15 */
 static uint32_t draw_area_left, draw_area_top;
 static uint32_t draw_area_right, draw_area_bottom;
 
+static int draw_area_intersects_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0)
+        return 0;
+    int r = x + w - 1;
+    int b = y + h - 1;
+    return !((int)draw_area_right < x ||
+             (int)draw_area_left > r ||
+             (int)draw_area_bottom < y ||
+             (int)draw_area_top > b);
+}
+
+static int ws_local_viewport_draw_target(int *base_x) {
+    int base = 0, src_w = 0;
+    if (!ws_local_viewport_layout(&base, &src_w, NULL, NULL))
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (draw_area_intersects_rect(base, (int)di.display_y,
+                                  src_w, (int)di.height)) {
+        if (base_x) *base_x = base;
+        return 1;
+    }
+    return 0;
+}
+
+static int ws_display_viewport_draw_target(int *base_x) {
+    if (!ws_native_wide_active())
+        return 0;
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width == 0 || di.height == 0)
+        return 0;
+    if (!draw_area_intersects_rect((int)di.display_x, (int)di.display_y,
+                                   (int)di.width, (int)di.height))
+        return 0;
+    if (base_x) *base_x = (int)di.display_x;
+    return 1;
+}
+
+typedef struct GpuVerticalSplitTrace {
+    uint8_t left_seen;
+    uint8_t right_seen;
+    uint16_t display_w;
+    uint16_t display_h;
+} GpuVerticalSplitTrace;
+
+static GpuVerticalSplitTrace split_trace_this;
+static GpuVerticalSplitTrace split_trace_last;
+static uint8_t split_recent_left_age = 255;
+static uint8_t split_recent_right_age = 255;
+static uint16_t split_recent_display_w = 0;
+static uint16_t split_recent_display_h = 0;
+
 /* Draw offset (set by GP0(E5h)) */
 static int32_t draw_offset_x, draw_offset_y;
 /* Instrumentation: per-vblank range/count of GP0(E5) draw-offset-Y sets. If a
@@ -2229,12 +2363,80 @@ static int ws_is_fb_base(uint32_t bx) {
     for (int i = 0; i < ws_fb_n; i++) if (ws_fb_base[i] == bx) return 1;
     return 0;
 }
+
+static void split_trace_reset(GpuVerticalSplitTrace *trace) {
+    memset(trace, 0, sizeof(*trace));
+}
+
+static void split_trace_note_draw_area(void) {
+    GpuDisplayInfo di;
+    gpu_get_display_info(&di);
+    if (di.disabled || di.depth24 || di.width < 256 || di.height < 128)
+        return;
+    if ((di.width & 1u) != 0)
+        return;
+    if (di.display_x + di.width > 1024u || di.display_y + di.height > 512u)
+        return;
+    if (draw_area_right <= draw_area_left || draw_area_bottom <= draw_area_top)
+        return;
+
+    const int disp_l = (int)di.display_x;
+    const int disp_r = (int)(di.display_x + di.width - 1u);
+    const int mid = disp_l + (int)(di.width / 2u);
+    const int tol = (int)di.width / 32 > 8 ? (int)di.width / 32 : 8;
+
+    const int area_l = (int)draw_area_left;
+    const int area_r = (int)draw_area_right;
+
+    if (split_trace_this.display_w != 0 &&
+        (split_trace_this.display_w != (uint16_t)di.width ||
+         split_trace_this.display_h != (uint16_t)di.height)) {
+        split_trace_reset(&split_trace_this);
+    }
+    split_trace_this.display_w = (uint16_t)di.width;
+    split_trace_this.display_h = (uint16_t)di.height;
+
+    if (area_l <= disp_l + tol &&
+        area_r >= mid - 1 - tol && area_r <= mid - 1 + tol) {
+        split_trace_this.left_seen = 1;
+    }
+    if (area_l >= mid - tol && area_l <= mid + tol &&
+        area_r >= disp_r - tol) {
+        split_trace_this.right_seen = 1;
+    }
+}
+
+static int ws_vertical_split_active(void) {
+    return split_recent_left_age <= 8 && split_recent_right_age <= 8;
+}
+
+int gpu_last_frame_vertical_split_screen(void) {
+    return ws_vertical_split_active();
+}
+
+void gpu_vertical_split_debug(int *active, int *left_age, int *right_age) {
+    if (active) *active = gpu_last_frame_vertical_split_screen();
+    if (left_age) *left_age = split_recent_left_age;
+    if (right_age) *right_age = split_recent_right_age;
+}
+
 /* Point the renderer's wide mirror at the current back buffer (draw_area_left)
  * when native-wide is active and that buffer is a known display buffer; else
  * disable mirroring for this draw. Called when the draw env changes. */
 static void ws_nw_sync_target(void) {
     if (!ws_native_wide_active()) { gr_wide_disable_target(); return; }
-    gr_wide_configure((int)ws_disp_w() + ws_nw_extra(), ws_nw_offset());
+    gr_wide_configure(ws_nw_present_width(), ws_nw_offset());
+    int local_base = 0;
+    if (ws_local_viewport_draw_target(&local_base)) {
+        gr_wide_set_target(local_base);
+        return;
+    }
+    if (ws_local_viewport_cfg) { gr_wide_disable_target(); return; }
+    int display_base = 0;
+    if (ws_display_viewport_draw_target(&display_base)) {
+        gr_wide_set_target(display_base);
+        return;
+    }
     uint32_t base = draw_area_left;
     if (ws_is_fb_base(base)) gr_wide_set_target((int)base);
     else                     gr_wide_disable_target();
@@ -2317,15 +2519,31 @@ uint64_t g_pollhack_vblank_count = 0;  /* instrumentation: poll-fallback VBlank 
 static void gpu_reset_state(int clear_vram) {
     if (clear_vram) {
         memset(vram, 0, sizeof(vram));
+        gpu_vram_dirty_mark_all();
     }
     gr_init(vram);
 
-    /* Reset GP0 state machine */
+    /* Reset GP0 state machine (+ leftover cmd/xfer crumbs that survive in
+     * gpu_snapshot and fork av digests on rematch). */
     gp0_state = GP0_IDLE;
     gp0_words_collected = 0;
     gp0_words_needed = 0;
+    memset(gp0_cmd_buf, 0, sizeof(gp0_cmd_buf));
+    gp0_next_source_addr = 0xFFFFFFFFu;
+    gp0_cmd_source_addr = 0xFFFFFFFFu;
+    polyline_color = 0;
+    polyline_prev_x = polyline_prev_y = 0;
+    polyline_prev_c = 0;
+    polyline_semi_trans = 0;
+    polyline_has_prev = 0;
+    vram_write_x = vram_write_y = 0;
+    vram_write_w = vram_write_h = 0;
+    vram_write_col = vram_write_row = 0;
     vram_write_remaining = 0;
     vram_read_active = 0;
+    vram_read_x = vram_read_y = 0;
+    vram_read_w = vram_read_h = 0;
+    vram_read_col = vram_read_row = 0;
 
     /* Reset all state to power-on defaults */
     texpage_x = 0;
@@ -2344,6 +2562,12 @@ static void gpu_reset_state(int clear_vram) {
     draw_area_top = 0;
     draw_area_right = 0;
     draw_area_bottom = 0;
+    split_trace_reset(&split_trace_this);
+    split_trace_reset(&split_trace_last);
+    split_recent_left_age = 255;
+    split_recent_right_age = 255;
+    split_recent_display_w = 0;
+    split_recent_display_h = 0;
     draw_offset_x = 0;
     draw_offset_y = 0;
     texture_window_value = 0;
@@ -2527,6 +2751,93 @@ static uint16_t rgb888_to_rgb555(uint32_t color24) {
 
 /* i_stat extern declared earlier in this file (above gpu_read_gpustat). */
 
+/* Netplay: present/finish_frame deferred from mid-psx_cyc_step to the next
+ * psx_check_interrupts BB edge. MotK menu wait-loop (0x8006CDA0) was digesting
+ * peers at different instr points (post-lw v0 vs post-slt v0=1) → cpu+ram fork
+ * on idle sealed resim. Guest VBlank raise / LCF stay immediate. */
+static int s_present_pending;
+static int s_flushing_present;
+
+void gpu_vblank_clear_deferred_present(void) {
+    s_present_pending = 0;
+    /* longjmp from flush_resume abandons the flush_present stack frame —
+     * must drop the reentrancy guard or every later flush no-ops forever. */
+    s_flushing_present = 0;
+}
+
+void gpu_vblank_arm_deferred_present(void) {
+    /* Coalesce: at most one deferred present. Stacking (≥2) drained in one
+     * flush as double finish_frame at the same guest cycle (MotK soak:
+     * fin@N and fin@N+1 share dig/cyc → episode skew + clk/tim ±9). */
+    if (s_present_pending < 1)
+        s_present_pending = 1;
+}
+
+int gpu_vblank_present_pending(void) {
+    return s_present_pending > 0;
+}
+
+void gpu_vblank_release_present_flush_guard(void) {
+    s_flushing_present = 0;
+}
+
+void gpu_vblank_flush_present(void) {
+    if (s_flushing_present || s_present_pending <= 0)
+        return;
+    /* Belt-and-suspenders with interrupts.c: never finish_frame inside the
+     * exception handler (IEc-clear BB edges used to drain present_pending). */
+    {
+        extern int psx_get_in_exception(void);
+        if (psx_get_in_exception())
+            return;
+    }
+    /* Hold finish_frame while native memcard SIO is in flight. MotK needs
+     * BB-edge commit for menu-wait determinism, but draining mid card
+     * busy-wait wedges save/load on Ape Escape (empty starfield) and the
+     * same class of titles. Keep s_present_pending; retry after card idle
+     * (sio_hold_present_for_card has a stale escape). */
+    {
+        extern int psx_netplay_active(void);
+        if (psx_netplay_active() && sio_hold_present_for_card())
+            return;
+    }
+    /* MotK menu wait (0x8006CD54↔0x8006CDA0) and post-FMV overlay wait
+     * (0x800768C8↔0x80076880): present ONLY at an explicit B edge. Never
+     * present on an A edge (sticky B must not allow that). Non-wait edges
+     * (FMV / cutover) must present even if sticky still names the wait loop. */
+    {
+        extern int psx_netplay_active(void);
+        extern uint32_t psx_compiled_irq_resume_pc(void);
+        extern uint32_t psx_last_irq_check_pc(void);
+        extern uint32_t psx_netplay_rb_sticky_bb_pc(void);
+        if (psx_netplay_active()) {
+            const uint32_t wait_a = 0x8006CD54u;
+            const uint32_t wait_b = 0x8006CDA0u;
+            const uint32_t wait2_a = 0x800768C8u;
+            const uint32_t wait2_b = 0x80076880u;
+            uint32_t pc = psx_compiled_irq_resume_pc();
+            uint32_t last = psx_last_irq_check_pc();
+            uint32_t sticky = psx_netplay_rb_sticky_bb_pc();
+            uint32_t edge = pc ? pc : last;
+            if (edge == wait_a || edge == wait2_a)
+                return;
+            if (edge == wait_b || edge == wait2_b || edge != 0u) {
+                /* B edge, or non-wait (FMV/cutover) — present; ignore sticky */
+            } else if (sticky == wait_a || sticky == wait2_a) {
+                return; /* latch cleared, sticky A — defer */
+            }
+            /* sticky B or unrelated/0 — present */
+        }
+    }
+    s_flushing_present = 1;
+    while (s_present_pending > 0) {
+        s_present_pending--;
+        if (vblank_callback)
+            vblank_callback();
+    }
+    s_flushing_present = 0;
+}
+
 void gpu_vblank_tick(void) {
     lcf ^= 1;
     /* GPUSTAT.13 (interlace FIELD): on real hardware this alternates per
@@ -2549,12 +2860,53 @@ void gpu_vblank_tick(void) {
         g_doff_cnt_last = g_doff_cnt_this;
     }
     g_doff_min_this = 0x7fffffff; g_doff_max_this = -0x7fffffff; g_doff_cnt_this = 0;
+    split_trace_last = split_trace_this;
+    if (split_trace_this.display_w != 0 &&
+        (split_recent_display_w != split_trace_this.display_w ||
+         split_recent_display_h != split_trace_this.display_h)) {
+        split_recent_left_age = 255;
+        split_recent_right_age = 255;
+        split_recent_display_w = split_trace_this.display_w;
+        split_recent_display_h = split_trace_this.display_h;
+    }
+    if (split_trace_this.left_seen) {
+        split_recent_left_age = 0;
+    } else if (split_recent_left_age < 255) {
+        split_recent_left_age++;
+    }
+    if (split_trace_this.right_seen) {
+        split_recent_right_age = 0;
+    } else if (split_recent_right_age < 255) {
+        split_recent_right_age++;
+    }
+    split_trace_reset(&split_trace_this);
     gpustat_poll_count = 0;
     /* Trusted package-selected plugins run on guest VBlank, independent of
      * host presentation, pacing, turbo, or skipped frames. */
     mod_runtime_on_vblank();
+    /* Ape LOAD: RAM-only libcard waiter + idle-skip can starve sio_tick /
+     * interrupt-check pumps; VBlank always runs. */
+    {
+        extern void sio_ape_card_unstick_pump(void);
+        sio_ape_card_unstick_pump();
+    }
     psx_irq_raise(0, 0); /* IRQ_VBLANK (gpu_vblank_tick) */
-    if (vblank_callback) vblank_callback();
+    if (!vblank_callback)
+        return;
+    {
+        extern int psx_netplay_active(void);
+        /* Offline selfcheck keeps immediate present: BB-edge defer +
+         * post-IRQ flush reintroduces clk/tim/csv phase skew between warm
+         * resim peers (selfcheck soak: many FAILs with d_cyc≠0). Netplay
+         * defers — both peers share the same present contract from boot. */
+        if (psx_netplay_active()) {
+            /* Coalesce to one deferred present (see arm_deferred_present). */
+            if (s_present_pending < 1)
+                s_present_pending = 1;
+        } else {
+            vblank_callback();
+        }
+    }
 }
 
 const uint16_t* gpu_get_vram(void) {
@@ -2580,13 +2932,17 @@ static void depth24_note_upload(uint32_t x, uint32_t w) {
 }
 
 uint32_t gpu_depth24_rgb_limit(uint32_t display_x, uint32_t crtc_w) {
-    if (!(display_depth & 1u) || s_d24_upload_x1 == 0u || crtc_w == 0u)
+    if (!(display_depth & 1u) || crtc_w == 0u)
         return crtc_w;
+    /* No uploads yet → treat as uncovered (present blanks until first blit). */
+    if (s_d24_upload_x1 == 0u)
+        return 0u;
     uint32_t dx = display_x & 1023u;
-    if (s_d24_upload_x1 <= dx) return crtc_w;
+    if (s_d24_upload_x1 <= dx) return 0u;
     uint32_t hw = s_d24_upload_x1 - dx;
     uint32_t rgb = (hw * 2u) / 3u;
-    if (rgb == 0u || rgb >= crtc_w) return crtc_w;
+    if (rgb == 0u) return 0u;
+    if (rgb >= crtc_w) return crtc_w;
     return rgb;
 }
 
@@ -2598,6 +2954,12 @@ int gpu_depth24_present_hold_tick(void) {
     if (s_d24_present_hold <= 0) return 0;
     s_d24_present_hold--;
     return 1;
+}
+
+void gpu_depth24_on_savestate_loaded(void) {
+    /* Hold skips Swap — after restore we want the restored VRAM visible now.
+     * Upload span / prev_h were restored from the GPU snap. */
+    s_d24_present_hold = 0;
 }
 
 /* ---- Present-time screen-colour LUT (verified-enhancement, opt-in) -------
@@ -2690,6 +3052,45 @@ uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y
     return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
+/* Batch depth24 (FMV) scanline → ARGB. Same semantics as calling
+ * gpu_display_pixel_argb(di, x, y) for x in [0, count) (byte-identical
+ * output, including the black-fill past the 2048-byte VRAM row), but hoists
+ * the per-row invariants (vy, base_byte_x, the "how many pixels are past the
+ * row edge" test) out of the per-pixel path instead of recomputing them
+ * `count` times and paying three gpu_vram_byte() calls per pixel. The
+ * per-pixel path was the dominant present-side cost of FMV frames (3x the
+ * VRAM touches of the 16-bit path, done as a function-call chain instead of
+ * a straight-line loop). Still scalar C — no host-endianness assumptions,
+ * same byte-order shifts as gpu_vram_byte. */
+void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out,
+                             uint32_t count) {
+    uint32_t vy = (di->display_y + y) & 511u;
+    uint32_t base_byte_x = (di->display_x & 1023u) * 2u;
+    const uint16_t* row = vram + (size_t)vy * 1024u;
+    uint32_t valid = 0u;
+    uint32_t x;
+
+    if (base_byte_x <= 2045u)
+        valid = (2045u - base_byte_x) / 3u + 1u;
+    if (valid > count)
+        valid = count;
+
+    for (x = 0; x < valid; x++) {
+        uint32_t byte_x = base_byte_x + x * 3u;
+        uint32_t bx1 = byte_x + 1u;
+        uint32_t bx2 = byte_x + 2u;
+        uint32_t hw0 = row[byte_x >> 1];
+        uint32_t hw1 = row[bx1 >> 1];
+        uint32_t hw2 = row[bx2 >> 1];
+        uint8_t r = (byte_x & 1u) ? (uint8_t)(hw0 >> 8) : (uint8_t)hw0;
+        uint8_t g = (bx1 & 1u) ? (uint8_t)(hw1 >> 8) : (uint8_t)hw1;
+        uint8_t b = (bx2 & 1u) ? (uint8_t)(hw2 >> 8) : (uint8_t)hw2;
+        out[x] = 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
+    for (; x < count; x++)
+        out[x] = 0xFF000000u;
+}
+
 int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
@@ -2722,7 +3123,19 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
         if (w == 0u) w = 4u;
     }
 
-    uint32_t h = (v_display_y2 > v_display_y1) ? (v_display_y2 - v_display_y1) : 240;
+    /* DuckStation GetFullDisplayResolution: clamp Y1/Y2 to the broadcast
+     * active region before taking the difference. Unclamped Y2 past the
+     * active end (common overscan programming) includes a flickering junk
+     * line at the bottom of present that DuckStation crops away. */
+    const int ymin = video_mode ? 20 : 16;  /* PAL : NTSC */
+    const int ymax = video_mode ? 308 : 256;
+    int y1 = (int)v_display_y1;
+    int y2 = (int)v_display_y2;
+    if (y1 < ymin) y1 = ymin;
+    if (y1 > ymax) y1 = ymax;
+    if (y2 < ymin) y2 = ymin;
+    if (y2 > ymax) y2 = ymax;
+    uint32_t h = (y2 > y1) ? (uint32_t)(y2 - y1) : 240u;
     if (vres) h *= 2; /* 480i */
 
     /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /
@@ -2769,48 +3182,64 @@ static void parse_vertex(uint32_t word, int32_t* x, int32_t* y) {
     *y = sign_extend((word >> 16) & 0x7FFu, 11);
 }
 
-extern int gte_geometry_correction_lookup(uint32_t packed,
-                                          int32_t *x16, int32_t *y16);
 extern int gte_geometry_correction_enabled(void);
 static int s_texture_correction_enabled = 0;
-extern void gte_precision_tracking_set(int enabled);
 extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
                                    int32_t *x16, int32_t *y16, uint16_t *z);
 
 void gpu_texture_correction_set(int enabled) {
     s_texture_correction_enabled = enabled ? 1 : 0;
-    gte_precision_tracking_set(enabled);
+    /* The PGXP dataflow engine feeds BOTH corrections; arm it while either
+     * is on (geometry correction is toggled in gte.cpp, so re-derive here). */
+    pgxp_set_enabled(s_texture_correction_enabled ||
+                     gte_geometry_correction_enabled());
+}
+
+int gpu_texture_correction_enabled(void) {
+    return s_texture_correction_enabled;
 }
 
 uint32_t gpu_texture_correction_hits(void) {
     return sw_perspective_triangle_count();
 }
 
-/* Match all three GP0 positions to recent GTE projections. Requiring a full
- * triangle match prevents screen-space HUD/sprites that happen to share one
- * coordinate from receiving world-geometry correction. The integer delta
- * folds in draw offsets and any widescreen adjustment already applied. */
-static void prepare_precise_triangle(uint32_t w0, uint32_t w1, uint32_t w2,
+/* Per-vertex precise positions (PGXP, ENHANCEMENTS.md G1). Each of the three
+ * packet words is resolved independently: the address-keyed dataflow shadow
+ * first (validated against the actual word — exact provenance, survives
+ * ordering-table reordering), the ambiguity-gated position cache second, the
+ * parsed integers last. Mixing precise and native vertices in one triangle
+ * is correct — a native vertex is exactly where the uncorrected pipeline put
+ * it, so shared edges between neighbouring triangles cannot disagree by more
+ * than the sub-pixel fraction. The integer delta folds in draw offsets and
+ * any widescreen adjustment already applied by the caller. */
+static void prepare_precise_triangle(int i0, int i1, int i2,
                                      const int32_t vx[3], const int32_t vy[3]) {
-    uint32_t words[3] = { w0, w1, w2 };
-    int32_t fx[3], fy[3];
-    const int geometry_enabled = gte_geometry_correction_enabled();
     gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
-    if (!geometry_enabled) {
+    if (!gte_geometry_correction_enabled()) {
         gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
         return;
     }
+    const int idx[3] = { i0, i1, i2 };
+    int32_t fx[3], fy[3];
+    int any_precise = 0;
     for (int i = 0; i < 3; i++) {
+        uint32_t word = gp0_cmd_buf[idx[i]];
         int32_t raw_x, raw_y;
-        parse_vertex(words[i], &raw_x, &raw_y);
-        if (!gte_geometry_correction_lookup(words[i], &fx[i], &fy[i])) {
-            gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
-            return;
-        }
-        fx[i] = (int32_t)((int64_t)fx[i] +
-                          (int64_t)(vx[i] - raw_x) * 65536);
-        fy[i] = (int32_t)((int64_t)fy[i] +
-                          (int64_t)(vy[i] - raw_y) * 65536);
+        parse_vertex(word, &raw_x, &raw_y);
+        uint32_t addr = (gp0_cmd_source_addr == 0xFFFFFFFFu)
+                            ? 0xFFFFFFFFu
+                            : gp0_cmd_source_addr + (uint32_t)idx[i] * 4u;
+        int32_t px, py;
+        uint16_t sz;
+        if (pgxp_get_precise_vertex(addr, word, raw_x, raw_y,
+                                    &px, &py, &sz) != PGXP_SRC_NATIVE)
+            any_precise = 1;
+        fx[i] = (int32_t)((int64_t)px + (int64_t)(vx[i] - raw_x) * 65536);
+        fy[i] = (int32_t)((int64_t)py + (int64_t)(vy[i] - raw_y) * 65536);
+    }
+    if (!any_precise) {
+        gr_set_precise_triangle(0, 0,0, 0,0, 0,0);
+        return;
     }
     gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
 }
@@ -2847,6 +3276,7 @@ static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
     uint32_t idx = vy * 1024 + vx;
     if (check_mask_bit && (vram[idx] & 0x8000u)) return;
     vram[idx] = color | (set_mask_bit ? 0x8000u : 0u);
+    gpu_vram_dirty_mark_row(vy);
 }
 
 /* Inclusive draw-area reject (same predicate as raster_pixel / hardware clip).
@@ -2873,7 +3303,11 @@ static void raster_pixel(int32_t x, int32_t y, uint16_t color) {
  * https://github.com/mstan/psxrecomp/pull/73
  * Keep that credit with this guarded framebuffer-target variant. */
 static inline int32_t draw_area_wide_x_margin(void) {
-    if (!ws_native_wide_active() || !ws_is_fb_base(draw_area_left)) return 0;
+    int local_base = 0;
+    if (!ws_native_wide_active()) return 0;
+    if (ws_local_viewport_draw_target(&local_base)) return (int32_t)ws_nw_offset();
+    if (ws_display_viewport_draw_target(NULL)) return (int32_t)ws_nw_offset();
+    if (!ws_is_fb_base(draw_area_left)) return 0;
     return (int32_t)ws_nw_offset();
 }
 
@@ -3021,7 +3455,7 @@ static void gp0_exec_mono_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2], gp0_cmd_buf[3],
+    prepare_precise_triangle(1, 2, 3,
                              vx, vy);
     gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
 }
@@ -3066,18 +3500,34 @@ static void gp0_exec_mono_quad(void) {
     }
     if (draw_area_out_bbox(vx, vy, 4)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
+    /* Semi axis-aligned mono quads (UI boxes/borders): one rect, not two tris.
+     * Thin semi borders (e.g. CTR name-entry OT-1144 teal 3×H) otherwise double-
+     * blend their shared diagonal — nearly the whole strip — and overpaint 3D. */
+    if (semi_trans && ws_axis_aligned_quad(vx, vy)) {
+        int32_t min_x = vx[0], max_x = vx[0], min_y = vy[0], max_y = vy[0];
+        for (int i = 1; i < 4; i++) {
+            if (vx[i] < min_x) min_x = vx[i];
+            if (vx[i] > max_x) max_x = vx[i];
+            if (vy[i] < min_y) min_y = vy[i];
+            if (vy[i] > max_y) max_y = vy[i];
+        }
+        int w = (int)(max_x - min_x);
+        int h = (int)(max_y - min_y);
+        if (w > 0 && h > 0) {
+            gr_draw_flat_rect(min_x, min_y, w, h, color);
+            return;
+        }
+    }
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[2],
-                                 gp0_cmd_buf[3], tx, ty);
+        prepare_precise_triangle(1, 2, 3, tx, ty);
         gr_draw_flat_triangle(vx[0], vy[0], vx[1], vy[1], vx[2], vy[2], color);
     }
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[3], gp0_cmd_buf[2],
-                                 gp0_cmd_buf[4], tx, ty);
+        prepare_precise_triangle(3, 2, 4, tx, ty);
         gr_draw_flat_triangle(vx[2], vy[2], vx[1], vy[1], vx[3], vy[3], color);
     }
 }
@@ -3100,7 +3550,7 @@ static void gp0_exec_shaded_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
                              vx, vy);
     gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                              vx[1], vy[1], c[1],
@@ -3146,8 +3596,7 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[5], tx, ty);
+        prepare_precise_triangle(1, 3, 5, tx, ty);
         gr_draw_gouraud_triangle(vx[0], vy[0], c[0],
                                  vx[1], vy[1], c[1],
                                  vx[2], vy[2], c[2]);
@@ -3155,8 +3604,7 @@ static void gp0_exec_shaded_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(5, 3, 7, tx, ty);
         gr_draw_gouraud_triangle(vx[2], vy[2], c[2],
                                  vx[1], vy[1], c[1],
                                  vx[3], vy[3], c[3]);
@@ -3227,7 +3675,7 @@ static void gp0_exec_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     setup_textured_draw(color24, semi_trans, raw_texture);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3], gp0_cmd_buf[5],
+    prepare_precise_triangle(1, 3, 5,
                              vx, vy);
     prepare_texture_triangle(1, 3, 5);
     gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
@@ -3309,8 +3757,7 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[5], tx, ty);
+        prepare_precise_triangle(1, 3, 5, tx, ty);
         prepare_texture_triangle(1, 3, 5);
         gr_draw_textured_triangle(vx[0], vy[0], u[0], v[0],
                                   vx[1], vy[1], u[1], v[1],
@@ -3320,8 +3767,7 @@ static void gp0_exec_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[5], gp0_cmd_buf[3],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(5, 3, 7, tx, ty);
         prepare_texture_triangle(5, 3, 7);
         gr_draw_textured_triangle(vx[2], vy[2], u[2], v[2],
                                   vx[1], vy[1], u[1], v[1],
@@ -3363,7 +3809,7 @@ static void gp0_exec_shaded_textured_tri(void) {
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
-    prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4], gp0_cmd_buf[7],
+    prepare_precise_triangle(1, 4, 7,
                              vx, vy);
     prepare_texture_triangle(1, 4, 7);
     gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
@@ -3414,8 +3860,7 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_a) {
         int32_t tx[3] = { vx[0], vx[1], vx[2] };
         int32_t ty[3] = { vy[0], vy[1], vy[2] };
-        prepare_precise_triangle(gp0_cmd_buf[1], gp0_cmd_buf[4],
-                                 gp0_cmd_buf[7], tx, ty);
+        prepare_precise_triangle(1, 4, 7, tx, ty);
         prepare_texture_triangle(1, 4, 7);
         gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
                                          vx[1], vy[1], u[1], v[1], c[1],
@@ -3425,8 +3870,7 @@ static void gp0_exec_shaded_textured_quad(void) {
     if (!rej_b) {
         int32_t tx[3] = { vx[2], vx[1], vx[3] };
         int32_t ty[3] = { vy[2], vy[1], vy[3] };
-        prepare_precise_triangle(gp0_cmd_buf[7], gp0_cmd_buf[4],
-                                 gp0_cmd_buf[10], tx, ty);
+        prepare_precise_triangle(7, 4, 10, tx, ty);
         prepare_texture_triangle(7, 4, 10);
         gr_draw_shaded_textured_triangle(vx[2], vy[2], u[2], v[2], c[2],
                                          vx[1], vy[1], u[1], v[1], c[1],
@@ -3659,7 +4103,11 @@ static void gp0_exec_fill_rect(void) {
     /* Native-wide: when the game clears a display buffer, clear the full width
      * of that buffer's wide surface over the same rows — refreshing the centred
      * content region and keeping the revealed margins clean. */
-    if (ws_native_wide_active() && ws_is_fb_base(dst_x)) {
+    int local_base = 0;
+    if (ws_native_wide_active() &&
+        (ws_is_fb_base(dst_x) ||
+         (ws_local_viewport_draw_target(&local_base) &&
+          dst_x == (uint32_t)local_base))) {
         gr_wide_clear((int)dst_x, (int)dst_y, (int)height, color16);
     }
 }
@@ -3701,6 +4149,7 @@ static void gp0_exec_draw_area_tl(void) {
     uint32_t param = gp0_cmd_buf[0] & 0x00FFFFFFu;
     draw_area_left = param & 0x3FF;
     draw_area_top  = (param >> 10) & 0x3FF;
+    split_trace_note_draw_area();
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
     ws_nw_sync_target();  /* back buffer (draw_area_left) → wide mirror surface */
@@ -3713,6 +4162,7 @@ static void gp0_exec_draw_area_br(void) {
     uint32_t param = gp0_cmd_buf[0] & 0x00FFFFFFu;
     draw_area_right  = param & 0x3FF;
     draw_area_bottom = (param >> 10) & 0x3FF;
+    split_trace_note_draw_area();
     gr_set_draw_area((int)draw_area_left, (int)draw_area_top,
                      (int)draw_area_right, (int)draw_area_bottom);
     ws_nw_sync_target();  /* back buffer (draw_area_left) → wide mirror surface */
@@ -4048,15 +4498,15 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
     }
 
     int32_t width = max_x - min_x, height = max_y - min_y;
-    int32_t W = ws_disp_w(), H = ws_disp_h();
-    if ((min_x <= 0 && max_x >= W && min_y <= 0 && max_y >= H) ||
+    int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
+    if ((min_x <= X && max_x >= X + W && min_y <= 0 && max_y >= H) ||
         (width > W / 2 && height > H / 4))
         return;
 
     WsUiPrepassItem *item = &ws_ui_prepass[ws_ui_prepass_count++];
     item->group.key =
         ws_auto_ui_group_key_words(words, op, min_y, height);
-    item->group.x = min_x;
+    item->group.x = min_x - X;
     item->group.width = width;
     item->group.anchor = 0;
     item->src_addr = source_addr & 0x1FFFFCu;
@@ -4137,16 +4587,26 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
             ws_ui_prepass[out++] = ws_ui_prepass[i];
     }
     ws_ui_prepass_count = out;
-    ws_auto_ui_dense = ws_ui_prepass_count >= 32u;
+    /*
+     * A high final-layer primitive count is a good "dense 2D menu" signal for
+     * titles without an explicit gameplay detector, where grouping everything
+     * around the centre avoids tearing text grids apart. For GTE-gated 3D
+     * titles, though, reaching this path already means a gameplay frame is
+     * being stretched. WipEout 3's race HUD is dense enough to trip the old
+     * threshold, which pinned every HUD group to the 4:3 centre. Keep edge
+     * groups edge-anchored in those frames so the HUD adapts to the wide view.
+     */
+    ws_auto_ui_dense = ws_ui_prepass_count >= 32u && !ws_gte_game_mode_cfg;
     if (ws_ui_prepass_count == 0) return;
 
+    const int32_t group_origin = ws_disp_x();
     WsUiGroupItem groups[WS_UI_PREPASS_MAX];
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         groups[i] = ws_ui_prepass[i].group;
     ws_ui_group_assign(groups, ws_ui_prepass_count, ws_disp_w(),
                        ws_auto_ui_dense);
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
-        ws_ui_prepass[i].group.anchor = groups[i].anchor;
+        ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
 }
 
 /* Per-opcode execution counters (exposed via gpu_get_opcode_stats) */
@@ -4664,6 +5124,7 @@ static void gpu_write_gp0_body(uint32_t val) {
              * reads/savestates. The renderer mirror is committed in bulk when
              * the GP0 payload completes. */
             vram[(uint32_t)wy * 1024u + wx] = pixel;
+            gpu_vram_dirty_mark_row((uint32_t)wy);
 
         next_pixel:
             if (++vram_write_col == vram_write_w) {
@@ -4910,10 +5371,13 @@ static void gp1_display_mode(uint32_t val) {
      * bit 5: vertical interlace (0=off, 1=on)
      * bit 6: horizontal resolution 2 (0=normal, 1=368)
      * bit 7: "reverseflag" */
+    uint32_t new_depth = (val >> 4) & 1;
     hres1 = val & 3;
     vres = (val >> 2) & 1;
     video_mode = (val >> 3) & 1;
-    display_depth = (val >> 4) & 1;
+    if (new_depth != display_depth)
+        s_d24_upload_x1 = 0; /* rising/falling: drop stale coverage */
+    display_depth = new_depth;
     vertical_interlace = (val >> 5) & 1;
     /* GPUSTAT.13 holds the legacy constant 0 in progressive (see the vblank
      * field flip); clear it on the switch so a title that toggles interlace
@@ -5054,6 +5518,8 @@ static int gpu_snap_emit(PstW *w) {
     WH(vram_write_col); WH(vram_write_row); WU(vram_write_remaining);
     WI(vram_read_active); WH(vram_read_x); WH(vram_read_y); WH(vram_read_w); WH(vram_read_h);
     WH(vram_read_col); WH(vram_read_row);
+    /* Depth24 present helpers (MotK FMV) — must resume with upload span. */
+    WU(s_d24_upload_x1); WI(s_d24_present_hold); WU(s_d24_prev_disp_h);
 #undef WU
 #undef WI
 #undef WH
@@ -5086,6 +5552,7 @@ static int gpu_snap_parse(PstR *r) {
     RH(vram_write_col); RH(vram_write_row); RU(vram_write_remaining);
     RI(vram_read_active); RH(vram_read_x); RH(vram_read_y); RH(vram_read_w); RH(vram_read_h);
     RH(vram_read_col); RH(vram_read_row);
+    RU(s_d24_upload_x1); RI(s_d24_present_hold); RU(s_d24_prev_disp_h);
 #undef RU
 #undef RI
 #undef RH

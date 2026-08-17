@@ -6,9 +6,11 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "bios_rom_alias.h"
 #include "fmt/format.h"
@@ -70,6 +72,8 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_depth", c.ws_cull_depth_sites);
     h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
     h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
+    h.words("cull_nclip_keep", c.ws_cull_nclip_keep_sites);
+    h.words("cull_branch_keep", c.ws_cull_branch_keep_sites);
     h.words("cull_w_imms", c.ws_cull_w_imms);
     h.words("cull_h_imms", c.ws_cull_h_imms);
     h.words("backdrop_x", c.ws_backdrop_x_sites);
@@ -171,6 +175,15 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
         h.u32(patch.expected);
         h.u32(patch.replacement);
     }
+
+    h.tag("load_charge_batch");
+    h.u32(c.load_charge_batch ? 1u : 0u);
+    {
+        std::vector<uint32_t> lcb = c.load_charge_batch_funcs;
+        std::sort(lcb.begin(), lcb.end());
+        h.u32((uint32_t)lcb.size());
+        for (uint32_t pc : lcb) h.u32(pc);
+    }
     return h.value;
 }
 
@@ -181,17 +194,41 @@ int pad_mode_from_string(const std::string& s, int fallback) {
     std::string l;
     l.reserve(s.size());
     for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
-    if (l == "hybrid")  return PAD_MODE_HYBRID;
+    /* "hybrid" is MOD-ONLY: reachable solely through
+     * psx_mod_set_controller_mode_override(). A game.toml that declares it is
+     * a configuration error, not something to silently coerce — coercion is
+     * how this mode kept reappearing in titles that never meant to ship it. */
+    if (l == "hybrid")
+        throw std::runtime_error(
+            "[controller] pad mode \"hybrid\" is not selectable. Hybrid is a "
+            "mod-only mode, requested at runtime by a trusted game plugin via "
+            "psx_mod_set_controller_mode_override(). Use \"analog\" or "
+            "\"digital\" here.");
+    if (l == "analog")  return PAD_MODE_ANALOG;
+    if (l == "digital") return PAD_MODE_DIGITAL;
+    return fallback;
+}
+
+/* Settings-file variant: a user's settings.toml may still carry a persisted
+ * "hybrid" from before the mode was removed from the selector. Migrate it to
+ * analog (what the old allow_hybrid clamp did) rather than refusing to
+ * launch over a value the user never typed. */
+int pad_mode_from_settings_string(const std::string& s, int fallback) {
+    std::string l;
+    l.reserve(s.size());
+    for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
+    if (l == "hybrid")  return PAD_MODE_ANALOG;
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;
     return fallback;
 }
 
 const char* pad_mode_to_string(int mode) {
+    /* Never writes "hybrid": the mod requests it at runtime and it is not
+     * persisted as a user preference. */
     switch (mode) {
-        case PAD_MODE_ANALOG:  return "analog";
         case PAD_MODE_DIGITAL: return "digital";
-        default:               return "hybrid";
+        default:               return "analog";
     }
 }
 
@@ -292,10 +329,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
         }
     }
-    if (!cfg.contains("runtime")) return rt;
-    const toml::value& runtime = toml::find(cfg, "runtime");
-    if (runtime.contains("language"))  // [runtime].language convenience alias
-        rt.language = toml::find<std::string>(runtime, "language");
+    if (cfg.contains("runtime")) {
+        const toml::value& runtime = toml::find(cfg, "runtime");
+        if (runtime.contains("language"))  // [runtime].language convenience alias
+            rt.language = toml::find<std::string>(runtime, "language");
 
     if (runtime.contains("debug_port")) {
         const auto port = toml::find<int64_t>(runtime, "debug_port");
@@ -436,12 +473,17 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         validate_project_relative(rt.overlay_capture_persist_dir,
                                   "runtime.overlay_capture_persist_dir");
     }
+    // turbo_loads / offer_turbo_loads are deprecated and ignored (see
+    // config_loader.h). Still parsed so old configs load, and the presence
+    // flags let the runtime name the dead key in its deprecation notice.
     if (runtime.contains("turbo_loads")) {
         rt.turbo_loads = toml::find<bool>(runtime, "turbo_loads");
+        rt.has_turbo_loads = true;
     }
     if (runtime.contains("offer_turbo_loads")) {
         rt.offer_turbo_loads =
             toml::find<bool>(runtime, "offer_turbo_loads");
+        rt.has_offer_turbo_loads = true;
     }
     if (runtime.contains("turbo_audio_sink")) {
         rt.turbo_audio_sink = toml::find<bool>(runtime, "turbo_audio_sink");
@@ -462,9 +504,10 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_backend")) {
         rt.overlay_backend = toml::find<std::string>(runtime, "overlay_backend");
     }
-    if (runtime.contains("overlay_native_block")) {
-        for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
-            rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+        if (runtime.contains("overlay_native_block")) {
+            for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
+                rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
+            }
         }
     }
 
@@ -530,6 +573,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("perspective_texturing")) {
             rt.video_perspective_texturing =
                 toml::find<bool>(video, "perspective_texturing");
+        }
+        if (video.contains("pgxp_cpu_mode")) {
+            rt.video_pgxp_cpu_mode = toml::find<bool>(video, "pgxp_cpu_mode");
+        }
+        if (video.contains("pgxp_tolerance")) {
+            rt.video_pgxp_tolerance =
+                toml::find<double>(video, "pgxp_tolerance");
         }
         if (video.contains("crt_filter")) {
             const auto mode = toml::find<std::string>(video, "crt_filter");
@@ -648,22 +698,29 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         // Preferred string form.
         if (ct.contains("default_mode")) {
             const int m = pad_mode_from_string(
-                toml::find<std::string>(ct, "default_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "default_mode"), PAD_MODE_ANALOG);
             rt.default_p1_mode = rt.default_p2_mode = m;
             rt.has_default_mode = true;
         }
         if (ct.contains("p1_mode")) {
             rt.default_p1_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
         }
         if (ct.contains("p2_mode")) {
             rt.default_p2_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
+                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_ANALOG);
             rt.has_default_mode = true;
         }
-        if (ct.contains("allow_hybrid")) {
-            rt.controller_allow_hybrid = toml::find<bool>(ct, "allow_hybrid");
+        if (ct.contains("p1_device")) {
+            rt.default_p1_device = toml::find<std::string>(ct, "p1_device");
+            if (!rt.default_p1_device.empty())
+                rt.has_default_p1_device = true;
+        }
+        if (ct.contains("p2_device")) {
+            rt.default_p2_device = toml::find<std::string>(ct, "p2_device");
+            if (!rt.default_p2_device.empty())
+                rt.has_default_p2_device = true;
         }
         if (ct.contains("lock_mode")) {
             rt.controller_lock_mode = toml::find<bool>(ct, "lock_mode");
@@ -678,6 +735,22 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                     "[controller] deadzone out of range (0..32767): {}", n));
             rt.deadzone = static_cast<int>(n);
             rt.has_deadzone = true;
+        }
+        if (ct.contains("multitap_port")) {
+            const auto n = toml::find<int64_t>(ct, "multitap_port");
+            if (n != 1 && n != 2)
+                throw std::runtime_error(fmt::format(
+                    "[controller] multitap_port must be 1 or 2, got {}", n));
+            rt.multitap_port = static_cast<int>(n);
+            rt.has_multitap_port = true;
+        }
+        if (ct.contains("multitap_analog")) {
+            rt.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            rt.has_multitap_analog = true;
+        }
+        // Prefer string key; accept legacy bool alias.
+        if (ct.contains("legacy_pad_config")) {
+            rt.legacy_pad_config = toml::find<bool>(ct, "legacy_pad_config");
         }
         if (ct.contains("anti_deadzone")) {
             const auto n = toml::find<int64_t>(ct, "anti_deadzone");
@@ -1121,6 +1194,63 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         for (char& c : disc_sha1) c = (char)std::tolower((unsigned char)c);
     }
 
+    // [netplay] — mount / TOC policy for online (see DiscIdentity::disc_fp).
+    bool netplay_require_cue = false;
+    int netplay_required_tracks = 0;
+    bool has_netplay_required_leadout = false;
+    uint32_t netplay_required_leadout_lba = 0;
+    std::string netplay_required_disc_fp;
+    std::string netplay_local_viewport;
+    std::string netplay_local_viewport_aspect;
+    if (cfg.contains("netplay")) {
+        const toml::value& np = toml::find(cfg, "netplay");
+        if (np.contains("require_cue"))
+            netplay_require_cue = toml::find<bool>(np, "require_cue");
+        if (np.contains("required_tracks"))
+            netplay_required_tracks = toml::find<int>(np, "required_tracks");
+        if (np.contains("required_leadout_lba")) {
+            netplay_required_leadout_lba =
+                (uint32_t)toml::find<int64_t>(np, "required_leadout_lba");
+            has_netplay_required_leadout = true;
+        }
+        if (np.contains("required_disc_fp")) {
+            netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
+            for (char& c : netplay_required_disc_fp)
+                c = (char)std::tolower((unsigned char)c);
+        }
+        if (np.contains("local_viewport")) {
+            netplay_local_viewport = toml::find<std::string>(np, "local_viewport");
+            for (char& c : netplay_local_viewport)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport.empty() &&
+                netplay_local_viewport != "vertical_split") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport must be \"vertical_split\", got '{}'",
+                    netplay_local_viewport));
+            }
+        }
+        if (np.contains("local_viewport_aspect")) {
+            netplay_local_viewport_aspect =
+                toml::find<std::string>(np, "local_viewport_aspect");
+            for (char& c : netplay_local_viewport_aspect)
+                c = (char)std::tolower((unsigned char)c);
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport_aspect != "16:9" &&
+                netplay_local_viewport_aspect != "21:9" &&
+                netplay_local_viewport_aspect != "adaptive") {
+                throw std::runtime_error(fmt::format(
+                    "[netplay] local_viewport_aspect must be \"16:9\", "
+                    "\"21:9\", or \"adaptive\", got '{}'",
+                    netplay_local_viewport_aspect));
+            }
+            if (!netplay_local_viewport_aspect.empty() &&
+                netplay_local_viewport.empty()) {
+                throw std::runtime_error(
+                    "[netplay] local_viewport_aspect requires local_viewport");
+            }
+        }
+    }
+
     // [recompiler]
     if (!cfg.contains("recompiler")) {
         throw std::runtime_error(
@@ -1230,6 +1360,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool ws_auto_ui_squash = false;
     bool ws_full_2d = false;
     bool ws_gte_game_mode = false;
+    bool ws_precise_nclip = false;
     uint32_t ws_gameplay_state_addr = 0;
     std::vector<uint32_t> ws_gameplay_state_values;
     bool ws_native_wide = true;
@@ -1279,6 +1410,20 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         for (const auto& a : arr)
             hot_funcs.push_back(parse_hex(a, "recompiler.hot_funcs"));
     }
+    // Optional emitter-level load-charge batching for VLC leaves.
+    bool load_charge_batch = false;
+    std::vector<uint32_t> load_charge_batch_funcs;
+    if (recomp.contains("load_charge_batch"))
+        load_charge_batch = toml::find<bool>(recomp, "load_charge_batch");
+    if (recomp.contains("load_charge_batch_funcs")) {
+        const auto& arr =
+            toml::find<std::vector<std::string>>(recomp, "load_charge_batch_funcs");
+        for (const auto& a : arr)
+            load_charge_batch_funcs.push_back(
+                parse_hex(a, "recompiler.load_charge_batch_funcs"));
+    }
+    if (load_charge_batch && load_charge_batch_funcs.empty())
+        load_charge_batch_funcs = hot_funcs;
     uint32_t vsync_query_func = 0;
     uint32_t vsync_counter_addr = 0;
     uint32_t vsync_gpustat_ptr_addr = 0;
@@ -1363,6 +1508,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             ws_full_2d = toml::find<bool>(ws, "full_2d");
         if (ws.contains("gte_game_mode"))
             ws_gte_game_mode = toml::find<bool>(ws, "gte_game_mode");
+        if (ws.contains("precise_nclip"))
+            ws_precise_nclip = toml::find<bool>(ws, "precise_nclip");
         const bool has_gameplay_state_addr = ws.contains("gameplay_state_addr");
         const bool has_gameplay_state_values = ws.contains("gameplay_state_values");
         if (has_gameplay_state_addr != has_gameplay_state_values)
@@ -1465,6 +1612,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_depth_sites;
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
+    std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    std::vector<uint32_t> ws_cull_branch_keep_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
     WidescreenAspectConeConfig ws_aspect_cone;
@@ -1498,6 +1647,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("depth_sites", ws_cull_depth_sites);
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
+            load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
+            load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
                 for (const auto& item : toml::find<toml::array>(cull, "keep")) {
@@ -1879,6 +2030,13 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_disc_crc*/     has_disc_crc,
         /*disc_crc*/         disc_crc,
         /*disc_sha1*/        disc_sha1,
+        /*netplay_require_cue*/ netplay_require_cue,
+        /*netplay_required_tracks*/ netplay_required_tracks,
+        /*has_netplay_required_leadout*/ has_netplay_required_leadout,
+        /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
+        /*netplay_required_disc_fp*/ netplay_required_disc_fp,
+        /*netplay_local_viewport*/ netplay_local_viewport,
+        /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
         /*seeds_path*/       seeds_path,
         /*bios_thunks_path*/ bios_thunks_path,
         /*bios_config_path*/ bios_config_path,
@@ -1895,6 +2053,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*data_shard_funcs*/      data_shard_funcs,
         /*mod_function_entry_funcs*/ mod_function_entry_funcs,
         /*hot_funcs*/             hot_funcs,
+        /*load_charge_batch*/     load_charge_batch,
+        /*load_charge_batch_funcs*/ load_charge_batch_funcs,
         /*vsync_query_func*/      vsync_query_func,
         /*vsync_counter_addr*/    vsync_counter_addr,
         /*vsync_gpustat_ptr_addr*/ vsync_gpustat_ptr_addr,
@@ -1915,6 +2075,8 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_depth_sites*/   ws_cull_depth_sites,
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
+        /*ws_cull_nclip_keep_sites*/ ws_cull_nclip_keep_sites,
+        /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
         /*ws_aspect_cone*/         ws_aspect_cone,
@@ -1929,6 +2091,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_auto_backdrop_preload*/ ws_auto_backdrop_preload,
         /*ws_full_2d*/            ws_full_2d,
         /*ws_gte_game_mode*/      ws_gte_game_mode,
+        /*ws_precise_nclip*/      ws_precise_nclip,
         /*ws_gameplay_state_addr*/ ws_gameplay_state_addr,
         /*ws_gameplay_state_values*/ ws_gameplay_state_values,
         /*ws_native_wide*/        ws_native_wide,
@@ -2005,6 +2168,10 @@ GameOptions load_game_options(const fs::path& path) {
 
 // ---- UserSettings (settings.toml) — launcher-written override layer ----
 
+static bool valid_user_audio_freq(int n) {
+    return n == 32040 || n == 32000 || n == 44100 || n == 48000;
+}
+
 UserSettings load_user_settings(const fs::path& path) {
     UserSettings s;
     std::error_code ec;
@@ -2066,6 +2233,9 @@ UserSettings load_user_settings(const fs::path& path) {
         if (v.contains("auto_skip_fmv")) try_get([&]{
             s.auto_skip_fmv = toml::find<bool>(v, "auto_skip_fmv"); s.has_auto_skip_fmv = true;
         });
+        // Deprecated and ignored: read only so the runtime can report that a
+        // stale value was found (and so the next save drops it). Never applied
+        // — see UserSettings::turbo_loads in config_loader.h.
         if (v.contains("turbo_loads")) try_get([&]{
             s.turbo_loads = toml::find<bool>(v, "turbo_loads"); s.has_turbo_loads = true;
         });
@@ -2117,11 +2287,59 @@ UserSettings load_user_settings(const fs::path& path) {
             s.adaptive_view = toml::find<bool>(v, "adaptive_view");
             s.has_adaptive_view = true;
         });
+        if (v.contains("rewind_depth")) try_get([&]{
+            int d = toml::find<int>(v, "rewind_depth");
+            static const int opts[4] = {50, 100, 150, 200};
+            int best = opts[0];
+            int best_d = d > best ? d - best : best - d;
+            for (int i = 1; i < 4; ++i) {
+                int dd = d > opts[i] ? d - opts[i] : opts[i] - d;
+                if (dd < best_d) { best_d = dd; best = opts[i]; }
+            }
+            s.rewind_depth = best;
+            s.has_rewind_depth = true;
+        });
+        if (v.contains("rewind_interval")) try_get([&]{
+            int d = toml::find<int>(v, "rewind_interval");
+            static const int opts[5] = {1, 4, 8, 12, 15};
+            int best = opts[0];
+            int best_d = d > best ? d - best : best - d;
+            for (int i = 1; i < 5; ++i) {
+                int dd = d > opts[i] ? d - opts[i] : opts[i] - d;
+                if (dd < best_d) { best_d = dd; best = opts[i]; }
+            }
+            s.rewind_interval = best;
+            s.has_rewind_interval = true;
+        });
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
+        if (a.contains("frequency")) try_get([&]{
+            const auto n = toml::find<int64_t>(a, "frequency");
+            if (valid_user_audio_freq((int)n)) {
+                s.audio_freq = (int)n;
+                s.has_audio_freq = true;
+            }
+        });
         if (a.contains("spu_hq")) try_get([&]{
             s.spu_hq = toml::find<bool>(a, "spu_hq"); s.has_spu_hq = true;
+        });
+    }
+    if (doc.contains("hotkeys")) {
+        const toml::value& h = toml::find(doc, "hotkeys");
+        if (h.contains("rewind_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "rewind_pad");
+            if (n >= 0 && n < 256) {
+                s.hotkey_pad_rewind = (int)n;
+                s.has_hotkey_pad_rewind = true;
+            }
+        });
+        if (h.contains("save_state_menu_pad")) try_get([&]{
+            const auto n = toml::find<int64_t>(h, "save_state_menu_pad");
+            if (n >= 0 && n < 256) {
+                s.hotkey_pad_save_state_menu = (int)n;
+                s.has_hotkey_pad_save_state_menu = true;
+            }
         });
     }
     if (doc.contains("launcher")) {
@@ -2211,39 +2429,64 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("controller")) {
         const toml::value& ct = toml::find(doc, "controller");
-        if (ct.contains("p1_device")) try_get([&]{
-            const auto v = toml::find<std::string>(ct, "p1_device");
-            if (!v.empty()) { s.p1_device = v; s.has_p1_device = true; }
+        static const char* kDevKeys[] = {
+            "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
+        static const char* kModeKeys[] = {
+            "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
+        static const char* kDzKeys[] = {
+            "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
+            "p5_deadzone"};
+        static const char* kAnalogKeys[] = {
+            "p1_analog", "p2_analog", "p3_analog", "p4_analog", "p5_analog"};
+        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+            if (ct.contains(kDevKeys[i])) try_get([&]{
+                const auto v = toml::find<std::string>(ct, kDevKeys[i]);
+                if (!v.empty()) {
+                    s.p_device[i] = v;
+                    s.has_p_device[i] = true;
+                }
+            });
+            // Legacy boolean form first (true->analog, false->digital); the
+            // string `*_mode` keys override when present.
+            if (ct.contains(kAnalogKeys[i])) try_get([&]{
+                s.p_mode[i] = toml::find<bool>(ct, kAnalogKeys[i])
+                                  ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
+                s.has_p_mode[i] = true;
+            });
+            if (ct.contains(kModeKeys[i])) try_get([&]{
+                s.p_mode[i] = pad_mode_from_settings_string(
+                    toml::find<std::string>(ct, kModeKeys[i]), PAD_MODE_ANALOG);
+                s.has_p_mode[i] = true;
+            });
+            if (ct.contains(kDzKeys[i])) try_get([&]{
+                const auto n = toml::find<int64_t>(ct, kDzKeys[i]);
+                if (n >= 0 && n <= 32767) {
+                    s.p_deadzone[i] = (int)n;
+                    s.has_p_deadzone[i] = true;
+                }
+            });
+        }
+        if (ct.contains("multitap")) try_get([&]{
+            s.multitap_enabled = toml::find<bool>(ct, "multitap");
+            s.has_multitap_enabled = true;
         });
-        if (ct.contains("p2_device")) try_get([&]{
-            const auto v = toml::find<std::string>(ct, "p2_device");
-            if (!v.empty()) { s.p2_device = v; s.has_p2_device = true; }
-        });
-        // Legacy boolean form first (true->analog, false->digital); the new
-        // string `*_mode` keys override when present.
-        if (ct.contains("p1_analog")) try_get([&]{
-            s.p1_mode = toml::find<bool>(ct, "p1_analog")
-                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-            s.has_p1_mode = true;
-        });
-        if (ct.contains("p2_analog")) try_get([&]{
-            s.p2_mode = toml::find<bool>(ct, "p2_analog")
-                            ? PAD_MODE_ANALOG : PAD_MODE_DIGITAL;
-            s.has_p2_mode = true;
-        });
-        if (ct.contains("p1_mode")) try_get([&]{
-            s.p1_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p1_mode"), PAD_MODE_HYBRID);
-            s.has_p1_mode = true;
-        });
-        if (ct.contains("p2_mode")) try_get([&]{
-            s.p2_mode = pad_mode_from_string(
-                toml::find<std::string>(ct, "p2_mode"), PAD_MODE_HYBRID);
-            s.has_p2_mode = true;
+        if (ct.contains("multitap_analog")) try_get([&]{
+            s.multitap_analog = toml::find<bool>(ct, "multitap_analog");
+            s.has_multitap_analog = true;
         });
         if (ct.contains("deadzone")) try_get([&]{
             const auto n = toml::find<int64_t>(ct, "deadzone");
-            if (n >= 0 && n <= 32767) { s.deadzone = (int)n; s.has_deadzone = true; }
+            if (n >= 0 && n <= 32767) {
+                s.deadzone = (int)n;
+                s.has_deadzone = true;
+                /* Legacy global: fill any slot that was not given pN_deadzone. */
+                for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+                    if (!s.has_p_deadzone[i]) {
+                        s.p_deadzone[i] = s.deadzone;
+                        s.has_p_deadzone[i] = true;
+                    }
+                }
+            }
         });
     }
     return s;
@@ -2293,8 +2536,10 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
     if (s.has_auto_skip_fmv)
         f << "auto_skip_fmv     = " << (s.auto_skip_fmv ? "true" : "false") << "\n";
-    if (s.has_turbo_loads)
-        f << "turbo_loads       = " << (s.turbo_loads ? "true" : "false") << "\n";
+    /* turbo_loads is deliberately NOT written back: it is deprecated and no
+     * longer restored, so re-emitting it would preserve a dead row that looks
+     * authoritative. Omitting it lets an existing settings.toml self-clean on
+     * the first save after the update. */
     if (s.has_fast_boot)
         f << "fast_boot         = " << (s.fast_boot ? "true" : "false") << "\n";
     if (s.has_bios_hle)
@@ -2313,9 +2558,23 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
+    if (s.has_rewind_depth)
+        f << "rewind_depth      = " << s.rewind_depth << "\n";
+    if (s.has_rewind_interval)
+        f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
+    if (s.has_audio_freq)
+        f << "frequency = " << s.audio_freq << "\n";
     if (s.has_spu_hq)
         f << "spu_hq = " << (s.spu_hq ? "true" : "false") << "\n";
+    if (s.has_hotkey_pad_rewind || s.has_hotkey_pad_save_state_menu) {
+        f << "\n[hotkeys]\n";
+        if (s.has_hotkey_pad_rewind)
+            f << "rewind_pad = " << s.hotkey_pad_rewind << "\n";
+        if (s.has_hotkey_pad_save_state_menu)
+            f << "save_state_menu_pad = "
+              << s.hotkey_pad_save_state_menu << "\n";
+    }
     if (s.has_skip_launcher)
         f << "\n[launcher]\nskip_launcher = " << (s.skip_launcher ? "true" : "false") << "\n";
     if ((s.has_netplay_player_name && !s.netplay_player_name.empty()) ||
@@ -2345,19 +2604,43 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "enable2 = " << (s.memcard2_enabled ? "true" : "false") << "\n";
     }
 
-    if (s.has_p1_device || s.has_p2_device || s.has_p1_mode || s.has_p2_mode ||
-        s.has_deadzone) {
-        f << "\n[controller]\n";
-        if (s.has_p1_device)
-            f << "p1_device = \"" << s.p1_device << "\"\n";
-        if (s.has_p1_mode)
-            f << "p1_mode   = \"" << pad_mode_to_string(s.p1_mode) << "\"\n";
-        if (s.has_p2_device)
-            f << "p2_device = \"" << s.p2_device << "\"\n";
-        if (s.has_p2_mode)
-            f << "p2_mode   = \"" << pad_mode_to_string(s.p2_mode) << "\"\n";
-        if (s.has_deadzone)
-            f << "deadzone  = " << s.deadzone << "\n";
+    {
+        bool any_ctrl = s.has_deadzone || s.has_multitap_enabled ||
+                        s.has_multitap_analog;
+        for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+            if (s.has_p_device[i] || s.has_p_mode[i] || s.has_p_deadzone[i])
+                any_ctrl = true;
+        }
+        if (any_ctrl) {
+            static const char* kDevKeys[] = {
+                "p1_device", "p2_device", "p3_device", "p4_device", "p5_device"};
+            static const char* kModeKeys[] = {
+                "p1_mode", "p2_mode", "p3_mode", "p4_mode", "p5_mode"};
+            static const char* kDzKeys[] = {
+                "p1_deadzone", "p2_deadzone", "p3_deadzone", "p4_deadzone",
+                "p5_deadzone"};
+            f << "\n[controller]\n";
+            for (int i = 0; i < UserSettings::kMaxControllerPlayers; ++i) {
+                if (s.has_p_device[i])
+                    f << kDevKeys[i] << " = \"" << s.p_device[i] << "\"\n";
+                if (s.has_p_mode[i])
+                    f << kModeKeys[i] << "   = \""
+                      << pad_mode_to_string(s.p_mode[i]) << "\"\n";
+                if (s.has_p_deadzone[i])
+                    f << kDzKeys[i] << " = " << s.p_deadzone[i] << "\n";
+            }
+            if (s.has_multitap_enabled)
+                f << "multitap  = " << (s.multitap_enabled ? "true" : "false")
+                  << "\n";
+            if (s.has_multitap_analog)
+                f << "multitap_analog = "
+                  << (s.multitap_analog ? "true" : "false") << "\n";
+            /* Keep a global deadzone= for older readers (mirrors P1). */
+            if (s.has_deadzone || s.has_p_deadzone[0])
+                f << "deadzone  = "
+                  << (s.has_p_deadzone[0] ? s.p_deadzone[0] : s.deadzone)
+                  << "\n";
+        }
     }
 
     if (s.has_language) {
@@ -2375,6 +2658,104 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
             f << "extra_late = " << s.parappa_timing_extra_late << "\n";
     }
 
+    return f.good();
+}
+
+bool upsert_game_toml_controller_bool(const std::filesystem::path& path,
+                                      const char* key, bool value)
+{
+    if (!key || !key[0]) return false;
+    std::string text;
+    {
+        std::ifstream in(path);
+        if (in) {
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            text = ss.str();
+        }
+    }
+    const std::string val = value ? "true" : "false";
+    const std::string assign = std::string(key) + " = " + val;
+
+    auto is_section = [](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        return i < line.size() && line[i] == '[';
+    };
+    auto section_name = [](const std::string& line) -> std::string {
+        size_t a = line.find('[');
+        size_t b = line.find(']');
+        if (a == std::string::npos || b == std::string::npos || b <= a + 1)
+            return {};
+        return line.substr(a + 1, b - a - 1);
+    };
+    auto key_prefix = [&](const std::string& line) {
+        size_t i = 0;
+        while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+        if (i < line.size() && line[i] == '#') return false;
+        const std::string rest = line.substr(i);
+        return rest.rfind(std::string(key) + " =", 0) == 0 ||
+               rest.rfind(std::string(key) + "=", 0) == 0;
+    };
+
+    std::istringstream ls(text);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(ls, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+    }
+
+    int ctrl_start = -1, ctrl_end = -1;
+    for (int i = 0; i < (int)lines.size(); ++i) {
+        if (is_section(lines[i]) && section_name(lines[i]) == "controller") {
+            ctrl_start = i;
+            ctrl_end = (int)lines.size();
+            for (int j = i + 1; j < (int)lines.size(); ++j) {
+                if (is_section(lines[j])) {
+                    ctrl_end = j;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    if (ctrl_start < 0) {
+        if (!text.empty() && text.back() != '\n') text.push_back('\n');
+        text += "\n[controller]\n";
+        text += assign;
+        text += "\n";
+    } else {
+        int replace_at = -1;
+        for (int i = ctrl_start + 1; i < ctrl_end; ++i) {
+            if (key_prefix(lines[i])) {
+                replace_at = i;
+                break;
+            }
+        }
+        if (replace_at >= 0) {
+            lines[replace_at] = assign;
+        } else {
+            int insert_at = ctrl_end;
+            while (insert_at > ctrl_start + 1 &&
+                   lines[insert_at - 1].find_first_not_of(" \t") ==
+                       std::string::npos)
+                --insert_at;
+            lines.insert(lines.begin() + insert_at, assign);
+        }
+        std::ostringstream out;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            out << lines[i];
+            if (i + 1 < lines.size() || (!text.empty() && text.back() == '\n'))
+                out << '\n';
+        }
+        text = out.str();
+    }
+
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f << text;
     return f.good();
 }
 

@@ -16,20 +16,22 @@ New to the codebase? Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
   (`recompiler/`), the runtime engine (`runtime/`), shared tools, and docs.
   Framework changes go here.
 - **Per-game repos** (`mstan/TombaRecomp`, `mstan/MegaManX6Recomp`,
-  `mstan/ApeEscapeRecomp`, …) — one per title. Each contains only that game's
-  config, seeds, and build glue and links this framework in as a submodule at
-  `psxrecomp/`. Game-specific work goes in the game repo; nothing game-specific
-  belongs in the framework.
+  `mstan/ApeEscapeRecomp`, …) — one per title. Each keeps **game code at the
+  repo root** and pins this framework (and usually `recomp-ui`) as **root-level
+  submodules** (`psxrecomp/`, `recomp-ui/`). Game-specific work goes in the game
+  repo; nothing game-specific belongs in the framework.
 
 Each game repo pins an **exact framework commit** — the git submodule pointer at
 `psxrecomp/` (some older game repos also carry a human-readable `psxrecomp-v4.pin`
 record; the submodule pointer is the source of truth). The framework evolves on
 its own cadence; a game only moves to a newer framework when someone deliberately
-bumps that submodule pointer. See
-[Linking the framework](docs/BUILDING.md#linking-the-framework) for the submodule
-+ local-junction dev setup, and
-[Framework changes and the pin](#framework-changes-and-the-pin) below for how a
-framework change actually reaches a game.
+bumps that submodule pointer.
+
+**Starting a new title or shipping a setup-host zip?** Follow
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (layout, CI template
+under `docs/ci/templates/setup-release.yml`, release checklist). Also see
+[Linking the framework](docs/BUILDING.md#linking-the-framework) and
+[Framework changes and the pin](#framework-changes-and-the-pin) below.
 
 ## The core rules
 

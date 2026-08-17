@@ -55,8 +55,10 @@ standalone BIOS runtime supporting OpenBIOS and a compatible retail BIOS** —
 see [Release Package](#release-package) below.
 
 Bringing up a title of your own? Start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md) and open an issue — community projects are
-listed here alongside the rest.
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) (submodules,
+setup-host CI template, release checklist), then
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Community projects are listed here
+alongside the rest.
 
 ## What It Is
 
@@ -95,15 +97,65 @@ Three things sit on that foundation:
   execution.
 
 PSXRecomp is a **framework**. Game-specific projects live in their own
-repositories and link this one in as a **git submodule** to build a game binary.
+repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
+and game code (`game.toml`, seeds, CMake) at the repo root. See
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
+### New Project Layout (preview)
+
+Scaffold a title repo: pass **`--disc`** (required path — tab-complete it);
+the script **prompts** for name, players, marketing, recomp-ui, wizard/netplay,
+lobby URL (default `netplay.retcomm.net`), CI, boxart, Generate, optional
+build, and optional `gh` repo create. Seeds `symbols.toml` + a rich
+`.gitignore`. Full flow: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
+```bash
+# Linux / macOS — interactive prompts after --disc
+sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/src
+```
+
+```powershell
+# Windows
+powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
+```
+
+**Migrate an older title** (e.g. `psxrecomp-v4` / prebuilt `packaging/`) onto
+setup-host with Project Studio — audit → plan → apply (CLI or GUI). Releases
+stay setup-host only (no prebuilt game C):
+
+```bash
+python3 tools/new_project_layout/migrate_project.py audit --root ~/src/MyGameRecomp
+python3 tools/new_project_layout/migrate_project.py apply --root ~/src/MyGameRecomp --dry-run
+python3 tools/new_project_layout/migrate_project.py gui
+```
+
+Details: [`tools/new_project_layout/README.md`](tools/new_project_layout/README.md)
+and [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+
+Launcher features that are still in active development are **opt-in at
+configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
+
+| Flag | Default | Enables |
+|------|---------|---------|
+| `-DPSX_SETUP_WIZARD=ON` | OFF | First-run setup wizard + Generate & rebuild |
+| `-DPSX_NETPLAY=ON` | OFF | Full netplay UI (needs `lib/recomp-net`) |
+
+Details: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md). Legacy CLI
+`psxrecomp build` / `tools/setup_dev.sh` remain available.
 
 **New here?** The fastest way in:
-[`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) (how a game actually
-runs — static / native-overlay / interpreter), then
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/BUILDING.md`](docs/BUILDING.md),
-[`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) (versioned runtime mods),
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+| Path | Doc |
+|------|-----|
+| How a game runs | [`docs/EXECUTION_MODEL.md`](docs/EXECUTION_MODEL.md) |
+| Architecture | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Build the framework | [`docs/BUILDING.md`](docs/BUILDING.md) |
+| **Ship a game repo** (submodules + CI + release checklist) | [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md) |
+| **Netplay** (rollback, SFU/ICE, dual-raster, disc gates) | [`docs/NETPLAY.md`](docs/NETPLAY.md) |
+| Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
+| Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
+| Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
+| Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Which PlayStation BIOS does it use?
 
@@ -696,9 +748,15 @@ seek delays as real hardware. On top of that faithful baseline, load-time
 acceleration is **opt-in**, per game, so the accurate path is never compromised:
 
 - **Turbo** — a hold-to-fast-forward key that compresses loads on demand.
-- **`[runtime] turbo_loads` / `idle_skip`** — automatic acceleration during load
-  waits, with `turbo_audio_sink` keeping the SPU timeline coherent through the
-  burst.
+- **The "Fast Loading (host pacing)" and "CD Speed" mods** — automatic
+  acceleration during load waits, shipped with every title and **off by
+  default**, with `turbo_audio_sink` keeping the SPU timeline coherent through
+  the burst. Host pacing only changes how fast real time is fed to a load, so
+  the guest cannot desync; CD speed changes when the game receives CD
+  interrupts. The former `[runtime] turbo_loads` config key is deprecated and
+  ignored — see `docs/config_schema.md`.
+- **`[runtime] idle_skip`** — proof-gated fast-forward through idle polling
+  loops, with guest time and device events still advancing exactly.
 - **Warm CD routes (`[[runtime.warm_cd_routes]]`)** — narrowly-scoped fast
   read cadence armed on a specific `SetLoc`, restoring authentic timing the
   moment the read pattern diverges.
@@ -744,13 +802,16 @@ the selected faithfully recompiled BIOS — OpenBIOS or retail BIOS — is the
 baseline and oracle, generated code is never hand-edited (fix the recompiler and
 regenerate), and a change proves itself against the Beetle oracle / on screen
 rather than by assertion. Game-specific work lives in the game repos, which pin
-an exact framework commit as a submodule.
+exact framework and UI commits as root-level submodules.
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the core
-rules, how to verify a change, the regression checklist across the known games,
-and how a framework fix reaches a game through its pin. Bugs and build problems go
-to GitHub issues (include `gcc -v` / OS / generator for build failures); design
-discussion happens in the **R.A.I.D.** Discord (invite below).
+- New title / setup-host release:
+  [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md)
+- Framework PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md) (rules, verification,
+  regression checklist, how a fix reaches a game through its pin)
+
+Bugs and build problems go to GitHub issues (include `gcc -v` / OS / generator
+for build failures); design discussion happens in the **R.A.I.D.** Discord
+(invite below).
 
 ## License
 

@@ -324,6 +324,26 @@ void psx_kernel_bless_stats(uint64_t out[6]) {
     out[5] = kbless_invalidations;
 }
 
+void psx_kernel_bless_resync_after_restore(void) {
+    /* kbless_state is host-only. CLEAN/MISMATCH are sticky across guest
+     * stores only via kbless_note_write; savestate RAM memcpy never hits
+     * that path. Leaving MISMATCH blocks native forever against restored
+     * bytes that may match ROM again; leaving CLEAN skips re-verify against
+     * restored patches. Both fork RB/selfcheck peers. */
+    memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
+}
+
+void psx_kernel_bless_reset_for_boot(void) {
+    /* SCPH and OpenBIOS use different kbless_rom_off / span. The one-shot
+     * latch in kbless_on() survives soft-return, so rematch BIOS switches
+     * would bless against the wrong ROM slice. */
+    kbless_enabled = -1;
+    s_kb_lo = 0;
+    s_kb_span = 0;
+    s_kb_rom_off = 0;
+    memset(kbless_state, KBLESS_UNKNOWN, sizeof(kbless_state));
+}
+
 static inline void dirty_ram_mark_kernel_write(uint32_t phys) {
     if (phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return;
     dirty_ram_mark_page(phys);
@@ -635,6 +655,9 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
     if (count > DIRTY_RAM_BITMAP_WORDS) count = DIRTY_RAM_BITMAP_WORDS;
     for (uint32_t i = 0; i < count; i++)
         dirty_ram_bitmap[i] = words[i];
+    /* Bitmap replace bypasses clean→dirty transitions; bump so interpreter
+     * site caches keyed on g_dirty_ram_code_gen cannot survive a restore. */
+    g_dirty_ram_code_gen++;
 }
 
 /* ---- Inc3: watched overlay pages + per-page generation counters ---------
@@ -653,6 +676,20 @@ void dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count) {
  */
 static uint32_t overlay_watch_bitmap[DIRTY_RAM_BITMAP_WORDS];
 static uint32_t overlay_page_gen[DIRTY_RAM_PAGE_COUNT];
+
+void dirty_ram_reset_for_boot(void) {
+    memset(dirty_ram_bitmap, 0, sizeof(dirty_ram_bitmap));
+    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));
+    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));
+    g_text_diverged_pages = 0;
+    memset(overlay_watch_bitmap, 0, sizeof(overlay_watch_bitmap));
+    memset(overlay_page_gen, 0, sizeof(overlay_page_gen));
+    memset(g_dirty_ram_exec_page_bitmap, 0, sizeof(g_dirty_ram_exec_page_bitmap));
+    memset(g_dirty_ram_exec_pc_bitmap, 0, sizeof(g_dirty_ram_exec_pc_bitmap));
+    memset(g_dirty_ram_dispatch_pc_bitmap, 0,
+           sizeof(g_dirty_ram_dispatch_pc_bitmap));
+    g_dirty_ram_code_gen++;
+}
 
 void overlay_watch_set_range(uint32_t phys, uint32_t len) {
     if (len == 0 || phys >= RAM_SIZE) return;
@@ -686,6 +723,36 @@ uint32_t overlay_watch_pagegen_sum(uint32_t phys, uint32_t len) {
     uint32_t sum = 0;
     for (uint32_t pg = fp; pg <= lp; pg++) sum += overlay_page_gen[pg];
     return sum;
+}
+
+/* Savestate restores RAM via memcpy and never hits the store chokepoint that
+ * bumps overlay_page_gen. Without this, ENTRY_VALID overlays keep the gen-gated
+ * fast path and run native code against restored bytes they were not validated
+ * for — hang / freeze after the restored frame presents. */
+void dirty_ram_text_guard_resync_after_restore(void) {
+    /* text_diverged_bitmap is sticky: once a page's entry bytes fail the
+     * reference compare, native stays blocked forever. That is correct for
+     * forward sim, but after a savestate/RB rewind the restored RAM may
+     * match the reference again — leaving the pre-load sticky bit forces
+     * dirty-interp where the peer (or the prior resim) still runs native,
+     * forking MotK selfcheck warm #2vs#3 at matched clocks (win#118 class:
+     * cold≡0, warm FAIL; post-span irq_resume also drifts). Drop both
+     * host-only text-guard bitmaps; live writes re-arm modified, and the
+     * next native_ok compare re-decides diverge against restored bytes. */
+    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));
+    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));
+    g_text_diverged_pages = 0;
+}
+
+void overlay_watch_invalidate_after_ram_restore(void) {
+    for (uint32_t pg = 0; pg < DIRTY_RAM_PAGE_COUNT; pg++)
+        overlay_page_gen[pg]++;
+    extern void overlay_loader_note_code_write(void);
+    extern void overlay_loader_resync_validation_after_restore(void);
+    overlay_loader_note_code_write();
+    dirty_ram_text_guard_resync_after_restore();
+    psx_kernel_bless_resync_after_restore();
+    overlay_loader_resync_validation_after_restore();
 }
 
 static inline void overlay_watch_note_write(uint32_t phys, uint32_t size) {
@@ -824,8 +891,27 @@ static void interrupt_write_stat_masked(uint32_t val, uint32_t mask) {
 
 static void interrupt_write_mask_masked(uint32_t val, uint32_t mask, uint8_t width) {
     uint32_t old = i_mask;
-    i_mask = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
+    uint32_t next = ((i_mask & ~mask) | (val & mask)) & 0x7FFu;
+    /* IMPORTANT (Ape Escape LOAD): BIOS clears I_MASK.7 immediately after
+     * the probe SELECT abort while A6C10 is still nested. That drops the
+     * nest_irq_pulse before LibCardIntRP can pop to idle / set B4E38.
+     * Hold bit7 until the nest unwinds (sio_card_should_hold_imask_bit7).
+     * EXPERIMENT: helper used to no-op under netplay; ungated for TM4 test.
+     * See ApeEscapeRecomp/docs/APE_MEMCARD_LOAD.md. */
+    if ((old & 0x80u) && !(next & 0x80u)) {
+        extern int sio_card_should_hold_imask_bit7(void);
+        if (sio_card_should_hold_imask_bit7()) {
+            next |= 0x80u;
+            if (!(i_stat & 0x80u))
+                i_stat |= 0x80u;
+        }
+    }
+    i_mask = next;
     imask_trace_record(old, i_mask, width);
+    {
+        extern void sio_card_handoff_on_imask(uint32_t old_mask, uint32_t new_mask);
+        sio_card_handoff_on_imask(old, i_mask);
+    }
     psx_irq_refresh_cause_ip2();
 }
 
@@ -896,6 +982,10 @@ void memory_init(const char* bios_path) {
     ram_size_reg = 0;
     i_stat = 0;
     i_mask = 0;
+    /* Host dirty/text/overlay bitmaps survive memset(ram) and fork dig0. */
+    dirty_ram_reset_for_boot();
+    /* Re-latch kbless window from the newly activated psx_bios_image. */
+    psx_kernel_bless_reset_for_boot();
 
     FILE* f = fopen(bios_path, "rb");
     if (!f) {
@@ -1465,7 +1555,6 @@ static inline void d44_note(uint32_t phys, uint32_t old, uint32_t val) {
 }
 
 static void psx_write_word_raw(uint32_t addr, uint32_t val);
-extern void gte_precision_invalidate_word(uint32_t addr);
 void psx_write_word(uint32_t addr, uint32_t val) {
     extern void (*g_overlay_flush_pending_cycles)(void);
     if (g_overlay_flush_pending_cycles) g_overlay_flush_pending_cycles();
@@ -1482,7 +1571,9 @@ void psx_write_word(uint32_t addr, uint32_t val) {
 }
 static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
-    gte_precision_invalidate_word(addr);
+    /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
+     * validates tracked words against the actual packet word on read, so an
+     * overwritten word can never be believed (ENHANCEMENTS.md G1). */
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) { cache_ctrl = val; return; }
     /* KSEG2 guard — see psx_read_word_raw. */
@@ -1532,19 +1623,32 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
          * TestEvent poll, consuming the public card event and leaving the UI
          * stuck at "Checking MEMORY CARD...". Let the real TestEvent consume
          * public MARK card events instead; keep this narrowly keyed to the
-         * helper's status store and the EvCB layout. */
-        if (fntrace_is_game_started() &&
-            g_debug_last_store_pc == 0xBFC117E4u &&
-            val == 0x2000u &&
-            phys >= 4u && (phys + 8u) < RAM_SIZE &&
-            read_ram_word(phys) == 0x4000u &&
-            read_ram_word(phys - 4u) == 0xF0000011u &&
-            read_ram_word(phys + 8u) == 0x2000u) {
-            uint32_t spec = read_ram_word(phys + 4u);
-            if (spec == 0x00000004u || spec == 0x00008000u ||
-                spec == 0x00000100u || spec == 0x00000200u ||
-                spec == 0x00002000u) {
-                return;
+         * helper's status store and the EvCB layout.
+         *
+         * Ape Escape LOAD: this suppress is tip-only (post-483a0d4) and leaves
+         * libcard parked after the 81 52 00 probe (A6C10 nested, B4E38=0, never
+         * re-enables I_MASK bit7 / never TX 0x57). Opt out unless explicitly
+         * enabled — Tomba can set PSX_TOMB_CARD_EVCB_PROTECT=1. */
+        {
+            static int s_tomb_evcb_protect = -1;
+            if (s_tomb_evcb_protect < 0) {
+                const char *e = getenv("PSX_TOMB_CARD_EVCB_PROTECT");
+                s_tomb_evcb_protect = (e && e[0] == '1') ? 1 : 0;
+            }
+            if (s_tomb_evcb_protect &&
+                fntrace_is_game_started() &&
+                g_debug_last_store_pc == 0xBFC117E4u &&
+                val == 0x2000u &&
+                phys >= 4u && (phys + 8u) < RAM_SIZE &&
+                read_ram_word(phys) == 0x4000u &&
+                read_ram_word(phys - 4u) == 0xF0000011u &&
+                read_ram_word(phys + 8u) == 0x2000u) {
+                uint32_t spec = read_ram_word(phys + 4u);
+                if (spec == 0x00000004u || spec == 0x00008000u ||
+                    spec == 0x00000100u || spec == 0x00000200u ||
+                    spec == 0x00002000u) {
+                    return;
+                }
             }
         }
         if (phys == D44_PHYS) d44_note(phys, read_ram_word(phys), val);
@@ -1669,7 +1773,6 @@ void psx_write_half(uint32_t addr, uint16_t val) {
 }
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
-    gte_precision_invalidate_word(addr);
     if (sr_ptr && (*sr_ptr & 0x10000u)) return;
 
         /* KSEG2 guard — see psx_read_word_raw. */
@@ -2005,7 +2108,6 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
 }
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
-    gte_precision_invalidate_word(addr);
     if (sr_ptr && (*sr_ptr & 0x10000u)) return;
 
         /* KSEG2 guard — see psx_read_word_raw. */

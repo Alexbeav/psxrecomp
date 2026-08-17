@@ -1282,3 +1282,46 @@ extern "C" int beetle_history_get_snapshot(int slot, uint32_t *out_addr, int *ou
     if (out_active) *out_active = s_beetle_snap_active[slot];
     return 1;
 }
+
+/* ---- cyc_watch / exc_ring stubs ----
+ * Full per-instruction sampling lives in a beetle-psx DebugMode CPUHook that
+ * was never checked into docs/*.patch. GPU/OT oracle work only needs these
+ * symbols to link; wire returns empty/unarmed until the hook patch lands. */
+static uint32_t s_cw_anchor_raw = 0, s_cw_anchor_phys = 0;
+static uint32_t s_cw_end_raw = 0, s_cw_end_phys = 0;
+static uint32_t s_cw_max_hits = 0, s_cw_hits = 0;
+static int s_cw_armed = 0;
+
+extern "C" void beetle_cyc_watch_arm(uint32_t anchor_raw, uint32_t end_raw, int n) {
+    s_cw_anchor_raw = anchor_raw;
+    s_cw_anchor_phys = anchor_raw & 0x1FFFFFFFu;
+    s_cw_end_raw = end_raw;
+    s_cw_end_phys = end_raw & 0x1FFFFFFFu;
+    s_cw_max_hits = (n > 0) ? (uint32_t)n : 16u;
+    s_cw_hits = 0;
+    s_cw_armed = 1;
+}
+extern "C" void beetle_cyc_watch_clear(void) {
+    s_cw_armed = 0; s_cw_hits = 0;
+}
+extern "C" void beetle_cyc_watch_get_state(uint32_t *anchor_raw, uint32_t *anchor_phys,
+                                          uint32_t *end_raw, uint32_t *end_phys,
+                                          uint32_t *max_hits, uint32_t *hits, int *armed) {
+    if (anchor_raw)  *anchor_raw  = s_cw_anchor_raw;
+    if (anchor_phys) *anchor_phys = s_cw_anchor_phys;
+    if (end_raw)     *end_raw     = s_cw_end_raw;
+    if (end_phys)    *end_phys    = s_cw_end_phys;
+    if (max_hits)    *max_hits    = s_cw_max_hits;
+    if (hits)        *hits        = s_cw_hits;
+    if (armed)       *armed       = s_cw_armed;
+}
+extern "C" int beetle_cyc_watch_get(uint32_t i, uint32_t *hit_index, uint32_t *pc,
+                                   unsigned long long *cyc) {
+    (void)i; (void)hit_index; (void)pc; (void)cyc;
+    return 0;
+}
+
+extern "C" int retro_psxref_exc_ring_dump(char *out, int cap) {
+    if (!out || cap < 32) return -1;
+    return std::snprintf(out, (size_t)cap, "{\"ok\":true,\"entries\":[]}");
+}

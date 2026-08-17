@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import base64
 import json
 import os
 import pathlib
@@ -16,6 +17,72 @@ SPEC.loader.exec_module(MOD)
 
 
 class CoverageVaultHistoryTests(unittest.TestCase):
+    def test_streaming_array_reader_handles_chunk_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "large.json")
+            records = [{"value": "x" * 100}, {"value": "y" * 137}]
+            with open(source, "w", encoding="utf-8") as out:
+                json.dump(records, out)
+            self.assertEqual(list(MOD._iter_json_array(source, chunk_size=7)),
+                             records)
+
+    def test_compaction_splits_execution_pages_and_collapses_mutable_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "overlay_captures.json")
+            output = os.path.join(tmp, "compacted.json")
+            first = bytearray(3 * 4096)
+            second = bytearray(first)
+            first[0:4] = second[0:4] = b"CODE"
+            first[8192:8196] = second[8192:8196] = b"TAIL"
+            first[4096 + 100] = 0x11
+            second[4096 + 100] = 0x22  # mutable, never-executed middle page
+            records = []
+            for image, dispatch in ((first, "0x80010000"),
+                                    (second, "0x80012000")):
+                records.append({
+                    "schema": "psxrecomp overlay capture v2",
+                    "load_addr": "0x80010000", "size": len(image),
+                    "bytes_b64": base64.b64encode(image).decode("ascii"),
+                    "executed_pcs": ["0x80010000", "0x80012000"],
+                    "dispatch_entry_pcs": [dispatch],
+                    "function_entry_pcs": [], "seeds": [dispatch],
+                })
+            with open(source, "w", encoding="utf-8") as out:
+                json.dump(records, out)
+            compacted, stats = MOD.compact_capture_manifest(source, output)
+            self.assertEqual(stats["source_regions"], 2)
+            self.assertEqual(stats["output_variants"], 2)
+            self.assertEqual(stats["max_output_region"], 4100)
+            self.assertEqual([r["load_addr"] for r in compacted],
+                             ["0x80010000", "0x80012000"])
+            self.assertEqual(compacted[0]["size"], 4100)
+            self.assertEqual(compacted[1]["size"], 4096)
+            self.assertEqual(compacted[0]["dispatch_entry_pcs"],
+                             ["0x80010000"])
+            self.assertEqual(compacted[1]["dispatch_entry_pcs"],
+                             ["0x80012000"])
+            self.assertEqual(base64.b64decode(compacted[0]["bytes_b64"])[:4],
+                             b"CODE")
+            self.assertEqual(base64.b64decode(compacted[1]["bytes_b64"])[:4],
+                             b"TAIL")
+            with open(output, encoding="utf-8") as saved:
+                self.assertEqual(json.load(saved), compacted)
+
+    def test_compaction_fails_closed_on_out_of_region_evidence(self):
+        image = bytes(4096)
+        region = {
+            "load_addr": "0x80010000", "size": len(image),
+            "bytes_b64": base64.b64encode(image).decode("ascii"),
+            "executed_pcs": ["0x80012000"],
+        }
+        with self.assertRaisesRegex(ValueError, "outside/alignment-invalid"):
+            MOD._compact_region(region)
+        compacted, evidence, invalid = MOD._compact_region(
+            region, drop_invalid_evidence=True)
+        self.assertEqual(compacted, [])
+        self.assertEqual(evidence, 0)
+        self.assertEqual(invalid, 1)
+
     def test_capture_merge_preserves_static_dispatch_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = os.path.join(tmp, 'captures.json')

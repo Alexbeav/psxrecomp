@@ -53,10 +53,34 @@ How the two configs relate:
 ```toml
 [program]    # in bios.toml; describes the BIOS
 [game]       # in game.toml; describes the game
+[prepare_disc]  # optional; data-track digests for prepare/verify
+[netplay]       # optional; TOC / cue policy for online
 [recompiler]
 [runtime]
 [audit]
 ```
+
+## Netplay disc mount (`[netplay]`)
+
+Optional. Online play needs the same CD geometry on every peer — data-track
+CRC/SHA alone cannot distinguish a Track-01-only dump from a full Redump
+multi-track cue. The runtime mounts the resolved path, fingerprints the TOC
+(`disc_fp`), and gates Host/Join on `netplay_ok`. Peers also exchange
+`disc_fp` through the lobby (`disc_mismatch` on join).
+
+| Field | Default | Description |
+|---|---|---|
+| `require_cue` | `false` | Require a `.cue` mount (reject bare `.bin` / cue→bin fallback) |
+| `required_tracks` | `0` | Exact `iso_track_count` when > 0 (e.g. MotK Redump = `17`) |
+| `required_leadout_lba` | unset | Exact lead-out LBA when set |
+| `required_disc_fp` | `""` | Exact lowercase hex SHA-256 TOC fingerprint when non-empty |
+
+Offline Play may still launch with a TOC warning; first-run setup Finish and
+online Create/Join require `netplay_ok` (and online also a clean verify +
+non-empty `disc_fp`). Mirror `required_tracks` in the RetComM catalog as
+`rom_identity.track_counts` so the hub library scan rejects Track-01-only dumps.
+Wizard / RetComM / catalog submission accept Redump `.cue` + sibling `.bin`
+tracks only — not `.iso`/`.chd` (cannot reliably expand to multi-track).
 
 ## Program / game block
 
@@ -304,17 +328,36 @@ The other load-time accelerators are likewise opt-in:
 
 ```toml
 [runtime]
-turbo_loads = true
-offer_turbo_loads = true
 idle_skip = true
 turbo_audio_sink = true
 ```
 
-`offer_turbo_loads` defaults to true. A game that moves load acceleration into
-its mod catalog sets it false; the generic Settings switch is hidden and stale
-persisted values are ignored before the selected mod activation callback runs.
+### `turbo_loads` / `offer_turbo_loads` — deprecated and ignored
 
-`turbo_audio_sink` is meaningful only while `turbo_loads` is active. It keeps
+**Do not use these keys.** Load acceleration is owned by the Mods catalog:
+`psx.enhancement.fast-loading` ("Fast Loading (host pacing)") and
+`psx.enhancement.cd-speed`. Both target `game_id = "*"`, so they ship with every
+title, both default to off, and both expose the multiplier and instant-scheduler
+detail that a single opaque boolean never could. recomp-ui correspondingly draws
+no generic Turbo loads row.
+
+Both keys are still parsed so existing configs load without error, but neither is
+honoured — the runtime logs a deprecation line naming the Fast Loading mod and
+leaves acceleration off. Remove them from `game.toml`.
+
+The same applies to `[video] turbo_loads` in a user's `settings.toml`: it is no
+longer restored at startup, and it is no longer written back out, so the stale
+row disappears on the first save after updating. This is deliberate. Because the
+launcher stopped drawing a control for it, a persisted `true` was simultaneously
+authoritative and unreachable: one run of a build whose `game.toml` said `true`
+latched turbo on permanently, and no later config change could undo it. That
+shipped to players in MegaManX6Recomp v1.0.4/v1.0.5 (MegaManX6Recomp#14). Never
+restore this row without also restoring a UI control for it.
+
+For development, the `turbo_loads` TCP debug command still toggles acceleration
+at runtime.
+
+`turbo_audio_sink` is meaningful only while load acceleration is active. It keeps
 the guest SPU timeline advancing but discards accelerated samples before host
 playback, then fades normal output back in.
 

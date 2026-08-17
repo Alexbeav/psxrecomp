@@ -21,6 +21,9 @@
 #include "gpu_render.h"
 #include "gpu_vk_renderer.h"
 #include "gpu_sw_renderer.h"
+#include "host_osd.h"
+#include "psx_savestate_menu.h"
+#include "psx_rewind.h"
 #include "crash_trace.h"
 #include "gpu_vk_upload.h"
 
@@ -39,6 +42,7 @@ int  vk_renderer_present_wide(int a,int b,int c,int d){(void)a;(void)b;(void)c;(
 void vk_renderer_present_cpu(const uint32_t*p,int w,int h,int l,int f){(void)p;(void)w;(void)h;(void)l;(void)f;}
 void vk_renderer_present_blank(void){}
 void vk_renderer_sync_cpu(void){}
+void vk_renderer_restage_vram_after_savestate(void){}
 void vk_renderer_set_present_mode(int m){(void)m;}
 int  vk_perf_json(char *out,int cap,int count){(void)count; return cap>2?snprintf(out,cap,"[]"):0;}
 const GpuRenderBackend *vk_backend_get(void) { return 0; }
@@ -1405,11 +1409,13 @@ int vk_renderer_init_context(SDL_Window *win) {
 }
 
 static void cpres_cache_free(void);   /* fwd: CPU-present resource cache */
+static void osd_staging_free(void);
 void vk_renderer_shutdown(void) {
     if (!s_dev) return;
     p_vkDeviceWaitIdle(s_dev);
     vk_gpu_sync_internal();   /* reclaim deferred staging before tearing down */
     cpres_cache_free();       /* FMV CPU-present cached image + staging */
+    osd_staging_free();       /* host toast OSD staging */
     for (int i = 0; i < STAGING_CACHE_MAX; ++i) {
         if (s_staging_cache[i].buf)
             staging_destroy(s_staging_cache[i].buf, s_staging_cache[i].mem);
@@ -1502,6 +1508,134 @@ static int acquire_present(VkImage *out_sc, VkCommandBuffer *out_cb,
     return 1;
 }
 
+/* Copy host toast into the swapchain (must still be TRANSFER_DST). Opaque
+ * overwrite — host_osd bakes an opaque panel so no blend pass is needed. */
+static VkBuffer       s_osd_buf  = VK_NULL_HANDLE;
+static VkDeviceMemory s_osd_mem  = VK_NULL_HANDLE;
+static void          *s_osd_map  = NULL;
+static VkDeviceSize   s_osd_cap  = 0;
+
+static void osd_staging_free(void) {
+    if (s_osd_buf) {
+        staging_destroy(s_osd_buf, s_osd_mem);
+        s_osd_buf = VK_NULL_HANDLE;
+        s_osd_mem = VK_NULL_HANDLE;
+    }
+    s_osd_map = NULL;
+    s_osd_cap = 0;
+}
+
+static void vk_osd_copy_rect(VkCommandBuffer cb, VkImage sc,
+                             const uint32_t *px, int w, int h,
+                             int x, int y, VkDeviceSize buf_off) {
+    if (!px || w <= 0 || h <= 0) return;
+    int dw = w, dh = h;
+    if (x + dw > (int)s_sc_extent.width) dw = (int)s_sc_extent.width - x;
+    if (y + dh > (int)s_sc_extent.height) dh = (int)s_sc_extent.height - y;
+    if (dw < 1 || dh < 1) return;
+    memcpy((uint8_t *)s_osd_map + (size_t)buf_off, px,
+           (size_t)w * (size_t)h * 4u);
+    VkBufferImageCopy bc = {0};
+    bc.bufferOffset = buf_off;
+    bc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    bc.imageSubresource.layerCount = 1;
+    bc.imageOffset.x = x;
+    bc.imageOffset.y = y;
+    bc.imageExtent.width = (uint32_t)dw;
+    bc.imageExtent.height = (uint32_t)dh;
+    bc.imageExtent.depth = 1;
+    bc.bufferRowLength = (uint32_t)w;
+    bc.bufferImageHeight = (uint32_t)h;
+    p_vkCmdCopyBufferToImage(cb, s_osd_buf, sc,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bc);
+}
+
+static void vk_osd_blit(VkCommandBuffer cb, VkImage sc) {
+    const uint32_t *text_px = NULL, *vol_px = NULL, *rw_px = NULL, *ssm_px = NULL;
+    int tw = 0, th = 0, vw = 0, vh = 0, rw = 0, rh = 0, sw = 0, sh = 0;
+    const int have_text = host_osd_image(&text_px, &tw, &th) && text_px;
+    const int have_vol = host_osd_volume_image(&vol_px, &vw, &vh) && vol_px;
+    const int have_rw = psx_rewind_overlay_image(&rw_px, &rw, &rh) && rw_px;
+    const int have_ssm =
+        psx_savestate_menu_overlay_image(&ssm_px, &sw, &sh) && ssm_px;
+    if (!have_text && !have_vol && !have_rw && !have_ssm) {
+        host_osd_present_done();
+        return;
+    }
+    /* Only BGRA swapchains match ARGB8888 LE packing used by host_osd. */
+    if (s_sc_format != VK_FORMAT_B8G8R8A8_UNORM &&
+        s_sc_format != VK_FORMAT_B8G8R8A8_SRGB) {
+        host_osd_present_done();
+        return;
+    }
+    VkDeviceSize text_bytes =
+        have_text ? (VkDeviceSize)tw * (VkDeviceSize)th * 4u : 0;
+    VkDeviceSize vol_bytes =
+        have_vol ? (VkDeviceSize)vw * (VkDeviceSize)vh * 4u : 0;
+    VkDeviceSize rw_bytes =
+        have_rw ? (VkDeviceSize)rw * (VkDeviceSize)rh * 4u : 0;
+    VkDeviceSize ssm_bytes =
+        have_ssm ? (VkDeviceSize)sw * (VkDeviceSize)sh * 4u : 0;
+    VkDeviceSize bytes = text_bytes + vol_bytes + rw_bytes + ssm_bytes;
+    if (bytes > s_osd_cap) {
+        p_vkQueueWaitIdle(s_queue);
+        osd_staging_free();
+        if (!make_staging(bytes, &s_osd_buf, &s_osd_mem, &s_osd_map)) {
+            host_osd_present_done();
+            return;
+        }
+        s_osd_cap = bytes;
+    }
+    const int margin = 8;
+    VkDeviceSize off = 0;
+    if (have_text) {
+        vk_osd_copy_rect(cb, sc, text_px, tw, th, margin, margin, off);
+        off += text_bytes;
+    }
+    if (have_vol) {
+        int x = ((int)s_sc_extent.width > vw + margin)
+                    ? ((int)s_sc_extent.width - vw - margin)
+                    : margin;
+        int y = ((int)s_sc_extent.height > vh)
+                    ? (((int)s_sc_extent.height - vh) / 2)
+                    : margin;
+        vk_osd_copy_rect(cb, sc, vol_px, vw, vh, x, y, off);
+        off += vol_bytes;
+    }
+    if (have_rw) {
+        float slide = psx_rewind_slide();
+        int x = ((int)s_sc_extent.width > rw)
+                    ? (((int)s_sc_extent.width - rw) / 2)
+                    : 0;
+        int y = (int)s_sc_extent.height - (int)((float)rh * slide + 0.5f);
+        vk_osd_copy_rect(cb, sc, rw_px, rw, rh, x, y, off);
+        off += rw_bytes;
+    }
+    if (have_ssm) {
+        int x = ((int)s_sc_extent.width > sw)
+                    ? (((int)s_sc_extent.width - sw) / 2)
+                    : 0;
+        int y = ((int)s_sc_extent.height > sh)
+                    ? (((int)s_sc_extent.height - sh) / 2)
+                    : 0;
+        vk_osd_copy_rect(cb, sc, ssm_px, sw, sh, x, y, off);
+    }
+    host_osd_present_done();
+}
+
+static void submit_present(VkCommandBuffer cb, uint32_t img_idx, uint32_t fr);
+
+static void finish_present(VkCommandBuffer cb, VkImage sc,
+                           uint32_t img_idx, uint32_t fr) {
+    vk_osd_blit(cb, sc);
+    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    submit_present(cb, img_idx, fr);
+}
+
 static void submit_present(VkCommandBuffer cb, uint32_t img_idx, uint32_t fr) {
     p_vkEndCommandBuffer(cb);
     /* Present command buffers write the acquired swapchain image with
@@ -1573,10 +1707,7 @@ int vk_renderer_present_vram(int disp_x, int disp_y, int w, int h,
                      sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
 
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
     return 1;
 }
@@ -1592,10 +1723,7 @@ void vk_renderer_present_blank(void) {
     VkClearColorValue black = {{0,0,0,1}};
     VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     p_vkCmdClearColorImage(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rng);
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
 }
 
@@ -1688,10 +1816,7 @@ void vk_renderer_present_cpu(const uint32_t *pixels, int src_w, int src_h,
     blit.dstOffsets[0] = dst[0]; blit.dstOffsets[1] = dst[1];
     p_vkCmdBlitImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
 
     /* Cached resources are rewritten next frame: wait for this frame's copy +
      * blit to complete first (FMV cadence is 15-24 fps; one idle-wait per
@@ -1749,10 +1874,7 @@ int vk_renderer_present_wide(int disp_x, int disp_y, int disp_h, int linear) {
                      1, &blit, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     img_to(cb, s_wide_img[i], &s_wide_layout[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-    img_barrier(cb, sc, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    submit_present(cb, idx, fr);
+    finish_present(cb, sc, idx, fr);
     perf_snapshot_present();
     return 1;
 }
@@ -2184,7 +2306,12 @@ static void flush_cpu_upload(void) {
 
 /* GPU -> CPU mirror: drain batches, pack, copy the whole raw mirror down. */
 static void ensure_cpu(void) {
+    extern int psx_netplay_active(void);
     if (!s_ready || !s_gpu_dirty || !s_vram) return;
+    if (psx_netplay_active()) {
+        s_gpu_dirty = 0;
+        return;
+    }
     flush_cpu_upload();   /* readback overwrites s_vram: pending writes land first */
     flush_tex_batch(); flush_geometry();
     /* Readback must reflect ALL current hr content, not just the incremental
@@ -2258,7 +2385,7 @@ static void vkb_fill_rect(int x, int y, int w, int h, uint16_t color) {
 static int s_depth24_skip_up = 0;
 static DirtyRect s_d24_skip_fb;
 
-static int depth24_is_fb_transfer(int w, int h) {
+static int depth24_is_fb_transfer(int x, int y, int w, int h) {
     if (!gpu_display_is_depth24() || w <= 0 || h <= 0) return 0;
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
@@ -2266,9 +2393,36 @@ static int depth24_is_fb_transfer(int w, int h) {
     int fb_h = (int)di.height;
     if (fb_w < 8) fb_w = 8;
     if (fb_h < 1) fb_h = 1;
+    /* See GL: 256×256 pages must not match the half-FB area heuristic. */
+    if (w <= 256 && h <= 256) return 0;
+    {
+        int dx = (int)(di.display_x & 1023u);
+        int dy = (int)(di.display_y & 511u);
+        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
+        if (x0 + w <= dx || x0 >= dx + fb_w || y0 + h <= dy || y0 >= dy + fb_h)
+            return 0;
+    }
     if (h >= fb_h - 8 && h <= fb_h + 16 && w >= (fb_w * 3) / 4) return 1;
     if ((int64_t)w * (int64_t)h >= ((int64_t)fb_w * fb_h) / 2) return 1;
     return 0;
+}
+
+static void depth24_mark_scanout_band(void) {
+    GpuDisplayInfo di;
+    int fb_w, fb_h, x0, y0, x1, y1;
+    if (!gpu_display_is_depth24()) return;
+    gpu_get_display_info(&di);
+    fb_w = (int)((di.width * 3u + 1u) / 2u);
+    fb_h = (int)di.height;
+    if (fb_w < 8) fb_w = 8;
+    if (fb_h < 1) fb_h = 1;
+    x0 = (int)(di.display_x & 1023u);
+    y0 = (int)(di.display_y & 511u);
+    x1 = x0 + fb_w - 1;
+    y1 = y0 + fb_h - 1;
+    if (x1 > VRAM_W - 1) x1 = VRAM_W - 1;
+    if (y1 > VRAM_H - 1) y1 = VRAM_H - 1;
+    rect_add(&s_d24_skip_fb, x0, y0, x1, y1);
 }
 
 static void depth24_clear_skipped_fb(void) {
@@ -2295,12 +2449,31 @@ static void vkb_vram_transfer_in(int x, int y, int w, int h, const uint16_t *dat
     sw_vram_transfer_in(x, y, w, h, data);
     if (!s_ctx_ok) return;
     depth24_upload_policy();
-    if (s_depth24_skip_up && depth24_is_fb_transfer(w, h)) {
-        int x0 = x & (VRAM_W - 1), y0 = y & (VRAM_H - 1);
-        rect_add(&s_d24_skip_fb, x0, y0, x0 + w - 1, y0 + h - 1);
+    if (s_depth24_skip_up && depth24_is_fb_transfer(x, y, w, h)) {
+        /* Full-VRAM savestate restore: stage FBO; mark scanout band only. */
+        if (w >= VRAM_W && h >= VRAM_H) {
+            up_add_transfer(x, y, w, h);
+            rect_clear(&s_d24_skip_fb);
+            depth24_mark_scanout_band();
+            return;
+        }
+        depth24_mark_scanout_band();
         return;
     }
     up_add_transfer(x, y, w, h);   /* exact touched rects, incl. per-pixel wrap */
+}
+
+void vk_renderer_restage_vram_after_savestate(void) {
+    if (!s_ctx_ok || !s_vram) return;
+    s_up_nrects = 0;
+    rect_clear(&s_d24_skip_fb);
+    s_depth24_skip_up = 0;
+    up_add_transfer(0, 0, VRAM_W, VRAM_H);
+    flush_cpu_upload();
+    if (gpu_display_is_depth24()) {
+        s_depth24_skip_up = 1;
+        depth24_mark_scanout_band();
+    }
 }
 static void vkb_vram_transfer_out(int x, int y, int w, int h, uint16_t *data) {
     ensure_cpu();   /* sync GPU-rendered content down to the CPU mirror first */

@@ -111,9 +111,24 @@ games/*/*
 # Session-scratch debug scripts (hardcoded local paths; kept on disk, not tracked)
 tools/_options_session/
 
-# Compiled test binaries (build artifacts; the runtime/tests/*.c sources are tracked)
+# Compiled test binaries (build artifacts; the runtime/tests/*.c sources are tracked).
+# The *.exe rule alone missed extension-less Linux binaries, and three of them
+# (test_netplay_snap_ring, test_netplay_hash_confirm, test_netplay_input_hist)
+# were committed as a result — the snap-ring one from before boot_state grew its
+# VRAM-incremental queries, so it could no longer be rebuilt from the tree it sat
+# in. Ignore everything matching test_* here except the tracked sources/fixtures.
 runtime/tests/*.exe
+runtime/tests/test_*
+!runtime/tests/test_*.c
+!runtime/tests/test_*.cpp
+!runtime/tests/test_*.py
+!runtime/tests/test_*.mcd
+!runtime/tests/test_dir/
 
 # transient split-gen build dirs
 recompiler/build-splitgen/
 recompiler/build-*/
+
+# Project Studio GUI venv (customtkinter)
+tools/new_project_layout/.venv/
+tools/new_project_layout/project_studio_repos.json

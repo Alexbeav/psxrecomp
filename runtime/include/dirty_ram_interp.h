@@ -46,6 +46,17 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);
  * interpreter or an exception is delivered, so no register write is dropped. */
 void dirty_ram_ld_delay_flush(CPUState* cpu);
 
+/* Drop a deferred load-delay writeback WITHOUT applying it. Required on
+ * savestate/RB restore: the snap already has architectural GPRs, and a
+ * host-static pending load from the pre-load timeline must not stomp them
+ * on the next interp step (selfcheck MotK v0=countdown vs v0=1 forks). */
+void dirty_ram_ld_delay_discard(void);
+
+/* Re-anchor host-only dirty IRQ pump ambient (entry-poll stride + 4096-insn
+ * gap) after snap restore. Not in boot_state — peers that drifted through FMV
+ * otherwise entered the post-FMV dirty wait on opposite poll phases. */
+void dirty_ram_irq_ambient_resync_after_restore(void);
+
 /* Overlay-cache windows — the address ranges eligible for capture, offline
  * recompilation, and per-entry-validated native execution (Rule 18 code that
  * does not exist in any compile-time image):
@@ -102,6 +113,10 @@ int      dirty_ram_is_dirty(uint32_t phys);
 int      psx_kernel_bless_dispatchable(uint32_t phys);
 void     psx_kernel_bless_note_range(uint32_t phys, uint32_t len);
 void     psx_kernel_bless_stats(uint64_t out[6]);
+void     psx_kernel_bless_resync_after_restore(void);
+/* Soft-return rematch / BIOS switch: drop latched SCPH↔OpenBIOS window +
+ * CLEAN/MISMATCH so the next kbless_on() re-reads psx_bios_image. */
+void     psx_kernel_bless_reset_for_boot(void);
 
 /* Capture/candidate window membership. Kernel window and overlay region are
  * unconditional; main-EXE text [KERNEL_WINDOW_END, FLOOR) is included only
@@ -117,10 +132,25 @@ static inline int overlay_cache_window_contains(uint32_t phys) {
 uint32_t dirty_ram_get_bitmap(void);
 uint32_t dirty_ram_get_bitmap_word(uint32_t word_index);
 uint32_t dirty_ram_get_bitmap_word_count(void);
+void     dirty_ram_set_bitmap_words(const uint32_t* words, uint32_t count);
+/* Rematch / session_reboot: wipe host dirty tracking so dig0 matches a cold
+ * process (memory_init clears RAM but used to leave these bitmaps sticky). */
+void     dirty_ram_reset_for_boot(void);
+/* After bulk RAM restore (savestate): bump overlay page gens + lazy-miss epoch
+ * so native overlays re-hash against restored bytes; also drop sticky
+ * text_diverged/modified bitmaps (host-only — restored RAM may match ref). */
+void     overlay_watch_invalidate_after_ram_restore(void);
+void     dirty_ram_text_guard_resync_after_restore(void);
 void     dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);
 void     dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes,
                                        uint32_t len);
 int      dirty_ram_text_native_ok(uint32_t phys);
+/* Exact CFG ranges; exec_pc clips ranges that end before the resume PC. */
+int      dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
+                                             uint32_t count,
+                                             uint32_t exec_pc);
+int      dirty_ram_text_native_ok_ranges(const uint32_t *lo_len_pairs,
+                                        uint32_t count);
 int      dirty_ram_text_image_registered(void);
 /* Bless an intentional runtime data patch (e.g. text_xlate string/glyph tables)
  * into the text reference image so it is not mistaken for self-modifying code. */
@@ -289,44 +319,6 @@ typedef struct {
 } DirtyRamInsnLogEntry;
 extern DirtyRamInsnLogEntry g_dirty_ram_insn_log[DIRTY_RAM_INSN_LOG_CAP];
 extern uint64_t             g_dirty_ram_insn_log_seq;
-
-/* PaRappa rhythm debug ring. Narrow, game-specific probe for the Stage 1
- * rhythm routine when it is running through the dirty interpreter. */
-#ifdef PSX_NO_DEBUG_TOOLS
-#define PARAPPA_RHYTHM_EVENT_CAP 1u
-#else
-#define PARAPPA_RHYTHM_EVENT_CAP 4096u
-#endif
-typedef struct {
-    uint64_t seq;
-    uint32_t frame;
-    uint32_t pc;
-    uint32_t addr;
-    uint32_t value;
-    uint32_t width;
-    uint32_t obj;
-    uint32_t ra;
-    uint32_t a0;
-    uint32_t a1;
-    uint32_t a2;
-    uint32_t a3;
-    uint32_t s5;
-    uint32_t s6;
-    uint32_t g_800901bc;
-    uint32_t g_800901c0;
-    uint32_t g_800916d0;
-    uint32_t g_800916d8;
-    uint32_t g_800916da;
-    uint32_t g_800916dc;
-    uint32_t g_801d3040;
-} ParappaRhythmEvent;
-extern ParappaRhythmEvent g_parappa_rhythm_events[PARAPPA_RHYTHM_EVENT_CAP];
-extern uint64_t           g_parappa_rhythm_event_seq;
-void parappa_rhythm_events_reset(void);
-void parappa_timing_window_reset(void);
-extern int g_parappa_timing_mode;
-extern int g_parappa_timing_extra_early;
-extern int g_parappa_timing_extra_late;
 
 #ifdef __cplusplus
 }
