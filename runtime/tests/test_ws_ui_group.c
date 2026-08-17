@@ -69,6 +69,36 @@ int main(void) {
     assert(stacked[2].root == stacked[0].root);
     assert(stacked[3].root != stacked[0].root);
 
+    /* Submission adjacency. WipEout 3's speed/shield readout ends at x=288 and
+     * the meter bar it belongs to starts at x=306 with a different CLUT, so
+     * neither shared columns nor a matching key can join them; only being
+     * consecutive in the ordering-table walk while touching can. The bottom
+     * -left cluster must NOT chain in through the same rule, so the item before
+     * the readout is a far-away neighbour. Coordinates are the captured ones,
+     * with display_width 508 rather than the 384 used above. */
+    WsUiGroupItem submitted[] = {
+        {0x9a4d,  26, 32, 228, 16, 0, 0},  /* bottom-left, 66 px clear     */
+        {0xd82d, 277, 11, 234,  8, 0, 0},  /* last readout glyph           */
+        {0xb938, 306,112, 236,  6, 0, 0},  /* meter bar, gap 18, rows meet */
+        {0xf3e1, 418, 16, 236,  8, 0, 0},  /* bar end cap                  */
+    };
+    ws_ui_group_assign(submitted, 4, 508, 0);
+    assert(submitted[1].root == submitted[2].root);   /* readout joins meters */
+    assert(submitted[2].root == submitted[3].root);
+    assert(submitted[0].root != submitted[1].root);   /* left stays separate  */
+    assert(submitted[1].anchor == 508 && submitted[0].anchor == 0);
+
+    /* The same two primitives NOT consecutive in the walk must not join --
+     * otherwise the rule degenerates into plain proximity and chains the whole
+     * bottom row into one centre-anchored run. */
+    WsUiGroupItem apart[] = {
+        {0xd82d, 277, 11, 234, 8, 0, 0},
+        {0x1111,  10,  4,  10, 4, 0, 0},   /* unrelated, breaks adjacency */
+        {0xb938, 306,112, 236, 6, 0, 0},
+    };
+    ws_ui_group_assign(apart, 3, 508, 0);
+    assert(apart[0].root != apart[2].root);
+
     assert(ws_ui_anchor_for_bounds(8, 32, display_width) == 0);
     assert(ws_ui_anchor_for_bounds(344, 32, display_width) == 384);
     return 0;

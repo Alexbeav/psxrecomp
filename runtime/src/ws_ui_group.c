@@ -51,6 +51,50 @@ static int same_element(const WsUiGroupItem *a, const WsUiGroupItem *b) {
            WS_UI_GROUP_STACK_GAP;
 }
 
+/* Close enough on screen to be part of the same widget: horizontally within a
+ * glyph-gap, vertically overlapping or all but touching. Weaker than
+ * same_element(), which additionally demands shared columns. */
+static int touching(const WsUiGroupItem *a, const WsUiGroupItem *b) {
+    return interval_gap(a, b) <= WS_UI_GROUP_JOIN_GAP &&
+           axis_gap(a->y, a->y + a->height, b->y, b->y + b->height) <=
+               WS_UI_GROUP_STACK_GAP;
+}
+
+/* The three ways two primitives are one HUD element.
+ *
+ * The third is submission adjacency: consecutive in the ordering-table walk
+ * AND touching. The array arrives in submission order -- gpu_ws_prepass_linked_
+ * list fills it as it walks the OT, and the max_rank filter compacts forward --
+ * so "adjacent index" needs no extra field.
+ *
+ * It is what the shared-columns test was standing in for. WipEout 3's
+ * speed/shield readout ends at x=288 and the meter bar it belongs to starts at
+ * x=306: no shared column, so same_element() cannot fire, and the digit font's
+ * CLUT differs from the bar's, so the key join cannot fire either. The readout
+ * was left as its own run; its bbox midpoint, 256.5, landed in the middle third
+ * against a screen centre of 254; and it stayed pinned near screen centre while
+ * its own meters went to the right edge. A 2 px gap in 4:3 opens to 64 frame-
+ * buffer pixels at 16:9, 110 at 21:9 and 159 at 32:9.
+ *
+ * No anchor threshold can fix that. The genuinely centred "pit ... check"
+ * message sits FARTHER RIGHT (midpoint 300.5) than the mis-anchored readout, so
+ * any threshold that pushed the readout into the right third would drag the
+ * message there first and tear it apart. Submission order is the only signal
+ * that separates them: one widget's draw code emits its parts back to back.
+ *
+ * The gap and row tests keep it narrow -- consecutive packets that are far
+ * apart on screen are simply the next widget. Simulated over six captures this
+ * forms exactly one union that changes an anchor, and that union is the defect;
+ * the bottom-left cluster does not chain in, because its nearest consecutive
+ * neighbour pair is 66 px apart. */
+static int items_join(const WsUiGroupItem *items, size_t i, size_t j) {
+    const WsUiGroupItem *a = &items[i], *b = &items[j];
+    if (same_element(a, b)) return 1;
+    if (a->key == b->key && interval_gap(a, b) <= WS_UI_GROUP_JOIN_GAP) return 1;
+    if (j == i + 1 && touching(a, b)) return 1;
+    return 0;
+}
+
 static size_t root_of(size_t *parent, size_t index) {
     while (parent[index] != index) {
         parent[index] = parent[parent[index]];
@@ -93,6 +137,7 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
      *    or a bar and its frame, could never merge. They then got INDEPENDENT
      *    thirds anchors and were dragged toward opposite screen edges as the
      *    frame widened.
+     *  - SUBMISSION-ADJACENT and touching — see items_join().
      *
      * Observed on WipEout 3's race HUD at 32:9: the lap readout's digits at
      * [137,202] anchored left while the box beneath them at [138,202] anchored
@@ -101,10 +146,7 @@ void ws_ui_group_assign(WsUiGroupItem *items, size_t count,
      * aspect. */
     for (size_t i = 0; i < count; i++) {
         for (size_t j = i + 1; j < count; j++) {
-            if (!same_element(&items[i], &items[j]) &&
-                (items[i].key != items[j].key ||
-                 interval_gap(&items[i], &items[j]) > WS_UI_GROUP_JOIN_GAP))
-                continue;
+            if (!items_join(items, i, j)) continue;
             size_t ri = root_of(parent, i);
             size_t rj = root_of(parent, j);
             if (ri != rj) parent[rj] = ri;

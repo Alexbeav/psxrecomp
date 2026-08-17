@@ -5204,10 +5204,19 @@ static void handle_geom_correction(int id, const char *json)
      * but described a different word (stale = provenance hole to hunt). */
     PGXPStats ps;
     pgxp_get_stats(&ps);
+    /* Perspective arming, with its real denominator. perspective_triangles on
+     * its own could only be compared against gp0_draw, which counts untextured
+     * primitives that are correctly never armed — so it read as a coverage
+     * figure without being one. texcorr.attempts counts exactly the textured
+     * triangles that reach the predicate. */
+    uint64_t tc_att = 0, tc_arm = 0, tc_off = 0, tc_nosrc = 0, tc_noz = 0;
+    gpu_texture_correction_stats(&tc_att, &tc_arm, &tc_off, &tc_nosrc, &tc_noz);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"geometry_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
+             "\"texcorr\":{\"attempts\":%llu,\"armed\":%llu,"
+             "\"no_correction\":%llu,\"no_source\":%llu,\"no_depth\":%llu},"
              "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
@@ -5218,6 +5227,9 @@ static void handle_geom_correction(int id, const char *json)
              gte_geometry_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
+             (unsigned long long)tc_att, (unsigned long long)tc_arm,
+             (unsigned long long)tc_off, (unsigned long long)tc_nosrc,
+             (unsigned long long)tc_noz,
              (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
              pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
              (unsigned long long)ps.lookups,

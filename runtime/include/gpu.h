@@ -39,6 +39,14 @@ typedef struct {
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
+
+/* Perspective-correct UV arming rate, per condition. armed/attempts is the
+ * real perspective coverage: attempts counts only textured triangles, so it is
+ * the denominator that gp0_draw (which includes untextured primitives that are
+ * correctly never armed) cannot provide. Diagnostic; any pointer may be NULL. */
+void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
+                                  uint64_t *no_correction,
+                                  uint64_t *no_source, uint64_t *no_depth);
 /* GP1(08h) bit4 — 24-bit display. Renderers skip FBO upload queues while set:
  * packed RGB888 lives in the CPU mirror; treating A0 rects as 1555 FBO uploads
  * both wastes bandwidth and force-flushes when UP_RECTS_MAX is hit (MotK FMV). */

@@ -771,7 +771,10 @@ function(psxrecomp_add_runtime_target target)
     # and stamp the pgxp overlay flavor so the shard cache and the ABI gate
     # keep pgxp and base DLLs fully separate. The base target is untouched —
     # the macros preprocess away without the define.
-    set(options ORACLE COSIM PGXP)
+    # PGXP_CLONE is internal: set only by the PSX_PGXP_VARIANT auto-clone at the
+    # end of this function, to mark the sibling that needs a distinguishing exe
+    # name. Callers pass PGXP alone.
+    set(options ORACLE COSIM PGXP PGXP_CLONE)
     set(oneValueArgs
         GAME_GENERATED_DISPATCH_C
         GAME_OVERLAY_STATIC_C
@@ -936,10 +939,22 @@ function(psxrecomp_add_runtime_target target)
         set(_psxrt_exe_name "${_psxrt_exe_name}_oracle")
     endif()
     if(PSXRT_PGXP)
-        # Distinct binary beside the base one; the launcher (or the player)
-        # picks the variant. Same debug port as the base build — run one at a
-        # time (the A/B protocol is one-toggle-per-run anyway).
-        set(_psxrt_exe_name "${_psxrt_exe_name}_pgxp")
+        # The _pgxp suffix exists only to keep the auto-cloned A/B sibling
+        # distinct from the base binary it sits beside (PSX_PGXP_VARIANT); the
+        # launcher or the player picks between them. Same debug port as the
+        # base build — run one at a time (the A/B protocol is
+        # one-toggle-per-run anyway).
+        #
+        # A title that builds PGXP into its ONE runtime target has no base
+        # binary beside it, so suffixing there would ship a single product
+        # under an odd name and, worse, leave a second look-alike executable in
+        # the build tree for someone to launch by mistake. That is not
+        # hypothetical: a non-PGXP binary got played and reported as "textures
+        # still wobble" while the PGXP one measured 99% precise-vertex
+        # coverage. Suffix the clone, never the primary.
+        if(PSXRT_PGXP_CLONE)
+            set(_psxrt_exe_name "${_psxrt_exe_name}_pgxp")
+        endif()
         target_compile_definitions(${target} PRIVATE
             PSX_PGXP=1
             PSX_OVERLAY_FLAVOR=2)   # PSX_OVERLAY_FLAVOR_PGXP (overlay_api.h)
@@ -1657,7 +1672,7 @@ function(psxrecomp_add_runtime_target target)
         option(PSX_PGXP_VARIANT
             "Also build the <exe>_pgxp PGXP precision-shadowing variant" OFF)
         if(PSX_PGXP_VARIANT)
-            psxrecomp_add_runtime_target(${target}-pgxp PGXP ${ARGN})
+            psxrecomp_add_runtime_target(${target}-pgxp PGXP PGXP_CLONE ${ARGN})
         endif()
     endif()
 endfunction()

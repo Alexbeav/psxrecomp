@@ -107,6 +107,24 @@ static WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
 static uint32_t ws_ui_prepass_count;
 static uint16_t ws_ui_prepass_rank = 0xFFFFu;
 
+/* Why a UI-looking primitive did NOT reach the squash partition.
+ *
+ * Every rejection here leaves a primitive at its raw 4:3 X while the cluster
+ * around it is squashed toward an anchor -- which is precisely how a HUD mark
+ * ends up stranded in open screen at a wide aspect. The gates are silent
+ * `return`s, so a stranded primitive is indistinguishable from one that was
+ * never drawn at all. These counters let ws_ui_groups name the responsible gate
+ * from a capture instead of it being guessed at. Diagnostic only; nothing in
+ * the transform path reads them. */
+static struct {
+    uint32_t opcode;      /* not in the textured quad / rect families      */
+    uint32_t not_axis;    /* textured quad, but not axis-aligned           */
+    uint32_t degenerate;  /* zero or negative extent                       */
+    uint32_t too_big;     /* full-screen or large-primitive reject         */
+    uint32_t cap;         /* WS_UI_PREPASS_MAX reached                     */
+    uint32_t rank;        /* admitted, then dropped by the max_rank filter */
+} ws_ui_reject;
+
 /* Wide-aspect mode: 0 = off (4:3 identity), 1 = squash (legacy hack — compress
  * a wider FOV into the 320 frame, present stretched), 2 = native-wide (render
  * the wider FOV into an actually wider frame and present 1:1; the GTE is NOT
@@ -1609,10 +1627,16 @@ int psx_ws_backdrop_ring_json(char *buf, int cap) {
 int psx_ws_ui_groups_json(char *buf, int cap) {
     int off = snprintf(buf, (size_t)cap,
         "\"active\":%d,\"squash\":%d,\"dense\":%d,\"rank\":%d,"
-        "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,\"n\":%u,\"items\":[",
+        "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,"
+        "\"rejected\":{\"opcode\":%u,\"not_axis\":%u,\"degenerate\":%u,"
+        "\"too_big\":%u,\"cap\":%u,\"rank\":%u},"
+        "\"n\":%u,\"items\":[",
         ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
         ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
-        ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP, ws_ui_prepass_count);
+        ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP,
+        ws_ui_reject.opcode, ws_ui_reject.not_axis, ws_ui_reject.degenerate,
+        ws_ui_reject.too_big, ws_ui_reject.cap, ws_ui_reject.rank,
+        ws_ui_prepass_count);
     for (uint32_t i = 0; i < ws_ui_prepass_count && off < cap - 220; i++) {
         const WsUiPrepassItem *it = &ws_ui_prepass[i];
         /* Recover the key components so a split is attributable. Mirrors
@@ -3299,26 +3323,57 @@ static void prepare_precise_triangle(int i0, int i1, int i2,
     gr_set_precise_triangle(1, fx[0],fy[0], fx[1],fy[1], fx[2],fy[2]);
 }
 
+/* Arming rate for perspective-correct UVs, per condition.
+ *
+ * perspective_triangles alone cannot answer "how much texture warp is left",
+ * because it has no denominator: comparing it to gp0_draw mixes in untextured
+ * mono and gouraud primitives that are correctly never armed, and comparing it
+ * to a vertex-lookup count divided by three is the same error. `attempts`
+ * counts exactly the textured triangles that reach this predicate, so
+ * armed/attempts IS the perspective coverage, and the three reject counters
+ * say which condition is spending it. Diagnostic only. */
+static struct {
+    uint64_t attempts;      /* textured triangles submitted                 */
+    uint64_t armed;         /* got perspective-correct UVs                  */
+    uint64_t no_correction; /* texture correction off                       */
+    uint64_t no_source;     /* CPU-built primitive, no packet address       */
+    uint64_t no_depth;      /* a vertex had no recorded Z, or Z == 0        */
+} s_texcorr;
+
+void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
+                                  uint64_t *no_correction,
+                                  uint64_t *no_source, uint64_t *no_depth) {
+    if (attempts)      *attempts      = s_texcorr.attempts;
+    if (armed)         *armed         = s_texcorr.armed;
+    if (no_correction) *no_correction = s_texcorr.no_correction;
+    if (no_source)     *no_source     = s_texcorr.no_source;
+    if (no_depth)      *no_depth      = s_texcorr.no_depth;
+}
+
 /* Enable perspective UVs only when every position word came from an exact
  * SWC2 projection store at that same DMA packet address. This preserves the
  * association through ordering-table reordering and rejects CPU-built UI. */
 static void prepare_texture_triangle(int i0, int i1, int i2) {
     gr_set_perspective_triangle(0, 0.0f, 0.0f, 0.0f);
-    if (!s_texture_correction_enabled || gp0_cmd_source_addr == 0xFFFFFFFFu)
-        return;
+    s_texcorr.attempts++;
+    if (!s_texture_correction_enabled) { s_texcorr.no_correction++; return; }
+    if (gp0_cmd_source_addr == 0xFFFFFFFFu) { s_texcorr.no_source++; return; }
     int indices[3] = { i0, i1, i2 };
     uint16_t z[3];
     for (int i = 0; i < 3; i++) {
         uint32_t addr = (gp0_cmd_source_addr + (uint32_t)indices[i] * 4u) & 0x1FFFFCu;
         if (!gte_precision_load_word(addr, gp0_cmd_buf[indices[i]], NULL, NULL, &z[i]) ||
-            z[i] == 0)
+            z[i] == 0) {
+            s_texcorr.no_depth++;
             return;
+        }
     }
     float q[3] = { 1.0f / (float)z[0], 1.0f / (float)z[1], 1.0f / (float)z[2] };
     float qmax = q[0];
     if (q[1] > qmax) qmax = q[1];
     if (q[2] > qmax) qmax = q[2];
-    if (qmax <= 0.0f) return;
+    if (qmax <= 0.0f) { s_texcorr.no_depth++; return; }
+    s_texcorr.armed++;
     gr_set_perspective_triangle(1, q[0] / qmax, q[1] / qmax, q[2] / qmax);
 }
 
@@ -4508,8 +4563,8 @@ static int gp0_command_word_count(uint8_t opcode) {
 
 static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
                               uint16_t rank) {
-    if (ws_ui_prepass_count >= WS_UI_PREPASS_MAX || rank == 0xFFFFu)
-        return;
+    if (rank == 0xFFFFu) return;
+    if (ws_ui_prepass_count >= WS_UI_PREPASS_MAX) { ws_ui_reject.cap++; return; }
     uint32_t op = words[0] >> 24;
     int32_t min_x, max_x, min_y, max_y;
 
@@ -4526,7 +4581,7 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
         int32_t vx[4], vy[4];
         for (int i = 0; i < 4; i++)
             parse_vertex(words[indices[i]], &vx[i], &vy[i]);
-        if (!ws_axis_aligned_quad(vx, vy)) return;
+        if (!ws_axis_aligned_quad(vx, vy)) { ws_ui_reject.not_axis++; return; }
         min_x = max_x = vx[0]; min_y = max_y = vy[0];
         for (int i = 1; i < 4; i++) {
             if (vx[i] < min_x) min_x = vx[i];
@@ -4545,18 +4600,21 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
         } else {
             width = height = op >= 0x7Cu ? 16 : 8;
         }
-        if (width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0) { ws_ui_reject.degenerate++; return; }
         max_x = min_x + width;
         max_y = min_y + height;
     } else {
+        ws_ui_reject.opcode++;
         return;
     }
 
     int32_t width = max_x - min_x, height = max_y - min_y;
     int32_t X = ws_disp_x(), W = ws_disp_w(), H = ws_disp_h();
     if ((min_x <= X && max_x >= X + W && min_y <= 0 && max_y >= H) ||
-        (width > W / 2 && height > H / 4))
+        (width > W / 2 && height > H / 4)) {
+        ws_ui_reject.too_big++;
         return;
+    }
 
     WsUiPrepassItem *item = &ws_ui_prepass[ws_ui_prepass_count++];
     item->group.key =
@@ -4578,6 +4636,8 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_ui_prepass_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
     ws_auto_ui_dense = 0;
+    ws_ui_reject.opcode = ws_ui_reject.not_axis = ws_ui_reject.degenerate =
+        ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
     uint32_t addr = psx_mod_gpu_dma_resolve_address(start_addr);
@@ -4647,6 +4707,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         if (ws_ui_prepass[i].ot_rank == max_rank)
             ws_ui_prepass[out++] = ws_ui_prepass[i];
     }
+    ws_ui_reject.rank = ws_ui_prepass_count - out;
     ws_ui_prepass_count = out;
     /*
      * A high final-layer primitive count is a good "dense 2D menu" signal for
