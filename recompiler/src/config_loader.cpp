@@ -566,6 +566,9 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
         if (video.contains("offer_vulkan")) {
             rt.video_offer_vulkan = toml::find<bool>(video, "offer_vulkan");
         }
+        if (video.contains("bezel")) {
+            rt.video_bezel = toml::find<std::string>(video, "bezel");
+        }
         if (video.contains("geometry_correction")) {
             rt.video_geometry_correction =
                 toml::find<bool>(video, "geometry_correction");

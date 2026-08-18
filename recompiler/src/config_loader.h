@@ -350,6 +350,10 @@ struct RuntimeConfig {
     // fallback. Stored as VIDEO_RENDERER_*.
     int                   video_renderer = DEFAULT_VIDEO_RENDERER;
 
+    // [video] bezel: still artwork drawn behind the frame in GL margin space.
+    // Relative paths resolve against the disc directory. Empty = none.
+    std::string           video_bezel;
+
     // geometry_correction: sub-pixel vertex precision (the PGXP-style fix for
     // PS1 polygon jitter/wobble). The GTE projects in 16.16 and then throws the
     // fraction away when it saturates SXY to integer screen pixels; vertices of

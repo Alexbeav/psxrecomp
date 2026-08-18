@@ -39,6 +39,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
 #include "gpu_gl_renderer.h"
+/* Declarations only: STB_IMAGE_IMPLEMENTATION lives in psx_window_icon.cpp. */
+#define STBI_NO_STDIO
+#include "../third_party/stb_image.h"
 #include "gpu_vk_renderer.h"
 #include "frame_pacing.h"
 #include "latency_ring.h"
@@ -1112,6 +1115,7 @@ static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
+static std::string   g_bezel_path;      /* [video] bezel -- margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
@@ -10642,6 +10646,7 @@ int main(int argc, char** argv) {
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
             g_video_renderer   = gc.runtime.video_renderer;
+            g_bezel_path       = gc.runtime.video_bezel;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
@@ -12748,6 +12753,36 @@ session_reboot:
     if (g_video_renderer == 1) {
         gl_renderer_set_swap_interval(present_effective_swap_interval()); /* applied at context init */
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
+
+        /* Bezel artwork ([video] bezel): load after the GL context exists. */
+        if (!g_bezel_path.empty() && g_gl_active) {
+            std::filesystem::path bp(g_bezel_path);
+            if (bp.is_relative()) bp = resolved_disc.parent_path() / bp;
+            std::vector<unsigned char> file;
+            if (FILE *bf = std::fopen(bp.string().c_str(), "rb")) {
+                std::fseek(bf, 0, SEEK_END);
+                const long len = std::ftell(bf);
+                std::fseek(bf, 0, SEEK_SET);
+                if (len > 0) {
+                    file.resize((size_t)len);
+                    if (std::fread(file.data(), 1, file.size(), bf) != file.size())
+                        file.clear();
+                }
+                std::fclose(bf);
+            }
+            int bw = 0, bh = 0, bc = 0;
+            unsigned char *px = file.empty() ? nullptr
+                : stbi_load_from_memory(file.data(), (int)file.size(), &bw, &bh, &bc, 4);
+            if (px) {
+                gl_renderer_set_bezel(px, bw, bh);
+                stbi_image_free(px);
+                std::fprintf(stdout, "psxrecomp: bezel artwork %dx%d from %s\n",
+                             bw, bh, bp.string().c_str());
+            } else {
+                std::fprintf(stdout, "psxrecomp: bezel artwork not loaded: %s\n",
+                             bp.string().c_str());
+            }
+        }
         if (!g_gl_active) {
             gr_set_backend(GR_BACKEND_SOFTWARE);
             gl_renderer_set_cpu_auth_dual(0);
