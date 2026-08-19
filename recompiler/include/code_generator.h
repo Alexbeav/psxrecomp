@@ -479,6 +479,35 @@ private:
     std::string translate_lhu(uint32_t instr);
     std::string translate_lwl(uint32_t instr);
     std::string translate_lwr(uint32_t instr);
+    //
+    // LWL/LWR take their destination register as BOTH input (the merge base)
+    // and output. Unlike every other load, they read that input late enough to
+    // receive the forwarded result of an immediately preceding load, so they
+    // are NOT subject to the load delay: after
+    //
+    //     lw   $t0, 12($a3)
+    //     lwr  $t0, 10($a3)
+    //
+    // the LWR merges into the value the LW just fetched, not the stale $t0.
+    // When the pair emitter defers a load's writeback into psx_ldd_<addr>, it
+    // sets these so the LWL/LWR merge operand names that temporary instead of
+    // cpu->gpr[rt]. Empty temp = no forwarding in effect.
+    //
+    // (The mirror case -- LWL/LWR as the PRODUCER -- needs nothing: those never
+    // defer, so their writeback is already immediate.)
+    void set_lwlr_merge_forward(uint32_t rt, const std::string& temp) {
+        lwlr_merge_reg_ = rt;
+        lwlr_merge_temp_ = temp;
+    }
+    void clear_lwlr_merge_forward() { lwlr_merge_temp_.clear(); }
+    // Name to use for an LWL/LWR merge operand on register rt.
+    std::string lwlr_merge_operand(uint32_t rt) {
+        if (!lwlr_merge_temp_.empty() && rt == lwlr_merge_reg_)
+            return lwlr_merge_temp_;
+        return reg_name(rt);
+    }
+    uint32_t    lwlr_merge_reg_ = 0xFFFFFFFFu;
+    std::string lwlr_merge_temp_;
     std::string translate_swl(uint32_t instr);
     std::string translate_swr(uint32_t instr);
     std::string translate_sb(uint32_t instr);

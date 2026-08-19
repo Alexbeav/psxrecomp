@@ -432,7 +432,7 @@ std::string CodeGenerator::translate_lwl(uint32_t instr) {
         return fmt::format("(void)psx_lwl(cpu, {}, {}, 0, 0x{:X}u);", addr, reg_name(rt), mask);
     }
     return fmt::format("{} = psx_lwl(cpu, {}, {}, {}, 0x{:X}u);",
-                       reg_name(rt), addr, reg_name(rt), rt, mask);
+                       reg_name(rt), addr, lwlr_merge_operand(rt), rt, mask);
 }
 
 std::string CodeGenerator::translate_lwr(uint32_t instr) {
@@ -452,7 +452,7 @@ std::string CodeGenerator::translate_lwr(uint32_t instr) {
         return fmt::format("(void)psx_lwr(cpu, {}, {}, 0, 0x{:X}u);", addr, reg_name(rt), mask);
     }
     return fmt::format("{} = psx_lwr(cpu, {}, {}, {}, 0x{:X}u);",
-                       reg_name(rt), addr, reg_name(rt), rt, mask);
+                       reg_name(rt), addr, lwlr_merge_operand(rt), rt, mask);
 }
 
 std::string CodeGenerator::translate_swl(uint32_t instr) {
@@ -1894,7 +1894,22 @@ std::string CodeGenerator::translate_basic_block(
         if (!is_cf) {
             if (cycle_per_insn) emit_pre_icache(addr, config_.indent);
             if (cycle_per_insn) emit_pre_timing(instr, config_.indent);
+            // If this is the successor half of a deferred load pair AND it is an
+            // LWL/LWR merging into that same register, hardware forwards the
+            // pending load into the merge (see set_lwlr_merge_forward). Point
+            // the merge operand at the deferred temporary before translating.
+            const uint32_t succ_op = instr >> 26;
+            const bool succ_is_lwlr = (succ_op == 0x22u || succ_op == 0x26u);
+            const bool forward_to_lwlr =
+                delayed_load_active && addr == delayed_load_addr + 4u &&
+                succ_is_lwlr && get_rt(instr) == delayed_load_dest;
+            if (forward_to_lwlr) {
+                set_lwlr_merge_forward(
+                    delayed_load_dest,
+                    fmt::format("psx_ldd_{:08X}", delayed_load_addr));
+            }
             std::string emitted = translate_instruction(addr, instr);
+            if (forward_to_lwlr) clear_lwlr_merge_forward();
             int load_dest = simple_load_dest(instr);
             bool defer_load = false;
             if (!delayed_load_active && load_dest > 0 && addr + 4u <= block.end_addr &&
@@ -1918,7 +1933,11 @@ std::string CodeGenerator::translate_basic_block(
             }
             ss << emitted << "\n";
             if (delayed_load_active && addr == delayed_load_addr + 4u) {
-                if (writes_gpr(instr, delayed_load_dest)) {
+                if (forward_to_lwlr) {
+                    ss << config_.indent << fmt::format(
+                        "/* psx_ldd_{:08X} forwarded into the LWL/LWR merge above */\n",
+                        delayed_load_addr);
+                } else if (writes_gpr(instr, delayed_load_dest)) {
                     ss << config_.indent << fmt::format(
                         "(void)psx_ldd_{:08X};  /* successor write wins */\n",
                         delayed_load_addr);
