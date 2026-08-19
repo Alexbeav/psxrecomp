@@ -10897,6 +10897,20 @@ int main(int argc, char** argv) {
                 uint32_t text_end = (gc.load_address + gc.text_size) & 0x1FFFFFFFu;
                 if (text_end > 0x00010000u /* DIRTY_RAM_KERNEL_WINDOW_END */)
                     g_overlay_region_floor = text_end;
+                /* PSX_OVERLAY_REGION_FLOOR: per-title override for games whose TEXT
+                 * range is itself partially overwritten by streamed level data
+                 * (Driver 2 streams mission code over pages inside its static text
+                 * range). Lowering the floor routes those regions through local-flow
+                 * chaining and makes them overlay-cache candidates, so live-byte
+                 * closures can own them instead of single-instruction dispatch
+                 * thrash. Clamped to stay above the kernel window. */
+                {
+                    const char* fenv = std::getenv("PSX_OVERLAY_REGION_FLOOR");
+                    if (fenv && fenv[0]) {
+                        uint32_t v = (uint32_t)strtoul(fenv, nullptr, 0) & 0x1FFFFFFFu;
+                        if (v >= 0x00010000u) g_overlay_region_floor = v;
+                    }
+                }
                 std::fprintf(stdout,
                     "psxrecomp: overlay_region_floor = 0x%05X (game text end)\n",
                     g_overlay_region_floor);
