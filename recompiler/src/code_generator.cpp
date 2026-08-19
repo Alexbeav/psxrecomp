@@ -2405,6 +2405,16 @@ std::string CodeGenerator::translate_basic_block(
             ss << config_.indent
                << fmt::format("func_{:08X}(cpu); return;  /* fallthrough to split piece */\n",
                               next_addr);
+        } else if (cps_enabled_) {
+            // Unit-edge fall-through with no known successor function (e.g. a
+            // partial overlay capture). Falling off the body would leave
+            // cpu->pc == 0 (the continuation-entry prologue cleared it), which
+            // the trampoline reads as a normal guest exit — a silent shutdown.
+            // Publish the PC so dispatch can route it instead.
+            ss << emit_interrupt_check(next_addr, config_.indent);
+            ss << config_.indent
+               << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS fallthrough past unit edge */\n",
+                              next_addr);
         } else {
             ss << emit_interrupt_check(next_addr, config_.indent);
         }
