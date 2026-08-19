@@ -417,7 +417,12 @@ std::atomic<int>                         g_msg_sep_pending{0}; // unpatched coun
 std::mutex g_mtx;
 
 std::atomic<bool>     g_apply_armed{false};   // table non-empty AND language enabled
-std::atomic<bool>     g_capture_on{true};     // always-on inventory (default)
+std::atomic<bool>     g_capture_on{false};    // inventory capture DEFAULT OFF:
+    // the always-on Shift-JIS string-inventory scan costs 26-35% of
+    // whole-lane throughput on streaming-heavy titles (measured across
+    // three GT2 race lanes; reproduced fleet-wide). Substitution (table +
+    // language armed) is unaffected; PSX_XLATE_CAPTURE=1 re-enables the
+    // scan for translation authoring.
 std::atomic<uint64_t> g_calls{0};
 std::atomic<uint64_t> g_hits{0};
 std::string           g_lang = "en";
@@ -914,6 +919,7 @@ extern "C" void text_xlate_init(const char* project_root, const char* language) 
         g_dir = (fs::path(project_root) / "translations").string();
     const char* capenv = std::getenv("PSX_XLATE_CAPTURE");
     if (capenv && capenv[0] == '0') g_capture_on.store(false);
+    else if (capenv && capenv[0] == '1') g_capture_on.store(true);
     std::lock_guard<std::mutex> lk(g_mtx);
     load_tables_locked();
 }
