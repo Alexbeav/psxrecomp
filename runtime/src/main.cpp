@@ -11532,6 +11532,19 @@ int main(int argc, char** argv) {
             std::string assets_dir_str = exe_dir_from_argv(argv[0]).string();
             /* Same keybinds.ini / config.ini the runtime reads — never cwd. */
             ae_rui_set_sidecar_paths(argv[0]);
+            /* A CLI --disc must seed the launcher's initial disc. Without this,
+             * the override suppresses the remembered settings/disc.cfg pick (the
+             * has_disc_path gate above) while contributing nothing itself, so the
+             * launcher opens with "No disc selected" and forces a manual pick on
+             * every launch. resolve_disc_for_runtime still applies the override
+             * authoritatively after the launcher returns. */
+            if (disc_override_path && disc_override_path[0]) {
+                std::filesystem::path cli_disc = normalize_disc_path_for_launch(
+                    std::filesystem::path(disc_override_path));
+                std::error_code cli_ec;
+                if (std::filesystem::exists(cli_disc, cli_ec))
+                    resolved_disc = cli_disc;
+            }
             std::string rui_initial_disc = resolved_disc.string();
             std::string rui_title = (game_name.empty() ? std::string("PSX") : game_name)
                                      + " - Launcher";
