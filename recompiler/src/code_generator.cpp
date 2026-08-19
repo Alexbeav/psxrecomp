@@ -1909,8 +1909,23 @@ std::string CodeGenerator::translate_basic_block(
                 const size_t pos = emitted.find(lhs);
                 if (pos != std::string::npos) {
                     const std::string temp = fmt::format("psx_ldd_{:08X}", addr);
-                    emitted.replace(pos, lhs.size(), "uint32_t " + temp + " =");
+                    // Declare the temp in the pair block, not inline at the
+                    // load: with PGXP the load already sits in its own
+                    // `{ uint32_t _pgxa = ...; <load> PGXP_LOAD(...); }`
+                    // wrapper, so an inline declaration would go out of
+                    // scope before the writeback below.
+                    emitted.replace(pos, lhs.size(), temp + " =");
+                    // Point the PGXP hook at the temp: the writeback is
+                    // deferred, so the GPR still holds the pre-load value.
+                    const std::string pgxp_tail =
+                        fmt::format(", _pgxa, cpu->gpr[{}]);", load_dest);
+                    const size_t hook = emitted.rfind(pgxp_tail);
+                    if (hook != std::string::npos)
+                        emitted.replace(hook, pgxp_tail.size(),
+                                        fmt::format(", _pgxa, {});", temp));
                     ss << config_.indent << "{ /* MIPS-I load-delay pair */\n";
+                    ss << config_.indent
+                       << fmt::format("    uint32_t {} = 0;\n", temp);
                     delayed_load_addr = addr;
                     delayed_load_dest = static_cast<uint32_t>(load_dest);
                     delayed_load_active = true;
