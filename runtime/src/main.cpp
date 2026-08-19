@@ -5811,6 +5811,8 @@ static void rewind_host_pause_loop(void) {
         rewind_pause_present();
         SDL_Delay(8);
     }
+    /* Swallow the still-held close press so it doesn't bleed into the game. */
+    savestate_input_guard_arm();
 }
 
 /* Freeze guest in vblank present while the save-state slot menu is open. */
@@ -5852,6 +5854,8 @@ static void savestate_menu_host_pause_loop(void) {
         rewind_pause_present();
         SDL_Delay(8);
     }
+    /* Swallow the close press; a just-queued save must not snapshot it. */
+    savestate_input_guard_arm();
 }
 
 /* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
