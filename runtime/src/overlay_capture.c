@@ -938,6 +938,13 @@ int overlay_capture_count(void)
 #define AUTOCAP_MIN_DISPATCHES  128u   /* catches ~120/s FMV helper gaps    */
 #define AUTOCAP_MIN_INSNS       100000ull /* long compute gap pressure gate */
 #define AUTOCAP_COOLDOWN_FRAMES 300u   /* >= ~5 s between auto-fires        */
+/* Host-time twins of the two frame gates, at their 60 Hz equivalents. Each
+ * gate opens on whichever budget expires FIRST: frame counting alone
+ * deadlocks recovery, because the stall autocapture exists to fix is exactly
+ * when vblanks stop arriving (at 0.26 fps, 120 frames is ~8 minutes of wall
+ * clock). At full speed the budgets coincide, so cadence is unchanged. */
+#define AUTOCAP_CHECK_MS        2000ull
+#define AUTOCAP_COOLDOWN_MS     5000ull
 #define AUTOCAP_BACKOFF_MAX     64u    /* futile-retry ceiling: 64*5s ≈ 5min */
 #define AUTOCAP_WRITE_RETRY_MAX_FRAMES 60u /* cap failed-I/O retry at ~1 s */
 
@@ -957,6 +964,10 @@ static uint32_t s_autocap_futile     = 0;    /* futile skips (telemetry)      */
 static uint64_t s_autocap_provider_sig_pending = 0;
 static uint64_t s_autocap_provider_retry_frame = 0;
 static unsigned s_autocap_provider_attempts = 0;
+static uint64_t s_autocap_last_check_ms = 0; /* host twin of last_check      */
+static uint64_t s_autocap_next_ok_ms    = 0; /* host twin of next_ok         */
+
+static uint64_t autocap_now_ms(void) { return (uint64_t)SDL_GetTicks64(); }
 
 typedef struct {
     uint8_t *ram;
@@ -1065,6 +1076,8 @@ static int autocap_provider_request_try(const CodeProvider *cp, uint64_t frame)
             s_autocap_backoff <<= 1;
         s_autocap_next_ok = frame +
             (uint64_t)AUTOCAP_COOLDOWN_FRAMES * s_autocap_backoff;
+        s_autocap_next_ok_ms = autocap_now_ms() +
+            AUTOCAP_COOLDOWN_MS * (uint64_t)s_autocap_backoff;
         s_autocap_provider_sig_pending = 0;
         s_autocap_provider_retry_frame = 0;
         s_autocap_provider_attempts = 0;
@@ -1306,8 +1319,12 @@ void overlay_autocapture_tick(void)
 
     if (!s_autocap_enabled || !s_active) return;
     if (SDL_AtomicGet(&s_autocap_write_state) != 0) return;
-    if (s_frame_count - s_autocap_last_check < AUTOCAP_CHECK_FRAMES) return;
+    const uint64_t now_ms = autocap_now_ms();
+    if (s_frame_count - s_autocap_last_check < AUTOCAP_CHECK_FRAMES &&
+        now_ms - s_autocap_last_check_ms < AUTOCAP_CHECK_MS)
+        return;
     s_autocap_last_check = s_frame_count;
+    s_autocap_last_check_ms = now_ms;
 
     uint64_t disp  = g_dirty_window_dispatches;
     uint64_t delta = disp - s_autocap_last_disp;
@@ -1322,13 +1339,15 @@ void overlay_autocapture_tick(void)
         return;
     if (cdrom_load_in_progress()) return;          /* coherent moment only  */
     if (cp->busy && cp->busy()) return;
-    if (s_frame_count < s_autocap_next_ok) return; /* cooldown (x backoff)  */
+    if (s_frame_count < s_autocap_next_ok && now_ms < s_autocap_next_ok_ms)
+        return;                                    /* cooldown (x backoff)  */
 
     /* Snapshot coherent inputs for the player-shareable coverage manifest;
      * a worker writes/hashes it, then a later vblank applies futility/backoff.
      * Unchanged content with no new candidates backs off without a provider run. */
     s_autocap_last_fire = s_frame_count;
     s_autocap_next_ok = s_frame_count + AUTOCAP_COOLDOWN_FRAMES;
+    s_autocap_next_ok_ms = now_ms + AUTOCAP_COOLDOWN_MS;
     if (autocap_write_start()) {
         /* The queued job now owns this coherent evidence epoch. Start the next
          * one immediately so later periodic manifests contain only newly seen
