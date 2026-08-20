@@ -498,6 +498,17 @@ bool FullFunctionEmitter::emit_function(
     };
     /* load addr -> {dest reg, flush writeback (vs discard)} */
     std::map<uint32_t, std::pair<int, bool>> ldd_sites;
+    /* Load addrs whose dependent successor is an LWL/LWR merging into that
+     * same rt. LWL/LWR read their destination late enough to receive the
+     * forwarded result of an immediately preceding load, so hardware merges
+     * into the value the load just fetched -- they are NOT subject to the
+     * load delay. The merge base must therefore name psx_ldd_<addr>, and the
+     * ordinary writeback is suppressed because the merge already consumed it.
+     * Without this the load was deferred AND then discarded (the successor
+     * writes rt), so the fetched word vanished and the merge combined the
+     * stale pre-load register -- silently wrong code. Mirrors the CFG
+     * emitter's set_lwlr_merge_forward path. */
+    std::set<uint32_t> ldd_lwlr_forward;
     std::string unmodeled_load_delay;
     for (const auto& [la, lw_raw] : addr_to_raw) {
         int dest = simple_load_dest(lw_raw);
@@ -578,6 +589,16 @@ bool FullFunctionEmitter::emit_function(
             }
             continue;
         }
+        {
+            const uint32_t nop_ = nx->second >> 26;
+            const uint32_t nrt_ = (nx->second >> 16) & 31u;
+            if ((nop_ == 0x22u || nop_ == 0x26u) &&
+                nrt_ == static_cast<uint32_t>(dep_reg)) {
+                ldd_lwlr_forward.insert(la);
+                ldd_sites[la] = {dest, false};
+                continue;
+            }
+        }
         ldd_sites[la] = {dest, true};
     }
     if (!unmodeled_load_delay.empty()) {
@@ -613,6 +634,16 @@ bool FullFunctionEmitter::emit_function(
     #define out func_out
 
     for (auto& [la, s] : ldd_sites) {
+        if (ldd_lwlr_forward.count(la)) {
+            /* The LWL/LWR merge consumes the temp; no writeback and no
+               discard. Do NOT let the successor-writes-rt rule below turn
+               this into a discard. */
+            std::fprintf(stderr,
+                "[load-delay] modeled pair: load 0x%08X rt=%d succ 0x%08X "
+                "LWL/LWR-forward (func 0x%08X)\n",
+                la, s.first, la + 4, func.entry_addr);
+            continue;
+        }
         uint32_t nw = addr_to_raw.at(la + 4);
         if (insn_writes_gpr(nw, static_cast<uint32_t>(s.first))) {
             auto nsite = ldd_sites.find(la + 4);
@@ -675,6 +706,12 @@ bool FullFunctionEmitter::emit_function(
     auto emit_ldd_flush = [&](uint32_t succ_addr) {
         auto it = ldd_sites.find(succ_addr - 4);
         if (it == ldd_sites.end()) return;
+        if (ldd_lwlr_forward.count(it->first)) {
+            out += fmt::format(
+                "    /* psx_ldd_{:08X} forwarded into the LWL/LWR merge above */\n",
+                it->first);
+            return;
+        }
         if (it->second.second) {
             out += fmt::format("    cpu->gpr[{}] = psx_ldd_{:08X};  /* load-delay writeback */\n",
                                it->second.first, it->first);
@@ -1215,6 +1252,30 @@ bool FullFunctionEmitter::emit_function(
             out += fmt::format("    /* load-delay pair: gpr[{}] writeback deferred past 0x{:08X} */\n",
                                ldd_sites[addr].first, addr + 4);
             out += fmt::format("    {}\n", tr.c_code_deferred);
+        } else if (ldd_lwlr_forward.count(addr - 4u)) {
+            /* This LWL/LWR consumes the pending load from addr-4: point its
+             * merge base at the deferred temp. strict_translator emits that
+             * base as a single psx_old_rt initializer reading the GPR, which
+             * still holds the PRE-load value here. If that emitted shape ever
+             * changes, fail the build rather than silently emit a stale merge. */
+            const int fwd_rt = ldd_sites.at(addr - 4u).first;
+            const std::string from =
+                fmt::format("uint32_t psx_old_rt      = cpu->gpr[{}];", fwd_rt);
+            const std::string to =
+                fmt::format("uint32_t psx_old_rt      = psx_ldd_{:08X};", addr - 4u);
+            std::string fwd = tr.c_code;
+            const size_t at = fwd.find(from);
+            if (at == std::string::npos) {
+                throw std::runtime_error(fmt::format(
+                    "cannot forward pending load 0x{:08X} into the LWL/LWR at "
+                    "0x{:08X} (func 0x{:08X}): merge-base initializer not found",
+                    addr - 4u, addr, func.entry_addr));
+            }
+            fwd.replace(at, from.size(), to);
+            out += fmt::format(
+                "    /* LWL/LWR merge takes the forwarded psx_ldd_{:08X} */\n",
+                addr - 4u);
+            out += fmt::format("    {}\n", fwd);
         } else {
             out += fmt::format("    {}\n", tr.c_code);
         }
