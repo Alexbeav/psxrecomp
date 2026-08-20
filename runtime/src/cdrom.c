@@ -1520,6 +1520,54 @@ static void deliver_cdda_data_end(void) {
     fire_cdrom_irq();
 }
 
+/* CD-DA position reports (Setmode bit2), psx-spx "Command 03h - Play":
+ * INT1(stat, track, index, mm/amm, ss+80h/ass, sect/asect, peaklo, peakhi)
+ * on every 10th frame of absolute time — asect BCD 00/20/40/60h absolute,
+ * 10/30/50/70h track-relative with bit7 set on the seconds byte. Peak is
+ * the sector's per-channel peak (the L/R toggle is effectively stuck on
+ * PSX, kept 0), measured pre-mute — the controller keeps processing audio
+ * while muted. A report colliding with an unacknowledged IRQ is dropped;
+ * the controller does not queue reports. */
+static void deliver_cdda_report(const int16_t* pcm) {
+    int am, as, af;
+    lba_to_msf((int)cdda_lba, 150, &am, &as, &af);
+    if (af % 10) return;
+    if (irq_flag != 0) return;
+
+    int track_lba = (int)iso_track_start_lba(iso_handle, cdda_track);
+    int index = ((int)cdda_lba >= track_lba) ? 1 : 0;
+
+    int32_t peak = 0;
+    for (int i = 0; i < CDDA_SECTOR_FRAMES; ++i) {
+        int32_t v = pcm[i * 2];
+        if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    if (peak > 0x7FFF) peak = 0x7FFF;
+
+    response_clear();
+    response_push(stat_reg);
+    response_push(bin_to_bcd(cdda_track));
+    response_push(bin_to_bcd(index));
+    if ((af / 10) % 2 == 0) {
+        response_push(bin_to_bcd(am));
+        response_push(bin_to_bcd(as));
+        response_push(bin_to_bcd(af));
+    } else {
+        int rm, rs, rf;
+        int rel = (int)cdda_lba - track_lba;
+        if (rel < 0) rel = -rel;
+        lba_to_msf(rel, 0, &rm, &rs, &rf);
+        response_push(bin_to_bcd(rm));
+        response_push((uint8_t)(bin_to_bcd(rs) | 0x80u));
+        response_push(bin_to_bcd(rf));
+    }
+    response_push((uint8_t)(peak & 0xFF));
+    response_push((uint8_t)((peak >> 8) & 0x7F));
+    set_irq(CDIRQ_DATA_READY);
+    fire_cdrom_irq();
+}
+
 static int cdda_track_for_lba(uint32_t lba) {
     int count = iso_handle ? iso_track_count(iso_handle) : 0;
     int found = 0;
@@ -1590,6 +1638,8 @@ static void process_cdda_stream(uint32_t cycles) {
                 pcm[i] = (int16_t)u;
             }
         }
+
+        if (mode_reg & 0x04u) deliver_cdda_report(pcm);
 
         if (cd_muted) memset(pcm, 0, sizeof(pcm));
         cd_apply_decode_volume(pcm, CDDA_SECTOR_FRAMES);
