@@ -474,6 +474,7 @@ extern int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr);
 extern int psx_game_address_in_text(uint32_t addr);
 extern int psx_game_is_function_entry(uint32_t addr);  /* non-destructive entry test */
 extern int psx_game_text_native_ok(uint32_t addr);
+extern int psx_game_text_native_ok_full(uint32_t addr);
 #endif
 extern void psx_dispatch_call(CPUState* cpu, uint32_t addr, uint32_t return_addr);
 
@@ -3152,10 +3153,14 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         }
         pc = next_pc;
 #ifdef PSX_HAS_GAME_DISPATCH
-        /* Guest call returns advance without transferred set. Re-check the
-         * resume PC so a patched entry can hand its unchanged tail back to
-         * compiled code without adding probes to ordinary dirty overlay runs. */
-        if (clean_game_text_miss && interp_enter_compiled(cpu, pc)) {
+        /* Guest call returns advance without transferred set. A suffix-only
+         * continuation check is insufficient here: a split compiled piece can
+         * fall through by a direct host call into another piece without a new
+         * RAM-byte check. Require the continuation's complete emitted range to
+         * match before this straight-line handoff. Control-transfer handoffs
+         * retain suffix validation because they are explicit guest entries. */
+        if (clean_game_text_miss && psx_game_text_native_ok_full(pc) &&
+            interp_enter_compiled(cpu, pc)) {
             g_dirty_ram_native_handoffs++;
             g_dirty_ram_blocks_run++;
             if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;

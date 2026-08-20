@@ -1458,6 +1458,7 @@ int main(int argc, char** argv) {
         ds << "#include \"psx_runtime.h\"\n\n";
         ds << "extern void psx_check_interrupts_dispatch_entry(CPUState* cpu, uint32_t resume_pc);\n\n";
         ds << "extern int dirty_ram_text_native_ok_ranges_from(const uint32_t* lo_len_pairs, uint32_t count, uint32_t exec_pc);\n\n";
+        ds << "extern int dirty_ram_text_native_ok_ranges(const uint32_t* lo_len_pairs, uint32_t count);\n\n";
 
         // Forward declarations
         ds << "/* Forward declarations for all recompiled functions */\n";
@@ -1617,6 +1618,14 @@ int main(int argc, char** argv) {
         ds << "    if (!entry || entry->range_count == 0) return 0;\n";
         ds << "    return dirty_ram_text_native_ok_ranges_from(\n";
         ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count, addr);\n";
+        ds << "}\n\n";
+
+        ds << "/* Full-range validity for straight-line interpreter-to-AOT handoff. */\n";
+        ds << "int psx_game_text_native_ok_full(uint32_t addr) {\n";
+        ds << "    const PsxGameDispatchEntry* entry = psx_game_find_entry(addr);\n";
+        ds << "    if (!entry || entry->range_count == 0) return 0;\n";
+        ds << "    return dirty_ram_text_native_ok_ranges(\n";
+        ds << "        &k_psx_game_code_ranges[entry->range_index].lo, entry->range_count);\n";
         ds << "}\n\n";
 
         ds << "/* Maps PS1 address to compiled game code. Returns 1 if dispatched, 0 if unknown. */\n";
