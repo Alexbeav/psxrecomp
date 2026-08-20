@@ -11700,6 +11700,14 @@ static void handle_autocompile_status(int id, const char *json)
     extern uint64_t overlay_autocapture_last_insns_delta(void);
     extern void overlay_autocapture_get_futility(uint32_t *backoff,
                                                  uint32_t *futile);
+    extern const char *overlay_autocapture_gate_name(void);
+    extern uint64_t overlay_autocapture_ms_since_sample(void);
+    extern void overlay_autocapture_get_gates(int *capture_active,
+                                              int *write_state,
+                                              int *write_job_pending,
+                                              unsigned *write_job_attempts,
+                                              int *provider_pending,
+                                              unsigned *provider_attempts);
     (void)json;
     int      ac_en = 0;
     uint32_t trig = 0;
@@ -11707,15 +11715,33 @@ static void handle_autocompile_status(int id, const char *json)
     uint32_t backoff = 0, futile = 0;
     overlay_autocapture_get_status(&ac_en, &trig, &delta);
     overlay_autocapture_get_futility(&backoff, &futile);
+    int cap_active = 0, wstate = 0, wjob = 0, ppend = 0;
+    unsigned wattempts = 0, pattempts = 0;
+    overlay_autocapture_get_gates(&cap_active, &wstate, &wjob, &wattempts,
+                                  &ppend, &pattempts);
+    /* Pressure sampling is host-time paced, so a long dry stretch means a
+     * tick gate latched: autocapture is wedged and nothing new will compile
+     * until restart. Say so instead of looking merely idle. */
+    uint64_t dry_ms = overlay_autocapture_ms_since_sample();
+    int wedged = (ac_en && dry_ms > 30000ull);
     char comp[4096];
     autocompile_status_json(comp, sizeof(comp));
     send_fmt("{\"id\":%d,\"ok\":true,\"autocapture_enabled\":%d,"
              "\"triggers\":%u,\"futile_skips\":%u,\"backoff_mult\":%u,"
              "\"last_pressure\":%llu,"
-             "\"last_insns_pressure\":%llu,\"compile\":%s}\n",
+             "\"last_insns_pressure\":%llu,"
+             "\"autocapture\":{\"wedged\":%d,\"gate\":\"%s\","
+             "\"ms_since_sample\":%llu,\"capture_active\":%d,"
+             "\"write_state\":%d,\"write_job_pending\":%d,"
+             "\"write_job_attempts\":%u,\"provider_pending\":%d,"
+             "\"provider_attempts\":%u},"
+             "\"compile\":%s}\n",
              id, ac_en, trig, futile, backoff,
              (unsigned long long)delta,
-             (unsigned long long)overlay_autocapture_last_insns_delta(), comp);
+             (unsigned long long)overlay_autocapture_last_insns_delta(),
+             wedged, overlay_autocapture_gate_name(),
+             (unsigned long long)dry_ms, cap_active, wstate, wjob, wattempts,
+             ppend, pattempts, comp);
 }
 
 /* (sljit removed 2026-07-15: the sljit_status, sljit_async, and sljit_try TCP
