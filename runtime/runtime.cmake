@@ -332,6 +332,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_stick.c
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/kernel_patch_ranges.c
+    ${PSXRECOMP_ROOT}/runtime/src/guest_tty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
     ${PSXRECOMP_ROOT}/runtime/src/source_gpu_runtime.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c

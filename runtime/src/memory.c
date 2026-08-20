@@ -23,6 +23,7 @@
 #include "lockstep.h"
 #include "data_shards.h"
 #include "dirty_ram_interp.h"
+#include "guest_tty.h"
 #include "psx_cycles.h"
 #include "psx_icache.h"
 #include "starvation_ring.h"
