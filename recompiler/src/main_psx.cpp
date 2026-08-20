@@ -1502,9 +1502,13 @@ int main(int argc, char** argv) {
                 records.push_back({cont, cont, owner, 0, 0});
             }
         }
+        // Sort by PHYSICAL address. psx_game_find_entry() compares masked
+        // addresses so a KUSEG-executing guest still matches KSEG-normalized
+        // keys; the search invariant must therefore be the masked order too.
+        // Within one segment this is identical to sorting by the raw address.
         std::sort(records.begin(), records.end(),
                   [](const DispatchRecord& a, const DispatchRecord& b) {
-                      return a.addr < b.addr;
+                      return (a.addr & 0x1FFFFFFFu) < (b.addr & 0x1FFFFFFFu);
                   });
 
         // Attach the exact CFG instruction ranges from the manifest to every
@@ -1586,13 +1590,22 @@ int main(int argc, char** argv) {
         }
         ds << "};\n";
         ds << fmt::format("#define PSX_GAME_DISPATCH_COUNT {}u\n\n", records.size());
+        ds << "/* PS1 segments alias the same physical RAM. A game whose PS-X EXE\n";
+        ds << " * header carries KUSEG addresses (load address and entry PC without the\n";
+        ds << " * KSEG bit) executes with a KUSEG PC, while this table is keyed by the\n";
+        ds << " * recompiler's KSEG-normalized addresses. Comparing raw values made every\n";
+        ds << " * lookup fail for such a title: 0x0001xxxx is always below 0x8001xxxx, so\n";
+        ds << " * the search collapsed and returned no entry, silently routing all game\n";
+        ds << " * code to the interpreter. Compare the 29-bit physical address instead;\n";
+        ds << " * the table is sorted by the same masked key. */\n";
         ds << "static const PsxGameDispatchEntry* psx_game_find_entry(uint32_t addr) {\n";
+        ds << "    const uint32_t want = addr & 0x1FFFFFFFu;\n";
         ds << "    uint32_t lo = 0, hi = PSX_GAME_DISPATCH_COUNT;\n";
         ds << "    while (lo < hi) {\n";
         ds << "        uint32_t mid = lo + (hi - lo) / 2;\n";
-        ds << "        uint32_t key = k_psx_game_dispatch[mid].addr;\n";
-        ds << "        if (addr < key) hi = mid;\n";
-        ds << "        else if (addr > key) lo = mid + 1;\n";
+        ds << "        uint32_t key = k_psx_game_dispatch[mid].addr & 0x1FFFFFFFu;\n";
+        ds << "        if (want < key) hi = mid;\n";
+        ds << "        else if (want > key) lo = mid + 1;\n";
         ds << "        else return &k_psx_game_dispatch[mid];\n";
         ds << "    }\n";
         ds << "    return 0;\n";

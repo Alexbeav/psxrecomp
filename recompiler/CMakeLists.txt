@@ -400,6 +400,12 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
+            NAME kuseg_dispatch_lookup
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kuseg_dispatch_lookup.py
+                    --recompiler $<TARGET_FILE:psxrecomp-game>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
             NAME overlay_shim_compile_contract
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_shim_compile.py)
