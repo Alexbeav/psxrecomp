@@ -348,6 +348,12 @@ target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 if(BUILD_TESTING)
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
+    add_executable(guest_tty_test
+        ../runtime/tests/test_guest_tty.c
+        ../runtime/src/guest_tty.c)
+    target_include_directories(guest_tty_test PRIVATE ../runtime/include)
+    add_test(NAME guest_tty_test COMMAND guest_tty_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
