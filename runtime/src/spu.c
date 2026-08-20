@@ -907,8 +907,11 @@ static void key_on(uint32_t mask) {
         SpuVoice *v = &voices[i];
         memset(v, 0, sizeof(*v));
         v->active = 1;
-        v->cur_addr = ((uint32_t)voice_reg(i, 3) << 3) & (SPU_RAM_SIZE - 1u);
-        v->repeat_addr = ((uint32_t)voice_reg(i, 7) << 3) & (SPU_RAM_SIZE - 1u);
+        /* Address registers count 8-byte units but hardware ignores bit0
+         * — block fetches are 16-byte aligned (DuckStation Voice::KeyOn
+         * `adpcm_start_address & ~1u`; Beetle aligns identically). */
+        v->cur_addr = ((uint32_t)(voice_reg(i, 3) & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
+        v->repeat_addr = ((uint32_t)(voice_reg(i, 7) & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
         v->sample_idx = SPU_BLOCK_SAMPLES;
         /* Reset ADSR — KEYON starts envelope at 0 in Attack phase
          * (matches Beetle's PS_SPU::ResetEnvelope). */
@@ -1438,8 +1441,9 @@ void spu_write(uint32_t addr, uint32_t value) {
              * re-looping ~1400x/s, +11 dB over the oracle, clipping). */
             if (idx < (uint32_t)SPU_VOICE_COUNT * 8u && (idx & 7u) == 7u) {
                 int v = (int)(idx >> 3);
+                /* bit0 ignored (16-byte alignment) — same masking as KEYON. */
                 voices[v].repeat_addr =
-                    ((uint32_t)(uint16_t)value << 3) & (SPU_RAM_SIZE - 1u);
+                    ((uint32_t)((uint16_t)value & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
             }
 
             /* Volume registers feed the sweep envelopes: a direct write
