@@ -388,6 +388,12 @@ if(BUILD_TESTING)
     add_test(NAME spu_end_without_repeat_test
              COMMAND spu_end_without_repeat_test)
 
+    add_executable(spu_pitch_zero_test
+        tests/test_spu_pitch_zero.c)
+    target_include_directories(spu_pitch_zero_test PRIVATE include)
+    add_test(NAME spu_pitch_zero_test
+             COMMAND spu_pitch_zero_test)
+
     add_executable(spu_gaussian_test tests/test_spu_gaussian.c)
     target_include_directories(spu_gaussian_test PRIVATE include)
     add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
