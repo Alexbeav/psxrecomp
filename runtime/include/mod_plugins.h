@@ -35,6 +35,11 @@ void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
  * return 1 = handled (guest resumes at $ra), 0 = decline (original runs).
  * Wrap semantics via func_override_call_original(); optional residency
  * guard via expected_words (NULL/0 = unguarded).
+ *
+ * `id` may carry an optional ":label" suffix ("pkg.feature:aim") that names
+ * the override in the `func_override` TCP inventory; gating and manifest
+ * matching use only the part before the ':', so several overrides can sit
+ * under one [[plugin]] entry and still read apart in diagnostics.
  */
 typedef int (*PSXModFunctionOverrideFn)(struct CPUState* cpu);
 int psx_mod_register_function_override(const char* id, uint32_t address,

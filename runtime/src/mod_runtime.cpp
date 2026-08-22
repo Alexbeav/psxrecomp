@@ -89,9 +89,12 @@ std::vector<FunctionEntryPlugin>& function_entry_plugins() {
 
 /* Function overrides queue here at constructor time and are ARMED into the
  * func_override tier only for plugins the resolved package plan selects —
- * the same gating as vblank/activation callbacks. */
+ * the same gating as vblank/activation callbacks. `id` is the full
+ * registered name (may carry a ":label" suffix, kept for diagnostics);
+ * `plugin` is the manifest-facing part gating matches on. */
 struct FunctionOverridePlugin {
     std::string id;
+    std::string plugin;
     uint32_t address = 0;
     PSXModFunctionOverrideFn fn = nullptr;
     uint32_t guard[FO_MAX_GUARD_WORDS] = {0, 0, 0, 0};
@@ -1237,7 +1240,7 @@ extern "C" void mod_runtime_activate_plugins(void) {
         const bool selected = std::any_of(
             s.plan.plugins.begin(), s.plan.plugins.end(),
             [&](const ModResolution::Plugin& plugin) {
-                return plugin.id == pending.id;
+                return plugin.id == pending.plugin;
             });
         if (!selected) continue;
         const int rc =
@@ -1350,6 +1353,15 @@ extern "C" int psx_mod_register_function_override(
     if (!id || !*id || !address || !fn) return 0;
     if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return 0;
     if (n_words > 0 && !expected_words) return 0;
+    /* An optional ":label" suffix names this override in diagnostics (the
+     * `func_override` TCP command) without multiplying manifest plugin ids —
+     * gating and resolver availability use only the part before the ':'.
+     * "pkg.feature:aim" and "pkg.feature:fire" are two overrides under the
+     * one manifest plugin "pkg.feature". */
+    const char* colon = strchr(id, ':');
+    const std::string plugin_id = colon ? std::string(id, colon - id)
+                                        : std::string(id);
+    if (plugin_id.empty() || (colon && !colon[1])) return 0;
     auto& plugins = function_override_plugins();
     const auto duplicate = std::find_if(
         plugins.begin(), plugins.end(),
@@ -1359,14 +1371,15 @@ extern "C" int psx_mod_register_function_override(
     if (duplicate != plugins.end()) return 0;
     FunctionOverridePlugin plugin;
     plugin.id = id;
+    plugin.plugin = plugin_id;
     plugin.address = address;
     plugin.fn = fn;
     for (int i = 0; i < n_words; ++i) plugin.guard[i] = expected_words[i];
     plugin.n_guard = n_words;
     plugins.push_back(plugin);
-    /* Mark the id available to the package resolver so a manifest can gate
-     * an override-only plugin (multiple overrides may share one id). */
-    mod_register_function_override_marker(id);
+    /* Mark the plugin id available to the package resolver so a manifest can
+     * gate an override-only plugin (multiple overrides may share one). */
+    mod_register_function_override_marker(plugin_id);
     return 1;
 }
 
