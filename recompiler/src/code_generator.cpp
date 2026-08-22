@@ -1633,6 +1633,16 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     }
 
     PSXRecomp::append_pgxp_hooks(instr, code);
+    /* The trailing disassembly comment must not land ON a preprocessor
+     * directive line -- it would be swallowed as extra tokens and dropped,
+     * costing the annotation and emitting -Wendif-labels noise. Reachable
+     * whenever the PGXP hook did NOT get appended after a block-cycles stall
+     * block, e.g. `mfhi $zero` / `mflo $zero` (append_pgxp_hooks returns early
+     * for rd==0, leaving the emission ending on a bare #endif). Same hazard
+     * class as PR #171. */
+    if (!comment.empty() &&
+        PSXRecomp::emission_ends_on_preprocessor_directive(code))
+        return config_.indent + code + "\n" + config_.indent + comment;
     return config_.indent + code + comment;
 }
 
