@@ -80,6 +80,7 @@ static void advance_devices(uint32_t c) {
     dma_advance(c);
     timers_advance(c);
     interrupts_advance_cycles(c);
+    psx_spu_sample_event_service();
 }
 
 /* ===== Event-deadline device servicing (production fast path) =================
@@ -139,6 +140,7 @@ static uint32_t devices_cycles_to_next_internal_event(void) {
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
     uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
+    uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
     if (best == 0) best = 1;    /* due/overdue: process within one cycle */
     return best;
 }
