@@ -274,7 +274,24 @@ target_include_directories(l2_structural_test PRIVATE
 )
 target_link_libraries(l2_structural_test PRIVATE fmt rabbitizer)
 
+# Emitter directive-line guard — pins the predicate that keeps same-line
+# appenders off preprocessor-directive lines (the PR #171 hazard class).
+add_executable(emitter_directive_line_test
+    tests/emitter_directive_line_test.cpp
+    src/pgxp_hook_emitter.cpp
+)
+target_include_directories(emitter_directive_line_test PRIVATE
+    include
+    src
+    lib/rabbitizer/include
+    lib/rabbitizer/cplusplus/include
+    lib/fmt/include
+)
+target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
+
 if(BUILD_TESTING)
+    add_test(NAME emitter_directive_line_test
+             COMMAND emitter_directive_line_test)
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
