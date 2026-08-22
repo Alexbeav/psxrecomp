@@ -2,9 +2,11 @@
  * See savestate.h.
  *
  * Wraps boot_state.c's full-machine serializer. Requests are staged by the SDL
- * key handler / debug server and executed by savestate_poll at a block-leader
- * boundary (in_exception == 0), where cpu->pc is a valid resume PC. A load
- * restores the full machine then unwinds to the scheduler and re-dispatches. */
+ * key handler / debug server and executed by savestate_poll. In HLE scheduler
+ * mode, saves defer until psx_scheduler_run's flat pre-dispatch boundary; a
+ * merely dispatchable interrupt-resume hint is not enough because its host CPS
+ * continuation cannot be serialized. A load restores the full machine then
+ * unwinds to the scheduler and re-dispatches. */
 
 #include "savestate.h"
 #include "boot_state.h"
@@ -687,17 +689,26 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int slot = s_save_pending;
         char path[600];
         uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
-        if (!savestate_resume_pc_ok(pc)) {
-            /* FMV/present edges often poll with hint=0; wait briefly for a
-             * sticky BB / IRQ latch rather than writing pc=0 poison. */
+        const int needs_scheduler_boundary =
+            psx_hle_scheduler_enabled() &&
+            !psx_scheduler_snapshot_boundary_active();
+        if (needs_scheduler_boundary || !savestate_resume_pc_ok(pc)) {
+            /* A dispatchable hint can still belong to a suspended host call
+             * chain rather than the live CPU register file. In HLE mode wait
+             * for the scheduler's flat pre-dispatch boundary. FMV/present edges
+             * with hint=0 use the same bounded deferral. */
             const double now = savestate_mono_ms();
             if (s_save_defer_slot != slot) {
                 s_save_defer_slot = slot;
                 s_save_defer_t0 = now;
                 fprintf(stderr,
-                        "savestate: deferring slot %d — no safe resume PC "
-                        "(hint=0x%08X)\n",
-                        slot, (unsigned)resume_pc);
+                        "savestate: deferring slot %d — %s "
+                        "(hint=0x%08X resolved=0x%08X)\n",
+                        slot,
+                        needs_scheduler_boundary
+                            ? "waiting for scheduler snapshot boundary"
+                            : "no safe resume PC",
+                        (unsigned)resume_pc, (unsigned)pc);
             }
             if (now - s_save_defer_t0 < 2000.0)
                 return;
@@ -706,9 +717,13 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_last_save_pc = 0;
             s_save_failed = 1;
             fprintf(stderr,
-                    "savestate: SAVE FAILED slot %d — no safe resume PC "
-                    "(hint=0x%08X)\n",
-                    slot, (unsigned)resume_pc);
+                    "savestate: SAVE FAILED slot %d — %s "
+                    "(hint=0x%08X resolved=0x%08X)\n",
+                    slot,
+                    needs_scheduler_boundary
+                        ? "no scheduler snapshot boundary"
+                        : "no safe resume PC",
+                    (unsigned)resume_pc, (unsigned)pc);
             psx_frontend_on_savestate_notify(0, slot, 0);
         } else {
             s_save_pending = -1;

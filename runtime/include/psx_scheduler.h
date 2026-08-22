@@ -103,6 +103,13 @@ void psx_clear_return_to_lobby(void);
  * resume (see below) for the first post-resume frame. */
 void psx_scheduler_resume_at(uint32_t resume_pc);
 
+/* True only while psx_scheduler_run is between restoring/materializing the
+ * selected guest context and entering psx_dispatch. At this point there is no
+ * nested CPS/native host continuation beneath the guest PC, so a disk
+ * savestate can serialize CPUState without mixing it with a stale interrupt
+ * resume latch. User saves in HLE mode defer until this boundary. */
+int psx_scheduler_snapshot_boundary_active(void);
+
 /* After resume_at, dispatch is top-level — there is no abandoned mid-block
  * native chain under the resume PC. Sentinel same-thread RFE must not publish
  * pc=0 / "continue live chain" (that is GUEST_EXIT). Active until the first

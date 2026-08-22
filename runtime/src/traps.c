@@ -15,6 +15,7 @@
 #include <setjmp.h>
 #include "psx_fiber.h"   /* cross-platform fibers (Win32 fibers / POSIX ucontext) */
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
+#include "savestate.h"   /* scheduler-top coherent disk save/load boundary */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
@@ -45,6 +46,16 @@ psx_sched_escape_t g_sched_escape;
  * latched at the last YIELD_TO_TCB, restored if the target's top-level dispatch
  * returns. Zero = no pending return target (top-level pc==0 is a real exit). */
 static uint32_t g_sched_return_tcb = 0;
+
+/* Disk savestates cannot serialize a suspended host CPS/native call chain. Set
+ * only at the scheduler's flat dispatch boundary, after CPUState has been
+ * materialized and before psx_dispatch creates a new host continuation. */
+static int g_sched_snapshot_boundary = 0;
+
+int psx_scheduler_snapshot_boundary_active(void)
+{
+    return g_sched_snapshot_boundary;
+}
 
 /* sched_escape_ring (plan step 8) — always-on record of every structured
  * scheduler escape, queryable via the `sched_escape_ring` debug command. This
@@ -816,6 +827,9 @@ void psx_scheduler_run(CPUState* cpu)
              * with in_exception==0), so interrupt state needs no fixup here. */
             extern void overlay_loader_shadow_scheduler_escape_fixup(void);
             overlay_loader_shadow_scheduler_escape_fixup();
+            /* A load/yield can longjmp out of the scheduler-top savestate poll.
+             * The old host boundary is gone, so its latch must not survive. */
+            g_sched_snapshot_boundary = 0;
             g_psx_dispatch_depth = 0;
             g_psx_call_bail      = 0;
             /* Soft-exit / yield longjmps out of vblank inside
@@ -885,6 +899,19 @@ void psx_scheduler_run(CPUState* cpu)
         if (from_top_resume) {
             extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
             psx_irq_arm_compiled_resume_pc(run_pc);
+        }
+        /* User save requests can arrive while psx_check_interrupts is nested
+         * inside a CPS/native dispatch. That point has a dispatchable resume
+         * hint but not a serializable host continuation (MGS slots 0/1/3/4/5
+         * captured mixed CPU/TCB PCs and restored without scheduler liveness).
+         * Service disk save/load here instead: CPUState is fully materialized,
+         * dispatch/call-unit depth is flat, and no host guest-call chain exists.
+         * Near-free unless a request is pending. A successful load longjmps to
+         * this loop; the landing fixup above clears the boundary latch. */
+        if (savestate_pending()) {
+            g_sched_snapshot_boundary = 1;
+            savestate_poll(cpu, run_pc);
+            g_sched_snapshot_boundary = 0;
         }
         psx_dispatch(cpu, run_pc);
 

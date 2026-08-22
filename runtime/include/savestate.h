@@ -78,7 +78,8 @@ int savestate_read_thumb(int slot, uint32_t* out_argb,
 int savestate_slot_compatible(int slot, char* reason, size_t reason_cap);
 
 /* Stage a save/load of slot [0..SAVESTATE_SLOTS-1]. Executed at the next safe
- * boundary by savestate_poll (called every block from psx_check_interrupts).
+ * boundary by savestate_poll. HLE saves serialize at the scheduler's flat
+ * pre-dispatch boundary; loads may also unwind there from an interrupt poll.
  * Safe to call from the SDL key handler or a debug-server command.
  * Returns 1 if staged, 0 if refused (not configured, bad slot, LLE load, or
  * netplay guest — only the match host may initiate user save/load). */

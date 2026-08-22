@@ -499,6 +499,7 @@ if(BUILD_TESTING)
                 overlay_init_guard
                 sdl3_main_single_include
                 spu_sample_scheduler_default
+                savestate_capture_boundary_guards
                 vk_build_default
                 vk_color_self_barrier
                 vk_command_buffer_batching
