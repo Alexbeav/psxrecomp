@@ -890,8 +890,16 @@ static int16_t voice_next_sample(int idx) {
         v->active = 0;
     }
 
+    /* Pitch 0 means the sample counter does not advance: the voice holds its
+     * current sample. It does NOT mean "play at 1.0x" — coercing it to 0x1000
+     * makes a parked voice stream forward through SPU RAM at full rate,
+     * decoding whatever follows as ADPCM. Alien Resurrection (SLUS-00633)
+     * parks its two ambience voices that way when the pause menu opens: pitch
+     * 0, envelope frozen mid-sustain, no key-off. Coerced, they ran ~0x790
+     * bytes past their own repeat address and turned the menu into a
+     * continuous mid-band buzz. DuckStation and Beetle both just add the
+     * pitch to the counter, so zero holds. */
     uint32_t pitch = voice_reg(idx, 2) & 0x3FFFu;
-    if (pitch == 0) pitch = 0x1000u;
     v->phase += pitch;
     while (v->phase >= 0x1000u) {
         v->phase -= 0x1000u;
