@@ -25,6 +25,7 @@
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
+#include "controller_port_route.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -350,6 +351,10 @@ struct PlayerInput {
     bool    rumble_warned = false;
 };
 static PlayerInput g_players[PSX_MAX_PLAYERS];
+/* Host-side routing permutation. False: host P1->console port 1. True: host
+ * P1->console port 2 (and host P2->console port 1). It deliberately is not
+ * serialized in guest save states: this models physically moving plugs. */
+static bool g_controller_ports_swapped = false;
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
 /* Set when [controller] lock_mode pins every seat to digital — blocks the
@@ -3867,10 +3872,12 @@ static void update_controller_rumble(void) {
         const char* e = std::getenv("PSX_RUMBLE_TRACE");
         return e && e[0] && e[0] != '0';
     }();
-    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
-        PlayerInput& p = g_players[s];
+    for (int host = 0; host < PSX_MAX_PLAYERS; host++) {
+        const int sio_slot = controller_port_route_sio_for_host(
+            host, g_controller_ports_swapped ? 1 : 0);
+        PlayerInput& p = g_players[host];
         uint8_t small = 0, large = 0;
-        sio_get_pad_rumble(s, &small, &large);
+        sio_get_pad_rumble(sio_slot, &small, &large);
         if (!p.handle) {
             p.rumble_small = small;
             p.rumble_large = large;
@@ -3895,14 +3902,14 @@ static void update_controller_rumble(void) {
             if (rc != 0 && !p.rumble_warned) {
                 std::fprintf(stderr,
                     "psxrecomp runtime: controller for slot %d rejected rumble: %s\n",
-                    s + 1, SDL_GetError());
+                    host + 1, SDL_GetError());
                 p.rumble_warned = true;
             }
         }
         if (trace && changed) {
             std::fprintf(stdout,
-                "psxrecomp rumble: slot=%d small=%u large=%u\n",
-                s + 1, (unsigned)small, (unsigned)large);
+                "psxrecomp rumble: host=%d sio_port=%d small=%u large=%u\n",
+                host + 1, sio_slot + 1, (unsigned)small, (unsigned)large);
         }
         p.rumble_small = small;
         p.rumble_large = large;
@@ -3938,6 +3945,38 @@ static int effective_player_mode_for_sio(const PlayerInput& p, int sio_slot) {
     return effective_player_mode(p);
 }
 
+static bool dev_any_input_enabled();
+
+static int host_player_for_sio_slot(int sio_slot) {
+    return controller_port_route_host_for_sio(
+        sio_slot, g_controller_ports_swapped ? 1 : 0);
+}
+
+static int controller_port_swap_available(void) {
+    return !psx_netplay_active() && !sio_get_multitap() &&
+           g_offline_pad_count <= 2;
+}
+
+/* Reassert console-visible connection and controller type after hotplug or a
+ * routing change. The host device array is never reordered: every consumer
+ * maps through the same permutation, including rumble and dev-any input. */
+static void refresh_sio_port_routes(void) {
+    if (psx_netplay_active())
+        return;
+    for (int sio_slot = 0; sio_slot < PSX_MAX_PLAYERS; sio_slot++) {
+        const int host = host_player_for_sio_slot(sio_slot);
+        PlayerInput& p = g_players[host];
+        const bool dev_host_p1 = dev_any_input_enabled() && host == 0;
+        const int mode = effective_player_mode_for_sio(p, sio_slot);
+        sio_set_pad_connected(sio_slot,
+                              (p.kind != 0 || dev_host_p1) ? 1 : 0);
+        sio_set_pad_analog(sio_slot, pad_mode_boot_analog(mode),
+                           0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_config_capable(
+            sio_slot, mode != PSXRecompV4::PAD_MODE_DIGITAL);
+    }
+}
+
 /* Open/close SDL handles so they match g_players, and (re)assert each slot's
  * PSX connection + pad type. Safe to call repeatedly (hotplug, boot).
  * While delay-sync netplay is active, SIO connection/type are owned by
@@ -3948,17 +3987,9 @@ static void refresh_player_devices(void) {
         PlayerInput& p = g_players[s];
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
         else open_player(p, s);
-        if (netplay) continue;
-        const int mode = effective_player_mode_for_sio(p, s);
-        sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
-        /* DIGITAL mode == a plain digital controller that ignores the DualShock
-         * config-mode commands (real SCPH-1080 behaviour); ANALOG/HYBRID == a
-         * config-capable DualShock. A digital pad that wrongly answered 0x43
-         * sent Tomba 2's pad driver down the config path -> phantom 0x00 reads.
-         * Multitap taps are always digital (see sio_pad_on_multitap). */
-        sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
+    if (!netplay)
+        refresh_sio_port_routes();
 }
 
 /* Parse a [controller] device string into a player slot:
@@ -4503,11 +4534,12 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     out->analog = 0;
     out->connected = 0;
 
-    PlayerInput& p = g_players[s];
-    const int  player  = s + 1;             /* keybinds.ini section (1..5) */
+    const int host = host_player_for_sio_slot(s);
+    PlayerInput& p = g_players[host];
+    const int  player  = host + 1;          /* keybinds.ini section (1..5) */
     /* Opt-in dev merge: P1 is driven by the keyboard AND every connected
      * controller (PSX_DEV_INPUT=1). Default is strict per-slot routing. */
-    const bool dev_here = (dev_any_input_enabled() && s == 0);
+    const bool dev_here = (dev_any_input_enabled() && host == 0);
     if (p.kind == 0 && !dev_here) return 0;  /* no device in this port */
 
     /* Resolve the pad type this frame FIRST — the effective analog/digital
@@ -5095,6 +5127,8 @@ static void sample_pad_into_sio(int override) {
     }
     int n = g_offline_pad_count;
     if (n < 1) n = 1;
+    /* A one-player title still needs console port 2 sampled after a live swap. */
+    if (g_controller_ports_swapped && n < 2) n = 2;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
     const uint32_t consumer_sim =
         psx_start_consumer_enabled() ? psx_start_consumer_offline_frame() : 0u;
@@ -5112,7 +5146,7 @@ static void sample_pad_into_sio(int override) {
         if (psx_start_consumer_enabled())
             psx_start_consumer_note(s, consumer_sim, pad.buttons);
         if (psx_start_bisect_enabled() && s == 0) {
-            const int sdl = netplay_sdl_start_held(s);
+            const int sdl = netplay_sdl_start_held(host_player_for_sio_slot(s));
             const int cap = ((uint16_t)(~pad.buttons) & 0x0008u) != 0;
             const int sio =
                 ((uint16_t)(~sio_get_pad_buttons_slot(s)) & 0x0008u) != 0;
@@ -5528,6 +5562,56 @@ static int savestate_menu_open = 0;
 static int savestate_menu_slot = 0;
 static int savestate_menu_ignore_toggle_release = 0;
 static SDL_Keycode savestate_menu_open_key = 0;
+static int runtime_settings_menu_open = 0;
+static SDL_Keycode runtime_settings_menu_open_key = 0;
+
+static void runtime_settings_menu_sync_overlay(void) {
+    psx_savestate_menu_set_runtime_settings(
+        runtime_settings_menu_open, g_controller_ports_swapped ? 1 : 0,
+        controller_port_swap_available());
+}
+
+static void runtime_settings_menu_close(void) {
+    runtime_settings_menu_open = 0;
+    runtime_settings_menu_sync_overlay();
+    host_osd_push("Runtime settings closed", 800);
+}
+
+static void controller_port_route_toggle(void) {
+    if (!controller_port_swap_available()) {
+        host_osd_push(psx_netplay_active()
+                          ? "Controller swap is unavailable during netplay"
+                          : "Controller swap is unavailable with multitap",
+                      1800);
+        runtime_settings_menu_sync_overlay();
+        return;
+    }
+    g_controller_ports_swapped = !g_controller_ports_swapped;
+    refresh_sio_port_routes();
+    runtime_settings_menu_sync_overlay();
+    host_osd_push(g_controller_ports_swapped
+                      ? "Controller 1 moved to console port 2"
+                      : "Controller 1 moved to console port 1",
+                  1800);
+    /* A physical unplug/replug cannot carry a held button across ports. */
+    savestate_input_guard_arm();
+}
+
+static void runtime_settings_menu_toggle(SDL_Keycode opened_by_key) {
+    if (psx_netplay_active()) {
+        host_osd_push("Runtime settings are unavailable during netplay", 1800);
+        return;
+    }
+    if (psx_rewind_is_open() || savestate_menu_open)
+        return;
+    if (runtime_settings_menu_open) {
+        runtime_settings_menu_close();
+        return;
+    }
+    runtime_settings_menu_open = 1;
+    runtime_settings_menu_open_key = opened_by_key;
+    runtime_settings_menu_sync_overlay();
+}
 
 static void savestate_menu_sync_overlay(void) {
     psx_savestate_menu_set_state(savestate_menu_open, savestate_menu_slot);
@@ -5540,7 +5624,7 @@ static void savestate_menu_close(void) {
 }
 
 static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
-    if (psx_rewind_is_open())
+    if (psx_rewind_is_open() || runtime_settings_menu_open)
         return;
     if (savestate_menu_open) {
         savestate_menu_close();
@@ -5550,6 +5634,46 @@ static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
     savestate_menu_ignore_toggle_release = 1;
     savestate_menu_open_key = opened_by_key;
     savestate_menu_sync_overlay();
+}
+
+static void runtime_settings_menu_handle_key(SDL_Keycode key, int mod,
+                                             int repeat) {
+    if (repeat)
+        return;
+    if (runtime_settings_menu_open_key && key == runtime_settings_menu_open_key)
+        return;
+    if (host_keymap_match(HOST_KEYMAP_RUNTIME_MENU, (int)key, mod) ||
+        key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
+        runtime_settings_menu_close();
+    } else if (host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                 (int)key, mod) ||
+               key == SDLK_LEFT || key == SDLK_RIGHT ||
+               key == SDLK_RETURN || key == SDLK_SPACE) {
+        controller_port_route_toggle();
+    }
+}
+
+static void runtime_settings_menu_poll_nav(void) {
+    static int prev_toggle;
+    static int prev_cancel;
+    int toggle = 0;
+    int cancel = 0;
+    SDL_GameController *h = g_players[0].handle;
+    if (h) {
+        toggle = SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A) ||
+                 SDL_GameControllerGetButton(h,
+                                             SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+                 SDL_GameControllerGetButton(h,
+                                             SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+        cancel = SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B) ||
+                 SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK);
+    }
+    if (toggle && !prev_toggle)
+        controller_port_route_toggle();
+    if (cancel && !prev_cancel)
+        runtime_settings_menu_close();
+    prev_toggle = toggle;
+    prev_cancel = cancel;
 }
 
 static void savestate_menu_move(int delta) {
@@ -5858,6 +5982,50 @@ static void savestate_menu_host_pause_loop(void) {
     savestate_input_guard_arm();
 }
 
+/* Freeze guest at the VBlank host boundary while runtime settings are open.
+ * Applying the routing permutation here means no guest instruction or SIO byte
+ * transfer runs concurrently with the change. */
+static void runtime_settings_menu_host_pause_loop(void) {
+    while (runtime_settings_menu_open) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const Uint16 mod = ev.key.keysym.mod;
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                runtime_settings_menu_handle_key(key, (int)mod, repeat);
+            } else if (ev.type == SDL_KEYUP) {
+#if defined(PSX_SDL3)
+                const SDL_Keycode key = ev.key.key;
+#else
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (runtime_settings_menu_open_key == key)
+                    runtime_settings_menu_open_key = 0;
+            }
+        }
+        runtime_settings_menu_poll_nav();
+        rewind_pause_present();
+        SDL_Delay(8);
+    }
+    savestate_input_guard_arm();
+}
+
 /* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
  * is destroyed — episode snap load longjmps via psx_netplay_rb_flush_resume and
  * must not cross non-trivial destructors (UB / guest crash). */
@@ -6067,6 +6235,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                            (int)key, (int)mod)) {
                     savestate_menu_toggle(key);
                 }
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_RUNTIME_MENU,
+                                           (int)key, (int)mod)) {
+                    runtime_settings_menu_toggle(key);
+                }
+                else if (!key_repeat &&
+                         host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                           (int)key, (int)mod)) {
+                    controller_port_route_toggle();
+                }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
@@ -6120,6 +6298,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         psx_rewind_present_tick((uint32_t)SDL_GetTicks());
         if (savestate_menu_open)
             savestate_menu_host_pause_loop();
+        if (runtime_settings_menu_open)
+            runtime_settings_menu_host_pause_loop();
         if (psx_rewind_is_open())
             rewind_host_pause_loop();
     }

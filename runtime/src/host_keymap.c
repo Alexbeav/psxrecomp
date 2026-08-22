@@ -97,6 +97,11 @@ static void apply_defaults(void) {
 #endif
     if (s_actions[HOST_KEYMAP_SAVE_STATE_MENU].count == 0)
         add_bind(HOST_KEYMAP_SAVE_STATE_MENU, (int)SDLK_F7, (int)SDL_SCANCODE_F7, 0);
+    if (s_actions[HOST_KEYMAP_RUNTIME_MENU].count == 0)
+        add_bind(HOST_KEYMAP_RUNTIME_MENU, (int)SDLK_F1, (int)SDL_SCANCODE_F1, 0);
+    if (s_actions[HOST_KEYMAP_SWAP_CONTROLLER_PORTS].count == 0)
+        add_bind(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, (int)SDLK_F6,
+                 (int)SDL_SCANCODE_F6, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -154,6 +159,9 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "DisplayPerf")) return HOST_KEYMAP_DISPLAY_PERF;
     if (ieq(name, "Rewind")) return HOST_KEYMAP_REWIND;
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
+    if (ieq(name, "RuntimeMenu")) return HOST_KEYMAP_RUNTIME_MENU;
+    if (ieq(name, "SwapControllerPorts"))
+        return HOST_KEYMAP_SWAP_CONTROLLER_PORTS;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 
@@ -296,6 +304,10 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
 #endif
         if (action == HOST_KEYMAP_SAVE_STATE_MENU)
             snprintf(out, cap, "F7");
+        else if (action == HOST_KEYMAP_RUNTIME_MENU)
+            snprintf(out, cap, "F1");
+        else if (action == HOST_KEYMAP_SWAP_CONTROLLER_PORTS)
+            snprintf(out, cap, "F6");
         return out;
     }
     b = &a->binds[0];

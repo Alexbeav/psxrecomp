@@ -39,6 +39,11 @@ int main(int argc, char **argv) {
           "default volume down is keypad minus");
     check(host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)SDLK_f, 0),
           "default display perf is F");
+    check(host_keymap_match(HOST_KEYMAP_RUNTIME_MENU, (int)SDLK_F1, 0),
+          "default runtime menu is F1");
+    check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                            (int)SDLK_F6, 0),
+          "default controller port swap is F6");
 
     f = fopen(cfg, "wb");
     check(f != NULL, "create temporary config.ini");
@@ -48,7 +53,9 @@ int main(int argc, char **argv) {
           "Turbo = Q\n"
           "VolumeUp = Up\n"
           "VolumeDown = Down\n"
-          "DisplayPerf = F10\n",
+          "DisplayPerf = F10\n"
+          "RuntimeMenu = F2\n"
+          "SwapControllerPorts = F5\n",
           f);
     fclose(f);
 
@@ -73,6 +80,11 @@ int main(int argc, char **argv) {
           "display perf rebind disables F fallback");
     check(host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)SDLK_F10, 0),
           "display perf rebind uses F10");
+    check(host_keymap_match(HOST_KEYMAP_RUNTIME_MENU, (int)SDLK_F2, 0),
+          "runtime menu rebind uses F2");
+    check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                            (int)SDLK_F5, 0),
+          "controller port swap rebind uses F5");
 
     remove(cfg);
     if (failures) {
