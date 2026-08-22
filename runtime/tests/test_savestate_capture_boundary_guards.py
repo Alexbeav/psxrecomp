@@ -44,11 +44,18 @@ def main() -> int:
     if landing_clear >= traps.index("switch (g_sched_escape.reason)", landing):
         raise AssertionError("structured-escape landing must clear boundary latch")
 
+    require(savestate, "psx_hle_scheduler_enabled()", "HLE save-side gate")
     require(
         savestate,
-        "psx_hle_scheduler_enabled() &&\n"
-        "            !psx_scheduler_snapshot_boundary_active()",
-        "HLE save-side boundary gate",
+        "!psx_scheduler_snapshot_boundary_active()",
+        "scheduler-boundary save deferral",
+    )
+    if traps.count("g_sched_snapshot_boundary = 1;") != 1:
+        raise AssertionError("exactly one scheduler snapshot boundary may be opened")
+    require(
+        traps,
+        "savestate_pending() && psx_is_dispatchable(run_pc)",
+        "dispatchable scheduler resume guard",
     )
     gate = savestate.index("if (needs_scheduler_boundary ||")
     write = savestate.index("boot_state_save(&snap")

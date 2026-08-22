@@ -908,7 +908,7 @@ void psx_scheduler_run(CPUState* cpu)
          * dispatch/call-unit depth is flat, and no host guest-call chain exists.
          * Near-free unless a request is pending. A successful load longjmps to
          * this loop; the landing fixup above clears the boundary latch. */
-        if (savestate_pending()) {
+        if (savestate_pending() && psx_is_dispatchable(run_pc)) {
             g_sched_snapshot_boundary = 1;
             savestate_poll(cpu, run_pc);
             g_sched_snapshot_boundary = 0;
