@@ -1666,12 +1666,9 @@ static void mc_process_byte(uint8_t tx_byte) {
             mc_state = MC_ID1;
             sio_rx_data = mc_flag;
             sio_stat |= SIO_STAT_ACK;
-            /* no$psx: FLAG byte is 0x08 only after newly-inserted/changed-battery
-             * card; cleared on first read or write. Without this clear, the BIOS
-             * sees 0x08 forever, treats every read as a fresh-card probe, and
-             * resets the chain counter (v0=-1 + 0x7520=1 path in BFC152E0).
-             * Beetle's card sim returns 0x00 in steady-state — match that. */
-            mc_flag = 0x00;
+            /* FLAG.3 survives reads and ID queries.  Original cards clear it
+             * only after a write; BIOS card initialization normally performs
+             * a dummy write to sector 003Fh for exactly that purpose. */
         } else {
             mc_state = MC_IDLE;
             sio_rx_data = 0xFF;
