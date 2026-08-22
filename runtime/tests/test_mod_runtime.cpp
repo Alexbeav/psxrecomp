@@ -1,6 +1,9 @@
 #include "mod_runtime.h"
 #include "mod_packages.h"
+#include "mod_plugins.h"
 #include "psx_sha256.h"
+
+#include "gpu.h"
 
 #include <array>
 #include <cstdint>
@@ -57,6 +60,15 @@ extern "C" uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t, uint32_t) {
     return 0;
 }
 extern "C" int psx_ws_x_margin(void) { return 0; }
+
+/* Stand-in for the GPU's display geometry. psx_mod_display_width/height must
+ * report exactly what the presenter reports -- a plugin drawing an overlay
+ * uses this as the screen edge, so a substituted or rounded value would put
+ * HUD elements in the wrong place. */
+static GpuDisplayInfo g_test_display;
+extern "C" void gpu_get_display_info(GpuDisplayInfo* out) {
+    *out = g_test_display;
+}
 
 extern "C" void dirty_ram_mark_executable_range(uint32_t, uint32_t) {}
 extern "C" int fntrace_is_game_started(void) { return 1; }
@@ -459,6 +471,25 @@ int main() {
               bad_sparse_disc[24 + 22] == 0x33,
           "a failed sparse disc guard must leave every write in the sector "
           "untouched");
+
+    /*
+     * Display geometry passthrough. Ape Escape scans out 384 while its mode
+     * width is 368, which is precisely why a plugin cannot derive this from
+     * GPUSTAT: the horizontal range that makes the difference is write-only.
+     */
+    g_test_display.width = 384;
+    g_test_display.height = 240;
+    check(psx_mod_display_width() == 384u,
+          "psx_mod_display_width must report the presenter's visible width, "
+          "not the coarse mode width");
+    check(psx_mod_display_height() == 240u,
+          "psx_mod_display_height must report the presenter's visible height");
+
+    g_test_display.width = 0;
+    g_test_display.height = 0;
+    check(psx_mod_display_width() == 0u && psx_mod_display_height() == 0u,
+          "unestablished display geometry must report zero so callers skip "
+          "drawing instead of guessing");
 
     fs::remove_all(root, ec);
     if (failures) return 1;

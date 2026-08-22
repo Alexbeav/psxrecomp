@@ -59,6 +59,28 @@ uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
 int32_t psx_mod_widescreen_x_margin(void);
 
 /*
+ * Width, in native game pixels, of the picture the guest is currently
+ * scanning out -- the same value the presenter uses, derived from the display
+ * mode and the GP1(06h) horizontal range.
+ *
+ * Why this exists: a plugin that draws its own overlay primitives needs to
+ * know where the right-hand edge of the screen is, and it cannot work that
+ * out for itself. GPUSTAT carries the horizontal-resolution bits, so a plugin
+ * can recover the coarse MODE width (256/320/512/640, or 368), but the
+ * visible width also depends on the GP1(06h) X1/X2 range, which is write-only
+ * and mirrored nowhere the plugin can read. Ape Escape is the worked example:
+ * it scans out 384 while its mode width is 368, and a plugin that assumed the
+ * usual 320 put its HUD row 68 pixels short of the edge.
+ *
+ * Returns 0 if the display geometry is not yet established, in which case the
+ * caller should skip drawing rather than substitute a guess.
+ */
+uint32_t psx_mod_display_width(void);
+
+/* Height companion to psx_mod_display_width(); same conventions. */
+uint32_t psx_mod_display_height(void);
+
+/*
  * Read the committed value of one of this package's declared options, as the
  * player left it in the launcher (or the manifest default when untouched).
  * Writes a NUL-terminated string into `out` and returns 1; returns 0 with
