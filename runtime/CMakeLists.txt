@@ -144,6 +144,12 @@ if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
     add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
+    add_executable(controller_port_route_test
+        tests/test_controller_port_route.c
+        src/controller_port_route.c)
+    target_include_directories(controller_port_route_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
 
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /

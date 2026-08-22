@@ -56,6 +56,9 @@ static const uint8_t FONT8[59][8] = {
 
 static int s_open;
 static int s_selected;
+static int s_runtime_open;
+static int s_route_swapped;
+static int s_route_available;
 static int s_dirty = 1;
 static uint32_t s_panel[SSM_W * SSM_H];
 static uint32_t s_thumbs[SAVESTATE_SLOTS][SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
@@ -289,6 +292,58 @@ static void rasterize_panel(void)
     s_dirty = 0;
 }
 
+static void rasterize_runtime_panel(void)
+{
+    int i;
+    char key[32];
+    char buf[96];
+    const uint32_t active = 0xFFFFD24Du;
+    const uint32_t text = 0xFFE2E5EBu;
+    const uint32_t sub = 0xFFB2B8C2u;
+
+    for (i = 0; i < SSM_W * SSM_H; i++)
+        s_panel[i] = 0xFF0F1118u;
+    fill_rect(s_panel, 0, 0, SSM_W, 54, 0xFF171B25u);
+    draw_text(s_panel, 24, 16, "RUNTIME SETTINGS", active, 2);
+    host_keymap_label(HOST_KEYMAP_RUNTIME_MENU, key, sizeof(key));
+    snprintf(buf, sizeof(buf), "%s MENU", key[0] ? key : "F1");
+    draw_text(s_panel, 480, 20, buf, 0xFFB8BDC8u, 1);
+
+    draw_text(s_panel, 44, 96, "CONTROLLER ROUTE", text, 1);
+    fill_rect(s_panel, 36, 124, 568, 96, 0xFF202631u);
+    stroke_rect(s_panel, 36, 124, 568, 96,
+                s_route_available ? active : 0xFF596171u);
+    draw_text(s_panel, 58, 146, "HOST CONTROLLER 1", sub, 1);
+    draw_text(s_panel, 58, 174, "CONNECTED TO", 0xFF7F8796u, 1);
+    if (!s_route_available) {
+        draw_text(s_panel, 296, 158, "UNAVAILABLE", 0xFFFF6B6Bu, 2);
+        draw_text(s_panel, 58, 236,
+                  "DISABLED DURING NETPLAY OR MULTITAP", 0xFFB8BDC8u, 1);
+    } else if (s_route_swapped) {
+        draw_text(s_panel, 360, 158, "PORT 2", active, 2);
+        draw_text(s_panel, 58, 236,
+                  "PSYCHO MANTIS MODE: CONTROLLER 1 DRIVES CONSOLE PORT 2",
+                  text, 1);
+    } else {
+        draw_text(s_panel, 360, 158, "PORT 1", active, 2);
+        draw_text(s_panel, 58, 236,
+                  "NORMAL MODE: CONTROLLER 1 DRIVES CONSOLE PORT 1",
+                  text, 1);
+    }
+
+    host_keymap_label(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, key, sizeof(key));
+    snprintf(buf, sizeof(buf), "%s QUICK SWAP", key[0] ? key : "F6");
+    draw_text(s_panel, 58, 284, buf, sub, 1);
+    draw_text(s_panel, 58, 316,
+              "ENTER / LEFT / RIGHT  TOGGLE ROUTE", text, 1);
+    draw_text(s_panel, 58, 344,
+              "ESC / BACK  RESUME GAME", text, 1);
+    draw_text(s_panel, 58, 396,
+              "THE GAME IS PAUSED WHILE THIS MENU IS OPEN.",
+              0xFF7F8796u, 1);
+    s_dirty = 0;
+}
+
 void psx_savestate_menu_set_state(int open, int selected_slot)
 {
     if (selected_slot < 0) selected_slot = 0;
@@ -304,21 +359,39 @@ void psx_savestate_menu_note_slots_changed(void)
     s_dirty = 1;
 }
 
+void psx_savestate_menu_set_runtime_settings(int open, int route_swapped,
+                                             int route_available)
+{
+    open = open ? 1 : 0;
+    route_swapped = route_swapped ? 1 : 0;
+    route_available = route_available ? 1 : 0;
+    if (s_runtime_open != open || s_route_swapped != route_swapped ||
+        s_route_available != route_available)
+        s_dirty = 1;
+    s_runtime_open = open;
+    s_route_swapped = route_swapped;
+    s_route_available = route_available;
+}
+
 int psx_savestate_menu_needs_present(void)
 {
-    return s_open;
+    return s_open || s_runtime_open;
 }
 
 int psx_savestate_menu_overlay_image(const uint32_t **pixels, int *w, int *h)
 {
-    if (!s_open) {
+    if (!s_open && !s_runtime_open) {
         if (pixels) *pixels = NULL;
         if (w) *w = 0;
         if (h) *h = 0;
         return 0;
     }
-    if (s_dirty)
-        rasterize_panel();
+    if (s_dirty) {
+        if (s_runtime_open)
+            rasterize_runtime_panel();
+        else
+            rasterize_panel();
+    }
     if (pixels) *pixels = s_panel;
     if (w) *w = SSM_W;
     if (h) *h = SSM_H;
