@@ -46,13 +46,24 @@ extern "C" SDL_AudioDeviceID psx_sdl_audio_open(
     }
 
     const SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(s_audio_stream);
-    SDL_AudioSpec obtained = requested;
-    (void)SDL_GetAudioDeviceFormat(device, &obtained, nullptr);
+    /* SDL_OpenAudioDeviceStream's `requested` spec describes the APPLICATION
+     * side of the stream. SDL converts from that input spec to the physical
+     * device spec internally. Report the stream input spec to callers: they
+     * produce bytes for this side of the stream, not for the device side.
+     *
+     * Reporting SDL_GetAudioDeviceFormat() here made the runtime's DRC bridge
+     * resample 44.1 kHz SPU output to (for example) a 96 kHz Windows device,
+     * then put those 96k frames into an SDL stream still labelled 44.1 kHz.
+     * SDL resampled them a second time, playing audio at roughly 44.1/96 speed.
+     */
+    SDL_AudioSpec input = requested;
+    SDL_AudioSpec output = requested;
+    (void)SDL_GetAudioStreamFormat(s_audio_stream, &input, &output);
     if (have) {
         std::memset(have, 0, sizeof(*have));
-        have->freq = obtained.freq;
-        have->format = obtained.format;
-        have->channels = obtained.channels;
+        have->freq = input.freq;
+        have->format = input.format;
+        have->channels = input.channels;
         have->samples = want->samples;
     }
 
