@@ -110,6 +110,11 @@ int savestate_take_load_failed(void);
  * a stale/null-PC .pst. */
 int savestate_take_save_failed(void);
 
+/* Retained human-readable detail for the most recent request/result. The
+ * frontend uses this for visible rejection messages; no guest payload bytes
+ * are included. */
+const char* savestate_last_status_detail(void);
+
 /* Resume PC stamped into the last successful slot save (0 if none / failed). */
 uint32_t savestate_last_save_pc(void);
 

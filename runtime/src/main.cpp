@@ -939,7 +939,7 @@ static void post_load_probe_on_vblank(int turbo_active, int present_reached) {
  * restored VRAM — including a blank if display was disabled in the snapshot. */
 static void savestate_input_guard_arm(void);
 extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) {
-    char buf[64];
+    char buf[192];
     const int disp = slot + 1;
     if (!is_load && ok)
         psx_savestate_menu_note_slots_changed();
@@ -949,12 +949,14 @@ extern "C" void psx_frontend_on_savestate_notify(int is_load, int slot, int ok) 
         if (ok)
             snprintf(buf, sizeof(buf), "Loaded slot %d", disp);
         else
-            snprintf(buf, sizeof(buf), "Load failed slot %d", disp);
+            snprintf(buf, sizeof(buf), "Load failed slot %d: %s", disp,
+                     savestate_last_status_detail());
     } else {
         if (ok)
             snprintf(buf, sizeof(buf), "Saved slot %d", disp);
         else
-            snprintf(buf, sizeof(buf), "Save failed slot %d", disp);
+            snprintf(buf, sizeof(buf), "Save failed slot %d: %s", disp,
+                     savestate_last_status_detail());
     }
     host_osd_push(buf, 2000);
 }
@@ -5704,9 +5706,19 @@ static int savestate_submit_slot(int slot, int save) {
         else
             (void)psx_netplay_request_load(slot);
     } else if (save) {
-        (void)savestate_request_save(slot);
+        if (savestate_request_save(slot)) {
+            char msg[48];
+            snprintf(msg, sizeof(msg), "Saving slot %d...", slot + 1);
+            host_osd_push(msg, 2000);
+        } else {
+            host_osd_push(savestate_last_status_detail(), 2500);
+            return 0;
+        }
     } else {
-        (void)savestate_request_load(slot);
+        if (!savestate_request_load(slot)) {
+            host_osd_push(savestate_last_status_detail(), 2500);
+            return 0;
+        }
     }
     return 1;
 }

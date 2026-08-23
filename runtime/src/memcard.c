@@ -17,6 +17,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <time.h>
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -31,6 +32,41 @@ typedef struct {
 } MemCard;
 
 static MemCard cards[MAX_CARDS];
+
+static void memcard_startup_diag(const char* dir, int slot, const char* outcome,
+                                 size_t bytes)
+{
+    char log_path[640];
+    FILE* log;
+    int occupied = 0;
+    int i;
+    const unsigned magic0 = cards[slot].data[0];
+    const unsigned magic1 = cards[slot].data[1];
+    if (cards[slot].present && magic0 == 'M' && magic1 == 'C') {
+        for (i = 1; i <= 15; ++i)
+            if ((cards[slot].data[i * 128] & 0xF0u) == 0x50u)
+                ++occupied;
+    }
+    fprintf(stdout,
+            "psxrecomp: card slot=%d path=\"%s\" bytes=%zu outcome=%s "
+            "magic=%02X%02X occupied_blocks=%d\n",
+            slot + 1, cards[slot].filepath, bytes, outcome,
+            magic0, magic1, occupied);
+    fflush(stdout);
+    if (!dir || !dir[0]) return;
+    snprintf(log_path, sizeof(log_path), "%s%s%s", dir,
+             (dir[strlen(dir) - 1] == '/' || dir[strlen(dir) - 1] == '\\')
+                 ? "" : "/",
+             "writable-state.log");
+    log = fopen(log_path, "ab");
+    if (!log) return;
+    fprintf(log,
+            "epoch=%lld event=card_startup slot=%d path=\"%s\" bytes=%zu "
+            "outcome=%s magic=%02X%02X occupied_blocks=%d\n",
+            (long long)time(NULL), slot, cards[slot].filepath, bytes, outcome,
+            magic0, magic1, occupied);
+    fclose(log);
+}
 
 /* XOR checksum of bytes 0x00-0x7E, stored at 0x7F. */
 static uint8_t frame_checksum(const uint8_t *frame) {
@@ -122,12 +158,17 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
     memcard_ensure_dir(dir);
 
     for (int i = 0; i < MAX_CARDS; i++) {
+        const char* outcome = "disabled";
+        size_t io_bytes = 0;
         cards[i].present = 0;
         cards[i].dirty = 0;
 
         const int enabled = slots ? slots[i].enabled : 1;
         const char* path  = slots ? slots[i].path : NULL;
-        if (!enabled) continue;  /* slot empty: no card inserted */
+        if (!enabled) {
+            memcard_startup_diag(dir, i, outcome, 0);
+            continue;  /* slot empty: no card inserted */
+        }
 
         if (path && path[0]) {
             snprintf(cards[i].filepath, sizeof(cards[i].filepath), "%s", path);
@@ -142,8 +183,12 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
         if (f) {
             size_t n = fread(cards[i].data, 1, MEMCARD_SIZE, f);
             fclose(f);
+            io_bytes = n;
             if (n == MEMCARD_SIZE) {
                 cards[i].present = 1;
+                outcome = "loaded_existing";
+            } else {
+                outcome = "rejected_invalid_size";
             }
         } else {
             memcard_format(cards[i].data);
@@ -154,9 +199,17 @@ void memcard_init_slots(const char* dir, const MemcardSlotConfig slots[2]) {
                 int close_ok = (fclose(f) == 0);
                 if (n == MEMCARD_SIZE && flush_ok && close_ok) {
                     cards[i].present = 1;
+                    io_bytes = n;
+                    outcome = "created_blank";
+                } else {
+                    io_bytes = n;
+                    outcome = "create_failed";
                 }
+            } else {
+                outcome = "create_failed";
             }
         }
+        memcard_startup_diag(dir, i, outcome, io_bytes);
     }
 }
 

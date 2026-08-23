@@ -21,9 +21,11 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #ifdef _WIN32
 #include <direct.h>
 #include <windows.h>
@@ -62,6 +64,7 @@ static int      s_save_failed = 0;
 static uint32_t s_last_save_pc = 0;
 static int      s_save_defer_slot = -1;
 static double   s_save_defer_t0 = 0.0;
+static char     s_status_detail[160];
 static uint8_t *s_load_blob = NULL;   /* optional in-memory .pst for netplay */
 static size_t   s_load_blob_len = 0;
 
@@ -118,12 +121,42 @@ static int savestate_snapshot_resume_pc_ok(uint32_t pc)
  * frame. Such a state may run briefly after restore, then wedge when the
  * missing host continuation should have returned. A serializable disk state
  * must have both its resume PC and live stack in guest RAM. */
-static int savestate_snapshot_context_ok(uint32_t pc, uint32_t sp, uint32_t ra)
+static int savestate_snapshot_context_ok(uint32_t pc, uint32_t sp)
 {
     const uint32_t sp_phys = sp & 0x1FFFFFFFu;
     return savestate_snapshot_resume_pc_ok(pc) && sp != 0u &&
-           (sp & 3u) == 0u && sp_phys < 0x00800000u &&
-           (((pc ^ ra) & 0x1FFFFFFFu) == 0u);
+           (sp & 3u) == 0u && sp_phys < 0x00800000u;
+}
+
+static void savestate_set_status_detail(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_status_detail, sizeof(s_status_detail), fmt, ap);
+    va_end(ap);
+}
+
+static void savestate_diag(const char* event, int slot, const char* fmt, ...)
+{
+    char detail[512];
+    char path[600];
+    FILE* f;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(detail, sizeof(detail), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "writable-state: event=%s slot=%d %s\n",
+            event ? event : "unknown", slot, detail);
+    if (!s_root[0]) return;
+    snprintf(path, sizeof(path), "%s%s%s", s_root,
+             (s_root[0] && s_root[strlen(s_root) - 1] != '/' &&
+              s_root[strlen(s_root) - 1] != '\\') ? "/" : "",
+             "writable-state.log");
+    f = fopen(path, "ab");
+    if (!f) return;
+    fprintf(f, "epoch=%lld event=%s slot=%d %s\n",
+            (long long)time(NULL), event ? event : "unknown", slot, detail);
+    fclose(f);
 }
 
 /* Active admission may unwind only the outer game dispatch with no nested
@@ -134,7 +167,7 @@ static int savestate_active_capture_boundary_ok(const CPUState* cpu,
 {
     extern int g_psx_dispatch_depth;
     return cpu &&
-           savestate_snapshot_context_ok(pc, cpu->gpr[29], cpu->gpr[31]) &&
+           savestate_snapshot_context_ok(pc, cpu->gpr[29]) &&
            g_psx_dispatch_depth == 1 &&
            overlay_loader_call_unit_depth() == 0;
 }
@@ -373,6 +406,12 @@ void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry
             s_dir[sizeof(s_dir) - 1] = '\0';
         }
         ensure_dir(s_dir);
+        savestate_set_status_detail("ready: %s", s_dir);
+        savestate_diag("startup", -1,
+                       "root=\"%s\" bios_dir=\"%s\" bios_token=%s "
+                       "entry=0x%08X",
+                       s_root, s_dir, s_bios_token,
+                       (unsigned)s_entry_pc);
     } else {
         /* Netplay guest sandbox / already-scoped path: do not clear the
          * personal root/token remembered from the last bios-scoped configure. */
@@ -621,28 +660,50 @@ static int netplay_user_blocked(void) {
 }
 
 static int request_save_inner(int slot) {
-    if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
-    if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
+    if (!s_configured) {
+        savestate_set_status_detail("save rejected: storage is not configured");
+        savestate_diag("save_reject", slot, "reason=not_configured");
+        return 0;
+    }
+    if (slot < 0 || slot >= SAVESTATE_SLOTS) {
+        savestate_set_status_detail("save rejected: invalid slot %d", slot + 1);
+        savestate_diag("save_reject", slot, "reason=invalid_slot");
+        return 0;
+    }
     s_save_failed = 0;
     s_last_save_pc = 0; /* block netplay transfer until this write stamps a PC */
     s_save_defer_slot = -1;
     s_save_pending = slot;
+    savestate_set_status_detail("save slot %d requested", slot + 1);
+    savestate_diag("save_request", slot, "outcome=staged");
     return 1;
 }
 
 static int request_load_inner(int slot) {
-    if (!s_configured) { fprintf(stderr, "savestate: not configured\n"); return 0; }
-    if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
+    if (!s_configured) {
+        savestate_set_status_detail("load rejected: storage is not configured");
+        savestate_diag("load_reject", slot, "reason=not_configured");
+        return 0;
+    }
+    if (slot < 0 || slot >= SAVESTATE_SLOTS) {
+        savestate_set_status_detail("load rejected: invalid slot %d", slot + 1);
+        savestate_diag("load_reject", slot, "reason=invalid_slot");
+        return 0;
+    }
     if (!psx_hle_scheduler_enabled()) {
         /* LLE (host-fiber) mode: the restore longjmp target lives on the
          * scheduler fiber; cross-fiber unwind is unsafe. HLE is the default. */
         fprintf(stderr, "savestate: load requires the HLE scheduler (default); "
                         "PSX_HLE_SCHEDULER=0 run cannot load states.\n");
+        savestate_set_status_detail("load rejected: HLE scheduler is disabled");
+        savestate_diag("load_reject", slot, "reason=hle_scheduler_disabled");
         return 0;
     }
     s_load_failed = 0;
     s_load_completed = 0;
     s_load_pending = slot;
+    savestate_set_status_detail("load slot %d requested", slot + 1);
+    savestate_diag("load_request", slot, "outcome=staged");
     return 1;
 }
 
@@ -716,6 +777,10 @@ int savestate_take_save_failed(void) {
     return v;
 }
 
+const char* savestate_last_status_detail(void) {
+    return s_status_detail;
+}
+
 uint32_t savestate_last_save_pc(void) {
     return s_last_save_pc;
 }
@@ -741,11 +806,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     "savestate: admitting slot %d at scheduler boundary "
                     "(resume=0x%08X)\n",
                     slot, (unsigned)resume_pc);
+            savestate_diag("save_admission", slot,
+                           "outcome=unwind_to_flat_scheduler resume=0x%08X "
+                           "sp=0x%08X ra=0x%08X",
+                           (unsigned)resume_pc, (unsigned)cpu->gpr[29],
+                           (unsigned)cpu->gpr[31]);
             (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
         }
         if (needs_scheduler_boundary ||
-            !cpu || !savestate_snapshot_context_ok(pc, cpu->gpr[29],
-                                                    cpu->gpr[31])) {
+            !cpu || !savestate_snapshot_context_ok(pc, cpu->gpr[29])) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
              * for the scheduler's flat pre-dispatch boundary. FMV/present edges
@@ -762,6 +831,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                             ? "waiting for scheduler snapshot boundary"
                             : "no safe resume PC",
                         (unsigned)resume_pc, (unsigned)pc);
+                savestate_diag("save_defer", slot,
+                               "reason=%s hint=0x%08X resolved=0x%08X "
+                               "sp=0x%08X ra=0x%08X",
+                               needs_scheduler_boundary
+                                   ? "waiting_flat_scheduler"
+                                   : "unsafe_guest_context",
+                               (unsigned)resume_pc, (unsigned)pc,
+                               cpu ? (unsigned)cpu->gpr[29] : 0u,
+                               cpu ? (unsigned)cpu->gpr[31] : 0u);
             }
             if (now - s_save_defer_t0 < 2000.0)
                 return;
@@ -769,6 +847,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_save_defer_slot = -1;
             s_last_save_pc = 0;
             s_save_failed = 1;
+            savestate_set_status_detail(
+                "save rejected: no serializable scheduler boundary within 2s");
             fprintf(stderr,
                     "savestate: SAVE FAILED slot %d — %s "
                     "(hint=0x%08X resolved=0x%08X)\n",
@@ -777,6 +857,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         ? "no scheduler snapshot boundary"
                         : "no safe resume PC",
                     (unsigned)resume_pc, (unsigned)pc);
+            savestate_diag("save_reject", slot,
+                           "reason=bounded_timeout hint=0x%08X resolved=0x%08X",
+                           (unsigned)resume_pc, (unsigned)pc);
             psx_frontend_on_savestate_notify(0, slot, 0);
         } else {
             s_save_pending = -1;
@@ -796,13 +879,26 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 if (ok) {
                     s_last_save_pc = pc;
                     s_save_failed = 0;
+                    savestate_set_status_detail("saved slot %d", slot + 1);
                     (void)savestate_capture_thumb(slot);
                 } else {
                     s_last_save_pc = 0;
                     s_save_failed = 1;
+                    savestate_set_status_detail("save rejected: file write failed");
                 }
                 fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
                         ok ? "SAVED" : "SAVE FAILED", slot, (unsigned)pc, path);
+                {
+                    struct stat st;
+                    const long long bytes =
+                        ok && stat(path, &st) == 0 ? (long long)st.st_size : 0;
+                    savestate_diag("save_write", slot,
+                                   "outcome=%s path=\"%s\" bytes=%lld "
+                                   "pc=0x%08X sp=0x%08X ra=0x%08X",
+                                   ok ? "success" : "failed", path, bytes,
+                                   (unsigned)pc, (unsigned)cpu->gpr[29],
+                                   (unsigned)cpu->gpr[31]);
+                }
                 psx_frontend_on_savestate_notify(0, slot, ok);
             } else {
                 s_last_save_pc = 0;
@@ -831,7 +927,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 boot_state_peek_cpu_context_buffer(s_load_blob, blob_len,
                                                    &saved_pc, &saved_sp,
                                                    &saved_ra) &&
-                savestate_snapshot_context_ok(saved_pc, saved_sp, saved_ra);
+                savestate_snapshot_context_ok(saved_pc, saved_sp);
             if (preflight_ok)
                 loaded = boot_state_load_buffer(s_load_blob, blob_len,
                                                 s_bios_checksum, s_entry_pc, cpu);
@@ -849,8 +945,13 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
             preflight_ok = boot_state_peek_cpu_context(path, &saved_pc,
                                                        &saved_sp, &saved_ra) &&
-                           savestate_snapshot_context_ok(saved_pc, saved_sp,
-                                                         saved_ra);
+                           savestate_snapshot_context_ok(saved_pc, saved_sp);
+            savestate_diag("load_preflight", slot,
+                           "outcome=%s path=\"%s\" pc=0x%08X sp=0x%08X "
+                           "ra=0x%08X",
+                           preflight_ok ? "accepted" : "rejected", path,
+                           (unsigned)saved_pc, (unsigned)saved_sp,
+                           (unsigned)saved_ra);
             if (preflight_ok)
                 loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
             if (!loaded) {
@@ -861,6 +962,11 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         (unsigned)saved_ra,
                         preflight_ok ? "" : ", rejected before apply");
                 s_load_failed = 1;
+                savestate_set_status_detail(
+                    preflight_ok ? "load rejected: state apply failed"
+                                 : "load rejected: invalid guest PC or stack");
+                savestate_diag("load_apply", slot, "outcome=failed path=\"%s\"",
+                               path);
                 psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else {
@@ -868,8 +974,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
-        if (loaded && !savestate_snapshot_context_ok(cpu->pc, cpu->gpr[29],
-                                                     cpu->gpr[31])) {
+        if (loaded && !savestate_snapshot_context_ok(cpu->pc, cpu->gpr[29])) {
             fprintf(stderr,
                     "savestate: LOAD FAILED slot %d — resume pc=0x%08X "
                     "sp=0x%08X ra=0x%08X "
@@ -882,6 +987,11 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
         if (loaded) {
+            savestate_set_status_detail("loaded slot %d", slot + 1);
+            savestate_diag("load_apply", slot,
+                           "outcome=success pc=0x%08X sp=0x%08X ra=0x%08X",
+                           (unsigned)cpu->pc, (unsigned)cpu->gpr[29],
+                           (unsigned)cpu->gpr[31]);
             t_after_boot = savestate_mono_ms();
             psx_cycles_resync_after_restore(cpu);
             /* Drop absolute-cycle IRQ cooldowns / VBlank phase from the
@@ -897,6 +1007,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             /* Restage FBO/present latch so the restored frame is visible
              * immediately (avoids disabled-display blank latch + stale smooth). */
             psx_frontend_on_savestate_loaded();
+            savestate_diag("load_resume", slot,
+                           "outcome=ready_for_flat_redispatch pc=0x%08X",
+                           (unsigned)cpu->pc);
             t_after_frontend = savestate_mono_ms();
             fprintf(stderr,
                     "savestate: LOADED slot %d -> resuming pc=0x%08X "

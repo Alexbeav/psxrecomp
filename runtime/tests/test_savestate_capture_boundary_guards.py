@@ -19,6 +19,8 @@ def main() -> int:
     traps = (ROOT / "runtime/src/traps.c").read_text(encoding="utf-8")
     savestate = (ROOT / "runtime/src/savestate.c").read_text(encoding="utf-8")
     interrupts = (ROOT / "runtime/src/interrupts.c").read_text(encoding="utf-8")
+    memcard = (ROOT / "runtime/src/memcard.c").read_text(encoding="utf-8")
+    main_cpp = (ROOT / "runtime/src/main.cpp").read_text(encoding="utf-8")
 
     require(
         scheduler_h,
@@ -105,11 +107,38 @@ def main() -> int:
     for needle in (
         "savestate_snapshot_context_ok",
         "sp_phys < 0x00800000u",
-        "((pc ^ ra) & 0x1FFFFFFFu) == 0u",
         "g_psx_dispatch_depth == 1",
         "overlay_loader_call_unit_depth() == 0",
     ):
         require(savestate, needle, "flat RAM-stack capture guard")
+    if "((pc ^ ra) & 0x1FFFFFFFu) == 0u" in savestate:
+        raise AssertionError(
+            "serialized guest RA must not be mistaken for host continuation ownership"
+        )
+    for needle in (
+        'savestate_diag("save_request"',
+        'savestate_diag("save_admission"',
+        'savestate_diag("save_defer"',
+        'savestate_diag("save_reject"',
+        'savestate_diag("save_write"',
+        'savestate_diag("load_preflight"',
+        'savestate_diag("load_apply"',
+        'savestate_diag("load_resume"',
+    ):
+        require(savestate, needle, "retained state lifecycle diagnostic")
+    for needle in (
+        "event=card_startup",
+        "occupied_blocks=%d",
+        "writable-state.log",
+        "loaded_existing",
+        "rejected_invalid_size",
+    ):
+        require(memcard, needle, "retained memory-card startup diagnostic")
+    require(
+        main_cpp,
+        "savestate_last_status_detail()",
+        "visible state rejection detail",
+    )
 
     wrapper = interrupts[interrupts.index("void psx_check_interrupts_at") :]
     pending = wrapper.index("if (savestate_pending())")
