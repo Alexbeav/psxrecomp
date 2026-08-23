@@ -784,14 +784,19 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
     return 1;
 }
 
-int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
-                                  uint32_t* out_pc) {
+int boot_state_peek_cpu_context_buffer(const uint8_t* file, size_t file_len,
+                                       uint32_t* out_pc, uint32_t* out_sp,
+                                       uint32_t* out_ra) {
     BootStateHeader h;
     const uint8_t* cur;
     const uint8_t* end;
 
-    if (!out_pc || !boot_state_parse_header(file, file_len, &h))
+    if (!out_pc || !out_sp || !out_ra ||
+        !boot_state_parse_header(file, file_len, &h))
         return 0;
+    *out_pc = 0;
+    *out_sp = 0;
+    *out_ra = 0;
     cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
     end = file + file_len;
     for (uint32_t i = 0; i < h.section_count; ++i) {
@@ -858,6 +863,10 @@ int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
                     free(inflated);
                     return 0;
                 }
+                if (reg == 29)
+                    *out_sp = discard;
+                else if (reg == 31)
+                    *out_ra = discard;
             }
             if (!pst_r_u32(&cpu_r, out_pc)) {
                 free(inflated);
@@ -870,13 +879,14 @@ int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
     return 0;
 }
 
-int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc) {
+int boot_state_peek_cpu_context(const char* path, uint32_t* out_pc,
+                                uint32_t* out_sp, uint32_t* out_ra) {
     FILE* f;
     long sz;
     uint8_t* file;
     int ok;
 
-    if (!path || !out_pc || !(f = fopen(path, "rb")))
+    if (!path || !out_pc || !out_sp || !out_ra || !(f = fopen(path, "rb")))
         return 0;
     if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0 ||
         sz > 64L * 1024L * 1024L || fseek(f, 0, SEEK_SET) != 0) {
@@ -889,7 +899,8 @@ int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc) {
         return 0;
     }
     ok = fread(file, 1, (size_t)sz, f) == (size_t)sz &&
-         boot_state_peek_cpu_pc_buffer(file, (size_t)sz, out_pc);
+         boot_state_peek_cpu_context_buffer(file, (size_t)sz, out_pc, out_sp,
+                                            out_ra);
     free(file);
     fclose(f);
     return ok;

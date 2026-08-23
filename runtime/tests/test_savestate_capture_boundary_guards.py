@@ -63,8 +63,8 @@ def main() -> int:
     )
     require(
         savestate,
-        "savestate_snapshot_resume_pc_ok(resume_pc)",
-        "RAM-backed save-admission guard",
+        "savestate_active_capture_boundary_ok(cpu, resume_pc)",
+        "flat RAM-context save-admission guard",
     )
     require(
         savestate,
@@ -81,7 +81,7 @@ def main() -> int:
     gate = savestate.index("if (needs_scheduler_boundary ||")
     admission_gate = savestate.index(
         "if (needs_scheduler_boundary &&\n"
-        "            savestate_snapshot_resume_pc_ok(resume_pc))"
+        "            savestate_active_capture_boundary_ok(cpu, resume_pc))"
     )
     admission_call = savestate.index("psx_scheduler_snapshot_at(resume_pc)")
     write = savestate.index("boot_state_save(&snap")
@@ -94,13 +94,22 @@ def main() -> int:
 
     require(
         savestate,
-        "boot_state_peek_cpu_pc(path, &saved_pc)",
-        "disk-load resume-PC preflight",
+        "boot_state_peek_cpu_context(path, &saved_pc,",
+        "disk-load CPU-context preflight",
     )
-    preflight = savestate.index("boot_state_peek_cpu_pc(path, &saved_pc)")
+    preflight = savestate.index("boot_state_peek_cpu_context(path, &saved_pc,")
     apply_load = savestate.index("boot_state_load(path", preflight)
     if preflight >= apply_load:
         raise AssertionError("state resume-PC preflight must precede state apply")
+
+    for needle in (
+        "savestate_snapshot_context_ok",
+        "sp_phys < 0x00800000u",
+        "((pc ^ ra) & 0x1FFFFFFFu) == 0u",
+        "g_psx_dispatch_depth == 1",
+        "overlay_loader_call_unit_depth() == 0",
+    ):
+        require(savestate, needle, "flat RAM-stack capture guard")
 
     wrapper = interrupts[interrupts.index("void psx_check_interrupts_at") :]
     pending = wrapper.index("if (savestate_pending())")

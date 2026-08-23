@@ -16,6 +16,7 @@
 #include "psx_cycles.h"
 #include "psx_netplay.h"
 #include "psx_netplay_rb.h"
+#include "overlay_loader.h"
 #include "psx_scheduler.h"
 #include <ctype.h>
 #include <errno.h>
@@ -110,6 +111,32 @@ static int savestate_snapshot_resume_pc_ok(uint32_t pc)
 {
     const uint32_t phys = pc & 0x1FFFFFFFu;
     return savestate_resume_pc_ok(pc) && phys < 0x00800000u;
+}
+
+/* The retail BIOS uses scratchpad as its exception stack. in_exception can
+ * already be clear while a recompiled/HLE return continuation still owns that
+ * frame. Such a state may run briefly after restore, then wedge when the
+ * missing host continuation should have returned. A serializable disk state
+ * must have both its resume PC and live stack in guest RAM. */
+static int savestate_snapshot_context_ok(uint32_t pc, uint32_t sp, uint32_t ra)
+{
+    const uint32_t sp_phys = sp & 0x1FFFFFFFu;
+    return savestate_snapshot_resume_pc_ok(pc) && sp != 0u &&
+           (sp & 3u) == 0u && sp_phys < 0x00800000u &&
+           (((pc ^ ra) & 0x1FFFFFFFu) == 0u);
+}
+
+/* Active admission may unwind only the outer game dispatch with no nested
+ * overlay call unit. Scheduler-top serialization itself has depth zero and
+ * enters through the separate boundary latch. */
+static int savestate_active_capture_boundary_ok(const CPUState* cpu,
+                                                uint32_t pc)
+{
+    extern int g_psx_dispatch_depth;
+    return cpu &&
+           savestate_snapshot_context_ok(pc, cpu->gpr[29], cpu->gpr[31]) &&
+           g_psx_dispatch_depth == 1 &&
+           overlay_loader_call_unit_depth() == 0;
 }
 
 extern int psx_hle_scheduler_enabled(void);
@@ -704,7 +731,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
         if (needs_scheduler_boundary &&
-            savestate_snapshot_resume_pc_ok(resume_pc)) {
+            savestate_active_capture_boundary_ok(cpu, resume_pc)) {
             /* A title can stay inside one long CPS/native dispatch forever,
              * so passive deferral never reaches psx_scheduler_run's flat poll.
              * At an explicit block-leader interrupt boundary CPUState is
@@ -717,7 +744,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
         }
         if (needs_scheduler_boundary ||
-            !savestate_snapshot_resume_pc_ok(pc)) {
+            !cpu || !savestate_snapshot_context_ok(pc, cpu->gpr[29],
+                                                    cpu->gpr[31])) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
              * for the scheduler's flat pre-dispatch boundary. FMV/present edges
@@ -789,6 +817,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int loaded = 0;
         int preflight_ok = 0;
         uint32_t saved_pc = 0;
+        uint32_t saved_sp = 0;
+        uint32_t saved_ra = 0;
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
@@ -798,8 +828,10 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         if (s_load_blob && s_load_blob_len > 0) {
             const size_t blob_len = s_load_blob_len;
             preflight_ok =
-                boot_state_peek_cpu_pc_buffer(s_load_blob, blob_len, &saved_pc) &&
-                savestate_snapshot_resume_pc_ok(saved_pc);
+                boot_state_peek_cpu_context_buffer(s_load_blob, blob_len,
+                                                   &saved_pc, &saved_sp,
+                                                   &saved_ra) &&
+                savestate_snapshot_context_ok(saved_pc, saved_sp, saved_ra);
             if (preflight_ok)
                 loaded = boot_state_load_buffer(s_load_blob, blob_len,
                                                 s_bios_checksum, s_entry_pc, cpu);
@@ -807,22 +839,26 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             if (!loaded) {
                 fprintf(stderr,
                         "savestate: LOAD FAILED blob (%zu bytes, entry=%08X, "
-                        "resume=0x%08X%s)\n",
+                        "resume=0x%08X sp=0x%08X ra=0x%08X%s)\n",
                         blob_len, (unsigned)s_entry_pc, (unsigned)saved_pc,
+                        (unsigned)saved_sp, (unsigned)saved_ra,
                         preflight_ok ? "" : ", rejected before apply");
                 s_load_failed = 1;
                 psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
-            preflight_ok = boot_state_peek_cpu_pc(path, &saved_pc) &&
-                           savestate_snapshot_resume_pc_ok(saved_pc);
+            preflight_ok = boot_state_peek_cpu_context(path, &saved_pc,
+                                                       &saved_sp, &saved_ra) &&
+                           savestate_snapshot_context_ok(saved_pc, saved_sp,
+                                                         saved_ra);
             if (preflight_ok)
                 loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
             if (!loaded) {
                 fprintf(stderr,
                         "savestate: LOAD FAILED slot %d %s "
-                        "(resume=0x%08X%s)\n",
-                        slot, path, (unsigned)saved_pc,
+                        "(resume=0x%08X sp=0x%08X ra=0x%08X%s)\n",
+                        slot, path, (unsigned)saved_pc, (unsigned)saved_sp,
+                        (unsigned)saved_ra,
                         preflight_ok ? "" : ", rejected before apply");
                 s_load_failed = 1;
                 psx_frontend_on_savestate_notify(1, slot, 0);
@@ -832,11 +868,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
-        if (loaded && !savestate_snapshot_resume_pc_ok(cpu->pc)) {
+        if (loaded && !savestate_snapshot_context_ok(cpu->pc, cpu->gpr[29],
+                                                     cpu->gpr[31])) {
             fprintf(stderr,
                     "savestate: LOAD FAILED slot %d — resume pc=0x%08X "
+                    "sp=0x%08X ra=0x%08X "
                     "(null/undispatchable/unserializable)%s\n",
-                    slot, (unsigned)cpu->pc, path[0] ? "" : " [blob]");
+                    slot, (unsigned)cpu->pc, (unsigned)cpu->gpr[29],
+                    (unsigned)cpu->gpr[31],
+                    path[0] ? "" : " [blob]");
             loaded = 0;
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
