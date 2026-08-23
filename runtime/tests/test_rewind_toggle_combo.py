@@ -38,6 +38,6 @@ assert "savestate_menu_toggle(0)" in MAIN
 assert 'std::getenv("PSX_FAST_FORWARD_SPEED")' in MAIN
 assert "bool manual_turbo_active = false;" in MAIN
 assert "Fast forward: %dx" in MAIN
-assert "g_frame_period_ms / (double)mult" in MAIN
+assert "present_effective_frame_period_ms() / (double)mult" in MAIN  # fast-forward divides the (PAL/NTSC-aware) frame period
 
 print("host shortcut guard passed")
