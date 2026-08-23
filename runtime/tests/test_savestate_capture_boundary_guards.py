@@ -60,14 +60,16 @@ def main() -> int:
     )
     require(
         savestate,
-        "psx_scheduler_snapshot_at(resume_pc)",
+        "psx_scheduler_snapshot_at(pc)",
         "active-dispatch save admission",
     )
     require(
         savestate,
-        "savestate_active_capture_boundary_ok(cpu, resume_pc)",
+        "savestate_active_capture_boundary_ok(cpu, pc)",
         "flat RAM-context save-admission guard",
     )
+    if "savestate_active_capture_boundary_ok(cpu, resume_pc)" in savestate:
+        raise AssertionError("save admission must validate the resolved resume PC")
     require(
         savestate,
         "phys < 0x00800000u",
@@ -83,9 +85,9 @@ def main() -> int:
     gate = savestate.index("if (needs_scheduler_boundary ||")
     admission_gate = savestate.index(
         "if (needs_scheduler_boundary &&\n"
-        "            savestate_active_capture_boundary_ok(cpu, resume_pc))"
+        "            savestate_active_capture_boundary_ok(cpu, pc))"
     )
-    admission_call = savestate.index("psx_scheduler_snapshot_at(resume_pc)")
+    admission_call = savestate.index("psx_scheduler_snapshot_at(pc)")
     write = savestate.index("boot_state_save(&snap")
     if not admission_gate < admission_call < gate:
         raise AssertionError(

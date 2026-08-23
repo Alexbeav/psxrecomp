@@ -796,7 +796,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
         if (needs_scheduler_boundary &&
-            savestate_active_capture_boundary_ok(cpu, resume_pc)) {
+            savestate_active_capture_boundary_ok(cpu, pc)) {
             /* A title can stay inside one long CPS/native dispatch forever,
              * so passive deferral never reaches psx_scheduler_run's flat poll.
              * At an explicit block-leader interrupt boundary CPUState is
@@ -804,14 +804,16 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
              * serialize, then re-dispatch this exact guest PC. */
             fprintf(stderr,
                     "savestate: admitting slot %d at scheduler boundary "
-                    "(resume=0x%08X)\n",
-                    slot, (unsigned)resume_pc);
+                    "(hint=0x%08X resolved=0x%08X)\n",
+                    slot, (unsigned)resume_pc, (unsigned)pc);
             savestate_diag("save_admission", slot,
-                           "outcome=unwind_to_flat_scheduler resume=0x%08X "
+                           "outcome=unwind_to_flat_scheduler hint=0x%08X "
+                           "resolved=0x%08X "
                            "sp=0x%08X ra=0x%08X",
-                           (unsigned)resume_pc, (unsigned)cpu->gpr[29],
+                           (unsigned)resume_pc, (unsigned)pc,
+                           (unsigned)cpu->gpr[29],
                            (unsigned)cpu->gpr[31]);
-            (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
+            (void)psx_scheduler_snapshot_at(pc); /* longjmp on success */
         }
         if (needs_scheduler_boundary ||
             !cpu || !savestate_snapshot_context_ok(pc, cpu->gpr[29])) {
