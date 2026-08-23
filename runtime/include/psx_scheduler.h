@@ -103,6 +103,13 @@ void psx_clear_return_to_lobby(void);
  * resume (see below) for the first post-resume frame. */
 void psx_scheduler_resume_at(uint32_t resume_pc);
 
+/* Pending disk-save admission: unwind an active guest dispatch to the flat
+ * scheduler boundary and re-dispatch at resume_pc after the state is written.
+ * Unlike resume_at(), this does not mark a restored-state top-level resume.
+ * Returns 0 when no scheduler dispatch is active or resume_pc is invalid;
+ * otherwise it longjmps and does not return. */
+int psx_scheduler_snapshot_at(uint32_t resume_pc);
+
 /* True only while psx_scheduler_run is between restoring/materializing the
  * selected guest context and entering psx_dispatch. At this point there is no
  * nested CPS/native host continuation beneath the guest PC, so a disk

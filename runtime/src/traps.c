@@ -51,6 +51,7 @@ static uint32_t g_sched_return_tcb = 0;
  * only at the scheduler's flat dispatch boundary, after CPUState has been
  * materialized and before psx_dispatch creates a new host continuation. */
 static int g_sched_snapshot_boundary = 0;
+static int g_in_scheduler_run = 0;
 
 int psx_scheduler_snapshot_boundary_active(void)
 {
@@ -752,6 +753,27 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
 }
 
+int psx_scheduler_snapshot_at(uint32_t resume_pc)
+{
+    if (!g_in_scheduler_run || g_sched_snapshot_boundary)
+        return 0;
+    if (!psx_is_dispatchable(resume_pc))
+        return 0;
+
+    g_sched_escape.target_tcb = 0;
+    g_sched_escape.resume_pc  = resume_pc;
+    g_sched_escape.reason     = PSX_RUN_RESUME_CURRENT;
+    /* This is not a restore: keep g_sched_top_level_resume unchanged. The
+     * live CPUState is already materialized at the caller's block boundary;
+     * the scheduler-top poll will serialize it before re-dispatch. */
+    {
+        extern void psx_irq_arm_compiled_resume_pc(uint32_t pc);
+        psx_irq_arm_compiled_resume_pc(resume_pc);
+    }
+    longjmp(g_scheduler_jmpbuf, 1); /* never returns on successful admission */
+    return 1;
+}
+
 /* Scheduler mode. HLE = the deterministic TCB scheduler
  * (psx_request_thread_switch, default); LLE = the legacy host-fiber bridge
  * (psx_change_thread_fiber). This is the HLE tier's standing SUBSYSTEM
@@ -789,7 +811,6 @@ static int psx_change_thread(CPUState* cpu, uint32_t target_tcb)
     return psx_change_thread_fiber(cpu, target_tcb);
 }
 
-static int g_in_scheduler_run = 0;
 static int g_return_to_lobby_req = 0;
 
 void psx_clear_return_to_lobby(void)

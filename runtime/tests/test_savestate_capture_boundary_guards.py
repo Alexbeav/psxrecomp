@@ -24,6 +24,11 @@ def main() -> int:
         "int psx_scheduler_snapshot_boundary_active(void);",
         "public scheduler-boundary query",
     )
+    require(
+        scheduler_h,
+        "int psx_scheduler_snapshot_at(uint32_t resume_pc);",
+        "public save-admission escape",
+    )
     for needle in (
         "g_sched_snapshot_boundary = 1;",
         "savestate_poll(cpu, run_pc);",
@@ -50,6 +55,11 @@ def main() -> int:
         "!psx_scheduler_snapshot_boundary_active()",
         "scheduler-boundary save deferral",
     )
+    require(
+        savestate,
+        "psx_scheduler_snapshot_at(resume_pc)",
+        "active-dispatch save admission",
+    )
     if traps.count("g_sched_snapshot_boundary = 1;") != 1:
         raise AssertionError("exactly one scheduler snapshot boundary may be opened")
     require(
@@ -58,11 +68,31 @@ def main() -> int:
         "dispatchable scheduler resume guard",
     )
     gate = savestate.index("if (needs_scheduler_boundary ||")
+    admission_gate = savestate.index(
+        "if (needs_scheduler_boundary && savestate_resume_pc_ok(resume_pc))"
+    )
+    admission_call = savestate.index("psx_scheduler_snapshot_at(resume_pc)")
     write = savestate.index("boot_state_save(&snap")
+    if not admission_gate < admission_call < gate:
+        raise AssertionError(
+            "active-dispatch admission must precede passive save deferral"
+        )
     if gate >= write:
         raise AssertionError("capture-boundary gate must precede serialization")
 
-    print("PASS: HLE disk saves defer to the flat scheduler boundary")
+    snapshot_impl = traps[
+        traps.index("int psx_scheduler_snapshot_at(uint32_t resume_pc)") :
+        traps.index("/* Scheduler mode.")
+    ]
+    require(
+        snapshot_impl,
+        "g_sched_escape.reason     = PSX_RUN_RESUME_CURRENT;",
+        "structured snapshot escape",
+    )
+    if "g_sched_top_level_resume = 1" in snapshot_impl:
+        raise AssertionError("save admission must not impersonate state restore")
+
+    print("PASS: HLE disk saves actively reach the flat scheduler boundary")
     return 0
 
 

@@ -692,6 +692,18 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         const int needs_scheduler_boundary =
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
+        if (needs_scheduler_boundary && savestate_resume_pc_ok(resume_pc)) {
+            /* A title can stay inside one long CPS/native dispatch forever,
+             * so passive deferral never reaches psx_scheduler_run's flat poll.
+             * At an explicit block-leader interrupt boundary CPUState is
+             * materialized: unwind the host continuation, let scheduler-top
+             * serialize, then re-dispatch this exact guest PC. */
+            fprintf(stderr,
+                    "savestate: admitting slot %d at scheduler boundary "
+                    "(resume=0x%08X)\n",
+                    slot, (unsigned)resume_pc);
+            (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
+        }
         if (needs_scheduler_boundary || !savestate_resume_pc_ok(pc)) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
