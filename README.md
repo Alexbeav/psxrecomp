@@ -489,6 +489,13 @@ pinned SDL3 release automatically. Then run:
 powershell -ExecutionPolicy Bypass -File "C:\Projects\MyGameRecomp\build.ps1"
 ```
 
+The generated project must keep the `psxrecomp/` framework folder beside
+`CMakeLists.txt`; that folder contains `runtime/runtime.cmake`. If CMake says it
+cannot find that file, the framework tree is missing or incomplete. For a git
+checkout, run `git submodule update --init --recursive` from the project root.
+For a project made by the released `psxrecomp.exe`, regenerate it from the full
+CLI zip and keep the generated `psxrecomp/` folder.
+
 The generated project also includes a shell build script for macOS and Linux:
 
 ```sh

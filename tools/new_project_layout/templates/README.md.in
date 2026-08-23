@@ -39,6 +39,12 @@ cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release --target psx-runtime
 ```
 
+`psxrecomp/runtime/runtime.cmake` must exist before configuring. If CMake says
+the runtime is missing, the framework submodule is not checked out; run
+`git submodule update --init --recursive`, or pass
+`-DPSXRECOMP_ROOT=<path-to-psxrecomp>` when intentionally building against a
+separate framework checkout.
+
 Zip prefix for CI artifacts: `@ZIP_PREFIX@`.
 
 ## Symbols

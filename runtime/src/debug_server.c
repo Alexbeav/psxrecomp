@@ -12158,12 +12158,16 @@ static void handle_s3_smear_watch(int id, const char *json)
                             ? hex_to_u32(buf) : 0u;
         g_s3_smear_valid = 0;
     }
-    send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+    /* `armed` so a never-tripped watch (valid:0) can be told apart from one
+     * that was never recording — the same ambiguity the callret ring had. */
+    send_fmt("{\"id\":%d,\"ok\":true,\"armed\":%s,"
+             "\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
              "\"excl\":\"0x%08X\","
              "\"valid\":%d,\"pc\":\"0x%08X\",\"insn\":\"0x%08X\","
              "\"s3_old\":\"0x%08X\",\"s3_new\":\"0x%08X\","
              "\"call_target\":\"0x%08X\",\"frame\":%u}\n",
-             id, g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
+             id, (g_s3_smear_hi > g_s3_smear_lo) ? "true" : "false",
+             g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
              g_s3_smear_valid,
              g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old, g_s3_smear_new,
              g_s3_smear_tgt, g_s3_smear_frame);
@@ -12188,25 +12192,74 @@ static void handle_callret_watch(int id, const char *json)
         uint32_t last_func_a;
     } E;
     extern uint32_t g_callret_lo, g_callret_hi;
+    extern int callret_armed(void);
     extern E g_callret_ring[]; extern uint64_t g_callret_seq;
     const uint32_t cap = 64u;   /* MUST match CALLRET_CAP (dirty_ram_interp.c) */
     char buf[32];
-    if (json_get_str(json, "lo", buf, sizeof(buf))) {
-        g_callret_lo = hex_to_u32(buf);
-        if (json_get_str(json, "hi", buf, sizeof(buf)))
-            g_callret_hi = hex_to_u32(buf);
+    /* Explicit disarm, and the documented legacy spelling for it. `lo` with no
+     * `hi` used to mean "disarm" only because the gate tested lo != 0; keep
+     * that contract for lo=0 (scripts rely on it) but answer it explicitly
+     * instead of silently. */
+    const int want_disarm = json_get_int(json, "disarm", 0) != 0;
+    if (want_disarm) {
+        g_callret_lo = g_callret_hi = 0;
         g_callret_seq = 0;
-        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\"}\n",
-                 id, g_callret_lo, g_callret_hi);
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":false,\"lo\":\"0x00000000\","
+                 "\"hi\":\"0x00000000\"}\n", id);
+        return;
+    }
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        const uint32_t new_lo = hex_to_u32(buf);
+        char hibuf[32];
+        const int have_hi = json_get_str(json, "hi", hibuf, sizeof(hibuf)) != NULL;
+        if (!have_hi) {
+            /* Legacy disarm: {"lo":"0"} with no hi. Honour it, name it. */
+            if (new_lo == 0) {
+                g_callret_lo = g_callret_hi = 0;
+                g_callret_seq = 0;
+                send_fmt("{\"id\":%d,\"ok\":true,\"armed\":false,"
+                         "\"lo\":\"0x00000000\",\"hi\":\"0x00000000\","
+                         "\"note\":\"disarmed (legacy lo=0 spelling; prefer"
+                         " disarm=true)\"}\n", id);
+                return;
+            }
+            /* A floor with no ceiling silently inherited the previous hi —
+             * usually 0, i.e. an empty window that recorded nothing while
+             * replying ok. Refuse instead of guessing. */
+            send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"lo without hi\","
+                     "\"armed\":%s,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+                     "\"note\":\"pass BOTH lo and hi (hi > lo) to arm, or"
+                     " disarm=true to stop; window left unchanged\"}\n",
+                     id, callret_armed() ? "true" : "false",
+                     g_callret_lo, g_callret_hi);
+            return;
+        }
+        g_callret_lo = new_lo;
+        g_callret_hi = hex_to_u32(hibuf);
+        g_callret_seq = 0;
+        /* Report `armed` rather than leaving the caller to infer it: an empty
+         * window records nothing, and "total: 0" from an unarmed ring reads
+         * exactly like a real "these events never happened" answer. */
+        const int armed = callret_armed();
+        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+                 "\"armed\":%s%s}\n",
+                 id, g_callret_lo, g_callret_hi, armed ? "true" : "false",
+                 armed ? ""
+                       : ",\"note\":\"empty window (hi <= lo) - NOT recording\"");
         return;
     }
     uint64_t total = g_callret_seq;
     uint32_t avail = total < cap ? (uint32_t)total : cap;
     size_t BUF_SZ = 512u + (size_t)avail * 512u;
     char *out = (char *)malloc(BUF_SZ); if (!out) { send_err(id, "oom"); return; }
+    /* Carry the window and armed state on the READ too: "total": 0 is
+     * otherwise indistinguishable between "armed, nothing matched" and "never
+     * armed", and the second reads as evidence that the events did not happen. */
     size_t pos = (size_t)snprintf(out, BUF_SZ,
-        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
-        id, (unsigned long long)total);
+        "{\"id\":%d,\"ok\":true,\"armed\":%s,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+        "\"total\":%llu,\"entries\":[",
+        id, callret_armed() ? "true" : "false", g_callret_lo, g_callret_hi,
+        (unsigned long long)total);
     for (uint32_t i = 0; i < avail && pos < BUF_SZ - 600; i++) {
         E *e = &g_callret_ring[(total - avail + i) & (cap - 1u)];
         pos += (size_t)snprintf(out + pos, BUF_SZ - pos,
@@ -12853,6 +12906,39 @@ static void handle_ce_profile(int id, const char *json)
 
 /* Arm the §18 boundary trip at runtime once the idle baseline is known:
  * xprobe_arm {"frame_trip":N,"stk_kb":K,"warmup":F}. Any 0 disables that arm. */
+/* "xprobe_watch": get or set the JAL/JALR watched-target list that filters the
+ * xprobe `watched` dump. Previously a hardcoded list of one title's addresses,
+ * so every other game silently watched nothing. Pass `targets` (comma /
+ * semicolon / space separated, 0x or decimal) to replace the list; pass an
+ * empty string to clear it; pass nothing to read it back. Also settable before
+ * the process starts via PSX_XPROBE_WATCH, so a target can be watched from
+ * instruction zero. Always reports the active list, so an empty `watched` dump
+ * is never ambiguous between "not called" and "not watched". */
+static void handle_xprobe_watch(int id, const char *json)
+{
+    extern void dirty_ram_xprobe_watch_set(const char *spec);
+    extern int  dirty_ram_xprobe_watch_get(int index, uint32_t *phys_out);
+    extern int  dirty_ram_xprobe_watch_count(void);
+    char spec[512];
+    if (json_get_str(json, "targets", spec, sizeof(spec)))
+        dirty_ram_xprobe_watch_set(spec);
+    char list[768];
+    size_t pos = 0;
+    const int n = dirty_ram_xprobe_watch_count();
+    for (int i = 0; i < n && pos < sizeof(list) - 24; i++) {
+        uint32_t phys = 0;
+        if (!dirty_ram_xprobe_watch_get(i, &phys)) break;
+        pos += (size_t)snprintf(list + pos, sizeof(list) - pos, "%s\"0x%08X\"",
+                                i ? "," : "", phys);
+    }
+    list[pos] = '\0';
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d,\"watching\":[%s]%s}",
+             id, n, list,
+             n ? "" : ",\"note\":\"no targets watched - the xprobe watched dump"
+                      " will be empty regardless of what the game calls; pass"
+                      " targets=0x... to watch\"");
+}
+
 static void handle_xprobe_arm(int id, const char *json)
 {
     extern void dirty_ram_xprobe_arm(int frame_trip, int stk_kb, int warmup);
@@ -13288,6 +13374,7 @@ static const CmdEntry s_commands[] = {
     { "stack_profile",     handle_stack_profile },
     { "xprobe",            handle_xprobe },
     { "xprobe_arm",        handle_xprobe_arm },
+    { "xprobe_watch",      handle_xprobe_watch },
     { "ce_profile",        handle_ce_profile },
     { "frame",             handle_frame },
     { "frame_fingerprint", handle_frame_fingerprint },

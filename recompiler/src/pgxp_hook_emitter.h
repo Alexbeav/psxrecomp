@@ -24,6 +24,24 @@ namespace PSXRecomp {
  * Deliberately unhooked: AND/XOR/NOR/SLT-family and the exotic immediates —
  * they only ever DESTROY precision, and the engine's validate-on-read drops
  * their stale shadows without help. */
+/* True when `code`'s LAST line is a preprocessor directive.
+ *
+ * A directive owns its whole line: the preprocessor swallows anything after it
+ * as "extra tokens" and silently DISCARDS it (gcc -Wendif-labels). Several
+ * emissions end on a bare `#endif` -- the PSX_ENABLE_BLOCK_CYCLES muldiv
+ * stall/latency blocks in both emitters (code_generator.cpp translate_mult/
+ * multu/div/divu and translate_mfhi/mflo; strict_translator.cpp the same
+ * shapes) -- so ANY text appended to such an emission on the same line is
+ * dropped without a build failure.
+ *
+ * That is exactly the defect PR #171 fixed for the PGXP hooks, where 3,187
+ * hooks per title were being discarded. This predicate exists so the remaining
+ * same-line appenders can be guarded by construction instead of one at a time.
+ *
+ * Callers append "
+" + indent instead of a space when this returns true. */
+bool emission_ends_on_preprocessor_directive(const std::string& code);
+
 void append_pgxp_hooks(uint32_t instr, std::string& code);
 
 } // namespace PSXRecomp
