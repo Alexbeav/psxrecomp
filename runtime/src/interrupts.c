@@ -2127,6 +2127,15 @@ irq_deliver_eval:
 void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
     uint32_t prev = s_compiled_interrupt_resume_pc;
     s_compiled_interrupt_resume_pc = resume_pc;
+    /* A staged disk state needs the exact materialized block-leader PC. The
+     * hot IRQ paths below can otherwise return for seconds without polling,
+     * even though this wrapper already has the safe RAM resume boundary. */
+    if (!in_exception) {
+        extern int savestate_pending(void);
+        extern void savestate_poll(CPUState* cpu, uint32_t resume_pc);
+        if (savestate_pending())
+            savestate_poll(cpu, resume_pc);
+    }
     psx_check_interrupts(cpu); /* flushes load-charge batch on entry */
     s_compiled_interrupt_resume_pc = prev;
 }

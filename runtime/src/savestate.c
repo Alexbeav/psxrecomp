@@ -787,6 +787,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
     if (s_load_pending >= 0) {
         int slot = s_load_pending;
         int loaded = 0;
+        int preflight_ok = 0;
+        uint32_t saved_pc = 0;
         s_load_pending = -1;
         char path[600];
         const double t_load0 = savestate_mono_ms();
@@ -795,22 +797,33 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         path[0] = '\0';
         if (s_load_blob && s_load_blob_len > 0) {
             const size_t blob_len = s_load_blob_len;
-            loaded = boot_state_load_buffer(s_load_blob, blob_len,
-                                            s_bios_checksum, s_entry_pc, cpu);
+            preflight_ok =
+                boot_state_peek_cpu_pc_buffer(s_load_blob, blob_len, &saved_pc) &&
+                savestate_snapshot_resume_pc_ok(saved_pc);
+            if (preflight_ok)
+                loaded = boot_state_load_buffer(s_load_blob, blob_len,
+                                                s_bios_checksum, s_entry_pc, cpu);
             clear_load_blob();
             if (!loaded) {
                 fprintf(stderr,
-                        "savestate: LOAD FAILED blob (%zu bytes, entry=%08X)\n",
-                        blob_len, (unsigned)s_entry_pc);
+                        "savestate: LOAD FAILED blob (%zu bytes, entry=%08X, "
+                        "resume=0x%08X%s)\n",
+                        blob_len, (unsigned)s_entry_pc, (unsigned)saved_pc,
+                        preflight_ok ? "" : ", rejected before apply");
                 s_load_failed = 1;
                 psx_frontend_on_savestate_notify(1, slot, 0);
             }
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
-            loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
+            preflight_ok = boot_state_peek_cpu_pc(path, &saved_pc) &&
+                           savestate_snapshot_resume_pc_ok(saved_pc);
+            if (preflight_ok)
+                loaded = boot_state_load(path, s_bios_checksum, s_entry_pc, cpu);
             if (!loaded) {
                 fprintf(stderr,
-                        "savestate: LOAD FAILED slot %d %s\n",
-                        slot, path);
+                        "savestate: LOAD FAILED slot %d %s "
+                        "(resume=0x%08X%s)\n",
+                        slot, path, (unsigned)saved_pc,
+                        preflight_ok ? "" : ", rejected before apply");
                 s_load_failed = 1;
                 psx_frontend_on_savestate_notify(1, slot, 0);
             }

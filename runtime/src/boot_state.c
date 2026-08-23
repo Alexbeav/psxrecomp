@@ -784,6 +784,117 @@ int boot_state_check_buffer(const uint8_t* file, size_t file_len,
     return 1;
 }
 
+int boot_state_peek_cpu_pc_buffer(const uint8_t* file, size_t file_len,
+                                  uint32_t* out_pc) {
+    BootStateHeader h;
+    const uint8_t* cur;
+    const uint8_t* end;
+
+    if (!out_pc || !boot_state_parse_header(file, file_len, &h))
+        return 0;
+    cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
+    end = file + file_len;
+    for (uint32_t i = 0; i < h.section_count; ++i) {
+        PstR sh;
+        uint32_t tag = 0, flags = 0;
+        uint64_t len = 0;
+        const uint8_t* payload;
+        uint8_t* inflated = NULL;
+        const uint8_t* cpu_data;
+        uint32_t cpu_len;
+
+        if ((size_t)(end - cur) < 16u)
+            return 0;
+        pst_r_init(&sh, cur, 16);
+        if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &flags) ||
+            !pst_r_u64(&sh, &len))
+            return 0;
+        cur += 16;
+        if (len > 64u * 1024u * 1024u || (uint64_t)(end - cur) < len)
+            return 0;
+        payload = cur;
+        cur += (size_t)len;
+        if (tag != BS_SEC_CPU)
+            continue;
+
+        if (h.version >= 4u && flags == BOOT_STATE_SEC_ZLIB) {
+            PstR lr;
+            uint32_t raw_len = 0;
+            uLong dest_len;
+            if (len < 4u)
+                return 0;
+            pst_r_init(&lr, payload, 4);
+            if (!pst_r_u32(&lr, &raw_len) || raw_len != CPU_REGS_WIRE_BYTES)
+                return 0;
+            inflated = (uint8_t*)malloc(raw_len);
+            if (!inflated)
+                return 0;
+            dest_len = (uLong)raw_len;
+            if (uncompress(inflated, &dest_len, payload + 4,
+                           (uLong)(len - 4u)) != Z_OK ||
+                dest_len != (uLong)raw_len) {
+                free(inflated);
+                return 0;
+            }
+            cpu_data = inflated;
+            cpu_len = raw_len;
+        } else if (flags == 0u && len == CPU_REGS_WIRE_BYTES) {
+            cpu_data = payload;
+            cpu_len = (uint32_t)len;
+        } else {
+            return 0;
+        }
+
+        if (cpu_len != CPU_REGS_WIRE_BYTES) {
+            free(inflated);
+            return 0;
+        }
+        {
+            PstR cpu_r;
+            uint32_t discard;
+            pst_r_init(&cpu_r, cpu_data, cpu_len);
+            for (int reg = 0; reg < 32; ++reg) {
+                if (!pst_r_u32(&cpu_r, &discard)) {
+                    free(inflated);
+                    return 0;
+                }
+            }
+            if (!pst_r_u32(&cpu_r, out_pc)) {
+                free(inflated);
+                return 0;
+            }
+        }
+        free(inflated);
+        return 1;
+    }
+    return 0;
+}
+
+int boot_state_peek_cpu_pc(const char* path, uint32_t* out_pc) {
+    FILE* f;
+    long sz;
+    uint8_t* file;
+    int ok;
+
+    if (!path || !out_pc || !(f = fopen(path, "rb")))
+        return 0;
+    if (fseek(f, 0, SEEK_END) != 0 || (sz = ftell(f)) < 0 ||
+        sz > 64L * 1024L * 1024L || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
+    file = (uint8_t*)malloc((size_t)sz);
+    if (!file) {
+        fclose(f);
+        return 0;
+    }
+    ok = fread(file, 1, (size_t)sz, f) == (size_t)sz &&
+         boot_state_peek_cpu_pc_buffer(file, (size_t)sz, out_pc);
+    free(file);
+    fclose(f);
+    return ok;
+}
+
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {

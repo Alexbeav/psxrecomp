@@ -18,6 +18,7 @@ def main() -> int:
     )
     traps = (ROOT / "runtime/src/traps.c").read_text(encoding="utf-8")
     savestate = (ROOT / "runtime/src/savestate.c").read_text(encoding="utf-8")
+    interrupts = (ROOT / "runtime/src/interrupts.c").read_text(encoding="utf-8")
 
     require(
         scheduler_h,
@@ -90,6 +91,25 @@ def main() -> int:
         )
     if gate >= write:
         raise AssertionError("capture-boundary gate must precede serialization")
+
+    require(
+        savestate,
+        "boot_state_peek_cpu_pc(path, &saved_pc)",
+        "disk-load resume-PC preflight",
+    )
+    preflight = savestate.index("boot_state_peek_cpu_pc(path, &saved_pc)")
+    apply_load = savestate.index("boot_state_load(path", preflight)
+    if preflight >= apply_load:
+        raise AssertionError("state resume-PC preflight must precede state apply")
+
+    wrapper = interrupts[interrupts.index("void psx_check_interrupts_at") :]
+    pending = wrapper.index("if (savestate_pending())")
+    pending_poll = wrapper.index("savestate_poll(cpu, resume_pc);")
+    irq_check = wrapper.index("psx_check_interrupts(cpu);")
+    if not pending < pending_poll < irq_check:
+        raise AssertionError(
+            "explicit block-leader state poll must precede fast IRQ handling"
+        )
 
     snapshot_impl = traps[
         traps.index("int psx_scheduler_snapshot_at(uint32_t resume_pc)") :
