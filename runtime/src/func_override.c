@@ -13,7 +13,16 @@
 
 #include "cpu_state.h"
 
-extern uint32_t psx_read_word(uint32_t addr);
+/* Residency-guard reads go through the UNTRACED peek, never psx_read_word.
+ * psx_read_word is a traced accessor (memory.c): under lockstep it feeds
+ * ls_read_hook, under lockstep replay it RETURNS the replayed value instead
+ * of RAM, and under DuckStation recording it calls ds_note_read. The guard
+ * is a host-side residency check, not a guest memory access — routing it
+ * through the traced path injects phantom reads the oracle side never
+ * performs (dirtying every divergence comparison) and makes the guard
+ * compare replayed data rather than resident bytes. The peek keeps the full
+ * address decode, so a guard on a non-RAM address stays correct. */
+extern uint32_t psx_peek_word_untraced(uint32_t addr);
 
 /* Set by us, read at the top of every psx_dispatch_impl (emitted by
  * recompiler/src/full_function_emitter.cpp) and at the interpreter's
@@ -29,6 +38,7 @@ typedef struct {
     uint64_t       guard_misses;
     uint32_t       guard[FO_MAX_GUARD_WORDS];
     int            n_guard;      /* 0 = unguarded */
+    int            package;      /* 1 = armed by a mod package plan */
 } Entry;
 
 static Entry s_entries[FO_MAX_OVERRIDES];
@@ -53,7 +63,7 @@ static Entry *find(uint32_t phys)
 }
 
 static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
-                      const uint32_t *guard, int n_guard)
+                      const uint32_t *guard, int n_guard, int package)
 {
     if (!fn)                         return FO_ERR_ARGS;
     if (n_guard < 0 || n_guard > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
@@ -61,6 +71,11 @@ static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
     if (s_count >= FO_MAX_OVERRIDES) return FO_ERR_FULL;
 
     const uint32_t phys = normalise(addr);
+    /* phys 0 is the "not inside an override" sentinel for s_active_phys and
+     * the "no bypass armed" sentinel for s_bypass_phys, so an override there
+     * would silently break func_override_call_original. No real function
+     * lives at guest 0 anyway. */
+    if (phys == 0) return FO_ERR_ARGS;
     /* Two overrides on one address is always a mistake, and a silent
      * last-wins would be untraceable. Refuse it. */
     if (find(phys)) return FO_ERR_DUPLICATE;
@@ -75,20 +90,29 @@ static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
     e->fn   = fn;
     for (int i = 0; i < n_guard; i++) e->guard[i] = guard[i];
     e->n_guard = n_guard;
+    e->package = package ? 1 : 0;
     s_count++;
     return FO_OK;
 }
 
 int func_override_add(const char *id, uint32_t addr, FuncOverrideFn fn)
 {
-    return add_common(id, addr, fn, NULL, 0);
+    return add_common(id, addr, fn, NULL, 0, 0);
 }
 
 int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
                               const uint32_t *expected_words, int n_words)
 {
     if (n_words < 1) return FO_ERR_ARGS;
-    return add_common(id, addr, fn, expected_words, n_words);
+    return add_common(id, addr, fn, expected_words, n_words, 0);
+}
+
+int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
+                              const uint32_t *expected_words, int n_words)
+{
+    if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
+    return add_common(id, addr, fn, n_words ? expected_words : NULL, n_words,
+                      1);
 }
 
 /* The hook. Runs on EVERY dispatch, so the common path — nothing registered
@@ -113,7 +137,8 @@ static int hook(CPUState *cpu, uint32_t phys)
             const uint32_t base = 0x80000000u | phys;
             int miss = 0;
             for (int w = 0; w < e->n_guard; w++)
-                if (psx_read_word(base + (uint32_t)(w * 4)) != e->guard[w]) {
+                if (psx_peek_word_untraced(base + (uint32_t)(w * 4)) !=
+                    e->guard[w]) {
                     miss = 1;
                     break;
                 }
@@ -174,22 +199,55 @@ void func_override_install(void)
     g_psx_func_override_hook = (s_count > 0) ? hook : NULL;
 }
 
-int func_override_count(void) { return s_count; }
-
-int func_override_get(int index, char *id_out, uint32_t *addr_out,
-                      uint64_t *calls_out)
+int func_override_reset_package_armed(void)
 {
-    return func_override_get_ex(index, id_out, addr_out, calls_out, NULL,
-                                NULL);
+    /* Drop every package-armed entry and compact, keeping direct
+     * registrations. Direct ones are the game's own always-on faithful
+     * reimplementations: not player-toggleable, identical in both peers'
+     * builds, so netplay has no reason to disarm them. Package-armed ones
+     * ARE player-selected, so a cleared plan must leave no trace of them —
+     * without this the entry survives in the table with the hook still
+     * installed and keeps firing after the vanilla-session banner prints.
+     *
+     * Any in-flight bypass/active marker refers to an entry that may be
+     * disappearing, so clear both rather than leave a dangling address. */
+    int removed = 0;
+    int w = 0;
+    for (int i = 0; i < s_count; i++) {
+        if (s_entries[i].package) { removed++; continue; }
+        if (w != i) s_entries[w] = s_entries[i];
+        w++;
+    }
+    s_count = w;
+    if (removed) {
+        s_active_phys = 0;
+        s_bypass_phys = 0;
+        func_override_install();   /* follows s_count back to NULL if empty */
+    }
+    return removed;
 }
 
-int func_override_get_ex(int index, char *id_out, uint32_t *addr_out,
-                         uint64_t *calls_out, uint64_t *guard_misses_out,
-                         int *guarded_out)
+int func_override_count(void) { return s_count; }
+
+int func_override_get(int index, char *id_out, size_t id_cap,
+                      uint32_t *addr_out, uint64_t *calls_out)
+{
+    return func_override_get_ex(index, id_out, id_cap, addr_out, calls_out,
+                                NULL, NULL);
+}
+
+int func_override_get_ex(int index, char *id_out, size_t id_cap,
+                         uint32_t *addr_out, uint64_t *calls_out,
+                         uint64_t *guard_misses_out, int *guarded_out)
 {
     if (index < 0 || index >= s_count) return 0;
     const Entry *e = &s_entries[index];
-    if (id_out)           { memcpy(id_out, e->id, FO_MAX_ID); }
+    /* Bounded copy: the caller states its buffer size rather than being
+     * silently required to supply FO_MAX_ID bytes. Always NUL-terminated. */
+    if (id_out && id_cap) {
+        strncpy(id_out, e->id, id_cap - 1);
+        id_out[id_cap - 1] = '\0';
+    }
     if (addr_out)         *addr_out         = e->phys;
     if (calls_out)        *calls_out        = e->calls;
     if (guard_misses_out) *guard_misses_out = e->guard_misses;

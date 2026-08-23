@@ -1046,10 +1046,15 @@ enum { XOP_JAL = 0, XOP_JALR = 1, XOP_JR = 2, XOP_J = 3, XOP_DD = 4, XOP_BR = 5,
                       ds_insn = v0 after the path ran */ };
 enum { XSITE_INTERP = 0, XSITE_DD = 1 };
 /* XOP_RES path codes (in the `site` field). */
-enum { XRES_OVERRIDE = 13,
-       XRES_EC_BAIL = 2, XRES_EC_PC = 3, XRES_EC_CONTRACT = 4, XRES_EC_RET = 5,
+enum { XRES_EC_BAIL = 2, XRES_EC_PC = 3, XRES_EC_CONTRACT = 4, XRES_EC_RET = 5,
        XRES_OV_BAIL = 6, XRES_OV_PC = 7, XRES_OV_CONTRACT = 8, XRES_OV_RET = 9,
-       XRES_NONLOCAL = 10, XRES_PCCHAIN = 11, XRES_UNDECODABLE = 12 };
+       XRES_NONLOCAL = 10, XRES_PCCHAIN = 11, XRES_UNDECODABLE = 12,
+       /* Appended, NOT slotted into consult order: unlike CRES (which had a
+        * reserved gap at 6) this enum is dense, so inserting would renumber
+        * the codes above and invalidate every previously captured xprobe
+        * trace. The override tier is consulted FIRST at both call sites; the
+        * wire value carries no ordering meaning. */
+       XRES_OVERRIDE = 13 };
 
 int g_mixed_depth = 0;   /* best-effort interp→compiled nesting depth; reset per frame */
 
@@ -1583,25 +1588,19 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
             uint32_t _cr = callret_begin(cpu, pc, target);   /* call-resolution ring */
 #define CRET(code, rv) do { callret_end(_cr, cpu, (code)); return (rv); } while (0)
             if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */
-#ifdef PSX_HAS_GAME_DISPATCH
-            cpu->pc = 0;
-            if (interp_enter_compiled(cpu, target)) {
-                if (g_psx_call_bail) CRET(CRES_EC_BAIL, 1);  /* wild unwind: cpu->pc = true target */
-                if (cpu->pc != 0) CRET(CRES_EC_PC, 1);
-                if (rd == 0 || rd == 31) {
-                    if (psx_call_contract(cpu, return_pc, site_sp)) CRET(CRES_EC_CONTRACT, 1);
-                }
-                { int _r = dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
-                  CRET(CRES_EC_RET | (_r ? 0x100u : 0u), _r); }
-            }
-#endif
-            /* Function-override tier (func_override.h): consulted between
-             * the compiled and overlay-native backends — the reserved
-             * CRES_OVERRIDE slot. Without this, a call the interpreter
-             * resolves below (overlay-native or local pc-chain) would
-             * bypass an armed override. Handled => the override completed
-             * against guest state; same call contract as a compiled
-             * callee. */
+            /* Function-override tier (func_override.h): consulted BEFORE
+             * every game code backend, matching psx_dispatch_impl. It must
+             * precede interp_enter_compiled, not follow it: that tier calls
+             * psx_dispatch_game_compiled -> entry->fn(cpu) directly and
+             * never re-enters psx_dispatch_impl, so a hook consulted after
+             * it is unreachable for any override on a statically-compiled
+             * function called from interpreted code. Registration would
+             * still succeed and the func_override inventory would still
+             * list the entry, so the miss is invisible — the same
+             * registration-is-not-coverage failure the overlay-native and
+             * pc-chain tiers below already had. Handled => the override
+             * completed against guest state; same call contract as a
+             * compiled callee. */
             {
                 extern int (*g_psx_func_override_hook)(CPUState *cpu,
                                                        uint32_t phys);
@@ -1620,6 +1619,18 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                     }
                 }
             }
+#ifdef PSX_HAS_GAME_DISPATCH
+            cpu->pc = 0;
+            if (interp_enter_compiled(cpu, target)) {
+                if (g_psx_call_bail) CRET(CRES_EC_BAIL, 1);  /* wild unwind: cpu->pc = true target */
+                if (cpu->pc != 0) CRET(CRES_EC_PC, 1);
+                if (rd == 0 || rd == 31) {
+                    if (psx_call_contract(cpu, return_pc, site_sp)) CRET(CRES_EC_CONTRACT, 1);
+                }
+                { int _r = dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+                  CRET(CRES_EC_RET | (_r ? 0x100u : 0u), _r); }
+            }
+#endif
             /* Native overlay candidates get the SAME call contract as
              * statically-compiled callees: run as a unit, resume at
              * return_pc. A bare pc-chain here loses the return obligation
@@ -1819,18 +1830,10 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #define XRES(code) do { (void)(code); } while (0)
 #endif
         if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; return 1; }  /* slice / lockstep-replay: plain transfer, never execute the callee */
-#ifdef PSX_HAS_GAME_DISPATCH
-        cpu->pc = 0;
-        if (interp_enter_compiled(cpu, target)) {
-            if (g_psx_call_bail) { XRES(XRES_EC_BAIL); return 1; }  /* wild unwind: cpu->pc = true target */
-            if (cpu->pc != 0)    { XRES(XRES_EC_PC); return 1; }
-            if (psx_call_contract(cpu, return_pc, site_sp)) { XRES(XRES_EC_CONTRACT); return 1; }
-            XRES(XRES_EC_RET);
-            return dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
-        }
-#endif
         /* Function-override tier: same placement and contract as the JALR
-         * site above (reserved CRES_OVERRIDE slot). */
+         * site above — BEFORE interp_enter_compiled, so an override on a
+         * statically-compiled callee is reachable from interpreted code
+         * (reserved CRES_OVERRIDE slot). */
         {
             extern int (*g_psx_func_override_hook)(CPUState *cpu,
                                                    uint32_t phys);
@@ -1848,6 +1851,16 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
                 }
             }
         }
+#ifdef PSX_HAS_GAME_DISPATCH
+        cpu->pc = 0;
+        if (interp_enter_compiled(cpu, target)) {
+            if (g_psx_call_bail) { XRES(XRES_EC_BAIL); return 1; }  /* wild unwind: cpu->pc = true target */
+            if (cpu->pc != 0)    { XRES(XRES_EC_PC); return 1; }
+            if (psx_call_contract(cpu, return_pc, site_sp)) { XRES(XRES_EC_CONTRACT); return 1; }
+            XRES(XRES_EC_RET);
+            return dirty_ram_finish_call_return(cpu, return_pc, next_pc_out);
+        }
+#endif
         /* Native overlay candidates get the SAME call contract as statically-
          * compiled callees: run as a unit, resume at return_pc. A bare
          * pc-chain here loses the return obligation when the callee runs

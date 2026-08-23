@@ -8884,7 +8884,7 @@ static void handle_wide_full(int id, const char *json)
 static void handle_func_override(int id, const char *json)
 {
     extern int func_override_count(void);
-    extern int func_override_get_ex(int index, char *id_out,
+    extern int func_override_get_ex(int index, char *id_out, size_t id_cap,
                                     uint32_t *addr_out, uint64_t *calls_out,
                                     uint64_t *guard_misses_out,
                                     int *guarded_out);
@@ -8898,15 +8898,27 @@ static void handle_func_override(int id, const char *json)
         uint32_t addr = 0;
         uint64_t calls = 0, misses = 0;
         int guarded = 0;
-        if (!func_override_get_ex(i, oid, &addr, &calls, &misses, &guarded))
+        if (!func_override_get_ex(i, oid, sizeof(oid), &addr, &calls,
+                                  &misses, &guarded))
             break;
-        n += snprintf(buf + n, sizeof(buf) - (size_t)n,
+        /* Clamp before advancing: snprintf returns the length it WOULD have
+         * written, so on truncation an unclamped n exceeds sizeof(buf) and
+         * the next sizeof(buf) - n underflows to a huge size_t. The 256-byte
+         * headroom check below keeps that unreachable at today's caps, but
+         * raising FO_MAX_ID or FO_MAX_OVERRIDES must not silently turn this
+         * into an overflow. */
+        const int w = snprintf(buf + n, sizeof(buf) - (size_t)n,
                       "%s{\"id\":\"%s\",\"addr\":\"0x%08X\",\"calls\":%llu,"
                       "\"guard_misses\":%llu,\"guarded\":%d}",
                       i ? "," : "", oid, addr,
                       (unsigned long long)calls, (unsigned long long)misses,
                       guarded);
-        if ((size_t)n >= sizeof(buf) - 256) break;
+        if (w < 0) break;
+        n += w;
+        if ((size_t)n >= sizeof(buf) - 256) {
+            n = (int)(sizeof(buf) - 256);
+            break;
+        }
     }
     snprintf(buf + n, sizeof(buf) - (size_t)n, "]}");
     send_fmt("%s", buf);

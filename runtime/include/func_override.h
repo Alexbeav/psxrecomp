@@ -23,9 +23,20 @@
  * code backend. That placement is deliberate and load-bearing: one
  * address-keyed hook covers the STATIC EXE, runtime-loaded OVERLAYS and
  * DIRTY RAM alike. The interpreter's JAL/JALR call-resolution tiers consult
- * it too (between enter-compiled and overlay-native — the reserved
- * CRES_OVERRIDE slot), so calls the interpreter resolves locally cannot
- * bypass an override.
+ * it on the SAME terms — before enter-compiled, before overlay-native and
+ * before the local pc-chain (the reserved CRES_OVERRIDE slot) — so no call
+ * the interpreter resolves itself can bypass an override. Ordering there is
+ * not cosmetic: interp_enter_compiled calls psx_dispatch_game_compiled ->
+ * entry->fn(cpu) directly and never re-enters psx_dispatch_impl, so a hook
+ * placed after it is unreachable for any override on a statically-compiled
+ * function reached from interpreted code, while registration and the
+ * func_override inventory both still look healthy.
+ *
+ * SCOPE: overrides are CALL-site keyed. A guest tail transfer (j / jr) into
+ * an overridden address from the dirty-RAM block loop is a TRANSFER, not a
+ * call, and does not consult the hook — see dirty_ram_interp.c's compiled
+ * handoff sites. Registering on a function only ever entered by tail
+ * transfer will show calls == 0.
  *
  * THE CONTRACT
  *
@@ -54,11 +65,21 @@
  * desync replays. Reading host config that never changes mid-session is
  * fine.
  *
- * CYCLE ACCOUNTING. A handled override credits no guest cycles for the code
- * it skipped; on timing-sensitive paths prefer wrapping (call the original
- * via func_override_call_original, then adjust) over wholesale replacement.
- * A cycle-credit parameter is deliberately deferred until the shared cycle
- * core exposes a public credit API — see FAITHFUL_TIMING_PLAN.
+ * CYCLE ACCOUNTING — UNRESOLVED, READ THIS BEFORE USING THE TIER.
+ * A handled override credits NO guest cycles for the code it skipped, so
+ * replacing a function collapses its guest-time cost to zero and shifts IRQ
+ * phase. On timing-sensitive paths prefer wrapping (call the original via
+ * func_override_call_original, then adjust) over wholesale replacement.
+ *
+ * There is NO technical blocker to charging cycles: psx_advance_cycles() is
+ * public in runtime/include/psx_cycles.h and the adjacent BIOS HLE tier
+ * already charges per service with it (bios_hle.c, under its own TIMING
+ * NOTE). What is unresolved is POLICY — whether a credit argument should be
+ * required at registration, and what a wrap should charge given the original
+ * accrues its own cycles. Until that is settled, treat zero-credit as a
+ * known faithfulness gap: acceptable for a player-toggled mod, NOT yet
+ * justified for an always-on reimplementation claiming to be
+ * indistinguishable from the code it replaces. See FAITHFUL_TIMING_PLAN.
  *
  * WHAT IT DOES NOT DO
  *
@@ -70,6 +91,7 @@
 #ifndef PSXRECOMP_FUNC_OVERRIDE_H
 #define PSXRECOMP_FUNC_OVERRIDE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 struct CPUState;
@@ -135,22 +157,42 @@ void func_override_guest_call(struct CPUState *cpu, uint32_t target,
  * guest-level wrap would observe). */
 void func_override_call_original(struct CPUState *cpu);
 
+/* Register on behalf of a mod package plan. Identical to the two calls above
+ * (pass n_words 0 for unguarded) except the entry is tagged package-armed, so
+ * func_override_reset_package_armed can drop it when the plan is cleared.
+ * The mod runtime uses this; game code registering its own always-on
+ * reimplementations should use func_override_add/_add_guarded. */
+int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
+                              const uint32_t *expected_words, int n_words);
+
 /* Install the dispatcher hook. Call once at startup AFTER registering (the
  * mod runtime calls it again after arming package-gated overrides — safe).
  * Cheap with nothing registered — it leaves the hook NULL, so dispatch is
  * byte-identical to a build without the tier. */
 void func_override_install(void);
 
+/* Drop every package-armed override, keep direct registrations, re-install
+ * (so the hook goes back to NULL if the table empties). Returns how many were
+ * dropped. THIS IS REQUIRED FOR CORRECTNESS, not a convenience: a cleared mod
+ * plan stops activation/vblank callbacks simply by no longer being iterated,
+ * but an armed override lives in this module's own table, so without an
+ * explicit reset it keeps firing after the plan is gone — including after
+ * netplay's clear-mods announces a vanilla session, which is a peer
+ * divergence. Direct registrations are deliberately kept: they are the game's
+ * own always-on faithful reimplementations, present identically in both
+ * peers' builds and not player-selectable. */
+int func_override_reset_package_armed(void);
+
 /* Introspection, surfaced by the `func_override` TCP command. An override
  * whose `calls` stays 0 was never reached: wrong address, or that code path
  * never ran. `guard_misses` counts consults declined by the residency
  * guard. */
 int  func_override_count(void);
-int  func_override_get(int index, char *id_out, uint32_t *addr_out,
-                       uint64_t *calls_out);
-int  func_override_get_ex(int index, char *id_out, uint32_t *addr_out,
-                          uint64_t *calls_out, uint64_t *guard_misses_out,
-                          int *guarded_out);
+int  func_override_get(int index, char *id_out, size_t id_cap,
+                       uint32_t *addr_out, uint64_t *calls_out);
+int  func_override_get_ex(int index, char *id_out, size_t id_cap,
+                          uint32_t *addr_out, uint64_t *calls_out,
+                          uint64_t *guard_misses_out, int *guarded_out);
 
 #ifdef __cplusplus
 }

@@ -1086,6 +1086,20 @@ bool mod_runtime_clear_for_netplay(std::string* error) {
     s.disc_enabled = false;
     s.disc_guard_failed = false;
     s.error.clear();
+    /* Clearing s.plan is enough for activation/vblank callbacks — they only
+     * run while something iterates the plan. Function overrides are armed
+     * into func_override.c's own table with the dispatcher hook installed,
+     * so they survive a cleared plan and keep firing unless explicitly
+     * disarmed. That matters most on the rematch path (main.cpp jumps to
+     * session_reboot, which is PAST mod_runtime_activate_plugins and
+     * func_override_install), where a modded session entering netplay would
+     * otherwise print the vanilla banner and still run its overrides —
+     * diverging from a peer without the mod. Also re-arm-able: dropping the
+     * armed flag lets a later plan register the same override again. */
+    const int disarmed = func_override_reset_package_armed();
+    if (disarmed > 0)
+        for (FunctionOverridePlugin& pending : function_override_plugins())
+            pending.armed = false;
     if (error) error->clear();
     std::fprintf(stdout, "psxrecomp: mods cleared for netplay (vanilla session)\n");
     return true;
@@ -1243,13 +1257,9 @@ extern "C" void mod_runtime_activate_plugins(void) {
                 return plugin.id == pending.plugin;
             });
         if (!selected) continue;
-        const int rc =
-            pending.n_guard
-                ? func_override_add_guarded(pending.id.c_str(),
-                                            pending.address, pending.fn,
-                                            pending.guard, pending.n_guard)
-                : func_override_add(pending.id.c_str(), pending.address,
-                                    pending.fn);
+        const int rc = func_override_add_package(
+            pending.id.c_str(), pending.address, pending.fn,
+            pending.n_guard ? pending.guard : nullptr, pending.n_guard);
         pending.armed = (rc == FO_OK);
     }
     func_override_install();
