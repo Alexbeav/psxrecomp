@@ -402,7 +402,15 @@ uint32_t g_ra_load_snap_gpr[32] = {0};
  * interp blocks across the call). This is the piece the s3 tripwire lacks:
  * the tripwire names the callee that came back smeared; this ring names the
  * RETURN PATH that let it come back. Zero-cost when disarmed. */
+/* Armed iff the window is NON-EMPTY (hi > lo). It used to be `lo != 0`, which
+ * made lo=0 a silent off switch: `callret_watch lo=0 hi=0x200000` looked like
+ * "record the whole address space", replied ok, and then recorded nothing —
+ * so an empty ring read as "these events never happened" rather than "the
+ * ring was never on". A window is a window; 0 is a legal floor. Default 0/0
+ * is still an empty window, so the ring stays disarmed (and zero-cost) until
+ * someone sets one. */
 uint32_t g_callret_lo = 0, g_callret_hi = 0;
+int callret_armed(void) { return g_callret_hi > g_callret_lo; }
 /* MUST stay field-for-field identical to the local mirror `E` in
  * debug_server.c handle_callret_watch() (which dumps this ring through an
  * opaque extern; a divergence is silent garbage, not a compile error). */
@@ -429,7 +437,8 @@ enum { CRES_PLAIN = 1,
 extern uint64_t g_dispatch_static_hits;   /* debug_server.c; bumped by generated dispatch */
 extern uint64_t psx_cycle_count;
 static uint32_t callret_begin(CPUState *cpu, uint32_t pc, uint32_t target) {
-    if (!g_callret_lo || pc < g_callret_lo || pc >= g_callret_hi)
+    if (g_callret_hi <= g_callret_lo || pc < g_callret_lo ||
+        pc >= g_callret_hi)
         return 0xFFFFFFFFu;
     uint32_t idx = (uint32_t)(g_callret_seq++ & (CALLRET_CAP - 1u));
     CallRetEnt *e = &g_callret_ring[idx];
@@ -1115,13 +1124,77 @@ static void xprobe_flush_frame(void) {
 /* Record one boundary crossing. want_detail=1 for interp-site guest transfers
  * (rich context), 0 for the dd-site (count + depth only). Runs the per-frame
  * flush on frame change (leak-proof reset of g_mixed_depth) and the early trip. */
-static int g_xprobe_watch(uint32_t t) {
-    return t == 0x8001A954u || t == 0x80046264u || t == 0x8004630Cu || t == 0x8004DFA0u
-        /* MMX6 card-load firstfile flow (mmx6_card_load_regression_state):
-         * the mount 0x8001C1AC (works) vs firstfile flow 0x8001C4C0 (its body
-         * never runs) — record every call event + resolution for both. */
-        || t == 0x8001C1ACu || t == 0x8001C4C0u;
+/* Watched call targets — CONFIGURED, never compiled in.
+ *
+ * This used to be a hardcoded list of six guest addresses from two specific
+ * titles (an MMX6 card-load investigation and a Tomba flow). Baking one
+ * game's addresses into the shared runtime makes the JAL-site resolution ring
+ * record for those titles and SILENTLY NOTHING for every other one: an
+ * investigation on any other game reads an empty `watched` dump and cannot
+ * tell "this target is never called" from "this build was never able to watch
+ * it". That is the same defect class as beads-eio.3.21, and it is why the JAL
+ * call site was unusable while measuring beads-eio.3.59 — only the JALR
+ * callret ring could be used.
+ *
+ * Default is EMPTY: no title is privileged, and a game that wants targets
+ * watched says so at runtime. Set via the `xprobe_watch` TCP command or the
+ * PSX_XPROBE_WATCH environment variable (comma/semicolon/space separated,
+ * 0x-prefixed or decimal) so a watch can be in place from instruction zero
+ * without a rebuild — the ring is always-on, the filter is what you choose.
+ * Compared on the normalised address so a KSEG or physical form both match. */
+#define XPROBE_WATCH_MAX 32
+static uint32_t s_xprobe_watch[XPROBE_WATCH_MAX];
+static int      s_xprobe_watch_n = 0;
+static int      s_xprobe_watch_env_done = 0;
+
+static void xprobe_watch_parse(const char *spec)
+{
+    s_xprobe_watch_n = 0;
+    if (!spec) return;
+    const char *p = spec;
+    while (*p && s_xprobe_watch_n < XPROBE_WATCH_MAX) {
+        while (*p == ',' || *p == ';' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 0);
+        if (end == p) break;
+        p = end;
+        s_xprobe_watch[s_xprobe_watch_n++] = (uint32_t)v & 0x1FFFFFFFu;
+    }
 }
+
+/* Env seeding is lazy so it works no matter which subsystem touches the ring
+ * first, and costs one branch after the first call. */
+static int g_xprobe_watch(uint32_t t) {
+    if (!s_xprobe_watch_env_done) {
+        s_xprobe_watch_env_done = 1;
+        const char *env = getenv("PSX_XPROBE_WATCH");
+        if (env && *env) xprobe_watch_parse(env);
+    }
+    if (s_xprobe_watch_n == 0) return 0;   /* nothing watched: zero-cost */
+    const uint32_t phys = t & 0x1FFFFFFFu;
+    for (int i = 0; i < s_xprobe_watch_n; i++)
+        if (s_xprobe_watch[i] == phys) return 1;
+    return 0;
+}
+
+/* Control plane for the `xprobe_watch` TCP command. set() replaces the list
+ * (NULL or empty clears it); get() reports it so a caller can never mistake
+ * "nothing watched" for "watched but never called". */
+void dirty_ram_xprobe_watch_set(const char *spec)
+{
+    s_xprobe_watch_env_done = 1;   /* explicit set wins over the env */
+    xprobe_watch_parse(spec);
+}
+
+int dirty_ram_xprobe_watch_get(int index, uint32_t *phys_out)
+{
+    if (index < 0 || index >= s_xprobe_watch_n) return 0;
+    if (phys_out) *phys_out = s_xprobe_watch[index];
+    return 1;
+}
+
+int dirty_ram_xprobe_watch_count(void) { return s_xprobe_watch_n; }
 static void xprobe_event(uint32_t src_pc, uint8_t op, uint8_t site, uint32_t target,
                          uint32_t ds_insn, uint32_t sp, uint32_t ra, int want_detail);
 /* Watched-target call note for NON-interp call sites (overlay shard call-outs
@@ -2912,7 +2985,11 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
         cosim_exec_one_begin();
         int transferred = exec_one_fetched(cpu, pc, insn, &next_pc);
 #ifndef PSX_NO_DEBUG_TOOLS
-        if (g_s3_smear_lo && !g_s3_smear_valid &&
+        /* Armed iff the window is NON-EMPTY, same as the callret ring: a `lo`
+         * test made address 0 a silent off switch, so lo=0 with a real hi
+         * recorded nothing while the command answered ok. Since this watch
+         * clears `hi` whenever it is omitted, {"lo":"0"} still disarms. */
+        if (g_s3_smear_hi > g_s3_smear_lo && !g_s3_smear_valid &&
             pc >= g_s3_smear_lo && pc < g_s3_smear_hi &&
             cpu->gpr[19] != before_s3 &&
             (g_s3_smear_excl == 0u || insn != g_s3_smear_excl)) {
