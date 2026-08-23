@@ -2535,6 +2535,23 @@ static int host_refresh_is_approx_60hz(void) {
     return g_host_refresh_hz >= 58.8 && g_host_refresh_hz <= 61.2;
 }
 
+/* PAL titles (GP1(08h) bit 3 set) present at 50 Hz. Follow the GPU video
+ * standard for the wall-clock period exactly as the VBlank/HBlank periods do
+ * (interrupts.c / timers.c): 20.000 ms instead of 1000/59.94. An explicit mod
+ * native-VBlank-rate override still wins. Uncapped (<= 0) stays uncapped.
+ * (T32, MGS PAL: the game ran 1.2x fast and a ~60 Hz panel's driver vsync
+ * cannot own a 50 Hz cadence.) */
+static constexpr double PSX_FRAME_PERIOD_PAL_MS = 1000.0 / 50.0;
+static int present_video_standard_is_pal(void) {
+    extern int gpu_video_standard_is_pal(void);
+    return gpu_video_standard_is_pal();
+}
+static double present_effective_frame_period_ms(void) {
+    if (g_frame_period_ms <= 0.0) return g_frame_period_ms;
+    if (g_mod_native_vblank_rate) return g_frame_period_ms;
+    return present_video_standard_is_pal() ? PSX_FRAME_PERIOD_PAL_MS : g_frame_period_ms;
+}
+
 static int present_vsync_owns_cadence(void) {
     if (g_video_vsync == 0 || g_present_vsync_disabled)
         return 0;
@@ -2544,7 +2561,26 @@ static int present_vsync_owns_cadence(void) {
         return 0;
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
+    if (present_video_standard_is_pal() && !g_mod_native_vblank_rate)
+        return 0;   /* 50 Hz guest: a ~60 Hz panel's vsync must not own cadence */
     return host_refresh_is_approx_60hz();
+}
+
+/* The GP1 video standard can flip at runtime (EU BIOS shell -> game, or a
+ * title toggling modes). Re-apply the present cadence (swap interval) when it
+ * does, so the pacer/vsync ownership above takes effect immediately. */
+static void present_track_video_standard(void) {
+    static int s_last_pal = -1;
+    const int pal = present_video_standard_is_pal();
+    if (pal == s_last_pal) return;
+    if (s_last_pal >= 0) {
+        apply_present_cadence();
+        std::printf("psxrecomp: video standard now %s; present cadence %s (%.4f ms/frame)\n",
+                    pal ? "PAL (50 Hz)" : "NTSC (59.94 Hz)",
+                    present_vsync_owns_cadence() ? "driver vsync" : "wall-clock pacer",
+                    present_effective_frame_period_ms());
+    }
+    s_last_pal = pal;
 }
 
 static int present_effective_swap_interval(void) {
@@ -6518,7 +6554,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             if (mult >= 2 && g_frame_period_ms > 0.0) {
                 uint64_t perf_start = runtime_perf_section_begin();
                 frame_pacer_wait(&s_frame_pacer,
-                                 g_frame_period_ms / (double)mult);
+                                 present_effective_frame_period_ms() / (double)mult);
                 runtime_perf_section_end(perf_start,
                                          &g_runtime_perf.pacer_ticks);
                 latency_ring_mark(LAT_PACED);
@@ -6553,7 +6589,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
             uint64_t perf_start = runtime_perf_section_begin();
             frame_pacer_wait(
                 &s_frame_pacer,
-                g_frame_period_ms / (double)g_turbo_load_wall_multiplier);
+                present_effective_frame_period_ms() / (double)g_turbo_load_wall_multiplier);
             runtime_perf_section_end(
                 perf_start, &g_runtime_perf.pacer_ticks);
             latency_ring_mark(LAT_PACED);
@@ -6616,8 +6652,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * resim. */
     if (!psx_netplay_active() && !psx_selfcheck_resim_active()) {
         uint64_t perf_start = runtime_perf_section_begin();
+        present_track_video_standard();
         if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())
-            frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+            frame_pacer_wait(&s_frame_pacer, present_effective_frame_period_ms());
         runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
         latency_ring_mark(LAT_PACED);
 
@@ -7136,8 +7173,9 @@ static void sdl_vblank_present(void) {
         return;
     }
     uint64_t perf_start = runtime_perf_section_begin();
+    present_track_video_standard();
     if (present_should_wall_pace())
-        frame_pacer_wait(&s_frame_pacer, g_frame_period_ms);
+        frame_pacer_wait(&s_frame_pacer, present_effective_frame_period_ms());
     runtime_perf_section_end(perf_start, &g_runtime_perf.pacer_ticks);
     latency_ring_mark(LAT_PACED);
 }

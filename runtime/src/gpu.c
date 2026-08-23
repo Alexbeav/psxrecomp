@@ -3095,6 +3095,15 @@ int gpu_display_is_depth24(void) {
     return (int)(display_depth & 1u);
 }
 
+/* Video standard as the hardware defines it: GP1(08h) bit 3 (GPUSTAT.20).
+ * 0 = NTSC (60 Hz VBlank, 263 lines), 1 = PAL (50 Hz VBlank, 314 lines).
+ * The EU BIOS shell and PAL titles set it themselves; a console powers up
+ * NTSC-timed until the first GP1(08h). Consumers: VBlank/HBlank periods in
+ * interrupts.c/timers.c and the wall-clock pacer in main.cpp (T32, MGS PAL). */
+int gpu_video_standard_is_pal(void) {
+    return (int)(video_mode & 1u);
+}
+
 void gpu_get_display_info(GpuDisplayInfo* out) {
     out->display_x = display_area_x;
     out->display_y = display_area_y;

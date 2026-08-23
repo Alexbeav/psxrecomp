@@ -178,8 +178,19 @@ void psx_irq_raise(uint32_t bit, uint32_t detail)
 
 /* Dispatch counter for vblank scheduling. */
 #define VBLANK_INTERVAL 50000        /* legacy: dispatch-count fallback (unused for VBlank gating now) */
-#define VBLANK_CYCLES   564480u      /* 33.8688 MHz / 60 Hz — real PSX NTSC VBlank period */
-#define VBLANK_DEFER_STALE_CYCLES (VBLANK_CYCLES * 10ull)
+/* VBlank period in guest cycles follows the GPU video standard (GP1(08h)
+ * bit 3), as on hardware: NTSC 33.8688 MHz / 60 Hz = 564,480; PAL 33.8688 MHz
+ * / 50 Hz = 677,376. A PAL title ticked at the NTSC period sees 60 VBlanks per
+ * guest second (1.2x logic speed). Before this the constant was NTSC-only
+ * (T32, MGS PAL: measured 564,480 cycles/VBlank with GPUSTAT.20 = PAL). */
+#define VBLANK_CYCLES_NTSC 564480u
+#define VBLANK_CYCLES_PAL  677376u
+extern int gpu_video_standard_is_pal(void);
+static inline uint32_t vblank_period_cycles(void) {
+    return gpu_video_standard_is_pal() ? VBLANK_CYCLES_PAL : VBLANK_CYCLES_NTSC;
+}
+#define VBLANK_CYCLES   vblank_period_cycles()
+#define VBLANK_DEFER_STALE_CYCLES ((uint64_t)VBLANK_CYCLES * 10ull)
 static uint32_t dispatch_count;
 static uint64_t total_checks;
 static uint32_t cycles_since_vblank;  /* incremented by interrupts_advance_cycles */
