@@ -679,6 +679,15 @@ static int defer_switch_enabled(void) {
     return s;
 }
 
+/* Exposed for the dirty-RAM interpreter: a deferred in-exception thread switch
+ * is honored only at a site-0 poll with a materialized resume PC. An
+ * interpreted thread that never leaves one local-flow run (MGS's debug-console
+ * poll loop spins on a stubbed get_char: lw/beqz/jal/bltz) never reaches such a
+ * poll on its own, so the guest's switch would be deferred forever and every
+ * other task starves (MGS PAL boot black screen, T32). The interpreter uses
+ * this to surface to the dispatcher at its next committed transfer. */
+int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
+
 static int same_guest_pc(uint32_t a, uint32_t b) {
     return (((a ^ b) & 0x1FFFFFFFu) == 0);
 }
@@ -1337,6 +1346,12 @@ void psx_check_interrupts(CPUState* cpu) {
                 debug_server_log_thread_event(32, cpu, from_tcb, to_tcb, resume_pc);
                 g_dirty_interp_active = 0;
                 s_compiled_interrupt_resume_pc = 0;
+                /* The interpreter's entry poll publishes its entry PC in the
+                 * dirty resume latch so this boundary can be honored; the longjmp
+                 * skips that frame's restore, and the latch is transient (scoped
+                 * to a pump call), so it must read 0 once we land in the
+                 * scheduler — else a later compiled poll would take it as EPC. */
+                g_dirty_safe_resume_pc = 0;
                 g_sched_escape.target_tcb = to_tcb;
                 g_sched_escape.resume_pc  = 0;
                 g_sched_escape.reason     = PSX_RUN_YIELD_TO_TCB;
