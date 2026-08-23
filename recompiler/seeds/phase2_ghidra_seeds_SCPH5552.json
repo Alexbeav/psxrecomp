@@ -1,7 +1,7 @@
 {
   "schema": "psxrecomp phase2 seeds",
-  "source": "phase2_ghidra_seeds.json filtered vs SCPH5552 ROM (64-byte window)",
-  "seed_count": 534,
+  "source": "phase2_ghidra_seeds.json filtered vs SCPH5552 ROM (64-byte window); reference ROM sha256 71af94d1e47a68c11e8fdb9f8368040601514a42a5a399cda48c7d3bff1e99d3; target ROM sha256 1faaa18fa820a0225e488d9f086296b8e6c46df739666093987ff7d8fd352c09; kept 560 dropped 568",
+  "seed_count": 560,
   "seeds": [
     {
       "address": "0xBFC00000",
@@ -2642,6 +2642,136 @@
     {
       "address": "0xBFC0D4F0",
       "rationale": "kernel jump-table target: A0:B4 (GetSystemInfo-family) \u2014 ROM-resident entry of the post-init A0/B0/C0 tables (read from live kernel RAM 0x200/0x874/0x674); reachable only through the vector table, invisible to transitive discovery. Class found via MMX6 card-check: A0:2B memset dispatch-missed silently, killing the save-scan (2026-07-02)."
+    },
+    {
+      "address": "0xBFC0192C",
+      "label": "midfn_BFC0192C_dispatch_entry",
+      "rationale": "PSX-BIOS-002: runtime dispatch miss at mid-function entry of 0xBFC01920 (ra 0xBFC06814) on disc-wired boot; observed identically for MOHU, GT and C-12 SCUS-94666"
+    },
+    {
+      "address": "0xBFC08620",
+      "label": "midfn_BFC08620_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC08520",
+      "label": "midfn_BFC08520_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC0C16C",
+      "label": "midfn_BFC0C16C_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04830",
+      "label": "midfn_BFC04830_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC048F0",
+      "label": "midfn_BFC048F0_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04F9C",
+      "label": "midfn_BFC04F9C_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04DCC",
+      "label": "midfn_BFC04DCC_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC0504C",
+      "label": "midfn_BFC0504C_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04A9C",
+      "label": "midfn_BFC04A9C_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04C18",
+      "label": "midfn_BFC04C18_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC05084",
+      "label": "midfn_BFC05084_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC07814",
+      "label": "midfn_BFC07814_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC04BA4",
+      "label": "midfn_BFC04BA4_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC07974",
+      "label": "midfn_BFC07974_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC07968",
+      "label": "midfn_BFC07968_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC01E14",
+      "label": "midfn_BFC01E14_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC07228",
+      "label": "midfn_BFC07228_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC048B0",
+      "label": "midfn_BFC048B0_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC0C190",
+      "label": "midfn_BFC0C190_dispatch_entry",
+      "rationale": "PSX-BIOS-002 iterative dispatch-miss seed (C-12 SCUS-94666 boot chain)"
+    },
+    {
+      "address": "0xBFC06660",
+      "label": "game_called_bios_helper_BFC06660",
+      "rationale": "PSX-BOOT-001: 007 TWINE SLUS-01272 fail-fast at 0xBFC06660 with ra=0x80010184 (game crt0/text) on SCPH1001 skip-to-game, a0=2 a1=0xA00091E0 - game-called ROM helper, same class as C-12 crt0 seeds"
+    },
+    {
+      "address": "0xBFC02B7C",
+      "label": "game_called_bios_helper_BFC02B7C",
+      "rationale": "PSX-BOOT-001: 007 TWINE SLUS-01272 fail-fast at 0xBFC02B7C with ra=0x80063A50 (runtime-loaded game code), a0=0x800884DC - second game-called ROM helper behind 0xBFC06660"
+    },
+    {
+      "address": "0xBFC03884",
+      "label": "game_called_bios_helper_BFC03884",
+      "rationale": "PSX-BOOT-001: 007 TWINE SLUS-01272 fail-fast at 0xBFC03884 with ra=0x80030CDC (level-load path), a0=0x8010543C - third game-called ROM helper (behind 0xBFC06660, 0xBFC02B7C)"
+    },
+    {
+      "address": "0xBFC0C0B0",
+      "label": "moh_card_path_rom_helper",
+      "rationale": "MOH SLUS-00974 memory-card check calls this ROM addr (ra 0x80076F04); fail-fast unknown-dispatch at the save screen 2026-08-18 (PSX-BIOS-002 pattern)"
+    },
+    {
+      "address": "0xBFC03A94",
+      "label": "mgs_loader_bios_helper",
+      "rationale": "dispatch_miss: MGS PAL (SLES-01370) loader calls here at handoff (ra=0x80060970) - frame-871 wedge, psx_crash.txt 2026-08-19"
+    },
+    {
+      "address": "0xBFC0A554",
+      "label": "mgs_loader_bios_helper_bfc0a554",
+      "rationale": "dispatch_miss: MGS PAL boot chain (seed loop 2026-08-19)"
     }
   ],
   "excluded": [
