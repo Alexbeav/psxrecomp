@@ -132,6 +132,11 @@ void psx_frontend_on_savestate_notify(int is_load, int slot, int ok);
  * longjmp to the scheduler (never returns in that case). Near-free when idle. */
 void savestate_poll(CPUState* cpu, uint32_t resume_pc);
 
+/* Outermost same-thread IRQ return: CPUState contains the exact interrupted
+ * game registers again, while the handler host continuation has finished.
+ * Admit a staged save here instead of waiting for a lucky ordinary poll. */
+void savestate_poll_irq_return(CPUState* cpu, uint32_t resume_pc);
+
 #ifdef __cplusplus
 }
 #endif

@@ -8,6 +8,7 @@
 #include "interrupts.h"
 #include "psx_cycles.h"
 #include "psx_icache.h"    /* g_psx_icache_tv — fetch-cost tags in BS_SEC_ICACHE */
+#include "psx_scheduler.h"
 #include "pst_wire.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -370,12 +371,17 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 16;
+    h.section_count = 17;
 
     ok = write_header_le(o, &h);
 
     if (ok) ok = write_cpu_section(o, cpu);
     if (ok) ok = write_section(o, BS_SEC_RAM,  memory_get_ram_ptr(),        RAM_SIZE);
+    if (ok) {
+        uint8_t sched[PSX_SCHEDULER_SNAPSHOT_BYTES];
+        psx_scheduler_snapshot_write(sched, sizeof sched);
+        ok = write_section(o, BS_SEC_SCHED, sched, sizeof sched);
+    }
     if (ok) ok = write_section(o, BS_SEC_SPAD, memory_get_scratchpad_ptr(), SPAD_SIZE);
     if (ok) {
         /* 12B: i_stat, i_mask, cycles_since_vblank. Zeroing csv on warm load
@@ -546,6 +552,10 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
             psx_kernel_bless_note_range(0, RAM_SIZE);
         }
         return 1;
+    case BS_SEC_SCHED:
+        /* RAM precedes this section in every v6 stream, so guest TCB pointers
+         * can be validated against the restored kernel state. */
+        return psx_scheduler_snapshot_read(p, len, cpu);
     case BS_SEC_SPAD:
         if (len != SPAD_SIZE) return 0;
         memcpy(memory_get_scratchpad_ptr(), p, SPAD_SIZE);
@@ -917,7 +927,8 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_CPU)|(1u<<BS_SEC_RAM)|(1u<<BS_SEC_SPAD)|(1u<<BS_SEC_IRQ)|
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
-        (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY);
+        (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY)|
+        (1u<<BS_SEC_SCHED);
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();

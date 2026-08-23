@@ -117,6 +117,17 @@ int psx_scheduler_snapshot_at(uint32_t resume_pc);
  * resume latch. User saves in HLE mode defer until this boundary. */
 int psx_scheduler_snapshot_boundary_active(void);
 
+/* Disk/ring snapshot wire for logical scheduler state that is not stored in
+ * guest RAM. The one-level return TCB is required when a yielded target later
+ * returns to its caller; omitting it can leave a restored title in a live BIOS
+ * loop even though CPU/RAM/device restoration succeeded. */
+#define PSX_SCHEDULER_SNAPSHOT_BYTES 16u
+void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len);
+int  psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len,
+                                 struct CPUState *cpu);
+int  psx_scheduler_disk_snapshot_ready(void);
+uint32_t psx_scheduler_snapshot_return_tcb(void);
+
 /* After resume_at, dispatch is top-level — there is no abandoned mid-block
  * native chain under the resume PC. Sentinel same-thread RFE must not publish
  * pc=0 / "continue live chain" (that is GUEST_EXIT). Active until the first

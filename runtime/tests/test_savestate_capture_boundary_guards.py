@@ -19,6 +19,10 @@ def main() -> int:
     traps = (ROOT / "runtime/src/traps.c").read_text(encoding="utf-8")
     savestate = (ROOT / "runtime/src/savestate.c").read_text(encoding="utf-8")
     interrupts = (ROOT / "runtime/src/interrupts.c").read_text(encoding="utf-8")
+    boot_state = (ROOT / "runtime/src/boot_state.c").read_text(encoding="utf-8")
+    boot_state_h = (ROOT / "runtime/include/boot_state.h").read_text(
+        encoding="utf-8"
+    )
     memcard = (ROOT / "runtime/src/memcard.c").read_text(encoding="utf-8")
     main_cpp = (ROOT / "runtime/src/main.cpp").read_text(encoding="utf-8")
 
@@ -111,8 +115,27 @@ def main() -> int:
         "sp_phys < 0x00800000u",
         "g_psx_dispatch_depth == 1",
         "overlay_loader_call_unit_depth() == 0",
+        "psx_scheduler_disk_snapshot_ready()",
     ):
         require(savestate, needle, "flat RAM-stack capture guard")
+
+    require(
+        savestate,
+        "void savestate_poll_irq_return(CPUState* cpu, uint32_t resume_pc)",
+        "outermost IRQ-return save admission",
+    )
+    require(
+        interrupts,
+        "savestate_poll_irq_return(cpu, g_exception_real_epc)",
+        "IRQ-return scheduler handoff",
+    )
+    for needle in (
+        "BS_SEC_SCHED",
+        "psx_scheduler_snapshot_write",
+        "psx_scheduler_snapshot_read",
+    ):
+        if needle not in boot_state and needle not in boot_state_h:
+            raise AssertionError(f"missing scheduler snapshot contract: {needle}")
     if "((pc ^ ra) & 0x1FFFFFFFu) == 0u" in savestate:
         raise AssertionError(
             "serialized guest RA must not be mistaken for host continuation ownership"

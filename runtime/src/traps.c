@@ -17,6 +17,7 @@
 #include "psx_scheduler.h" /* deterministic TCB scheduler carve-out (scaffolding) */
 #include "savestate.h"   /* scheduler-top coherent disk save/load boundary */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
+#include "pst_wire.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -52,6 +53,8 @@ static uint32_t g_sched_return_tcb = 0;
  * materialized and before psx_dispatch creates a new host continuation. */
 static int g_sched_snapshot_boundary = 0;
 static int g_in_scheduler_run = 0;
+
+extern int interrupts_scheduler_disk_snapshot_ready(void);
 
 int psx_scheduler_snapshot_boundary_active(void)
 {
@@ -751,6 +754,48 @@ void psx_scheduler_resume_at(uint32_t resume_pc)
         psx_irq_arm_compiled_resume_pc(resume_pc);
     }
     longjmp(g_scheduler_jmpbuf, 1); /* unwind to psx_scheduler_run; never returns */
+}
+
+int psx_scheduler_disk_snapshot_ready(void)
+{
+    return interrupts_scheduler_disk_snapshot_ready();
+}
+
+uint32_t psx_scheduler_snapshot_return_tcb(void)
+{
+    return g_sched_return_tcb;
+}
+
+void psx_scheduler_snapshot_write(uint8_t *out, uint32_t len)
+{
+    PstW w;
+    if (!out || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return;
+    pst_w_init(&w, out, len);
+    (void)pst_w_u32(&w, g_sched_return_tcb);
+    (void)pst_w_u32(&w, 0u);
+    (void)pst_w_u32(&w, 0u);
+    (void)pst_w_u32(&w, 0u);
+}
+
+int psx_scheduler_snapshot_read(const uint8_t *in, uint32_t len, CPUState *cpu)
+{
+    PstR r;
+    uint32_t return_tcb, reserved0, reserved1, reserved2;
+    if (!in || !cpu || len != PSX_SCHEDULER_SNAPSHOT_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &return_tcb) ||
+        !pst_r_u32(&r, &reserved0) ||
+        !pst_r_u32(&r, &reserved1) ||
+        !pst_r_u32(&r, &reserved2))
+        return 0;
+    if (reserved0 || reserved1 || reserved2) return 0;
+    if (return_tcb && !psx_is_valid_tcb(cpu, return_tcb)) return 0;
+    g_sched_return_tcb = return_tcb;
+    g_sched_escape.target_tcb = 0;
+    g_sched_escape.resume_pc = 0;
+    g_sched_escape.reason = PSX_RUN_CONTINUE;
+    g_sched_top_level_resume = 0;
+    return 1;
 }
 
 int psx_scheduler_snapshot_at(uint32_t resume_pc)

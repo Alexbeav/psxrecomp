@@ -39,10 +39,11 @@ extern "C" {
 /* v1 = incomplete RAM-only; v2 = full machine but host-struct memcpy (padding);
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
- * v5 = v4 + CD-ROM Sub-Q replacement state. */
-#define BOOT_STATE_VERSION 5u
-/* v5 intentionally breaks older savestates after the CD-ROM wire grew. */
-#define BOOT_STATE_VERSION_MIN_READ 5u
+ * v5 = v4 + CD-ROM Sub-Q replacement state;
+ * v6 = v5 + deterministic scheduler continuation state. */
+#define BOOT_STATE_VERSION 6u
+/* v6 intentionally rejects states that omitted the scheduler continuation. */
+#define BOOT_STATE_VERSION_MIN_READ 6u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -101,6 +102,7 @@ enum {
                               apart (MotK abort@940: fin cyc Δ8, v0 5c83/5c86
                               from identical baselines). Optional on load for
                               old blobs (left untouched when absent).          */
+    BS_SEC_SCHED  = 0x11,  /* deterministic scheduler return continuation       */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */

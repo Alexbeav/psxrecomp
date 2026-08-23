@@ -664,6 +664,11 @@ static int      s_defer_switch_pending = 0;
 static uint32_t s_defer_switch_target  = 0;  /* TCB PCB[0] should name after the switch */
 static uint32_t s_defer_switch_from    = 0;  /* the interrupted thread to re-save cleanly */
 
+int interrupts_scheduler_disk_snapshot_ready(void)
+{
+    return !s_defer_switch_pending;
+}
+
 /* A/B toggle: PSX_DEFER_SWITCH=0 forces the legacy immediate-switch behavior
  * (longjmp the instant a mid-exception ChangeThread is detected, regardless of
  * nesting) so the deferred-switch fix can be compared against the baseline
@@ -1960,6 +1965,16 @@ irq_deliver_eval:
     /* Nested delivery: a level-2 exit must leave level-1 flagged. */
     in_exception = prev_in_exception;
     if (exception_nest_depth > 0) exception_nest_depth--;
+
+    /* A same-thread outermost IRQ return is the reliable disk-save handoff:
+     * the handler host frames are finished and do_restore has materialized the
+     * exact interrupted registers. Longjmp from here abandons only the live
+     * guest continuation and re-enters it from the saved block leader. */
+    if (prev_in_exception == 0 && entry_tcb != 0u && entry_tcb == exit_tcb &&
+        do_restore && psx_hle_scheduler_enabled()) {
+        extern void savestate_poll_irq_return(CPUState *cpu, uint32_t resume_pc);
+        savestate_poll_irq_return(cpu, g_exception_real_epc);
+    }
 
     /* Adaptive cooldown: if the handler acknowledged the interrupt (cleared
      * some I_STAT bits), the interrupt won't immediately re-fire and we need

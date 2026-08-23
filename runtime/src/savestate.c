@@ -168,8 +168,26 @@ static int savestate_active_capture_boundary_ok(const CPUState* cpu,
     extern int g_psx_dispatch_depth;
     return cpu &&
            savestate_snapshot_context_ok(pc, cpu->gpr[29]) &&
+           psx_scheduler_disk_snapshot_ready() &&
            g_psx_dispatch_depth == 1 &&
            overlay_loader_call_unit_depth() == 0;
+}
+
+void savestate_poll_irq_return(CPUState* cpu, uint32_t resume_pc)
+{
+    int slot;
+    if (s_save_pending < 0 || !cpu ||
+        !savestate_snapshot_context_ok(resume_pc, cpu->gpr[29]) ||
+        !psx_scheduler_disk_snapshot_ready())
+        return;
+    slot = s_save_pending;
+    savestate_diag("save_admission", slot,
+                   "outcome=irq_return_to_flat_scheduler resolved=0x%08X "
+                   "sp=0x%08X ra=0x%08X return_tcb=0x%08X",
+                   (unsigned)resume_pc, (unsigned)cpu->gpr[29],
+                   (unsigned)cpu->gpr[31],
+                   (unsigned)psx_scheduler_snapshot_return_tcb());
+    (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
 }
 
 extern int psx_hle_scheduler_enabled(void);
@@ -896,10 +914,12 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                         ok && stat(path, &st) == 0 ? (long long)st.st_size : 0;
                     savestate_diag("save_write", slot,
                                    "outcome=%s path=\"%s\" bytes=%lld "
-                                   "pc=0x%08X sp=0x%08X ra=0x%08X",
+                                   "pc=0x%08X sp=0x%08X ra=0x%08X "
+                                   "return_tcb=0x%08X",
                                    ok ? "success" : "failed", path, bytes,
                                    (unsigned)pc, (unsigned)cpu->gpr[29],
-                                   (unsigned)cpu->gpr[31]);
+                                   (unsigned)cpu->gpr[31],
+                                   (unsigned)psx_scheduler_snapshot_return_tcb());
                 }
                 psx_frontend_on_savestate_notify(0, slot, ok);
             } else {
@@ -991,9 +1011,11 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         if (loaded) {
             savestate_set_status_detail("loaded slot %d", slot + 1);
             savestate_diag("load_apply", slot,
-                           "outcome=success pc=0x%08X sp=0x%08X ra=0x%08X",
+                           "outcome=success pc=0x%08X sp=0x%08X ra=0x%08X "
+                           "return_tcb=0x%08X",
                            (unsigned)cpu->pc, (unsigned)cpu->gpr[29],
-                           (unsigned)cpu->gpr[31]);
+                           (unsigned)cpu->gpr[31],
+                           (unsigned)psx_scheduler_snapshot_return_tcb());
             t_after_boot = savestate_mono_ms();
             psx_cycles_resync_after_restore(cpu);
             /* Drop absolute-cycle IRQ cooldowns / VBlank phase from the
