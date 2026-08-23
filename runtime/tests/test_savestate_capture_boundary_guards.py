@@ -60,6 +60,16 @@ def main() -> int:
         "psx_scheduler_snapshot_at(resume_pc)",
         "active-dispatch save admission",
     )
+    require(
+        savestate,
+        "savestate_snapshot_resume_pc_ok(resume_pc)",
+        "RAM-backed save-admission guard",
+    )
+    require(
+        savestate,
+        "phys < 0x00800000u",
+        "BIOS/ROM resume exclusion",
+    )
     if traps.count("g_sched_snapshot_boundary = 1;") != 1:
         raise AssertionError("exactly one scheduler snapshot boundary may be opened")
     require(
@@ -69,7 +79,8 @@ def main() -> int:
     )
     gate = savestate.index("if (needs_scheduler_boundary ||")
     admission_gate = savestate.index(
-        "if (needs_scheduler_boundary && savestate_resume_pc_ok(resume_pc))"
+        "if (needs_scheduler_boundary &&\n"
+        "            savestate_snapshot_resume_pc_ok(resume_pc))"
     )
     admission_call = savestate.index("psx_scheduler_snapshot_at(resume_pc)")
     write = savestate.index("boot_state_save(&snap")

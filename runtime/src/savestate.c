@@ -101,6 +101,17 @@ static int savestate_resume_pc_ok(uint32_t pc)
            pc != 0x80000080u && pc != 0xbfc00180u && pc != 0x80000000u;
 }
 
+/* HLE BIOS calls carry host continuations that boot_state cannot serialize.
+ * A ROM PC may be dispatchable, but unwinding to scheduler-top there abandons
+ * the host-side return chain and produces a state that resumes into garbage.
+ * Admit disk snapshots only from RAM (including its 8 MiB mirror window),
+ * where the exact guest PC and register file are sufficient to redispatch. */
+static int savestate_snapshot_resume_pc_ok(uint32_t pc)
+{
+    const uint32_t phys = pc & 0x1FFFFFFFu;
+    return savestate_resume_pc_ok(pc) && phys < 0x00800000u;
+}
+
 extern int psx_hle_scheduler_enabled(void);
 
 /* Create each path component (mkdir -p). Single-level mkdir fails for
@@ -692,7 +703,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         const int needs_scheduler_boundary =
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
-        if (needs_scheduler_boundary && savestate_resume_pc_ok(resume_pc)) {
+        if (needs_scheduler_boundary &&
+            savestate_snapshot_resume_pc_ok(resume_pc)) {
             /* A title can stay inside one long CPS/native dispatch forever,
              * so passive deferral never reaches psx_scheduler_run's flat poll.
              * At an explicit block-leader interrupt boundary CPUState is
@@ -704,7 +716,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     slot, (unsigned)resume_pc);
             (void)psx_scheduler_snapshot_at(resume_pc); /* longjmp on success */
         }
-        if (needs_scheduler_boundary || !savestate_resume_pc_ok(pc)) {
+        if (needs_scheduler_boundary ||
+            !savestate_snapshot_resume_pc_ok(pc)) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
              * for the scheduler's flat pre-dispatch boundary. FMV/present edges
@@ -806,10 +819,10 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
-        if (loaded && !savestate_resume_pc_ok(cpu->pc)) {
+        if (loaded && !savestate_snapshot_resume_pc_ok(cpu->pc)) {
             fprintf(stderr,
                     "savestate: LOAD FAILED slot %d — resume pc=0x%08X "
-                    "(null/undispatchable)%s\n",
+                    "(null/undispatchable/unserializable)%s\n",
                     slot, (unsigned)cpu->pc, path[0] ? "" : " [blob]");
             loaded = 0;
             s_load_failed = 1;
