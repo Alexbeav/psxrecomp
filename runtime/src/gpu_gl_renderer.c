@@ -4004,11 +4004,25 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
 int gl_renderer_present_hold_last(void) {
     int ww = 0, wh = 0;
     int lx, ly, lw, lh;
-    if (!s_ctx || !s_win || s_hold_kind == HOLD_NONE || !s_hold_tex)
+    if (!s_ctx || !s_win)
         return 0;
     SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     if (ww < 1 || wh < 1)
         return 0;
+    /* A pause/menu can be opened before the first guest frame has populated
+     * the hold texture. Still present the host overlays: otherwise save-state
+     * rejection/status messages are generated but remain invisible on GL. */
+    if (s_hold_kind == HOLD_NONE || !s_hold_tex) {
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0, 0, ww, wh);
+        glClearColor(0.f, 0.f, 0.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        latency_ring_mark(LAT_SWAP_BEGIN);
+        gl_swap_with_osd();
+        latency_ring_mark(LAT_SWAP_END);
+        s_probe_swap++;
+        return 1;
+    }
     glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, ww, wh);
     glClearColor(0.f, 0.f, 0.f, 1.f);

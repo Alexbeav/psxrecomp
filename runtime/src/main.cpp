@@ -1940,8 +1940,8 @@ static std::filesystem::path resolve_existing_runtime_path(const char* requested
 
     std::error_code ec;
     fs::path p(requested);
-    if (fs::exists(p, ec)) return fs::absolute(p, ec);
-    if (p.is_absolute()) return {};
+    if (p.is_absolute())
+        return fs::exists(p, ec) ? fs::absolute(p, ec) : fs::path{};
 
     // Anchor exclusively on the exe directory — never cwd (see exe_dir_from_argv).
     const fs::path root = exe_dir_from_argv(argv0);

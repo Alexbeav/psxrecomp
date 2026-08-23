@@ -491,10 +491,12 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 hybrid_dev_any_input
                 launcher_vulkan_option
+                mdec_busy_output_drain
                 mod_controller_override
                 mod_load_acceleration
                 overlay_candidate_capacity
                 release_zip
+                runtime_config_packaging_guards
                 overlay_decodable_fallback
                 overlay_init_guard
                 sdl3_main_single_include

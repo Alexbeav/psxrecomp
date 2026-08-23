@@ -824,6 +824,24 @@ function(psxrecomp_add_runtime_target target)
     if(NOT DEFINED PSXRT_DEFAULT_GAME_CONFIG_PATH)
         set(PSXRT_DEFAULT_GAME_CONFIG_PATH "")
     endif()
+    # Keep the build-time source path separate from the path baked into the
+    # executable. Game projects commonly pass an absolute source-tree path;
+    # baking that path makes a copied Release package depend on the builder's
+    # checkout and leaves game identity/savestates unconfigured elsewhere.
+    set(_psxrt_game_config_source "")
+    set(_psxrt_game_config_runtime "")
+    if(NOT PSXRT_DEFAULT_GAME_CONFIG_PATH STREQUAL "")
+        get_filename_component(_psxrt_game_config_source
+            "${PSXRT_DEFAULT_GAME_CONFIG_PATH}" ABSOLUTE
+            BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(NOT EXISTS "${_psxrt_game_config_source}")
+            message(FATAL_ERROR
+                "${target}: DEFAULT_GAME_CONFIG_PATH does not exist: "
+                "${_psxrt_game_config_source}")
+        endif()
+        get_filename_component(_psxrt_game_config_runtime
+            "${_psxrt_game_config_source}" NAME)
+    endif()
 
     if(PSXRT_BIOS_GENERATED_FULL_C AND PSXRT_BIOS_GENERATED_DISPATCH_C)
         # Per-game BIOS pin: the pinned files REPLACE the matching stem's
@@ -1166,7 +1184,7 @@ function(psxrecomp_add_runtime_target target)
         # Where the shipped redistributable image lives, relative to the exe.
         # This is what a player gets when they choose no BIOS.
         PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"
-        PSX_DEFAULT_GAME_CONFIG_PATH="${PSXRT_DEFAULT_GAME_CONFIG_PATH}"
+        PSX_DEFAULT_GAME_CONFIG_PATH="${_psxrt_game_config_runtime}"
         PSX_WINDOW_TITLE="${PSXRT_WINDOW_TITLE}"
         PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}
         FMT_HEADER_ONLY=1
@@ -1174,6 +1192,18 @@ function(psxrecomp_add_runtime_target target)
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>
         $<$<CXX_COMPILER_ID:MSVC>:SDL_MAIN_HANDLED>
     )
+    # A runnable target and its config are one artifact. Stage the exact config
+    # beside every built executable so launcher identity, per-title runtime
+    # policy, memory cards, and savestates cannot silently disappear in a dev
+    # build or hand-copied package.
+    if(NOT _psxrt_game_config_source STREQUAL "")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_psxrt_game_config_source}"
+                    "$<TARGET_FILE_DIR:${target}>/${_psxrt_game_config_runtime}"
+            COMMENT "Staging ${_psxrt_game_config_runtime} beside ${target}"
+            VERBATIM)
+    endif()
     # Version / git rev change often on package updates. Keep them off the
     # target-wide compile line so Ninja does not rebuild every runtime + shard TU.
     set_source_files_properties(
