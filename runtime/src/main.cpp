@@ -1819,6 +1819,7 @@ int      g_turbo_audio_sink_enabled = 0;
 int      g_turbo_audio_sink_active = 0;
 uint64_t g_turbo_audio_sink_frames = 0; /* guest SPU frames advanced, not queued */
 }
+static int g_turbo_audio_sink_config_enabled = 0;
 /* The CD predicate already excludes XA and holds across ordinary inter-file
  * gaps. A short engage debounce rejects a one-frame controller blip without
  * leaving a visible authentic-paced prefix on every real load. Once engaged,
@@ -10613,6 +10614,7 @@ int main(int argc, char** argv) {
                     gc.runtime.has_offer_turbo_loads ? "offer_turbo_loads" : "");
             }
             if (gc.runtime.turbo_audio_sink) {
+                g_turbo_audio_sink_config_enabled = 1;
                 g_turbo_audio_sink_enabled = 1;
                 std::fprintf(stdout,
                     "psxrecomp: turbo_audio_sink enabled (opt-in)\n");
@@ -12188,6 +12190,7 @@ int main(int argc, char** argv) {
     g_mod_load_release_frames = -1;
     g_mod_disc_speed_divisor = -1;
     g_mod_disc_instant_rate = -1;
+    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
     g_turbo_load_wall_multiplier = 0;
     g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
     if (!turbo_loads_offered)
@@ -12203,6 +12206,11 @@ int main(int argc, char** argv) {
         g_turbo_loads_enabled = 1;
         g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
         g_turbo_load_release_frames = g_mod_load_release_frames;
+        /* Fast Loading advances the guest at a host rate greater than real
+         * time. Keep the canonical SPU/CD stream running, but discard the
+         * accelerated presentation-side audio until pacing resumes; otherwise
+         * the SDL bridge overflows and the load becomes observably unstable. */
+        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
         if (g_turbo_load_wall_multiplier) {
             std::fprintf(stdout,
                 "psxrecomp: mod selected %dx load acceleration "
