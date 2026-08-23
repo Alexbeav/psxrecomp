@@ -124,6 +124,17 @@ def main() -> int:
         "void savestate_poll_irq_return(CPUState* cpu, uint32_t resume_pc)",
         "outermost IRQ-return save admission",
     )
+    for needle in (
+        "savestate_flat_context_ok",
+        "sp_phys >= 0x1F800000u && sp_phys < 0x1F800400u",
+        "psx_scheduler_snapshot_boundary_active()",
+    ):
+        require(savestate, needle, "flat scratchpad-stack scheduler boundary")
+    load_path = savestate[savestate.index("if (s_load_pending >= 0)") :]
+    if "savestate_snapshot_context_ok" in load_path:
+        raise AssertionError("state loads must admit serialized scratchpad stacks")
+    if load_path.count("savestate_flat_context_ok") < 3:
+        raise AssertionError("blob, disk, and post-apply load guards must be flat")
     require(
         interrupts,
         "savestate_poll_irq_return(cpu, g_exception_real_epc)",

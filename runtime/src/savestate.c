@@ -128,6 +128,19 @@ static int savestate_snapshot_context_ok(uint32_t pc, uint32_t sp)
            (sp & 3u) == 0u && sp_phys < 0x00800000u;
 }
 
+/* Some titles intentionally keep their live game stack in the 1 KiB PSX
+ * scratchpad. That is serializable only after an explicit scheduler handoff:
+ * the same address is also used by BIOS exception frames whose host return
+ * continuation cannot be captured. */
+static int savestate_flat_context_ok(uint32_t pc, uint32_t sp)
+{
+    const uint32_t sp_phys = sp & 0x1FFFFFFFu;
+    const int main_ram = sp_phys < 0x00800000u;
+    const int scratchpad = sp_phys >= 0x1F800000u && sp_phys < 0x1F800400u;
+    return savestate_snapshot_resume_pc_ok(pc) && sp != 0u &&
+           (sp & 3u) == 0u && (main_ram || scratchpad);
+}
+
 static void savestate_set_status_detail(const char* fmt, ...)
 {
     va_list ap;
@@ -177,7 +190,7 @@ void savestate_poll_irq_return(CPUState* cpu, uint32_t resume_pc)
 {
     int slot;
     if (s_save_pending < 0 || !cpu ||
-        !savestate_snapshot_context_ok(resume_pc, cpu->gpr[29]) ||
+        !savestate_flat_context_ok(resume_pc, cpu->gpr[29]) ||
         !psx_scheduler_disk_snapshot_ready())
         return;
     slot = s_save_pending;
@@ -813,6 +826,10 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         const int needs_scheduler_boundary =
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
+        const int context_ok = cpu &&
+            (psx_scheduler_snapshot_boundary_active()
+                 ? savestate_flat_context_ok(pc, cpu->gpr[29])
+                 : savestate_snapshot_context_ok(pc, cpu->gpr[29]));
         if (needs_scheduler_boundary &&
             savestate_active_capture_boundary_ok(cpu, pc)) {
             /* A title can stay inside one long CPS/native dispatch forever,
@@ -833,8 +850,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                            (unsigned)cpu->gpr[31]);
             (void)psx_scheduler_snapshot_at(pc); /* longjmp on success */
         }
-        if (needs_scheduler_boundary ||
-            !cpu || !savestate_snapshot_context_ok(pc, cpu->gpr[29])) {
+        if (needs_scheduler_boundary || !context_ok) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
              * for the scheduler's flat pre-dispatch boundary. FMV/present edges
@@ -949,7 +965,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 boot_state_peek_cpu_context_buffer(s_load_blob, blob_len,
                                                    &saved_pc, &saved_sp,
                                                    &saved_ra) &&
-                savestate_snapshot_context_ok(saved_pc, saved_sp);
+                savestate_flat_context_ok(saved_pc, saved_sp);
             if (preflight_ok)
                 loaded = boot_state_load_buffer(s_load_blob, blob_len,
                                                 s_bios_checksum, s_entry_pc, cpu);
@@ -967,7 +983,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         } else if (savestate_slot_path(slot, path, sizeof(path))) {
             preflight_ok = boot_state_peek_cpu_context(path, &saved_pc,
                                                        &saved_sp, &saved_ra) &&
-                           savestate_snapshot_context_ok(saved_pc, saved_sp);
+                           savestate_flat_context_ok(saved_pc, saved_sp);
             savestate_diag("load_preflight", slot,
                            "outcome=%s path=\"%s\" pc=0x%08X sp=0x%08X "
                            "ra=0x%08X",
@@ -996,7 +1012,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
-        if (loaded && !savestate_snapshot_context_ok(cpu->pc, cpu->gpr[29])) {
+        if (loaded && !savestate_flat_context_ok(cpu->pc, cpu->gpr[29])) {
             fprintf(stderr,
                     "savestate: LOAD FAILED slot %d — resume pc=0x%08X "
                     "sp=0x%08X ra=0x%08X "
