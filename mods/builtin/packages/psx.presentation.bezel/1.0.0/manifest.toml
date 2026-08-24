@@ -1,0 +1,22 @@
+format_version = 5
+id = "psx.presentation.bezel"
+version = "1.0.0"
+name = "Bezel Artwork"
+author = "psxrecomp"
+description = "Draws package-provided artwork behind the game image in OpenGL letterbox or pillarbox margins. Disabled by default; with the feature off, margins remain the normal black clear."
+resolver = "declarative"
+save_compatibility = "shared"
+
+[[target]]
+game_id = "*"
+
+[[feature]]
+id = "bezel"
+name = "Bezel Artwork"
+description = "Disabled by default. Shows this package's bezel.png behind the game image whenever the selected aspect ratio leaves side or top/bottom margins. This is presentation-only and does not change guest rendering."
+group = "Visual"
+default_enabled = false
+
+[[plugin]]
+feature = "bezel"
+id = "psx.bezel"

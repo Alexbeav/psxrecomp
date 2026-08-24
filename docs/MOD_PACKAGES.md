@@ -404,3 +404,16 @@ The installer accepts stored or DEFLATE-compressed ZIP entries, validates CRCs,
 rejects encrypted entries and unsafe or absolute paths, limits archives to 4096
 files and 256 MiB expanded size, stages extraction, validates the manifest, and
 publishes the version atomically.
+
+### Presentation bezel packages
+
+The framework registers `psx.bezel`, a trusted presentation plugin for OpenGL
+margin artwork. A package using this plugin includes a `bezel.png` file beside
+its `manifest.toml`; when the feature is enabled, the runtime draws that image
+behind the game frame before presenting the normal 4:3 or widescreen content.
+
+The built-in package `psx.presentation.bezel` targets every game but defaults to
+off, so the default presentation is unchanged: letterbox and pillarbox margins
+remain black. Title authors or users can ship alternate `.psxmod` packages with
+their own `bezel.png` and the same trusted plugin id. The package supplies data
+only; archives still cannot load native code.
