@@ -100,14 +100,6 @@ void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
 }
 
 /* Determine whether this timer uses system clock ticks */
-
-/* HBlank period in guest cycles per the GPU video standard (GP1(08h) bit 3):
- * NTSC 564,480/263 ≈ 2146; PAL 677,376/314 ≈ 2157 (T32, MGS PAL). */
-extern int gpu_video_standard_is_pal(void);
-static inline int timers_hblank_cycles(void) {
-    return gpu_video_standard_is_pal() ? 2157 : 2146;
-}
-
 static int timer_uses_sysclk(int t) {
     int src = (timers[t].mode >> 8) & 3;
     switch (t) {
@@ -217,9 +209,10 @@ void timers_advance(uint32_t cycles) {
         } else if (timer_uses_sysclk(t)) {
             timer_advance_counts(t, cycles);
         } else if (t == 1) {
-            /* Timer 1 HBlank clock. NTSC: ~263 HBlanks per 564,480-cycle frame
-             * (2146 cycles/line); PAL: 314 per 677,376-cycle frame (2157). */
-            timer_advance_divided(t, cycles, timers_hblank_cycles());
+            /* Keep the established HBlank approximation for both video
+             * standards. PAL VBlank cadence is handled independently by the
+             * interrupt scheduler; retiming this clock regresses FMV playback. */
+            timer_advance_divided(t, cycles, 2146);
         } else if (t == 0) {
             /* Timer 0 dotclock approximation; exact divider depends on GPU mode. */
             timer_advance_divided(t, cycles, 5);
@@ -232,7 +225,7 @@ static uint32_t timer_divisor(int t) {
     int src = (timers[t].mode >> 8) & 3;
     if (t == 2 && (src == 2 || src == 3)) return 8;   /* sysclk/8 */
     if (timer_uses_sysclk(t))             return 1;   /* 1 cycle = 1 tick */
-    if (t == 1)                           return timers_hblank_cycles(); /* HBlank */
+    if (t == 1)                           return 2146; /* HBlank approximation */
     if (t == 0)                           return 5;    /* dotclock approximation */
     return 1;
 }
@@ -343,10 +336,9 @@ void timers_write(uint32_t addr, uint32_t value) {
 }
 
 void timers_tick(int cycles) {
-    /* Timer 1 in HBlank mode: ~263 HBlanks per NTSC frame, 314 per PAL frame */
+    /* Preserve the legacy HBlank schedule independently of PAL VBlank timing. */
     if (!timer_uses_sysclk(1)) {
-        const int lines = gpu_video_standard_is_pal() ? 314 : 263;
-        for (int h = 0; h < lines; h++)
+        for (int h = 0; h < 263; h++)
             timer_tick_one(1);
     }
 
