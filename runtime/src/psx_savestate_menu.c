@@ -5,6 +5,10 @@
 #include "host_keymap.h"
 #include "savestate.h"
 
+#if defined(RECOMP_LAUNCHER)
+#include "recomp_runtime_ui.h"
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -59,6 +63,7 @@ static int s_selected;
 static int s_runtime_open;
 static int s_route_swapped;
 static int s_route_available;
+static RecompRuntimeUi *s_runtime_ui;
 static int s_dirty = 1;
 static uint32_t s_panel[SSM_W * SSM_H];
 static uint32_t s_thumbs[SAVESTATE_SLOTS][SAVESTATE_THUMB_W * SAVESTATE_THUMB_H];
@@ -373,6 +378,18 @@ void psx_savestate_menu_set_runtime_settings(int open, int route_swapped,
     s_route_available = route_available;
 }
 
+void psx_savestate_menu_set_runtime_ui(RecompRuntimeUi *ui)
+{
+    if (s_runtime_ui != ui)
+        s_dirty = 1;
+    s_runtime_ui = ui;
+}
+
+void psx_savestate_menu_note_runtime_changed(void)
+{
+    s_dirty = 1;
+}
+
 int psx_savestate_menu_needs_present(void)
 {
     return s_open || s_runtime_open;
@@ -386,7 +403,25 @@ int psx_savestate_menu_overlay_image(const uint32_t **pixels, int *w, int *h)
         if (h) *h = 0;
         return 0;
     }
-    if (s_dirty) {
+    if (s_runtime_open && s_runtime_ui) {
+#if defined(RECOMP_LAUNCHER)
+        /* The shared renderer composites over its input.  This plane is an
+         * opaque host overlay rather than a captured game frame, so seed it
+         * with the same deep-blue floor used by the legacy panel.  Render on
+         * every paused present: callback-owned values can change outside the
+         * menu (volume hotkeys/controller quick-swap) without a parallel dirty
+         * protocol. */
+        int i;
+        for (i = 0; i < SSM_W * SSM_H; ++i)
+            s_panel[i] = 0xFF0F1118u;
+        recomp_runtime_ui_render_argb8888(
+            s_runtime_ui, s_panel, SSM_W, SSM_H,
+            SSM_W * (int)sizeof(s_panel[0]));
+        s_dirty = 0;
+#else
+        rasterize_runtime_panel();
+#endif
+    } else if (s_dirty) {
         if (s_runtime_open)
             rasterize_runtime_panel();
         else
