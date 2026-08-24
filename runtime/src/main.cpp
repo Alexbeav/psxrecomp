@@ -86,8 +86,15 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #if defined(PSX_HAS_GAME_CODEGEN)
 extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
 extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
-extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
+#endif
+/* Setup-host relaunch hook: only exists when a codegen_setup.c-style host was
+ * actually linked (PSX_HAS_CODEGEN_SETUP_HOST) — that file depends on
+ * recomp-ui/launcher headers a --no-recomp-ui build does not have, so this
+ * must NOT be gated on PSX_HAS_GAME_CODEGEN (set for any linked game C) or
+ * RECOMP_LAUNCHER alone. */
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
+extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include "psx_sdl.h"
 #if defined(PSX_SDL3)
@@ -10315,7 +10322,7 @@ int main(int argc, char** argv) {
 
     /* Setup-host zip-root exe: after Generate & rebuild, hand off to the
      * product binary under build-release/ (bios/, mods/, assets/, settings). */
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
     psx_game_codegen_forward_if_built(argc, argv);
 #endif
 
