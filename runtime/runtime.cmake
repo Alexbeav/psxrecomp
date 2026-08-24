@@ -333,6 +333,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_pgxp.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_bezel.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
@@ -1274,7 +1275,7 @@ function(psxrecomp_add_runtime_target target)
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${PSXRECOMP_ROOT}/mods/builtin"
                 "$<TARGET_FILE_DIR:${target}>/mods"
-            COMMENT "Staging framework-owned mod catalog (loading speed)"
+            COMMENT "Staging framework-owned mod catalog"
             VERBATIM)
     endif()
     endif()

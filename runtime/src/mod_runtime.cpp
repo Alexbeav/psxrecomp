@@ -68,6 +68,7 @@ struct RuntimeMods {
     bool main_applied = false;
     bool disc_enabled = false;
     bool disc_guard_failed = false;
+    const ModResolution::Plugin* current_plugin = nullptr;
 };
 
 RuntimeMods& state() {
@@ -1207,8 +1208,11 @@ extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
     if (!s.initialized || !s.plan.ok) return;
-    for (const ModResolution::Plugin& plugin : s.plan.plugins)
+    for (const ModResolution::Plugin& plugin : s.plan.plugins) {
+        s.current_plugin = &plugin;
         mod_invoke_activation_plugin(plugin.id);
+        s.current_plugin = nullptr;
+    }
 }
 
 extern "C" void mod_runtime_on_vblank(void) {
@@ -1242,6 +1246,30 @@ extern "C" int psx_mod_option_value(const char* package_id,
     if (value.empty()) return 0;
     if (value.size() + 1 > (size_t)out_size) return 0;
     std::memcpy(out, value.c_str(), value.size() + 1);
+    return 1;
+}
+
+extern "C" int psx_mod_current_package_file(const char* relative_path,
+                                            char* out, uint32_t out_size) {
+    using namespace PSXRecompV4;
+    if (out && out_size) out[0] = '\0';
+    if (!relative_path || !relative_path[0] || !out || out_size == 0)
+        return 0;
+    RuntimeMods& s = state();
+    if (!s.initialized || !s.plan.ok || !s.current_plugin) return 0;
+    const ModPackage* package =
+        s.manager.selected_package(s.current_plugin->package_id);
+    if (!package) return 0;
+    std::filesystem::path rel(relative_path);
+    if (rel.is_absolute()) return 0;
+    for (const auto& part : rel) {
+        if (part == "." || part == "..") return 0;
+    }
+    const std::filesystem::path path =
+        (package->root / rel).lexically_normal();
+    const std::string text = path.string();
+    if (text.size() + 1 > (size_t)out_size) return 0;
+    std::memcpy(out, text.c_str(), text.size() + 1);
     return 1;
 }
 

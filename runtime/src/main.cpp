@@ -1115,7 +1115,7 @@ static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
-static std::string   g_bezel_path;      /* [video] bezel -- margin artwork */
+static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
@@ -1371,6 +1371,18 @@ extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     g_auto_skip_fmv = enabled;
     std::fprintf(stdout, "psxrecomp: mod %s automatic FMV skipping\n",
                  enabled ? "enabled" : "disabled");
+    return 1;
+}
+
+extern "C" int psx_mod_set_bezel_artwork(const char* path) {
+    if (!path || !path[0]) {
+        std::fprintf(stderr, "psxrecomp: mod rejected empty bezel artwork path\n");
+        return 0;
+    }
+    g_bezel_path = path;
+    g_video_renderer = 1;
+    std::fprintf(stdout, "psxrecomp: mod selected bezel artwork %s\n",
+                 g_bezel_path.c_str());
     return 1;
 }
 
@@ -10646,7 +10658,6 @@ int main(int argc, char** argv) {
             g_video_pgxp_cpu_mode = gc.runtime.video_pgxp_cpu_mode ? 1 : 0;
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
             g_video_renderer   = gc.runtime.video_renderer;
-            g_bezel_path       = gc.runtime.video_bezel;
             g_video_screen     = gc.runtime.video_screen_kind;
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
@@ -12754,10 +12765,9 @@ session_reboot:
         gl_renderer_set_swap_interval(present_effective_swap_interval()); /* applied at context init */
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
 
-        /* Bezel artwork ([video] bezel): load after the GL context exists. */
+        /* Bezel artwork (Mods): load after the GL context exists. */
         if (!g_bezel_path.empty() && g_gl_active) {
             std::filesystem::path bp(g_bezel_path);
-            if (bp.is_relative()) bp = resolved_disc.parent_path() / bp;
             std::vector<unsigned char> file;
             if (FILE *bf = std::fopen(bp.string().c_str(), "rb")) {
                 std::fseek(bf, 0, SEEK_END);
