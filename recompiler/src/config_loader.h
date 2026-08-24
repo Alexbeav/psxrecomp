@@ -1166,6 +1166,7 @@ struct UserSettings {
     bool has_hotkey_pad_rewind = false; int hotkey_pad_rewind = 1272; /* select+r3 */
     bool has_hotkey_pad_save_state_menu = false; int hotkey_pad_save_state_menu = 2040; /* select+r1 */
     // [audio]
+    bool has_volume         = false; int  volume         = 100; // host mixer, 0..100
     bool has_spu_hq         = false; bool spu_hq         = false;
     bool has_audio_freq     = false; int  audio_freq     = 44100;
     // [bios] / [disc] / [memcard]

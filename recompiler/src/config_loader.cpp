@@ -2314,6 +2314,13 @@ UserSettings load_user_settings(const fs::path& path) {
     }
     if (doc.contains("audio")) {
         const toml::value& a = toml::find(doc, "audio");
+        if (a.contains("volume")) try_get([&]{
+            const auto n = toml::find<int64_t>(a, "volume");
+            if (n >= 0 && n <= 100) {
+                s.volume = (int)n;
+                s.has_volume = true;
+            }
+        });
         if (a.contains("frequency")) try_get([&]{
             const auto n = toml::find<int64_t>(a, "frequency");
             if (valid_user_audio_freq((int)n)) {
@@ -2563,6 +2570,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     if (s.has_rewind_interval)
         f << "rewind_interval   = " << s.rewind_interval << "\n";
     f << "\n[audio]\n";
+    if (s.has_volume)
+        f << "volume = " << s.volume << "\n";
     if (s.has_audio_freq)
         f << "frequency = " << s.audio_freq << "\n";
     if (s.has_spu_hq)

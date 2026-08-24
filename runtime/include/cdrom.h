@@ -9,6 +9,20 @@ extern "C" {
 
 void cdrom_init(const char* cue_path);
 
+/* Replace the mounted image without resetting the emulated machine.
+ *
+ * The replacement is transactional: the new image is opened before the old
+ * handle is released, so a bad path leaves the current disc untouched.  On a
+ * successful swap the active read/CD-DA/XA streams are stopped and the drive
+ * emits the same shell-close/reinsert notification as the debug reinsert
+ * path.  `scex` may be NULL to retain the current license-region response
+ * (needed for audio/non-PSX discs whose region cannot be identified).
+ *
+ * This is an offline host action.  It refuses to mutate the mounted disc while
+ * a netplay session is active.  The caller owns persistence policy; the
+ * runtime overlay deliberately treats selected paths as session-only. */
+int cdrom_replace_disc(const char* cue_path, const char scex[4]);
+
 /* Did cdrom_init() actually mount an image? 0 = the drive is empty.
  *
  * cdrom_init() is deliberately non-fatal when iso_open() fails (a BIOS-only

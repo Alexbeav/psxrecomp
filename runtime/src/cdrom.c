@@ -2564,6 +2564,46 @@ int cdrom_has_disc(void) {
     return has_disc();
 }
 
+int cdrom_replace_disc(const char* cue_path, const char scex[4]) {
+    void* replacement;
+    void* previous;
+
+    if (!cue_path || !cue_path[0] || psx_netplay_active())
+        return 0;
+
+    /* Open first.  Never sacrifice a known-good mounted disc for a picker
+     * typo, an incomplete multi-track cue, or an unreadable CHD. */
+    replacement = iso_open(cue_path);
+    if (!replacement)
+        return 0;
+
+    stop_read_stream();
+    stop_cdda_playback();
+    xa_reset_decode();
+    spu_cd_audio_reset();
+    clear_sector_buffer();
+    cdrom_clear_pending_dataready();
+
+    previous = iso_handle;
+    iso_handle = replacement;
+    if (scex)
+        memcpy(disc_scex, scex, sizeof(disc_scex));
+
+    last_valid_subq_available = 0;
+    subq_replacements_active = iso_has_subq_replacements(iso_handle);
+    if (subq_replacements_active)
+        update_last_valid_subq(0);
+
+    /* The handle swap is complete before the guest is notified, so any
+     * command awakened by the ACK can only observe the replacement image. */
+    debug_force_cd_reinsert();
+    if (previous)
+        iso_close(previous);
+    trace_cdrom('W', 0, iso_sector_count(iso_handle),
+                (uint32_t)iso_track_count(iso_handle));
+    return 1;
+}
+
 uint32_t cdrom_read(uint32_t addr) {
     uint32_t ret = 0;
     switch (addr) {
