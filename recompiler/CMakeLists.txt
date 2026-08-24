@@ -499,6 +499,7 @@ if(BUILD_TESTING)
                 runtime_config_packaging_guards
                 overlay_decodable_fallback
                 overlay_init_guard
+                runtime_overlay_guards
                 sdl3_main_single_include
                 spu_sample_scheduler_default
                 savestate_capture_boundary_guards
