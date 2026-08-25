@@ -4147,18 +4147,23 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
 
 /* Analog stick bytes (lx,ly,rx,ry) for a player; centred if no live source.
  *
- * The host left stick maps to the LEFT analog axes (variable). When fold_dpad
- * is set, the physical D-pad (and, for a keyboard player, the arrow keys) is
- * ALSO folded onto the left axes at full deflection, so an analog-mode game
- * whose movement reads only the stick magnitude (e.g. Tomba) still responds to
- * the D-pad/keyboard — the faithful "seamless" behaviour: the stick gives
- * variable speed, the D-pad gives full speed, both at once. Only the PHYSICAL
- * D-pad is folded in (not the stick->d-pad button mapping), so the stick keeps
- * its true variable magnitude. fold_dpad is false in HYBRID mode (there the
- * D-pad instead flips the pad to digital, so the game runs its own d-pad path)
- * and true in pinned-ANALOG mode. The keyboard branch always folds the arrows
- * — they are that player's only stick source. */
-static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], bool fold_dpad) {
+ * The host left stick maps to the LEFT analog axes (variable). The physical
+ * D-pad is deliberately NOT folded onto those axes: a real DualShock holds
+ * both sticks at 0x80 while the D-pad is pressed, so presenting a direction
+ * as a button bit AND a full stick deflection at once is a state no hardware
+ * produces. An analog-aware game that reads both sources then acts on one
+ * press twice — measured on Legend of Mana's land-placement cursor, which
+ * stepped two entries per tap in pinned-ANALOG and exactly one in DIGITAL.
+ *
+ * A game whose movement reads only the stick magnitude (e.g. Tomba) is served
+ * by HYBRID mode, where pressing the D-pad flips the pad to digital and the
+ * game runs its own d-pad path — without ever presenting the impossible
+ * both-at-once state.
+ *
+ * The keyboard branch is unaffected: psx_keybinds_sticks maps that player's
+ * bound stick-direction keys onto the axes, which is their only stick
+ * source. */
+static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
         /* Keyboard analog: the configurable left/right stick-direction binds
@@ -4227,25 +4232,6 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
         } else {
             apply_discrete_stick("rs_up", "rs_down", "rs_left", "rs_right",
                                  &out[2], &out[3]);
-        }
-        if (fold_dpad) {
-            /* Fold physical D-pad (mapped "up"/etc. button sources that are
-             * d-pad buttons) — prefer the mapped sources over hardcoded buttons
-             * so a remapped d-pad still folds onto the left stick. */
-            auto dpad_pressed = [&](const char* n) {
-                const PsxButtonMap* e = find_entry(n);
-                if (!e) return false;
-                for (const auto& s : e->sources) {
-                    if (source_is_stick_axis(s)) continue;
-                    if (controller_source_pressed_h(p.handle, s, p.deadzone))
-                        return true;
-                }
-                return false;
-            };
-            if (dpad_pressed("left"))  out[0] = 0x00;
-            if (dpad_pressed("right")) out[0] = 0xFF;
-            if (dpad_pressed("up"))    out[1] = 0x00;
-            if (dpad_pressed("down"))  out[1] = 0xFF;
         }
     }
 }
@@ -4530,9 +4516,16 @@ static void apply_input_override_to_sio(int override_word) {
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
-    /* Pinned-ANALOG folds injected D-pad onto the left stick (same as a real
-     * DualShock seat). Without this, stick-only menu/move paths ignore
-     * button-bit injection even though pad_status shows the bits pressed. */
+    /* Injected input only (set_input / dev routing): fold the injected D-pad
+     * word onto the left stick so stick-only menu/move paths respond to a
+     * button-bit injection that has no physical stick behind it.
+     *
+     * This is NOT hardware behaviour -- a real DualShock keeps its sticks at
+     * 0x80 while the D-pad is held -- and a game reading both sources will
+     * act on one injected press twice. It is kept only because injection has
+     * no other way to steer such a game; the equivalent fold for physical
+     * controllers was removed (see pad_sticks_for) after it was measured
+     * double-stepping Legend of Mana's land-placement cursor. */
     if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
@@ -4611,15 +4604,13 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     if (src.all_pads)
         btn &= dev_all_controllers_buttons(suppress_stick);
 
-    /* Analog axes. Pinned-ANALOG folds the physical D-pad onto the left axes
-     * (fold_dpad) so the D-pad still moves stick-only games; HYBRID feeds the
-     * raw stick when currently analog (no fold — the D-pad drives its own
-     * digital path there); DIGITAL leaves the axes centred. */
+    /* Analog axes. Pinned-ANALOG and HYBRID both feed the raw stick only; the
+     * D-pad is never folded in, matching a real DualShock, which keeps its
+     * sticks centred while the D-pad is held. DIGITAL leaves the axes
+     * centred. */
     uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        pad_sticks_for(p, player, st, /*fold_dpad=*/true);
-    } else if (eff_analog) {  /* HYBRID, currently presenting analog */
-        pad_sticks_for(p, player, st, /*fold_dpad=*/false);
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG || eff_analog) {
+        pad_sticks_for(p, player, st);
     }
     /* Stick fold, driven by the SAME source set as the buttons above: whatever
      * may press a button may also steer. kind==1 already folded its binds
@@ -4677,10 +4668,8 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     uint16_t btn = pad_buttons_for(p, player, suppress_stick);
 
     uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        pad_sticks_for(p, player, st, /*fold_dpad=*/true);
-    } else if (eff_analog) {  /* HYBRID, currently presenting analog */
-        pad_sticks_for(p, player, st, /*fold_dpad=*/false);
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG || eff_analog) {
+        pad_sticks_for(p, player, st);
     }
 
     out->buttons = btn;
@@ -4815,6 +4804,9 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
         else if (dpad_live) p.hybrid_analog = false;
         eff_analog = p.hybrid_analog ? 1 : 0;
     }
+    /* Injected input only; see the note on the sibling fold above. Not
+     * hardware behaviour, retained solely so injection can steer stick-only
+     * games. */
     if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
