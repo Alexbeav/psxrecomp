@@ -57,6 +57,19 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    foreach(_ram_geometry IN ITEMS retail expanded)
+        add_executable(psx_memory_geometry_${_ram_geometry}_test
+            tests/test_psx_memory_geometry.c)
+        target_include_directories(psx_memory_geometry_${_ram_geometry}_test
+            PRIVATE include)
+        if(_ram_geometry STREQUAL "expanded")
+            target_compile_definitions(psx_memory_geometry_${_ram_geometry}_test
+                PRIVATE PSX_MAIN_RAM_BYTES=0x00800000u)
+        endif()
+        add_test(NAME psx_memory_geometry_${_ram_geometry}_test
+                 COMMAND psx_memory_geometry_${_ram_geometry}_test)
+    endforeach()
+
     add_executable(host_keymap_test
         tests/test_host_keymap.c
         src/host_keymap.c)
