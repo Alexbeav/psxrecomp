@@ -15,9 +15,16 @@
 #     --display-name "Bomberman Party Edition Recompiled" \
 #     --recompiler-build build-recompiler \
 #     [--project-file REL]... [--project-dir REL]... \
+#     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
+#
+# --runtime-dir stages a directory the runtime loads exe-relative (mods,
+# bezels, ...) from the built exe's directory into the stage root, so the
+# shipped layout matches what the build tree staged next to the binary.
+# Per-user state (mods/state.toml) is always excluded. The -optional variant
+# warns and continues when the directory is absent from the build.
 #
 # Env:
 #   RELEASE_VERSION / <version-env> / VERSION file  (must match binary stamp)
@@ -43,6 +50,8 @@ VERSION_ENV="RELEASE_VERSION"
 DISC_HINT="your legally owned game disc"
 PROJECT_FILES=()
 PROJECT_DIRS=()
+RUNTIME_DIRS=()
+RUNTIME_DIRS_OPTIONAL=()
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
@@ -51,12 +60,12 @@ fi
 
 usage() {
   sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
-  exit 2
+  exit "${1:-2}"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -h|--help) usage ;;
+    -h|--help) usage 0 ;;
     --build-dir) BUILD_DIR="${2:?}"; shift 2 ;;
     --artifact) ARTIFACT="${2:?}"; shift 2 ;;
     --zip-prefix) ZIP_PREFIX="${2:?}"; shift 2 ;;
@@ -67,20 +76,22 @@ while [[ $# -gt 0 ]]; do
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
+    --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
+    --runtime-dir-optional) RUNTIME_DIRS_OPTIONAL+=("${2:?}"); shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
     --root) ROOT="${2:?}"; shift 2 ;;
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
-      usage
+      usage 2
       ;;
   esac
 done
 
 if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT}" || -z "${ZIP_PREFIX}" || -z "${EXE_NAME}" ]]; then
   echo "error: --build-dir, --artifact, --zip-prefix, and --exe-name are required" >&2
-  usage
+  usage 2
 fi
 if [[ -z "${DISPLAY_NAME}" ]]; then
   DISPLAY_NAME="${EXE_NAME}"
@@ -225,11 +236,52 @@ if [[ ! -f "${STAGE}/assets/img/boxart.tga" && -f "${ROOT}/launcher_assets/img/b
   cp -a "${ROOT}/launcher_assets/img/boxart.tga" "${STAGE}/assets/img/boxart.tga"
 fi
 
+# Exe-relative runtime data (mods catalog, bezels, ...): the runtime resolves
+# these from the exe's own directory, so ship them at the stage root exactly
+# as the build tree staged them. mods/state.toml is the LOCAL machine's mod
+# enable/disable state -- preloaded catalogs ship default-disabled, so a dev
+# machine's selections must never leak into a release.
+copy_runtime_dir() {
+  local name="$1" optional="$2"
+  if [[ ! -d "${EXE_DIR}/${name}" ]]; then
+    if [[ "${optional}" -eq 1 ]]; then
+      echo "warn: ${EXE_DIR}/${name} missing -- skipped (--runtime-dir-optional)" >&2
+      return 0
+    fi
+    echo "error: ${EXE_DIR}/${name} missing -- rebuild the runtime target" >&2
+    echo "  (build wiring stages it next to the exe; see the title CMakeLists)" >&2
+    exit 1
+  fi
+  mkdir -p "${STAGE}/${name}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude 'state.toml' --exclude 'state.toml.tmp' \
+      "${EXE_DIR}/${name}/" "${STAGE}/${name}/"
+  else
+    cp -a "${EXE_DIR}/${name}/." "${STAGE}/${name}/"
+    rm -f "${STAGE}/${name}/state.toml" "${STAGE}/${name}/state.toml.tmp"
+  fi
+  echo "staged runtime dir ${name}/"
+}
+
+for d in "${RUNTIME_DIRS[@]}"; do
+  copy_runtime_dir "${d}" 0
+done
+for d in "${RUNTIME_DIRS_OPTIONAL[@]}"; do
+  copy_runtime_dir "${d}" 1
+done
+
 copy_proj() {
   local rel="$1"
   if [[ -e "${ROOT}/${rel}" ]]; then
     mkdir -p "$(dirname "${STAGE}/${rel}")"
-    cp -a "${ROOT}/${rel}" "${STAGE}/${rel}"
+    if [[ -d "${ROOT}/${rel}" ]]; then
+      # Merge, never nest: a --runtime-dir of the same name may already have
+      # staged both exe-relative data and project-local source data.
+      mkdir -p "${STAGE}/${rel}"
+      cp -a "${ROOT}/${rel}/." "${STAGE}/${rel}/"
+    else
+      cp -a "${ROOT}/${rel}" "${STAGE}/${rel}"
+    fi
   else
     echo "error: missing ${rel}" >&2
     exit 1
