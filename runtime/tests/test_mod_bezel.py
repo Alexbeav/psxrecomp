@@ -21,15 +21,23 @@ MANIFEST = (
 assert "video_bezel" not in CONFIG_H
 assert 'video.contains("bezel")' not in CONFIG_CPP
 assert "psx_mod_set_bezel_artwork" in HEADER
-assert "psx_mod_current_package_file" in HEADER
+assert "psx_mod_current_package_file" not in HEADER
+assert "psx_mod_current_resource_path" in HEADER
 assert "psx_mod_set_bezel_artwork" in MAIN
 assert "g_video_renderer = 1;" in MAIN
 assert "mod-owned OpenGL margin artwork" in MAIN
 assert "current_plugin" in MOD_RUNTIME
-assert 'psx_mod_current_package_file("bezel.png"' in BUILTIN
+assert 'psx_mod_current_resource_path("artwork"' in BUILTIN
 assert 'psx_mod_register_activation_plugin("psx.bezel"' in BUILTIN
 assert 'id = "psx.presentation.bezel"' in MANIFEST
 assert "default_enabled = false" in MANIFEST
+assert "[[resource]]" in MANIFEST
+assert 'id = "artwork"' in MANIFEST
+assert 'file_patterns = "*.png,*.jpg,*.jpeg,*.bmp"' in MANIFEST
 assert 'id = "psx.bezel"' in MANIFEST
+assert not (
+    ROOT
+    / "mods/builtin/packages/psx.presentation.bezel/1.0.0/bezel.png"
+).exists()
 
 print("mod-owned bezel guard passed")
