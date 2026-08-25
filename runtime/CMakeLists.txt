@@ -382,6 +382,12 @@ if(BUILD_TESTING)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
 
+    add_executable(psx_vblank_clock_test
+        tests/test_psx_vblank_clock.c
+        src/psx_vblank_clock.c)
+    target_include_directories(psx_vblank_clock_test PRIVATE include)
+    add_test(NAME psx_vblank_clock_test COMMAND psx_vblank_clock_test)
+
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)
     target_include_directories(spu_end_without_repeat_test PRIVATE include)
