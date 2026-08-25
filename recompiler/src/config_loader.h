@@ -376,6 +376,10 @@ struct RuntimeConfig {
     // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
     int                   video_supersampling = 1;
 
+    // Optional initial window width declared by the title profile. Zero keeps
+    // the historical fit-to-display behavior; player settings may override it.
+    int                   video_window_width = 0;
+
     // antialiasing: when true the present path uses linear filtering when
     // scaling the framebuffer to the window (smooths the supersample
     // downscale and any window resize). false = nearest (sharp pixels).

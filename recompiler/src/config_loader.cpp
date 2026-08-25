@@ -545,6 +545,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
             rt.video_supersampling = static_cast<int>(n);
         }
+        if (video.contains("window_width")) {
+            const auto n = toml::find<int64_t>(video, "window_width");
+            if (n < 640 || n > 7680) {
+                throw std::runtime_error(fmt::format(
+                    "[video] window_width out of range (640..7680): {}", n));
+            }
+            rt.video_window_width = static_cast<int>(n);
+        }
         if (video.contains("antialiasing")) {
             rt.video_antialiasing = toml::find<bool>(video, "antialiasing");
         }
