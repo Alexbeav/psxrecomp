@@ -81,6 +81,17 @@ if(BUILD_TESTING)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
 
+    add_executable(keyboard_pad_chord_test
+        tests/test_keyboard_pad_chord.c
+        src/psx_keybinds.c)
+    target_include_directories(keyboard_pad_chord_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(keyboard_pad_chord_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(keyboard_pad_chord_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME keyboard_pad_chord_test COMMAND keyboard_pad_chord_test)
+
     # Generic external replacement-pack core. The renderer integration is a
     # separate consumer; this target pins pack discovery, deterministic keying,
     # VRAM residency, portable tracking state, and bounded asynchronous decode.
