@@ -1078,8 +1078,11 @@ void read_conditions(const toml::value& value, const std::vector<ModOption>& opt
             when[id] = condition_value;
         }
     }
-    for (const auto& [id, condition_value] : when) {
-        (void)condition_value;
+    /* Bind map entries to real locals before the lambda — capturing a
+     * structured binding is a C++20 extension and breaks MinGW C++17 builds. */
+    for (const auto& entry : when) {
+        const std::string& id = entry.first;
+        const std::string& condition_value = entry.second;
         const auto option = std::find_if(
             options.begin(), options.end(),
             [&](const ModOption& item) {
