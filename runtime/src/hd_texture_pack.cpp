@@ -1326,4 +1326,3 @@ void hd_texture_pixels_release(HdTexturePixels* pixels) {
 }
 
 } // extern "C"
-

@@ -25,7 +25,6 @@ void check(bool condition, const char* message) {
         ++failures;
     }
 }
-
 std::string key_name(uint32_t texture_hash, uint32_t palette_hash) {
     std::ostringstream out;
     out << std::hex << std::nouppercase << texture_hash << '-'
@@ -532,4 +531,3 @@ int main() {
     std::puts("PASS: external HD texture pack scan/hash/tracker semantics");
     return 0;
 }
-
