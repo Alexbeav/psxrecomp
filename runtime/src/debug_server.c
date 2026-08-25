@@ -8703,13 +8703,21 @@ static void handle_screenshot_hires(int id, const char *json)
 
     uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
-    int got = gr_render_display_hires(argb, (int)ow, (int)di.display_x,
+    /* Renderer pitches are byte strides (the live SDL presentation path uses
+     * the same contract). Passing `ow` here advanced each row by only one
+     * quarter of its ARGB width, overlapping four rows and producing a PNG
+     * with repeated horizontal strips followed by untouched black storage. */
+    int got = gr_render_display_hires(argb,
+                                      (int)(ow * sizeof(*argb)),
+                                      (int)di.display_x,
                                       (int)di.display_y, (int)w, (int)h);
     if (!got) {
         /* No hi-res surface (scale 1, or a backend without one): resolve the
          * native display instead and say so, rather than emitting a blank. */
         scale = 1; ow = w; oh = h;
-        got = gr_render_display(argb, (int)ow, (int)di.display_x,
+        got = gr_render_display(argb,
+                                (int)(ow * sizeof(*argb)),
+                                (int)di.display_x,
                                 (int)di.display_y, (int)w, (int)h);
         if (!got) { free(argb); send_err(id, "no display surface"); return; }
     }
