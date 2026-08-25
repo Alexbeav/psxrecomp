@@ -68,6 +68,17 @@ if(BUILD_TESTING)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
 
+    # Generic external replacement-pack core. The renderer integration is a
+    # separate consumer; this target pins pack discovery, deterministic keying,
+    # VRAM residency, portable tracking state, and bounded asynchronous decode.
+    add_executable(hd_texture_pack_test
+        tests/test_hd_texture_pack.cpp
+        src/hd_texture_pack.cpp)
+    target_include_directories(hd_texture_pack_test PRIVATE include)
+    find_package(Threads REQUIRED)
+    target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
+    add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
+
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
     # g_debug_last_store_pc references that this test's stub block never gained,
