@@ -13,6 +13,22 @@ Normal runtime builds stage it automatically so players supply only a disc;
 `bios/OpenBIOS.LICENSE` always rides alongside the shipped image.
 
 
+## libchdr — CHD disc-image decompressor
+
+[libchdr](https://github.com/rtissera/libchdr) by Romain Tisserand and
+contributors, licensed **BSD-3-Clause** (notice: `LICENSE.txt` inside the
+archive). Vendored as the pinned source archive
+`third_party/libchdr-<commit>.tar.gz`; the commit, digest, and upstream URL are
+recorded in `third_party/deps.manifest`, and `runtime/chd_dependency.cmake`
+verifies the archive against that digest before building it. It is compiled
+into the runtime as a static library, so the BSD notice must ship with any
+binary that links it.
+
+The archive also carries libchdr's own bundled decompressors — Zstandard
+(BSD-3-Clause / GPL-2.0 dual), LZMA SDK (public domain), and miniz (MIT) —
+built from the same pinned tree; `WITH_SYSTEM_ZLIB`/`WITH_SYSTEM_ZSTD` are
+forced OFF so the disc decoder cannot change with the host's packages.
+
 ## TinyCC (TCC) — toolchain-free overlay compiler shipped to players
 
 [TinyCC](https://bellard.org/tcc/) by Fabrice Bellard and contributors, licensed

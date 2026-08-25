@@ -8,6 +8,7 @@ if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 endif()
 
+include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
 
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
@@ -166,30 +167,24 @@ if(_psx_sdl_backend STREQUAL "SDL3")
         # CI (tools/ci/prefetch_sdl3.sh) pre-extracts with curl --http1.1 to
         # avoid intermittent GitHub HTTP/2 REFUSED_STREAM failures from
         # CMake's file(DOWNLOAD). Prefer that tree when present.
-        set(_psx_sdl3_src "")
-        if(DEFINED FETCHCONTENT_SOURCE_DIR_SDL3 AND
-           NOT FETCHCONTENT_SOURCE_DIR_SDL3 STREQUAL "" AND
-           EXISTS "${FETCHCONTENT_SOURCE_DIR_SDL3}/CMakeLists.txt")
-            set(_psx_sdl3_src "${FETCHCONTENT_SOURCE_DIR_SDL3}")
-        elseif(DEFINED ENV{PSX_SDL3_SOURCE_DIR} AND
-               NOT "$ENV{PSX_SDL3_SOURCE_DIR}" STREQUAL "" AND
-               EXISTS "$ENV{PSX_SDL3_SOURCE_DIR}/CMakeLists.txt")
-            set(_psx_sdl3_src "$ENV{PSX_SDL3_SOURCE_DIR}")
-            set(FETCHCONTENT_SOURCE_DIR_SDL3 "${_psx_sdl3_src}" CACHE PATH
-                "Pre-fetched SDL3 source (skip download)" FORCE)
-        endif()
-        if(_psx_sdl3_src)
-            message(STATUS
-                "psxrecomp: using pre-fetched SDL3 source ${_psx_sdl3_src}")
-        endif()
+        psxrecomp_dependency_source_dir(SDL3
+            ENV PSX_SDL3_SOURCE_DIR
+            OUT _psx_sdl3_src)
+        # Pin (and any vendored archive) come from third_party/deps.manifest, so
+        # an air-gapped tree staged by tools/ci/vendor_deps.sh needs no download.
+        psxrecomp_dependency_archive(SDL3
+            SOURCE_DIR "${_psx_sdl3_src}"
+            OUT_URL _psx_sdl3_url OUT_HASH _psx_sdl3_hash)
         FetchContent_Declare(SDL3
             URL
-                "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
+                "${_psx_sdl3_url}"
             URL_HASH
-                "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
+                "${_psx_sdl3_hash}"
             ${_psx_sdl3_timestamp_args})
         FetchContent_MakeAvailable(SDL3)
         unset(_psx_sdl3_src)
+        unset(_psx_sdl3_url)
+        unset(_psx_sdl3_hash)
     endif()
     if(NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR
@@ -729,11 +724,17 @@ function(psxrecomp_ensure_zlib)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
         list(APPEND _psx_zlib_timestamp_args DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     endif()
+    psxrecomp_dependency_source_dir(psx_zlib
+        ENV PSX_ZLIB_SOURCE_DIR
+        OUT _psx_zlib_src)
+    psxrecomp_dependency_archive(psx_zlib
+        SOURCE_DIR "${_psx_zlib_src}"
+        OUT_URL _psx_zlib_url OUT_HASH _psx_zlib_hash)
     FetchContent_Declare(psx_zlib
         URL
-            "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
+            "${_psx_zlib_url}"
         URL_HASH
-            "SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+            "${_psx_zlib_hash}"
         ${_psx_zlib_timestamp_args})
     FetchContent_MakeAvailable(psx_zlib)
     # madler/zlib builds zlibstatic even when a shared zlib target exists.
