@@ -1454,9 +1454,30 @@ function(psxrecomp_add_runtime_target target)
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
         endif()
-        find_package(OpenGL)
-        if(OpenGL_FOUND)
-            target_link_libraries(${target} PRIVATE OpenGL::GL)
+        # GL for gpu_gl_renderer.c. Do NOT hardcode OpenGL::GL: FindOpenGL
+        # reports OpenGL as found on a GLVND host that has libOpenGL.so but no
+        # legacy libGL.so / glx.h (Steam Deck), yet never creates that target —
+        # which then fails at generate time. recomp_resolve_gl() picks whatever
+        # the host actually has; see recomp-ui/cmake/recomp_gl.cmake.
+        if(NOT COMMAND recomp_resolve_gl
+           AND RECOMP_UI_ROOT AND EXISTS "${RECOMP_UI_ROOT}/cmake/recomp_gl.cmake")
+            include("${RECOMP_UI_ROOT}/cmake/recomp_gl.cmake")
+        endif()
+        if(COMMAND recomp_resolve_gl)
+            recomp_resolve_gl(_psx_gl_target)
+            target_link_libraries(${target} PRIVATE ${_psx_gl_target})
+        else()
+            # No recomp-ui checkout (PSX_RECOMP_UI=OFF): same resolution inline.
+            find_package(OpenGL)
+            if(TARGET OpenGL::GL)
+                target_link_libraries(${target} PRIVATE OpenGL::GL)
+            elseif(TARGET OpenGL::OpenGL)
+                target_link_libraries(${target} PRIVATE OpenGL::OpenGL)
+            elseif(OPENGL_gl_LIBRARY)
+                target_link_libraries(${target} PRIVATE "${OPENGL_gl_LIBRARY}")
+            elseif(OPENGL_opengl_LIBRARY)
+                target_link_libraries(${target} PRIVATE "${OPENGL_opengl_LIBRARY}")
+            endif()
         endif()
         # Async lobby connect (psx_lobby_client.c) uses pthread on Unix.
         if(PSXRECOMP_HAS_LOBBY_CLIENT)
