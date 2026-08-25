@@ -1794,10 +1794,12 @@ function(psxrecomp_add_game_runtime target)
             "build the setup host.")
     endif()
 
-    set(_psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
+    set(_psxg_extras)
     # psxrecomp_codegen_host.c unconditionally includes recomp_launcher.h, so
-    # it can only be built alongside the recomp-ui submodule (PSX_RECOMP_UI).
+    # the title's setup host and the shared host implementation can only be
+    # built alongside the recomp-ui submodule (PSX_RECOMP_UI).
     if(PSX_RECOMP_UI)
+        list(APPEND _psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
         list(APPEND _psxg_extras
             "${PSXRECOMP_ROOT}/host/psxrecomp_codegen_host.c")
     endif()
@@ -1862,7 +1864,7 @@ function(psxrecomp_add_game_runtime target)
         # C is linked"): this only fires when a codegen_setup.c-style host was
         # actually provided, since that file needs recomp-ui/launcher headers
         # that a --no-recomp-ui build does not have.
-        if(PSXG_CODEGEN_SETUP_SOURCES)
+        if(PSX_RECOMP_UI AND PSXG_CODEGEN_SETUP_SOURCES)
             target_compile_definitions(${_psxg_t} PRIVATE PSX_HAS_CODEGEN_SETUP_HOST=1)
         endif()
 
