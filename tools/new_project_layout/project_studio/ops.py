@@ -668,6 +668,10 @@ def op_merge_gitignore(root: Path, options: MigrateOptions) -> ApplyResult:
         "/build/",
         "/build-*/",
         "/saves/",
+        # Local analysis scratch: GPU frame captures / parity dumps and disc
+        # asset rips. Routinely exceeds GitHub's 100 MB blob limit, and rips
+        # are disc content that must never be committed.
+        "/analysis/",
         "*.bin",
         "*.cue",
     ]

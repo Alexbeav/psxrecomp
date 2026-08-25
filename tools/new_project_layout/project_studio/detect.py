@@ -674,7 +674,7 @@ def audit_project(root: Path) -> AuditReport:
     gi = _read(root / ".gitignore")
     missing_gi = [
         pat
-        for pat in ("/generated/", "/disc/", "/bios/", "/dist/")
+        for pat in ("/generated/", "/disc/", "/bios/", "/dist/", "/analysis/")
         if pat not in gi and pat.rstrip("/") not in gi
     ]
     if not (root / ".gitignore").is_file():
