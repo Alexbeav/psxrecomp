@@ -5657,7 +5657,8 @@ static int savestate_menu_slot_from_key(SDL_Keycode key) {
     return -1;
 }
 
-static void savestate_menu_handle_key(SDL_Keycode key, int mod, int repeat) {
+static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
+                                      int mod, int repeat) {
     int slot;
     if (repeat)
         return;
@@ -5669,7 +5670,8 @@ static void savestate_menu_handle_key(SDL_Keycode key, int mod, int repeat) {
         savestate_menu_sync_overlay();
         return;
     }
-    if (host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU, (int)key, mod) ||
+    if (host_keymap_match_event(HOST_KEYMAP_SAVE_STATE_MENU, (int)key,
+                                (int)scancode, mod) ||
         key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
         savestate_menu_close();
     } else if (key == SDLK_LEFT || key == SDLK_UP) {
@@ -5846,14 +5848,17 @@ static void rewind_host_pause_loop(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (!repeat &&
-                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
+                                            (int)scancode, (int)mod)) {
                     psx_rewind_toggle();
                 }
             }
@@ -5884,13 +5889,15 @@ static void savestate_menu_host_pause_loop(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
-                savestate_menu_handle_key(key, (int)mod, repeat);
+                savestate_menu_handle_key(key, scancode, (int)mod, repeat);
             } else if (ev.type == SDL_KEYUP) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
@@ -6099,10 +6106,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int key_repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int key_repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (key == SDLK_ESCAPE && psx_netplay_active()) {
@@ -6110,12 +6119,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     return ep;
                 }
                 if (!key_repeat &&
-                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
+                                            (int)scancode, (int)mod)) {
                     psx_rewind_toggle();
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU,
-                                           (int)key, (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_SAVE_STATE_MENU,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     savestate_menu_toggle(key);
                 }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
@@ -6124,17 +6135,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     host_osd_push("CD reinsert", 1500);
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)key,
-                                           (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     fps_telemetry_toggle();
                 }
                 /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
                  * (defaults: keypad +/-). 5% steps; shows right-side bar. */
-                else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
-                                           (int)mod)) {
+                else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_UP,
+                                                  (int)key, (int)scancode,
+                                                  (int)mod)) {
                     host_volume_adjust(+5);
-                } else if (host_keymap_match(HOST_KEYMAP_VOLUME_DOWN, (int)key,
-                                             (int)mod)) {
+                } else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_DOWN,
+                                                    (int)key, (int)scancode,
+                                                    (int)mod)) {
                     host_volume_adjust(-5);
                 }
                 /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
@@ -6146,8 +6160,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)key,
-                                           (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
