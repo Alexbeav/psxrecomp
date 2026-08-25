@@ -10667,6 +10667,35 @@ int main(int argc, char** argv) {
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
+    std::vector<std::string> cli_path_arg_storage;
+    cli_path_arg_storage.reserve((size_t)argc);
+    auto is_cli_option = [](const char* arg) {
+        return arg && arg[0] == '-' && arg[1] == '-';
+    };
+    auto consume_path_arg = [&](int& i) -> const char* {
+        const int first = i + 1;
+        std::string combined;
+        std::string best;
+        int best_index = first;
+        for (int j = first; j < argc; ++j) {
+            if (j != first && is_cli_option(argv[j])) break;
+            if (!combined.empty()) combined += " ";
+            combined += argv[j];
+
+            std::error_code ec;
+            if (std::filesystem::exists(std::filesystem::path(combined), ec)) {
+                best = combined;
+                best_index = j;
+            }
+        }
+        if (best.empty()) {
+            best = argv[first];
+            best_index = first;
+        }
+        i = best_index;
+        cli_path_arg_storage.push_back(std::move(best));
+        return cli_path_arg_storage.back().c_str();
+    };
     PsxNetplayConfig net_cfg;
     psx_netplay_config_defaults(&net_cfg);
     psx_netplay_apply_env(&net_cfg);  /* CLI flags below win over env */
@@ -10692,17 +10721,17 @@ int main(int argc, char** argv) {
      * No --game-root flag: that remains config-driven. */
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--bios") == 0 && i + 1 < argc) {
-            bios_path = argv[++i];
+            bios_path = consume_path_arg(i);
             bios_from_cli = true;
             bios_explicit = true;
         } else if (std::strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
-            game_config_path = argv[++i];
+            game_config_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
-            disc_override_path = argv[++i];
+            disc_override_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
-            cli_memcard_dir = argv[++i];
+            cli_memcard_dir = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
