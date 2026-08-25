@@ -401,9 +401,9 @@ values, and leaves activation to the selected trusted plugin.
 
 Bezel artwork is intentionally not a `[video]` key. It is exposed as the
 disabled-by-default `psx.presentation.bezel` mod package, which draws a
-package-local `bezel.png` behind the game image in OpenGL letterbox or
-pillarbox margins. With the mod disabled, margins remain the historical black
-clear.
+user-selected image resource behind the game image in OpenGL letterbox or
+pillarbox margins. With the mod disabled, or with no bezel image selected,
+margins remain the historical black clear.
 
 Reserved future fields:
 - `default_disc_path` — game runtimes can pre-mount a disc
