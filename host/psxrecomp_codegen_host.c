@@ -14,6 +14,7 @@
 #  include <errno.h>
 #  include <fcntl.h>
 #  include <spawn.h>
+#  include <strings.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
@@ -61,6 +62,14 @@ static int g_wizard_bios_explicit;
 
 static const char* cfg_or(const char* v, const char* d) {
     return (v && v[0]) ? v : d;
+}
+
+static int ascii_strcasecmp(const char* a, const char* b) {
+#if defined(_WIN32)
+    return _stricmp(a, b);
+#else
+    return strcasecmp(a, b);
+#endif
 }
 
 static int path_is_file(const char* path) {
@@ -1710,8 +1719,8 @@ static const char* toolchain_zip_asset_name(void) {
 static const char* toolchain_min_version(void) {
     const char* env = getenv("RETCOMM_TOOLCHAIN_MIN_VERSION");
     if (env && env[0]) {
-        if (strcmp(env, "0") == 0 || strcasecmp(env, "off") == 0 ||
-            strcasecmp(env, "none") == 0)
+        if (strcmp(env, "0") == 0 || ascii_strcasecmp(env, "off") == 0 ||
+            ascii_strcasecmp(env, "none") == 0)
             return "";
         return env;
     }
