@@ -911,8 +911,9 @@ function(psxrecomp_add_runtime_target target)
     target_link_libraries(${target} PRIVATE chdr-static)
     # audio_trace.c uses C11 atomics. Make the runtime's actual language
     # requirement explicit instead of relying on a parent project's global
-    # CMAKE_C_STANDARD setting.
-    target_compile_features(${target} PRIVATE c_std_11)
+    # CMAKE_C_STANDARD setting. cxx_std_17 likewise — game CMakeLists may omit
+    # CMAKE_CXX_STANDARD; mod_packages.cpp must not compile as a pre-17 dialect.
+    target_compile_features(${target} PRIVATE c_std_11 cxx_std_17)
 
     # Game-specific executable name. Every title instantiates this function with
     # the same CMake target name ("psx-runtime"), so without this they ALL produce
