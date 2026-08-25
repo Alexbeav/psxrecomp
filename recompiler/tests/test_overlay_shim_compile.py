@@ -16,9 +16,9 @@ INCLUDE = ROOT / "runtime" / "include"
 def find_gcc() -> str:
     candidates = [
         os.environ.get("CC"),
-        r"C:\msys64\mingw64\bin\gcc.exe" if os.name == "nt" else None,
         shutil.which("gcc"),
         shutil.which("cc"),
+        r"C:\msys64\mingw64\bin\gcc.exe" if os.name == "nt" else None,
     ]
     for candidate in candidates:
         if candidate and pathlib.Path(candidate).is_file():
