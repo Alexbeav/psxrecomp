@@ -223,6 +223,14 @@ if(BUILD_TESTING)
         ../recompiler/lib/toml11)
     add_test(NAME mod_packages_test COMMAND mod_packages_test)
 
+    add_executable(text_xlate_fix_only_test
+        tests/test_text_xlate_fix_only.cpp
+        src/text_xlate.cpp)
+    target_include_directories(text_xlate_fix_only_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
+
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
