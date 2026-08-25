@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --check) CHECK_ONLY=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help)
-      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*)
