@@ -563,6 +563,7 @@ if(BUILD_TESTING)
                 fps_telemetry_opt_in
                 frame_interpolation_display_rate
                 hybrid_dev_any_input
+                jalr_link_register_guards
                 launcher_vulkan_option
                 mdec_busy_output_drain
                 mod_controller_override
