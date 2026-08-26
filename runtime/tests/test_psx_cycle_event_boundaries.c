@@ -53,6 +53,9 @@ uint32_t dma_cycles_to_deliverable_irq(uint32_t mask) {
     return UINT32_MAX;
 }
 uint32_t sio_cycles_to_irq(uint32_t mask) { (void)mask; return UINT32_MAX; }
+/* SPU sample-event scheduler (golden 1a973806): psx_cycles.c consults it; stub here. */
+uint32_t psx_spu_sample_event_cycles_to_next(void) { return UINT32_MAX; }
+void psx_spu_sample_event_service(void) {}
 int psx_get_in_exception(void) { return 0; }
 
 void starvation_watchdog_check(void) {}

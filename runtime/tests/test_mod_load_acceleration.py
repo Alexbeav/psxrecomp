@@ -71,7 +71,7 @@ assert (
 )
 
 assert "release_run = g_turbo_load_release_frames;" in MAIN
-assert "g_frame_period_ms / (double)g_turbo_load_wall_multiplier" in MAIN
+assert ("g_frame_period_ms / (double)g_turbo_load_wall_multiplier" in MAIN or "present_effective_frame_period_ms() / (double)g_turbo_load_wall_multiplier" in MAIN)
 assert "if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())" in MAIN
 assert "if (g_mod_disc_speed_divisor >= 0)" in MAIN
 
