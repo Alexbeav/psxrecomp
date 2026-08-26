@@ -59,7 +59,12 @@ def main() -> int:
     require(savestate, "psx_hle_scheduler_enabled()", "HLE save-side gate")
     require(
         savestate,
-        "!psx_scheduler_snapshot_boundary_active()",
+        "savestate_admission_decide(&adm)",
+        "admission decided by the tested helper (test_savestate_admission.c)",
+    )
+    require(
+        savestate,
+        "!adm.boundary_active",
         "scheduler-boundary save deferral",
     )
     require(
@@ -86,10 +91,9 @@ def main() -> int:
         "savestate_pending() && psx_is_dispatchable(run_pc)",
         "dispatchable scheduler resume guard",
     )
-    gate = savestate.index("if (needs_scheduler_boundary ||")
+    gate = savestate.index("if (verdict != SAVESTATE_ADMIT)")
     admission_gate = savestate.index(
-        "if (needs_scheduler_boundary &&\n"
-        "            savestate_active_capture_boundary_ok(cpu, pc))"
+        "if (verdict == SAVESTATE_UNWIND_TO_SCHEDULER)"
     )
     admission_call = savestate.index("psx_scheduler_snapshot_at(pc)")
     write = savestate.index("boot_state_save(&snap")

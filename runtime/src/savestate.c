@@ -18,6 +18,7 @@
 #include "psx_netplay_rb.h"
 #include "overlay_loader.h"
 #include "psx_scheduler.h"
+#include "savestate_admission.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -854,15 +855,25 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
          * orthogonal to its dirty-pump / hint rules above. Structural guard:
          * tests/test_savestate_capture_boundary_guards.py; behavioural matrix:
          * tests/test_savestate_admission.c (savestate_admission_decide). */
-        const int needs_scheduler_boundary =
-            psx_hle_scheduler_enabled() &&
-            !psx_scheduler_snapshot_boundary_active();
-        const int context_ok = cpu &&
-            (psx_scheduler_snapshot_boundary_active()
+        SavestateAdmissionInputs adm;
+        adm.hle_enabled = psx_hle_scheduler_enabled() ? 1 : 0;
+        adm.boundary_active = psx_scheduler_snapshot_boundary_active() ? 1 : 0;
+        adm.capture_boundary_ok =
+            (adm.hle_enabled && !adm.boundary_active &&
+             savestate_active_capture_boundary_ok(cpu, pc)) ? 1 : 0;
+        adm.context_ok = (cpu &&
+            (adm.boundary_active
                  ? savestate_flat_context_ok(pc, cpu->gpr[29])
-                 : savestate_snapshot_context_ok(pc, cpu->gpr[29]));
-        if (needs_scheduler_boundary &&
-            savestate_active_capture_boundary_ok(cpu, pc)) {
+                 : savestate_snapshot_context_ok(pc, cpu->gpr[29]))) ? 1 : 0;
+        adm.snapshot_safe = snapshot_safe;
+        adm.resume_pc_ok = savestate_resume_pc_ok(pc) ? 1 : 0;
+        adm.resume_pc = resume_pc;
+        adm.pc = pc;
+        adm.cpu_pc = cpu ? cpu->pc : 0u;
+        const SavestateAdmission verdict = savestate_admission_decide(&adm);
+        const int needs_scheduler_boundary = adm.hle_enabled && !adm.boundary_active;
+        (void)pc_matches_cpu; /* folded into savestate_admission_decide */
+        if (verdict == SAVESTATE_UNWIND_TO_SCHEDULER) {
             /* A title can stay inside one long CPS/native dispatch forever,
              * so passive deferral never reaches psx_scheduler_run's flat poll.
              * At an explicit block-leader interrupt boundary CPUState is
@@ -891,9 +902,7 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
          * (This is also what excludes the first-F7 poison case this tree used to
          * reject with an unconditional hint==0 rule: that substitute PC came from
          * sticky-BB latches / $ra and never equals cpu->pc.) */
-        if (needs_scheduler_boundary || !context_ok || !snapshot_safe ||
-            (resume_pc == 0u && !pc_matches_cpu) ||
-            !savestate_resume_pc_ok(pc)) {
+        if (verdict != SAVESTATE_ADMIT) { /* DEFER, or an unwind that returned */
             /* FMV/present edges often poll with hint=0; wait briefly for a
              * sticky BB / IRQ latch rather than writing pc=0 poison. */
             const double now = savestate_mono_ms();

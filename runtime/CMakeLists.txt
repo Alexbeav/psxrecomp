@@ -87,6 +87,16 @@ if(BUILD_TESTING)
     target_include_directories(controller_port_route_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
+    add_executable(controller_policy_switch_test
+        tests/test_controller_policy_switch.c
+        src/controller_policy.c)
+    target_include_directories(controller_policy_switch_test PRIVATE include)
+    add_test(NAME controller_policy_switch_test COMMAND controller_policy_switch_test)
+    add_executable(savestate_admission_test
+        tests/test_savestate_admission.c
+        src/savestate_admission.c)
+    target_include_directories(savestate_admission_test PRIVATE include)
+    add_test(NAME savestate_admission_test COMMAND savestate_admission_test)
     add_executable(keyboard_pad_chord_test
         tests/test_keyboard_pad_chord.c
         src/psx_keybinds.c)
@@ -483,6 +493,15 @@ if(BUILD_TESTING)
         add_test(NAME savestate_status_protocol_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_savestate_status_protocol.py)
+        add_test(NAME savestate_capture_boundary_guards_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_savestate_capture_boundary_guards.py)
+        add_test(NAME mod_controller_override_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_controller_override.py)
+        add_test(NAME hybrid_dev_any_input_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hybrid_dev_any_input.py)
         add_test(NAME overlay_region_floor_config_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_region_floor_config.py)

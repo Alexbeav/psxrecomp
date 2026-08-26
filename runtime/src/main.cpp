@@ -76,6 +76,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "launcher_device.h"
 #include "game_options.h"
 #include "mod_plugins.h"
+#include "controller_policy.h"
 #include "mod_runtime.h"
 #include "crc32.h"
 #include "disc_identity.h"
@@ -4479,6 +4480,11 @@ static bool controller_policy_dpad_active(const PlayerInput& p, int player,
     return false;
 }
 
+static_assert((int)PSXRecompV4::PAD_MODE_ANALOG == PSX_CTRL_MODE_ANALOG &&
+              (int)PSXRecompV4::PAD_MODE_DIGITAL == PSX_CTRL_MODE_DIGITAL &&
+              (int)PSX_MOD_CONTROLLER_ANALOG == PSX_CTRL_MODE_ANALOG &&
+              (int)PSX_MOD_CONTROLLER_DIGITAL == PSX_CTRL_MODE_DIGITAL,
+              "controller_policy.h mode encoding must match PadMode and the plugin ABI");
 static int controller_policy_resolve_mode(
     int slot, int player, int configured_mode, const PadSources& src,
     const PlayerInput& p, uint16_t buttons, const uint8_t st[4]) {
@@ -4505,15 +4511,16 @@ static int controller_policy_resolve_mode(
     input.ry = st[3];
 
     const uint32_t requested = policy.callback(&input);
-    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
-        return PSXRecompV4::PAD_MODE_ANALOG;
-    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
-        return PSXRecompV4::PAD_MODE_DIGITAL;
-    std::fprintf(stderr,
-        "psxrecomp: mod controller policy returned invalid mode %u "
-        "(player %u)\n",
-        (unsigned)requested, (unsigned)player);
-    return configured_mode;
+    if (requested != (uint32_t)PSX_MOD_CONTROLLER_ANALOG &&
+        requested != (uint32_t)PSX_MOD_CONTROLLER_DIGITAL) {
+        std::fprintf(stderr,
+            "psxrecomp: mod controller policy returned invalid mode %u "
+            "(player %u)\n",
+            (unsigned)requested, (unsigned)player);
+    }
+    /* PSX_MOD_CONTROLLER_* and PAD_MODE_* share values (ANALOG=1, DIGITAL=2;
+     * static_assert'ed above); the pure helper is the tested specification. */
+    return controller_policy_effective_mode(configured_mode, 1, requested);
 }
 
 static int controller_policy_resolve_override_mode(
@@ -4542,15 +4549,16 @@ static int controller_policy_resolve_override_mode(
     input.ry = st[3];
 
     const uint32_t requested = policy.callback(&input);
-    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
-        return PSXRecompV4::PAD_MODE_ANALOG;
-    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
-        return PSXRecompV4::PAD_MODE_DIGITAL;
-    std::fprintf(stderr,
-        "psxrecomp: mod controller policy returned invalid mode %u "
-        "(player %u)\n",
-        (unsigned)requested, (unsigned)player);
-    return configured_mode;
+    if (requested != (uint32_t)PSX_MOD_CONTROLLER_ANALOG &&
+        requested != (uint32_t)PSX_MOD_CONTROLLER_DIGITAL) {
+        std::fprintf(stderr,
+            "psxrecomp: mod controller policy returned invalid mode %u "
+            "(player %u)\n",
+            (unsigned)requested, (unsigned)player);
+    }
+    /* PSX_MOD_CONTROLLER_* and PAD_MODE_* share values (ANALOG=1, DIGITAL=2;
+     * static_assert'ed above); the pure helper is the tested specification. */
+    return controller_policy_effective_mode(configured_mode, 1, requested);
 }
 
 /* Sample each player's live device state into the matching SIO pad slot.
@@ -4731,14 +4739,7 @@ static void apply_input_override_to_sio(int override_word) {
      * no other way to steer such a game; the equivalent fold for physical
      * controllers was removed (see pad_sticks_for) after it was measured
      * double-stepping Legend of Mana's land-placement cursor. */
-    if (eff_analog &&
-        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
-        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
-        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
-        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
-        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF; /* Right */
-    }
-    if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
+    controller_pad_compose_injected(effective_mode, stick_live ? 1 : 0, w, st);
     sio_set_pad_sticks(0, st[0], st[1], st[2], st[3]);
     sio_request_pad_type(0, eff_analog);
     psx_selfcheck_note_pad(0, w, st[0], st[1], st[2], st[3],
@@ -4828,9 +4829,7 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         if (src.all_pads)
             dev_any_controller_sticks(st);
     }
-    if (!eff_analog) {
-        st[0] = st[1] = st[2] = st[3] = 0x80;
-    }
+    controller_pad_compose_physical(effective_mode, st, st); /* centred unless ANALOG; never D-pad-derived */
 
     out->buttons = btn;
     out->lx = st[0]; out->ly = st[1]; out->rx = st[2]; out->ry = st[3];
@@ -4874,9 +4873,7 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     const bool suppress_stick = (eff_analog != 0);
     uint16_t btn = pad_buttons_for(p, player, suppress_stick);
 
-    if (!eff_analog) {
-        st[0] = st[1] = st[2] = st[3] = 0x80;
-    }
+    controller_pad_compose_physical(effective_mode, st, st); /* centred unless ANALOG; never D-pad-derived */
 
     out->buttons = btn;
     out->lx = st[0]; out->ly = st[1]; out->rx = st[2]; out->ry = st[3];
@@ -5007,14 +5004,7 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     /* Injected input only; see the note on the sibling fold above. Not
      * hardware behaviour, retained solely so injection can steer stick-only
      * games. */
-    if (eff_analog &&
-        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
-        if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
-        if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
-        if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
-        if ((uint16_t)(~w & 0x0020u)) st[0] = 0xFF;
-    }
-    if (!eff_analog) { st[0] = st[1] = st[2] = st[3] = 0x80; }
+    controller_pad_compose_injected(effective_mode, stick_live ? 1 : 0, w, st);
 
     out->buttons = w;
     out->lx = st[0]; out->ly = st[1]; out->rx = st[2]; out->ry = st[3];
