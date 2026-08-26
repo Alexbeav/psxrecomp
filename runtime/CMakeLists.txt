@@ -57,6 +57,19 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    foreach(_ram_geometry IN ITEMS retail expanded)
+        add_executable(psx_memory_geometry_${_ram_geometry}_test
+            tests/test_psx_memory_geometry.c)
+        target_include_directories(psx_memory_geometry_${_ram_geometry}_test
+            PRIVATE include)
+        if(_ram_geometry STREQUAL "expanded")
+            target_compile_definitions(psx_memory_geometry_${_ram_geometry}_test
+                PRIVATE PSX_MAIN_RAM_BYTES=0x00800000u)
+        endif()
+        add_test(NAME psx_memory_geometry_${_ram_geometry}_test
+                 COMMAND psx_memory_geometry_${_ram_geometry}_test)
+    endforeach()
+
     add_executable(host_keymap_test
         tests/test_host_keymap.c
         src/host_keymap.c)
@@ -74,6 +87,27 @@ if(BUILD_TESTING)
     target_include_directories(controller_port_route_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
+    add_executable(keyboard_pad_chord_test
+        tests/test_keyboard_pad_chord.c
+        src/psx_keybinds.c)
+    target_include_directories(keyboard_pad_chord_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(keyboard_pad_chord_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(keyboard_pad_chord_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME keyboard_pad_chord_test COMMAND keyboard_pad_chord_test)
+
+    # Generic external replacement-pack core. The renderer integration is a
+    # separate consumer; this target pins pack discovery, deterministic keying,
+    # VRAM residency, portable tracking state, and bounded asynchronous decode.
+    add_executable(hd_texture_pack_test
+        tests/test_hd_texture_pack.cpp
+        src/hd_texture_pack.cpp)
+    target_include_directories(hd_texture_pack_test PRIVATE include)
+    find_package(Threads REQUIRED)
+    target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
+    add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
 
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
@@ -229,6 +263,14 @@ if(BUILD_TESTING)
         include
         ../recompiler/lib/toml11)
     add_test(NAME mod_packages_test COMMAND mod_packages_test)
+
+    add_executable(text_xlate_fix_only_test
+        tests/test_text_xlate_fix_only.cpp
+        src/text_xlate.cpp)
+    target_include_directories(text_xlate_fix_only_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
 
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
@@ -404,6 +446,12 @@ if(BUILD_TESTING)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
 
+    add_executable(psx_vblank_clock_test
+        tests/test_psx_vblank_clock.c
+        src/psx_vblank_clock.c)
+    target_include_directories(psx_vblank_clock_test PRIVATE include)
+    add_test(NAME psx_vblank_clock_test COMMAND psx_vblank_clock_test)
+
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)
     target_include_directories(spu_end_without_repeat_test PRIVATE include)
@@ -422,9 +470,18 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME mod_bezel_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)
         add_test(NAME rewind_toggle_combo_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rewind_toggle_combo.py)
+        add_test(NAME savestate_status_protocol_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_savestate_status_protocol.py)
+        add_test(NAME screenshot_hires_pitch_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshot_hires_pitch.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,

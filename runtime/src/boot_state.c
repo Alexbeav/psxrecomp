@@ -687,7 +687,14 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return 1;
     }
     default:
-        return 0;
+        /* Unknown section: SKIP, never fail. This was `return 0`, which made
+         * every state written by a build with one extra section a poison pill
+         * for every build without it -- and worse than unloadable: the apply
+         * loop had already restored RAM/VRAM/CPU by the time it hit the
+         * unknown tag, so the refusal left a HALF-RESTORED machine that
+         * wedged or died at PC=0. A sectioned state format exists precisely
+         * so readers can step over what they do not know. */
+        return 1;
     }
 }
 

@@ -1,4 +1,5 @@
 #include "ps1_exe_parser.h"
+#include <algorithm>
 #include <fstream>
 #include <cstring>
 #include <fmt/core.h>
@@ -157,19 +158,37 @@ bool PS1Executable::validate(std::string& error_msg) const {
         return false;
     }
 
-    // Check BSS section doesn't overlap code
+    // A few retail PS-X EXEs round the payload up to a disc-sector boundary
+    // while declaring BSS at the end of the meaningful bytes. Loading those
+    // zero padding bytes and then clearing them as BSS is equivalent. Reject
+    // every overlap that contains actual code/data.
     if (header.memfill_size > 0) {
         uint32_t bss_start = header.memfill_start;
         uint32_t bss_end = header.bss_end();
         uint32_t code_end = end_address();
 
-        // BSS should come after code
         if (bss_start < code_end) {
-            error_msg = fmt::format(
-                "BSS section [0x{:08X}, 0x{:08X}) overlaps code [0x{:08X}, 0x{:08X})",
-                bss_start, bss_end, load_address(), code_end
-            );
-            return false;
+            if (bss_start < load_address()) {
+                error_msg = fmt::format(
+                    "BSS section [0x{:08X}, 0x{:08X}) begins before code "
+                    "[0x{:08X}, 0x{:08X})",
+                    bss_start, bss_end, load_address(), code_end
+                );
+                return false;
+            }
+            const size_t overlap_offset =
+                static_cast<size_t>(bss_start - load_address());
+            const bool has_nonzero_payload = std::any_of(
+                code_data.begin() + overlap_offset, code_data.end(),
+                [](uint8_t byte) { return byte != 0; });
+            if (has_nonzero_payload) {
+                error_msg = fmt::format(
+                    "BSS section [0x{:08X}, 0x{:08X}) overlaps non-zero "
+                    "code/data [0x{:08X}, 0x{:08X})",
+                    bss_start, bss_end, load_address(), code_end
+                );
+                return false;
+            }
         }
     }
 

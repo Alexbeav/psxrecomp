@@ -80,6 +80,14 @@ int32_t psx_mod_widescreen_x_margin(void);
  */
 int psx_mod_option_value(const char* package_id, const char* feature_id,
                          const char* option_id, char* out, uint32_t out_size);
+/*
+ * Read the committed owner-selected path for a resource declared by the
+ * package feature whose trusted plugin is currently running. Returns 0 when
+ * the feature has no selected path for that resource; plugins then leave the
+ * stock presentation unchanged.
+ */
+int psx_mod_current_resource_path(const char* resource_id,
+                                  char* out, uint32_t out_size);
 
 /*
  * Request a fixed host display aspect before renderer/window initialization.
@@ -122,6 +130,12 @@ enum {
 };
 int psx_mod_set_frame_interpolation_blend(uint32_t blend_mode);
 int psx_mod_set_auto_skip_fmv(int enabled);
+/*
+ * Draw still artwork behind the game image in OpenGL letterbox/pillarbox
+ * margins. The image path is an owner-selected mod resource; with no enabled
+ * mod/resource path, the margins remain the historical black clear.
+ */
+int psx_mod_set_bezel_artwork(const char* path);
 
 /*
  * Upper bounds for the two loading-speed knobs below. Both are generous on

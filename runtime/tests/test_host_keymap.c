@@ -44,6 +44,10 @@ int main(int argc, char **argv) {
     check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
                             (int)SDLK_F6, 0),
           "default controller port swap is F6");
+    check(host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
+                                  (int)SDLK_UNKNOWN,
+                                  (int)SDL_SCANCODE_F, 0),
+          "default display perf accepts its physical scancode");
 
     f = fopen(cfg, "wb");
     check(f != NULL, "create temporary config.ini");
@@ -78,6 +82,10 @@ int main(int argc, char **argv) {
           "volume down rebind uses Down");
     check(!host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)SDLK_f, 0),
           "display perf rebind disables F fallback");
+    check(!host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
+                                   (int)SDLK_UNKNOWN,
+                                   (int)SDL_SCANCODE_F, 0),
+          "display perf rebind disables the old F scancode");
     check(host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)SDLK_F10, 0),
           "display perf rebind uses F10");
     check(host_keymap_match(HOST_KEYMAP_RUNTIME_MENU, (int)SDLK_F2, 0),
@@ -85,6 +93,10 @@ int main(int argc, char **argv) {
     check(host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
                             (int)SDLK_F5, 0),
           "controller port swap rebind uses F5");
+    check(host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
+                                  (int)SDLK_UNKNOWN,
+                                  (int)SDL_SCANCODE_F10, 0),
+          "display perf rebind accepts the F10 scancode");
 
     remove(cfg);
     if (failures) {

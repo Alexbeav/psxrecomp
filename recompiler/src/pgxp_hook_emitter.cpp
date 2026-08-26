@@ -29,6 +29,20 @@ inline int16_t get_imm16(uint32_t i) { return (int16_t)(i & 0xFFFF); }
  * their stale shadows without help. The configured widescreen special sites
  * return early above translate_instruction's main dispatch and are likewise
  * unhooked (they are cull compares, not vertex moves; validation covers). */
+bool emission_ends_on_preprocessor_directive(const std::string& code) {
+    /* Scan back to the start of the final line, then find its first
+     * non-blank character. A directive is legal with leading whitespace, so
+     * "    #endif" counts just as much as "#endif". */
+    const std::size_t nl = code.find_last_of('\n');
+    const std::size_t line_begin = (nl == std::string::npos) ? 0u : nl + 1u;
+    for (std::size_t i = line_begin; i < code.size(); ++i) {
+        const char c = code[i];
+        if (c == ' ' || c == '\t' || c == '\r') continue;
+        return c == '#';
+    }
+    return false;  /* blank final line -- appending is already safe */
+}
+
 void append_pgxp_hooks(uint32_t instr, std::string& code) {
     const uint32_t opcode = (instr >> 26) & 0x3F;
     const uint32_t rs = get_rs(instr);

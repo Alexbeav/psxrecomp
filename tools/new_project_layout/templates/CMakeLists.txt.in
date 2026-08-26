@@ -1,8 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
-project(@PROJECT_CMAKE_NAME@ LANGUAGES C CXX)
-
 set(PSXRECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/psxrecomp" CACHE PATH
     "Path to psxrecomp")
+if(NOT EXISTS "${PSXRECOMP_ROOT}/runtime/runtime.cmake")
+    message(FATAL_ERROR
+        "PSXRecomp runtime is missing: ${PSXRECOMP_ROOT}/runtime/runtime.cmake\n"
+        "This project expects the psxrecomp framework checkout at ${PSXRECOMP_ROOT}.\n"
+        "Run: git submodule update --init --recursive\n"
+        "If psxrecomp/ is not a submodule, set -DPSXRECOMP_ROOT=<path-to-psxrecomp>.")
+endif()
+
+project(@PROJECT_CMAKE_NAME@ LANGUAGES C CXX)
 
 # --- Opt-in product surfaces (OFF by default in the framework) -------------
 # Scaffold prompts / flags fill these. Without recomp-ui, PSX_RECOMP_UI is OFF.
@@ -39,4 +46,3 @@ foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
             VERBATIM)
     endif()
 endforeach()
-

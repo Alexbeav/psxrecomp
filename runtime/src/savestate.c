@@ -60,6 +60,11 @@ static int      s_save_pending = -1;   /* slot, or -1 */
 static int      s_load_pending = -1;
 static int      s_load_completed = 0;
 static int      s_load_failed = 0;
+static uint32_t s_status_generation = 0;
+static int      s_status_pending = 0;
+static int      s_status_last_ok = 0;
+static int      s_status_last_load = 0;
+static int      s_status_last_slot = -1;
 static int      s_save_failed = 0;
 static uint32_t s_last_save_pc = 0;
 static int      s_save_defer_slot = -1;
@@ -707,6 +712,9 @@ static int request_save_inner(int slot) {
     s_save_pending = slot;
     savestate_set_status_detail("save slot %d requested", slot + 1);
     savestate_diag("save_request", slot, "outcome=staged");
+    s_status_pending = 1;
+    s_status_last_load = 0;
+    s_status_last_slot = slot;
     return 1;
 }
 
@@ -735,6 +743,9 @@ static int request_load_inner(int slot) {
     s_load_pending = slot;
     savestate_set_status_detail("load slot %d requested", slot + 1);
     savestate_diag("load_request", slot, "outcome=staged");
+    s_status_pending = 1;
+    s_status_last_load = 1;
+    s_status_last_slot = slot;
     return 1;
 }
 
@@ -788,6 +799,16 @@ int savestate_request_load_blob_protocol(const void* data, size_t size) {
 
 int savestate_pending(void) {
     return (s_save_pending >= 0 || s_load_pending >= 0) ? 1 : 0;
+}
+
+void savestate_status_json(char* buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    snprintf(buf, cap,
+             "\"generation\":%u,\"pending\":%d,\"last_ok\":%d,"
+             "\"last_op\":\"%s\",\"last_slot\":%d",
+             (unsigned)s_status_generation, s_status_pending,
+             s_status_last_ok, s_status_last_load ? "load" : "save",
+             s_status_last_slot);
 }
 
 int savestate_take_load_completed(void) {
@@ -850,11 +871,23 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                            (unsigned)cpu->gpr[31]);
             (void)psx_scheduler_snapshot_at(pc); /* longjmp on success */
         }
-        if (needs_scheduler_boundary || !context_ok) {
+        /* hint==0 ALSO defers, even when the resolver found a plausible-looking
+         * substitute. The substitute chain ends in sticky-BB latches and $ra,
+         * which pass the sanity check while being the wrong place to resume:
+         * the first F7 of a session saved such a state, it loaded, ran for
+         * ~150M instructions off the rails, and died at PC=0 -- poison that
+         * looks valid at save time and only fails minutes later. Deferring
+         * reuses the existing retry: the save completes at the next poll where
+         * a real block-leader PC is published, or fails LOUDLY after the
+         * timeout instead of writing a corrupt state silently. */
+        if (needs_scheduler_boundary || !context_ok ||
+            resume_pc == 0u || !savestate_resume_pc_ok(pc)) {
             /* A dispatchable hint can still belong to a suspended host call
              * chain rather than the live CPU register file. In HLE mode wait
              * for the scheduler's flat pre-dispatch boundary. FMV/present edges
              * with hint=0 use the same bounded deferral. */
+            /* FMV/present edges often poll with hint=0; wait briefly for a
+             * sticky BB / IRQ latch rather than writing pc=0 poison. */
             const double now = savestate_mono_ms();
             if (s_save_defer_slot != slot) {
                 s_save_defer_slot = slot;
@@ -885,6 +918,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_save_failed = 1;
             savestate_set_status_detail(
                 "save rejected: no serializable scheduler boundary within 2s");
+            s_status_pending = 0;
+            s_status_last_ok = 0;
+            s_status_generation++;
             fprintf(stderr,
                     "savestate: SAVE FAILED slot %d — %s "
                     "(hint=0x%08X resolved=0x%08X)\n",
@@ -922,6 +958,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                     s_save_failed = 1;
                     savestate_set_status_detail("save rejected: file write failed");
                 }
+                s_status_pending = 0;
+                s_status_last_ok = ok ? 1 : 0;
+                s_status_generation++;
                 fprintf(stderr, "savestate: %s slot %d @ pc=0x%08X -> %s\n",
                         ok ? "SAVED" : "SAVE FAILED", slot, (unsigned)pc, path);
                 {
@@ -941,6 +980,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             } else {
                 s_last_save_pc = 0;
                 s_save_failed = 1;
+                s_status_pending = 0;
+                s_status_last_ok = 0;
+                s_status_generation++;
                 psx_frontend_on_savestate_notify(0, slot, 0);
             }
         }
@@ -1024,6 +1066,11 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_load_failed = 1;
             psx_frontend_on_savestate_notify(1, slot, 0);
         }
+        if (!loaded) {
+            s_status_pending = 0;
+            s_status_last_ok = 0;
+            s_status_generation++;
+        }
         if (loaded) {
             savestate_set_status_detail("loaded slot %d", slot + 1);
             savestate_diag("load_apply", slot,
@@ -1044,6 +1091,9 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             cdrom_accelerate_after_savestate();
             /* Netplay post-load barrier observes this before the longjmp. */
             s_load_completed = 1;
+            s_status_pending = 0;
+            s_status_last_ok = 1;
+            s_status_generation++;
             /* Restage FBO/present latch so the restored frame is visible
              * immediately (avoids disabled-display blank latch + stale smooth). */
             psx_frontend_on_savestate_loaded();

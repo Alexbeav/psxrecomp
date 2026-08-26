@@ -146,6 +146,7 @@ typedef void   (APIENTRY *PFN_glUniform1i)(GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform1f)(GLint, GLfloat);
 typedef void   (APIENTRY *PFN_glUniform2i)(GLint, GLint, GLint);
 typedef void   (APIENTRY *PFN_glUniform4i)(GLint, GLint, GLint, GLint, GLint);
+typedef void   (APIENTRY *PFN_glUniform2f)(GLint, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glBlendColor)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void   (APIENTRY *PFN_glBlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum);
@@ -211,6 +212,7 @@ static PFN_glUniform1i         p_glUniform1i;
 static PFN_glUniform1f         p_glUniform1f;
 static PFN_glUniform2i         p_glUniform2i;
 static PFN_glUniform4i         p_glUniform4i;
+static PFN_glUniform2f         p_glUniform2f;
 static PFN_glUniform4f         p_glUniform4f;
 static PFN_glBlendColor        p_glBlendColor;
 static PFN_glBlendFuncSeparate p_glBlendFuncSeparate;
@@ -268,6 +270,7 @@ static int load_modern_gl(void) {
     LOAD(p_glGetUniformLocation, "glGetUniformLocation"); LOAD(p_glUniform1i, "glUniform1i");
     LOAD(p_glUniform1f, "glUniform1f");
     LOAD(p_glUniform2i, "glUniform2i"); LOAD(p_glUniform4i, "glUniform4i");
+    LOAD(p_glUniform2f, "glUniform2f");
     LOAD(p_glUniform4f, "glUniform4f");
     LOAD(p_glBlendColor, "glBlendColor");
     LOAD(p_glBlendFuncSeparate, "glBlendFuncSeparate");
@@ -322,6 +325,8 @@ static int           s_osd_tw = 0, s_osd_th = 0;
 static GLuint        s_present_prog = 0, s_present_vao = 0;
 static void          gl_swap_with_osd(void);
 static GLint         s_present_uTex = -1, s_present_uUvRect = -1;
+static GLint         s_present_uTexSize = -1, s_present_uSharpScale = -1;
+static GLint         s_present_uSharp = -1;
 static GLuint        s_interp_prog = 0, s_interp_tex[3];
 static GLsync        s_interp_fence[3];
 static GLsync        s_interp_draw_fence = NULL;
@@ -859,10 +864,74 @@ static const char *PRESENT_VS =
     "  v_uv = vec2(mix(u_uv_rect.x,u_uv_rect.z,p.x),\n"
     "              mix(u_uv_rect.y,u_uv_rect.w,1.0-p.y));\n"
     "  gl_Position = vec4(p*2.0-1.0,0.0,1.0); }\n";
+/* Present sampling. u_sharp==0 is the historical behaviour: sample straight at
+ * v_uv, so the texture's own filter (NEAREST or LINEAR) decides everything.
+ *
+ * u_sharp==1 selects SHARP-BILINEAR, for upscaling a low-res source (FMV) to a
+ * much larger window. Plain GL_LINEAR blends across the whole texel and turns a
+ * 320x192 movie to mush; plain GL_NEAREST keeps it crisp but blocky and makes
+ * the non-integer scale factor beat (some source pixels land 3 window pixels
+ * wide, their neighbours 4). Sharp-bilinear keeps each texel flat across its
+ * interior and confines the linear ramp to a ONE-OUTPUT-PIXEL-wide band at the
+ * texel boundary: crisp like nearest, but without the uneven pixel widths.
+ *
+ * u_sharp_scale is output pixels per texel. At <=1 (downscale) the band covers
+ * the whole texel and this degrades to plain bilinear, which is what you want
+ * there. The result is clamped to u_uv_rect so the half-texel edge inset the
+ * caller applied still holds — that inset is what keeps LINEAR from bleeding
+ * the border texel into the image (the old reason FMV was pinned to NEAREST). */
 static const char *PRESENT_FS =
     "#version 330\n"
     "in vec2 v_uv; uniform sampler2D u_tex; out vec4 frag;\n"
-    "void main(){ frag = texture(u_tex, v_uv); }\n";
+    "uniform vec4 u_uv_rect;\n"
+    "uniform vec2 u_tex_size;\n"
+    "uniform vec2 u_sharp_scale;\n"
+    "uniform int  u_sharp;\n"
+    /* Catmull-Rom bicubic via 9 bilinear taps. Sharper than plain bilinear at
+     * the same smoothness, with mild overshoot that reads as edge definition.
+     * The present texture holds exactly the source rect and wraps CLAMP_TO_EDGE,
+     * so the +/-2 texel footprint clamps to real edge pixels, never garbage. */
+    "vec4 bicubic(vec2 uv){\n"
+    "  vec2 sp = uv * u_tex_size;\n"
+    "  vec2 t1 = floor(sp - 0.5) + 0.5;\n"
+    "  vec2 f  = sp - t1;\n"
+    "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n"
+    "  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+    "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n"
+    "  vec2 w3 = f * f * (-0.5 + 0.5 * f);\n"
+    "  vec2 w12 = w1 + w2;\n"
+    "  vec2 t0 = (t1 - 1.0) / u_tex_size;\n"
+    "  vec2 t3 = (t1 + 2.0) / u_tex_size;\n"
+    "  vec2 t12 = (t1 + w2 / w12) / u_tex_size;\n"
+    "  vec4 r = vec4(0.0);\n"
+    "  r += texture(u_tex, vec2(t0.x , t0.y )) * (w0.x  * w0.y );\n"
+    "  r += texture(u_tex, vec2(t12.x, t0.y )) * (w12.x * w0.y );\n"
+    "  r += texture(u_tex, vec2(t3.x , t0.y )) * (w3.x  * w0.y );\n"
+    "  r += texture(u_tex, vec2(t0.x , t12.y)) * (w0.x  * w12.y);\n"
+    "  r += texture(u_tex, vec2(t12.x, t12.y)) * (w12.x * w12.y);\n"
+    "  r += texture(u_tex, vec2(t3.x , t12.y)) * (w3.x  * w12.y);\n"
+    "  r += texture(u_tex, vec2(t0.x , t3.y )) * (w0.x  * w3.y );\n"
+    "  r += texture(u_tex, vec2(t12.x, t3.y )) * (w12.x * w3.y );\n"
+    "  r += texture(u_tex, vec2(t3.x , t3.y )) * (w3.x  * w3.y );\n"
+    "  return r;\n"
+    "}\n"
+    "void main(){\n"
+    "  vec2 uv = v_uv;\n"
+    "  if (u_sharp == 2) { frag = bicubic(uv); return; }\n"
+    "  if (u_sharp == 1) {\n"
+    "    vec2 scale = max(u_sharp_scale, vec2(1.0));\n"
+    "    vec2 texel = uv * u_tex_size;\n"
+    "    vec2 tf    = floor(texel);\n"
+    "    vec2 cd    = (texel - tf) - 0.5;\n"
+    "    vec2 band  = 0.5 - 0.5 / scale;\n"
+    "    vec2 f     = (cd - clamp(cd, -band, band)) * scale + 0.5;\n"
+    "    uv = (tf + f) / u_tex_size;\n"
+    "    vec2 lo = min(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "    vec2 hi = max(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "    uv = clamp(uv, lo, hi);\n"
+    "  }\n"
+    "  frag = texture(u_tex, uv);\n"
+    "}\n";
 static const char *INTERP_FS =
     "#version 330\n"
     "in vec2 v_uv; uniform sampler2D u_prev; uniform sampler2D u_curr;\n"
@@ -1409,6 +1478,10 @@ static void flush_pack_if_sampling(int tpage_x, int tpage_y, int depth,
 }
 
 /* ---- coherency: GPU -> CPU readback -------------------------------------- */
+/* Defined with the depth24 policy below; needed here for the readback guard. */
+static int s_depth24_skip_up = 0;
+static DirtyRect s_d24_skip_fb; /* union of skipped MDEC FB rects (VRAM halfwords) */
+
 static void ensure_cpu(void) {
     extern int psx_netplay_active(void);
     if (!s_raster_ok || !s_gpu_dirty) return;
@@ -2339,9 +2412,6 @@ static int  glb_render_display_hires(uint32_t *o,int p,int dx,int dy,int dw,int 
  * smaller texture A0s so post-FMV menus keep VRAM pages coherent.
  * On leave: clear the skipped FB union in the FBO — do NOT restage CPU RGB888
  * as 1555 (that painted MotK title rainbow/static). */
-static int s_depth24_skip_up = 0;
-static DirtyRect s_d24_skip_fb; /* union of skipped MDEC FB rects (VRAM halfwords) */
-
 static int depth24_is_fb_transfer(int x, int y, int w, int h) {
     if (!gpu_display_is_depth24() || w <= 0 || h <= 0) return 0;
     GpuDisplayInfo di;
@@ -2424,6 +2494,18 @@ static void depth24_clear_skipped_fb(void) {
 static void depth24_upload_policy(void) {
     int d24 = gpu_display_is_depth24();
     if (d24 && !s_depth24_skip_up) {
+        /* Entering 24-bit: from here the frame is presented from the CPU
+         * mirror, and MDEC only writes the movie's own rows. A letterboxed
+         * movie leaves the bars untouched, so they scan out whatever the
+         * mirror already held; pre-movie primitive clears live only in the FBO
+         * until this sync.
+         *
+         * WipEout 3's intro is 320x192 written inside a 320x240 band. Without
+         * syncing here, stale pre-FMV pixels can remain in the CPU mirror's
+         * top/bottom bars and flicker between double-buffered movie frames.
+         * Cost is one full-VRAM readback per 24-bit entry, not per frame, and
+         * ensure_cpu is a no-op when the FBO is already clean. */
+        ensure_cpu();
         s_up_nrects = 0;
         rect_clear(&s_d24_skip_fb);
     } else if (!d24 && s_depth24_skip_up) {
@@ -2484,6 +2566,36 @@ static void upload_present_tex(const uint32_t *pixels, int w, int h, int linear)
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
     }
+}
+
+static int s_fmv_filter_cfg = 0;          /* VIDEO_FMV_FILTER_NEAREST */
+
+void gl_renderer_set_fmv_filter(int cfg_value) {
+    if (cfg_value >= 0 && cfg_value <= 3) s_fmv_filter_cfg = cfg_value;
+}
+
+static int fmv_filter_mode(void) {
+    return s_fmv_filter_cfg - 1;
+}
+
+/* Select the present-program sampling mode. s_present_prog is shared by the CPU
+ * present and both VRAM/FBO quad paths, and program uniforms persist, so every
+ * user states its choice rather than inheriting the last one's. sharp=0 keeps
+ * the historical straight sample. */
+static void present_set_sharp(int mode, int tex_w, int tex_h,
+                              int out_w, int out_h) {
+    if (s_present_uSharp < 0) return;
+    if (mode <= 0 || tex_w <= 0 || tex_h <= 0) {
+        p_glUniform1i(s_present_uSharp, 0);
+        return;
+    }
+    p_glUniform1i(s_present_uSharp, mode);
+    if (s_present_uTexSize >= 0)
+        p_glUniform2f(s_present_uTexSize, (float)tex_w, (float)tex_h);
+    if (s_present_uSharpScale >= 0)
+        p_glUniform2f(s_present_uSharpScale,
+                      (float)out_w / (float)tex_w,
+                      (float)out_h / (float)tex_h);
 }
 
 /* Display aspect for the present letterbox. Default 4:3 (native). When a wide
@@ -2750,6 +2862,12 @@ int gl_renderer_init_context(SDL_Window *win) {
             p_glGenVertexArrays(1, &s_present_vao);
             s_present_uTex = p_glGetUniformLocation(s_present_prog, "u_tex");
             s_present_uUvRect = p_glGetUniformLocation(s_present_prog, "u_uv_rect");
+            s_present_uTexSize =
+                p_glGetUniformLocation(s_present_prog, "u_tex_size");
+            s_present_uSharpScale =
+                p_glGetUniformLocation(s_present_prog, "u_sharp_scale");
+            s_present_uSharp =
+                p_glGetUniformLocation(s_present_prog, "u_sharp");
             s_interp_uPrev = p_glGetUniformLocation(s_interp_prog, "u_prev");
             s_interp_uCurr = p_glGetUniformLocation(s_interp_prog, "u_curr");
             s_interp_uAlpha = p_glGetUniformLocation(s_interp_prog, "u_alpha");
@@ -2877,10 +2995,30 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
         lw = (lw * content_w) / src_w;
         if (lw < 1) lw = 1;
     }
+    /* This is the low-res source path (24-bit FMV, and the forced-CPU present
+     * diagnostic): a 320x192-class image blown up to fill the window, so how it
+     * is reconstructed is very visible. `linear` (the video AA setting) allows
+     * filtered reconstruction when [video] fmv_filter opts into it:
+     *
+     *   nearest   hard pixels, uneven pixel widths at non-integer scale
+     *   bilinear  plain GL_LINEAR — smoothest, but blurs the whole texel
+     *   sharp     sharp-bilinear: flat texel interiors, ramp confined to a
+     *             one-output-pixel band at the boundary
+     *   bicubic   Catmull-Rom
+     *
+     * Measured on this intro at 1280x960 (fraction of adjacent pixel pairs
+     * differing by >=24 luma = visible staircase, vs mean |dx| = overall
+     * sharpness): nearest 1.00%/1.028, sharp 0.87%/1.008, bicubic 0.34%/1.038,
+     * bilinear 0.14%/0.930. Bicubic removes two thirds of the staircase while
+     * holding gradient at the nearest level; bilinear removes the most but
+     * costs 10% of it, which reads as blur. Still a taste call, hence the knob. */
+    int filt_mode = linear ? fmv_filter_mode()
+                           : -1;          /* AA off: nearest, no shader work */
     glViewport(lx, ly, lw, lh);
     p_glActiveTexture(PSXGL_TEXTURE0);
-    upload_present_tex(pixels, src_w, src_h, linear);
+    upload_present_tex(pixels, src_w, src_h, filt_mode >= 0 ? 1 : 0);
     p_glUseProgram(s_present_prog); p_glUniform1i(s_present_uTex, 0);
+    present_set_sharp(filt_mode, src_w, src_h, lw, lh);
     if (crop) {
         /* Cropped present keeps left-aligned content; still inset so linear
          * AA does not blend the cut column with undefined border texels. */
@@ -3908,6 +4046,7 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     glViewport(vx, wh - vy - dh, dw, dh);
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
+    present_set_sharp(0, 0, 0, 0, 0);   /* OSD is authored at output res */
     /* Host OSD bitmaps are top-down (row 0 = top), same as guest CPU
      * present with v_flip=1: uv (0,0)-(1,1). (0,1)-(1,0) was the hold-last
      * cancel for already-oriented captures and made toasts upside-down. */
@@ -3976,6 +4115,9 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
+    /* The rasterized path already renders at the internal scale, so it has no
+     * low-res source to reconstruct — keep the plain sample. */
+    present_set_sharp(0, 0, 0, 0, 0);
     /* Half-texel inset: with GL_LINEAR, corner-mapped UVs make the outermost
      * dest pixels blend the border texel with VRAM outside the content rect
      * (visible edge stripe with AA on). Center-mapped UVs keep edge samples
@@ -3995,6 +4137,51 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
         v1 = t;
     }
     p_glUniform4f(s_present_uUvRect, u0, v0, u1, v1);
+    p_glBindVertexArray(s_present_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    p_glBindVertexArray(0);
+    p_glUseProgram(0);
+}
+
+/* Bezel art: a still image behind the frame, filling whatever the letterbox or
+ * pillarbox leaves over. It never samples the frame, so unlike an edge-stretch
+ * backdrop it is independent of what the game is currently drawing. */
+static GLuint s_bezel_tex = 0;
+
+int gl_renderer_set_bezel(const void *rgba, int w, int h) {
+    if (s_bezel_tex) { glDeleteTextures(1, &s_bezel_tex); s_bezel_tex = 0; }
+    if (!rgba || w <= 0 || h <= 0) return 1;
+    if (!s_ctx || !s_raster_ok) return 0;
+    glGenTextures(1, &s_bezel_tex);
+    if (!s_bezel_tex) return 0;
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_bezel_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, rgba);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    return 1;
+}
+
+int gl_renderer_has_bezel(void) { return s_bezel_tex != 0; }
+
+/* Cover the drawable with the bezel before the game quad. */
+static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh) {
+    if (!s_bezel_tex || ww <= 0 || wh <= 0) return;
+    if (lx <= 0 && ly <= 0 && lw >= ww && lh >= wh) return;
+    p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, ww, wh);
+    p_glActiveTexture(PSXGL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_bezel_tex);
+    p_glUseProgram(s_present_prog);
+    p_glUniform1i(s_present_uTex, 0);
+    p_glUniform4f(s_present_uUvRect, 0.0f, 0.0f, 1.0f, 1.0f);
     p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);
@@ -4120,6 +4307,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dx = disp_x; s_last_dy = disp_y; s_last_dw = w; s_last_dh = h;
         return;
     }
+    present_bezel(ww, wh, lx, ly, lw, lh);
     present_target_quad(s_hr_tex, VRAM_W, VRAM_H,
                         disp_x, disp_y, w, h, linear, lx, ly, lw, lh, 1);
     pres_record(GL_PRES_VRAM, disp_x, disp_y, w, h, lx, ly, lw, lh);

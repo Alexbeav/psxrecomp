@@ -362,13 +362,19 @@ int dirty_ram_is_dirty(uint32_t phys);
  * trust a clean text page to run its compiled function and divert only truly-
  * overlaid pages to the interpreter (Tomba 2 loads a loader overlay over
  * 0x8001Dxxx). The kernel window [0,0x10000) (BIOS install stubs) and the overlay
- * region [FLOOR, RAM) are left untouched. */
+ * region OUTSIDE [BASE, FLOOR) are left untouched — including the RAM BELOW the
+ * text image, which is overlay space for a high-loading boot EXE (Klonoa loads
+ * at 0x180000). Baselining from the kernel-window end instead of the real text
+ * base wiped that whole region's dirty bits. See dirty_ram_interp.h. */
 extern uint32_t g_overlay_region_floor;
 void dirty_ram_clear_image_baseline(void) {
     uint32_t floor = g_overlay_region_floor;
     if (floor <= DIRTY_RAM_KERNEL_TRACK_BYTES) return;
     if (floor > RAM_SIZE) floor = RAM_SIZE;
-    uint32_t first_page = DIRTY_RAM_KERNEL_TRACK_BYTES >> DIRTY_RAM_PAGE_SHIFT;
+    uint32_t base = g_text_image_lo;
+    if (base < DIRTY_RAM_KERNEL_TRACK_BYTES) base = DIRTY_RAM_KERNEL_TRACK_BYTES;
+    if (base >= floor) return;
+    uint32_t first_page = base >> DIRTY_RAM_PAGE_SHIFT;
     uint32_t last_page  = (floor - 1u) >> DIRTY_RAM_PAGE_SHIFT;
     for (uint32_t page = first_page; page <= last_page; page++)
         dirty_ram_bitmap[page >> 5] &= ~(1u << (page & 31u));
@@ -633,9 +639,13 @@ int dirty_ram_is_dirty(uint32_t phys) {
     if (dirty_ram_force_interp() && phys >= DIRTY_RAM_KERNEL_TRACK_BYTES) return 1;
     if (dirty_ram_shellwin_interp() && phys >= 0x00030000u && phys <= 0x0005AFFFu) return 1;
     /* Experimental fallback for overlays copied into their final location by
-     * ordinary guest CPU stores rather than CD DMA. Dispatch above the static
-     * image floor is treated as dynamic and validated by the interpreter. */
-    if (phys >= g_overlay_region_floor) return 1;
+     * ordinary guest CPU stores rather than CD DMA. Dispatch OUTSIDE the static
+     * image (either side of it) is treated as dynamic and validated by the
+     * interpreter. Below-text RAM counts too: a high-loading boot EXE streams
+     * its gameplay code into the RAM beneath itself (Klonoa loads at 0x180000
+     * and runs overlays from 0x10000+), and gating on the floor alone left
+     * those pages unreachable by the interpreter. See dirty_ram_interp.h. */
+    if (phys_is_overlay_region(phys)) return 1;
     uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;
     return (dirty_ram_bitmap[page >> 5] >> (page & 31u)) & 1u;
 }

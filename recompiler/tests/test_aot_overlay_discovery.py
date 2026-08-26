@@ -1398,9 +1398,15 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
 '''
         for reader in ('complete', 'coverage'):
             with tempfile.TemporaryDirectory() as tmp:
-                final = os.path.join(tmp, "00010000_DEADBEEF.dll")
+                # Name the shard with the platform's real extension. The
+                # coverage reader re-derives the shard path from the .ranges
+                # name via overlay_ext(), so a hardcoded ".dll" made it lock
+                # <stem>.so.pair-lock on Linux while the writer held
+                # <stem>.dll.pair-lock -- different files, no contention, and
+                # the reader sailed through the publication window.
+                final = os.path.join(tmp, "00010000_DEADBEEF" + MOD.overlay_ext())
                 ranges = os.path.splitext(final)[0] + '.ranges'
-                staged = os.path.join(tmp, ".new.dll")
+                staged = os.path.join(tmp, ".new" + MOD.overlay_ext())
                 staged_ranges = os.path.join(tmp, ".new.ranges")
                 paused = os.path.join(tmp, "paused")
                 pathlib.Path(final).write_bytes(b"OLD-DLL")

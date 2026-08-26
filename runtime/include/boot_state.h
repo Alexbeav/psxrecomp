@@ -75,8 +75,9 @@ typedef struct {
  *     uint64_t len;        LE payload byte count
  *     uint8_t  payload[len];   (module payloads are LE field wires too)
  * When BOOT_STATE_SEC_ZLIB is set, payload = u32 LE raw_len + zlib(raw).
- * An unknown tag, a length mismatch, or a missing required section on load is a
- * hard reject (incomplete restore is never allowed) -> normal boot + recapture.
+ * Unknown tags are skipped for forward compatibility. A malformed known section
+ * or a missing required section on load is a hard reject (incomplete restore is
+ * never allowed) -> normal boot + recapture.
  */
 enum {
     BS_SEC_CPU    = 0x01,  /* CPUState: gpr/pc/hi/lo/cop0/gte_data/gte_ctrl       */

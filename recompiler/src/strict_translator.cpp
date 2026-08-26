@@ -78,8 +78,14 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
     if (r.load_dest >= 0 && !r.c_code_deferred.empty()) {
         const uint32_t rs = (d.raw >> 21) & 0x1F;
         const int16_t offset = static_cast<int16_t>(d.raw & 0xFFFF);
+        /* Newline, never a space: if the deferred emission ever ends on a
+         * preprocessor directive (the block-cycles annotations already do
+         * elsewhere in this file), a space-joined hook lands on the directive
+         * line and is silently discarded -- the PR #171 defect. Unconditional
+         * "\n" is always valid where the space was, so non-directive
+         * emissions are unaffected apart from whitespace. */
         r.c_code_deferred = fmt::format(
-            "{{ uint32_t _pgxa = cpu->gpr[{}] + {}; {} "
+            "{{ uint32_t _pgxa = cpu->gpr[{}] + {}; {}\n    "
             "PGXP_LOAD(0x{:08X}u, _pgxa, psx_ldd_{:08X}); }}",
             static_cast<int>(rs), static_cast<int>(offset),
             r.c_code_deferred, d.raw, d.address);

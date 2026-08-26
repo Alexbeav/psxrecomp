@@ -31,7 +31,7 @@ assert 'runtime.contains("offer_turbo_loads")' in CONFIG_CPP
 assert "rt.has_turbo_loads = true;" in CONFIG_CPP
 assert "constexpr bool turbo_loads_offered = false;" in MAIN
 assert "turbo_loads_offered = gc.runtime.offer_turbo_loads;" not in MAIN
-assert "gi.has_turbo_loads      = turbo_loads_offered ? 1 : 0;" in MAIN
+assert "gi->has_turbo_loads = turbo_loads_offered_b ? 1 : 0;" in MAIN
 assert "Turbo loads is mod-owned on PSX" in MAIN
 
 # game.toml [runtime] turbo_loads must not enable anything, only warn.
@@ -72,7 +72,7 @@ assert (
 
 assert "release_run = g_turbo_load_release_frames;" in MAIN
 assert "g_frame_period_ms / (double)g_turbo_load_wall_multiplier" in MAIN
-assert "if (!turbo_load_paced && g_frame_period_ms > 0.0)" in MAIN
+assert "if (!manual_turbo_active && !turbo_load_paced && present_should_wall_pace())" in MAIN
 assert "if (g_mod_disc_speed_divisor >= 0)" in MAIN
 
 print("mod-owned load acceleration guard passed")

@@ -46,6 +46,12 @@ void gl_renderer_runtime_diag(uint64_t out[6]);
 void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linear,
                          int force_4_3, int content_w);
 
+/* Bezel art shown in the letterbox/pillarbox margins. Takes RGBA8 pixels; the
+ * caller owns them and may free them on return. Passing NULL clears it.
+ * Returns 0 only if a texture could not be created. */
+int  gl_renderer_set_bezel(const void *rgba, int w, int h);
+int  gl_renderer_has_bezel(void);
+
 /* Clear to black + swap (display-disabled frame). */
 void gl_renderer_present_blank(void);
 
@@ -81,6 +87,11 @@ void gl_renderer_restage_vram_after_savestate(void);
  * digests / GPUREAD authority) while the OpenGL hr FBO keeps settings-scale
  * SSAA for present-only. Never enables glReadPixels; CPU stays current. */
 void gl_renderer_set_cpu_auth_dual(int on);
+
+/* FMV present reconstruction, settings.toml [video] fmv_filter. Takes the
+ * config enum VIDEO_FMV_FILTER_* (0 nearest, 1 bilinear, 2 sharp, 3 bicubic).
+ * Only consulted while video antialiasing is on; AA off is always nearest. */
+void gl_renderer_set_fmv_filter(int cfg_value);
 int  gl_renderer_cpu_auth_dual(void);
 
 /* Post-savestate freeze probe: skip/swap/dirty-mark counters (GL present path).

@@ -495,10 +495,11 @@ void load_tables_locked() {
         try { data = toml::parse(de.path().string()); }
         catch (...) { continue; }
         ++files;
-        if (!data.contains("entry")) continue;
-        const auto& arr = toml::find(data, "entry");
-        if (!arr.is_array()) continue;
-        for (const auto& e : arr.as_array()) {
+        /* A fixes-only file (vram_patch / glyph-label / msg blocks, no string
+         * table) is valid: gate each block on its own key, never the file. */
+        const auto arr = data.contains("entry") ? toml::find(data, "entry")
+                                                : toml::value(toml::array{});
+        if (arr.is_array()) for (const auto& e : arr.as_array()) {
             if (!e.contains("src_hex")) continue;
             std::string hex = toml::find_or<std::string>(e, "src_hex", "");
             auto bytes = hex_to_bytes(hex);

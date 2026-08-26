@@ -1633,6 +1633,16 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
     }
 
     PSXRecomp::append_pgxp_hooks(instr, code);
+    /* The trailing disassembly comment must not land ON a preprocessor
+     * directive line -- it would be swallowed as extra tokens and dropped,
+     * costing the annotation and emitting -Wendif-labels noise. Reachable
+     * whenever the PGXP hook did NOT get appended after a block-cycles stall
+     * block, e.g. `mfhi $zero` / `mflo $zero` (append_pgxp_hooks returns early
+     * for rd==0, leaving the emission ending on a bare #endif). Same hazard
+     * class as PR #171. */
+    if (!comment.empty() &&
+        PSXRecomp::emission_ends_on_preprocessor_directive(code))
+        return config_.indent + code + "\n" + config_.indent + comment;
     return config_.indent + code + comment;
 }
 
@@ -2778,6 +2788,24 @@ GeneratedFunction CodeGenerator::generate_function(
                                        fallthrough_name);
             }
         }
+    } else if (!cfg.block_order.empty()) {
+        // No in-image fallthrough function exists (region/image boundary): a
+        // reachable final block that runs off the end must publish its
+        // continuation PC. Falling off the C body would return with the
+        // entry-switch's consumed cpu->pc == 0, which the top-level trampoline
+        // reads as "program ended".
+        const BasicBlock& last_block = cfg.blocks.at(cfg.block_order.back());
+        bool runs_off_end =
+            last_block.exit_instr.type == ControlFlowType::None ||
+            ((last_block.exit_instr.type == ControlFlowType::Branch ||
+              last_block.exit_instr.type == ControlFlowType::Jump) &&
+             last_block.successors.empty());
+        bool is_reachable = last_block.is_entry || !last_block.predecessors.empty();
+        if (runs_off_end && is_reachable) {
+            body_ss << fmt::format(
+                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
+                last_block.end_addr + 4u);
+        }
     }
     body_ss << "    ;  /* label compatibility: C requires a statement after the last label */\n";
     body_ss << "}\n";
@@ -3006,6 +3034,23 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
         if (needs_fallthrough) {
             body << fmt::format("    {}(cpu);  /* fallthrough to next function */\n",
                                 fallthrough_name);
+        }
+    } else if (!cfg.block_order.empty() &&
+               live_blocks.count(cfg.block_order.back())) {
+        // Image-edge fallthrough (mirrors generate_function): no in-image next
+        // function exists, so a live final block that runs off the end must
+        // tail-transfer to its continuation PC instead of falling off the C
+        // body with cpu->pc still consumed to 0.
+        const BasicBlock& last_block = cfg.blocks.at(cfg.block_order.back());
+        bool runs_off_end =
+            (last_block.exit_instr.type == ControlFlowType::None) ||
+            ((last_block.exit_instr.type == ControlFlowType::Branch ||
+              last_block.exit_instr.type == ControlFlowType::Jump) &&
+             last_block.successors.empty());
+        if (runs_off_end) {
+            body << fmt::format(
+                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
+                last_block.end_addr + 4u);
         }
     }
     body << "    ;  /* label compatibility */\n";

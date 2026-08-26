@@ -351,6 +351,9 @@ enabled = true
 
 [feature.values]
 variant = "rockman"
+
+[feature.resources]
+artwork = "C:/Users/You/Pictures/example-bezel.png"
 ```
 
 State format 1 and package-only manifests remain readable as a migration aid.
@@ -395,6 +398,28 @@ belong inside one feature as option values.
 
 ## Trusted adapters and archive safety
 
+### Owner-selected resources
+
+Format-5 packages may declare feature-owned resources that the launcher renders
+with its native file/folder picker:
+
+```toml
+[[resource]]
+feature = "bezel"
+id = "artwork"
+label = "Bezel image"
+description = "Select an image to draw behind the game frame."
+format = "file"
+file_patterns = "*.png,*.jpg,*.jpeg,*.bmp"
+file_description = "Image files"
+required = false
+```
+
+Resources are paths selected by the player and persisted in `mods/state.toml`;
+they are not copied into the package. Optional resources with no selected path
+are omitted from the committed plan. Required resources reject launch while the
+feature is enabled and unset.
+
 `resolver = "builtin:<id>"` selects a resolver statically registered by the
 game. Format-5 plugin ids likewise select only statically registered
 implementations. Packages cannot load arbitrary native code or select
@@ -404,3 +429,17 @@ The installer accepts stored or DEFLATE-compressed ZIP entries, validates CRCs,
 rejects encrypted entries and unsafe or absolute paths, limits archives to 4096
 files and 256 MiB expanded size, stages extraction, validates the manifest, and
 publishes the version atomically.
+
+### Presentation bezel packages
+
+The framework registers `psx.bezel`, a trusted presentation plugin for OpenGL
+margin artwork. The built-in package declares an optional `artwork` image
+resource; when the feature is enabled and the player has selected an image, the
+runtime draws that image behind the game frame before presenting the normal 4:3
+or widescreen content.
+
+The built-in package `psx.presentation.bezel` targets every game but defaults to
+off, so the default presentation is unchanged: letterbox and pillarbox margins
+remain black. Enabling the feature without choosing artwork is also a no-op.
+The package supplies only the declaration and trusted plugin selection; archives
+still cannot load native code.

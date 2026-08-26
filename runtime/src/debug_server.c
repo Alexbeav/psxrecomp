@@ -5533,6 +5533,8 @@ static void handle_cdrom_state(int id, const char *json)
              "\"read_cmd\":\"0x%02X\",\"read_delay\":%d,"
              "\"read_hold_cycles\":%llu,\"read_hold_events\":%llu,"
              "\"int1_pended\":%llu,\"int1_lost\":%llu,\"int1_pending_now\":%u,"
+             "\"accel_consumer_waits\":%llu,\"accel_consumer_wait_cycles\":%llu,"
+             "\"ring_starved\":%llu,\"ring_dropped\":%llu,"
              "\"filter_file\":%u,\"filter_channel\":%u,\"muted\":%u,"
              "\"seek_msf\":[%u,%u,%u],"
              "\"pending\":{\"cmd\":\"0x%02X\",\"active\":%d,\"delay\":%d,\"phase\":%d},"
@@ -5551,6 +5553,10 @@ static void handle_cdrom_state(int id, const char *json)
              (unsigned long long)s.int1_pended,
              (unsigned long long)s.int1_lost,
              s.int1_pending_now,
+             (unsigned long long)s.accel_consumer_waits,
+             (unsigned long long)s.accel_consumer_wait_cycles,
+             (unsigned long long)s.ring_starved,
+             (unsigned long long)s.ring_dropped,
              s.filter_file, s.filter_channel, s.muted,
              s.seek_min, s.seek_sec, s.seek_sect,
              s.pending_cmd, s.pending_pending, s.pending_delay,
@@ -5726,10 +5732,11 @@ static void handle_cdrom_command_history(int id, const char *json)
         if (frame_hi >= 0 && (int)e->frame > frame_hi) continue;
 
         pos += snprintf(buf + pos, bufsz - pos,
-                        "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\","
+                        "%s{\"seq\":%llu,\"cycle\":%llu,\"frame\":%u,\"kind\":\"%s\","
                         "\"cmd\":\"0x%02X\",\"param_count\":%u,\"params\":[",
                         emitted ? "," : "",
-                        (unsigned long long)e->seq, e->frame,
+                        (unsigned long long)e->seq,
+                        (unsigned long long)e->cycle, e->frame,
                         cdrom_command_kind_name(e->kind),
                         e->cmd, e->param_count);
         for (uint8_t i = 0; i < e->param_count && i < 16 && pos < bufsz - 96; i++) {
@@ -8044,6 +8051,18 @@ static void handle_savestate(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,\"op\":\"%s\",\"slot\":%d}", id, op, slot);
 }
 
+/* Deterministic harness receipt: unlike the savestate acknowledgement above,
+ * this reports the safe-boundary completion generation after savestate_poll
+ * has actually applied or rejected the request. */
+static void handle_savestate_status(int id, const char *json)
+{
+    (void)json;
+    extern void savestate_status_json(char *buf, size_t cap);
+    char status[256];
+    savestate_status_json(status, sizeof status);
+    send_fmt("{\"id\":%d,\"ok\":true,%s}", id, status);
+}
+
 static void handle_turbo(int id, const char *json)
 {
     int enabled = json_get_int(json, "enabled", -1);
@@ -8684,13 +8703,21 @@ static void handle_screenshot_hires(int id, const char *json)
 
     uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
-    int got = gr_render_display_hires(argb, (int)ow, (int)di.display_x,
+    /* Renderer pitches are byte strides (the live SDL presentation path uses
+     * the same contract). Passing `ow` here advanced each row by only one
+     * quarter of its ARGB width, overlapping four rows and producing a PNG
+     * with repeated horizontal strips followed by untouched black storage. */
+    int got = gr_render_display_hires(argb,
+                                      (int)(ow * sizeof(*argb)),
+                                      (int)di.display_x,
                                       (int)di.display_y, (int)w, (int)h);
     if (!got) {
         /* No hi-res surface (scale 1, or a backend without one): resolve the
          * native display instead and say so, rather than emitting a blank. */
         scale = 1; ow = w; oh = h;
-        got = gr_render_display(argb, (int)ow, (int)di.display_x,
+        got = gr_render_display(argb,
+                                (int)(ow * sizeof(*argb)),
+                                (int)di.display_x,
                                 (int)di.display_y, (int)w, (int)h);
         if (!got) { free(argb); send_err(id, "no display surface"); return; }
     }
@@ -11541,6 +11568,12 @@ static void handle_cd_read_log(int id, const char *json)
                                          uint32_t *dest, uint32_t *size);
 
     int tail = json_get_int(json, "tail", 256);
+    /* Optional LBA window + output cap, matching the oracle's cd_read_log so
+     * one call shape returns the same span from both emulators. */
+    int lba_lo = json_get_int(json, "lba_lo", -1);
+    int lba_hi = json_get_int(json, "lba_hi", -1);
+    int max_entries = json_get_int(json, "max_entries", 65536);
+    int emitted_rows = 0;
     uint32_t total = cd_dma_log_get_total();
     uint32_t cap   = 65536;
     uint32_t avail = total < cap ? total : cap;
@@ -11555,6 +11588,10 @@ static void handle_cd_read_log(int id, const char *json)
         int lba; uint32_t dest, size;
         cd_dma_log_get_entry(i, &lba, &dest, &size);
         if (lba < 0) continue;
+        if (emitted_rows >= max_entries) break;
+        if (lba_lo >= 0 && lba < lba_lo) continue;
+        if (lba_hi >= 0 && lba > lba_hi) continue;
+        emitted_rows++;
         send_fmt("%s{\"lba\":%d,\"dest\":\"0x%08X\",\"size\":%u}",
                  first ? "" : ",", lba, dest, size);
         first = 0;
@@ -11686,6 +11723,52 @@ static void handle_cdrom_timing(int id, const char *json)
     char stats[2048];
     cdrom_timing_stats_json(stats, (int)sizeof(stats));
     send_fmt("{\"id\":%d,\"ok\":true,%s}\n", id, stats);
+}
+
+/* cdrom_timing_dump: per-sector records from the L1.5 timing ring.
+ * Parameters: tail (default 1024), lba_lo / lba_hi (optional filter).
+ * One row per physical sector deadline: when it was due, when it landed in
+ * the buffer, when its INT1 was armed and presented to INTC, and the
+ * data/dma/pended/lost flags -- enough to see a single skipped sector and
+ * whether the guest or the drive was late around it. */
+static void handle_cdrom_timing_dump(int id, const char *json)
+{
+    int tail = json_get_int(json, "tail", 1024);
+    if (tail < 1) tail = 1;
+    if (tail > 4096) tail = 4096;
+    int lba_lo = json_get_int(json, "lba_lo", -1);
+    int lba_hi = json_get_int(json, "lba_hi", -1);
+
+    uint64_t total = cdrom_timing_total();
+    uint64_t start = total > (uint64_t)tail ? total - (uint64_t)tail : 0;
+    send_fmt("{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
+             id, (unsigned long long)total);
+    int first = 1;
+    for (uint64_t seq = start; seq < total; seq++) {
+        CdTimingPub r;
+        if (!cdrom_timing_record(seq, &r)) continue;
+        if (lba_lo >= 0 && r.lba < lba_lo) continue;
+        if (lba_hi >= 0 && r.lba > lba_hi) continue;
+        send_fmt("%s{\"seq\":%llu,\"lba\":%d,\"frame\":%u,"
+                 "\"due\":%llu,\"buffer\":%llu,\"irq_arm\":%llu,"
+                 "\"intc\":%llu,\"data\":%u,\"dma\":%u,"
+                 "\"pended\":%u,\"lost\":%u,\"irq_armed\":%u,"
+                 "\"intc_seen\":%u}",
+                 first ? "" : ",",
+                 (unsigned long long)r.seq, r.lba, r.frame,
+                 (unsigned long long)r.due_cycle,
+                 (unsigned long long)r.buffer_cycle,
+                 (unsigned long long)r.irq_arm_cycle,
+                 (unsigned long long)r.intc_cycle,
+                 (r.flags & 0x01u) ? 1 : 0,
+                 (r.flags & 0x02u) ? 1 : 0,
+                 (r.flags & 0x04u) ? 1 : 0,
+                 (r.flags & 0x08u) ? 1 : 0,
+                 (r.flags & 0x10u) ? 1 : 0,
+                 (r.flags & 0x20u) ? 1 : 0);
+        first = 0;
+    }
+    send_fmt("]}\n");
 }
 
 /* autocompile_status: variant-capture automation state — autocapture
@@ -12111,12 +12194,16 @@ static void handle_s3_smear_watch(int id, const char *json)
                             ? hex_to_u32(buf) : 0u;
         g_s3_smear_valid = 0;
     }
-    send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+    /* `armed` so a never-tripped watch (valid:0) can be told apart from one
+     * that was never recording — the same ambiguity the callret ring had. */
+    send_fmt("{\"id\":%d,\"ok\":true,\"armed\":%s,"
+             "\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
              "\"excl\":\"0x%08X\","
              "\"valid\":%d,\"pc\":\"0x%08X\",\"insn\":\"0x%08X\","
              "\"s3_old\":\"0x%08X\",\"s3_new\":\"0x%08X\","
              "\"call_target\":\"0x%08X\",\"frame\":%u}\n",
-             id, g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
+             id, (g_s3_smear_hi > g_s3_smear_lo) ? "true" : "false",
+             g_s3_smear_lo, g_s3_smear_hi, g_s3_smear_excl,
              g_s3_smear_valid,
              g_s3_smear_pc, g_s3_smear_insn, g_s3_smear_old, g_s3_smear_new,
              g_s3_smear_tgt, g_s3_smear_frame);
@@ -12141,25 +12228,74 @@ static void handle_callret_watch(int id, const char *json)
         uint32_t last_func_a;
     } E;
     extern uint32_t g_callret_lo, g_callret_hi;
+    extern int callret_armed(void);
     extern E g_callret_ring[]; extern uint64_t g_callret_seq;
     const uint32_t cap = 64u;   /* MUST match CALLRET_CAP (dirty_ram_interp.c) */
     char buf[32];
-    if (json_get_str(json, "lo", buf, sizeof(buf))) {
-        g_callret_lo = hex_to_u32(buf);
-        if (json_get_str(json, "hi", buf, sizeof(buf)))
-            g_callret_hi = hex_to_u32(buf);
+    /* Explicit disarm, and the documented legacy spelling for it. `lo` with no
+     * `hi` used to mean "disarm" only because the gate tested lo != 0; keep
+     * that contract for lo=0 (scripts rely on it) but answer it explicitly
+     * instead of silently. */
+    const int want_disarm = json_get_int(json, "disarm", 0) != 0;
+    if (want_disarm) {
+        g_callret_lo = g_callret_hi = 0;
         g_callret_seq = 0;
-        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\"}\n",
-                 id, g_callret_lo, g_callret_hi);
+        send_fmt("{\"id\":%d,\"ok\":true,\"armed\":false,\"lo\":\"0x00000000\","
+                 "\"hi\":\"0x00000000\"}\n", id);
+        return;
+    }
+    if (json_get_str(json, "lo", buf, sizeof(buf))) {
+        const uint32_t new_lo = hex_to_u32(buf);
+        char hibuf[32];
+        const int have_hi = json_get_str(json, "hi", hibuf, sizeof(hibuf)) != NULL;
+        if (!have_hi) {
+            /* Legacy disarm: {"lo":"0"} with no hi. Honour it, name it. */
+            if (new_lo == 0) {
+                g_callret_lo = g_callret_hi = 0;
+                g_callret_seq = 0;
+                send_fmt("{\"id\":%d,\"ok\":true,\"armed\":false,"
+                         "\"lo\":\"0x00000000\",\"hi\":\"0x00000000\","
+                         "\"note\":\"disarmed (legacy lo=0 spelling; prefer"
+                         " disarm=true)\"}\n", id);
+                return;
+            }
+            /* A floor with no ceiling silently inherited the previous hi —
+             * usually 0, i.e. an empty window that recorded nothing while
+             * replying ok. Refuse instead of guessing. */
+            send_fmt("{\"id\":%d,\"ok\":false,\"error\":\"lo without hi\","
+                     "\"armed\":%s,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+                     "\"note\":\"pass BOTH lo and hi (hi > lo) to arm, or"
+                     " disarm=true to stop; window left unchanged\"}\n",
+                     id, callret_armed() ? "true" : "false",
+                     g_callret_lo, g_callret_hi);
+            return;
+        }
+        g_callret_lo = new_lo;
+        g_callret_hi = hex_to_u32(hibuf);
+        g_callret_seq = 0;
+        /* Report `armed` rather than leaving the caller to infer it: an empty
+         * window records nothing, and "total: 0" from an unarmed ring reads
+         * exactly like a real "these events never happened" answer. */
+        const int armed = callret_armed();
+        send_fmt("{\"id\":%d,\"ok\":true,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+                 "\"armed\":%s%s}\n",
+                 id, g_callret_lo, g_callret_hi, armed ? "true" : "false",
+                 armed ? ""
+                       : ",\"note\":\"empty window (hi <= lo) - NOT recording\"");
         return;
     }
     uint64_t total = g_callret_seq;
     uint32_t avail = total < cap ? (uint32_t)total : cap;
     size_t BUF_SZ = 512u + (size_t)avail * 512u;
     char *out = (char *)malloc(BUF_SZ); if (!out) { send_err(id, "oom"); return; }
+    /* Carry the window and armed state on the READ too: "total": 0 is
+     * otherwise indistinguishable between "armed, nothing matched" and "never
+     * armed", and the second reads as evidence that the events did not happen. */
     size_t pos = (size_t)snprintf(out, BUF_SZ,
-        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"entries\":[",
-        id, (unsigned long long)total);
+        "{\"id\":%d,\"ok\":true,\"armed\":%s,\"lo\":\"0x%08X\",\"hi\":\"0x%08X\","
+        "\"total\":%llu,\"entries\":[",
+        id, callret_armed() ? "true" : "false", g_callret_lo, g_callret_hi,
+        (unsigned long long)total);
     for (uint32_t i = 0; i < avail && pos < BUF_SZ - 600; i++) {
         E *e = &g_callret_ring[(total - avail + i) & (cap - 1u)];
         pos += (size_t)snprintf(out + pos, BUF_SZ - pos,
@@ -12806,6 +12942,39 @@ static void handle_ce_profile(int id, const char *json)
 
 /* Arm the §18 boundary trip at runtime once the idle baseline is known:
  * xprobe_arm {"frame_trip":N,"stk_kb":K,"warmup":F}. Any 0 disables that arm. */
+/* "xprobe_watch": get or set the JAL/JALR watched-target list that filters the
+ * xprobe `watched` dump. Previously a hardcoded list of one title's addresses,
+ * so every other game silently watched nothing. Pass `targets` (comma /
+ * semicolon / space separated, 0x or decimal) to replace the list; pass an
+ * empty string to clear it; pass nothing to read it back. Also settable before
+ * the process starts via PSX_XPROBE_WATCH, so a target can be watched from
+ * instruction zero. Always reports the active list, so an empty `watched` dump
+ * is never ambiguous between "not called" and "not watched". */
+static void handle_xprobe_watch(int id, const char *json)
+{
+    extern void dirty_ram_xprobe_watch_set(const char *spec);
+    extern int  dirty_ram_xprobe_watch_get(int index, uint32_t *phys_out);
+    extern int  dirty_ram_xprobe_watch_count(void);
+    char spec[512];
+    if (json_get_str(json, "targets", spec, sizeof(spec)))
+        dirty_ram_xprobe_watch_set(spec);
+    char list[768];
+    size_t pos = 0;
+    const int n = dirty_ram_xprobe_watch_count();
+    for (int i = 0; i < n && pos < sizeof(list) - 24; i++) {
+        uint32_t phys = 0;
+        if (!dirty_ram_xprobe_watch_get(i, &phys)) break;
+        pos += (size_t)snprintf(list + pos, sizeof(list) - pos, "%s\"0x%08X\"",
+                                i ? "," : "", phys);
+    }
+    list[pos] = '\0';
+    send_fmt("{\"id\":%d,\"ok\":true,\"count\":%d,\"watching\":[%s]%s}",
+             id, n, list,
+             n ? "" : ",\"note\":\"no targets watched - the xprobe watched dump"
+                      " will be empty regardless of what the game calls; pass"
+                      " targets=0x... to watch\"");
+}
+
 static void handle_xprobe_arm(int id, const char *json)
 {
     extern void dirty_ram_xprobe_arm(int frame_trip, int stk_kb, int warmup);
@@ -13241,6 +13410,7 @@ static const CmdEntry s_commands[] = {
     { "stack_profile",     handle_stack_profile },
     { "xprobe",            handle_xprobe },
     { "xprobe_arm",        handle_xprobe_arm },
+    { "xprobe_watch",      handle_xprobe_watch },
     { "ce_profile",        handle_ce_profile },
     { "frame",             handle_frame },
     { "frame_fingerprint", handle_frame_fingerprint },
@@ -13371,6 +13541,7 @@ static const CmdEntry s_commands[] = {
     { "wtrace_reset",        handle_wtrace_clear },
     { "wtrace_ranges",       handle_wtrace_ranges },
     { "wtrace_dump",         handle_wtrace_dump },
+    { "cdrom_timing_dump",   handle_cdrom_timing_dump },
     { "wtrace_stats",        handle_wtrace_stats },
     { "wtrace_boot_dump",    handle_wtrace_boot_dump },
     { "wtrace_boot_summary", handle_wtrace_boot_summary },
@@ -13427,6 +13598,7 @@ static const CmdEntry s_commands[] = {
     { "input_route_stop",  handle_input_route_stop },
     { "input_route_status",handle_input_route_status },
     { "savestate",         handle_savestate },
+    { "savestate_status",  handle_savestate_status },
     { "turbo",             handle_turbo },
     { "turbo_state",       handle_turbo_state },
     { "pause",             handle_pause },
