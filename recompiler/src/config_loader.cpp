@@ -502,6 +502,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_backend")) {
         rt.overlay_backend = toml::find<std::string>(runtime, "overlay_backend");
     }
+    if (runtime.contains("overlay_region_floor")) {
+        const auto& v = toml::find(runtime, "overlay_region_floor");
+        rt.overlay_region_floor = v.is_string()
+            ? parse_hex(v.as_string(), "runtime.overlay_region_floor")
+            : (uint32_t)v.as_integer();
+        rt.has_overlay_region_floor = true;
+    }
         if (runtime.contains("overlay_native_block")) {
             for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
                 rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
