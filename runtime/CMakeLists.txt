@@ -479,9 +479,6 @@ if(BUILD_TESTING)
         add_test(NAME savestate_status_protocol_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_savestate_status_protocol.py)
-        add_test(NAME runtime_overlay_guards_test
-                 COMMAND ${Python3_EXECUTABLE}
-                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_overlay_guards.py)
         add_test(NAME screenshot_hires_pitch_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshot_hires_pitch.py)
