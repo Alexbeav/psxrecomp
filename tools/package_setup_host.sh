@@ -263,12 +263,16 @@ copy_runtime_dir() {
   echo "staged runtime dir ${name}/"
 }
 
-for d in "${RUNTIME_DIRS[@]}"; do
-  copy_runtime_dir "${d}" 0
-done
-for d in "${RUNTIME_DIRS_OPTIONAL[@]}"; do
-  copy_runtime_dir "${d}" 1
-done
+if ((${#RUNTIME_DIRS[@]})); then
+  for d in "${RUNTIME_DIRS[@]}"; do
+    copy_runtime_dir "${d}" 0
+  done
+fi
+if ((${#RUNTIME_DIRS_OPTIONAL[@]})); then
+  for d in "${RUNTIME_DIRS_OPTIONAL[@]}"; do
+    copy_runtime_dir "${d}" 1
+  done
+fi
 
 copy_proj() {
   local rel="$1"
