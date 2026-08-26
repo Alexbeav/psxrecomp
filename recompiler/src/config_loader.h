@@ -358,6 +358,16 @@ struct RuntimeConfig {
     // gcc shards still load). The env var PSX_OVERLAY_BACKEND overrides at runtime.
     std::string           overlay_backend;
 
+    // overlay_region_floor: per-title override of the overlay region floor
+    // (defaults to the boot EXE text end). Titles whose gameplay code loads
+    // at/inside the boot text range (Gran Turismo's secondary EXEs all load
+    // at 0x80010000; Driver 2 streams mission code over its text pages) need
+    // it lowered so that code is overlay-cache eligible instead of falling to
+    // single-instruction interpretation. Same semantics and clamp as the
+    // PSX_OVERLAY_REGION_FLOOR env override, which still takes precedence.
+    bool                  has_overlay_region_floor = false;
+    uint32_t              overlay_region_floor = 0;
+
     // overlay_native_block: per-game overlay function entries that must stay on
     // the dirty-RAM interpreter even when a matching native DLL exists. Intended
     // for small timing-sensitive setup/task routines while the rest of the

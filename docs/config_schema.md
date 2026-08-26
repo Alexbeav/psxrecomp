@@ -330,6 +330,11 @@ The other load-time accelerators are likewise opt-in:
 [runtime]
 idle_skip = true
 turbo_audio_sink = true
+overlay_region_floor = "0x10000"   # optional: lowest RAM address treated as overlay region.
+                                    # Default = boot EXE text end. Lower it for titles whose gameplay
+                                    # code loads at/inside the boot text range (GT1 secondary EXEs at
+                                    # 0x80010000, Driver 2 mission pages) so it is overlay-cache
+                                    # eligible. Clamped >= 0x10000; PSX_OVERLAY_REGION_FLOOR overrides.
 ```
 
 ### `turbo_loads` / `offer_turbo_loads` — deprecated and ignored
