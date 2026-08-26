@@ -30,21 +30,10 @@
 namespace PSXRecompV4 {
 
 // Pad input mode (per player). Replaces the old analog on/off boolean.
-//   hybrid  — MOD-ONLY. Not selectable in the launcher, not a valid game.toml
-//             value, never a default. It survives solely so a trusted game mod
-//             can request it via psx_mod_set_controller_mode_override() (Tomba's
-//             hybrid controller plugin). Auto-switches analog/digital per the
-//             most-recent input:
-//             nudge the stick -> report DualShock (0x73, variable sticks);
-//             press the D-pad -> report a digital pad (0x41) so the game runs
-//             its OWN d-pad path at true digital sensitivity. Mirrors a
-//             DualShock's analog LED toggling on/off (and Tomba Special
-//             Edition's auto-detect).
 //   analog  — always present a DualShock/analog pad (id 0x73). The D-pad is
-//             folded onto the stick at full deflection so it still moves you.
-//             Default.
+//             independent from both sticks, matching real hardware. Default.
 //   digital — always present a digital pad (id 0x41); sticks disabled.
-enum PadMode { PAD_MODE_HYBRID = 0, PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
+enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
 
 // Renderer IDs shared by game.toml/settings parsing and runtime startup.
 // OpenGL is the default because the Windows software/SDL_Renderer path is slow
@@ -157,7 +146,7 @@ struct WidescreenAspectConeConfig {
 };
 // Parse/format a pad mode. Strict game.toml parsing accepts "analog" or
 // "digital" (case-insensitive), returns `fallback` for unknown values, and
-// THROWS on "hybrid" — the mode is mod-only and must not be declared by a game.
+// THROWS on "hybrid" — game-specific switching must not be declared globally.
 int         pad_mode_from_string(const std::string& s, int fallback);
 // Lenient: for a user's settings.toml, where a stale persisted "hybrid" must
 // migrate to analog rather than refuse to launch.
@@ -560,13 +549,11 @@ struct RuntimeConfig {
 
     // ---- [controller] block — game-declared input defaults ----
     // default_mode: the pad input mode this game ships with (see PadMode):
-    // "hybrid" (default) auto-switches DualShock/digital from the player's
-    // input, "analog" pins DualShock (0x73), "digital" pins a digital pad
-    // (0x41). A stick-capable title (e.g. Tomba) ships "hybrid" so the stick
-    // gives variable run speed yet the D-pad keeps its classic digital feel,
-    // with no launcher toggling. Per-install settings.toml [controller]
-    // p1_mode/p2_mode still override. `default_mode` sets both ports;
-    // `p1_mode`/`p2_mode` set one. Legacy `default_analog`/`p1_analog`/
+    // "analog" pins DualShock (0x73), "digital" pins a digital pad (0x41).
+    // Game-specific auto-switching belongs in an enabled trusted mod plugin,
+    // not in this global config surface. Per-install settings.toml
+    // [controller] p1_mode/p2_mode still override. `default_mode` sets both
+    // ports; `p1_mode`/`p2_mode` set one. Legacy `default_analog`/`p1_analog`/
     // `p2_analog` booleans are still accepted (true->analog, false->digital).
     bool                  has_default_mode = false;
     int                   default_p1_mode  = PAD_MODE_ANALOG;
@@ -582,7 +569,7 @@ struct RuntimeConfig {
     std::string           default_p2_device;
 
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
-    // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
+    // (Analog | D-Pad) and forces every port to default_p1_mode. For a
     // game that supports exactly one pad type — e.g. Tomba 2, whose driver only
     // works as a plain digital pad because the DualShock config-mode handshake
     // is unhandled — so the player can't pick a broken mode. Supersedes

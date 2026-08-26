@@ -167,3 +167,30 @@ class AnalyzeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FoldSkewTest(unittest.TestCase):
+    """The D-pad bit and its folded stick deflection should arrive together."""
+
+    def test_simultaneous_fold_has_zero_skew(self):
+        s = [sample(0.00, 10, NONE),
+             sample(0.01, 11, hold("up"), [0x80, 0x00, 0x80, 0x80], True),
+             sample(0.02, 12, NONE)]
+        runs, findings = pt.analyze(s)
+        self.assertEqual(runs[0]["fold_skew_frames"], 0)
+        self.assertNotIn("fold_skew", {f["kind"] for f in findings})
+
+    def test_late_stick_is_reported_as_skew(self):
+        s = [sample(0.00, 10, hold("up"), [0x80] * 4, True),
+             sample(0.01, 12, hold("up"), [0x80, 0x00, 0x80, 0x80], True),
+             sample(0.02, 13, NONE)]
+        runs, findings = pt.analyze(s)
+        self.assertEqual(runs[0]["fold_skew_frames"], 2)
+        self.assertIn("fold_skew", {f["kind"] for f in findings})
+
+    def test_no_stick_means_no_skew(self):
+        s = [sample(0.00, 10, hold("up"), [0x80] * 4, False),
+             sample(0.01, 11, NONE)]
+        runs, findings = pt.analyze(s)
+        self.assertIsNone(runs[0]["fold_skew_frames"])
+        self.assertNotIn("fold_skew", {f["kind"] for f in findings})
