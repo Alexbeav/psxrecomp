@@ -2981,13 +2981,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (deliverable || defer_pending || (++s_interp_entry_poll & 0x3Fu) == 0) {
                 cpu->pc = pc;
                 s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-                {
-                    extern uint32_t g_dirty_safe_resume_pc;
-                    uint32_t prev_safe = g_dirty_safe_resume_pc;
-                    g_dirty_safe_resume_pc = pc;
-                    psx_check_interrupts(cpu);   /* a honored switch longjmps away */
-                    g_dirty_safe_resume_pc = prev_safe;
-                }
+                psx_check_interrupts_at(cpu, pc);
                 if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
                     /* Handler resumed elsewhere — surface to dispatch. */
                     g_dirty_ram_blocks_run++;

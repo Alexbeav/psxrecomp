@@ -844,6 +844,16 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int slot = s_save_pending;
         char path[600];
         uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
+        /* upstream (mstan #230/#237): never snapshot at a dirty-RAM pump site, and
+         * accept a missing hint only when the resolved PC is cpu->pc itself. */
+        int snapshot_safe = psx_irq_resume_context_snapshot_safe();
+        int pc_matches_cpu = cpu && cpu->pc != 0u &&
+                             (((cpu->pc ^ pc) & 0x1FFFFFFFu) == 0u);
+        /* ---- downstream HLE scheduler-boundary admission ----------------------
+         * Upstream has no scheduler snapshot boundary; these predicates are
+         * orthogonal to its dirty-pump / hint rules above. Structural guard:
+         * tests/test_savestate_capture_boundary_guards.py; behavioural matrix:
+         * tests/test_savestate_admission.c (savestate_admission_decide). */
         const int needs_scheduler_boundary =
             psx_hle_scheduler_enabled() &&
             !psx_scheduler_snapshot_boundary_active();
@@ -871,21 +881,19 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                            (unsigned)cpu->gpr[31]);
             (void)psx_scheduler_snapshot_at(pc); /* longjmp on success */
         }
-        /* hint==0 ALSO defers, even when the resolver found a plausible-looking
-         * substitute. The substitute chain ends in sticky-BB latches and $ra,
-         * which pass the sanity check while being the wrong place to resume:
-         * the first F7 of a session saved such a state, it loaded, ran for
-         * ~150M instructions off the rails, and died at PC=0 -- poison that
-         * looks valid at save time and only fails minutes later. Deferring
-         * reuses the existing retry: the save completes at the next poll where
-         * a real block-leader PC is published, or fails LOUDLY after the
-         * timeout instead of writing a corrupt state silently. */
-        if (needs_scheduler_boundary || !context_ok ||
-            resume_pc == 0u || !savestate_resume_pc_ok(pc)) {
-            /* A dispatchable hint can still belong to a suspended host call
-             * chain rather than the live CPU register file. In HLE mode wait
-             * for the scheduler's flat pre-dispatch boundary. FMV/present edges
-             * with hint=0 use the same bounded deferral. */
+        /* ---- end downstream block ------------------------------------------- */
+        /* A missing hint is only safe when the resolved PC came directly from
+         * cpu->pc: dirty-RAM entry polls set cpu->pc to the materialized block
+         * boundary but do not publish a separate hint. Stale fallback latches
+         * and dirty-RAM synthetic pump sites can expose a plausible resume PC
+         * before the matching register context is materialized, so those still
+         * defer instead of writing a structurally valid but poisoned state.
+         * (This is also what excludes the first-F7 poison case this tree used to
+         * reject with an unconditional hint==0 rule: that substitute PC came from
+         * sticky-BB latches / $ra and never equals cpu->pc.) */
+        if (needs_scheduler_boundary || !context_ok || !snapshot_safe ||
+            (resume_pc == 0u && !pc_matches_cpu) ||
+            !savestate_resume_pc_ok(pc)) {
             /* FMV/present edges often poll with hint=0; wait briefly for a
              * sticky BB / IRQ latch rather than writing pc=0 poison. */
             const double now = savestate_mono_ms();

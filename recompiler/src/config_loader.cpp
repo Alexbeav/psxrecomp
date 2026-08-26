@@ -194,15 +194,13 @@ int pad_mode_from_string(const std::string& s, int fallback) {
     std::string l;
     l.reserve(s.size());
     for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
-    /* "hybrid" is MOD-ONLY: reachable solely through
-     * psx_mod_set_controller_mode_override(). A game.toml that declares it is
-     * a configuration error, not something to silently coerce — coercion is
-     * how this mode kept reappearing in titles that never meant to ship it. */
+    /* "hybrid" used to be a framework mode. A game.toml that declares it is
+     * now a configuration error: game-specific auto-switching belongs in an
+     * enabled trusted plugin policy, not in the global launcher/config surface. */
     if (l == "hybrid")
         throw std::runtime_error(
             "[controller] pad mode \"hybrid\" is not selectable. Hybrid is a "
-            "mod-only mode, requested at runtime by a trusted game plugin via "
-            "psx_mod_set_controller_mode_override(). Use \"analog\" or "
+            "game-owned mod policy, not a game.toml value. Use \"analog\" or "
             "\"digital\" here.");
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard Hybrid mode's explicitly opt-in dev-any routing."""
+"""Guard plugin controller policy's explicitly opt-in dev-any routing."""
 
 from pathlib import Path
 
@@ -14,27 +14,34 @@ assert "e && (e[0] == '0'" not in MAIN, (
     "PSX_DEV_INPUT must not use the old default-on/explicit-disable predicate"
 )
 
-assert "hybrid_stick_active(const PlayerInput& p, const PadSources& src)" in MAIN
-assert "hybrid_dpad_active(const PlayerInput& p, int player," in MAIN
-assert "hybrid_stick_active(p, src)" in MAIN
-assert "hybrid_dpad_active(p, player, src)" in MAIN
+assert "PAD_MODE_HYBRID" not in MAIN
+assert "PSX_MOD_CONTROLLER_HYBRID" not in MAIN
+assert "controller_policy_stick_active(const PlayerInput& p," in MAIN
+assert "controller_policy_dpad_active(const PlayerInput& p, int player," in MAIN
+assert "controller_policy_stick_active(p, src)" in MAIN
+assert "controller_policy_dpad_active(p, player, src)" in MAIN
 
 stick_body = MAIN.split(
-    "static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src)", 1
-)[1].split("static bool hybrid_dpad_active", 1)[0]
+    "static bool controller_policy_stick_active(const PlayerInput& p,",
+    1,
+)[1].split("static bool controller_policy_dpad_active", 1)[0]
 dpad_body = MAIN.split(
-    "static bool hybrid_dpad_active(const PlayerInput& p, int player,",
+    "static bool controller_policy_dpad_active(const PlayerInput& p, int player,",
     1,
 )[1].split("/* Sample each player's live device state", 1)[0]
 
 for name, body, detector in (
     ("stick", stick_body, "controller_stick_active(handle, controller_deadzone)"),
-    ("D-pad", dpad_body, "controller_dpad_active(handle)"),
+    ("D-pad", dpad_body, "controller_mapped_dpad_active"),
 ):
     assert "SDL_NumJoysticks()" in body, (
-        f"Hybrid {name} detection must inspect all dev-any controllers"
+        f"Policy {name} detection must inspect all dev-any controllers"
     )
     assert "SDL_GameControllerFromInstanceID" in body
     assert detector in body
 
-print("Hybrid dev-any physical-controller guard passed")
+assert "controller_mapped_dpad_active" in dpad_body
+assert "controller_pad_buttons(controller_map_for(p), handle," in MAIN
+assert "true, deadzone" in MAIN
+
+print("controller policy dev-any physical-controller guard passed")

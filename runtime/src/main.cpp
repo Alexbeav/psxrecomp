@@ -349,13 +349,11 @@ static SDL_Texture*  sdl_texture;
 struct PlayerInput {
     int   kind = 0;            /* 0=none, 1=keyboard, 2=controller */
     char  guid[40] = {0};      /* SDL joystick GUID string when kind==controller */
-    /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 0=hybrid
-     * (MOD-ONLY, requested via psx_mod_set_controller_mode_override),
-     * 2=digital. hybrid_analog is the per-frame auto-switch latch used only in
-     * hybrid mode: true => currently presenting DualShock (stick was the last
-     * input), false => currently presenting a digital pad (D-pad was last). */
+    /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 2=digital.
+     * Game-owned plugins may register a trusted per-sample presentation policy
+     * for title-specific switching, but the global launcher/config surface only
+     * persists analog or digital. */
     int   mode = PSXRecompV4::PAD_MODE_ANALOG;
-    bool  hybrid_analog = false;
     int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
@@ -1222,9 +1220,19 @@ static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
-static int           g_mod_controller_mode_override[2] = { -1, -1 };
-static_assert((int)PSX_MOD_CONTROLLER_HYBRID ==
-              (int)PSXRecompV4::PAD_MODE_HYBRID);
+static std::array<int, PSX_MAX_PLAYERS> g_mod_controller_mode_override =
+    [] {
+        std::array<int, PSX_MAX_PLAYERS> modes{};
+        modes.fill(-1);
+        return modes;
+    }();
+struct ModControllerPresentationPolicy {
+    PSXModControllerPresentationCallback callback = nullptr;
+    int initial_mode = PSXRecompV4::PAD_MODE_ANALOG;
+    int config_capable = 0;
+};
+static ModControllerPresentationPolicy
+    g_mod_controller_policy[PSX_MAX_PLAYERS];
 static_assert((int)PSX_MOD_CONTROLLER_ANALOG ==
               (int)PSXRecompV4::PAD_MODE_ANALOG);
 static_assert((int)PSX_MOD_CONTROLLER_DIGITAL ==
@@ -1487,8 +1495,9 @@ extern "C" int psx_mod_set_disc_speed(
 
 extern "C" int psx_mod_set_controller_mode_override(
     uint32_t player, uint32_t controller_mode) {
-    if (player >= 2 ||
-        controller_mode > (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL) {
+    if (player >= PSX_MAX_PLAYERS ||
+        (controller_mode != (uint32_t)PSXRecompV4::PAD_MODE_ANALOG &&
+         controller_mode != (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL)) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected controller-mode override "
             "(player %u, mode %u)\n",
@@ -1496,6 +1505,26 @@ extern "C" int psx_mod_set_controller_mode_override(
         return 0;
     }
     g_mod_controller_mode_override[player] = (int)controller_mode;
+    return 1;
+}
+
+extern "C" int psx_mod_set_controller_presentation_policy(
+    uint32_t player,
+    PSXModControllerPresentationCallback callback,
+    uint32_t initial_mode,
+    int config_capable) {
+    if (player >= PSX_MAX_PLAYERS || !callback ||
+        (initial_mode != (uint32_t)PSXRecompV4::PAD_MODE_ANALOG &&
+         initial_mode != (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL)) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected controller-presentation policy "
+            "(player %u, initial mode %u)\n",
+            (unsigned)player, (unsigned)initial_mode);
+        return 0;
+    }
+    g_mod_controller_policy[player].callback = callback;
+    g_mod_controller_policy[player].initial_mode = (int)initial_mode;
+    g_mod_controller_policy[player].config_capable = config_capable ? 1 : 0;
     return 1;
 }
 
@@ -4031,18 +4060,13 @@ static void update_controller_rumble(void) {
 }
 
 /* The pad type a mode reports before any input has been sampled (boot /
- * hotplug). analog pins DualShock; digital and hybrid both start as a digital
- * pad (hybrid only flips to DualShock once the player nudges the stick). */
+ * hotplug). analog pins DualShock; digital starts as a plain digital pad. */
 static int pad_mode_boot_analog(int mode) {
-    /* Hybrid boots ANALOG-on (matches a DualShock powered up with the analog LED
-     * lit): the seamless auto-switch then drops to digital only if the player
-     * reaches for the d-pad. Pinned-analog also boots analog; digital boots off. */
-    return (mode == PSXRecompV4::PAD_MODE_ANALOG ||
-            mode == PSXRecompV4::PAD_MODE_HYBRID) ? 1 : 0;
+    return mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
 }
 
 /* Keyboard has no DualShock sticks/config handshake — always present as a
- * plain digital pad (SCPH-1080). Leaving keyboard slots in ANALOG/HYBRID made
+ * plain digital pad (SCPH-1080). Leaving keyboard slots in ANALOG/policy mode made
  * P2–P5 show as connected while games that expect digital multitap pads never
  * saw usable button input. */
 static int effective_player_mode(const PlayerInput& p) {
@@ -4100,6 +4124,23 @@ static void refresh_player_devices(void) {
         PlayerInput& p = g_players[s];
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
         else open_player(p, s);
+        if (netplay) continue;
+        const int mode = effective_player_mode_for_sio(p, s);
+        const ModControllerPresentationPolicy& policy =
+            g_mod_controller_policy[s];
+        const int boot_mode = policy.callback ? policy.initial_mode : mode;
+        sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
+        sio_set_pad_analog(s, pad_mode_boot_analog(boot_mode),
+                           0x80, 0x80, 0x80, 0x80);
+        /* DIGITAL mode == a plain digital controller that ignores the DualShock
+         * config-mode commands (real SCPH-1080 behaviour); ANALOG or an
+         * explicitly config-capable mod policy == a config-capable DualShock.
+         * A digital pad that wrongly answered 0x43 sent Tomba 2's pad driver
+         * down the config path -> phantom 0x00 reads.
+         * Multitap taps are always digital (see sio_pad_on_multitap). */
+        sio_set_pad_config_capable(
+            s, policy.callback ? policy.config_capable
+                               : mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
     if (!netplay)
         refresh_sio_port_routes();
@@ -4109,9 +4150,6 @@ static void refresh_player_devices(void) {
  *   "none" -> no pad; "keyboard" -> keyboard map; otherwise an SDL GUID. */
 static void set_player_device(PlayerInput& p, const std::string& dev, int mode) {
     p.mode = mode;
-    /* Hybrid starts in ANALOG (analog LED on); the auto-switch drops to digital
-     * only when the player uses the d-pad. */
-    p.hybrid_analog = true;
     p.guid[0] = '\0';
     std::string d = lower_copy(trim_copy(dev));
     if (d.empty() || d == "none") { p.kind = 0; }
@@ -4247,10 +4285,10 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
  * press twice — measured on Legend of Mana's land-placement cursor, which
  * stepped two entries per tap in pinned-ANALOG and exactly one in DIGITAL.
  *
- * A game whose movement reads only the stick magnitude (e.g. Tomba) is served
- * by HYBRID mode, where pressing the D-pad flips the pad to digital and the
- * game runs its own d-pad path — without ever presenting the impossible
- * both-at-once state.
+ * A game whose movement reads only the stick magnitude (e.g. Tomba) can opt
+ * into a game-owned presentation policy. That policy may flip the pad to
+ * digital on D-pad input so the game runs its own D-pad path, without ever
+ * presenting the impossible both-at-once state.
  *
  * The keyboard branch is unaffected: psx_keybinds_sticks maps that player's
  * bound stick-direction keys onto the axes, which is their only stick
@@ -4328,11 +4366,9 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
     }
 }
 
-/* HYBRID-mode auto-switch detectors (mirror the DualShock analog LED toggling).
- * hybrid_stick_active: the LEFT stick is outside the radial deadzone — the
- * player has reached for analog. hybrid_dpad_active: any D-pad direction (or,
- * for the keyboard, an arrow key) is held — the player wants classic digital.
- * The keyboard has no analog stick, so a keyboard player stays digital. */
+/* Controller-policy facts exposed to trusted game-owned plugins. The runtime
+ * samples host devices and SIO delivery; the plugin decides only whether that
+ * sample should present as analog or digital. */
 static bool controller_stick_active(SDL_GameController* handle, int deadzone) {
     if (!handle) return false;
     const double lx =
@@ -4342,21 +4378,23 @@ static bool controller_stick_active(SDL_GameController* handle, int deadzone) {
     const double dz = (double)(deadzone > 0 ? deadzone : controller_deadzone);
     return std::sqrt(lx * lx + ly * ly) > dz;
 }
-static bool controller_dpad_active(SDL_GameController* handle) {
-    return handle &&
-        (SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN));
+static bool controller_mapped_dpad_active(const PlayerInput& p,
+                                          SDL_GameController* handle,
+                                          int deadzone) {
+    if (!handle) return false;
+    const uint16_t buttons =
+        controller_pad_buttons(controller_map_for(p), handle,
+                               true, deadzone);
+    return ((uint16_t)~buttons & 0x00F0u) != 0;
 }
 /* Which input sources may drive ONE pad slot this frame.
  *
  * This exists because the answer is consumed in three places — the button
- * merge, the HYBRID analog/digital auto-switch, and the analog stick fold —
+ * merge, the mod presentation policy, and the analog stick fold —
  * and those three used to compute it independently. Whenever they disagreed,
- * a source could assert a button without the hybrid state machine seeing it,
+ * a source could assert a button without the policy detector seeing it,
  * leaving the pad reporting D-pad presses while still presenting ANALOG: the
- * exact failure the hybrid logic exists to prevent, and silent when it
+ * exact failure a policy callback may exist to prevent, and silent when it
  * happens. Deriving all three from one predicate makes that desync
  * structurally impossible rather than merely fixed once.
  *
@@ -4378,11 +4416,11 @@ static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
      * keybinds.ini/mouse bind silently.
      *
      * Widening this ONE line is safe precisely because every consumer reads
-     * it — the button merge, the HYBRID auto-switch detectors and the stick
+     * it — the button merge, mod policy detectors and the stick
      * fold all learn about the keyboard in the same instant. Widening the
      * button merge alone (the original shape of this change) let a keyboard
-     * D-pad press assert the D-pad bits while hybrid_dpad_active never saw
-     * them, leaving a mod-driven hybrid pad reporting D-pad input while still
+     * D-pad press assert the D-pad bits while policy detection never saw
+     * them, leaving a policy-driven pad reporting D-pad input while still
      * presenting ANALOG.
      *
      * The PSX pad word is active-low and the merge is an AND, so an unpressed
@@ -4395,7 +4433,8 @@ static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
     return s;
 }
 
-static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src) {
+static bool controller_policy_stick_active(const PlayerInput& p,
+                                           const PadSources& src) {
     if (src.device && p.kind == 2 &&
         controller_stick_active(p.handle, p.deadzone)) return true;
     if (src.all_pads) {
@@ -4411,9 +4450,10 @@ static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src) {
     }
     return false;
 }
-static bool hybrid_dpad_active(const PlayerInput& p, int player,
-                               const PadSources& src) {
-    if (src.device && p.kind == 2 && controller_dpad_active(p.handle)) return true;
+static bool controller_policy_dpad_active(const PlayerInput& p, int player,
+                                          const PadSources& src) {
+    if (src.device && p.kind == 2 &&
+        controller_mapped_dpad_active(p, p.handle, p.deadzone)) return true;
     if (src.all_pads) {
         const int n = SDL_NumJoysticks();
         for (int i = 0; i < n; i++) {
@@ -4422,7 +4462,14 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player,
             SDL_GameController* handle =
                 SDL_GameControllerFromInstanceID(inst);
             if (!handle) handle = SDL_GameControllerOpen(i);
-            if (controller_dpad_active(handle)) return true;
+            if (!handle) continue;
+            PlayerInput tmp;
+            tmp.kind = 2;
+            SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(i);
+            SDL_JoystickGetGUIDString(g, tmp.guid, (int)sizeof(tmp.guid));
+            if (controller_mapped_dpad_active(tmp, handle,
+                                              controller_deadzone))
+                return true;
         }
     }
     if (src.keybinds) {
@@ -4432,16 +4479,88 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player,
     return false;
 }
 
+static int controller_policy_resolve_mode(
+    int slot, int player, int configured_mode, const PadSources& src,
+    const PlayerInput& p, uint16_t buttons, const uint8_t st[4]) {
+    ModControllerPresentationPolicy& policy = g_mod_controller_policy[slot];
+    if (!policy.callback)
+        return configured_mode;
+
+    const uint32_t current_mode =
+        configured_mode == PSXRecompV4::PAD_MODE_DIGITAL
+            ? (uint32_t)PSX_MOD_CONTROLLER_DIGITAL
+            : (uint32_t)PSX_MOD_CONTROLLER_ANALOG;
+    PSXModControllerInput input{};
+    input.struct_size = sizeof(input);
+    input.player = (uint32_t)player;
+    input.sio_slot = (uint32_t)slot;
+    input.configured_mode = current_mode;
+    input.current_mode = current_mode;
+    input.stick_active = controller_policy_stick_active(p, src) ? 1u : 0u;
+    input.dpad_active = controller_policy_dpad_active(p, player, src) ? 1u : 0u;
+    input.buttons = buttons;
+    input.lx = st[0];
+    input.ly = st[1];
+    input.rx = st[2];
+    input.ry = st[3];
+
+    const uint32_t requested = policy.callback(&input);
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
+        return PSXRecompV4::PAD_MODE_ANALOG;
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
+        return PSXRecompV4::PAD_MODE_DIGITAL;
+    std::fprintf(stderr,
+        "psxrecomp: mod controller policy returned invalid mode %u "
+        "(player %u)\n",
+        (unsigned)requested, (unsigned)player);
+    return configured_mode;
+}
+
+static int controller_policy_resolve_override_mode(
+    int slot, int player, int configured_mode, uint16_t buttons,
+    const uint8_t st[4], bool stick_live, bool dpad_live) {
+    ModControllerPresentationPolicy& policy = g_mod_controller_policy[slot];
+    if (!policy.callback)
+        return configured_mode;
+
+    const uint32_t current_mode =
+        configured_mode == PSXRecompV4::PAD_MODE_DIGITAL
+            ? (uint32_t)PSX_MOD_CONTROLLER_DIGITAL
+            : (uint32_t)PSX_MOD_CONTROLLER_ANALOG;
+    PSXModControllerInput input{};
+    input.struct_size = sizeof(input);
+    input.player = (uint32_t)player;
+    input.sio_slot = (uint32_t)slot;
+    input.configured_mode = current_mode;
+    input.current_mode = current_mode;
+    input.stick_active = stick_live ? 1u : 0u;
+    input.dpad_active = dpad_live ? 1u : 0u;
+    input.buttons = buttons;
+    input.lx = st[0];
+    input.ly = st[1];
+    input.rx = st[2];
+    input.ry = st[3];
+
+    const uint32_t requested = policy.callback(&input);
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
+        return PSXRecompV4::PAD_MODE_ANALOG;
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
+        return PSXRecompV4::PAD_MODE_DIGITAL;
+    std::fprintf(stderr,
+        "psxrecomp: mod controller policy returned invalid mode %u "
+        "(player %u)\n",
+        (unsigned)requested, (unsigned)player);
+    return configured_mode;
+}
+
 /* Sample each player's live device state into the matching SIO pad slot.
  * override >= 0 forces port-1 buttons (debug-server input injection). Called
  * once at cycle start (covers the turbo/FMV-skip paths that present nothing)
  * and, when g_low_latency_input is set, AGAIN after the pacer wait so the next
  * CPU frame reads near-fresh input instead of input ~one frame stale.
  *
- * HYBRID mode auto-switches DualShock<->digital from the most-recent input
- * (stick -> analog, D-pad -> digital) so the game runs its own analog or
- * digital input path exactly as on hardware (mirrors the inline block this
- * helper was extracted from for the low-latency re-sample). */
+ * A game-owned presentation policy may auto-switch DualShock<->digital from
+ * the most-recent input so the game runs its own analog or digital path. */
 /* Dev input mode: while enabled, Player 1 is driven by the keyboard AND EVERY
  * connected game controller, all merged together (active-low AND) onto the P1 pad
  * word — so a tester can navigate P1 from whatever is plugged in (keyboard, the
@@ -4569,12 +4688,12 @@ static int savestate_input_guard_active(void) {
 
 /* Debug-server input injection: drive the SAME pad model as a physical
  * device. The old path set only the button word and returned, which left the
- * pad type/sticks at whatever the real device last was — a hybrid P1 stayed
- * analog, so injected d-pad bits never moved games that read the stick in
- * analog mode (menus reacted, walking didn't). Injected d-pad reads as d-pad
- * activity (hybrid drops to digital), an injected stick override reads as
- * stick activity (hybrid rises to analog), and the resolved type goes through
- * the same coherent request channel as real sampling — never slammed mid-
+ * pad type/sticks at whatever the real device last was. A policy-driven P1
+ * could stay analog, so injected D-pad bits never moved games that read the
+ * stick in analog mode (menus reacted, walking didn't). Injected D-pad reads
+ * as D-pad activity, an injected stick override reads as stick activity, and
+ * the resolved type goes through the same coherent request channel as real
+ * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
 static void apply_input_override_to_sio(int override_word) {
     PlayerInput& p = g_players[0];
@@ -4598,16 +4717,10 @@ static void apply_input_override_to_sio(int override_word) {
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
-    int eff_analog;
-    if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == (int)PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID: most-recent input source wins, like the real sampler */
-        if (stick_live)     p.hybrid_analog = true;
-        else if (dpad_live) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
-    }
+    const int effective_mode = controller_policy_resolve_override_mode(
+        0, 1, mode, w, st, stick_live, dpad_live);
+    const int eff_analog =
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
     /* Injected input only (set_input / dev routing): fold the injected D-pad
      * word onto the left stick so stick-only menu/move paths respond to a
      * button-bit injection that has no physical stick behind it.
@@ -4618,7 +4731,8 @@ static void apply_input_override_to_sio(int override_word) {
      * no other way to steer such a game; the equivalent fold for physical
      * controllers was removed (see pad_sticks_for) after it was measured
      * double-stepping Legend of Mana's land-placement cursor. */
-    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+    if (eff_analog &&
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
         if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
@@ -4655,21 +4769,22 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * handshake cadence is preserved exactly). A P1 with no assigned device
      * keeps the game's resolved mode while dev-any-input merges the keyboard and
      * all connected controllers. */
-    /* One source set, consumed by the hybrid switch, the button merge and the
+    /* One source set, consumed by the presentation policy, the button merge and the
      * stick fold below — see pad_sources_for(). */
     const PadSources src = pad_sources_for(p, dev_here);
 
     const int mode = effective_player_mode_for_sio(p, s);
-    int eff_analog;
-    if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID */
-        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
+    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG ||
+        g_mod_controller_policy[s].callback) {
+        pad_sticks_for(p, player, st);
     }
+    const uint16_t policy_buttons =
+        src.device ? pad_buttons_for(p, player, true) : (uint16_t)0xFFFF;
+    const int effective_mode = controller_policy_resolve_mode(
+        s, player, mode, src, p, policy_buttons, st);
+    const int eff_analog =
+        effective_mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
     if (savestate_input_guard_active()) {
         out->buttons = 0xFFFFu;
         out->lx = out->ly = out->rx = out->ry = 0x80u;
@@ -4697,14 +4812,10 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     if (src.all_pads)
         btn &= dev_all_controllers_buttons(suppress_stick);
 
-    /* Analog axes. Pinned-ANALOG and HYBRID both feed the raw stick only; the
-     * D-pad is never folded in, matching a real DualShock, which keeps its
-     * sticks centred while the D-pad is held. DIGITAL leaves the axes
+    /* Analog axes. ANALOG and plugin-selected analog feed the raw stick only;
+     * the D-pad is never folded in, matching a real DualShock, which keeps
+     * its sticks centred while the D-pad is held. DIGITAL leaves the axes
      * centred. */
-    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG || eff_analog) {
-        pad_sticks_for(p, player, st);
-    }
     /* Stick fold, driven by the SAME source set as the buttons above: whatever
      * may press a button may also steer. kind==1 already folded its binds
      * inside pad_sticks_for; psx_keybinds_sticks only widens a deflection, so
@@ -4716,6 +4827,9 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         }
         if (src.all_pads)
             dev_any_controller_sticks(st);
+    }
+    if (!eff_analog) {
+        st[0] = st[1] = st[2] = st[3] = 0x80;
     }
 
     out->buttons = btn;
@@ -4746,23 +4860,22 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     const PadSources src = pad_sources_for(p, dev_here);
     const int sio_slot = (present_sio_slot >= 0) ? present_sio_slot : s;
     int mode = effective_player_mode_for_sio(p, sio_slot);
-    int eff_analog;
-    if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID */
-        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
+    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG ||
+        g_mod_controller_policy[s].callback) {
+        pad_sticks_for(p, player, st);
     }
+    const uint16_t policy_buttons = pad_buttons_for(p, player, true);
+    const int effective_mode = controller_policy_resolve_mode(
+        s, player, mode, src, p, policy_buttons, st);
+    const int eff_analog =
+        effective_mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
 
     const bool suppress_stick = (eff_analog != 0);
     uint16_t btn = pad_buttons_for(p, player, suppress_stick);
 
-    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG || eff_analog) {
-        pad_sticks_for(p, player, st);
+    if (!eff_analog) {
+        st[0] = st[1] = st[2] = st[3] = 0x80;
     }
 
     out->buttons = btn;
@@ -4887,20 +5000,15 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
-    int eff_analog;
-    if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == (int)PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else {
-        if (stick_live)     p.hybrid_analog = true;
-        else if (dpad_live) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
-    }
+    const int effective_mode = controller_policy_resolve_override_mode(
+        0, 1, mode, w, st, stick_live, dpad_live);
+    const int eff_analog =
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
     /* Injected input only; see the note on the sibling fold above. Not
      * hardware behaviour, retained solely so injection can steer stick-only
      * games. */
-    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+    if (eff_analog &&
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
         if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
@@ -5241,12 +5349,10 @@ static void sample_pad_into_sio(int override) {
         PsxNetPad pad;
         if (!capture_pad_slot(s, &pad)) continue;  /* no device in this port */
         /* Push sticks every frame; request the pad type (digital/analog) through
-         * the coherent channel so a hybrid stick<->d-pad flip is applied only at
-         * an idle, non-config bus boundary (never mid-poll / mid-handshake). This
-         * is the fix for the v0.5.0 phantom-input regression: slamming the type
-         * each frame raced Tomba's DualShock config handshake -> garbage button
-         * reads. eff_analog still reflects this frame's mode (digital / analog /
-         * hybrid auto-switch). */
+         * the coherent channel so a policy switch is applied only at an idle,
+         * non-config bus boundary (never mid-poll / mid-handshake). This is the
+         * fix for the v0.5.0 phantom-input regression: slamming the type each
+         * frame raced Tomba's DualShock config handshake -> garbage reads. */
         apply_pad_slot_to_sio(s, pad);
         if (psx_start_consumer_enabled())
             psx_start_consumer_note(s, consumer_sim, pad.buttons);
@@ -12903,10 +13009,11 @@ int main(int argc, char** argv) {
         }
     }
     /* Activation callbacks are re-run after every launcher session. Clear
-     * game-owned controller overrides first so disabling a package cannot
-     * leave its prior mode latched across a soft return to the launcher. */
-    g_mod_controller_mode_override[0] = -1;
-    g_mod_controller_mode_override[1] = -1;
+     * game-owned controller overrides/policies first so disabling a package
+     * cannot leave its prior state latched across a soft return. */
+    g_mod_controller_mode_override.fill(-1);
+    for (auto& policy : g_mod_controller_policy)
+        policy = ModControllerPresentationPolicy{};
     g_mod_load_wall_multiplier = -1;
     g_mod_load_release_frames = -1;
     g_mod_disc_speed_divisor = -1;
@@ -12919,10 +13026,10 @@ int main(int argc, char** argv) {
     g_frame_interpolation_blend = g_frame_interpolation_blend_default;
     mod_runtime_activate_plugins();
     apply_netplay_local_viewport_aspect(net_cfg.enabled);
-    if (g_mod_controller_mode_override[0] >= 0)
-        player_mode[0] = g_mod_controller_mode_override[0];
-    if (g_mod_controller_mode_override[1] >= 0)
-        player_mode[1] = g_mod_controller_mode_override[1];
+    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+        if (g_mod_controller_mode_override[i] >= 0)
+            player_mode[i] = g_mod_controller_mode_override[i];
+    }
     if (g_mod_load_wall_multiplier >= 0) {
         g_turbo_loads_enabled = 1;
         g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;

@@ -171,19 +171,50 @@ int psx_mod_set_load_acceleration(uint32_t wall_clock_multiplier,
 int psx_mod_set_disc_speed(uint32_t divisor,
                            uint32_t instant_max_per_frame);
 
-/*
- * Override one player's resolved controller presentation mode for this launch.
- * This is intentionally a trusted-plugin API, not a generic launcher setting:
- * games may hide Hybrid from their normal selector while offering it as an
- * explicit game-owned mod.
- */
+/* Controller presentation values exposed to trusted game-owned plugins. */
 enum {
-    PSX_MOD_CONTROLLER_HYBRID = 0,
     PSX_MOD_CONTROLLER_ANALOG = 1,
     PSX_MOD_CONTROLLER_DIGITAL = 2
 };
+/*
+ * Per-sample input facts for an opt-in controller presentation policy. The
+ * runtime owns SDL sampling and SIO delivery; the game-owned plugin owns only
+ * the policy decision of whether this sample should present as DualShock
+ * analog or a digital pad.
+ */
+typedef struct PSXModControllerInput {
+    uint32_t struct_size;
+    uint32_t player;
+    uint32_t sio_slot;
+    uint32_t configured_mode;
+    uint32_t current_mode;
+    uint32_t stick_active;
+    uint32_t dpad_active;
+    uint32_t buttons;
+    uint32_t lx;
+    uint32_t ly;
+    uint32_t rx;
+    uint32_t ry;
+} PSXModControllerInput;
+typedef uint32_t (*PSXModControllerPresentationCallback)(
+    const PSXModControllerInput* input);
+/*
+ * Override one player's resolved controller presentation mode for this launch.
+ * This is intentionally a trusted-plugin API, not a generic launcher setting.
+ */
 int psx_mod_set_controller_mode_override(uint32_t player,
                                          uint32_t controller_mode);
+/*
+ * Let a game-owned plugin choose analog/digital presentation for one player on
+ * every input sample. The initial mode is used for boot/hotplug before the
+ * first sample. config_capable should be non-zero when the selected policy may
+ * present a DualShock, even if a later sample currently reports digital.
+ */
+int psx_mod_set_controller_presentation_policy(
+    uint32_t player,
+    PSXModControllerPresentationCallback callback,
+    uint32_t initial_mode,
+    int config_capable);
 
 /*
  * Register a C plugin before main() on the compilers supported by the runtime.

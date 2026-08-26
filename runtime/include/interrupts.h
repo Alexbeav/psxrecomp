@@ -105,6 +105,10 @@ int psx_get_in_exception(void);
  * Used by the post-savestate freeze probe (vblank-time "where was the game"). */
 uint32_t psx_last_irq_check_pc(void);
 uint32_t psx_compiled_irq_resume_pc(void);
+/* True when the current IRQ poll has a materialized CPUState/register context
+ * matching its resume PC. Dirty-RAM synthetic pump sites may expose a committed
+ * resume PC for IRQ timing before the live CPUState is safe to serialize. */
+int psx_irq_resume_context_snapshot_safe(void);
 /* Soft-return / netplay BYE: drop sticky resume latches so rematch dig0 snaps
  * cannot inherit a prior-match game PC (see pick_snap_resume_pc). */
 void psx_irq_clear_resume_latches(void);
