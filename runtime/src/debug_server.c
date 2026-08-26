@@ -45,6 +45,7 @@
 #include "crash_trace.h"
 #include "gpu_gl_renderer.h"
 #include "lockstep.h"
+#include "guest_tty.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3559,6 +3560,40 @@ static void handle_bioscall_dump(int id, const char *json)
     }
     pos += snprintf(out + pos, BUF_SZ - pos, "]}\n");
     debug_server_send_line(out); free(out);
+}
+
+/* guest_tty_dump — bounded, structured capture of bytes emitted through the
+ * guest console. Hex avoids JSON escaping ambiguity and preserves arbitrary
+ * byte values. The command is observational and never consumes the ring. */
+static void handle_guest_tty_dump(int id, const char *json)
+{
+    int requested = json_get_int(json, "tail", 4096);
+    if (requested < 0) requested = 0;
+    if (requested > 65536) requested = 65536;
+
+    size_t cap = (size_t)requested;
+    uint8_t *bytes = cap ? (uint8_t *)malloc(cap) : NULL;
+    if (cap && !bytes) { send_err(id, "oom"); return; }
+
+    uint64_t total = 0;
+    size_t count = psx_guest_tty_snapshot(bytes, cap, &total);
+    size_t out_cap = 160u + count * 2u;
+    char *out = (char *)malloc(out_cap);
+    if (!out) { free(bytes); send_err(id, "oom"); return; }
+
+    size_t pos = (size_t)snprintf(
+        out, out_cap,
+        "{\"id\":%d,\"ok\":true,\"total\":%llu,\"tail\":%llu,\"hex\":\"",
+        id, (unsigned long long)total, (unsigned long long)count);
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < count; ++i) {
+        out[pos++] = digits[bytes[i] >> 4];
+        out[pos++] = digits[bytes[i] & 0x0Fu];
+    }
+    out[pos++] = '"'; out[pos++] = '}'; out[pos++] = '\n'; out[pos] = '\0';
+    debug_server_send_line(out);
+    free(out);
+    free(bytes);
 }
 
 /* bios_info — which recompiled BIOS this build links, and whether the
@@ -13634,6 +13669,7 @@ static const CmdEntry s_commands[] = {
     { "fntrace_dump",      handle_fntrace_dump },
     { "unknown_dispatch_log", handle_unknown_dispatch_log },
     { "bioscall_dump",     handle_bioscall_dump },
+    { "guest_tty_dump",    handle_guest_tty_dump },
     { "bios_info",         handle_bios_info },
     { "hle_dump",          handle_hle_dump },
     { "card_trace_dump",   handle_card_trace_dump },
