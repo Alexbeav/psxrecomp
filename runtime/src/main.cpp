@@ -24,6 +24,7 @@
 #include "psx_rewind.h"
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
+#include "fps_readout.h"
 #include "host_keymap.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
@@ -482,6 +483,8 @@ static int post_load_probe_env_on(void) {
 }
 static Uint64   s_fps_last_time = 0;
 static uint64_t s_fps_last_frame = 0;
+static uint64_t s_fps_last_vblank = 0;   /* guest VBlank raises at window start */
+static uint64_t s_fps_last_cycles = 0;   /* guest CPU cycles at window start */
 static std::string s_fps_base_title;
 static int      s_fps_telemetry_enabled = -1; /* -1 = unread env */
 static FramePacer s_frame_pacer = { 0 };
@@ -519,6 +522,8 @@ static void present_session_reset(void) {
     s_sw_hold_valid = 0;
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
+    s_fps_last_vblank = 0;
+    s_fps_last_cycles = 0;
     s_fps_base_title.clear();
     s_frame_pacer = FramePacer{ 0 };
     s_turbo_present_skip = 0;
@@ -536,6 +541,14 @@ static void present_session_reset(void) {
     smooth_60_reset();
 }
 
+static int s_fps_telemetry_log = -1;     /* PSX_FPS_TELEMETRY=2: also log to stderr */
+static int fps_telemetry_log_enabled(void) {
+    if (s_fps_telemetry_log < 0) {
+        const char *e = std::getenv("PSX_FPS_TELEMETRY");
+        s_fps_telemetry_log = (e && e[0] == '2') ? 1 : 0;
+    }
+    return s_fps_telemetry_log;
+}
 static int fps_telemetry_enabled(void) {
     if (s_fps_telemetry_enabled < 0) {
         const char *e = std::getenv("PSX_FPS_TELEMETRY");
@@ -549,6 +562,8 @@ static void fps_telemetry_toggle(void) {
     s_fps_telemetry_enabled = enabled;
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
+    s_fps_last_vblank = 0;
+    s_fps_last_cycles = 0;
     if (!enabled && sdl_window && !s_fps_base_title.empty())
         SDL_SetWindowTitle(sdl_window, s_fps_base_title.c_str());
     if (!enabled)
@@ -973,6 +988,8 @@ extern "C" void psx_frontend_on_savestate_loaded(void) {
     s_frame_pacer = FramePacer{ 0 };
     s_fps_last_time = 0;
     s_fps_last_frame = 0;
+    s_fps_last_vblank = 0;
+    s_fps_last_cycles = 0;
     /* Re-anchor guest-cycle→sample budgeting (pump clears queued PCM too). */
     g_audio_cycle_resync = 1;
     /* Depth24 FMV: drop ephemeral present hold/cutover so restored VRAM shows.
@@ -6061,17 +6078,33 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         extern uint64_t s_frame_count;
         const Uint64 now = SDL_GetPerformanceCounter();
         const Uint64 frequency = SDL_GetPerformanceFrequency();
+        extern uint64_t g_vblank_raise_count;   /* interrupts.c: cycle-paced VBlank raises */
         if (!s_fps_last_time) {
             s_fps_last_time = now;
             s_fps_last_frame = s_frame_count;
+            s_fps_last_vblank = g_vblank_raise_count;
+            s_fps_last_cycles = psx_get_cycle_count();
             if (sdl_window && s_fps_base_title.empty()) {
                 const char *title = SDL_GetWindowTitle(sdl_window);
                 if (title) s_fps_base_title = title;
             }
         } else if (frequency && now - s_fps_last_time >= frequency) {
             const double seconds = (double)(now - s_fps_last_time) / (double)frequency;
-            const double fps = (double)(s_frame_count - s_fps_last_frame) / seconds;
-            const double speed = fps / 59.94;
+            /* Guest speed, not host presents: VBlank raises and CPU cycles
+             * retired by the guest in this wall-clock window (fps_readout.h). */
+            const uint64_t cycles_now = psx_get_cycle_count();
+            const uint64_t d_cycles = cycles_now - s_fps_last_cycles;
+            const FpsReadout ro = fps_readout_compute(
+                seconds,
+                g_vblank_raise_count - s_fps_last_vblank,
+                d_cycles,
+                s_frame_count - s_fps_last_frame,
+                present_video_standard_is_pal());
+            const double fps = ro.guest_hz;      /* guest VBlank Hz */
+            const double speed = ro.realtime;    /* fraction of real time (cycles) */
+            const double host_fps = ro.host_fps; /* host frontend loop rate */
+            s_fps_last_vblank = g_vblank_raise_count;
+            s_fps_last_cycles = cycles_now;
             double display_fps = 0.0;
             if (g_frame_interpolation && g_gl_active) {
                 display_fps = g_frame_interpolation_fps > 0
@@ -6082,11 +6115,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 char title[256];
                 if (display_fps > 0.0) {
                     snprintf(title, sizeof(title),
-                             "%s  [Game %.0f fps %.2fx | Display %.0f fps]",
-                             s_fps_base_title.c_str(), fps, speed, display_fps);
+                             "%s  [Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f | Display %.0f fps]",
+                             s_fps_base_title.c_str(), fps, ro.nominal_hz,
+                             speed * 100.0, host_fps, display_fps);
                 } else {
-                    snprintf(title, sizeof(title), "%s  [Game %.0f fps %.2fx]",
-                             s_fps_base_title.c_str(), fps, speed);
+                    snprintf(title, sizeof(title),
+                             "%s  [Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f fps]",
+                             s_fps_base_title.c_str(), fps, ro.nominal_hz,
+                             speed * 100.0, host_fps);
                 }
                 SDL_SetWindowTitle(sdl_window, title);
             }
@@ -6094,13 +6130,21 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 char osd[96];
                 if (display_fps > 0.0) {
                     snprintf(osd, sizeof(osd),
-                             "Game %.0f FPS  %.2fx | Display %.0f FPS",
-                             fps, speed, display_fps);
+                             "Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f | Display %.0f FPS",
+                             fps, ro.nominal_hz, speed * 100.0, host_fps, display_fps);
                 } else {
-                    snprintf(osd, sizeof(osd), "Game %.0f FPS  %.2fx",
-                             fps, speed);
+                    snprintf(osd, sizeof(osd),
+                             "Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f FPS",
+                             fps, ro.nominal_hz, speed * 100.0, host_fps);
                 }
                 host_osd_set_status(osd);
+            }
+            if (fps_telemetry_log_enabled()) {
+                std::fprintf(stderr,
+                    "[GUEST] vblank=%.2f Hz nominal=%.2f speed=%.3fx realtime=%.3f "
+                    "host_loop=%.1f fps window=%.2fs cycles=%llu\n",
+                    ro.guest_hz, ro.nominal_hz, ro.speed, ro.realtime, host_fps,
+                    seconds, (unsigned long long)d_cycles);
             }
             if (netplay_timing_on() && s_np_timing_frames > 0) {
                 const double invf = 1000.0 / (double)frequency;

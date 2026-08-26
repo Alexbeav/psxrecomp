@@ -443,6 +443,10 @@ if(BUILD_TESTING)
     add_test(NAME spu_pitch_zero_test
              COMMAND spu_pitch_zero_test)
 
+    add_executable(fps_readout_test tests/test_fps_readout.c)
+    target_include_directories(fps_readout_test PRIVATE include)
+    add_test(NAME fps_readout_test COMMAND fps_readout_test)
+
     add_executable(spu_gaussian_test tests/test_spu_gaussian.c)
     target_include_directories(spu_gaussian_test PRIVATE include)
     add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
