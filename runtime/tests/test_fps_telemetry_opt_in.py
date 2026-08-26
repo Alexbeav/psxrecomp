@@ -12,8 +12,8 @@ required = (
     'std::getenv("PSX_FPS_TELEMETRY")',
     "fps_telemetry_enabled() && !psx_netplay_in_load_barrier()",
     "sdl_window && s_fps_base_title.empty()",
-    "Game %.0f fps %.2fx | Display %.0f fps",
-    "Game %.0f FPS  %.2fx | Display %.0f FPS",
+    "[Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f | Display %.0f fps]",
+    "Guest %.1f Hz/%.0f  %.0f%% RT | Host %.0f | Display %.0f FPS",
 )
 for needle in required:
     if needle not in main_cpp:
