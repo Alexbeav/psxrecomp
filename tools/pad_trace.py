@@ -76,12 +76,28 @@ def find_runs(samples, name):
     return runs
 
 
+def fold_skew(samples, run):
+    """Frames between the D-pad bit falling and the stick leaving centre.
+
+    Both are written by the same host frame, so 0 means the game sees one
+    event carrying two representations.  Non-zero means the two arrive on
+    different frames, and an edge-detecting menu fires twice.  None means the
+    stick never deflected.
+    """
+    i0, i1 = run
+    for i in range(i0, i1 + 1):
+        if stick_deflected(samples[i]["sticks"]):
+            return samples[i]["frame"] - samples[i0]["frame"]
+    return None
+
+
 def describe_run(samples, name, run):
     i0, i1 = run
     a, b = samples[i0], samples[i1]
     folded = any(stick_deflected(samples[i]["sticks"]) for i in range(i0, i1 + 1))
     analogs = {bool(samples[i]["analog"]) for i in range(i0, i1 + 1)}
     return {
+        "fold_skew_frames": fold_skew(samples, run),
         "button": name,
         "t0": a["t"], "t1": b["t"],
         "ms": round((b["t"] - a["t"]) * 1000.0, 1),
@@ -122,6 +138,14 @@ def analyze(samples, rebounce_ms=400.0, repeat_frames=16):
                     "kind": "analog_flip", "button": name,
                     "detail": "pad analog flag changed during the press",
                 })
+            if name in DPAD and d.get("fold_skew_frames"):
+                findings.append({
+                    "kind": "fold_skew", "button": name,
+                    "frames": d["fold_skew_frames"],
+                    "detail": "stick deflection arrived %d frame(s) after the "
+                              "D-pad bit; an edge-detecting menu fires twice"
+                              % d["fold_skew_frames"],
+                })
             if d["frames"] >= repeat_frames:
                 findings.append({
                     "kind": "long_hold", "button": name,
@@ -133,24 +157,82 @@ def analyze(samples, rebounce_ms=400.0, repeat_frames=16):
     return runs, findings
 
 
-def capture(host, port, seconds):
-    import debug_client
-    sock = debug_client.connect(host, port)
+class Link:
+    """A debug-server connection that survives builds which close after one
+    command.
+
+    The shipped build answers exactly one command per connection and then
+    hangs up; other builds keep the socket open.  Rather than assume either,
+    reuse the socket until it EOFs, then fall back to connect-per-command for
+    the rest of the run.
+    """
+
+    def __init__(self, host, port):
+        self.host, self.port = host, port
+        self.sock = None
+        self.persistent = True
+        self.reconnects = 0
+
+    def _connect(self):
+        import debug_client
+        self.sock = debug_client.connect(self.host, self.port)
+
+    def cmd(self, name):
+        return self.cmd_with({"cmd": name})
+
+    def cmd_with(self, obj):
+        import debug_client
+        for attempt in (0, 1):
+            try:
+                if self.sock is None:
+                    self._connect()
+                r = debug_client.send_cmd(self.sock, obj)
+                if not self.persistent:
+                    self.close()
+                return r
+            except Exception:
+                # EOF or parse failure => this build hung up on us.
+                self.close()
+                if attempt == 0:
+                    self.persistent = False
+                    self.reconnects += 1
+                    continue
+                raise
+        return None
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+
+def capture(host, port, seconds, min_interval=0.0):
+    """Sample pad_status (+ the frame counter) until `seconds` elapse."""
+    link = Link(host, port)
     samples, t_end = [], time.time() + seconds
     while time.time() < t_end:
-        st = debug_client.send_cmd(sock, {"cmd": "pad_status"})
-        pg = debug_client.send_cmd(sock, {"cmd": "ping"})
+        t0 = time.time()
+        st = link.cmd("pad_status")
         if not st or "slot0" not in st:
             continue
+        # `frame`, not `ping`: the shipped build's ping carries no frame number.
+        fr = link.cmd("frame")
         s0 = st["slot0"]
         samples.append({
             "t": time.time(),
-            "frame": int(pg.get("frame", -1)) if pg else -1,
+            "frame": int(fr.get("frame", -1)) if fr else -1,
             "buttons": int(s0["buttons"], 16),
             "sticks": [int(v) for v in s0.get("sticks", [128, 128, 128, 128])],
             "analog": bool(s0.get("analog", False)),
         })
-    return samples
+        spent = time.time() - t0
+        if min_interval > spent:
+            time.sleep(min_interval - spent)
+    link.close()
+    return samples, link
 
 
 def main():
@@ -160,11 +242,14 @@ def main():
     ap.add_argument("--port", type=int, default=4370)
     ap.add_argument("--seconds", type=float, default=8.0)
     ap.add_argument("--repeat-frames", type=int, default=16)
+    ap.add_argument("--hz", type=float, default=0.0,
+                    help="cap the sample rate (0 = as fast as possible)")
     ap.add_argument("--json", help="write raw samples + findings here")
     args = ap.parse_args()
 
     print("Capturing %.0fs — tap the D-pad ONCE, cleanly." % args.seconds)
-    samples = capture(args.host, args.port, args.seconds)
+    samples, link = capture(args.host, args.port, args.seconds,
+                            min_interval=1.0 / args.hz if args.hz else 0.0)
     if not samples:
         print("No samples. Is the runtime up on port %d?" % args.port)
         return 1
@@ -174,14 +259,23 @@ def main():
     frames = samples[-1]["frame"] - samples[0]["frame"]
     print("%d samples over %.1fs (%.0f Hz, %d emulated frames)"
           % (len(samples), span, rate, frames))
+    if not link.persistent:
+        print("note: this build closes the socket after each command; "
+              "reconnected per command.")
+    if frames <= 0:
+        print("WARNING: the frame counter never advanced — is the runtime "
+              "paused? Frame spans below are meaningless.")
+    if rate < 120.0:
+        print("WARNING: %.0f Hz is below 2x the emulated frame rate; a short "
+              "press may be missed." % rate)
 
     runs, findings = analyze(samples, repeat_frames=args.repeat_frames)
     if not runs:
         print("No button press seen — nothing to classify.")
     for r in runs:
-        print("  %-8s %6.1f ms  %3d frames  stick_folded=%s analog=%s"
+        print("  %-8s %6.1f ms  %3d frames  stick_folded=%s skew=%s analog=%s"
               % (r["button"], r["ms"], r["frames"],
-                 r["stick_folded"], r["analog"]))
+                 r["stick_folded"], r["fold_skew_frames"], r["analog"]))
 
     print()
     if not findings:
