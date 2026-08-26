@@ -2952,7 +2952,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (deliverable || (++s_interp_entry_poll & 0x3Fu) == 0) {
                 cpu->pc = pc;
                 s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-                psx_check_interrupts(cpu);
+                psx_check_interrupts_at(cpu, pc);
                 if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
                     /* Handler resumed elsewhere — surface to dispatch. */
                     g_dirty_ram_blocks_run++;
