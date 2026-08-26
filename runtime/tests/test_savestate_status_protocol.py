@@ -4,6 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = (ROOT / "include/savestate.h").read_text(encoding="utf-8")
 STATE = (ROOT / "src/savestate.c").read_text(encoding="utf-8")
+ADMISSION = (ROOT / "src" / "savestate_admission.c").read_text(
+    encoding="utf-8"
+)
 SERVER = (ROOT / "src/debug_server.c").read_text(encoding="utf-8")
 INTERRUPTS_H = (ROOT / "include/interrupts.h").read_text(encoding="utf-8")
 INTERRUPTS = (ROOT / "src/interrupts.c").read_text(encoding="utf-8")
@@ -18,7 +21,11 @@ assert "savestate_status_json(status, sizeof status)" in SERVER
 assert "int psx_irq_resume_context_snapshot_safe(void);" in INTERRUPTS_H
 assert "psx_irq_resume_context_snapshot_safe(void)" in INTERRUPTS
 assert "g_cosim_dirty_pump_site == 0" in INTERRUPTS
-assert "!snapshot_safe || !savestate_resume_pc_ok(pc)" in STATE
+# The admission predicate lives in the tested helper (downstream refactor):
+assert "int snapshot_safe = psx_irq_resume_context_snapshot_safe();" in STATE
+assert "savestate_admission_decide(&adm)" in STATE
+assert "if (!in->snapshot_safe)" in ADMISSION
+assert "if (!in->resume_pc_ok)" in ADMISSION
 assert "!psx_irq_resume_context_snapshot_safe() || !resume_pc_ok(pc)" in REWIND
 assert "psx_check_interrupts_at(cpu, pc)" in DIRTY
 print("savestate status protocol guard passed")
