@@ -545,6 +545,13 @@ uint32_t psx_compiled_irq_resume_pc(void) { return s_compiled_interrupt_resume_p
 uint64_t psx_last_irq_check_cycle(void) { return s_last_interrupt_check_cycle; }
 uint64_t psx_interrupt_total_checks(void) { return total_checks; }
 uint32_t psx_interrupt_fast_maintenance(void) { return s_fast_maintenance; }
+int psx_irq_resume_context_snapshot_safe(void)
+{
+    /* Dirty interpreter pump sites are IRQ-precise but not save-state safe:
+     * they can publish a valid committed PC while CPUState still describes a
+     * helper/device or previous local context. Snapshot only at normal polls. */
+    return g_cosim_dirty_pump_site == 0;
+}
 
 void psx_irq_clear_resume_latches(void)
 {

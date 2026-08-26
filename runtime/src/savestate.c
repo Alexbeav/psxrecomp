@@ -708,16 +708,17 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int slot = s_save_pending;
         char path[600];
         uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
-        /* hint==0 ALSO defers, even when the resolver found a plausible-looking
-         * substitute. The substitute chain ends in sticky-BB latches and $ra,
-         * which pass the sanity check while being the wrong place to resume:
-         * the first F7 of a session saved such a state, it loaded, ran for
-         * ~150M instructions off the rails, and died at PC=0 -- poison that
-         * looks valid at save time and only fails minutes later. Deferring
-         * reuses the existing retry: the save completes at the next poll where
-         * a real block-leader PC is published, or fails LOUDLY after the
-         * timeout instead of writing a corrupt state silently. */
-        if (resume_pc == 0u || !savestate_resume_pc_ok(pc)) {
+        int snapshot_safe = psx_irq_resume_context_snapshot_safe();
+        int pc_matches_cpu = cpu && cpu->pc != 0u &&
+                             (((cpu->pc ^ pc) & 0x1FFFFFFFu) == 0u);
+        /* A missing hint is only safe when the resolved PC came directly from
+         * cpu->pc: dirty-RAM entry polls set cpu->pc to the materialized block
+         * boundary but do not publish a separate hint. Stale fallback latches
+         * and dirty-RAM synthetic pump sites can expose a plausible resume PC
+         * before the matching register context is materialized, so those still
+         * defer instead of writing a structurally valid but poisoned state. */
+        if ((resume_pc == 0u && !pc_matches_cpu) ||
+            !snapshot_safe || !savestate_resume_pc_ok(pc)) {
             /* FMV/present edges often poll with hint=0; wait briefly for a
              * sticky BB / IRQ latch rather than writing pc=0 poison. */
             const double now = savestate_mono_ms();
