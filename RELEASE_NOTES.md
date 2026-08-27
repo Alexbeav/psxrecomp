@@ -1,4 +1,4 @@
-# Unreleased
+# v0.3.2-alpha
 
 - Replaces OpenGL temporal frame blending's shared second context and
   presentation thread with a deadline-driven path on the renderer's original
