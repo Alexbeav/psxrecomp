@@ -357,6 +357,16 @@ if(BUILD_TESTING)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
 
+    add_executable(frame_interpolation_schedule_test
+        tests/test_frame_interpolation_schedule.c
+        src/frame_interpolation.c)
+    target_include_directories(frame_interpolation_schedule_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(frame_interpolation_schedule_test PRIVATE m)
+    endif()
+    add_test(NAME frame_interpolation_schedule_test
+             COMMAND frame_interpolation_schedule_test)
+
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
     add_test(NAME gpu_primitive_reject_test COMMAND gpu_primitive_reject_test)
@@ -464,6 +474,9 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME frame_interpolation_context_ownership_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
         add_test(NAME mod_bezel_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)

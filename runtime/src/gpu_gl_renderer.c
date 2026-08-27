@@ -67,6 +67,7 @@
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
+#include "frame_interpolation.h"
 #include "host_osd.h"
 #include "psx_savestate_menu.h"
 #include "host_time.h"
@@ -117,8 +118,6 @@
 #define PSXGL_CONSTANT_ALPHA        0x8003
 #define PSXGL_UNPACK_ROW_LENGTH     0x0CF2
 #define PSXGL_SRC1_ALPHA            0x8589
-#define PSXGL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
-#define PSXGL_TIMEOUT_IGNORED       0xFFFFFFFFFFFFFFFFull
 
 #ifndef APIENTRY
 #define APIENTRY
@@ -160,9 +159,6 @@ typedef void   (APIENTRY *PFN_glBufferData)(GLenum, ptrdiff_t, const void *, GLe
 typedef void   (APIENTRY *PFN_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void *);
 typedef void   (APIENTRY *PFN_glEnableVertexAttribArray)(GLuint);
 typedef void   (APIENTRY *PFN_glBindFragDataLocationIndexed)(GLuint, GLuint, GLuint, const char *);
-typedef GLsync (APIENTRY *PFN_glFenceSync)(GLenum, GLbitfield);
-typedef void   (APIENTRY *PFN_glWaitSync)(GLsync, GLbitfield, GLuint64);
-typedef void   (APIENTRY *PFN_glDeleteSync)(GLsync);
 typedef void   (APIENTRY *PFN_glGenFramebuffers)(GLsizei, GLuint *);
 typedef void   (APIENTRY *PFN_glDeleteFramebuffers)(GLsizei, const GLuint *);
 typedef void   (APIENTRY *PFN_glBindFramebuffer)(GLenum, GLuint);
@@ -226,9 +222,6 @@ static PFN_glBufferData        p_glBufferData;
 static PFN_glVertexAttribPointer p_glVertexAttribPointer;
 static PFN_glEnableVertexAttribArray p_glEnableVertexAttribArray;
 static PFN_glBindFragDataLocationIndexed p_glBindFragDataLocationIndexed;
-static PFN_glFenceSync p_glFenceSync;
-static PFN_glWaitSync p_glWaitSync;
-static PFN_glDeleteSync p_glDeleteSync;
 static PFN_glGenFramebuffers   p_glGenFramebuffers;
 static PFN_glDeleteFramebuffers p_glDeleteFramebuffers;
 static PFN_glBindFramebuffer   p_glBindFramebuffer;
@@ -281,9 +274,6 @@ static int load_modern_gl(void) {
     LOAD(p_glVertexAttribPointer, "glVertexAttribPointer");
     LOAD(p_glEnableVertexAttribArray, "glEnableVertexAttribArray");
     LOAD(p_glBindFragDataLocationIndexed, "glBindFragDataLocationIndexed");
-    LOAD(p_glFenceSync, "glFenceSync");
-    LOAD(p_glWaitSync, "glWaitSync");
-    LOAD(p_glDeleteSync, "glDeleteSync");
     LOAD(p_glGenFramebuffers, "glGenFramebuffers"); LOAD(p_glBindFramebuffer, "glBindFramebuffer");
     LOAD(p_glDeleteFramebuffers, "glDeleteFramebuffers");
     LOAD(p_glFramebufferTexture2D, "glFramebufferTexture2D");
@@ -328,8 +318,6 @@ static GLint         s_present_uTex = -1, s_present_uUvRect = -1;
 static GLint         s_present_uTexSize = -1, s_present_uSharpScale = -1;
 static GLint         s_present_uSharp = -1;
 static GLuint        s_interp_prog = 0, s_interp_tex[3];
-static GLsync        s_interp_fence[3];
-static GLsync        s_interp_draw_fence = NULL;
 static GLint         s_interp_uPrev = -1, s_interp_uCurr = -1;
 static GLint         s_interp_uAlpha = -1, s_interp_uUvRect = -1;
 static GLint         s_interp_uBlendMode = -1;
@@ -339,21 +327,18 @@ static int           s_interp_blend_mode = 0;
 static int           s_interp_prev = 0, s_interp_cur = 0;
 static int           s_interp_w = 0, s_interp_h = 0, s_interp_linear = 0;
 static int           s_interp_force_4_3 = 0, s_interp_source_path = -1;
-static uint64_t      s_interp_start = 0, s_interp_duration = 1;
-static uint64_t      s_interp_last_capture = 0, s_interp_swaps = 0;
+static uint64_t      s_interp_swaps = 0;
 static uint64_t      s_interp_captures = 0;
 static int           s_interp_diag = 0;
 static double        s_interp_host_hz = 0.0;
 static double        s_interp_target_hz = 0.0;
-static SDL_GLContext s_interp_ctx = NULL;
-static SDL_Thread   *s_interp_thread = NULL;
-static SDL_mutex    *s_interp_mutex = NULL;
-static SDL_atomic_t  s_interp_thread_run;
-static GLuint        s_interp_thread_vao = 0;
+static double        s_interp_source_hz = 0.0;
+static FrameInterpolationSchedule s_interp_schedule;
 static void interp_reset_history(void);
-static int interp_thread_main(void *opaque);
-static int interp_present(void);
+static int interp_present(float alpha);
+static void interp_present_source_interval(void);
 static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh);
+static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh);
 
 static int           s_raster_ok = 0;      /* full GPU pipeline available */
 
@@ -2906,33 +2891,9 @@ void gl_renderer_set_swap_interval(int interval) {
 }
 
 void gl_renderer_shutdown(void) {
-    if (s_interp_thread) {
-        SDL_AtomicSet(&s_interp_thread_run, 0);
-        SDL_WaitThread(s_interp_thread, NULL);
-        s_interp_thread = NULL;
-    }
-    if (s_interp_ctx) {
-        SDL_GL_DeleteContext(s_interp_ctx);
-        s_interp_ctx = NULL;
-    }
     if (s_ctx) {
-        SDL_GL_MakeCurrent(s_win, s_ctx);
-        if (s_interp_draw_fence) {
-            p_glDeleteSync(s_interp_draw_fence);
-            s_interp_draw_fence = NULL;
-        }
-        for (int i = 0; i < 3; i++) {
-            if (s_interp_fence[i]) {
-                p_glDeleteSync(s_interp_fence[i]);
-                s_interp_fence[i] = NULL;
-            }
-        }
         ensure_cpu();
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
-    }
-    if (s_interp_mutex) {
-        SDL_DestroyMutex(s_interp_mutex);
-        s_interp_mutex = NULL;
     }
     free(s_conv); s_conv = NULL;
     s_raster_ok = 0;
@@ -3729,104 +3690,68 @@ int  gl_renderer_get_ws_ablate(void)     { return s_ws_ablate; }
 static void interp_reset_history_unlocked(void) {
     s_interp_valid = 0;
     s_interp_w = s_interp_h = 0;
-    s_interp_start = s_interp_last_capture = 0;
-    s_interp_duration = 1;
     s_interp_source_path = -1;
+    frame_interpolation_schedule_reset(&s_interp_schedule);
 }
 
 static void interp_reset_history(void) {
-    if (s_interp_mutex) SDL_LockMutex(s_interp_mutex);
     interp_reset_history_unlocked();
-    if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
 }
 
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
-                                   int blend_mode) {
-    double effective_hz = target_hz < 0.0
-        ? -1.0
-        : (target_hz >= 60.0 ? target_hz : host_hz);
-    int active = (enabled &&
-                  (effective_hz < 0.0 || effective_hz >= 50.0)) ? 1 : 0;
+                                   double source_hz, int blend_mode) {
+    double effective_hz = target_hz > 0.0 ? target_hz : host_hz;
+    if (effective_hz < source_hz) effective_hz = source_hz;
+    int active = (enabled && source_hz >= 1.0 && source_hz <= 1000.0 &&
+                  effective_hz >= source_hz && effective_hz <= 1000.0) ? 1 : 0;
     const char *diag = getenv("PSX_GL_INTERP_DIAG");
     s_interp_diag = diag && diag[0] && diag[0] != '0';
-    if (active && !s_interp_ctx && s_ctx) {
-        if (!s_interp_mutex) s_interp_mutex = SDL_CreateMutex();
-        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-        s_interp_ctx = SDL_GL_CreateContext(s_win);
-        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 0);
-        SDL_GL_MakeCurrent(s_win, s_ctx);
-        /* The wall-clock pacer and interpolation scheduler own cadence. Keeping
-         * driver vsync on the main context adds a 6-11 ms block whenever an
-         * FMV temporarily suspends interpolation and the main context presents. */
-        SDL_GL_SetSwapInterval(0);
-        if (s_interp_ctx && s_interp_mutex) {
-            SDL_AtomicSet(&s_interp_thread_run, 1);
-            s_interp_thread = SDL_CreateThread(interp_thread_main,
-                                               "psx-gl-interp", NULL);
-        }
-        if (!s_interp_thread) {
-            SDL_AtomicSet(&s_interp_thread_run, 0);
-            if (s_interp_ctx) SDL_GL_DeleteContext(s_interp_ctx);
-            s_interp_ctx = NULL;
-            active = 0;
-        }
-    }
-    if (s_interp_mutex) SDL_LockMutex(s_interp_mutex);
-    if (active != s_interp_enabled) interp_reset_history_unlocked();
+    if (active != s_interp_enabled || source_hz != s_interp_source_hz ||
+        effective_hz != s_interp_target_hz)
+        interp_reset_history_unlocked();
     s_interp_enabled = active;
     s_interp_host_hz = host_hz;
     s_interp_target_hz = active ? effective_hz : 0.0;
+    s_interp_source_hz = active ? source_hz : 0.0;
     s_interp_blend_mode = blend_mode == 1 ? 1 : 0;
-    if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
-    if (active && effective_hz < 0.0)
-        fprintf(stdout, "psxrecomp: GL frame interpolation enabled: uncapped "
-                "target on %.1f Hz display (%s blend)\n", host_hz,
-                s_interp_blend_mode ? "motion-adaptive" : "linear");
-    else if (active)
-        fprintf(stdout, "psxrecomp: GL frame interpolation enabled: %.1f FPS "
-                "target on %.1f Hz display (%s blend)\n", effective_hz, host_hz,
-                s_interp_blend_mode ? "motion-adaptive" : "linear");
+    if (active)
+        fprintf(stdout, "psxrecomp: GL temporal frame blending enabled: %.1f "
+                "presents/s from %.3f guest frames/s on the render thread "
+                "(%s blend; no motion vectors)\n",
+                effective_hz, source_hz,
+                s_interp_blend_mode ? "change-adaptive" : "linear");
     else
-        fprintf(stdout, "psxrecomp: GL frame interpolation disabled (host %.1f Hz)\n", host_hz);
+        fprintf(stdout, "psxrecomp: GL temporal frame blending disabled "
+                "(host %.1f Hz)\n", host_hz);
 }
 
 void gl_renderer_set_interpolation_suspended(int suspended) {
     suspended = suspended ? 1 : 0;
-    if (s_interp_mutex) SDL_LockMutex(s_interp_mutex);
     if (suspended != s_interp_suspended) interp_reset_history_unlocked();
     s_interp_suspended = suspended;
-    if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
+}
+
+int gl_renderer_interpolation_owns_cadence(void) {
+    return s_ctx && s_interp_enabled && !s_interp_suspended;
 }
 
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,
                                     double *host_hz, double *target_hz,
                                     uint64_t *swaps) {
-    if (s_interp_mutex) SDL_LockMutex(s_interp_mutex);
     if (enabled) *enabled = s_interp_enabled;
     if (suspended) *suspended = s_interp_suspended;
     if (history_frames) *history_frames = s_interp_valid;
     if (host_hz) *host_hz = s_interp_host_hz;
     if (target_hz) *target_hz = s_interp_target_hz;
     if (swaps) *swaps = s_interp_swaps;
-    if (s_interp_mutex) SDL_UnlockMutex(s_interp_mutex);
 }
 
 /* Copy a stable display image out of the mutable VRAM/wide render target.
- * Returns true once both previous and current images are available. */
+ * Returns true when temporal blending owns this source-frame interval. */
 static int interp_capture(GLuint fbo, int x, int y, int w, int h,
                           int linear, int force_4_3, int source_path) {
     if (!s_interp_enabled || s_interp_suspended || !fbo || w <= 0 || h <= 0) return 0;
-    SDL_LockMutex(s_interp_mutex);
-    /* The presentation context may still have a draw queued which samples one
-     * of the shared history textures.  Order this context's next allocation or
-     * copy after that draw before recycling a texture.  glWaitSync keeps the
-     * dependency on the GPU; unlike glFinish it does not stall the guest CPU. */
-    if (s_interp_draw_fence) {
-        p_glWaitSync(s_interp_draw_fence, 0, PSXGL_TIMEOUT_IGNORED);
-        p_glDeleteSync(s_interp_draw_fence);
-        s_interp_draw_fence = NULL;
-    }
     int pw = w * s_scale, ph = h * s_scale;
     if (pw != s_interp_w || ph != s_interp_h ||
         source_path != s_interp_source_path || force_4_3 != s_interp_force_4_3) {
@@ -3843,30 +3768,11 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
     int dst = 0;
     if (s_interp_valid == 1) dst = s_interp_cur == 0 ? 1 : 0;
     else if (s_interp_valid >= 2) dst = s_interp_prev;
-    if (s_interp_fence[dst]) {
-        p_glDeleteSync(s_interp_fence[dst]);
-        s_interp_fence[dst] = NULL;
-    }
-
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, fbo);
     glBindTexture(GL_TEXTURE_2D, s_interp_tex[dst]);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
                         x * s_scale, y * s_scale, pw, ph);
-    s_interp_fence[dst] = p_glFenceSync(PSXGL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glFlush();
     p_glBindFramebuffer(PSXGL_READ_FRAMEBUFFER, 0);
-
-    uint64_t now = SDL_GetPerformanceCounter();
-    uint64_t freq = SDL_GetPerformanceFrequency();
-    if (s_interp_valid > 0 && s_interp_last_capture && now > s_interp_last_capture) {
-        uint64_t d = now - s_interp_last_capture;
-        uint64_t lo = freq / 240u, hi = freq / 10u;
-        if (d < lo) d = lo;
-        if (d > hi) d = hi;
-        s_interp_duration = d;
-    }
-    s_interp_last_capture = now;
-    s_interp_start = now;
     if (s_interp_valid == 0) {
         s_interp_cur = dst;
         s_interp_valid = 1;
@@ -3879,17 +3785,11 @@ static int interp_capture(GLuint fbo, int x, int y, int w, int h,
     s_interp_force_4_3 = force_4_3;
     s_interp_source_path = source_path;
     s_interp_captures++;
-    int ready = s_interp_valid >= 2;
-    SDL_UnlockMutex(s_interp_mutex);
-    return ready;
+    return 1;
 }
 
 static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
     int prev = s_interp_prev, curr = s_interp_cur;
-    if (s_interp_fence[prev])
-        p_glWaitSync(s_interp_fence[prev], 0, PSXGL_TIMEOUT_IGNORED);
-    if (s_interp_fence[curr])
-        p_glWaitSync(s_interp_fence[curr], 0, PSXGL_TIMEOUT_IGNORED);
     p_glBindFramebuffer(PSXGL_FRAMEBUFFER, 0);
     glViewport(lx, ly, lw, lh);
     p_glActiveTexture(PSXGL_TEXTURE0);
@@ -3906,25 +3806,16 @@ static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
     p_glUniform1f(s_interp_uAlpha, alpha);
     p_glUniform1i(s_interp_uBlendMode, s_interp_blend_mode);
     p_glUniform4f(s_interp_uUvRect, 0.f, 0.f, 1.f, 1.f);
-    p_glBindVertexArray(s_interp_thread_vao);
+    p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);
     p_glUseProgram(0);
     p_glActiveTexture(PSXGL_TEXTURE0);
 }
 
-static int interp_present(void) {
-    if (!s_ctx || !s_interp_enabled || s_interp_suspended || s_interp_valid < 2) return 0;
-    uint64_t now = SDL_GetPerformanceCounter();
-    if (now <= s_interp_start || !s_interp_duration) return 0;
-    double a = (double)(now - s_interp_start) / (double)s_interp_duration;
-    /* Keep swapping at the host cadence after the blend completes.  Holding
-     * alpha at one is visually identical to leaving the current image on the
-     * front buffer, but avoids an irregular 2/3-swap pattern on 120/144/165 Hz
-     * displays while the next 59.94 Hz guest frame is being produced. */
-    if (a > 1.0) a = 1.0;
-    if (a < 0.0) a = 0.0;
-
+static int interp_present(float alpha) {
+    if (!s_ctx || !s_interp_enabled || s_interp_suspended || s_interp_valid < 1)
+        return 0;
     int ww = 0, wh = 0; SDL_GL_GetDrawableSize(s_win, &ww, &wh);
     int lx, ly, lw, lh;
     if (s_interp_force_4_3)
@@ -3937,10 +3828,8 @@ static int interp_present(void) {
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
     }
-    interp_draw_quad((float)a, lx, ly, lw, lh);
-    if (s_interp_draw_fence) p_glDeleteSync(s_interp_draw_fence);
-    s_interp_draw_fence = p_glFenceSync(PSXGL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glFlush();
+    present_bezel(ww, wh, lx, ly, lw, lh);
+    interp_draw_quad(alpha, lx, ly, lw, lh);
     pres_record(GL_PRES_INTERP, 0, 0, s_interp_w, s_interp_h,
                 lx, ly, lw, lh);
     gl_swap_with_osd();
@@ -3948,62 +3837,58 @@ static int interp_present(void) {
     return 1;
 }
 
-static int interp_thread_main(void *opaque) {
-    (void)opaque;
-    if (SDL_GL_MakeCurrent(s_win, s_interp_ctx) != 0) return -1;
-    SDL_GL_SetSwapInterval(0); /* host-period scheduler owns cadence */
-    p_glGenVertexArrays(1, &s_interp_thread_vao);
-    uint64_t freq = SDL_GetPerformanceFrequency();
-    uint64_t deadline = SDL_GetPerformanceCounter();
-    uint64_t diag_start = deadline, diag_swaps = 0, diag_captures = 0;
-
-    while (SDL_AtomicGet(&s_interp_thread_run)) {
-        SDL_LockMutex(s_interp_mutex);
-        double hz = s_interp_target_hz;
-        SDL_UnlockMutex(s_interp_mutex);
-        int uncapped = hz < 0.0;
-        uint64_t now = SDL_GetPerformanceCounter();
-        if (!uncapped) {
-            if (hz < 50.0) hz = 60.0;
-            uint64_t period = (uint64_t)((double)freq / hz);
-            if (!period) period = 1;
-            deadline += period;
-            if (now > deadline + period * 4u) deadline = now + period;
-            for (;;) {
-                now = SDL_GetPerformanceCounter();
-                if (now >= deadline) break;
-                uint64_t remain = deadline - now;
-                uint32_t ms = (uint32_t)((remain * 1000u) /
-                                         (freq ? freq : 1u));
-                if (ms > 1) psx_host_sleep_ms(ms - 1);
-            }
-            while (SDL_GetPerformanceCounter() < deadline) {}
-            now = SDL_GetPerformanceCounter();
-        } else {
-            deadline = now;
-        }
-
-        SDL_LockMutex(s_interp_mutex);
-        int presented = 0;
-        if (SDL_AtomicGet(&s_interp_thread_run) && s_interp_enabled)
-            presented = interp_present();
-        if (s_interp_diag && now - diag_start >= freq * 5u) {
-            double seconds = (double)(now - diag_start) / (double)freq;
-            fprintf(stdout, "psxrecomp: GL interpolation cadence: "
-                    "%.2f captures/s, %.2f presents/s\n",
-                    (double)(s_interp_captures - diag_captures) / seconds,
-                    (double)(s_interp_swaps - diag_swaps) / seconds);
-            fflush(stdout);
-            diag_start = now;
-            diag_captures = s_interp_captures;
-            diag_swaps = s_interp_swaps;
-        }
-        SDL_UnlockMutex(s_interp_mutex);
-        if (uncapped && !presented) psx_host_sleep_ms(1);
+static void interp_wait_until(uint64_t deadline, uint64_t frequency) {
+    uint64_t now;
+    if (!deadline || !frequency) return;
+    for (;;) {
+        now = SDL_GetPerformanceCounter();
+        if (now >= deadline) return;
+        uint64_t remain = deadline - now;
+        uint32_t ms = (uint32_t)((remain * 1000u) / frequency);
+        if (ms > 1) psx_host_sleep_ms(ms - 1);
     }
-    p_glBindVertexArray(0);
-    SDL_GL_MakeCurrent(s_win, NULL);
-    return 0;
+}
+
+static void interp_present_source_interval(void) {
+    static uint64_t diag_start, diag_swaps, diag_captures;
+    uint64_t frequency = SDL_GetPerformanceFrequency();
+    uint64_t now = SDL_GetPerformanceCounter();
+    uint64_t deadline;
+    float alpha;
+
+    if (!frame_interpolation_schedule_begin(
+            &s_interp_schedule, now, frequency,
+            s_interp_source_hz, s_interp_target_hz))
+        return;
+
+    while (frame_interpolation_schedule_next(
+               &s_interp_schedule, SDL_GetPerformanceCounter(),
+               &deadline, &alpha)) {
+        interp_wait_until(deadline, frequency);
+        latency_ring_mark(LAT_SWAP_BEGIN);
+        (void)interp_present(alpha);
+        latency_ring_mark(LAT_SWAP_END);
+    }
+    interp_wait_until(frame_interpolation_schedule_end(&s_interp_schedule),
+                      frequency);
+
+    now = SDL_GetPerformanceCounter();
+    if (!diag_start) {
+        diag_start = now;
+        diag_swaps = s_interp_swaps;
+        diag_captures = s_interp_captures;
+    } else if (s_interp_diag && frequency &&
+               now - diag_start >= frequency * 5u) {
+        double seconds = (double)(now - diag_start) / (double)frequency;
+        fprintf(stdout, "psxrecomp: GL temporal-blend cadence: "
+                "%.2f captures/s, %.2f presents/s (single context)\n",
+                (double)(s_interp_captures - diag_captures) / seconds,
+                (double)(s_interp_swaps - diag_swaps) / seconds);
+        fflush(stdout);
+        diag_start = now;
+        diag_captures = s_interp_captures;
+        diag_swaps = s_interp_swaps;
+    }
 }
 
 /* Draw one host OSD ARGB image into the default framebuffer at (vx,vy)
@@ -4052,11 +3937,7 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
      * cancel for already-oriented captures and made toasts upside-down. */
     p_glUniform4f(s_present_uUvRect, 0.f, 0.f, 1.f, 1.f);
     {
-        GLuint vao = s_present_vao;
-        if (s_interp_ctx && SDL_GL_GetCurrentContext() == s_interp_ctx &&
-            s_interp_thread_vao)
-            vao = s_interp_thread_vao;
-        p_glBindVertexArray(vao);
+        p_glBindVertexArray(s_present_vao);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         p_glBindVertexArray(0);
     }
@@ -4257,7 +4138,8 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == w && s_last_dh == h &&
         !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1) &&
-        !host_osd_needs_present()) {
+        !host_osd_needs_present() &&
+        !gl_renderer_interpolation_owns_cadence()) {
         s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(0);
@@ -4283,9 +4165,10 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
     int interp_pair = interp_capture(s_hr_fbo, disp_x, disp_y, w, h,
                                      linear, force_4_3, GL_PRES_VRAM);
     if (interp_pair) {
-        /* Interp owns Swap — still snapshot the band so resim hold-last has
-         * a frozen frame if an episode opens before the next main-thread Swap. */
+        /* Temporal blending owns this stock frame interval. Capture hold-last
+         * before pacing; every blend and Swap remains on this context/thread. */
         hold_capture_native_fbo(s_hr_fbo, disp_x, disp_y, w, h, force_4_3, linear);
+        interp_present_source_interval();
         gl_perf_present_exit(0);
         present_dirty_rect(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1, 0);
         present_force_consumed();
@@ -4365,7 +4248,8 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         s_last_dx == disp_x && s_last_dy == disp_y &&
         s_last_dw == g_wide_w && s_last_dh == disp_h &&
         !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1) &&
-        !host_osd_needs_present()) {
+        !host_osd_needs_present() &&
+        !gl_renderer_interpolation_owns_cadence()) {
         s_probe_skip++;
         gl_perf_present_enter();
         gl_perf_present_exit(1);
@@ -4387,6 +4271,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
                                      linear, 0, GL_PRES_WIDE);
     if (interp_pair) {
         hold_capture_native_fbo(fbo, 0, disp_y, g_wide_w, disp_h, 0, linear);
+        interp_present_source_interval();
         gl_perf_present_exit(1);
         present_dirty_rect(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1, 0);
         present_force_consumed();

@@ -1368,13 +1368,13 @@ extern "C" int psx_mod_set_frame_interpolation(
 
     if (frames_per_second) {
         std::fprintf(stdout,
-            "psxrecomp: mod selected presentation-only interpolation at "
-            "%u FPS; guest timing remains stock\n",
+            "psxrecomp: mod selected presentation-only temporal blending at "
+            "%u presents/s; guest timing remains stock (no motion vectors)\n",
             (unsigned)frames_per_second);
     } else {
         std::fprintf(stdout,
-            "psxrecomp: mod selected display-refresh presentation-only "
-            "interpolation; guest timing remains stock\n");
+            "psxrecomp: mod selected display-refresh presentation-only temporal "
+            "blending; guest timing remains stock (no motion vectors)\n");
     }
     return 1;
 }
@@ -2634,6 +2634,11 @@ static int present_effective_swap_interval(void) {
 }
 
 static int present_should_wall_pace(void) {
+    /* The single-context temporal-blend path subdivides this same stock frame
+     * interval. Do not run the outer pacer as well or guest timing doubles. */
+    if (g_frame_interpolation && g_gl_active &&
+        gl_renderer_interpolation_owns_cadence())
+        return 0;
     return g_frame_period_ms > 0.0 && !present_vsync_owns_cadence();
 }
 
@@ -13048,7 +13053,10 @@ session_reboot:
             g_video_scale = gr_scale();
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
                                       (double)g_frame_interpolation_fps,
-                                      /*blend_mode*/ 0);
+                                      g_frame_period_ms > 0.0
+                                          ? 1000.0 / g_frame_period_ms
+                                          : 59.94,
+                                      g_frame_interpolation_blend);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init

@@ -136,13 +136,15 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
 /*
  * Enable presentation-only frame interpolation while leaving guest VBlank,
  * game logic, timers, and audio at their stock cadence. The OpenGL presenter
- * blends between completed guest frames at the requested output rate.
+ * temporally blends completed guest frames at the requested output rate on its
+ * owning render thread/context. It does not derive motion vectors or generate
+ * true intermediate object positions.
  * A value of zero follows the measured host-display refresh rate.
  */
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 /*
- * Choose how the OpenGL presenter combines completed frames. Linear is the
- * legacy full-frame crossfade. Motion-adaptive retains interpolation for
+ * Choose how the OpenGL presenter combines completed frames. Linear is a
+ * full-frame crossfade. Motion-adaptive retains temporal blending for
  * small temporal changes but switches large changes cleanly to reduce the
  * double-image trails produced by moving objects.
  */
