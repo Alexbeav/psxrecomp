@@ -45,13 +45,13 @@ static void sio_debug_poll_maybe(void) {
 
 /* Pad state: 0=pressed, 1=released (PS1 convention). Indexed by LOGICAL pad
  * 0 .. PSX_MAX_PLAYERS-1 (not physical SIO slot). */
-static uint16_t pad_buttons[PSX_MAX_PLAYERS] = { [0 ... PSX_MAX_PLAYERS - 1] = 0xFFFF };
+static uint16_t pad_buttons[PSX_MAX_PLAYERS] = { PSX_PAD_INIT(0xFFFF) };
 
 /* Per-logical-pad type + analog stick state. analog: 0=digital pad (poll id
  * 0x41), 1=DualShock/analog (poll id 0x73). Sticks are 0..255, 0x80 centred. */
 static PSX_BSS uint8_t pad_analog[PSX_MAX_PLAYERS];
 static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
-    [0 ... PSX_MAX_PLAYERS - 1] = { 0x80, 0x80, 0x80, 0x80 }
+    PSX_PAD_INIT({ 0x80, 0x80, 0x80, 0x80 })
 }; /* lx,ly,rx,ry */
 
 /* DualShock command 0x4D maps the six writable bytes in a 0x42 poll onto the
@@ -59,7 +59,7 @@ static uint8_t pad_stick[PSX_MAX_PLAYERS][4] = {
  * 0xFF = unused. The map powers up unassigned and is echoed back while a new
  * map is latched, matching the physical pad/Mednafen protocol. */
 static uint8_t pad_rumble_map[PSX_MAX_PLAYERS][6] = {
-    [0 ... PSX_MAX_PLAYERS - 1] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
+    PSX_PAD_INIT({ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF })
 };
 static PSX_BSS uint8_t pad_rumble_small[PSX_MAX_PLAYERS];
 static PSX_BSS uint8_t pad_rumble_large[PSX_MAX_PLAYERS];
@@ -134,7 +134,7 @@ static PSX_BSS uint8_t pad_in_config[PSX_MAX_PLAYERS];
  * phantom "all pressed" input. Default 1 keeps analog/hybrid pads unchanged;
  * main.cpp sets 0 for PAD_MODE_DIGITAL. */
 static uint8_t pad_supports_config[PSX_MAX_PLAYERS] = {
-    [0 ... PSX_MAX_PLAYERS - 1] = 1
+    PSX_PAD_INIT(1)
 };
 
 /* Coherent-DualShock model (Tomba phantom-input fix). A real controller never
@@ -149,7 +149,7 @@ static uint8_t pad_supports_config[PSX_MAX_PLAYERS] = {
  * only when the bus is idle (PAD_IDLE) and the pad is NOT in config mode. A
  * request raised during config is held until config exits. -1 = no request. */
 static int8_t pad_type_req[PSX_MAX_PLAYERS] = {
-    [0 ... PSX_MAX_PLAYERS - 1] = -1
+    PSX_PAD_INIT(-1)
 };
 
 /* ---- Logical pad ↔ physical SIO port mapping ----

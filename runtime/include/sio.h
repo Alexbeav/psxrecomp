@@ -17,6 +17,40 @@ extern "C" {
 #error "PSX_MAX_PLAYERS must be in 1..8"
 #endif
 
+/* Per-pad table initializer: repeat one element PSX_MAX_PLAYERS times.
+ *
+ *     static uint16_t pad_buttons[PSX_MAX_PLAYERS] = { PSX_PAD_INIT(0xFFFF) };
+ *
+ * GNU's [0 ... PSX_MAX_PLAYERS - 1] = x range designator says this in one
+ * token, but it is a GCC extension with no MSVC equivalent, so the element
+ * list is expanded by the preprocessor instead. Each PSX_PAD_REP_n is written
+ * flat rather than recursively so no nested macro call is involved and the
+ * expansion is identical under both the conforming and the traditional MSVC
+ * preprocessor. Variadic so a braced element ({ 0x80, 0x80, 0x80, 0x80 })
+ * survives argument splitting. The 1..8 bound above is what makes the ladder
+ * finite; a value outside it fails the #error before reaching an undefined
+ * PSX_PAD_REP_n. The count always matches the array extent because both are
+ * spelled PSX_MAX_PLAYERS. */
+#define PSX_PAD_REP_1(...) __VA_ARGS__
+#define PSX_PAD_REP_2(...) __VA_ARGS__, __VA_ARGS__
+#define PSX_PAD_REP_3(...) __VA_ARGS__, __VA_ARGS__, __VA_ARGS__
+#define PSX_PAD_REP_4(...) __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__
+#define PSX_PAD_REP_5(...) \
+    __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__
+#define PSX_PAD_REP_6(...) \
+    __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, \
+    __VA_ARGS__
+#define PSX_PAD_REP_7(...) \
+    __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, \
+    __VA_ARGS__, __VA_ARGS__
+#define PSX_PAD_REP_8(...) \
+    __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, __VA_ARGS__, \
+    __VA_ARGS__, __VA_ARGS__, __VA_ARGS__
+/* Two layers so PSX_MAX_PLAYERS expands to its value before the ## paste. */
+#define PSX_PAD_REP_JOIN(n, ...) PSX_PAD_REP_##n(__VA_ARGS__)
+#define PSX_PAD_REP_EXPAND(n, ...) PSX_PAD_REP_JOIN(n, __VA_ARGS__)
+#define PSX_PAD_INIT(...) PSX_PAD_REP_EXPAND(PSX_MAX_PLAYERS, __VA_ARGS__)
+
 /* SIO0 register base: 0x1F801040 */
 #define SIO_BASE 0x1F801040
 
