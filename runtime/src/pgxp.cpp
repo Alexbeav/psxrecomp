@@ -103,10 +103,17 @@ extern "C" void pgxp_invalidate_all(void) {
 }
 
 extern "C" void pgxp_set_enabled(int enabled) {
+    int resized = 0;
     if (enabled && !s_ram) {
         s_ram = (PGXPValue *)std::calloc(PGXP_RAM_WORDS, sizeof(PGXPValue));
-        if (!s_ram) enabled = 0;              /* fail closed: stay faithful   */
+        if (s_ram)
+            resized = 1;
+        else
+            enabled = 0;                      /* fail closed: stay faithful   */
     }
+    /* Re-applying configuration must not invalidate every live shadow. */
+    if (s_enabled == (enabled ? 1 : 0) && !resized)
+        return;
     s_enabled = enabled ? 1 : 0;
     pgxp_invalidate_all();
     recompute_active();

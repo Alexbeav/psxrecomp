@@ -184,7 +184,13 @@ static int ws_gameplay_state_value_count = 0;
  * this many consecutive frames (save/options/memory-card) — reverts to 4:3. */
 #define WS_GTE_GAME_MODE_HYSTERESIS 45u
 void gpu_ws_set_gte_game_mode(int on) { ws_gte_game_mode_cfg = on ? 1 : 0; }
-void gpu_ws_set_precise_nclip(int on) { ws_precise_nclip_cfg = on ? 1 : 0; }
+void gpu_pgxp_rederive_enable(void);
+void gpu_ws_set_precise_nclip(int on) {
+    ws_precise_nclip_cfg = on ? 1 : 0;
+    /* Exact NCLIP consumes PGXP transport shadows even when every visual
+     * PGXP correction is disabled. Re-derive the internal transport arm. */
+    gpu_pgxp_rederive_enable();
+}
 int gpu_ws_precise_nclip_enabled(void) { return ws_precise_nclip_cfg && ws_active(); }
 void gpu_ws_set_gameplay_state_gate(uint32_t addr,
                                     const uint32_t *values, int nvalues) {
@@ -3187,12 +3193,17 @@ static int s_texture_correction_enabled = 0;
 extern int gte_precision_load_word(uint32_t addr, uint32_t packed,
                                    int32_t *x16, int32_t *y16, uint16_t *z);
 
+/* Arm the PGXP dataflow transport for any consumer. Exact NCLIP is an internal
+ * sign source only; this does not enable geometry or texture correction. */
+void gpu_pgxp_rederive_enable(void) {
+    pgxp_set_enabled(s_texture_correction_enabled ||
+                     gte_geometry_correction_enabled() ||
+                     ws_precise_nclip_cfg);
+}
+
 void gpu_texture_correction_set(int enabled) {
     s_texture_correction_enabled = enabled ? 1 : 0;
-    /* The PGXP dataflow engine feeds BOTH corrections; arm it while either
-     * is on (geometry correction is toggled in gte.cpp, so re-derive here). */
-    pgxp_set_enabled(s_texture_correction_enabled ||
-                     gte_geometry_correction_enabled());
+    gpu_pgxp_rederive_enable();
 }
 
 int gpu_texture_correction_enabled(void) {
