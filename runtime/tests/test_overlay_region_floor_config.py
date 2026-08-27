@@ -15,6 +15,12 @@ MAIN = (ROOT / "runtime/src/main.cpp").read_text(encoding="utf-8")
 assert "has_overlay_region_floor" in LOADER_H and "overlay_region_floor" in LOADER_H
 assert 'runtime.contains("overlay_region_floor")' in LOADER_CPP
 assert 'parse_hex(v.as_string(), "runtime.overlay_region_floor")' in LOADER_CPP, "hex string form must be accepted"
+# Raw integers must be validated at parse time (review on mstan/psxrecomp#242): a
+# negative or >32-bit TOML integer must not wrap into a different address, and
+# the value must name main RAM above the kernel window.
+assert "raw < 0 || raw > 0xFFFFFFFFll" in LOADER_CPP, "integer form must reject wrap-around values"
+assert "phys < 0x00010000u || phys >= 0x00200000u" in LOADER_CPP, "floor must be validated against main RAM"
+assert LOADER_CPP.count("overlay_region_floor out of range") == 2, "both rejections must fail loud"
 
 cfg = MAIN.index("gc.runtime.has_overlay_region_floor")
 env = MAIN.index('std::getenv("PSX_OVERLAY_REGION_FLOOR")')
