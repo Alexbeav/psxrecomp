@@ -910,19 +910,18 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 s_save_defer_slot = slot;
                 s_save_defer_t0 = now;
                 fprintf(stderr,
-                        "savestate: deferring slot %d — %s "
+                        "savestate: deferring slot %d — %s [%s] "
                         "(hint=0x%08X resolved=0x%08X)\n",
                         slot,
                         needs_scheduler_boundary
                             ? "waiting for scheduler snapshot boundary"
                             : "no safe resume PC",
+                        savestate_admission_reason(&adm),
                         (unsigned)resume_pc, (unsigned)pc);
                 savestate_diag("save_defer", slot,
                                "reason=%s hint=0x%08X resolved=0x%08X "
                                "sp=0x%08X ra=0x%08X",
-                               needs_scheduler_boundary
-                                   ? "waiting_flat_scheduler"
-                                   : "unsafe_guest_context",
+                               savestate_admission_reason(&adm),
                                (unsigned)resume_pc, (unsigned)pc,
                                cpu ? (unsigned)cpu->gpr[29] : 0u,
                                cpu ? (unsigned)cpu->gpr[31] : 0u);
@@ -939,15 +938,18 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_status_last_ok = 0;
             s_status_generation++;
             fprintf(stderr,
-                    "savestate: SAVE FAILED slot %d — %s "
+                    "savestate: SAVE FAILED slot %d — %s [%s] "
                     "(hint=0x%08X resolved=0x%08X)\n",
                     slot,
                     needs_scheduler_boundary
                         ? "no scheduler snapshot boundary"
                         : "no safe resume PC",
+                    savestate_admission_reason(&adm),
                     (unsigned)resume_pc, (unsigned)pc);
             savestate_diag("save_reject", slot,
-                           "reason=bounded_timeout hint=0x%08X resolved=0x%08X",
+                           "reason=bounded_timeout last=%s hint=0x%08X "
+                           "resolved=0x%08X",
+                           savestate_admission_reason(&adm),
                            (unsigned)resume_pc, (unsigned)pc);
             psx_frontend_on_savestate_notify(0, slot, 0);
         } else {

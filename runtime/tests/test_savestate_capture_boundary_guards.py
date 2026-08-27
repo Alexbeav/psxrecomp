@@ -55,6 +55,20 @@ def main() -> int:
     landing_clear = traps.index("g_sched_snapshot_boundary = 0;", landing)
     if landing_clear >= traps.index("switch (g_sched_escape.reason)", landing):
         raise AssertionError("structured-escape landing must clear boundary latch")
+    # A snapshot unwind / deferred yield can longjmp out of a dirty-interpreter
+    # IRQ pump and skip its latch restore; the landing must clear both latches
+    # or psx_irq_resume_context_snapshot_safe() rejects every scheduler-top save.
+    for needle in ("g_cosim_dirty_pump_site = 0;", "g_dirty_safe_resume_pc = 0;"):
+        idx = traps.find(needle, landing)
+        if idx < 0 or idx >= traps.index("switch (g_sched_escape.reason)", landing):
+            raise AssertionError(
+                f"structured-escape landing must clear the dirty pump-site latch: {needle}"
+            )
+    for needle in (
+        "savestate_admission_reason(&adm)",
+        "reason=bounded_timeout last=%s",
+    ):
+        require(savestate, needle, "precise admission reason in state diagnostics")
 
     require(savestate, "psx_hle_scheduler_enabled()", "HLE save-side gate")
     require(
