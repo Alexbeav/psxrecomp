@@ -1666,12 +1666,9 @@ static void mc_process_byte(uint8_t tx_byte) {
             mc_state = MC_ID1;
             sio_rx_data = mc_flag;
             sio_stat |= SIO_STAT_ACK;
-            /* no$psx: FLAG byte is 0x08 only after newly-inserted/changed-battery
-             * card; cleared on first read or write. Without this clear, the BIOS
-             * sees 0x08 forever, treats every read as a fresh-card probe, and
-             * resets the chain counter (v0=-1 + 0x7520=1 path in BFC152E0).
-             * Beetle's card sim returns 0x00 in steady-state — match that. */
-            mc_flag = 0x00;
+            /* FLAG.3 survives reads and ID queries.  Original cards clear it
+             * only after a write; BIOS card initialization normally performs
+             * a dummy write to sector 003Fh for exactly that purpose. */
         } else {
             mc_state = MC_IDLE;
             sio_rx_data = 0xFF;
@@ -2630,14 +2627,13 @@ static int sio_consume_ack_event(void) {
 }
 
 static void sio_fire_ack_irq(void) {
-    /* Card: drop sticky unmasked SPU (I_STAT bit 9) before raising SIO.
-     * Tip's LOAD probe ACKs otherwise land on i_stat_before 0x200 while
-     * master sees 0x000 — guest-visible divergence.
-     * EXPERIMENT: was offline-only; ungated for TM4 netplay test. */
+    /* I_STAT sources are owned per device: an SIO0 card ACK may only raise
+     * bit 7. It must never clear SPU (bit 9) — a pending SPU IRQ stays
+     * pending until the guest performs the SPU/INTC acknowledgement. The
+     * prior netplay-parity experiment that dropped bit 9 here consumed the
+     * SPU interrupt during card scans and silenced SPU-IRQ-driven audio. */
     int card_ack = (sio_irq_pending_source == SIO_IRQ_SRC_CARD_ACK ||
                     active_device == DEV_MEMCARD);
-    if (card_ack)
-        i_stat &= ~(1u << 9);
 
     sio_stat |= SIO_STAT_ACK;
     sio_ack_visible_reads = 2;

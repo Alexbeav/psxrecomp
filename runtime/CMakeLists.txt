@@ -317,8 +317,8 @@ if(BUILD_TESTING)
     #                                   CPUState* parameter; psx_cycles.c grew
     #                                   three externs the stub block never did
     #   test_spu_end_without_repeat.c   spu.c grew psx_irq_raise / crc32_update
-    #   test_sio_card_protocol.c        builds, but 147 of 309 checks fail —
-    #                                   registered DISABLED below, see beads
+    #   test_sio_card_protocol.c        repaired below: the harness now walks
+    #                                   shift/ACK edges and clears INTC IRQ7
     #
     # Registering them is only half the fix; check_test_registration.cmake at
     # the end of this file is what stops the next one from going unnoticed.
@@ -329,6 +329,21 @@ if(BUILD_TESTING)
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
+    # clear another device's pending source — pinned on SPU (I_STAT bit 9)
+    # staying set across card ACK delivery until the guest acknowledges it.
+    # Scratch working dir for the same reason as sio_card_protocol_test: the
+    # test self-provisions test_dir/card1.mcd relative to its cwd.
+    add_executable(sio_spu_istat_ownership_test
+        tests/test_sio_spu_istat_ownership.c
+        src/sio.c
+        src/memcard.c)
+    target_include_directories(sio_spu_istat_ownership_test PRIVATE include src)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
+    add_test(NAME sio_spu_istat_ownership_test COMMAND sio_spu_istat_ownership_test
+             WORKING_DIRECTORY
+                 ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
 
     # Mirrors func_00005A08 (BIOS card READ chain handler) against a mock CPU,
     # so it pins the disassembly reading without linking the recompiled BIOS.
@@ -463,18 +478,8 @@ if(BUILD_TESTING)
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshot_hires_pitch.py)
     endif()
 
-    # DISABLED, not de-registered. It links and runs, but 147 of its 309 checks
-    # fail: the no-card path is clean (141/141) while the card-present READ
-    # reply stream comes back shifted by one and then stuck (idx[1] 0xFF for an
-    # expected 0x08 FLAG, then 0x08 for every subsequent byte). That is either a
-    # real sio.c protocol regression or a stale expectation in the test, and it
-    # needs an owner either way.
-    #
-    # De-registering a failing test is exactly the mechanism that let these 16
-    # rot in the first place, and wiring it RED would recreate the red-check-
-    # nobody-trusts problem that took CI off PRs. DISABLED keeps it built, keeps
-    # it listed in `ctest -N`, and keeps it countable, without failing the run.
-    # Re-enable by deleting the set_tests_properties line once triaged.
+    # Full card protocol regression: read, write, address echo, per-slot state,
+    # pad interruption, terminal ACK behavior and persistent FLAG semantics.
     add_executable(sio_card_protocol_test
         tests/test_sio_card_protocol.c
         src/sio.c
@@ -488,7 +493,6 @@ if(BUILD_TESTING)
     add_test(NAME sio_card_protocol_test COMMAND sio_card_protocol_test
              WORKING_DIRECTORY
                  ${CMAKE_CURRENT_BINARY_DIR}/sio_card_protocol_scratch)
-    set_tests_properties(sio_card_protocol_test PROPERTIES DISABLED TRUE)
 
     # POSIX-only: dlopen()s a fixture .so out of a synthetic cache tree, so it
     # cannot link under MinGW/MSVC (-ldl). run_overlay_posix_test.sh already

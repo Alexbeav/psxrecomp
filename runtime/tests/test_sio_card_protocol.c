@@ -122,10 +122,15 @@ static uint8_t card_xchg(uint8_t tx, int slot) {
                   | (slot ? CTRL_SLOT : 0);
     sio_write(SIO_CTRL, ctrl);
     sio_write(SIO_TX_DATA, tx);
-    sio_tick(2000);
+    /* The cycle-paced SIO walker deliberately emits at most one edge per
+     * call.  Advance the byte shift and its ACK as separate hardware events
+     * instead of assuming one oversized tick collapses both. */
+    sio_advance(1088);
     uint8_t rx = (uint8_t)sio_read(SIO_RX_DATA);
+    sio_advance(170);
     /* Acknowledge IRQ between bytes (BIOS pattern) */
     sio_write(SIO_CTRL, ctrl | CTRL_ACK);
+    i_stat &= ~0x80u;
     return rx;
 }
 
