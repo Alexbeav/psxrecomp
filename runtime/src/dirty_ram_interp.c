@@ -2997,7 +2997,20 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (deliverable || defer_pending || (++s_interp_entry_poll & 0x3Fu) == 0) {
                 cpu->pc = pc;
                 s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-                psx_check_interrupts_at(cpu, pc);
+                {
+                    /* Site-0 entry poll. Downstream publishes the materialized
+                     * entry PC in the dirty resume latch (async-RFE resume latch,
+                     * deferred-switch honoring and EPC selection read it);
+                     * upstream (cd68169c) routes the poll through the block-leader
+                     * wrapper for the compiled latch + staged savestate poll. The
+                     * 2026-08-26 merge kept only the wrapper, so IRQs taken here
+                     * left g_async_rfe_resume_pc stale. Both are needed. */
+                    extern uint32_t g_dirty_safe_resume_pc;
+                    uint32_t prev_safe = g_dirty_safe_resume_pc;
+                    g_dirty_safe_resume_pc = pc;
+                    psx_check_interrupts_at(cpu, pc);   /* a honored switch longjmps away */
+                    g_dirty_safe_resume_pc = prev_safe;
+                }
                 if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
                     /* Handler resumed elsewhere — surface to dispatch. */
                     g_dirty_ram_blocks_run++;
