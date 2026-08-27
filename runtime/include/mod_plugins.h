@@ -59,6 +59,28 @@ uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size, uint32_t alignment);
 int32_t psx_mod_widescreen_x_margin(void);
 
 /*
+ * Width, in native game pixels, of the picture the guest is currently
+ * scanning out -- the same value the presenter uses, derived from the display
+ * mode and the GP1(06h) horizontal range.
+ *
+ * Why this exists: a plugin that draws its own overlay primitives needs to
+ * know where the right-hand edge of the screen is, and it cannot work that
+ * out for itself. GPUSTAT carries the horizontal-resolution bits, so a plugin
+ * can recover the coarse MODE width (256/320/512/640, or 368), but the
+ * visible width also depends on the GP1(06h) X1/X2 range, which is write-only
+ * and mirrored nowhere the plugin can read. Ape Escape is the worked example:
+ * it scans out 384 while its mode width is 368, and a plugin that assumed the
+ * usual 320 put its HUD row 68 pixels short of the edge.
+ *
+ * Returns 0 if the display geometry is not yet established, in which case the
+ * caller should skip drawing rather than substitute a guess.
+ */
+uint32_t psx_mod_display_width(void);
+
+/* Height companion to psx_mod_display_width(); same conventions. */
+uint32_t psx_mod_display_height(void);
+
+/*
  * Read the committed value of one of this package's declared options, as the
  * player left it in the launcher (or the manifest default when untouched).
  * Writes a NUL-terminated string into `out` and returns 1; returns 0 with
@@ -114,13 +136,15 @@ int psx_mod_set_native_vblank_rate(uint32_t frames_per_second);
 /*
  * Enable presentation-only frame interpolation while leaving guest VBlank,
  * game logic, timers, and audio at their stock cadence. The OpenGL presenter
- * blends between completed guest frames at the requested output rate.
+ * temporally blends completed guest frames at the requested output rate on its
+ * owning render thread/context. It does not derive motion vectors or generate
+ * true intermediate object positions.
  * A value of zero follows the measured host-display refresh rate.
  */
 int psx_mod_set_frame_interpolation(uint32_t frames_per_second);
 /*
- * Choose how the OpenGL presenter combines completed frames. Linear is the
- * legacy full-frame crossfade. Motion-adaptive retains interpolation for
+ * Choose how the OpenGL presenter combines completed frames. Linear is a
+ * full-frame crossfade. Motion-adaptive retains temporal blending for
  * small temporal changes but switches large changes cleanly to reduce the
  * double-image trails produced by moving objects.
  */

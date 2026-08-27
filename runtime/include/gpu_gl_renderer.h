@@ -23,11 +23,13 @@ int  gl_renderer_init_context(struct SDL_Window *win);
  * Safe before or after context creation; applies live when a context exists. */
 void gl_renderer_set_swap_interval(int interval);
 
-/* Presentation-only frame interpolation. High-refresh sub-presents blend the
- * two most recent stable display images; guest simulation timing is unchanged. */
+/* Presentation-only temporal blending. High-refresh sub-presents blend the two
+ * most recent stable display images on the owning render thread/context; this
+ * does not generate motion vectors or true intermediate object positions. */
 void gl_renderer_set_interpolation(int enabled, double host_hz, double target_hz,
-                                   int blend_mode);
+                                   double source_hz, int blend_mode);
 void gl_renderer_set_interpolation_suspended(int suspended);
+int gl_renderer_interpolation_owns_cadence(void);
 void gl_renderer_interpolation_diag(int *enabled, int *suspended,
                                     int *history_frames,
                                     double *host_hz, double *target_hz,

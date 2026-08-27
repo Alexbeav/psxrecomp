@@ -4,6 +4,7 @@
 #include "iso_reader.h"
 #include "mod_packages.h"
 #include "mod_plugins.h"
+#include "gpu.h"
 #include "psx_sha256.h"
 
 #if defined(RECOMP_LAUNCHER)
@@ -1380,6 +1381,27 @@ extern "C" uint32_t psx_mod_alloc_gpu_dma_memory(uint32_t size,
 
 extern "C" int32_t psx_mod_widescreen_x_margin(void) {
     return (int32_t)psx_ws_x_margin();
+}
+
+/*
+ * The presenter's own view of the scanned-out picture. Plugins that draw
+ * overlay primitives need the real edge, and the visible width depends on the
+ * GP1(06h) horizontal range, which GPUSTAT does not carry -- so a plugin
+ * cannot derive this itself. Zero means "not established yet"; the header
+ * tells callers to skip drawing rather than guess.
+ */
+extern "C" uint32_t psx_mod_display_width(void) {
+    GpuDisplayInfo info;
+    std::memset(&info, 0, sizeof(info));
+    gpu_get_display_info(&info);
+    return info.width;
+}
+
+extern "C" uint32_t psx_mod_display_height(void) {
+    GpuDisplayInfo info;
+    std::memset(&info, 0, sizeof(info));
+    gpu_get_display_info(&info);
+    return info.height;
 }
 
 extern "C" int psx_mod_register_function_entry_plugin(

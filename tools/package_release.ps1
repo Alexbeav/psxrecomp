@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "v0.1.0-alpha",
+    [string]$Version = "v0.3.2-alpha",
     [string]$BuildDir = "runtime/build-release"
 )
 
@@ -21,7 +21,12 @@ cmake -S (Join-Path $Root "runtime") -B $BuildPath -G Ninja `
 cmake --build $BuildPath --target psx-runtime -j $env:NUMBER_OF_PROCESSORS
 
 if (Test-Path $StageRoot) {
-    Remove-Item -Recurse -Force $StageRoot
+    $resolvedRoot = (Resolve-Path $Root).Path.TrimEnd('\')
+    $resolvedStage = (Resolve-Path $StageRoot).Path.TrimEnd('\')
+    if (-not $resolvedStage.StartsWith($resolvedRoot + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to delete stage path outside repo root: $resolvedStage"
+    }
+    Remove-Item -LiteralPath $StageRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force $Stage | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $Stage "saves") | Out-Null
@@ -53,7 +58,7 @@ $imports = & $objdump -p (Join-Path $Stage "PSXRecomp.exe") |
 $systemDlls = @("kernel32.dll","user32.dll","gdi32.dll","shell32.dll","msvcrt.dll",
                 "advapi32.dll","ws2_32.dll","comdlg32.dll","dbghelp.dll","ole32.dll",
                 "oleaut32.dll","winmm.dll","imm32.dll","version.dll","setupapi.dll",
-                "dinput8.dll","rpcrt4.dll","hid.dll","cfgmgr32.dll")
+                "dinput8.dll","rpcrt4.dll","hid.dll","cfgmgr32.dll","opengl32.dll")
 $nonSystem = $imports | Where-Object { $systemDlls -notcontains $_.ToLower() }
 if ($nonSystem) {
     throw "Release exe is NOT self-contained; imports non-system DLL(s): $($nonSystem -join ', ')"
