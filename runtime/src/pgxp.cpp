@@ -652,9 +652,16 @@ extern "C" void pgxp_gte_push_sxy(int32_t x16, int32_t y16, uint16_t sz3,
 }
 
 extern "C" int pgxp_get_gte_sxy(uint32_t index, int32_t *x16, int32_t *y16) {
+    return pgxp_get_gte_sxy_checked(index, 0u, 0, x16, y16);
+}
+
+extern "C" int pgxp_get_gte_sxy_checked(uint32_t index, uint32_t expect,
+                                        int check, int32_t *x16, int32_t *y16) {
     if (index >= 4) return 0;
     const PGXPValue *pv = &s_gte[12 + index];
     if (!pv_live(pv) || (pv->flags & PGXP_F_VXY) != PGXP_F_VXY)
+        return 0;
+    if (check && pv->value != expect)
         return 0;
     if (x16) *x16 = pv->x16;
     if (y16) *y16 = pv->y16;
