@@ -312,6 +312,8 @@ static inline int64_t geom_slot(uint32_t packed) {
     return (int64_t)(y + GEOM_BIAS) * GEOM_AXIS + (x + GEOM_BIAS);
 }
 
+extern "C" void gpu_pgxp_rederive_enable(void);
+
 extern "C" void gte_geometry_correction_set(int enabled) {
     s_geom_enabled = enabled ? 1 : 0;
     s_geom_hits = 0;
@@ -324,6 +326,7 @@ extern "C" void gte_geometry_correction_set(int enabled) {
         if (!s_geom_cache) s_geom_enabled = 0;   /* fail closed: stay faithful */
     }
     gte_geom_generation_advance();
+    gpu_pgxp_rederive_enable();
 }
 
 /* Lookup census for the debug server: attempted, hit, and the two miss classes.
@@ -888,9 +891,15 @@ void gte_rtps_internal(GTEState* gte, int16_t* V, bool setMac0, uint32_t instr) 
     int64_t sx = sx16 >> 16;
     int64_t sy = sy16 >> 16;
     gte->push_sxy(sx, sy);
-    if (!s_gte_replay_sandbox)
-        pgxp_gte_push_sxy((int32_t)sx16, (int32_t)sy16, gte->SZ[3],
+    if (!s_gte_replay_sandbox) {
+        /* Bound the 16.16 transport so an extreme projection cannot wrap an
+         * int32 and masquerade as a valid on-screen shadow. */
+        const int64_t kLim = (int64_t)4096 << 16;
+        int64_t cx16 = sx16 < -kLim ? -kLim : (sx16 > kLim - 1 ? kLim - 1 : sx16);
+        int64_t cy16 = sy16 < -kLim ? -kLim : (sy16 > kLim - 1 ? kLim - 1 : sy16);
+        pgxp_gte_push_sxy((int32_t)cx16, (int32_t)cy16, gte->SZ[3],
                           (uint32_t)gte->SXY[2]);
+    }
     geom_note((uint32_t)gte->SXY[2], sx16, sy16);
 
     // Step 5: Depth cueing (MAC0/IR0) — only for last vertex of RTPT or RTPS
@@ -921,6 +930,24 @@ void gte_rtpt(GTEState* gte, uint32_t instr) {
 // ---------------------------------------------------------------------------
 // NCLIP (0x06) — Normal Clipping (2D cross product for backface culling)
 // ---------------------------------------------------------------------------
+static uint64_t s_nclip_precise_hits = 0;
+static uint64_t s_nclip_fallbacks = 0;
+static uint64_t s_nclip_disagreements = 0;
+static int32_t s_nclip_last_native = 0;
+static int8_t s_nclip_last_precise_sign = 0;
+static bool s_nclip_last_precise_valid = false;
+extern "C" void gte_nclip_precise_stats(uint64_t *hits, uint64_t *fallbacks,
+                                        uint64_t *disagreements) {
+    if (hits) *hits = s_nclip_precise_hits;
+    if (fallbacks) *fallbacks = s_nclip_fallbacks;
+    if (disagreements) *disagreements = s_nclip_disagreements;
+}
+extern "C" int gte_nclip_precise_bltz(int32_t native_mac0) {
+    if (!s_nclip_last_precise_valid || native_mac0 != s_nclip_last_native)
+        return native_mac0 < 0;
+    return s_nclip_last_precise_sign < 0;
+}
+
 void gte_nclip(GTEState* gte, uint32_t instr) {
     gte->FLAG = 0;
     int32_t sx0 = static_cast<int16_t>(gte->SXY[0] & 0xFFFF);
@@ -929,23 +956,36 @@ void gte_nclip(GTEState* gte, uint32_t instr) {
     int32_t sy1 = static_cast<int16_t>(gte->SXY[1] >> 16);
     int32_t sx2 = static_cast<int16_t>(gte->SXY[2] & 0xFFFF);
     int32_t sy2 = static_cast<int16_t>(gte->SXY[2] >> 16);
-    int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0, px2 = 0, py2 = 0;
-    if (gpu_ws_precise_nclip_enabled() &&
-        pgxp_get_gte_sxy(0, &px0, &py0) &&
-        pgxp_get_gte_sxy(1, &px1, &py1) &&
-        pgxp_get_gte_sxy(2, &px2, &py2)) {
-        sx0 = px0 >> 16;
-        sy0 = py0 >> 16;
-        sx1 = px1 >> 16;
-        sy1 = py1 >> 16;
-        sx2 = px2 >> 16;
-        sy2 = py2 >> 16;
-    }
     int64_t mac0 = (int64_t)sx0 * (sy1 - sy2) +
                    (int64_t)sx1 * (sy2 - sy0) +
                    (int64_t)sx2 * (sy0 - sy1);
     gte->check_mac0_overflow(mac0);
-    gte->MAC0 = static_cast<int32_t>(mac0);
+    int32_t out = static_cast<int32_t>(mac0);
+    s_nclip_last_native = out;
+    s_nclip_last_precise_valid = false;
+    /* Compute an exact 16.16 determinant for configured branch consumers, but
+     * preserve native guest-visible MAC0 for every architectural reader. */
+    int32_t px0, py0, px1, py1, px2, py2;
+    if (gpu_ws_precise_nclip_enabled() &&
+        !s_gte_replay_sandbox && s_speculative_depth == 0 &&
+        pgxp_get_gte_sxy_checked(0, gte->SXY[0], 1, &px0, &py0) &&
+        pgxp_get_gte_sxy_checked(1, gte->SXY[1], 1, &px1, &py1) &&
+        pgxp_get_gte_sxy_checked(2, gte->SXY[2], 1, &px2, &py2)) {
+        s_nclip_precise_hits++;
+        const int64_t dx10 = (int64_t)px1 - px0;
+        const int64_t dy10 = (int64_t)py1 - py0;
+        const int64_t dx20 = (int64_t)px2 - px0;
+        const int64_t dy20 = (int64_t)py2 - py0;
+        const int64_t cross = dx10 * dy20 - dy10 * dx20;
+        s_nclip_last_precise_sign = cross < 0 ? -1 : (cross > 0 ? 1 : 0);
+        s_nclip_last_precise_valid = true;
+        if ((cross > 0 && out <= 0) || (cross < 0 && out >= 0))
+            s_nclip_disagreements++;
+    } else if (gpu_ws_precise_nclip_enabled() &&
+               !s_gte_replay_sandbox && s_speculative_depth == 0) {
+        s_nclip_fallbacks++;
+    }
+    gte->MAC0 = out;
     gte->set_error_flag();
 }
 
@@ -1543,11 +1583,13 @@ extern "C" int gte_replay_side_effects_begin(void) {
     if (s_gte_replay_sandbox) return 0;
     s_gte_replay_saved_caller_ra = s_gte_caller_ra;
     s_gte_replay_sandbox = 1;
+    pgxp_suppress_begin();
     return 1;
 }
 extern "C" void gte_replay_side_effects_end(void) {
     using namespace PSXRecomp::GTE;
     if (!s_gte_replay_sandbox) return;
+    pgxp_suppress_end();
     s_gte_caller_ra = s_gte_replay_saved_caller_ra;
     s_gte_replay_sandbox = 0;
 }
