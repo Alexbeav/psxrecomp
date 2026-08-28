@@ -741,6 +741,7 @@ int provider_feature_get(void*, int index, RecompLauncherCModFeature* out) {
     copy_text(out->source_name, sizeof(out->source_name), package->source_name);
     copy_text(out->source_url, sizeof(out->source_url), package->source_url);
     copy_text(out->group, sizeof(out->group), feature->group);
+    out->hidden = feature->hidden ? 1 : 0;
     out->enabled =
         state().manager.feature_enabled(package->id, feature->id) ? 1 : 0;
     out->option_count =

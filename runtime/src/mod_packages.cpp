@@ -1572,6 +1572,7 @@ bool ModPackageManager::read_manifest(const fs::path& path, ModPackage& out,
                     ? toml::find<std::string>(v, "group") : "General";
                 feature.default_enabled =
                     toml::find_or<bool>(v, "default_enabled", false);
+                feature.hidden = toml::find_or<bool>(v, "hidden", false);
                 if (!valid_id(feature.id) ||
                     !feature_ids.insert(feature.id).second)
                     throw std::runtime_error("invalid or duplicate feature id");
