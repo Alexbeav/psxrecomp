@@ -187,6 +187,19 @@ extern "C" {
     extern uint64_t g_dirty_window_dispatches;
     extern uint32_t g_slice_exit_pc, g_slice_exit_reason, g_slice_exit_iter;
     extern uint32_t g_slice_exit_dispatchable, g_slice_exit_dirty, g_slice_exit_in_text, g_slice_exit_want;
+    /* memory.c */
+    extern uint32_t i_stat, i_mask;
+    extern uint64_t g_guest_store_count;
+    extern uint64_t g_vblank_ack_count;
+    /* interrupts.c */
+    extern uint64_t g_vblank_raise_count, g_vblank_deliver_count;
+    /* dirty_ram_interp.c */
+    extern uint64_t g_dirty_ram_blocks_run;
+    extern uint64_t g_dirty_pump_count;
+    /* overlay_loader.c */
+    extern int      g_call_unit_depth;
+    /* psx_bios_backend.c */
+    extern int      g_psx_dispatch_depth;
 }
 
 /* memory.c */
