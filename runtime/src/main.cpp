@@ -1658,7 +1658,11 @@ static void update_adaptive_widescreen() {
     if (width <= 0 || height <= 0) return;
 
     int num = width, den = height;
-    if ((int64_t)width * 3 <= (int64_t)height * 4) {
+    /* A nominal 4:3 client can be one physical pixel wider after fractional-DPI
+     * conversion (for example 960x720 -> 2161x1620 at 225%).  Keep that
+     * rounding pixel in the identity fallback instead of engaging an almost-
+     * identity widescreen squash and its cull guard. */
+    if ((int64_t)(width - 1) * 3 <= (int64_t)height * 4) {
         num = 4; den = 3;
     } else if ((int64_t)width * g_ws_adaptive_max_den >=
                (int64_t)height * g_ws_adaptive_max_num) {
