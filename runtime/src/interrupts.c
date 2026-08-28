@@ -37,6 +37,7 @@
 #include "lockstep.h"
 #include "psx_cycles.h"
 #include "psx_scheduler.h"
+#include "spu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -384,7 +385,87 @@ static int should_defer_vblank_for_sio(void) {
  * From PR #102 by Alexandros Mandravillis. */
 static void (*s_midframe_audio_pump)(void);
 
+/* First-divergence telemetry for the per-sample SPU scheduler. */
+uint64_t g_spu_sample_deadline_queries;
+uint64_t g_spu_sample_service_checks;
+uint64_t g_spu_sample_service_pumps;
+uint64_t g_spu_sample_raw_boundaries;
+uint64_t g_spu_sample_deferred_mismatches;
+uint64_t g_spu_sample_enabled_queries;
+uint64_t g_spu_sample_enabled_services;
+uint32_t g_spu_sample_last_query_phase;
+uint32_t g_spu_sample_last_query_delta;
+uint32_t g_spu_sample_last_service_phase;
+uint64_t g_spu_sample_mode_rejects;
+uint64_t g_spu_sample_pump_null_rejects;
+uint64_t g_spu_sample_ctrl_rejects;
+
 void psx_set_midframe_audio_pump(void (*fn)(void)) { s_midframe_audio_pump = fn; }
+
+/* While SPU IRQ9 is enabled, expose each 44.1-kHz sample as a device deadline
+ * so guest code can acknowledge and re-arm an IRQ-address hit before the next
+ * sample. Rendering a whole VBlank's accumulated samples as one chunk collapses
+ * multiple hardware IRQ edges into one latch, slowing IRQ-driven audio engines
+ * and blocking cutscene synchronization. Keep an explicit opt-out for bisecting
+ * old captures; faithful per-sample scheduling is the production default. */
+static int spu_sample_event_mode(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *e = getenv("PSX_SPU_SAMPLE_EVENTS");
+        enabled = (!e || !*e || strcmp(e, "0") != 0) ? 1 : 0;
+    }
+    return enabled;
+}
+
+uint32_t psx_spu_sample_event_cycles_to_next(void) {
+    SpuGlobalState state;
+    g_spu_sample_deadline_queries++;
+    if (!spu_sample_event_mode()) {
+        g_spu_sample_mode_rejects++;
+        return UINT32_MAX;
+    }
+    if (!s_midframe_audio_pump) {
+        g_spu_sample_pump_null_rejects++;
+        return UINT32_MAX;
+    }
+    spu_get_global_state(&state);
+    if ((state.ctrl & 0x0040u) == 0) {
+        g_spu_sample_ctrl_rejects++;
+        return UINT32_MAX;
+    }
+    g_spu_sample_enabled_queries++;
+
+    /* The PS1 CPU/SPU ratio is exactly 768 CPU cycles per 44.1-kHz sample.
+     * Cycle zero is the common hardware epoch; a value exactly on a sample
+     * boundary names the following event, not an already-serviced event. */
+    const uint32_t phase = (uint32_t)(psx_get_cycle_count() % 768u);
+    const uint32_t delta = phase ? (768u - phase) : 768u;
+    g_spu_sample_last_query_phase = phase;
+    g_spu_sample_last_query_delta = delta;
+    return delta;
+}
+
+void psx_spu_sample_event_service(void) {
+    g_spu_sample_service_checks++;
+    if (!spu_sample_event_mode() || !s_midframe_audio_pump)
+        return;
+    SpuGlobalState state;
+    spu_get_global_state(&state);
+    if ((state.ctrl & 0x0040u) != 0) {
+        g_spu_sample_enabled_services++;
+        g_spu_sample_last_service_phase = (uint32_t)(psx_cycle_count % 768u);
+    }
+    if ((psx_cycle_count % 768u) == 0) {
+        g_spu_sample_raw_boundaries++;
+        if ((psx_get_cycle_count() % 768u) != 0)
+            g_spu_sample_deferred_mismatches++;
+    }
+    if ((state.ctrl & 0x0040u) != 0 &&
+        (psx_get_cycle_count() % 768u) == 0) {
+        g_spu_sample_service_pumps++;
+        s_midframe_audio_pump();
+    }
+}
 
 static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot

@@ -80,6 +80,12 @@ void psx_check_interrupts_dispatch_entry(struct CPUState* cpu, uint32_t resume_p
 void interrupts_advance_cycles(uint32_t cycles);
 void interrupts_service_scheduled_events(void);
 uint32_t interrupts_cycles_to_vblank(void);
+/* While IRQ9 is enabled, expose the next 44.1-kHz sample as a first-class
+ * device deadline so the CPU can observe and acknowledge an IRQ before the
+ * following sample. UINT32_MAX means inactive. PSX_SPU_SAMPLE_EVENTS=0 is a
+ * diagnostic opt-out. */
+uint32_t psx_spu_sample_event_cycles_to_next(void);
+void psx_spu_sample_event_service(void);
 /* VBlank phase within the current frame (0 .. VBLANK_CYCLES-1). Persisted in
  * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
  * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */

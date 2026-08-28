@@ -12869,6 +12869,19 @@ session_reboot:
     if (game_entry_pc != 0)
         fntrace_set_game_range(game_entry_pc, 0);
 
+  /* Headless still runs the SPU as a guest-cycle device. Register and prime
+   * the pump before the frontend split so deterministic gates exercise the
+   * same sample-deadline path as an operator run. Without the cycle-zero
+   * prime, the first deadline service establishes a shifted epoch and the
+   * headless smoke cannot detect the resulting audio/cutscene regression. */
+#ifndef PSX_SDL_NO_AUDIO
+  if (g_headless) {
+    audio_trace_init();
+    psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
+    sdl_audio_pump_midframe();
+  }
+#endif
+
   if (g_headless) {
     std::fprintf(stdout, "psxrecomp: headless frontend enabled\n");
   } else {
@@ -12964,6 +12977,10 @@ session_reboot:
      * depend on a successful host open (Win↔Linux aux/spu fork). Routed
      * through the gated wrapper so turbo mute/sink still apply. */
     psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
+    /* Establish the cycle-zero audio epoch before the first device deadline.
+     * Otherwise the first D-1 quiet-prefix service becomes the epoch and shifts
+     * every nominal 768-cycle sample boundary. */
+    sdl_audio_pump_midframe();
 #endif
 
     Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
