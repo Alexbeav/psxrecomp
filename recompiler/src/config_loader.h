@@ -1215,6 +1215,11 @@ struct UserSettings {
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
     bool has_adaptive_view  = false; bool adaptive_view  = false;
+    // [video] rewind: local rewind ring on/off. OFF by default — the ring
+    // holds whole-machine snapshots (2 MB RAM + 1 MB VRAM + 512 KB SPU RAM
+    // each) and captures on a frame cadence, so it is opt-in rather than a
+    // cost every host pays. Env PSX_REWIND still outranks this.
+    bool has_rewind         = false; bool rewind         = false;
     // [video] rewind_depth: local rewind snap-ring capacity. UI offers
     // 50 / 100 / 150 / 200 (default 50). Runtime clamps + snaps to those steps.
     bool has_rewind_depth   = false; int  rewind_depth   = 50;
