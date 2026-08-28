@@ -11090,6 +11090,10 @@ int main(int argc, char** argv) {
                  * chaining and makes them overlay-cache candidates, so live-byte
                  * closures can own them instead of single-instruction dispatch
                  * thrash. Clamped to stay above the kernel window. */
+                if (gc.runtime.has_overlay_region_floor) {
+                    uint32_t v = gc.runtime.overlay_region_floor & 0x1FFFFFFFu;
+                    if (v >= 0x00010000u) g_overlay_region_floor = v;
+                }
                 {
                     const char* fenv = std::getenv("PSX_OVERLAY_REGION_FLOOR");
                     if (fenv && fenv[0]) {
@@ -11506,49 +11510,68 @@ int main(int argc, char** argv) {
         overlay_autocapture_set_enabled(0);
         const char *cfg_backend = deferred_overlay_backend.empty()
                 ? nullptr : deferred_overlay_backend.c_str();
-        int gcc_avail = deferred_has_overlay_ac
+        /* The bundled overlay_toolchain/ (embedded Python + compile_overlays.py +
+         * recompiler + headers + tcc) can drive EITHER compiler: tcc from the
+         * bundle, or a real gcc when one is on PATH. So a gcc toolchain counts
+         * as available when there is a configured gcc command OR the bundle is
+         * present to build one - the same package then yields gcc shards on a
+         * dev box and tcc shards on a toolchain-less player box. */
+        extern int g_psx_cps_mode;
+        const std::filesystem::path tk_xd = exe_dir_from_argv(argv[0]);
+        const std::filesystem::path tk_dir = tk_xd / "overlay_toolchain";
+        const std::filesystem::path tk_py = tk_dir / "python" / "python.exe";
+        const bool tk_present = std::filesystem::exists(tk_py);
+        auto build_toolchain_cmd = [&](const char *compiler) {
+            auto cmd_quote = [](const std::string& s) {
+                return std::string("\"") + s + "\"";
+            };
+            std::string c =
+                cmd_quote(tk_py.string()) + " " +
+                cmd_quote((tk_dir / "compile_overlays.py").string()) +
+                " --captures " + cmd_quote(captures_path.string()) +
+                " --game-toml " + cmd_quote(std::string(
+                    game_config_path ? game_config_path : "game.toml")) +
+                " --recompiler " + cmd_quote((tk_dir / "psxrecomp-game.exe").string()) +
+                " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
+                " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
+                (g_psx_cps_mode ? " --cps" : "") +
+                " --compiler " + compiler;
+            if (std::string(compiler) == "tcc")
+                c += " --tcc " + cmd_quote((tk_dir / "tcc" / "tcc.exe").string());
+            return c;
+        };
+        int gcc_avail = (deferred_has_overlay_ac || tk_present)
                         && autocompile_toolchain_available();
         OverlayBackend eff = overlay_backend_resolve(cfg_backend, gcc_avail);
         std::string built_tcc_cmd;
+        std::string built_gcc_cmd;
         std::string env_ac_cmd;
         const std::string *ac_cmd = nullptr;
         if (eff == OVERLAY_BACKEND_TCC) {
             if (deferred_has_overlay_ac_tcc) {
                 ac_cmd = &deferred_overlay_ac_tcc;
+            } else if (tk_present) {
+                built_tcc_cmd = build_toolchain_cmd("tcc");
+                ac_cmd = &built_tcc_cmd;
+                std::fprintf(stdout,
+                    "psxrecomp: tcc tier using bundled toolchain (%s)\n",
+                    tk_dir.string().c_str());
             } else {
-                extern int g_psx_cps_mode;
-                std::filesystem::path xd = exe_dir_from_argv(argv[0]);
-                std::filesystem::path tk = xd / "overlay_toolchain";
-                std::filesystem::path py = tk / "python" / "python.exe";
-                if (std::filesystem::exists(py)) {
-                    auto cmd_quote = [](const std::string& s) {
-                        return std::string("\"") + s + "\"";
-                    };
-                    built_tcc_cmd =
-                        cmd_quote(py.string()) + " " +
-                        cmd_quote((tk / "compile_overlays.py").string()) +
-                        " --captures " + cmd_quote(captures_path.string()) +
-                        " --game-toml " + cmd_quote(std::string(
-                            game_config_path ? game_config_path : "game.toml")) +
-                        " --recompiler " + cmd_quote((tk / "psxrecomp-game.exe").string()) +
-                        " --runtime-include " + cmd_quote((tk / "include").string()) +
-                        " --out-dir " + cmd_quote((xd / "cache").string()) +
-                        (g_psx_cps_mode ? " --cps" : "") +
-                        " --compiler tcc --tcc " +
-                        cmd_quote((tk / "tcc" / "tcc.exe").string());
-                    ac_cmd = &built_tcc_cmd;
-                    std::fprintf(stdout,
-                        "psxrecomp: tcc tier using bundled toolchain (%s)\n",
-                        tk.string().c_str());
-                } else {
-                    std::fprintf(stdout,
-                        "psxrecomp: tcc tier active but no bundled toolchain at %s "
-                        "(overlay gaps -> interpreter)\n", tk.string().c_str());
-                }
+                std::fprintf(stdout,
+                    "psxrecomp: tcc tier active but no bundled toolchain at %s "
+                    "(overlay gaps -> interpreter)\n", tk_dir.string().c_str());
             }
         } else {
-            if (deferred_has_overlay_ac)
+            if (deferred_has_overlay_ac) {
                 ac_cmd = &deferred_overlay_ac;
+            } else if (tk_present) {
+                /* gcc on PATH + bundled toolchain: gcc shards from the same bundle. */
+                built_gcc_cmd = build_toolchain_cmd("gcc");
+                ac_cmd = &built_gcc_cmd;
+                std::fprintf(stdout,
+                    "psxrecomp: gcc tier using bundled toolchain (%s) with gcc from PATH\n",
+                    tk_dir.string().c_str());
+            }
         }
         if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CMD")) {
             if (e[0]) {
