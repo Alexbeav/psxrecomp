@@ -62,6 +62,8 @@ def main() -> int:
     cmake = (ROOT / "runtime/runtime.cmake").read_text(encoding="utf-8")
     check("psxrecomp_exe_name-${target}.txt" in cmake,
           "runtime.cmake writes psxrecomp_exe_name-<target>.txt")
+    check("file(GENERATE" in cmake and "TARGET_FILE_BASE_NAME:${target}" in cmake,
+          "marker uses the final CMake target filename")
     check('MAKE_C_IDENTIFIER "${PSXRT_WINDOW_TITLE}"' in cmake,
           "OUTPUT_NAME still derives from WINDOW_TITLE (marker must match it)")
 

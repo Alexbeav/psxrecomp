@@ -976,13 +976,11 @@ function(psxrecomp_add_runtime_target target)
     # Revelations_Persona__Recompiled.exe — same algorithm, colon in a
     # different place.
     #
-    # Written at configure time (not file(GENERATE)) because _psxrt_exe_name is
-    # a plain variable here: it carries no generator expression and does not
-    # vary per configuration, so a fixed filename is correct on multi-config
-    # generators too. Name only, never a path — the consumers already know
-    # their build directory, and only ever got the basename wrong.
-    file(WRITE "${CMAKE_BINARY_DIR}/psxrecomp_exe_name-${target}.txt"
-         "${_psxrt_exe_name}\n")
+    # Generate-time output uses the final target property, so a game that
+    # changes OUTPUT_NAME after this helper returns still publishes the name
+    # CMake will actually link.
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/psxrecomp_exe_name-${target}.txt"
+         CONTENT "$<TARGET_FILE_BASE_NAME:${target}>\n")
 
     # ---- Windows / desktop app icon ---------------------------------------
     # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
