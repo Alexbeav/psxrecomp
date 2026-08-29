@@ -388,12 +388,24 @@ def probe(cue_path: Path) -> DiscProbe:
     entries = parse_root_entries(bytes(root[:root_size]))
 
     if "SYSTEM.CNF" not in entries:
-        raise SystemExit(
-            f"SYSTEM.CNF missing on disc (found {sorted(entries)[:24]})"
+        # Very early titles (e.g. King's Field, Dec 1994) ship no SYSTEM.CNF;
+        # the BIOS falls back to booting PSX.EXE from the root directory.
+        psx_exe = next((k for k in entries if k.upper() == "PSX.EXE"), None)
+        if psx_exe is None:
+            raise SystemExit(
+                f"SYSTEM.CNF missing on disc and no PSX.EXE fallback "
+                f"(found {sorted(entries)[:24]})"
+            )
+        boot_token = psx_exe
+        warnings.append(
+            "SYSTEM.CNF missing; using the BIOS PSX.EXE fallback boot path. "
+            "No serial is recoverable from the filesystem — set game_id "
+            "manually in catalog_identity.json / game.toml."
         )
-    extent, fsize = entries["SYSTEM.CNF"]
-    cnf = read_file(read_user, data, extent, fsize)
-    boot_token = parse_system_cnf(cnf)
+    else:
+        extent, fsize = entries["SYSTEM.CNF"]
+        cnf = read_file(read_user, data, extent, fsize)
+        boot_token = parse_system_cnf(cnf)
     serial, boot_exe = normalize_serial(boot_token)
 
     disc_boot = boot_token
