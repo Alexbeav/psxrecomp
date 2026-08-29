@@ -2353,6 +2353,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.adaptive_view = toml::find<bool>(v, "adaptive_view");
             s.has_adaptive_view = true;
         });
+        if (v.contains("rewind")) try_get([&]{
+            s.rewind = toml::find<bool>(v, "rewind");
+            s.has_rewind = true;
+        });
         if (v.contains("rewind_depth")) try_get([&]{
             int d = toml::find<int>(v, "rewind_depth");
             static const int opts[4] = {50, 100, 150, 200};
@@ -2635,6 +2639,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
+    if (s.has_rewind)
+        f << "rewind            = " << (s.rewind ? "true" : "false") << "\n";
     if (s.has_rewind_depth)
         f << "rewind_depth      = " << s.rewind_depth << "\n";
     if (s.has_rewind_interval)

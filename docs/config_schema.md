@@ -431,6 +431,34 @@ Settings surface. A game migrating Skip FMVs into its built-in mod catalog sets
 it to false. The runtime then hides the Settings row, ignores stale persisted
 values, and leaves activation to the selected trusted plugin.
 
+### Local rewind (`settings.toml`)
+
+Rewind is a player setting, not a game one: it lives in the user's
+`settings.toml` beside the runtime executable, under `[video]`.
+
+```toml
+[video]
+rewind          = false   # off by default — see below
+rewind_depth    = 50      # snapshots kept: 50 / 100 / 150 / 200
+rewind_interval = 15      # frames between snapshots: 1 / 4 / 8 / 12 / 15
+```
+
+**`rewind` defaults to `false`.** The ring holds whole *machine* snapshots —
+2 MB main RAM + 1 MB VRAM + 512 KB SPU RAM, stored uncompressed — and captures
+one every `rewind_interval` frames (denser, toward 4, while an FMV runs). At
+the default depth that is a few hundred MB of resident memory plus a periodic
+multi-megabyte copy, which is not a cost to charge every host for a feature a
+session may never open. Turning it on is one click in the launcher's Display
+card; nothing is allocated until it is.
+
+`PSX_REWIND=1` / `PSX_REWIND=0` override the setting either way, and
+`PSX_REWIND_DEPTH` / `PSX_REWIND_INTERVAL` / `PSX_REWIND_FMV_INTERVAL` override
+the tuning. A build configured with `-DPSX_REWIND=OFF` has no rewind at all and
+ignores all of these.
+
+Netplay rollback is a separate subsystem with its own ring and is unaffected by
+this setting; rewind is in fact suppressed while a netplay session is active.
+
 Bezel artwork is intentionally not a `[video]` key. It is exposed as the
 disabled-by-default `psx.presentation.bezel` mod package, which draws a
 user-selected image resource behind the game image in OpenGL letterbox or

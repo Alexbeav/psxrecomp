@@ -1163,6 +1163,9 @@ static bool          g_video_win_w_explicit = false; /* user chose a width */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
+/* Local rewind is opt-in: the snap ring is whole-machine state on a frame
+ * cadence, too much to charge every host for a feature many never open. */
+static int           g_rewind_enabled = 0;
 static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
 static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
@@ -11583,6 +11586,7 @@ int main(int argc, char** argv) {
         }
         if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
+        if (us.has_rewind)        g_rewind_enabled = us.rewind ? 1 : 0;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
         if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
         if (us.has_hotkey_pad_rewind)
@@ -12055,6 +12059,7 @@ int main(int argc, char** argv) {
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
             seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
+            seed.rewind = g_rewind_enabled != 0;          seed.has_rewind = true;
             seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
             seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
             seed.hotkey_pad_rewind = g_hotkey_pad_rewind;
@@ -12227,6 +12232,7 @@ int main(int argc, char** argv) {
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
+            ls.rewind_enabled    = seed.rewind ? 1 : 0;
             ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
             ls.rewind_interval   = seed.rewind_interval > 0 ? seed.rewind_interval : 15;
             ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
@@ -12503,6 +12509,8 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
+                seed.rewind                = ls.rewind_enabled != 0;
+                seed.has_rewind            = true;
                 seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 seed.has_rewind_depth      = true;
                 seed.rewind_interval       = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
@@ -12716,6 +12724,7 @@ int main(int argc, char** argv) {
                 g_video_aspect_den = seed.aspect_den;
                 g_audio_freq      = seed.audio_freq;
                 g_audio_spu_hq    = seed.spu_hq;
+                g_rewind_enabled = seed.has_rewind ? (seed.rewind ? 1 : 0) : 0;
                 g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
                     ? seed.rewind_depth : 50;
                 g_rewind_interval = seed.has_rewind_interval && seed.rewind_interval > 0
@@ -13820,6 +13829,7 @@ session_reboot:
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
+        psx_rewind_set_enabled(g_rewind_enabled);
         psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_set_interval((uint32_t)g_rewind_interval);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
@@ -14172,6 +14182,7 @@ soft_return_lobby:
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
         ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
         ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
+        ls.rewind_enabled = g_rewind_enabled;
         ls.rewind_depth = g_rewind_depth;
         ls.rewind_interval = g_rewind_interval;
         ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
@@ -14453,6 +14464,8 @@ soft_return_lobby:
                 us.has_audio_freq = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
+                us.rewind = ls.rewind_enabled != 0;
+                us.has_rewind = true;
                 us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 us.has_rewind_depth = true;
                 us.rewind_interval = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
@@ -14519,6 +14532,18 @@ soft_return_lobby:
             if (ls.rewind_interval > 0) {
                 g_rewind_interval = ls.rewind_interval;
                 psx_rewind_set_interval((uint32_t)g_rewind_interval);
+            }
+            /* Applied live so turning rewind off frees the ring now rather
+             * than next launch — reclaiming it is the point of the setting.
+             * shutdown() also closes the overlay and drops a pending load. */
+            if ((ls.rewind_enabled ? 1 : 0) != g_rewind_enabled) {
+                g_rewind_enabled = ls.rewind_enabled ? 1 : 0;
+                psx_rewind_set_enabled(g_rewind_enabled);
+                if (g_rewind_enabled)
+                    psx_rewind_configure(memory_get_bios_checksum(),
+                                         game_entry_pc);
+                else
+                    psx_rewind_shutdown();
             }
             g_hotkey_pad_rewind = normalize_hotkey_pad_binding(
                 ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],
