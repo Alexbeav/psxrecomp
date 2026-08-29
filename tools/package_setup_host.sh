@@ -389,6 +389,37 @@ downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
 EOF
 
+# --- Gate: the staged tree must be able to configure itself ----------------
+# The project file/dir list is an allowlist, so any path a project adds to
+# CMakeLists.txt has to be added here too. When that is missed the zip still
+# builds and only fails on the user's machine, at cmake configure, with
+# "Cannot find source file". Catch it at package time instead.
+#
+# Only unguarded references are required: a path used solely inside
+# if(EXISTS "...") is optional by construction, and a glob or a path built from
+# a cmake variable cannot be resolved here.
+if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
+  cml="${STAGE}/CMakeLists.txt"
+  guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
+               | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u)"
+  missing_refs=()
+  while IFS= read -r rel; do
+    [[ -z "${rel}" ]] && continue
+    case "${rel}" in *"*"*|*"?"*|*'$'*) continue ;; esac
+    if [[ -n "${guarded}" ]] && grep -qxF -- "${rel}" <<<"${guarded}"; then
+      continue
+    fi
+    [[ -e "${STAGE}/${rel}" ]] || missing_refs+=("${rel}")
+  done < <(grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' "${cml}" \
+             | sed 's|^\${CMAKE_CURRENT_SOURCE_DIR}/||' | sort -u)
+  if (( ${#missing_refs[@]} )); then
+    echo "error: CMakeLists.txt references paths that are not staged in the zip:" >&2
+    for r in "${missing_refs[@]}"; do echo "  - ${r}" >&2; done
+    echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+    exit 1
+  fi
+fi
+
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
 (
