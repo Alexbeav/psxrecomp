@@ -1338,6 +1338,11 @@ static int resolve_bios_arg(char* out, size_t cap) {
 #define PSX_HOST_MAX_DISCS 8
 
 static char g_disc_paths[PSX_HOST_MAX_DISCS][1024];
+/* What the PLAYER located in the wizard, as opposed to what game.toml already
+ * claimed. Generate writes these into game.toml so the runtime's hot-swap
+ * roster ([game] discs) describes the images this machine actually has. */
+static char g_wizard_discs[PSX_HOST_MAX_DISCS][1024];
+static int  g_wizard_disc_count;
 static RecompLauncherCDisc g_disc_roster[PSX_HOST_MAX_DISCS];
 static int  g_num_discs;
 
@@ -1495,6 +1500,13 @@ static int host_persist_setup_discs(void* ctx, const char* const* disc_paths,
         return 0;
     if (disc_count > PSX_HOST_MAX_DISCS)
         disc_count = PSX_HOST_MAX_DISCS;
+
+    g_wizard_disc_count = 0;
+    for (i = 0; i < disc_count; ++i) {
+        const char* d = disc_paths[i] ? disc_paths[i] : "";
+        snprintf(g_wizard_discs[i], sizeof(g_wizard_discs[i]), "%s", d);
+        if (d[0]) g_wizard_disc_count = i + 1;   /* trailing blanks are not a set */
+    }
 
     body[0] = '\0';
     for (i = 0; i < disc_count; ++i) {
@@ -3461,6 +3473,74 @@ static int host_ensure_toolchain(RecompLauncherCPrepareProgressFn on_progress,
                                                on_progress, progress_ctx);
 }
 
+/* Record the located set in game.toml before Generate reads it.
+ *
+ * disc.cfg is the mounted-image cache and the runtime takes only its first
+ * line; the hot-swap roster is built from game.toml [game] discs. So the
+ * wizard's picks reach the roster only by being written there -- which is
+ * exactly what the RetComM path does by running probe_disc.py per image and
+ * verify_disc_set.py over the results.
+ *
+ * update_disc_set.py performs the same probe/verify and then edits ONLY the
+ * disc keys, leaving the project's hand-tuned sections and comments alone. It
+ * is a no-op when game.toml already names these images, so a re-run of the
+ * wizard does not churn the file.
+ *
+ * A failure here is reported and non-fatal: Generate itself only needs the
+ * boot image, and refusing to build because disc 3 could not be probed would
+ * be a worse outcome than building with a single-disc roster. */
+static void host_update_disc_set(RecompLauncherCPrepareProgressFn on_progress,
+                                 void* progress_ctx) {
+    char script[1200];
+    char cmd[4096];
+    const char* cut;
+    size_t n;
+    int i, off;
+
+    if (g_wizard_disc_count < 2 || !g_python[0] || !g_cli_path[0] ||
+        !g_game_toml[0])
+        return;
+
+    /* tools/ sits beside psxrecomp_cli.py, wherever the submodule lives. */
+    cut = strrchr(g_cli_path, '/');
+#if defined(_WIN32)
+    {
+        const char* b = strrchr(g_cli_path, '\\');
+        if (b && (!cut || b > cut)) cut = b;
+    }
+#endif
+    if (!cut) return;
+    n = (size_t)(cut - g_cli_path);
+    if (n >= sizeof(script)) return;
+    memcpy(script, g_cli_path, n);
+    script[n] = '\0';
+    if ((size_t)snprintf(script + n, sizeof(script) - n,
+                         "/tools/new_project_layout/update_disc_set.py") >=
+        sizeof(script) - n)
+        return;
+    if (!path_is_file(script))
+        return;   /* older SDK checkout: nothing to run, single-disc as before */
+
+    off = snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" --game-toml \"%s\"",
+                   g_python, script, g_game_toml);
+    for (i = 0; i < g_wizard_disc_count; ++i) {
+        if (!g_wizard_discs[i][0])
+            return;   /* a gap in the middle would renumber the set */
+        if (off < 0 || (size_t)off >= sizeof(cmd))
+            return;
+        off += snprintf(cmd + off, sizeof(cmd) - (size_t)off, " \"%s\"",
+                        g_wizard_discs[i]);
+    }
+    if (off < 0 || (size_t)off >= sizeof(cmd))
+        return;
+
+    if (on_progress)
+        on_progress(progress_ctx, 0.03f, "Recording the disc set…");
+    if (!run_cmd_exit_zero(cmd) && on_progress)
+        on_progress(progress_ctx, 0.03f,
+                    "Could not record every disc — continuing with the boot disc.");
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -3488,6 +3568,9 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     }
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
+
+    /* Must precede the CLI: generate reads game.toml. */
+    host_update_disc_set(on_progress, progress_ctx);
 
     /* Hand the CLI the launcher's staged disc + BIOS. Empty g_wizard_bios means
      * OpenBIOS unless setup can adopt a retail dump beside the install. */
