@@ -521,8 +521,10 @@ def render_game_toml(p: DiscProbe, *, disc_rel: str, out_dir: str, players: int,
             if not extra_discs
             else [
                 "# Verified as one program on N images (verify_disc_set.py).",
-                "# Disc 1 boots; the rest are data. The runtime mounts the boot",
-                "# disc today — docs/MULTI_DISC.md P1 + P3 add the rest.",
+                "# Disc 1 boots; the rest are data. The runtime builds its disc",
+                "# roster from this list and mounts the SELECTED one (remembered",
+                "# in disc_index), so the launcher can switch discs between runs.",
+                "# Swapping mid-session is MULTI_DISC.md P3 and is not implemented.",
                 "discs = [",
                 *[f'    "{toml_escape(d)}",' for d in [disc_rel, *extra_discs]],
                 "]",
