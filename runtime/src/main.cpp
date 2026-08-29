@@ -13006,9 +13006,19 @@ session_reboot:
         /* GetID must report the inserted disc's license region (the BIOS CD
          * driver revalidates it mid-game). Derive it from the disc's boot
          * serial via the same disc_identity module the launch check uses. */
+#if defined(RECOMP_LAUNCHER)
+        const std::string& expected_serial = g_lnch_expected_serial;
+        const uint32_t expected_crc = g_lnch_expected_crc;
+        const bool has_crc = g_lnch_has_crc;
+#else
+        const std::string& expected_serial = game_id;
+        const uint32_t expected_crc = game_disc_crc;
+        const bool has_crc = game_has_disc_crc;
+#endif
+
         const auto ident = PSXRecompV4::identify_disc(
-            disc_path_str, /*expected_serial*/"", /*expected_crc*/0,
-            /*has_expected_crc*/false, /*compute_crc*/false);
+            disc_path_str, expected_serial, expected_crc,
+            has_crc, /*compute_crc*/false);
         if (ident.region == "PAL")         cdrom_set_disc_scex("SCEE");
         else if (ident.region == "NTSC-J") cdrom_set_disc_scex("SCEI");
         else if (ident.region == "NTSC-U") cdrom_set_disc_scex("SCEA");
