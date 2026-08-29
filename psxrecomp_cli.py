@@ -1306,6 +1306,59 @@ def _cmake_configure(
 
 
 
+def _runtime_exe_candidates(build_dir: Path, target: str, exe_basename: str):
+    """Names to try for the built runtime, best evidence first.
+
+    runtime.cmake writes the OUTPUT_NAME it actually set to
+    psxrecomp_exe_name-<target>.txt at configure time. That file is the answer;
+    exe_basename is only a guess re-derived from a second copy of the window
+    title, and the two drift the moment a game is renamed.
+    """
+    published = build_dir / f"psxrecomp_exe_name-{target}.txt"
+    names, seen = [], set()
+    try:
+        name = published.read_text(encoding="utf-8").strip()
+    except OSError:
+        name = ""
+    for candidate in (name, exe_basename):
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            names.append(candidate)
+    return names, name
+
+
+def _resolve_runtime_exe(build_dir: Path, target: str, exe_basename: str):
+    """(path, None) once found, or (None, message) explaining what went wrong."""
+    names, published = _runtime_exe_candidates(build_dir, target, exe_basename)
+    for name in names:
+        for path in (build_dir / name, build_dir / f"{name}.exe"):
+            if path.is_file():
+                return path, None
+
+    # Nothing matched. Distinguish the two very different reasons, because
+    # "binary missing" after a clean build reads as a build failure and is not
+    # one: a name disagreement means the executable is sitting right there.
+    built = sorted(
+        p.name
+        for p in build_dir.glob("*")
+        if p.is_file() and (p.suffix.lower() == ".exe" or os.access(p, os.X_OK))
+    )
+    if published and published != exe_basename:
+        return None, (
+            f"the runtime was built as '{published}' but this project expects "
+            f"'{exe_basename}'. The build itself succeeded — nothing is wrong "
+            f"with the code. CMake derives the name from WINDOW_TITLE in "
+            f"CMakeLists.txt; --exe-name / codegen_setup.exe_basename carries a "
+            f"second copy of that title which has drifted. Make them agree, or "
+            f"pin it by passing EXE_NAME to psxrecomp_add_game_runtime()."
+        )
+    hint = f" Executables present: {', '.join(built)}." if built else ""
+    return None, (
+        f"build reported success but no runtime binary was found in "
+        f"{build_dir} (looked for {', '.join(names)}).{hint}"
+    )
+
+
 def _cmake_build(
     build_dir: Path,
     target: str,
@@ -1380,6 +1433,7 @@ def run_pgo_train(
     build_dir: Path,
     *,
     exe_basename: str,
+    target: str,
     disc: Path,
     config: Path,
     train_secs: int,
@@ -1388,11 +1442,9 @@ def run_pgo_train(
     hide_video: bool,
     progress: ProgressReporter,
 ) -> None:
-    exe = build_dir / exe_basename
-    if not exe.is_file():
-        exe = build_dir / f"{exe_basename}.exe"
-    if not exe.is_file():
-        raise RuntimeError(f"train binary missing: {exe_basename} under {build_dir}")
+    exe, exe_err = _resolve_runtime_exe(build_dir, target, exe_basename)
+    if exe is None:
+        raise RuntimeError(f"PGO training cannot start: {exe_err}")
 
     pgo_dir = build_dir / "pgo"
     if pgo_dir.exists():
@@ -1641,6 +1693,7 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 project_root,
                 build_dir,
                 exe_basename=exe_basename,
+                target=target,
                 disc=Path(disc),
                 config=config,
                 train_secs=train_secs,
@@ -1662,11 +1715,9 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         progress.error(str(exc), code=EXIT_ERROR)
         return EXIT_ERROR
 
-    exe = build_dir / exe_basename
-    if not exe.is_file():
-        exe = build_dir / f"{exe_basename}.exe"
-    if not exe.is_file():
-        progress.error(f"build succeeded but binary missing: {exe}", code=EXIT_ERROR)
+    exe, exe_err = _resolve_runtime_exe(build_dir, target, exe_basename)
+    if exe is None:
+        progress.error(exe_err, code=EXIT_ERROR)
         return EXIT_ERROR
 
     prune_raw = (getattr(args, "prune_after", None) or "").strip()

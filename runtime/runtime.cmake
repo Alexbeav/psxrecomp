@@ -962,6 +962,28 @@ function(psxrecomp_add_runtime_target target)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
 
+    # Publish the name we just chose, so nothing downstream has to re-derive it.
+    #
+    # Two other places used to compute this independently — psxrecomp_cli.py
+    # from --exe-name, and the in-runtime self-compiler from
+    # codegen_setup.exe_basename — each re-running the same
+    # MAKE_C_IDENTIFIER(WINDOW_TITLE) rule against its own copy of the title.
+    # The rules agree; the copies drift. Rename a game and the build links
+    # <new>.exe while both consumers look for <old>.exe, which surfaces as the
+    # flatly untrue "build succeeded but binary missing" on a build that had no
+    # errors at all. Seen in the wild on Revelations: Persona, where CMake
+    # emitted Revelations__Persona_Recompiled.exe and the setup host wanted
+    # Revelations_Persona__Recompiled.exe — same algorithm, colon in a
+    # different place.
+    #
+    # Written at configure time (not file(GENERATE)) because _psxrt_exe_name is
+    # a plain variable here: it carries no generator expression and does not
+    # vary per configuration, so a fixed filename is correct on multi-config
+    # generators too. Name only, never a path — the consumers already know
+    # their build directory, and only ever got the basename wrong.
+    file(WRITE "${CMAKE_BINARY_DIR}/psxrecomp_exe_name-${target}.txt"
+         "${_psxrt_exe_name}\n")
+
     # ---- Windows / desktop app icon ---------------------------------------
     # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
     # the framework default shipped in psxrecomp/assets (RetComM-themed pad).

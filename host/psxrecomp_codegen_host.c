@@ -83,6 +83,30 @@ static int path_is_file(const char* path) {
 #endif
 }
 
+/* Read the first line of a small text file into out, trimming EOL and any
+ * trailing spaces. Returns 1 on success. Used for the exe-name marker CMake
+ * writes; anything unreadable just leaves the caller on its fallback. */
+static int read_first_line(const char* path, char* out, size_t cap) {
+    FILE* f;
+    size_t n;
+    if (!path || !out || cap == 0)
+        return 0;
+    f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    if (!fgets(out, (int)cap, f)) {
+        fclose(f);
+        out[0] = '\0';
+        return 0;
+    }
+    fclose(f);
+    n = strlen(out);
+    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                     out[n - 1] == ' ' || out[n - 1] == '\t'))
+        out[--n] = '\0';
+    return out[0] != '\0';
+}
+
 static int path_is_absolute(const char* path) {
     if (!path || !path[0]) return 0;
 #if defined(_WIN32)
@@ -1084,11 +1108,28 @@ static int resolve_build_paths(void) {
         }
     }
 
+    /* Prefer the name CMake published over the one baked into codegen_setup.c.
+     * Both are MAKE_C_IDENTIFIER(WINDOW_TITLE), but from two separate copies of
+     * the title, so renaming a game leaves this one pointing at an executable
+     * that is never produced. runtime.cmake writes the name it really used to
+     * psxrecomp_exe_name-<target>.txt beside the build. */
+    char basename[256];
+    snprintf(basename, sizeof(basename), "%s", g_exe_basename);
+    if (g_cfg && g_cfg->cmake_target && g_cfg->cmake_target[0]) {
+        char marker[1200], published[256];
+        snprintf(published, sizeof(published), "psxrecomp_exe_name-%s.txt",
+                 g_cfg->cmake_target);
+        if (join_path(marker, sizeof(marker), g_build_dir, published) &&
+            read_first_line(marker, published, sizeof(published)) &&
+            published[0])
+            snprintf(basename, sizeof(basename), "%s", published);
+    }
+
     char exe_name[300];
 #if defined(_WIN32)
-    snprintf(exe_name, sizeof(exe_name), "%s.exe", g_exe_basename);
+    snprintf(exe_name, sizeof(exe_name), "%s.exe", basename);
 #else
-    snprintf(exe_name, sizeof(exe_name), "%s", g_exe_basename);
+    snprintf(exe_name, sizeof(exe_name), "%s", basename);
 #endif
     return join_path(g_exe_path, sizeof(g_exe_path), g_build_dir, exe_name);
 }
