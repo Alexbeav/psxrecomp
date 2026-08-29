@@ -36,6 +36,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -184,15 +185,26 @@ def main() -> int:
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if the file would change; write nothing")
     ap.add_argument("--artifact-dir", default="",
-                    help="where disc_probe*.json / disc_set.json go (default: "
-                         "next to game.toml)")
+                    help="keep disc_probe*.json / disc_set.json here. Omitted, "
+                         "they are written to a temp dir and discarded -- the "
+                         "default must not dirty the project.")
     args = ap.parse_args()
 
     game_toml = Path(args.game_toml).expanduser()
     if not game_toml.is_file():
         print(f"error: missing {game_toml}", file=sys.stderr)
         return 1
-    art = Path(args.artifact_dir).expanduser() if args.artifact_dir else game_toml.parent
+    # Probe dumps are inputs to verify_disc_set, not project content. Writing
+    # them beside game.toml by default modified three TRACKED files in the game
+    # repo on every Generate (disc_probe*.json are committed provenance records
+    # of the original scaffold), so they go to a scratch dir unless asked for.
+    tmp: tempfile.TemporaryDirectory | None = None
+    if args.artifact_dir:
+        art = Path(args.artifact_dir).expanduser()
+        art.mkdir(parents=True, exist_ok=True)
+    else:
+        tmp = tempfile.TemporaryDirectory(prefix="disc_set_")
+        art = Path(tmp.name)
 
     cues = [Path(c).expanduser() for c in args.cues]
     for c in cues:
@@ -263,6 +275,8 @@ def main() -> int:
             set_array("netplay", "required_disc_fps", fps)
 
     new_text = surgeon.text()
+    if tmp is not None:
+        tmp.cleanup()
     if args.check:
         if new_text != game_toml.read_text(encoding="utf-8"):
             print(f"out of date: {game_toml}", file=sys.stderr)
