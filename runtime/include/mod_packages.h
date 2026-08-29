@@ -46,6 +46,7 @@ struct ModFeature {
     std::string description;
     std::string group = "General";
     bool default_enabled = false;
+    bool hidden = false;
     bool legacy = false;
 };
 

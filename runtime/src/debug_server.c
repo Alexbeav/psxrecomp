@@ -5239,10 +5239,19 @@ static void handle_geom_correction(int id, const char *json)
      * but described a different word (stale = provenance hole to hunt). */
     PGXPStats ps;
     pgxp_get_stats(&ps);
+    /* Perspective arming, with its real denominator. perspective_triangles on
+     * its own could only be compared against gp0_draw, which counts untextured
+     * primitives that are correctly never armed — so it read as a coverage
+     * figure without being one. texcorr.attempts counts exactly the textured
+     * triangles that reach the predicate. */
+    uint64_t tc_att = 0, tc_arm = 0, tc_off = 0, tc_nosrc = 0, tc_noz = 0;
+    gpu_texture_correction_stats(&tc_att, &tc_arm, &tc_off, &tc_nosrc, &tc_noz);
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"geometry_correction\":%d,"
              "\"geometry_vertex_hits\":%u,"
              "\"perspective_triangles\":%u,"
+             "\"texcorr\":{\"attempts\":%llu,\"armed\":%llu,"
+             "\"no_correction\":%llu,\"no_source\":%llu,\"no_depth\":%llu},"
              "\"lookups\":%u,\"miss_unrecorded\":%u,\"miss_ambiguous\":%u,"
              "\"pgxp\":{\"enabled\":%d,\"cpu_mode\":%d,\"tolerance\":%.3f,"
              "\"lookups\":%llu,\"dataflow_hit\":%llu,\"fallback_hit\":%llu,"
@@ -5253,6 +5262,9 @@ static void handle_geom_correction(int id, const char *json)
              gte_geometry_correction_enabled(),
              (unsigned)hits,
              (unsigned)gpu_texture_correction_hits(),
+             (unsigned long long)tc_att, (unsigned long long)tc_arm,
+             (unsigned long long)tc_off, (unsigned long long)tc_nosrc,
+             (unsigned long long)tc_noz,
              (unsigned)lookups, (unsigned)unrec, (unsigned)ambig,
              pgxp_enabled(), pgxp_cpu_mode(), (double)pgxp_tolerance(),
              (unsigned long long)ps.lookups,
@@ -7885,6 +7897,31 @@ static void handle_ws_backdrop_ring(int id, const char *json)
     free(buf);
 }
 
+/* ws_ui_groups: dump the auto_ui_squash partition for the last UI prepass —
+ * per primitive its op / key / raw key inputs (y, h, derived band and family) /
+ * union-find root / final anchor.
+ *
+ * auto_ui_squash squashes each spatial run about its own anchor, so a HUD
+ * element split across two runs gets two anchors and comes apart as the frame
+ * widens (elements drifting to opposite edges, glyphs sliding off their
+ * background box). Diagnosing that needed to know which run each primitive
+ * landed in, and nothing exposed it: `key` is a hash, so unequal keys do not
+ * say WHICH of CLUT/texpage/band/family differed, and `anchor` takes only three
+ * values, so equal anchors do not prove two prims actually co-grouped.
+ * Read-only; sized for the 2048-entry prepass cap. */
+static void handle_ws_ui_groups(int id, const char *json)
+{
+    (void)json;
+    size_t cap = 1u << 19;                 /* 512 KB: 2048 items * ~180 chars */
+    char *buf = (char *)malloc(cap);
+    if (!buf) { send_err(id, "alloc failed"); return; }
+    int hdr  = snprintf(buf, cap, "{\"id\":%d,\"ok\":true,", id);
+    int body = psx_ws_ui_groups_json(buf + hdr, (int)cap - hdr - 4);
+    snprintf(buf + hdr + body, cap - (size_t)(hdr + body), "}");
+    debug_server_send_line(buf);
+    free(buf);
+}
+
 /* ws_backdrop_margin [m=<N>]: live-tune the far-backdrop widen strategy without
  * a rebuild. m<0 = whole-row preload, m=0 = off, m>0 = widen N columns each side.
  * No m= just reports the current value. */
@@ -8738,7 +8775,9 @@ static void handle_screenshot_hires(int id, const char *json)
         strncpy(path, "psx_screenshot_hires.png", sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
 
-    uint32_t *argb = (uint32_t *)malloc((size_t)ow * oh * sizeof(uint32_t));
+    /* calloc, not malloc: any pixel a resolve declines to touch must be a
+     * deterministic black, never whatever the allocator handed back. */
+    uint32_t *argb = (uint32_t *)calloc((size_t)ow * oh, sizeof(uint32_t));
     if (!argb) { send_err(id, "alloc failed"); return; }
     /* Renderer pitches are byte strides (the live SDL presentation path uses
      * the same contract). Passing `ow` here advanced each row by only one
@@ -8748,15 +8787,25 @@ static void handle_screenshot_hires(int id, const char *json)
                                       (int)(ow * sizeof(*argb)),
                                       (int)di.display_x,
                                       (int)di.display_y, (int)w, (int)h);
-    if (!got) {
-        /* No hi-res surface (scale 1, or a backend without one): resolve the
-         * native display instead and say so, rather than emitting a blank. */
+    /* The resolves return the pixel COUNT they wrote, and a partial cover is a
+     * real case: gr_scale() reports the GL backend's internal scale, but
+     * sw_render_display_hires falls back to the native resolve when the CPU
+     * hi-res mirror does not exist (gpu_sw_renderer.c: !g_hr || g_scale <= 1).
+     * That fills w*h of an ow*oh buffer and still returns non-zero, so testing
+     * `!got` alone would emit a PNG that is mostly untouched allocation. Demand
+     * full cover, else redo it honestly at native size. */
+    if (got < (int)((size_t)ow * oh)) {
+        /* No hi-res surface (scale 1, a backend without one, or a partial
+         * cover): resolve the native display instead and say so, rather than
+         * emitting a blank. */
         scale = 1; ow = w; oh = h;
         got = gr_render_display(argb,
                                 (int)(ow * sizeof(*argb)),
                                 (int)di.display_x,
                                 (int)di.display_y, (int)w, (int)h);
-        if (!got) { free(argb); send_err(id, "no display surface"); return; }
+        if (got < (int)((size_t)ow * oh)) {
+            free(argb); send_err(id, "no display surface"); return;
+        }
     }
 
     uint8_t *rgb = (uint8_t *)malloc((size_t)ow * oh * 3);
@@ -8778,6 +8827,56 @@ static void handle_screenshot_hires(int id, const char *json)
 
     send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"width\":%u,"
              "\"height\":%u,\"scale\":%d}", id, path, ow, oh, scale);
+}
+
+/* present_shot — PNG of the COMPOSED renderer output: the frame after SDL fits
+ * the display buffer into the logical surface, i.e. at the aspect the player is
+ * actually looking at.
+ *
+ * The three buffer-level captures above (screenshot / screenshot_file /
+ * screenshot_hires) all resolve the display buffer BEFORE that fit. On a 508x256
+ * display in a 4:3 window they answer 508x256 while the window shows 640x480 —
+ * the same pixels at a different shape. That is correct for faithfulness work
+ * and WRONG for anything aspect-shaped: a widescreen change alters the GTE
+ * squash and the present fit, so validating it against a pre-fit buffer measures
+ * the one stage the change does not touch.
+ *
+ * Staged and fulfilled in the present path (see present_shot_request in
+ * main.cpp), so the ack means "queued", not "written" — the PNG lands on the
+ * next present. Sample `present_shot_seq` before staging and poll it until the
+ * counter moves; `wrote` in that reply says whether a file actually landed.
+ *
+ * Refused up front on headless (no present surface) and on the Vulkan backend,
+ * which presents through its own swapchain and has no readback hook — accepting
+ * there would leave a request nothing can ever fulfil. */
+static void handle_present_shot(int id, const char *json)
+{
+    extern int present_shot_request(const char *path);
+    extern int present_shot_seq(void);
+    char path[512];
+    if (!json_get_str(json, "path", path, sizeof(path)))
+        strncpy(path, "psx_present_shot.png", sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+    if (!present_shot_request(path)) {
+        send_err(id, "present_shot unavailable (headless, or the Vulkan backend "
+                     "which has no present readback)");
+        return;
+    }
+    send_fmt("{\"id\":%d,\"ok\":true,\"path\":\"%s\",\"staged\":true,\"seq\":%d}",
+             id, path, present_shot_seq());
+}
+
+/* present_shot_seq — completion counter for the staged capture above. Sample it
+ * before present_shot and poll until it changes; the counter advances on every
+ * completion, success or not, so the poll always terminates. `wrote` reports
+ * whether that completion actually produced a PNG. */
+static void handle_present_shot_seq(int id, const char *json)
+{
+    extern int present_shot_seq(void);
+    extern int present_shot_ok(void);
+    (void)json;
+    send_fmt("{\"id\":%d,\"ok\":true,\"seq\":%d,\"wrote\":%d}",
+             id, present_shot_seq(), present_shot_ok());
 }
 
 /* dump_buffer: dump a raw 512x240 VRAM region starting at display Y = `y` to a
@@ -13585,6 +13684,7 @@ static const CmdEntry s_commands[] = {
     { "ws_aspect",         handle_ws_aspect },
     { "ws_nw",             handle_ws_nw },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
+    { "ws_ui_groups",      handle_ws_ui_groups },
     { "ws_backdrop_margin", handle_ws_backdrop_margin },
     { "ws_backdrop_stretch", handle_ws_backdrop_stretch },
     { "ws_dbg_stretch",    handle_ws_dbg_stretch },
@@ -13774,6 +13874,8 @@ static const CmdEntry s_commands[] = {
     { "screenshot",        handle_present_screenshot },
     { "screenshot_file",   handle_screenshot_file },
     { "screenshot_hires",  handle_screenshot_hires },
+    { "present_shot",      handle_present_shot },
+    { "present_shot_seq",  handle_present_shot_seq },
     { "display_ring_get",  handle_display_ring_get },
     { "display_ring_aux",  handle_display_ring_aux },
     { "display_ring_stats", handle_display_ring_stats },

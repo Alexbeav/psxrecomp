@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -73,6 +74,7 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
     h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
     h.words("cull_nclip_keep", c.ws_cull_nclip_keep_sites);
+    h.words("cull_nclip_exact", c.ws_cull_nclip_exact_sites);
     h.words("cull_branch_keep", c.ws_cull_branch_keep_sites);
     h.words("cull_w_imms", c.ws_cull_w_imms);
     h.words("cull_h_imms", c.ws_cull_h_imms);
@@ -504,9 +506,31 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     }
     if (runtime.contains("overlay_region_floor")) {
         const auto& v = toml::find(runtime, "overlay_region_floor");
-        rt.overlay_region_floor = v.is_string()
-            ? parse_hex(v.as_string(), "runtime.overlay_region_floor")
-            : (uint32_t)v.as_integer();
+        uint32_t floor = 0;
+        if (v.is_string()) {
+            floor = parse_hex(v.as_string(), "runtime.overlay_region_floor");
+        } else {
+            // Raw TOML integers are 64-bit signed: reject anything that would
+            // wrap or be masked into a different physical address downstream.
+            const std::int64_t raw = v.as_integer();
+            if (raw < 0 || raw > 0xFFFFFFFFll) {
+                throw std::runtime_error(fmt::format(
+                    "[runtime] overlay_region_floor out of range "
+                    "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): {}",
+                    raw));
+            }
+            floor = static_cast<uint32_t>(raw);
+        }
+        // The floor names a main-RAM physical address above the kernel window;
+        // fail loud here instead of relying on the runtime clamp/mask.
+        const uint32_t phys = floor & 0x1FFFFFFFu;
+        if (phys < 0x00010000u || phys >= 0x00200000u) {
+            throw std::runtime_error(fmt::format(
+                "[runtime] overlay_region_floor out of range "
+                "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): 0x{:08X}",
+                floor));
+        }
+        rt.overlay_region_floor = floor;
         rt.has_overlay_region_floor = true;
     }
         if (runtime.contains("overlay_native_block")) {
@@ -1633,6 +1657,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    std::vector<uint32_t> ws_cull_nclip_exact_sites;
     std::vector<uint32_t> ws_cull_branch_keep_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
@@ -1668,6 +1693,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
             load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
+            load_sites("nclip_exact_sites", ws_cull_nclip_exact_sites);
             load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
@@ -2096,6 +2122,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
         /*ws_cull_nclip_keep_sites*/ ws_cull_nclip_keep_sites,
+        /*ws_cull_nclip_exact_sites*/ ws_cull_nclip_exact_sites,
         /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,

@@ -578,11 +578,12 @@ static int apply_speed(int delay) {
 
 static int apply_read_speed(int delay) {
     /* A route is an explicit DATA-read allowlist, never a blanket drive-speed
-     * change. Keep FMV/STR authentic: XA-ADPCM (0x40), filter (0x08), and
-     * Form2/0x924 (0x20) — MotK sets mode 0xa2 (Form2+2×) before the XA bit,
-     * and disc_speed=4x was compressing that preamble into a one-sector race
-     * (soak §93 P1 sim 184: rd≈112896 vs delivered). */
-    if (xa_stream_active || (mode_reg & 0x68u)) return delay;
+     * change. Keep FMV/STR authentic once the drive is explicitly in XA/filter
+     * mode (0x40/0x08) or an XA stream is already active. Do not treat the
+     * whole-sector/Form2 bit (0x20) alone as realtime media: Tomba's normal
+     * asset loads use mode 0xA0, so including 0x20 here made the CD Speed mod
+     * configure divisor=32 while every actual data-read deadline stayed 1x/2x. */
+    if (xa_stream_active || (mode_reg & 0x48u)) return delay;
     if (s_warm_route_active) return warm_route_period();
     return apply_speed(delay);
 }

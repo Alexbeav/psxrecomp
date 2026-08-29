@@ -158,8 +158,20 @@ static uint32_t devices_cycles_to_next_idle_event(void) {
     uint32_t c = cdrom_cycles_to_irq(i_mask);   if (c < best) best = c;
     uint32_t d = dma_cycles_to_deliverable_irq(i_mask); if (d < best) best = d;
     uint32_t s = sio_cycles_to_irq(i_mask);     if (s < best) best = s;
+    /* SPU IRQ9 is raised by the guest-clock sample scheduler, not by a device
+     * *_advance(); a poll loop waiting on it must not be skipped across several
+     * 768-cycle sample boundaries before it can acknowledge and re-arm. Only an
+     * unmasked IRQ9 is observable, like the other sources above. */
+    if (i_mask & (1u << IRQ_SPU)) {
+        uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
+    }
     if (best == 0) best = 1;
     return best;
+}
+
+/* Test/diagnostic accessor for the idle-skip observation boundary above. */
+uint32_t psx_idle_cycles_to_next_observable_event(void) {
+    return devices_cycles_to_next_idle_event();
 }
 
 static void psx_devices_recompute_deadline(void) {

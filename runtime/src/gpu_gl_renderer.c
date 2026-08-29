@@ -85,6 +85,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "png_write.h"   /* png_write_rgb — present_shot readback */
 
 #ifndef GL_BGRA
 #define GL_BGRA 0x80E1
@@ -2494,8 +2495,13 @@ static void depth24_upload_policy(void) {
         s_up_nrects = 0;
         rect_clear(&s_d24_skip_fb);
     } else if (!d24 && s_depth24_skip_up) {
-        s_up_nrects = 0;
+        /* Small texture uploads are still queued while depth24 scanout uses
+         * the CPU mirror. Clear only the skipped movie band first, then land
+         * those newer uploads so texture pages which overlap that band win in
+         * PS1 command order. Dropping the queue here loses GT2's boot menu
+         * atlas; flushing before the clear would wipe it again. */
         depth24_clear_skipped_fb();
+        flush_cpu_upload();
         gpu_depth24_upload_span_reset();
         /* Force a fresh present after FMV→15-bit so menus/loading screens
          * are not held as a stale depth24 frame. */
@@ -3981,6 +3987,42 @@ static void gl_swap_with_osd(void) {
         }
     }
     host_osd_present_done();
+    /* present_shot (GL backend): the default framebuffer now holds the composed
+     * frame — display quad fitted to the window, plus OSD — so this is the only
+     * capture that carries the presented aspect. Buffer-level captures resolve
+     * before the fit and answer the raw display size instead. Read back before
+     * the swap; GL rows come out bottom-up, so flip into the PNG. */
+    {
+        extern int  present_shot_take(char *out, int n);
+        extern void present_shot_done(int ok);
+        char shot_path[512];
+        if (present_shot_take(shot_path, (int)sizeof(shot_path))) {
+            int ww = 0, wh = 0;
+            int wrote = 0;
+            SDL_GL_GetDrawableSize(s_win, &ww, &wh);
+            if (ww > 0 && wh > 0) {
+                uint8_t *rows = (uint8_t *)malloc((size_t)ww * wh * 3);
+                uint8_t *flip = rows ? (uint8_t *)malloc((size_t)ww * wh * 3) : NULL;
+                if (rows && flip) {
+                    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                    glReadPixels(0, 0, ww, wh, GL_RGB, GL_UNSIGNED_BYTE, rows);
+                    for (int y = 0; y < wh; y++)
+                        memcpy(flip + (size_t)y * ww * 3,
+                               rows + (size_t)(wh - 1 - y) * ww * 3,
+                               (size_t)ww * 3);
+                    FILE *pf = fopen(shot_path, "wb");
+                    if (pf) {
+                        wrote = png_write_rgb(pf, flip, (uint32_t)ww, (uint32_t)wh);
+                        fclose(pf);
+                    }
+                }
+                /* free() tolerates NULL, so both exits are covered. */
+                free(flip);
+                free(rows);
+            }
+            present_shot_done(wrote);
+        }
+    }
     SDL_GL_SwapWindow(s_win);
 }
 

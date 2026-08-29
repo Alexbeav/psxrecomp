@@ -27,6 +27,7 @@
 #include "fps_readout.h"
 #include "host_keymap.h"
 #include "controller_port_route.h"
+#include "png_write.h"       /* png_write_rgb — present_shot readback */
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -119,6 +120,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <cctype>
 #include <cmath>
@@ -192,6 +194,19 @@ extern "C" {
     extern uint64_t g_dirty_window_dispatches;
     extern uint32_t g_slice_exit_pc, g_slice_exit_reason, g_slice_exit_iter;
     extern uint32_t g_slice_exit_dispatchable, g_slice_exit_dirty, g_slice_exit_in_text, g_slice_exit_want;
+    /* memory.c */
+    extern uint32_t i_stat, i_mask;
+    extern uint64_t g_guest_store_count;
+    extern uint64_t g_vblank_ack_count;
+    /* interrupts.c */
+    extern uint64_t g_vblank_raise_count, g_vblank_deliver_count;
+    /* dirty_ram_interp.c */
+    extern uint64_t g_dirty_ram_blocks_run;
+    extern uint64_t g_dirty_pump_count;
+    /* overlay_loader.c */
+    extern int      g_call_unit_depth;
+    /* psx_bios_backend.c */
+    extern int      g_psx_dispatch_depth;
 }
 
 /* memory.c */
@@ -434,6 +449,7 @@ static bool     s_force_present_after_load = false;
 static int s_sw_hold_valid = 0;
 static SDL_Rect s_sw_hold_src;
 static SDL_Rect s_sw_hold_dst;
+
 /* After LOADED: optional freeze probe (PSX_POST_LOAD_PROBE=1). Off by default. */
 static int      s_post_load_probe_enabled = -1; /* -1 = unread env */
 static int      s_post_load_probe_left = 0;
@@ -1185,6 +1201,7 @@ static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
  * movie's per-movie total minus 3; writing the current movie's total down to
@@ -1676,7 +1693,11 @@ static void update_adaptive_widescreen() {
     if (width <= 0 || height <= 0) return;
 
     int num = width, den = height;
-    if ((int64_t)width * 3 <= (int64_t)height * 4) {
+    /* A nominal 4:3 client can be one physical pixel wider after fractional-DPI
+     * conversion (for example 960x720 -> 2161x1620 at 225%).  Keep that
+     * rounding pixel in the identity fallback instead of engaging an almost-
+     * identity widescreen squash and its cull guard. */
+    if ((int64_t)(width - 1) * 3 <= (int64_t)height * 4) {
         num = 4; den = 3;
     } else if ((int64_t)width * g_ws_adaptive_max_den >=
                (int64_t)height * g_ws_adaptive_max_num) {
@@ -1722,6 +1743,77 @@ extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
 static bool          g_gl_active = false;    /* GL context live -> GL present path */
 static bool          g_vk_active = false;    /* Vulkan context live -> VK present path */
+
+/* present_shot — capture the COMPOSED present surface, i.e. the frame after the
+ * backend has fitted the display buffer to the window, so the PNG carries the
+ * aspect the player is actually looking at.
+ *
+ * screenshot / screenshot_file / screenshot_hires all resolve the display
+ * buffer BEFORE that fit: on a 508x256 display in a 4:3 window they answer
+ * 508x256 while the window shows 640x480. Correct for faithfulness work, wrong
+ * for anything aspect-shaped — a widescreen change moves the GTE squash and the
+ * present fit, which is exactly the stage those captures skip.
+ *
+ * Staged here and fulfilled by whichever backend owns the present: the SDL
+ * software path reads back via SDL_RenderReadPixels, the GL path via
+ * glReadPixels before SwapWindow (gpu_gl_renderer.c).
+ *
+ * THREADING: the request is written from a debug-server command handler on the
+ * emu thread (debug_server_poll safe point), but GL fulfilment can run on the
+ * frame-interpolation thread (gpu_gl_renderer.c interp_present -> gl_swap_with_osd),
+ * so the path buffer and the pending flag are mutex-guarded and the counters are
+ * atomic. present_shot_take() CLAIMS the request under the lock, so two present
+ * paths can never fulfil the same shot.
+ *
+ * A staged shot is OVERWRITTEN by a later request rather than refused (the same
+ * choice savestate's request_save_inner makes). A present that never arrives —
+ * a static frame, a backend that stops presenting — therefore cannot wedge the
+ * command: the next request simply replaces it. */
+static std::mutex       s_present_shot_mtx;
+static char             s_present_shot_path[512];
+static bool             s_present_shot_pending = false;
+static std::atomic<int> s_present_shot_seq{0};   /* bumps on every completion */
+static std::atomic<int> s_present_shot_ok{0};    /* 1 = last completion wrote a PNG */
+
+extern "C" int present_shot_request(const char *path)
+{
+    if (!path || !*path) return 0;
+    if (g_headless)  return 0;   /* no present surface to read back */
+    /* Vulkan owns its own swapchain present (see the g_vk_active branch in
+     * sdl_vblank_present_body) and has no readback hook, so nothing would ever
+     * fulfil the request. Refuse honestly instead of accepting a shot that can
+     * never complete — CLAUDE.md rule 15. */
+    if (g_vk_active) return 0;
+    {
+        std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+        std::snprintf(s_present_shot_path, sizeof(s_present_shot_path), "%s", path);
+        s_present_shot_pending = true;
+    }
+    return 1;
+}
+
+/* Backend hook: atomically claim a staged shot (returns 1 and fills `out`),
+ * then call present_shot_done(ok) once the PNG is written — or not written. */
+extern "C" int present_shot_take(char *out, int n)
+{
+    if (!out || n <= 0) return 0;
+    std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+    if (!s_present_shot_pending) return 0;
+    std::snprintf(out, (size_t)n, "%s", s_present_shot_path);
+    s_present_shot_pending = false;   /* claimed */
+    return 1;
+}
+
+/* ok = 1 only when a PNG actually landed on disk. seq advances either way so a
+ * client polling it always terminates; ok tells it whether the file exists. */
+extern "C" void present_shot_done(int ok)
+{
+    s_present_shot_ok.store(ok ? 1 : 0, std::memory_order_release);
+    s_present_shot_seq.fetch_add(1, std::memory_order_release);
+}
+
+extern "C" int present_shot_seq(void) { return s_present_shot_seq.load(std::memory_order_acquire); }
+extern "C" int present_shot_ok(void)  { return s_present_shot_ok.load(std::memory_order_acquire); }
 /* Present straight from the FBO (fast, no readback). Set PSX_GL_FORCE_CPU_PRESENT=1
  * to force the software readout path instead — a diagnostic/fallback that also
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
@@ -2657,8 +2749,40 @@ static double present_effective_frame_period_ms(void) {
     return present_video_standard_is_pal() ? PSX_FRAME_PERIOD_PAL_MS : g_frame_period_ms;
 }
 
+static int host_driver_vsync_unreliable(void) {
+#ifdef _WIN32
+    return 0;
+#else
+    static int cached = -1;
+    if (cached >= 0)
+        return cached;
+    if (const char *e = std::getenv("PSX_TRUST_DRIVER_VSYNC");
+        e && e[0] && e[0] != '0') {
+        cached = 0;
+        return cached;
+    }
+    if (std::getenv("WSL_INTEROP") || std::getenv("WSL_DISTRO_NAME")) {
+        cached = 1;
+        return cached;
+    }
+    cached = 0;
+    if (FILE *f = std::fopen("/proc/version", "rb")) {
+        char buf[512];
+        size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        buf[n] = '\0';
+        if (std::strstr(buf, "Microsoft") || std::strstr(buf, "microsoft") ||
+            std::strstr(buf, "WSL") || std::strstr(buf, "wsl"))
+            cached = 1;
+    }
+    return cached;
+#endif
+}
+
 static int present_vsync_owns_cadence(void) {
     if (g_video_vsync == 0 || g_present_vsync_disabled)
+        return 0;
+    if (host_driver_vsync_unreliable())
         return 0;
     if (g_frame_period_ms <= 0.0)
         return 0;
@@ -2730,7 +2854,11 @@ static void log_present_cadence(void) {
     } else if (g_frame_period_ms > 0.0) {
         if (g_video_vsync != 0 && !g_frame_interpolation &&
             !g_netplay_vsync_forced_off) {
-            if (g_host_refresh_hz > 0.0) {
+            if (host_driver_vsync_unreliable()) {
+                std::printf("psxrecomp: present cadence: wall-clock pacer "
+                            "(%.4f ms/frame); driver vsync off under WSL\n",
+                            g_frame_period_ms);
+            } else if (g_host_refresh_hz > 0.0) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
                             "(%.4f ms/frame); driver vsync off on %.0f Hz panel\n",
                             g_frame_period_ms, g_host_refresh_hz);
@@ -7642,6 +7770,66 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
     host_osd_draw_sdl(sdl_renderer);
+    /* Fulfil a staged present_shot here: after RenderCopy + OSD, before
+     * RenderPresent, the renderer holds exactly the composed frame the player
+     * sees — including the logical-size aspect fit that every buffer-level
+     * capture misses. Reading back costs a GPU sync, so it only runs when a
+     * shot was explicitly requested. */
+    char shot_path[512];
+    if (present_shot_take(shot_path, (int)sizeof(shot_path))) {
+        int ow = 0, oh = 0;
+        uint8_t *packed = NULL;
+#if defined(PSX_SDL3)
+        SDL_Surface *surf = SDL_RenderReadPixels(sdl_renderer, NULL);
+        if (surf) {
+            SDL_Surface *conv = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGB24);
+            SDL_DestroySurface(surf);
+            if (conv) {
+                ow = conv->w; oh = conv->h;
+                packed = (uint8_t *)std::malloc((size_t)ow * oh * 3);
+                if (packed) {
+                    /* SDL rows are pitch-aligned; png_write_rgb wants packed. */
+                    for (int y = 0; y < oh; y++)
+                        std::memcpy(packed + (size_t)y * ow * 3,
+                                    (const uint8_t *)conv->pixels + (size_t)y * conv->pitch,
+                                    (size_t)ow * 3);
+                }
+                SDL_DestroySurface(conv);
+            }
+        }
+#else
+        /* Size the buffer from the renderer's REAL output, not from a
+         * viewport*scale reconstruction: SDL_RenderReadPixels(NULL) fills the
+         * current viewport, and deriving that region from
+         * SDL_RenderGetViewport x SDL_RenderGetScale rounds independently of
+         * what SDL actually writes. The output size is a hard upper bound, so
+         * a full-output allocation cannot be overrun whatever SDL picks. */
+        int rw = 0, rh = 0;
+        if (SDL_GetRendererOutputSize(sdl_renderer, &rw, &rh) == 0 && rw > 0 && rh > 0) {
+            SDL_Rect vp; SDL_RenderGetViewport(sdl_renderer, &vp);
+            float sx = 1.0f, sy = 1.0f; SDL_RenderGetScale(sdl_renderer, &sx, &sy);
+            ow = (int)(vp.w * sx); oh = (int)(vp.h * sy);
+            if (ow <= 0 || ow > rw) ow = rw;
+            if (oh <= 0 || oh > rh) oh = rh;
+            packed = (uint8_t *)std::malloc((size_t)rw * rh * 3);   /* upper bound */
+            if (packed && SDL_RenderReadPixels(sdl_renderer, NULL,
+                                               SDL_PIXELFORMAT_RGB24,
+                                               packed, ow * 3) != 0) {
+                std::free(packed); packed = NULL;
+            }
+        }
+#endif
+        int wrote = 0;
+        if (packed && ow > 0 && oh > 0) {
+            FILE *pf = std::fopen(shot_path, "wb");
+            if (pf) {
+                wrote = png_write_rgb(pf, packed, (uint32_t)ow, (uint32_t)oh);
+                std::fclose(pf);
+            }
+        }
+        std::free(packed);
+        present_shot_done(wrote);
+    }
     /* §33: remember active rect for resim hold-last (not full 640x512). */
     s_sw_hold_src = src;
     s_sw_hold_dst = dst;
@@ -11061,8 +11249,8 @@ namespace {
 
 int main(int argc, char** argv) {
     /* Force line-buffered output so messages appear even if killed. */
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
-    std::setvbuf(stderr, nullptr, _IOLBF, 0);
+    std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
+    std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
     std::fprintf(stderr, "psxrecomp: main() entered\n");
     std::fflush(stderr);
 #if defined(RECOMP_LAUNCHER)
@@ -11103,6 +11291,35 @@ int main(int argc, char** argv) {
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
+    std::vector<std::string> cli_path_arg_storage;
+    cli_path_arg_storage.reserve((size_t)argc);
+    auto is_cli_option = [](const char* arg) {
+        return arg && arg[0] == '-' && arg[1] == '-';
+    };
+    auto consume_path_arg = [&](int& i) -> const char* {
+        const int first = i + 1;
+        std::string combined;
+        std::string best;
+        int best_index = first;
+        for (int j = first; j < argc; ++j) {
+            if (j != first && is_cli_option(argv[j])) break;
+            if (!combined.empty()) combined += " ";
+            combined += argv[j];
+
+            std::error_code ec;
+            if (std::filesystem::exists(std::filesystem::path(combined), ec)) {
+                best = combined;
+                best_index = j;
+            }
+        }
+        if (best.empty()) {
+            best = argv[first];
+            best_index = first;
+        }
+        i = best_index;
+        cli_path_arg_storage.push_back(std::move(best));
+        return cli_path_arg_storage.back().c_str();
+    };
     PsxNetplayConfig net_cfg;
     psx_netplay_config_defaults(&net_cfg);
     psx_netplay_apply_env(&net_cfg);  /* CLI flags below win over env */
@@ -11128,17 +11345,17 @@ int main(int argc, char** argv) {
      * No --game-root flag: that remains config-driven. */
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--bios") == 0 && i + 1 < argc) {
-            bios_path = argv[++i];
+            bios_path = consume_path_arg(i);
             bios_from_cli = true;
             bios_explicit = true;
         } else if (std::strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
-            game_config_path = argv[++i];
+            game_config_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
-            disc_override_path = argv[++i];
+            disc_override_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
-            cli_memcard_dir = argv[++i];
+            cli_memcard_dir = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
@@ -13615,11 +13832,11 @@ session_reboot:
             g_host_refresh_hz = host_hz;
             if (host_hz >= 58.8 && host_hz <= 61.2) {
                 g_frame_period_ms = 1000.0 / host_hz;
-                std::printf("psxrecomp: sync-to-host-refresh: pacing to %d Hz panel "
-                            "(%.4f ms/frame)\n", dm.refresh_rate, g_frame_period_ms);
+                std::printf("psxrecomp: sync-to-host-refresh: pacing to %.1f Hz panel "
+                            "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
             } else {
-                std::printf("psxrecomp: host panel %d Hz not ~60 Hz; keeping PSX "
-                            "59.94 Hz pacing\n", dm.refresh_rate);
+                std::printf("psxrecomp: host panel %.1f Hz not ~60 Hz; keeping PSX "
+                            "59.94 Hz pacing\n", host_hz);
             }
         }
     }
