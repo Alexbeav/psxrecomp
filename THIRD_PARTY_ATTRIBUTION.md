@@ -91,7 +91,7 @@ Alex Vanderveen, licensed **MIT** (notice: `LICENSE` in that repository).
 psxrecomp is PolyForm-NC, so this is permissive vendored into stricter — the
 MIT notice must ride along and is why this entry exists.
 
-Vendored into `tools/new_project_layout/` at commit `a2b71ed9`:
+Vendored into `tools/new_project_layout/` at commit `06bb918b`:
 
 - **`verify_disc_set.py`** — verifies that N probed images form one buildable
   set (identical program across differing per-disc serials). New to this

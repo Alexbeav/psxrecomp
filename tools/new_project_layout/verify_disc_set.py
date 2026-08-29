@@ -297,9 +297,13 @@ def main() -> int:
             f"program covers the set."
         )
         print(
-            "  Scaffolding that program now. Mounting the later discs at "
-            "runtime still needs docs/MULTI_DISC.md P1 + P3; the runtime "
-            "mounts the boot disc only today."
+            "  Scaffolding that program now. P1 has since landed: `discs` is a "
+            "first-class config entry, the runtime builds a roster from it, "
+            "and it mounts the SELECTED disc — remembered in disc_index — not "
+            "just the boot disc. Choosing a disc still means choosing it "
+            "before the game starts; swapping one mid-session is "
+            "docs/MULTI_DISC.md P3 (a faithful lid in cdrom.c), which has not "
+            "landed."
         )
 
     return EXIT_OK
