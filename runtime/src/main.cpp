@@ -202,6 +202,8 @@ extern "C" {
     extern int      g_call_unit_depth;
     /* psx_bios_backend.c */
     extern int      g_psx_dispatch_depth;
+    /* interrupts.c */
+    extern uint32_t vblank_cycles;
 }
 
 /* memory.c */
@@ -13019,7 +13021,14 @@ session_reboot:
         const auto ident = PSXRecompV4::identify_disc(
             disc_path_str, expected_serial, expected_crc,
             has_crc, /*compute_crc*/false);
-        if (ident.region == "PAL")         cdrom_set_disc_scex("SCEE");
+        if (ident.region == "PAL") {
+            cdrom_set_disc_scex("SCEE");
+
+            /* We need to adjust the frame pacing for PAL games to run at the
+             * correct speed */
+            vblank_cycles = 677376u;
+            g_frame_period_ms = 1000.0 / 50.0;  /* 50hz refresh rate */
+        }
         else if (ident.region == "NTSC-J") cdrom_set_disc_scex("SCEI");
         else if (ident.region == "NTSC-U") cdrom_set_disc_scex("SCEA");
         if (!ident.region.empty())
