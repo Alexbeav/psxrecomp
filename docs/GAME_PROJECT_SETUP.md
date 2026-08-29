@@ -434,10 +434,23 @@ submodules land:
 (Linux x64, Windows x64, macOS arm64 + Intel)
 - `scripts/package_setup_release.sh` ← zip prefix / exe / display name
 
-`--exe-name` / `codegen_setup.exe_basename` must match CMake
-`OUTPUT_NAME` (`MAKE_C_IDENTIFIER(WINDOW_TITLE)`, e.g. `TwistedMetal4_Recompiled`),
-not the bare project folder name (`TwistedMetal4Recomp`). Scaffolding derives
+`--exe-name` / `codegen_setup.exe_basename` should match CMake `OUTPUT_NAME`
+(`MAKE_C_IDENTIFIER(WINDOW_TITLE)`, e.g. `TwistedMetal4_Recompiled`), not the
+bare project folder name (`TwistedMetal4Recomp`). Scaffolding derives
 `EXE_BASENAME` from `WINDOW_TITLE` for that reason.
+
+It is no longer fatal when they disagree. CMake is the single source of truth:
+`runtime.cmake` writes the `OUTPUT_NAME` it chose to
+`<build-dir>/psxrecomp_exe_name-<target>.txt`, and both the build CLI and the
+in-runtime self-compiler read that in preference to their own copy. A build
+tree predating the marker still falls back to `exe_basename`.
+
+This matters because the two values are separate copies of the same window
+title, and renaming a game updates one of them. Before the marker existed, that
+drift produced `build succeeded but binary missing` on a build with no errors
+at all — the executable was sitting in the build directory under the name CMake
+had chosen. To pin the name explicitly instead of deriving it, pass `EXE_NAME`
+to `psxrecomp_add_game_runtime()`.
 
 Zip prefix defaults to a short acronym from `--name` (e.g. `MastersOfTerasKasiRecomp`
 → `motk`); override with `--zip-prefix` / `-ZipPrefix`.
