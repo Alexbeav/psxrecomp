@@ -451,7 +451,9 @@ class ProjectStudioApp:
         self.np_netplay_var = tk.BooleanVar(value=True)  # players default = 2
         self.np_ci_var = tk.BooleanVar(value=True)
         self.np_boxart_var = tk.BooleanVar(value=True)
-        self.np_stage_var = tk.BooleanVar(value=True)
+        # Off by default — see NewProjectOptions.stage_disc. The project reads
+        # the dump from where the user keeps it instead of duplicating it.
+        self.np_stage_var = tk.BooleanVar(value=False)
         self.np_generate_var = tk.BooleanVar(value=True)
         self.np_build_var = tk.BooleanVar(value=True)
         self.np_github_var = tk.BooleanVar(value=False)
@@ -910,7 +912,7 @@ class ProjectStudioApp:
             ("Netplay", self.np_netplay_var),
             ("CI", self.np_ci_var),
             ("Boxart", self.np_boxart_var),
-            ("Stage disc", self.np_stage_var),
+            ("Copy disc into project", self.np_stage_var),
             ("Generate", self.np_generate_var),
             ("Build", self.np_build_var),
             ("GitHub", self.np_github_var),
