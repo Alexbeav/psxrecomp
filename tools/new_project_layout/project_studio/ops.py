@@ -917,6 +917,74 @@ def op_emit_packager(root: Path, options: MigrateOptions) -> ApplyResult:
     )
 
 
+_PACKAGER_BLURB = {
+    "src": (
+        "# Game-owned C that CMakeLists.txt compiles into the runtime — mod\n"
+        "# activation plugins live here (CODEGEN_SETUP_SOURCES \"src/*_mods.c\").\n"
+    ),
+    "mods": (
+        "# Preloaded mod packages (mods/preloaded/packages/<id>). Plugins compiled\n"
+        "# in above select themselves through these; without them a mod is built\n"
+        "# and never enabled.\n"
+    ),
+}
+
+
+def op_sync_packager_project_dirs(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Stage paths CMakeLists.txt needs but the packager allowlist omits.
+
+    Patches the existing wrapper rather than regenerating it: packagers are
+    routinely hand-extended with extra --project-file lines, and rewriting from
+    the template would silently drop them.
+    """
+    from .detect import packager_missing_optional_paths, packager_missing_paths
+
+    dst = root / "scripts" / "package_setup_release.sh"
+    if not dst.is_file():
+        return ApplyResult(
+            "sync_packager_project_dirs", False, "No scripts/package_setup_release.sh", []
+        )
+    missing = sorted(set(packager_missing_paths(root)) |
+                     set(packager_missing_optional_paths(root)))
+    if not missing:
+        return ApplyResult(
+            "sync_packager_project_dirs", True, "Packager already stages every needed path", []
+        )
+
+    text = dst.read_text(encoding="utf-8")
+    anchor = "\ncd \"${ROOT}\"\n"
+    if anchor not in text:
+        return ApplyResult(
+            "sync_packager_project_dirs",
+            False,
+            "Unrecognised packager layout (no cd \"${ROOT}\" anchor); fix by hand",
+            [],
+        )
+
+    added: list[str] = []
+    block = ""
+    for rel in missing:
+        target = root / rel
+        kind = "dir" if target.is_dir() else "file"
+        test = "-d" if kind == "dir" else "-f"
+        block += _PACKAGER_BLURB.get(rel, "")
+        block += (
+            f'if [[ {test} "${{ROOT}}/{rel}" ]]; then\n'
+            f"  EXTRA_PROJECT+=(--project-{kind} {rel})\n"
+            "fi\n"
+        )
+        added.append(rel)
+
+    text = text.replace(anchor, "\n" + block + anchor, 1)
+    _write(dst, text, options.dry_run)
+    return ApplyResult(
+        "sync_packager_project_dirs",
+        True,
+        "Staged " + ", ".join(added) + " in scripts/package_setup_release.sh",
+        ["scripts/package_setup_release.sh"],
+    )
+
+
 def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
     src = ci_setup_release_template(root)
@@ -1234,6 +1302,7 @@ _OPS = {
     "ensure_app_icon": op_ensure_app_icon,
     "rewrite_cmake_setup_host": op_rewrite_cmake_setup_host,
     "emit_packager": op_emit_packager,
+    "sync_packager_project_dirs": op_sync_packager_project_dirs,
     "emit_ci_workflow": op_emit_ci_workflow,
     "annotate_legacy_packaging": op_annotate_legacy_packaging,
     "probe_disc_refresh": op_probe_disc_refresh,
