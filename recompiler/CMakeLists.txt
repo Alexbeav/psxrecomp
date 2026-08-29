@@ -438,6 +438,21 @@ if(BUILD_TESTING)
     add_test(NAME video_enhancement_settings_test
              COMMAND video_enhancement_settings_test)
 
+    # [video] rewind opt-in plumbing (default off + settings round trip).
+    add_executable(rewind_settings_test
+        tests/rewind_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(rewind_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(rewind_settings_test PRIVATE fmt)
+    add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
