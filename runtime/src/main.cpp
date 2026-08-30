@@ -2380,6 +2380,20 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
  *
  * Single-disc titles (roster of 0 or 1) are returned unchanged: the persisted
  * path wins, exactly as it did before any of this existed. */
+/* Roster position of `disc`, or -1. Stem-compared for the same reason
+ * resolve_selected_disc() is: the roster holds .cue entries while everything
+ * downstream has already been through normalize_disc_path_for_launch(), which
+ * swaps a .cue for its .bin. */
+static int roster_index_for_disc(
+    const std::vector<std::filesystem::path>& roster,
+    const std::filesystem::path& disc) {
+    if (disc.empty()) return -1;
+    const std::string want = uppercase_ascii(disc.stem().string());
+    for (size_t i = 0; i < roster.size(); ++i)
+        if (uppercase_ascii(roster[i].stem().string()) == want) return (int)i;
+    return -1;
+}
+
 static std::filesystem::path resolve_selected_disc(
     const std::vector<std::filesystem::path>& roster, int selected_1based,
     const std::filesystem::path& persisted) {
@@ -11651,21 +11665,37 @@ int main(int argc, char** argv) {
         }
         if (us.has_disc_path && !disc_override_path)
             resolved_disc = normalize_disc_path_for_launch(us.disc_path);
-        /* Multi-disc: the remembered disc NUMBER decides which image boots,
-         * so a skip-launcher boot resumes on the disc the player left off on
-         * and an external launcher can move them by writing one field. */
-        if (us.has_disc_index) selected_disc_index = us.disc_index;
-        if (!game_discs.empty())
+        /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
+         * PRESENT; absent it, [disc] path decides and the index is derived
+         * from it.
+         *
+         * Getting this backwards is a live bug, not a hypothetical: an
+         * external launcher that knows the path but cannot work out the roster
+         * position writes `path` alone, and treating a missing key as
+         * "selected = 1" then overrode a correct disc-2 path back to disc 1 on
+         * every launch. `path` alone worked before the index existed and must
+         * keep working -- a new field may add a way to choose a disc, it may
+         * not take away the old one. */
+        if (!game_discs.empty() && us.has_disc_index)
             selected_disc_index =
-                std::min(std::max(selected_disc_index, 1), (int)game_discs.size());
+                std::min(std::max(us.disc_index, 1), (int)game_discs.size());
         if (!disc_override_path && game_discs.size() > 1) {
-            const auto sel = resolve_selected_disc(game_discs,
-                                                   selected_disc_index,
-                                                   resolved_disc);
-            /* Never normalize an empty path -- fs::absolute("") is the cwd,
-             * which would turn "no disc yet" into a bogus mount. */
-            if (!sel.empty())
-                resolved_disc = normalize_disc_path_for_launch(sel);
+            if (us.has_disc_index) {
+                const auto sel = resolve_selected_disc(game_discs,
+                                                       selected_disc_index,
+                                                       resolved_disc);
+                /* Never normalize an empty path -- fs::absolute("") is the
+                 * cwd, which would turn "no disc yet" into a bogus mount. */
+                if (!sel.empty())
+                    resolved_disc = normalize_disc_path_for_launch(sel);
+            } else {
+                /* Derive the index so the launcher still preselects the right
+                 * row and a later save writes a consistent pair. An unknown
+                 * path (the player browsed to something off-roster) leaves the
+                 * default; it is not evidence for any disc. */
+                const int idx = roster_index_for_disc(game_discs, resolved_disc);
+                if (idx >= 0) selected_disc_index = idx + 1;
+            }
         }
         if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
         if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
