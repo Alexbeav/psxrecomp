@@ -5300,6 +5300,7 @@ static void handle_gpu_state(int id, const char *json)
     send_fmt("{\"id\":%d,\"ok\":true,"
              "\"display_x\":%d,\"display_y\":%d,"
              "\"width\":%d,\"height\":%d,"
+             "\"screen_offset_y\":%d,"
              "\"depth\":%d,\"depth24\":%d,"
              "\"disabled\":%d,"
              "\"h_display\":[%u,%u],\"v_display\":[%u,%u],"
@@ -5328,6 +5329,7 @@ static void handle_gpu_state(int id, const char *json)
              "\"max_vanilla\":%u,\"max_widened\":%u}}}",
              id, di.display_x, di.display_y,
              di.width, di.height,
+             di.screen_offset_y,
              di.depth24 ? 24 : 15, di.depth24,
              di.disabled,
              hx1, hx2, hy1, hy2, hr1, hr2,

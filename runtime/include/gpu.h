@@ -34,6 +34,7 @@ const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
 typedef struct {
     uint32_t display_x, display_y;     /* VRAM start of display area (GP1(05h)) */
     uint32_t width, height;            /* Derived from display mode + ranges */
+    int32_t  screen_offset_y;          /* GP1(07h) position relative to TV centre */
     int      depth24;                  /* GP1(08h) display depth flag: RGB888 scanout */
     int      disabled;                 /* GP1(03h) display disable flag */
 } GpuDisplayInfo;
