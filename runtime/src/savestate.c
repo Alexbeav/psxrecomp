@@ -310,6 +310,61 @@ static void migrate_legacy_pst_by_bios(const char* root, uint32_t openbios_words
     }
 }
 
+/* "_disc2", or empty for a single-disc title. Part of the slot FILENAME, not
+ * a directory: discs of one set share a BIOS and a save root, and a filename
+ * token separates them without adding a directory level to browse, back up and
+ * migrate. Empty leaves the historical name byte-for-byte, so single-disc
+ * titles keep every existing state. */
+static char s_disc_token[16];
+
+void savestate_set_disc_scope(int disc_number) {
+    if (disc_number >= 1)
+        snprintf(s_disc_token, sizeof(s_disc_token), "_disc%d", disc_number);
+    else
+        s_disc_token[0] = '\0';
+}
+
+/* Count state_*.pst sitting directly in the BIOS directory once per-disc
+ * scoping is active. They predate the split and cannot be placed: every disc
+ * of a set shares one entry_pc, so nothing in the file says which disc it was
+ * taken on. Moving them would be a guess, and guessing wrong reintroduces the
+ * exact mix-up this scoping exists to prevent -- so say where they are and
+ * leave them for the player to place deliberately. */
+static void note_unscoped_legacy_states(const char* bios_dir) {
+    int n = 0;
+#if defined(_WIN32)
+    char pattern[600];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    snprintf(pattern, sizeof(pattern), "%s\\state_*.pst", bios_dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { n++; } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR* d = opendir(bios_dir);
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d))) {
+            size_t len = strlen(e->d_name);
+            if (len > 4 && strncmp(e->d_name, "state_", 6) == 0 &&
+                strcmp(e->d_name + len - 4, ".pst") == 0 &&
+                strstr(e->d_name, "_disc") == NULL)
+                n++;
+        }
+        closedir(d);
+    }
+#endif
+    if (n > 0) {
+        printf("psxrecomp: %d savestate(s) in %s predate per-disc naming and "
+               "are not listed; nothing in them says which disc they were "
+               "taken on, so rename with the disc token to use one.\n",
+               n, bios_dir);
+        fflush(stdout);
+    }
+}
+
 void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry_pc,
                          const char* bios_token, uint32_t openbios_wordsum) {
     s_bios_checksum = bios_checksum;
@@ -338,6 +393,7 @@ void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry
             s_dir[sizeof(s_dir) - 1] = '\0';
         }
         ensure_dir(s_dir);
+        if (s_disc_token[0]) note_unscoped_legacy_states(s_dir);
     } else {
         /* Netplay guest sandbox / already-scoped path: do not clear the
          * personal root/token remembered from the last bios-scoped configure. */
@@ -373,16 +429,18 @@ int savestate_slot_path(int slot, char* out, size_t cap) {
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
     /* Keyed by entry_pc so slots from different games in a shared dir never
      * collide; boot_state_load also rejects a mismatched entry_pc internally. */
-    snprintf(out, cap, "%s%sstate_%08X_slot%02d.pst",
-             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc, slot);
+    snprintf(out, cap, "%s%sstate_%08X%s_slot%02d.pst",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc,
+             s_disc_token, slot);
     return 1;
 }
 
 static int savestate_thumb_path(int slot, char* out, size_t cap) {
     if (!s_configured || !out || cap == 0) return 0;
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
-    snprintf(out, cap, "%s%sstate_%08X_slot%02d.thumb",
-             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc, slot);
+    snprintf(out, cap, "%s%sstate_%08X%s_slot%02d.thumb",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc,
+             s_disc_token, slot);
     return 1;
 }
 

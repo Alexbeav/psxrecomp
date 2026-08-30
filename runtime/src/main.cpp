@@ -13913,6 +13913,14 @@ session_reboot:
             if (bundled->image)
                 openbios_ws = bundled->image->image_wordsum;
         }
+        /* Multi-disc sets tag savestates with the disc, inside the existing
+         * BIOS directory. A savestate is whole-machine state, so one taken on
+         * disc 2 and restored while disc 1 is mounted resumes a guest that
+         * believes it is still reading disc 2 -- and nothing in the slot list
+         * would say so, because every disc of a set shares one entry_pc, which
+         * is the key the slot files already use. Single-disc titles pass 0 and
+         * keep their existing filenames untouched. */
+        savestate_set_disc_scope(game_discs.size() > 1 ? selected_disc_index : 0);
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
