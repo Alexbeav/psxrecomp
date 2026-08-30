@@ -10,8 +10,8 @@ extern "C" {
 enum {
     DMA_GPU_LL_PHASE_IDLE = 0,
     DMA_GPU_LL_PHASE_HEADER = 1,
-    DMA_GPU_LL_PHASE_PAYLOAD = 2,
-    DMA_GPU_LL_PHASE_COMPLETE = 3
+    DMA_GPU_LL_PHASE_SETUP = 2,
+    DMA_GPU_LL_PHASE_PAYLOAD = 3
 };
 
 typedef struct {
@@ -23,6 +23,7 @@ typedef struct {
     uint32_t current_addr;
     uint32_t next_addr;
     uint32_t word_count;
+    uint32_t payload_index;
     uint32_t cycles_remaining;
     uint32_t nodes_processed;
     uint32_t max_nodes;

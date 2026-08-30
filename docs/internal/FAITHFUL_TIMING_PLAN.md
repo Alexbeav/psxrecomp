@@ -213,6 +213,16 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-08-31 (GPU DMA2 review correction — source gate passed):**
+  Fork review found two valid timing defects in the DMA2 candidate. The
+  linked-list engine now reads and emits one live payload word at each
+  one-clock boundary. A CPU rewrite after an earlier word transfers can now
+  affect a later word. The optional widescreen prepass now fingerprints its
+  cached nodes and commands. It discards all cached transform metadata if live
+  RAM differs. The focused regressions pass, and all 55 enabled runtime tests
+  pass. Two pre-existing tests remain disabled. Retail checks and a new fork
+  review are still required before the public branch can change.
+
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
   Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded
   30–500 ms range. The compatibility default remains 180 ms, preserving the

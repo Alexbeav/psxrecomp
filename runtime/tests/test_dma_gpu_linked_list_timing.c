@@ -54,6 +54,32 @@ int main(void) {
     DMAGPULinkedList state;
     memset(ram, 0, sizeof(ram));
 
+    /* A multi-word node must fetch one live RAM word at each DMA word
+     * boundary. In particular, a CPU rewrite after word 0 transfers must be
+     * visible when DMA reaches word 1. */
+    ram[0x40 / 4] = 0x03FFFFFFu;
+    ram[0x44 / 4] = 0x11111111u;
+    ram[0x48 / 4] = 0x22222222u;
+    ram[0x4C / 4] = 0x33333333u;
+
+    dma_gpu_ll_start(&state, 0x40u, 8u);
+    dma_gpu_ll_advance(&state, 8u, &ops, NULL);
+    CHECK(emitted_count == 0u);
+    dma_gpu_ll_advance(&state, 5u, &ops, NULL);
+    CHECK(emitted_count == 0u);
+    CHECK(dma_gpu_ll_cycles_to_event(&state) == 1u);
+    dma_gpu_ll_advance(&state, 1u, &ops, NULL);
+    CHECK(emitted_count == 1u && emitted[0] == 0x11111111u);
+    ram[0x48 / 4] = 0xA5A5A5A5u;
+    dma_gpu_ll_advance(&state, 1u, &ops, NULL);
+    CHECK(emitted_count == 2u && emitted[1] == 0xA5A5A5A5u);
+    dma_gpu_ll_advance(&state, 1u, &ops, NULL);
+    CHECK(emitted_count == 3u && emitted[2] == 0x33333333u);
+    CHECK(completed == 1u && hit_limit == 0u && !state.active);
+
+    memset(emitted, 0, sizeof(emitted));
+    emitted_count = completed = hit_limit = 0u;
+
     /* Node 0 at 0x00 points to node 1 at 0x20. Node 1 terminates. */
     ram[0x00 / 4] = 0x01000020u;
     ram[0x04 / 4] = 0x11111111u;
@@ -70,18 +96,21 @@ int main(void) {
     CHECK(emitted_count == 0u);
     CHECK(dma_gpu_ll_cycles_to_event(&state) == 5u);
     dma_gpu_ll_advance(&state, 5u, &ops, NULL);
+    CHECK(emitted_count == 0u);
+    CHECK(dma_gpu_ll_cycles_to_event(&state) == 1u);
+    dma_gpu_ll_advance(&state, 1u, &ops, NULL);
     CHECK(emitted_count == 1u && emitted[0] == 0x11111111u);
 
     /* This is the regression: the CPU changes the later packet after DMA has
      * started. DMA must read the new value when it reaches that packet. */
     ram[0x24 / 4] = 0xA5A5A5A5u;
-    CHECK(dma_gpu_ll_cycles_to_event(&state) == 9u);
-    dma_gpu_ll_advance(&state, 9u, &ops, NULL);
+    CHECK(dma_gpu_ll_cycles_to_event(&state) == 8u);
+    dma_gpu_ll_advance(&state, 8u, &ops, NULL);
     CHECK(emitted_count == 1u);
     dma_gpu_ll_advance(&state, 5u, &ops, NULL);
-    CHECK(emitted_count == 2u && emitted[1] == 0xA5A5A5A5u);
-    CHECK(completed == 0u);
+    CHECK(emitted_count == 1u);
     dma_gpu_ll_advance(&state, 1u, &ops, NULL);
+    CHECK(emitted_count == 2u && emitted[1] == 0xA5A5A5A5u);
     CHECK(completed == 1u && hit_limit == 0u && !state.active);
 
     /* A malformed cycle is bounded and reports the safety stop. */
