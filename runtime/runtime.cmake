@@ -115,7 +115,51 @@ foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR
         list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "$ENV{${_psx_tc_env}}")
     endif()
 endforeach()
+# The compiler's own location is the hint that cannot be forgotten. Callers
+# that pass -DCMAKE_C_COMPILER=<toolchain>/bin/cc without also exporting one of
+# the variables above — the setup wizard among them — used to leave this list
+# empty, and every find_package below then fell through to the host's copy of a
+# dependency. That is not merely a different copy: cmake-clang-v1 compiles
+# against its own sysroot and never searches /usr/include, so a host package is
+# found, reported as "using prebuilt/system", and then fails to compile.
+if(CMAKE_C_COMPILER)
+    get_filename_component(_psx_cc_bin "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(_psx_cc_pfx "${_psx_cc_bin}" DIRECTORY)
+    if(_psx_cc_pfx AND EXISTS "${_psx_cc_pfx}")
+        list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "${_psx_cc_pfx}")
+    endif()
+    unset(_psx_cc_bin)
+    unset(_psx_cc_pfx)
+endif()
 list(REMOVE_DUPLICATES _PSX_TOOLCHAIN_PREFIX_HINTS)
+
+# A dependency found outside the compiler's sysroot may still be unusable: the
+# toolchain will not search it, and for headers under /usr/include CMake cannot
+# even pass -I, because it drops that directory from include lists to avoid
+# disturbing the system header order. So a "found" package has to be compiled
+# before it is believed. Sets <out> to TRUE/FALSE.
+include(CheckIncludeFile)
+# INCLUDES for a bare header directory, LIBRARIES for an imported target — an
+# imported target must be asked through CMAKE_REQUIRED_LIBRARIES rather than by
+# reading INTERFACE_INCLUDE_DIRECTORIES off it, because a package may carry its
+# headers on a transitive target. SDL3::SDL3 does exactly that (its include
+# dirs live on SDL3::Headers), so reading the property yields NOTFOUND and the
+# check would fail against a perfectly good SDL3.
+function(_psx_header_compiles out header)
+    cmake_parse_arguments(_psx_hc "" "" "INCLUDES;LIBRARIES" ${ARGN})
+    set(CMAKE_REQUIRED_INCLUDES ${_psx_hc_INCLUDES})
+    set(CMAKE_REQUIRED_LIBRARIES ${_psx_hc_LIBRARIES})
+    set(CMAKE_REQUIRED_QUIET ON)
+    string(MAKE_C_IDENTIFIER
+           "_psx_have_${header}_${_psx_hc_INCLUDES}_${_psx_hc_LIBRARIES}"
+           _cache_var)
+    check_include_file("${header}" ${_cache_var})
+    if(${_cache_var})
+        set(${out} TRUE PARENT_SCOPE)
+    else()
+        set(${out} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
 
 if(_psx_sdl_backend STREQUAL "SDL3")
     set(PSX_SDL3 ON)
@@ -147,6 +191,23 @@ if(_psx_sdl_backend STREQUAL "SDL3")
         PATH_SUFFIXES lib/cmake/SDL3)
     unset(_PSX_SDL3_HINTS)
     if(TARGET SDL3::SDL3)
+        # Trust it only if the compiler can actually read its headers. A host
+        # SDL3 under /usr/include satisfies find_package and then fails every
+        # translation unit that includes psx_sdl.h.
+        _psx_header_compiles(_psx_sdl3_ok "SDL3/SDL.h" LIBRARIES SDL3::SDL3)
+        if(NOT _psx_sdl3_ok)
+            message(FATAL_ERROR
+                "psxrecomp: SDL3 was found at ${SDL3_DIR} but <SDL3/SDL.h> does "
+                "not compile with ${CMAKE_C_COMPILER}.\n"
+                "That compiler searches its own sysroot, not the host's "
+                "/usr/include, so this SDL3 cannot be used even though CMake "
+                "located it.\n"
+                "Fix: point SDL3_DIR at the copy shipped with the toolchain, "
+                "e.g. -DSDL3_DIR=<toolchain>/deps/lib/cmake/SDL3, or configure "
+                "with -DPSX_SDL_BACKEND=SDL2, or build with a compiler that "
+                "sees the host headers.")
+        endif()
+        unset(_psx_sdl3_ok)
         message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
     endif()
     if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
@@ -962,6 +1023,26 @@ function(psxrecomp_add_runtime_target target)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
 
+    # Publish the name we just chose, so nothing downstream has to re-derive it.
+    #
+    # Two other places used to compute this independently — psxrecomp_cli.py
+    # from --exe-name, and the in-runtime self-compiler from
+    # codegen_setup.exe_basename — each re-running the same
+    # MAKE_C_IDENTIFIER(WINDOW_TITLE) rule against its own copy of the title.
+    # The rules agree; the copies drift. Rename a game and the build links
+    # <new>.exe while both consumers look for <old>.exe, which surfaces as the
+    # flatly untrue "build succeeded but binary missing" on a build that had no
+    # errors at all. Seen in the wild on Revelations: Persona, where CMake
+    # emitted Revelations__Persona_Recompiled.exe and the setup host wanted
+    # Revelations_Persona__Recompiled.exe — same algorithm, colon in a
+    # different place.
+    #
+    # Generate-time output uses the final target property, so a game that
+    # changes OUTPUT_NAME after this helper returns still publishes the name
+    # CMake will actually link.
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/psxrecomp_exe_name-${target}.txt"
+         CONTENT "$<TARGET_FILE_BASE_NAME:${target}>\n")
+
     # ---- Windows / desktop app icon ---------------------------------------
     # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
     # the framework default shipped in psxrecomp/assets (RetComM-themed pad).
@@ -1537,6 +1618,23 @@ function(psxrecomp_add_runtime_target target)
     endif()
     find_program(GLSLC_EXE NAMES glslc
         HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+    # Finding the header is not the same as being able to include it. The usual
+    # miss is _vk_inc=/usr/include: CMake drops that directory from include
+    # lists (adding it explicitly would disturb the system header order), so
+    # the -I never reaches the compiler, and a sysroot toolchain never had it
+    # on the search path to begin with. Verify, then fall back to the inert
+    # stub this block already knows how to build.
+    if(_vk_inc AND GLSLC_EXE)
+        _psx_header_compiles(_psx_vk_ok "vulkan/vulkan.h" INCLUDES "${_vk_inc}")
+        if(NOT _psx_vk_ok)
+            message(STATUS
+                "Vulkan backend: headers at ${_vk_inc} are not reachable from "
+                "${CMAKE_C_COMPILER} - gpu_vk_renderer.c builds as a software "
+                "stub. Set VULKAN_SDK to a copy the compiler can see to enable it.")
+            set(_vk_inc "")
+        endif()
+        unset(_psx_vk_ok)
+    endif()
     if(_vk_inc AND GLSLC_EXE)
         message(STATUS "Vulkan backend: headers ${_vk_inc}, glslc ${GLSLC_EXE}")
         target_include_directories(${target} PRIVATE "${_vk_inc}")
