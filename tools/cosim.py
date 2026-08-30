@@ -173,8 +173,11 @@ def main():
             for _ in range(max(0, n)):
                 cmd(sa, "step 1", timeout=1200)
                 cmd(sb, "step 1", timeout=1200)
-            da = parse_cpu(cmd(sa, "cpu"))
-            db = parse_cpu(cmd(sb, "cpu"))
+            ra = cmd(sa, "cpu"); rb = cmd(sb, "cpu")
+            da = parse_cpu(ra)
+            db = parse_cpu(rb)
+            print(f"A cpu dump: {ra}", flush=True)
+            print(f"B cpu dump: {rb}", flush=True)
             print(f"CPU field-diff at cp {args.cpudiff_at_cp}  (A={args.a} B={args.b}):", flush=True)
             diffs = [k for k in da if da.get(k) != db.get(k)]
             if not diffs:
