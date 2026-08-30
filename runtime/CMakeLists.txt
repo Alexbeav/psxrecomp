@@ -167,6 +167,13 @@ if(BUILD_TESTING)
     add_test(NAME mod_gpu_dma_aperture_test
              COMMAND mod_gpu_dma_aperture_test)
 
+    add_executable(dma_gpu_linked_list_timing_test
+        tests/test_dma_gpu_linked_list_timing.c
+        src/dma_gpu_ll.c)
+    target_include_directories(dma_gpu_linked_list_timing_test PRIVATE include)
+    add_test(NAME dma_gpu_linked_list_timing_test
+             COMMAND dma_gpu_linked_list_timing_test)
+
     # Clean-room SPU DSP fidelity (issue #103): SPU IRQ on every RAM access
     # class, reverb (write gating + work-area wrap + CD-only path), noise
     # generator, volume sweeps / direct decode, capture buffers, and
