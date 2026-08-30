@@ -2801,6 +2801,7 @@ void cdrom_init(const char* cue_path) {
     seek_min = seek_sec = seek_sect = 0;
     s_setloc_lba = -1;
     setloc_seek_far = 0;
+    setloc_pending = 0;
     s_warm_routes_count = 0;
     s_warm_route_configured = 0;
     s_warm_route_enabled = 0;
@@ -3479,6 +3480,13 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
 }
 
 #ifdef PSX_CDROM_SEEK_SEMANTICS_TEST
+int cdrom_test_init_clears_setloc(void) {
+    setloc_seek_far = 1;
+    setloc_pending = 1;
+    cdrom_init(NULL);
+    return setloc_seek_far || setloc_pending;
+}
+
 int cdrom_test_explicit_seek_ownership(void) {
     int failures = 0;
     reading = 1;
@@ -3541,6 +3549,7 @@ int cdrom_test_implicit_seek_sequence(void) {
     if ((stat_reg & (CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK)) != CDSTAT_READ)
         failures |= 8;
     if (setloc_seek_far) failures |= 16;
+    if (last_sector_lba != s_setloc_lba) failures |= 32;
     return failures;
 }
 
