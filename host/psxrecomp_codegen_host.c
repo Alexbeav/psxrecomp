@@ -83,6 +83,30 @@ static int path_is_file(const char* path) {
 #endif
 }
 
+/* Read the first line of a small text file into out, trimming EOL and any
+ * trailing spaces. Returns 1 on success. Used for the exe-name marker CMake
+ * writes; anything unreadable just leaves the caller on its fallback. */
+static int read_first_line(const char* path, char* out, size_t cap) {
+    FILE* f;
+    size_t n;
+    if (!path || !out || cap == 0)
+        return 0;
+    f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    if (!fgets(out, (int)cap, f)) {
+        fclose(f);
+        out[0] = '\0';
+        return 0;
+    }
+    fclose(f);
+    n = strlen(out);
+    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                     out[n - 1] == ' ' || out[n - 1] == '\t'))
+        out[--n] = '\0';
+    return out[0] != '\0';
+}
+
 static int path_is_absolute(const char* path) {
     if (!path || !path[0]) return 0;
 #if defined(_WIN32)
@@ -1084,11 +1108,28 @@ static int resolve_build_paths(void) {
         }
     }
 
+    /* Prefer the name CMake published over the one baked into codegen_setup.c.
+     * Both are MAKE_C_IDENTIFIER(WINDOW_TITLE), but from two separate copies of
+     * the title, so renaming a game leaves this one pointing at an executable
+     * that is never produced. runtime.cmake writes the name it really used to
+     * psxrecomp_exe_name-<target>.txt beside the build. */
+    char basename[256];
+    snprintf(basename, sizeof(basename), "%s", g_exe_basename);
+    if (g_cfg && g_cfg->cmake_target && g_cfg->cmake_target[0]) {
+        char marker[1200], published[256];
+        snprintf(published, sizeof(published), "psxrecomp_exe_name-%s.txt",
+                 g_cfg->cmake_target);
+        if (join_path(marker, sizeof(marker), g_build_dir, published) &&
+            read_first_line(marker, published, sizeof(published)) &&
+            published[0])
+            snprintf(basename, sizeof(basename), "%s", published);
+    }
+
     char exe_name[300];
 #if defined(_WIN32)
-    snprintf(exe_name, sizeof(exe_name), "%s.exe", g_exe_basename);
+    snprintf(exe_name, sizeof(exe_name), "%s.exe", basename);
 #else
-    snprintf(exe_name, sizeof(exe_name), "%s", g_exe_basename);
+    snprintf(exe_name, sizeof(exe_name), "%s", basename);
 #endif
     return join_path(g_exe_path, sizeof(g_exe_path), g_build_dir, exe_name);
 }
@@ -1323,6 +1364,113 @@ static int resolve_bios_arg(char* out, size_t cap) {
 }
 
 /* bios_path NULL = leave bios.cfg untouched; "" = clear (OpenBIOS); else write. */
+/* ---- multi-disc roster (game.toml [game] discs) --------------------------
+ *
+ * The RUNTIME launcher has published a disc roster for a while, built from
+ * game.toml [game] discs. The SETUP host never did -- so on a first run the
+ * wizard could not know a title was a 3-disc set and asked for a single image.
+ * The other discs were then discovered missing much later, mid-game, at the
+ * first swap.
+ *
+ * Mirrors the runtime's rule: a roster is published only when there is more
+ * than one image, so single-disc titles see no behavioural change at all.
+ * Matches LNG_MAX_DISCS in recomp-ui; a longer list is clamped, exactly as the
+ * launcher clamps it. */
+#define PSX_HOST_MAX_DISCS 8
+
+static char g_disc_paths[PSX_HOST_MAX_DISCS][1024];
+/* What the PLAYER located in the wizard, as opposed to what game.toml already
+ * claimed. Generate writes these into game.toml so the runtime's hot-swap
+ * roster ([game] discs) describes the images this machine actually has. */
+static char g_wizard_discs[PSX_HOST_MAX_DISCS][1024];
+static int  g_wizard_disc_count;
+static RecompLauncherCDisc g_disc_roster[PSX_HOST_MAX_DISCS];
+static int  g_num_discs;
+
+static int host_path_is_absolute(const char* p) {
+    if (!p || !p[0]) return 0;
+    if (p[0] == '/' || p[0] == '\\') return 1;
+    return (p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') ||
+                            (p[0] >= 'a' && p[0] <= 'z')));
+}
+
+/* Minimal reader for one known key rather than a TOML library: this host shells
+ * out to Python for every real parse, and pulling in a parser to read a single
+ * array of strings would be a dependency for one line of config.
+ *
+ * Only [game] discs is recognised, and only string entries -- anything else in
+ * the file is skipped rather than guessed at. */
+static void load_game_toml_disc_roster(void) {
+    FILE* f;
+    char line[1600];
+    int in_game = 0, in_array = 0, i;
+
+    g_num_discs = 0;
+    if (!g_game_toml[0]) return;
+    f = fopen(g_game_toml, "rb");
+    if (!f) return;
+
+    while (fgets(line, sizeof(line), f)) {
+        const char* p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (!in_array) {
+            if (*p == '[') {                    /* section header */
+                in_game = (strncmp(p, "[game]", 6) == 0);
+                continue;
+            }
+            if (*p == '#' || !*p) continue;
+            if (!in_game) continue;
+            if (strncmp(p, "discs", 5) != 0) continue;
+            p += 5;
+            while (*p == ' ' || *p == '\t') ++p;
+            /* Guard against a longer key that merely starts with "discs". */
+            if (*p != '=') continue;
+            ++p;
+            in_array = 1;
+        }
+        for (; *p; ++p) {
+            if (*p == ']') { in_array = 0; break; }
+            if (*p == '#') break;               /* trailing comment */
+            if (*p != '"') continue;
+            {
+                const char* q = ++p;
+                size_t n;
+                while (*p && *p != '"') ++p;
+                if (!*p) break;                 /* unterminated -- give up */
+                n = (size_t)(p - q);
+                if (g_num_discs < PSX_HOST_MAX_DISCS &&
+                    n < sizeof(g_disc_paths[0])) {
+                    memcpy(g_disc_paths[g_num_discs], q, n);
+                    g_disc_paths[g_num_discs][n] = '\0';
+                    ++g_num_discs;
+                }
+            }
+        }
+        if (!in_array) break;
+    }
+    fclose(f);
+
+    /* game.toml may hold repo-relative paths. The launcher existence-checks
+     * what we publish, and its cwd is not necessarily the project root, so a
+     * relative entry would render as "missing" on a perfectly good install. */
+    for (i = 0; i < g_num_discs; ++i) {
+        char abs[1024];
+        if (host_path_is_absolute(g_disc_paths[i])) continue;
+        if (!g_project_root[0]) continue;
+        if (join_path(abs, sizeof(abs), g_project_root, g_disc_paths[i]))
+            snprintf(g_disc_paths[i], sizeof(g_disc_paths[i]), "%s", abs);
+    }
+
+    /* One image is not a set: leave GameInfo dark so nothing changes for
+     * single-disc titles. */
+    if (g_num_discs < 2) { g_num_discs = 0; return; }
+    for (i = 0; i < g_num_discs; ++i) {
+        g_disc_roster[i].number = i + 1;
+        g_disc_roster[i].label = NULL;   /* launcher formats "Disc N" */
+        g_disc_roster[i].path = g_disc_paths[i];
+    }
+}
+
 static int host_persist_setup(void* ctx, const char* rom_path,
                               const char* bios_path) {
     char path[1200];
@@ -1364,6 +1512,68 @@ static int host_persist_setup(void* ctx, const char* rom_path,
                           g_exe_basename))
                 write_sidecar_near_exe(build_exe, "disc.cfg", rom_path);
         }
+    }
+    return 0;
+}
+
+/* Multi-disc flush (RecompLauncherCGameInfo.persist_setup_discs).
+ *
+ * disc.cfg becomes one path per line, in disc order. Readers that take only
+ * the first line keep working and get disc 1 -- which is what they got before
+ * this existed -- so the format change is additive in the direction that
+ * matters. A slot the player has not located is written as an EMPTY line
+ * rather than skipped, so line N is always disc N and filling one in later
+ * cannot renumber the others.
+ *
+ * The BIOS half is delegated to host_persist_setup: passing rom_path NULL runs
+ * its bios.cfg logic and skips its single-path disc write, so the two entry
+ * points cannot drift on BIOS handling. */
+static int host_persist_setup_discs(void* ctx, const char* const* disc_paths,
+                                    int disc_count, const char* bios_path) {
+    char body[PSX_HOST_MAX_DISCS * 1030];
+    char path[1200];
+    size_t o = 0;
+    int i, any = 0;
+
+    host_persist_setup(ctx, NULL, bios_path);
+
+    if (!disc_paths || disc_count <= 0)
+        return 0;
+    if (disc_count > PSX_HOST_MAX_DISCS)
+        disc_count = PSX_HOST_MAX_DISCS;
+
+    g_wizard_disc_count = 0;
+    for (i = 0; i < disc_count; ++i) {
+        const char* d = disc_paths[i] ? disc_paths[i] : "";
+        snprintf(g_wizard_discs[i], sizeof(g_wizard_discs[i]), "%s", d);
+        if (d[0]) g_wizard_disc_count = i + 1;   /* trailing blanks are not a set */
+    }
+
+    body[0] = '\0';
+    for (i = 0; i < disc_count; ++i) {
+        const char* d = disc_paths[i] ? disc_paths[i] : "";
+        size_t n = strlen(d);
+        if (o + n + 2 >= sizeof(body))
+            return 0;
+        if (i) body[o++] = '\n';
+        if (n) { memcpy(body + o, d, n); o += n; any = 1; }
+        body[o] = '\0';
+    }
+    /* Nothing located: leave any existing disc.cfg alone rather than replacing
+     * it with a file of blank lines. */
+    if (!any)
+        return 0;
+
+    if (g_project_root[0] &&
+        join_path(path, sizeof(path), g_project_root, "disc.cfg"))
+        write_line_file(path, body);
+    write_line_file("disc.cfg", body);
+    if (g_exe_path[0])
+        write_sidecar_near_exe(g_exe_path, "disc.cfg", body);
+    if (g_build_dir[0]) {
+        char build_exe[1200];
+        if (join_path(build_exe, sizeof(build_exe), g_build_dir, g_exe_basename))
+            write_sidecar_near_exe(build_exe, "disc.cfg", body);
     }
     return 0;
 }
@@ -3304,6 +3514,74 @@ static int host_ensure_toolchain(RecompLauncherCPrepareProgressFn on_progress,
                                                on_progress, progress_ctx);
 }
 
+/* Record the located set in game.toml before Generate reads it.
+ *
+ * disc.cfg is the mounted-image cache and the runtime takes only its first
+ * line; the hot-swap roster is built from game.toml [game] discs. So the
+ * wizard's picks reach the roster only by being written there -- which is
+ * exactly what the RetComM path does by running probe_disc.py per image and
+ * verify_disc_set.py over the results.
+ *
+ * update_disc_set.py performs the same probe/verify and then edits ONLY the
+ * disc keys, leaving the project's hand-tuned sections and comments alone. It
+ * is a no-op when game.toml already names these images, so a re-run of the
+ * wizard does not churn the file.
+ *
+ * A failure here is reported and non-fatal: Generate itself only needs the
+ * boot image, and refusing to build because disc 3 could not be probed would
+ * be a worse outcome than building with a single-disc roster. */
+static void host_update_disc_set(RecompLauncherCPrepareProgressFn on_progress,
+                                 void* progress_ctx) {
+    char script[1200];
+    char cmd[4096];
+    const char* cut;
+    size_t n;
+    int i, off;
+
+    if (g_wizard_disc_count < 2 || !g_python[0] || !g_cli_path[0] ||
+        !g_game_toml[0])
+        return;
+
+    /* tools/ sits beside psxrecomp_cli.py, wherever the submodule lives. */
+    cut = strrchr(g_cli_path, '/');
+#if defined(_WIN32)
+    {
+        const char* b = strrchr(g_cli_path, '\\');
+        if (b && (!cut || b > cut)) cut = b;
+    }
+#endif
+    if (!cut) return;
+    n = (size_t)(cut - g_cli_path);
+    if (n >= sizeof(script)) return;
+    memcpy(script, g_cli_path, n);
+    script[n] = '\0';
+    if ((size_t)snprintf(script + n, sizeof(script) - n,
+                         "/tools/new_project_layout/update_disc_set.py") >=
+        sizeof(script) - n)
+        return;
+    if (!path_is_file(script))
+        return;   /* older SDK checkout: nothing to run, single-disc as before */
+
+    off = snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" --game-toml \"%s\"",
+                   g_python, script, g_game_toml);
+    for (i = 0; i < g_wizard_disc_count; ++i) {
+        if (!g_wizard_discs[i][0])
+            return;   /* a gap in the middle would renumber the set */
+        if (off < 0 || (size_t)off >= sizeof(cmd))
+            return;
+        off += snprintf(cmd + off, sizeof(cmd) - (size_t)off, " \"%s\"",
+                        g_wizard_discs[i]);
+    }
+    if (off < 0 || (size_t)off >= sizeof(cmd))
+        return;
+
+    if (on_progress)
+        on_progress(progress_ctx, 0.03f, "Recording the disc set…");
+    if (!run_cmd_exit_zero(cmd) && on_progress)
+        on_progress(progress_ctx, 0.03f,
+                    "Could not record every disc — continuing with the boot disc.");
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -3331,6 +3609,9 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     }
     if (on_progress)
         on_progress(progress_ctx, 0.02f, "Starting psxrecomp generate…");
+
+    /* Must precede the CLI: generate reads game.toml. */
+    host_update_disc_set(on_progress, progress_ctx);
 
     /* Hand the CLI the launcher's staged disc + BIOS. Empty g_wizard_bios means
      * OpenBIOS unless setup can adopt a retail dump beside the install. */
@@ -3956,6 +4237,15 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     (void)find_python(g_python, sizeof(g_python));
     gi->persist_setup = host_persist_setup;
     gi->persist_setup_ctx = NULL;
+    /* Multi-disc titles only: load_game_toml_disc_roster leaves g_num_discs 0
+     * for a single image, so the wizard keeps its one-image layout and the
+     * launcher keeps taking the single-path flush. */
+    load_game_toml_disc_roster();
+    if (g_num_discs > 1) {
+        gi->discs = g_disc_roster;
+        gi->num_discs = g_num_discs;
+        gi->persist_setup_discs = host_persist_setup_discs;
+    }
     gi->prepare_with_progress = host_prepare_generate;
     gi->prepare_use_selected_rom = 1;
     /* Number prefix is applied in the setup UI (BIOS adds a step). */

@@ -543,6 +543,42 @@ jobs:
           scripts/package_setup_release.sh build-ci "${{ matrix.artifact }}" build-recompiler
           ls -la dist/
 
+      - name: Verify zip ships the mod catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Gate the release on the catalog actually being inside the zip.
+          # The packager stages mods/ by default, but this shipped broken for
+          # a long time precisely because nothing checked: the Mods page was
+          # empty in every release and the build logs looked fine. Assert the
+          # artifact, not the intent.
+          ZIP=$(ls dist/YOUR_ZIP_PREFIX-*-"${{ matrix.artifact }}".zip | head -1)
+          echo "checking ${ZIP}"
+          MANIFESTS=$(unzip -l "${ZIP}" | grep -c 'mods/packages/.*/manifest\.toml' || true)
+          echo "mod manifests in zip: ${MANIFESTS}"
+          if [[ "${MANIFESTS}" -lt 1 ]]; then
+            echo "::error::release zip ships no mod catalog (mods/packages/*/manifest.toml)" >&2
+            unzip -l "${ZIP}" | head -40 >&2
+            exit 1
+          fi
+          # Per-machine mod state must never ship: preloaded catalogs are
+          # default-disabled, so a leaked state.toml makes one machine's
+          # selections everybody's defaults.
+          if unzip -l "${ZIP}" | grep -q 'state\.toml'; then
+            echo "::error::release zip contains mods/state.toml (per-machine state)" >&2
+            exit 1
+          fi
+          # Developer-channel packages are unfinished work that ships with
+          # local builds only. The packager drops them under CI automatically
+          # (it keys off $CI); assert the outcome so a future change to that
+          # default cannot quietly publish in-progress mods.
+          if unzip -p "${ZIP}" 'mods/**/manifest.toml' 2>/dev/null \
+               | grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"'; then
+            echo "::error::release zip contains developer-channel mod packages" >&2
+            exit 1
+          fi
+          echo "mod catalog verified in ${ZIP} (no developer-channel packages)"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

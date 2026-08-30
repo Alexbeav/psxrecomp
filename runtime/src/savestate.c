@@ -84,16 +84,20 @@ typedef struct SavestateThumbHeader {
  * parked). Prefer sticky BB / compiled latches over writing a null resume. */
 static uint32_t savestate_resolve_resume_pc(const CPUState* cpu, uint32_t hint)
 {
-    const uint32_t cands[6] = {
-        hint,
-        cpu ? cpu->pc : 0u,
-        psx_compiled_irq_resume_pc(),
-        psx_last_irq_check_pc(),
-        psx_netplay_rb_sticky_bb_pc(),
-        cpu ? cpu->gpr[31] : 0u,
-    };
+    uint32_t cands[7];
+    int n = 0;
     int i;
-    for (i = 0; i < 6; ++i) {
+
+    if (psx_irq_resume_context_snapshot_site() != 0)
+        cands[n++] = psx_irq_resume_context_snapshot_pc();
+    cands[n++] = hint;
+    cands[n++] = cpu ? cpu->pc : 0u;
+    cands[n++] = psx_compiled_irq_resume_pc();
+    cands[n++] = psx_last_irq_check_pc();
+    cands[n++] = psx_netplay_rb_sticky_bb_pc();
+    cands[n++] = cpu ? cpu->gpr[31] : 0u;
+
+    for (i = 0; i < n; ++i) {
         uint32_t pc = cands[i];
         if (!pc || (pc & 3u) != 0u)
             continue;
@@ -415,6 +419,61 @@ static void migrate_legacy_pst_by_bios(const char* root, uint32_t openbios_words
     }
 }
 
+/* "_disc2", or empty for a single-disc title. Part of the slot FILENAME, not
+ * a directory: discs of one set share a BIOS and a save root, and a filename
+ * token separates them without adding a directory level to browse, back up and
+ * migrate. Empty leaves the historical name byte-for-byte, so single-disc
+ * titles keep every existing state. */
+static char s_disc_token[16];
+
+void savestate_set_disc_scope(int disc_number) {
+    if (disc_number >= 1)
+        snprintf(s_disc_token, sizeof(s_disc_token), "_disc%d", disc_number);
+    else
+        s_disc_token[0] = '\0';
+}
+
+/* Count state_*.pst sitting directly in the BIOS directory once per-disc
+ * scoping is active. They predate the split and cannot be placed: every disc
+ * of a set shares one entry_pc, so nothing in the file says which disc it was
+ * taken on. Moving them would be a guess, and guessing wrong reintroduces the
+ * exact mix-up this scoping exists to prevent -- so say where they are and
+ * leave them for the player to place deliberately. */
+static void note_unscoped_legacy_states(const char* bios_dir) {
+    int n = 0;
+#if defined(_WIN32)
+    char pattern[600];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    snprintf(pattern, sizeof(pattern), "%s\\state_*.pst", bios_dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { n++; } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR* d = opendir(bios_dir);
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d))) {
+            size_t len = strlen(e->d_name);
+            if (len > 4 && strncmp(e->d_name, "state_", 6) == 0 &&
+                strcmp(e->d_name + len - 4, ".pst") == 0 &&
+                strstr(e->d_name, "_disc") == NULL)
+                n++;
+        }
+        closedir(d);
+    }
+#endif
+    if (n > 0) {
+        printf("psxrecomp: %d savestate(s) in %s predate per-disc naming and "
+               "are not listed; nothing in them says which disc they were "
+               "taken on, so rename with the disc token to use one.\n",
+               n, bios_dir);
+        fflush(stdout);
+    }
+}
+
 void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry_pc,
                          const char* bios_token, uint32_t openbios_wordsum) {
     s_bios_checksum = bios_checksum;
@@ -449,6 +508,7 @@ void savestate_configure(const char* dir, uint32_t bios_checksum, uint32_t entry
                        "entry=0x%08X",
                        s_root, s_dir, s_bios_token,
                        (unsigned)s_entry_pc);
+        if (s_disc_token[0]) note_unscoped_legacy_states(s_dir);
     } else {
         /* Netplay guest sandbox / already-scoped path: do not clear the
          * personal root/token remembered from the last bios-scoped configure. */
@@ -484,16 +544,18 @@ int savestate_slot_path(int slot, char* out, size_t cap) {
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
     /* Keyed by entry_pc so slots from different games in a shared dir never
      * collide; boot_state_load also rejects a mismatched entry_pc internally. */
-    snprintf(out, cap, "%s%sstate_%08X_slot%02d.pst",
-             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc, slot);
+    snprintf(out, cap, "%s%sstate_%08X%s_slot%02d.pst",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc,
+             s_disc_token, slot);
     return 1;
 }
 
 static int savestate_thumb_path(int slot, char* out, size_t cap) {
     if (!s_configured || !out || cap == 0) return 0;
     if (slot < 0 || slot >= SAVESTATE_SLOTS) return 0;
-    snprintf(out, cap, "%s%sstate_%08X_slot%02d.thumb",
-             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc, slot);
+    snprintf(out, cap, "%s%sstate_%08X%s_slot%02d.thumb",
+             s_dir, (s_dir[0] ? "/" : ""), (unsigned)s_entry_pc,
+             s_disc_token, slot);
     return 1;
 }
 
@@ -847,7 +909,8 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
         /* upstream (mstan #230/#237): never snapshot at a dirty-RAM pump site, and
          * accept a missing hint only when the resolved PC is cpu->pc itself. */
-        int snapshot_safe = psx_irq_resume_context_snapshot_safe();
+        int snapshot_safe = psx_irq_resume_context_snapshot_safe_at(pc);
+        int snapshot_site = psx_irq_resume_context_snapshot_site();
         int pc_matches_cpu = cpu && cpu->pc != 0u &&
                              (((cpu->pc ^ pc) & 0x1FFFFFFFu) == 0u);
         /* ---- downstream HLE scheduler-boundary admission ----------------------
@@ -911,13 +974,14 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 s_save_defer_t0 = now;
                 fprintf(stderr,
                         "savestate: deferring slot %d — %s [%s] "
-                        "(hint=0x%08X resolved=0x%08X)\n",
+                        "(hint=0x%08X resolved=0x%08X safe=%d site=%d)\n",
                         slot,
                         needs_scheduler_boundary
                             ? "waiting for scheduler snapshot boundary"
                             : "no safe resume PC",
                         savestate_admission_reason(&adm),
-                        (unsigned)resume_pc, (unsigned)pc);
+                        (unsigned)resume_pc, (unsigned)pc,
+                        snapshot_safe, snapshot_site);
                 savestate_diag("save_defer", slot,
                                "reason=%s hint=0x%08X resolved=0x%08X "
                                "sp=0x%08X ra=0x%08X",
@@ -939,13 +1003,14 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_status_generation++;
             fprintf(stderr,
                     "savestate: SAVE FAILED slot %d — %s [%s] "
-                    "(hint=0x%08X resolved=0x%08X)\n",
+                    "(hint=0x%08X resolved=0x%08X safe=%d site=%d)\n",
                     slot,
                     needs_scheduler_boundary
                         ? "no scheduler snapshot boundary"
                         : "no safe resume PC",
                     savestate_admission_reason(&adm),
-                    (unsigned)resume_pc, (unsigned)pc);
+                    (unsigned)resume_pc, (unsigned)pc,
+                    snapshot_safe, snapshot_site);
             savestate_diag("save_reject", slot,
                            "reason=bounded_timeout last=%s hint=0x%08X "
                            "resolved=0x%08X",

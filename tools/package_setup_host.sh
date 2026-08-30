@@ -26,6 +26,22 @@
 # Per-user state (mods/state.toml) is always excluded. The -optional variant
 # warns and continues when the directory is absent from the build.
 #
+# mods/ IS STAGED BY DEFAULT and is REQUIRED. Every non-oracle game runtime
+# gets <exe>/mods from runtime.cmake, so a release missing it means the build
+# wiring is broken and the title would ship with an empty Mods page -- which
+# is exactly what happened: this was opt-in per title, and 21 of 23 ports
+# silently shipped no mods at all because their generated wrapper never passed
+# --runtime-dir mods. Enforce it here rather than in each title's wrapper.
+# A title that genuinely ships no catalog passes --no-mods.
+#
+# DEVELOPER CHANNEL. A package manifest may declare channel = "developer".
+# Those are work-in-progress catalogs that should stay on the maintainer's
+# machine: they ship with ordinary local builds and local exports, but
+# --exclude-dev-mods (or EXCLUDE_DEV_MODS=1, which CI sets) drops them from a
+# public release. Pruning is by PACKAGE directory, never by rewriting a
+# manifest -- editing a package during packaging would change content that is
+# meant to be verifiable.
+#
 # Env:
 #   RELEASE_VERSION / <version-env> / VERSION file  (must match binary stamp)
 #   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR  (only with --embed-toolchain)
@@ -52,6 +68,20 @@ PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
+# mods/ ships by default; --no-mods opts a catalog-less title out.
+STAGE_MODS=1
+# Drop channel = "developer" packages from the shipped catalog.
+#
+# Defaults to ON under CI and OFF locally, which is the whole point: a
+# maintainer's local build and local export keep the mods they are working on,
+# while anything a release workflow publishes does not. Keying off $CI (set by
+# GitHub Actions and every other provider) means this holds for every title
+# without editing 23 separate release workflows -- a per-workflow opt-in is
+# exactly the shape that left 21 of 23 ports shipping no mods at all.
+# --include-dev-mods / --exclude-dev-mods override either way.
+if [[ -z "${EXCLUDE_DEV_MODS:-}" ]]; then
+  if [[ -n "${CI:-}" ]]; then EXCLUDE_DEV_MODS=1; else EXCLUDE_DEV_MODS=0; fi
+fi
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
@@ -76,6 +106,9 @@ while [[ $# -gt 0 ]]; do
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
+    --no-mods) STAGE_MODS=0; shift ;;
+    --exclude-dev-mods) EXCLUDE_DEV_MODS=1; shift ;;
+    --include-dev-mods) EXCLUDE_DEV_MODS=0; shift ;;
     --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-dir-optional) RUNTIME_DIRS_OPTIONAL+=("${2:?}"); shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
@@ -88,6 +121,33 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Default the mods catalog into the required set unless the caller already
+# named it (in either list) or opted out. Appending rather than overriding
+# keeps an explicit --runtime-dir-optional mods meaningful for a title that
+# knowingly builds without one.
+if [[ "${STAGE_MODS}" -eq 1 ]]; then
+  _mods_named=0
+  for _d in "${RUNTIME_DIRS[@]:-}" "${RUNTIME_DIRS_OPTIONAL[@]:-}"; do
+    [[ "${_d}" == "mods" ]] && _mods_named=1
+  done
+  if [[ "${_mods_named}" -eq 0 ]]; then
+    RUNTIME_DIRS+=("mods")
+  fi
+  # Also ship the SOURCE catalog (mods/preloaded/...) when the title has one.
+  # The setup-host zip rebuilds on the player's machine, and that rebuild
+  # re-runs the title's POST_BUILD mod staging -- which reads the source tree,
+  # not the staged copy. Without this the rebuilt exe silently loses every
+  # game-owned mod and keeps only the framework builtins. copy_proj skips a
+  # path that does not exist, so this is inert for a title with no catalog.
+  _mods_proj=0
+  for _d in "${PROJECT_DIRS[@]:-}"; do
+    [[ "${_d}" == "mods" ]] && _mods_proj=1
+  done
+  if [[ "${_mods_proj}" -eq 0 ]]; then
+    PROJECT_DIRS+=("mods")
+  fi
+fi
 
 if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT}" || -z "${ZIP_PREFIX}" || -z "${EXE_NAME}" ]]; then
   echo "error: --build-dir, --artifact, --zip-prefix, and --exe-name are required" >&2
@@ -263,6 +323,30 @@ copy_runtime_dir() {
   echo "staged runtime dir ${name}/"
 }
 
+# Remove every channel = "developer" package from a staged catalog tree.
+# <tree>/packages/<id>/<version>/manifest.toml is the layout; drop the VERSION
+# directory that declares the channel, then the package directory once it has
+# no versions left. Matching is on the manifest's own declaration so a package
+# carries its own status -- nothing here maintains a list of names to exclude.
+prune_dev_mods() {  # prune_dev_mods <staged-catalog-root>
+  local tree="$1" manifest pkgdir verdir dropped=0
+  [[ -d "${tree}/packages" ]] || return 0
+  while IFS= read -r manifest; do
+    # Tolerate spacing/quoting variants; anchor to a top-level key so a
+    # feature description mentioning the word cannot trigger a drop.
+    if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "${manifest}"; then
+      verdir="$(dirname "${manifest}")"
+      pkgdir="$(dirname "${verdir}")"
+      rm -rf "${verdir}"
+      rmdir "${pkgdir}" 2>/dev/null || true
+      echo "  excluded developer package: $(basename "${pkgdir}")/$(basename "${verdir}")"
+      dropped=$((dropped + 1))
+    fi
+  done < <(find "${tree}/packages" -mindepth 3 -maxdepth 3 -name manifest.toml 2>/dev/null)
+  return 0
+}
+
 if ((${#RUNTIME_DIRS[@]})); then
   for d in "${RUNTIME_DIRS[@]}"; do
     copy_runtime_dir "${d}" 0
@@ -298,6 +382,32 @@ done
 for d in "${PROJECT_DIRS[@]}"; do
   copy_proj "${d}"
 done
+
+# Developer-channel pruning runs AFTER every catalog is staged, and covers BOTH
+# copies: the runtime catalog under mods/packages that the launcher lists, and
+# the source catalog under mods/preloaded that the setup-host rebuild re-stages
+# from. Pruning only the first would publish the package in source form and let
+# the player's own rebuild put it straight back.
+if [[ "${EXCLUDE_DEV_MODS}" -eq 1 ]]; then
+  echo "excluding developer-channel mods from this package"
+  prune_dev_mods "${STAGE}/mods"
+  prune_dev_mods "${STAGE}/mods/preloaded"
+  _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+      "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+  if [[ "${_dev_left}" -ne 0 ]]; then
+    echo "error: ${_dev_left} developer manifest(s) survived pruning:" >&2
+    grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "${STAGE}" --include=manifest.toml >&2 || true
+    exit 1
+  fi
+else
+  _dev_in=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+      "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+  if [[ "${_dev_in}" -ne 0 ]]; then
+    echo "note: package includes ${_dev_in} developer-channel manifest(s);" \
+         "pass --exclude-dev-mods (or EXCLUDE_DEV_MODS=1) for a public release"
+  fi
+fi
 
 copy_tree_filtered() {
   local src="$1" dest="$2"
@@ -388,6 +498,80 @@ RetComM uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
 EOF
+
+# --- Gate: the staged tree must be able to configure itself ----------------
+# The project file/dir list is an allowlist, so any path a project adds to
+# CMakeLists.txt has to be added here too. When that is missed the zip still
+# builds and only fails on the user's machine, at cmake configure, with
+# "Cannot find source file". Catch it at package time instead.
+#
+# Only unguarded references are required: a path used solely inside
+# if(EXISTS "...") is optional by construction, and a glob or a path built from
+# a cmake variable cannot be resolved here.
+if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
+  cml="${STAGE}/CMakeLists.txt"
+  guarded="$(grep -oE 'if\(EXISTS[[:space:]]+"\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+"' "${cml}" \
+               | sed -E 's|.*\$\{CMAKE_CURRENT_SOURCE_DIR\}/||; s|"$||' | sort -u)"
+  missing_refs=()
+  while IFS= read -r rel; do
+    [[ -z "${rel}" ]] && continue
+    case "${rel}" in *"*"*|*"?"*|*'$'*) continue ;; esac
+    if [[ -n "${guarded}" ]] && grep -qxF -- "${rel}" <<<"${guarded}"; then
+      continue
+    fi
+    [[ -e "${STAGE}/${rel}" ]] || missing_refs+=("${rel}")
+  done < <(grep -oE '\$\{CMAKE_CURRENT_SOURCE_DIR\}/[^"]+' "${cml}" \
+             | sed 's|^\${CMAKE_CURRENT_SOURCE_DIR}/||' | sort -u)
+  if (( ${#missing_refs[@]} )); then
+    echo "error: CMakeLists.txt references paths that are not staged in the zip:" >&2
+    for r in "${missing_refs[@]}"; do echo "  - ${r}" >&2; done
+    echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+    exit 1
+  fi
+fi
+
+# Second gate: the project's own C must be able to include what it includes.
+# The CMakeLists check above cannot see this — src/<game>_mods.c pulls in
+# "../psx_symbols.h", a compile input nothing in CMakeLists.txt names, and a zip
+# missing it fails at the first object file rather than at configure.
+#
+# Only project-owned staged paths are scanned. Framework trees (psxrecomp/,
+# recomp-ui/) resolve their headers through -I and are not ours to police.
+missing_incs=()
+for rel in "${PROJECT_FILES[@]}" "${PROJECT_DIRS[@]}"; do
+  [[ -e "${STAGE}/${rel}" ]] || continue
+  while IFS= read -r src; do
+    case "${src}" in *.c|*.cc|*.cpp|*.h|*.hpp) ;; *) continue ;; esac
+    src_dir="$(dirname "${src}")"
+    while IFS= read -r inc; do
+      [[ -z "${inc}" ]] && continue
+      # Only relative includes can name a file the zip is expected to carry.
+      case "${inc}" in /*) continue ;; esac
+      target="${src_dir}/${inc}"
+      [[ -e "${target}" ]] && continue
+      # Resolve against the stage root too (some projects include "x.h" flatly).
+      [[ -e "${STAGE}/${inc}" ]] && continue
+      # Finally, anything reachable through an -I path: the framework trees are
+      # staged whole, so a bare "mod_plugins.h" resolves out of
+      # psxrecomp/runtime/include. Match on basename — deliberately loose, since
+      # a false pass here only forfeits a warning while a false failure would
+      # block a good release.
+      inc_base="${inc##*/}"
+      if find "${STAGE}" -name "${inc_base}" -type f -print -quit 2>/dev/null | grep -q .; then
+        continue
+      fi
+      rel_src="${src#"${STAGE}"/}"
+      missing_incs+=("${inc}  (included by ${rel_src})")
+    done < <(grep -oE '^[[:space:]]*#[[:space:]]*include[[:space:]]+"[^"]+"' "${src}" 2>/dev/null \
+               | sed -E 's|.*"([^"]+)".*|\1|')
+  done < <(find "${STAGE}/${rel}" -type f 2>/dev/null)
+done
+if (( ${#missing_incs[@]} )); then
+  echo "error: staged project sources include files that are not in the zip:" >&2
+  printf '  - %s\n' "${missing_incs[@]}" >&2
+  echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+  exit 1
+fi
 
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 

@@ -444,6 +444,21 @@ if(BUILD_TESTING)
     add_test(NAME video_enhancement_settings_test
              COMMAND video_enhancement_settings_test)
 
+    # [video] rewind opt-in plumbing (default off + settings round trip).
+    add_executable(rewind_settings_test
+        tests/rewind_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(rewind_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(rewind_settings_test PRIVATE fmt)
+    add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
@@ -460,6 +475,13 @@ if(BUILD_TESTING)
             NAME cli_project_packaging
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # The runtime exe name must come from CMake, not be re-derived.
+        add_test(
+            NAME runtime_exe_name
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_exe_name.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # These two invoke psxrecomp-game, whose BIOS-profile resolution
@@ -580,6 +602,7 @@ if(BUILD_TESTING)
                 overlay_decodable_fallback
                 overlay_init_guard
                 runtime_overlay_guards
+                pal_cadence_host_refresh
                 sdl3_main_single_include
                 spu_sample_scheduler_default
                 savestate_capture_boundary_guards

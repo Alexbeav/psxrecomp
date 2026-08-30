@@ -741,6 +741,17 @@ struct GameConfig {
     // the union here).
     std::vector<std::filesystem::path> discs;
 
+    // Optional per-disc serials, PARALLEL to `discs` ([game] disc_serials).
+    // Each disc of a set carries its own serial (FF7 US: SCUS-94163 / -64 /
+    // -65), so a set verified against the BOOT disc's serial alone would
+    // report every other disc as "wrong disc" the moment the player selects
+    // it. May be shorter than `discs` (or absent entirely, which every
+    // single-disc title and every port written before this is): a disc with
+    // no serial here is simply not serial-gated -- the ISO header check
+    // still applies. Written by tools/new_project_layout from the same probe
+    // that produced disc_set.json.
+    std::vector<std::string> disc_serials;
+
     // Optional expected disc identity, for the launcher's "Disc verified" badge.
     // disc_crc: full-file CRC32 (IEEE) of the data track. disc_sha1: lowercase
     // hex SHA-1. Either may be absent (has_disc_crc / disc_sha1.empty()).
@@ -757,6 +768,16 @@ struct GameConfig {
     bool                  has_netplay_required_leadout = false;
     uint32_t              netplay_required_leadout_lba = 0;
     std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+    // Per-disc TOC fingerprints for a MULTI-DISC set, PARALLEL to [game]
+    // discs ([netplay] required_disc_fps). Every disc of a set has its own
+    // TOC, so a set gated on one fingerprint refuses online play on every
+    // disc but that one -- and the flat required_disc_fp above can only ever
+    // name the boot disc. May be shorter than `discs`, or absent (every
+    // single-disc title): a disc with no fingerprint here falls back to the
+    // flat value, and a set that declares neither is simply not fingerprint-
+    // gated. Values come from the same verify_disc_set.py probe that writes
+    // disc_set.json.
+    std::vector<std::string> netplay_required_disc_fps;
     // local_viewport = "vertical_split": while real netplay is active, crop
     // presentation to this peer's left/right split-screen half. This is a
     // presentation-only helper for titles that still render native split-screen
@@ -1215,6 +1236,11 @@ struct UserSettings {
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
     bool has_adaptive_view  = false; bool adaptive_view  = false;
+    // [video] rewind: local rewind ring on/off. OFF by default — the ring
+    // holds whole-machine snapshots (2 MB RAM + 1 MB VRAM + 512 KB SPU RAM
+    // each) and captures on a frame cadence, so it is opt-in rather than a
+    // cost every host pays. Env PSX_REWIND still outranks this.
+    bool has_rewind         = false; bool rewind         = false;
     // [video] rewind_depth: local rewind snap-ring capacity. UI offers
     // 50 / 100 / 150 / 200 (default 50). Runtime clamps + snaps to those steps.
     bool has_rewind_depth   = false; int  rewind_depth   = 50;
@@ -1232,6 +1258,14 @@ struct UserSettings {
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;
+    // [disc] selected: which image of a MULTI-DISC set ([game] discs in
+    // game.toml) the player last chose, 1-based. Stored as an ordinary
+    // setting so the launcher's Disc Selection dropdown persists across
+    // sessions and an external launcher can drive it like any other row.
+    // Ignored by single-disc titles. When it disagrees with disc_path, the
+    // rule is in resolve_selected_disc() (runtime/src/main.cpp): the index
+    // names the disc, disc_path only survives when it is that same disc.
+    bool has_disc_index     = false; int  disc_index     = 1;
     bool has_memcard_dir    = false; std::filesystem::path memcard_dir;
     // Per-slot memory-card overrides. An explicit card path overrides the
     // <dir>/card<N>.mcd default; the enable flag inserts/removes the card.
