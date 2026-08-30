@@ -354,6 +354,7 @@ void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
 void gpu_ws_begin_linked_list(void);
 void gpu_ws_end_linked_list(void);
 void gpu_ws_prepass_linked_list(uint32_t start_addr);
+void gpu_ws_validate_linked_list_header(uint32_t addr, uint32_t header);
 void gpu_ws_validate_linked_list_node(uint32_t addr, uint32_t num_words);
 void gpu_ws_restore_linked_list_rank(uint32_t rank);
 /* Native-wide full-frame 2D backdrop stretch ([widescreen] nw_backdrop):

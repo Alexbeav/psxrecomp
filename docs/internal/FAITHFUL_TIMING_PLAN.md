@@ -214,13 +214,18 @@ on a fixed region -> next.
 ## 5. Status / Log (update every session)
 
 - **2026-08-31 (GPU DMA2 review correction — source gate passed):**
-  Fork review found two valid timing defects in the DMA2 candidate. The
+  The first fork review found two valid timing defects in the DMA2 candidate. The
   linked-list engine now reads and emits one live payload word at each
   one-clock boundary. A CPU rewrite after an earlier word transfers can now
   affect a later word. The optional widescreen prepass now fingerprints its
   cached nodes and commands. It discards all cached transform metadata if live
-  RAM differs. The focused regressions pass, and all 55 enabled runtime tests
-  pass. Two pre-existing tests remain disabled. Retail checks and a new fork
+  RAM differs. The second fork review found three more valid issues. Late
+  service now consumes every elapsed DMA boundary. Header and link rewrites
+  now invalidate cached prepass topology at the exact header-read boundary.
+  The obsolete opt-in polygon-drop filter was removed. The focused regressions,
+  full build, and all 55 enabled runtime tests pass. Two pre-existing tests
+  remain disabled. Fresh Spot and Vampire Hunter D builds also pass their
+  600-frame headless gates. Visible software-renderer routes and another fork
   review are still required before the public branch can change.
 
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**

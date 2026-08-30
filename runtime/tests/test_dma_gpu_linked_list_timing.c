@@ -40,7 +40,7 @@ static void complete(void *opaque, int limited) {
 }
 
 static const DMAGPULinkedListOps ops = {
-    resolve, read_word, begin_node, emit_word, complete
+    resolve, read_word, NULL, begin_node, emit_word, complete
 };
 
 #define CHECK(expr) do { \
@@ -61,6 +61,15 @@ int main(void) {
     ram[0x44 / 4] = 0x11111111u;
     ram[0x48 / 4] = 0x22222222u;
     ram[0x4C / 4] = 0x33333333u;
+
+    /* A late service call must consume every elapsed boundary. */
+    dma_gpu_ll_start(&state, 0x40u, 8u);
+    dma_gpu_ll_advance(&state, 16u, &ops, NULL);
+    CHECK(emitted_count == 3u);
+    CHECK(completed == 1u && hit_limit == 0u && !state.active);
+
+    memset(emitted, 0, sizeof(emitted));
+    emitted_count = completed = hit_limit = 0u;
 
     dma_gpu_ll_start(&state, 0x40u, 8u);
     dma_gpu_ll_advance(&state, 8u, &ops, NULL);

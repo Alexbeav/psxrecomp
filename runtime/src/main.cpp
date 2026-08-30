@@ -11242,12 +11242,6 @@ int main(int argc, char** argv) {
             game_id   = gc.id;
             game_region = gc.region;
             game_players = gc.players;
-            /* CTR ND intro: an older workaround (PSX_ND_SIB_FLAP_LAST=1) skipped
-             * wide additive 0x36 in OT ranks 1600..2099 to unmask sibling flaps.
-             * After the AVSZ3 MAC0 fix (unshifted product → correct MAC0>>17 OT
-             * indices), flaps/rain sort without that skip — and FLAP_LAST=1
-             * shreds the crate glow fountain. Default is off; opt in via env
-             * (dma.c) only for experiments. */
             apply_offline_pad_count(game_players, multitap_enabled);
             game_has_disc_crc = gc.has_disc_crc;
             game_disc_crc     = gc.disc_crc;
