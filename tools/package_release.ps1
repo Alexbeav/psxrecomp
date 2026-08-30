@@ -1,6 +1,9 @@
 param(
     [string]$Version = "v0.3.2-alpha",
-    [string]$BuildDir = "runtime/build-release"
+    [string]$BuildDir = "runtime/build-release",
+    # Drop channel = "developer" packages. Off by default so a local package
+    # still carries in-progress work; CI sets EXCLUDE_DEV_MODS=1 instead.
+    [switch]$ExcludeDevMods
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,6 +101,36 @@ $manifestCount = (Get-ChildItem $ModsDst -Recurse -File -Filter "manifest.toml" 
     -ErrorAction SilentlyContinue | Measure-Object).Count
 if ($manifestCount -lt 1) {
     throw "Staged mods/ contains no manifest.toml; the catalog would ship empty"
+}
+# Developer-channel packages (channel = "developer") are unfinished work that
+# ships with local builds but must never be published. Prune by PACKAGE
+# directory; never rewrite a manifest during packaging.
+$ExcludeDev = $ExcludeDevMods -or ($env:EXCLUDE_DEV_MODS -eq "1")
+if ($ExcludeDev) {
+    Write-Host "Excluding developer-channel mods"
+    Get-ChildItem (Join-Path $ModsDst "packages") -Recurse -File -Filter "manifest.toml" `
+        -ErrorAction SilentlyContinue | ForEach-Object {
+        if ((Get-Content $_.FullName) -match '^\s*channel\s*=\s*"developer"\s*$') {
+            $verDir = $_.Directory
+            $pkgDir = $verDir.Parent
+            Remove-Item -Recurse -Force $verDir.FullName
+            if (-not (Get-ChildItem $pkgDir.FullName -ErrorAction SilentlyContinue)) {
+                Remove-Item -Force $pkgDir.FullName
+            }
+            Write-Host "  excluded developer package: $($pkgDir.Name)/$($verDir.Name)"
+        }
+    }
+    $devLeft = Get-ChildItem $Stage -Recurse -File -Filter "manifest.toml" `
+        -ErrorAction SilentlyContinue |
+        Where-Object { (Get-Content $_.FullName) -match '^\s*channel\s*=\s*"developer"\s*$' }
+    if ($devLeft) {
+        throw "developer manifest(s) survived pruning: $(($devLeft | ForEach-Object FullName) -join '; ')"
+    }
+    $manifestCount = (Get-ChildItem $ModsDst -Recurse -File -Filter "manifest.toml" `
+        -ErrorAction SilentlyContinue | Measure-Object).Count
+    if ($manifestCount -lt 1) {
+        throw "every staged package was developer-channel; the catalog would ship empty"
+    }
 }
 Write-Host "Staged mod catalog: $manifestCount manifest(s)"
 

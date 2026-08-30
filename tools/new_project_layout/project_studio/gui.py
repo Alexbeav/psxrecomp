@@ -2622,6 +2622,10 @@ class ProjectStudioApp:
             return export_release(
                 root,
                 build_dir=self.build_dir_var.get().strip() or "build-release",
+                # Local export keeps developer-channel mods: the reason to
+                # export locally is to test what you are working on. CI drops
+                # them; `build export --exclude-dev-mods` reproduces that.
+                exclude_dev_mods=False,
                 log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
             )
 

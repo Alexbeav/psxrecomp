@@ -1523,6 +1523,7 @@ def cmd_build_export(args: argparse.Namespace) -> int:
         build_dir=args.build_dir,
         artifact_tag=args.artifact or None,
         recompiler_build=args.recompiler_build,
+        exclude_dev_mods=args.exclude_dev_mods,
         log=print,
     )
     print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
@@ -2388,6 +2389,12 @@ def build_parser() -> argparse.ArgumentParser:
              "Matches the CI matrix so local and released zips share names.",
     )
     p_bx.add_argument("--recompiler-build", default="build-recompiler")
+    p_bx.add_argument(
+        "--exclude-dev-mods",
+        action="store_true",
+        help='Drop channel = "developer" packages, reproducing what CI '
+             "publishes. Local exports keep them by default.",
+    )
     p_bx.set_defaults(func=cmd_build_export)
 
     p_br = build_sub.add_parser("run", help="Launch product binary with env")
