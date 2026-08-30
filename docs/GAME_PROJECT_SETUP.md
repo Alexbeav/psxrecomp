@@ -47,7 +47,7 @@ prompt for that path.
 sh tools/new_project_layout/setup_project.sh \
   --disc /path/to/legal/game.cue \
   --dir ~/src \
-  --bios /path/to/SCPH1001.BIN   # optional; only used if you answer Y to Generate
+  --bios /path/to/compatible-retail-bios.bin  # optional; used by Generate
 ```
 
 ```powershell
@@ -63,7 +63,7 @@ Non-interactive / CI (`--yes` / `-Yes` or `PSXRECOMP_SETUP_YES=1`): requires
 | ------------------ | ------------------------------------------------------------- |
 | `--disc` / `-Disc` | **Required.** Stage cue+bins, probe identity / seeds / TOC fp |
 | `--dir` / `-Dir`   | Parent directory for the new repo (default `.`)               |
-| `--bios` / `-Bios` | Optional `SCPH1001.BIN` when Generate runs                    |
+| `--bios` / `-Bios` | Optional retail BIOS selected by `[recompiler].bios_config`   |
 | `--boot-exe`       | Optional until probe overwrites from `SYSTEM.CNF`             |
 
 
