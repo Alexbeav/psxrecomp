@@ -11,6 +11,7 @@
  */
 
 #include "gpu.h"
+#include "display_scanout.h"
 #include "pgxp.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
@@ -3257,6 +3258,9 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
 
     out->width  = w;
     out->height = h;
+    out->screen_offset_y = psx_display_vertical_offset(
+        video_mode != 0, v_display_y1, v_display_y2);
+    if (vres) out->screen_offset_y *= 2;
 }
 
 /* Debug accessors for GP1 display-range / mode (TCP gpu_state). */

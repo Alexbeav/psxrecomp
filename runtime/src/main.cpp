@@ -35,6 +35,7 @@
 extern "C" void psx_event_step_conservative_env_init(void);
 #include "overlay_backend.h"
 #include "gpu.h"
+#include "display_scanout.h"
 #include "pgxp.h"
 #include "interrupts.h"
 #include "present_ring.h"
@@ -7685,6 +7686,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * inside the full-width buffer — never shrink present width. */
                 depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
                                              di.display_x);
+                psx_display_shift_rows_argb(sdl_pixel_buf, present_w, h,
+                                            di.screen_offset_y);
                 vk_renderer_present_cpu(sdl_pixel_buf, (int)present_w, (int)h,
                                         0 /* nearest */, fmv_frame ? 1 : 0);
             } else if (wide_present &&
@@ -7771,6 +7774,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (di.depth24 && active_scale == 1 && !wide_present)
             depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
                                          di.display_x);
+        if (di.depth24 && active_scale == 1 && !wide_present)
+            psx_display_shift_rows_argb(sdl_pixel_buf, present_w, h,
+                                        di.screen_offset_y);
 
         int present_px_w = (int)present_w * active_scale;
         int present_px_h = (int)h * active_scale;
