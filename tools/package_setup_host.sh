@@ -17,6 +17,7 @@
 #     [--project-file REL]... [--project-dir REL]... \
 #     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
+#     [--bios-hint "an optional retail SCPH-1001 BIOS; otherwise OpenBIOS"] \
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
@@ -48,6 +49,7 @@ DISPLAY_NAME=""
 RECOMPILER_BUILD="build-recompiler"
 VERSION_ENV="RELEASE_VERSION"
 DISC_HINT="your legally owned game disc"
+BIOS_HINT="an optional retail SCPH-1001 BIOS; otherwise OpenBIOS is regenerated locally"
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
@@ -74,6 +76,7 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
+    --bios-hint) BIOS_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
@@ -377,8 +380,7 @@ BIOS dumps, pre-generated game C, or a portable cmake/clang pack. Emitters
 Standalone:
 1. Install Python 3.
 2. Run ${EXE_BASENAME}.
-3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
-   OpenBIOS is regenerated locally).
+3. Provide ${DISC_HINT} and ${BIOS_HINT}.
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
    cmake-clang-v1 from TechnicallyComputers/retcomm-toolchains (or you can
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja

@@ -377,6 +377,10 @@ RetComM / the wizard download `cmake-clang-v1` from
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
 
+Pass `--bios-hint` when a title has a non-default BIOS contract. For example,
+a PAL title that disables OpenBIOS can name its required legal retail BIOS.
+The value appears in `README-SETUP.txt`; the BIOS profile still owns validation.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |
