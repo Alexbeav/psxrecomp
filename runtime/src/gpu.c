@@ -112,6 +112,7 @@ static uint16_t ws_ui_prepass_rank = 0xFFFFu;
 #define WS_UI_PREPASS_NODE_MAX 8192u
 typedef struct {
     uint32_t addr;
+    uint32_t header;
     WsPrepassPacketGuard payload_guard;
 } WsUiPrepassNode;
 static WsUiPrepassNode ws_ui_prepass_nodes[WS_UI_PREPASS_NODE_MAX];
@@ -4756,6 +4757,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
         WsUiPrepassNode *node =
             &ws_ui_prepass_nodes[ws_ui_prepass_node_count++];
         node->addr = addr & 0x1FFFFCu;
+        node->header = header;
         node->payload_guard =
             ws_prepass_packet_guard(payload, num_words);
         if (num_words == 0) {
@@ -4845,6 +4847,20 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                        ws_auto_ui_dense);
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
+}
+
+void gpu_ws_validate_linked_list_header(uint32_t addr, uint32_t header) {
+    if (ws_ui_prepass_count == 0) return;
+
+    uint32_t resolved =
+        psx_mod_gpu_dma_resolve_address(addr) & 0x1FFFFCu;
+    for (uint32_t i = 0; i < ws_ui_prepass_node_count; i++) {
+        if (ws_ui_prepass_nodes[i].addr != resolved) continue;
+        if (ws_ui_prepass_nodes[i].header != header)
+            ws_ui_prepass_invalidate_stale();
+        return;
+    }
+    ws_ui_prepass_invalidate_stale();
 }
 
 void gpu_ws_validate_linked_list_node(uint32_t addr, uint32_t num_words) {

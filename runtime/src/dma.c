@@ -659,18 +659,6 @@ static void execute_ch1_mdec_out(void) {
     complete_transfer(1);
 }
 
-static int gpu_ll_nd_flap_last(void) {
-    static int enabled = -1;
-    if (enabled < 0) {
-        const char *e = getenv("PSX_ND_SIB_FLAP_LAST");
-        if (!e || !*e) e = getenv("PSX_ND_OT_OPAQUE_LAST");
-        enabled = (e && *e && *e != '0') ? 1 : 0;
-        if (enabled)
-            fprintf(stdout, "psxrecomp: PSX_ND_SIB_FLAP_LAST enabled\n");
-    }
-    return enabled;
-}
-
 static uint32_t gpu_ll_resolve_address(void *opaque, uint32_t address) {
     (void)opaque;
     return psx_mod_gpu_dma_resolve_address(address);
@@ -681,33 +669,18 @@ static uint32_t gpu_ll_read_word(void *opaque, uint32_t address) {
     return psx_read_word(address);
 }
 
+static void gpu_ll_observe_header(void *opaque, uint32_t addr,
+                                  uint32_t header) {
+    (void)opaque;
+    gpu_ws_validate_linked_list_header(addr, header);
+}
+
 static int gpu_ll_begin_node(void *opaque, uint32_t addr, uint32_t num_words) {
     (void)opaque;
-    int emit = 1;
-    uint32_t ot_rank = gpu_linked_list.empty_rank;
 
     gpu_ws_validate_linked_list_node(addr, num_words);
-
-    if (gpu_ll_nd_flap_last() && num_words >= 6u &&
-        ot_rank >= 1600u && ot_rank < 2100u) {
-        uint32_t word_addr = psx_mod_gpu_dma_resolve_address(addr + 4u);
-        uint32_t cmd = psx_read_word(word_addr);
-        uint32_t op = (cmd >> 24) & 0xFFu;
-        if (op == 0x36u) {
-            int32_t sx_max = -0x8000;
-            for (uint32_t vi = 1; vi <= 5; vi += 2) {
-                uint32_t xy = psx_read_word(psx_mod_gpu_dma_resolve_address(
-                    word_addr + vi * 4u));
-                int32_t sx = (int32_t)(xy & 0x7FFu);
-                if (sx & 0x400) sx -= 0x800;
-                if (sx > sx_max) sx_max = sx;
-            }
-            if (sx_max >= 280) emit = 0;
-        }
-    }
-
-    if (emit) gpu_set_gp0_linked_list_node(addr, num_words);
-    return emit;
+    gpu_set_gp0_linked_list_node(addr, num_words);
+    return 1;
 }
 
 static void gpu_ll_emit_word(void *opaque, uint32_t address, uint32_t word) {
@@ -727,6 +700,7 @@ static void gpu_ll_complete(void *opaque, int hit_limit) {
 static const DMAGPULinkedListOps gpu_ll_ops = {
     gpu_ll_resolve_address,
     gpu_ll_read_word,
+    gpu_ll_observe_header,
     gpu_ll_begin_node,
     gpu_ll_emit_word,
     gpu_ll_complete

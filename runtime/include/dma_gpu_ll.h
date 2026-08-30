@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     uint32_t (*resolve_address)(void *opaque, uint32_t address);
     uint32_t (*read_word)(void *opaque, uint32_t address);
+    void (*observe_header)(void *opaque, uint32_t address, uint32_t header);
     int (*begin_node)(void *opaque, uint32_t address, uint32_t word_count);
     void (*emit_word)(void *opaque, uint32_t address, uint32_t word);
     void (*complete)(void *opaque, int hit_limit);
