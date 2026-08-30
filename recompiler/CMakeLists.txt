@@ -352,6 +352,10 @@ if(BUILD_TESTING)
         ../runtime/tests/test_guest_tty.c
         ../runtime/src/guest_tty.c)
     target_include_directories(guest_tty_test PRIVATE ../runtime/include)
+    target_compile_features(guest_tty_test PRIVATE c_std_11)
+    if(MSVC)
+        target_compile_options(guest_tty_test PRIVATE /experimental:c11atomics)
+    endif()
     add_test(NAME guest_tty_test COMMAND guest_tty_test)
 
     add_executable(debug_trace_ranges_test
