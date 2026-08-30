@@ -18,6 +18,12 @@ if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT_TAG}" ]]; then
   exit 2
 fi
 
+# mods/ is staged by the framework packager by default (catalog next to the
+# exe, plus the source catalog for the setup-host rebuild) -- no flag needed.
+# --project-dir src ships game-owned trusted-plugin sources; CMakeLists.txt
+# references them unconditionally, so the rebuild cannot configure without it.
+# copy_proj skips a path that does not exist, so it is inert for titles with
+# no src/.
 PACKAGER="${ROOT}/psxrecomp/tools/package_setup_host.sh"
 if [[ ! -f "${PACKAGER}" ]]; then
   echo "error: missing ${PACKAGER} (psxrecomp submodule)" >&2
@@ -56,4 +62,5 @@ exec bash "${PACKAGER}" \
   --project-file README.md \
   --project-dir seeds \
   --project-dir launcher_assets \
+  --project-dir src \
   "${EXTRA_PROJECT[@]}"

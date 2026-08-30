@@ -76,11 +76,37 @@ if ($bakedBios) {
 }
 Write-Host "Verified no baked absolute BIOS path in the exe"
 
+# Mod catalog. runtime.cmake stages <exe>/mods for every non-oracle target, so
+# a build that lacks it has broken wiring -- fail rather than ship a package
+# whose Mods page is silently empty.
+#
+# Staged BEFORE the stray-file scan below on purpose: mods/state.toml is the
+# BUILD MACHINE's per-user enable/disable state and must never ship (preloaded
+# catalogs are default-disabled, so a dev's selections would become everyone's
+# defaults). Strip it here -- a dev machine legitimately has one, so that is a
+# strip, not a failure -- and let the stray scan confirm none survived.
+$ModsSrc = Join-Path $BuildPath "mods"
+$ModsDst = Join-Path $Stage "mods"
+if (!(Test-Path $ModsSrc)) {
+    throw "Build has no mods/ next to the exe: $ModsSrc (rebuild the runtime target)"
+}
+Copy-Item -Recurse -Force $ModsSrc $ModsDst
+Get-ChildItem $ModsDst -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -eq "state.toml" -or $_.Name -eq "state.toml.tmp" } |
+    Remove-Item -Force
+$manifestCount = (Get-ChildItem $ModsDst -Recurse -File -Filter "manifest.toml" `
+    -ErrorAction SilentlyContinue | Measure-Object).Count
+if ($manifestCount -lt 1) {
+    throw "Staged mods/ contains no manifest.toml; the catalog would ship empty"
+}
+Write-Host "Staged mod catalog: $manifestCount manifest(s)"
+
 # No user-machine or copyrighted files may ride along in the stage. OpenBIOS
 # is intentionally present and redistributable; retail SCPH images remain
 # forbidden.
 $strayPatterns = @("SCPH*.BIN","*.cue","*.iso","*.mcd","bios.cfg","disc.cfg",
-                   "settings.toml","keybinds.ini","overlay_captures.json")
+                   "settings.toml","keybinds.ini","overlay_captures.json",
+                   "state.toml")
 $stray = foreach ($pat in $strayPatterns) { Get-ChildItem $Stage -Recurse -File -Filter $pat -ErrorAction SilentlyContinue }
 if ($stray) {
     throw "Stage contains files that must never ship: $(($stray | ForEach-Object FullName) -join '; ')"

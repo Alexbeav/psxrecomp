@@ -26,6 +26,14 @@
 # Per-user state (mods/state.toml) is always excluded. The -optional variant
 # warns and continues when the directory is absent from the build.
 #
+# mods/ IS STAGED BY DEFAULT and is REQUIRED. Every non-oracle game runtime
+# gets <exe>/mods from runtime.cmake, so a release missing it means the build
+# wiring is broken and the title would ship with an empty Mods page -- which
+# is exactly what happened: this was opt-in per title, and 21 of 23 ports
+# silently shipped no mods at all because their generated wrapper never passed
+# --runtime-dir mods. Enforce it here rather than in each title's wrapper.
+# A title that genuinely ships no catalog passes --no-mods.
+#
 # Env:
 #   RELEASE_VERSION / <version-env> / VERSION file  (must match binary stamp)
 #   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR  (only with --embed-toolchain)
@@ -52,6 +60,8 @@ PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
+# mods/ ships by default; --no-mods opts a catalog-less title out.
+STAGE_MODS=1
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
@@ -76,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
+    --no-mods) STAGE_MODS=0; shift ;;
     --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-dir-optional) RUNTIME_DIRS_OPTIONAL+=("${2:?}"); shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
@@ -88,6 +99,33 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Default the mods catalog into the required set unless the caller already
+# named it (in either list) or opted out. Appending rather than overriding
+# keeps an explicit --runtime-dir-optional mods meaningful for a title that
+# knowingly builds without one.
+if [[ "${STAGE_MODS}" -eq 1 ]]; then
+  _mods_named=0
+  for _d in "${RUNTIME_DIRS[@]:-}" "${RUNTIME_DIRS_OPTIONAL[@]:-}"; do
+    [[ "${_d}" == "mods" ]] && _mods_named=1
+  done
+  if [[ "${_mods_named}" -eq 0 ]]; then
+    RUNTIME_DIRS+=("mods")
+  fi
+  # Also ship the SOURCE catalog (mods/preloaded/...) when the title has one.
+  # The setup-host zip rebuilds on the player's machine, and that rebuild
+  # re-runs the title's POST_BUILD mod staging -- which reads the source tree,
+  # not the staged copy. Without this the rebuilt exe silently loses every
+  # game-owned mod and keeps only the framework builtins. copy_proj skips a
+  # path that does not exist, so this is inert for a title with no catalog.
+  _mods_proj=0
+  for _d in "${PROJECT_DIRS[@]:-}"; do
+    [[ "${_d}" == "mods" ]] && _mods_proj=1
+  done
+  if [[ "${_mods_proj}" -eq 0 ]]; then
+    PROJECT_DIRS+=("mods")
+  fi
+fi
 
 if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT}" || -z "${ZIP_PREFIX}" || -z "${EXE_NAME}" ]]; then
   echo "error: --build-dir, --artifact, --zip-prefix, and --exe-name are required" >&2
