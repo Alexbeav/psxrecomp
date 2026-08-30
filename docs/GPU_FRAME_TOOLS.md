@@ -290,6 +290,19 @@ Parity between two runs that were not driven the same way means nothing.
 
 ---
 
+## 24-bit scanout position
+
+`gpu_state` reports `screen_offset_y` for 24-bit display output. The runtime
+derives this value from the GP1(07h) vertical display range.
+
+A positive value moves the decoded scanout down. A negative value moves it up.
+The reference point is the PAL or NTSC broadcast centre, not the window edge.
+
+Use `present_shot`, not `screenshot`, to validate letterbox placement.
+`screenshot` captures the display buffer before the window-fit stage.
+
+---
+
 ## Tests
 
 ```bash
