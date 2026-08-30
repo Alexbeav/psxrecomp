@@ -42,6 +42,13 @@ def tail_file(path, max_bytes=8192):
 
 def launch(mode, port, stride, start_cycle):
     os.makedirs(LOGDIR, exist_ok=True)
+    # Two instances sharing one cwd race on mods/state.toml publish (temp-file
+    # rename collision, ENOENT). COSIM_CWD_B gives the second instance its own
+    # runtime dir when set.
+    cwd = CWD
+    cwd_b = os.environ.get("COSIM_CWD_B", "")
+    if cwd_b and port != 4600 and str(port).endswith("1"):
+        cwd = cwd_b
     env = dict(os.environ)
     env["PSX_HEADLESS"] = "1"
     env["PSX_COSIM_PORT"] = str(port)
@@ -57,7 +64,7 @@ def launch(mode, port, stride, start_cycle):
     log_path = os.path.join(LOGDIR, f"cosim_{mode}_{port}_{os.getpid()}.log")
     log_file = open(log_path, "wb")
     p = subprocess.Popen([EXE, "--headless", "--no-launcher", "--game", GAME],
-                         cwd=CWD, env=env,
+                         cwd=cwd, env=env,
                          stdout=log_file, stderr=subprocess.STDOUT,
                          creationflags=0x00000200)
     p._cosim_log_path = log_path
