@@ -2560,6 +2560,10 @@ void gpu_ws_end_linked_list(void) {
     gp0_ot_rank = 0xFFFFu;
 }
 
+void gpu_ws_restore_linked_list_rank(uint32_t rank) {
+    gp0_ot_rank = rank == UINT32_MAX ? 0xFFFFu : (uint16_t)rank;
+}
+
 
 /* Horizontal display range (GP1(06h)) */
 static uint32_t h_display_x1;
