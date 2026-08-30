@@ -420,6 +420,49 @@ if [[ -f "${STAGE}/CMakeLists.txt" ]]; then
   fi
 fi
 
+# Second gate: the project's own C must be able to include what it includes.
+# The CMakeLists check above cannot see this — src/<game>_mods.c pulls in
+# "../psx_symbols.h", a compile input nothing in CMakeLists.txt names, and a zip
+# missing it fails at the first object file rather than at configure.
+#
+# Only project-owned staged paths are scanned. Framework trees (psxrecomp/,
+# recomp-ui/) resolve their headers through -I and are not ours to police.
+missing_incs=()
+for rel in "${PROJECT_FILES[@]}" "${PROJECT_DIRS[@]}"; do
+  [[ -e "${STAGE}/${rel}" ]] || continue
+  while IFS= read -r src; do
+    case "${src}" in *.c|*.cc|*.cpp|*.h|*.hpp) ;; *) continue ;; esac
+    src_dir="$(dirname "${src}")"
+    while IFS= read -r inc; do
+      [[ -z "${inc}" ]] && continue
+      # Only relative includes can name a file the zip is expected to carry.
+      case "${inc}" in /*) continue ;; esac
+      target="${src_dir}/${inc}"
+      [[ -e "${target}" ]] && continue
+      # Resolve against the stage root too (some projects include "x.h" flatly).
+      [[ -e "${STAGE}/${inc}" ]] && continue
+      # Finally, anything reachable through an -I path: the framework trees are
+      # staged whole, so a bare "mod_plugins.h" resolves out of
+      # psxrecomp/runtime/include. Match on basename — deliberately loose, since
+      # a false pass here only forfeits a warning while a false failure would
+      # block a good release.
+      inc_base="${inc##*/}"
+      if find "${STAGE}" -name "${inc_base}" -type f -print -quit 2>/dev/null | grep -q .; then
+        continue
+      fi
+      rel_src="${src#"${STAGE}"/}"
+      missing_incs+=("${inc}  (included by ${rel_src})")
+    done < <(grep -oE '^[[:space:]]*#[[:space:]]*include[[:space:]]+"[^"]+"' "${src}" 2>/dev/null \
+               | sed -E 's|.*"([^"]+)".*|\1|')
+  done < <(find "${STAGE}/${rel}" -type f 2>/dev/null)
+done
+if (( ${#missing_incs[@]} )); then
+  echo "error: staged project sources include files that are not in the zip:" >&2
+  printf '  - %s\n' "${missing_incs[@]}" >&2
+  echo "  add them via --project-file / --project-dir in scripts/package_setup_release.sh" >&2
+  exit 1
+fi
+
 find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {} +
 
 (
