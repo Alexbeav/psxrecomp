@@ -31,6 +31,20 @@ assert "psx_netplay_active()" in swap
 assert swap.index("replacement = iso_open") < swap.index("previous = iso_handle")
 assert swap.index("previous = iso_handle") < swap.index("iso_close(previous)")
 assert "debug_force_cd_reinsert();" in swap
+assert "disc replacement mounted:" in swap
+
+lid_irq = body(
+    CDROM,
+    "static void present_lid_open_irq_if_ready",
+    "static void process_lid_state",
+)
+assert "response_push(0x08)" in lid_irq
+assert "set_irq(CDIRQ_ERROR)" in lid_irq
+
+reinsert = CDROM[CDROM.index("void debug_force_cd_reinsert") :]
+assert "cdrom_lid_begin_open" in reinsert
+assert "s_lid_irq_pending = 1" in reinsert
+assert "set_irq(CDIRQ_ACK)" not in reinsert
 
 action = body(MAIN, "static int runtime_ui_change_disc", "static int runtime_ui_run_action")
 assert "resolve_disc_path" in action

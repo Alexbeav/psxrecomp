@@ -36,8 +36,10 @@ the only supported path.
 `Change disc...` resolves a picked BIN/ISO/IMG/CAR/CUE/CHD through the shared
 disc-path resolver, opens the replacement before releasing the current handle,
 updates the inserted-disc SCE region when identifiable, resets active data,
-CD-DA, XA and subchannel state, and emits the existing reinsert notification.
-An unreadable selection leaves the current disc mounted.
+CD-DA, XA and subchannel state, and starts a guest-visible tray cycle. The
+replacement stays unreadable for two guest seconds. The drive then closes the
+tray and makes the replacement readable. An unreadable selection leaves the
+current disc mounted.
 
 The selected path is session-only: it is not written to `settings.toml` or
 `disc.cfg`, because a game-requested Disc 2 or a foreign audio CD must not
@@ -54,7 +56,7 @@ Acceptance testing should cover:
 - region changes between identifiable PSX discs;
 - software, OpenGL, and Vulkan overlay presentation.
 
-The drive currently reports the close/reinsert transition immediately, as the
-pre-existing debug action did.  If a title requires guest-observable tray-open
-dwell time, add it as title-neutral CD-controller state with tests; do not add a
-per-title delay.
+The open-tray event raises a CD-ROM error interrupt with the `ShellOpen` status.
+After the tray closes, the first `GetStat` response keeps `ShellOpen` set. A
+later `GetStat` response reports the inserted disc normally. The same
+title-neutral state machine handles replacement and debug reinsertion.
