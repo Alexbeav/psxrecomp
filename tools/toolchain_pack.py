@@ -817,6 +817,20 @@ def unpack_zip_to(zip_path: Path, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(dest)
+        # zipfile.extractall() discards the Unix mode held in external_attr, so
+        # on POSIX hosts every binary lands 0644 and the pack is unusable:
+        # "Toolchain cmake probe failed ... [Errno 13] Permission denied".
+        # Restore the recorded mode (zips built on Windows record none, in
+        # which case the extracted default is already correct).
+        if os.name != "nt":
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                mode = (info.external_attr >> 16) & 0o7777
+                if mode:
+                    target = dest / info.filename
+                    if target.exists():
+                        target.chmod(mode)
     root = unwrap_pack_root(dest)
     if not pack_root_looks_usable(root):
         raise RuntimeError(f"toolchain zip missing bin/{cmake_name()}: {zip_path}")
