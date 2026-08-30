@@ -585,6 +585,7 @@ if(BUILD_TESTING)
                 release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
+                pal_cadence_host_refresh
                 sdl3_main_single_include
                 spu_sample_scheduler_default
                 vk_build_default

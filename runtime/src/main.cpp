@@ -2702,8 +2702,11 @@ static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
  * wall-clock pacer double-blocks the vblank callback (present is before the
  * guest resumes), which shows up as MotK FMV ~30–40 FPS in netplay vs ~50+
  * offline. Force immediate swaps for the session; restore on soft-exit. */
-static int host_refresh_is_approx_60hz(void) {
-    return g_host_refresh_hz >= 58.8 && g_host_refresh_hz <= 61.2;
+static int host_refresh_matches_guest_cadence(void) {
+    if (g_host_refresh_hz <= 0.0 || g_frame_period_ms <= 0.0)
+        return 0;
+    const double guest_hz = 1000.0 / g_frame_period_ms;
+    return std::fabs(g_host_refresh_hz - guest_hz) <= guest_hz * 0.02;
 }
 
 static int host_driver_vsync_unreliable(void) {
@@ -2747,7 +2750,7 @@ static int present_vsync_owns_cadence(void) {
         return 0;
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
-    return host_refresh_is_approx_60hz();
+    return host_refresh_matches_guest_cadence();
 }
 
 static int present_effective_swap_interval(void) {
@@ -13257,23 +13260,25 @@ session_reboot:
     if (!g_fullscreen && !g_video_win_w_explicit)
         SDL_MaximizeWindow(sdl_window);
 
-    /* Host refresh: if the panel is within ~2% of 60 Hz, record it so driver
-     * vsync can own cadence (pacer skipped). Non-~60 Hz and unknown refresh
-     * (common on Wayland) keep PSX 59.94 Hz pacing and force swap interval 0
-     * — vsync as the clock would run the sim at the panel rate. */
+    /* Host refresh: if the panel matches the current guest cadence, record it
+     * so driver vsync can own cadence (pacer skipped). Mismatched and unknown
+     * refresh rates keep guest pacing and force swap interval 0; vsync as the
+     * clock would otherwise run the sim at the panel rate. */
     {
         SDL_DisplayMode dm;
         int disp_idx = SDL_GetWindowDisplayIndex(sdl_window);
         if (disp_idx >= 0 && SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 && dm.refresh_rate > 0) {
             double host_hz = (double)dm.refresh_rate;
             g_host_refresh_hz = host_hz;
-            if (host_hz >= 58.8 && host_hz <= 61.2) {
+            if (host_refresh_matches_guest_cadence()) {
                 g_frame_period_ms = 1000.0 / host_hz;
                 std::printf("psxrecomp: sync-to-host-refresh: pacing to %.1f Hz panel "
                             "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
             } else {
-                std::printf("psxrecomp: host panel %.1f Hz not ~60 Hz; keeping PSX "
-                            "59.94 Hz pacing\n", host_hz);
+                std::printf("psxrecomp: host panel %.1f Hz does not match guest "
+                            "cadence; keeping %.2f Hz pacing\n",
+                            host_hz,
+                            g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0);
             }
         }
     }
