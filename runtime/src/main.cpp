@@ -575,6 +575,30 @@ static void fps_telemetry_toggle(void) {
     host_osd_push(enabled ? "FPS readout on" : "FPS readout off", 1500);
 }
 
+/* Hold-to-act host hotkeys must not fire while the game window does not hold
+ * keyboard focus.
+ *
+ * SDL_GetKeyboardState() returns a CACHED array that SDL updates from events.
+ * A key whose key-UP is delivered to some other window stays latched in that
+ * array with nothing to clear it -- and the canonical way to move focus away
+ * is Alt+TAB, where TAB is exactly the fast-forward bind. The game then runs
+ * at the fast-forward multiplier with no key held, indefinitely. Regaining
+ * focus makes SDL reconcile the array, which is why the symptom "stops" the
+ * moment you click back into the window and press anything.
+ *
+ * Gating on real input focus fixes that and is independently correct: a
+ * hold-to-turbo must not run while the player is typing in another
+ * application. Edge-triggered hotkeys are unaffected -- they go through
+ * host_keymap_match() on real key EVENTS, which are only delivered to the
+ * focused window in the first place.
+ *
+ * No window (headless, or before the window exists) means focus is not a
+ * concept here; do not suppress in that case. */
+static bool host_hotkey_input_focused(void) {
+    if (!sdl_window) return true;
+    return (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
 static int manual_fast_forward_multiplier(void) {
     static int value = -2; /* -2 = unread, -1 = max/unbounded */
     if (value == -2) {
@@ -2209,6 +2233,40 @@ static bool pick_runtime_file(const char* title, const char* filter,
 #endif
 }
 
+/* Per-disc expected serials for a multi-disc set, keyed by the disc image's
+ * UPPERCASED file-name stem (game.toml [game] disc_serials, in the order of
+ * [game] discs). Every disc of a set carries its own serial, so checking disc
+ * 2 against the BOOT disc's serial reports the player's correct disc as the
+ * wrong game -- which is what the launcher's disc dropdown would trip on
+ * every time, and what the launch-time check warned about even when the
+ * player picked exactly the right image. A disc absent from this map is not
+ * serial-gated at all; the ISO-header check still applies. Keyed by stem
+ * rather than full path because a .cue and the .bin it owns are one disc and
+ * either may be what the player picked. Populated from game.toml; empty for
+ * every single-disc title, which therefore behaves exactly as before. */
+static std::unordered_map<std::string, std::string> g_disc_serials;
+
+/* Per-disc netplay TOC fingerprints, same keying and same reason as
+ * g_disc_serials: every disc of a set has its own TOC, so a set gated on the
+ * BOOT disc's fingerprint refuses online play on every other disc the player
+ * can now select. Populated from game.toml [netplay] required_disc_fps; empty
+ * for every single-disc title and every port that predates the key, which
+ * therefore keep the flat [netplay] required_disc_fp behaviour exactly. */
+static std::unordered_map<std::string, std::string> g_disc_netplay_fps;
+
+static std::string uppercase_ascii(std::string s);
+
+/* The serial THIS image is expected to carry: the set's per-disc value when
+ * the game declared one, the game's own id otherwise. An image that belongs
+ * to a declared set but has no serial listed is returned ungated (""), never
+ * gated against another disc's number. */
+static std::string expected_serial_for_disc(const std::filesystem::path& disc,
+                                            const std::string& fallback) {
+    if (g_disc_serials.empty()) return fallback;
+    const auto it = g_disc_serials.find(uppercase_ascii(disc.stem().string()));
+    return it != g_disc_serials.end() ? it->second : std::string();
+}
+
 static std::string uppercase_ascii(std::string s) {
     for (char& c : s) {
         c = (char)std::toupper((unsigned char)c);
@@ -2252,17 +2310,20 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
     // the launcher badge can never drift apart. No CRC here — the launch check
     // only cares about openability / header / serial; the launcher does the
     // (slower) CRC pass when an expected CRC is configured.
+    /* A multi-disc set is checked against the SELECTED disc's serial, not the
+     * boot disc's -- see expected_serial_for_disc(). */
+    const std::string expect = expected_serial_for_disc(selected_path, game_id);
     const PSXRecompV4::DiscIdentity id =
-        PSXRecompV4::identify_disc(selected_path, game_id, /*expected_crc*/0,
+        PSXRecompV4::identify_disc(selected_path, expect, /*expected_crc*/0,
                                    /*has_expected_crc*/false, /*compute_crc*/false);
     DiscValidation v;
     v.opened     = id.opened;
     v.has_header = id.has_header;
-    v.id_matches = game_id.empty() ? true : id.serial_matches;
+    v.id_matches = expect.empty() ? true : id.serial_matches;
     v.detail     = id.detail;
     if (id.opened && id.has_header && !v.id_matches && v.detail.empty()) {
         v.detail = "The disc header is readable, but it does not contain the expected game ID " +
-                   uppercase_ascii(game_id) + " in the early disc metadata.";
+                   uppercase_ascii(expect) + " in the early disc metadata.";
     }
     return v;
 }
@@ -2303,6 +2364,49 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
     }
 
     return p;
+}
+
+/* Which image of a MULTI-DISC set to mount, given the roster this build was
+ * made from (game.toml [game] discs), the player's persisted [disc] selected
+ * index, and the [disc] path the launcher last wrote.
+ *
+ * The index names the disc; the path only survives when it IS that disc.
+ * That ordering is the whole point of storing the index: an external launcher
+ * (or a hand edit) changes discs by writing one integer, and it takes effect
+ * even though settings.toml still carries the previous disc's path. A player
+ * who browsed for their own copy of the selected disc is still honoured,
+ * because a relocated or container-swapped image keeps its stem -- a Redump
+ * dump names the disc in the file name and only the extension moves
+ * (".. (Disc 2).cue" -> ".. (Disc 2).bin", which is exactly the substitution
+ * normalize_disc_path_for_launch performs).
+ *
+ * Single-disc titles (roster of 0 or 1) are returned unchanged: the persisted
+ * path wins, exactly as it did before any of this existed. */
+/* Roster position of `disc`, or -1. Stem-compared for the same reason
+ * resolve_selected_disc() is: the roster holds .cue entries while everything
+ * downstream has already been through normalize_disc_path_for_launch(), which
+ * swaps a .cue for its .bin. */
+static int roster_index_for_disc(
+    const std::vector<std::filesystem::path>& roster,
+    const std::filesystem::path& disc) {
+    if (disc.empty()) return -1;
+    const std::string want = uppercase_ascii(disc.stem().string());
+    for (size_t i = 0; i < roster.size(); ++i)
+        if (uppercase_ascii(roster[i].stem().string()) == want) return (int)i;
+    return -1;
+}
+
+static std::filesystem::path resolve_selected_disc(
+    const std::vector<std::filesystem::path>& roster, int selected_1based,
+    const std::filesystem::path& persisted) {
+    if (roster.size() < 2) return persisted;
+    const int idx = selected_1based - 1;
+    if (idx < 0 || idx >= (int)roster.size()) return persisted;
+    if (!persisted.empty() &&
+        uppercase_ascii(persisted.stem().string()) ==
+            uppercase_ascii(roster[(size_t)idx].stem().string()))
+        return persisted;
+    return roster[(size_t)idx];
 }
 
 /* BIOS selection state (docs/BIOS_SELECTION.md). s_openbios_allowed is the
@@ -2771,7 +2875,23 @@ static int present_should_wall_pace(void) {
     if (g_frame_interpolation && g_gl_active &&
         gl_renderer_interpolation_owns_cadence())
         return 0;
-    return g_frame_period_ms > 0.0 && !present_vsync_owns_cadence();
+    /* Run the pacer even when driver vsync is SUPPOSED to own the cadence.
+     *
+     * Skipping it here trusts the swap to block, and a swap that does not
+     * block leaves the guest with NO speed limit at all -- the game simply
+     * free-runs. Measured on NVIDIA GL under a compositing WM: 45 s of
+     * gameplay produced 4771 guest frames (~106 fps, 1.77x) with vsync
+     * "owning" cadence, against 2651 (~58.9 fps, 1.00x) with PSX_VSYNC=0
+     * forcing this pacer on. Nothing was held; it looked exactly like a stuck
+     * fast-forward.
+     *
+     * This is safe to run alongside a vsync that DOES block, because
+     * frame_pacer_wait() is deadline-based rather than a fixed sleep: if the
+     * swap already consumed the period, `now >= next_deadline` and it returns
+     * immediately after advancing the deadline. So it costs nothing where
+     * vsync works and supplies the cap where it does not, which also means it
+     * cannot add latency to the healthy path. */
+    return g_frame_period_ms > 0.0;
 }
 
 static void apply_present_cadence(void) {
@@ -2789,9 +2909,15 @@ static void apply_present_cadence(void) {
 
 static void log_present_cadence(void) {
     if (present_vsync_owns_cadence()) {
-        std::printf("psxrecomp: present cadence: driver vsync (%.1f Hz panel, "
-                    "wall-clock pacer skipped)\n",
-                    g_host_refresh_hz);
+        /* The pacer still runs underneath as a deadline cap (see
+         * present_should_wall_pace) -- a no-op whenever the swap actually
+         * blocks, and the only speed limit when it does not. Say so: this
+         * line is how a bring-up session decides whether pacing is accounted
+         * for, and "skipped" sent this one hunting a phantom stuck
+         * fast-forward instead of an unpaced present. */
+        std::printf("psxrecomp: present cadence: driver vsync (%.1f Hz panel; "
+                    "wall-clock cap %.4f ms/frame)\n",
+                    g_host_refresh_hz, g_frame_period_ms);
     } else if (g_frame_period_ms > 0.0) {
         if (g_video_vsync != 0 && !g_frame_interpolation &&
             !g_netplay_vsync_forced_off) {
@@ -6606,7 +6732,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
-        if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
+        if (host_hotkey_input_focused() &&
+            host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
@@ -7317,6 +7444,27 @@ static void sdl_vblank_present(void) {
 /* game.toml [netplay] + last TOC fingerprint — shared by launcher verify and
  * the pre-psx_netplay_start gate (works with or without RECOMP_LAUNCHER). */
 static PSXRecompV4::NetplayDiscExpect g_netplay_disc_expect{};
+
+/* The netplay mount policy for ONE image. The policy is per-disc, not
+ * per-build: the TOC fingerprint is the disc's own, and the same is true in
+ * principle of required_tracks / required_leadout_lba (a set may mix a
+ * CD-DA disc with a data-only one, and the lead-out LBA is literally the
+ * disc's size). Resolving the whole struct per image -- rather than reaching
+ * for the one global -- is what keeps those honest as soon as a title needs
+ * them; today only the fingerprint has per-disc data to apply.
+ *
+ * A disc with no per-disc fingerprint keeps the flat [netplay]
+ * required_disc_fp, so single-disc titles are unaffected. */
+static PSXRecompV4::NetplayDiscExpect netplay_expect_for_disc(
+    const std::filesystem::path& disc) {
+    PSXRecompV4::NetplayDiscExpect e = g_netplay_disc_expect;
+    if (!g_disc_netplay_fps.empty()) {
+        const auto it =
+            g_disc_netplay_fps.find(uppercase_ascii(disc.stem().string()));
+        if (it != g_disc_netplay_fps.end()) e.required_disc_fp = it->second;
+    }
+    return e;
+}
 static std::string g_session_disc_fp;
 static bool        g_session_netplay_disc_ok = false;
 
@@ -7502,12 +7650,24 @@ namespace {
     int ae_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
         if (!disc_path || !disc_path[0] || !out) return 0;
         std::memset(out, 0, sizeof(*out));
+        /* Which serial THIS disc should carry -- the set's per-disc value, or
+         * the game's own for a single-disc title. The expected CRC is disc
+         * 1's and is only consulted when the game supplied one, so a set that
+         * ships a CRC and lets the player pick disc 2 lands on the "warn"
+         * verdict rather than "bad". */
+        const std::string expect_serial =
+            expected_serial_for_disc(std::filesystem::path(disc_path),
+                                     g_lnch_expected_serial);
+        /* The netplay gate is the SELECTED disc's, for the same reason the
+         * serial is -- see netplay_expect_for_disc(). */
+        const PSXRecompV4::NetplayDiscExpect np_expect =
+            netplay_expect_for_disc(std::filesystem::path(disc_path));
         PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
-            disc_path, g_lnch_expected_serial, g_lnch_expected_crc,
+            disc_path, expect_serial, g_lnch_expected_crc,
             g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc,
-            g_lnch_netplay_available ? &g_netplay_disc_expect : nullptr);
+            g_lnch_netplay_available ? &np_expect : nullptr);
         const std::string& serial = !id.detected_serial.empty()
-            ? id.detected_serial : g_lnch_expected_serial;
+            ? id.detected_serial : expect_serial;
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
@@ -10643,6 +10803,14 @@ namespace {
         gi->memcard_inspect = ae_memcard_inspect;
         gi->mods = PSXRecompV4::mod_runtime_launcher_provider();
         gi->bios_verify = ae_bios_verify;
+        /* Launcher window icon: the SAME file psx_apply_window_icon() puts on
+         * the game window (assets/psxrecomp.png beside the exe, which
+         * runtime.cmake stages from APP_ICON's directory). Resolved through
+         * the shared helper rather than re-derived here, so the launcher and
+         * the game can never end up on different art. The pointer is process-
+         * lifetime; "" when the build shipped no PNG, which recomp-ui treats
+         * as "leave the toolkit default". */
+        gi->window_icon_path = psx_window_icon_path(g_lnch_argv0);
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
         g_lnch_game_players = game_players_n;
         /* ae_disc_verify only fills netplay_ok/disc_fp when this is true. */
@@ -10909,6 +11077,15 @@ int main(int argc, char** argv) {
     std::string resolved_language = "en";
     std::vector<PSXRecompV4::RuntimeConfig::LanguageOption> lang_menu_options;
     std::filesystem::path resolved_disc;
+    /* game.toml [game] discs, in disc order -- the images this build was made
+     * from. Single-disc titles leave one entry (or none). This is the roster
+     * the launcher's Disc Selection dropdown offers and the list [disc]
+     * selected indexes into; it is NOT a scan of the player's folder, so a
+     * player who moved an image still browses for it. */
+    std::vector<std::filesystem::path> game_discs;
+    /* 1-based selected disc, from settings.toml [disc] selected. Kept at main
+     * scope because it round-trips through both launcher entry points. */
+    int selected_disc_index = 1;
     std::string window_title = PSX_WINDOW_TITLE;
     uint16_t   debug_port    = (uint16_t)DEFAULT_DEBUG_PORT;
     std::string game_name;
@@ -10972,6 +11149,26 @@ int main(int argc, char** argv) {
                 (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
                 (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
                 (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
+            game_discs = gc.discs;
+            /* Per-disc serial gate, shared by the launch-time disc check and
+             * the launcher's disc verdict. Keyed by the image's uppercased
+             * stem so a .cue and its .bin agree. */
+            g_disc_serials.clear();
+            for (size_t i = 0;
+                 i < gc.discs.size() && i < gc.disc_serials.size(); ++i) {
+                if (gc.disc_serials[i].empty()) continue;
+                g_disc_serials[uppercase_ascii(gc.discs[i].stem().string())] =
+                    gc.disc_serials[i];
+            }
+            /* Same keying for the per-disc netplay TOC fingerprints. */
+            g_disc_netplay_fps.clear();
+            for (size_t i = 0;
+                 i < gc.discs.size() && i < gc.netplay_required_disc_fps.size();
+                 ++i) {
+                if (gc.netplay_required_disc_fps[i].empty()) continue;
+                g_disc_netplay_fps[uppercase_ascii(gc.discs[i].stem().string())] =
+                    gc.netplay_required_disc_fps[i];
+            }
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -11473,6 +11670,38 @@ int main(int argc, char** argv) {
         }
         if (us.has_disc_path && !disc_override_path)
             resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+        /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
+         * PRESENT; absent it, [disc] path decides and the index is derived
+         * from it.
+         *
+         * Getting this backwards is a live bug, not a hypothetical: an
+         * external launcher that knows the path but cannot work out the roster
+         * position writes `path` alone, and treating a missing key as
+         * "selected = 1" then overrode a correct disc-2 path back to disc 1 on
+         * every launch. `path` alone worked before the index existed and must
+         * keep working -- a new field may add a way to choose a disc, it may
+         * not take away the old one. */
+        if (!game_discs.empty() && us.has_disc_index)
+            selected_disc_index =
+                std::min(std::max(us.disc_index, 1), (int)game_discs.size());
+        if (!disc_override_path && game_discs.size() > 1) {
+            if (us.has_disc_index) {
+                const auto sel = resolve_selected_disc(game_discs,
+                                                       selected_disc_index,
+                                                       resolved_disc);
+                /* Never normalize an empty path -- fs::absolute("") is the
+                 * cwd, which would turn "no disc yet" into a bogus mount. */
+                if (!sel.empty())
+                    resolved_disc = normalize_disc_path_for_launch(sel);
+            } else {
+                /* Derive the index so the launcher still preselects the right
+                 * row and a later save writes a consistent pair. An unknown
+                 * path (the player browsed to something off-roster) leaves the
+                 * default; it is not evidence for any disc. */
+                const int idx = roster_index_for_disc(game_discs, resolved_disc);
+                if (idx >= 0) selected_disc_index = idx + 1;
+            }
+        }
         if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
         if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
         if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
@@ -12125,6 +12354,9 @@ int main(int argc, char** argv) {
             }
             ls.memcard_enabled[0] = seed.memcard1_enabled ? 1 : 0;
             ls.memcard_enabled[1] = seed.memcard2_enabled ? 1 : 0;
+            /* Which disc the dropdown opens on (1-based; ignored when the
+             * game is single-disc and gi.discs is empty). */
+            ls.disc_index = selected_disc_index;
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
             ls.multitap_enabled = seed.multitap_enabled ? 1 : 0;
 #endif
@@ -12155,6 +12387,27 @@ int main(int argc, char** argv) {
             g_lnch_has_crc         = game_has_disc_crc;
             g_lnch_argv0           = argv[0];
 
+            /* Multi-disc roster for the launcher's Disc Selection dropdown.
+             * The ABI BORROWS every pointer, so this storage has to outlive
+             * recomp_launcher_run_window below -- hence plain locals in this
+             * scope rather than a temporary. Paths go through the same
+             * normalization as every other mount so a roster entry and the
+             * initial disc are spelled identically. Labels are left null:
+             * recomp-ui formats "Disc N" from the number itself, and one
+             * source of that string beats two. */
+            std::vector<std::string> rui_disc_paths;
+            std::vector<RecompLauncherCDisc> rui_discs;
+            if (game_discs.size() > 1) {
+                rui_disc_paths.reserve(game_discs.size());
+                for (const auto& d : game_discs)
+                    rui_disc_paths.push_back(
+                        normalize_disc_path_for_launch(d).string());
+                rui_discs.reserve(rui_disc_paths.size());
+                for (size_t i = 0; i < rui_disc_paths.size(); ++i)
+                    rui_discs.push_back(RecompLauncherCDisc{
+                        (int)i + 1, nullptr, rui_disc_paths[i].c_str()});
+            }
+
             RecompLauncherCGameInfo gi{};
             ae_fill_psx_launcher_game_info(
                 &gi,
@@ -12172,6 +12425,8 @@ int main(int argc, char** argv) {
                 rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
                 (int)rui_lang_labels.size(),
                 /*resume_netplay_room=*/0);
+            gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
+            gi.num_discs = (int)rui_discs.size();
 #if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
              * first-run wizard so players need not run the script by hand. */
@@ -12256,6 +12511,16 @@ int main(int argc, char** argv) {
                 if (rui_out_disc[0]) {
                     seed.disc_path = rui_out_disc;
                     seed.has_disc_path = true;
+                }
+                /* Persist the Disc Selection choice next to the disc path, so
+                 * the next session opens on the same disc and an external
+                 * launcher sees it as an ordinary settings row. Written for
+                 * multi-disc titles only -- a single-disc game has nothing to
+                 * select and should not grow a meaningless key. */
+                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                    selected_disc_index = ls.disc_index;
+                    seed.disc_index = ls.disc_index;
+                    seed.has_disc_index = true;
                 }
                 seed.fullscreen    = ls.fullscreen;            seed.has_fullscreen = true;
                 seed.skip_launcher = ls.skip_launcher != 0;   seed.has_skip_launcher = true;
@@ -13464,17 +13729,21 @@ session_reboot:
             const std::filesystem::path disc_check = resolved_disc;
             if (!disc_check.empty()) {
 #if defined(RECOMP_LAUNCHER)
-                const std::string& expect_serial = g_lnch_expected_serial;
+                const std::string expect_serial =
+                    expected_serial_for_disc(disc_check, g_lnch_expected_serial);
                 const uint32_t expect_crc = g_lnch_expected_crc;
                 const bool has_crc = g_lnch_has_crc;
 #else
-                const std::string expect_serial = game_id;
+                const std::string expect_serial =
+                    expected_serial_for_disc(disc_check, game_id);
                 const uint32_t expect_crc = game_disc_crc;
                 const bool has_crc = game_has_disc_crc;
 #endif
+                const PSXRecompV4::NetplayDiscExpect np_expect =
+                    netplay_expect_for_disc(disc_check);
                 PSXRecompV4::DiscIdentity nid = PSXRecompV4::identify_disc(
                     disc_check, expect_serial, expect_crc, has_crc,
-                    /*compute_crc*/ false, &g_netplay_disc_expect);
+                    /*compute_crc*/ false, &np_expect);
                 g_session_disc_fp = nid.disc_fp;
                 g_session_netplay_disc_ok = nid.netplay_ok && !nid.disc_fp.empty();
                 psx_lobby_set_disc_fp(nid.disc_fp.c_str());
@@ -13658,6 +13927,14 @@ session_reboot:
             if (bundled->image)
                 openbios_ws = bundled->image->image_wordsum;
         }
+        /* Multi-disc sets tag savestates with the disc, inside the existing
+         * BIOS directory. A savestate is whole-machine state, so one taken on
+         * disc 2 and restored while disc 1 is mounted resumes a guest that
+         * believes it is still reading disc 2 -- and nothing in the slot list
+         * would say so, because every disc of a set shares one entry_pc, which
+         * is the key the slot files already use. Single-disc titles pass 0 and
+         * keep their existing filenames untouched. */
+        savestate_set_disc_scope(game_discs.size() > 1 ? selected_disc_index : 0);
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
@@ -13988,6 +14265,7 @@ soft_return_lobby:
         RecompLauncherCSettings ls{};
         ls.output_method = 2;
         ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
+        ls.disc_index = selected_disc_index;
         ls.fullscreen = g_fullscreen ? 1 : 0;
         ls.ignore_aspect = 0;
         ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
@@ -14093,6 +14371,20 @@ soft_return_lobby:
         for (const auto& lo : lang_menu_options)
             rui_lang_labels.push_back(lo.label.c_str());
 
+        /* Same borrowed-roster contract as the first-open launcher above. */
+        std::vector<std::string> rui_disc_paths;
+        std::vector<RecompLauncherCDisc> rui_discs;
+        if (game_discs.size() > 1) {
+            rui_disc_paths.reserve(game_discs.size());
+            for (const auto& d : game_discs)
+                rui_disc_paths.push_back(
+                    normalize_disc_path_for_launch(d).string());
+            rui_discs.reserve(rui_disc_paths.size());
+            for (size_t i = 0; i < rui_disc_paths.size(); ++i)
+                rui_discs.push_back(RecompLauncherCDisc{
+                    (int)i + 1, nullptr, rui_disc_paths[i].c_str()});
+        }
+
         RecompLauncherCGameInfo gi{};
         ae_fill_psx_launcher_game_info(
             &gi,
@@ -14110,6 +14402,8 @@ soft_return_lobby:
             rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
             (int)rui_lang_labels.size(),
             /*resume_netplay_room=*/1);
+        gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
+        gi.num_discs = (int)rui_discs.size();
 #if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)
         psx_game_codegen_setup_apply(&gi);
 #endif
@@ -14233,6 +14527,11 @@ soft_return_lobby:
                 }
                 us.deadzone = player_deadzone[0];
                 us.has_deadzone = true;
+                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                    selected_disc_index = ls.disc_index;
+                    us.disc_index = ls.disc_index;
+                    us.has_disc_index = true;
+                }
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
                 multitap_enabled = ls.multitap_enabled != 0;
                 us.multitap_enabled = multitap_enabled;
