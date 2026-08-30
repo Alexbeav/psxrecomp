@@ -385,6 +385,10 @@ On Windows, the first-run rebuild binds C, C++, Ninja, and the resource compiler
 to the selected portable toolchain. The resource-compiler path uses forward
 slashes so source and build directories can contain spaces.
 
+Pass `--bios-hint` to give title-specific BIOS guidance. Recommend a supported
+retail SCPH BIOS that matches the game's region. OpenBIOS can remain in the
+package as a fallback. The BIOS profile still owns validation.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |
