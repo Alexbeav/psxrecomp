@@ -5983,15 +5983,14 @@ static int savestate_submit_slot(int slot, int save) {
             return 0;
         }
         if (save)
-            (void)psx_netplay_request_save(slot);
+            return psx_netplay_request_save(slot);
         else
-            (void)psx_netplay_request_load(slot);
+            return psx_netplay_request_load(slot);
     } else if (save) {
-        (void)savestate_request_save(slot);
+        return savestate_request_save(slot);
     } else {
-        (void)savestate_request_load(slot);
+        return savestate_request_load(slot);
     }
-    return 1;
 }
 
 static void savestate_menu_submit(int save) {
@@ -6221,6 +6220,7 @@ static void rewind_host_pause_loop(void) {
         }
         rewind_poll_nav((uint32_t)SDL_GetTicks());
         rewind_pause_present();
+        starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
     /* Swallow the still-held close press so it doesn't bleed into the game. */
@@ -6266,6 +6266,7 @@ static void savestate_menu_host_pause_loop(void) {
         }
         savestate_menu_poll_nav((uint32_t)SDL_GetTicks());
         rewind_pause_present();
+        starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
     /* Swallow the close press; a just-queued save must not snapshot it. */

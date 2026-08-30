@@ -77,16 +77,20 @@ typedef struct SavestateThumbHeader {
  * parked). Prefer sticky BB / compiled latches over writing a null resume. */
 static uint32_t savestate_resolve_resume_pc(const CPUState* cpu, uint32_t hint)
 {
-    const uint32_t cands[6] = {
-        hint,
-        cpu ? cpu->pc : 0u,
-        psx_compiled_irq_resume_pc(),
-        psx_last_irq_check_pc(),
-        psx_netplay_rb_sticky_bb_pc(),
-        cpu ? cpu->gpr[31] : 0u,
-    };
+    uint32_t cands[7];
+    int n = 0;
     int i;
-    for (i = 0; i < 6; ++i) {
+
+    if (psx_irq_resume_context_snapshot_site() != 0)
+        cands[n++] = psx_irq_resume_context_snapshot_pc();
+    cands[n++] = hint;
+    cands[n++] = cpu ? cpu->pc : 0u;
+    cands[n++] = psx_compiled_irq_resume_pc();
+    cands[n++] = psx_last_irq_check_pc();
+    cands[n++] = psx_netplay_rb_sticky_bb_pc();
+    cands[n++] = cpu ? cpu->gpr[31] : 0u;
+
+    for (i = 0; i < n; ++i) {
         uint32_t pc = cands[i];
         if (!pc || (pc & 3u) != 0u)
             continue;
@@ -766,17 +770,12 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
         int slot = s_save_pending;
         char path[600];
         uint32_t pc = savestate_resolve_resume_pc(cpu, resume_pc);
-        int snapshot_safe = psx_irq_resume_context_snapshot_safe();
+        int snapshot_safe = psx_irq_resume_context_snapshot_safe_at(pc);
+        int snapshot_site = psx_irq_resume_context_snapshot_site();
         int pc_matches_cpu = cpu && cpu->pc != 0u &&
                              (((cpu->pc ^ pc) & 0x1FFFFFFFu) == 0u);
-        /* A missing hint is only safe when the resolved PC came directly from
-         * cpu->pc: dirty-RAM entry polls set cpu->pc to the materialized block
-         * boundary but do not publish a separate hint. Stale fallback latches
-         * and dirty-RAM synthetic pump sites can expose a plausible resume PC
-         * before the matching register context is materialized, so those still
-         * defer instead of writing a structurally valid but poisoned state. */
-        if ((resume_pc == 0u && !pc_matches_cpu) ||
-            !snapshot_safe || !savestate_resume_pc_ok(pc)) {
+        int pc_ok = savestate_resume_pc_ok(pc);
+        if ((resume_pc == 0u && !pc_matches_cpu) || !snapshot_safe || !pc_ok) {
             /* FMV/present edges often poll with hint=0; wait briefly for a
              * sticky BB / IRQ latch rather than writing pc=0 poison. */
             const double now = savestate_mono_ms();
@@ -785,8 +784,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
                 s_save_defer_t0 = now;
                 fprintf(stderr,
                         "savestate: deferring slot %d — no safe resume PC "
-                        "(hint=0x%08X)\n",
-                        slot, (unsigned)resume_pc);
+                        "(hint=0x%08X cpu=0x%08X compiled=0x%08X "
+                        "last=0x%08X sticky=0x%08X ra=0x%08X safe=%d site=%d)\n",
+                        slot, (unsigned)resume_pc,
+                        (unsigned)(cpu ? cpu->pc : 0u),
+                        (unsigned)psx_compiled_irq_resume_pc(),
+                        (unsigned)psx_last_irq_check_pc(),
+                        (unsigned)psx_netplay_rb_sticky_bb_pc(),
+                        (unsigned)(cpu ? cpu->gpr[31] : 0u),
+                        snapshot_safe, snapshot_site);
             }
             if (now - s_save_defer_t0 < 2000.0)
                 return;
@@ -799,8 +805,15 @@ void savestate_poll(CPUState* cpu, uint32_t resume_pc) {
             s_status_generation++;
             fprintf(stderr,
                     "savestate: SAVE FAILED slot %d — no safe resume PC "
-                    "(hint=0x%08X)\n",
-                    slot, (unsigned)resume_pc);
+                    "(hint=0x%08X cpu=0x%08X compiled=0x%08X "
+                    "last=0x%08X sticky=0x%08X ra=0x%08X safe=%d site=%d)\n",
+                    slot, (unsigned)resume_pc,
+                    (unsigned)(cpu ? cpu->pc : 0u),
+                    (unsigned)psx_compiled_irq_resume_pc(),
+                    (unsigned)psx_last_irq_check_pc(),
+                    (unsigned)psx_netplay_rb_sticky_bb_pc(),
+                    (unsigned)(cpu ? cpu->gpr[31] : 0u),
+                    snapshot_safe, snapshot_site);
             psx_frontend_on_savestate_notify(0, slot, 0);
         } else {
             s_save_pending = -1;
