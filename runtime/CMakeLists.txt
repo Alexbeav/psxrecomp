@@ -550,6 +550,9 @@ if(BUILD_TESTING)
         add_test(NAME cdrom_lid_integration_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
+        add_test(NAME bios_registry_zero_entry_guard_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_registry_zero_entry.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
