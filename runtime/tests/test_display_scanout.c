@@ -7,6 +7,8 @@ static void test_vertical_offsets(void)
     assert(psx_display_vertical_offset(1, 83, 312) == 32);
     assert(psx_display_vertical_offset(1, 35, 291) == 0);
     assert(psx_display_vertical_offset(0, 16, 256) == 0);
+    assert(psx_display_vertical_offset(1, 100, 100) == 0);
+    assert(psx_display_vertical_offset(0, 200, 100) == 0);
 }
 
 static void test_row_shift(void)

@@ -18,6 +18,7 @@ static inline int psx_display_vertical_offset(int pal, uint32_t raw_y1,
     const int centre = pal ? 0xA3 : 0x88;
     int y1 = (int)raw_y1;
     int y2 = (int)raw_y2;
+    if (raw_y2 <= raw_y1) return 0;
     if (y1 < ymin) y1 = ymin;
     if (y1 > ymax) y1 = ymax;
     if (y2 < ymin) y2 = ymin;
