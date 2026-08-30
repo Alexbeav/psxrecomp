@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 uint64_t psx_cycle_count;
 uint32_t i_stat;
@@ -39,7 +40,9 @@ uint32_t psx_netplay_sim_tick(void) { return 0; }
 void *iso_open(const char *path) { (void)path; return NULL; }
 void iso_close(void *handle) { (void)handle; }
 int iso_read_sector(void *handle, uint32_t lba, uint8_t *buffer, int size) {
-    (void)handle; (void)lba; (void)buffer; (void)size; return 0;
+    (void)handle; (void)lba;
+    memset(buffer, 0, (size_t)size);
+    return 1;
 }
 int iso_read_raw_sector(void *handle, uint32_t lba, uint8_t *buffer, int size) {
     (void)handle; (void)lba; (void)buffer; (void)size; return 0;
@@ -65,10 +68,13 @@ int iso_track_is_audio(void *handle, int track) {
 
 int cdrom_test_explicit_seek_ownership(void);
 int cdrom_test_implicit_seek_sequence(void);
+int cdrom_test_init_clears_setloc(void);
 void cdrom_test_set_setloc_state(int far_state, int pending_state);
 int cdrom_test_get_setloc_state(void);
 
 static int failures;
+
+#define EXPECTED_CDROM_SNAPSHOT_BYTES 4931u
 
 #define CHECK(condition, label) do {                                         \
     if (!(condition)) {                                                      \
@@ -81,12 +87,16 @@ int main(void) {
     uint32_t snapshot_size;
     uint8_t *snapshot;
 
+    CHECK(cdrom_test_init_clears_setloc() == 0,
+          "controller reset clears pending Setloc state");
     CHECK(cdrom_test_explicit_seek_ownership() == 0,
           "SeekL/SeekP clears the old stream, pending INT1, ring, and BFRD");
     CHECK(cdrom_test_implicit_seek_sequence() == 0,
           "Setloc plus ReadN keeps SEEK until the first sector is eligible");
 
     snapshot_size = cdrom_snapshot_bytes();
+    CHECK(snapshot_size == EXPECTED_CDROM_SNAPSHOT_BYTES,
+          "CD-ROM snapshot wire size remains backward-compatible");
     snapshot = (uint8_t *)malloc(snapshot_size);
     CHECK(snapshot != NULL, "snapshot allocation");
     if (snapshot) {
@@ -97,6 +107,16 @@ int main(void) {
               "snapshot parser accepts the unchanged wire size");
         CHECK(cdrom_test_get_setloc_state() == 3,
               "snapshot restores far-seek and pending-Setloc bits");
+
+        /* Old snapshots stored only setloc_seek_far in this slot. The value
+         * 1 must still decode as far=true, pending=false. */
+        cdrom_test_set_setloc_state(1, 0);
+        cdrom_snapshot_write(snapshot);
+        cdrom_test_set_setloc_state(0, 1);
+        CHECK(cdrom_snapshot_read(snapshot, snapshot_size) == 1,
+              "snapshot parser accepts the old Setloc field value");
+        CHECK(cdrom_test_get_setloc_state() == 1,
+              "old Setloc value restores without a pending seek");
         free(snapshot);
     }
 
