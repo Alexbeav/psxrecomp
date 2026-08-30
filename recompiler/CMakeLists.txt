@@ -362,6 +362,24 @@ if(BUILD_TESTING)
         ../runtime/include)
     add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
 
+    add_executable(cdrom_seek_semantics_test
+        ../runtime/tests/test_cdrom_seek_semantics.c
+        ../runtime/src/cdrom.c)
+    target_include_directories(cdrom_seek_semantics_test PRIVATE
+        ../runtime/include
+        ../runtime/src)
+    target_compile_definitions(cdrom_seek_semantics_test PRIVATE
+        PSX_CDROM_SEEK_SEMANTICS_TEST=1)
+    if(MSVC)
+        target_compile_options(cdrom_seek_semantics_test PRIVATE /Gy)
+        target_link_options(cdrom_seek_semantics_test PRIVATE /OPT:REF)
+    else()
+        target_compile_options(cdrom_seek_semantics_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(cdrom_seek_semantics_test PRIVATE -Wl,--gc-sections)
+    endif()
+    add_test(NAME cdrom_seek_semantics_test COMMAND cdrom_seek_semantics_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp
@@ -563,7 +581,6 @@ if(BUILD_TESTING)
         foreach(_t IN ITEMS
                 bios_selection_guards
                 capture_history
-                cdrom_implicit_seek
                 default_renderer_guards
                 mod_owned_display_controls
                 fmv_quiet_guards

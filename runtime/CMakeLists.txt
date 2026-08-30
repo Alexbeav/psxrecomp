@@ -346,6 +346,22 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
 
+    add_executable(cdrom_seek_semantics_test
+        tests/test_cdrom_seek_semantics.c
+        src/cdrom.c)
+    target_include_directories(cdrom_seek_semantics_test PRIVATE include src)
+    target_compile_definitions(cdrom_seek_semantics_test PRIVATE
+        PSX_CDROM_SEEK_SEMANTICS_TEST=1)
+    if(MSVC)
+        target_compile_options(cdrom_seek_semantics_test PRIVATE /Gy)
+        target_link_options(cdrom_seek_semantics_test PRIVATE /OPT:REF)
+    else()
+        target_compile_options(cdrom_seek_semantics_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(cdrom_seek_semantics_test PRIVATE -Wl,--gc-sections)
+    endif()
+    add_test(NAME cdrom_seek_semantics_test COMMAND cdrom_seek_semantics_test)
+
     # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
     # clear another device's pending source — pinned on SPU (I_STAT bit 9)
     # staying set across card ACK delivery until the guest acknowledges it.
@@ -500,9 +516,6 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME cdrom_implicit_seek_test
-                 COMMAND ${Python3_EXECUTABLE}
-                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_implicit_seek.py)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)

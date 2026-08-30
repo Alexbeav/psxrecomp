@@ -1559,6 +1559,29 @@ static int read_continues_current_stream(void) {
     return 1;
 }
 
+static int read_start_delay_cycles(int implicit_seek) {
+    return implicit_seek
+        ? seek_complete_delay_cycles() + sector_delay_cycles()
+        : initial_read_delay_cycles();
+}
+
+static void apply_read_start_status(int implicit_seek) {
+    if (implicit_seek) {
+        stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
+        stat_reg |= CDSTAT_SEEK;
+    } else {
+        stat_reg &= (uint8_t)~CDSTAT_SEEK;
+        stat_reg |= CDSTAT_READ;
+    }
+}
+
+static void finish_implicit_seek_status(void) {
+    if (!(stat_reg & CDSTAT_SEEK)) return;
+    stat_reg &= (uint8_t)~CDSTAT_SEEK;
+    stat_reg |= CDSTAT_READ;
+    setloc_seek_far = 0;
+}
+
 static void start_read_stream(uint8_t cmd) {
     int implicit_seek = setloc_pending;
     cdda_playing = 0;
@@ -1582,20 +1605,13 @@ static void start_read_stream(uint8_t cmd) {
     /* An unprocessed Setloc makes ReadN/ReadS perform a logical seek before
      * the first sector. Keep the current bounded seek model, but do not let
      * sector delivery begin while that seek is still active. */
-    read_delay = implicit_seek
-        ? seek_complete_delay_cycles() + sector_delay_cycles()
-        : initial_read_delay_cycles();
+    read_delay = read_start_delay_cycles(implicit_seek);
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
     s_cd_timing_stream_starts++;
     reading = 1;
-    if (implicit_seek) {
-        stat_reg &= (uint8_t)~CDSTAT_READ;
-        stat_reg |= CDSTAT_SEEK;
-    } else {
-        stat_reg |= CDSTAT_READ;
-    }
+    apply_read_start_status(implicit_seek);
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
@@ -1628,6 +1644,13 @@ static void stop_read_stream(void) {
     read_delay = 0;
     s_cd_timing_next_due = 0;
     cdrom_clear_pending_dataready();
+}
+
+static void take_explicit_seek_ownership(void) {
+    stop_read_stream();
+    clear_sector_buffer();
+    stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
+    stat_reg |= CDSTAT_SEEK;
 }
 
 static void stop_cdda_playback(void) {
@@ -2363,12 +2386,10 @@ static void exec_command(uint8_t cmd) {
         /* A seek owns the drive and cancels any prior ReadN/ReadS generation.
          * Otherwise the old stream continues during the seek and later reads
          * never consume the new Setloc target. */
-        stop_read_stream();
+        take_explicit_seek_ownership();
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
-        stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
-        stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
         {
@@ -2655,11 +2676,7 @@ static void process_read_stream(uint32_t cycles) {
     if (read_delay <= 0) {
         /* The implicit Setloc seek completes when the first requested sector
          * becomes eligible. Status changes from SEEK to READ at this point. */
-        if (stat_reg & CDSTAT_SEEK) {
-            stat_reg &= (uint8_t)~CDSTAT_SEEK;
-            stat_reg |= CDSTAT_READ;
-            setloc_seek_far = 0;
-        }
+        finish_implicit_seek_status();
         uint64_t timing_seq = cd_timing_begin_sector(
             msf_to_lba(read_min, read_sec, read_sect));
         if (irq_flag == 0) {
@@ -3297,6 +3314,17 @@ int cdrom_savestate_boost_vblanks_remaining(void) {
 /* LE field wire — PendingCmd/QueuedCmd have host padding. */
 #include "pst_wire.h"
 
+/* Keep the existing four-byte wire slot. Old snapshots stored only 0 or 1
+ * here, so bit 1 is free for the pending Setloc state. */
+static int32_t pack_setloc_snapshot_state(void) {
+    return (setloc_seek_far ? 1 : 0) | (setloc_pending ? 2 : 0);
+}
+
+static void unpack_setloc_snapshot_state(int32_t state) {
+    setloc_seek_far = (state & 1) != 0;
+    setloc_pending = (state & 2) != 0;
+}
+
 static int cdrom_snap_emit(PstW *w) {
 #define W8(f)  do { if (!pst_w_u8(w, (uint8_t)(f))) return 0; } while (0)
 #define WI(f)  do { if (!pst_w_i32(w, (int32_t)(f))) return 0; } while (0)
@@ -3332,7 +3360,8 @@ static int cdrom_snap_emit(PstW *w) {
     WU(0u); W8(last_sector_mode); W8(last_sector_have_raw);
     W8(last_sector_raw_mode); W8(last_sector_xa_file); W8(last_sector_xa_channel);
     W8(last_sector_xa_submode); W8(last_sector_xa_coding);
-    W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba); WI(setloc_seek_far);
+    W8(seek_min); W8(seek_sec); W8(seek_sect); WI(s_setloc_lba);
+    WI(pack_setloc_snapshot_state());
     WI(reading); WI(read_min); WI(read_sec); WI(read_sect); W8(mode_reg);
     W8(read_cmd); WI(read_delay); W8(filter_file); W8(filter_channel); W8(cd_muted);
     WI(cdda_playing); WI(cdda_track); WU(cdda_lba); WI(cdda_delay);
@@ -3398,7 +3427,8 @@ static int cdrom_snap_parse(PstR *r) {
     RU(last_sector_frame); R8(last_sector_mode); R8(last_sector_have_raw);
     R8(last_sector_raw_mode); R8(last_sector_xa_file); R8(last_sector_xa_channel);
     R8(last_sector_xa_submode); R8(last_sector_xa_coding);
-    R8(seek_min); R8(seek_sec); R8(seek_sect); RI(s_setloc_lba); RI(setloc_seek_far); setloc_pending = 0;
+    R8(seek_min); R8(seek_sec); R8(seek_sect); RI(s_setloc_lba);
+    RI(i); unpack_setloc_snapshot_state(i);
     RI(reading); RI(read_min); RI(read_sec); RI(read_sect); R8(mode_reg);
     R8(read_cmd); RI(read_delay); R8(filter_file); R8(filter_channel); R8(cd_muted);
     RI(cdda_playing); RI(cdda_track); RU(cdda_lba); RI(cdda_delay);
@@ -3447,6 +3477,82 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     cdrom_resync_deadlines_after_restore();
     return 1;
 }
+
+#ifdef PSX_CDROM_SEEK_SEMANTICS_TEST
+int cdrom_test_explicit_seek_ownership(void) {
+    int failures = 0;
+    reading = 1;
+    read_cmd = 0x06;
+    read_delay = 1234;
+    pending_dataready = 1;
+    pending_dataready_stat = CDSTAT_READ;
+    pending_present_due = 5678;
+    request_reg |= CDROM_REQUEST_BFRD;
+    stat_reg = CDSTAT_MOTOR | CDSTAT_READ | CDSTAT_PLAY;
+    iso_handle = (void *)(uintptr_t)1;
+    irq_flag = 0;
+    for (int slot = 0; slot < CDROM_NUM_SECTOR_BUFFERS; slot++) {
+        s_sector_ring[slot].size = 32 + slot;
+        s_sector_ring[slot].pos = slot;
+    }
+
+    exec_command(0x15);
+
+    if (reading || read_cmd || read_delay || s_cd_timing_next_due) failures |= 1;
+    if (pending_dataready || pending_dataready_stat || pending_present_due) failures |= 2;
+    if (request_reg & CDROM_REQUEST_BFRD) failures |= 4;
+    for (int slot = 0; slot < CDROM_NUM_SECTOR_BUFFERS; slot++) {
+        if (s_sector_ring[slot].size || s_sector_ring[slot].pos) failures |= 8;
+    }
+    if ((stat_reg & (CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK)) != CDSTAT_SEEK)
+        failures |= 16;
+    return failures;
+}
+
+int cdrom_test_implicit_seek_sequence(void) {
+    const int expected = CDROM_SINGLE_SPEED_SECTOR_CYCLES * 4
+                       + CDROM_SINGLE_SPEED_SECTOR_CYCLES / 2;
+    int failures = 0;
+    mode_reg = 0x80;
+    g_disc_speed_divisor = 1;
+    xa_stream_active = 0;
+    s_warm_route_active = 0;
+    reading = 0;
+    pending.pending = 0;
+    iso_handle = (void *)(uintptr_t)1;
+    last_sector_lba = 0;
+    stat_reg = CDSTAT_MOTOR | CDSTAT_READ | CDSTAT_PLAY;
+    irq_flag = 0;
+    param_fifo[0] = 0x00;
+    param_fifo[1] = 0x10;
+    param_fifo[2] = 0x00;
+    param_count = 3;
+
+    exec_command(0x02);
+    irq_flag = 0;
+    exec_command(0x06);
+
+    if (read_delay != expected) failures |= 1;
+    if ((stat_reg & (CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK)) != CDSTAT_SEEK)
+        failures |= 2;
+    if (setloc_pending) failures |= 4;
+    irq_flag = 0;
+    process_read_stream((uint32_t)expected);
+    if ((stat_reg & (CDSTAT_READ | CDSTAT_PLAY | CDSTAT_SEEK)) != CDSTAT_READ)
+        failures |= 8;
+    if (setloc_seek_far) failures |= 16;
+    return failures;
+}
+
+void cdrom_test_set_setloc_state(int far_state, int pending_state) {
+    setloc_seek_far = far_state != 0;
+    setloc_pending = pending_state != 0;
+}
+
+int cdrom_test_get_setloc_state(void) {
+    return pack_setloc_snapshot_state();
+}
+#endif
 
 void debug_force_cd_reinsert(void) {
     // Simulamos la apertura de la bandeja borrando los flujos actuales
