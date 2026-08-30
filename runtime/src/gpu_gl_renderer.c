@@ -72,6 +72,7 @@
 #include "psx_savestate_menu.h"
 #include "host_time.h"
 #include "latency_ring.h"
+#include "frame_pacing.h"
 #include "psx_rewind.h"
 
 #include "psx_sdl.h"
@@ -622,7 +623,14 @@ static uint64_t   s_coh_seq = 0;
 
 /* 16x16 native-pixel tiles changed since their last on-screen present. This
  * lets a double-buffered 30 Hz game avoid swapping the unchanged front buffer
- * on the intervening 60 Hz vblank without guessing from game identity. */
+ * on the intervening 60 Hz vblank without guessing from game identity.
+ *
+ * INVARIANT: eliding a swap also elides whatever that swap was blocking on.
+ * The frontend calls present once per guest vblank, so when the driver's swap
+ * block owns the guest cadence (psx_present_vsync_owns_cadence(), the XOR
+ * partner of the wall-clock pacer) an elided frame is an unthrottled frame:
+ * a 30 Hz-presenting game then advances two vblanks per block and runs at 2x.
+ * Every skip site below is therefore gated on that query. */
 #define PRES_TILE 16
 #define PRES_ROWS (VRAM_H / PRES_TILE)
 static uint64_t s_present_dirty[PRES_ROWS];
@@ -4195,6 +4203,7 @@ void gl_renderer_present_vram(int disp_x, int disp_y, int w, int h, int linear,
         s_last_dw == w && s_last_dh == h &&
         !present_dirty_test(disp_x, disp_y, disp_x + w - 1, disp_y + h - 1) &&
         !host_osd_needs_present() &&
+        !psx_present_vsync_owns_cadence() &&
         !gl_renderer_interpolation_owns_cadence()) {
         s_probe_skip++;
         gl_perf_present_enter();
@@ -4305,6 +4314,7 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
         s_last_dw == g_wide_w && s_last_dh == disp_h &&
         !present_dirty_test(0, disp_y, VRAM_W - 1, disp_y + disp_h - 1) &&
         !host_osd_needs_present() &&
+        !psx_present_vsync_owns_cadence() &&
         !gl_renderer_interpolation_owns_cadence()) {
         s_probe_skip++;
         gl_perf_present_enter();

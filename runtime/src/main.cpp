@@ -2906,6 +2906,12 @@ static int present_vsync_owns_cadence(void) {
     return host_refresh_matches_guest_cadence();
 }
 
+/* C accessor for the renderers (frame_pacing.h). The GL present-skip
+ * optimisation must consult this before eliding a swap. */
+extern "C" int psx_present_vsync_owns_cadence(void) {
+    return present_vsync_owns_cadence();
+}
+
 /* The GP1 video standard can flip at runtime (EU BIOS shell -> game, or a
  * title toggling modes). Re-apply the present cadence (swap interval) when it
  * does, so the pacer/vsync ownership above takes effect immediately. */

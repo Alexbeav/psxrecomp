@@ -514,6 +514,9 @@ if(BUILD_TESTING)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
+        add_test(NAME present_skip_cadence_guard_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_skip_cadence_guard.py)
         add_test(NAME mod_bezel_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)
