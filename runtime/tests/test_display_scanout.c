@@ -9,24 +9,32 @@ static void test_vertical_offsets(void)
     assert(psx_display_vertical_offset(0, 16, 256) == 0);
     assert(psx_display_vertical_offset(1, 100, 100) == 0);
     assert(psx_display_vertical_offset(0, 200, 100) == 0);
+    assert(psx_display_vertical_offset(1, 400, 500) == 0);
 }
 
-static void test_row_shift(void)
+static void test_vertical_layout(void)
 {
-    uint32_t down[5] = { 1, 2, 3, 4, 5 };
-    uint32_t up[5] = { 1, 2, 3, 4, 5 };
-    const uint32_t black = 0xFF000000u;
+    PsxDisplayVerticalLayout alundra = psx_display_vertical_layout(1, 83, 312);
+    assert(alundra.valid);
+    assert(alundra.canvas_height == 288);
+    assert(alundra.canvas_origin_y == 63);
+    assert(alundra.source_skip_y == 0);
+    assert(alundra.source_height == 225);
+    assert(alundra.offset_y == 32);
 
-    psx_display_shift_rows_argb(down, 1, 5, 1);
-    assert(down[0] == black && down[1] == 1 && down[4] == 4);
+    PsxDisplayVerticalLayout clipped_top = psx_display_vertical_layout(1, 0, 100);
+    assert(clipped_top.valid);
+    assert(clipped_top.canvas_origin_y == 0);
+    assert(clipped_top.source_skip_y == 20);
+    assert(clipped_top.source_height == 80);
 
-    psx_display_shift_rows_argb(up, 1, 5, -2);
-    assert(up[0] == 3 && up[2] == 5 && up[3] == black && up[4] == black);
+    assert(!psx_display_vertical_layout(1, 400, 500).valid);
+    assert(!psx_display_vertical_layout(0, 100, 100).valid);
 }
 
 int main(void)
 {
     test_vertical_offsets();
-    test_row_shift();
+    test_vertical_layout();
     return 0;
 }

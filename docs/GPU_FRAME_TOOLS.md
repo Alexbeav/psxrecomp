@@ -298,6 +298,10 @@ derives this value from the GP1(07h) vertical display range.
 A positive value moves the decoded scanout down. A negative value moves it up.
 The reference point is the PAL or NTSC broadcast centre, not the window edge.
 
+The 24-bit presenter stages the visible source rows inside the full PAL or NTSC
+active canvas. Rows before or after active video are clipped once. Black canvas
+rows preserve the GP1(07h) position without dropping additional FMV content.
+
 Use `present_shot`, not `screenshot`, to validate letterbox placement.
 `screenshot` captures the display buffer before the window-fit stage.
 

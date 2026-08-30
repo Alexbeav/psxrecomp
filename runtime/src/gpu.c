@@ -3225,16 +3225,18 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
      * active region before taking the difference. Unclamped Y2 past the
      * active end (common overscan programming) includes a flickering junk
      * line at the bottom of present that DuckStation crops away. */
-    const int ymin = video_mode ? 20 : 16;  /* PAL : NTSC */
-    const int ymax = video_mode ? 308 : 256;
-    int y1 = (int)v_display_y1;
-    int y2 = (int)v_display_y2;
-    if (y1 < ymin) y1 = ymin;
-    if (y1 > ymax) y1 = ymax;
-    if (y2 < ymin) y2 = ymin;
-    if (y2 > ymax) y2 = ymax;
-    uint32_t h = (y2 > y1) ? (uint32_t)(y2 - y1) : 240u;
-    if (vres) h *= 2; /* 480i */
+    PsxDisplayVerticalLayout vertical = psx_display_vertical_layout(
+        video_mode != 0, v_display_y1, v_display_y2);
+    uint32_t h = vertical.valid ? vertical.source_height : 240u;
+    uint32_t screen_h = vertical.valid ? vertical.canvas_height : h;
+    uint32_t screen_origin_y = vertical.valid ? vertical.canvas_origin_y : 0u;
+    uint32_t screen_source_skip_y = vertical.valid ? vertical.source_skip_y : 0u;
+    if (vres) {
+        h *= 2; /* 480i */
+        screen_h *= 2;
+        screen_origin_y *= 2;
+        screen_source_skip_y *= 2;
+    }
 
     /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /
      * Beetle: coordinates stay 16-bit-based; W RGB occupies W*3/2 halfwords).
@@ -3245,12 +3247,16 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
 
     /* Clamp to sane maximums */
     if (w > 640) w = 640;
-    if (h > 512) h = 512;
+    if (screen_h > 512) screen_h = 512;
+    if (screen_origin_y > screen_h) screen_origin_y = screen_h;
+    if (h > screen_h - screen_origin_y) h = screen_h - screen_origin_y;
 
     out->width  = w;
     out->height = h;
-    out->screen_offset_y = psx_display_vertical_offset(
-        video_mode != 0, v_display_y1, v_display_y2);
+    out->screen_height = screen_h;
+    out->screen_origin_y = screen_origin_y;
+    out->screen_source_skip_y = screen_source_skip_y;
+    out->screen_offset_y = vertical.valid ? vertical.offset_y : 0;
     if (vres) out->screen_offset_y *= 2;
 }
 
