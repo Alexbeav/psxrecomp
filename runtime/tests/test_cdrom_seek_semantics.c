@@ -16,8 +16,9 @@ uint32_t g_debug_current_func_addr;
 uint32_t g_debug_last_store_pc;
 uint64_t s_frame_count;
 
-/* cdrom.c is compiled as one production translation unit. These inert host
- * edges satisfy its linker contract; the test does not execute them. */
+/* cdrom.c is compiled as one production translation unit. Most host edges are
+ * inert linker stubs. iso_read_sector is the deliberate exception: the
+ * implicit-seek sequence uses it to complete the target-sector delivery. */
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)bit; (void)detail; }
 void event_ring_record(uint16_t kind, uint8_t detail) { (void)kind; (void)detail; }
 void event_ring_record_aux(uint16_t kind, uint8_t detail, uint32_t aux) {
