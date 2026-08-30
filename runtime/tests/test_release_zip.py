@@ -16,8 +16,10 @@ with tempfile.TemporaryDirectory() as temporary:
     stage = base / "stage"
     (stage / "mods" / "package").mkdir(parents=True)
     (stage / "Tomba Recompiled.exe").write_bytes(b"exe")
-    (stage / "mods" / "package" / "manifest.toml").write_text(
-        'id = "test"\n', encoding="utf-8"
+    # The ZIP helper preserves file bytes. Use an explicit LF fixture so this
+    # archive-path test does not depend on the checkout host's newline policy.
+    (stage / "mods" / "package" / "manifest.toml").write_bytes(
+        b'id = "test"\n'
     )
     output = base / "release.zip"
     subprocess.run(

@@ -1441,8 +1441,9 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
             import _ctypes
             import ctypes
             import shutil
-            gcc = r'C:\msys64\mingw64\bin\gcc.exe'
-            assert os.path.isfile(gcc), "real loaded-DLL regression needs MinGW gcc"
+            gcc = shutil.which('gcc')
+            assert gcc and os.path.isfile(gcc), (
+                "real loaded-DLL regression needs MinGW gcc on PATH")
             with tempfile.TemporaryDirectory() as tmp:
                 # The actual host compiler must export the same 64-bit identity
                 # serialized in P; this catches width/decorated-name mistakes
@@ -2145,8 +2146,9 @@ def check_candidate_capacity_publication():
     if os.name == 'nt':
         # Exact pairs racing to distinct names may both commit: the namespace
         # lock makes the second writer observe the first pair's dedup identity.
-        gcc = r'C:\msys64\mingw64\bin\gcc.exe'
-        assert os.path.isfile(gcc)
+        gcc = shutil.which('gcc')
+        assert gcc and os.path.isfile(gcc), (
+            "candidate-capacity regression needs MinGW gcc on PATH")
         with tempfile.TemporaryDirectory() as tmp:
             pair_id = 0x1020304050607080
             source = pathlib.Path(tmp) / 'capacity.c'
@@ -2924,7 +2926,10 @@ def check_interior_fragment_contract():
                 f"P {pair_id:016X}\nF {entry:08X} {code_crc:08X} junk\n"
                 f"R {entry:08X} 8\n")
             assert MOD.load_shard_entry_set(str(dll)) == set()
-            outside = 0x80200000
+            # Overlay tooling supports the runtime's full opt-in 8 MiB host
+            # capacity. Use the first byte beyond that capacity as the reject
+            # case; 0x80200000 is now a valid high-bank address.
+            outside = 0x80800000
             ranges.write_text(
                 f"P {pair_id:016X}\nF {outside:08X} {code_crc:08X}\n"
                 f"R {outside:08X} 4\n")
