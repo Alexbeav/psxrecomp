@@ -538,6 +538,14 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
         g_text_native_blocked++;
         return 0;
     }
+    /* NOTE (2026-08-30): ranges are validated IN FULL regardless of exec_pc.
+     * The former [exec_pc, end) clip assumed a continuation "never fetches
+     * the patched bytes" behind its resume PC — false for any entry with a
+     * backward edge: a post-call continuation re-enters mid-function and
+     * loops back into the clipped-away region, executing stale static code
+     * (CMR2 overlay corruption, second locus 0x80016B34). A genuinely
+     * patched prologue now blocks the whole entry to the interpreter —
+     * correct, merely slower. */
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t phys = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
@@ -546,11 +554,6 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             len > text_ref_hi - phys) {
             g_text_native_blocked++;
             return 0;
-        }
-        if (phys + len <= at) continue;
-        if (phys < at) {
-            len -= at - phys;
-            phys = at;
         }
         any = 1;
         /* Page-clean fast path: every page this range touches is neither
