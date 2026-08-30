@@ -34,6 +34,14 @@
 # --runtime-dir mods. Enforce it here rather than in each title's wrapper.
 # A title that genuinely ships no catalog passes --no-mods.
 #
+# DEVELOPER CHANNEL. A package manifest may declare channel = "developer".
+# Those are work-in-progress catalogs that should stay on the maintainer's
+# machine: they ship with ordinary local builds and local exports, but
+# --exclude-dev-mods (or EXCLUDE_DEV_MODS=1, which CI sets) drops them from a
+# public release. Pruning is by PACKAGE directory, never by rewriting a
+# manifest -- editing a package during packaging would change content that is
+# meant to be verifiable.
+#
 # Env:
 #   RELEASE_VERSION / <version-env> / VERSION file  (must match binary stamp)
 #   PSXRECOMP_TOOLCHAIN_DIR | TOOLCHAIN_DIR | BPE_TOOLCHAIN_DIR  (only with --embed-toolchain)
@@ -62,6 +70,18 @@ RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
 # mods/ ships by default; --no-mods opts a catalog-less title out.
 STAGE_MODS=1
+# Drop channel = "developer" packages from the shipped catalog.
+#
+# Defaults to ON under CI and OFF locally, which is the whole point: a
+# maintainer's local build and local export keep the mods they are working on,
+# while anything a release workflow publishes does not. Keying off $CI (set by
+# GitHub Actions and every other provider) means this holds for every title
+# without editing 23 separate release workflows -- a per-workflow opt-in is
+# exactly the shape that left 21 of 23 ports shipping no mods at all.
+# --include-dev-mods / --exclude-dev-mods override either way.
+if [[ -z "${EXCLUDE_DEV_MODS:-}" ]]; then
+  if [[ -n "${CI:-}" ]]; then EXCLUDE_DEV_MODS=1; else EXCLUDE_DEV_MODS=0; fi
+fi
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
@@ -87,6 +107,8 @@ while [[ $# -gt 0 ]]; do
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --no-mods) STAGE_MODS=0; shift ;;
+    --exclude-dev-mods) EXCLUDE_DEV_MODS=1; shift ;;
+    --include-dev-mods) EXCLUDE_DEV_MODS=0; shift ;;
     --runtime-dir) RUNTIME_DIRS+=("${2:?}"); shift 2 ;;
     --runtime-dir-optional) RUNTIME_DIRS_OPTIONAL+=("${2:?}"); shift 2 ;;
     --runtime-bin) RUNTIME_BIN_DIR="${2:?}"; shift 2 ;;
@@ -301,6 +323,30 @@ copy_runtime_dir() {
   echo "staged runtime dir ${name}/"
 }
 
+# Remove every channel = "developer" package from a staged catalog tree.
+# <tree>/packages/<id>/<version>/manifest.toml is the layout; drop the VERSION
+# directory that declares the channel, then the package directory once it has
+# no versions left. Matching is on the manifest's own declaration so a package
+# carries its own status -- nothing here maintains a list of names to exclude.
+prune_dev_mods() {  # prune_dev_mods <staged-catalog-root>
+  local tree="$1" manifest pkgdir verdir dropped=0
+  [[ -d "${tree}/packages" ]] || return 0
+  while IFS= read -r manifest; do
+    # Tolerate spacing/quoting variants; anchor to a top-level key so a
+    # feature description mentioning the word cannot trigger a drop.
+    if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "${manifest}"; then
+      verdir="$(dirname "${manifest}")"
+      pkgdir="$(dirname "${verdir}")"
+      rm -rf "${verdir}"
+      rmdir "${pkgdir}" 2>/dev/null || true
+      echo "  excluded developer package: $(basename "${pkgdir}")/$(basename "${verdir}")"
+      dropped=$((dropped + 1))
+    fi
+  done < <(find "${tree}/packages" -mindepth 3 -maxdepth 3 -name manifest.toml 2>/dev/null)
+  return 0
+}
+
 if ((${#RUNTIME_DIRS[@]})); then
   for d in "${RUNTIME_DIRS[@]}"; do
     copy_runtime_dir "${d}" 0
@@ -336,6 +382,32 @@ done
 for d in "${PROJECT_DIRS[@]}"; do
   copy_proj "${d}"
 done
+
+# Developer-channel pruning runs AFTER every catalog is staged, and covers BOTH
+# copies: the runtime catalog under mods/packages that the launcher lists, and
+# the source catalog under mods/preloaded that the setup-host rebuild re-stages
+# from. Pruning only the first would publish the package in source form and let
+# the player's own rebuild put it straight back.
+if [[ "${EXCLUDE_DEV_MODS}" -eq 1 ]]; then
+  echo "excluding developer-channel mods from this package"
+  prune_dev_mods "${STAGE}/mods"
+  prune_dev_mods "${STAGE}/mods/preloaded"
+  _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+      "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+  if [[ "${_dev_left}" -ne 0 ]]; then
+    echo "error: ${_dev_left} developer manifest(s) survived pruning:" >&2
+    grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "${STAGE}" --include=manifest.toml >&2 || true
+    exit 1
+  fi
+else
+  _dev_in=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+      "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+  if [[ "${_dev_in}" -ne 0 ]]; then
+    echo "note: package includes ${_dev_in} developer-channel manifest(s);" \
+         "pass --exclude-dev-mods (or EXCLUDE_DEV_MODS=1) for a public release"
+  fi
+fi
 
 copy_tree_filtered() {
   local src="$1" dest="$2"

@@ -36,6 +36,7 @@
 #   --version VER      release version, e.g. v0.0.1        (default: dev)
 #   --out DIR          output directory           (default: <repo>/release-macos)
 #   --game-config P    game.toml to bundle, relative to repo
+#   --exclude-dev-mods drop channel = "developer" packages (also EXCLUDE_DEV_MODS=1)
 #   --mods-src DIR     override catalog source   (default: the build tree's
 #                      mods/, which carries framework builtins AND the title's
 #                      own packages; per-machine state.toml is stripped)
@@ -77,6 +78,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2;;
     --out) OUT="$2"; shift 2;;
     --game-config) GAME_CONFIG="$2"; shift 2;;
+    --exclude-dev-mods) EXCLUDE_DEV_MODS=1; shift;;
     --mods-src) MODS_SRC="$2"; MODS_SRC_EXPLICIT=1; shift 2;;
     --require-mod) REQUIRE_MODS+=("$2"); shift 2;;
     --data) DATA_FILES+=("$2"); shift 2;;
@@ -187,6 +189,24 @@ _mod_manifests=$(find "$APPDIR/Contents/Resources/mods" -name manifest.toml 2>/d
     || die "staged mods/ contains no manifest.toml; the catalog would ship empty"
 [ -z "$(find "$APPDIR/Contents/Resources/mods" -name 'state.toml*' 2>/dev/null)" ] \
     || die "per-machine mods/state.toml survived staging"
+# Developer-channel packages (channel = "developer") are unfinished work that
+# ships with local builds but must not be published. Prune by PACKAGE
+# directory; never rewrite a manifest during packaging.
+if [ "${EXCLUDE_DEV_MODS:-0}" = "1" ]; then
+    note "excluding developer-channel mods"
+    find "$APPDIR/Contents/Resources/mods/packages" -mindepth 3 -maxdepth 3 \
+        -name manifest.toml 2>/dev/null | while read -r m; do
+        if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' "$m"; then
+            v=$(dirname "$m"); p=$(dirname "$v")
+            rm -rf "$v"; rmdir "$p" 2>/dev/null || true
+            note "  excluded developer package: $(basename "$p")/$(basename "$v")"
+        fi
+    done
+    _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "$APPDIR" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+    [ "$_dev_left" -eq 0 ] || die "developer manifest(s) survived pruning: $_dev_left"
+    _mod_manifests=$(find "$APPDIR/Contents/Resources/mods" -name manifest.toml 2>/dev/null | wc -l)
+fi
 note "mod catalog: ${_mod_manifests} manifest(s), no per-machine state"
 
 if [ -n "$GAME_CONFIG" ]; then

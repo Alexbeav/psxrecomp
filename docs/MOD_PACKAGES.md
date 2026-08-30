@@ -261,6 +261,32 @@ Sparse fields and integer predicates are still pre-boot plan construction.
 They do not provide a general expression evaluator, masks, arithmetic beyond
 the checked field addend, package code execution, or per-frame dispatch.
 
+## Developer channel
+
+A package may declare itself unfinished:
+
+```toml
+format_version = 5
+id = "example.enhancements"
+channel = "developer"
+```
+
+`channel = "developer"` marks work in progress. Such a package is staged next
+to the executable by an ordinary build and ships in a locally exported
+package, so it can be tested exactly as a player would see it — but release
+packaging drops it, so unfinished work is never published.
+
+Packaging defaults the exclusion from `$CI`: on under any CI provider, off
+locally. `--exclude-dev-mods` / `--include-dev-mods` (or `EXCLUDE_DEV_MODS=0|1`)
+override it, and `project_studio build export --exclude-dev-mods` reproduces
+what a release would contain. Any absent `channel` means stable.
+
+Pruning removes the whole package directory. A manifest is never rewritten
+during packaging — a package's content stays exactly what its author shipped,
+so the maturity marker is package-level. Split a player-ready feature into its
+own stable package rather than promoting a catalog that still holds
+in-progress work.
+
 ## Trusted static plugins
 
 Package format 5 can activate a game-owned plugin that is already statically

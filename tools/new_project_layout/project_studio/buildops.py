@@ -882,9 +882,15 @@ def export_release(
     artifact_tag: str | None = None,
     recompiler_build: str = "build-recompiler",
     *,
+    exclude_dev_mods: bool = False,
     log: LogFn | None = None,
 ) -> CmdResult:
-    """Package a distributable zip from an existing build. Returns its path."""
+    """Package a distributable zip from an existing build. Returns its path.
+
+    exclude_dev_mods reproduces what CI publishes -- channel = "developer"
+    packages dropped. A local export keeps them by default, because the point
+    of exporting locally is to test the work in progress.
+    """
     wrapper = root / "scripts" / "package_setup_release.sh"
     if not wrapper.is_file():
         return CmdResult(
@@ -909,6 +915,9 @@ def export_release(
     tag = artifact_tag or default_artifact_tag()
     env = dict(os.environ)
     env.setdefault("RELEASE_VERSION", release_version(root))
+    # Explicit either way: the packager defaults this from $CI, and a studio
+    # export must not inherit that by accident on a CI-flavoured machine.
+    env["EXCLUDE_DEV_MODS"] = "1" if exclude_dev_mods else "0"
     res = _run_stream(
         ["bash", str(wrapper), build_dir, tag, recompiler_build],
         root, log=log, env=env,
