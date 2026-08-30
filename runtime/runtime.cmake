@@ -1912,8 +1912,9 @@ function(psxrecomp_add_game_runtime target)
             "-DPSX_GAME_VERSION=${_psxg_release_version} or delete the build cache.")
     endif()
 
-    # Prefer game-root recomp-ui (runtime.cmake also auto-discovers this).
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
+    # Use a game-root recomp-ui only when the caller did not select one.
+    if((NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL "")
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
         set(RECOMP_UI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui" CACHE PATH
             "Path to recomp-ui launcher" FORCE)
     endif()

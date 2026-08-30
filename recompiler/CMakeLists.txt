@@ -605,6 +605,7 @@ if(BUILD_TESTING)
                 runtime_config_packaging_guards
                 overlay_decodable_fallback
                 overlay_init_guard
+                recomp_ui_root_override
                 runtime_overlay_guards
                 pal_cadence_host_refresh
                 sdl3_main_single_include
