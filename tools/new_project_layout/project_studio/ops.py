@@ -985,6 +985,34 @@ def op_sync_packager_project_dirs(root: Path, options: MigrateOptions) -> ApplyR
     )
 
 
+def _ci_step_names(text: str) -> list[str]:
+    """`- name:` values under a workflow's steps, in order.
+
+    Deliberately a regex over the raw text rather than a YAML parse: this runs
+    against a template that still holds @TOKEN@ placeholders, which are valid
+    YAML here but need no interpretation, and the check must not depend on a
+    yaml module being importable inside Studio.
+    """
+    names: list[str] = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*-\s+name:\s*(.+?)\s*$", line)
+        if m:
+            names.append(m.group(1).strip().strip('"\''))
+    return names
+
+
+def _ci_steps_missing_from(installed: Path, template: Path) -> list[str]:
+    """Template step names absent from the installed workflow."""
+    try:
+        have = set(_ci_step_names(installed.read_text(encoding="utf-8", errors="replace")))
+        want = _ci_step_names(template.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return []
+    # Names carrying a token cannot be compared literally -- the installed copy
+    # has them substituted -- so they are not evidence either way.
+    return [n for n in want if n not in have and "@" not in n]
+
+
 def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
     src = ci_setup_release_template(root)
@@ -999,7 +1027,29 @@ def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     if dst.is_file() and not options.force and "YOUR_ZIP_PREFIX" not in dst.read_text(
         encoding="utf-8", errors="replace"
     ):
-        return ApplyResult("emit_ci_workflow", True, "release.yml already filled", [])
+        # "Filled" is not the same as "current". This used to stop here, so a
+        # project that installed the workflow once never learned the template
+        # had gained steps -- which is how a release gate can exist in the
+        # framework and be missing from every title that predates it.
+        #
+        # Compare STEP NAMES rather than text: a filled workflow legitimately
+        # differs from the template (tokens, and titles customise theirs), so a
+        # textual diff would cry stale on every project forever. A step the
+        # template defines and the installed file does not is unambiguous.
+        missing = _ci_steps_missing_from(dst, src)
+        if missing:
+            return ApplyResult(
+                "emit_ci_workflow",
+                False,
+                "release.yml is out of date with the CI template; missing step(s): "
+                + ", ".join(missing)
+                + " — re-emit with force to update (review the diff first: a "
+                  "customised workflow is overwritten wholesale)",
+                [],
+            )
+        return ApplyResult(
+            "emit_ci_workflow", True, "release.yml already filled and current", []
+        )
     _fill(src, dst, tokens, options.dry_run, ci=True)
     return ApplyResult(
         "emit_ci_workflow",
