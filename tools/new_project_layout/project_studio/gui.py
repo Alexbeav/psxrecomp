@@ -2405,6 +2405,18 @@ class ProjectStudioApp:
             height=30,
             command=self._build_configure_and_build,
         ).pack(side="left", padx=8)
+        # Local export runs the SAME wrapper CI runs, so a zip made here and a
+        # released one are the same artifact by construction. It exists because
+        # "build it and look inside the package" had no button: the only route
+        # to a distributable was commit-and-wait-for-CI, which is how releases
+        # shipped with an empty Mods page without anyone noticing.
+        ctk.CTkButton(
+            brow,
+            text="Export release zip",
+            width=160,
+            height=30,
+            command=self._build_export,
+        ).pack(side="left")
 
         launch_box = ctk.CTkFrame(tab, corner_radius=10)
         launch_box.pack(fill="x", padx=4, pady=4)
@@ -2597,6 +2609,23 @@ class ProjectStudioApp:
             )
 
         self._build_run_bg("Build", go)
+
+    def _build_export(self) -> None:
+        """Bundle a distributable zip from the current build (mods included)."""
+        from .buildops import export_release
+
+        root = self._game_root()
+        if root is None:
+            return
+
+        def go():
+            return export_release(
+                root,
+                build_dir=self.build_dir_var.get().strip() or "build-release",
+                log=lambda m: self.root.after(0, lambda line=m: self._log(line)),
+            )
+
+        self._build_run_bg("Export release", go)
 
     def _build_configure_and_build(self) -> None:
         from .buildops import build, configure

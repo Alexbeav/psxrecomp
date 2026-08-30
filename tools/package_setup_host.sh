@@ -112,6 +112,19 @@ if [[ "${STAGE_MODS}" -eq 1 ]]; then
   if [[ "${_mods_named}" -eq 0 ]]; then
     RUNTIME_DIRS+=("mods")
   fi
+  # Also ship the SOURCE catalog (mods/preloaded/...) when the title has one.
+  # The setup-host zip rebuilds on the player's machine, and that rebuild
+  # re-runs the title's POST_BUILD mod staging -- which reads the source tree,
+  # not the staged copy. Without this the rebuilt exe silently loses every
+  # game-owned mod and keeps only the framework builtins. copy_proj skips a
+  # path that does not exist, so this is inert for a title with no catalog.
+  _mods_proj=0
+  for _d in "${PROJECT_DIRS[@]:-}"; do
+    [[ "${_d}" == "mods" ]] && _mods_proj=1
+  done
+  if [[ "${_mods_proj}" -eq 0 ]]; then
+    PROJECT_DIRS+=("mods")
+  fi
 fi
 
 if [[ -z "${BUILD_DIR}" || -z "${ARTIFACT}" || -z "${ZIP_PREFIX}" || -z "${EXE_NAME}" ]]; then
