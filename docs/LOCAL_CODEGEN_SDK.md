@@ -15,7 +15,7 @@ Games can ship a **setup host**: `psx-runtime` linked **without** game C and
 `PSX_SETUP_WIZARD=ON` / `ENABLE_SETUP_WIZARD` so first-run Generate & rebuild
 actually appears. CI never
 needs BIOS dumps or private assets. First-run Generate emits OpenBIOS (from
-bundled `openbios.bin`) and optional SCPH1001 (player dump), then game C, then
+bundled `openbios.bin`) and an optional compatible retail BIOS backend, then game C, then
 rebuild links everything into `build-release/` (or the title’s
 `build_dir_name`).
 
@@ -64,7 +64,7 @@ python psxrecomp/psxrecomp_cli.py verify-disc \
 
 python psxrecomp/psxrecomp_cli.py generate \
   --config game.toml --project-root . --disc path/to/dump.iso \
-  [--bios path/to/SCPH1001.BIN] [--force-bios] \
+  [--bios path/to/compatible-retail-bios.bin] [--force-bios] \
   [--skip-hash-check] [--force-prepare] [--json-progress]
 
 python psxrecomp/psxrecomp_cli.py ensure-toolchain \
