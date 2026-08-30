@@ -10,10 +10,16 @@ RUNTIME_CMAKE = ROOT / "runtime" / "runtime.cmake"
 
 def main() -> None:
     text = RUNTIME_CMAKE.read_text(encoding="utf-8")
-    expected = """if((NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL \"\")
+    function_fallback = """if((NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL \"\")
        AND EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake\")"""
-    assert expected in text, (
-        "runtime packaging must preserve an explicit RECOMP_UI_ROOT before "
+    module_fallback = """if(PSX_RECOMP_UI AND (NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL \"\"))
+    if(EXISTS \"${CMAKE_SOURCE_DIR}/recomp-ui/recomp_ui.cmake\")"""
+    assert function_fallback in text, (
+        "the game-runtime function must preserve an explicit RECOMP_UI_ROOT "
+        "before falling back to the game-root recomp-ui"
+    )
+    assert module_fallback in text, (
+        "the runtime module must preserve an explicit RECOMP_UI_ROOT before "
         "falling back to the game-root recomp-ui"
     )
 
