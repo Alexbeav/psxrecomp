@@ -553,6 +553,25 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             phys = at;
         }
         any = 1;
+        /* Page-clean fast path: every page this range touches is neither
+         * guard-modified nor runtime-dirty, so its bytes still equal the
+         * reference image — skip the memcmp. This keeps the emitted
+         * stale-static guards on inter-piece host transfers near-free on
+         * the (overwhelmingly common) pristine pages. */
+        {
+            uint32_t p0 = phys >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p;
+            int clean = 1;
+            for (p = p0; p <= p1; p++) {
+                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||
+                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {
+                    clean = 0;
+                    break;
+                }
+            }
+            if (clean) continue;
+        }
         if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len) != 0) {
             uint32_t off = 0;
             const uint8_t *live = ram + phys;
