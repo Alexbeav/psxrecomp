@@ -2753,6 +2753,12 @@ static int present_vsync_owns_cadence(void) {
     return host_refresh_matches_guest_cadence();
 }
 
+/* C accessor for the renderers (frame_pacing.h). The GL present-skip
+ * optimisation must consult this before eliding a swap. */
+extern "C" int psx_present_vsync_owns_cadence(void) {
+    return present_vsync_owns_cadence();
+}
+
 static int present_effective_swap_interval(void) {
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
