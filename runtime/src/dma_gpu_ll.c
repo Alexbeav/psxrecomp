@@ -68,6 +68,7 @@ void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,
         state->current_addr = resolve_address(ops, opaque, state->current_addr);
         uint32_t header = ops->read_word(opaque, state->current_addr);
         state->word_count = header >> 24;
+        state->payload_index = 0;
         state->next_addr = header & 0x00FFFFFFu;
         state->nodes_processed++;
         state->total_words++;
@@ -76,7 +77,7 @@ void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,
                 ? 0u : state->empty_rank + 1u;
         if (state->word_count != 0) {
             state->emit_node = 1u;
-            state->phase = DMA_GPU_LL_PHASE_PAYLOAD;
+            state->phase = DMA_GPU_LL_PHASE_SETUP;
             state->cycles_remaining = DMA_GPU_LL_SETUP_CYCLES;
             return;
         }
@@ -94,35 +95,39 @@ void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,
         return;
     }
 
-    if (state->phase == DMA_GPU_LL_PHASE_PAYLOAD) {
-        uint32_t word_addr = resolve_address(
-            ops, opaque, state->current_addr + 4u);
+    if (state->phase == DMA_GPU_LL_PHASE_SETUP) {
         state->emit_node = ops->begin_node
             ? (uint8_t)(ops->begin_node(opaque, state->current_addr,
                                         state->word_count) != 0)
             : 1u;
+        state->phase = DMA_GPU_LL_PHASE_PAYLOAD;
+        state->cycles_remaining = 1u;
+        return;
+    }
+
+    if (state->phase == DMA_GPU_LL_PHASE_PAYLOAD) {
+        uint32_t word_addr = resolve_address(
+            ops, opaque, state->current_addr + 4u +
+                         state->payload_index * 4u);
         if (state->emit_node) {
-            for (uint32_t i = 0; i < state->word_count; i++) {
-                uint32_t word = ops->read_word(opaque, word_addr);
-                if (ops->emit_word) ops->emit_word(opaque, word_addr, word);
-                word_addr = resolve_address(ops, opaque, word_addr + 4u);
-            }
+            uint32_t word = ops->read_word(opaque, word_addr);
+            if (ops->emit_word) ops->emit_word(opaque, word_addr, word);
         }
-        state->total_words += state->word_count;
+        state->payload_index++;
+        state->total_words++;
+
+        if (state->payload_index < state->word_count) {
+            state->cycles_remaining = 1u;
+            return;
+        }
 
         if (state->next_addr == 0x00FFFFFFu) {
-            state->phase = DMA_GPU_LL_PHASE_COMPLETE;
-            state->cycles_remaining = state->word_count;
+            finish(state, ops, opaque);
             return;
         }
         state->phase = DMA_GPU_LL_PHASE_HEADER;
         state->current_addr = resolve_address(ops, opaque, state->next_addr);
-        state->cycles_remaining = state->word_count + DMA_GPU_LL_HEADER_CYCLES;
-        return;
-    }
-
-    if (state->phase == DMA_GPU_LL_PHASE_COMPLETE) {
-        finish(state, ops, opaque);
+        state->cycles_remaining = DMA_GPU_LL_HEADER_CYCLES;
         return;
     }
 

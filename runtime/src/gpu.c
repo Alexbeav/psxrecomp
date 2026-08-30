@@ -28,6 +28,7 @@
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
 #include "ws_ui_group.h"
+#include "ws_prepass_guard.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,10 +103,19 @@ typedef struct {
     int32_t  y;
     int32_t  h;
     uint8_t  op;
+    WsPrepassPacketGuard packet_guard;
 } WsUiPrepassItem;
 static WsUiPrepassItem ws_ui_prepass[WS_UI_PREPASS_MAX];
 static uint32_t ws_ui_prepass_count;
 static uint16_t ws_ui_prepass_rank = 0xFFFFu;
+
+#define WS_UI_PREPASS_NODE_MAX 8192u
+typedef struct {
+    uint32_t addr;
+    WsPrepassPacketGuard payload_guard;
+} WsUiPrepassNode;
+static WsUiPrepassNode ws_ui_prepass_nodes[WS_UI_PREPASS_NODE_MAX];
+static uint32_t ws_ui_prepass_node_count;
 
 /* Why a UI-looking primitive did NOT reach the squash partition.
  *
@@ -123,6 +133,7 @@ static struct {
     uint32_t too_big;     /* full-screen or large-primitive reject         */
     uint32_t cap;         /* WS_UI_PREPASS_MAX reached                     */
     uint32_t rank;        /* admitted, then dropped by the max_rank filter */
+    uint32_t stale;       /* live packet no longer matches cached bytes    */
 } ws_ui_reject;
 
 /* Geometry of the primitives the max_rank filter discarded. A count alone
@@ -182,6 +193,7 @@ void gpu_ws_set_full_2d(int on) { ws_full_2d = on ? 1 : 0; }
 void gpu_ws_set_auto_ui_squash(int on) {
     ws_auto_ui_squash = on ? 1 : 0;
     ws_ui_prepass_count = 0;
+    ws_ui_prepass_node_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
     ws_auto_ui_dense = 0;
     ws_auto_ui_candidate_count = 0;
@@ -1639,13 +1651,14 @@ int psx_ws_ui_groups_json(char *buf, int cap) {
         "\"active\":%d,\"squash\":%d,\"dense\":%d,\"rank\":%d,"
         "\"disp_x\":%d,\"disp_w\":%d,\"join_gap\":%d,"
         "\"rejected\":{\"opcode\":%u,\"not_axis\":%u,\"degenerate\":%u,"
-        "\"too_big\":%u,\"cap\":%u,\"rank\":%u},"
+        "\"too_big\":%u,\"cap\":%u,\"rank\":%u,\"stale\":%u},"
         "\"n\":%u,",
         ws_active(), ws_auto_ui_squash, ws_auto_ui_dense,
         ws_ui_prepass_rank != 0xFFFFu ? (int)ws_ui_prepass_rank : -1,
         ws_disp_x(), ws_disp_w(), WS_UI_GROUP_JOIN_GAP,
         ws_ui_reject.opcode, ws_ui_reject.not_axis, ws_ui_reject.degenerate,
         ws_ui_reject.too_big, ws_ui_reject.cap, ws_ui_reject.rank,
+        ws_ui_reject.stale,
         ws_ui_prepass_count);
     off += snprintf(buf + off, (size_t)(cap - off), "\"rank_dropped\":[");
     for (uint32_t i = 0; i < ws_ui_rankdrop_count && off < cap - 120; i++) {
@@ -2041,6 +2054,14 @@ static int32_t ws_hud_pivot(int32_t x, int32_t w) {
  * before the list streams through GP0. This excludes CPU-built characters (the
  * source of the old squashed-Spike regression) even when their packets are
  * axis-aligned, and gives animated glyphs a shared anchor on their first frame. */
+static void ws_ui_prepass_invalidate_stale(void) {
+    ws_ui_prepass_count = 0;
+    ws_ui_prepass_node_count = 0;
+    ws_ui_prepass_rank = 0xFFFFu;
+    ws_auto_ui_dense = 0;
+    ws_ui_reject.stale++;
+}
+
 static int ws_auto_ui_anchor(int32_t *out_anchor) {
     if (!ws_auto_ui_squash || !ws_active() ||
         gp0_cmd_source_addr == 0xFFFFFFFFu)
@@ -2048,6 +2069,12 @@ static int ws_auto_ui_anchor(int32_t *out_anchor) {
     uint32_t src = gp0_cmd_source_addr & 0x1FFFFCu;
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++) {
         if (ws_ui_prepass[i].src_addr != src) continue;
+        if (!ws_prepass_packet_matches(&ws_ui_prepass[i].packet_guard,
+                                       gp0_cmd_buf,
+                                       (uint32_t)gp0_words_needed)) {
+            ws_ui_prepass_invalidate_stale();
+            return 0;
+        }
         if (out_anchor) *out_anchor = ws_ui_prepass[i].group.anchor;
         ws_auto_ui_candidate_count++;
         return 1;
@@ -4599,8 +4626,8 @@ static int gp0_command_word_count(uint8_t opcode) {
     }
 }
 
-static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
-                              uint16_t rank) {
+static void ws_ui_prepass_add(const uint32_t *words, uint32_t word_count,
+                              uint32_t source_addr, uint16_t rank) {
     if (rank == 0xFFFFu) return;
     if (ws_ui_prepass_count >= WS_UI_PREPASS_MAX) { ws_ui_reject.cap++; return; }
     uint32_t op = words[0] >> 24;
@@ -4687,14 +4714,17 @@ static void ws_ui_prepass_add(const uint32_t *words, uint32_t source_addr,
     item->y  = min_y;
     item->h  = height;
     item->op = (uint8_t)op;
+    item->packet_guard = ws_prepass_packet_guard(words, word_count);
 }
 
 void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     ws_ui_prepass_count = 0;
+    ws_ui_prepass_node_count = 0;
     ws_ui_prepass_rank = 0xFFFFu;
     ws_auto_ui_dense = 0;
     ws_ui_reject.opcode = ws_ui_reject.not_axis = ws_ui_reject.degenerate =
-        ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank = 0;
+        ws_ui_reject.too_big = ws_ui_reject.cap = ws_ui_reject.rank =
+        ws_ui_reject.stale = 0;
     ws_ui_rankdrop_count = 0;
     if (!ws_auto_ui_squash || !ws_active()) return;
 
@@ -4706,10 +4736,28 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
     for (;;) {
         if (safety++ > max_nodes) {
             ws_ui_prepass_count = 0;
+            ws_ui_prepass_node_count = 0;
             return;
         }
         uint32_t header = psx_read_word(addr);
         uint32_t num_words = (header >> 24) & 0xFFu;
+        if (ws_ui_prepass_node_count >= WS_UI_PREPASS_NODE_MAX) {
+            ws_ui_reject.cap++;
+            ws_ui_prepass_count = 0;
+            ws_ui_prepass_node_count = 0;
+            return;
+        }
+        uint32_t payload[255];
+        uint32_t first_addr = psx_mod_gpu_dma_resolve_address(addr + 4u);
+        for (uint32_t i = 0; i < num_words; i++) {
+            payload[i] = psx_read_word(psx_mod_gpu_dma_resolve_address(
+                first_addr + i * 4u));
+        }
+        WsUiPrepassNode *node =
+            &ws_ui_prepass_nodes[ws_ui_prepass_node_count++];
+        node->addr = addr & 0x1FFFFCu;
+        node->payload_guard =
+            ws_prepass_packet_guard(payload, num_words);
         if (num_words == 0) {
             rank = rank == 0xFFFFu ? 0u : (uint16_t)(rank + 1u);
         } else if (rank != 0xFFFFu) {
@@ -4733,7 +4781,7 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                         psx_mod_gpu_dma_resolve_address(
                             word_addr + (offset + (uint32_t)i) * 4u));
                 }
-                ws_ui_prepass_add(words,
+                ws_ui_prepass_add(words, (uint32_t)count,
                     psx_mod_gpu_dma_resolve_address(
                         word_addr + offset * 4u), rank);
                 offset += (uint32_t)count;
@@ -4797,6 +4845,34 @@ void gpu_ws_prepass_linked_list(uint32_t start_addr) {
                        ws_auto_ui_dense);
     for (uint32_t i = 0; i < ws_ui_prepass_count; i++)
         ws_ui_prepass[i].group.anchor = group_origin + groups[i].anchor;
+}
+
+void gpu_ws_validate_linked_list_node(uint32_t addr, uint32_t num_words) {
+    if (ws_ui_prepass_count == 0) return;
+
+    uint32_t resolved =
+        psx_mod_gpu_dma_resolve_address(addr) & 0x1FFFFCu;
+    const WsUiPrepassNode *node = NULL;
+    for (uint32_t i = 0; i < ws_ui_prepass_node_count; i++) {
+        if (ws_ui_prepass_nodes[i].addr == resolved) {
+            node = &ws_ui_prepass_nodes[i];
+            break;
+        }
+    }
+    if (!node || node->payload_guard.word_count != num_words) {
+        ws_ui_prepass_invalidate_stale();
+        return;
+    }
+
+    uint32_t payload[255];
+    uint32_t first_addr =
+        psx_mod_gpu_dma_resolve_address(resolved + 4u);
+    for (uint32_t i = 0; i < num_words; i++) {
+        payload[i] = psx_read_word(psx_mod_gpu_dma_resolve_address(
+            first_addr + i * 4u));
+    }
+    if (!ws_prepass_packet_matches(&node->payload_guard, payload, num_words))
+        ws_ui_prepass_invalidate_stale();
 }
 
 /* Per-opcode execution counters (exposed via gpu_get_opcode_stats) */

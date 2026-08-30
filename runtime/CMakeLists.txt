@@ -161,6 +161,11 @@ if(BUILD_TESTING)
     target_include_directories(ws_ui_group_test PRIVATE include)
     add_test(NAME ws_ui_group_test COMMAND ws_ui_group_test)
 
+    add_executable(ws_prepass_guard_test
+        tests/test_ws_prepass_guard.c)
+    target_include_directories(ws_prepass_guard_test PRIVATE include)
+    add_test(NAME ws_prepass_guard_test COMMAND ws_prepass_guard_test)
+
     add_executable(mod_gpu_dma_aperture_test
         tests/test_mod_gpu_dma_aperture.c)
     target_include_directories(mod_gpu_dma_aperture_test PRIVATE include)
