@@ -1560,6 +1560,7 @@ static int read_continues_current_stream(void) {
 }
 
 static void start_read_stream(uint8_t cmd) {
+    int implicit_seek = setloc_pending;
     cdda_playing = 0;
     cdda_track = 0;
     cdda_delay = 0;
@@ -1578,13 +1579,23 @@ static void start_read_stream(uint8_t cmd) {
     read_sec = seek_sec;
     read_sect = seek_sect;
     read_cmd = cmd;
-    read_delay = initial_read_delay_cycles();
+    /* An unprocessed Setloc makes ReadN/ReadS perform a logical seek before
+     * the first sector. Keep the current bounded seek model, but do not let
+     * sector delivery begin while that seek is still active. */
+    read_delay = implicit_seek
+        ? seek_complete_delay_cycles() + sector_delay_cycles()
+        : initial_read_delay_cycles();
     s_cd_probe_read_start_count++;
     s_cd_probe_read_start_cycles += (uint64_t)read_delay;
     s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
     s_cd_timing_stream_starts++;
     reading = 1;
-    stat_reg |= CDSTAT_READ;
+    if (implicit_seek) {
+        stat_reg &= (uint8_t)~CDSTAT_READ;
+        stat_reg |= CDSTAT_SEEK;
+    } else {
+        stat_reg |= CDSTAT_READ;
+    }
     /* ENQUEUE: sector-read stream scheduled (due in read_delay cycles). A
      * content load that happens in OFF but not ON shows up as a missing
      * SRC_CD_READ enqueue here. */
@@ -2349,9 +2360,14 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        /* A seek owns the drive and cancels any prior ReadN/ReadS generation.
+         * Otherwise the old stream continues during the seek and later reads
+         * never consume the new Setloc target. */
+        stop_read_stream();
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
         stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
@@ -2496,7 +2512,7 @@ static void process_pending(uint32_t cycles) {
         stat_reg &= ~CDSTAT_SEEK;
         stat_reg |= CDSTAT_READ;   /* PSX-CD-003: GT1 waits for READ after seek */
         setloc_seek_far = 0;
-    setloc_pending = 0;
+        setloc_pending = 0;
         response_push(stat_reg);
         set_irq(CDIRQ_COMPLETE);
         fire_cdrom_irq();
@@ -2637,6 +2653,13 @@ static void process_read_stream(uint32_t cycles) {
     }
 
     if (read_delay <= 0) {
+        /* The implicit Setloc seek completes when the first requested sector
+         * becomes eligible. Status changes from SEEK to READ at this point. */
+        if (stat_reg & CDSTAT_SEEK) {
+            stat_reg &= (uint8_t)~CDSTAT_SEEK;
+            stat_reg |= CDSTAT_READ;
+            setloc_seek_far = 0;
+        }
         uint64_t timing_seq = cd_timing_begin_sector(
             msf_to_lba(read_min, read_sec, read_sect));
         if (irq_flag == 0) {
