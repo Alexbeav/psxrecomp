@@ -42,6 +42,27 @@ fi
 if [[ -f "${ROOT}/game_options.toml" ]]; then
   EXTRA_PROJECT+=(--project-file game_options.toml)
 fi
+# Game-owned C that CMakeLists.txt compiles into the runtime — mod activation
+# plugins live here (CODEGEN_SETUP_SOURCES "src/<game>_mods.c"). Leaving this
+# out ships a CMakeLists that references a file the zip does not contain, so
+# the build dies at configure with "Cannot find source file".
+if [[ -d "${ROOT}/src" ]]; then
+  EXTRA_PROJECT+=(--project-dir src)
+fi
+# Preloaded mod packages (mods/preloaded/packages/<id>). The activation plugin
+# above is compiled in, but selects itself through these marker files; without
+# them the mod is built and never enabled.
+if [[ -d "${ROOT}/mods" ]]; then
+  EXTRA_PROJECT+=(--project-dir mods)
+fi
+# Generated symbol headers. Game-owned C in src/ includes these by relative
+# path ("../psx_symbols.h"), so they are compile inputs of the shipped tree even
+# though nothing in CMakeLists.txt names them.
+for _sym in psx_symbols.h psx_symbols_overlays.h; do
+  if [[ -f "${ROOT}/${_sym}" ]]; then
+    EXTRA_PROJECT+=(--project-file "${_sym}")
+  fi
+done
 
 cd "${ROOT}"
 exec bash "${PACKAGER}" \
