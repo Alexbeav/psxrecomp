@@ -663,6 +663,16 @@ if(BUILD_TESTING)
             set_tests_properties(${_t} PROPERTIES DISABLED TRUE)
         endforeach()
     endif()
+
+    # Python's default text encoding follows the host Windows locale. Compiler
+    # and recompiler diagnostics are UTF-8, so a Greek cp1253 host otherwise
+    # loses captured output before a test can inspect it. Keep the test harness
+    # deterministic without requiring a shell-specific environment setup.
+    get_property(_psxrecomp_registered_tests DIRECTORY PROPERTY TESTS)
+    if(_psxrecomp_registered_tests)
+        set_tests_properties(${_psxrecomp_registered_tests}
+            PROPERTIES ENVIRONMENT "PYTHONUTF8=1")
+    endif()
 endif()
 
 # Reachable main-EXE discovery test: parser-bound validation plus exact-entry
