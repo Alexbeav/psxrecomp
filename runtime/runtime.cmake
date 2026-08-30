@@ -667,6 +667,15 @@ else()
     list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
 endif()
 
+# ISO C requires at least one initializer. A setup host can intentionally have
+# zero linked BIOS backends, so give the generated array one unused null entry
+# while keeping its public count at zero. MSVC 19.44 otherwise crashes with
+# C1001 in CloseTypeServerPDB when it compiles an empty initializer list.
+if(NOT _psxrt_registry_entries)
+    set(_psxrt_registry_entries "    0, /* unused: registry count is zero */
+")
+endif()
+
 # Registry of the compiled-in backends, in preference order. Generated so the
 # stem list stays the single source of truth.
 set(_psxrt_registry_c "${CMAKE_BINARY_DIR}/psx_bios_registry.c")
