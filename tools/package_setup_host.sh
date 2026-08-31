@@ -432,8 +432,10 @@ find "${STAGE}" -exec touch -c {} + 2>/dev/null || find "${STAGE}" -exec touch {
   cd "${STAGE}"
   if command -v zip >/dev/null 2>&1; then
     zip -r -q "${DIST}/${ZIP_NAME}" .
+  elif command -v cmake >/dev/null 2>&1; then
+    cmake -E tar cf "${DIST}/${ZIP_NAME}" --format=zip .
   else
-    echo "error: zip not found" >&2
+    echo "error: zip and cmake are not available" >&2
     exit 1
   fi
 )

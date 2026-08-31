@@ -379,6 +379,7 @@ packs.
 
 The setup packager removes owned-input and player-state files, including files
 with backup suffixes. Audit the final ZIP independently before publication.
+The packager uses CMake to create the ZIP when the `zip` command is unavailable.
 
 Pass `--bios-hint` when a title has a non-default BIOS contract. For example,
 a PAL title that disables OpenBIOS can name its required legal retail BIOS.

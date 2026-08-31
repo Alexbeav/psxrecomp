@@ -19,6 +19,8 @@ def main() -> None:
     assert "forbidden retail BIOS payload" in text
     assert "*.mcd'" not in text
     assert "*.mcr'" not in text
+    assert "elif command -v cmake" in text
+    assert 'cmake -E tar cf "${DIST}/${ZIP_NAME}" --format=zip .' in text
     print("setup package payload filter test: PASS")
 
 
