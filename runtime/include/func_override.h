@@ -169,13 +169,15 @@ int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
  * word-aligned, non-overlapping RAM ranges and must cover addr. This uses the
  * overlay loader's page-generation cache, so unchanged code does not re-hash
  * on every call. A short prefix guard is only a quick sanity check; use this
- * API when the resident overlay generation must be identified exactly. */
+ * API when the resident overlay generation must be identified exactly.
+ * n_ranges must be 1..FO_MAX_CODE_RANGES. */
 int func_override_add_exact(const char *id, uint32_t addr, FuncOverrideFn fn,
                             const uint32_t *lo_len_pairs, int n_ranges,
                             uint32_t expected_crc, int32_t credit);
 
-/* Validate the range shape used by func_override_add_exact. Exposed so the
- * package registry can reject bad constructor input before plan selection. */
+/* Validate the range shape used by func_override_add_exact. n_ranges must be
+ * 1..FO_MAX_CODE_RANGES. Exposed so the package registry can reject bad
+ * constructor input before plan selection. */
 int func_override_code_ranges_valid(uint32_t addr,
                                     const uint32_t *lo_len_pairs,
                                     int n_ranges);
@@ -221,6 +223,7 @@ int func_override_try_dispatch(struct CPUState *cpu, uint32_t target,
 int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
                               const uint32_t *expected_words, int n_words,
                               int32_t credit);
+/* Exact package form. n_ranges must be 1..FO_MAX_CODE_RANGES. */
 int func_override_add_package_exact(const char *id, uint32_t addr,
                                     FuncOverrideFn fn,
                                     const uint32_t *lo_len_pairs,

@@ -161,6 +161,7 @@ int func_override_add_exact(const char *id, uint32_t addr, FuncOverrideFn fn,
                             const uint32_t *lo_len_pairs, int n_ranges,
                             uint32_t expected_crc, int32_t credit)
 {
+    if (n_ranges < 1) return FO_ERR_ARGS;
     return add_common(id, addr, fn, NULL, 0, lo_len_pairs, n_ranges,
                       expected_crc, 0, credit);
 }
@@ -180,6 +181,7 @@ int func_override_add_package_exact(const char *id, uint32_t addr,
                                     int n_ranges, uint32_t expected_crc,
                                     int32_t credit)
 {
+    if (n_ranges < 1) return FO_ERR_ARGS;
     return add_common(id, addr, fn, NULL, 0, lo_len_pairs, n_ranges,
                       expected_crc, 1, credit);
 }

@@ -204,6 +204,61 @@ static void test_add_rejects_bad_input(void)
     CHECK(func_override_add_guarded("t.gnull", 0x80001000u, impl_handles, NULL,
                                     2, 0) == FO_ERR_ARGS,
           "guarded with NULL words must be refused");
+    static const uint32_t range[2] = {0x80001000u, 4u};
+    CHECK(func_override_add_exact("t.x0", 0x80001000u, impl_handles,
+                                  range, 0, 0, 0) == FO_ERR_ARGS,
+          "exact override with zero ranges must be refused");
+    CHECK(func_override_add_package_exact("t.px0", 0x80001000u, impl_handles,
+                                          range, 0, 0, 0) == FO_ERR_ARGS,
+          "package exact override with zero ranges must be refused");
+}
+
+static void test_code_range_validator_edges(void)
+{
+    static const uint32_t valid_aliases[] = {
+        0xA0000100u, 4u,
+        0x80000200u, 8u,
+    };
+    static const uint32_t adjacent[] = {
+        0x80000100u, 4u,
+        0x80000104u, 4u,
+    };
+    static const uint32_t unaligned_start[] = {0x80000102u, 4u};
+    static const uint32_t unaligned_length[] = {0x80000100u, 6u};
+    static const uint32_t short_length[] = {0x80000100u, 0u};
+    static const uint32_t start_outside_ram[] = {0x80200000u, 4u};
+    static const uint32_t crosses_ram_end[] = {0x801FFFFCu, 8u};
+    static const uint32_t misses_entry[] = {0x80000100u, 4u};
+    static const uint32_t alias_overlap[] = {
+        0x80000100u, 8u,
+        0xA0000104u, 4u,
+    };
+
+    CHECK(!func_override_code_ranges_valid(0x80000100u, NULL, 1),
+          "NULL exact range array must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, valid_aliases, 0),
+          "zero exact ranges must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, valid_aliases,
+                                            FO_MAX_CODE_RANGES + 1),
+          "exact range count above the cap must be refused");
+    CHECK(func_override_code_ranges_valid(0xA0000204u, valid_aliases, 2),
+          "KSEG aliases and discontiguous ranges must validate");
+    CHECK(func_override_code_ranges_valid(0x80000104u, adjacent, 2),
+          "adjacent ranges must not count as overlap");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, unaligned_start, 1),
+          "unaligned exact range start must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, unaligned_length, 1),
+          "unaligned exact range length must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, short_length, 1),
+          "exact range shorter than one instruction must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80200000u, start_outside_ram, 1),
+          "exact range starting outside RAM must be refused");
+    CHECK(!func_override_code_ranges_valid(0x801FFFFCu, crosses_ram_end, 1),
+          "exact range crossing the RAM end must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000104u, misses_entry, 1),
+          "exact ranges must cover the override entry");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, alias_overlap, 2),
+          "overlap through KSEG aliases must be refused");
 }
 
 static void test_duplicate_address_refused(void)
@@ -630,6 +685,7 @@ int main(void)
 {
     test_install_is_null_until_registered();
     test_add_rejects_bad_input();
+    test_code_range_validator_edges();
     test_duplicate_address_refused();
     test_handled_and_declined_both_count_as_consults();
     test_guard_declines_on_mismatch();

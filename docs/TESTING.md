@@ -70,7 +70,7 @@ then wire them in.
 |---|---|
 | `runtime/tests/test_interpreter_perf_guards.py` | Asserts `psx_devices_mmio_sync` invalidates the inline cycle limit. It does not: the function delegates to `psx_devices_service_to_now()` (which clears `g_psx_cycle_fast_limit`, `psx_cycles.c:161`) **or** to `psx_devices_recompute_deadline()` (`:153-157`), and that second branch never clears it. Needs a timing owner to decide whether the guard found a real hole or the invariant moved. The guard is also partly stale — it still names `s_next_service_cycle`, since renamed to `psx_next_service_cycle`. |
 | `runtime/tests/test_runtime_perf_diag_guards.py` | Asserts a substring that is no longer present in the runtime source. Either the diagnostic was removed or it was renamed; the guard has not been updated either way. |
-| `runtime/tests/test_overlay_pair_dedup_runtime.py` | Needs its companion harness (`overlay_pair_dedup_harness.c`) built. Unlike the other Python tests it is not source-only, so it needs a build target before it can be registered. |
+| `runtime/tests/test_overlay_pair_dedup_runtime.py` | Registered as `overlay_pair_dedup_runtime`. The Python driver builds its companion harness and redistributable shared-library fixtures. It covers exact static-code identity, cache replacement and restore behavior, pair publication, deduplication, and rejection boundaries. |
 
 ## Tests that are not in `ctest` and should not be
 
