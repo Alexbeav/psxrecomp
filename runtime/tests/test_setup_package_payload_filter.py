@@ -36,6 +36,11 @@ def main() -> None:
     for token in ("Users", "Projects", "AgentData", "OneDrive", "Share", "/mnt/"):
         assert token in gate_text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
+    assert "--omit-openbios) OMIT_OPENBIOS=1" in text
+    assert '"${STAGE}/psxrecomp/bios/openbios.bin"' in text
+    assert '"${STAGE}/psxrecomp/bios/OpenBIOS.toml"' in text
+    assert '"${STAGE}/psxrecomp/bios/OpenBIOS.LICENSE"' in text
+    assert "forbidden final BIOS payload" in text
     print("setup package payload filter test: PASS")
 
 
