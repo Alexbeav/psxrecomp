@@ -49,11 +49,6 @@ Change is localized to `runtime/src/cdrom.c`. The timing delay paths (seek durat
 read interval) check `disc_speed` and either apply the emulated delay or skip it. No other
 subsystem is affected.
 
-The CD-ROM state sequence does not change at higher speeds. `Setloc` followed by `ReadN` or
-`ReadS` keeps the drive in `SEEK` until the logical seek is complete. The drive then changes
-to `READ` and delivers the requested sector first. An explicit `SeekL` or `SeekP` command
-stops any active read stream before it starts the new seek.
-
 ---
 
 ## Relation to overlay-discovery
