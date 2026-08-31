@@ -236,6 +236,7 @@ if(BUILD_TESTING)
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
+        src/func_override.c
         src/mod_packages.cpp
         src/disc_path.cpp
         src/cue_sheet.cpp

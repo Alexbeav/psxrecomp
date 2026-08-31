@@ -8887,7 +8887,7 @@ static void handle_func_override(int id, const char *json)
     extern int func_override_get_ex(int index, char *id_out, size_t id_cap,
                                     uint32_t *addr_out, uint64_t *calls_out,
                                     uint64_t *guard_misses_out,
-                                    int *guarded_out);
+                                    int *guarded_out, int32_t *credit_out);
     (void)json;
     char buf[16 * 1024];
     int n = snprintf(buf, sizeof(buf),
@@ -8898,9 +8898,17 @@ static void handle_func_override(int id, const char *json)
         uint32_t addr = 0;
         uint64_t calls = 0, misses = 0;
         int guarded = 0;
+        int32_t credit = 0;
+        char creditstr[16];
         if (!func_override_get_ex(i, oid, sizeof(oid), &addr, &calls,
-                                  &misses, &guarded))
+                                  &misses, &guarded, &credit))
             break;
+        /* credit: the declared cycle policy — a number (fixed per-call
+         * charge) or the string "self" (the body charges its own). */
+        if (credit < 0)
+            snprintf(creditstr, sizeof(creditstr), "\"self\"");
+        else
+            snprintf(creditstr, sizeof(creditstr), "%d", credit);
         /* Clamp before advancing: snprintf returns the length it WOULD have
          * written, so on truncation an unclamped n exceeds sizeof(buf) and
          * the next sizeof(buf) - n underflows to a huge size_t. The 256-byte
@@ -8909,10 +8917,10 @@ static void handle_func_override(int id, const char *json)
          * into an overflow. */
         const int w = snprintf(buf + n, sizeof(buf) - (size_t)n,
                       "%s{\"id\":\"%s\",\"addr\":\"0x%08X\",\"calls\":%llu,"
-                      "\"guard_misses\":%llu,\"guarded\":%d}",
+                      "\"guard_misses\":%llu,\"guarded\":%d,\"credit\":%s}",
                       i ? "," : "", oid, addr,
                       (unsigned long long)calls, (unsigned long long)misses,
-                      guarded);
+                      guarded, creditstr);
         if (w < 0) break;
         n += w;
         if ((size_t)n >= sizeof(buf) - 256) {

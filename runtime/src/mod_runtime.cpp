@@ -99,6 +99,7 @@ struct FunctionOverridePlugin {
     PSXModFunctionOverrideFn fn = nullptr;
     uint32_t guard[FO_MAX_GUARD_WORDS] = {0, 0, 0, 0};
     int n_guard = 0;
+    int32_t credit = 0;
     bool armed = false;
 };
 
@@ -1259,7 +1260,8 @@ extern "C" void mod_runtime_activate_plugins(void) {
         if (!selected) continue;
         const int rc = func_override_add_package(
             pending.id.c_str(), pending.address, pending.fn,
-            pending.n_guard ? pending.guard : nullptr, pending.n_guard);
+            pending.n_guard ? pending.guard : nullptr, pending.n_guard,
+            pending.credit);
         pending.armed = (rc == FO_OK);
     }
     func_override_install();
@@ -1358,11 +1360,12 @@ extern "C" int psx_mod_register_function_entry_plugin(
 
 extern "C" int psx_mod_register_function_override(
     const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
-    const uint32_t* expected_words, int n_words) {
+    const uint32_t* expected_words, int n_words, int32_t credit) {
     using namespace PSXRecompV4;
     if (!id || !*id || !address || !fn) return 0;
     if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return 0;
     if (n_words > 0 && !expected_words) return 0;
+    if (credit < FO_CREDIT_SELF) return 0;
     /* An optional ":label" suffix names this override in diagnostics (the
      * `func_override` TCP command) without multiplying manifest plugin ids —
      * gating and resolver availability use only the part before the ':'.
@@ -1386,6 +1389,7 @@ extern "C" int psx_mod_register_function_override(
     plugin.fn = fn;
     for (int i = 0; i < n_words; ++i) plugin.guard[i] = expected_words[i];
     plugin.n_guard = n_words;
+    plugin.credit = credit;
     plugins.push_back(plugin);
     /* Mark the plugin id available to the package resolver so a manifest can
      * gate an override-only plugin (multiple overrides may share one). */

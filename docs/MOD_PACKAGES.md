@@ -300,9 +300,12 @@ a guest function at a given address, with an optional prologue-word residency
 guard. Registration only queues the override; it is ARMED into the dispatcher
 tier when the resolved plan selects that plugin — the same gating as the other
 callback kinds, so an override-only plugin id counts as available to the
-resolver. The full execution contract (guest ABI, decline semantics,
+resolver. Every registration states a required guest-cycle `credit` (a fixed
+per-handled-call charge, `0` for a mod with no hardware analog, or
+`FO_CREDIT_SELF` when the body — or a wrapped original — accounts for its own
+time). The full execution contract (guest ABI, decline semantics,
 `func_override_call_original` wrap primitive, `func_override_guest_call`,
-determinism and cycle-accounting constraints) is documented in
+determinism and cycle-accounting policy) is documented in
 `runtime/include/func_override.h`. Overrides registered directly through
 `func_override_add` (game `EXTRAS_SOURCES` constructors, the progressive-
 decompilation idiom) bypass package gating and are always active; packages

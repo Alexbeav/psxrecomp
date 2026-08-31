@@ -49,6 +49,7 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `write_ram` | ✓ | ✓ | `addr`, `val` | Write **one byte** to PS1 address space. Note the parameter is `val` (not `hex`), and the write is a single byte per call — this row previously documented both incorrectly |
 | `read_scratch` |   | ✓ | `addr`, `len` | Read PS1 scratchpad (0x1F800000 region) |
 | `read_vram` / `vram_peek` | ✓¹ | ✓ | `x`, `y`, `w`, `h` | Read 16-bit VRAM pixels (max 128×128) |
+| `func_override` | ✓ |  | — | Inventory of armed function overrides (`func_override.h`): per entry `id`, guest `addr`, `calls`, `guard_misses`, `guarded`, `credit` (the declared cycle policy — a per-handled-call charge, or `"self"` when the body charges its own). `calls` counts **consults**, declines included — so a decline-only probe proves an address crosses a hooked path, and `calls: 0` means the override was never reached (wrong address, or that path never ran). Package-gated overrides appear only after the mod plan arms them; an id may read `plugin:label` when one plugin registers several overrides |
 | `gpu_state` | ✓ | ✓ | — | Display area, display depth, draw offset, GPUSTAT, clip rect, xfer state |
 | `screenshot_hires` |   | ✓ | `path` | PNG of the **supersampled** surface (the present path the window uses), at `display × gr_scale()`. ⚠ `screenshot`/`screenshot_file` capture native 15-bit VRAM and are **blind to anything that only exists in the hi-res mirror** — geometry correction, SSAA edges, perspective UVs — so they show a clean frame while the player sees a broken one. Use this one to verify those. Falls back to the native resolve (and reports `scale: 1`) when no hi-res surface exists |
 | `geom_correction` |   | ✓ | — | `[video] geometry_correction` / `perspective_texturing` engagement: enable flag plus free-running `geometry_vertex_hits` and `perspective_triangles` totals. Both enhancements silently fall back to the faithful path on anything they cannot prove is projected geometry, so a zero counter with the flag on means the title never qualifies — sample twice and diff for a rate |
@@ -274,7 +275,7 @@ The TCP server is the canonical instrumentation surface. Rule 3 in `CLAUDE.md` i
 
 **306 commands registered** — 293 on the native server (`runtime/src/debug_server.c`), 61 on the Beetle server (`runtime/src/beetle_debug_server.c`).
 
-49 of 306 have prose above; **257 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
+50 of 306 have prose above; **256 are index-only**. An index-only command still works — it just has no description here yet. Send it `{"cmd":"<name>"}` and read the reply, or find its `handle_*` function in the server source.
 
 Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this block has drifted from the code.
 
@@ -388,7 +389,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `frame_range` | ✓ | ✓ | ✓ |
 | `frame_timeseries` | ✓ | ✓ | ✓ |
 | `freeze_check` | ✓ |  |  |
-| `func_override` | ✓ |  |  |
+| `func_override` | ✓ |  | ✓ |
 | `game_options` | ✓ |  |  |
 | `geom_correction` | ✓ |  | ✓ |
 | `get_frame` | ✓ | ✓ | ✓ |

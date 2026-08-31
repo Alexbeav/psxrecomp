@@ -45,6 +45,20 @@ uint32_t psx_peek_word_untraced(uint32_t addr)
     return (idx < FAKE_RAM_WORDS) ? s_ram[idx] : 0xDEADBEEFu;
 }
 
+/* Cycle-core doubles: func_override.c charges fixed credits through the
+ * psx_advance_cycles inline (psx_cycles.h), which reads these globals. The
+ * doubles keep it a plain counter bump so the credit tests can assert
+ * against psx_cycle_count deltas directly. */
+uint64_t psx_cycle_count = 0;
+uint64_t psx_next_service_cycle = 0;
+int      psx_in_device_service = 0;
+int      g_event_step_conservative = 0;
+int      g_ls_replay_active = 0;
+uint32_t g_psx_cyc_batch = 0;
+uint32_t g_psx_cyc_batch_limit = 0;
+void psx_devices_service_to_now(void) {}
+void psx_advance_cycles_slow(uint32_t cycles) { psx_cycle_count += cycles; }
+
 /* Stands in for the recompiled dispatcher. Re-consults the hook exactly as
  * psx_dispatch_impl does, so func_override_call_original's one-shot bypass is
  * exercised through its real mechanism rather than assumed. */
@@ -138,35 +152,35 @@ static void test_install_is_null_until_registered(void)
 
 static void test_add_rejects_bad_input(void)
 {
-    CHECK(func_override_add("t.null_fn", 0x80001000u, NULL) == FO_ERR_ARGS,
+    CHECK(func_override_add("t.null_fn", 0x80001000u, NULL, 0) == FO_ERR_ARGS,
           "NULL fn must be refused");
     /* phys 0 collides with the "not inside an override" sentinel. */
-    CHECK(func_override_add("t.zero", 0x80000000u, impl_handles) == FO_ERR_ARGS,
+    CHECK(func_override_add("t.zero", 0x80000000u, impl_handles, 0) == FO_ERR_ARGS,
           "address normalising to phys 0 must be refused");
-    CHECK(func_override_add("t.zero2", 0x00000000u, impl_handles) == FO_ERR_ARGS,
+    CHECK(func_override_add("t.zero2", 0x00000000u, impl_handles, 0) == FO_ERR_ARGS,
           "raw address 0 must be refused");
     static const uint32_t g[1] = {0};
-    CHECK(func_override_add_guarded("t.g0", 0x80001000u, impl_handles, g, 0)
+    CHECK(func_override_add_guarded("t.g0", 0x80001000u, impl_handles, g, 0, 0)
               == FO_ERR_ARGS,
           "guarded with n_words 0 must be refused");
     CHECK(func_override_add_guarded("t.gmax", 0x80001000u, impl_handles, g,
-                                    FO_MAX_GUARD_WORDS + 1) == FO_ERR_ARGS,
+                                    FO_MAX_GUARD_WORDS + 1, 0) == FO_ERR_ARGS,
           "guard word count over the cap must be refused");
     CHECK(func_override_add_guarded("t.gnull", 0x80001000u, impl_handles, NULL,
-                                    2) == FO_ERR_ARGS,
+                                    2, 0) == FO_ERR_ARGS,
           "guarded with NULL words must be refused");
 }
 
 static void test_duplicate_address_refused(void)
 {
     const uint32_t addr = 0x80002000u;
-    CHECK(func_override_add("t.first", addr, impl_handles) == FO_OK,
+    CHECK(func_override_add("t.first", addr, impl_handles, 0) == FO_OK,
           "first registration must succeed");
     /* A silent last-wins here would be untraceable, which is why this is an
      * error and not an overwrite. KSEG vs physical must not defeat it. */
-    CHECK(func_override_add("t.second", addr, impl_declines) == FO_ERR_DUPLICATE,
+    CHECK(func_override_add("t.second", addr, impl_declines, 0) == FO_ERR_DUPLICATE,
           "same address twice must be refused");
-    CHECK(func_override_add("t.second_phys", addr & 0x1FFFFFFFu, impl_declines)
+    CHECK(func_override_add("t.second_phys", addr & 0x1FFFFFFFu, impl_declines, 0)
               == FO_ERR_DUPLICATE,
           "same address in physical form must also be refused");
 }
@@ -179,8 +193,8 @@ static void test_handled_and_declined_both_count_as_consults(void)
 
     const uint32_t handled_at = 0x80003000u;
     const uint32_t declined_at = 0x80003100u;
-    CHECK(func_override_add("t.handled", handled_at, impl_handles) == FO_OK, "add handled");
-    CHECK(func_override_add("t.declined", declined_at, impl_declines) == FO_OK, "add declined");
+    CHECK(func_override_add("t.handled", handled_at, impl_handles, 0) == FO_OK, "add handled");
+    CHECK(func_override_add("t.declined", declined_at, impl_declines, 0) == FO_OK, "add declined");
     func_override_install();
     CHECK(g_psx_func_override_hook != NULL, "hook must install once populated");
 
@@ -202,7 +216,7 @@ static void test_handled_and_declined_both_count_as_consults(void)
         uint64_t calls = 0, misses = 0;
         int guarded = -1;
         if (!func_override_get_ex(i, id, sizeof(id), &addr, &calls, &misses,
-                                  &guarded))
+                                  &guarded, NULL))
             continue;
         if (addr == (handled_at & 0x1FFFFFFFu)) {
             found_handled = 1;
@@ -230,7 +244,7 @@ static void test_guard_declines_on_mismatch(void)
     /* Address inside the fake RAM window so the guard can be satisfied. */
     const uint32_t addr = 0x80000040u;   /* phys 0x40 -> word index 16 */
     static const uint32_t prologue[2] = {0x27BDFFE0u, 0xAFB20018u};
-    CHECK(func_override_add_guarded("t.guarded", addr, impl_handles, prologue, 2)
+    CHECK(func_override_add_guarded("t.guarded", addr, impl_handles, prologue, 2, 0)
               == FO_OK, "guarded add must succeed");
     func_override_install();
 
@@ -257,7 +271,8 @@ static void test_guard_declines_on_mismatch(void)
         uint32_t a = 0;
         uint64_t calls = 0, misses = 0;
         int guarded = 0;
-        if (!func_override_get_ex(i, id, sizeof(id), &a, &calls, &misses, &guarded))
+        if (!func_override_get_ex(i, id, sizeof(id), &a, &calls, &misses,
+                                  &guarded, NULL))
             continue;
         if (a != (addr & 0x1FFFFFFFu)) continue;
         CHECK(guarded == 2, "guard word count must be reported, got %d", guarded);
@@ -273,7 +288,7 @@ static void test_call_original_is_one_shot(void)
     reset_all();
 
     const uint32_t addr = 0x80004000u;
-    CHECK(func_override_add("t.wrap", addr, impl_wraps) == FO_OK, "add wrap");
+    CHECK(func_override_add("t.wrap", addr, impl_wraps, FO_CREDIT_SELF) == FO_OK, "add wrap");
     func_override_install();
 
     CHECK(consult(&cpu, addr) == 1, "wrap must handle");
@@ -305,7 +320,7 @@ static void test_bypass_is_consumed_so_recursion_reconsults(void)
     reset_all();
 
     const uint32_t addr = 0x80004100u;
-    CHECK(func_override_add("t.wrap_rec", addr, impl_wraps) == FO_OK,
+    CHECK(func_override_add("t.wrap_rec", addr, impl_wraps, FO_CREDIT_SELF) == FO_OK,
           "add recursive wrap");
     func_override_install();
 
@@ -343,9 +358,9 @@ static void test_package_reset_drops_only_package_entries(void)
 
     const uint32_t direct_at = 0x80005000u;
     const uint32_t pkg_at = 0x80005100u;
-    CHECK(func_override_add("t.direct", direct_at, impl_handles) == FO_OK,
+    CHECK(func_override_add("t.direct", direct_at, impl_handles, 0) == FO_OK,
           "direct add");
-    CHECK(func_override_add_package("pkg.feature:a", pkg_at, impl_handles, NULL, 0)
+    CHECK(func_override_add_package("pkg.feature:a", pkg_at, impl_handles, NULL, 0, 0)
               == FO_OK, "package add");
     func_override_install();
 
@@ -372,7 +387,8 @@ static void test_package_reset_drops_only_package_entries(void)
         char id[FO_MAX_ID];
         uint32_t a = 0;
         uint64_t calls = 0;
-        if (!func_override_get_ex(i, id, sizeof(id), &a, &calls, NULL, NULL))
+        if (!func_override_get_ex(i, id, sizeof(id), &a, &calls, NULL, NULL,
+                                  NULL))
             continue;
         if (a == (direct_at & 0x1FFFFFFFu)) {
             seen_direct = 1;
@@ -385,7 +401,7 @@ static void test_package_reset_drops_only_package_entries(void)
     CHECK(seen_direct, "direct entry must remain enumerable");
 
     /* The address is free again, so a later plan can re-arm it. */
-    CHECK(func_override_add_package("pkg.feature:a", pkg_at, impl_handles, NULL, 0)
+    CHECK(func_override_add_package("pkg.feature:a", pkg_at, impl_handles, NULL, 0, 0)
               == FO_OK, "re-arming after reset must succeed");
     CHECK(func_override_reset_package_armed() >= 1, "and drop again");
 }
@@ -399,7 +415,8 @@ static void test_get_ex_bounded_id_copy(void)
         char small[4];
         uint32_t a = 0;
         memset(small, 0x7F, sizeof(small));
-        if (!func_override_get_ex(i, small, sizeof(small), &a, NULL, NULL, NULL))
+        if (!func_override_get_ex(i, small, sizeof(small), &a, NULL, NULL, NULL,
+                                  NULL))
             continue;
         CHECK(small[sizeof(small) - 1] == '\0',
               "short id buffer must be NUL-terminated");
@@ -408,11 +425,70 @@ static void test_get_ex_bounded_id_copy(void)
     }
     CHECK(checked, "expected at least one entry to enumerate");
 
-    CHECK(func_override_get_ex(-1, NULL, 0, NULL, NULL, NULL, NULL) == 0,
+    CHECK(func_override_get_ex(-1, NULL, 0, NULL, NULL, NULL, NULL, NULL) == 0,
           "negative index must fail");
     CHECK(func_override_get_ex(func_override_count(), NULL, 0, NULL, NULL, NULL,
-                               NULL) == 0,
+                               NULL, NULL) == 0,
           "out-of-range index must fail");
+}
+
+static void test_credit_policy(void)
+{
+    reset_all();
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+
+    /* The credit is a required statement: FO_CREDIT_SELF or >= 0. Any other
+     * negative value is a typo, not a policy. */
+    CHECK(func_override_add("t.badcredit", 0x80006000u, impl_handles, -2)
+              == FO_ERR_ARGS,
+          "credit below FO_CREDIT_SELF must be refused");
+
+    CHECK(func_override_add("t.credit40", 0x80006100u, impl_handles, 40)
+              == FO_OK, "fixed-credit add");
+    CHECK(func_override_add("t.credit40d", 0x80006200u, impl_declines, 40)
+              == FO_OK, "fixed-credit decline probe add");
+    CHECK(func_override_add("t.creditself", 0x80006300u, impl_handles,
+                            FO_CREDIT_SELF)
+              == FO_OK, "self-credit add");
+    CHECK(func_override_add("t.credit0", 0x80006400u, impl_handles, 0)
+              == FO_OK, "zero-credit add");
+    func_override_install();
+
+    /* A handled call charges exactly the declared credit... */
+    uint64_t before = psx_cycle_count;
+    CHECK(consult(&cpu, 0x80006100u) == 1, "fixed-credit override handles");
+    CHECK(psx_cycle_count - before == 40u,
+          "handled call must charge the declared credit");
+
+    /* ...a DECLINE charges nothing (the original runs and self-charges
+       through the normal backends, so a tier-side charge would double). */
+    before = psx_cycle_count;
+    CHECK(consult(&cpu, 0x80006200u) == 0, "decline probe declines");
+    CHECK(psx_cycle_count == before, "a decline must charge nothing");
+
+    /* FO_CREDIT_SELF and 0 charge nothing from the tier. */
+    before = psx_cycle_count;
+    CHECK(consult(&cpu, 0x80006300u) == 1, "self-credit override handles");
+    CHECK(psx_cycle_count == before, "SELF must not be charged by the tier");
+    before = psx_cycle_count;
+    CHECK(consult(&cpu, 0x80006400u) == 1, "zero-credit override handles");
+    CHECK(psx_cycle_count == before, "credit 0 must charge nothing");
+
+    /* The declared policy is inspectable, not just documented. */
+    int seen40 = 0, seenself = 0;
+    for (int i = 0; i < func_override_count(); i++) {
+        char id[FO_MAX_ID];
+        uint32_t a = 0;
+        int32_t credit = -99;
+        if (!func_override_get_ex(i, id, sizeof(id), &a, NULL, NULL, NULL,
+                                  &credit))
+            continue;
+        if (a == 0x00006100u) { seen40   = (credit == 40); }
+        if (a == 0x00006300u) { seenself = (credit == FO_CREDIT_SELF); }
+    }
+    CHECK(seen40, "get_ex must report the fixed credit");
+    CHECK(seenself, "get_ex must report FO_CREDIT_SELF");
 }
 
 int main(void)
@@ -427,6 +503,7 @@ int main(void)
     test_call_original_outside_override_is_a_noop();
     test_package_reset_drops_only_package_entries();
     test_get_ex_bounded_id_copy();
+    test_credit_policy();
 
     if (g_fail) {
         printf("func_override: FAILURES\n");

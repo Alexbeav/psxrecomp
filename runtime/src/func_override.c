@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "psx_cycles.h"
 
 /* Residency-guard reads go through the UNTRACED peek, never psx_read_word.
  * psx_read_word is a traced accessor (memory.c): under lockstep it feeds
@@ -39,6 +40,8 @@ typedef struct {
     uint32_t       guard[FO_MAX_GUARD_WORDS];
     int            n_guard;      /* 0 = unguarded */
     int            package;      /* 1 = armed by a mod package plan */
+    int32_t        credit;       /* >= 0 charged per handled call;
+                                    FO_CREDIT_SELF = body self-charges */
 } Entry;
 
 static Entry s_entries[FO_MAX_OVERRIDES];
@@ -63,11 +66,16 @@ static Entry *find(uint32_t phys)
 }
 
 static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
-                      const uint32_t *guard, int n_guard, int package)
+                      const uint32_t *guard, int n_guard, int package,
+                      int32_t credit)
 {
     if (!fn)                         return FO_ERR_ARGS;
     if (n_guard < 0 || n_guard > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
     if (n_guard > 0 && !guard)       return FO_ERR_ARGS;
+    /* The credit is a required statement of timing intent (header, CYCLE
+     * ACCOUNTING): a fixed per-call charge, or FO_CREDIT_SELF. Any other
+     * negative value is a typo, not a policy. */
+    if (credit < FO_CREDIT_SELF)     return FO_ERR_ARGS;
     if (s_count >= FO_MAX_OVERRIDES) return FO_ERR_FULL;
 
     const uint32_t phys = normalise(addr);
@@ -91,28 +99,32 @@ static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
     for (int i = 0; i < n_guard; i++) e->guard[i] = guard[i];
     e->n_guard = n_guard;
     e->package = package ? 1 : 0;
+    e->credit  = credit;
     s_count++;
     return FO_OK;
 }
 
-int func_override_add(const char *id, uint32_t addr, FuncOverrideFn fn)
+int func_override_add(const char *id, uint32_t addr, FuncOverrideFn fn,
+                      int32_t credit)
 {
-    return add_common(id, addr, fn, NULL, 0, 0);
+    return add_common(id, addr, fn, NULL, 0, 0, credit);
 }
 
 int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
-                              const uint32_t *expected_words, int n_words)
+                              const uint32_t *expected_words, int n_words,
+                              int32_t credit)
 {
     if (n_words < 1) return FO_ERR_ARGS;
-    return add_common(id, addr, fn, expected_words, n_words, 0);
+    return add_common(id, addr, fn, expected_words, n_words, 0, credit);
 }
 
 int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
-                              const uint32_t *expected_words, int n_words)
+                              const uint32_t *expected_words, int n_words,
+                              int32_t credit)
 {
     if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
     return add_common(id, addr, fn, n_words ? expected_words : NULL, n_words,
-                      1);
+                      1, credit);
 }
 
 /* The hook. Runs on EVERY dispatch, so the common path — nothing registered
@@ -158,6 +170,14 @@ static int hook(CPUState *cpu, uint32_t phys)
             s_active_phys = phys;
             const int handled = e->fn(cpu) ? 1 : 0;
             s_active_phys = saved_active;
+            /* Charge the declared credit only when HANDLED: a decline runs
+             * the original, which accrues its exact cycles by executing.
+             * FO_CREDIT_SELF (< 0) and 0 charge nothing here — SELF bodies
+             * called psx_advance_cycles themselves, and guest work the body
+             * ran via func_override_guest_call / call_original has already
+             * self-charged through the normal backends. */
+            if (handled && e->credit > 0)
+                psx_advance_cycles((uint32_t)e->credit);
             return handled;
         }
     }
@@ -233,12 +253,13 @@ int func_override_get(int index, char *id_out, size_t id_cap,
                       uint32_t *addr_out, uint64_t *calls_out)
 {
     return func_override_get_ex(index, id_out, id_cap, addr_out, calls_out,
-                                NULL, NULL);
+                                NULL, NULL, NULL);
 }
 
 int func_override_get_ex(int index, char *id_out, size_t id_cap,
                          uint32_t *addr_out, uint64_t *calls_out,
-                         uint64_t *guard_misses_out, int *guarded_out)
+                         uint64_t *guard_misses_out, int *guarded_out,
+                         int32_t *credit_out)
 {
     if (index < 0 || index >= s_count) return 0;
     const Entry *e = &s_entries[index];
@@ -252,5 +273,6 @@ int func_override_get_ex(int index, char *id_out, size_t id_cap,
     if (calls_out)        *calls_out        = e->calls;
     if (guard_misses_out) *guard_misses_out = e->guard_misses;
     if (guarded_out)      *guarded_out      = e->n_guard;
+    if (credit_out)       *credit_out       = e->credit;
     return 1;
 }
