@@ -46,6 +46,7 @@ struct ModFeature {
     std::string description;
     std::string group = "General";
     bool default_enabled = false;
+    bool hidden = false;
     bool legacy = false;
 };
 
@@ -162,6 +163,17 @@ struct ModPlugin {
     int64_t order = 0;
 };
 
+struct ModResource {
+    std::string feature_id;
+    std::string id;
+    std::string label;
+    std::string description;
+    std::string file_patterns;
+    std::string file_description;
+    std::string format = "file";
+    bool required = false;
+};
+
 struct ModDerivedDisc {
     std::string kind = "vcdiff";
     std::filesystem::path patch;
@@ -201,6 +213,7 @@ struct ModPackage {
     std::vector<ModPatch> patches;
     std::vector<ModOverlay> overlays;
     std::vector<ModPlugin> plugins;
+    std::vector<ModResource> resources;
     std::vector<ModDerivedDisc> derived_discs;
 };
 
@@ -208,6 +221,7 @@ struct ModFeatureSelection {
     bool enabled = false;
     bool has_enabled = false;
     std::map<std::string, std::string> values;
+    std::map<std::string, std::string> resources;
 };
 
 struct ModSelection {
@@ -261,6 +275,13 @@ struct ModResolution {
         std::string feature_id;
     };
     std::vector<Plugin> plugins;
+    struct Resource {
+        std::string package_id;
+        std::string feature_id;
+        std::string id;
+        std::filesystem::path path;
+    };
+    std::vector<Resource> resources;
     struct Diagnostic {
         std::string message;
         std::string resource;
@@ -316,6 +337,11 @@ public:
                             const std::string& option_id,
                             const std::string& value,
                             std::string* error = nullptr);
+    bool set_feature_resource_path(const std::string& package_id,
+                                   const std::string& feature_id,
+                                   const std::string& resource_id,
+                                   const std::filesystem::path& path,
+                                   std::string* error = nullptr);
 
     const std::map<std::string, std::map<std::string, ModPackage>>& packages() const {
         return packages_;
@@ -329,6 +355,10 @@ public:
     std::string feature_option_value(const std::string& package_id,
                                      const std::string& feature_id,
                                      const std::string& option_id) const;
+    std::filesystem::path feature_resource_path(
+        const std::string& package_id,
+        const std::string& feature_id,
+        const std::string& resource_id) const;
 
     ModResolution resolve(const std::string& game_id,
                           const std::string& exe_sha256 = {},

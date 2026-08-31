@@ -101,6 +101,33 @@ CodeGenerator::CodeGenerator(const PS1Executable& exe, const CodeGenConfig& conf
     { const char* e = std::getenv("PSX_CPS"); cps_enabled_ = (e == nullptr || e[0] != '0'); }
 }
 
+/* Inter-piece host transfers (fallthrough into a split piece / the next
+ * function, and the legacy non-CPS split-target transfers) hand execution to
+ * another compiled dispatch entry WITHOUT passing the dispatcher's
+ * stale-static validation. A game that overlays its own text at runtime
+ * (CMR2 streams transform-loop variants over its boot EXE) keeps executing
+ * the stale static translation of the target piece through such an edge.
+ * The guard revalidates the target entry's emitted ranges; on mismatch it
+ * publishes the PC and unwinds to the trampoline, whose dispatch takes the
+ * sanctioned dirty-RAM-interpreter fallback over the live bytes. */
+static std::string emit_stale_static_guard(uint32_t target, const std::string& indent) {
+    return fmt::format(
+        "{0}if (!psx_game_text_native_ok(0x{1:08X}u)) {{ cpu->pc = 0x{1:08X}u; return; }}  /* stale-static guard */\n",
+        indent, target);
+}
+
+/* Same guard when only the emitted function NAME is at hand (the
+ * fallthrough-to-next-function edges). Game functions are named func_%08X;
+ * anything else gets no guard (identical to the pre-guard emission). */
+static std::string emit_stale_static_guard_named(const std::string& name,
+                                                 const std::string& indent) {
+    if (name.rfind("func_", 0) != 0) return "";
+    char* end = nullptr;
+    unsigned long v = strtoul(name.c_str() + 5, &end, 16);
+    if (!end || *end != '\0' || v == 0) return "";
+    return emit_stale_static_guard((uint32_t)v, indent);
+}
+
 uint32_t CodeGenerator::partial_block_cycle_count(uint32_t addr,
                                                   const ControlFlowGraph& cfg) const {
     if (cfg.blocks.count(addr)) {
@@ -768,6 +795,9 @@ std::string CodeGenerator::generate_branch_condition(uint32_t instr, uint32_t ad
             if (regimm_op == 0x00 && config_.ws_cull_nclip_keep_sites.count(addr))
                 return fmt::format("psx_ws_x_margin() > 0 ? 0 : ((int32_t){} < 0) /* ws nclip keep */",
                                    reg_name(rs));
+            if (regimm_op == 0x00 && config_.ws_cull_nclip_exact_sites.count(addr))
+                return fmt::format("psx_ws_x_margin() > 0 ? gte_nclip_precise_bltz((int32_t){}) : ((int32_t){} < 0) /* ws exact nclip */",
+                                   reg_name(rs), reg_name(rs));
             return keep_branch_if_wide(
                 fmt::format("(int32_t){} < 0", reg_name(rs)));
         } else {                            // bgez family (incl. bgezal + undefined mirrors)
@@ -2151,6 +2181,7 @@ std::string CodeGenerator::translate_basic_block(
                                << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS taken: split */\n", branch_target);
                         } else if (known_functions_.count(branch_target)) {
                             ss << emit_interrupt_check(branch_target, config_.indent + config_.indent);
+                            ss << emit_stale_static_guard(branch_target, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* taken: split piece */\n", branch_target);
                         } else {
@@ -2169,6 +2200,7 @@ std::string CodeGenerator::translate_basic_block(
                                << fmt::format("cpu->pc = 0x{:08X}u; return;  /* CPS not taken: split */\n", fall_through_addr);
                         } else if (known_functions_.count(fall_through_addr)) {
                             ss << emit_interrupt_check(fall_through_addr, config_.indent + config_.indent);
+                            ss << emit_stale_static_guard(fall_through_addr, config_.indent + config_.indent);
                             ss << config_.indent << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* not taken: split piece */\n", fall_through_addr);
                         } else {
@@ -2194,6 +2226,7 @@ std::string CodeGenerator::translate_basic_block(
                     } else if (block.exit_instr.target != 0 && known_functions_.count(block.exit_instr.target)) {
                         // Jump target is out-of-function and is a known function start
                         ss << emit_interrupt_check(block.exit_instr.target, config_.indent);
+                        ss << emit_stale_static_guard(block.exit_instr.target, config_.indent);
                         ss << config_.indent
                            << fmt::format("func_{:08X}(cpu); return;  /* j to split piece */\n",
                                           block.exit_instr.target);
@@ -2365,8 +2398,13 @@ std::string CodeGenerator::translate_basic_block(
                     ss << config_.indent << "{ uint32_t _csp = cpu->gpr[29];\n";
                     ss << emit_interrupt_check(target, config_.indent);
                     if (known_functions_.count(target) > 0) {
-                        ss << config_.indent << fmt::format("func_{:08X}(cpu);  /* jal */\n", target);
-                        ss << config_.indent << fmt::format("if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return; }}\n", addr + 8);
+                        ss << config_.indent << fmt::format(
+                            "if (psx_game_text_native_ok(0x{0:08X}u)) {{ func_{0:08X}(cpu);  /* jal */\n", target);
+                        ss << config_.indent << fmt::format(
+                            "if (psx_call_contract(cpu, 0x{:08X}u, _csp)) return;\n", addr + 8);
+                        ss << config_.indent << fmt::format(
+                            "}} else {{ call_by_address(cpu, 0x{:08X}u);  /* jal: stale-static guard */\n", target);
+                        ss << config_.indent << "if (g_psx_call_bail) return; (void)_csp; } }\n";
                     } else {
                         ss << config_.indent << fmt::format("call_by_address(cpu, 0x{:08X}u);  /* external jal */\n", target);
                         /* psx_dispatch_call validated the (ra, sp) contract;
@@ -2380,6 +2418,7 @@ std::string CodeGenerator::translate_basic_block(
                         // Split-function: JAL continuation is outside this function piece.
                         // Tail-call to the continuation piece (at exit_addr + 8, past delay slot).
                         if (known_functions_.count(cont_addr)) {
+                            ss << emit_stale_static_guard(cont_addr, config_.indent);
                             ss << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* jal cont: split piece */\n", cont_addr);
                         } else {
@@ -2421,6 +2460,7 @@ std::string CodeGenerator::translate_basic_block(
                     } else {
                         // Split-function: JALR continuation is outside this function piece.
                         if (known_functions_.count(cont_addr)) {
+                            ss << emit_stale_static_guard(cont_addr, config_.indent);
                             ss << config_.indent
                                << fmt::format("func_{:08X}(cpu); return;  /* jalr cont: split piece */\n", cont_addr);
                         } else {
@@ -2446,6 +2486,7 @@ std::string CodeGenerator::translate_basic_block(
     } else if (block.exit_instr.type == ControlFlowType::None) {
         uint32_t next_addr = block.end_addr + 4;
         if (known_functions_.count(next_addr) > 0) {
+            ss << emit_stale_static_guard(next_addr, config_.indent);
             ss << config_.indent
                << fmt::format("func_{:08X}(cpu); return;  /* fallthrough to split piece */\n",
                               next_addr);
@@ -2784,9 +2825,28 @@ GeneratedFunction CodeGenerator::generate_function(
             const BasicBlock& last = cfg.blocks.at(cfg.block_order.back());
             bool is_reachable = last.is_entry || !last.predecessors.empty();
             if (is_reachable) {
+                body_ss << emit_stale_static_guard_named(fallthrough_name, "    ");
                 body_ss << fmt::format("    {}(cpu);  /* fallthrough to next function */\n",
                                        fallthrough_name);
             }
+        }
+    } else if (!cfg.block_order.empty()) {
+        // No in-image fallthrough function exists (region/image boundary): a
+        // reachable final block that runs off the end must publish its
+        // continuation PC. Falling off the C body would return with the
+        // entry-switch's consumed cpu->pc == 0, which the top-level trampoline
+        // reads as "program ended".
+        const BasicBlock& last_block = cfg.blocks.at(cfg.block_order.back());
+        bool runs_off_end =
+            last_block.exit_instr.type == ControlFlowType::None ||
+            ((last_block.exit_instr.type == ControlFlowType::Branch ||
+              last_block.exit_instr.type == ControlFlowType::Jump) &&
+             last_block.successors.empty());
+        bool is_reachable = last_block.is_entry || !last_block.predecessors.empty();
+        if (runs_off_end && is_reachable) {
+            body_ss << fmt::format(
+                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
+                last_block.end_addr + 4u);
         }
     }
     body_ss << "    ;  /* label compatibility: C requires a statement after the last label */\n";
@@ -3014,8 +3074,26 @@ std::vector<GeneratedFunction> CodeGenerator::generate_alias_group(
               last_block.exit_instr.type == ControlFlowType::Jump) &&
              last_block.successors.empty());
         if (needs_fallthrough) {
+            body << emit_stale_static_guard_named(fallthrough_name, "    ");
             body << fmt::format("    {}(cpu);  /* fallthrough to next function */\n",
                                 fallthrough_name);
+        }
+    } else if (!cfg.block_order.empty() &&
+               live_blocks.count(cfg.block_order.back())) {
+        // Image-edge fallthrough (mirrors generate_function): no in-image next
+        // function exists, so a live final block that runs off the end must
+        // tail-transfer to its continuation PC instead of falling off the C
+        // body with cpu->pc still consumed to 0.
+        const BasicBlock& last_block = cfg.blocks.at(cfg.block_order.back());
+        bool runs_off_end =
+            (last_block.exit_instr.type == ControlFlowType::None) ||
+            ((last_block.exit_instr.type == ControlFlowType::Branch ||
+              last_block.exit_instr.type == ControlFlowType::Jump) &&
+             last_block.successors.empty());
+        if (runs_off_end) {
+            body << fmt::format(
+                "    cpu->pc = 0x{:08X}u; return;  /* image-edge fallthrough: tail-transfer */\n",
+                last_block.end_addr + 4u);
         }
     }
     body << "    ;  /* label compatibility */\n";
@@ -3186,6 +3264,7 @@ void CodeGenerator::emit_runtime_externs(std::ostream& ss) const {
     ss << "extern void cosim_block(uint32_t block_leader_phys);\n";
     ss << "extern void cosim_instr(uint32_t pc);\n";
     ss << "#endif\n";
+    ss << "extern int  psx_game_text_native_ok(uint32_t addr);  /* stale-static guard (dispatch shard) */\n";
     ss << "extern int  psx_datashard_enter(CPUState* cpu, uint32_t key);  /* data-shard replay/capture (data_shards.c) */\n";
     ss << "extern void psx_mod_function_entry(CPUState* cpu, uint32_t address);  /* trusted opt-in game-mod hook */\n";
     ss << "extern void psx_datashard_ret(CPUState* cpu);                  /* data-shard capture finalize */\n";

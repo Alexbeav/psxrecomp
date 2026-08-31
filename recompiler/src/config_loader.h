@@ -30,21 +30,10 @@
 namespace PSXRecompV4 {
 
 // Pad input mode (per player). Replaces the old analog on/off boolean.
-//   hybrid  — MOD-ONLY. Not selectable in the launcher, not a valid game.toml
-//             value, never a default. It survives solely so a trusted game mod
-//             can request it via psx_mod_set_controller_mode_override() (Tomba's
-//             hybrid controller plugin). Auto-switches analog/digital per the
-//             most-recent input:
-//             nudge the stick -> report DualShock (0x73, variable sticks);
-//             press the D-pad -> report a digital pad (0x41) so the game runs
-//             its OWN d-pad path at true digital sensitivity. Mirrors a
-//             DualShock's analog LED toggling on/off (and Tomba Special
-//             Edition's auto-detect).
 //   analog  — always present a DualShock/analog pad (id 0x73). The D-pad is
-//             folded onto the stick at full deflection so it still moves you.
-//             Default.
+//             independent from both sticks, matching real hardware. Default.
 //   digital — always present a digital pad (id 0x41); sticks disabled.
-enum PadMode { PAD_MODE_HYBRID = 0, PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
+enum PadMode { PAD_MODE_ANALOG = 1, PAD_MODE_DIGITAL = 2 };
 
 // Renderer IDs shared by game.toml/settings parsing and runtime startup.
 // OpenGL is the default because the Windows software/SDL_Renderer path is slow
@@ -54,6 +43,47 @@ inline constexpr int VIDEO_RENDERER_SOFTWARE = 0;
 inline constexpr int VIDEO_RENDERER_OPENGL = 1;
 inline constexpr int VIDEO_RENDERER_VULKAN = 2;
 inline constexpr int DEFAULT_VIDEO_RENDERER = VIDEO_RENDERER_OPENGL;
+
+// Controller-hotkey bind encoding, mirroring recomp-ui's RECOMP_LAUNCHER_PAD_*
+// (recomp_launcher.h): 0 = unbound, 1..99 = button (1 + SDL button code),
+// 100..999 = axis, 1000+ = a CHORD, encoded as 1000 + a bitmask of SDL button
+// codes. Two buttons held together is the normal case (select+r3), so a real
+// value here is routinely five digits.
+//
+// The bound matters: a naive `< 256` check silently rejects every chord, so a
+// saved rewind_pad = 1272 was dropped on load and pad hotkeys were only ever
+// configurable to single buttons. SDL defines about 21 gamepad buttons, so cap
+// the mask at 32 bits' worth and let the runtime ignore bits no controller can
+// produce.
+inline constexpr int PAD_BIND_MAX = 1000 + (1 << 21);
+inline bool pad_bind_value_ok(long long n) { return n >= 0 && n < PAD_BIND_MAX; }
+
+// FMV present reconstruction, ordered least to most smoothing. The default
+// remains nearest so existing games keep their current FMV presentation unless
+// a package or user setting opts into filtering.
+inline constexpr int VIDEO_FMV_FILTER_NEAREST  = 0;
+inline constexpr int VIDEO_FMV_FILTER_BILINEAR = 1;
+inline constexpr int VIDEO_FMV_FILTER_SHARP    = 2;
+inline constexpr int VIDEO_FMV_FILTER_BICUBIC  = 3;
+inline constexpr int VIDEO_FMV_FILTER_COUNT    = 4;
+inline constexpr int VIDEO_FMV_FILTER_DEFAULT  = VIDEO_FMV_FILTER_NEAREST;
+
+// Canonical settings.toml / game.toml spelling for each value, and its parse.
+inline const char* video_fmv_filter_name(int v) {
+    switch (v) {
+        case VIDEO_FMV_FILTER_NEAREST:  return "nearest";
+        case VIDEO_FMV_FILTER_BILINEAR: return "bilinear";
+        case VIDEO_FMV_FILTER_SHARP:    return "sharp";
+        default:                        return "bicubic";
+    }
+}
+inline bool video_fmv_filter_parse(const std::string& s, int* out) {
+    if (s == "nearest")       { *out = VIDEO_FMV_FILTER_NEAREST;  return true; }
+    else if (s == "bilinear") { *out = VIDEO_FMV_FILTER_BILINEAR; return true; }
+    else if (s == "sharp")    { *out = VIDEO_FMV_FILTER_SHARP;    return true; }
+    else if (s == "bicubic")  { *out = VIDEO_FMV_FILTER_BICUBIC;  return true; }
+    return false;
+}
 
 struct WidescreenSignedBoundSite {
     uint32_t address = 0;
@@ -116,7 +146,7 @@ struct WidescreenAspectConeConfig {
 };
 // Parse/format a pad mode. Strict game.toml parsing accepts "analog" or
 // "digital" (case-insensitive), returns `fallback` for unknown values, and
-// THROWS on "hybrid" — the mode is mod-only and must not be declared by a game.
+// THROWS on "hybrid" — game-specific switching must not be declared globally.
 int         pad_mode_from_string(const std::string& s, int fallback);
 // Lenient: for a user's settings.toml, where a stale persisted "hybrid" must
 // migrate to analog rather than refuse to launch.
@@ -317,6 +347,16 @@ struct RuntimeConfig {
     // gcc shards still load). The env var PSX_OVERLAY_BACKEND overrides at runtime.
     std::string           overlay_backend;
 
+    // overlay_region_floor: per-title override of the overlay region floor
+    // (defaults to the boot EXE text end). Titles whose gameplay code loads
+    // at/inside the boot text range (Gran Turismo's secondary EXEs all load
+    // at 0x80010000; Driver 2 streams mission code over its text pages) need
+    // it lowered so that code is overlay-cache eligible instead of falling to
+    // single-instruction interpretation. Same semantics and clamp as the
+    // PSX_OVERLAY_REGION_FLOOR env override, which still takes precedence.
+    bool                  has_overlay_region_floor = false;
+    uint32_t              overlay_region_floor = 0;
+
     // overlay_native_block: per-game overlay function entries that must stay on
     // the dirty-RAM interpreter even when a matching native DLL exists. Intended
     // for small timing-sensitive setup/task routines while the rest of the
@@ -335,6 +375,10 @@ struct RuntimeConfig {
     // supersampling + edge anti-aliasing. Cost scales ~N^2 in fill rate.
     int                   video_supersampling = 1;
 
+    // Optional initial window width declared by the title profile. Zero keeps
+    // the historical fit-to-display behavior; player settings may override it.
+    int                   video_window_width = 0;
+
     // antialiasing: when true the present path uses linear filtering when
     // scaling the framebuffer to the window (smooths the supersample
     // downscale and any window resize). false = nearest (sharp pixels).
@@ -344,6 +388,18 @@ struct RuntimeConfig {
     // texture_filtering: "nearest" (default, native PSX look) | "bilinear"
     // (smooths textures and 2D backgrounds). Stored as 0/1.
     int                   video_texture_filter = 0;
+
+    // fmv_filter: how the 24-bit FMV present reconstructs its low-res source
+    // (a 320x192-class movie blown up to the window). Only consulted when
+    // antialiasing is on — AA off means nearest, as it does everywhere else.
+    //   0 nearest   point-sampled; hard pixels, uneven pixel widths at a
+    //               non-integer scale
+    //   1 bilinear  plain GL_LINEAR; smoothest, but blurs the whole texel
+    //   2 sharp     sharp-bilinear; flat texel interiors, ramp confined to a
+    //               one-output-pixel band at the boundary
+    //   3 bicubic   Catmull-Rom; removes most of the staircase while holding
+    //               overall sharpness at the nearest level
+    int                   video_fmv_filter = VIDEO_FMV_FILTER_DEFAULT;
 
     // renderer: "software" | "opengl" (default) | "vulkan". Selects the
     // rasterizer/present backend. The software rasterizer remains the explicit
@@ -503,13 +559,11 @@ struct RuntimeConfig {
 
     // ---- [controller] block — game-declared input defaults ----
     // default_mode: the pad input mode this game ships with (see PadMode):
-    // "hybrid" (default) auto-switches DualShock/digital from the player's
-    // input, "analog" pins DualShock (0x73), "digital" pins a digital pad
-    // (0x41). A stick-capable title (e.g. Tomba) ships "hybrid" so the stick
-    // gives variable run speed yet the D-pad keeps its classic digital feel,
-    // with no launcher toggling. Per-install settings.toml [controller]
-    // p1_mode/p2_mode still override. `default_mode` sets both ports;
-    // `p1_mode`/`p2_mode` set one. Legacy `default_analog`/`p1_analog`/
+    // "analog" pins DualShock (0x73), "digital" pins a digital pad (0x41).
+    // Game-specific auto-switching belongs in an enabled trusted mod plugin,
+    // not in this global config surface. Per-install settings.toml
+    // [controller] p1_mode/p2_mode still override. `default_mode` sets both
+    // ports; `p1_mode`/`p2_mode` set one. Legacy `default_analog`/`p1_analog`/
     // `p2_analog` booleans are still accepted (true->analog, false->digital).
     bool                  has_default_mode = false;
     int                   default_p1_mode  = PAD_MODE_ANALOG;
@@ -525,7 +579,7 @@ struct RuntimeConfig {
     std::string           default_p2_device;
 
     // lock_mode: when true the launcher HIDES the whole pad-mode selector
-    // (Hybrid | Analog | D-Pad) and forces every port to default_p1_mode. For a
+    // (Analog | D-Pad) and forces every port to default_p1_mode. For a
     // game that supports exactly one pad type — e.g. Tomba 2, whose driver only
     // works as a plain digital pad because the DualShock config-mode handshake
     // is unhandled — so the player can't pick a broken mode. Supersedes
@@ -687,6 +741,17 @@ struct GameConfig {
     // the union here).
     std::vector<std::filesystem::path> discs;
 
+    // Optional per-disc serials, PARALLEL to `discs` ([game] disc_serials).
+    // Each disc of a set carries its own serial (FF7 US: SCUS-94163 / -64 /
+    // -65), so a set verified against the BOOT disc's serial alone would
+    // report every other disc as "wrong disc" the moment the player selects
+    // it. May be shorter than `discs` (or absent entirely, which every
+    // single-disc title and every port written before this is): a disc with
+    // no serial here is simply not serial-gated -- the ISO header check
+    // still applies. Written by tools/new_project_layout from the same probe
+    // that produced disc_set.json.
+    std::vector<std::string> disc_serials;
+
     // Optional expected disc identity, for the launcher's "Disc verified" badge.
     // disc_crc: full-file CRC32 (IEEE) of the data track. disc_sha1: lowercase
     // hex SHA-1. Either may be absent (has_disc_crc / disc_sha1.empty()).
@@ -703,6 +768,16 @@ struct GameConfig {
     bool                  has_netplay_required_leadout = false;
     uint32_t              netplay_required_leadout_lba = 0;
     std::string           netplay_required_disc_fp;  // lowercase hex SHA-256
+    // Per-disc TOC fingerprints for a MULTI-DISC set, PARALLEL to [game]
+    // discs ([netplay] required_disc_fps). Every disc of a set has its own
+    // TOC, so a set gated on one fingerprint refuses online play on every
+    // disc but that one -- and the flat required_disc_fp above can only ever
+    // name the boot disc. May be shorter than `discs`, or absent (every
+    // single-disc title): a disc with no fingerprint here falls back to the
+    // flat value, and a set that declares neither is simply not fingerprint-
+    // gated. Values come from the same verify_disc_set.py probe that writes
+    // disc_set.json.
+    std::vector<std::string> netplay_required_disc_fps;
     // local_viewport = "vertical_split": while real netplay is active, crop
     // presentation to this peer's left/right split-screen half. This is a
     // presentation-only helper for titles that still render native split-screen
@@ -852,6 +927,9 @@ struct GameConfig {
     // not-taken only while widescreen reveals extra world. This is deliberately
     // separate from bltz_sites, whose helper adjusts screen-X edge thresholds.
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    // Exact NCLIP/backface branch sites that use the validated tracked sign
+    // only while wide. Guest MAC0 remains native and 4:3 remains bit-exact.
+    std::vector<uint32_t> ws_cull_nclip_exact_sites;
     // Exact branch PCs whose reject path is forced not-taken only while
     // widescreen reveals extra world. Use only after screenshot-validated
     // evidence that the target is a visibility reject.
@@ -1110,6 +1188,9 @@ struct UserSettings {
     bool has_window_width   = false; int  window_width   = 1280; // -> 1280x960
     bool has_antialiasing   = false; bool antialiasing   = true;
     bool has_texture_filter = false; int  texture_filter = 0; // 0=nearest,1=bilinear
+    // FMV present reconstruction (VIDEO_FMV_FILTER_*). Only consulted when
+    // antialiasing is on. See RuntimeConfig::video_fmv_filter.
+    bool has_fmv_filter     = false; int  fmv_filter     = VIDEO_FMV_FILTER_DEFAULT;
     // Sub-pixel vertex precision / perspective-correct UVs (see RuntimeConfig).
     // Both default off — the faithful floor — and are player-selectable.
     bool has_geometry_correction   = false; bool geometry_correction   = false;
@@ -1155,6 +1236,11 @@ struct UserSettings {
     bool has_aspect_ratio   = false; int  aspect_num     = 4; // display aspect W:H
                                      int  aspect_den     = 3; // (4:3 = native)
     bool has_adaptive_view  = false; bool adaptive_view  = false;
+    // [video] rewind: local rewind ring on/off. OFF by default — the ring
+    // holds whole-machine snapshots (2 MB RAM + 1 MB VRAM + 512 KB SPU RAM
+    // each) and captures on a frame cadence, so it is opt-in rather than a
+    // cost every host pays. Env PSX_REWIND still outranks this.
+    bool has_rewind         = false; bool rewind         = false;
     // [video] rewind_depth: local rewind snap-ring capacity. UI offers
     // 50 / 100 / 150 / 200 (default 50). Runtime clamps + snaps to those steps.
     bool has_rewind_depth   = false; int  rewind_depth   = 50;
@@ -1171,6 +1257,14 @@ struct UserSettings {
     // [bios] / [disc] / [memcard]
     bool has_bios_path      = false; std::filesystem::path bios_path;
     bool has_disc_path      = false; std::filesystem::path disc_path;
+    // [disc] selected: which image of a MULTI-DISC set ([game] discs in
+    // game.toml) the player last chose, 1-based. Stored as an ordinary
+    // setting so the launcher's Disc Selection dropdown persists across
+    // sessions and an external launcher can drive it like any other row.
+    // Ignored by single-disc titles. When it disagrees with disc_path, the
+    // rule is in resolve_selected_disc() (runtime/src/main.cpp): the index
+    // names the disc, disc_path only survives when it is that same disc.
+    bool has_disc_index     = false; int  disc_index     = 1;
     bool has_memcard_dir    = false; std::filesystem::path memcard_dir;
     // Per-slot memory-card overrides. An explicit card path overrides the
     // <dir>/card<N>.mcd default; the enable flag inserts/removes the card.

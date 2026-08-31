@@ -25,6 +25,7 @@
 #include "psx_savestate_menu.h"
 #include "host_osd.h"
 #include "host_keymap.h"
+#include "png_write.h"       /* png_write_rgb — present_shot readback */
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -39,6 +40,9 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "gpu_sw_renderer.h"
 #include "gpu_render.h"
 #include "gpu_gl_renderer.h"
+/* Declarations only: STB_IMAGE_IMPLEMENTATION lives in psx_window_icon.cpp. */
+#define STBI_NO_STDIO
+#include "../third_party/stb_image.h"
 #include "gpu_vk_renderer.h"
 #include "frame_pacing.h"
 #include "latency_ring.h"
@@ -87,8 +91,15 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #if defined(PSX_HAS_GAME_CODEGEN)
 extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
 extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
-extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
+#endif
+/* Setup-host relaunch hook: only exists when a codegen_setup.c-style host was
+ * actually linked (PSX_HAS_CODEGEN_SETUP_HOST) — that file depends on
+ * recomp-ui/launcher headers a --no-recomp-ui build does not have, so this
+ * must NOT be gated on PSX_HAS_GAME_CODEGEN (set for any linked game C) or
+ * RECOMP_LAUNCHER alone. */
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
+extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include "psx_sdl.h"
 #if defined(PSX_SDL3)
@@ -105,6 +116,7 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #endif
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <cctype>
 #include <cmath>
@@ -172,11 +184,27 @@ extern "C" {
     extern uint64_t psx_cycle_count;
     extern uint64_t s_frame_count;
     extern uint32_t g_overlay_region_floor;
+    extern uint32_t g_text_image_lo;
     extern int      g_psx_cps_mode;
     extern uint64_t g_slice_fired, g_slice_irq_taken, g_dirty_ram_insns_run;
     extern uint64_t g_dirty_window_dispatches;
     extern uint32_t g_slice_exit_pc, g_slice_exit_reason, g_slice_exit_iter;
     extern uint32_t g_slice_exit_dispatchable, g_slice_exit_dirty, g_slice_exit_in_text, g_slice_exit_want;
+    /* memory.c */
+    extern uint32_t i_stat, i_mask;
+    extern uint64_t g_guest_store_count;
+    extern uint64_t g_vblank_ack_count;
+    /* interrupts.c */
+    extern uint64_t g_vblank_raise_count, g_vblank_deliver_count;
+    /* dirty_ram_interp.c */
+    extern uint64_t g_dirty_ram_blocks_run;
+    extern uint64_t g_dirty_pump_count;
+    /* overlay_loader.c */
+    extern int      g_call_unit_depth;
+    /* psx_bios_backend.c */
+    extern int      g_psx_dispatch_depth;
+    /* interrupts.c */
+    extern uint32_t vblank_cycles;
 }
 
 /* memory.c */
@@ -335,13 +363,11 @@ static SDL_Texture*  sdl_texture;
 struct PlayerInput {
     int   kind = 0;            /* 0=none, 1=keyboard, 2=controller */
     char  guid[40] = {0};      /* SDL joystick GUID string when kind==controller */
-    /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 0=hybrid
-     * (MOD-ONLY, requested via psx_mod_set_controller_mode_override),
-     * 2=digital. hybrid_analog is the per-frame auto-switch latch used only in
-     * hybrid mode: true => currently presenting DualShock (stick was the last
-     * input), false => currently presenting a digital pad (D-pad was last). */
+    /* Pad input mode (PSXRecompV4::PadMode): 1=analog (default), 2=digital.
+     * Game-owned plugins may register a trusted per-sample presentation policy
+     * for title-specific switching, but the global launcher/config surface only
+     * persists analog or digital. */
     int   mode = PSXRecompV4::PAD_MODE_ANALOG;
-    bool  hybrid_analog = false;
     int   deadzone = 3277;  /* raw SDL axis units, ~10% default */
     SDL_GameController* handle = nullptr;
     SDL_JoystickID      instance = -1;
@@ -417,6 +443,7 @@ static bool     s_force_present_after_load = false;
 static int s_sw_hold_valid = 0;
 static SDL_Rect s_sw_hold_src;
 static SDL_Rect s_sw_hold_dst;
+
 /* After LOADED: optional freeze probe (PSX_POST_LOAD_PROBE=1). Off by default. */
 static int      s_post_load_probe_enabled = -1; /* -1 = unread env */
 static int      s_post_load_probe_left = 0;
@@ -547,6 +574,30 @@ static void fps_telemetry_toggle(void) {
         host_osd_set_status(NULL);
     s_fps_base_title.clear();
     host_osd_push(enabled ? "FPS readout on" : "FPS readout off", 1500);
+}
+
+/* Hold-to-act host hotkeys must not fire while the game window does not hold
+ * keyboard focus.
+ *
+ * SDL_GetKeyboardState() returns a CACHED array that SDL updates from events.
+ * A key whose key-UP is delivered to some other window stays latched in that
+ * array with nothing to clear it -- and the canonical way to move focus away
+ * is Alt+TAB, where TAB is exactly the fast-forward bind. The game then runs
+ * at the fast-forward multiplier with no key held, indefinitely. Regaining
+ * focus makes SDL reconcile the array, which is why the symptom "stops" the
+ * moment you click back into the window and press anything.
+ *
+ * Gating on real input focus fixes that and is independently correct: a
+ * hold-to-turbo must not run while the player is typing in another
+ * application. Edge-triggered hotkeys are unaffected -- they go through
+ * host_keymap_match() on real key EVENTS, which are only delivered to the
+ * focused window in the first place.
+ *
+ * No window (headless, or before the window exists) means focus is not a
+ * concept here; do not suppress in that case. */
+static bool host_hotkey_input_focused(void) {
+    if (!sdl_window) return true;
+    return (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
 
 static int manual_fast_forward_multiplier(void) {
@@ -1104,6 +1155,23 @@ extern "C" EMSCRIPTEN_KEEPALIVE void psx_web_set_smooth_60fps(int enabled) {
 /* [video] options, resolved from the game config (defaults: native + AA). */
 static int           g_video_scale = 1;     /* internal-resolution SSAA factor */
 static bool          g_video_aa    = true;  /* linear present filtering */
+/* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
+ * once the config is resolved. Only consulted while g_video_aa is on. */
+static int           g_video_fmv_filter = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
+
+/* recomp-ui stores this 1-based so a zero-initialized (older) host reads as
+ * "unset" rather than pinning nearest; the config enum is 0-based. Convert at
+ * the boundary, and treat anything out of range as the default. */
+static inline int launcher_fmv_filter_to_cfg(int ls_value) {
+    if (ls_value < 1 || ls_value > PSXRecompV4::VIDEO_FMV_FILTER_COUNT)
+        return PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
+    return ls_value - 1;
+}
+static inline int cfg_fmv_filter_to_launcher(int cfg_value) {
+    if (cfg_value < 0 || cfg_value >= PSXRecompV4::VIDEO_FMV_FILTER_COUNT)
+        cfg_value = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
+    return cfg_value + 1;
+}
 static int           g_video_texfilter = 0; /* 0=nearest, 1=bilinear */
 /* Sub-pixel vertex precision + perspective-correct UVs (PGXP-style). Visual
  * only: the PS1-visible GTE SXY FIFO stays integer, so guest-side culling and
@@ -1113,13 +1181,18 @@ static int           g_video_perspective_texturing = 0;
 static int           g_video_pgxp_cpu_mode         = 0;
 static float         g_video_pgxp_tolerance        = 0.5f;
 static int           g_video_renderer = PSXRecompV4::DEFAULT_VIDEO_RENDERER;
+static std::string   g_bezel_path;      /* mod-owned OpenGL margin artwork */
 static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderless (desktop)
                                               * fullscreen, 2 exclusive fullscreen */
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
-static int           g_video_win_w    = 1280; /* window width (height follows aspect) */
+static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
+static bool          g_video_win_w_explicit = false; /* user chose a width */
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
+/* Local rewind is opt-in: the snap ring is whole-machine state on a frame
+ * cadence, too much to charge every host for a feature many never open. */
+static int           g_rewind_enabled = 0;
 static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/150/200) */
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
 static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
@@ -1127,6 +1200,7 @@ static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
+
 /* FMV instant-skip via the game's OWN end-of-movie path. Tomba's MDEC player
  * (FUN_8001efe8) tears a movie down when the streamed frame number reaches that
  * movie's per-movie total minus 3; writing the current movie's total down to
@@ -1163,9 +1237,19 @@ static int           g_frame_interpolation_blend =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
 static int           g_frame_interpolation_blend_default =
     PSX_MOD_FRAME_INTERPOLATION_LINEAR;
-static int           g_mod_controller_mode_override[2] = { -1, -1 };
-static_assert((int)PSX_MOD_CONTROLLER_HYBRID ==
-              (int)PSXRecompV4::PAD_MODE_HYBRID);
+static std::array<int, PSX_MAX_PLAYERS> g_mod_controller_mode_override =
+    [] {
+        std::array<int, PSX_MAX_PLAYERS> modes{};
+        modes.fill(-1);
+        return modes;
+    }();
+struct ModControllerPresentationPolicy {
+    PSXModControllerPresentationCallback callback = nullptr;
+    int initial_mode = PSXRecompV4::PAD_MODE_ANALOG;
+    int config_capable = 0;
+};
+static ModControllerPresentationPolicy
+    g_mod_controller_policy[PSX_MAX_PLAYERS];
 static_assert((int)PSX_MOD_CONTROLLER_ANALOG ==
               (int)PSXRecompV4::PAD_MODE_ANALOG);
 static_assert((int)PSX_MOD_CONTROLLER_DIGITAL ==
@@ -1331,13 +1415,13 @@ extern "C" int psx_mod_set_frame_interpolation(
 
     if (frames_per_second) {
         std::fprintf(stdout,
-            "psxrecomp: mod selected presentation-only interpolation at "
-            "%u FPS; guest timing remains stock\n",
+            "psxrecomp: mod selected presentation-only temporal blending at "
+            "%u presents/s; guest timing remains stock (no motion vectors)\n",
             (unsigned)frames_per_second);
     } else {
         std::fprintf(stdout,
-            "psxrecomp: mod selected display-refresh presentation-only "
-            "interpolation; guest timing remains stock\n");
+            "psxrecomp: mod selected display-refresh presentation-only temporal "
+            "blending; guest timing remains stock (no motion vectors)\n");
     }
     return 1;
 }
@@ -1368,6 +1452,18 @@ extern "C" int psx_mod_set_auto_skip_fmv(int enabled) {
     g_auto_skip_fmv = enabled;
     std::fprintf(stdout, "psxrecomp: mod %s automatic FMV skipping\n",
                  enabled ? "enabled" : "disabled");
+    return 1;
+}
+
+extern "C" int psx_mod_set_bezel_artwork(const char* path) {
+    if (!path || !path[0]) {
+        std::fprintf(stderr, "psxrecomp: mod rejected empty bezel artwork path\n");
+        return 0;
+    }
+    g_bezel_path = path;
+    g_video_renderer = 1;
+    std::fprintf(stdout, "psxrecomp: mod selected bezel artwork %s\n",
+                 g_bezel_path.c_str());
     return 1;
 }
 
@@ -1416,8 +1512,9 @@ extern "C" int psx_mod_set_disc_speed(
 
 extern "C" int psx_mod_set_controller_mode_override(
     uint32_t player, uint32_t controller_mode) {
-    if (player >= 2 ||
-        controller_mode > (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL) {
+    if (player >= PSX_MAX_PLAYERS ||
+        (controller_mode != (uint32_t)PSXRecompV4::PAD_MODE_ANALOG &&
+         controller_mode != (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL)) {
         std::fprintf(stderr,
             "psxrecomp: mod rejected controller-mode override "
             "(player %u, mode %u)\n",
@@ -1425,6 +1522,26 @@ extern "C" int psx_mod_set_controller_mode_override(
         return 0;
     }
     g_mod_controller_mode_override[player] = (int)controller_mode;
+    return 1;
+}
+
+extern "C" int psx_mod_set_controller_presentation_policy(
+    uint32_t player,
+    PSXModControllerPresentationCallback callback,
+    uint32_t initial_mode,
+    int config_capable) {
+    if (player >= PSX_MAX_PLAYERS || !callback ||
+        (initial_mode != (uint32_t)PSXRecompV4::PAD_MODE_ANALOG &&
+         initial_mode != (uint32_t)PSXRecompV4::PAD_MODE_DIGITAL)) {
+        std::fprintf(stderr,
+            "psxrecomp: mod rejected controller-presentation policy "
+            "(player %u, initial mode %u)\n",
+            (unsigned)player, (unsigned)initial_mode);
+        return 0;
+    }
+    g_mod_controller_policy[player].callback = callback;
+    g_mod_controller_policy[player].initial_mode = (int)initial_mode;
+    g_mod_controller_policy[player].config_capable = config_capable ? 1 : 0;
     return 1;
 }
 
@@ -1459,9 +1576,18 @@ static int           g_logical_w = 640;
  * the given aspect: height = width*den/num. */
 static void clamp_window_aspect(int* w, int* h, int num, int den) {
     int width = *w;
-    if (width < 640) width = 640;
     SDL_Rect bounds;
-    if (SDL_GetDisplayUsableBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0) {
+    const int have_bounds =
+        (SDL_GetDisplayUsableBounds(0, &bounds) == 0 && bounds.w > 0 && bounds.h > 0);
+    /* 0 = "fit the display". The old default was a hardcoded 1280, which on a
+     * 4K or 8K panel opens a small window in the corner and, worse, makes the
+     * image far smaller than the internal render resolution the user chose --
+     * supersampling 16 rendering into a 1280-wide window throws almost all of
+     * it away. Fitting the usable bounds keeps the window proportional to the
+     * display it is actually on. An explicit width still wins. */
+    if (width <= 0) width = have_bounds ? bounds.w : 1280;
+    if (width < 640) width = 640;
+    if (have_bounds) {
         if (width > bounds.w)             width = bounds.w;
         if (width * den / num > bounds.h) width = bounds.h * num / den;
     }
@@ -1566,7 +1692,11 @@ static void update_adaptive_widescreen() {
     if (width <= 0 || height <= 0) return;
 
     int num = width, den = height;
-    if ((int64_t)width * 3 <= (int64_t)height * 4) {
+    /* A nominal 4:3 client can be one physical pixel wider after fractional-DPI
+     * conversion (for example 960x720 -> 2161x1620 at 225%).  Keep that
+     * rounding pixel in the identity fallback instead of engaging an almost-
+     * identity widescreen squash and its cull guard. */
+    if ((int64_t)(width - 1) * 3 <= (int64_t)height * 4) {
         num = 4; den = 3;
     } else if ((int64_t)width * g_ws_adaptive_max_den >=
                (int64_t)height * g_ws_adaptive_max_num) {
@@ -1612,6 +1742,77 @@ extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
 static bool          g_gl_active = false;    /* GL context live -> GL present path */
 static bool          g_vk_active = false;    /* Vulkan context live -> VK present path */
+
+/* present_shot — capture the COMPOSED present surface, i.e. the frame after the
+ * backend has fitted the display buffer to the window, so the PNG carries the
+ * aspect the player is actually looking at.
+ *
+ * screenshot / screenshot_file / screenshot_hires all resolve the display
+ * buffer BEFORE that fit: on a 508x256 display in a 4:3 window they answer
+ * 508x256 while the window shows 640x480. Correct for faithfulness work, wrong
+ * for anything aspect-shaped — a widescreen change moves the GTE squash and the
+ * present fit, which is exactly the stage those captures skip.
+ *
+ * Staged here and fulfilled by whichever backend owns the present: the SDL
+ * software path reads back via SDL_RenderReadPixels, the GL path via
+ * glReadPixels before SwapWindow (gpu_gl_renderer.c).
+ *
+ * THREADING: the request is written from a debug-server command handler on the
+ * emu thread (debug_server_poll safe point), but GL fulfilment can run on the
+ * frame-interpolation thread (gpu_gl_renderer.c interp_present -> gl_swap_with_osd),
+ * so the path buffer and the pending flag are mutex-guarded and the counters are
+ * atomic. present_shot_take() CLAIMS the request under the lock, so two present
+ * paths can never fulfil the same shot.
+ *
+ * A staged shot is OVERWRITTEN by a later request rather than refused (the same
+ * choice savestate's request_save_inner makes). A present that never arrives —
+ * a static frame, a backend that stops presenting — therefore cannot wedge the
+ * command: the next request simply replaces it. */
+static std::mutex       s_present_shot_mtx;
+static char             s_present_shot_path[512];
+static bool             s_present_shot_pending = false;
+static std::atomic<int> s_present_shot_seq{0};   /* bumps on every completion */
+static std::atomic<int> s_present_shot_ok{0};    /* 1 = last completion wrote a PNG */
+
+extern "C" int present_shot_request(const char *path)
+{
+    if (!path || !*path) return 0;
+    if (g_headless)  return 0;   /* no present surface to read back */
+    /* Vulkan owns its own swapchain present (see the g_vk_active branch in
+     * sdl_vblank_present_body) and has no readback hook, so nothing would ever
+     * fulfil the request. Refuse honestly instead of accepting a shot that can
+     * never complete — CLAUDE.md rule 15. */
+    if (g_vk_active) return 0;
+    {
+        std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+        std::snprintf(s_present_shot_path, sizeof(s_present_shot_path), "%s", path);
+        s_present_shot_pending = true;
+    }
+    return 1;
+}
+
+/* Backend hook: atomically claim a staged shot (returns 1 and fills `out`),
+ * then call present_shot_done(ok) once the PNG is written — or not written. */
+extern "C" int present_shot_take(char *out, int n)
+{
+    if (!out || n <= 0) return 0;
+    std::lock_guard<std::mutex> lk(s_present_shot_mtx);
+    if (!s_present_shot_pending) return 0;
+    std::snprintf(out, (size_t)n, "%s", s_present_shot_path);
+    s_present_shot_pending = false;   /* claimed */
+    return 1;
+}
+
+/* ok = 1 only when a PNG actually landed on disk. seq advances either way so a
+ * client polling it always terminates; ok tells it whether the file exists. */
+extern "C" void present_shot_done(int ok)
+{
+    s_present_shot_ok.store(ok ? 1 : 0, std::memory_order_release);
+    s_present_shot_seq.fetch_add(1, std::memory_order_release);
+}
+
+extern "C" int present_shot_seq(void) { return s_present_shot_seq.load(std::memory_order_acquire); }
+extern "C" int present_shot_ok(void)  { return s_present_shot_ok.load(std::memory_order_acquire); }
 /* Present straight from the FBO (fast, no readback). Set PSX_GL_FORCE_CPU_PRESENT=1
  * to force the software readout path instead — a diagnostic/fallback that also
  * keeps CPU VRAM current every frame (so screenshots reflect the screen). */
@@ -1820,6 +2021,7 @@ int      g_turbo_audio_sink_enabled = 0;
 int      g_turbo_audio_sink_active = 0;
 uint64_t g_turbo_audio_sink_frames = 0; /* guest SPU frames advanced, not queued */
 }
+static int g_turbo_audio_sink_config_enabled = 0;
 /* The CD predicate already excludes XA and holds across ordinary inter-file
  * gaps. A short engage debounce rejects a one-frame controller blip without
  * leaving a visible authentic-paced prefix on every real load. Once engaged,
@@ -2032,6 +2234,40 @@ static bool pick_runtime_file(const char* title, const char* filter,
 #endif
 }
 
+/* Per-disc expected serials for a multi-disc set, keyed by the disc image's
+ * UPPERCASED file-name stem (game.toml [game] disc_serials, in the order of
+ * [game] discs). Every disc of a set carries its own serial, so checking disc
+ * 2 against the BOOT disc's serial reports the player's correct disc as the
+ * wrong game -- which is what the launcher's disc dropdown would trip on
+ * every time, and what the launch-time check warned about even when the
+ * player picked exactly the right image. A disc absent from this map is not
+ * serial-gated at all; the ISO-header check still applies. Keyed by stem
+ * rather than full path because a .cue and the .bin it owns are one disc and
+ * either may be what the player picked. Populated from game.toml; empty for
+ * every single-disc title, which therefore behaves exactly as before. */
+static std::unordered_map<std::string, std::string> g_disc_serials;
+
+/* Per-disc netplay TOC fingerprints, same keying and same reason as
+ * g_disc_serials: every disc of a set has its own TOC, so a set gated on the
+ * BOOT disc's fingerprint refuses online play on every other disc the player
+ * can now select. Populated from game.toml [netplay] required_disc_fps; empty
+ * for every single-disc title and every port that predates the key, which
+ * therefore keep the flat [netplay] required_disc_fp behaviour exactly. */
+static std::unordered_map<std::string, std::string> g_disc_netplay_fps;
+
+static std::string uppercase_ascii(std::string s);
+
+/* The serial THIS image is expected to carry: the set's per-disc value when
+ * the game declared one, the game's own id otherwise. An image that belongs
+ * to a declared set but has no serial listed is returned ungated (""), never
+ * gated against another disc's number. */
+static std::string expected_serial_for_disc(const std::filesystem::path& disc,
+                                            const std::string& fallback) {
+    if (g_disc_serials.empty()) return fallback;
+    const auto it = g_disc_serials.find(uppercase_ascii(disc.stem().string()));
+    return it != g_disc_serials.end() ? it->second : std::string();
+}
+
 static std::string uppercase_ascii(std::string s) {
     for (char& c : s) {
         c = (char)std::toupper((unsigned char)c);
@@ -2075,17 +2311,20 @@ static DiscValidation validate_disc_image(const std::filesystem::path& selected_
     // the launcher badge can never drift apart. No CRC here — the launch check
     // only cares about openability / header / serial; the launcher does the
     // (slower) CRC pass when an expected CRC is configured.
+    /* A multi-disc set is checked against the SELECTED disc's serial, not the
+     * boot disc's -- see expected_serial_for_disc(). */
+    const std::string expect = expected_serial_for_disc(selected_path, game_id);
     const PSXRecompV4::DiscIdentity id =
-        PSXRecompV4::identify_disc(selected_path, game_id, /*expected_crc*/0,
+        PSXRecompV4::identify_disc(selected_path, expect, /*expected_crc*/0,
                                    /*has_expected_crc*/false, /*compute_crc*/false);
     DiscValidation v;
     v.opened     = id.opened;
     v.has_header = id.has_header;
-    v.id_matches = game_id.empty() ? true : id.serial_matches;
+    v.id_matches = expect.empty() ? true : id.serial_matches;
     v.detail     = id.detail;
     if (id.opened && id.has_header && !v.id_matches && v.detail.empty()) {
         v.detail = "The disc header is readable, but it does not contain the expected game ID " +
-                   uppercase_ascii(game_id) + " in the early disc metadata.";
+                   uppercase_ascii(expect) + " in the early disc metadata.";
     }
     return v;
 }
@@ -2126,6 +2365,49 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
     }
 
     return p;
+}
+
+/* Which image of a MULTI-DISC set to mount, given the roster this build was
+ * made from (game.toml [game] discs), the player's persisted [disc] selected
+ * index, and the [disc] path the launcher last wrote.
+ *
+ * The index names the disc; the path only survives when it IS that disc.
+ * That ordering is the whole point of storing the index: an external launcher
+ * (or a hand edit) changes discs by writing one integer, and it takes effect
+ * even though settings.toml still carries the previous disc's path. A player
+ * who browsed for their own copy of the selected disc is still honoured,
+ * because a relocated or container-swapped image keeps its stem -- a Redump
+ * dump names the disc in the file name and only the extension moves
+ * (".. (Disc 2).cue" -> ".. (Disc 2).bin", which is exactly the substitution
+ * normalize_disc_path_for_launch performs).
+ *
+ * Single-disc titles (roster of 0 or 1) are returned unchanged: the persisted
+ * path wins, exactly as it did before any of this existed. */
+/* Roster position of `disc`, or -1. Stem-compared for the same reason
+ * resolve_selected_disc() is: the roster holds .cue entries while everything
+ * downstream has already been through normalize_disc_path_for_launch(), which
+ * swaps a .cue for its .bin. */
+static int roster_index_for_disc(
+    const std::vector<std::filesystem::path>& roster,
+    const std::filesystem::path& disc) {
+    if (disc.empty()) return -1;
+    const std::string want = uppercase_ascii(disc.stem().string());
+    for (size_t i = 0; i < roster.size(); ++i)
+        if (uppercase_ascii(roster[i].stem().string()) == want) return (int)i;
+    return -1;
+}
+
+static std::filesystem::path resolve_selected_disc(
+    const std::vector<std::filesystem::path>& roster, int selected_1based,
+    const std::filesystem::path& persisted) {
+    if (roster.size() < 2) return persisted;
+    const int idx = selected_1based - 1;
+    if (idx < 0 || idx >= (int)roster.size()) return persisted;
+    if (!persisted.empty() &&
+        uppercase_ascii(persisted.stem().string()) ==
+            uppercase_ascii(roster[(size_t)idx].stem().string()))
+        return persisted;
+    return roster[(size_t)idx];
 }
 
 /* BIOS selection state (docs/BIOS_SELECTION.md). s_openbios_allowed is the
@@ -2525,12 +2807,47 @@ static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
  * wall-clock pacer double-blocks the vblank callback (present is before the
  * guest resumes), which shows up as MotK FMV ~30–40 FPS in netplay vs ~50+
  * offline. Force immediate swaps for the session; restore on soft-exit. */
-static int host_refresh_is_approx_60hz(void) {
-    return g_host_refresh_hz >= 58.8 && g_host_refresh_hz <= 61.2;
+static int host_refresh_matches_guest_cadence(void) {
+    if (g_host_refresh_hz <= 0.0 || g_frame_period_ms <= 0.0)
+        return 0;
+    const double guest_hz = 1000.0 / g_frame_period_ms;
+    return std::fabs(g_host_refresh_hz - guest_hz) <= guest_hz * 0.02;
+}
+
+static int host_driver_vsync_unreliable(void) {
+#ifdef _WIN32
+    return 0;
+#else
+    static int cached = -1;
+    if (cached >= 0)
+        return cached;
+    if (const char *e = std::getenv("PSX_TRUST_DRIVER_VSYNC");
+        e && e[0] && e[0] != '0') {
+        cached = 0;
+        return cached;
+    }
+    if (std::getenv("WSL_INTEROP") || std::getenv("WSL_DISTRO_NAME")) {
+        cached = 1;
+        return cached;
+    }
+    cached = 0;
+    if (FILE *f = std::fopen("/proc/version", "rb")) {
+        char buf[512];
+        size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+        std::fclose(f);
+        buf[n] = '\0';
+        if (std::strstr(buf, "Microsoft") || std::strstr(buf, "microsoft") ||
+            std::strstr(buf, "WSL") || std::strstr(buf, "wsl"))
+            cached = 1;
+    }
+    return cached;
+#endif
 }
 
 static int present_vsync_owns_cadence(void) {
     if (g_video_vsync == 0 || g_present_vsync_disabled)
+        return 0;
+    if (host_driver_vsync_unreliable())
         return 0;
     if (g_frame_period_ms <= 0.0)
         return 0;
@@ -2538,7 +2855,13 @@ static int present_vsync_owns_cadence(void) {
         return 0;
     if (g_netplay_vsync_forced_off || psx_netplay_active())
         return 0;
-    return host_refresh_is_approx_60hz();
+    return host_refresh_matches_guest_cadence();
+}
+
+/* C accessor for the renderers (frame_pacing.h). The GL present-skip
+ * optimisation must consult this before eliding a swap. */
+extern "C" int psx_present_vsync_owns_cadence(void) {
+    return present_vsync_owns_cadence();
 }
 
 static int present_effective_swap_interval(void) {
@@ -2554,7 +2877,28 @@ static int present_effective_swap_interval(void) {
 }
 
 static int present_should_wall_pace(void) {
-    return g_frame_period_ms > 0.0 && !present_vsync_owns_cadence();
+    /* The single-context temporal-blend path subdivides this same stock frame
+     * interval. Do not run the outer pacer as well or guest timing doubles. */
+    if (g_frame_interpolation && g_gl_active &&
+        gl_renderer_interpolation_owns_cadence())
+        return 0;
+    /* Run the pacer even when driver vsync is SUPPOSED to own the cadence.
+     *
+     * Skipping it here trusts the swap to block, and a swap that does not
+     * block leaves the guest with NO speed limit at all -- the game simply
+     * free-runs. Measured on NVIDIA GL under a compositing WM: 45 s of
+     * gameplay produced 4771 guest frames (~106 fps, 1.77x) with vsync
+     * "owning" cadence, against 2651 (~58.9 fps, 1.00x) with PSX_VSYNC=0
+     * forcing this pacer on. Nothing was held; it looked exactly like a stuck
+     * fast-forward.
+     *
+     * This is safe to run alongside a vsync that DOES block, because
+     * frame_pacer_wait() is deadline-based rather than a fixed sleep: if the
+     * swap already consumed the period, `now >= next_deadline` and it returns
+     * immediately after advancing the deadline. So it costs nothing where
+     * vsync works and supplies the cap where it does not, which also means it
+     * cannot add latency to the healthy path. */
+    return g_frame_period_ms > 0.0;
 }
 
 static void apply_present_cadence(void) {
@@ -2572,13 +2916,23 @@ static void apply_present_cadence(void) {
 
 static void log_present_cadence(void) {
     if (present_vsync_owns_cadence()) {
-        std::printf("psxrecomp: present cadence: driver vsync (%.1f Hz panel, "
-                    "wall-clock pacer skipped)\n",
-                    g_host_refresh_hz);
+        /* The pacer still runs underneath as a deadline cap (see
+         * present_should_wall_pace) -- a no-op whenever the swap actually
+         * blocks, and the only speed limit when it does not. Say so: this
+         * line is how a bring-up session decides whether pacing is accounted
+         * for, and "skipped" sent this one hunting a phantom stuck
+         * fast-forward instead of an unpaced present. */
+        std::printf("psxrecomp: present cadence: driver vsync (%.1f Hz panel; "
+                    "wall-clock cap %.4f ms/frame)\n",
+                    g_host_refresh_hz, g_frame_period_ms);
     } else if (g_frame_period_ms > 0.0) {
         if (g_video_vsync != 0 && !g_frame_interpolation &&
             !g_netplay_vsync_forced_off) {
-            if (g_host_refresh_hz > 0.0) {
+            if (host_driver_vsync_unreliable()) {
+                std::printf("psxrecomp: present cadence: wall-clock pacer "
+                            "(%.4f ms/frame); driver vsync off under WSL\n",
+                            g_frame_period_ms);
+            } else if (g_host_refresh_hz > 0.0) {
                 std::printf("psxrecomp: present cadence: wall-clock pacer "
                             "(%.4f ms/frame); driver vsync off on %.0f Hz panel\n",
                             g_frame_period_ms, g_host_refresh_hz);
@@ -3912,18 +4266,13 @@ static void update_controller_rumble(void) {
 }
 
 /* The pad type a mode reports before any input has been sampled (boot /
- * hotplug). analog pins DualShock; digital and hybrid both start as a digital
- * pad (hybrid only flips to DualShock once the player nudges the stick). */
+ * hotplug). analog pins DualShock; digital starts as a plain digital pad. */
 static int pad_mode_boot_analog(int mode) {
-    /* Hybrid boots ANALOG-on (matches a DualShock powered up with the analog LED
-     * lit): the seamless auto-switch then drops to digital only if the player
-     * reaches for the d-pad. Pinned-analog also boots analog; digital boots off. */
-    return (mode == PSXRecompV4::PAD_MODE_ANALOG ||
-            mode == PSXRecompV4::PAD_MODE_HYBRID) ? 1 : 0;
+    return mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
 }
 
 /* Keyboard has no DualShock sticks/config handshake — always present as a
- * plain digital pad (SCPH-1080). Leaving keyboard slots in ANALOG/HYBRID made
+ * plain digital pad (SCPH-1080). Leaving keyboard slots in ANALOG/policy mode made
  * P2–P5 show as connected while games that expect digital multitap pads never
  * saw usable button input. */
 static int effective_player_mode(const PlayerInput& p) {
@@ -3951,14 +4300,21 @@ static void refresh_player_devices(void) {
         else open_player(p, s);
         if (netplay) continue;
         const int mode = effective_player_mode_for_sio(p, s);
+        const ModControllerPresentationPolicy& policy =
+            g_mod_controller_policy[s];
+        const int boot_mode = policy.callback ? policy.initial_mode : mode;
         sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(mode), 0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_analog(s, pad_mode_boot_analog(boot_mode),
+                           0x80, 0x80, 0x80, 0x80);
         /* DIGITAL mode == a plain digital controller that ignores the DualShock
-         * config-mode commands (real SCPH-1080 behaviour); ANALOG/HYBRID == a
-         * config-capable DualShock. A digital pad that wrongly answered 0x43
-         * sent Tomba 2's pad driver down the config path -> phantom 0x00 reads.
+         * config-mode commands (real SCPH-1080 behaviour); ANALOG or an
+         * explicitly config-capable mod policy == a config-capable DualShock.
+         * A digital pad that wrongly answered 0x43 sent Tomba 2's pad driver
+         * down the config path -> phantom 0x00 reads.
          * Multitap taps are always digital (see sio_pad_on_multitap). */
-        sio_set_pad_config_capable(s, mode != PSXRecompV4::PAD_MODE_DIGITAL);
+        sio_set_pad_config_capable(
+            s, policy.callback ? policy.config_capable
+                               : mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
 }
 
@@ -3966,9 +4322,6 @@ static void refresh_player_devices(void) {
  *   "none" -> no pad; "keyboard" -> keyboard map; otherwise an SDL GUID. */
 static void set_player_device(PlayerInput& p, const std::string& dev, int mode) {
     p.mode = mode;
-    /* Hybrid starts in ANALOG (analog LED on); the auto-switch drops to digital
-     * only when the player uses the d-pad. */
-    p.hybrid_analog = true;
     p.guid[0] = '\0';
     std::string d = lower_copy(trim_copy(dev));
     if (d.empty() || d == "none") { p.kind = 0; }
@@ -4096,18 +4449,23 @@ static uint16_t pad_buttons_for(const PlayerInput& p, int player, bool suppress_
 
 /* Analog stick bytes (lx,ly,rx,ry) for a player; centred if no live source.
  *
- * The host left stick maps to the LEFT analog axes (variable). When fold_dpad
- * is set, the physical D-pad (and, for a keyboard player, the arrow keys) is
- * ALSO folded onto the left axes at full deflection, so an analog-mode game
- * whose movement reads only the stick magnitude (e.g. Tomba) still responds to
- * the D-pad/keyboard — the faithful "seamless" behaviour: the stick gives
- * variable speed, the D-pad gives full speed, both at once. Only the PHYSICAL
- * D-pad is folded in (not the stick->d-pad button mapping), so the stick keeps
- * its true variable magnitude. fold_dpad is false in HYBRID mode (there the
- * D-pad instead flips the pad to digital, so the game runs its own d-pad path)
- * and true in pinned-ANALOG mode. The keyboard branch always folds the arrows
- * — they are that player's only stick source. */
-static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], bool fold_dpad) {
+ * The host left stick maps to the LEFT analog axes (variable). The physical
+ * D-pad is deliberately NOT folded onto those axes: a real DualShock holds
+ * both sticks at 0x80 while the D-pad is pressed, so presenting a direction
+ * as a button bit AND a full stick deflection at once is a state no hardware
+ * produces. An analog-aware game that reads both sources then acts on one
+ * press twice — measured on Legend of Mana's land-placement cursor, which
+ * stepped two entries per tap in pinned-ANALOG and exactly one in DIGITAL.
+ *
+ * A game whose movement reads only the stick magnitude (e.g. Tomba) can opt
+ * into a game-owned presentation policy. That policy may flip the pad to
+ * digital on D-pad input so the game runs its own D-pad path, without ever
+ * presenting the impossible both-at-once state.
+ *
+ * The keyboard branch is unaffected: psx_keybinds_sticks maps that player's
+ * bound stick-direction keys onto the axes, which is their only stick
+ * source. */
+static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4]) {
     out[0] = out[1] = out[2] = out[3] = 0x80;
     if (p.kind == 1) {
         /* Keyboard analog: the configurable left/right stick-direction binds
@@ -4177,33 +4535,12 @@ static void pad_sticks_for(const PlayerInput& p, int player, uint8_t out[4], boo
             apply_discrete_stick("rs_up", "rs_down", "rs_left", "rs_right",
                                  &out[2], &out[3]);
         }
-        if (fold_dpad) {
-            /* Fold physical D-pad (mapped "up"/etc. button sources that are
-             * d-pad buttons) — prefer the mapped sources over hardcoded buttons
-             * so a remapped d-pad still folds onto the left stick. */
-            auto dpad_pressed = [&](const char* n) {
-                const PsxButtonMap* e = find_entry(n);
-                if (!e) return false;
-                for (const auto& s : e->sources) {
-                    if (source_is_stick_axis(s)) continue;
-                    if (controller_source_pressed_h(p.handle, s, p.deadzone))
-                        return true;
-                }
-                return false;
-            };
-            if (dpad_pressed("left"))  out[0] = 0x00;
-            if (dpad_pressed("right")) out[0] = 0xFF;
-            if (dpad_pressed("up"))    out[1] = 0x00;
-            if (dpad_pressed("down"))  out[1] = 0xFF;
-        }
     }
 }
 
-/* HYBRID-mode auto-switch detectors (mirror the DualShock analog LED toggling).
- * hybrid_stick_active: the LEFT stick is outside the radial deadzone — the
- * player has reached for analog. hybrid_dpad_active: any D-pad direction (or,
- * for the keyboard, an arrow key) is held — the player wants classic digital.
- * The keyboard has no analog stick, so a keyboard player stays digital. */
+/* Controller-policy facts exposed to trusted game-owned plugins. The runtime
+ * samples host devices and SIO delivery; the plugin decides only whether that
+ * sample should present as analog or digital. */
 static bool controller_stick_active(SDL_GameController* handle, int deadzone) {
     if (!handle) return false;
     const double lx =
@@ -4213,21 +4550,23 @@ static bool controller_stick_active(SDL_GameController* handle, int deadzone) {
     const double dz = (double)(deadzone > 0 ? deadzone : controller_deadzone);
     return std::sqrt(lx * lx + ly * ly) > dz;
 }
-static bool controller_dpad_active(SDL_GameController* handle) {
-    return handle &&
-        (SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
-         SDL_GameControllerGetButton(handle, SDL_CONTROLLER_BUTTON_DPAD_DOWN));
+static bool controller_mapped_dpad_active(const PlayerInput& p,
+                                          SDL_GameController* handle,
+                                          int deadzone) {
+    if (!handle) return false;
+    const uint16_t buttons =
+        controller_pad_buttons(controller_map_for(p), handle,
+                               true, deadzone);
+    return ((uint16_t)~buttons & 0x00F0u) != 0;
 }
 /* Which input sources may drive ONE pad slot this frame.
  *
  * This exists because the answer is consumed in three places — the button
- * merge, the HYBRID analog/digital auto-switch, and the analog stick fold —
+ * merge, the mod presentation policy, and the analog stick fold —
  * and those three used to compute it independently. Whenever they disagreed,
- * a source could assert a button without the hybrid state machine seeing it,
+ * a source could assert a button without the policy detector seeing it,
  * leaving the pad reporting D-pad presses while still presenting ANALOG: the
- * exact failure the hybrid logic exists to prevent, and silent when it
+ * exact failure a policy callback may exist to prevent, and silent when it
  * happens. Deriving all three from one predicate makes that desync
  * structurally impossible rather than merely fixed once.
  *
@@ -4249,11 +4588,11 @@ static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
      * keybinds.ini/mouse bind silently.
      *
      * Widening this ONE line is safe precisely because every consumer reads
-     * it — the button merge, the HYBRID auto-switch detectors and the stick
+     * it — the button merge, mod policy detectors and the stick
      * fold all learn about the keyboard in the same instant. Widening the
      * button merge alone (the original shape of this change) let a keyboard
-     * D-pad press assert the D-pad bits while hybrid_dpad_active never saw
-     * them, leaving a mod-driven hybrid pad reporting D-pad input while still
+     * D-pad press assert the D-pad bits while policy detection never saw
+     * them, leaving a policy-driven pad reporting D-pad input while still
      * presenting ANALOG.
      *
      * The PSX pad word is active-low and the merge is an AND, so an unpressed
@@ -4266,7 +4605,8 @@ static PadSources pad_sources_for(const PlayerInput& p, bool dev_here) {
     return s;
 }
 
-static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src) {
+static bool controller_policy_stick_active(const PlayerInput& p,
+                                           const PadSources& src) {
     if (src.device && p.kind == 2 &&
         controller_stick_active(p.handle, p.deadzone)) return true;
     if (src.all_pads) {
@@ -4282,9 +4622,10 @@ static bool hybrid_stick_active(const PlayerInput& p, const PadSources& src) {
     }
     return false;
 }
-static bool hybrid_dpad_active(const PlayerInput& p, int player,
-                               const PadSources& src) {
-    if (src.device && p.kind == 2 && controller_dpad_active(p.handle)) return true;
+static bool controller_policy_dpad_active(const PlayerInput& p, int player,
+                                          const PadSources& src) {
+    if (src.device && p.kind == 2 &&
+        controller_mapped_dpad_active(p, p.handle, p.deadzone)) return true;
     if (src.all_pads) {
         const int n = SDL_NumJoysticks();
         for (int i = 0; i < n; i++) {
@@ -4293,7 +4634,14 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player,
             SDL_GameController* handle =
                 SDL_GameControllerFromInstanceID(inst);
             if (!handle) handle = SDL_GameControllerOpen(i);
-            if (controller_dpad_active(handle)) return true;
+            if (!handle) continue;
+            PlayerInput tmp;
+            tmp.kind = 2;
+            SDL_JoystickGUID g = SDL_JoystickGetDeviceGUID(i);
+            SDL_JoystickGetGUIDString(g, tmp.guid, (int)sizeof(tmp.guid));
+            if (controller_mapped_dpad_active(tmp, handle,
+                                              controller_deadzone))
+                return true;
         }
     }
     if (src.keybinds) {
@@ -4303,16 +4651,88 @@ static bool hybrid_dpad_active(const PlayerInput& p, int player,
     return false;
 }
 
+static int controller_policy_resolve_mode(
+    int slot, int player, int configured_mode, const PadSources& src,
+    const PlayerInput& p, uint16_t buttons, const uint8_t st[4]) {
+    ModControllerPresentationPolicy& policy = g_mod_controller_policy[slot];
+    if (!policy.callback)
+        return configured_mode;
+
+    const uint32_t current_mode =
+        configured_mode == PSXRecompV4::PAD_MODE_DIGITAL
+            ? (uint32_t)PSX_MOD_CONTROLLER_DIGITAL
+            : (uint32_t)PSX_MOD_CONTROLLER_ANALOG;
+    PSXModControllerInput input{};
+    input.struct_size = sizeof(input);
+    input.player = (uint32_t)player;
+    input.sio_slot = (uint32_t)slot;
+    input.configured_mode = current_mode;
+    input.current_mode = current_mode;
+    input.stick_active = controller_policy_stick_active(p, src) ? 1u : 0u;
+    input.dpad_active = controller_policy_dpad_active(p, player, src) ? 1u : 0u;
+    input.buttons = buttons;
+    input.lx = st[0];
+    input.ly = st[1];
+    input.rx = st[2];
+    input.ry = st[3];
+
+    const uint32_t requested = policy.callback(&input);
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
+        return PSXRecompV4::PAD_MODE_ANALOG;
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
+        return PSXRecompV4::PAD_MODE_DIGITAL;
+    std::fprintf(stderr,
+        "psxrecomp: mod controller policy returned invalid mode %u "
+        "(player %u)\n",
+        (unsigned)requested, (unsigned)player);
+    return configured_mode;
+}
+
+static int controller_policy_resolve_override_mode(
+    int slot, int player, int configured_mode, uint16_t buttons,
+    const uint8_t st[4], bool stick_live, bool dpad_live) {
+    ModControllerPresentationPolicy& policy = g_mod_controller_policy[slot];
+    if (!policy.callback)
+        return configured_mode;
+
+    const uint32_t current_mode =
+        configured_mode == PSXRecompV4::PAD_MODE_DIGITAL
+            ? (uint32_t)PSX_MOD_CONTROLLER_DIGITAL
+            : (uint32_t)PSX_MOD_CONTROLLER_ANALOG;
+    PSXModControllerInput input{};
+    input.struct_size = sizeof(input);
+    input.player = (uint32_t)player;
+    input.sio_slot = (uint32_t)slot;
+    input.configured_mode = current_mode;
+    input.current_mode = current_mode;
+    input.stick_active = stick_live ? 1u : 0u;
+    input.dpad_active = dpad_live ? 1u : 0u;
+    input.buttons = buttons;
+    input.lx = st[0];
+    input.ly = st[1];
+    input.rx = st[2];
+    input.ry = st[3];
+
+    const uint32_t requested = policy.callback(&input);
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_ANALOG)
+        return PSXRecompV4::PAD_MODE_ANALOG;
+    if (requested == (uint32_t)PSX_MOD_CONTROLLER_DIGITAL)
+        return PSXRecompV4::PAD_MODE_DIGITAL;
+    std::fprintf(stderr,
+        "psxrecomp: mod controller policy returned invalid mode %u "
+        "(player %u)\n",
+        (unsigned)requested, (unsigned)player);
+    return configured_mode;
+}
+
 /* Sample each player's live device state into the matching SIO pad slot.
  * override >= 0 forces port-1 buttons (debug-server input injection). Called
  * once at cycle start (covers the turbo/FMV-skip paths that present nothing)
  * and, when g_low_latency_input is set, AGAIN after the pacer wait so the next
  * CPU frame reads near-fresh input instead of input ~one frame stale.
  *
- * HYBRID mode auto-switches DualShock<->digital from the most-recent input
- * (stick -> analog, D-pad -> digital) so the game runs its own analog or
- * digital input path exactly as on hardware (mirrors the inline block this
- * helper was extracted from for the low-latency re-sample). */
+ * A game-owned presentation policy may auto-switch DualShock<->digital from
+ * the most-recent input so the game runs its own analog or digital path. */
 /* Dev input mode: while enabled, Player 1 is driven by the keyboard AND EVERY
  * connected game controller, all merged together (active-low AND) onto the P1 pad
  * word — so a tester can navigate P1 from whatever is plugged in (keyboard, the
@@ -4440,12 +4860,12 @@ static int savestate_input_guard_active(void) {
 
 /* Debug-server input injection: drive the SAME pad model as a physical
  * device. The old path set only the button word and returned, which left the
- * pad type/sticks at whatever the real device last was — a hybrid P1 stayed
- * analog, so injected d-pad bits never moved games that read the stick in
- * analog mode (menus reacted, walking didn't). Injected d-pad reads as d-pad
- * activity (hybrid drops to digital), an injected stick override reads as
- * stick activity (hybrid rises to analog), and the resolved type goes through
- * the same coherent request channel as real sampling — never slammed mid-
+ * pad type/sticks at whatever the real device last was. A policy-driven P1
+ * could stay analog, so injected D-pad bits never moved games that read the
+ * stick in analog mode (menus reacted, walking didn't). Injected D-pad reads
+ * as D-pad activity, an injected stick override reads as stick activity, and
+ * the resolved type goes through the same coherent request channel as real
+ * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
 static void apply_input_override_to_sio(int override_word) {
     PlayerInput& p = g_players[0];
@@ -4469,20 +4889,22 @@ static void apply_input_override_to_sio(int override_word) {
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
-    int eff_analog;
-    if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == (int)PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID: most-recent input source wins, like the real sampler */
-        if (stick_live)     p.hybrid_analog = true;
-        else if (dpad_live) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
-    }
-    /* Pinned-ANALOG folds injected D-pad onto the left stick (same as a real
-     * DualShock seat). Without this, stick-only menu/move paths ignore
-     * button-bit injection even though pad_status shows the bits pressed. */
-    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+    const int effective_mode = controller_policy_resolve_override_mode(
+        0, 1, mode, w, st, stick_live, dpad_live);
+    const int eff_analog =
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
+    /* Injected input only (set_input / dev routing): fold the injected D-pad
+     * word onto the left stick so stick-only menu/move paths respond to a
+     * button-bit injection that has no physical stick behind it.
+     *
+     * This is NOT hardware behaviour -- a real DualShock keeps its sticks at
+     * 0x80 while the D-pad is held -- and a game reading both sources will
+     * act on one injected press twice. It is kept only because injection has
+     * no other way to steer such a game; the equivalent fold for physical
+     * controllers was removed (see pad_sticks_for) after it was measured
+     * double-stepping Legend of Mana's land-placement cursor. */
+    if (eff_analog &&
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00; /* Up */
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF; /* Down */
         if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00; /* Left */
@@ -4518,21 +4940,22 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
      * handshake cadence is preserved exactly). A P1 with no assigned device
      * keeps the game's resolved mode while dev-any-input merges the keyboard and
      * all connected controllers. */
-    /* One source set, consumed by the hybrid switch, the button merge and the
+    /* One source set, consumed by the presentation policy, the button merge and the
      * stick fold below — see pad_sources_for(). */
     const PadSources src = pad_sources_for(p, dev_here);
 
     const int mode = effective_player_mode_for_sio(p, s);
-    int eff_analog;
-    if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID */
-        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
+    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG ||
+        g_mod_controller_policy[s].callback) {
+        pad_sticks_for(p, player, st);
     }
+    const uint16_t policy_buttons =
+        src.device ? pad_buttons_for(p, player, true) : (uint16_t)0xFFFF;
+    const int effective_mode = controller_policy_resolve_mode(
+        s, player, mode, src, p, policy_buttons, st);
+    const int eff_analog =
+        effective_mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
     if (savestate_input_guard_active()) {
         out->buttons = 0xFFFFu;
         out->lx = out->ly = out->rx = out->ry = 0x80u;
@@ -4560,16 +4983,10 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     if (src.all_pads)
         btn &= dev_all_controllers_buttons(suppress_stick);
 
-    /* Analog axes. Pinned-ANALOG folds the physical D-pad onto the left axes
-     * (fold_dpad) so the D-pad still moves stick-only games; HYBRID feeds the
-     * raw stick when currently analog (no fold — the D-pad drives its own
-     * digital path there); DIGITAL leaves the axes centred. */
-    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        pad_sticks_for(p, player, st, /*fold_dpad=*/true);
-    } else if (eff_analog) {  /* HYBRID, currently presenting analog */
-        pad_sticks_for(p, player, st, /*fold_dpad=*/false);
-    }
+    /* Analog axes. ANALOG and plugin-selected analog feed the raw stick only;
+     * the D-pad is never folded in, matching a real DualShock, which keeps
+     * its sticks centred while the D-pad is held. DIGITAL leaves the axes
+     * centred. */
     /* Stick fold, driven by the SAME source set as the buttons above: whatever
      * may press a button may also steer. kind==1 already folded its binds
      * inside pad_sticks_for; psx_keybinds_sticks only widens a deflection, so
@@ -4581,6 +4998,9 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
         }
         if (src.all_pads)
             dev_any_controller_sticks(st);
+    }
+    if (!eff_analog) {
+        st[0] = st[1] = st[2] = st[3] = 0x80;
     }
 
     out->buttons = btn;
@@ -4611,25 +5031,22 @@ static int capture_pad_slot_exclusive(int s, PsxNetPad* out, int present_sio_slo
     const PadSources src = pad_sources_for(p, dev_here);
     const int sio_slot = (present_sio_slot >= 0) ? present_sio_slot : s;
     int mode = effective_player_mode_for_sio(p, sio_slot);
-    int eff_analog;
-    if (mode == PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else { /* HYBRID */
-        if (hybrid_stick_active(p, src))             p.hybrid_analog = true;
-        else if (hybrid_dpad_active(p, player, src)) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
+    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
+    if (mode == PSXRecompV4::PAD_MODE_ANALOG ||
+        g_mod_controller_policy[s].callback) {
+        pad_sticks_for(p, player, st);
     }
+    const uint16_t policy_buttons = pad_buttons_for(p, player, true);
+    const int effective_mode = controller_policy_resolve_mode(
+        s, player, mode, src, p, policy_buttons, st);
+    const int eff_analog =
+        effective_mode == PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
 
     const bool suppress_stick = (eff_analog != 0);
     uint16_t btn = pad_buttons_for(p, player, suppress_stick);
 
-    uint8_t st[4] = { 0x80, 0x80, 0x80, 0x80 };
-    if (mode == PSXRecompV4::PAD_MODE_ANALOG) {
-        pad_sticks_for(p, player, st, /*fold_dpad=*/true);
-    } else if (eff_analog) {  /* HYBRID, currently presenting analog */
-        pad_sticks_for(p, player, st, /*fold_dpad=*/false);
+    if (!eff_analog) {
+        st[0] = st[1] = st[2] = st[3] = 0x80;
     }
 
     out->buttons = btn;
@@ -4754,17 +5171,15 @@ static void capture_override_pad(int override_word, PsxNetPad* out) {
     else if (dev_any_input_enabled()) mode = (int)PSXRecompV4::PAD_MODE_ANALOG;
     else                              mode = p.mode;
 
-    int eff_analog;
-    if (mode == (int)PSXRecompV4::PAD_MODE_DIGITAL) {
-        eff_analog = 0;
-    } else if (mode == (int)PSXRecompV4::PAD_MODE_ANALOG) {
-        eff_analog = 1;
-    } else {
-        if (stick_live)     p.hybrid_analog = true;
-        else if (dpad_live) p.hybrid_analog = false;
-        eff_analog = p.hybrid_analog ? 1 : 0;
-    }
-    if (eff_analog && mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
+    const int effective_mode = controller_policy_resolve_override_mode(
+        0, 1, mode, w, st, stick_live, dpad_live);
+    const int eff_analog =
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG ? 1 : 0;
+    /* Injected input only; see the note on the sibling fold above. Not
+     * hardware behaviour, retained solely so injection can steer stick-only
+     * games. */
+    if (eff_analog &&
+        effective_mode == (int)PSXRecompV4::PAD_MODE_ANALOG && !stick_live) {
         if ((uint16_t)(~w & 0x0010u)) st[1] = 0x00;
         if ((uint16_t)(~w & 0x0040u)) st[1] = 0xFF;
         if ((uint16_t)(~w & 0x0080u)) st[0] = 0x00;
@@ -5103,12 +5518,10 @@ static void sample_pad_into_sio(int override) {
         PsxNetPad pad;
         if (!capture_pad_slot(s, &pad)) continue;  /* no device in this port */
         /* Push sticks every frame; request the pad type (digital/analog) through
-         * the coherent channel so a hybrid stick<->d-pad flip is applied only at
-         * an idle, non-config bus boundary (never mid-poll / mid-handshake). This
-         * is the fix for the v0.5.0 phantom-input regression: slamming the type
-         * each frame raced Tomba's DualShock config handshake -> garbage button
-         * reads. eff_analog still reflects this frame's mode (digital / analog /
-         * hybrid auto-switch). */
+         * the coherent channel so a policy switch is applied only at an idle,
+         * non-config bus boundary (never mid-poll / mid-handshake). This is the
+         * fix for the v0.5.0 phantom-input regression: slamming the type each
+         * frame raced Tomba's DualShock config handshake -> garbage reads. */
         apply_pad_slot_to_sio(s, pad);
         if (psx_start_consumer_enabled())
             psx_start_consumer_note(s, consumer_sim, pad.buttons);
@@ -5577,15 +5990,14 @@ static int savestate_submit_slot(int slot, int save) {
             return 0;
         }
         if (save)
-            (void)psx_netplay_request_save(slot);
+            return psx_netplay_request_save(slot);
         else
-            (void)psx_netplay_request_load(slot);
+            return psx_netplay_request_load(slot);
     } else if (save) {
-        (void)savestate_request_save(slot);
+        return savestate_request_save(slot);
     } else {
-        (void)savestate_request_load(slot);
+        return savestate_request_load(slot);
     }
-    return 1;
 }
 
 static void savestate_menu_submit(int save) {
@@ -5607,7 +6019,8 @@ static int savestate_menu_slot_from_key(SDL_Keycode key) {
     return -1;
 }
 
-static void savestate_menu_handle_key(SDL_Keycode key, int mod, int repeat) {
+static void savestate_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode,
+                                      int mod, int repeat) {
     int slot;
     if (repeat)
         return;
@@ -5619,7 +6032,8 @@ static void savestate_menu_handle_key(SDL_Keycode key, int mod, int repeat) {
         savestate_menu_sync_overlay();
         return;
     }
-    if (host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU, (int)key, mod) ||
+    if (host_keymap_match_event(HOST_KEYMAP_SAVE_STATE_MENU, (int)key,
+                                (int)scancode, mod) ||
         key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
         savestate_menu_close();
     } else if (key == SDLK_LEFT || key == SDLK_UP) {
@@ -5796,20 +6210,24 @@ static void rewind_host_pause_loop(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (!repeat &&
-                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
+                                            (int)scancode, (int)mod)) {
                     psx_rewind_toggle();
                 }
             }
         }
         rewind_poll_nav((uint32_t)SDL_GetTicks());
         rewind_pause_present();
+        starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
     /* Swallow the still-held close press so it doesn't bleed into the game. */
@@ -5834,13 +6252,15 @@ static void savestate_menu_host_pause_loop(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
-                savestate_menu_handle_key(key, (int)mod, repeat);
+                savestate_menu_handle_key(key, scancode, (int)mod, repeat);
             } else if (ev.type == SDL_KEYUP) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
@@ -5853,6 +6273,7 @@ static void savestate_menu_host_pause_loop(void) {
         }
         savestate_menu_poll_nav((uint32_t)SDL_GetTicks());
         rewind_pause_present();
+        starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
     /* Swallow the close press; a just-queued save must not snapshot it. */
@@ -6049,10 +6470,12 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 #if defined(PSX_SDL3)
                 const SDL_Keymod mod = ev.key.mod;
                 const SDL_Keycode key = ev.key.key;
+                const SDL_Scancode scancode = ev.key.scancode;
                 const int key_repeat = ev.key.repeat ? 1 : 0;
 #else
                 const Uint16 mod = ev.key.keysym.mod;
                 const SDL_Keycode key = ev.key.keysym.sym;
+                const SDL_Scancode scancode = ev.key.keysym.scancode;
                 const int key_repeat = ev.key.repeat ? 1 : 0;
 #endif
                 if (key == SDLK_ESCAPE && psx_netplay_active()) {
@@ -6060,12 +6483,14 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     return ep;
                 }
                 if (!key_repeat &&
-                    host_keymap_match(HOST_KEYMAP_REWIND, (int)key, (int)mod)) {
+                    host_keymap_match_event(HOST_KEYMAP_REWIND, (int)key,
+                                            (int)scancode, (int)mod)) {
                     psx_rewind_toggle();
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_SAVE_STATE_MENU,
-                                           (int)key, (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_SAVE_STATE_MENU,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     savestate_menu_toggle(key);
                 }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
@@ -6074,17 +6499,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     host_osd_push("CD reinsert", 1500);
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_DISPLAY_PERF, (int)key,
-                                           (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_DISPLAY_PERF,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     fps_telemetry_toggle();
                 }
                 /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
                  * (defaults: keypad +/-). 5% steps; shows right-side bar. */
-                else if (host_keymap_match(HOST_KEYMAP_VOLUME_UP, (int)key,
-                                           (int)mod)) {
+                else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_UP,
+                                                  (int)key, (int)scancode,
+                                                  (int)mod)) {
                     host_volume_adjust(+5);
-                } else if (host_keymap_match(HOST_KEYMAP_VOLUME_DOWN, (int)key,
-                                             (int)mod)) {
+                } else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_DOWN,
+                                                    (int)key, (int)scancode,
+                                                    (int)mod)) {
                     host_volume_adjust(-5);
                 }
                 /* Fullscreen toggle: Alt+Enter or Cmd/Ctrl+F. Toggles between
@@ -6096,8 +6524,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                  * SDL_WINDOW_FULLSCREEN_DESKTOP, so testing just that bit
                  * detects "currently fullscreen, either mode". */
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_FULLSCREEN, (int)key,
-                                           (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_FULLSCREEN,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
                     Uint32 is_fs = SDL_GetWindowFlags(sdl_window) &
                                    SDL_WINDOW_FULLSCREEN;
                     if (is_fs) {
@@ -6311,7 +6740,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
-        if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
+        if (host_hotkey_input_focused() &&
+            host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
@@ -6824,10 +7254,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         /* OpenGL present: upload the active display rect and draw a full-screen
          * quad. Either SwapWindow vsync OR the wall-clock pacer owns timing,
          * never both. 24-bit (FMV) frames pin to native 4:3. */
-        /* FMV: nearest present — linear filtering fringes the right edge of
-         * low-res 24-bit scanouts into adjacent (often garbage) texels. */
+        /* FMV follows the same AA setting as everything else. It used to be
+         * pinned to nearest because plain GL_LINEAR fringed the right edge of
+         * low-res 24-bit scanouts into adjacent (often garbage) texels — but
+         * gl_renderer_present now half-texel-insets its UV rect (and crops the
+         * depth24 margin via content_w), which is exactly that bleed, and it
+         * reconstructs a filtered low-res source when [video] fmv_filter opts
+         * into it instead of smearing whole texels. Measured: the
+         * right-edge jump the old comment describes is 0 with filtering on.
+         * Set video AA off to get nearest back. */
+        gl_renderer_set_fmv_filter(g_video_fmv_filter);
         gl_renderer_present(sdl_pixel_buf, src_w, src_h,
-                            (g_video_aa && !depth24_frame) ? 1 : 0,
+                            g_video_aa ? 1 : 0,
                             pin_43 ? 1 : 0, 0 /* full width */);
         netplay_note_present();
     } else {
@@ -6888,6 +7326,66 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     SDL_RenderClear(sdl_renderer);
     SDL_RenderCopy(sdl_renderer, sdl_texture, &src, &dst);
     host_osd_draw_sdl(sdl_renderer);
+    /* Fulfil a staged present_shot here: after RenderCopy + OSD, before
+     * RenderPresent, the renderer holds exactly the composed frame the player
+     * sees — including the logical-size aspect fit that every buffer-level
+     * capture misses. Reading back costs a GPU sync, so it only runs when a
+     * shot was explicitly requested. */
+    char shot_path[512];
+    if (present_shot_take(shot_path, (int)sizeof(shot_path))) {
+        int ow = 0, oh = 0;
+        uint8_t *packed = NULL;
+#if defined(PSX_SDL3)
+        SDL_Surface *surf = SDL_RenderReadPixels(sdl_renderer, NULL);
+        if (surf) {
+            SDL_Surface *conv = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGB24);
+            SDL_DestroySurface(surf);
+            if (conv) {
+                ow = conv->w; oh = conv->h;
+                packed = (uint8_t *)std::malloc((size_t)ow * oh * 3);
+                if (packed) {
+                    /* SDL rows are pitch-aligned; png_write_rgb wants packed. */
+                    for (int y = 0; y < oh; y++)
+                        std::memcpy(packed + (size_t)y * ow * 3,
+                                    (const uint8_t *)conv->pixels + (size_t)y * conv->pitch,
+                                    (size_t)ow * 3);
+                }
+                SDL_DestroySurface(conv);
+            }
+        }
+#else
+        /* Size the buffer from the renderer's REAL output, not from a
+         * viewport*scale reconstruction: SDL_RenderReadPixels(NULL) fills the
+         * current viewport, and deriving that region from
+         * SDL_RenderGetViewport x SDL_RenderGetScale rounds independently of
+         * what SDL actually writes. The output size is a hard upper bound, so
+         * a full-output allocation cannot be overrun whatever SDL picks. */
+        int rw = 0, rh = 0;
+        if (SDL_GetRendererOutputSize(sdl_renderer, &rw, &rh) == 0 && rw > 0 && rh > 0) {
+            SDL_Rect vp; SDL_RenderGetViewport(sdl_renderer, &vp);
+            float sx = 1.0f, sy = 1.0f; SDL_RenderGetScale(sdl_renderer, &sx, &sy);
+            ow = (int)(vp.w * sx); oh = (int)(vp.h * sy);
+            if (ow <= 0 || ow > rw) ow = rw;
+            if (oh <= 0 || oh > rh) oh = rh;
+            packed = (uint8_t *)std::malloc((size_t)rw * rh * 3);   /* upper bound */
+            if (packed && SDL_RenderReadPixels(sdl_renderer, NULL,
+                                               SDL_PIXELFORMAT_RGB24,
+                                               packed, ow * 3) != 0) {
+                std::free(packed); packed = NULL;
+            }
+        }
+#endif
+        int wrote = 0;
+        if (packed && ow > 0 && oh > 0) {
+            FILE *pf = std::fopen(shot_path, "wb");
+            if (pf) {
+                wrote = png_write_rgb(pf, packed, (uint32_t)ow, (uint32_t)oh);
+                std::fclose(pf);
+            }
+        }
+        std::free(packed);
+        present_shot_done(wrote);
+    }
     /* §33: remember active rect for resim hold-last (not full 640x512). */
     s_sw_hold_src = src;
     s_sw_hold_dst = dst;
@@ -6954,6 +7452,27 @@ static void sdl_vblank_present(void) {
 /* game.toml [netplay] + last TOC fingerprint — shared by launcher verify and
  * the pre-psx_netplay_start gate (works with or without RECOMP_LAUNCHER). */
 static PSXRecompV4::NetplayDiscExpect g_netplay_disc_expect{};
+
+/* The netplay mount policy for ONE image. The policy is per-disc, not
+ * per-build: the TOC fingerprint is the disc's own, and the same is true in
+ * principle of required_tracks / required_leadout_lba (a set may mix a
+ * CD-DA disc with a data-only one, and the lead-out LBA is literally the
+ * disc's size). Resolving the whole struct per image -- rather than reaching
+ * for the one global -- is what keeps those honest as soon as a title needs
+ * them; today only the fingerprint has per-disc data to apply.
+ *
+ * A disc with no per-disc fingerprint keeps the flat [netplay]
+ * required_disc_fp, so single-disc titles are unaffected. */
+static PSXRecompV4::NetplayDiscExpect netplay_expect_for_disc(
+    const std::filesystem::path& disc) {
+    PSXRecompV4::NetplayDiscExpect e = g_netplay_disc_expect;
+    if (!g_disc_netplay_fps.empty()) {
+        const auto it =
+            g_disc_netplay_fps.find(uppercase_ascii(disc.stem().string()));
+        if (it != g_disc_netplay_fps.end()) e.required_disc_fp = it->second;
+    }
+    return e;
+}
 static std::string g_session_disc_fp;
 static bool        g_session_netplay_disc_ok = false;
 
@@ -7139,12 +7658,24 @@ namespace {
     int ae_disc_verify(const char* disc_path, RecompLauncherCDiscVerify* out) {
         if (!disc_path || !disc_path[0] || !out) return 0;
         std::memset(out, 0, sizeof(*out));
+        /* Which serial THIS disc should carry -- the set's per-disc value, or
+         * the game's own for a single-disc title. The expected CRC is disc
+         * 1's and is only consulted when the game supplied one, so a set that
+         * ships a CRC and lets the player pick disc 2 lands on the "warn"
+         * verdict rather than "bad". */
+        const std::string expect_serial =
+            expected_serial_for_disc(std::filesystem::path(disc_path),
+                                     g_lnch_expected_serial);
+        /* The netplay gate is the SELECTED disc's, for the same reason the
+         * serial is -- see netplay_expect_for_disc(). */
+        const PSXRecompV4::NetplayDiscExpect np_expect =
+            netplay_expect_for_disc(std::filesystem::path(disc_path));
         PSXRecompV4::DiscIdentity id = PSXRecompV4::identify_disc(
-            disc_path, g_lnch_expected_serial, g_lnch_expected_crc,
+            disc_path, expect_serial, g_lnch_expected_crc,
             g_lnch_has_crc, /*compute_crc*/ g_lnch_has_crc,
-            g_lnch_netplay_available ? &g_netplay_disc_expect : nullptr);
+            g_lnch_netplay_available ? &np_expect : nullptr);
         const std::string& serial = !id.detected_serial.empty()
-            ? id.detected_serial : g_lnch_expected_serial;
+            ? id.detected_serial : expect_serial;
         std::snprintf(out->serial, sizeof(out->serial), "%s", serial.c_str());
         std::snprintf(out->region, sizeof(out->region), "%s", id.region.c_str());
         out->iso_ok = id.has_header ? 1 : 0;
@@ -10280,6 +10811,14 @@ namespace {
         gi->memcard_inspect = ae_memcard_inspect;
         gi->mods = PSXRecompV4::mod_runtime_launcher_provider();
         gi->bios_verify = ae_bios_verify;
+        /* Launcher window icon: the SAME file psx_apply_window_icon() puts on
+         * the game window (assets/psxrecomp.png beside the exe, which
+         * runtime.cmake stages from APP_ICON's directory). Resolved through
+         * the shared helper rather than re-derived here, so the launcher and
+         * the game can never end up on different art. The pointer is process-
+         * lifetime; "" when the build shipped no PNG, which recomp-ui treats
+         * as "leave the toolkit default". */
+        gi->window_icon_path = psx_window_icon_path(g_lnch_argv0);
 #if defined(PSX_HAS_RECOMP_NET) && defined(PSX_HAS_LOBBY_CLIENT)
         g_lnch_game_players = game_players_n;
         /* ae_disc_verify only fills netplay_ok/disc_fp when this is true. */
@@ -10306,8 +10845,8 @@ namespace {
 
 int main(int argc, char** argv) {
     /* Force line-buffered output so messages appear even if killed. */
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
-    std::setvbuf(stderr, nullptr, _IOLBF, 0);
+    std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
+    std::setvbuf(stderr, nullptr, _IOLBF, BUFSIZ);
     std::fprintf(stderr, "psxrecomp: main() entered\n");
     std::fflush(stderr);
 #if defined(RECOMP_LAUNCHER)
@@ -10316,7 +10855,7 @@ int main(int argc, char** argv) {
 
     /* Setup-host zip-root exe: after Generate & rebuild, hand off to the
      * product binary under build-release/ (bios/, mods/, assets/, settings). */
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
     psx_game_codegen_forward_if_built(argc, argv);
 #endif
 
@@ -10348,6 +10887,35 @@ int main(int argc, char** argv) {
     int         cli_renderer   = -1;   /* 0=software 1=opengl 2=vulkan */
     const char* cli_window_title = nullptr;  /* label windows in a fleet */
     const char* cli_memcard_dir = nullptr;   /* isolate writable state in a fleet */
+    std::vector<std::string> cli_path_arg_storage;
+    cli_path_arg_storage.reserve((size_t)argc);
+    auto is_cli_option = [](const char* arg) {
+        return arg && arg[0] == '-' && arg[1] == '-';
+    };
+    auto consume_path_arg = [&](int& i) -> const char* {
+        const int first = i + 1;
+        std::string combined;
+        std::string best;
+        int best_index = first;
+        for (int j = first; j < argc; ++j) {
+            if (j != first && is_cli_option(argv[j])) break;
+            if (!combined.empty()) combined += " ";
+            combined += argv[j];
+
+            std::error_code ec;
+            if (std::filesystem::exists(std::filesystem::path(combined), ec)) {
+                best = combined;
+                best_index = j;
+            }
+        }
+        if (best.empty()) {
+            best = argv[first];
+            best_index = first;
+        }
+        i = best_index;
+        cli_path_arg_storage.push_back(std::move(best));
+        return cli_path_arg_storage.back().c_str();
+    };
     PsxNetplayConfig net_cfg;
     psx_netplay_config_defaults(&net_cfg);
     psx_netplay_apply_env(&net_cfg);  /* CLI flags below win over env */
@@ -10373,17 +10941,17 @@ int main(int argc, char** argv) {
      * No --game-root flag: that remains config-driven. */
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--bios") == 0 && i + 1 < argc) {
-            bios_path = argv[++i];
+            bios_path = consume_path_arg(i);
             bios_from_cli = true;
             bios_explicit = true;
         } else if (std::strcmp(argv[i], "--game") == 0 && i + 1 < argc) {
-            game_config_path = argv[++i];
+            game_config_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--disc") == 0 && i + 1 < argc) {
-            disc_override_path = argv[++i];
+            disc_override_path = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
             cli_debug_port = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--memcard-dir") == 0 && i + 1 < argc) {
-            cli_memcard_dir = argv[++i];
+            cli_memcard_dir = consume_path_arg(i);
         } else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             const char* r = argv[++i];
             if      (std::strcmp(r, "software") == 0) cli_renderer = 0;
@@ -10517,6 +11085,15 @@ int main(int argc, char** argv) {
     std::string resolved_language = "en";
     std::vector<PSXRecompV4::RuntimeConfig::LanguageOption> lang_menu_options;
     std::filesystem::path resolved_disc;
+    /* game.toml [game] discs, in disc order -- the images this build was made
+     * from. Single-disc titles leave one entry (or none). This is the roster
+     * the launcher's Disc Selection dropdown offers and the list [disc]
+     * selected indexes into; it is NOT a scan of the player's folder, so a
+     * player who moved an image still browses for it. */
+    std::vector<std::filesystem::path> game_discs;
+    /* 1-based selected disc, from settings.toml [disc] selected. Kept at main
+     * scope because it round-trips through both launcher entry points. */
+    int selected_disc_index = 1;
     std::string window_title = PSX_WINDOW_TITLE;
     uint16_t   debug_port    = (uint16_t)DEFAULT_DEBUG_PORT;
     std::string game_name;
@@ -10580,6 +11157,26 @@ int main(int argc, char** argv) {
                 (gc.netplay_local_viewport_aspect == "16:9") ? 1 :
                 (gc.netplay_local_viewport_aspect == "21:9") ? 2 :
                 (gc.netplay_local_viewport_aspect == "adaptive") ? 3 : 0;
+            game_discs = gc.discs;
+            /* Per-disc serial gate, shared by the launch-time disc check and
+             * the launcher's disc verdict. Keyed by the image's uppercased
+             * stem so a .cue and its .bin agree. */
+            g_disc_serials.clear();
+            for (size_t i = 0;
+                 i < gc.discs.size() && i < gc.disc_serials.size(); ++i) {
+                if (gc.disc_serials[i].empty()) continue;
+                g_disc_serials[uppercase_ascii(gc.discs[i].stem().string())] =
+                    gc.disc_serials[i];
+            }
+            /* Same keying for the per-disc netplay TOC fingerprints. */
+            g_disc_netplay_fps.clear();
+            for (size_t i = 0;
+                 i < gc.discs.size() && i < gc.netplay_required_disc_fps.size();
+                 ++i) {
+                if (gc.netplay_required_disc_fps[i].empty()) continue;
+                g_disc_netplay_fps[uppercase_ascii(gc.discs[i].stem().string())] =
+                    gc.netplay_required_disc_fps[i];
+            }
             if (!gc.discs.empty()) resolved_disc = gc.discs.front();
             if (gc.runtime.has_memcard_dir)  memcard_dir   = gc.runtime.memcard_dir;
             if (gc.runtime.has_window_title) window_title  = gc.runtime.window_title;
@@ -10614,6 +11211,7 @@ int main(int argc, char** argv) {
                     gc.runtime.has_offer_turbo_loads ? "offer_turbo_loads" : "");
             }
             if (gc.runtime.turbo_audio_sink) {
+                g_turbo_audio_sink_config_enabled = 1;
                 g_turbo_audio_sink_enabled = 1;
                 std::fprintf(stdout,
                     "psxrecomp: turbo_audio_sink enabled (opt-in)\n");
@@ -10634,8 +11232,13 @@ int main(int argc, char** argv) {
             for (uint32_t site : gc.vsync_event_horizon_extra_sites)
                 psx_vsync_query_hle_add_extra_event_horizon_site(site);
             g_video_scale      = gc.runtime.video_supersampling;
+            if (gc.runtime.video_window_width > 0) {
+                g_video_win_w = gc.runtime.video_window_width;
+                g_video_win_w_explicit = true;
+            }
             g_video_aa         = gc.runtime.video_antialiasing;
             g_video_texfilter  = gc.runtime.video_texture_filter;
+            g_video_fmv_filter = gc.runtime.video_fmv_filter;
             g_video_geometry_correction   =
                 gc.runtime.video_geometry_correction ? 1 : 0;
             g_video_perspective_texturing =
@@ -10899,9 +11502,17 @@ int main(int argc, char** argv) {
              * 0x85000+) at the Whoopee-Camp splash. See dirty_ram_interp.h. */
             {
                 extern uint32_t g_overlay_region_floor;
+                extern uint32_t g_text_image_lo;
                 uint32_t text_end = (gc.load_address + gc.text_size) & 0x1FFFFFFFu;
                 if (text_end > 0x00010000u /* DIRTY_RAM_KERNEL_WINDOW_END */)
                     g_overlay_region_floor = text_end;
+                /* Pin the text BASE too. The floor alone assumes the boot EXE
+                 * sits at the bottom of RAM; a high-loading EXE (Klonoa
+                 * 0x180000, SFA3 0x113B00) streams its overlays into the RAM
+                 * BELOW itself, which must be overlay region, not text. */
+                uint32_t text_lo = gc.load_address & 0x1FFFFFFFu;
+                if (text_lo > 0x00010000u && text_lo < g_overlay_region_floor)
+                    g_text_image_lo = text_lo;
                 /* PSX_OVERLAY_REGION_FLOOR: per-title override for games whose TEXT
                  * range is itself partially overwritten by streamed level data
                  * (Driver 2 streams mission code over pages inside its static text
@@ -10909,6 +11520,10 @@ int main(int argc, char** argv) {
                  * chaining and makes them overlay-cache candidates, so live-byte
                  * closures can own them instead of single-instruction dispatch
                  * thrash. Clamped to stay above the kernel window. */
+                if (gc.runtime.has_overlay_region_floor) {
+                    uint32_t v = gc.runtime.overlay_region_floor & 0x1FFFFFFFu;
+                    if (v >= 0x00010000u) g_overlay_region_floor = v;
+                }
                 {
                     const char* fenv = std::getenv("PSX_OVERLAY_REGION_FLOOR");
                     if (fenv && fenv[0]) {
@@ -10917,8 +11532,9 @@ int main(int argc, char** argv) {
                     }
                 }
                 std::fprintf(stdout,
-                    "psxrecomp: overlay_region_floor = 0x%05X (game text end)\n",
-                    g_overlay_region_floor);
+                    "psxrecomp: overlay_region_floor = 0x%05X (game text end), "
+                    "text_image_lo = 0x%05X\n",
+                    g_overlay_region_floor, g_text_image_lo);
             }
             /* Overlay DLL cache (Layer A): stash config now; heavy init
              * (cache scan / ABI preflight / resident LoadLibrary) runs after
@@ -11011,8 +11627,10 @@ int main(int argc, char** argv) {
 #endif
         if (us.has_supersampling)  g_video_scale     = us.supersampling;
         if (us.has_window_width)   g_video_win_w     = us.window_width;
+        if (us.has_window_width && us.window_width > 0) g_video_win_w_explicit = true;
         if (us.has_antialiasing)   g_video_aa        = us.antialiasing;
         if (us.has_texture_filter) g_video_texfilter = us.texture_filter;
+        if (us.has_fmv_filter)     g_video_fmv_filter = us.fmv_filter;
         if (us.has_geometry_correction)
             g_video_geometry_correction = us.geometry_correction ? 1 : 0;
         if (us.has_perspective_texturing)
@@ -11042,6 +11660,7 @@ int main(int argc, char** argv) {
         }
         if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
+        if (us.has_rewind)        g_rewind_enabled = us.rewind ? 1 : 0;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
         if (us.has_rewind_interval) g_rewind_interval = us.rewind_interval;
         if (us.has_hotkey_pad_rewind)
@@ -11059,6 +11678,38 @@ int main(int argc, char** argv) {
         }
         if (us.has_disc_path && !disc_override_path)
             resolved_disc = normalize_disc_path_for_launch(us.disc_path);
+        /* Multi-disc precedence. [disc] selected is authoritative ONLY WHEN
+         * PRESENT; absent it, [disc] path decides and the index is derived
+         * from it.
+         *
+         * Getting this backwards is a live bug, not a hypothetical: an
+         * external launcher that knows the path but cannot work out the roster
+         * position writes `path` alone, and treating a missing key as
+         * "selected = 1" then overrode a correct disc-2 path back to disc 1 on
+         * every launch. `path` alone worked before the index existed and must
+         * keep working -- a new field may add a way to choose a disc, it may
+         * not take away the old one. */
+        if (!game_discs.empty() && us.has_disc_index)
+            selected_disc_index =
+                std::min(std::max(us.disc_index, 1), (int)game_discs.size());
+        if (!disc_override_path && game_discs.size() > 1) {
+            if (us.has_disc_index) {
+                const auto sel = resolve_selected_disc(game_discs,
+                                                       selected_disc_index,
+                                                       resolved_disc);
+                /* Never normalize an empty path -- fs::absolute("") is the
+                 * cwd, which would turn "no disc yet" into a bogus mount. */
+                if (!sel.empty())
+                    resolved_disc = normalize_disc_path_for_launch(sel);
+            } else {
+                /* Derive the index so the launcher still preselects the right
+                 * row and a later save writes a consistent pair. An unknown
+                 * path (the player browsed to something off-roster) leaves the
+                 * default; it is not evidence for any disc. */
+                const int idx = roster_index_for_disc(game_discs, resolved_disc);
+                if (idx >= 0) selected_disc_index = idx + 1;
+            }
+        }
         if (us.has_memcard_dir)                      memcard_dir   = us.memcard_dir;
         if (us.has_memcard1_path)    memcard1_path    = us.memcard1_path;
         if (us.has_memcard2_path)    memcard2_path    = us.memcard2_path;
@@ -11322,49 +11973,68 @@ int main(int argc, char** argv) {
         overlay_autocapture_set_enabled(0);
         const char *cfg_backend = deferred_overlay_backend.empty()
                 ? nullptr : deferred_overlay_backend.c_str();
-        int gcc_avail = deferred_has_overlay_ac
+        /* The bundled overlay_toolchain/ (embedded Python + compile_overlays.py +
+         * recompiler + headers + tcc) can drive EITHER compiler: tcc from the
+         * bundle, or a real gcc when one is on PATH. So a gcc toolchain counts
+         * as available when there is a configured gcc command OR the bundle is
+         * present to build one - the same package then yields gcc shards on a
+         * dev box and tcc shards on a toolchain-less player box. */
+        extern int g_psx_cps_mode;
+        const std::filesystem::path tk_xd = exe_dir_from_argv(argv[0]);
+        const std::filesystem::path tk_dir = tk_xd / "overlay_toolchain";
+        const std::filesystem::path tk_py = tk_dir / "python" / "python.exe";
+        const bool tk_present = std::filesystem::exists(tk_py);
+        auto build_toolchain_cmd = [&](const char *compiler) {
+            auto cmd_quote = [](const std::string& s) {
+                return std::string("\"") + s + "\"";
+            };
+            std::string c =
+                cmd_quote(tk_py.string()) + " " +
+                cmd_quote((tk_dir / "compile_overlays.py").string()) +
+                " --captures " + cmd_quote(captures_path.string()) +
+                " --game-toml " + cmd_quote(std::string(
+                    game_config_path ? game_config_path : "game.toml")) +
+                " --recompiler " + cmd_quote((tk_dir / "psxrecomp-game.exe").string()) +
+                " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
+                " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
+                (g_psx_cps_mode ? " --cps" : "") +
+                " --compiler " + compiler;
+            if (std::string(compiler) == "tcc")
+                c += " --tcc " + cmd_quote((tk_dir / "tcc" / "tcc.exe").string());
+            return c;
+        };
+        int gcc_avail = (deferred_has_overlay_ac || tk_present)
                         && autocompile_toolchain_available();
         OverlayBackend eff = overlay_backend_resolve(cfg_backend, gcc_avail);
         std::string built_tcc_cmd;
+        std::string built_gcc_cmd;
         std::string env_ac_cmd;
         const std::string *ac_cmd = nullptr;
         if (eff == OVERLAY_BACKEND_TCC) {
             if (deferred_has_overlay_ac_tcc) {
                 ac_cmd = &deferred_overlay_ac_tcc;
+            } else if (tk_present) {
+                built_tcc_cmd = build_toolchain_cmd("tcc");
+                ac_cmd = &built_tcc_cmd;
+                std::fprintf(stdout,
+                    "psxrecomp: tcc tier using bundled toolchain (%s)\n",
+                    tk_dir.string().c_str());
             } else {
-                extern int g_psx_cps_mode;
-                std::filesystem::path xd = exe_dir_from_argv(argv[0]);
-                std::filesystem::path tk = xd / "overlay_toolchain";
-                std::filesystem::path py = tk / "python" / "python.exe";
-                if (std::filesystem::exists(py)) {
-                    auto cmd_quote = [](const std::string& s) {
-                        return std::string("\"") + s + "\"";
-                    };
-                    built_tcc_cmd =
-                        cmd_quote(py.string()) + " " +
-                        cmd_quote((tk / "compile_overlays.py").string()) +
-                        " --captures " + cmd_quote(captures_path.string()) +
-                        " --game-toml " + cmd_quote(std::string(
-                            game_config_path ? game_config_path : "game.toml")) +
-                        " --recompiler " + cmd_quote((tk / "psxrecomp-game.exe").string()) +
-                        " --runtime-include " + cmd_quote((tk / "include").string()) +
-                        " --out-dir " + cmd_quote((xd / "cache").string()) +
-                        (g_psx_cps_mode ? " --cps" : "") +
-                        " --compiler tcc --tcc " +
-                        cmd_quote((tk / "tcc" / "tcc.exe").string());
-                    ac_cmd = &built_tcc_cmd;
-                    std::fprintf(stdout,
-                        "psxrecomp: tcc tier using bundled toolchain (%s)\n",
-                        tk.string().c_str());
-                } else {
-                    std::fprintf(stdout,
-                        "psxrecomp: tcc tier active but no bundled toolchain at %s "
-                        "(overlay gaps -> interpreter)\n", tk.string().c_str());
-                }
+                std::fprintf(stdout,
+                    "psxrecomp: tcc tier active but no bundled toolchain at %s "
+                    "(overlay gaps -> interpreter)\n", tk_dir.string().c_str());
             }
         } else {
-            if (deferred_has_overlay_ac)
+            if (deferred_has_overlay_ac) {
                 ac_cmd = &deferred_overlay_ac;
+            } else if (tk_present) {
+                /* gcc on PATH + bundled toolchain: gcc shards from the same bundle. */
+                built_gcc_cmd = build_toolchain_cmd("gcc");
+                ac_cmd = &built_gcc_cmd;
+                std::fprintf(stdout,
+                    "psxrecomp: gcc tier using bundled toolchain (%s) with gcc from PATH\n",
+                    tk_dir.string().c_str());
+            }
         }
         if (const char *e = std::getenv("PSX_OVERLAY_AUTOCOMPILE_CMD")) {
             if (e[0]) {
@@ -11424,6 +12094,24 @@ int main(int argc, char** argv) {
         (!std::getenv("PSX_NO_LAUNCHER") && !force_no_launcher && !skip_launcher_setting);
     if (want_launcher) {
         launcher_boot_timing_mark("host:before_sdl_init");
+    /* Per-monitor DPI awareness, BEFORE any SDL_Init.
+     *
+     * Without it Windows virtualises everything this process sees: on a
+     * 7680x4320 panel at 400% scaling SDL_GetDisplayUsableBounds reports
+     * 1920x1032, so the window is clamped to roughly 1376 LOGICAL pixels and
+     * opens as a small box, while the desktop compositor then upscales it.
+     * The internal render resolution is unaffected -- which is the trap: the
+     * game renders at supersampling 16 and the result is thrown away scaling
+     * a 1376-wide window up to an 8K display.
+     *
+     * permonitorv2 makes SDL report physical pixels, so the window sizes
+     * against the real panel and the drawable matches it 1:1. */
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
+#ifdef SDL_HINT_WINDOWS_DPI_SCALING
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "0");
+#endif
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0) {
             launcher_boot_timing_mark("host:after_sdl_init");
             recomp_launcher_set_preserve_sdl(1);
@@ -11438,6 +12126,7 @@ int main(int argc, char** argv) {
             seed.supersampling = g_video_scale;           seed.has_supersampling = true;
             seed.antialiasing = g_video_aa;               seed.has_antialiasing = true;
             seed.texture_filter = g_video_texfilter;      seed.has_texture_filter = true;
+            seed.fmv_filter = g_video_fmv_filter;         seed.has_fmv_filter = true;
             /* Seeded (and marked present) so a launcher save round-trips the
              * player's hand-edited value instead of dropping the key. */
             seed.geometry_correction = (g_video_geometry_correction != 0);
@@ -11460,6 +12149,7 @@ int main(int argc, char** argv) {
             seed.aspect_den = g_video_aspect_den;         seed.has_aspect_ratio = true;
             seed.audio_freq = g_audio_freq;               seed.has_audio_freq = true;
             seed.spu_hq = g_audio_spu_hq;                 seed.has_spu_hq = true;
+            seed.rewind = g_rewind_enabled != 0;          seed.has_rewind = true;
             seed.rewind_depth = g_rewind_depth;           seed.has_rewind_depth = true;
             seed.rewind_interval = g_rewind_interval;     seed.has_rewind_interval = true;
             seed.hotkey_pad_rewind = g_hotkey_pad_rewind;
@@ -11625,12 +12315,14 @@ int main(int argc, char** argv) {
             ls.supersampling      = seed.supersampling;
             ls.antialiasing       = seed.antialiasing ? 1 : 0;
             ls.texture_filter     = seed.texture_filter;
+            ls.fmv_filter         = cfg_fmv_filter_to_launcher(seed.fmv_filter);
             ls.geometry_correction   = seed.geometry_correction ? 1 : 0;
             ls.perspective_texturing = seed.perspective_texturing ? 1 : 0;
             ls.screen_kind        = seed.screen_kind;
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
+            ls.rewind_enabled    = seed.rewind ? 1 : 0;
             ls.rewind_depth      = seed.rewind_depth > 0 ? seed.rewind_depth : 50;
             ls.rewind_interval   = seed.rewind_interval > 0 ? seed.rewind_interval : 15;
             ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
@@ -11670,6 +12362,9 @@ int main(int argc, char** argv) {
             }
             ls.memcard_enabled[0] = seed.memcard1_enabled ? 1 : 0;
             ls.memcard_enabled[1] = seed.memcard2_enabled ? 1 : 0;
+            /* Which disc the dropdown opens on (1-based; ignored when the
+             * game is single-disc and gi.discs is empty). */
+            ls.disc_index = selected_disc_index;
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
             ls.multitap_enabled = seed.multitap_enabled ? 1 : 0;
 #endif
@@ -11700,6 +12395,27 @@ int main(int argc, char** argv) {
             g_lnch_has_crc         = game_has_disc_crc;
             g_lnch_argv0           = argv[0];
 
+            /* Multi-disc roster for the launcher's Disc Selection dropdown.
+             * The ABI BORROWS every pointer, so this storage has to outlive
+             * recomp_launcher_run_window below -- hence plain locals in this
+             * scope rather than a temporary. Paths go through the same
+             * normalization as every other mount so a roster entry and the
+             * initial disc are spelled identically. Labels are left null:
+             * recomp-ui formats "Disc N" from the number itself, and one
+             * source of that string beats two. */
+            std::vector<std::string> rui_disc_paths;
+            std::vector<RecompLauncherCDisc> rui_discs;
+            if (game_discs.size() > 1) {
+                rui_disc_paths.reserve(game_discs.size());
+                for (const auto& d : game_discs)
+                    rui_disc_paths.push_back(
+                        normalize_disc_path_for_launch(d).string());
+                rui_discs.reserve(rui_disc_paths.size());
+                for (size_t i = 0; i < rui_disc_paths.size(); ++i)
+                    rui_discs.push_back(RecompLauncherCDisc{
+                        (int)i + 1, nullptr, rui_disc_paths[i].c_str()});
+            }
+
             RecompLauncherCGameInfo gi{};
             ae_fill_psx_launcher_game_info(
                 &gi,
@@ -11717,6 +12433,8 @@ int main(int argc, char** argv) {
                 rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
                 (int)rui_lang_labels.size(),
                 /*resume_netplay_room=*/0);
+            gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
+            gi.num_discs = (int)rui_discs.size();
 #if defined(PSX_HAS_SETUP_WIZARD)
             /* MotK ships tools/prepare_disc.py (2448→2352). Offer it in the
              * first-run wizard so players need not run the script by hand. */
@@ -11802,6 +12520,16 @@ int main(int argc, char** argv) {
                     seed.disc_path = rui_out_disc;
                     seed.has_disc_path = true;
                 }
+                /* Persist the Disc Selection choice next to the disc path, so
+                 * the next session opens on the same disc and an external
+                 * launcher sees it as an ordinary settings row. Written for
+                 * multi-disc titles only -- a single-disc game has nothing to
+                 * select and should not grow a meaningless key. */
+                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                    selected_disc_index = ls.disc_index;
+                    seed.disc_index = ls.disc_index;
+                    seed.has_disc_index = true;
+                }
                 seed.fullscreen    = ls.fullscreen;            seed.has_fullscreen = true;
                 seed.skip_launcher = ls.skip_launcher != 0;   seed.has_skip_launcher = true;
                 /* aspect_index round-trips 0/1/2 -> 4:3 / 16:9 / 21:9, superseding the
@@ -11817,6 +12545,8 @@ int main(int argc, char** argv) {
                  * is the legacy fallback field for consoles without the cap and is
                  * left unused here. */
                 seed.texture_filter = ls.texture_filter ? 1 : 0; seed.has_texture_filter = true;
+                seed.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
+                seed.has_fmv_filter = true;
                 {
                     const int n = std::min(PSX_MAX_PLAYERS, RECOMP_LAUNCHER_MAX_PLAYERS);
                     const int un = std::min(n, PSXRecompV4::UserSettings::kMaxControllerPlayers);
@@ -11862,11 +12592,15 @@ int main(int argc, char** argv) {
                 seed.has_geometry_correction = true;
                 seed.perspective_texturing = ls.perspective_texturing != 0;
                 seed.has_perspective_texturing = true;
+                seed.fmv_filter            = launcher_fmv_filter_to_cfg(ls.fmv_filter);
+                seed.has_fmv_filter        = true;
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
+                seed.rewind                = ls.rewind_enabled != 0;
+                seed.has_rewind            = true;
                 seed.rewind_depth          = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 seed.has_rewind_depth      = true;
                 seed.rewind_interval       = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
@@ -12064,6 +12798,7 @@ int main(int argc, char** argv) {
                 g_video_scale     = seed.supersampling;
                 g_video_aa        = seed.antialiasing;
                 g_video_texfilter = seed.texture_filter;
+                g_video_fmv_filter = seed.fmv_filter;
                 g_video_geometry_correction   = seed.geometry_correction ? 1 : 0;
                 g_video_perspective_texturing = seed.perspective_texturing ? 1 : 0;
                 g_video_screen    = seed.screen_kind;
@@ -12079,6 +12814,7 @@ int main(int argc, char** argv) {
                 g_video_aspect_den = seed.aspect_den;
                 g_audio_freq      = seed.audio_freq;
                 g_audio_spu_hq    = seed.spu_hq;
+                g_rewind_enabled = seed.has_rewind ? (seed.rewind ? 1 : 0) : 0;
                 g_rewind_depth   = seed.has_rewind_depth && seed.rewind_depth > 0
                     ? seed.rewind_depth : 50;
                 g_rewind_interval = seed.has_rewind_interval && seed.rewind_interval > 0
@@ -12181,14 +12917,16 @@ int main(int argc, char** argv) {
         }
     }
     /* Activation callbacks are re-run after every launcher session. Clear
-     * game-owned controller overrides first so disabling a package cannot
-     * leave its prior mode latched across a soft return to the launcher. */
-    g_mod_controller_mode_override[0] = -1;
-    g_mod_controller_mode_override[1] = -1;
+     * game-owned controller overrides/policies first so disabling a package
+     * cannot leave its prior state latched across a soft return. */
+    g_mod_controller_mode_override.fill(-1);
+    for (auto& policy : g_mod_controller_policy)
+        policy = ModControllerPresentationPolicy{};
     g_mod_load_wall_multiplier = -1;
     g_mod_load_release_frames = -1;
     g_mod_disc_speed_divisor = -1;
     g_mod_disc_instant_rate = -1;
+    g_turbo_audio_sink_enabled = g_turbo_audio_sink_config_enabled;
     g_turbo_load_wall_multiplier = 0;
     g_turbo_load_release_frames = TURBO_LOADS_RELEASE_FRAMES;
     if (!turbo_loads_offered)
@@ -12201,14 +12939,19 @@ int main(int argc, char** argv) {
      * mod_runtime_activate_plugins above. Idempotent. */
     func_override_install();
     apply_netplay_local_viewport_aspect(net_cfg.enabled);
-    if (g_mod_controller_mode_override[0] >= 0)
-        player_mode[0] = g_mod_controller_mode_override[0];
-    if (g_mod_controller_mode_override[1] >= 0)
-        player_mode[1] = g_mod_controller_mode_override[1];
+    for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
+        if (g_mod_controller_mode_override[i] >= 0)
+            player_mode[i] = g_mod_controller_mode_override[i];
+    }
     if (g_mod_load_wall_multiplier >= 0) {
         g_turbo_loads_enabled = 1;
         g_turbo_load_wall_multiplier = g_mod_load_wall_multiplier;
         g_turbo_load_release_frames = g_mod_load_release_frames;
+        /* Fast Loading advances the guest at a host rate greater than real
+         * time. Keep the canonical SPU/CD stream running, but discard the
+         * accelerated presentation-side audio until pacing resumes; otherwise
+         * the SDL bridge overflows and the load becomes observably unstable. */
+        g_turbo_audio_sink_enabled = g_turbo_load_wall_multiplier > 1;
         if (g_turbo_load_wall_multiplier) {
             std::fprintf(stdout,
                 "psxrecomp: mod selected %dx load acceleration "
@@ -12546,10 +13289,27 @@ session_reboot:
         /* GetID must report the inserted disc's license region (the BIOS CD
          * driver revalidates it mid-game). Derive it from the disc's boot
          * serial via the same disc_identity module the launch check uses. */
+#if defined(RECOMP_LAUNCHER)
+        const std::string& expected_serial = g_lnch_expected_serial;
+        const uint32_t expected_crc = g_lnch_expected_crc;
+        const bool has_crc = g_lnch_has_crc;
+#else
+        const std::string& expected_serial = game_id;
+        const uint32_t expected_crc = game_disc_crc;
+        const bool has_crc = game_has_disc_crc;
+#endif
+
         const auto ident = PSXRecompV4::identify_disc(
-            disc_path_str, /*expected_serial*/"", /*expected_crc*/0,
-            /*has_expected_crc*/false, /*compute_crc*/false);
-        if (ident.region == "PAL")         cdrom_set_disc_scex("SCEE");
+            disc_path_str, expected_serial, expected_crc,
+            has_crc, /*compute_crc*/false);
+        if (ident.region == "PAL") {
+            cdrom_set_disc_scex("SCEE");
+
+            /* We need to adjust the frame pacing for PAL games to run at the
+             * correct speed */
+            vblank_cycles = 677376u;
+            g_frame_period_ms = 1000.0 / 50.0;  /* 50hz refresh rate */
+        }
         else if (ident.region == "NTSC-J") cdrom_set_disc_scex("SCEI");
         else if (ident.region == "NTSC-U") cdrom_set_disc_scex("SCEA");
         if (!ident.region.empty())
@@ -12618,6 +13378,19 @@ session_reboot:
     if (game_entry_pc != 0)
         fntrace_set_game_range(game_entry_pc, 0);
 
+  /* Headless still runs the SPU as a guest-cycle device. Register and prime
+   * the pump before the frontend split so deterministic gates exercise the
+   * same sample-deadline path as an operator run. Without the cycle-zero
+   * prime, the first deadline service establishes a shifted epoch and the
+   * headless smoke cannot detect the resulting audio/cutscene regression. */
+#ifndef PSX_SDL_NO_AUDIO
+  if (g_headless) {
+    audio_trace_init();
+    psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
+    sdl_audio_pump_midframe();
+  }
+#endif
+
   if (g_headless) {
     std::fprintf(stdout, "psxrecomp: headless frontend enabled\n");
   } else {
@@ -12643,6 +13416,24 @@ session_reboot:
      * default). Enable the HIDAPI Xbox driver so HIDAPI handles Xbox pads too. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "1");
     if (!SDL_WasInit(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER)) {
+    /* Per-monitor DPI awareness, BEFORE any SDL_Init.
+     *
+     * Without it Windows virtualises everything this process sees: on a
+     * 7680x4320 panel at 400% scaling SDL_GetDisplayUsableBounds reports
+     * 1920x1032, so the window is clamped to roughly 1376 LOGICAL pixels and
+     * opens as a small box, while the desktop compositor then upscales it.
+     * The internal render resolution is unaffected -- which is the trap: the
+     * game renders at supersampling 16 and the result is thrown away scaling
+     * a 1376-wide window up to an 8K display.
+     *
+     * permonitorv2 makes SDL report physical pixels, so the window sizes
+     * against the real panel and the drawable matches it 1:1. */
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
+#ifdef SDL_HINT_WINDOWS_DPI_SCALING
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "0");
+#endif
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
             std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
             return 1;
@@ -12695,6 +13486,10 @@ session_reboot:
      * depend on a successful host open (Win↔Linux aux/spu fork). Routed
      * through the gated wrapper so turbo mute/sink still apply. */
     psx_set_midframe_audio_pump(sdl_audio_pump_midframe);
+    /* Establish the cycle-zero audio epoch before the first device deadline.
+     * Otherwise the first D-1 quiet-prefix service becomes the epoch and shifts
+     * every nominal 768-cycle sample boundary. */
+    sdl_audio_pump_midframe();
 #endif
 
     Uint32 win_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
@@ -12727,23 +13522,41 @@ session_reboot:
     }
     psx_apply_window_icon(sdl_window, argv[0]);
 
-    /* Host refresh: if the panel is within ~2% of 60 Hz, record it so driver
-     * vsync can own cadence (pacer skipped). Non-~60 Hz and unknown refresh
-     * (common on Wayland) keep PSX 59.94 Hz pacing and force swap interval 0
-     * — vsync as the clock would run the sim at the panel rate. */
+    /* Maximise instead of computing the frame size ourselves.
+     *
+     * clamp_window_aspect fits the CLIENT area to the usable bounds, but a
+     * window is client plus title bar and borders, so fitting the client to a
+     * full-height display produced a window taller than the screen that hung
+     * off the top. Deriving the decoration size first does not work either:
+     * SDL_GetWindowBordersSize reports nothing useful before the window is
+     * shown, so the correction silently did not apply.
+     *
+     * The window manager already solves this exactly. Maximise and let it fit
+     * the work area, decorations and taskbar included. Only when the request
+     * was "fit the display" (window_width unset) -- an explicit width is a
+     * deliberate choice and is left alone. */
+    if (!g_fullscreen && !g_video_win_w_explicit)
+        SDL_MaximizeWindow(sdl_window);
+
+    /* Host refresh: if the panel matches the current guest cadence, record it
+     * so driver vsync can own cadence (pacer skipped). Mismatched and unknown
+     * refresh rates keep guest pacing and force swap interval 0; vsync as the
+     * clock would otherwise run the sim at the panel rate. */
     {
         SDL_DisplayMode dm;
         int disp_idx = SDL_GetWindowDisplayIndex(sdl_window);
         if (disp_idx >= 0 && SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 && dm.refresh_rate > 0) {
             double host_hz = (double)dm.refresh_rate;
             g_host_refresh_hz = host_hz;
-            if (host_hz >= 58.8 && host_hz <= 61.2) {
+            if (host_refresh_matches_guest_cadence()) {
                 g_frame_period_ms = 1000.0 / host_hz;
-                std::printf("psxrecomp: sync-to-host-refresh: pacing to %d Hz panel "
-                            "(%.4f ms/frame)\n", dm.refresh_rate, g_frame_period_ms);
+                std::printf("psxrecomp: sync-to-host-refresh: pacing to %.1f Hz panel "
+                            "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
             } else {
-                std::printf("psxrecomp: host panel %d Hz not ~60 Hz; keeping PSX "
-                            "59.94 Hz pacing\n", dm.refresh_rate);
+                std::printf("psxrecomp: host panel %.1f Hz does not match guest "
+                            "cadence; keeping %.2f Hz pacing\n",
+                            host_hz,
+                            g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0);
             }
         }
     }
@@ -12754,6 +13567,35 @@ session_reboot:
     if (g_video_renderer == 1) {
         gl_renderer_set_swap_interval(present_effective_swap_interval()); /* applied at context init */
         g_gl_active = (gl_renderer_init_context(sdl_window) != 0);
+
+        /* Bezel artwork (Mods): load after the GL context exists. */
+        if (!g_bezel_path.empty() && g_gl_active) {
+            std::filesystem::path bp(g_bezel_path);
+            std::vector<unsigned char> file;
+            if (FILE *bf = std::fopen(bp.string().c_str(), "rb")) {
+                std::fseek(bf, 0, SEEK_END);
+                const long len = std::ftell(bf);
+                std::fseek(bf, 0, SEEK_SET);
+                if (len > 0) {
+                    file.resize((size_t)len);
+                    if (std::fread(file.data(), 1, file.size(), bf) != file.size())
+                        file.clear();
+                }
+                std::fclose(bf);
+            }
+            int bw = 0, bh = 0, bc = 0;
+            unsigned char *px = file.empty() ? nullptr
+                : stbi_load_from_memory(file.data(), (int)file.size(), &bw, &bh, &bc, 4);
+            if (px) {
+                gl_renderer_set_bezel(px, bw, bh);
+                stbi_image_free(px);
+                std::fprintf(stdout, "psxrecomp: bezel artwork %dx%d from %s\n",
+                             bw, bh, bp.string().c_str());
+            } else {
+                std::fprintf(stdout, "psxrecomp: bezel artwork not loaded: %s\n",
+                             bp.string().c_str());
+            }
+        }
         if (!g_gl_active) {
             gr_set_backend(GR_BACKEND_SOFTWARE);
             gl_renderer_set_cpu_auth_dual(0);
@@ -12779,7 +13621,10 @@ session_reboot:
             g_video_scale = gr_scale();
         gl_renderer_set_interpolation(g_frame_interpolation, g_host_refresh_hz,
                                       (double)g_frame_interpolation_fps,
-                                      /*blend_mode*/ 0);
+                                      g_frame_period_ms > 0.0
+                                          ? 1000.0 / g_frame_period_ms
+                                          : 59.94,
+                                      g_frame_interpolation_blend);
     }
     /* Vulkan backend: create the instance/device/swapchain on the
      * SDL_WINDOW_VULKAN window. On failure, fall back to software (vkb_init
@@ -12897,17 +13742,21 @@ session_reboot:
             const std::filesystem::path disc_check = resolved_disc;
             if (!disc_check.empty()) {
 #if defined(RECOMP_LAUNCHER)
-                const std::string& expect_serial = g_lnch_expected_serial;
+                const std::string expect_serial =
+                    expected_serial_for_disc(disc_check, g_lnch_expected_serial);
                 const uint32_t expect_crc = g_lnch_expected_crc;
                 const bool has_crc = g_lnch_has_crc;
 #else
-                const std::string expect_serial = game_id;
+                const std::string expect_serial =
+                    expected_serial_for_disc(disc_check, game_id);
                 const uint32_t expect_crc = game_disc_crc;
                 const bool has_crc = game_has_disc_crc;
 #endif
+                const PSXRecompV4::NetplayDiscExpect np_expect =
+                    netplay_expect_for_disc(disc_check);
                 PSXRecompV4::DiscIdentity nid = PSXRecompV4::identify_disc(
                     disc_check, expect_serial, expect_crc, has_crc,
-                    /*compute_crc*/ false, &g_netplay_disc_expect);
+                    /*compute_crc*/ false, &np_expect);
                 g_session_disc_fp = nid.disc_fp;
                 g_session_netplay_disc_ok = nid.netplay_ok && !nid.disc_fp.empty();
                 psx_lobby_set_disc_fp(nid.disc_fp.c_str());
@@ -13091,9 +13940,18 @@ session_reboot:
             if (bundled->image)
                 openbios_ws = bundled->image->image_wordsum;
         }
+        /* Multi-disc sets tag savestates with the disc, inside the existing
+         * BIOS directory. A savestate is whole-machine state, so one taken on
+         * disc 2 and restored while disc 1 is mounted resumes a guest that
+         * believes it is still reading disc 2 -- and nothing in the slot list
+         * would say so, because every disc of a set shares one entry_pc, which
+         * is the key the slot files already use. Single-disc titles pass 0 and
+         * keep their existing filenames untouched. */
+        savestate_set_disc_scope(game_discs.size() > 1 ? selected_disc_index : 0);
         savestate_configure(memcard_dir.string().c_str(),
                             memory_get_bios_checksum(), game_entry_pc,
                             bios_token, openbios_ws);
+        psx_rewind_set_enabled(g_rewind_enabled);
         psx_rewind_set_depth((uint32_t)g_rewind_depth);
         psx_rewind_set_interval((uint32_t)g_rewind_interval);
         psx_rewind_configure(memory_get_bios_checksum(), game_entry_pc);
@@ -13420,6 +14278,7 @@ soft_return_lobby:
         RecompLauncherCSettings ls{};
         ls.output_method = 2;
         ls.window_scale = std::max(1, std::min(4, g_video_win_w / 320));
+        ls.disc_index = selected_disc_index;
         ls.fullscreen = g_fullscreen ? 1 : 0;
         ls.ignore_aspect = 0;
         ls.linear_filter = (g_video_texfilter != 0) ? 1 : 0;
@@ -13436,6 +14295,7 @@ soft_return_lobby:
         ls.supersampling = g_video_scale;
         ls.antialiasing = g_video_aa ? 1 : 0;
         ls.texture_filter = g_video_texfilter;
+        ls.fmv_filter = cfg_fmv_filter_to_launcher(g_video_fmv_filter);
         ls.geometry_correction = g_video_geometry_correction ? 1 : 0;
         ls.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
         ls.screen_kind = g_video_screen;
@@ -13444,6 +14304,7 @@ soft_return_lobby:
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
         ls.auto_skip_fmv = (skip_fmv_offered && g_auto_skip_fmv) ? 1 : 0;
         ls.turbo_loads = (turbo_loads_offered && g_turbo_loads_enabled) ? 1 : 0;
+        ls.rewind_enabled = g_rewind_enabled;
         ls.rewind_depth = g_rewind_depth;
         ls.rewind_interval = g_rewind_interval;
         ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND] =
@@ -13523,6 +14384,20 @@ soft_return_lobby:
         for (const auto& lo : lang_menu_options)
             rui_lang_labels.push_back(lo.label.c_str());
 
+        /* Same borrowed-roster contract as the first-open launcher above. */
+        std::vector<std::string> rui_disc_paths;
+        std::vector<RecompLauncherCDisc> rui_discs;
+        if (game_discs.size() > 1) {
+            rui_disc_paths.reserve(game_discs.size());
+            for (const auto& d : game_discs)
+                rui_disc_paths.push_back(
+                    normalize_disc_path_for_launch(d).string());
+            rui_discs.reserve(rui_disc_paths.size());
+            for (size_t i = 0; i < rui_disc_paths.size(); ++i)
+                rui_discs.push_back(RecompLauncherCDisc{
+                    (int)i + 1, nullptr, rui_disc_paths[i].c_str()});
+        }
+
         RecompLauncherCGameInfo gi{};
         ae_fill_psx_launcher_game_info(
             &gi,
@@ -13540,6 +14415,8 @@ soft_return_lobby:
             rui_lang_labels.empty() ? nullptr : rui_lang_labels.data(),
             (int)rui_lang_labels.size(),
             /*resume_netplay_room=*/1);
+        gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
+        gi.num_discs = (int)rui_discs.size();
 #if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)
         psx_game_codegen_setup_apply(&gi);
 #endif
@@ -13663,6 +14540,11 @@ soft_return_lobby:
                 }
                 us.deadzone = player_deadzone[0];
                 us.has_deadzone = true;
+                if (game_discs.size() > 1 && ls.disc_index > 0) {
+                    selected_disc_index = ls.disc_index;
+                    us.disc_index = ls.disc_index;
+                    us.has_disc_index = true;
+                }
 #if defined(RECOMP_LAUNCHER_HAS_MULTITAP_ENABLED)
                 multitap_enabled = ls.multitap_enabled != 0;
                 us.multitap_enabled = multitap_enabled;
@@ -13688,6 +14570,8 @@ soft_return_lobby:
                 us.has_antialiasing = true;
                 us.texture_filter = ls.texture_filter;
                 us.has_texture_filter = true;
+                us.fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
+                us.has_fmv_filter = true;
                 us.geometry_correction = ls.geometry_correction != 0;
                 us.has_geometry_correction = true;
                 us.perspective_texturing = ls.perspective_texturing != 0;
@@ -13702,6 +14586,8 @@ soft_return_lobby:
                 us.has_audio_freq = true;
                 us.spu_hq = ls.spu_hq != 0;
                 us.has_spu_hq = true;
+                us.rewind = ls.rewind_enabled != 0;
+                us.has_rewind = true;
                 us.rewind_depth = ls.rewind_depth > 0 ? ls.rewind_depth : 50;
                 us.has_rewind_depth = true;
                 us.rewind_interval = ls.rewind_interval > 0 ? ls.rewind_interval : 15;
@@ -13743,6 +14629,7 @@ soft_return_lobby:
             g_video_scale = ls.supersampling;
             g_video_aa = ls.antialiasing;
             g_video_texfilter = ls.texture_filter;
+            g_video_fmv_filter = launcher_fmv_filter_to_cfg(ls.fmv_filter);
             g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
             g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;
             g_video_screen = ls.screen_kind;
@@ -13767,6 +14654,18 @@ soft_return_lobby:
             if (ls.rewind_interval > 0) {
                 g_rewind_interval = ls.rewind_interval;
                 psx_rewind_set_interval((uint32_t)g_rewind_interval);
+            }
+            /* Applied live so turning rewind off frees the ring now rather
+             * than next launch — reclaiming it is the point of the setting.
+             * shutdown() also closes the overlay and drops a pending load. */
+            if ((ls.rewind_enabled ? 1 : 0) != g_rewind_enabled) {
+                g_rewind_enabled = ls.rewind_enabled ? 1 : 0;
+                psx_rewind_set_enabled(g_rewind_enabled);
+                if (g_rewind_enabled)
+                    psx_rewind_configure(memory_get_bios_checksum(),
+                                         game_entry_pc);
+                else
+                    psx_rewind_shutdown();
             }
             g_hotkey_pad_rewind = normalize_hotkey_pad_binding(
                 ls.assist_pad_bind[PSX_ASSIST_BIND_REWIND],

@@ -57,6 +57,19 @@ if(BUILD_TESTING)
         PSX_OVERLAY_DLL_BUILD=1)
     add_test(NAME psx_icache_fastpath_test COMMAND psx_icache_fastpath_test)
 
+    foreach(_ram_geometry IN ITEMS retail expanded)
+        add_executable(psx_memory_geometry_${_ram_geometry}_test
+            tests/test_psx_memory_geometry.c)
+        target_include_directories(psx_memory_geometry_${_ram_geometry}_test
+            PRIVATE include)
+        if(_ram_geometry STREQUAL "expanded")
+            target_compile_definitions(psx_memory_geometry_${_ram_geometry}_test
+                PRIVATE PSX_MAIN_RAM_BYTES=0x00800000u)
+        endif()
+        add_test(NAME psx_memory_geometry_${_ram_geometry}_test
+                 COMMAND psx_memory_geometry_${_ram_geometry}_test)
+    endforeach()
+
     add_executable(host_keymap_test
         tests/test_host_keymap.c
         src/host_keymap.c)
@@ -67,6 +80,28 @@ if(BUILD_TESTING)
         $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
     target_link_libraries(host_keymap_test PRIVATE ${PSX_SDL_LIBRARIES})
     add_test(NAME host_keymap_test COMMAND host_keymap_test)
+
+    add_executable(keyboard_pad_chord_test
+        tests/test_keyboard_pad_chord.c
+        src/psx_keybinds.c)
+    target_include_directories(keyboard_pad_chord_test PRIVATE
+        include ${PSX_SDL_INCLUDE_DIRS})
+    target_compile_definitions(keyboard_pad_chord_test PRIVATE
+        SDL_MAIN_HANDLED
+        $<$<BOOL:${PSX_SDL3}>:PSX_SDL3=1>)
+    target_link_libraries(keyboard_pad_chord_test PRIVATE ${PSX_SDL_LIBRARIES})
+    add_test(NAME keyboard_pad_chord_test COMMAND keyboard_pad_chord_test)
+
+    # Generic external replacement-pack core. The renderer integration is a
+    # separate consumer; this target pins pack discovery, deterministic keying,
+    # VRAM residency, portable tracking state, and bounded asynchronous decode.
+    add_executable(hd_texture_pack_test
+        tests/test_hd_texture_pack.cpp
+        src/hd_texture_pack.cpp)
+    target_include_directories(hd_texture_pack_test PRIVATE include)
+    find_package(Threads REQUIRED)
+    target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
+    add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
 
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
@@ -131,6 +166,13 @@ if(BUILD_TESTING)
     target_include_directories(mod_gpu_dma_aperture_test PRIVATE include)
     add_test(NAME mod_gpu_dma_aperture_test
              COMMAND mod_gpu_dma_aperture_test)
+
+    add_executable(dma_gpu_linked_list_timing_test
+        tests/test_dma_gpu_linked_list_timing.c
+        src/dma_gpu_ll.c)
+    target_include_directories(dma_gpu_linked_list_timing_test PRIVATE include)
+    add_test(NAME dma_gpu_linked_list_timing_test
+             COMMAND dma_gpu_linked_list_timing_test)
 
     # Clean-room SPU DSP fidelity (issue #103): SPU IRQ on every RAM access
     # class, reverb (write gating + work-area wrap + CD-only path), noise
@@ -233,6 +275,14 @@ if(BUILD_TESTING)
         ../recompiler/lib/toml11)
     add_test(NAME mod_packages_test COMMAND mod_packages_test)
 
+    add_executable(text_xlate_fix_only_test
+        tests/test_text_xlate_fix_only.cpp
+        src/text_xlate.cpp)
+    target_include_directories(text_xlate_fix_only_test PRIVATE
+        include
+        ../recompiler/lib/toml11)
+    add_test(NAME text_xlate_fix_only_test COMMAND text_xlate_fix_only_test)
+
     add_executable(mod_runtime_test
         tests/test_mod_runtime.cpp
         src/mod_runtime.cpp
@@ -285,8 +335,8 @@ if(BUILD_TESTING)
     #                                   CPUState* parameter; psx_cycles.c grew
     #                                   three externs the stub block never did
     #   test_spu_end_without_repeat.c   spu.c grew psx_irq_raise / crc32_update
-    #   test_sio_card_protocol.c        builds, but 147 of 309 checks fail —
-    #                                   registered DISABLED below, see beads
+    #   test_sio_card_protocol.c        repaired below: the harness now walks
+    #                                   shift/ACK edges and clears INTC IRQ7
     #
     # Registering them is only half the fix; check_test_registration.cmake at
     # the end of this file is what stops the next one from going unnoticed.
@@ -297,6 +347,41 @@ if(BUILD_TESTING)
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
+
+    add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
+    target_include_directories(cdrom_lid_state_test PRIVATE src)
+    add_test(NAME cdrom_lid_state_test COMMAND cdrom_lid_state_test)
+
+    add_executable(cdrom_seek_semantics_test
+        tests/test_cdrom_seek_semantics.c
+        src/cdrom.c)
+    target_include_directories(cdrom_seek_semantics_test PRIVATE include src)
+    target_compile_definitions(cdrom_seek_semantics_test PRIVATE
+        PSX_CDROM_SEEK_SEMANTICS_TEST=1)
+    if(MSVC)
+        target_compile_options(cdrom_seek_semantics_test PRIVATE /Gy)
+        target_link_options(cdrom_seek_semantics_test PRIVATE /OPT:REF)
+    else()
+        target_compile_options(cdrom_seek_semantics_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(cdrom_seek_semantics_test PRIVATE -Wl,--gc-sections)
+    endif()
+    add_test(NAME cdrom_seek_semantics_test COMMAND cdrom_seek_semantics_test)
+
+    # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
+    # clear another device's pending source — pinned on SPU (I_STAT bit 9)
+    # staying set across card ACK delivery until the guest acknowledges it.
+    # Scratch working dir for the same reason as sio_card_protocol_test: the
+    # test self-provisions test_dir/card1.mcd relative to its cwd.
+    add_executable(sio_spu_istat_ownership_test
+        tests/test_sio_spu_istat_ownership.c
+        src/sio.c
+        src/memcard.c)
+    target_include_directories(sio_spu_istat_ownership_test PRIVATE include src)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
+    add_test(NAME sio_spu_istat_ownership_test COMMAND sio_spu_istat_ownership_test
+             WORKING_DIRECTORY
+                 ${CMAKE_CURRENT_BINARY_DIR}/sio_spu_istat_scratch)
 
     # Mirrors func_00005A08 (BIOS card READ chain handler) against a mock CPU,
     # so it pins the disassembly reading without linking the recompiled BIOS.
@@ -309,6 +394,22 @@ if(BUILD_TESTING)
     add_executable(frame_pacing_test tests/test_frame_pacing.c)
     target_include_directories(frame_pacing_test PRIVATE include)
     add_test(NAME frame_pacing_test COMMAND frame_pacing_test)
+
+    add_executable(freeze_dump_policy_test
+        tests/test_freeze_dump_policy.c
+        src/freeze_dump_policy.c)
+    target_include_directories(freeze_dump_policy_test PRIVATE src)
+    add_test(NAME freeze_dump_policy_test COMMAND freeze_dump_policy_test)
+
+    add_executable(frame_interpolation_schedule_test
+        tests/test_frame_interpolation_schedule.c
+        src/frame_interpolation.c)
+    target_include_directories(frame_interpolation_schedule_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(frame_interpolation_schedule_test PRIVATE m)
+    endif()
+    add_test(NAME frame_interpolation_schedule_test
+             COMMAND frame_interpolation_schedule_test)
 
     add_executable(gpu_primitive_reject_test tests/test_gpu_primitive_reject.c)
     target_include_directories(gpu_primitive_reject_test PRIVATE include)
@@ -393,6 +494,12 @@ if(BUILD_TESTING)
     add_test(NAME psx_cycle_event_boundaries_test
              COMMAND psx_cycle_event_boundaries_test)
 
+    add_executable(psx_vblank_clock_test
+        tests/test_psx_vblank_clock.c
+        src/psx_vblank_clock.c)
+    target_include_directories(psx_vblank_clock_test PRIVATE include)
+    add_test(NAME psx_vblank_clock_test COMMAND psx_vblank_clock_test)
+
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)
     target_include_directories(spu_end_without_repeat_test PRIVATE include)
@@ -411,23 +518,40 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME frame_interpolation_context_ownership_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
+        add_test(NAME present_skip_cadence_guard_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_skip_cadence_guard.py)
+        add_test(NAME mod_bezel_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)
         add_test(NAME rewind_toggle_combo_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rewind_toggle_combo.py)
+        add_test(NAME savestate_status_protocol_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_savestate_status_protocol.py)
+        add_test(NAME overlay_region_floor_config_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_region_floor_config.py)
+        add_test(NAME screenshot_hires_pitch_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshot_hires_pitch.py)
+        add_test(NAME gl_depth24_upload_order_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_depth24_upload_order.py)
+        add_test(NAME pal_cadence_host_refresh_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pal_cadence_host_refresh.py)
+        add_test(NAME cdrom_lid_integration_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
     endif()
 
-    # DISABLED, not de-registered. It links and runs, but 147 of its 309 checks
-    # fail: the no-card path is clean (141/141) while the card-present READ
-    # reply stream comes back shifted by one and then stuck (idx[1] 0xFF for an
-    # expected 0x08 FLAG, then 0x08 for every subsequent byte). That is either a
-    # real sio.c protocol regression or a stale expectation in the test, and it
-    # needs an owner either way.
-    #
-    # De-registering a failing test is exactly the mechanism that let these 16
-    # rot in the first place, and wiring it RED would recreate the red-check-
-    # nobody-trusts problem that took CI off PRs. DISABLED keeps it built, keeps
-    # it listed in `ctest -N`, and keeps it countable, without failing the run.
-    # Re-enable by deleting the set_tests_properties line once triaged.
+    # Full card protocol regression: read, write, address echo, per-slot state,
+    # pad interruption, terminal ACK behavior and persistent FLAG semantics.
     add_executable(sio_card_protocol_test
         tests/test_sio_card_protocol.c
         src/sio.c
@@ -441,7 +565,6 @@ if(BUILD_TESTING)
     add_test(NAME sio_card_protocol_test COMMAND sio_card_protocol_test
              WORKING_DIRECTORY
                  ${CMAKE_CURRENT_BINARY_DIR}/sio_card_protocol_scratch)
-    set_tests_properties(sio_card_protocol_test PROPERTIES DISABLED TRUE)
 
     # POSIX-only: dlopen()s a fixture .so out of a synthetic cache tree, so it
     # cannot link under MinGW/MSVC (-ldl). run_overlay_posix_test.sh already

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from .naming import (
     boot_exe_from_game_toml,
     build_token_map,
     entry_pc_from_game_toml,
+    game_name_from_project,
     infer_project_name,
     normalize_lobby_url,
     players_from_cmake,
@@ -221,6 +223,8 @@ def _resolve_tokens(root: Path, options: MigrateOptions) -> dict[str, str]:
         enable_wizard=options.enable_wizard if options.enable_recomp_ui else False,
         enable_netplay=enable_netplay if options.enable_recomp_ui else False,
         has_boxart=has_boxart,
+        github_owner=options.github_owner,
+        github_repo=options.github_repo,
     )
 
 
@@ -664,6 +668,10 @@ def op_merge_gitignore(root: Path, options: MigrateOptions) -> ApplyResult:
         "/build/",
         "/build-*/",
         "/saves/",
+        # Local analysis scratch: GPU frame captures / parity dumps and disc
+        # asset rips. Routinely exceeds GitHub's 100 MB blob limit, and rips
+        # are disc content that must never be committed.
+        "/analysis/",
         "*.bin",
         "*.cue",
     ]
@@ -909,6 +917,102 @@ def op_emit_packager(root: Path, options: MigrateOptions) -> ApplyResult:
     )
 
 
+_PACKAGER_BLURB = {
+    "src": (
+        "# Game-owned C that CMakeLists.txt compiles into the runtime — mod\n"
+        "# activation plugins live here (CODEGEN_SETUP_SOURCES \"src/*_mods.c\").\n"
+    ),
+    "mods": (
+        "# Preloaded mod packages (mods/preloaded/packages/<id>). Plugins compiled\n"
+        "# in above select themselves through these; without them a mod is built\n"
+        "# and never enabled.\n"
+    ),
+}
+
+
+def op_sync_packager_project_dirs(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Stage paths CMakeLists.txt needs but the packager allowlist omits.
+
+    Patches the existing wrapper rather than regenerating it: packagers are
+    routinely hand-extended with extra --project-file lines, and rewriting from
+    the template would silently drop them.
+    """
+    from .detect import packager_missing_optional_paths, packager_missing_paths
+
+    dst = root / "scripts" / "package_setup_release.sh"
+    if not dst.is_file():
+        return ApplyResult(
+            "sync_packager_project_dirs", False, "No scripts/package_setup_release.sh", []
+        )
+    missing = sorted(set(packager_missing_paths(root)) |
+                     set(packager_missing_optional_paths(root)))
+    if not missing:
+        return ApplyResult(
+            "sync_packager_project_dirs", True, "Packager already stages every needed path", []
+        )
+
+    text = dst.read_text(encoding="utf-8")
+    anchor = "\ncd \"${ROOT}\"\n"
+    if anchor not in text:
+        return ApplyResult(
+            "sync_packager_project_dirs",
+            False,
+            "Unrecognised packager layout (no cd \"${ROOT}\" anchor); fix by hand",
+            [],
+        )
+
+    added: list[str] = []
+    block = ""
+    for rel in missing:
+        target = root / rel
+        kind = "dir" if target.is_dir() else "file"
+        test = "-d" if kind == "dir" else "-f"
+        block += _PACKAGER_BLURB.get(rel, "")
+        block += (
+            f'if [[ {test} "${{ROOT}}/{rel}" ]]; then\n'
+            f"  EXTRA_PROJECT+=(--project-{kind} {rel})\n"
+            "fi\n"
+        )
+        added.append(rel)
+
+    text = text.replace(anchor, "\n" + block + anchor, 1)
+    _write(dst, text, options.dry_run)
+    return ApplyResult(
+        "sync_packager_project_dirs",
+        True,
+        "Staged " + ", ".join(added) + " in scripts/package_setup_release.sh",
+        ["scripts/package_setup_release.sh"],
+    )
+
+
+def _ci_step_names(text: str) -> list[str]:
+    """`- name:` values under a workflow's steps, in order.
+
+    Deliberately a regex over the raw text rather than a YAML parse: this runs
+    against a template that still holds @TOKEN@ placeholders, which are valid
+    YAML here but need no interpretation, and the check must not depend on a
+    yaml module being importable inside Studio.
+    """
+    names: list[str] = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*-\s+name:\s*(.+?)\s*$", line)
+        if m:
+            names.append(m.group(1).strip().strip('"\''))
+    return names
+
+
+def _ci_steps_missing_from(installed: Path, template: Path) -> list[str]:
+    """Template step names absent from the installed workflow."""
+    try:
+        have = set(_ci_step_names(installed.read_text(encoding="utf-8", errors="replace")))
+        want = _ci_step_names(template.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return []
+    # Names carrying a token cannot be compared literally -- the installed copy
+    # has them substituted -- so they are not evidence either way.
+    return [n for n in want if n not in have and "@" not in n]
+
+
 def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     tokens = _resolve_tokens(root, options)
     src = ci_setup_release_template(root)
@@ -923,7 +1027,29 @@ def op_emit_ci_workflow(root: Path, options: MigrateOptions) -> ApplyResult:
     if dst.is_file() and not options.force and "YOUR_ZIP_PREFIX" not in dst.read_text(
         encoding="utf-8", errors="replace"
     ):
-        return ApplyResult("emit_ci_workflow", True, "release.yml already filled", [])
+        # "Filled" is not the same as "current". This used to stop here, so a
+        # project that installed the workflow once never learned the template
+        # had gained steps -- which is how a release gate can exist in the
+        # framework and be missing from every title that predates it.
+        #
+        # Compare STEP NAMES rather than text: a filled workflow legitimately
+        # differs from the template (tokens, and titles customise theirs), so a
+        # textual diff would cry stale on every project forever. A step the
+        # template defines and the installed file does not is unambiguous.
+        missing = _ci_steps_missing_from(dst, src)
+        if missing:
+            return ApplyResult(
+                "emit_ci_workflow",
+                False,
+                "release.yml is out of date with the CI template; missing step(s): "
+                + ", ".join(missing)
+                + " — re-emit with force to update (review the diff first: a "
+                  "customised workflow is overwritten wholesale)",
+                [],
+            )
+        return ApplyResult(
+            "emit_ci_workflow", True, "release.yml already filled and current", []
+        )
     _fill(src, dst, tokens, options.dry_run, ci=True)
     return ApplyResult(
         "emit_ci_workflow",
@@ -1080,6 +1206,136 @@ def op_record_framework_pins(root: Path, options: MigrateOptions) -> ApplyResult
     )
 
 
+def _boxart_hints(root: Path, options: MigrateOptions) -> tuple[str, str]:
+    cue = ""
+    display = ""
+    if options.disc:
+        cue = Path(options.disc).name
+    cat = root / "catalog_identity.json"
+    if cat.is_file():
+        try:
+            data = json.loads(cat.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            rom = data.get("rom_identity") if isinstance(data.get("rom_identity"), dict) else {}
+            cue = cue or str(rom.get("cue_name") or "")
+            game = data.get("game") if isinstance(data.get("game"), dict) else {}
+            display = str(game.get("name") or "")
+    name = options.project_name or infer_project_name(root)
+    display = options.window_title or display or game_name_from_project(name)
+    return cue, display
+
+
+def _ensure_boxart_png(root: Path, options: MigrateOptions) -> list[str]:
+    """Fetch libretro boxart PNG/TGA when the README PNG is missing. Never raises."""
+    png = root / "launcher_assets" / "img" / "boxart.png"
+    tga = root / "launcher_assets" / "img" / "boxart.tga"
+    if png.is_file():
+        return []
+    if options.dry_run:
+        return ["launcher_assets/img/boxart.png"]
+    cue, display = _boxart_hints(root, options)
+    if not cue and not display:
+        return []
+    try:
+        sys.path.insert(0, str(toolkit_dir()))
+        from fetch_boxart import fetch_to_paths  # type: ignore
+    except ImportError:
+        return []
+    try:
+        fetch_to_paths(tga, cue_stem=cue, display_name=display)
+    except Exception:
+        return []
+    changed: list[str] = []
+    if png.is_file():
+        changed.append("launcher_assets/img/boxart.png")
+    if tga.is_file():
+        changed.append("launcher_assets/img/boxart.tga")
+    src = tga.parent / "BOXART_SOURCE.txt"
+    if src.is_file():
+        changed.append("launcher_assets/img/BOXART_SOURCE.txt")
+    return changed
+
+
+def op_patch_readme_metrics(root: Path, options: MigrateOptions) -> ApplyResult:
+    """Upsert download badges, libretro boxart, RetComM Launcher, and R.A.I.D. footer."""
+    from .readme_metrics import (
+        apply_github_about,
+        boxart_png_present,
+        render_boxart_block,
+        render_launcher_block,
+        render_metrics_block,
+        render_raid_block,
+        resolve_github_slug,
+        upsert_readme_blocks,
+    )
+
+    name = options.project_name or infer_project_name(root)
+    owner, repo = resolve_github_slug(root, options.github_owner, options.github_repo)
+    zp = options.zip_prefix or derive_zip_prefix(name)
+    fetched = _ensure_boxart_png(root, options)
+    display = options.window_title or game_name_from_project(name)
+    boxart_block = None
+    if boxart_png_present(root) or (
+        options.dry_run and "launcher_assets/img/boxart.png" in fetched
+    ):
+        boxart_block = render_boxart_block(display)
+
+    path = root / "README.md"
+    if path.is_file():
+        old = path.read_text(encoding="utf-8", errors="replace")
+    else:
+        title = options.window_title or window_title_from_name(name)
+        old = f"# {title}\n"
+    new = upsert_readme_blocks(
+        old,
+        render_metrics_block(owner, repo, zp),
+        render_launcher_block(),
+        render_raid_block(),
+        boxart=boxart_block,
+    )
+    changed: list[str] = list(fetched)
+    if new != old:
+        _write(path, new, options.dry_run)
+        if "README.md" not in changed:
+            changed.append("README.md")
+
+    src_img = templates_dir() / "raid-discord.png"
+    dst_img = root / ".github" / "raid-discord.png"
+    if src_img.is_file() and not dst_img.is_file():
+        if not options.dry_run:
+            dst_img.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_img, dst_img)
+        changed.append(".github/raid-discord.png")
+
+    about_ok, about_msg = apply_github_about(owner, repo, dry_run=options.dry_run)
+    parts: list[str] = []
+    if changed:
+        parts.append(
+            f"Patched README badges, boxart, RetComM Launcher, and R.A.I.D. footer ({owner}/{repo})"
+        )
+    if fetched:
+        parts.append("fetched libretro boxart")
+    if about_ok:
+        parts.append(about_msg)
+    else:
+        parts.append("GitHub About skipped: " + about_msg)
+    if not changed and not about_ok:
+        return ApplyResult(
+            "patch_readme_metrics",
+            True,
+            f"README metrics already current ({owner}/{repo}); {about_msg}",
+            [],
+        )
+    return ApplyResult(
+        "patch_readme_metrics",
+        True,
+        "; ".join(parts),
+        changed,
+    )
+
+
 _OPS = {
     "rename_psxrecomp_submodule": op_rename_psxrecomp_submodule,
     "ensure_psxrecomp_submodule": op_ensure_psxrecomp_submodule,
@@ -1096,10 +1352,12 @@ _OPS = {
     "ensure_app_icon": op_ensure_app_icon,
     "rewrite_cmake_setup_host": op_rewrite_cmake_setup_host,
     "emit_packager": op_emit_packager,
+    "sync_packager_project_dirs": op_sync_packager_project_dirs,
     "emit_ci_workflow": op_emit_ci_workflow,
     "annotate_legacy_packaging": op_annotate_legacy_packaging,
     "probe_disc_refresh": op_probe_disc_refresh,
     "record_framework_pins": op_record_framework_pins,
+    "patch_readme_metrics": op_patch_readme_metrics,
 }
 
 

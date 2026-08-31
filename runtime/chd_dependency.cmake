@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
 include(FetchContent)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/psx_dependency_archive.cmake")
 
 # libchdr is the small, BSD-licensed decompressor used by MAME-compatible CHD
 # images. Pin the exact source archive (and its digest) so generated games do
@@ -21,10 +22,26 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 endif()
 
+# This include is unconditional — there is no find_package path and no
+# toolchain pack that ships libchdr — so a player building a released game with
+# no route to github.com used to fail here, in a FetchContent subbuild, with no
+# usable diagnosis. The pinned archive is vendored at third_party/ for exactly
+# that reason; the upstream URL stays as the fallback for a stripped checkout.
+psxrecomp_dependency_source_dir(psx_libchdr
+    ENV PSX_LIBCHDR_SOURCE_DIR
+    OUT _psx_libchdr_src)
+psxrecomp_dependency_archive(psx_libchdr
+    SOURCE_DIR "${_psx_libchdr_src}"
+    OUT_URL _psx_libchdr_url OUT_HASH _psx_libchdr_hash)
+
 FetchContent_Declare(psx_libchdr
     URL
-        "https://github.com/rtissera/libchdr/archive/6cde5348eb118da3baf94f75a69577a005a484fd.tar.gz"
+        "${_psx_libchdr_url}"
     URL_HASH
-        "SHA256=a222b1f1c842f988c2aad51e5f56ba94a423ed87ccab71f1abdb757caa7444f5"
+        "${_psx_libchdr_hash}"
     ${_psx_libchdr_timestamp_args})
 FetchContent_MakeAvailable(psx_libchdr)
+
+unset(_psx_libchdr_src)
+unset(_psx_libchdr_url)
+unset(_psx_libchdr_hash)

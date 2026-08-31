@@ -205,17 +205,24 @@ void host_keymap_load(const char *config_ini_path) {
     apply_defaults();
 }
 
-int host_keymap_match(HostKeymapAction action, int keycode, int mod) {
+int host_keymap_match_event(HostKeymapAction action, int keycode,
+                            int scancode, int mod) {
     const HostKeyAction *a;
     const int relevant = (int)(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT);
     int i;
     if (action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return 0;
     a = &s_actions[action];
     for (i = 0; i < a->count; i++) {
-        if (a->binds[i].keycode != keycode) continue;
+        if (a->binds[i].keycode != keycode &&
+            (scancode <= 0 || a->binds[i].scancode != scancode))
+            continue;
         if ((mod & relevant) == a->binds[i].mods) return 1;
     }
     return 0;
+}
+
+int host_keymap_match(HostKeymapAction action, int keycode, int mod) {
+    return host_keymap_match_event(action, keycode, 0, mod);
 }
 
 int host_keymap_down(HostKeymapAction action, const uint8_t *keys, int mod) {

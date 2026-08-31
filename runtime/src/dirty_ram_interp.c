@@ -478,6 +478,11 @@ static void callret_end(uint32_t idx, CPUState *cpu, uint32_t path) {
  * load. See dirty_ram_interp.h for the per-game rationale. */
 uint32_t g_overlay_region_floor = OVERLAY_REGION_FLOOR_DEFAULT;
 
+/* Text-image base (phys) = the loaded game's main-EXE load address. Defaults to
+ * the kernel-window end so the below-text overlay clause is empty until a
+ * high-loading game pins it; main.cpp sets it at game load. See the header. */
+uint32_t g_text_image_lo = DIRTY_RAM_KERNEL_WINDOW_END;
+
 #ifdef PSX_HAS_GAME_DISPATCH
 extern int psx_dispatch_game_compiled(CPUState* cpu, uint32_t addr);
 extern int psx_game_address_in_text(uint32_t addr);
@@ -2889,11 +2894,17 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     if (!dirty_ram_is_dirty(phys) && !clean_game_text_miss) {
         /* Bulk host transfers can populate post-EXE executable RAM without
          * passing through the write hooks that mark dirty pages. A real
-         * control transfer to a decodable word above the configured boot-EXE
-         * text end is enough evidence to admit that word to the interpreter.
-         * Data and invalid targets still fail closed. */
+         * control transfer to a decodable word OUTSIDE the configured boot-EXE
+         * text image is enough evidence to admit that word to the interpreter.
+         * "Outside" is both sides of the text: a boot EXE that loads high
+         * streams its gameplay overlays into the RAM below itself (Klonoa's
+         * text is 0x180000-0x18B000, its overlays run from 0x10000+), and
+         * gating on the floor alone rejected every one of those targets —
+         * a JALR into a CD-DMA'd overlay page then fell through to
+         * psx_unknown_dispatch and fail-fast exit(1). Data and invalid targets
+         * still fail closed via the decodability check. */
         if (phys < (2u * 1024u * 1024u) &&
-            phys >= g_overlay_region_floor &&
+            phys_is_overlay_region(phys) &&
             dirty_ram_word_looks_decodable(fetch_word(phys))) {
             dirty_ram_mark_executable_range(phys, 4u);
         } else {
@@ -2913,6 +2924,16 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
      * is_local_dirty_target / phys_is_overlay_flow_region). Includes boot-text
      * pages overwritten by a runtime overlay (Tomba 2), not just [FLOOR, RAM). */
     int allow_local_dirty_flow = phys_is_overlay_flow_region(phys);
+
+    /* Backend-invariant mod_function_entry hooks: generated code fires
+     * psx_mod_function_entry at listed function entries, but a mod-patched
+     * page runs here instead and would silently skip them. Fire the same hook
+     * on interp dispatch so the contract does not depend on which backend
+     * executes the page. */
+    {
+        extern void psx_mod_function_entry(CPUState *cpu, uint32_t address);
+        psx_mod_function_entry(cpu, addr);
+    }
 
     /* Per-PC entry counter (visible via dirty_ram_stats). */
     DirtyRamPcEntry *pc_entry = pc_table_get_or_insert(phys);
@@ -2999,7 +3020,7 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
             if (deliverable || (++s_interp_entry_poll & 0x3Fu) == 0) {
                 cpu->pc = pc;
                 s_last_dirty_irq_pump_insns = g_dirty_ram_insns_run;
-                psx_check_interrupts(cpu);
+                psx_check_interrupts_at(cpu, pc);
                 if (cpu->pc != 0u && !dirty_ram_same_pc(cpu->pc, pc)) {
                     /* Handler resumed elsewhere — surface to dispatch. */
                     g_dirty_ram_blocks_run++;

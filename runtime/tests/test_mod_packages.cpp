@@ -513,6 +513,77 @@ int main() {
               partial_compatible.fingerprint,
           "feature state must resolve deterministically after reload");
 
+    fs::create_directories(root / "selected", ec);
+    write_text(root / "selected/bezel.png", "not a decoded image");
+    write_text(root / "packages/resource.mod/1.0.0/manifest.toml",
+               "format_version = 5\n"
+               "id = \"resource.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Resource Mod\"\n"
+               "resolver = \"declarative\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"bezel\"\n"
+               "name = \"Bezel\"\n"
+               "[[resource]]\n"
+               "feature = \"bezel\"\n"
+               "id = \"artwork\"\n"
+               "label = \"Artwork\"\n"
+               "description = \"Pick image\"\n"
+               "file_patterns = \"*.png,*.jpg\"\n"
+               "file_description = \"Image files\"\n"
+               "required = false\n");
+    write_text(root / "packages/required-resource.mod/1.0.0/manifest.toml",
+               "format_version = 5\n"
+               "id = \"required-resource.mod\"\n"
+               "version = \"1.0.0\"\n"
+               "name = \"Required Resource Mod\"\n"
+               "resolver = \"declarative\"\n"
+               "[[target]]\n"
+               "game_id = \"SLUS-TEST\"\n"
+               "[[feature]]\n"
+               "id = \"bezel\"\n"
+               "name = \"Bezel\"\n"
+               "[[resource]]\n"
+               "feature = \"bezel\"\n"
+               "id = \"artwork\"\n"
+               "label = \"Artwork\"\n"
+               "required = true\n");
+    check(feature_reload.scan(&error), error.c_str());
+    check(feature_reload.set_feature_enabled(
+              "resource.mod", "bezel", true, &error), error.c_str());
+    ModResolution resource_unset = feature_reload.resolve("SLUS-TEST");
+    check(resource_unset.ok && resource_unset.resources.empty(),
+          "optional resources must be omitted when no path is selected");
+    check(feature_reload.set_feature_resource_path(
+              "resource.mod", "bezel", "artwork",
+              root / "selected/bezel.png", &error), error.c_str());
+    ModResolution resource_selected = feature_reload.resolve("SLUS-TEST");
+    check(resource_selected.ok && resource_selected.resources.size() == 1 &&
+              resource_selected.resources[0].id == "artwork" &&
+              resource_selected.resources[0].path ==
+                  root / "selected/bezel.png",
+          "selected feature resource path must enter the committed plan");
+    check(feature_reload.save_state(&error), error.c_str());
+    ModPackageManager resource_reload(root);
+    check(resource_reload.scan(&error), error.c_str());
+    check(resource_reload.load_state(&error), error.c_str());
+    check(resource_reload.feature_resource_path(
+              "resource.mod", "bezel", "artwork") ==
+              root / "selected/bezel.png",
+          "feature resource paths must survive save/reload");
+    check(resource_reload.set_feature_enabled(
+              "required-resource.mod", "bezel", true, &error), error.c_str());
+    ModResolution resource_required = resource_reload.resolve("SLUS-TEST");
+    check(!resource_required.ok,
+          "required enabled resources must reject launch while unset");
+    check(resource_reload.set_feature_resource_path(
+              "required-resource.mod", "bezel", "artwork",
+              root / "selected/bezel.png", &error), error.c_str());
+    check(resource_reload.resolve("SLUS-TEST").ok,
+          "required enabled resources must resolve after selecting a path");
+
     write_text(root / "packages/parametric.mod/1.0.0/manifest.toml",
                "format_version = 3\n"
                "id = \"parametric.mod\"\n"

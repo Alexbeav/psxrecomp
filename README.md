@@ -304,6 +304,7 @@ Choose the narrowest mechanism that describes the change:
 | A player-selectable boolean, choice, or number | Feature-local `[[option]]` plus `when`, `replace_from`, sparse `fields`, or `when_integer` |
 | Artwork, script, audio, or another large disc asset | Hashed file-backed `[[overlay]]`; do not rebuild the player's stock image |
 | Host setting or live game behavior | Trusted static `[[plugin]]`, compiled into the game and selected by a stable id |
+| OpenGL bezel artwork | A disabled-by-default package using the trusted `psx.bezel` plugin and a user-selected image resource |
 | Several features composing one shared table, bitfield, routine, or allocation | Game-owned `resolver = "builtin:<id>"`, only when declarative operations cannot express the composition |
 
 Format versions 2–4 add bounded integers, ordered constraints, linked MIPS

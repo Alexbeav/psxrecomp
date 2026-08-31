@@ -4,7 +4,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/../runtime/chd_dependency.cmake")
+# libchdr is needed by exactly one target here: the user-facing `psxrecomp`
+# media CLI. It arrives via FetchContent + ExternalProject, which is by far the
+# heaviest and most fragile thing in this configure — it needs the network on a
+# cold cache, and ExternalProject cannot handle a source path containing a colon
+# (a repo directory like "Marvel vs. Capcom: Clash of Super Heroes Recomp"
+# truncates to "…/Marvel vs. Capcom.rule" and configure dies).
+#
+# Turning it off lets a caller that only wants an analysis or emitter binary
+# configure this project without any of that. Nothing but the media CLI is
+# affected; the emitters, psxrecomp-analyze, and every test are chd-free.
+option(PSXRECOMP_ENABLE_CHD
+       "Build the psxrecomp media CLI (requires libchdr via FetchContent)" ON)
+
+if(PSXRECOMP_ENABLE_CHD)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/../runtime/chd_dependency.cmake")
+endif()
 
 add_subdirectory(lib/fmt)
 
@@ -112,23 +127,60 @@ target_include_directories(psxrecomp-toml PRIVATE
 target_link_libraries(psxrecomp-toml PRIVATE fmt)
 
 # psxrecomp — user-facing media-to-source project generator.
-add_executable(psxrecomp
-    src/main_cli.cpp
-    src/cli_boot_path.cpp
+# The only libchdr consumer in this project; see PSXRECOMP_ENABLE_CHD above.
+if(PSXRECOMP_ENABLE_CHD)
+    add_executable(psxrecomp
+        src/main_cli.cpp
+        src/cli_boot_path.cpp
+        src/ps1_exe_parser.cpp
+        ../runtime/src/cue_sheet.cpp
+        ../runtime/src/iso_reader.cpp
+    )
+    target_include_directories(psxrecomp PRIVATE
+        include
+        ../runtime/include
+        lib/fmt/include
+    )
+    target_link_libraries(psxrecomp PRIVATE fmt chdr-static)
+    if(MINGW)
+        target_link_options(psxrecomp PRIVATE -Wl,--stack,16777216)
+    elseif(MSVC)
+        target_link_options(psxrecomp PRIVATE /STACK:16777216)
+    endif()
+endif()
+
+# psxrecomp-analyze — developer-facing static function discovery.
+#
+# NOT part of the recompilation path. It turns the boundary/CFG/jump-table
+# knowledge the emitters already derive into a queryable artifact set for
+# modding and decomp work (see docs/FUNCTION_DISCOVERY.md).
+#
+# The source list is the guarantee: no runtime/ translation unit appears here
+# and none may be added. The tool's whole claim is that everything it reports
+# was proven from the executable image alone, with no trace, overlay-capture,
+# or executed-PC feedback. Linking the runtime would quietly make that false.
+add_executable(psxrecomp-analyze
     src/ps1_exe_parser.cpp
-    ../runtime/src/cue_sheet.cpp
-    ../runtime/src/iso_reader.cpp
+    src/mips_decoder.cpp
+    src/function_analysis.cpp
+    src/analysis_db.cpp
+    src/bios_call_names.cpp
+    src/analysis_export.cpp
+    src/widescreen_scan.cpp
+    src/main_analyze.cpp
 )
-target_include_directories(psxrecomp PRIVATE
+target_include_directories(psxrecomp-analyze PRIVATE
     include
-    ../runtime/include
+    src
+    ../runtime/include   # ws_cull_detect.h — the shared auto_screen_x detector
     lib/fmt/include
+    lib/toml11
 )
-target_link_libraries(psxrecomp PRIVATE fmt chdr-static)
+target_link_libraries(psxrecomp-analyze PRIVATE fmt)
 if(MINGW)
-    target_link_options(psxrecomp PRIVATE -Wl,--stack,16777216)
+    target_link_options(psxrecomp-analyze PRIVATE -Wl,--stack,16777216)
 elseif(MSVC)
-    target_link_options(psxrecomp PRIVATE /STACK:16777216)
+    target_link_options(psxrecomp-analyze PRIVATE /STACK:16777216)
 endif()
 
 # ---- baked codegen hash (stale-binary guard) --------------------------------
@@ -212,7 +264,11 @@ endif()
 # libgcc/libstdc++ harvested from MSYS2. Keep opt-in for local debug builds.
 option(PSXRECOMP_STATIC_CLI "Statically link Windows runtime into CLI tools" OFF)
 if(PSXRECOMP_STATIC_CLI AND WIN32 AND (MINGW OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-    foreach(_cli_target psxrecomp psxrecomp-game psxrecomp-toml psxrecomp-bios)
+    set(_cli_targets psxrecomp-game psxrecomp-toml psxrecomp-bios psxrecomp-analyze)
+    if(PSXRECOMP_ENABLE_CHD)
+        list(APPEND _cli_targets psxrecomp)
+    endif()
+    foreach(_cli_target IN LISTS _cli_targets)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             target_link_options(${_cli_target} PRIVATE
                 -static -static-libgcc -static-libstdc++)
@@ -300,6 +356,24 @@ if(BUILD_TESTING)
         ../runtime/include)
     add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
 
+    add_executable(cdrom_seek_semantics_test
+        ../runtime/tests/test_cdrom_seek_semantics.c
+        ../runtime/src/cdrom.c)
+    target_include_directories(cdrom_seek_semantics_test PRIVATE
+        ../runtime/include
+        ../runtime/src)
+    target_compile_definitions(cdrom_seek_semantics_test PRIVATE
+        PSX_CDROM_SEEK_SEMANTICS_TEST=1)
+    if(MSVC)
+        target_compile_options(cdrom_seek_semantics_test PRIVATE /Gy)
+        target_link_options(cdrom_seek_semantics_test PRIVATE /OPT:REF)
+    else()
+        target_compile_options(cdrom_seek_semantics_test PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(cdrom_seek_semantics_test PRIVATE -Wl,--gc-sections)
+    endif()
+    add_test(NAME cdrom_seek_semantics_test COMMAND cdrom_seek_semantics_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp
@@ -382,6 +456,21 @@ if(BUILD_TESTING)
     add_test(NAME video_enhancement_settings_test
              COMMAND video_enhancement_settings_test)
 
+    # [video] rewind opt-in plumbing (default off + settings round trip).
+    add_executable(rewind_settings_test
+        tests/rewind_settings_test.cpp
+        src/config_loader.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(rewind_settings_test PRIVATE
+        include
+        src
+        lib/fmt/include
+        lib/toml11
+    )
+    target_link_libraries(rewind_settings_test PRIVATE fmt)
+    add_test(NAME rewind_settings_test COMMAND rewind_settings_test)
+
     # Needs bios/SCPH1001.toml — run from the framework root.
     add_test(NAME bios_address_model_test
              COMMAND bios_address_model_test
@@ -398,6 +487,13 @@ if(BUILD_TESTING)
             NAME cli_project_packaging
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+        # The runtime exe name must come from CMake, not be re-derived.
+        add_test(
+            NAME runtime_exe_name
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_exe_name.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # These two invoke psxrecomp-game, whose BIOS-profile resolution
@@ -514,7 +610,9 @@ if(BUILD_TESTING)
                 release_zip
                 overlay_decodable_fallback
                 overlay_init_guard
+                pal_cadence_host_refresh
                 sdl3_main_single_include
+                spu_sample_scheduler_default
                 vk_build_default
                 vk_color_self_barrier
                 vk_command_buffer_batching

@@ -39,6 +39,14 @@ typedef struct {
 } GpuDisplayInfo;
 
 void gpu_get_display_info(GpuDisplayInfo* out);
+
+/* Perspective-correct UV arming rate, per condition. armed/attempts is the
+ * real perspective coverage: attempts counts only textured triangles, so it is
+ * the denominator that gp0_draw (which includes untextured primitives that are
+ * correctly never armed) cannot provide. Diagnostic; any pointer may be NULL. */
+void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
+                                  uint64_t *no_correction,
+                                  uint64_t *no_source, uint64_t *no_depth);
 /* GP1(08h) bit4 — 24-bit display. Renderers skip FBO upload queues while set:
  * packed RGB888 lives in the CPU mirror; treating A0 rects as 1555 FBO uploads
  * both wastes bandwidth and force-flushes when UP_RECTS_MAX is hit (MotK FMV). */
@@ -342,6 +350,7 @@ void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
 void gpu_ws_begin_linked_list(void);
 void gpu_ws_end_linked_list(void);
 void gpu_ws_prepass_linked_list(uint32_t start_addr);
+void gpu_ws_restore_linked_list_rank(uint32_t rank);
 /* Native-wide full-frame 2D backdrop stretch ([widescreen] nw_backdrop):
  * stretch a screen-space quad that covers the whole 4:3 framebuffer (sky
  * gradient / backdrop image) to fill the wide frame, so it no longer
@@ -382,6 +391,12 @@ void psx_ws_backdrop_ring_note(uint32_t pc, int kind, int wcols, uint32_t orig,
                                uint32_t finalv, int extent, int camx, int count,
                                uint32_t base, uint32_t dl);
 int  psx_ws_backdrop_ring_json(char *buf, int cap);
+
+/* auto_ui_squash partition dump (`ws_ui_groups`). Reports, for the last UI
+ * prepass, each primitive's raw key inputs (CLUT/texpage band/family via op,
+ * y, h) alongside its union-find root and final anchor — enough to tell whether
+ * two HUD primitives shared a run, and which key component split them if not. */
+int  psx_ws_ui_groups_json(char *buf, int cap);
 
 /* Live-tunable backdrop widen amount (ws_backdrop_margin command): <0 whole-row,
  * 0 off, >0 N-column widen. g_ws_bd_from_interp is the interp's one-shot

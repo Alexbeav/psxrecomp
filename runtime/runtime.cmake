@@ -8,6 +8,7 @@ if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 endif()
 
+include("${PSXRECOMP_ROOT}/cmake/psx_dependency_archive.cmake")
 include("${PSXRECOMP_ROOT}/runtime/chd_dependency.cmake")
 
 # Default to an optimized build. The recompiled game is a huge (~270 MB) block of
@@ -114,7 +115,51 @@ foreach(_psx_tc_env IN ITEMS RETCOMM_TOOLCHAIN_DIR PSXRECOMP_TOOLCHAIN_DIR
         list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "$ENV{${_psx_tc_env}}")
     endif()
 endforeach()
+# The compiler's own location is the hint that cannot be forgotten. Callers
+# that pass -DCMAKE_C_COMPILER=<toolchain>/bin/cc without also exporting one of
+# the variables above — the setup wizard among them — used to leave this list
+# empty, and every find_package below then fell through to the host's copy of a
+# dependency. That is not merely a different copy: cmake-clang-v1 compiles
+# against its own sysroot and never searches /usr/include, so a host package is
+# found, reported as "using prebuilt/system", and then fails to compile.
+if(CMAKE_C_COMPILER)
+    get_filename_component(_psx_cc_bin "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(_psx_cc_pfx "${_psx_cc_bin}" DIRECTORY)
+    if(_psx_cc_pfx AND EXISTS "${_psx_cc_pfx}")
+        list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "${_psx_cc_pfx}")
+    endif()
+    unset(_psx_cc_bin)
+    unset(_psx_cc_pfx)
+endif()
 list(REMOVE_DUPLICATES _PSX_TOOLCHAIN_PREFIX_HINTS)
+
+# A dependency found outside the compiler's sysroot may still be unusable: the
+# toolchain will not search it, and for headers under /usr/include CMake cannot
+# even pass -I, because it drops that directory from include lists to avoid
+# disturbing the system header order. So a "found" package has to be compiled
+# before it is believed. Sets <out> to TRUE/FALSE.
+include(CheckIncludeFile)
+# INCLUDES for a bare header directory, LIBRARIES for an imported target — an
+# imported target must be asked through CMAKE_REQUIRED_LIBRARIES rather than by
+# reading INTERFACE_INCLUDE_DIRECTORIES off it, because a package may carry its
+# headers on a transitive target. SDL3::SDL3 does exactly that (its include
+# dirs live on SDL3::Headers), so reading the property yields NOTFOUND and the
+# check would fail against a perfectly good SDL3.
+function(_psx_header_compiles out header)
+    cmake_parse_arguments(_psx_hc "" "" "INCLUDES;LIBRARIES" ${ARGN})
+    set(CMAKE_REQUIRED_INCLUDES ${_psx_hc_INCLUDES})
+    set(CMAKE_REQUIRED_LIBRARIES ${_psx_hc_LIBRARIES})
+    set(CMAKE_REQUIRED_QUIET ON)
+    string(MAKE_C_IDENTIFIER
+           "_psx_have_${header}_${_psx_hc_INCLUDES}_${_psx_hc_LIBRARIES}"
+           _cache_var)
+    check_include_file("${header}" ${_cache_var})
+    if(${_cache_var})
+        set(${out} TRUE PARENT_SCOPE)
+    else()
+        set(${out} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
 
 if(_psx_sdl_backend STREQUAL "SDL3")
     set(PSX_SDL3 ON)
@@ -146,6 +191,23 @@ if(_psx_sdl_backend STREQUAL "SDL3")
         PATH_SUFFIXES lib/cmake/SDL3)
     unset(_PSX_SDL3_HINTS)
     if(TARGET SDL3::SDL3)
+        # Trust it only if the compiler can actually read its headers. A host
+        # SDL3 under /usr/include satisfies find_package and then fails every
+        # translation unit that includes psx_sdl.h.
+        _psx_header_compiles(_psx_sdl3_ok "SDL3/SDL.h" LIBRARIES SDL3::SDL3)
+        if(NOT _psx_sdl3_ok)
+            message(FATAL_ERROR
+                "psxrecomp: SDL3 was found at ${SDL3_DIR} but <SDL3/SDL.h> does "
+                "not compile with ${CMAKE_C_COMPILER}.\n"
+                "That compiler searches its own sysroot, not the host's "
+                "/usr/include, so this SDL3 cannot be used even though CMake "
+                "located it.\n"
+                "Fix: point SDL3_DIR at the copy shipped with the toolchain, "
+                "e.g. -DSDL3_DIR=<toolchain>/deps/lib/cmake/SDL3, or configure "
+                "with -DPSX_SDL_BACKEND=SDL2, or build with a compiler that "
+                "sees the host headers.")
+        endif()
+        unset(_psx_sdl3_ok)
         message(STATUS "psxrecomp: using prebuilt/system SDL3 (skip FetchContent)")
     endif()
     if(NOT TARGET SDL3::SDL3 AND PSX_SDL3_FETCH)
@@ -166,30 +228,24 @@ if(_psx_sdl_backend STREQUAL "SDL3")
         # CI (tools/ci/prefetch_sdl3.sh) pre-extracts with curl --http1.1 to
         # avoid intermittent GitHub HTTP/2 REFUSED_STREAM failures from
         # CMake's file(DOWNLOAD). Prefer that tree when present.
-        set(_psx_sdl3_src "")
-        if(DEFINED FETCHCONTENT_SOURCE_DIR_SDL3 AND
-           NOT FETCHCONTENT_SOURCE_DIR_SDL3 STREQUAL "" AND
-           EXISTS "${FETCHCONTENT_SOURCE_DIR_SDL3}/CMakeLists.txt")
-            set(_psx_sdl3_src "${FETCHCONTENT_SOURCE_DIR_SDL3}")
-        elseif(DEFINED ENV{PSX_SDL3_SOURCE_DIR} AND
-               NOT "$ENV{PSX_SDL3_SOURCE_DIR}" STREQUAL "" AND
-               EXISTS "$ENV{PSX_SDL3_SOURCE_DIR}/CMakeLists.txt")
-            set(_psx_sdl3_src "$ENV{PSX_SDL3_SOURCE_DIR}")
-            set(FETCHCONTENT_SOURCE_DIR_SDL3 "${_psx_sdl3_src}" CACHE PATH
-                "Pre-fetched SDL3 source (skip download)" FORCE)
-        endif()
-        if(_psx_sdl3_src)
-            message(STATUS
-                "psxrecomp: using pre-fetched SDL3 source ${_psx_sdl3_src}")
-        endif()
+        psxrecomp_dependency_source_dir(SDL3
+            ENV PSX_SDL3_SOURCE_DIR
+            OUT _psx_sdl3_src)
+        # Pin (and any vendored archive) come from third_party/deps.manifest, so
+        # an air-gapped tree staged by tools/ci/vendor_deps.sh needs no download.
+        psxrecomp_dependency_archive(SDL3
+            SOURCE_DIR "${_psx_sdl3_src}"
+            OUT_URL _psx_sdl3_url OUT_HASH _psx_sdl3_hash)
         FetchContent_Declare(SDL3
             URL
-                "https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-3.4.10.tar.gz"
+                "${_psx_sdl3_url}"
             URL_HASH
-                "SHA256=12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
+                "${_psx_sdl3_hash}"
             ${_psx_sdl3_timestamp_args})
         FetchContent_MakeAvailable(SDL3)
         unset(_psx_sdl3_src)
+        unset(_psx_sdl3_url)
+        unset(_psx_sdl3_hash)
     endif()
     if(NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR
@@ -262,11 +318,13 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
+    ${PSXRECOMP_ROOT}/runtime/src/dma_gpu_ll.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
     ${PSXRECOMP_ROOT}/runtime/src/mdec.c
     ${PSXRECOMP_ROOT}/runtime/src/timers.c
     ${PSXRECOMP_ROOT}/runtime/src/interrupts.c
     ${PSXRECOMP_ROOT}/runtime/src/frame_pacing.c
+    ${PSXRECOMP_ROOT}/runtime/src/frame_interpolation.c
     ${PSXRECOMP_ROOT}/runtime/src/host_time.c
     ${PSXRECOMP_ROOT}/runtime/src/psx_fiber.c
     ${PSXRECOMP_ROOT}/runtime/src/sio.c
@@ -297,6 +355,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
     ${PSXRECOMP_ROOT}/runtime/src/crash_trace.c
+    ${PSXRECOMP_ROOT}/runtime/src/freeze_dump_policy.c
     ${PSXRECOMP_ROOT}/runtime/src/freeze_heartbeat.c
     ${PSXRECOMP_ROOT}/runtime/src/gte.cpp
     ${PSXRECOMP_ROOT}/runtime/src/pgxp.cpp
@@ -334,6 +393,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/game_options.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_speed.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_pgxp.c
+    ${PSXRECOMP_ROOT}/runtime/src/mod_builtin_bezel.c
     ${PSXRECOMP_ROOT}/runtime/src/mod_packages.cpp
     ${PSXRECOMP_ROOT}/runtime/src/mod_runtime.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_keybinds.c
@@ -729,11 +789,17 @@ function(psxrecomp_ensure_zlib)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
         list(APPEND _psx_zlib_timestamp_args DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     endif()
+    psxrecomp_dependency_source_dir(psx_zlib
+        ENV PSX_ZLIB_SOURCE_DIR
+        OUT _psx_zlib_src)
+    psxrecomp_dependency_archive(psx_zlib
+        SOURCE_DIR "${_psx_zlib_src}"
+        OUT_URL _psx_zlib_url OUT_HASH _psx_zlib_hash)
     FetchContent_Declare(psx_zlib
         URL
-            "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
+            "${_psx_zlib_url}"
         URL_HASH
-            "SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+            "${_psx_zlib_hash}"
         ${_psx_zlib_timestamp_args})
     FetchContent_MakeAvailable(psx_zlib)
     # madler/zlib builds zlibstatic even when a shared zlib target exists.
@@ -769,7 +835,10 @@ function(psxrecomp_add_runtime_target target)
     # and stamp the pgxp overlay flavor so the shard cache and the ABI gate
     # keep pgxp and base DLLs fully separate. The base target is untouched —
     # the macros preprocess away without the define.
-    set(options ORACLE COSIM PGXP)
+    # PGXP_CLONE is internal: set only by the PSX_PGXP_VARIANT auto-clone at the
+    # end of this function, to mark the sibling that needs a distinguishing exe
+    # name. Callers pass PGXP alone.
+    set(options ORACLE COSIM PGXP PGXP_CLONE)
     set(oneValueArgs
         GAME_GENERATED_DISPATCH_C
         GAME_OVERLAY_STATIC_C
@@ -910,8 +979,9 @@ function(psxrecomp_add_runtime_target target)
     target_link_libraries(${target} PRIVATE chdr-static)
     # audio_trace.c uses C11 atomics. Make the runtime's actual language
     # requirement explicit instead of relying on a parent project's global
-    # CMAKE_C_STANDARD setting.
-    target_compile_features(${target} PRIVATE c_std_11)
+    # CMAKE_C_STANDARD setting. cxx_std_17 likewise — game CMakeLists may omit
+    # CMAKE_CXX_STANDARD; mod_packages.cpp must not compile as a pre-17 dialect.
+    target_compile_features(${target} PRIVATE c_std_11 cxx_std_17)
 
     # Game-specific executable name. Every title instantiates this function with
     # the same CMake target name ("psx-runtime"), so without this they ALL produce
@@ -933,15 +1003,47 @@ function(psxrecomp_add_runtime_target target)
         set(_psxrt_exe_name "${_psxrt_exe_name}_oracle")
     endif()
     if(PSXRT_PGXP)
-        # Distinct binary beside the base one; the launcher (or the player)
-        # picks the variant. Same debug port as the base build — run one at a
-        # time (the A/B protocol is one-toggle-per-run anyway).
-        set(_psxrt_exe_name "${_psxrt_exe_name}_pgxp")
+        # The _pgxp suffix exists only to keep the auto-cloned A/B sibling
+        # distinct from the base binary it sits beside (PSX_PGXP_VARIANT); the
+        # launcher or the player picks between them. Same debug port as the
+        # base build — run one at a time (the A/B protocol is
+        # one-toggle-per-run anyway).
+        #
+        # A title that builds PGXP into its ONE runtime target has no base
+        # binary beside it, so suffixing there would ship a single product
+        # under an odd name and, worse, leave a second look-alike executable in
+        # the build tree for someone to launch by mistake. That is not
+        # hypothetical: a non-PGXP binary got played and reported as "textures
+        # still wobble" while the PGXP one measured 99% precise-vertex
+        # coverage. Suffix the clone, never the primary.
+        if(PSXRT_PGXP_CLONE)
+            set(_psxrt_exe_name "${_psxrt_exe_name}_pgxp")
+        endif()
         target_compile_definitions(${target} PRIVATE
             PSX_PGXP=1
             PSX_OVERLAY_FLAVOR=2)   # PSX_OVERLAY_FLAVOR_PGXP (overlay_api.h)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
+
+    # Publish the name we just chose, so nothing downstream has to re-derive it.
+    #
+    # Two other places used to compute this independently — psxrecomp_cli.py
+    # from --exe-name, and the in-runtime self-compiler from
+    # codegen_setup.exe_basename — each re-running the same
+    # MAKE_C_IDENTIFIER(WINDOW_TITLE) rule against its own copy of the title.
+    # The rules agree; the copies drift. Rename a game and the build links
+    # <new>.exe while both consumers look for <old>.exe, which surfaces as the
+    # flatly untrue "build succeeded but binary missing" on a build that had no
+    # errors at all. Seen in the wild on Revelations: Persona, where CMake
+    # emitted Revelations__Persona_Recompiled.exe and the setup host wanted
+    # Revelations_Persona__Recompiled.exe — same algorithm, colon in a
+    # different place.
+    #
+    # Generate-time output uses the final target property, so a game that
+    # changes OUTPUT_NAME after this helper returns still publishes the name
+    # CMake will actually link.
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/psxrecomp_exe_name-${target}.txt"
+         CONTENT "$<TARGET_FILE_BASE_NAME:${target}>\n")
 
     # ---- Windows / desktop app icon ---------------------------------------
     # Prefer an explicit APP_ICON, then the game-repo copy under assets/, then
@@ -1264,19 +1366,37 @@ function(psxrecomp_add_runtime_target target)
     # own POST_BUILD copy so a title may still override an id if it ever needs
     # to; copy_directory merges rather than replacing the tree.
     if(EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages")
+        # Clear first: copy_directory MERGES, so a mod deleted from source
+        # would otherwise survive in the build output forever and keep
+        # appearing on the Mods page (and inflate release catalog assertions).
+        # Scoped to mods/packages, not mods/: state.toml is launcher-owned user
+        # state and must survive a rebuild.
+        set(_psx_builtin_mod_copy_commands "")
+        if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
+           "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
+            foreach(_psx_builtin_mod IN LISTS PSX_BUILTIN_MOD_ALLOWLIST)
+                if(NOT EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages/${_psx_builtin_mod}")
+                    message(FATAL_ERROR
+                        "PSX_BUILTIN_MOD_ALLOWLIST names missing package: ${_psx_builtin_mod}")
+                endif()
+                list(APPEND _psx_builtin_mod_copy_commands
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${PSXRECOMP_ROOT}/mods/builtin/packages/${_psx_builtin_mod}"
+                        "$<TARGET_FILE_DIR:${target}>/mods/packages/${_psx_builtin_mod}")
+            endforeach()
+        else()
+            list(APPEND _psx_builtin_mod_copy_commands
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${PSXRECOMP_ROOT}/mods/builtin"
+                    "$<TARGET_FILE_DIR:${target}>/mods")
+        endif()
         add_custom_command(TARGET ${target} POST_BUILD
-            # Clear first: copy_directory MERGES, so a mod deleted from source
-            # would otherwise survive in the build output forever and keep
-            # appearing on the Mods page (and inflate the release packagers'
-            # catalog assertions). This runs before the game's own staging, so
-            # both catalogs land on a clean slate.
             COMMAND ${CMAKE_COMMAND} -E rm -rf
-                "$<TARGET_FILE_DIR:${target}>/mods"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${PSXRECOMP_ROOT}/mods/builtin"
-                "$<TARGET_FILE_DIR:${target}>/mods"
-            COMMENT "Staging framework-owned mod catalog (loading speed)"
+                "$<TARGET_FILE_DIR:${target}>/mods/packages"
+            ${_psx_builtin_mod_copy_commands}
+            COMMENT "Staging framework-owned mod catalog"
             VERBATIM)
+        unset(_psx_builtin_mod_copy_commands)
     endif()
     endif()
 
@@ -1436,9 +1556,30 @@ function(psxrecomp_add_runtime_target target)
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
         endif()
-        find_package(OpenGL)
-        if(OpenGL_FOUND)
-            target_link_libraries(${target} PRIVATE OpenGL::GL)
+        # GL for gpu_gl_renderer.c. Do NOT hardcode OpenGL::GL: FindOpenGL
+        # reports OpenGL as found on a GLVND host that has libOpenGL.so but no
+        # legacy libGL.so / glx.h (Steam Deck), yet never creates that target —
+        # which then fails at generate time. recomp_resolve_gl() picks whatever
+        # the host actually has; see recomp-ui/cmake/recomp_gl.cmake.
+        if(NOT COMMAND recomp_resolve_gl
+           AND RECOMP_UI_ROOT AND EXISTS "${RECOMP_UI_ROOT}/cmake/recomp_gl.cmake")
+            include("${RECOMP_UI_ROOT}/cmake/recomp_gl.cmake")
+        endif()
+        if(COMMAND recomp_resolve_gl)
+            recomp_resolve_gl(_psx_gl_target)
+            target_link_libraries(${target} PRIVATE ${_psx_gl_target})
+        else()
+            # No recomp-ui checkout (PSX_RECOMP_UI=OFF): same resolution inline.
+            find_package(OpenGL)
+            if(TARGET OpenGL::GL)
+                target_link_libraries(${target} PRIVATE OpenGL::GL)
+            elseif(TARGET OpenGL::OpenGL)
+                target_link_libraries(${target} PRIVATE OpenGL::OpenGL)
+            elseif(OPENGL_gl_LIBRARY)
+                target_link_libraries(${target} PRIVATE "${OPENGL_gl_LIBRARY}")
+            elseif(OPENGL_opengl_LIBRARY)
+                target_link_libraries(${target} PRIVATE "${OPENGL_opengl_LIBRARY}")
+            endif()
         endif()
         # Async lobby connect (psx_lobby_client.c) uses pthread on Unix.
         if(PSXRECOMP_HAS_LOBBY_CLIENT)
@@ -1479,6 +1620,23 @@ function(psxrecomp_add_runtime_target target)
     endif()
     find_program(GLSLC_EXE NAMES glslc
         HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+    # Finding the header is not the same as being able to include it. The usual
+    # miss is _vk_inc=/usr/include: CMake drops that directory from include
+    # lists (adding it explicitly would disturb the system header order), so
+    # the -I never reaches the compiler, and a sysroot toolchain never had it
+    # on the search path to begin with. Verify, then fall back to the inert
+    # stub this block already knows how to build.
+    if(_vk_inc AND GLSLC_EXE)
+        _psx_header_compiles(_psx_vk_ok "vulkan/vulkan.h" INCLUDES "${_vk_inc}")
+        if(NOT _psx_vk_ok)
+            message(STATUS
+                "Vulkan backend: headers at ${_vk_inc} are not reachable from "
+                "${CMAKE_C_COMPILER} - gpu_vk_renderer.c builds as a software "
+                "stub. Set VULKAN_SDK to a copy the compiler can see to enable it.")
+            set(_vk_inc "")
+        endif()
+        unset(_psx_vk_ok)
+    endif()
     if(_vk_inc AND GLSLC_EXE)
         message(STATUS "Vulkan backend: headers ${_vk_inc}, glslc ${GLSLC_EXE}")
         target_include_directories(${target} PRIVATE "${_vk_inc}")
@@ -1615,7 +1773,7 @@ function(psxrecomp_add_runtime_target target)
         option(PSX_PGXP_VARIANT
             "Also build the <exe>_pgxp PGXP precision-shadowing variant" OFF)
         if(PSX_PGXP_VARIANT)
-            psxrecomp_add_runtime_target(${target}-pgxp PGXP ${ARGN})
+            psxrecomp_add_runtime_target(${target}-pgxp PGXP PGXP_CLONE ${ARGN})
         endif()
     endif()
 endfunction()
@@ -1795,9 +1953,15 @@ function(psxrecomp_add_game_runtime target)
             "build the setup host.")
     endif()
 
-    set(_psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
-    list(APPEND _psxg_extras
-        "${PSXRECOMP_ROOT}/host/psxrecomp_codegen_host.c")
+    set(_psxg_extras)
+    # psxrecomp_codegen_host.c unconditionally includes recomp_launcher.h, so
+    # the title's setup host and the shared host implementation can only be
+    # built alongside the recomp-ui submodule (PSX_RECOMP_UI).
+    if(PSX_RECOMP_UI)
+        list(APPEND _psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
+        list(APPEND _psxg_extras
+            "${PSXRECOMP_ROOT}/host/psxrecomp_codegen_host.c")
+    endif()
 
     set(_psxg_rt_args
         GAME_VERSION "${PSX_GAME_VERSION}"
@@ -1855,6 +2019,13 @@ function(psxrecomp_add_game_runtime target)
 
     foreach(_psxg_t IN LISTS _psxg_targets)
         target_compile_definitions(${_psxg_t} PRIVATE PSX_HAS_GAME_CODEGEN=1)
+        # Distinct from PSX_HAS_GAME_CODEGEN (which just means "generated game
+        # C is linked"): this only fires when a codegen_setup.c-style host was
+        # actually provided, since that file needs recomp-ui/launcher headers
+        # that a --no-recomp-ui build does not have.
+        if(PSX_RECOMP_UI AND PSXG_CODEGEN_SETUP_SOURCES)
+            target_compile_definitions(${_psxg_t} PRIVATE PSX_HAS_CODEGEN_SETUP_HOST=1)
+        endif()
 
         if(PSX_NET_LOBBY_DEFAULT_URL)
             # Stringify for C: PSX_NET_LOBBY_DEFAULT_URL="ws://..."

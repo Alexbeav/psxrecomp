@@ -202,6 +202,10 @@ int psx_ws_cull_sltiu(uint32_t sx, uint32_t imm) {
 int psx_ws_cull_slti(uint32_t sx, uint32_t imm) {
     return ((int32_t)sx < (int32_t)imm + psx_ws_x_margin()) ? 1 : 0;
 }
+int psx_ws_cull_slti_lower(uint32_t sx, uint32_t imm) {
+    int32_t bound = (int32_t)(int16_t)(uint16_t)imm;
+    return ((int32_t)sx < bound - psx_ws_x_margin()) ? 1 : 0;
+}
 int psx_ws_cull_bltz(uint32_t v) {
     return ((int32_t)v < -psx_ws_x_margin()) ? 1 : 0;
 }

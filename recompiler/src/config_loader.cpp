@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -73,6 +74,7 @@ uint32_t overlay_codegen_config_hash(const GameConfig& c) {
     h.words("cull_plane_nx", c.ws_cull_plane_nx_sites);
     h.words("cull_xclip_load", c.ws_cull_xclip_load_sites);
     h.words("cull_nclip_keep", c.ws_cull_nclip_keep_sites);
+    h.words("cull_nclip_exact", c.ws_cull_nclip_exact_sites);
     h.words("cull_branch_keep", c.ws_cull_branch_keep_sites);
     h.words("cull_w_imms", c.ws_cull_w_imms);
     h.words("cull_h_imms", c.ws_cull_h_imms);
@@ -194,15 +196,13 @@ int pad_mode_from_string(const std::string& s, int fallback) {
     std::string l;
     l.reserve(s.size());
     for (char c : s) l.push_back((char)std::tolower((unsigned char)c));
-    /* "hybrid" is MOD-ONLY: reachable solely through
-     * psx_mod_set_controller_mode_override(). A game.toml that declares it is
-     * a configuration error, not something to silently coerce — coercion is
-     * how this mode kept reappearing in titles that never meant to ship it. */
+    /* "hybrid" used to be a framework mode. A game.toml that declares it is
+     * now a configuration error: game-specific auto-switching belongs in an
+     * enabled trusted plugin policy, not in the global launcher/config surface. */
     if (l == "hybrid")
         throw std::runtime_error(
             "[controller] pad mode \"hybrid\" is not selectable. Hybrid is a "
-            "mod-only mode, requested at runtime by a trusted game plugin via "
-            "psx_mod_set_controller_mode_override(). Use \"analog\" or "
+            "game-owned mod policy, not a game.toml value. Use \"analog\" or "
             "\"digital\" here.");
     if (l == "analog")  return PAD_MODE_ANALOG;
     if (l == "digital") return PAD_MODE_DIGITAL;
@@ -504,6 +504,35 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
     if (runtime.contains("overlay_backend")) {
         rt.overlay_backend = toml::find<std::string>(runtime, "overlay_backend");
     }
+    if (runtime.contains("overlay_region_floor")) {
+        const auto& v = toml::find(runtime, "overlay_region_floor");
+        uint32_t floor = 0;
+        if (v.is_string()) {
+            floor = parse_hex(v.as_string(), "runtime.overlay_region_floor");
+        } else {
+            // Raw TOML integers are 64-bit signed: reject anything that would
+            // wrap or be masked into a different physical address downstream.
+            const std::int64_t raw = v.as_integer();
+            if (raw < 0 || raw > 0xFFFFFFFFll) {
+                throw std::runtime_error(fmt::format(
+                    "[runtime] overlay_region_floor out of range "
+                    "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): {}",
+                    raw));
+            }
+            floor = static_cast<uint32_t>(raw);
+        }
+        // The floor names a main-RAM physical address above the kernel window;
+        // fail loud here instead of relying on the runtime clamp/mask.
+        const uint32_t phys = floor & 0x1FFFFFFFu;
+        if (phys < 0x00010000u || phys >= 0x00200000u) {
+            throw std::runtime_error(fmt::format(
+                "[runtime] overlay_region_floor out of range "
+                "(0x10000..0x1FFFFF physical, KSEG0/KSEG1 prefix allowed): 0x{:08X}",
+                floor));
+        }
+        rt.overlay_region_floor = floor;
+        rt.has_overlay_region_floor = true;
+    }
         if (runtime.contains("overlay_native_block")) {
             for (const auto& a : toml::find<std::vector<std::string>>(runtime, "overlay_native_block")) {
                 rt.overlay_native_block.push_back(parse_hex(a, "runtime.overlay_native_block"));
@@ -545,6 +574,14 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             }
             rt.video_supersampling = static_cast<int>(n);
         }
+        if (video.contains("window_width")) {
+            const auto n = toml::find<int64_t>(video, "window_width");
+            if (n < 640 || n > 7680) {
+                throw std::runtime_error(fmt::format(
+                    "[video] window_width out of range (640..7680): {}", n));
+            }
+            rt.video_window_width = static_cast<int>(n);
+        }
         if (video.contains("antialiasing")) {
             rt.video_antialiasing = toml::find<bool>(video, "antialiasing");
         }
@@ -554,6 +591,13 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
             else if (mode == "bilinear") rt.video_texture_filter = 1;
             else throw std::runtime_error(fmt::format(
                 "[video] texture_filtering must be \"nearest\" or \"bilinear\": {}", mode));
+        }
+        if (video.contains("fmv_filter")) {
+            const auto mode = toml::find<std::string>(video, "fmv_filter");
+            if (!video_fmv_filter_parse(mode, &rt.video_fmv_filter))
+                throw std::runtime_error(fmt::format(
+                    "[video] fmv_filter must be \"nearest\", \"bilinear\", "
+                    "\"sharp\" or \"bicubic\": {}", mode));
         }
         if (video.contains("renderer")) {
             const auto mode = toml::find<std::string>(video, "renderer");
@@ -1179,6 +1223,10 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         const auto& d = toml::find<std::string>(game, "disc");
         discs.push_back(fs::absolute(root / d));
     }
+    /* Per-disc serials, parallel to `discs`. Absent => no per-disc gate. */
+    std::vector<std::string> disc_serials;
+    if (game.contains("disc_serials"))
+        disc_serials = toml::find<std::vector<std::string>>(game, "disc_serials");
 
     // Optional expected disc identity (launcher verification badge).
     bool has_disc_crc = false;
@@ -1200,6 +1248,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool has_netplay_required_leadout = false;
     uint32_t netplay_required_leadout_lba = 0;
     std::string netplay_required_disc_fp;
+    std::vector<std::string> netplay_required_disc_fps;
     std::string netplay_local_viewport;
     std::string netplay_local_viewport_aspect;
     if (cfg.contains("netplay")) {
@@ -1217,6 +1266,14 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
             for (char& c : netplay_required_disc_fp)
                 c = (char)std::tolower((unsigned char)c);
+        }
+        /* Per-disc fingerprints for a multi-disc set, parallel to [game]
+         * discs. Lowercased here so the runtime compares like for like. */
+        if (np.contains("required_disc_fps")) {
+            netplay_required_disc_fps =
+                toml::find<std::vector<std::string>>(np, "required_disc_fps");
+            for (std::string& fp : netplay_required_disc_fps)
+                for (char& c : fp) c = (char)std::tolower((unsigned char)c);
         }
         if (np.contains("local_viewport")) {
             netplay_local_viewport = toml::find<std::string>(np, "local_viewport");
@@ -1613,6 +1670,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     std::vector<uint32_t> ws_cull_plane_nx_sites;
     std::vector<uint32_t> ws_cull_xclip_load_sites;
     std::vector<uint32_t> ws_cull_nclip_keep_sites;
+    std::vector<uint32_t> ws_cull_nclip_exact_sites;
     std::vector<uint32_t> ws_cull_branch_keep_sites;
     std::vector<WidescreenCullKeepSite> ws_cull_keep_sites;
     std::vector<WidescreenAngleSite> ws_cull_angle_sites;
@@ -1648,6 +1706,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             load_sites("plane_nx_sites", ws_cull_plane_nx_sites);
             load_sites("xclip_load_sites", ws_cull_xclip_load_sites);
             load_sites("nclip_keep_sites", ws_cull_nclip_keep_sites);
+            load_sites("nclip_exact_sites", ws_cull_nclip_exact_sites);
             load_sites("branch_keep_sites", ws_cull_branch_keep_sites);
             if (cull.contains("keep")) {
                 std::set<uint32_t> seen;
@@ -2027,6 +2086,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*text_size*/        text_size,
         /*stack_base*/       stack_base,
         /*discs*/            discs,
+        /*disc_serials*/     disc_serials,
         /*has_disc_crc*/     has_disc_crc,
         /*disc_crc*/         disc_crc,
         /*disc_sha1*/        disc_sha1,
@@ -2035,6 +2095,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_netplay_required_leadout*/ has_netplay_required_leadout,
         /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
         /*netplay_required_disc_fp*/ netplay_required_disc_fp,
+        /*netplay_required_disc_fps*/ netplay_required_disc_fps,
         /*netplay_local_viewport*/ netplay_local_viewport,
         /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
         /*seeds_path*/       seeds_path,
@@ -2076,6 +2137,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*ws_cull_plane_nx_sites*/ ws_cull_plane_nx_sites,
         /*ws_cull_xclip_load_sites*/ ws_cull_xclip_load_sites,
         /*ws_cull_nclip_keep_sites*/ ws_cull_nclip_keep_sites,
+        /*ws_cull_nclip_exact_sites*/ ws_cull_nclip_exact_sites,
         /*ws_cull_branch_keep_sites*/ ws_cull_branch_keep_sites,
         /*ws_cull_keep_sites*/    ws_cull_keep_sites,
         /*ws_cull_angle_sites*/   ws_cull_angle_sites,
@@ -2215,6 +2277,10 @@ UserSettings load_user_settings(const fs::path& path) {
             if (m == "nearest") { s.texture_filter = 0; s.has_texture_filter = true; }
             else if (m == "bilinear") { s.texture_filter = 1; s.has_texture_filter = true; }
         });
+        if (v.contains("fmv_filter")) try_get([&]{
+            const auto m = toml::find<std::string>(v, "fmv_filter");
+            if (video_fmv_filter_parse(m, &s.fmv_filter)) s.has_fmv_filter = true;
+        });
         if (v.contains("geometry_correction")) try_get([&]{
             s.geometry_correction = toml::find<bool>(v, "geometry_correction");
             s.has_geometry_correction = true;
@@ -2287,6 +2353,10 @@ UserSettings load_user_settings(const fs::path& path) {
             s.adaptive_view = toml::find<bool>(v, "adaptive_view");
             s.has_adaptive_view = true;
         });
+        if (v.contains("rewind")) try_get([&]{
+            s.rewind = toml::find<bool>(v, "rewind");
+            s.has_rewind = true;
+        });
         if (v.contains("rewind_depth")) try_get([&]{
             int d = toml::find<int>(v, "rewind_depth");
             static const int opts[4] = {50, 100, 150, 200};
@@ -2329,14 +2399,14 @@ UserSettings load_user_settings(const fs::path& path) {
         const toml::value& h = toml::find(doc, "hotkeys");
         if (h.contains("rewind_pad")) try_get([&]{
             const auto n = toml::find<int64_t>(h, "rewind_pad");
-            if (n >= 0 && n < 256) {
+            if (pad_bind_value_ok(n)) {
                 s.hotkey_pad_rewind = (int)n;
                 s.has_hotkey_pad_rewind = true;
             }
         });
         if (h.contains("save_state_menu_pad")) try_get([&]{
             const auto n = toml::find<int64_t>(h, "save_state_menu_pad");
-            if (n >= 0 && n < 256) {
+            if (pad_bind_value_ok(n)) {
                 s.hotkey_pad_save_state_menu = (int)n;
                 s.has_hotkey_pad_save_state_menu = true;
             }
@@ -2371,6 +2441,15 @@ UserSettings load_user_settings(const fs::path& path) {
         if (d.contains("path")) try_get([&]{
             const auto p = toml::find<std::string>(d, "path");
             if (!p.empty()) { s.disc_path = fs::path(p); s.has_disc_path = true; }
+        });
+        /* Multi-disc selection, 1-based. Anything below 1 is a malformed
+         * hand-edit, not a request to boot disc 0 -- clamp up and keep going
+         * rather than silently mounting nothing. The upper bound is the disc
+         * roster's size, which only the runtime knows, so it clamps there. */
+        if (d.contains("selected")) try_get([&]{
+            const auto n = toml::find<int>(d, "selected");
+            s.disc_index = n < 1 ? 1 : n;
+            s.has_disc_index = true;
         });
     }
     if (doc.contains("memcard")) {
@@ -2522,6 +2601,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "antialiasing      = " << (s.antialiasing ? "true" : "false") << "\n";
     if (s.has_texture_filter)
         f << "texture_filtering = \"" << (s.texture_filter ? "bilinear" : "nearest") << "\"\n";
+    if (s.has_fmv_filter)
+        f << "fmv_filter        = \"" << video_fmv_filter_name(s.fmv_filter) << "\"\n";
     if (s.has_geometry_correction)
         f << "geometry_correction   = "
           << (s.geometry_correction ? "true" : "false") << "\n";
@@ -2558,6 +2639,8 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
         f << "aspect_ratio      = \"" << s.aspect_num << ":" << s.aspect_den << "\"\n";
     if (s.has_adaptive_view)
         f << "adaptive_view     = " << (s.adaptive_view ? "true" : "false") << "\n";
+    if (s.has_rewind)
+        f << "rewind            = " << (s.rewind ? "true" : "false") << "\n";
     if (s.has_rewind_depth)
         f << "rewind_depth      = " << s.rewind_depth << "\n";
     if (s.has_rewind_interval)
@@ -2587,8 +2670,15 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
     if (s.has_bios_path)
         f << "\n[bios]\npath = \"" << fwd(s.bios_path) << "\"\n";
-    if (s.has_disc_path)
-        f << "\n[disc]\npath = \"" << fwd(s.disc_path) << "\"\n";
+    if (s.has_disc_path || s.has_disc_index) {
+        f << "\n[disc]\n";
+        if (s.has_disc_path)
+            f << "path = \"" << fwd(s.disc_path) << "\"\n";
+        /* Only meaningful for a multi-disc title; harmless (and informative)
+         * for a single-disc one, where it is always 1. */
+        if (s.has_disc_index)
+            f << "selected = " << s.disc_index << "\n";
+    }
     if (s.has_memcard_dir || s.has_memcard1_path || s.has_memcard2_path ||
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";

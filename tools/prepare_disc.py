@@ -298,7 +298,11 @@ def stage_multitrack_cue(
         text = re.sub(
             r'FILE\s+"([^"]+)"\s+BINARY', _basename_file, text, flags=re.I
         )
-        cue_dest.write_text(text, encoding="utf-8", newline="\n")
+        # NB: Path.write_text(newline=) is Python 3.10+. Use open() so the
+        # tools keep working on 3.9, which RHEL/Rocky 9, Debian 11 and Ubuntu
+        # 20.04 still ship as the system python3.
+        with open(cue_dest, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
         print(f"wrote {cue_dest}")
     else:
         print(f"source cue already at {cue_dest}")
@@ -400,7 +404,23 @@ def extract_via(
     root = bytes(root[:root_size])
     entries = parse_root_entries(root)
     files: dict[str, bytes] = {}
-    for need in ("SYSTEM.CNF", boot_exe):
+    # Very early titles (e.g. King's Field, Dec 1994) ship no SYSTEM.CNF; the
+    # BIOS falls back to booting PSX.EXE from the root directory. probe_disc.py
+    # already accepts these discs (5ab7a053); staging has to accept the same
+    # ones or a clean worktree can never prepare them.
+    needed = ["SYSTEM.CNF", boot_exe]
+    if "SYSTEM.CNF" not in entries:
+        if boot_exe not in entries:
+            raise SystemExit(
+                f"SYSTEM.CNF missing on disc and no {boot_exe} fallback "
+                f"(found {sorted(entries)[:20]})"
+            )
+        print(
+            "  SYSTEM.CNF missing; using the BIOS "
+            f"{boot_exe} fallback boot path"
+        )
+        needed = [boot_exe]
+    for need in needed:
         if need not in entries:
             raise SystemExit(f"missing {need} on disc (found {sorted(entries)[:20]})")
         extent, size = entries[need]
@@ -626,13 +646,12 @@ def main() -> int:
         bin_path.write_bytes(bin_data)
 
     cue_path = cfg.out_dir / cfg.cue_name
-    cue_path.write_text(
-        f'FILE "{cfg.bin_name}" BINARY\n'
-        f"  TRACK 01 MODE2/2352\n"
-        f"    INDEX 01 00:00:00\n",
-        encoding="ascii",
-        newline="\n",
-    )
+    with open(cue_path, "w", encoding="ascii", newline="\n") as fh:
+        fh.write(
+            f'FILE "{cfg.bin_name}" BINARY\n'
+            f"  TRACK 01 MODE2/2352\n"
+            f"    INDEX 01 00:00:00\n"
+        )
     print(f"wrote {cue_path}")
 
     out_md5, out_sha1, out_size = file_hashes(bin_path)

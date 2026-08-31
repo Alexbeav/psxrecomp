@@ -13,6 +13,22 @@ Normal runtime builds stage it automatically so players supply only a disc;
 `bios/OpenBIOS.LICENSE` always rides alongside the shipped image.
 
 
+## libchdr — CHD disc-image decompressor
+
+[libchdr](https://github.com/rtissera/libchdr) by Romain Tisserand and
+contributors, licensed **BSD-3-Clause** (notice: `LICENSE.txt` inside the
+archive). Vendored as the pinned source archive
+`third_party/libchdr-<commit>.tar.gz`; the commit, digest, and upstream URL are
+recorded in `third_party/deps.manifest`, and `runtime/chd_dependency.cmake`
+verifies the archive against that digest before building it. It is compiled
+into the runtime as a static library, so the BSD notice must ship with any
+binary that links it.
+
+The archive also carries libchdr's own bundled decompressors — Zstandard
+(BSD-3-Clause / GPL-2.0 dual), LZMA SDK (public domain), and miniz (MIT) —
+built from the same pinned tree; `WITH_SYSTEM_ZLIB`/`WITH_SYSTEM_ZSTD` are
+forced OFF so the disc decoder cannot change with the host's packages.
+
 ## TinyCC (TCC) — toolchain-free overlay compiler shipped to players
 
 [TinyCC](https://bellard.org/tcc/) by Fabrice Bellard and contributors, licensed
@@ -67,3 +83,29 @@ engine-agnostic pieces originally authored by Jrickey in
 - The tap plumbing in `runtime/src/spu.c` and `runtime/include/spu.h`.
 
 All reuse keeps the original copyright and dual MIT/Apache-2.0 license.
+
+## retcomm-studio — multi-disc project tooling
+
+[retcomm-studio](https://github.com/TechnicallyComputers/retcomm-studio) by
+Alex Vanderveen, licensed **MIT** (notice: `LICENSE` in that repository).
+psxrecomp is PolyForm-NC, so this is permissive vendored into stricter — the
+MIT notice must ride along and is why this entry exists.
+
+Vendored into `tools/new_project_layout/` at commit `06bb918b`:
+
+- **`verify_disc_set.py`** — verifies that N probed images form one buildable
+  set (identical program across differing per-disc serials). New to this
+  repository.
+- **`probe_disc.py`** — synced forward. psxrecomp carried a stale fork
+  predating multi-disc support, 90 lines behind; its only 8 unique lines were
+  older revisions of the same functions, so nothing psxrecomp-specific was
+  dropped. A single-disc project still renders `disc = "..."` byte-identically.
+
+`update_disc_set.py` beside them is **not** vendored — it is psxrecomp's own,
+written here because neither repository had it: `probe_disc.py
+--write-game-toml` renders a complete game.toml, which is correct when
+scaffolding a project and destructive on a live one.
+
+Keep the pin above accurate when re-syncing. These files are the reason a
+standalone setup-wizard install and a RetComM build produce the same
+multi-disc `game.toml`; if the two drift, so do those two paths.

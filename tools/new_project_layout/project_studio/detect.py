@@ -14,6 +14,13 @@ from .models import (
     Severity,
 )
 from .naming import boot_exe_from_game_toml, infer_project_name
+from .readme_metrics import (
+    boxart_png_present,
+    readme_has_boxart,
+    readme_has_launcher,
+    readme_has_metrics,
+    readme_has_raid,
+)
 
 
 def _read(path: Path) -> str:
@@ -106,6 +113,96 @@ def diagnose_psxrecomp_checkout(root: Path) -> str | None:
 
 def _cmake_has(text: str, needle: str) -> bool:
     return needle in text
+
+
+# Trees the packager stages on its own (framework submodules, build output,
+# and the app-icon dir it installs) — never project files.
+_PACKAGER_IMPLICIT = {
+    "psxrecomp", "recomp-ui", "gbarecomp", "snesrecomp", "ndsrecomp",
+    "assets", "generated", "build", "variants", "third_party",
+}
+
+
+def _cmake_source_refs(cmake: str) -> tuple[set[str], set[str]]:
+    """Paths CMakeLists.txt reads from the project root.
+
+    Returns (referenced, guarded). ``guarded`` are those used only inside
+    ``if(EXISTS ...)``, which are optional by construction. Globs and paths
+    built from cmake variables cannot be resolved statically and are dropped.
+    """
+    refs: set[str] = set()
+    for m in re.finditer(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\"\s)]+)", cmake):
+        rel = m.group(1).rstrip('"')
+        if not rel or any(c in rel for c in "*?$"):
+            continue
+        refs.add(rel)
+    guarded = set()
+    for m in re.finditer(
+        r"if\(EXISTS\s+\"\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^\"]+)\"", cmake
+    ):
+        guarded.add(m.group(1))
+    return refs, guarded
+
+
+def packager_staged_paths(packager_text: str) -> set[str]:
+    """Top-level paths the packager passes as --project-file / --project-dir."""
+    out: set[str] = set()
+    # Two call shapes appear: the template's trailing-backslash argument list
+    # ("--project-dir seeds \") and the conditional array form
+    # ("EXTRA_PROJECT+=(--project-dir mods)"), whose closing paren is not part
+    # of the path.
+    for m in re.finditer(r"--project-(?:file|dir)\s+([^\s\\)]+)", packager_text):
+        out.add(m.group(1).strip('"\'').split("/")[0])
+    return out
+
+
+def packager_missing_paths(root: Path) -> list[str]:
+    """Paths CMakeLists.txt requires that the release zip would not contain.
+
+    The packager allowlist has to track CMakeLists.txt by hand, and when it
+    drifts the zip still builds — the failure only lands on a user's machine,
+    at cmake configure ("Cannot find source file"). Same rule the packager's
+    own pre-zip gate applies, so the two cannot disagree.
+    """
+    cmake_path = root / "CMakeLists.txt"
+    packager = root / "scripts" / "package_setup_release.sh"
+    if not cmake_path.is_file() or not packager.is_file():
+        return []
+    refs, guarded = _cmake_source_refs(_read(cmake_path))
+    staged = packager_staged_paths(_read(packager))
+    missing: set[str] = set()
+    for rel in refs - guarded:
+        top = rel.split("/")[0]
+        if top in _PACKAGER_IMPLICIT or top in staged:
+            continue
+        if not (root / rel).exists():
+            continue  # dangling in the repo too — a different problem
+        missing.add(top)
+    return sorted(missing)
+
+
+def packager_missing_optional_paths(root: Path) -> list[str]:
+    """Present in the repo, referenced under if(EXISTS ...), not in the zip.
+
+    These do not break the build — cmake skips the guarded block — but the
+    feature quietly does not ship. mods/preloaded/packages is the case that
+    matters: the activation plugin is compiled in and then has no package to
+    select, so the mod builds and never enables.
+    """
+    cmake_path = root / "CMakeLists.txt"
+    packager = root / "scripts" / "package_setup_release.sh"
+    if not cmake_path.is_file() or not packager.is_file():
+        return []
+    refs, guarded = _cmake_source_refs(_read(cmake_path))
+    staged = packager_staged_paths(_read(packager))
+    out: set[str] = set()
+    for rel in guarded & refs:
+        top = rel.split("/")[0]
+        if top in _PACKAGER_IMPLICIT or top in staged:
+            continue
+        if (root / rel).exists():
+            out.add(top)
+    return sorted(out)
 
 
 def audit_project(root: Path) -> AuditReport:
@@ -371,6 +468,55 @@ def audit_project(root: Path) -> AuditReport:
                 detail="Setup-host packager wrapper present.",
             )
         )
+        # Present is not the same as current: the allowlist inside it has to
+        # track CMakeLists.txt, and when it drifts the zip ships without a
+        # source the build needs.
+        missing_pkg = packager_missing_paths(root)
+        if missing_pkg:
+            checks.append(
+                CheckResult(
+                    id="packager_stages_sources",
+                    title="Packager stages everything CMakeLists.txt needs",
+                    status=CheckStatus.FAIL,
+                    severity=Severity.REQUIRED,
+                    detail=(
+                        "Release zip would omit "
+                        + ", ".join(missing_pkg + [])
+                        + " — CMakeLists.txt references them, so cmake configure "
+                        "fails on the user's machine with \"Cannot find source file\"."
+                    ),
+                    fix_op="sync_packager_project_dirs",
+                )
+            )
+        else:
+            checks.append(
+                CheckResult(
+                    id="packager_stages_sources",
+                    title="Packager stages everything CMakeLists.txt needs",
+                    status=CheckStatus.PASS,
+                    severity=Severity.REQUIRED,
+                    detail="Every path CMakeLists.txt requires is in the zip.",
+                )
+            )
+        # Guarded paths do not break the build, but the feature ships dead.
+        optional_pkg = packager_missing_optional_paths(root)
+        if optional_pkg:
+            checks.append(
+                CheckResult(
+                    id="packager_stages_optional",
+                    title="Packager stages optional runtime data",
+                    status=CheckStatus.WARN,
+                    severity=Severity.RECOMMENDED,
+                    detail=(
+                        "Release zip would omit "
+                        + ", ".join(optional_pkg)
+                        + " — present here and used by CMakeLists.txt under "
+                        "if(EXISTS ...), so the build succeeds and the feature "
+                        "(e.g. preloaded mods) never activates for users."
+                    ),
+                    fix_op="sync_packager_project_dirs",
+                )
+            )
     else:
         checks.append(
             CheckResult(
@@ -667,7 +813,7 @@ def audit_project(root: Path) -> AuditReport:
     gi = _read(root / ".gitignore")
     missing_gi = [
         pat
-        for pat in ("/generated/", "/disc/", "/bios/", "/dist/")
+        for pat in ("/generated/", "/disc/", "/bios/", "/dist/", "/analysis/")
         if pat not in gi and pat.rstrip("/") not in gi
     ]
     if not (root / ".gitignore").is_file():
@@ -746,6 +892,47 @@ def audit_project(root: Path) -> AuditReport:
                 severity=Severity.OPTIONAL,
                 detail="No mods/preloaded catalog stub.",
                 fix_op="emit_mods_preloaded",
+            )
+        )
+
+    # README download badges + boxart + RetComM Launcher (idempotent migrate op)
+    readme_path = root / "README.md"
+    readme_text = _read(readme_path) if readme_path.is_file() else ""
+    missing_readme: list[str] = []
+    if not readme_path.is_file():
+        missing_readme.append("README.md")
+    else:
+        if not readme_has_metrics(readme_text):
+            missing_readme.append("download badges")
+        if not readme_has_boxart(readme_text):
+            missing_readme.append("libretro boxart")
+        if not readme_has_launcher(readme_text):
+            missing_readme.append("RetComM Launcher section")
+        if not readme_has_raid(readme_text):
+            missing_readme.append("R.A.I.D. Discord footer")
+    if not (root / ".github" / "raid-discord.png").is_file():
+        missing_readme.append(".github/raid-discord.png")
+    if not boxart_png_present(root):
+        missing_readme.append("launcher_assets/img/boxart.png")
+    if missing_readme:
+        checks.append(
+            CheckResult(
+                id="readme_metrics",
+                title="README download metrics / launcher / RAID / boxart",
+                status=CheckStatus.WARN,
+                severity=Severity.RECOMMENDED,
+                detail="Missing: " + ", ".join(missing_readme),
+                fix_op="patch_readme_metrics",
+            )
+        )
+    else:
+        checks.append(
+            CheckResult(
+                id="readme_metrics",
+                title="README download metrics / launcher / RAID / boxart",
+                status=CheckStatus.PASS,
+                severity=Severity.RECOMMENDED,
+                detail="Download badges, boxart, RetComM Launcher, and R.A.I.D. footer present.",
             )
         )
 

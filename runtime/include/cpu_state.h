@@ -221,6 +221,16 @@ extern void     gte_geometry_correction_stats(uint32_t *lookups, uint32_t *hits,
                                               uint32_t *miss_unrecorded,
                                               uint32_t *miss_ambiguous);
 
+/* Exact NCLIP audit coverage: precise = all three SXY shadows are coherent and
+ * word-validated; fallback = native integer-only; disagreements counts cases
+ * where sub-pixel and guest-visible integer signs differ. MAC0 stays native. */
+extern void     gte_nclip_precise_stats(uint64_t *hits, uint64_t *fallbacks,
+                                        uint64_t *disagreements);
+/* Title-scoped widescreen cull consumer. Returns the exact tracked NCLIP sign
+ * only when it belongs to the supplied native MAC0; otherwise preserves the
+ * native comparison. This does not change guest-visible GTE state. */
+extern int      gte_nclip_precise_bltz(int32_t native_mac0);
+
 /* PGXP dataflow-shadowing hook macros (PGXP_LOAD/STORE/ALU/MULDIV/COP2).
  * The emitter writes them unconditionally; they expand to real calls only
  * under -DPSX_PGXP=1 (the pgxp build variant) and to ((void)0) otherwise.
