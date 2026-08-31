@@ -6970,7 +6970,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     /* ---- Display from our VRAM ---- */
     probe_reached = 1;
-    uint32_t w = 0, h = 0;
+    uint32_t w = 0, h = 0, present_h = 0;
     uint32_t present_w = 0;  /* display width actually presented (w + native-wide EXTRA) */
     int active_scale = 1;   /* hi-res mirror used only for 15-bit display */
     bool fmv_frame = false;  /* FMV/boot — present pillarboxed 4:3 in widescreen */
@@ -7017,7 +7017,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         s_disabled_frame_presented = false;
         s_force_present_after_load = false;
         w = di.width; h = di.height;
-        const uint32_t present_h = di.depth24 ? di.screen_height : h;
+        present_h = psx_display_present_height(
+            di.depth24, h, di.screen_height);
         /* 4:3-pinned frames: the pre-game BIOS boot, plus (once engaged) every
          * frame the widescreen layer presents native — FMV video and full-2D
          * menu/title screens. gpu_ws_present_native_43() is the single source
@@ -7259,7 +7260,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * leave the active image stuck in the upper-left portion of the window. */
 #ifndef PSX_SDL_NO_RENDER
     int src_w = (int)present_w * active_scale;
-    int src_h = (int)h * active_scale;
+    int src_h = (int)present_h * active_scale;
     if (local_viewport_crop_applied && src_w >= 2)
         src_w /= 2;
     if (g_gl_active) {
@@ -7313,8 +7314,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int dst_h = 480 * tex_scale;
     SDL_Rect dst = { (g_logical_w - dst_w) / 2, 0, dst_w, dst_h };
     /* Match GL: short display bands letterbox inside the 4:3 rect. */
-    if (pin_43 && h > 0 && h < 240) {
-        int content_h = (dst_h * (int)h) / 240;
+    if (pin_43 && present_h > 0 && present_h < 240) {
+        int content_h = (dst_h * (int)present_h) / 240;
         if (content_h < 1) content_h = 1;
         dst.y = (dst_h - content_h) / 2;
         dst.h = content_h;

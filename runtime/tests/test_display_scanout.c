@@ -12,6 +12,13 @@ static void test_vertical_offsets(void)
     assert(psx_display_vertical_offset(1, 400, 500) == 0);
 }
 
+static void test_present_height(void)
+{
+    assert(psx_display_present_height(0, 225, 288) == 225);
+    assert(psx_display_present_height(1, 225, 288) == 288);
+    assert(psx_display_present_height(1, 225, 0) == 225);
+}
+
 static void test_vertical_layout(void)
 {
     PsxDisplayVerticalLayout alundra = psx_display_vertical_layout(1, 83, 312);
@@ -36,5 +43,6 @@ int main(void)
 {
     test_vertical_offsets();
     test_vertical_layout();
+    test_present_height();
     return 0;
 }

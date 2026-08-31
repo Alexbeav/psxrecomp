@@ -14,6 +14,15 @@ typedef struct {
     int valid;
 } PsxDisplayVerticalLayout;
 
+/* Depth24 staging expands the visible source into the full active-video
+ * canvas. Every presentation backend must therefore consume the canvas
+ * height, while ordinary 15-bit display keeps its source height. */
+static inline uint32_t psx_display_present_height(
+    int depth24, uint32_t source_height, uint32_t canvas_height)
+{
+    return depth24 && canvas_height != 0u ? canvas_height : source_height;
+}
+
 /* Intersect a GP1(07h) range with the PAL or NTSC active region. The canvas
  * preserves the television scanout position without discarding visible VRAM
  * rows. source_skip_y owns rows before the active region; canvas_origin_y owns
