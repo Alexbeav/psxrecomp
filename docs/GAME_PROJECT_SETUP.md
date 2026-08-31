@@ -377,6 +377,14 @@ RetComM / the wizard download `cmake-clang-v1` from
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
 
+The setup packager removes owned-input and player-state files, including files
+with backup suffixes. It checks the complete staged tree again after it adds the
+SDK. Audit the final ZIP independently before publication.
+
+On Windows, the first-run rebuild binds C, C++, Ninja, and the resource compiler
+to the selected portable toolchain. The resource-compiler path uses forward
+slashes so source and build directories can contain spaces.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |

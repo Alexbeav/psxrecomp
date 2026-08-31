@@ -675,6 +675,7 @@ def _build_recompiler_targets(
         cmake_args.append(f"-DCMAKE_C_COMPILER={clang_c}")
     if clang_cxx is not None:
         cmake_args.append(f"-DCMAKE_CXX_COMPILER={clang_cxx}")
+    cmake_args.extend(_windows_rc_cmake_args(toolchain_bin, clang_c))
     # Portable llvm-mingw / cmake-clang-v1: static CRT so staged emitters need
     # no MSYS2 GCC DLLs (same as tools/ci/build_emitters.sh).
     if clang_c is not None or clang_cxx is not None:
@@ -1202,6 +1203,29 @@ def _tool_in_dir(bin_dir: Optional[Path], name: str) -> Optional[Path]:
     return None
 
 
+def _windows_rc_cmake_args(
+    toolchain_bin: Optional[Path], compiler: Optional[Path]
+) -> list[str]:
+    """Bind windres to the selected Windows toolchain on first configure.
+
+    An ambient resource compiler can split quoted include paths that contain
+    spaces. Use a forward-slash absolute path so CMake cannot interpret a
+    Windows backslash as an escape sequence.
+    """
+    if sys.platform != "win32":
+        return []
+    search_dirs: list[Path] = []
+    if toolchain_bin is not None:
+        search_dirs.append(toolchain_bin)
+    if compiler is not None and compiler.parent not in search_dirs:
+        search_dirs.append(compiler.parent)
+    for directory in search_dirs:
+        windres = _tool_in_dir(directory, "windres")
+        if windres is not None:
+            return [f"-DCMAKE_RC_COMPILER={windres.resolve().as_posix()}"]
+    return []
+
+
 def _pack_sysroot_cmake_args(
     clang_path: Optional[Path], existing: list[str] | tuple[str, ...] = ()
 ) -> list[str]:
@@ -1279,6 +1303,7 @@ def _cmake_configure(
         compiler_args.append(f"-DCMAKE_C_COMPILER={clang_c}")
     if clang_cxx is not None:
         compiler_args.append(f"-DCMAKE_CXX_COMPILER={clang_cxx}")
+    compiler_args.extend(_windows_rc_cmake_args(toolchain_bin, clang_c))
     compiler_args.extend(_pack_sysroot_cmake_args(clang_c, extra))
 
     cmd = [
