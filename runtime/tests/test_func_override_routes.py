@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Pin the generated and dirty-RAM function-override entry routes."""
+"""Pin the dirty-RAM function-override entry route."""
 
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DIRTY = (ROOT / "runtime/src/dirty_ram_interp.c").read_text(encoding="utf-8")
-EMITTER = (ROOT / "recompiler/src/full_function_emitter.cpp").read_text(
-    encoding="utf-8"
-)
 
 
 def require(condition: bool, message: str) -> None:
@@ -27,11 +24,14 @@ def main() -> None:
             "tail override entry must keep precise/replay plain-transfer policy")
     require("((insn >> 21) & 0x1Fu) != 31u" in DIRTY[pump:local],
             "JR $ra returns must not be treated as function tail entries")
-    require("func_override_try_dispatch(cpu, addr, cpu->gpr[31])" in EMITTER,
-            "generated dispatch must use the continuation-preserving helper")
-    require("g_psx_func_override_hook(cpu, addr & 0x1FFFFFFFu)) {\n"
-            "            cpu->pc = cpu->gpr[31];" not in EMITTER,
-            "generated dispatch must not overwrite non-local continuations")
+    require("proven_tail_entry" in DIRTY[pump:tail],
+            "J/JR override entry must require a proven function entry")
+    require("overlay_loader_is_candidate(target_phys)" in DIRTY[pump:tail],
+            "dynamic tail entry must require an exact overlay entry")
+    require("psx_game_is_function_entry(target)" in DIRTY[pump:tail],
+            "static tail entry must require a generated function entry")
+    require("target_phys != phys" in DIRTY[pump:tail],
+            "an intra-function jump to the current entry must not re-consult")
     print("function override entry routes passed")
 
 

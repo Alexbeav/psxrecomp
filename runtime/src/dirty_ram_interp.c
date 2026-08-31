@@ -3211,20 +3211,29 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 OV_FPLOG_RET1();
             }
             target = cpu->pc;
-            /* J/JR is an unlinked function tail entry. It has the same guest
-             * return obligation as a call but reuses the caller's $ra. Check
-             * the override after the interrupt safe point and before local
-             * dirty flow, then surface the continuation so dispatch stays
-             * flat. Conditional branches are intra-function flow and do not
-             * use this function-entry hook. Precise/replay mode keeps the
-             * same plain-transfer policy as JAL/JALR above. */
+            uint32_t target_phys = target & 0x1FFFFFFFu;
+            /* A J/JR can be an unlinked function tail entry or an ordinary
+             * intra-function jump. Only a known static or overlay function
+             * entry proves the former. Check the override after the interrupt
+             * safe point and before local dirty flow, then surface the
+             * continuation so dispatch stays flat. Precise/replay mode keeps
+             * the same plain-transfer policy as JAL/JALR above. */
             {
                 const uint32_t opc = insn >> 26;
                 const int unlinked_tail =
                     opc == 0x02u ||
                     (opc == 0x00u && (insn & 0x3Fu) == 0x08u &&
                      ((insn >> 21) & 0x1Fu) != 31u);
-                if (unlinked_tail && !g_precise_mode && !g_ls_replay_active &&
+                int proven_tail_entry =
+                    target != 0u && target_phys != phys &&
+                    overlay_loader_is_candidate(target_phys);
+#ifdef PSX_HAS_GAME_DISPATCH
+                if (!proven_tail_entry && target != 0u &&
+                    target_phys != phys)
+                    proven_tail_entry = psx_game_is_function_entry(target);
+#endif
+                if (unlinked_tail && proven_tail_entry &&
+                    !g_precise_mode && !g_ls_replay_active &&
                     func_override_try_dispatch(cpu, target, cpu->gpr[31])) {
                     g_dirty_ram_blocks_run++;
                     if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
@@ -3261,7 +3270,6 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 cpu->pc = target;  /* surfaced; trampoline re-dispatches flat */
             }
 #endif
-            uint32_t target_phys = target & 0x1FFFFFFFu;
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
                 phys_is_overlay_flow_region(target_phys) &&

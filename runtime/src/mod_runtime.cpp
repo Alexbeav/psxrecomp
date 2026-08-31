@@ -1400,7 +1400,8 @@ extern "C" void mod_runtime_activate_plugins(void) {
             s.error = out.str();
             s.plan.ok = false;
             func_override_install();
-            std::fprintf(stderr, "psxrecomp: %s\n", s.error.c_str());
+            /* The launcher reads s.error through provider_error. Keep this
+             * failure on that existing diagnostics boundary. */
             return;
         }
     }

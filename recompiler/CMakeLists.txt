@@ -628,14 +628,19 @@ if(BUILD_TESTING)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         endforeach()
 
-        # This test builds redistributable fixture DLLs and links a portable
-        # harness against the real overlay loader. It covers publication-pair
-        # deduplication plus static code-identity replacement/restore caching.
-        add_test(
-            NAME overlay_pair_dedup_runtime
-            COMMAND ${Python3_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        # This executable loader test is not a source-invariant guard. It
+        # builds redistributable fixture DLLs and a real-loader harness with a
+        # GCC-compatible command line. Keep plain MSVC-only recompiler builds
+        # green when that separate compiler is unavailable.
+        find_program(PSX_OVERLAY_FIXTURE_CC NAMES gcc cc clang)
+        if(PSX_OVERLAY_FIXTURE_CC)
+            add_test(
+                NAME overlay_pair_dedup_runtime
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
+                        --gcc ${PSX_OVERLAY_FIXTURE_CC}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        endif()
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------
         # These two were previously left out of the list above with a comment
