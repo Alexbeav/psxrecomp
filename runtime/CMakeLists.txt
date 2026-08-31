@@ -337,6 +337,10 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
 
+    add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
+    target_include_directories(cdrom_lid_state_test PRIVATE src)
+    add_test(NAME cdrom_lid_state_test COMMAND cdrom_lid_state_test)
+
     # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
     # clear another device's pending source — pinned on SPU (I_STAT bit 9)
     # staying set across card ACK delivery until the guest acknowledges it.
@@ -514,6 +518,9 @@ if(BUILD_TESTING)
         add_test(NAME pal_cadence_host_refresh_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pal_cadence_host_refresh.py)
+        add_test(NAME cdrom_lid_integration_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
