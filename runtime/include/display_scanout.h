@@ -35,6 +35,20 @@ static inline uint32_t psx_display_interlaced_rows(
     return interlaced ? rows * 2u : rows;
 }
 
+/* Canvas-origin clipping belongs only to staged depth24 presentation.
+ * Ordinary 15-bit renderers read their source rectangle directly. */
+static inline uint32_t psx_display_clip_source_height(
+    int depth24, uint32_t source_height, uint32_t canvas_height,
+    uint32_t canvas_origin_y)
+{
+    if (!depth24)
+        return source_height;
+    if (canvas_origin_y >= canvas_height)
+        return 0u;
+    const uint32_t available = canvas_height - canvas_origin_y;
+    return source_height < available ? source_height : available;
+}
+
 /* Preserve the legacy default for an unset/degenerate GP1(07h) range. A
  * programmed increasing range that has no active-video intersection owns a
  * zero height instead, so presentation fails closed to black. */

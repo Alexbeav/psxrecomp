@@ -3248,11 +3248,21 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
 
     /* Clamp to sane maximums */
     if (w > 640) w = 640;
-    const uint32_t max_screen_h = out->depth24
-        ? PSX_DISPLAY_PRESENT_MAX_HEIGHT : 512u;
-    if (screen_h > max_screen_h) screen_h = max_screen_h;
-    if (screen_origin_y > screen_h) screen_origin_y = screen_h;
-    if (h > screen_h - screen_origin_y) h = screen_h - screen_origin_y;
+    if (out->depth24) {
+        if (screen_h > PSX_DISPLAY_PRESENT_MAX_HEIGHT)
+            screen_h = PSX_DISPLAY_PRESENT_MAX_HEIGHT;
+        if (screen_origin_y > screen_h)
+            screen_origin_y = screen_h;
+        h = psx_display_clip_source_height(
+            1, h, screen_h, screen_origin_y);
+    } else {
+        /* The active canvas is a depth24 staging contract. Keep direct 15-bit
+         * source rectangles independent from its origin and 576-row limit. */
+        if (h > 512u) h = 512u;
+        screen_h = h;
+        screen_origin_y = 0u;
+        screen_source_skip_y = 0u;
+    }
 
     out->width  = w;
     out->height = h;
