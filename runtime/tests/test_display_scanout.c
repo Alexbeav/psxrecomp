@@ -17,6 +17,9 @@ static void test_present_height(void)
     assert(psx_display_present_height(0, 225, 288) == 225);
     assert(psx_display_present_height(1, 225, 288) == 288);
     assert(psx_display_present_height(1, 225, 0) == 225);
+    assert(psx_display_interlaced_rows(288, 0) == 288);
+    assert(psx_display_interlaced_rows(288, 1) ==
+           PSX_DISPLAY_PRESENT_MAX_HEIGHT);
 
     PsxDisplayVerticalLayout unset = psx_display_vertical_layout(0, 100, 100);
     assert(!unset.range_set);

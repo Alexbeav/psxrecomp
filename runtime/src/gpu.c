@@ -3232,10 +3232,11 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
     uint32_t screen_origin_y = vertical.valid ? vertical.canvas_origin_y : 0u;
     uint32_t screen_source_skip_y = vertical.valid ? vertical.source_skip_y : 0u;
     if (vres) {
-        h *= 2; /* 480i */
-        screen_h *= 2;
-        screen_origin_y *= 2;
-        screen_source_skip_y *= 2;
+        h = psx_display_interlaced_rows(h, 1);
+        screen_h = psx_display_interlaced_rows(screen_h, 1);
+        screen_origin_y = psx_display_interlaced_rows(screen_origin_y, 1);
+        screen_source_skip_y = psx_display_interlaced_rows(
+            screen_source_skip_y, 1);
     }
 
     /* 24-bit scanout uses the same CRTC pixel width as 15-bit (DuckStation /
@@ -3247,7 +3248,9 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
 
     /* Clamp to sane maximums */
     if (w > 640) w = 640;
-    if (screen_h > 512) screen_h = 512;
+    const uint32_t max_screen_h = out->depth24
+        ? PSX_DISPLAY_PRESENT_MAX_HEIGHT : 512u;
+    if (screen_h > max_screen_h) screen_h = max_screen_h;
     if (screen_origin_y > screen_h) screen_origin_y = screen_h;
     if (h > screen_h - screen_origin_y) h = screen_h - screen_origin_y;
 

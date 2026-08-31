@@ -5,6 +5,11 @@
 
 #include <stdint.h>
 
+/* PAL active video is 288 lines per field and 576 rows when the interlaced
+ * display bit is set. CPU presentation buffers must preserve that full
+ * canvas even though PS1 VRAM itself remains 512 rows and wraps on access. */
+#define PSX_DISPLAY_PRESENT_MAX_HEIGHT 576u
+
 typedef struct {
     uint32_t canvas_height;
     uint32_t canvas_origin_y;
@@ -22,6 +27,12 @@ static inline uint32_t psx_display_present_height(
     int depth24, uint32_t source_height, uint32_t canvas_height)
 {
     return depth24 && canvas_height != 0u ? canvas_height : source_height;
+}
+
+static inline uint32_t psx_display_interlaced_rows(
+    uint32_t rows, int interlaced)
+{
+    return interlaced ? rows * 2u : rows;
 }
 
 /* Preserve the legacy default for an unset/degenerate GP1(07h) range. A

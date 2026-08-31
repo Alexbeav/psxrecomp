@@ -393,9 +393,8 @@ static void apply_offline_pad_count(int game_players, bool multitap_enabled)
         n = 2;
     g_offline_pad_count = n;
 }
-/* ARGB8888 staging buffer. Sized for the active internal resolution:
- * 640*scale x 512*scale. Allocated once the supersampling scale is known
- * (sized for the native 640x512 when supersampling is off). */
+/* ARGB8888 staging buffer. The 576-row maximum preserves the full interlaced
+ * PAL active canvas. Allocated once the supersampling scale is known. */
 static uint32_t*     sdl_pixel_buf = nullptr;
 
 typedef void (*ModFrameHook)(void);
@@ -1880,7 +1879,8 @@ static int ensure_sw_sdl_present(void) {
             sdl_renderer,
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
-            640 * tex_scale, 512 * tex_scale);
+            640 * tex_scale,
+            (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale);
         if (!sdl_texture) {
             std::fprintf(stderr,
                          "psxrecomp: netplay SW present: SDL_CreateTexture failed: %s\n",
@@ -1893,7 +1893,8 @@ static int ensure_sw_sdl_present(void) {
     if (!sdl_pixel_buf) {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
+            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+            tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
             return -1;
@@ -7294,7 +7295,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * show that as a thin white strip; Wayland may not). Pad one black row
      * so any residual linear fringe is black, matching the letterbox. */
     const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-    const int tex_h = 512 * tex_scale;
+    const int tex_h = (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale;
     if (src_w > 0 && src_h > 0 && src_h < tex_h) {
         static uint32_t s_black_pad[640 * 4]; /* covers g_video_scale <= 4 */
         const int pad_cap = (int)(sizeof(s_black_pad) / sizeof(s_black_pad[0]));
@@ -13706,12 +13707,13 @@ session_reboot:
     }
   }
 
-    /* Staging buffer + backing texture are sized for the internal resolution
-     * (640x512 native, times the supersampling factor). Netplay: 1×. */
+    /* Staging buffer + backing texture preserve the 576-row interlaced PAL
+     * canvas, times the supersampling factor. Netplay: 1×. */
     {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
+            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+            tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
             return 1;
@@ -13724,7 +13726,8 @@ session_reboot:
         sdl_renderer,
         SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
-        640 * tex_scale, 512 * tex_scale
+        640 * tex_scale,
+        (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale
     );
     if (!sdl_texture) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
