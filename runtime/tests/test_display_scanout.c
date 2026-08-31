@@ -21,13 +21,13 @@ static void test_present_height(void)
 
 static void test_vertical_layout(void)
 {
-    PsxDisplayVerticalLayout alundra = psx_display_vertical_layout(1, 83, 312);
-    assert(alundra.valid);
-    assert(alundra.canvas_height == 288);
-    assert(alundra.canvas_origin_y == 63);
-    assert(alundra.source_skip_y == 0);
-    assert(alundra.source_height == 225);
-    assert(alundra.offset_y == 32);
+    PsxDisplayVerticalLayout offset_range = psx_display_vertical_layout(1, 83, 312);
+    assert(offset_range.valid);
+    assert(offset_range.canvas_height == 288);
+    assert(offset_range.canvas_origin_y == 63);
+    assert(offset_range.source_skip_y == 0);
+    assert(offset_range.source_height == 225);
+    assert(offset_range.offset_y == 32);
 
     PsxDisplayVerticalLayout clipped_top = psx_display_vertical_layout(1, 0, 100);
     assert(clipped_top.valid);
