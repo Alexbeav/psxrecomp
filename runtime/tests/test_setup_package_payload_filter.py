@@ -17,6 +17,11 @@ def main() -> None:
     assert "! -iname 'openbios.bin' -delete" in text
     assert "forbidden owned-input or player-state payload" in text
     assert "forbidden retail BIOS payload" in text
+    assert "--omit-openbios) OMIT_OPENBIOS=1" in text
+    assert '"${STAGE}/psxrecomp/bios/openbios.bin"' in text
+    assert '"${STAGE}/psxrecomp/bios/OpenBIOS.toml"' in text
+    assert '"${STAGE}/psxrecomp/bios/OpenBIOS.LICENSE"' in text
+    assert "forbidden final BIOS payload" in text
     assert "*.mcd'" not in text
     assert "*.mcr'" not in text
     assert "elif command -v cmake" in text

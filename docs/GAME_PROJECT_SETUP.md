@@ -384,6 +384,9 @@ The packager uses CMake to create the ZIP when the `zip` command is unavailable.
 Pass `--bios-hint` when a title has a non-default BIOS contract. For example,
 a PAL title that disables OpenBIOS can name its required legal retail BIOS.
 The value appears in `README-SETUP.txt`; the BIOS profile still owns validation.
+If `game.toml` sets `openbios = false`, pass `--omit-openbios`. This option
+removes the unused OpenBIOS image, profile, and notice from the final package.
+The packager repeats the BIOS payload gate after it stages the SDK.
 
 ### Player updates (after first Generate)
 

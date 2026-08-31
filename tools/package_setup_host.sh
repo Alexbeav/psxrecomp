@@ -18,6 +18,7 @@
 #     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
 #     [--bios-hint "an optional retail SCPH-1001 BIOS; otherwise OpenBIOS"] \
+#     [--omit-openbios]     # retail-BIOS-only titles; game.toml openbios=false
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
@@ -56,6 +57,7 @@ RUNTIME_DIRS=()
 RUNTIME_DIRS_OPTIONAL=()
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
+OMIT_OPENBIOS=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
   EMBED_TOOLCHAIN=1
 fi
@@ -85,6 +87,7 @@ while [[ $# -gt 0 ]]; do
     --root) ROOT="${2:?}"; shift 2 ;;
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
+    --omit-openbios) OMIT_OPENBIOS=1; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage 2
@@ -403,6 +406,33 @@ else
 fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
+
+# A retail-BIOS-only title does not use OpenBIOS. Remove its redistributable
+# image, profile, and notice when the title package selects that boundary.
+if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+  rm -f \
+    "${STAGE}/psxrecomp/bios/openbios.bin" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.toml" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.LICENSE"
+fi
+
+# stage_setup_sdk.sh runs after the first scrub. Repeat the BIOS payload gate
+# against the complete stage so a later SDK change cannot restore a forbidden
+# image.
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) -print -quit)"
+  else
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) \
+      ! -iname 'openbios.bin' -print -quit)"
+  fi
+  if [[ -n "${FORBIDDEN_FINAL_BIOS}" ]]; then
+    echo "error: forbidden final BIOS payload: ${FORBIDDEN_FINAL_BIOS}" >&2
+    exit 1
+  fi
+fi
 
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
