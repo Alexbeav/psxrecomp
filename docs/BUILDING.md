@@ -311,10 +311,9 @@ tools/regen_bios.sh --config bios/OpenBIOS.toml
 tools/regen_bios.sh --config bios/SCPH1001.toml
 ```
 
-`PSXRECOMP_BIOS_STEMS` defaults to `OpenBIOS;SCPH1001`. The runtime build
-automatically stages `bios/openbios.bin` and `bios/OpenBIOS.LICENSE` beside
-every native executable. A release packager must copy that `bios/` directory
-unchanged.
+`PSXRECOMP_BIOS_STEMS` defaults to `OpenBIOS;SCPH1001`. A runtime that links
+the OpenBIOS backend stages `bios/openbios.bin` and its license beside the
+executable. A retail-only runtime does not require or stage these files.
 
 At runtime, no explicit player choice means OpenBIOS. A retail BIOS selected
 with the launcher, `settings.toml`, or `--bios` wins after its exact identity is
