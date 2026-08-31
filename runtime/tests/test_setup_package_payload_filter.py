@@ -11,11 +11,14 @@ PACKAGER = ROOT / "tools" / "package_setup_host.sh"
 def main() -> None:
     text = PACKAGER.read_text(encoding="utf-8")
     assert "The source tree can contain these files even when Git reports it clean." in text
-    for suffix in ("*.cue", "*.iso", "*.chd", "*.mcd", "*.mcr"):
+    for suffix in ("*.cue*", "*.iso*", "*.chd*", "*.mcd*", "*.mcr*"):
         assert suffix in text
+    assert "-iname '*.bin*'" in text
     assert "! -iname 'openbios.bin' -delete" in text
     assert "forbidden owned-input or player-state payload" in text
     assert "forbidden retail BIOS payload" in text
+    assert "*.mcd'" not in text
+    assert "*.mcr'" not in text
     print("setup package payload filter test: PASS")
 
 
