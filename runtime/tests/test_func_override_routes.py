@@ -24,14 +24,19 @@ def main() -> None:
             "tail override entry must keep precise/replay plain-transfer policy")
     require("((insn >> 21) & 0x1Fu) != 31u" in DIRTY[pump:local],
             "JR $ra returns must not be treated as function tail entries")
-    require("proven_tail_entry" in DIRTY[pump:tail],
-            "J/JR override entry must require a proven function entry")
+    require("current_is_function_entry" in DIRTY[pump:tail],
+            "J/JR override entry must prove the current function entry")
+    require("target_is_function_entry" in DIRTY[pump:tail],
+            "J/JR override entry must prove the target function entry")
+    require("current_is_function_entry && target_is_function_entry" in
+            DIRTY[pump:tail],
+            "J/JR override entry must require both proven endpoints")
     require("overlay_loader_is_candidate(target_phys)" in DIRTY[pump:tail],
             "dynamic tail entry must require an exact overlay entry")
     require("psx_game_is_function_entry(target)" in DIRTY[pump:tail],
             "static tail entry must require a generated function entry")
     require("target_phys != phys" in DIRTY[pump:tail],
-            "an intra-function jump to the current entry must not re-consult")
+            "a jump back to the current function entry must not re-consult")
     print("function override entry routes passed")
 
 

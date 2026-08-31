@@ -631,15 +631,18 @@ if(BUILD_TESTING)
         # This executable loader test is not a source-invariant guard. It
         # builds redistributable fixture DLLs and a real-loader harness with a
         # GCC-compatible command line. Keep plain MSVC-only recompiler builds
-        # green when that separate compiler is unavailable.
+        # green when that separate compiler is unavailable, but keep the test
+        # registered and visible to the registration audit.
         find_program(PSX_OVERLAY_FIXTURE_CC NAMES gcc cc clang)
-        if(PSX_OVERLAY_FIXTURE_CC)
-            add_test(
-                NAME overlay_pair_dedup_runtime
-                COMMAND ${Python3_EXECUTABLE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
-                        --gcc ${PSX_OVERLAY_FIXTURE_CC}
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME overlay_pair_dedup_runtime
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_overlay_pair_dedup_runtime.py
+                    --gcc ${PSX_OVERLAY_FIXTURE_CC}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        if(NOT PSX_OVERLAY_FIXTURE_CC)
+            set_tests_properties(overlay_pair_dedup_runtime
+                                 PROPERTIES DISABLED TRUE)
         endif()
 
         # ---- known-failing guards: DISABLED, not de-registered ---------------

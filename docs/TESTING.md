@@ -59,8 +59,8 @@ runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
 The `overlay_pair_dedup_runtime` test is an executable loader test, not a
-source-invariant guard. A plain recompiler build registers it only when CMake
-finds a GCC-compatible C compiler (`gcc`, `cc`, or `clang`). The test builds
+source-invariant guard. A plain recompiler build keeps it registered but
+disables it when CMake cannot find `gcc`, `cc`, or `clang`. The test builds
 redistributable fixture libraries and links a harness against the real loader.
 
 ## Known-failing tests (registered as disabled)

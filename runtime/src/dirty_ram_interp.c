@@ -3224,14 +3224,21 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                     opc == 0x02u ||
                     (opc == 0x00u && (insn & 0x3Fu) == 0x08u &&
                      ((insn >> 21) & 0x1Fu) != 31u);
-                int proven_tail_entry =
-                    target != 0u && target_phys != phys &&
+                int current_is_function_entry =
+                    overlay_loader_is_candidate(phys);
+                int target_is_function_entry =
                     overlay_loader_is_candidate(target_phys);
 #ifdef PSX_HAS_GAME_DISPATCH
-                if (!proven_tail_entry && target != 0u &&
-                    target_phys != phys)
-                    proven_tail_entry = psx_game_is_function_entry(target);
+                if (!current_is_function_entry)
+                    current_is_function_entry =
+                        psx_game_is_function_entry(addr);
+                if (!target_is_function_entry)
+                    target_is_function_entry =
+                        psx_game_is_function_entry(target);
 #endif
+                const int proven_tail_entry =
+                    target != 0u && target_phys != phys &&
+                    current_is_function_entry && target_is_function_entry;
                 if (unlinked_tail && proven_tail_entry &&
                     !g_precise_mode && !g_ls_replay_active &&
                     func_override_try_dispatch(cpu, target, cpu->gpr[31])) {
