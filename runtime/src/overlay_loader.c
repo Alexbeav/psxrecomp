@@ -615,6 +615,21 @@ int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
         return entry->matches;
     }
 
+    /* Arm the page watch over this variant's code ranges before hashing them.
+     * Without this the static path has NO residency signal: overlay_page_gen
+     * only advances for pages set in overlay_watch_bitmap, and the sole other
+     * callers of overlay_watch_set_range are the DLL loader's cand_register()
+     * and rebuild_lazy_manifest_index() -- both inert for an AOT-static title.
+     * An unwatched range yields a constant gen_sum, so the cache above would
+     * answer every subsequent dispatch from its first result: the CRC gate
+     * would be consulted once per process instead of once per code change, and
+     * a band that swapped occupants would keep dispatching the stale variant.
+     * Arming only sets bitmap bits -- it does not advance any generation, so
+     * the gen_sum computed above stays valid for the cache write below. */
+    for (uint32_t i = 0; i < count; i++)
+        overlay_watch_set_range(lo_len_pairs[i * 2u] & 0x1FFFFFFFu,
+                                lo_len_pairs[i * 2u + 1u]);
+
     uint32_t crc = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
