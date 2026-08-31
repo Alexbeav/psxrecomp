@@ -17,6 +17,16 @@ static void test_present_height(void)
     assert(psx_display_present_height(0, 225, 288) == 225);
     assert(psx_display_present_height(1, 225, 288) == 288);
     assert(psx_display_present_height(1, 225, 0) == 225);
+
+    PsxDisplayVerticalLayout unset = psx_display_vertical_layout(0, 100, 100);
+    assert(!unset.range_set);
+    assert(psx_display_source_height(unset, 240) == 240);
+
+    PsxDisplayVerticalLayout offscreen = psx_display_vertical_layout(1, 400, 500);
+    assert(offscreen.range_set);
+    assert(!offscreen.valid);
+    assert(offscreen.canvas_height == 288);
+    assert(psx_display_source_height(offscreen, 240) == 0);
 }
 
 static void test_vertical_layout(void)

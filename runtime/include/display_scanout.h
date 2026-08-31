@@ -11,6 +11,7 @@ typedef struct {
     uint32_t source_skip_y;
     uint32_t source_height;
     int offset_y;
+    int range_set;
     int valid;
 } PsxDisplayVerticalLayout;
 
@@ -21,6 +22,15 @@ static inline uint32_t psx_display_present_height(
     int depth24, uint32_t source_height, uint32_t canvas_height)
 {
     return depth24 && canvas_height != 0u ? canvas_height : source_height;
+}
+
+/* Preserve the legacy default for an unset/degenerate GP1(07h) range. A
+ * programmed increasing range that has no active-video intersection owns a
+ * zero height instead, so presentation fails closed to black. */
+static inline uint32_t psx_display_source_height(
+    PsxDisplayVerticalLayout layout, uint32_t fallback_height)
+{
+    return layout.range_set ? layout.source_height : fallback_height;
 }
 
 /* Intersect a GP1(07h) range with the PAL or NTSC active region. The canvas
@@ -39,6 +49,8 @@ static inline PsxDisplayVerticalLayout psx_display_vertical_layout(
 
     if (raw_y2 <= raw_y1)
         return out;
+    out.range_set = 1;
+    out.canvas_height = (uint32_t)(ymax - ymin);
     if (y1 < ymin) y1 = ymin;
     if (y1 > ymax) y1 = ymax;
     if (y2 < ymin) y2 = ymin;
@@ -46,7 +58,6 @@ static inline PsxDisplayVerticalLayout psx_display_vertical_layout(
     if (y2 <= y1)
         return out;
 
-    out.canvas_height = (uint32_t)(ymax - ymin);
     out.canvas_origin_y = (uint32_t)(y1 - ymin);
     out.source_skip_y = raw_y1 < (uint32_t)ymin
         ? (uint32_t)ymin - raw_y1 : 0u;

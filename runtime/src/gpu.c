@@ -3227,8 +3227,8 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
      * line at the bottom of present that DuckStation crops away. */
     PsxDisplayVerticalLayout vertical = psx_display_vertical_layout(
         video_mode != 0, v_display_y1, v_display_y2);
-    uint32_t h = vertical.valid ? vertical.source_height : 240u;
-    uint32_t screen_h = vertical.valid ? vertical.canvas_height : h;
+    uint32_t h = psx_display_source_height(vertical, 240u);
+    uint32_t screen_h = vertical.range_set ? vertical.canvas_height : h;
     uint32_t screen_origin_y = vertical.valid ? vertical.canvas_origin_y : 0u;
     uint32_t screen_source_skip_y = vertical.valid ? vertical.source_skip_y : 0u;
     if (vres) {
