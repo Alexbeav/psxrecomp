@@ -2396,6 +2396,20 @@ def generate_overlay_dispatch(variants: list) -> str:
         lines.append('')
         lines += emit_table('psx_ov_hash_idx', table_idx)
         lines.append('')
+        # Resident-occupant memo. On hardware the game CD-reads a file to a
+        # fixed address and jal's straight into it -- identity is implicit in
+        # control flow and costs nothing. We rediscover it by walking a band's
+        # occupants and CRC-gating each. On a deep band that walk dominated:
+        # the memory-card screen measured 41.25 checks per hit, i.e. ~41 failed
+        # gates before the resident one, 4.4 M failed checks per 2 s.
+        #
+        # Remember which occupant last satisfied each address and try it first.
+        # Correctness is unchanged because the memo only reorders candidates --
+        # every call still passes psx_overlay_static_code_matches(), so a band
+        # that swapped occupants fails the memo and falls into the full walk.
+        # The memo is a hint, never an authority.
+        lines.append(f'static uint16_t psx_ov_last_hit[{n_entries}];')
+        lines.append('')
 
     lines += [
         f'/* {n_entries} dispatch addresses, {len(flat_variants)} variants, '
@@ -2447,14 +2461,36 @@ def generate_overlay_dispatch(variants: list) -> str:
         '        slot = (slot + 1u) & PSX_OV_HASH_MASK;',
         '    }',
         '    {',
-        '        const PsxOvEntry *e = &psx_ov_entries[psx_ov_hash_idx[slot]];',
-        '        const PsxOvVariant *v = &psx_ov_variants[e->first];',
+        '        const uint32_t ei = psx_ov_hash_idx[slot];',
+        '        const PsxOvEntry *e = &psx_ov_entries[ei];',
+        '        const PsxOvVariant *base = &psx_ov_variants[e->first];',
+        '        const uint32_t n = e->n;',
+        '        uint32_t memo = psx_ov_last_hit[ei];',
         '        uint32_t i;',
-        '        for (i = 0; i < e->n; i++, v++) {',
+        '        if (memo >= n) memo = 0u;',
+        '        /* Try the occupant that satisfied this address last time. On a',
+        '         * deep band this is the difference between one CRC gate and',
+        '         * walking every occupant. It is only a hint: the gate below',
+        '         * still decides, so a swapped band simply falls through. */',
+        '        if (n > 1u) {',
+        '            const PsxOvVariant *v = base + memo;',
         '            psx_ov_static_checks++;',
         '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
         '                                               v->crc)) {',
         '                psx_ov_static_hits++;',
+        '                v->fn(cpu);',
+        '                return 1;',
+        '            }',
+        '            psx_ov_static_variant_misses++;',
+        '        }',
+        '        for (i = 0; i < n; i++) {',
+        '            const PsxOvVariant *v = base + i;',
+        '            if (n > 1u && i == memo) continue;   /* already tried */',
+        '            psx_ov_static_checks++;',
+        '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
+        '                                               v->crc)) {',
+        '                psx_ov_static_hits++;',
+        '                psx_ov_last_hit[ei] = (uint16_t)i;',
         '                v->fn(cpu);',
         '                return 1;',
         '            }',
