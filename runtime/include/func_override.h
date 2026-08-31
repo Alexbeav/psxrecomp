@@ -32,11 +32,12 @@
  * function reached from interpreted code, while registration and the
  * func_override inventory both still look healthy.
  *
- * SCOPE: overrides are CALL-site keyed. A guest tail transfer (j / jr) into
- * an overridden address from the dirty-RAM block loop is a TRANSFER, not a
- * call, and does not consult the hook — see dirty_ram_interp.c's compiled
- * handoff sites. Registering on a function only ever entered by tail
- * transfer will show calls == 0.
+ * Guest calls and unlinked function tail transfers (`j`, or `jr` through a
+ * register other than $ra) consult the same override. A handled override
+ * normally resumes at $ra. If the body or guest
+ * code that it invokes leaves a nonzero cpu->pc, dispatch preserves that
+ * continuation instead. This is required for longjmp-style guest control
+ * flow and for wrappers whose original function does not return locally.
  *
  * THE CONTRACT
  *
@@ -119,6 +120,7 @@ extern "C" {
 #define FO_MAX_OVERRIDES   128
 #define FO_MAX_ID          64
 #define FO_MAX_GUARD_WORDS 4
+#define FO_MAX_CODE_RANGES 16
 
 /* `credit` value: the override body states its own timing by calling
  * psx_advance_cycles() itself (mandatory for wraps — see CYCLE ACCOUNTING
@@ -130,6 +132,10 @@ extern "C" {
 #define FO_ERR_FULL      1
 #define FO_ERR_ARGS      2
 #define FO_ERR_DUPLICATE 3
+
+#define FO_GUARD_NONE       0
+#define FO_GUARD_WORDS      1
+#define FO_GUARD_CODE_CRC32 2
 
 /* An override implementation. Reads arguments from cpu->gpr[4..7], writes
  * the return value to cpu->gpr[2]. Returning nonzero means "handled";
@@ -155,6 +161,24 @@ int func_override_add(const char *id, uint32_t addr, FuncOverrideFn fn,
 int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
                               const uint32_t *expected_words, int n_words,
                               int32_t credit);
+
+/* Exact code-identity guard for overlays and reused dirty-RAM addresses.
+ * `lo_len_pairs` contains n_ranges immutable {guest_start, byte_length}
+ * pairs. The concatenated bytes must match expected_crc (IEEE CRC32) before
+ * the override can run. The ranges are copied at registration. They must be
+ * word-aligned, non-overlapping RAM ranges and must cover addr. This uses the
+ * overlay loader's page-generation cache, so unchanged code does not re-hash
+ * on every call. A short prefix guard is only a quick sanity check; use this
+ * API when the resident overlay generation must be identified exactly. */
+int func_override_add_exact(const char *id, uint32_t addr, FuncOverrideFn fn,
+                            const uint32_t *lo_len_pairs, int n_ranges,
+                            uint32_t expected_crc, int32_t credit);
+
+/* Validate the range shape used by func_override_add_exact. Exposed so the
+ * package registry can reject bad constructor input before plan selection. */
+int func_override_code_ranges_valid(uint32_t addr,
+                                    const uint32_t *lo_len_pairs,
+                                    int n_ranges);
 
 /* Call a guest function from inside an override (or any native code on the
  * dispatch thread): args already placed in cpu->gpr[4..7], returns after the
@@ -182,6 +206,13 @@ void func_override_guest_call(struct CPUState *cpu, uint32_t target,
  * guest-level wrap would observe). */
 void func_override_call_original(struct CPUState *cpu);
 
+/* Shared dispatcher boundary. It clears stale cpu->pc before the consult,
+ * restores it when the override declines, and on a handled call uses
+ * default_pc only when the override did not choose a non-local continuation.
+ * Generated dispatch and dirty-RAM j/jr tail entry both use this helper. */
+int func_override_try_dispatch(struct CPUState *cpu, uint32_t target,
+                               uint32_t default_pc);
+
 /* Register on behalf of a mod package plan. Identical to the two calls above
  * (pass n_words 0 for unguarded) except the entry is tagged package-armed, so
  * func_override_reset_package_armed can drop it when the plan is cleared.
@@ -190,6 +221,11 @@ void func_override_call_original(struct CPUState *cpu);
 int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
                               const uint32_t *expected_words, int n_words,
                               int32_t credit);
+int func_override_add_package_exact(const char *id, uint32_t addr,
+                                    FuncOverrideFn fn,
+                                    const uint32_t *lo_len_pairs,
+                                    int n_ranges, uint32_t expected_crc,
+                                    int32_t credit);
 
 /* Install the dispatcher hook. Call once at startup AFTER registering (the
  * mod runtime calls it again after arming package-gated overrides — safe).
@@ -209,6 +245,10 @@ void func_override_install(void);
  * peers' builds and not player-selectable. */
 int func_override_reset_package_armed(void);
 
+/* Package-plan preflight uses this to ignore entries from an older selected
+ * plan while still detecting conflicts with direct registrations. */
+int func_override_is_package(int index);
+
 /* Introspection, surfaced by the `func_override` TCP command. An override
  * whose `calls` stays 0 was never reached: wrong address, or that code path
  * never ran. `guard_misses` counts consults declined by the residency
@@ -222,6 +262,8 @@ int  func_override_get_ex(int index, char *id_out, size_t id_cap,
                           uint32_t *addr_out, uint64_t *calls_out,
                           uint64_t *guard_misses_out, int *guarded_out,
                           int32_t *credit_out);
+int  func_override_get_guard_info(int index, int *kind_out, int *count_out,
+                                  uint32_t *expected_crc_out);
 
 #ifdef __cplusplus
 }

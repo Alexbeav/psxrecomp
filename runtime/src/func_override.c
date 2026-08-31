@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "overlay_loader.h"
 #include "psx_cycles.h"
 
 /* Residency-guard reads go through the UNTRACED peek, never psx_read_word.
@@ -39,6 +40,9 @@ typedef struct {
     uint64_t       guard_misses;
     uint32_t       guard[FO_MAX_GUARD_WORDS];
     int            n_guard;      /* 0 = unguarded */
+    uint32_t       ranges[FO_MAX_CODE_RANGES * 2];
+    int            n_ranges;     /* 0 = no exact CRC identity guard */
+    uint32_t       expected_crc;
     int            package;      /* 1 = armed by a mod package plan */
     int32_t        credit;       /* >= 0 charged per handled call;
                                     FO_CREDIT_SELF = body self-charges */
@@ -65,13 +69,44 @@ static Entry *find(uint32_t phys)
     return NULL;
 }
 
+int func_override_code_ranges_valid(uint32_t addr,
+                                    const uint32_t *lo_len_pairs,
+                                    int n_ranges)
+{
+    if (!lo_len_pairs || n_ranges < 1 || n_ranges > FO_MAX_CODE_RANGES)
+        return 0;
+    const uint32_t entry = normalise(addr);
+    int entry_covered = 0;
+    for (int i = 0; i < n_ranges; i++) {
+        const uint32_t lo = normalise(lo_len_pairs[i * 2]);
+        const uint32_t len = lo_len_pairs[i * 2 + 1];
+        if ((lo & 3u) || (len & 3u) || len < 4u ||
+            lo >= 2u * 1024u * 1024u ||
+            len > 2u * 1024u * 1024u - lo)
+            return 0;
+        if (entry >= lo && entry - lo <= len - 4u) entry_covered = 1;
+        for (int p = 0; p < i; p++) {
+            const uint32_t prev_lo = normalise(lo_len_pairs[p * 2]);
+            const uint32_t prev_hi = prev_lo + lo_len_pairs[p * 2 + 1];
+            const uint32_t hi = lo + len;
+            if (lo < prev_hi && prev_lo < hi) return 0;
+        }
+    }
+    return entry_covered;
+}
+
 static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
-                      const uint32_t *guard, int n_guard, int package,
-                      int32_t credit)
+                      const uint32_t *guard, int n_guard,
+                      const uint32_t *ranges, int n_ranges,
+                      uint32_t expected_crc, int package, int32_t credit)
 {
     if (!fn)                         return FO_ERR_ARGS;
     if (n_guard < 0 || n_guard > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
     if (n_guard > 0 && !guard)       return FO_ERR_ARGS;
+    if (n_guard > 0 && n_ranges > 0) return FO_ERR_ARGS;
+    if (n_ranges < 0 || n_ranges > FO_MAX_CODE_RANGES) return FO_ERR_ARGS;
+    if (n_ranges > 0 && !func_override_code_ranges_valid(
+            addr, ranges, n_ranges)) return FO_ERR_ARGS;
     /* The credit is a required statement of timing intent (header, CYCLE
      * ACCOUNTING): a fixed per-call charge, or FO_CREDIT_SELF. Any other
      * negative value is a typo, not a policy. */
@@ -98,6 +133,9 @@ static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
     e->fn   = fn;
     for (int i = 0; i < n_guard; i++) e->guard[i] = guard[i];
     e->n_guard = n_guard;
+    for (int i = 0; i < n_ranges * 2; i++) e->ranges[i] = ranges[i];
+    e->n_ranges = n_ranges;
+    e->expected_crc = expected_crc;
     e->package = package ? 1 : 0;
     e->credit  = credit;
     s_count++;
@@ -107,7 +145,7 @@ static int add_common(const char *id, uint32_t addr, FuncOverrideFn fn,
 int func_override_add(const char *id, uint32_t addr, FuncOverrideFn fn,
                       int32_t credit)
 {
-    return add_common(id, addr, fn, NULL, 0, 0, credit);
+    return add_common(id, addr, fn, NULL, 0, NULL, 0, 0, 0, credit);
 }
 
 int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
@@ -115,7 +153,16 @@ int func_override_add_guarded(const char *id, uint32_t addr, FuncOverrideFn fn,
                               int32_t credit)
 {
     if (n_words < 1) return FO_ERR_ARGS;
-    return add_common(id, addr, fn, expected_words, n_words, 0, credit);
+    return add_common(id, addr, fn, expected_words, n_words, NULL, 0, 0,
+                      0, credit);
+}
+
+int func_override_add_exact(const char *id, uint32_t addr, FuncOverrideFn fn,
+                            const uint32_t *lo_len_pairs, int n_ranges,
+                            uint32_t expected_crc, int32_t credit)
+{
+    return add_common(id, addr, fn, NULL, 0, lo_len_pairs, n_ranges,
+                      expected_crc, 0, credit);
 }
 
 int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
@@ -124,7 +171,17 @@ int func_override_add_package(const char *id, uint32_t addr, FuncOverrideFn fn,
 {
     if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return FO_ERR_ARGS;
     return add_common(id, addr, fn, n_words ? expected_words : NULL, n_words,
-                      1, credit);
+                      NULL, 0, 0, 1, credit);
+}
+
+int func_override_add_package_exact(const char *id, uint32_t addr,
+                                    FuncOverrideFn fn,
+                                    const uint32_t *lo_len_pairs,
+                                    int n_ranges, uint32_t expected_crc,
+                                    int32_t credit)
+{
+    return add_common(id, addr, fn, NULL, 0, lo_len_pairs, n_ranges,
+                      expected_crc, 1, credit);
 }
 
 /* The hook. Runs on EVERY dispatch, so the common path — nothing registered
@@ -136,6 +193,10 @@ static int hook(CPUState *cpu, uint32_t phys)
     for (int i = 0; i < s_count; i++) {
         Entry *e = &s_entries[i];
         if (e->phys != phys) continue;
+        /* Every matched-address consult counts, including an exact/prefix
+         * identity miss and the one-shot original bypass. This makes calls
+         * a reachability counter rather than an execution counter. */
+        e->calls++;
         /* One-shot bypass: func_override_call_original re-dispatched this
          * address; let the original backend take it exactly once. */
         if (s_bypass_phys == phys) {
@@ -159,12 +220,11 @@ static int hook(CPUState *cpu, uint32_t phys)
                 return 0;
             }
         }
-        /* Count the CONSULT, not just the handled case: an override that
-         * declines still proves the address was reached through a hooked
-         * path, which is exactly what a diagnostic probe needs (calls == 0
-         * means "this call never crosses a hook", the bypass class of bug
-         * that hid the interp local-chain gap). */
-        e->calls++;
+        if (e->n_ranges && !psx_overlay_static_code_matches(
+                e->ranges, (uint32_t)e->n_ranges, e->expected_crc)) {
+            e->guard_misses++;
+            return 0;
+        }
         {
             const uint32_t saved_active = s_active_phys;
             s_active_phys = phys;
@@ -182,6 +242,20 @@ static int hook(CPUState *cpu, uint32_t phys)
         }
     }
     return 0;
+}
+
+int func_override_try_dispatch(CPUState *cpu, uint32_t target,
+                               uint32_t default_pc)
+{
+    if (!cpu || !g_psx_func_override_hook) return 0;
+    const uint32_t saved_pc = cpu->pc;
+    cpu->pc = 0;
+    if (!g_psx_func_override_hook(cpu, normalise(target))) {
+        cpu->pc = saved_pc;
+        return 0;
+    }
+    if (cpu->pc == 0) cpu->pc = default_pc;
+    return 1;
 }
 
 void func_override_guest_call(CPUState *cpu, uint32_t target, uint32_t site_ra)
@@ -240,6 +314,10 @@ int func_override_reset_package_armed(void)
     }
     s_count = w;
     if (removed) {
+        /* Entry compaction and later package re-arming can reuse the address
+         * of an exact range array. The overlay matcher keys immutable arrays
+         * by address, so discard those cache identities before reuse. */
+        overlay_loader_static_match_cache_clear();
         s_active_phys = 0;
         s_bypass_phys = 0;
         func_override_install();   /* follows s_count back to NULL if empty */
@@ -248,6 +326,11 @@ int func_override_reset_package_armed(void)
 }
 
 int func_override_count(void) { return s_count; }
+
+int func_override_is_package(int index)
+{
+    return (index >= 0 && index < s_count) ? s_entries[index].package : 0;
+}
 
 int func_override_get(int index, char *id_out, size_t id_cap,
                       uint32_t *addr_out, uint64_t *calls_out)
@@ -272,7 +355,23 @@ int func_override_get_ex(int index, char *id_out, size_t id_cap,
     if (addr_out)         *addr_out         = e->phys;
     if (calls_out)        *calls_out        = e->calls;
     if (guard_misses_out) *guard_misses_out = e->guard_misses;
-    if (guarded_out)      *guarded_out      = e->n_guard;
+    if (guarded_out)      *guarded_out      = e->n_guard ? e->n_guard
+                                                         : e->n_ranges;
     if (credit_out)       *credit_out       = e->credit;
+    return 1;
+}
+
+int func_override_get_guard_info(int index, int *kind_out, int *count_out,
+                                 uint32_t *expected_crc_out)
+{
+    if (index < 0 || index >= s_count) return 0;
+    const Entry *e = &s_entries[index];
+    const int kind = e->n_ranges ? FO_GUARD_CODE_CRC32
+                                 : (e->n_guard ? FO_GUARD_WORDS
+                                               : FO_GUARD_NONE);
+    if (kind_out) *kind_out = kind;
+    if (count_out) *count_out = e->n_ranges ? e->n_ranges : e->n_guard;
+    if (expected_crc_out)
+        *expected_crc_out = e->n_ranges ? e->expected_crc : 0;
     return 1;
 }

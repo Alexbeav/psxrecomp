@@ -59,6 +59,19 @@ void overlay_loader_clear_lazy_miss(void);
  * cache so native vs interp is re-decided against restored bytes. */
 void overlay_loader_resync_validation_after_restore(void);
 
+/* Exact code-range identity shared by generated static overlays and guarded
+ * function overrides. The pair array must remain at a stable address so the
+ * page-generation cache can key it without copying. */
+int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
+                                    uint32_t count,
+                                    uint32_t expected_crc);
+void overlay_loader_static_match_stats(uint64_t *rehashes,
+                                       uint64_t *crc_misses,
+                                       uint64_t *gen_fastpath);
+/* Range-array addresses are cache identities. Call this before mutable owners
+ * reuse an address for different ranges. Generated arrays are immutable. */
+void overlay_loader_static_match_cache_clear(void);
+
 /* Step 2.8: re-scan the cache dir for DLLs compiled after init and clear the
  * checked-regions memo so the next dispatch reconsiders the cache. Idempotent
  * (loaded DLLs stay loaded); emu thread only. */

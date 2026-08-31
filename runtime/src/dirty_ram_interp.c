@@ -35,6 +35,7 @@
 #include "lockstep.h"
 #include "starvation_ring.h"
 #include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
+#include "func_override.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -3208,6 +3209,28 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
                 g_dirty_interp_chain_target = cpu->pc;
                 OV_FPLOG_RET1();
+            }
+            target = cpu->pc;
+            /* J/JR is an unlinked function tail entry. It has the same guest
+             * return obligation as a call but reuses the caller's $ra. Check
+             * the override after the interrupt safe point and before local
+             * dirty flow, then surface the continuation so dispatch stays
+             * flat. Conditional branches are intra-function flow and do not
+             * use this function-entry hook. Precise/replay mode keeps the
+             * same plain-transfer policy as JAL/JALR above. */
+            {
+                const uint32_t opc = insn >> 26;
+                const int unlinked_tail =
+                    opc == 0x02u ||
+                    (opc == 0x00u && (insn & 0x3Fu) == 0x08u &&
+                     ((insn >> 21) & 0x1Fu) != 31u);
+                if (unlinked_tail && !g_precise_mode && !g_ls_replay_active &&
+                    func_override_try_dispatch(cpu, target, cpu->gpr[31])) {
+                    g_dirty_ram_blocks_run++;
+                    if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                    g_dirty_interp_chain_target = cpu->pc;
+                    OV_FPLOG_RET1();
+                }
             }
             target = cpu->pc;
 #ifdef PSX_HAS_GAME_DISPATCH

@@ -77,6 +77,9 @@ extern "C" int fntrace_is_game_started(void) { return 1; }
  * paths run for real. The tier's own behavior is pinned by
  * test_func_override.c; here the doubles only need to satisfy the link. */
 extern "C" uint32_t psx_peek_word_untraced(uint32_t) { return 0; }
+extern "C" int psx_overlay_static_code_matches(const uint32_t*, uint32_t,
+                                                  uint32_t) { return 1; }
+extern "C" void overlay_loader_static_match_cache_clear(void) {}
 extern "C" void psx_dispatch_call(struct CPUState*, uint32_t, uint32_t) {}
 extern "C" {
 uint64_t psx_cycle_count = 0;
@@ -97,6 +100,8 @@ static void test_vblank_plugin(void) {
 static void test_activation_plugin(void) {
     activation_calls++;
 }
+
+static int test_function_override(CPUState*) { return 1; }
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -507,6 +512,44 @@ int main() {
     check(psx_mod_display_width() == 0u && psx_mod_display_height() == 0u,
           "unestablished display geometry must report zero so callers skip "
           "drawing instead of guessing");
+
+    check(psx_mod_register_function_override(
+              "Invalid ID:bad", 0x80018000u, test_function_override,
+              nullptr, 0, 0) == 0,
+          "invalid package plugin ids must be rejected at registration");
+    const uint32_t exact_ranges[2] = {0x00018000u, 4u};
+    check(psx_mod_register_function_override_exact(
+              "runtime.test-vblank:exact", 0x80018000u,
+              test_function_override, exact_ranges, 1, 0x12345678u, 0) == 1,
+          "exact package override must queue");
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(func_override_count() == 1,
+          "selected exact package override must arm");
+    int guard_kind = -1, guard_count = 0;
+    uint32_t guard_crc = 0;
+    check(func_override_get_guard_info(0, &guard_kind, &guard_count,
+                                       &guard_crc) == 1 &&
+              guard_kind == FO_GUARD_CODE_CRC32 && guard_count == 1 &&
+              guard_crc == 0x12345678u,
+          "armed package inventory must retain exact code identity");
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    check(func_override_count() == 0,
+          "clearing the package plan must disarm the exact override");
+    check(psx_mod_register_function_override(
+              "runtime.test-vblank:first", 0x80018100u,
+              test_function_override, nullptr, 0, 0) == 1,
+          "first package override must queue");
+    check(psx_mod_register_function_override(
+              "runtime.test-vblank:second", 0x80018100u,
+              test_function_override, nullptr, 0, 0) == 1,
+          "a second package claim may queue until selection is known");
+    check(!PSXRecompV4::mod_runtime_commit(stock_path, &error),
+          "commit must reject two selected package overrides at one address");
+    check(error.find("function override collision") != std::string::npos,
+          "collision rejection must name the cause");
+    check(func_override_count() == 0,
+          "a rejected package override set must arm no partial entries");
 
     fs::remove_all(root, ec);
     if (failures) return 1;
