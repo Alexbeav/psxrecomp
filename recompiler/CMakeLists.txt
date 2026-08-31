@@ -356,6 +356,11 @@ if(BUILD_TESTING)
         ../runtime/include)
     add_test(NAME debug_trace_ranges_test COMMAND debug_trace_ranges_test)
 
+    add_executable(display_scanout_test
+        ../runtime/tests/test_display_scanout.c)
+    target_include_directories(display_scanout_test PRIVATE ../runtime/include)
+    add_test(NAME display_scanout_test COMMAND display_scanout_test)
+
     add_executable(cli_boot_path_test
         tests/cli_boot_path_test.cpp
         src/cli_boot_path.cpp
