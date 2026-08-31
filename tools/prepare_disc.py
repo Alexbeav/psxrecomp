@@ -404,7 +404,23 @@ def extract_via(
     root = bytes(root[:root_size])
     entries = parse_root_entries(root)
     files: dict[str, bytes] = {}
-    for need in ("SYSTEM.CNF", boot_exe):
+    # Very early titles (e.g. King's Field, Dec 1994) ship no SYSTEM.CNF; the
+    # BIOS falls back to booting PSX.EXE from the root directory. probe_disc.py
+    # already accepts these discs (5ab7a053); staging has to accept the same
+    # ones or a clean worktree can never prepare them.
+    needed = ["SYSTEM.CNF", boot_exe]
+    if "SYSTEM.CNF" not in entries:
+        if boot_exe not in entries:
+            raise SystemExit(
+                f"SYSTEM.CNF missing on disc and no {boot_exe} fallback "
+                f"(found {sorted(entries)[:20]})"
+            )
+        print(
+            "  SYSTEM.CNF missing; using the BIOS "
+            f"{boot_exe} fallback boot path"
+        )
+        needed = [boot_exe]
+    for need in needed:
         if need not in entries:
             raise SystemExit(f"missing {need} on disc (found {sorted(entries)[:20]})")
         extent, size = entries[need]
