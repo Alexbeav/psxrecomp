@@ -511,6 +511,7 @@ assert_no_private_build_paths() {
     -e 'C:[\\/]Users[\\/]' \
     "${STAGE}" 2>/dev/null \
     | grep -Ev 'C:[\\/]Users[\\/](You|username|\.\.\.)[\\/]' \
+    | grep -Ev 'C:[\\/]Users[\\/]\.\.\.([^A-Za-z0-9_]|$)' \
     || true)"
   if [[ -n "${hits}" ]]; then
     echo "error: staged source contains a developer-machine path:" >&2

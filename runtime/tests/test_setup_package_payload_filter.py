@@ -29,6 +29,7 @@ def main() -> None:
     ):
         assert private_source in text
     assert "developer-machine path" in text
+    assert "Users[\\\\/]\\.\\.\\." in text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
     print("setup package payload filter test: PASS")
 
