@@ -10,6 +10,14 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "tools" / "create_release_zip.py"
+PACKAGER = ROOT / "tools" / "package_release.ps1"
+
+packager_source = PACKAGER.read_text(encoding="utf-8")
+assert "tools/create_release_zip.py" in packager_source
+assert "Compress-Archive" not in packager_source
+assert "Get-Command gcc.exe" in packager_source
+assert "Get-Command objdump.exe" in packager_source
+assert 'api-ms-win-crt-*.dll' in packager_source
 
 with tempfile.TemporaryDirectory() as temporary:
     base = Path(temporary)

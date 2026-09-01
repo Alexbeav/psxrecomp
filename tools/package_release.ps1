@@ -13,7 +13,17 @@ $BuildPath = Join-Path $Root $BuildDir
 $StageRoot = Join-Path $Root "release-stage"
 $Stage = Join-Path $StageRoot "PSXRecomp-windows-x64"
 $ZipPath = Join-Path $Root ("PSXRecomp-{0}-windows-x64.zip" -f $Version)
-$MingwBin = "C:\msys64\mingw64\bin"
+$DefaultMingwBin = "C:\msys64\mingw64\bin"
+if (Test-Path (Join-Path $DefaultMingwBin "gcc.exe")) {
+    $MingwBin = $DefaultMingwBin
+} else {
+    $GccCommand = Get-Command gcc.exe -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $GccCommand) {
+        throw "MinGW gcc.exe was not found in C:\msys64\mingw64\bin or PATH"
+    }
+    $MingwBin = Split-Path -Parent $GccCommand.Source
+}
 
 $env:PATH = "$MingwBin;$env:PATH"
 
@@ -55,14 +65,23 @@ if (Test-Path (Join-Path $Root "RELEASE_NOTES.md")) {
 #
 # Assert self-containment rather than trust it: fail packaging if the exe
 # imports any non-system DLL.
-$objdump = Join-Path $MingwBin "objdump.exe"
+$objdumpCommand = Get-Command objdump.exe -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $objdumpCommand) {
+    throw "MinGW objdump.exe was not found next to the selected compiler or on PATH"
+}
+$objdump = $objdumpCommand.Source
 $imports = & $objdump -p (Join-Path $Stage "PSXRecomp.exe") |
     Select-String "DLL Name: (.+)" | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() }
 $systemDlls = @("kernel32.dll","user32.dll","gdi32.dll","shell32.dll","msvcrt.dll",
                 "advapi32.dll","ws2_32.dll","comdlg32.dll","dbghelp.dll","ole32.dll",
                 "oleaut32.dll","winmm.dll","imm32.dll","version.dll","setupapi.dll",
                 "dinput8.dll","rpcrt4.dll","hid.dll","cfgmgr32.dll","opengl32.dll")
-$nonSystem = $imports | Where-Object { $systemDlls -notcontains $_.ToLower() }
+$nonSystem = $imports | Where-Object {
+    $name = $_.ToLower()
+    ($systemDlls -notcontains $name) -and
+        ($name -notlike "api-ms-win-crt-*.dll")
+}
 if ($nonSystem) {
     throw "Release exe is NOT self-contained; imports non-system DLL(s): $($nonSystem -join ', ')"
 }
@@ -210,9 +229,12 @@ Controller mappings are configurable in input.ini.
 Memory cards are stored in the saves directory.
 "@ | Set-Content -Encoding ASCII (Join-Path $Stage "START_HERE.txt")
 
-if (Test-Path $ZipPath) {
-    Remove-Item -Force $ZipPath
+$pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $pythonCommand) {
+    throw "Python was not found on PATH"
 }
-Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $ZipPath -Force
+& $pythonCommand.Source (Join-Path $Root "tools/create_release_zip.py") `
+    --source $Stage --output $ZipPath
 
 Write-Host "Wrote $ZipPath"
