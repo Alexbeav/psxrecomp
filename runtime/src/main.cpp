@@ -12657,7 +12657,7 @@ int main(int argc, char** argv) {
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
 #if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
                 seed.scanlines             = ls.scanlines != 0;        seed.has_scanlines             = true;
-                if (ls.scanline_strength_pct > 0) {
+                if (ls.scanline_strength_pct >= 0) {
                     seed.scanline_strength = ls.scanline_strength_pct / 100.0;
                     seed.has_scanline_strength = true;
                 }
@@ -14666,7 +14666,7 @@ soft_return_lobby:
 #if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
                 us.scanlines = ls.scanlines != 0;
                 us.has_scanlines = true;
-                if (ls.scanline_strength_pct > 0) {
+                if (ls.scanline_strength_pct >= 0) {
                     us.scanline_strength = ls.scanline_strength_pct / 100.0;
                     us.has_scanline_strength = true;
                 }
@@ -14728,7 +14728,7 @@ soft_return_lobby:
             g_video_screen = ls.screen_kind;
 #if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
             g_video_scanlines = ls.scanlines != 0;
-            if (ls.scanline_strength_pct > 0)
+            if (ls.scanline_strength_pct >= 0)
                 g_video_scanline_strength = ls.scanline_strength_pct / 100.0f;
             gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
                                       g_video_scanline_strength);
