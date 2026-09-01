@@ -453,8 +453,78 @@ copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude 'build' \
   --exclude '__pycache__'
 
+# Developer notes, one-off capture helpers, and dependency test fixtures are
+# not setup SDK inputs. Some contain paths from their authors' workstations.
+# Keep those paths out of a public source package on both rsync and cp routes.
+rm -rf \
+  "${STAGE}/psxrecomp/CLAUDE.md" \
+  "${STAGE}/psxrecomp/docs/internal" \
+  "${STAGE}/psxrecomp/docs/STRING_TRANSLATION.md" \
+  "${STAGE}/psxrecomp/recompiler/lib/ELFIO/tests" \
+  "${STAGE}/psxrecomp/tools/aot_overlay_spike" \
+  "${STAGE}/psxrecomp/tools/audio_capture_ab.py" \
+  "${STAGE}/psxrecomp/tools/launch_tomba2_interp_perf.ps1" \
+  "${STAGE}/recomp-ui/docs/HANDOFF.md"
+
+# Never ship owned inputs or player state copied from the title or framework
+# worktrees. These files can be tracked or ignored, so a clean Git status is
+# not evidence that the package is clean. Backup suffixes are included.
+find "${STAGE}" -type f \( \
+  -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+  -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+  -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+  -iname '*.mcd*' -o -iname '*.mcr*' \
+\) -delete
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+    \( -iname '*.bin*' -o -iname '*.rom*' \) \
+    ! -iname 'openbios.bin' -delete
+fi
+
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
+
+assert_no_private_payload() {
+  local forbidden_payload forbidden_bios
+  forbidden_payload="$(find "${STAGE}" -type f \( \
+    -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+    -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+    -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+    -iname '*.mcd*' -o -iname '*.mcr*' \
+  \) -print -quit)"
+  if [[ -n "${forbidden_payload}" ]]; then
+    echo "error: forbidden owned-input or player-state payload: ${forbidden_payload}" >&2
+    exit 1
+  fi
+  if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+    forbidden_bios="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) \
+      ! -iname 'openbios.bin' -print -quit)"
+    if [[ -n "${forbidden_bios}" ]]; then
+      echo "error: forbidden retail BIOS payload: ${forbidden_bios}" >&2
+      exit 1
+    fi
+  fi
+}
+
+assert_no_private_payload
+
+assert_no_private_build_paths() {
+  local hits
+  hits="$(grep -rIEn \
+    -e '[D-Zd-z]:[\\/](Users|Projects)[\\/]' \
+    -e 'C:[\\/]Users[\\/]' \
+    "${STAGE}" 2>/dev/null \
+    | grep -Ev 'C:[\\/]Users[\\/](You|username|\.\.\.)[\\/]' \
+    || true)"
+  if [[ -n "${hits}" ]]; then
+    echo "error: staged source contains a developer-machine path:" >&2
+    printf '%s\n' "${hits}" >&2
+    exit 1
+  fi
+}
+
+assert_no_private_build_paths
 
 STAGE_SDK="${SCRIPT_DIR}/stage_setup_sdk.sh"
 if [[ ! -f "${STAGE_SDK}" ]]; then
@@ -484,6 +554,14 @@ fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
 
+<<<<<<< HEAD
+=======
+# The SDK stage runs after the first scrub. Check the complete package tree
+# again so future SDK changes cannot restore a forbidden file.
+assert_no_private_payload
+assert_no_private_build_paths
+
+>>>>>>> 06d8121e7 (Prevent private paths in setup packages)
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}
