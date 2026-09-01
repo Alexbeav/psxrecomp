@@ -114,6 +114,11 @@ Standalone helpers: `probe_disc.py`, `fetch_boxart.py`, `fill_tokens.py`,
 
 With a Redump-style `**.cue**`:
 
+The probe follows the complete `SYSTEM.CNF` boot path. This includes programs
+inside a disc directory, such as `TEKKEN3\\SLUS_004.02`. It matches every path
+component without case sensitivity, but keeps the disc's program name in the
+generated identity files.
+
 
 | Output                   | Contents                                                                                                                                               |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

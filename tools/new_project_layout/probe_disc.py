@@ -288,6 +288,36 @@ def parse_root_entries(root: bytes) -> dict[str, tuple[int, int]]:
     return entries
 
 
+def parse_directory_entries(directory: bytes) -> dict[str, tuple[int, int, bool]]:
+    """Return ISO9660 directory records as extent, size, and directory flag."""
+    entries: dict[str, tuple[int, int, bool]] = {}
+    i = 0
+    while i < len(directory):
+        reclen = directory[i]
+        if reclen == 0:
+            i = ((i // USER) + 1) * USER
+            if i >= len(directory):
+                break
+            continue
+        if i + reclen > len(directory):
+            break
+        extent = struct.unpack_from("<I", directory, i + 2)[0]
+        size = struct.unpack_from("<I", directory, i + 10)[0]
+        is_directory = bool(directory[i + 25] & 0x02)
+        namelen = directory[i + 32]
+        name = directory[i + 33 : i + 33 + namelen]
+        if b";" in name:
+            name = name.split(b";")[0]
+        if name not in (b"\x00", b"\x01"):
+            entries[name.decode("ascii", "replace")] = (
+                extent,
+                size,
+                is_directory,
+            )
+        i += reclen
+    return entries
+
+
 def read_file(read_user, data: bytes, extent: int, size: int) -> bytes:
     out = bytearray()
     rem, lba = size, extent
@@ -300,6 +330,34 @@ def read_file(read_user, data: bytes, extent: int, size: int) -> bytes:
     return bytes(out)
 
 
+def resolve_iso_file(
+    read_user,
+    data: bytes,
+    root_entries: dict[str, tuple[int, int, bool]],
+    path: str,
+) -> tuple[int, int]:
+    """Resolve a case-insensitive root or nested ISO9660 file path."""
+    parts = [part for part in re.split(r"[\\/]", path) if part]
+    if not parts:
+        raise KeyError(path)
+    entries = root_entries
+    for index, part in enumerate(parts):
+        names = {name.upper(): name for name in entries}
+        actual = names.get(part.upper())
+        if actual is None:
+            raise KeyError(path)
+        extent, size, is_directory = entries[actual]
+        if index == len(parts) - 1:
+            if is_directory:
+                raise KeyError(path)
+            return extent, size
+        if not is_directory:
+            raise KeyError(path)
+        directory = read_file(read_user, data, extent, size)
+        entries = parse_directory_entries(directory)
+    raise KeyError(path)
+
+
 def parse_system_cnf(cnf: bytes) -> str:
     text = cnf.decode("ascii", "replace")
     m = re.search(r"BOOT\s*=\s*cdrom:\\?([^;\s]+)", text, re.I)
@@ -308,8 +366,7 @@ def parse_system_cnf(cnf: bytes) -> str:
     if not m:
         raise SystemExit("SYSTEM.CNF has no BOOT= line")
     token = m.group(1).strip()
-    token = token.split("\\")[-1].split("/")[-1]
-    return token
+    return token.lstrip("\\/")
 
 
 def normalize_serial(boot_exe: str) -> tuple[str, str]:
@@ -409,7 +466,9 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     root = bytearray()
     for i in range((root_size + USER - 1) // USER):
         root += read_user(data, root_extent + i)
-    entries = parse_root_entries(bytes(root[:root_size]))
+    root_bytes = bytes(root[:root_size])
+    entries = parse_root_entries(root_bytes)
+    directory_entries = parse_directory_entries(root_bytes)
 
     if "SYSTEM.CNF" not in entries:
         # Very early titles (e.g. King's Field, Dec 1994) ship no SYSTEM.CNF;
@@ -430,25 +489,28 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
         extent, fsize = entries["SYSTEM.CNF"]
         cnf = read_file(read_user, data, extent, fsize)
         boot_token = parse_system_cnf(cnf)
-    serial, boot_exe = normalize_serial(boot_token)
+    boot_leaf = re.split(r"[\\/]", boot_token)[-1]
+    serial, boot_exe = normalize_serial(boot_leaf)
 
     disc_boot = boot_token
-    if disc_boot not in entries:
-        if boot_exe in entries:
+    try:
+        bext, bsize = resolve_iso_file(
+            read_user, data, directory_entries, disc_boot
+        )
+    except KeyError:
+        # Some malformed images omit the directory portion from SYSTEM.CNF.
+        # Preserve the historical root-file fallback by normalized EXE name.
+        try:
+            bext, bsize = resolve_iso_file(
+                read_user, data, directory_entries, boot_exe
+            )
             disc_boot = boot_exe
-        else:
-            upper = {k.upper(): k for k in entries}
-            if disc_boot.upper() in upper:
-                disc_boot = upper[disc_boot.upper()]
-            elif boot_exe.upper() in upper:
-                disc_boot = upper[boot_exe.upper()]
-            else:
-                raise SystemExit(
-                    f"boot EXE {boot_token!r} not on disc "
-                    f"(found {sorted(entries)[:24]})"
-                )
+        except KeyError:
+            raise SystemExit(
+                f"boot EXE {boot_token!r} not on disc "
+                f"(found {sorted(entries)[:24]})"
+            )
 
-    bext, bsize = entries[disc_boot]
     exe = read_file(read_user, data, bext, bsize)
     if exe[:8] != b"PS-X EXE":
         raise SystemExit(f"{disc_boot} is not a PS-X EXE")
@@ -459,7 +521,7 @@ def probe(cue_path: Path, *, identity_only: bool = False) -> DiscProbe:
     s_addr = struct.unpack_from("<I", exe, 0x30)[0]
     seeds = scan_jal_seeds(exe)
 
-    boot_name = disc_boot
+    boot_name = re.split(r"[\\/]", disc_boot)[-1]
     if not serial:
         serial, _ = normalize_serial(boot_name)
 
