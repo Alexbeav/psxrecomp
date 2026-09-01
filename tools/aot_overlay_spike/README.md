@@ -144,7 +144,9 @@ optional coverage to the next command.
 `runtime/tests/test_overlay_pair_dedup_runtime.py` compiles the real loader at a
 four-slot test cap plus real shared-library fixtures, and behaviorally covers an
 exact alias at capacity, handle/init/flush ownership, staged rescan idempotence,
-manifest/provenance/tier negatives, and partial-export non-authority.
+manifest/provenance/tier negatives, and partial-export non-authority. The same
+test also covers static code-identity cache replacement, restoration, reset,
+and invalid-range rejection against the real loader.
 Dynamic compilation serializes canonically sorted recipes under a whole-command
 namespace lock so a full cache has the same accepted subset on every clean run.
 GCC-first basename shadowing matches the loader, and non-growing replacements

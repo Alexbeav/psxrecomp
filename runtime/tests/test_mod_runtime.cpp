@@ -77,6 +77,9 @@ extern "C" int fntrace_is_game_started(void) { return 1; }
  * paths run for real. The tier's own behavior is pinned by
  * test_func_override.c; here the doubles only need to satisfy the link. */
 extern "C" uint32_t psx_peek_word_untraced(uint32_t) { return 0; }
+extern "C" int psx_overlay_static_code_matches(const uint32_t*, uint32_t,
+                                                  uint32_t) { return 1; }
+extern "C" void overlay_loader_static_match_cache_clear(void) {}
 extern "C" void psx_dispatch_call(struct CPUState*, uint32_t, uint32_t) {}
 extern "C" {
 uint64_t psx_cycle_count = 0;
@@ -97,6 +100,9 @@ static void test_vblank_plugin(void) {
 static void test_activation_plugin(void) {
     activation_calls++;
 }
+
+static int test_function_override(CPUState*) { return 1; }
+extern "C" void mod_runtime_clear_function_override_plugins_for_tests(void);
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -507,6 +513,97 @@ int main() {
     check(psx_mod_display_width() == 0u && psx_mod_display_height() == 0u,
           "unestablished display geometry must report zero so callers skip "
           "drawing instead of guessing");
+
+    check(psx_mod_register_function_override(
+              "Invalid ID:bad", 0x80018000u, test_function_override,
+              nullptr, 0, 0) == 0,
+          "invalid package plugin ids must be rejected at registration");
+    const uint32_t exact_ranges[2] = {0x00018000u, 4u};
+    check(psx_mod_register_function_override_exact(
+              "runtime.test-vblank:exact", 0x80018000u,
+              test_function_override, exact_ranges, 1, 0x12345678u, 0) == 1,
+          "exact package override must queue");
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(func_override_count() == 1,
+          "selected exact package override must arm");
+    int guard_kind = -1, guard_count = 0;
+    uint32_t guard_crc = 0;
+    check(func_override_get_guard_info(0, &guard_kind, &guard_count,
+                                       &guard_crc) == 1 &&
+              guard_kind == FO_GUARD_CODE_CRC32 && guard_count == 1 &&
+              guard_crc == 0x12345678u,
+          "armed package inventory must retain exact code identity");
+    check(PSXRecompV4::mod_runtime_clear_for_netplay(&error), error.c_str());
+    check(func_override_count() == 0,
+          "clearing the package plan must disarm the exact override");
+    check(psx_mod_register_function_override(
+              "runtime.test-vblank:first", 0x80018100u,
+              test_function_override, nullptr, 0, 0) == 1,
+          "first package override must queue");
+    check(psx_mod_register_function_override(
+              "runtime.test-vblank:second", 0x80018100u,
+              test_function_override, nullptr, 0, 0) == 1,
+          "a second package claim may queue until selection is known");
+    check(!PSXRecompV4::mod_runtime_commit(stock_path, &error),
+          "commit must reject two selected package overrides at one address");
+    check(error.find("function override collision") != std::string::npos,
+          "collision rejection must name the cause");
+    check(func_override_count() == 0,
+          "a rejected package override set must arm no partial entries");
+
+    /* A direct registration can race with the interval between plan commit
+     * and package activation. The late duplicate must disable the complete
+     * committed plan, not apply its main or disc patches without its
+     * function override. */
+    PSXRecompV4::mod_clear_plugins_for_tests();
+    mod_runtime_clear_function_override_plugins_for_tests();
+    check(psx_mod_register_function_override_exact(
+              "runtime.test-vblank:race", 0x80018000u,
+              test_function_override, exact_ranges, 1, 0x12345678u, 0) == 1,
+          "race package override must queue");
+    check(PSXRecompV4::mod_runtime_initialize(
+              root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+          error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    check(func_override_add("runtime.direct-race", 0x80018000u,
+                            test_function_override, 0) == FO_OK,
+          "direct override must occupy the committed package address");
+    mod_runtime_activate_plugins();
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    mod_runtime_on_dispatch(0x80002000);
+    check(ram[0x1000] == 1 && ram[0x1003] == 4,
+          "late override failure must disable main-memory plan writes");
+    mod_runtime_enable_disc_patches();
+    std::array<uint8_t, 2352> disabled_disc{};
+    disabled_disc[15] = 2;
+    disabled_disc[18] = 0;
+    disabled_disc[24 + 10] = 0xcc;
+    mod_runtime_patch_disc_sector(
+        3, 1, disabled_disc.data(), (uint32_t)disabled_disc.size());
+    check(disabled_disc[24 + 10] == 0xcc,
+          "late override failure must disable disc plan writes");
+
+    /* Remove the package registration that conflicted with the direct entry.
+     * A new successful commit must clear the failure latch and make its disc
+     * plan usable again. */
+    mod_runtime_clear_function_override_plugins_for_tests();
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(func_override_count() == 1,
+          "a corrected plan must preserve the direct override");
+    std::array<uint8_t, 2352> recovered_disc{};
+    recovered_disc[15] = 2;
+    recovered_disc[18] = 0;
+    recovered_disc[24 + 10] = 0xcc;
+    recovered_disc[24 + 20] = 0x11;
+    recovered_disc[24 + 21] = 0x22;
+    recovered_disc[24 + 22] = 0x33;
+    recovered_disc[24 + 23] = 0x44;
+    mod_runtime_patch_disc_sector(
+        3, 1, recovered_disc.data(), (uint32_t)recovered_disc.size());
+    check(recovered_disc[24 + 10] == 0xdd,
+          "a corrected plan must recover disc patching after late failure");
 
     fs::remove_all(root, ec);
     if (failures) return 1;

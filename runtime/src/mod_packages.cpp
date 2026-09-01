@@ -1456,9 +1456,13 @@ bool mod_register_vblank_plugin(const std::string& id, void (*callback)(void)) {
 bool mod_register_function_override_marker(const std::string& id) {
     if (!valid_id(id)) return false;
     RegisteredPlugin& plugin = registered_plugins()[id];
-    if (plugin.function_override) return false;
+    if (plugin.function_override) return true;
     plugin.function_override = true;
     return true;
+}
+
+bool mod_plugin_id_valid(const std::string& id) {
+    return valid_id(id);
 }
 
 bool mod_plugin_registered(const std::string& id) {

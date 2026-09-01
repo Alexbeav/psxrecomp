@@ -101,6 +101,9 @@ struct FunctionOverridePlugin {
     PSXModFunctionOverrideFn fn = nullptr;
     uint32_t guard[FO_MAX_GUARD_WORDS] = {0, 0, 0, 0};
     int n_guard = 0;
+    uint32_t ranges[FO_MAX_CODE_RANGES * 2] = {};
+    int n_ranges = 0;
+    uint32_t expected_crc = 0;
     int32_t credit = 0;
     bool armed = false;
 };
@@ -108,6 +111,48 @@ struct FunctionOverridePlugin {
 std::vector<FunctionOverridePlugin>& function_override_plugins() {
     static std::vector<FunctionOverridePlugin> value;
     return value;
+}
+
+bool plan_selects_plugin(const ModResolution& plan, const std::string& id) {
+    return std::any_of(
+        plan.plugins.begin(), plan.plugins.end(),
+        [&](const ModResolution::Plugin& plugin) { return plugin.id == id; });
+}
+
+bool validate_function_override_plan(const ModResolution& plan,
+                                     std::string& error) {
+    std::map<uint32_t, std::string> claims;
+    int total = 0;
+    for (int i = 0; i < func_override_count(); ++i) {
+        if (func_override_is_package(i)) continue;
+        char id[FO_MAX_ID];
+        uint32_t address = 0;
+        if (!func_override_get_ex(i, id, sizeof(id), &address, nullptr,
+                                  nullptr, nullptr, nullptr))
+            continue;
+        claims[address] = id[0] ? id : "direct registration";
+        ++total;
+    }
+    for (const FunctionOverridePlugin& pending : function_override_plugins()) {
+        if (!plan_selects_plugin(plan, pending.plugin)) continue;
+        const uint32_t address = pending.address & 0x1FFFFFFFu;
+        const auto inserted = claims.emplace(address, pending.id);
+        if (!inserted.second) {
+            std::ostringstream out;
+            out << "function override collision at 0x" << std::hex
+                << std::uppercase << std::setw(8) << std::setfill('0')
+                << address << ": " << inserted.first->second << " and "
+                << pending.id;
+            error = out.str();
+            return false;
+        }
+        ++total;
+    }
+    if (total > FO_MAX_OVERRIDES) {
+        error = "function override plan exceeds FO_MAX_OVERRIDES";
+        return false;
+    }
+    return true;
 }
 
 const ModPackage* selected_package(const std::string& id) {
@@ -1104,6 +1149,9 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                             const std::filesystem::path& exe_path,
                             std::string* error) {
     RuntimeMods& s = state();
+    func_override_reset_package_armed();
+    for (FunctionOverridePlugin& pending : function_override_plugins())
+        pending.armed = false;
     s.manager.set_root({});
     s.plan = {};
     s.validation = {};
@@ -1197,6 +1245,10 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         if (error) *error = s.error;
         return false;
     }
+    if (!validate_function_override_plan(plan, s.error)) {
+        if (error) *error = s.error;
+        return false;
+    }
     for (const ModResolution::Overlay& overlay : plan.overlays) {
         if (overlay.expected_sha256.empty()) continue;
         std::string actual;
@@ -1220,10 +1272,18 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
         if (error) *error = s.error;
         return false;
     }
+    /* A successful commit replaces the old package plan. Disarm its override
+     * table now, before publishing the new plan, so no dispatch window can
+     * run callbacks from one plan and overrides from another. Activation
+     * below will arm the complete new set atomically. */
+    func_override_reset_package_armed();
+    for (FunctionOverridePlugin& pending : function_override_plugins())
+        pending.armed = false;
     s.plan = std::move(plan);
     build_disc_index(s);
     s.effective_disc_path = std::move(effective_disc);
     s.main_applied = false;
+    s.disc_guard_failed = false;
     s.error.clear();
     return true;
 }
@@ -1308,35 +1368,67 @@ extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
 }
 
+#ifdef PSX_MOD_RUNTIME_TEST
+extern "C" void mod_runtime_clear_function_override_plugins_for_tests(void) {
+    PSXRecompV4::function_override_plugins().clear();
+}
+#endif
+
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
     if (!s.initialized || !s.plan.ok) return;
+    /* Arm the complete selected override set before any activation callback
+     * can change host or guest state. Commit already preflighted collisions
+     * and capacity. If the table changed after commit, roll back the complete
+     * package set and fail closed instead of silently arming a subset. */
+    func_override_reset_package_armed();
+    for (FunctionOverridePlugin& pending : function_override_plugins())
+        pending.armed = false;
+    for (FunctionOverridePlugin& pending : function_override_plugins()) {
+        if (!plan_selects_plugin(s.plan, pending.plugin)) continue;
+        const int rc = pending.n_ranges
+            ? func_override_add_package_exact(
+                  pending.id.c_str(), pending.address, pending.fn,
+                  pending.ranges, pending.n_ranges, pending.expected_crc,
+                  pending.credit)
+            : func_override_add_package(
+                  pending.id.c_str(), pending.address, pending.fn,
+                  pending.n_guard ? pending.guard : nullptr, pending.n_guard,
+                  pending.credit);
+        pending.armed = (rc == FO_OK);
+        if (rc != FO_OK) {
+            func_override_reset_package_armed();
+            for (FunctionOverridePlugin& item : function_override_plugins())
+                item.armed = false;
+            std::ostringstream out;
+            out << "function override activation failed for " << pending.id
+                << " (error " << rc << ")";
+            s.error = out.str();
+            /* A late table change invalidated the committed selection. Drop
+             * every part of that plan. Main-RAM writes, disc patches, and
+             * callbacks must not continue after its override set failed. */
+            s.plan = {};
+            s.validation = {};
+            s.raw_disc_index.clear();
+            s.user_disc_index.clear();
+            s.raw_overlay_index.clear();
+            s.user_overlay_index.clear();
+            s.effective_disc_path.clear();
+            s.main_applied = true;
+            s.disc_guard_failed = true;
+            func_override_install();
+            /* The launcher reads s.error through provider_error. Keep this
+             * failure on that existing diagnostics boundary. */
+            return;
+        }
+    }
+    func_override_install();
     for (const ModResolution::Plugin& plugin : s.plan.plugins) {
         s.current_plugin = &plugin;
         mod_invoke_activation_plugin(plugin.id);
         s.current_plugin = nullptr;
     }
-    /* Arm the package-gated function overrides for plan-selected plugin
-     * ids, then (re)install the dispatcher hook. func_override_add refuses
-     * duplicate addresses; a refusal here means two active plugins claim
-     * one function, which the resolver should have prevented — the armed
-     * flag stays false and the `func_override` TCP command shows the gap. */
-    for (FunctionOverridePlugin& pending : function_override_plugins()) {
-        if (pending.armed) continue;
-        const bool selected = std::any_of(
-            s.plan.plugins.begin(), s.plan.plugins.end(),
-            [&](const ModResolution::Plugin& plugin) {
-                return plugin.id == pending.plugin;
-            });
-        if (!selected) continue;
-        const int rc = func_override_add_package(
-            pending.id.c_str(), pending.address, pending.fn,
-            pending.n_guard ? pending.guard : nullptr, pending.n_guard,
-            pending.credit);
-        pending.armed = (rc == FO_OK);
-    }
-    func_override_install();
 }
 
 extern "C" void mod_runtime_on_vblank(void) {
@@ -1475,13 +1567,19 @@ extern "C" int psx_mod_register_function_entry_plugin(
     return 1;
 }
 
-extern "C" int psx_mod_register_function_override(
+static int register_function_override(
     const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
-    const uint32_t* expected_words, int n_words, int32_t credit) {
+    const uint32_t* expected_words, int n_words,
+    const uint32_t* ranges, int n_ranges, uint32_t expected_crc,
+    int32_t credit) {
     using namespace PSXRecompV4;
     if (!id || !*id || !address || !fn) return 0;
     if (n_words < 0 || n_words > FO_MAX_GUARD_WORDS) return 0;
     if (n_words > 0 && !expected_words) return 0;
+    if (n_words > 0 && n_ranges > 0) return 0;
+    if (n_ranges < 0 || n_ranges > FO_MAX_CODE_RANGES) return 0;
+    if (n_ranges > 0 &&
+        !func_override_code_ranges_valid(address, ranges, n_ranges)) return 0;
     if (credit < FO_CREDIT_SELF) return 0;
     /* An optional ":label" suffix names this override in diagnostics (the
      * `func_override` TCP command) without multiplying manifest plugin ids —
@@ -1492,6 +1590,7 @@ extern "C" int psx_mod_register_function_override(
     const std::string plugin_id = colon ? std::string(id, colon - id)
                                         : std::string(id);
     if (plugin_id.empty() || (colon && !colon[1])) return 0;
+    if (!mod_plugin_id_valid(plugin_id)) return 0;
     auto& plugins = function_override_plugins();
     const auto duplicate = std::find_if(
         plugins.begin(), plugins.end(),
@@ -1506,12 +1605,31 @@ extern "C" int psx_mod_register_function_override(
     plugin.fn = fn;
     for (int i = 0; i < n_words; ++i) plugin.guard[i] = expected_words[i];
     plugin.n_guard = n_words;
+    for (int i = 0; i < n_ranges * 2; ++i) plugin.ranges[i] = ranges[i];
+    plugin.n_ranges = n_ranges;
+    plugin.expected_crc = expected_crc;
     plugin.credit = credit;
     plugins.push_back(plugin);
     /* Mark the plugin id available to the package resolver so a manifest can
      * gate an override-only plugin (multiple overrides may share one). */
-    mod_register_function_override_marker(plugin_id);
-    return 1;
+    return mod_register_function_override_marker(plugin_id) ? 1 : 0;
+}
+
+extern "C" int psx_mod_register_function_override(
+    const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
+    const uint32_t* expected_words, int n_words, int32_t credit) {
+    return register_function_override(id, address, fn, expected_words, n_words,
+                                      nullptr, 0, 0, credit);
+}
+
+extern "C" int psx_mod_register_function_override_exact(
+    const char* id, uint32_t address, PSXModFunctionOverrideFn fn,
+    const uint32_t* lo_len_pairs, int n_ranges, uint32_t expected_crc,
+    int32_t credit) {
+    if (n_ranges < 1) return 0;
+    return register_function_override(id, address, fn, nullptr, 0,
+                                      lo_len_pairs, n_ranges, expected_crc,
+                                      credit);
 }
 
 extern "C" void psx_mod_function_entry(CPUState* cpu, uint32_t address) {

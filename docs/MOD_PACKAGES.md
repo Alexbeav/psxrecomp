@@ -322,20 +322,33 @@ patches and overlays when those operations are sufficient.
 
 An implementation may also register **function overrides** under a plugin id
 (`psx_mod_register_function_override`): hand-written C that replaces or wraps
-a guest function at a given address, with an optional prologue-word residency
-guard. Registration only queues the override; it is ARMED into the dispatcher
-tier when the resolved plan selects that plugin — the same gating as the other
-callback kinds, so an override-only plugin id counts as available to the
-resolver. Every registration states a required guest-cycle `credit` (a fixed
-per-handled-call charge, `0` for a mod with no hardware analog, or
-`FO_CREDIT_SELF` when the body — or a wrapped original — accounts for its own
-time). The full execution contract (guest ABI, decline semantics,
-`func_override_call_original` wrap primitive, `func_override_guest_call`,
-determinism and cycle-accounting policy) is documented in
-`runtime/include/func_override.h`. Overrides registered directly through
-`func_override_add` (game `EXTRAS_SOURCES` constructors, the progressive-
-decompilation idiom) bypass package gating and are always active; packages
-are the right home for anything a player should be able to toggle.
+a guest function at a given address. A short prologue-word guard is available
+for fixed code. It is not an overlay identity. Use
+`psx_mod_register_function_override_exact` for an overlay or a reused dirty-RAM
+address. That API checks the CRC32 of all declared code ranges. It uses the
+same page-generation cache as native overlay dispatch.
+
+Registration only queues the override. The commit checks the complete selected
+set for address collisions and capacity. A collision rejects the plan before
+activation. Activation arms the complete set before it runs any activation
+callback. An unexpected arming error removes the complete package set.
+It also disables all main-memory writes, disc patches, and callbacks from the
+selected plan. A later successful commit clears this failure state. Invalid
+plugin ids fail during registration.
+
+Calls and unlinked function tail entries use the same override. These entries
+are `j`, or `jr` through a register other than `$ra`. A `jr $ra` is a return.
+A handled override normally continues at `$ra`. Dispatch preserves a nonzero
+`cpu->pc` that the override, a guest call, or a wrapped original selects. Every
+matched-address consult increments `calls`. An identity mismatch also
+increments `guard_misses`.
+
+Every registration states a required guest-cycle `credit`. Use a fixed charge
+for a measured constant cost. Use `0` for a mod with no hardware analog. Use
+`FO_CREDIT_SELF` when the body or a wrapped original accounts for its own time.
+The full execution contract is in `runtime/include/func_override.h`. Direct
+registrations through `func_override_add` bypass package gating and are always
+active. Use packages for player-selectable behavior.
 
 `psx_mod_set_load_acceleration(multiplier, release_frames)` is the narrow
 pre-boot service for a game-owned fast-loading feature. It changes host

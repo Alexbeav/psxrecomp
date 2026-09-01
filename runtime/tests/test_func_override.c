@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "cpu_state.h"
+#include "crc32.h"
 #include "func_override.h"
 
 extern int (*g_psx_func_override_hook)(CPUState *cpu, uint32_t phys);
@@ -38,6 +39,26 @@ static int g_fail = 0;
  * guard_declines_on_mismatch, and the reason this double is trivial. */
 #define FAKE_RAM_WORDS 64
 static uint32_t s_ram[FAKE_RAM_WORDS];
+static int s_static_match_cache_clears;
+
+int psx_overlay_static_code_matches(const uint32_t *lo_len_pairs,
+                                    uint32_t count,
+                                    uint32_t expected_crc)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint32_t lo = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
+        const uint32_t len = lo_len_pairs[i * 2u + 1u];
+        if (lo >= sizeof(s_ram) || len > sizeof(s_ram) - lo) return 0;
+        crc = crc32_update(crc, (const uint8_t *)s_ram + lo, len);
+    }
+    return (crc ^ 0xFFFFFFFFu) == expected_crc;
+}
+
+void overlay_loader_static_match_cache_clear(void)
+{
+    s_static_match_cache_clears++;
+}
 
 uint32_t psx_peek_word_untraced(uint32_t addr)
 {
@@ -71,6 +92,8 @@ static int s_dispatch_depth = 0;
  * (what a guest-level wrap would observe). */
 static uint32_t s_recursive_original_at = 0;
 static int s_recursion_budget = 0;
+static uint32_t s_original_redirect_at = 0;
+static uint32_t s_original_redirect_to = 0;
 
 void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t return_addr)
 {
@@ -82,6 +105,9 @@ void psx_dispatch_call(CPUState *cpu, uint32_t addr, uint32_t return_addr)
         /* Nothing handled it: this is the original body running. */
         s_original_runs++;
         cpu->gpr[2] = 0xAAAAu;
+        if ((addr & 0x1FFFFFFFu) ==
+            (s_original_redirect_at & 0x1FFFFFFFu))
+            cpu->pc = s_original_redirect_to;
         if (s_recursive_original_at &&
             (addr & 0x1FFFFFFFu) == (s_recursive_original_at & 0x1FFFFFFFu) &&
             s_recursion_budget > 0) {
@@ -118,6 +144,13 @@ static int impl_wraps(CPUState *cpu)
     return 1;
 }
 
+static int impl_redirects(CPUState *cpu)
+{
+    s_impl_calls++;
+    cpu->pc = 0x8000D00Du;
+    return 1;
+}
+
 /* ---- helpers ------------------------------------------------------------ */
 
 static void reset_all(void)
@@ -129,6 +162,8 @@ static void reset_all(void)
     s_original_runs = 0;
     s_recursive_original_at = 0;
     s_recursion_budget = 0;
+    s_original_redirect_at = 0;
+    s_original_redirect_to = 0;
     memset(s_ram, 0, sizeof(s_ram));
 }
 
@@ -169,6 +204,61 @@ static void test_add_rejects_bad_input(void)
     CHECK(func_override_add_guarded("t.gnull", 0x80001000u, impl_handles, NULL,
                                     2, 0) == FO_ERR_ARGS,
           "guarded with NULL words must be refused");
+    static const uint32_t range[2] = {0x80001000u, 4u};
+    CHECK(func_override_add_exact("t.x0", 0x80001000u, impl_handles,
+                                  range, 0, 0, 0) == FO_ERR_ARGS,
+          "exact override with zero ranges must be refused");
+    CHECK(func_override_add_package_exact("t.px0", 0x80001000u, impl_handles,
+                                          range, 0, 0, 0) == FO_ERR_ARGS,
+          "package exact override with zero ranges must be refused");
+}
+
+static void test_code_range_validator_edges(void)
+{
+    static const uint32_t valid_aliases[] = {
+        0xA0000100u, 4u,
+        0x80000200u, 8u,
+    };
+    static const uint32_t adjacent[] = {
+        0x80000100u, 4u,
+        0x80000104u, 4u,
+    };
+    static const uint32_t unaligned_start[] = {0x80000102u, 4u};
+    static const uint32_t unaligned_length[] = {0x80000100u, 6u};
+    static const uint32_t short_length[] = {0x80000100u, 0u};
+    static const uint32_t start_outside_ram[] = {0x80200000u, 4u};
+    static const uint32_t crosses_ram_end[] = {0x801FFFFCu, 8u};
+    static const uint32_t misses_entry[] = {0x80000100u, 4u};
+    static const uint32_t alias_overlap[] = {
+        0x80000100u, 8u,
+        0xA0000104u, 4u,
+    };
+
+    CHECK(!func_override_code_ranges_valid(0x80000100u, NULL, 1),
+          "NULL exact range array must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, valid_aliases, 0),
+          "zero exact ranges must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, valid_aliases,
+                                            FO_MAX_CODE_RANGES + 1),
+          "exact range count above the cap must be refused");
+    CHECK(func_override_code_ranges_valid(0xA0000204u, valid_aliases, 2),
+          "KSEG aliases and discontiguous ranges must validate");
+    CHECK(func_override_code_ranges_valid(0x80000104u, adjacent, 2),
+          "adjacent ranges must not count as overlap");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, unaligned_start, 1),
+          "unaligned exact range start must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, unaligned_length, 1),
+          "unaligned exact range length must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, short_length, 1),
+          "exact range shorter than one instruction must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80200000u, start_outside_ram, 1),
+          "exact range starting outside RAM must be refused");
+    CHECK(!func_override_code_ranges_valid(0x801FFFFCu, crosses_ram_end, 1),
+          "exact range crossing the RAM end must be refused");
+    CHECK(!func_override_code_ranges_valid(0x80000104u, misses_entry, 1),
+          "exact ranges must cover the override entry");
+    CHECK(!func_override_code_ranges_valid(0x80000100u, alias_overlap, 2),
+          "overlap through KSEG aliases must be refused");
 }
 
 static void test_duplicate_address_refused(void)
@@ -278,7 +368,104 @@ static void test_guard_declines_on_mismatch(void)
         CHECK(guarded == 2, "guard word count must be reported, got %d", guarded);
         CHECK(misses == 2, "two guard misses expected, got %llu",
               (unsigned long long)misses);
+        CHECK(calls == 3, "all three matched-address consults must count, got %llu",
+              (unsigned long long)calls);
     }
+}
+
+static void test_exact_code_identity_covers_the_complete_range(void)
+{
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+    reset_all();
+
+    const uint32_t addr = 0x80000080u;
+    static const uint32_t ranges[2] = {0x00000080u, 20u};
+    for (int i = 0; i < 5; i++) s_ram[32 + i] = 0x10000000u + (uint32_t)i;
+    const uint32_t crc = crc32_compute((const uint8_t *)&s_ram[32], 20u);
+    CHECK(func_override_add_exact("t.exact", addr, impl_handles,
+                                  ranges, 1, crc, 0) == FO_OK,
+          "exact-range add must succeed");
+    func_override_install();
+
+    CHECK(consult(&cpu, addr) == 1, "complete matching code identity must handle");
+    for (int i = 0; i < func_override_count(); i++) {
+        uint32_t a = 0, reported_crc = 0;
+        int kind = -1, count = 0;
+        if (!func_override_get_ex(i, NULL, 0, &a, NULL, NULL, NULL, NULL) ||
+            a != (addr & 0x1FFFFFFFu)) continue;
+        CHECK(func_override_get_guard_info(i, &kind, &count, &reported_crc),
+              "exact guard information must be inspectable");
+        CHECK(kind == FO_GUARD_CODE_CRC32 && count == 1 && reported_crc == crc,
+              "inventory must identify the exact CRC guard");
+    }
+    s_ram[36] ^= 1u; /* word five: outside the legacy four-word prefix */
+    CHECK(consult(&cpu, addr) == 0,
+          "a changed fifth word must reject the exact code identity");
+    CHECK(s_impl_calls == 1, "identity mismatch must not run the override");
+}
+
+static void test_dispatch_preserves_nonlocal_continuations(void)
+{
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+    reset_all();
+
+    const uint32_t redirect_at = 0x80007000u;
+    CHECK(func_override_add("t.redirect", redirect_at, impl_redirects, 0) == FO_OK,
+          "redirect add");
+    func_override_install();
+    cpu.gpr[31] = 0x80001234u;
+    CHECK(func_override_try_dispatch(&cpu, redirect_at, cpu.gpr[31]) == 1,
+          "redirect override must handle");
+    CHECK(cpu.pc == 0x8000D00Du,
+          "handled non-local continuation must not be overwritten with $ra");
+
+    const uint32_t plain_at = 0x80007100u;
+    CHECK(func_override_add("t.plain_return", plain_at, impl_handles, 0) == FO_OK,
+          "plain return add");
+    cpu.pc = 0xFFFFFFFFu;
+    CHECK(func_override_try_dispatch(&cpu, plain_at, cpu.gpr[31]) == 1,
+          "plain override must handle");
+    CHECK(cpu.pc == cpu.gpr[31], "zero continuation must default to $ra");
+}
+
+static void test_wrap_preserves_original_nonlocal_continuation(void)
+{
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+    reset_all();
+
+    const uint32_t addr = 0x80007200u;
+    CHECK(func_override_add("t.wrap_redirect", addr, impl_wraps,
+                            FO_CREDIT_SELF) == FO_OK,
+          "redirecting wrap add");
+    func_override_install();
+    cpu.gpr[31] = 0x80002222u;
+    s_original_redirect_at = addr;
+    s_original_redirect_to = 0x8000BEEFu;
+    CHECK(func_override_try_dispatch(&cpu, addr, cpu.gpr[31]) == 1,
+          "redirecting wrap must handle");
+    CHECK(cpu.pc == s_original_redirect_to,
+          "wrap must preserve the original's non-local continuation");
+    CHECK(cpu.gpr[31] == 0x80002222u, "wrap must restore the caller's $ra");
+}
+
+static void test_guest_call_preserves_nonlocal_continuation(void)
+{
+    CPUState cpu;
+    memset(&cpu, 0, sizeof(cpu));
+    reset_all();
+
+    const uint32_t target = 0x80007300u;
+    cpu.gpr[31] = 0x80003333u;
+    s_original_redirect_at = target;
+    s_original_redirect_to = 0x8000CAFEu;
+    func_override_guest_call(&cpu, target, 0x80004444u);
+    CHECK(cpu.pc == s_original_redirect_to,
+          "guest_call must preserve the callee's non-local continuation");
+    CHECK(cpu.gpr[31] == 0x80003333u,
+          "guest_call must restore the native caller's $ra");
 }
 
 static void test_call_original_is_one_shot(void)
@@ -368,10 +555,13 @@ static void test_package_reset_drops_only_package_entries(void)
     CHECK(consult(&cpu, pkg_at) == 1, "package override armed");
 
     const int before = func_override_count();
+    const int clears_before = s_static_match_cache_clears;
     const int dropped = func_override_reset_package_armed();
     CHECK(dropped >= 1, "reset must report dropping the package entry");
     CHECK(func_override_count() == before - dropped,
           "count must shrink by exactly the dropped entries");
+    CHECK(s_static_match_cache_clears == clears_before + 1,
+          "package slot reuse must invalidate exact-identity cache keys");
 
     /* This is the netplay-divergence regression: after clear-mods the package
      * override must be gone, while the game's own always-on reimplementation
@@ -495,9 +685,14 @@ int main(void)
 {
     test_install_is_null_until_registered();
     test_add_rejects_bad_input();
+    test_code_range_validator_edges();
     test_duplicate_address_refused();
     test_handled_and_declined_both_count_as_consults();
     test_guard_declines_on_mismatch();
+    test_exact_code_identity_covers_the_complete_range();
+    test_dispatch_preserves_nonlocal_continuations();
+    test_wrap_preserves_original_nonlocal_continuation();
+    test_guest_call_preserves_nonlocal_continuation();
     test_call_original_is_one_shot();
     test_bypass_is_consumed_so_recursion_reconsults();
     test_call_original_outside_override_is_a_noop();

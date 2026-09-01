@@ -35,6 +35,7 @@
 #include "lockstep.h"
 #include "starvation_ring.h"
 #include "fntrace.h"  /* fntrace_is_game_started / fntrace_mark_game_started */
+#include "func_override.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -2869,6 +2870,13 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
     int      _ovfp = overlay_fp_enabled() &&
                      overlay_cache_window_contains(phys) &&
                      overlay_loader_is_candidate(phys);
+    uint32_t current_function_entry_phys =
+        overlay_loader_is_candidate(phys) ? phys : 0u;
+#ifdef PSX_HAS_GAME_DISPATCH
+    if (current_function_entry_phys == 0u &&
+        psx_game_is_function_entry(addr))
+        current_function_entry_phys = phys;
+#endif
     uint32_t _in_regs[34];
     if (_ovfp) {
         overlay_regs_snap(_in_regs, cpu);
@@ -3210,6 +3218,40 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 OV_FPLOG_RET1();
             }
             target = cpu->pc;
+            uint32_t target_phys = target & 0x1FFFFFFFu;
+            /* A J/JR can be an unlinked function tail entry or an ordinary
+             * intra-function jump. Only a known static or overlay function
+             * entry proves the former. Check the override after the interrupt
+             * safe point and before local dirty flow, then surface the
+             * continuation so dispatch stays flat. Precise/replay mode keeps
+             * the same plain-transfer policy as JAL/JALR above. */
+            const uint32_t opc = insn >> 26;
+            const int unlinked_tail =
+                opc == 0x02u ||
+                (opc == 0x00u && (insn & 0x3Fu) == 0x08u &&
+                 ((insn >> 21) & 0x1Fu) != 31u);
+            int target_is_function_entry =
+                overlay_loader_is_candidate(target_phys);
+#ifdef PSX_HAS_GAME_DISPATCH
+            if (!target_is_function_entry)
+                target_is_function_entry =
+                    psx_game_is_function_entry(target);
+#endif
+            const uint32_t source_phys = pc & 0x1FFFFFFFu;
+            const int proven_tail_entry =
+                target != 0u && target_phys != source_phys &&
+                current_function_entry_phys != 0u &&
+                target_phys != current_function_entry_phys &&
+                target_is_function_entry;
+            if (unlinked_tail && proven_tail_entry &&
+                !g_precise_mode && !g_ls_replay_active &&
+                func_override_try_dispatch(cpu, target, cpu->gpr[31])) {
+                g_dirty_ram_blocks_run++;
+                if (pc_entry) pc_entry->insns += (uint64_t)insns_executed;
+                g_dirty_interp_chain_target = cpu->pc;
+                OV_FPLOG_RET1();
+            }
+            target = cpu->pc;
 #ifdef PSX_HAS_GAME_DISPATCH
             if (target != 0) {
                 /* §20 FIX — the long-run idle freeze. A guest TAIL-transfer (j/jr/
@@ -3238,11 +3280,12 @@ static int dirty_ram_dispatch_inner(CPUState* cpu, uint32_t addr, uint32_t stop_
                 cpu->pc = target;  /* surfaced; trampoline re-dispatches flat */
             }
 #endif
-            uint32_t target_phys = target & 0x1FFFFFFFu;
             if (allow_local_dirty_flow && target != 0 &&
                 target != stop_addr &&
                 phys_is_overlay_flow_region(target_phys) &&
                 dirty_ram_is_dirty(target_phys)) {
+                if (unlinked_tail && target_is_function_entry)
+                    current_function_entry_phys = target_phys;
                 /* A runtime overlay may start executing while its final code
                  * bytes are still being installed. Entry-time native validation
                  * must reject that partial image, but local dirty flow used to

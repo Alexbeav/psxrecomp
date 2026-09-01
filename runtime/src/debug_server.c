@@ -9004,9 +9004,9 @@ static void handle_wide_full(int id, const char *json)
 }
 
 /* Function-override tier introspection (func_override.h): count + per-entry
- * {id, addr, calls, guard_misses}. calls == 0 = never reached (wrong address
- * or path never ran); guard_misses = consults declined by the residency
- * guard. */
+ * {id, addr, calls, guard identity, guard_misses}. calls == 0 = never reached
+ * (wrong address or path never ran); guard_misses = consults declined by the
+ * residency guard. */
 static void handle_func_override(int id, const char *json)
 {
     extern int func_override_count(void);
@@ -9014,8 +9014,11 @@ static void handle_func_override(int id, const char *json)
                                     uint32_t *addr_out, uint64_t *calls_out,
                                     uint64_t *guard_misses_out,
                                     int *guarded_out, int32_t *credit_out);
+    extern int func_override_get_guard_info(int index, int *kind_out,
+                                            int *count_out,
+                                            uint32_t *expected_crc_out);
     (void)json;
-    char buf[16 * 1024];
+    char buf[32 * 1024];
     int n = snprintf(buf, sizeof(buf),
                      "{\"id\":%d,\"ok\":true,\"count\":%d,\"overrides\":[",
                      id, func_override_count());
@@ -9024,11 +9027,17 @@ static void handle_func_override(int id, const char *json)
         uint32_t addr = 0;
         uint64_t calls = 0, misses = 0;
         int guarded = 0;
+        int guard_kind = 0, guard_count = 0;
+        uint32_t guard_crc = 0;
         int32_t credit = 0;
         char creditstr[16];
         if (!func_override_get_ex(i, oid, sizeof(oid), &addr, &calls,
                                   &misses, &guarded, &credit))
             break;
+        (void)func_override_get_guard_info(i, &guard_kind, &guard_count,
+                                           &guard_crc);
+        const char *guard_name = guard_kind == 2 ? "code_crc32"
+                                : guard_kind == 1 ? "words" : "none";
         /* credit: the declared cycle policy — a number (fixed per-call
          * charge) or the string "self" (the body charges its own). */
         if (credit < 0)
@@ -9043,10 +9052,12 @@ static void handle_func_override(int id, const char *json)
          * into an overflow. */
         const int w = snprintf(buf + n, sizeof(buf) - (size_t)n,
                       "%s{\"id\":\"%s\",\"addr\":\"0x%08X\",\"calls\":%llu,"
-                      "\"guard_misses\":%llu,\"guarded\":%d,\"credit\":%s}",
+                      "\"guard_misses\":%llu,\"guarded\":%d,"
+                      "\"guard_kind\":\"%s\",\"guard_count\":%d,"
+                      "\"guard_crc\":\"0x%08X\",\"credit\":%s}",
                       i ? "," : "", oid, addr,
                       (unsigned long long)calls, (unsigned long long)misses,
-                      guarded, creditstr);
+                      guarded, guard_name, guard_count, guard_crc, creditstr);
         if (w < 0) break;
         n += w;
         if ((size_t)n >= sizeof(buf) - 256) {
