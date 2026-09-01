@@ -319,10 +319,20 @@ static void          gl_swap_with_osd(void);
 static GLint         s_present_uTex = -1, s_present_uUvRect = -1;
 static GLint         s_present_uTexSize = -1, s_present_uSharpScale = -1;
 static GLint         s_present_uSharp = -1;
+/* Scanline post-process state (host display setting; see gl_renderer_set_scanlines).
+ * s_scanline_on/strength are pushed to whichever program draws game content;
+ * OSD/bezel and the already-composed hold-last re-present force it off so the
+ * effect is applied exactly once, at native-line pitch. */
+static int           s_scanline_on = 0;
+static float         s_scanline_strength = 0.5f;
+static GLint         s_present_uScanline = -1, s_present_uScanStrength = -1;
+static GLint         s_present_uScanLines = -1, s_present_uScanScale = -1;
 static GLuint        s_interp_prog = 0, s_interp_tex[3];
 static GLint         s_interp_uPrev = -1, s_interp_uCurr = -1;
 static GLint         s_interp_uAlpha = -1, s_interp_uUvRect = -1;
 static GLint         s_interp_uBlendMode = -1;
+static GLint         s_interp_uScanline = -1, s_interp_uScanStrength = -1;
+static GLint         s_interp_uScanLines = -1, s_interp_uScanScale = -1;
 static int           s_interp_enabled = 0, s_interp_valid = 0;
 static int           s_interp_suspended = 0;
 static int           s_interp_blend_mode = 0;
@@ -874,6 +884,30 @@ static const char *PRESENT_VS =
  * there. The result is clamped to u_uv_rect so the half-texel edge inset the
  * caller applied still holds — that inset is what keeps LINEAR from bleeding
  * the border texel into the image (the old reason FMV was pinned to NEAREST). */
+/* Scanline post-process, shared by the present and interpolation shaders.
+ * Darkens toward the gap between PS1 scanlines with a soft sinusoidal beam
+ * centred on each line. The pitch is u_scanline_lines (the number of native
+ * display lines across the source rect), so it tracks the PS1 line grid, not
+ * the internal SSAA scale or the window size. u_scanline_scale is output pixels
+ * per PS1 line; the gate fades the effect in from 1x to 2x so it never shimmers
+ * on a window too small to resolve one line as two rows (Nyquist). Computed
+ * against v_uv.y (position across the display region) so it is orientation- and
+ * scale-agnostic. */
+#define PSX_SCANLINE_UNIFORMS \
+    "uniform int   u_scanline;\n" \
+    "uniform float u_scanline_strength;\n" \
+    "uniform float u_scanline_lines;\n" \
+    "uniform float u_scanline_scale;\n"
+#define PSX_SCANLINE_FUNC \
+    "vec3 psx_scanline(vec3 rgb, float vy){\n" \
+    "  if (u_scanline == 0) return rgb;\n" \
+    "  float gate = clamp(u_scanline_scale - 1.0, 0.0, 1.0);\n" \
+    "  if (gate <= 0.0) return rgb;\n" \
+    "  float p    = fract(vy * u_scanline_lines);\n" \
+    "  float beam = sin(3.14159265 * p);\n" \
+    "  float mult = 1.0 - (u_scanline_strength * gate) * (1.0 - beam);\n" \
+    "  return rgb * mult;\n" \
+    "}\n"
 static const char *PRESENT_FS =
     "#version 330\n"
     "in vec2 v_uv; uniform sampler2D u_tex; out vec4 frag;\n"
@@ -881,6 +915,7 @@ static const char *PRESENT_FS =
     "uniform vec2 u_tex_size;\n"
     "uniform vec2 u_sharp_scale;\n"
     "uniform int  u_sharp;\n"
+    PSX_SCANLINE_UNIFORMS
     /* Catmull-Rom bicubic via 9 bilinear taps. Sharper than plain bilinear at
      * the same smoothness, with mild overshoot that reads as edge definition.
      * The present texture holds exactly the source rect and wraps CLAMP_TO_EDGE,
@@ -909,27 +944,35 @@ static const char *PRESENT_FS =
     "  r += texture(u_tex, vec2(t3.x , t3.y )) * (w3.x  * w3.y );\n"
     "  return r;\n"
     "}\n"
+    PSX_SCANLINE_FUNC
     "void main(){\n"
     "  vec2 uv = v_uv;\n"
-    "  if (u_sharp == 2) { frag = bicubic(uv); return; }\n"
-    "  if (u_sharp == 1) {\n"
-    "    vec2 scale = max(u_sharp_scale, vec2(1.0));\n"
-    "    vec2 texel = uv * u_tex_size;\n"
-    "    vec2 tf    = floor(texel);\n"
-    "    vec2 cd    = (texel - tf) - 0.5;\n"
-    "    vec2 band  = 0.5 - 0.5 / scale;\n"
-    "    vec2 f     = (cd - clamp(cd, -band, band)) * scale + 0.5;\n"
-    "    uv = (tf + f) / u_tex_size;\n"
-    "    vec2 lo = min(u_uv_rect.xy, u_uv_rect.zw);\n"
-    "    vec2 hi = max(u_uv_rect.xy, u_uv_rect.zw);\n"
-    "    uv = clamp(uv, lo, hi);\n"
+    "  vec4 c;\n"
+    "  if (u_sharp == 2) { c = bicubic(uv); }\n"
+    "  else {\n"
+    "    if (u_sharp == 1) {\n"
+    "      vec2 scale = max(u_sharp_scale, vec2(1.0));\n"
+    "      vec2 texel = uv * u_tex_size;\n"
+    "      vec2 tf    = floor(texel);\n"
+    "      vec2 cd    = (texel - tf) - 0.5;\n"
+    "      vec2 band  = 0.5 - 0.5 / scale;\n"
+    "      vec2 f     = (cd - clamp(cd, -band, band)) * scale + 0.5;\n"
+    "      uv = (tf + f) / u_tex_size;\n"
+    "      vec2 lo = min(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "      vec2 hi = max(u_uv_rect.xy, u_uv_rect.zw);\n"
+    "      uv = clamp(uv, lo, hi);\n"
+    "    }\n"
+    "    c = texture(u_tex, uv);\n"
     "  }\n"
-    "  frag = texture(u_tex, uv);\n"
+    "  c.rgb = psx_scanline(c.rgb, v_uv.y);\n"
+    "  frag = c;\n"
     "}\n";
 static const char *INTERP_FS =
     "#version 330\n"
     "in vec2 v_uv; uniform sampler2D u_prev; uniform sampler2D u_curr;\n"
     "uniform float u_alpha; uniform int u_blend_mode; out vec4 frag;\n"
+    PSX_SCANLINE_UNIFORMS
+    PSX_SCANLINE_FUNC
     "void main(){\n"
     "  vec4 prev=texture(u_prev,v_uv), curr=texture(u_curr,v_uv);\n"
     "  float alpha=u_alpha;\n"
@@ -939,7 +982,9 @@ static const char *INTERP_FS =
     "    float safe_blend=1.0-smoothstep(0.08,0.20,change);\n"
     "    alpha=mix(step(0.5,u_alpha),u_alpha,safe_blend);\n"
     "  }\n"
-    "  frag=mix(prev,curr,alpha);\n"
+    "  vec4 c=mix(prev,curr,alpha);\n"
+    "  c.rgb=psx_scanline(c.rgb, v_uv.y);\n"
+    "  frag=c;\n"
     "}\n";
 
 /* Geometry: position in VRAM pixels (draw offset already applied by gpu.c),
@@ -2597,6 +2642,40 @@ static void present_set_sharp(int mode, int tex_w, int tex_h,
                       (float)out_h / (float)tex_h);
 }
 
+/* Push scanline uniforms into the currently-bound present or interpolation
+ * program.
+ *   pitch_lines = the height of the TEXTURE that v_uv is normalized against
+ *                 (v_uv.y * pitch_lines is the texel-row coordinate, and one
+ *                 source texel row is one PS1 scanline). For the VRAM/FBO quad
+ *                 that is VRAM_H (v_uv spans only the display sub-range of the
+ *                 512-row texture); for the CPU/interp textures, which hold
+ *                 exactly the display rect, it equals the display height.
+ *   disp_lines  = PS1 display lines actually shown, for the output-scale gate.
+ *   out_h       = letterbox height in window px.
+ * Pass pitch_lines/disp_lines <= 0 (OSD, bezel, or the already-composed
+ * hold-last drawable) to force the effect off — program uniforms persist, so
+ * every content draw must state its own choice. */
+static void present_set_scanline(GLint uOn, GLint uStr, GLint uLines,
+                                 GLint uScale, int pitch_lines, int disp_lines,
+                                 int out_h) {
+    if (uOn < 0) return;
+    int on = (s_scanline_on && pitch_lines > 0 && disp_lines > 0 && out_h > 0)
+                 ? 1 : 0;
+    p_glUniform1i(uOn, on);
+    if (!on) return;
+    if (uStr >= 0)   p_glUniform1f(uStr, s_scanline_strength);
+    if (uLines >= 0) p_glUniform1f(uLines, (float)pitch_lines);
+    if (uScale >= 0) p_glUniform1f(uScale, (float)out_h / (float)disp_lines);
+}
+#define PRESENT_SCANLINE(pitch, disp, oh)                                   \
+    present_set_scanline(s_present_uScanline, s_present_uScanStrength,      \
+                         s_present_uScanLines, s_present_uScanScale,        \
+                         (pitch), (disp), (oh))
+#define INTERP_SCANLINE(pitch, disp, oh)                                    \
+    present_set_scanline(s_interp_uScanline, s_interp_uScanStrength,        \
+                         s_interp_uScanLines, s_interp_uScanScale,          \
+                         (pitch), (disp), (oh))
+
 /* Display aspect for the present letterbox. Default 4:3 (native). When a wide
  * aspect is configured the 4:3 frame is stretched into it — paired with the
  * GTE X-squash (gte_set_display_aspect) this nets a wider field of view. */
@@ -2605,6 +2684,22 @@ static int s_aspect_num = 4, s_aspect_den = 3;
 void gl_renderer_set_display_aspect(int num, int den) {
     if (num <= 0 || den <= 0) { num = 4; den = 3; }
     s_aspect_num = num; s_aspect_den = den;
+}
+
+/* Scanline post-process toggle (host display setting). strength is the depth of
+ * the dark gap between lines, 0..1 (0 = off-looking, 1 = fully black gap). The
+ * actual darkening is applied per-draw in the present/interpolation shaders and
+ * fades in with output scale — see PSX_SCANLINE_FUNC. */
+void gl_renderer_set_scanlines(int on, float strength) {
+    s_scanline_on = on ? 1 : 0;
+    if (strength < 0.f) strength = 0.f;
+    if (strength > 1.f) strength = 1.f;
+    s_scanline_strength = strength;
+}
+
+int gl_renderer_get_scanlines(float *strength) {
+    if (strength) *strength = s_scanline_strength;
+    return s_scanline_on;
 }
 
 /* Letterbox: largest num:den rect centered in the drawable. */
@@ -2867,6 +2962,22 @@ int gl_renderer_init_context(SDL_Window *win) {
                 p_glGetUniformLocation(s_present_prog, "u_sharp_scale");
             s_present_uSharp =
                 p_glGetUniformLocation(s_present_prog, "u_sharp");
+            s_present_uScanline =
+                p_glGetUniformLocation(s_present_prog, "u_scanline");
+            s_present_uScanStrength =
+                p_glGetUniformLocation(s_present_prog, "u_scanline_strength");
+            s_present_uScanLines =
+                p_glGetUniformLocation(s_present_prog, "u_scanline_lines");
+            s_present_uScanScale =
+                p_glGetUniformLocation(s_present_prog, "u_scanline_scale");
+            s_interp_uScanline =
+                p_glGetUniformLocation(s_interp_prog, "u_scanline");
+            s_interp_uScanStrength =
+                p_glGetUniformLocation(s_interp_prog, "u_scanline_strength");
+            s_interp_uScanLines =
+                p_glGetUniformLocation(s_interp_prog, "u_scanline_lines");
+            s_interp_uScanScale =
+                p_glGetUniformLocation(s_interp_prog, "u_scanline_scale");
             s_interp_uPrev = p_glGetUniformLocation(s_interp_prog, "u_prev");
             s_interp_uCurr = p_glGetUniformLocation(s_interp_prog, "u_curr");
             s_interp_uAlpha = p_glGetUniformLocation(s_interp_prog, "u_alpha");
@@ -2994,6 +3105,9 @@ void gl_renderer_present(const uint32_t *pixels, int src_w, int src_h, int linea
     upload_present_tex(pixels, src_w, src_h, filt_mode >= 0 ? 1 : 0);
     p_glUseProgram(s_present_prog); p_glUniform1i(s_present_uTex, 0);
     present_set_sharp(filt_mode, src_w, src_h, lw, lh);
+    /* CPU present texture holds exactly the display rect, so v_uv spans it and
+     * pitch == display height == src_h. */
+    PRESENT_SCANLINE(src_h, src_h, lh);
     if (crop) {
         /* Cropped present keeps left-aligned content; still inset so linear
          * AA does not blend the cut column with undefined border texels. */
@@ -3820,6 +3934,9 @@ static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh) {
     p_glUniform1f(s_interp_uAlpha, alpha);
     p_glUniform1i(s_interp_uBlendMode, s_interp_blend_mode);
     p_glUniform4f(s_interp_uUvRect, 0.f, 0.f, 1.f, 1.f);
+    /* Interp textures hold exactly the display rect (uv_rect is 0..1), so pitch
+     * == display height == s_interp_h. */
+    INTERP_SCANLINE(s_interp_h, s_interp_h, lh);
     p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);
@@ -3946,6 +4063,7 @@ static void gl_draw_osd_image(const uint32_t *px, int ow, int oh,
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
     present_set_sharp(0, 0, 0, 0, 0);   /* OSD is authored at output res */
+    PRESENT_SCANLINE(0, 0, 0);          /* never scanline the host OSD */
     /* Host OSD bitmaps are top-down (row 0 = top), same as guest CPU
      * present with v_flip=1: uv (0,0)-(1,1). (0,1)-(1,0) was the hold-last
      * cancel for already-oriented captures and made toasts upside-down. */
@@ -4049,6 +4167,12 @@ static void present_target_quad(GLuint tex, int tex_w, int tex_h,
     /* The rasterized path already renders at the internal scale, so it has no
      * low-res source to reconstruct — keep the plain sample. */
     present_set_sharp(0, 0, 0, 0, 0);
+    /* Scanline at the native line grid. v_uv is normalized against tex_h (the
+     * full VRAM/FBO texture), and one texel row is one PS1 scanline, so tex_h is
+     * the phase pitch; h is the displayed line count for the output-scale gate.
+     * v_flip=0 is the already-composed hold-last drawable (scanlines, if any,
+     * are already baked) — skip it. */
+    PRESENT_SCANLINE(v_flip ? tex_h : 0, v_flip ? h : 0, lh);
     /* Half-texel inset: with GL_LINEAR, corner-mapped UVs make the outermost
      * dest pixels blend the border texel with VRAM outside the content rect
      * (visible edge stripe with AA on). Center-mapped UVs keep edge samples
@@ -4113,6 +4237,7 @@ static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh) {
     p_glUseProgram(s_present_prog);
     p_glUniform1i(s_present_uTex, 0);
     p_glUniform4f(s_present_uUvRect, 0.0f, 0.0f, 1.0f, 1.0f);
+    PRESENT_SCANLINE(0, 0, 0);          /* bezel art is not scanlined */
     p_glBindVertexArray(s_present_vao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     p_glBindVertexArray(0);

@@ -488,6 +488,13 @@ struct RuntimeConfig {
     // PSX_SCREEN env var overrides this at runtime (debug path).
     int                   video_screen_kind = 0;
 
+    // scanlines: present-time horizontal scanline darkening (host enhancement,
+    // orthogonal to crt_filter's colour LUT — the two compose). Off by default;
+    // scanline_strength 0..1 is the dark-gap depth. PSX_SCANLINES /
+    // PSX_SCANLINE_STRENGTH override at runtime (debug path).
+    bool                  video_scanlines = false;
+    double                video_scanline_strength = 0.5;
+
     // auto_skip_fmv: when true, full-motion videos (streaming XA audio + MDEC
     // video) are skipped the instant they're detected — presentation + pacing are
     // suppressed and audio muted for the duration, so an FMV ends in a fraction of
@@ -1196,6 +1203,10 @@ struct UserSettings {
     bool has_geometry_correction   = false; bool geometry_correction   = false;
     bool has_perspective_texturing = false; bool perspective_texturing = false;
     bool has_screen_kind    = false; int  screen_kind    = 0; // 0..3 (ScreenKind)
+    // Scanline post-process (see RuntimeConfig::video_scanlines). Strength stored
+    // 0..1; the launcher ABI carries it as an integer percent.
+    bool has_scanlines         = false; bool   scanlines         = false;
+    bool has_scanline_strength = false; double scanline_strength = 0.5;
     bool has_auto_skip_fmv  = false; bool auto_skip_fmv  = false; // skip FMVs
     // [video] turbo_loads: DEPRECATED AND IGNORED — the legacy home of the
     // generic Turbo loads switch, back when the launcher drew a row for it.

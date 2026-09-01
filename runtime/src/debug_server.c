@@ -7846,6 +7846,25 @@ static void handle_ws_nw(int id, const char *json)
              id, psx_ws_get_native_wide(), ws.mode, ws.nw_extra);
 }
 
+/* Live scanline post-process toggle (A/B): `scanline on=<0|1> pct=<0..100>`.
+ * Either field is optional — omit `on` to keep the current toggle, omit `pct`
+ * to keep the current strength. Reports the resulting state. */
+extern void psx_video_set_scanlines(int on, float strength);
+extern int  psx_video_get_scanlines(float *strength);
+static void handle_scanline(int id, const char *json)
+{
+    int on  = json_get_int(json, "on", -1);
+    int pct = json_get_int(json, "pct", -1);
+    float cur = 0.f;
+    int cur_on = psx_video_get_scanlines(&cur);
+    int new_on = (on >= 0) ? (on ? 1 : 0) : cur_on;
+    float new_s = (pct >= 0 && pct <= 100) ? (float)pct / 100.f : cur;
+    psx_video_set_scanlines(new_on, new_s);
+    cur_on = psx_video_get_scanlines(&cur);
+    send_fmt("{\"id\":%d,\"ok\":true,\"scanlines\":%d,\"strength_pct\":%d}",
+             id, cur_on, (int)(cur * 100.f + 0.5f));
+}
+
 /* ws_backdrop_ring: dump the always-on auto_backdrop rewrite ring (which windows
  * fire, live extent/camera/DL-count, orig vs final bound). Read-only; small
  * heap envelope so the per-byte stall of a giant read is never in play. */
@@ -13531,6 +13550,7 @@ static const CmdEntry s_commands[] = {
     { "kernel_bless",      handle_kernel_bless },
     { "ws_aspect",         handle_ws_aspect },
     { "ws_nw",             handle_ws_nw },
+    { "scanline",          handle_scanline },
     { "ws_backdrop_ring",  handle_ws_backdrop_ring },
     { "ws_ui_groups",      handle_ws_ui_groups },
     { "ws_backdrop_margin", handle_ws_backdrop_margin },
