@@ -1157,6 +1157,27 @@ static bool          g_video_aa    = true;  /* linear present filtering */
 /* FMV present reconstruction (VIDEO_FMV_FILTER_*), pushed to the GL renderer
  * once the config is resolved. Only consulted while g_video_aa is on. */
 static int           g_video_fmv_filter = PSXRecompV4::VIDEO_FMV_FILTER_DEFAULT;
+/* Scanline post-process (host display enhancement). Off by default; toggled by
+ * the launcher Display card, the PSX_SCANLINES env override, the F6 hotkey, or
+ * the `scanline` TCP command. Strength 0..1 is the dark-gap depth. Pushed to the
+ * GL renderer each present alongside the FMV filter. */
+static bool          g_video_scanlines = false;
+static float         g_video_scanline_strength = 0.5f;
+
+/* Single point that changes scanline state: keeps the g_video_* mirror (used by
+ * the hotkey and startup banner) in lockstep with the GL renderer, so the F6
+ * hotkey, the PSX_SCANLINES env override, and the `scanline` TCP command can be
+ * mixed without drifting. Declared extern "C" so debug_server.c can call it. */
+extern "C" void psx_video_set_scanlines(int on, float strength) {
+    g_video_scanlines = on ? true : false;
+    if (strength >= 0.f && strength <= 1.f) g_video_scanline_strength = strength;
+    gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
+                              g_video_scanline_strength);
+}
+extern "C" int psx_video_get_scanlines(float *strength) {
+    if (strength) *strength = g_video_scanline_strength;
+    return g_video_scanlines ? 1 : 0;
+}
 
 /* recomp-ui stores this 1-based so a zero-initialized (older) host reads as
  * "unset" rather than pinning nearest; the config enum is 0-based. Convert at
@@ -6530,6 +6551,17 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                                  (int)mod)) {
                     fps_telemetry_toggle();
                 }
+                else if (!key_repeat &&
+                         host_keymap_match_event(HOST_KEYMAP_SCANLINES,
+                                                 (int)key, (int)scancode,
+                                                 (int)mod)) {
+                    psx_video_set_scanlines(g_video_scanlines ? 0 : 1,
+                                            g_video_scanline_strength);
+                    char msg[48];
+                    std::snprintf(msg, sizeof(msg), "Scanlines %s",
+                                  g_video_scanlines ? "on" : "off");
+                    host_osd_push(msg, 1200);
+                }
                 /* Host volume: config.ini [KeyMap] VolumeUp/VolumeDown
                  * (defaults: keypad +/-). 5% steps; shows right-side bar. */
                 else if (host_keymap_match_event(HOST_KEYMAP_VOLUME_UP,
@@ -11261,6 +11293,9 @@ int main(int argc, char** argv) {
             g_video_pgxp_tolerance = (float)gc.runtime.video_pgxp_tolerance;
             g_video_renderer   = gc.runtime.video_renderer;
             g_video_screen     = gc.runtime.video_screen_kind;
+            g_video_scanlines  = gc.runtime.video_scanlines;
+            g_video_scanline_strength =
+                (float)gc.runtime.video_scanline_strength;
             g_video_aspect_num = gc.runtime.video_aspect_num;
             g_video_aspect_den = gc.runtime.video_aspect_den;
             g_low_latency_input = gc.runtime.video_low_latency_input ? 1 : 0;
@@ -11650,6 +11685,9 @@ int main(int argc, char** argv) {
         if (us.has_perspective_texturing)
             g_video_perspective_texturing = us.perspective_texturing ? 1 : 0;
         if (us.has_screen_kind)    g_video_screen    = us.screen_kind;
+        if (us.has_scanlines)      g_video_scanlines = us.scanlines;
+        if (us.has_scanline_strength)
+            g_video_scanline_strength = (float)us.scanline_strength;
         if (us.has_auto_skip_fmv)  g_auto_skip_fmv   = us.auto_skip_fmv ? 1 : 0;
         /* turbo_loads is deliberately NOT restored from settings.toml. It is a
          * write-only latch: the launcher stopped drawing a Turbo loads row when
@@ -13181,6 +13219,18 @@ session_reboot:
     gpu_texture_correction_set(g_video_perspective_texturing);
     pgxp_set_cpu_mode(g_video_pgxp_cpu_mode);
     pgxp_set_tolerance(g_video_pgxp_tolerance);
+    /* Scanlines: env override wins over config, same as the corrections above,
+     * so a headless/free-run boot can be captured with the effect armed from the
+     * first present. PSX_SCANLINES=0/1; PSX_SCANLINE_STRENGTH=0..1. Pushed to the
+     * GL renderer, which holds the state and applies it per-draw. */
+    if (const char* e = std::getenv("PSX_SCANLINES"))
+        g_video_scanlines = (*e && *e != '0');
+    if (const char* e = std::getenv("PSX_SCANLINE_STRENGTH")) {
+        float s = (float)atof(e);
+        if (s >= 0.f && s <= 1.f) g_video_scanline_strength = s;
+    }
+    gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
+                              g_video_scanline_strength);
     if (g_video_geometry_correction || g_video_perspective_texturing) {
         std::fprintf(stdout,
                      "psxrecomp: geometry correction %s, perspective texturing %s%s\n",

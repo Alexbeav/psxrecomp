@@ -21,6 +21,7 @@ typedef enum HostKeymapAction {
     HOST_KEYMAP_DISPLAY_PERF,
     HOST_KEYMAP_REWIND,           /* default F8 */
     HOST_KEYMAP_SAVE_STATE_MENU,  /* default F7 */
+    HOST_KEYMAP_SCANLINES,        /* default F6 */
     HOST_KEYMAP_ACTION_COUNT
 } HostKeymapAction;
 

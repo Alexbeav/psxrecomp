@@ -79,6 +79,7 @@ Columns: **N** = native, **D** = DuckStation oracle.
 | `set_snapshot` | ✓ | ✓ | `slot`, `addr`, `size` | Configure per-frame RAM snapshot region (slots 0-3) |
 | `get_snapshots` | ✓ | ✓ | — | Show snapshot config |
 | `screenshot` | ✓ | ✓ | `path` (optional) | Write a **PNG** of the current display to `path` (default `psx_screenshot.png` in the runtime cwd); single metadata response `{path,width,height}`. `screenshot_file` is an alias; the old inline-hex-row `screenshot` is gone (it streamed h+1 response lines per request and poisoned the connection) |
+| `scanline` | ✓ |   | optional `on` (0/1), optional `pct` (0..100) | Live A/B toggle for the present-time scanline post-process. Omit `on` to keep the current toggle, omit `pct` to keep the current strength; reports `{scanlines, strength_pct}`. Same state the F6 hotkey and `[video] scanlines` drive |
 | `first_failure` | ✓ |   | — | Find first divergence point between runs (native-side tracking) |
 | `read_frame_ram` | ✓ |   | `addr`, `len`, `frame` | Read RAM **as of a specific frame** (from ring buffer) |
 | `wtrace_range` | ✓ |   | `lo`, `hi` | Set RAM-write trace range (ring of 262 144 writes with RA — `WRITE_TRACE_CAP`, `1 << 18`) |
@@ -490,6 +491,7 @@ Regenerate with `python tools/gen_tcp_commands.py`; `--check` fails if this bloc
 | `run_to_frame` | ✓ |  | ✓ |
 | `s3_smear_watch` | ✓ |  | ✓ |
 | `savestate` | ✓ |  |  |
+| `scanline` | ✓ |  |  |
 | `screenshot` | ✓ | ✓ | ✓ |
 | `screenshot_file` | ✓ | ✓ | ✓ |
 | `screenshot_hires` | ✓ |  | ✓ |

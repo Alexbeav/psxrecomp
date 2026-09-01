@@ -122,6 +122,14 @@ int gl_renderer_present_wide_fbo(int disp_x, int disp_y, int disp_h, int linear)
  * for the widescreen field-of-view hack. */
 void gl_renderer_set_display_aspect(int num, int den);
 
+/* Scanline post-process (host display setting). on toggles the effect; strength
+ * (0..1) is the depth of the dark gap between PS1 scanlines. Applied at the
+ * native display-line pitch in the present/interpolation shaders, and faded in
+ * with output scale so it never shimmers on a sub-2x window. gl_renderer_get_
+ * scanlines returns the on flag and (via out-param) the current strength. */
+void gl_renderer_set_scanlines(int on, float strength);
+int  gl_renderer_get_scanlines(float *strength);
+
 /* Select full native-wide mirror rendering instead of the centre-splice fast
  * path. Textured edge expansion needs the complete mirror surface. */
 void gl_renderer_set_wide_fast(int on);

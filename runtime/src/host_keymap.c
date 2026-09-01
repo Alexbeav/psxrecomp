@@ -97,6 +97,8 @@ static void apply_defaults(void) {
 #endif
     if (s_actions[HOST_KEYMAP_SAVE_STATE_MENU].count == 0)
         add_bind(HOST_KEYMAP_SAVE_STATE_MENU, (int)SDLK_F7, (int)SDL_SCANCODE_F7, 0);
+    if (s_actions[HOST_KEYMAP_SCANLINES].count == 0)
+        add_bind(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, (int)SDL_SCANCODE_F6, 0);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -154,6 +156,7 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "DisplayPerf")) return HOST_KEYMAP_DISPLAY_PERF;
     if (ieq(name, "Rewind")) return HOST_KEYMAP_REWIND;
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
+    if (ieq(name, "Scanlines")) return HOST_KEYMAP_SCANLINES;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 

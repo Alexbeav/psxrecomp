@@ -635,6 +635,15 @@ static RuntimeConfig parse_runtime_block(const toml::value& cfg, const fs::path&
                 "[video] crt_filter must be \"raw\"|\"crt\"|\"composite\"|\"trinitron\": {}",
                 mode));
         }
+        if (video.contains("scanlines")) {
+            rt.video_scanlines = toml::find<bool>(video, "scanlines");
+        }
+        if (video.contains("scanline_strength")) {
+            double s = toml::find<double>(video, "scanline_strength");
+            if (s < 0.0) s = 0.0;
+            if (s > 1.0) s = 1.0;
+            rt.video_scanline_strength = s;
+        }
         if (video.contains("auto_skip_fmv")) {
             rt.video_auto_skip_fmv = toml::find<bool>(video, "auto_skip_fmv");
         }
@@ -2295,6 +2304,15 @@ UserSettings load_user_settings(const fs::path& path) {
             else if (m == "crt")       { s.screen_kind = 1; s.has_screen_kind = true; }
             else if (m == "composite") { s.screen_kind = 2; s.has_screen_kind = true; }
             else if (m == "trinitron") { s.screen_kind = 3; s.has_screen_kind = true; }
+        });
+        if (v.contains("scanlines")) try_get([&]{
+            s.scanlines = toml::find<bool>(v, "scanlines"); s.has_scanlines = true;
+        });
+        if (v.contains("scanline_strength")) try_get([&]{
+            double d = toml::find<double>(v, "scanline_strength");
+            if (d < 0.0) d = 0.0;
+            if (d > 1.0) d = 1.0;
+            s.scanline_strength = d; s.has_scanline_strength = true;
         });
         if (v.contains("auto_skip_fmv")) try_get([&]{
             s.auto_skip_fmv = toml::find<bool>(v, "auto_skip_fmv"); s.has_auto_skip_fmv = true;
