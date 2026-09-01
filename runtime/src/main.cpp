@@ -1276,7 +1276,10 @@ static_assert((int)PSX_MOD_CONTROLLER_DIGITAL ==
               (int)PSXRecompV4::PAD_MODE_DIGITAL);
 static double        g_host_refresh_hz = 0.0;
 static constexpr double PSX_FRAME_PERIOD_MS = 1000.0 / 59.94;
+static double        g_guest_frame_period_ms = PSX_FRAME_PERIOD_MS;
 static double        g_frame_period_ms = PSX_FRAME_PERIOD_MS;
+static int           g_host_refresh_display_idx = -2;
+static uint64_t      g_host_refresh_last_probe_ms = 0;
 static bool          g_mod_native_vblank_rate = false;
 static uint32_t      g_mod_native_vblank_fps = 0;
 /* Activation-time request. -1 means no enabled mod owns load acceleration. */
@@ -1289,6 +1292,7 @@ static int present_vsync_owns_cadence(void);
 static int present_effective_swap_interval(void);
 static int present_should_wall_pace(void);
 static void apply_present_cadence(void);
+static void refresh_host_display_cadence(int force_log, int force_probe);
 
 /* Map the configured tri-state fullscreen mode (g_fullscreen) to the SDL
  * window-fullscreen flag: used both to open the window in that mode and to
@@ -1390,9 +1394,10 @@ extern "C" int psx_mod_set_native_vblank_rate(
     }
     g_mod_native_vblank_rate = true;
     g_mod_native_vblank_fps = frames_per_second;
-    g_frame_period_ms = frames_per_second
+    g_guest_frame_period_ms = frames_per_second
         ? 1000.0 / (double)frames_per_second
         : 0.0;
+    g_frame_period_ms = g_guest_frame_period_ms;
     /*
      * Above the physical panel rate (and in uncapped mode), swap-interval
      * blocking would silently replace the requested guest cadence with the
@@ -2830,10 +2835,64 @@ static void apply_netplay_local_viewport_aspect(bool netplay_enabled) {
  * guest resumes), which shows up as MotK FMV ~30–40 FPS in netplay vs ~50+
  * offline. Force immediate swaps for the session; restore on soft-exit. */
 static int host_refresh_matches_guest_cadence(void) {
-    if (g_host_refresh_hz <= 0.0 || g_frame_period_ms <= 0.0)
+    if (g_host_refresh_hz <= 0.0 || g_guest_frame_period_ms <= 0.0)
         return 0;
-    const double guest_hz = 1000.0 / g_frame_period_ms;
+    const double guest_hz = 1000.0 / g_guest_frame_period_ms;
     return std::fabs(g_host_refresh_hz - guest_hz) <= guest_hz * 0.02;
+}
+
+static void refresh_host_display_cadence(int force_log, int force_probe) {
+#ifndef PSX_SDL_NO_RENDER
+    if (!sdl_window)
+        return;
+
+    const uint64_t now_ms = SDL_GetTicks64();
+    const int disp_idx = SDL_GetWindowDisplayIndex(sdl_window);
+    if (!force_probe &&
+        disp_idx == g_host_refresh_display_idx &&
+        g_host_refresh_last_probe_ms != 0 &&
+        now_ms >= g_host_refresh_last_probe_ms &&
+        now_ms - g_host_refresh_last_probe_ms < 1000ull) {
+        return;
+    }
+    g_host_refresh_last_probe_ms = now_ms ? now_ms : 1ull;
+
+    double host_hz = 0.0;
+    if (disp_idx >= 0) {
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 &&
+            dm.refresh_rate > 0) {
+            host_hz = (double)dm.refresh_rate;
+        }
+    }
+
+    const int display_changed = (disp_idx != g_host_refresh_display_idx);
+    const int refresh_changed =
+        std::fabs(host_hz - g_host_refresh_hz) > 0.05;
+    if (!force_log && !display_changed && !refresh_changed)
+        return;
+
+    g_host_refresh_display_idx = disp_idx;
+    g_host_refresh_hz = host_hz;
+    g_frame_period_ms = g_guest_frame_period_ms;
+    if (host_refresh_matches_guest_cadence()) {
+        g_frame_period_ms = 1000.0 / host_hz;
+        std::printf("psxrecomp: sync-to-host-refresh: pacing to %.1f Hz panel "
+                    "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
+    } else if (host_hz > 0.0) {
+        std::printf("psxrecomp: host panel %.1f Hz does not match guest "
+                    "cadence; keeping %.2f Hz pacing\n",
+                    host_hz,
+                    g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0);
+    } else {
+        std::printf("psxrecomp: host refresh unknown; keeping %.2f Hz pacing\n",
+                    g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0);
+    }
+    apply_present_cadence();
+#else
+    (void)force_log;
+    (void)force_probe;
+#endif
 }
 
 static int host_driver_vsync_unreliable(void) {
@@ -6777,6 +6836,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         ep.skip_pace = 1;
         return ep;
     }
+
+    refresh_host_display_cadence(0, 0);
 
     /* TCP turbo is for automated validation and trace capture. It keeps the
      * simulation advancing and the debug server polling, but removes frontend
@@ -13387,7 +13448,8 @@ session_reboot:
             /* We need to adjust the frame pacing for PAL games to run at the
              * correct speed */
             vblank_cycles = 677376u;
-            g_frame_period_ms = 1000.0 / 50.0;  /* 50hz refresh rate */
+            g_guest_frame_period_ms = 1000.0 / 50.0;  /* 50hz refresh rate */
+            g_frame_period_ms = g_guest_frame_period_ms;
         }
         else if (ident.region == "NTSC-J") cdrom_set_disc_scex("SCEI");
         else if (ident.region == "NTSC-U") cdrom_set_disc_scex("SCEA");
@@ -13617,28 +13679,10 @@ session_reboot:
     if (!g_fullscreen && !g_video_win_w_explicit)
         SDL_MaximizeWindow(sdl_window);
 
-    /* Host refresh: if the panel matches the current guest cadence, record it
-     * so driver vsync can own cadence (pacer skipped). Mismatched and unknown
-     * refresh rates keep guest pacing and force swap interval 0; vsync as the
-     * clock would otherwise run the sim at the panel rate. */
-    {
-        SDL_DisplayMode dm;
-        int disp_idx = SDL_GetWindowDisplayIndex(sdl_window);
-        if (disp_idx >= 0 && SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 && dm.refresh_rate > 0) {
-            double host_hz = (double)dm.refresh_rate;
-            g_host_refresh_hz = host_hz;
-            if (host_refresh_matches_guest_cadence()) {
-                g_frame_period_ms = 1000.0 / host_hz;
-                std::printf("psxrecomp: sync-to-host-refresh: pacing to %.1f Hz panel "
-                            "(%.4f ms/frame)\n", host_hz, g_frame_period_ms);
-            } else {
-                std::printf("psxrecomp: host panel %.1f Hz does not match guest "
-                            "cadence; keeping %.2f Hz pacing\n",
-                            host_hz,
-                            g_frame_period_ms > 0.0 ? 1000.0 / g_frame_period_ms : 0.0);
-            }
-        }
-    }
+    /* Host refresh: if the window's current panel matches the guest cadence,
+     * record it so driver vsync can own cadence. Re-probed while running so
+     * mixed-refresh multi-monitor moves cannot leave this latched at startup. */
+    refresh_host_display_cadence(1, 1);
 
     /* OpenGL backend: create the GL context now. On failure, relabel the
      * facade back to software (rasterization already runs through software in

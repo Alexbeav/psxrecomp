@@ -518,6 +518,9 @@ if(BUILD_TESTING)
         add_test(NAME pal_cadence_host_refresh_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pal_cadence_host_refresh.py)
+        add_test(NAME mixed_refresh_display_cadence_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mixed_refresh_display_cadence.py)
         add_test(NAME cdrom_lid_integration_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
