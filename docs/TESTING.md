@@ -8,9 +8,14 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-That is the whole thing. 38 tests, under 5 seconds, and it needs **no BIOS dump,
-no disc image, and no generated code** — a plain recompiler build is enough. This
-is the check to run before opening a PR.
+That is the whole thing. The suite has 66 active tests and three disabled tests.
+It needs **no BIOS dump, no disc image, and no generated code**. A plain
+recompiler build is enough. Run this check before you open a PR.
+
+The `psxrecomp-game` build writes the codegen hash to its build directory and
+to `runtime/include/overlay_codegen_hash.h`. Git ignores the runtime header.
+The overlay tests use it to make sure that the recompiler matches the runtime
+cache tag.
 
 Until 2026-07-27 no document in this repository mentioned `ctest`, `pytest`, or
 how to run a test at all, so the suite was effectively invisible. If you add a
@@ -93,8 +98,7 @@ releases only. Its header explains why per-PR triggers were removed on
 carrying information, and a check nobody trusts costs attention without buying
 confidence.
 
-That reasoning still holds. The gap it left was that no fast, trustworthy
-alternative existed. The `ctest` suite above is a candidate: it is hermetic
-(no BIOS, no disc, no network), takes under five seconds, and is currently
-green. Restoring a per-PR check on top of it is a smaller decision than
-restoring the old one.
+That reasoning still holds. The gap left no small, trustworthy alternative.
+The active `ctest` suite above is hermetic and currently green. It needs no
+BIOS, disc, or network. A per-PR check can use this suite without restoring the
+old job.
