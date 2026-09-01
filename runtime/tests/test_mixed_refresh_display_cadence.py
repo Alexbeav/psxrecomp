@@ -26,8 +26,12 @@ require(
     "host display cadence must have a reusable refresh helper",
 )
 require(
-    "const double guest_hz = 1000.0 / g_guest_frame_period_ms;",
-    "host-refresh matching must compare against guest cadence, not effective host period",
+    "const double period_ms = present_effective_frame_period_ms();",
+    "host-refresh matching must use the effective PAL or NTSC guest period",
+)
+require(
+    "const double guest_hz = 1000.0 / period_ms;",
+    "host-refresh matching must derive the rate from the effective guest period",
 )
 require(
     "g_frame_period_ms = g_guest_frame_period_ms;\n    if (host_refresh_matches_guest_cadence())",
