@@ -400,9 +400,8 @@ static void apply_offline_pad_count(int game_players, bool multitap_enabled)
         n = 2;
     g_offline_pad_count = n;
 }
-/* ARGB8888 staging buffer. Sized for the active internal resolution:
- * 640*scale x 512*scale. Allocated once the supersampling scale is known
- * (sized for the native 640x512 when supersampling is off). */
+/* ARGB8888 staging buffer. The 576-row maximum preserves the full interlaced
+ * PAL active canvas. Allocated once the supersampling scale is known. */
 static uint32_t*     sdl_pixel_buf = nullptr;
 
 typedef void (*ModFrameHook)(void);
@@ -1909,7 +1908,8 @@ static int ensure_sw_sdl_present(void) {
             sdl_renderer,
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
-            640 * tex_scale, 512 * tex_scale);
+            640 * tex_scale,
+            (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale);
         if (!sdl_texture) {
             std::fprintf(stderr,
                          "psxrecomp: netplay SW present: SDL_CreateTexture failed: %s\n",
@@ -1922,7 +1922,8 @@ static int ensure_sw_sdl_present(void) {
     if (!sdl_pixel_buf) {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
+            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+            tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "psxrecomp: netplay SW present: staging alloc failed\n");
             return -1;
@@ -5958,6 +5959,31 @@ static void depth24_fix_trailing_margin(uint32_t *buf, uint32_t w, uint32_t h,
     }
 }
 
+/* Compose visible depth24 rows into the PAL/NTSC active canvas. Decode only
+ * the GP1(07h) intersection with active video. This preserves every visible
+ * source row and represents off-screen rows as clipping, not as an in-place
+ * shift that discards additional FMV content. */
+static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
+                                  uint32_t w) {
+    if (!di || !buf || w == 0u || di->screen_height == 0u)
+        return;
+
+    const size_t count = (size_t)w * di->screen_height;
+    for (size_t i = 0; i < count; i++)
+        buf[i] = 0xFF000000u;
+
+    if (di->screen_origin_y >= di->screen_height)
+        return;
+    uint32_t rows = di->height;
+    if (rows > di->screen_height - di->screen_origin_y)
+        rows = di->screen_height - di->screen_origin_y;
+    uint32_t *source = buf + (size_t)di->screen_origin_y * w;
+    for (uint32_t y = 0; y < rows; y++)
+        gpu_depth24_present_row(di, di->screen_source_skip_y + y,
+                                source + (size_t)y * w, w);
+    depth24_fix_trailing_margin(source, w, rows, di->display_x);
+}
+
 enum {
     PSX_ASSIST_BIND_REWIND = 0,
     PSX_ASSIST_BIND_SAVE_STATE_MENU,
@@ -7537,7 +7563,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
 
     /* ---- Display from our VRAM ---- */
     probe_reached = 1;
-    uint32_t w = 0, h = 0;
+    uint32_t w = 0, h = 0, present_h = 0;
     uint32_t present_w = 0;  /* display width actually presented (w + native-wide EXTRA) */
     int active_scale = 1;   /* hi-res mirror used only for 15-bit display */
     bool fmv_frame = false;  /* FMV/boot — present pillarboxed 4:3 in widescreen */
@@ -7584,6 +7610,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         s_disabled_frame_presented = false;
         s_force_present_after_load = false;
         w = di.width; h = di.height;
+        present_h = psx_display_present_height(
+            di.depth24, h, di.screen_height);
         /* 4:3-pinned frames: the pre-game BIOS boot, plus (once engaged) every
          * frame the widescreen layer presents native — FMV video and full-2D
          * menu/title screens. gpu_ws_present_native_43() is the single source
@@ -7635,7 +7663,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         PresRingEntry* pres_entry = present_ring_commit(
             fmv_frame ? PRES_PATH_NATIVE_43
                       : (wide_present ? PRES_PATH_WIDE : PRES_PATH_CANONICAL),
-            (uint16_t)w, (uint16_t)h, (uint16_t)present_w);
+            (uint16_t)w, (uint16_t)present_h, (uint16_t)present_w);
 
         /* OpenGL: 15-bit frames ALWAYS present straight from the authoritative
          * VRAM FBO — one deterministic path (the old per-frame FBO-vs-CPU
@@ -7756,9 +7784,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 /* Batch per-scanline (see gpu_depth24_present_row) — the
                  * per-pixel call chain was the dominant FMV present cost
                  * (3x the VRAM touches of the 16-bit path below). */
-                for (uint32_t y = 0; y < h; y++)
-                    gpu_depth24_present_row(&di, y, sdl_pixel_buf + (size_t)y * present_w,
-                                            present_w);
+                depth24_stage_scanout(&di, sdl_pixel_buf, present_w);
             } else {
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < present_w; x++) {
@@ -7779,7 +7805,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                         di.screen_offset_y);
 
         int present_px_w = (int)present_w * active_scale;
-        int present_px_h = (int)h * active_scale;
+        int present_px_h = (int)present_h * active_scale;
         if (!local_viewport_wide &&
             crop_present_to_netplay_local_viewport(sdl_pixel_buf,
                                                    &present_px_w,
@@ -7844,7 +7870,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * leave the active image stuck in the upper-left portion of the window. */
 #ifndef PSX_SDL_NO_RENDER
     int src_w = (int)present_w * active_scale;
-    int src_h = (int)h * active_scale;
+    int src_h = (int)present_h * active_scale;
     if (local_viewport_crop_applied && src_w >= 2)
         src_w /= 2;
     if (g_gl_active) {
@@ -7878,7 +7904,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
      * show that as a thin white strip; Wayland may not). Pad one black row
      * so any residual linear fringe is black, matching the letterbox. */
     const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
-    const int tex_h = 512 * tex_scale;
+    const int tex_h = (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale;
     if (src_w > 0 && src_h > 0 && src_h < tex_h) {
         static uint32_t s_black_pad[640 * 4]; /* covers g_video_scale <= 4 */
         const int pad_cap = (int)(sizeof(s_black_pad) / sizeof(s_black_pad[0]));
@@ -7898,8 +7924,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     int dst_h = 480 * tex_scale;
     SDL_Rect dst = { (g_logical_w - dst_w) / 2, 0, dst_w, dst_h };
     /* Match GL: short display bands letterbox inside the 4:3 rect. */
-    if (pin_43 && h > 0 && h < 240) {
-        int content_h = (dst_h * (int)h) / 240;
+    if (pin_43 && present_h > 0 && present_h < 240) {
+        int content_h = (dst_h * (int)present_h) / 240;
         if (content_h < 1) content_h = 1;
         dst.y = (dst_h - content_h) / 2;
         dst.h = content_h;
@@ -14287,12 +14313,13 @@ session_reboot:
     }
   }
 
-    /* Staging buffer + backing texture are sized for the internal resolution
-     * (640x512 native, times the supersampling factor). Netplay: 1×. */
+    /* Staging buffer + backing texture preserve the 576-row interlaced PAL
+     * canvas, times the supersampling factor. Netplay: 1×. */
     {
         const int tex_scale = netplay_cpu_auth_gpu() ? 1 : g_video_scale;
         sdl_pixel_buf = (uint32_t*)std::malloc(
-            (size_t)640 * tex_scale * 512 * tex_scale * sizeof(uint32_t));
+            (size_t)640 * tex_scale * PSX_DISPLAY_PRESENT_MAX_HEIGHT *
+            tex_scale * sizeof(uint32_t));
         if (!sdl_pixel_buf) {
             std::fprintf(stderr, "failed to allocate %dx staging buffer\n", tex_scale);
             return 1;
@@ -14305,7 +14332,8 @@ session_reboot:
         sdl_renderer,
         SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
-        640 * tex_scale, 512 * tex_scale
+        640 * tex_scale,
+        (int)PSX_DISPLAY_PRESENT_MAX_HEIGHT * tex_scale
     );
     if (!sdl_texture) {
         std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
