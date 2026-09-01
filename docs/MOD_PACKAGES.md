@@ -333,7 +333,8 @@ set for address collisions and capacity. A collision rejects the plan before
 activation. Activation arms the complete set before it runs any activation
 callback. An unexpected arming error removes the complete package set.
 It also disables all main-memory writes, disc patches, and callbacks from the
-selected plan. Invalid plugin ids fail during registration.
+selected plan. A later successful commit clears this failure state. Invalid
+plugin ids fail during registration.
 
 Calls and unlinked function tail entries use the same override. These entries
 are `j`, or `jr` through a register other than `$ra`. A `jr $ra` is a return.

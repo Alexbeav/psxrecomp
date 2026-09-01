@@ -584,6 +584,28 @@ int main() {
     check(disabled_disc[24 + 10] == 0xcc,
           "late override failure must disable disc plan writes");
 
+    /* Remove the package registration that conflicted with the direct entry.
+     * A new successful commit must clear the failure latch and make its disc
+     * plan usable again. */
+    mod_runtime_clear_function_override_plugins_for_tests();
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    mod_runtime_activate_plugins();
+    check(func_override_count() == 1,
+          "a corrected plan must preserve the direct override");
+    mod_runtime_enable_disc_patches();
+    std::array<uint8_t, 2352> recovered_disc{};
+    recovered_disc[15] = 2;
+    recovered_disc[18] = 0;
+    recovered_disc[24 + 10] = 0xcc;
+    recovered_disc[24 + 20] = 0x11;
+    recovered_disc[24 + 21] = 0x22;
+    recovered_disc[24 + 22] = 0x33;
+    recovered_disc[24 + 23] = 0x44;
+    mod_runtime_patch_disc_sector(
+        3, 1, recovered_disc.data(), (uint32_t)recovered_disc.size());
+    check(recovered_disc[24 + 10] == 0xdd,
+          "a corrected plan must recover disc patching after late failure");
+
     fs::remove_all(root, ec);
     if (failures) return 1;
     std::cout << "mod runtime tests passed\n";

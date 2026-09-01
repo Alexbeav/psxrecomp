@@ -1283,6 +1283,7 @@ bool mod_runtime_commit(const std::filesystem::path& disc_path, std::string* err
     build_disc_index(s);
     s.effective_disc_path = std::move(effective_disc);
     s.main_applied = false;
+    s.disc_guard_failed = false;
     s.error.clear();
     return true;
 }
