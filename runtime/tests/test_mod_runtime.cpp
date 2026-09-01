@@ -102,6 +102,7 @@ static void test_activation_plugin(void) {
 }
 
 static int test_function_override(CPUState*) { return 1; }
+extern "C" void mod_runtime_clear_function_override_plugins_for_tests(void);
 
 static void check(bool value, const char* message) {
     if (!value) {
@@ -550,6 +551,38 @@ int main() {
           "collision rejection must name the cause");
     check(func_override_count() == 0,
           "a rejected package override set must arm no partial entries");
+
+    /* A direct registration can race with the interval between plan commit
+     * and package activation. The late duplicate must disable the complete
+     * committed plan, not apply its main or disc patches without its
+     * function override. */
+    PSXRecompV4::mod_clear_plugins_for_tests();
+    mod_runtime_clear_function_override_plugins_for_tests();
+    check(psx_mod_register_function_override_exact(
+              "runtime.test-vblank:race", 0x80018000u,
+              test_function_override, exact_ranges, 1, 0x12345678u, 0) == 1,
+          "race package override must queue");
+    check(PSXRecompV4::mod_runtime_initialize(
+              root, "SLUS-RUNTIME", 0x80002000, {}, &error),
+          error.c_str());
+    check(PSXRecompV4::mod_runtime_commit(stock_path, &error), error.c_str());
+    check(func_override_add("runtime.direct-race", 0x80018000u,
+                            test_function_override, 0) == FO_OK,
+          "direct override must occupy the committed package address");
+    mod_runtime_activate_plugins();
+    ram[0x1000] = 1; ram[0x1001] = 2; ram[0x1002] = 3; ram[0x1003] = 4;
+    mod_runtime_on_dispatch(0x80002000);
+    check(ram[0x1000] == 1 && ram[0x1003] == 4,
+          "late override failure must disable main-memory plan writes");
+    mod_runtime_enable_disc_patches();
+    std::array<uint8_t, 2352> disabled_disc{};
+    disabled_disc[15] = 2;
+    disabled_disc[18] = 0;
+    disabled_disc[24 + 10] = 0xcc;
+    mod_runtime_patch_disc_sector(
+        3, 1, disabled_disc.data(), (uint32_t)disabled_disc.size());
+    check(disabled_disc[24 + 10] == 0xcc,
+          "late override failure must disable disc plan writes");
 
     fs::remove_all(root, ec);
     if (failures) return 1;

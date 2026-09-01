@@ -297,6 +297,8 @@ if(BUILD_TESTING)
     target_include_directories(mod_runtime_test PRIVATE
         include
         ../recompiler/lib/toml11)
+    target_compile_definitions(mod_runtime_test PRIVATE
+        PSX_MOD_RUNTIME_TEST=1)
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     # sha256_file carries ISOReader's large CHD decode state on this focused
     # test's stack. Match the product runtime's Windows stack contract so the

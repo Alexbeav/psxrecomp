@@ -1367,6 +1367,12 @@ extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
 }
 
+#ifdef PSX_MOD_RUNTIME_TEST
+extern "C" void mod_runtime_clear_function_override_plugins_for_tests(void) {
+    PSXRecompV4::function_override_plugins().clear();
+}
+#endif
+
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();
@@ -1398,7 +1404,19 @@ extern "C" void mod_runtime_activate_plugins(void) {
             out << "function override activation failed for " << pending.id
                 << " (error " << rc << ")";
             s.error = out.str();
-            s.plan.ok = false;
+            /* A late table change invalidated the committed selection. Drop
+             * every part of that plan. Main-RAM writes, disc patches, and
+             * callbacks must not continue after its override set failed. */
+            s.plan = {};
+            s.validation = {};
+            s.raw_disc_index.clear();
+            s.user_disc_index.clear();
+            s.raw_overlay_index.clear();
+            s.user_overlay_index.clear();
+            s.effective_disc_path.clear();
+            s.main_applied = true;
+            s.disc_enabled = false;
+            s.disc_guard_failed = true;
             func_override_install();
             /* The launcher reads s.error through provider_error. Keep this
              * failure on that existing diagnostics boundary. */

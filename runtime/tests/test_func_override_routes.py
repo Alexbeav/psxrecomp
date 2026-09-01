@@ -18,25 +18,25 @@ def main() -> None:
     pump = DIRTY.index("dirty_ram_pump_boundary(cpu, target, 1)")
     tail = DIRTY.index(helper, pump)
     local = DIRTY.index("if (allow_local_dirty_flow", tail)
-    require(pump < tail < local,
+    update = DIRTY.index("current_function_entry_phys = target_phys", local)
+    require(pump < tail < local < update,
             "J/JR override entry must follow the IRQ safe point and precede local flow")
     require("!g_precise_mode && !g_ls_replay_active" in DIRTY[pump:local],
             "tail override entry must keep precise/replay plain-transfer policy")
     require("((insn >> 21) & 0x1Fu) != 31u" in DIRTY[pump:local],
             "JR $ra returns must not be treated as function tail entries")
-    require("current_is_function_entry" in DIRTY[pump:tail],
-            "J/JR override entry must prove the current function entry")
+    require("current_function_entry_phys" in DIRTY[pump:tail],
+            "J/JR override entry must track current function provenance")
     require("target_is_function_entry" in DIRTY[pump:tail],
             "J/JR override entry must prove the target function entry")
-    require("current_is_function_entry && target_is_function_entry" in
-            DIRTY[pump:tail],
-            "J/JR override entry must require both proven endpoints")
+    require("source_phys = pc & 0x1FFFFFFFu" in DIRTY[pump:tail],
+            "J/JR override entry must use the current transfer source")
+    require("target_phys != current_function_entry_phys" in DIRTY[pump:tail],
+            "a back-edge to the current function entry must not re-consult")
     require("overlay_loader_is_candidate(target_phys)" in DIRTY[pump:tail],
             "dynamic tail entry must require an exact overlay entry")
     require("psx_game_is_function_entry(target)" in DIRTY[pump:tail],
             "static tail entry must require a generated function entry")
-    require("target_phys != phys" in DIRTY[pump:tail],
-            "a jump back to the current function entry must not re-consult")
     print("function override entry routes passed")
 
 
