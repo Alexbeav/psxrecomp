@@ -592,7 +592,6 @@ int main() {
     mod_runtime_activate_plugins();
     check(func_override_count() == 1,
           "a corrected plan must preserve the direct override");
-    mod_runtime_enable_disc_patches();
     std::array<uint8_t, 2352> recovered_disc{};
     recovered_disc[15] = 2;
     recovered_disc[18] = 0;

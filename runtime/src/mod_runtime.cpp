@@ -1416,7 +1416,6 @@ extern "C" void mod_runtime_activate_plugins(void) {
             s.user_overlay_index.clear();
             s.effective_disc_path.clear();
             s.main_applied = true;
-            s.disc_enabled = false;
             s.disc_guard_failed = true;
             func_override_install();
             /* The launcher reads s.error through provider_error. Keep this
