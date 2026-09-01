@@ -418,7 +418,6 @@ static int spu_sample_event_mode(void) {
 }
 
 uint32_t psx_spu_sample_event_cycles_to_next(void) {
-    SpuGlobalState state;
     g_spu_sample_deadline_queries++;
     if (!spu_sample_event_mode()) {
         g_spu_sample_mode_rejects++;
@@ -428,8 +427,10 @@ uint32_t psx_spu_sample_event_cycles_to_next(void) {
         g_spu_sample_pump_null_rejects++;
         return UINT32_MAX;
     }
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) == 0) {
+    /* Gate on SPUCNT alone — this runs on every deadline recompute, and the
+     * full SpuGlobalState snapshot here dominated the emu thread under an
+     * MMIO-polling guest loop (Capcom FMV, gdb-sampled 2026-09-01). */
+    if ((spu_ctrl_read() & 0x0040u) == 0) {
         g_spu_sample_ctrl_rejects++;
         return UINT32_MAX;
     }
@@ -449,9 +450,9 @@ void psx_spu_sample_event_service(void) {
     g_spu_sample_service_checks++;
     if (!spu_sample_event_mode() || !s_midframe_audio_pump)
         return;
-    SpuGlobalState state;
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) != 0) {
+    /* SPUCNT alone — same hot-gate rationale as the deadline query above. */
+    const uint16_t ctrl = spu_ctrl_read();
+    if ((ctrl & 0x0040u) != 0) {
         g_spu_sample_enabled_services++;
         g_spu_sample_last_service_phase = (uint32_t)(psx_cycle_count % 768u);
     }
@@ -460,7 +461,7 @@ void psx_spu_sample_event_service(void) {
         if ((psx_get_cycle_count() % 768u) != 0)
             g_spu_sample_deferred_mismatches++;
     }
-    if ((state.ctrl & 0x0040u) != 0 &&
+    if ((ctrl & 0x0040u) != 0 &&
         (psx_get_cycle_count() % 768u) == 0) {
         g_spu_sample_service_pumps++;
         s_midframe_audio_pump();
