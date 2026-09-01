@@ -18,7 +18,7 @@ require(
     "host refresh must be compared against the active guest cadence",
 )
 require(
-    "const double guest_hz = 1000.0 / g_frame_period_ms;",
+    "const double guest_hz = 1000.0 / g_guest_frame_period_ms;",
     "guest cadence must derive from the current frame period",
 )
 require(
