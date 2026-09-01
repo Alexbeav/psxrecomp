@@ -299,6 +299,20 @@ if [[ ! -f "${STAGE}/assets/img/boxart.tga" && -f "${ROOT}/launcher_assets/img/b
   cp -a "${ROOT}/launcher_assets/img/boxart.tga" "${STAGE}/assets/img/boxart.tga"
 fi
 
+# A setup host links the OpenBIOS backend so that it can enter its first-run
+# flow without a retail BIOS. Runtime lookup is exe-relative, while the source
+# SDK keeps its generator input under psxrecomp/bios. Ship both required
+# locations when the build staged OpenBIOS beside the host.
+if [[ -f "${EXE_DIR}/bios/openbios.bin" ]]; then
+  if [[ ! -f "${EXE_DIR}/bios/OpenBIOS.LICENSE" ]]; then
+    echo "error: build staged OpenBIOS without OpenBIOS.LICENSE" >&2
+    exit 1
+  fi
+  mkdir -p "${STAGE}/bios"
+  cp -a "${EXE_DIR}/bios/openbios.bin" "${STAGE}/bios/openbios.bin"
+  cp -a "${EXE_DIR}/bios/OpenBIOS.LICENSE" "${STAGE}/bios/OpenBIOS.LICENSE"
+fi
+
 # Exe-relative runtime data (mods catalog, bezels, ...): the runtime resolves
 # these from the exe's own directory, so ship them at the stage root exactly
 # as the build tree staged them. mods/state.toml is the LOCAL machine's mod
@@ -549,6 +563,17 @@ else
 fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
+
+if [[ -f "${STAGE}/bios/openbios.bin" ]]; then
+  cmp -s "${STAGE}/bios/openbios.bin" "${STAGE}/psxrecomp/bios/openbios.bin" || {
+    echo "error: runtime and SDK OpenBIOS images differ" >&2
+    exit 1
+  }
+  [[ -f "${STAGE}/bios/OpenBIOS.LICENSE" ]] || {
+    echo "error: runtime OpenBIOS license is missing" >&2
+    exit 1
+  }
+fi
 
 # The SDK stage runs after the first scrub. Check the complete package tree
 # again so future SDK changes cannot restore a forbidden file.
