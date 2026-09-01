@@ -12,11 +12,12 @@ SDL_MAIN_HEADER = "<SDL3/SDL_main.h>"
 def main() -> int:
     runtime = ROOT / "runtime"
     owners = []
-    for pattern in ("*.c", "*.cpp", "*.h"):
-        for path in runtime.rglob(pattern):
-            source = path.read_text(encoding="utf-8")
-            if SDL_MAIN_HEADER in source:
-                owners.append(path.relative_to(ROOT).as_posix())
+    for source_root in (runtime / "include", runtime / "src"):
+        for pattern in ("*.c", "*.cpp", "*.h"):
+            for path in source_root.rglob(pattern):
+                source = path.read_text(encoding="utf-8")
+                if SDL_MAIN_HEADER in source:
+                    owners.append(path.relative_to(ROOT).as_posix())
 
     if owners != ["runtime/src/main.cpp"]:
         raise AssertionError(
