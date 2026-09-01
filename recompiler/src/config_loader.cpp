@@ -2633,6 +2633,10 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
                       : s.screen_kind == 3 ? "trinitron" : "raw";
         f << "crt_filter        = \"" << k << "\"\n";
     }
+    if (s.has_scanlines)
+        f << "scanlines         = " << (s.scanlines ? "true" : "false") << "\n";
+    if (s.has_scanline_strength)
+        f << "scanline_strength = " << s.scanline_strength << "\n";
     if (s.has_auto_skip_fmv)
         f << "auto_skip_fmv     = " << (s.auto_skip_fmv ? "true" : "false") << "\n";
     /* turbo_loads is deliberately NOT written back: it is deprecated and no

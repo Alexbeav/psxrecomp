@@ -12186,6 +12186,9 @@ int main(int argc, char** argv) {
             seed.perspective_texturing = (g_video_perspective_texturing != 0);
             seed.has_perspective_texturing = true;
             seed.screen_kind = g_video_screen;            seed.has_screen_kind = true;
+            seed.scanlines = g_video_scanlines;           seed.has_scanlines = true;
+            seed.scanline_strength = g_video_scanline_strength;
+            seed.has_scanline_strength = true;
             seed.auto_skip_fmv = (g_auto_skip_fmv != 0);
             seed.has_auto_skip_fmv = skip_fmv_offered;
             seed.turbo_loads = (g_turbo_loads_enabled != 0);
@@ -12371,6 +12374,11 @@ int main(int argc, char** argv) {
             ls.geometry_correction   = seed.geometry_correction ? 1 : 0;
             ls.perspective_texturing = seed.perspective_texturing ? 1 : 0;
             ls.screen_kind        = seed.screen_kind;
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+            ls.scanlines             = seed.scanlines ? 1 : 0;
+            ls.scanline_strength_pct = seed.has_scanline_strength
+                ? (int)(seed.scanline_strength * 100.0 + 0.5) : 50;
+#endif
             ls.frame_interp       = seed.frame_interpolation ? 1 : 0;
             ls.frame_interp_fps   = seed.frame_interpolation_fps;
             ls.spu_hq             = seed.spu_hq ? 1 : 0;
@@ -12647,6 +12655,13 @@ int main(int argc, char** argv) {
                 seed.fmv_filter            = launcher_fmv_filter_to_cfg(ls.fmv_filter);
                 seed.has_fmv_filter        = true;
                 seed.screen_kind           = ls.screen_kind;           seed.has_screen_kind           = true;
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+                seed.scanlines             = ls.scanlines != 0;        seed.has_scanlines             = true;
+                if (ls.scanline_strength_pct > 0) {
+                    seed.scanline_strength = ls.scanline_strength_pct / 100.0;
+                    seed.has_scanline_strength = true;
+                }
+#endif
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
@@ -12854,6 +12869,11 @@ int main(int argc, char** argv) {
                 g_video_geometry_correction   = seed.geometry_correction ? 1 : 0;
                 g_video_perspective_texturing = seed.perspective_texturing ? 1 : 0;
                 g_video_screen    = seed.screen_kind;
+                if (seed.has_scanlines) g_video_scanlines = seed.scanlines;
+                if (seed.has_scanline_strength)
+                    g_video_scanline_strength = (float)seed.scanline_strength;
+                gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
+                                          g_video_scanline_strength);
                 g_auto_skip_fmv = skip_fmv_offered && seed.auto_skip_fmv ? 1 : 0;
                 g_turbo_loads_enabled =
                     turbo_loads_offered && seed.turbo_loads ? 1 : 0;
@@ -14360,6 +14380,10 @@ soft_return_lobby:
         ls.geometry_correction = g_video_geometry_correction ? 1 : 0;
         ls.perspective_texturing = g_video_perspective_texturing ? 1 : 0;
         ls.screen_kind = g_video_screen;
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+        ls.scanlines             = g_video_scanlines ? 1 : 0;
+        ls.scanline_strength_pct = (int)(g_video_scanline_strength * 100.0f + 0.5f);
+#endif
         ls.frame_interp = g_frame_interpolation ? 1 : 0;
         ls.frame_interp_fps = g_frame_interpolation_fps;
         ls.spu_hq = g_audio_spu_hq ? 1 : 0;
@@ -14639,6 +14663,14 @@ soft_return_lobby:
                 us.has_perspective_texturing = true;
                 us.screen_kind = ls.screen_kind;
                 us.has_screen_kind = true;
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+                us.scanlines = ls.scanlines != 0;
+                us.has_scanlines = true;
+                if (ls.scanline_strength_pct > 0) {
+                    us.scanline_strength = ls.scanline_strength_pct / 100.0;
+                    us.has_scanline_strength = true;
+                }
+#endif
                 us.frame_interpolation = ls.frame_interp != 0;
                 us.has_frame_interpolation = true;
                 us.frame_interpolation_fps = ls.frame_interp_fps;
@@ -14694,6 +14726,13 @@ soft_return_lobby:
             g_video_geometry_correction = ls.geometry_correction ? 1 : 0;
             g_video_perspective_texturing = ls.perspective_texturing ? 1 : 0;
             g_video_screen = ls.screen_kind;
+#if defined(RECOMP_LAUNCHER_HAS_SCANLINES)
+            g_video_scanlines = ls.scanlines != 0;
+            if (ls.scanline_strength_pct > 0)
+                g_video_scanline_strength = ls.scanline_strength_pct / 100.0f;
+            gl_renderer_set_scanlines(g_video_scanlines ? 1 : 0,
+                                      g_video_scanline_strength);
+#endif
             /* Load acceleration and FMV skipping are mod-owned on PSX, and the
              * launcher struct these come from was snapshotted BEFORE
              * mod_runtime_activate_plugins() ran. Applying them here would
