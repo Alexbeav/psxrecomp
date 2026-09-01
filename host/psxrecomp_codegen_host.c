@@ -3645,19 +3645,31 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     fprintf(stderr, "psxrecomp-codegen: generate disc=%s bios=%s\n", source_path,
             have_bios ? bios_path : "(OpenBIOS)");
 
+    /* The exact dispatch filename this host (and CMakeLists GEN_MARKER) will
+     * gate on later. Handing it to generate makes a boot-exe name skew fail
+     * there, loudly, instead of surfacing as an endless setup-wizard loop. */
+    const char* marker_rel =
+        cfg_or(g_cfg->gen_marker_relpath, "generated/SLUS_011.89_dispatch.c");
+    const char* marker_name = marker_rel;
+    for (const char* p = marker_rel; *p; ++p)
+        if (*p == '/' || *p == '\\')
+            marker_name = p + 1;
+
 #if defined(_WIN32)
     char cmdline[4096];
     if (have_bios) {
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
-                 "--disc \"%s\" --bios \"%s\" --json-progress",
+                 "--disc \"%s\" --bios \"%s\" --gen-marker \"%s\" "
+                 "--json-progress",
                  g_python, g_cli_path, g_project_root, g_game_toml, source_path,
-                 bios_path);
+                 bios_path, marker_name);
     } else {
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
-                 "--disc \"%s\" --json-progress",
-                 g_python, g_cli_path, g_project_root, g_game_toml, source_path);
+                 "--disc \"%s\" --gen-marker \"%s\" --json-progress",
+                 g_python, g_cli_path, g_project_root, g_game_toml, source_path,
+                 marker_name);
     }
     if (!run_cli_win(cmdline, on_progress, progress_ctx, err_msg, err_cap,
                      "psxrecomp generate"))
@@ -3678,6 +3690,8 @@ static int host_prepare_generate(const char* source_path, char* out_path,
         argv[argc++] = "--bios";
         argv[argc++] = bios_path;
     }
+    argv[argc++] = "--gen-marker";
+    argv[argc++] = (char*)marker_name;
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
     if (!run_cli_posix(argv, on_progress, progress_ctx, err_msg, err_cap,
@@ -3742,6 +3756,14 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     bat_write_set(f, "EXE_BASE", g_exe_basename);
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
+    {
+        /* Post-build sanity: the dispatch file the launcher will gate on. */
+        char marker_abs[1200];
+        if (join_path(marker_abs, sizeof(marker_abs), g_project_root,
+                      cfg_or(g_cfg->gen_marker_relpath,
+                             "generated/SLUS_011.89_dispatch.c")))
+            bat_write_set(f, "GEN_MARKER", marker_abs);
+    }
     if (force_pgo && disc_path && disc_path[0])
         bat_write_set(f, "DISC", disc_path);
     if (g_toolchain_bin[0])
@@ -3788,8 +3810,36 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
             "  pause\r\n"
             "  exit /b 1\r\n"
             ")\r\n"
+            /* %EXE% was guessed before the build; runtime.cmake publishes the
+             * OUTPUT_NAME it really used, which wins the moment a title is
+             * renamed. Then verify game code + exe exist before relaunching,
+             * so a setup-host build stops here with a message instead of
+             * reopening the wizard in a loop. */
+            "set \"EXE_FINAL=%%EXE%%\"\r\n"
+            "set \"PUBLISHED=\"\r\n"
+            "if exist \"%%BUILD_DIR%%\\psxrecomp_exe_name-%%TARGET%%.txt\" "
+            "set /p PUBLISHED=<\"%%BUILD_DIR%%\\psxrecomp_exe_name-%%TARGET%%.txt\"\r\n"
+            "if defined PUBLISHED if exist \"%%BUILD_DIR%%\\%%PUBLISHED%%.exe\" "
+            "set \"EXE_FINAL=%%BUILD_DIR%%\\%%PUBLISHED%%.exe\"\r\n"
+            "if defined GEN_MARKER if not exist \"%%GEN_MARKER%%\" (\r\n"
+            "  echo.\r\n"
+            "  echo Build finished but the generated game code is missing:\r\n"
+            "  echo   %%GEN_MARKER%%\r\n"
+            "  echo Launching now would reopen setup in a loop. Please report\r\n"
+            "  echo this to the port maintainer: the boot-EXE name in\r\n"
+            "  echo game.toml disagrees with GEN_MARKER in CMakeLists.txt.\r\n"
+            "  pause\r\n"
+            "  exit /b 1\r\n"
+            ")\r\n"
+            "if not exist \"%%EXE_FINAL%%\" (\r\n"
+            "  echo.\r\n"
+            "  echo Build finished but the game executable is missing:\r\n"
+            "  echo   %%EXE_FINAL%%\r\n"
+            "  pause\r\n"
+            "  exit /b 1\r\n"
+            ")\r\n"
             "echo Starting %%DISPLAY%%...\r\n"
-            "start \"\" /D \"%%ROOT%%\" \"%%EXE%%\" --launcher\r\n"
+            "start \"\" /D \"%%ROOT%%\" \"%%EXE_FINAL%%\" --launcher\r\n"
             "endlocal\r\n");
     fclose(f);
     return 1;
