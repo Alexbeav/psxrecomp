@@ -68,11 +68,54 @@ static void test_row_shift(void)
     assert(up[0] == 3 && up[2] == 5 && up[3] == black && up[4] == black);
 }
 
+static void assert_depth24_composition(int pal, uint32_t y1, uint32_t y2)
+{
+    const uint32_t black = 0xFF000000u;
+    uint32_t canvas[288];
+    PsxDisplayVerticalLayout layout = psx_display_vertical_layout(pal, y1, y2);
+
+    assert(layout.valid);
+    assert(layout.canvas_height <= 288u);
+    for (uint32_t row = 0; row < layout.canvas_height; row++)
+        canvas[row] = black;
+
+    uint32_t mapped = 0u;
+    for (uint32_t row = 0; row < layout.source_height; row++) {
+        uint32_t canvas_y = 0u;
+        uint32_t source_y = 0u;
+        assert(psx_display_stage_depth24_row(
+            layout.canvas_height, layout.canvas_origin_y,
+            layout.source_skip_y, layout.source_height, row,
+            &canvas_y, &source_y));
+        canvas[canvas_y] = source_y + 1u;
+        mapped++;
+    }
+
+    assert(mapped == layout.source_height);
+    for (uint32_t row = 0; row < layout.canvas_origin_y; row++)
+        assert(canvas[row] == black);
+    for (uint32_t row = 0; row < layout.source_height; row++)
+        assert(canvas[layout.canvas_origin_y + row] ==
+               layout.source_skip_y + row + 1u);
+    for (uint32_t row = layout.canvas_origin_y + layout.source_height;
+         row < layout.canvas_height; row++)
+        assert(canvas[row] == black);
+}
+
+static void test_depth24_composition(void)
+{
+    /* Mortal Kombat Trilogy PAL FMV range. */
+    assert_depth24_composition(1, 83, 312);
+    /* A centred NTSC movie range with a non-zero canvas origin. */
+    assert_depth24_composition(0, 24, 232);
+}
+
 int main(void)
 {
     test_vertical_offsets();
     test_vertical_layout();
     test_present_height();
     test_row_shift();
+    test_depth24_composition();
     return 0;
 }

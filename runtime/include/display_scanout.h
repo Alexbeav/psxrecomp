@@ -60,6 +60,23 @@ static inline uint32_t psx_display_source_height(
     return layout.range_set ? layout.source_height : fallback_height;
 }
 
+/* Map one visible depth24 source row into the active-video canvas. The staged
+ * canvas owns vertical placement, so callers must not apply offset_y again. */
+static inline int psx_display_stage_depth24_row(
+    uint32_t canvas_height, uint32_t canvas_origin_y,
+    uint32_t source_skip_y, uint32_t source_height, uint32_t row,
+    uint32_t *canvas_y, uint32_t *source_y)
+{
+    if (!canvas_y || !source_y || row >= source_height ||
+        canvas_origin_y >= canvas_height ||
+        row >= canvas_height - canvas_origin_y)
+        return 0;
+
+    *canvas_y = canvas_origin_y + row;
+    *source_y = source_skip_y + row;
+    return 1;
+}
+
 /* Intersect a GP1(07h) range with the PAL or NTSC active region. The canvas
  * preserves the television scanout position without discarding visible VRAM
  * rows. source_skip_y owns rows before the active region; canvas_origin_y owns

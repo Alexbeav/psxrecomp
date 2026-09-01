@@ -295,8 +295,12 @@ Parity between two runs that were not driven the same way means nothing.
 `gpu_state` reports `screen_offset_y` for 24-bit display output. The runtime
 derives this value from the GP1(07h) vertical display range.
 
-A positive value moves the decoded scanout down. A negative value moves it up.
-The reference point is the PAL or NTSC broadcast centre, not the window edge.
+The software and OpenGL path stages the decoded rows at `screen_origin_y` in
+the active-video canvas. That canvas owns the vertical position; do not apply
+`screen_offset_y` again. The Vulkan path does not stage into this canvas, so it
+uses the shift instead. A positive shift moves the decoded scanout down. A
+negative shift moves it up. The reference point is the PAL or NTSC broadcast
+centre, not the window edge.
 
 Use `present_shot`, not `screenshot`, to validate letterbox placement.
 `screenshot` captures the display buffer before the window-fit stage.

@@ -6033,16 +6033,23 @@ static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
     for (size_t i = 0; i < count; i++)
         buf[i] = 0xFF000000u;
 
-    if (di->screen_origin_y >= di->screen_height)
-        return;
-    uint32_t rows = di->height;
-    if (rows > di->screen_height - di->screen_origin_y)
-        rows = di->screen_height - di->screen_origin_y;
-    uint32_t *source = buf + (size_t)di->screen_origin_y * w;
-    for (uint32_t y = 0; y < rows; y++)
-        gpu_depth24_present_row(di, di->screen_source_skip_y + y,
-                                source + (size_t)y * w, w);
-    depth24_fix_trailing_margin(source, w, rows, di->display_x);
+    uint32_t rows = 0u;
+    for (uint32_t row = 0; row < di->height; row++) {
+        uint32_t canvas_y = 0u;
+        uint32_t source_y = 0u;
+        if (!psx_display_stage_depth24_row(
+                di->screen_height, di->screen_origin_y,
+                di->screen_source_skip_y, di->height, row,
+                &canvas_y, &source_y))
+            break;
+        gpu_depth24_present_row(di, source_y,
+                                buf + (size_t)canvas_y * w, w);
+        rows++;
+    }
+    if (rows != 0u) {
+        uint32_t *source = buf + (size_t)di->screen_origin_y * w;
+        depth24_fix_trailing_margin(source, w, rows, di->display_x);
+    }
 }
 
 enum {
@@ -7863,9 +7870,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         if (di.depth24 && active_scale == 1 && !wide_present)
             depth24_fix_trailing_margin(sdl_pixel_buf, present_w, h,
                                          di.display_x);
-        if (di.depth24 && active_scale == 1 && !wide_present)
-            psx_display_shift_rows_argb(sdl_pixel_buf, present_w, h,
-                                        di.screen_offset_y);
+        /* depth24_stage_scanout already owns vertical placement for the
+         * software/OpenGL canvas. Applying screen_offset_y here would move
+         * GP1(07h) a second time and discard valid FMV rows. */
 
         int present_px_w = (int)present_w * active_scale;
         int present_px_h = (int)present_h * active_scale;
