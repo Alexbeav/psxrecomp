@@ -3275,8 +3275,10 @@ void gpu_get_display_info(GpuDisplayInfo* out) {
 
     out->width  = w;
     out->height = h;
-    out->screen_offset_y = psx_display_vertical_offset(
-        video_mode != 0, v_display_y1, v_display_y2);
+    out->screen_height = screen_h;
+    out->screen_origin_y = screen_origin_y;
+    out->screen_source_skip_y = screen_source_skip_y;
+    out->screen_offset_y = vertical.valid ? vertical.offset_y : 0;
     if (vres) out->screen_offset_y *= 2;
 }
 
