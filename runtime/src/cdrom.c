@@ -12,6 +12,7 @@
 
 #include "cdrom.h"
 #include "cdrom_irq.h"
+#include "cdrom_lid.h"
 #include "dma.h"
 #include "spu.h"
 #include "event_ring.h"
@@ -61,6 +62,8 @@ static uint8_t stat_reg;
 static uint8_t request_reg;
 static uint8_t irq_enable;
 static uint8_t irq_flag;
+static CdromLidState s_lid;
+static int s_lid_irq_pending;
 
 /* Disc license region string returned in GetID's last four response bytes
  * ("SCEE" PAL / "SCEA" NTSC-U / "SCEI" NTSC-J). Real hardware reports the
@@ -350,6 +353,10 @@ void cdrom_resync_deadlines_after_restore(void)
         s_cd_timing_next_due = psx_cycle_count + (uint64_t)read_delay;
     else if (!reading)
         s_cd_timing_next_due = 0;
+    /* Disc reinsertion is disabled in netplay. Reset the host-side lid timer
+     * when a rollback snapshot restores the shared controller wire state. */
+    cdrom_lid_reset(&s_lid);
+    s_lid_irq_pending = 0;
     /* pending.due_cyc / cdrom_irq_present_due rebuilt in snap_parse from
      * relative remaining (same guest clock as the restore). */
 }
@@ -870,7 +877,7 @@ static void record_sector_history(int lba, int size, uint8_t mode, int have_raw,
 }
 
 static int has_disc(void) {
-    return iso_handle != NULL;
+    return cdrom_lid_media_ready(&s_lid, iso_handle != NULL);
 }
 
 /* CD status bits */
@@ -915,6 +922,34 @@ static void set_irq(int type) {
     trace_cdrom('I', 0, (uint32_t)type, 0);
     /* DEQUEUE: CD response/data event fired (aux = CD irq type). */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_CD_IRQ, (uint32_t)type);
+}
+
+static void fire_cdrom_irq(void);
+
+static void present_lid_open_irq_if_ready(void)
+{
+    if (!s_lid_irq_pending || irq_flag != 0)
+        return;
+    stat_reg = CDSTAT_ERROR | CDSTAT_SHELL;
+    response_clear();
+    response_push(stat_reg);
+    response_push(0x08); /* shell open */
+    set_irq(CDIRQ_ERROR);
+    fire_cdrom_irq();
+    s_lid_irq_pending = 0;
+}
+
+static void process_lid_state(void)
+{
+    present_lid_open_irq_if_ready();
+    if (!s_lid_irq_pending && cdrom_lid_close_if_due(&s_lid, psx_cycle_count)) {
+        stat_reg &= (uint8_t)~(CDSTAT_ERROR | CDSTAT_READ | CDSTAT_PLAY |
+                              CDSTAT_SEEK);
+        if (iso_handle)
+            stat_reg |= CDSTAT_MOTOR;
+        stat_reg |= CDSTAT_SHELL;
+        trace_cdrom('w', 0, iso_handle ? 1u : 0u, 0);
+    }
 }
 
 /* Present the current CD INT to the CPU interrupt controller exactly once per
@@ -2043,6 +2078,8 @@ static void exec_command(uint8_t cmd) {
             stat_reg |= CDSTAT_SHELL;
         }
         response_push(stat_reg);
+        if (cdrom_lid_acknowledge_closed_shell(&s_lid))
+            stat_reg &= (uint8_t)~CDSTAT_SHELL;
         set_irq(CDIRQ_ACK);
         break;
 
@@ -2721,6 +2758,8 @@ void cdrom_init(const char* cue_path) {
     request_reg = 0;
     irq_enable = 0x1F;
     irq_flag = 0;
+    cdrom_lid_reset(&s_lid);
+    s_lid_irq_pending = 0;
     cdrom_intc_request_latched = 0;
     cdrom_irq_generation = 0;
     cdrom_intc_latched_generation = 0;
@@ -2906,6 +2945,7 @@ void cdrom_write(uint32_t addr, uint32_t value) {
             irq_flag &= ~(val & 0x1F);
             if (had_active_irq && (irq_flag & 0x1F) == 0) {
                 cdrom_intc_request_latched = 0;
+                present_lid_open_irq_if_ready();
             }
             if (val & 0x40) {
                 param_count = 0;
@@ -2971,6 +3011,7 @@ void cdrom_advance(uint32_t cycles) {
      * it. Note: do NOT freeze CD during rollback Replay. MotK FMV skip resim
      * resumes into VLC/sector waits; frozen IRQs → no finish_frame hang.
      * Menu CD asymmetry is contained by no-invent during media + core POST. */
+    process_lid_state();
     refresh_cdrom_irq_line();
     process_pending(cycles);
     try_execute_queued_command();
@@ -2983,6 +3024,7 @@ void cdrom_advance(uint32_t cycles) {
     }
     process_read_stream(cycles);
     process_cdda_stream(cycles);
+    process_lid_state();
     refresh_cdrom_irq_line();
 }
 
@@ -3382,30 +3424,30 @@ int cdrom_snapshot_read(const uint8_t *p, uint32_t len) {
     /* Absolute host deadlines are not on the wire — rebuild from restored
      * relative read_delay (psx_cycle_count is resynced by the load caller). */
     cdrom_resync_deadlines_after_restore();
+    /* The snapshot wire predates the timed-lid helper. Reconstruct its short
+     * host-side deadline from the saved hardware status instead of changing
+     * the section size and invalidating existing save states. */
+    if (iso_handle && (stat_reg & (CDSTAT_ERROR | CDSTAT_SHELL)) ==
+                          (CDSTAT_ERROR | CDSTAT_SHELL)) {
+        cdrom_lid_begin_open(&s_lid, psx_cycle_count);
+    } else if (iso_handle && (stat_reg & CDSTAT_SHELL)) {
+        s_lid.shell_open_latched = 1;
+    }
     return 1;
 }
 
 void debug_force_cd_reinsert(void) {
-    // Simulamos la apertura de la bandeja borrando los flujos actuales
+    /* Stop the old transfer before exposing a physical tray-open event. */
     stop_read_stream();
     stop_cdda_playback();
     xa_reset_decode();
     spu_cd_audio_reset();
 
-    // Forzamos el estado de la lectora a "Bandeja Abierta" temporalmente
-    stat_reg = CDSTAT_SHELL;
+    stat_reg = CDSTAT_ERROR | CDSTAT_SHELL;
     cdrom_clear_pending_dataready();
-    response_clear();
-
-    // Forzamos al emulador a reinicializar el lector con el archivo de disco actual
-    if (iso_handle) {
-        stat_reg = CDSTAT_MOTOR; // Volvemos a encender el motor virtual
-    }
-
-    // Emitimos una interrupción de ACK para despertar al kernel del juego
-    set_irq(CDIRQ_ACK);
-    fire_cdrom_irq();
-
-    // Forzamos la ejecución de cualquier comando atascado en cola
-    try_execute_queued_command();
+    cdrom_lid_begin_open(&s_lid, psx_cycle_count);
+    s_lid_irq_pending = 1;
+    present_lid_open_irq_if_ready();
+    trace_cdrom('O', 0, (uint32_t)CDROM_LID_CLOSE_DELAY_CYCLES,
+                (uint32_t)(CDROM_LID_CLOSE_DELAY_CYCLES >> 32));
 }

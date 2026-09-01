@@ -34,6 +34,10 @@ const uint16_t* gpu_get_vram(void);    /* Pointer to 1024x512 16-bit VRAM */
 typedef struct {
     uint32_t display_x, display_y;     /* VRAM start of display area (GP1(05h)) */
     uint32_t width, height;            /* Derived from display mode + ranges */
+    uint32_t screen_height;            /* PAL/NTSC active canvas for depth24 */
+    uint32_t screen_origin_y;          /* Visible source origin in that canvas */
+    uint32_t screen_source_skip_y;     /* VRAM rows clipped above active video */
+    int32_t  screen_offset_y;          /* GP1(07h) position relative to TV centre */
     int      depth24;                  /* GP1(08h) display depth flag: RGB888 scanout */
     int      disabled;                 /* GP1(03h) display disable flag */
 } GpuDisplayInfo;
@@ -350,6 +354,7 @@ void gpu_ws_set_nw_left_hud_packet_range(uint32_t lo, uint32_t hi);
 void gpu_ws_begin_linked_list(void);
 void gpu_ws_end_linked_list(void);
 void gpu_ws_prepass_linked_list(uint32_t start_addr);
+void gpu_ws_restore_linked_list_rank(uint32_t rank);
 /* Native-wide full-frame 2D backdrop stretch ([widescreen] nw_backdrop):
  * stretch a screen-space quad that covers the whole 4:3 framebuffer (sky
  * gradient / backdrop image) to fill the wide frame, so it no longer

@@ -167,6 +167,13 @@ if(BUILD_TESTING)
     add_test(NAME mod_gpu_dma_aperture_test
              COMMAND mod_gpu_dma_aperture_test)
 
+    add_executable(dma_gpu_linked_list_timing_test
+        tests/test_dma_gpu_linked_list_timing.c
+        src/dma_gpu_ll.c)
+    target_include_directories(dma_gpu_linked_list_timing_test PRIVATE include)
+    add_test(NAME dma_gpu_linked_list_timing_test
+             COMMAND dma_gpu_linked_list_timing_test)
+
     # Clean-room SPU DSP fidelity (issue #103): SPU IRQ on every RAM access
     # class, reverb (write gating + work-area wrap + CD-only path), noise
     # generator, volume sweeps / direct decode, capture buffers, and
@@ -330,6 +337,10 @@ if(BUILD_TESTING)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
 
+    add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
+    target_include_directories(cdrom_lid_state_test PRIVATE src)
+    add_test(NAME cdrom_lid_state_test COMMAND cdrom_lid_state_test)
+
     # Cross-device I_STAT ownership: a memory-card ACK IRQ (SIO0) must not
     # clear another device's pending source — pinned on SPU (I_STAT bit 9)
     # staying set across card ACK delivery until the guest acknowledges it.
@@ -483,6 +494,9 @@ if(BUILD_TESTING)
         add_test(NAME frame_interpolation_context_ownership_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_frame_interpolation_context_ownership.py)
+        add_test(NAME present_skip_cadence_guard_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_present_skip_cadence_guard.py)
         add_test(NAME mod_bezel_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_bezel.py)
@@ -504,6 +518,12 @@ if(BUILD_TESTING)
         add_test(NAME pal_cadence_host_refresh_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pal_cadence_host_refresh.py)
+        add_test(NAME cdrom_lid_integration_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
+        add_test(NAME bios_registry_zero_entry_guard_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_registry_zero_entry.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,

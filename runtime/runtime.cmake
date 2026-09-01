@@ -318,6 +318,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/gpu_render.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_gl_renderer.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_vk_renderer.c
+    ${PSXRECOMP_ROOT}/runtime/src/dma_gpu_ll.c
     ${PSXRECOMP_ROOT}/runtime/src/dma.c
     ${PSXRECOMP_ROOT}/runtime/src/mdec.c
     ${PSXRECOMP_ROOT}/runtime/src/timers.c
@@ -664,6 +665,15 @@ if(NOT _psxrt_bios_linked)
 else()
     message(STATUS "BIOS backends linked: ${_psxrt_bios_linked}")
     list(LENGTH _psxrt_bios_linked _psxrt_bios_count)
+endif()
+
+# ISO C requires at least one initializer. A setup host can intentionally have
+# zero linked BIOS backends, so give the generated array one unused null entry
+# while keeping its public count at zero. MSVC 19.44 otherwise crashes with
+# C1001 in CloseTypeServerPDB when it compiles an empty initializer list.
+if(NOT _psxrt_registry_entries)
+    set(_psxrt_registry_entries "    0, /* unused: registry count is zero */
+")
 endif()
 
 # Registry of the compiled-in backends, in preference order. Generated so the
@@ -1877,8 +1887,9 @@ function(psxrecomp_add_game_runtime target)
             "-DPSX_GAME_VERSION=${_psxg_release_version} or delete the build cache.")
     endif()
 
-    # Prefer game-root recomp-ui (runtime.cmake also auto-discovers this).
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
+    # Use a game-root recomp-ui only when the caller did not select one.
+    if((NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL "")
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui/recomp_ui.cmake")
         set(RECOMP_UI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui" CACHE PATH
             "Path to recomp-ui launcher" FORCE)
     endif()

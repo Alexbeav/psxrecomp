@@ -36,7 +36,10 @@
 #   --version VER      release version, e.g. v0.0.1        (default: dev)
 #   --out DIR          output directory           (default: <repo>/release-macos)
 #   --game-config P    game.toml to bundle, relative to repo
-#   --mods-src DIR     reviewed catalog source    (default: <repo>/mods/preloaded)
+#   --exclude-dev-mods drop channel = "developer" packages (also EXCLUDE_DEV_MODS=1)
+#   --mods-src DIR     override catalog source   (default: the build tree's
+#                      mods/, which carries framework builtins AND the title's
+#                      own packages; per-machine state.toml is stripped)
 #   --require-mod PKG  path under mods/packages that must exist (repeatable)
 #   --data FILE        file the runtime reads BESIDE the executable, relative to
 #                      repo, e.g. keybinds.ini (repeatable)
@@ -60,7 +63,7 @@ note() { echo "      $*"; }
 [ "$(uname -s)" = "Darwin" ] || die "run this on macOS."
 
 REPO=""; BUILD=""; BIN_NAME=""; APP_NAME=""; PACKAGE=""; BUNDLE_ID=""
-VERSION="dev"; OUT=""; GAME_CONFIG=""; MODS_SRC=""
+VERSION="dev"; OUT=""; GAME_CONFIG=""; MODS_SRC=""; MODS_SRC_EXPLICIT=""
 DO_DMG=0; DO_ZIP=1
 REQUIRE_MODS=(); DOCS=(); DATA_FILES=()
 
@@ -75,7 +78,8 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2;;
     --out) OUT="$2"; shift 2;;
     --game-config) GAME_CONFIG="$2"; shift 2;;
-    --mods-src) MODS_SRC="$2"; shift 2;;
+    --exclude-dev-mods) EXCLUDE_DEV_MODS=1; shift;;
+    --mods-src) MODS_SRC="$2"; MODS_SRC_EXPLICIT=1; shift 2;;
     --require-mod) REQUIRE_MODS+=("$2"); shift 2;;
     --data) DATA_FILES+=("$2"); shift 2;;
     --doc) DOCS+=("$2"); shift 2;;
@@ -153,14 +157,57 @@ stage_data() {  # stage_data <name-beside-exe> <source>
 stage_data bios "$BUILD/bios"
 stage_data assets "$BUILD/assets"
 
-# Take the mod catalog from SOURCE, never the build tree: a developer build dir
-# accumulates mods/state.toml with enhancements switched on, and shipping that
-# silently flips a title's default presentation for every player.
-if [ -d "$MODS_SRC" ]; then
+# Mod catalog. The hazard this guards against is real but narrow: a developer
+# build dir accumulates mods/state.toml with enhancements switched on, and
+# shipping that silently flips a title's default presentation for every player.
+#
+# Taking the SOURCE catalog instead used to be the remedy, but it drops every
+# framework builtin (PGXP, fast loading, CD speed, bezel): those live in
+# psxrecomp/mods/builtin and only ever appear NEXT TO THE EXE, staged there by
+# runtime.cmake. A title with its own catalog therefore shipped one package
+# where the player should have seen five.
+#
+# So take the build tree -- which is exactly what the runtime resolves at
+# runtime -- and delete the one file that is actually unsafe. That matches
+# package_setup_host.sh and package_release.ps1, so all three packagers now
+# ship the same catalog. An explicit --mods-src still wins for anyone who
+# wants the source-only set.
+if [ -n "$MODS_SRC_EXPLICIT" ]; then
+    [ -d "$MODS_SRC" ] || die "--mods-src is not a directory: $MODS_SRC"
     stage_data mods "$MODS_SRC"
 elif [ -d "$BUILD/mods" ]; then
-    die "refusing to package mods/ from the build tree ($BUILD/mods): pass --mods-src pointing at the reviewed source catalog"
+    stage_data mods "$BUILD/mods"
+    find "$APPDIR/Contents/Resources/mods" \
+        \( -name state.toml -o -name state.toml.tmp \) -delete
+elif [ -d "$MODS_SRC" ]; then
+    stage_data mods "$MODS_SRC"
+else
+    die "no mod catalog found: neither $BUILD/mods nor $MODS_SRC exists (rebuild the runtime target)"
 fi
+_mod_manifests=$(find "$APPDIR/Contents/Resources/mods" -name manifest.toml 2>/dev/null | wc -l)
+[ "$_mod_manifests" -ge 1 ] \
+    || die "staged mods/ contains no manifest.toml; the catalog would ship empty"
+[ -z "$(find "$APPDIR/Contents/Resources/mods" -name 'state.toml*' 2>/dev/null)" ] \
+    || die "per-machine mods/state.toml survived staging"
+# Developer-channel packages (channel = "developer") are unfinished work that
+# ships with local builds but must not be published. Prune by PACKAGE
+# directory; never rewrite a manifest during packaging.
+if [ "${EXCLUDE_DEV_MODS:-0}" = "1" ]; then
+    note "excluding developer-channel mods"
+    find "$APPDIR/Contents/Resources/mods/packages" -mindepth 3 -maxdepth 3 \
+        -name manifest.toml 2>/dev/null | while read -r m; do
+        if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' "$m"; then
+            v=$(dirname "$m"); p=$(dirname "$v")
+            rm -rf "$v"; rmdir "$p" 2>/dev/null || true
+            note "  excluded developer package: $(basename "$p")/$(basename "$v")"
+        fi
+    done
+    _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
+        "$APPDIR" --include=manifest.toml 2>/dev/null || true; } | wc -l)
+    [ "$_dev_left" -eq 0 ] || die "developer manifest(s) survived pruning: $_dev_left"
+    _mod_manifests=$(find "$APPDIR/Contents/Resources/mods" -name manifest.toml 2>/dev/null | wc -l)
+fi
+note "mod catalog: ${_mod_manifests} manifest(s), no per-machine state"
 
 if [ -n "$GAME_CONFIG" ]; then
     stage_data "$(basename "$GAME_CONFIG")" "$REPO/$GAME_CONFIG"

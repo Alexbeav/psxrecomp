@@ -1511,6 +1511,29 @@ def cmd_build_compile(args: argparse.Namespace) -> int:
     return 0 if r.ok else 1
 
 
+def cmd_build_export(args: argparse.Namespace) -> int:
+    """Bundle a distributable zip from an existing build, mods included."""
+    from project_studio.buildops import export_release
+
+    root = _root_or_die(args)
+    if root is None:
+        return 2
+    r = export_release(
+        root,
+        build_dir=args.build_dir,
+        artifact_tag=args.artifact or None,
+        recompiler_build=args.recompiler_build,
+        exclude_dev_mods=args.exclude_dev_mods,
+        log=print,
+    )
+    print(f"[{'OK' if r.ok else 'FAIL'}] {r.message}")
+    if r.ok:
+        print(r.detail)
+    elif r.detail:
+        print(r.detail, file=sys.stderr)
+    return 0 if r.ok else 1
+
+
 def cmd_build_run(args: argparse.Namespace) -> int:
     import shlex
     from pathlib import Path
@@ -2353,6 +2376,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_bb.add_argument("--target", default="psx-runtime")
     p_bb.add_argument("--jobs", type=int, default=0)
     p_bb.set_defaults(func=cmd_build_compile)
+
+    p_bx = build_sub.add_parser(
+        "export",
+        help="Bundle a distributable zip from an existing build (mods included)",
+    )
+    add_build_root(p_bx)
+    p_bx.add_argument(
+        "--artifact",
+        default="",
+        help="Artifact tag (default: this host -- linux-x64 / windows-x64). "
+             "Matches the CI matrix so local and released zips share names.",
+    )
+    p_bx.add_argument("--recompiler-build", default="build-recompiler")
+    p_bx.add_argument(
+        "--exclude-dev-mods",
+        action="store_true",
+        help='Drop channel = "developer" packages, reproducing what CI '
+             "publishes. Local exports keep them by default.",
+    )
+    p_bx.set_defaults(func=cmd_build_export)
 
     p_br = build_sub.add_parser("run", help="Launch product binary with env")
     add_build_root(p_br)

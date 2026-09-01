@@ -1223,6 +1223,10 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         const auto& d = toml::find<std::string>(game, "disc");
         discs.push_back(fs::absolute(root / d));
     }
+    /* Per-disc serials, parallel to `discs`. Absent => no per-disc gate. */
+    std::vector<std::string> disc_serials;
+    if (game.contains("disc_serials"))
+        disc_serials = toml::find<std::vector<std::string>>(game, "disc_serials");
 
     // Optional expected disc identity (launcher verification badge).
     bool has_disc_crc = false;
@@ -1244,6 +1248,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
     bool has_netplay_required_leadout = false;
     uint32_t netplay_required_leadout_lba = 0;
     std::string netplay_required_disc_fp;
+    std::vector<std::string> netplay_required_disc_fps;
     std::string netplay_local_viewport;
     std::string netplay_local_viewport_aspect;
     if (cfg.contains("netplay")) {
@@ -1261,6 +1266,14 @@ GameConfig load_game_config(const fs::path& config_path_in) {
             netplay_required_disc_fp = toml::find<std::string>(np, "required_disc_fp");
             for (char& c : netplay_required_disc_fp)
                 c = (char)std::tolower((unsigned char)c);
+        }
+        /* Per-disc fingerprints for a multi-disc set, parallel to [game]
+         * discs. Lowercased here so the runtime compares like for like. */
+        if (np.contains("required_disc_fps")) {
+            netplay_required_disc_fps =
+                toml::find<std::vector<std::string>>(np, "required_disc_fps");
+            for (std::string& fp : netplay_required_disc_fps)
+                for (char& c : fp) c = (char)std::tolower((unsigned char)c);
         }
         if (np.contains("local_viewport")) {
             netplay_local_viewport = toml::find<std::string>(np, "local_viewport");
@@ -2073,6 +2086,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*text_size*/        text_size,
         /*stack_base*/       stack_base,
         /*discs*/            discs,
+        /*disc_serials*/     disc_serials,
         /*has_disc_crc*/     has_disc_crc,
         /*disc_crc*/         disc_crc,
         /*disc_sha1*/        disc_sha1,
@@ -2081,6 +2095,7 @@ GameConfig load_game_config(const fs::path& config_path_in) {
         /*has_netplay_required_leadout*/ has_netplay_required_leadout,
         /*netplay_required_leadout_lba*/ netplay_required_leadout_lba,
         /*netplay_required_disc_fp*/ netplay_required_disc_fp,
+        /*netplay_required_disc_fps*/ netplay_required_disc_fps,
         /*netplay_local_viewport*/ netplay_local_viewport,
         /*netplay_local_viewport_aspect*/ netplay_local_viewport_aspect,
         /*seeds_path*/       seeds_path,
@@ -2427,6 +2442,15 @@ UserSettings load_user_settings(const fs::path& path) {
             const auto p = toml::find<std::string>(d, "path");
             if (!p.empty()) { s.disc_path = fs::path(p); s.has_disc_path = true; }
         });
+        /* Multi-disc selection, 1-based. Anything below 1 is a malformed
+         * hand-edit, not a request to boot disc 0 -- clamp up and keep going
+         * rather than silently mounting nothing. The upper bound is the disc
+         * roster's size, which only the runtime knows, so it clamps there. */
+        if (d.contains("selected")) try_get([&]{
+            const auto n = toml::find<int>(d, "selected");
+            s.disc_index = n < 1 ? 1 : n;
+            s.has_disc_index = true;
+        });
     }
     if (doc.contains("memcard")) {
         const toml::value& m = toml::find(doc, "memcard");
@@ -2646,8 +2670,15 @@ bool save_user_settings(const fs::path& path, const UserSettings& s) {
     }
     if (s.has_bios_path)
         f << "\n[bios]\npath = \"" << fwd(s.bios_path) << "\"\n";
-    if (s.has_disc_path)
-        f << "\n[disc]\npath = \"" << fwd(s.disc_path) << "\"\n";
+    if (s.has_disc_path || s.has_disc_index) {
+        f << "\n[disc]\n";
+        if (s.has_disc_path)
+            f << "path = \"" << fwd(s.disc_path) << "\"\n";
+        /* Only meaningful for a multi-disc title; harmless (and informative)
+         * for a single-disc one, where it is always 1. */
+        if (s.has_disc_index)
+            f << "selected = " << s.disc_index << "\n";
+    }
     if (s.has_memcard_dir || s.has_memcard1_path || s.has_memcard2_path ||
         s.has_memcard1_enabled || s.has_memcard2_enabled) {
         f << "\n[memcard]\n";
