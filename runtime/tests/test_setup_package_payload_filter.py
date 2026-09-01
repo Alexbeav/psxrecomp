@@ -18,6 +18,17 @@ def main() -> None:
     assert "forbidden owned-input or player-state payload" in text
     assert "forbidden retail BIOS payload" in text
     assert text.count("assert_no_private_payload") >= 3
+    assert "assert_no_private_build_paths" in text
+    assert text.count("assert_no_private_build_paths") >= 3
+    for private_source in (
+        "CLAUDE.md",
+        "docs/internal",
+        "recompiler/lib/ELFIO/tests",
+        "tools/aot_overlay_spike",
+        "recomp-ui/docs/HANDOFF.md",
+    ):
+        assert private_source in text
+    assert "developer-machine path" in text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
     print("setup package payload filter test: PASS")
 
