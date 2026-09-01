@@ -47,13 +47,13 @@
 static const char *kReportPath = "psx_last_run_report.json";
 
 /* Build identity, embedded into every report so a user-submitted crash can be
- * correlated to an exact build (issue #1 reports had no version field). The git
- * rev comes from runtime.cmake (PSX_BUILD_REV); __DATE__/__TIME__ are a always-
- * available fallback that still distinguishes builds. */
+ * correlated to an exact source revision (issue #1 reports had no version
+ * field). Do not add __DATE__ or __TIME__ here. Those macros change product
+ * bytes when identical source packages build at different times. */
 #ifndef PSX_BUILD_REV
 #define PSX_BUILD_REV "unknown"
 #endif
-static const char *kBuildId = PSX_BUILD_REV " (" __DATE__ " " __TIME__ ")";
+static const char *kBuildId = PSX_BUILD_REV;
 
 /* CPU state pointer (set by debug server at init). */
 extern CPUState *debug_cpu_ptr;

@@ -386,7 +386,9 @@ to the selected portable toolchain. The resource-compiler path uses forward
 slashes so source and build directories can contain spaces.
 
 MinGW product links disable the PE timestamp and use a content-based build ID.
-Two links from the same inputs must have the same SHA-256 value.
+The crash identity uses the source revision only. It does not use compile-time
+date or time macros. Two clean builds from the same inputs must have the same
+SHA-256 value, including builds in different extraction directories.
 
 Pass `--bios-hint` to give title-specific BIOS guidance. Recommend a supported
 retail SCPH BIOS that matches the game's region. OpenBIOS can remain in the
