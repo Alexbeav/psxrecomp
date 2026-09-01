@@ -1219,12 +1219,24 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
     marker_name = args.gen_marker or f"{boot}_dispatch.c"
     marker = out_dir / marker_name
     if not marker.is_file():
-        # Accept any *_dispatch.c
+        # The build (CMakeLists GEN_MARKER) and the setup host
+        # (codegen_setup.c gen_marker_relpath) both gate on this exact
+        # filename. Accepting a differently named dispatch here used to
+        # report success while the next rebuild silently produced another
+        # setup host — an endless generate+build loop. Fail loudly instead.
         hits = list(out_dir.glob("*_dispatch.c"))
         if not hits:
             progress.error(f"generate produced no dispatch under {out_dir}", code=EXIT_ERROR)
             return EXIT_ERROR
-        marker = hits[0]
+        progress.error(
+            f"generate produced {', '.join(h.name for h in hits)} under "
+            f"{out_dir}, but the project expects {marker_name}. The boot-exe "
+            "name in game.toml disagrees with GEN_MARKER in CMakeLists.txt / "
+            "codegen_setup.c — the rebuild would link no game code. Fix the "
+            "project so all three name the same boot EXE.",
+            code=EXIT_ERROR,
+        )
+        return EXIT_ERROR
 
     progress.phase("done", pct=1.0, message="Generate complete")
     progress.result(
@@ -1703,12 +1715,20 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
                 return EXIT_ERROR
             progress.log("Using system cmake on PATH")
 
-    cmake_extra = []
+    # Full playable link after local generate (not the CI setup-host shape).
+    # The legacy BPE_ alias in runtime.cmake only maps ON, so clear the
+    # canonical name too; REQUIRE_GAME_C turns a marker-name skew into a
+    # loud configure failure instead of a silently rebuilt setup host that
+    # reopens the wizard forever. --cmake-extra comes last so a deliberate
+    # override (e.g. -DPSXRECOMP_REQUIRE_GAME_C=OFF) still wins.
+    cmake_extra = [
+        "-DBPE_FORCE_SETUP_HOST=OFF",
+        "-DPSXRECOMP_FORCE_SETUP_HOST=OFF",
+        "-DPSXRECOMP_ALLOW_NO_BIOS=OFF",
+        "-DPSXRECOMP_REQUIRE_GAME_C=ON",
+    ]
     if args.cmake_extra:
         cmake_extra.extend(args.cmake_extra)
-    # Full playable link after local generate (not the CI setup-host shape).
-    cmake_extra.append("-DBPE_FORCE_SETUP_HOST=OFF")
-    cmake_extra.append("-DPSXRECOMP_ALLOW_NO_BIOS=OFF")
 
     clamped = clamp_future_mtimes(project_root, skip=build_dir)
     if clamped:
