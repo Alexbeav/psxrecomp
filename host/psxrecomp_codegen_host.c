@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -3582,6 +3583,165 @@ static void host_update_disc_set(RecompLauncherCPrepareProgressFn on_progress,
                     "Could not record every disc — continuing with the boot disc.");
 }
 
+/* ---- self-build loop breaker + preflight ------------------------------- */
+
+#define HOST_LAST_GENERATE_SIDECAR ".psxrecomp_last_generate"
+/* A wizard loop iterates in minutes; a recent stamp with sources still
+ * missing means "generate worked but nothing gates on its output" — a
+ * config skew — not a user who wiped generated/ last week. */
+#define HOST_LOOP_BREAKER_WINDOW_SECS (6 * 60 * 60)
+
+static char g_loop_breaker_note[1024];
+
+/* Comma-join the *_dispatch.c basenames under <root>/generated. */
+static void list_generated_dispatch(char* out, size_t cap) {
+    char dir[1100];
+    size_t used = 0;
+    out[0] = '\0';
+    if (!join_path(dir, sizeof(dir), g_project_root, "generated"))
+        return;
+#if defined(_WIN32)
+    {
+        char pat[1200];
+        WIN32_FIND_DATAA fd;
+        HANDLE h;
+        if (!join_path(pat, sizeof(pat), dir, "*_dispatch.c"))
+            return;
+        h = FindFirstFileA(pat, &fd);
+        if (h == INVALID_HANDLE_VALUE)
+            return;
+        do {
+            int n = snprintf(out + used, cap - used, "%s%s",
+                             used ? ", " : "", fd.cFileName);
+            if (n <= 0 || (size_t)n >= cap - used)
+                break;
+            used += (size_t)n;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    {
+        static const char suffix[] = "_dispatch.c";
+        DIR* d = opendir(dir);
+        struct dirent* e;
+        if (!d)
+            return;
+        while ((e = readdir(d)) != NULL) {
+            size_t len = strlen(e->d_name);
+            int n;
+            if (len <= sizeof(suffix) - 1 ||
+                strcmp(e->d_name + len - (sizeof(suffix) - 1), suffix) != 0)
+                continue;
+            n = snprintf(out + used, cap - used, "%s%s",
+                         used ? ", " : "", e->d_name);
+            if (n <= 0 || (size_t)n >= cap - used)
+                break;
+            used += (size_t)n;
+        }
+        closedir(d);
+    }
+#endif
+}
+
+static void host_record_generate_ok(void) {
+    char sidecar[1200], line[32];
+    if (!join_path(sidecar, sizeof(sidecar), g_project_root,
+                   HOST_LAST_GENERATE_SIDECAR))
+        return;
+    snprintf(line, sizeof(line), "%lld", (long long)time(NULL));
+    write_line_file(sidecar, line);
+}
+
+static void host_clear_generate_stamp(void) {
+    char sidecar[1200];
+    if (join_path(sidecar, sizeof(sidecar), g_project_root,
+                  HOST_LAST_GENERATE_SIDECAR))
+        remove(sidecar);
+}
+
+/* apply() consults this when the wizard is about to reopen because sources
+ * are missing. If a generate succeeded here recently, re-running it will
+ * loop — say exactly what is missing and what exists instead of silently
+ * re-prompting. Returns NULL when there is nothing to warn about. */
+static const char* host_loop_breaker_note(void) {
+    char sidecar[1200], line[64], found[512], marker_abs[1200];
+    long long then, now;
+    const char* marker_rel;
+    int game_missing, bios_missing;
+    if (!join_path(sidecar, sizeof(sidecar), g_project_root,
+                   HOST_LAST_GENERATE_SIDECAR))
+        return NULL;
+    if (!read_line_file(sidecar, line, sizeof(line)))
+        return NULL;
+    then = strtoll(line, NULL, 10);
+    now = (long long)time(NULL);
+    if (then <= 0 || now < then || now - then > HOST_LOOP_BREAKER_WINDOW_SECS)
+        return NULL;
+    marker_rel = cfg_or(g_cfg->gen_marker_relpath,
+                        "generated/SLUS_011.89_dispatch.c");
+    game_missing =
+        !join_path(marker_abs, sizeof(marker_abs), g_project_root,
+                   marker_rel) ||
+        !path_is_file(marker_abs);
+    bios_missing = bios_backends_missing();
+    if (!game_missing && !bios_missing)
+        return NULL;
+    list_generated_dispatch(found, sizeof(found));
+    snprintf(g_loop_breaker_note, sizeof(g_loop_breaker_note),
+             "A Generate completed here recently, yet the launcher still "
+             "cannot find %s%s%s. generated/ contains: %s. Running Generate "
+             "again will very likely loop — please report this to the port "
+             "maintainer: the project's boot-EXE names disagree.",
+             game_missing ? marker_rel : "",
+             (game_missing && bios_missing) ? " and " : "",
+             bios_missing ? "the BIOS backends under psxrecomp/generated/"
+                          : "",
+             found[0] ? found : "no *_dispatch.c at all");
+    fprintf(stderr, "psxrecomp-codegen: %s\n", g_loop_breaker_note);
+    return g_loop_breaker_note;
+}
+
+/* Generating into Explorer's temporary zip extraction (Windows) or an
+ * unwritable folder always ends badly — the output evaporates or never
+ * lands, and the wizard reopens forever. Refuse with instructions. */
+static int host_preflight_project_root(char* err_msg, size_t err_cap) {
+#if defined(_WIN32)
+    {
+        char tmp[MAX_PATH];
+        DWORD n = GetTempPathA((DWORD)sizeof(tmp), tmp);
+        if (n > 0 && n < (DWORD)sizeof(tmp) &&
+            _strnicmp(g_project_root, tmp, strlen(tmp)) == 0) {
+            snprintf(err_msg, err_cap,
+                     "This game is running from a temporary folder (%s), "
+                     "usually because the downloaded ZIP was opened without "
+                     "extracting it. Extract the whole ZIP to a normal "
+                     "folder, then run the game from there.",
+                     g_project_root);
+            return 0;
+        }
+    }
+#endif
+    {
+        char probe[1200];
+        FILE* f;
+        if (!join_path(probe, sizeof(probe), g_project_root,
+                       ".psxrecomp_write_probe"))
+            return 1; /* path too long — let the CLI surface the real error */
+        f = fopen(probe, "wb");
+        if (!f) {
+            snprintf(err_msg, err_cap,
+                     "The install folder is not writable: %s. Move the game "
+                     "folder somewhere writable (e.g. your user folder) or "
+                     "fix its permissions, then retry.",
+                     g_project_root);
+            return 0;
+        }
+        fclose(f);
+        remove(probe);
+    }
+    return 1;
+}
+
 static int host_prepare_generate(const char* source_path, char* out_path,
                                  size_t out_cap, char* err_msg, size_t err_cap,
                                  RecompLauncherCPrepareProgressFn on_progress,
@@ -3594,6 +3754,8 @@ static int host_prepare_generate(const char* source_path, char* out_path,
         snprintf(err_msg, err_cap, "No disc selected.");
         return 0;
     }
+    if (!host_preflight_project_root(err_msg, err_cap))
+        return 0;
     activate_toolchain_path();
     if (!find_python(g_python, sizeof(g_python))) {
         /* First-run / pruned cache: page 0 normally installed the pack; heal. */
@@ -3698,6 +3860,10 @@ static int host_prepare_generate(const char* source_path, char* out_path,
                        "psxrecomp generate"))
         return 0;
 #endif
+
+    /* Stamp the success so apply() can tell "generate worked but the
+     * launcher still cannot see its output" apart from a plain first run. */
+    host_record_generate_ok();
 
     snprintf(out_path, out_cap, "%s", source_path);
     if (on_progress)
@@ -4365,6 +4531,19 @@ void psxrecomp_codegen_host_apply(RecompLauncherCGameInfo* gi,
     if (psxrecomp_codegen_host_sources_missing(cfg) || force_setup) {
         gi->needs_setup = 1;
         gi->prepare_required_before_continue = 1;
+        if (!force_setup) {
+            /* Loop breaker: a recent successful generate with sources still
+             * missing is a config skew, not a first run — say so in the
+             * wizard instead of silently asking for another round. */
+            const char* note = host_loop_breaker_note();
+            if (note)
+                gi->prepare_disc_note = note;
+        }
+    } else {
+        /* Sources are visible again — the last generate resolved; drop the
+         * stamp so a much later manual wipe of generated/ reads as a fresh
+         * first run, not a loop. */
+        host_clear_generate_stamp();
     }
 #endif /* PSX_HAS_SETUP_WIZARD */
 }
