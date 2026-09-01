@@ -1744,7 +1744,12 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     if(MINGW)
-        target_link_options(${target} PRIVATE -Wl,--stack,67108864)
+        target_link_options(${target} PRIVATE
+            -Wl,--stack,67108864
+            # Keep repeated links byte-identical. The PE timestamp and the
+            # default UUID build ID otherwise change on every link.
+            -Wl,--no-insert-timestamp
+            -Wl,--build-id)
         # No console window in Release MinGW builds.
         target_link_options(${target} PRIVATE $<$<CONFIG:Release>:-mwindows>)
         if(PSX_STATIC_RUNTIME)
