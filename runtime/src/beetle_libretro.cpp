@@ -547,7 +547,10 @@ extern "C" int beetle_init_with_disc(const char *bios_path, const char *disc_pat
             FILE *f = fopen(card_files[sl], "rb");
             if (!f) {
                 std::fprintf(stderr,
-                    "[psx-beetle] WARNING: %s missing — slot %d will be blank\n",
+                    "[psx-beetle] WARNING: %s missing — slot %d will be blank "
+                    "(populated fixtures live in "
+                    "runtime/tests/fixtures/memcards/; copy dummy.*.mcr into "
+                    "this process's working directory)\n",
                     card_files[sl], sl + 1);
                 continue;
             }
