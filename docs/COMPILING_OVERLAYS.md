@@ -262,5 +262,6 @@ shard-compile failure is visible in-game, not only in the provider's console.
   `<os>-<arch>` folder match the runtime you're launching, and that `--cps`
   matched the runtime build.
 
-Design/rationale for the whole system lives in `overlay-recompilation-design.md`,
-`overlay-plan.md`, and `FEATURES.md` in this folder.
+Design/rationale for the whole system lives in
+`internal/overlay-recompilation-design.md` and `internal/overlay-plan.md`;
+`FEATURES.md` is in this folder.

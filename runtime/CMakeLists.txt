@@ -20,7 +20,7 @@ psxrecomp_add_runtime_target(psx-runtime
 # With -DPSX_PGXP_VARIANT=ON, psxrecomp_add_runtime_target auto-clones a
 # psx-runtime-pgxp sibling (PSXRecomp_pgxp.exe) compiled with -DPSX_PGXP=1 —
 # the framework-dev validation surface for the PGXP value-propagation engine
-# (ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
+# (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
     add_executable(launcher_device_roundtrip_test
@@ -143,7 +143,7 @@ if(BUILD_TESTING)
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME gte_register_access_test COMMAND gte_register_access_test)
 
-    # PGXP value-propagation engine (ENHANCEMENTS.md G1.2/G1.3): shadow
+    # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read
     # (foreign overwrite + DMA-overwrite rejection), MOVE/repack arithmetic,
     # suppression bracket, invalidate-all, and GetPreciseVertex safeguards

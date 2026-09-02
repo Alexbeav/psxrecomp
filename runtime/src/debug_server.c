@@ -5,7 +5,8 @@
  * JSON-over-newline protocol on localhost:4370.
  *
  * Same function names and protocol as nesrecomp/snesrecomp versions
- * so TCP.md and DEBUG.md are reusable across projects.
+ * so docs/TCP_COMMANDS.md and docs/internal/DEBUG.md are reusable across
+ * projects.
  */
 /* Expose POSIX clock_gettime()/CLOCK_MONOTONIC (used by monotonic_ms) on
  * glibc — must precede any system header. Harmless on Windows/macOS. */
@@ -3261,7 +3262,7 @@ static void handle_dirty_insn_dump_file(int id, const char *json)
 
 /* ---- parity_dump / parity_ctl: general two-process control-flow parity ring.
  * Mirrors the IDENTICAL command on psx-beetle so tools/parity_diff.py can pull
- * both timelines and align by logical sequence (PRINCIPLES.md first-divergence). */
+ * both timelines and align by logical sequence (docs/internal/PRINCIPLES.md first-divergence). */
 /* Two rows have the same watched-STATE iff their watch words + epc + tcb_state
  * match (pc/ra/sp ignored). Used by the `transitions` dump filter to collapse
  * runs of identical-state dispatch rows into one (with a `reps` count), so a
@@ -5250,7 +5251,7 @@ static void handle_geom_correction(int id, const char *json)
  * geom_correction's "pgxp" object, flattened). */
 static void handle_pgxp(int id, const char *json)
 {
-    /* Live toggles for the one-toggle-at-a-time A/B protocol (ENHANCEMENTS.md
+    /* Live toggles for the one-toggle-at-a-time A/B protocol (docs/ENHANCEMENTS.md
      * G1.6 method rule): same scene, flip one knob, screenshot_hires. */
     int geom = json_get_int(json, "geometry", -1);
     if (geom >= 0)

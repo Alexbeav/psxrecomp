@@ -139,7 +139,7 @@ Instead:
 Adding a new command is cheap — the pattern is one handler in `runtime/src/debug_server.c`
 (native) and a matching handler in `duckstation/src/core/psxrecomp_debug_server.cpp`
 (DuckStation oracle, then regenerate `tools/duckstation/psxrecomp_oracle.patch`).
-See `TCP_COMMANDS.md` for the protocol.
+See [`../TCP_COMMANDS.md`](../TCP_COMMANDS.md) for the protocol.
 
 A wrong answer from missing tooling costs MORE than the time to build the tool.
 Every workaround becomes technical debt that hides the real bug longer.

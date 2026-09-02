@@ -471,7 +471,7 @@ Reserved future fields:
 
 ## Audit block
 
-See `docs/audit_inventory.md` for the audit pipeline. The schema here is
+See `docs/internal/audit_inventory.md` for the audit pipeline. The schema here is
 the input side: regions to walk, address-normalisation rules.
 
 ```toml

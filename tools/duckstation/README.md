@@ -110,7 +110,7 @@ The pinned base SHA lives in one place only: `UPSTREAM_BASE` at the top of `tool
 
 ## Protocol parity with native runtime
 
-Both servers implement the same JSON-over-newline command set where possible so that `tools/debug_client.py compare <cmd>` diffs state between them. See `TCP_COMMANDS.md` at the v4 root for the full command table with "native-only / duckstation-only / both" annotations.
+Both servers implement the same JSON-over-newline command set where possible so that `tools/debug_client.py compare <cmd>` diffs state between them. See `docs/TCP_COMMANDS.md` for the full command table with "native-only / duckstation-only / both" annotations.
 
 ## First-time setup: the `duckstation-qt.rcc` resource file
 

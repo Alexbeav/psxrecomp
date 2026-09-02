@@ -137,6 +137,60 @@ python3 tools/new_project_layout/probe_disc.py disc/game.cue \
 Prefer a **full multi-track** Redump cue. A single-TRACK dump will warn and will
 fail online multi-track gates (see `[NETPLAY.md](NETPLAY.md)`).
 
+### EXE-only autofill (`psxrecomp-toml`)
+
+When you have a PS-X EXE but no cue — or you just want a `game.toml` skeleton
+without running the full disc probe — `psxrecomp-toml` (built alongside the
+other CLI tools from `recompiler/`, source `recompiler/src/main_toml.cpp`)
+reads the EXE header and writes the config for you. It saves opening a hex
+editor or Ghidra just to recover the entry point, load address and text size.
+
+What it produces:
+
+- **`game.toml`** — `load_address`, `entry_pc` and `text_size` taken from the
+  actual PS-X EXE header, plus the game name and ID.
+- **Seeds** — the destinations of every direct jump-and-link (`JAL`) it finds
+  in the code segment, optionally widened with the addresses immediately
+  following each `jr $ra`.
+
+```
+Usage: psxrecomp-toml <PS1-EXE> [options]
+
+Options:
+  --output <path>   Write game.toml to <path> (default: stdout)
+  --seeds <path>    Also write JAL-target seed file to <path>
+  --name <str>      Game name in TOML (default: derived from EXE)
+  --id <str>        Game ID (default: auto-detect or empty)
+  --stdout          Force output to stdout even with --output
+  --include-after-return
+                    Add addresses after jr $ra to seeds (more coverage,
+                    may include some data addresses)
+  -h, --help        Show this help
+```
+
+Example:
+
+```bash
+psxrecomp-toml ./isos/SCES_028.34 \
+  --output ./projects/CrashBash/game.toml \
+  --seeds ./projects/CrashBash/recompiler/seeds/seeds.txt \
+  --name "Crash-Bash-EUR"
+```
+
+It also prints the EXE, game ID, entry PC, load address, text size, stack base
+and seed count to stderr, so you can sanity-check the header it read.
+
+`--include-after-return` trades precision for coverage: an address just past a
+`jr $ra` is usually the next function, but sometimes it is data, so those seeds
+can introduce junk entries.
+
+**This is a first pass, not full discovery.** Static `JAL` scanning cannot
+resolve dynamic function tables or indirect register dispatches. When the
+recompiler later reports discovery gaps or unknown dispatches at runtime, those
+newly-found addresses still have to be fed back into the seeds file. Prefer
+`probe_disc.py` above when you have a cue — it does the same header work plus
+disc identity, digests and netplay gates.
+
 ### Project Studio — migrate / update existing titles
 
 Older titles (e.g. `psxrecomp-v4` submodule, `psxrecomp_add_runtime_target`,

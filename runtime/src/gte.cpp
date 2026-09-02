@@ -226,7 +226,7 @@ static uint32_t s_geom_miss_ambig = 0;   /* recorded, but not unambiguously    *
 
 /* Exact GTE projection provenance now lives in the PGXP value-propagation
  * engine (pgxp.cpp): per-word RAM/scratchpad shadows plus per-GPR and per-GTE-
- * register shadows, validated on read (ENHANCEMENTS.md G1.2/G1.3). The
+ * register shadows, validated on read (docs/ENHANCEMENTS.md G1.2/G1.3). The
  * gte_precision_* entry points below are kept as the stable emit/ABI surface
  * (v14 swc2 sites, tests) and forward into that engine. The hashed
  * s_precision_store table and the s_precise_sxy FIFO it fed are retired —

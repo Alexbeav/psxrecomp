@@ -578,7 +578,7 @@ this there is no blind path: device + diverging shards stay on the interpreter.
   `autocompile_configured()` tests for a config *string*, not a real toolchain). →
   Phase C.
 
-### End-to-end success criteria (per DEBUG.md end-to-end rule)
+### End-to-end success criteria (per `docs/internal/DEBUG.md` end-to-end rule)
 
 `PSX_OVERLAY_SLJIT_LIVE=1` (or `auto`→sljit on a toolchain-less box): play through
 save-load, FMV, menus, and combat with **0 divergences, 0 wedges**, shards

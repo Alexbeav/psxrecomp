@@ -1601,7 +1601,7 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
     /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
      * validates tracked words against the actual packet word on read, so an
-     * overwritten word can never be believed (ENHANCEMENTS.md G1). */
+     * overwritten word can never be believed (docs/ENHANCEMENTS.md G1). */
     /* KSEG2 cache control — before physical translation. */
     if (addr == 0xFFFE0130u) { cache_ctrl = val; return; }
     /* KSEG2 guard — see psx_read_word_raw. */

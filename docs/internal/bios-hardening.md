@@ -92,7 +92,7 @@ on the `dispatch_stats` TCP command alongside `dispatch_miss_total`.
 Once Tomba seeding is complete, the remaining dirty_ram traffic will be genuinely
 overlay code (addresses > 0x98000, loaded from disc). That's when B+A slots in.
 
-See `docs/overlay-discovery.md` for the full architecture. Short version:
+See `overlay-discovery.md` for the full architecture. Short version:
 
 - **Layer B** (ship first): on CD DMA completion, log `(hash, load_addr, size)` to
   `logs/<SCUS_ID>/overlay_map.jsonl`. At next build, recompile those overlays

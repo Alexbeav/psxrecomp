@@ -3,8 +3,9 @@
 Faithfulness is the foundation (CLAUDE.md Rule -1); this file tracks the
 enhancement layer built on top of it: renderers beyond the software reference,
 widescreen, load acceleration, etc. Per-game enhancement ideas live in each
-game repo's ENHANCEMENTS.md. Active framework bugs referenced here live in the
-game repos' ISSUES.md until a framework tracker exists.
+game repo's ENHANCEMENTS.md. Framework bugs referenced here are tracked in
+Beads (epic `beads-eio.3`); older ones are still written up in the game repos'
+ISSUES.md where they were first found.
 
 ---
 
