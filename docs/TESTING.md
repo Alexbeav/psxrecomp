@@ -8,9 +8,15 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-That is the whole thing. 38 tests, under 5 seconds, and it needs **no BIOS dump,
-no disc image, and no generated code** — a plain recompiler build is enough. This
-is the check to run before opening a PR.
+That is the whole thing. CTest reports the enabled and disabled tests for this source.
+It needs **no BIOS dump, no disc image, and no generated code**. A plain
+recompiler build is enough. Run this check before you open a PR.
+
+The `psxrecomp-game` build writes both codegen-hash headers inside its build
+directory. A standalone runtime build writes its header inside the runtime
+build directory. Tests verify that neither build writes into the source tree.
+The setup packager stages the exact emitter-build header so overlay tools can
+still verify that the recompiler matches the runtime cache tag.
 
 Until 2026-07-27 no document in this repository mentioned `ctest`, `pytest`, or
 how to run a test at all, so the suite was effectively invisible. If you add a

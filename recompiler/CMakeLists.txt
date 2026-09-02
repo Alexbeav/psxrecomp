@@ -195,16 +195,23 @@ endif()
 set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
 set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
+set(_runtime_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/runtime/include/overlay_codegen_hash.h)
 add_custom_command(
-    OUTPUT  ${_baked_hash_hdr}
+    OUTPUT  ${_baked_hash_hdr} ${_runtime_hash_hdr}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_CURRENT_BINARY_DIR}/runtime/include
     COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
+            "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_runtime_hash_hdr}
             "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
-    COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
+    COMMENT "Hashing codegen sources -> baked and runtime hash headers"
     VERBATIM)
-add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr})
+add_custom_target(psxrecomp_baked_codegen_hash
+    DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
 add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 # Force main_psx.cpp to recompile whenever the hash header content changes
 # (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
@@ -609,6 +616,11 @@ if(BUILD_TESTING)
             NAME setup_private_path_gate
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_private_path_gate.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME codegen_hash_build_tree
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_codegen_hash_build_tree.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
             NAME bundle_mingw_dll_preference
