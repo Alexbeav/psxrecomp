@@ -2297,7 +2297,132 @@ def generate_overlay_dispatch(variants: list) -> str:
             f'static const uint32_t {variant["range_symbol"]}[] = '
             '{ ' + ', '.join(flat) + ' };')
 
+    # ---- O(1) address lookup ------------------------------------------------
+    # The dispatcher is consulted on EVERY interpreted entry, and the
+    # overwhelming majority of those calls are for addresses with no compiled
+    # entry at all. Measured on BoF3 during a battle-transition stall:
+    # ~264,000 calls/sec, of which ~1,160 out of every 1,161 found nothing.
+    # A `switch` over tens of thousands of sparse cases compiles to a binary
+    # search tree, so each of those fruitless calls walked ~log2(N) compares
+    # through a jump table far larger than cache -- which is why frame rate
+    # tracked compiled-case COUNT rather than variant chain depth, and why
+    # adding bands cost frame rate on screens where no overlay code ran.
+    #
+    # Replace it with a compile-time open-addressed hash table. The miss path
+    # -- the hot one -- becomes: hash, one load, compare, return. Two parallel
+    # uint32 arrays keep a miss inside a single 128 KB table: the address array
+    # answers "is this mine?" without touching the entry or variant arrays at
+    # all. Load factor is held at <= 0.5 to bound probe length.
+    entry_addrs = sorted(by_addr)
+    n_entries = len(entry_addrs)
+
+    def hash_slot(key: int, mask: int) -> int:
+        """MUST stay bit-identical to psx_ov_hash_slot() emitted below."""
+        h = (key >> 2) & 0xFFFFFFFF
+        h = (h * 0x9E3779B1) & 0xFFFFFFFF
+        h ^= h >> 15
+        return h & mask
+
+    bits = 4
+    while (1 << bits) < max(n_entries, 1) * 2:
+        bits += 1
+    size = 1 << bits
+    mask = size - 1
+
+    table_addr = [0] * size
+    table_idx = [0] * size
+    max_probe = 0
+    for index, addr in enumerate(entry_addrs):
+        slot = hash_slot(addr, mask)
+        probe = 0
+        while table_addr[slot] != 0:
+            assert table_addr[slot] != addr, f'duplicate entry 0x{addr:08X}'
+            slot = (slot + 1) & mask
+            probe += 1
+        table_addr[slot] = addr
+        table_idx[slot] = index
+        max_probe = max(max_probe, probe)
+
+    # Flat variant array; each entry owns a contiguous run of it.
+    flat_variants = []
+    entry_rows = []
+    for addr in entry_addrs:
+        entry_rows.append((addr, len(flat_variants), len(by_addr[addr])))
+        flat_variants.extend(by_addr[addr])
+
+    def emit_table(name, values, per_line=8):
+        out = [f'static const uint32_t {name}[{size}] = {{']
+        for i in range(0, size, per_line):
+            chunk = ', '.join(f'0x{v:08X}u' for v in values[i:i + per_line])
+            out.append(f'    {chunk},')
+        out.append('};')
+        return out
+
     lines += [
+        '',
+        'typedef void (*PsxOvFn)(CPUState *cpu);',
+        '',
+        'typedef struct {',
+        '    const uint32_t *ranges;',
+        '    uint32_t        count;',
+        '    uint32_t        crc;',
+        '    PsxOvFn         fn;',
+        '} PsxOvVariant;',
+        '',
+        'typedef struct {',
+        '    uint32_t addr;',
+        '    uint32_t first;   /* index into psx_ov_variants */',
+        '    uint32_t n;       /* occupants compiled at this address */',
+        '} PsxOvEntry;',
+        '',
+    ]
+
+    if flat_variants:
+        lines.append(f'static const PsxOvVariant '
+                     f'psx_ov_variants[{len(flat_variants)}] = {{')
+        for variant in flat_variants:
+            lines.append(
+                f'    {{ {variant["range_symbol"]}, '
+                f'{len(variant["ranges"])}u, 0x{variant["crc"]:08X}u, '
+                f'{variant["symbol"]} }},')
+        lines.append('};')
+        lines.append('')
+        lines.append(f'static const PsxOvEntry psx_ov_entries[{n_entries}] = {{')
+        for addr, first, count in entry_rows:
+            lines.append(f'    {{ 0x{addr:08X}u, {first}u, {count}u }},')
+        lines.append('};')
+        lines.append('')
+        lines += emit_table('psx_ov_hash_addr', table_addr)
+        lines.append('')
+        lines += emit_table('psx_ov_hash_idx', table_idx)
+        lines.append('')
+        # Resident-occupant memo. On hardware the game CD-reads a file to a
+        # fixed address and jal's straight into it -- identity is implicit in
+        # control flow and costs nothing. We rediscover it by walking a band's
+        # occupants and CRC-gating each. On a deep band that walk dominated:
+        # the memory-card screen measured 41.25 checks per hit, i.e. ~41 failed
+        # gates before the resident one, 4.4 M failed checks per 2 s.
+        #
+        # Remember which occupant last satisfied each address and try it first.
+        # Correctness is unchanged because the memo only reorders candidates --
+        # every call still passes psx_overlay_static_code_matches(), so a band
+        # that swapped occupants fails the memo and falls into the full walk.
+        # The memo is a hint, never an authority.
+        lines.append(f'static uint16_t psx_ov_last_hit[{n_entries}];')
+        lines.append('')
+
+    lines += [
+        f'/* {n_entries} dispatch addresses, {len(flat_variants)} variants, '
+        f'{size}-slot table (load {n_entries / size:.2f}), '
+        f'max probe {max_probe}. */',
+        f'#define PSX_OV_HASH_MASK 0x{mask:X}u',
+        '',
+        'static inline uint32_t psx_ov_hash_slot(uint32_t key) {',
+        '    uint32_t h = key >> 2;            /* entries are word-aligned */',
+        '    h *= 0x9E3779B1u;',
+        '    h ^= h >> 15;',
+        '    return h & PSX_OV_HASH_MASK;',
+        '}',
         '',
         'void psx_overlay_static_get_stats(uint64_t *checks, uint64_t *hits,',
         '                                  uint64_t *variant_misses,',
@@ -2310,29 +2435,70 @@ def generate_overlay_dispatch(variants: list) -> str:
         '',
         'int psx_overlay_dispatch(CPUState *cpu, uint32_t addr) {',
         '    const uint32_t key = (addr & 0x1FFFFFFFu) | 0x80000000u;',
-        '    switch (key) {',
     ]
-    for addr in sorted(by_addr):
-        lines.append(f'        case 0x{addr:08X}u:')
-        for variant in by_addr[addr]:
-            count = len(variant['ranges'])
-            lines += [
-                '            psx_ov_static_checks++;',
-                f'            if (psx_overlay_static_code_matches('
-                f'{variant["range_symbol"]}, {count}u, '
-                f'0x{variant["crc"]:08X}u)) {{',
-                '                psx_ov_static_hits++;',
-                f'                {variant["symbol"]}(cpu);',
-                '                return 1;',
-                '            }',
-                '            psx_ov_static_variant_misses++;',
-            ]
-        lines.append('            return 0;')
+
+    if not flat_variants:
+        lines += [
+            '    (void)cpu; (void)key;',
+            '    psx_ov_static_address_misses++;',
+            '    return 0;',
+            '}',
+            '',
+        ]
+        return '\n'.join(lines)
+
     lines += [
-        '        default:',
+        '    uint32_t slot = psx_ov_hash_slot(key);',
+        '    for (;;) {',
+        '        uint32_t slot_addr = psx_ov_hash_addr[slot];',
+        '        if (slot_addr == 0u) {',
+        '            /* Empty slot: this address is compiled nowhere. This is',
+        '             * the overwhelmingly common case -- keep it one load. */',
         '            psx_ov_static_address_misses++;',
         '            return 0;',
+        '        }',
+        '        if (slot_addr == key) break;',
+        '        slot = (slot + 1u) & PSX_OV_HASH_MASK;',
         '    }',
+        '    {',
+        '        const uint32_t ei = psx_ov_hash_idx[slot];',
+        '        const PsxOvEntry *e = &psx_ov_entries[ei];',
+        '        const PsxOvVariant *base = &psx_ov_variants[e->first];',
+        '        const uint32_t n = e->n;',
+        '        uint32_t memo = psx_ov_last_hit[ei];',
+        '        uint32_t i;',
+        '        if (memo >= n) memo = 0u;',
+        '        /* Try the occupant that satisfied this address last time. On a',
+        '         * deep band this is the difference between one CRC gate and',
+        '         * walking every occupant. It is only a hint: the gate below',
+        '         * still decides, so a swapped band simply falls through. */',
+        '        if (n > 1u) {',
+        '            const PsxOvVariant *v = base + memo;',
+        '            psx_ov_static_checks++;',
+        '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
+        '                                               v->crc)) {',
+        '                psx_ov_static_hits++;',
+        '                v->fn(cpu);',
+        '                return 1;',
+        '            }',
+        '            psx_ov_static_variant_misses++;',
+        '        }',
+        '        for (i = 0; i < n; i++) {',
+        '            const PsxOvVariant *v = base + i;',
+        '            if (n > 1u && i == memo) continue;   /* already tried */',
+        '            psx_ov_static_checks++;',
+        '            if (psx_overlay_static_code_matches(v->ranges, v->count,',
+        '                                               v->crc)) {',
+        '                psx_ov_static_hits++;',
+        '                psx_ov_last_hit[ei] = (uint16_t)i;',
+        '                v->fn(cpu);',
+        '                return 1;',
+        '            }',
+        '            psx_ov_static_variant_misses++;',
+        '        }',
+        '    }',
+        '    /* Address is ours but no occupant is resident -> interpreter. */',
+        '    return 0;',
         '}',
         '',
     ]
