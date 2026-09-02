@@ -1634,20 +1634,49 @@ function(psxrecomp_add_runtime_target target)
     # the -I never reaches the compiler, and a sysroot toolchain never had it
     # on the search path to begin with. Verify, then fall back to the inert
     # stub this block already knows how to build.
+    set(_vk_stage "")
     if(_vk_inc AND GLSLC_EXE)
         _psx_header_compiles(_psx_vk_ok "vulkan/vulkan.h" INCLUDES "${_vk_inc}")
         if(NOT _psx_vk_ok)
-            message(STATUS
-                "Vulkan backend: headers at ${_vk_inc} are not reachable from "
-                "${CMAKE_C_COMPILER} - gpu_vk_renderer.c builds as a software "
-                "stub. Set VULKAN_SDK to a copy the compiler can see to enable it.")
-            set(_vk_inc "")
+            # Unreachable as given. Rather than give up the renderer, stage a
+            # private include dir holding ONLY the Vulkan subtrees and try that:
+            # it is not /usr/include, so CMake will emit it, and it pulls none
+            # of the rest of the host include root ahead of the sysroot's own
+            # libc headers -- which is what makes this safe where adding
+            # ${_vk_inc} itself would not be. vk_video/ has to come along too;
+            # vulkan_core.h includes the H.264/H.265 codec headers from it, so
+            # staging vulkan/ alone still fails to compile.
+            set(_vk_stage "${CMAKE_CURRENT_BINARY_DIR}/${target}_vkinc")
+            file(MAKE_DIRECTORY "${_vk_stage}")
+            foreach(_vk_sub vulkan vk_video)
+                if(EXISTS "${_vk_inc}/${_vk_sub}")
+                    file(CREATE_LINK "${_vk_inc}/${_vk_sub}"
+                         "${_vk_stage}/${_vk_sub}" SYMBOLIC COPY_ON_ERROR)
+                endif()
+            endforeach()
+            _psx_header_compiles(_psx_vk_ok "vulkan/vulkan.h" INCLUDES "${_vk_stage}")
+            if(_psx_vk_ok)
+                message(STATUS
+                    "Vulkan backend: ${_vk_inc} is not reachable directly; "
+                    "staged ${_vk_stage} instead.")
+            else()
+                message(STATUS
+                    "Vulkan backend: headers at ${_vk_inc} are not reachable from "
+                    "${CMAKE_C_COMPILER} - gpu_vk_renderer.c builds as a software "
+                    "stub. Set VULKAN_SDK to a copy the compiler can see to enable it.")
+                set(_vk_inc "")
+                set(_vk_stage "")
+            endif()
         endif()
         unset(_psx_vk_ok)
     endif()
     if(_vk_inc AND GLSLC_EXE)
         message(STATUS "Vulkan backend: headers ${_vk_inc}, glslc ${GLSLC_EXE}")
-        target_include_directories(${target} PRIVATE "${_vk_inc}")
+        if(_vk_stage)
+            target_include_directories(${target} PRIVATE "${_vk_stage}")
+        else()
+            target_include_directories(${target} PRIVATE "${_vk_inc}")
+        endif()
         target_compile_definitions(${target} PRIVATE PSX_HAVE_VULKAN=1)
         # Compile every shader under runtime/shaders/ to SPIR-V (glslc) and embed
         # them into one generated header (vk_shaders_spv.h) of uint32_t arrays, so
