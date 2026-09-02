@@ -555,6 +555,11 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
+            NAME bundle_mingw_dll_preference
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_bundle_mingw_dll_preference.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
             NAME windows_rc_compiler_arg
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_windows_rc_compiler_arg.py

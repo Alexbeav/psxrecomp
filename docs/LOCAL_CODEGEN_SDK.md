@@ -36,7 +36,7 @@ product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
 | `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
-| `tools/bundle_mingw_dlls.sh` | Windows: copy MinGW runtime DLLs next to host + emitters |
+| `tools/bundle_mingw_dlls.sh` | Windows: copy compiler-matched MinGW runtime DLLs next to host + emitters; an explicit `--runtime-bin` takes priority over ambient shell runtimes |
 | Project `toolchain/` | Stamp file `.psxrecomp-bin` pointing at the shared pack `bin/` |
 | Shared toolchain cache | `%LOCALAPPDATA%/retcomm/toolchains/cmake-clang-v1/` (Windows) or `~/.local/share/retcomm/toolchains/cmake-clang-v1/` — same tree RetComM uses |
 | `docs/ci/` | Composite actions + [`templates/setup-release.yml`](ci/templates/setup-release.yml) |

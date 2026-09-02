@@ -189,18 +189,22 @@ find_dll_src() {
     zlib.dll) names+=("zlib1.dll" "z.dll") ;;
   esac
   for name in "${names[@]}"; do
+    # Explicit runtime roots are a dependency contract, not a fallback.  In
+    # particular, Git Bash exposes its own GCC runtime at /mingw64/bin; that
+    # runtime can be ABI-incompatible with an emitter built by another MinGW
+    # toolchain even though the DLL names match.
+    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
+    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
+      candidates+=("${d}/${name}")
+    done
     candidates+=(
       "$(dirname "${exe}")/${name}"
       "${dest_dir}/${name}"
       "/mingw64/bin/${name}"
       "/usr/x86_64-w64-mingw32/bin/${name}"
     )
-    for d in "${SEARCH_DIRS[@]+"${SEARCH_DIRS[@]}"}"; do
-      candidates+=("${d}/${name}")
-    done
-    for d in "${RUNTIME_BINS[@]+"${RUNTIME_BINS[@]}"}"; do
-      candidates+=("${d}/${name}")
-    done
   done
   for cand in "${candidates[@]}"; do
     [[ -n "${cand}" ]] || continue

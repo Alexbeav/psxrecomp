@@ -60,7 +60,7 @@ the ICD dynamically via SDL; CI only needs headers and the shader compiler.
 | `ci/build_emitters.sh` | Build `psxrecomp-game` + `psxrecomp-bios` |
 | `fetch_toolchain.sh` | Download/unpack cmake-clang-v1 (Windows emitter builds; optional embed) |
 | `stage_setup_sdk.sh` | Emitters, OpenBIOS, optional `toolchain/`, MinGW DLLs |
-| `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs |
+| `bundle_mingw_dlls.sh` | Copy imported non-system DLLs next to Windows PEs; the explicit runtime directory wins over ambient shell runtimes |
 | `package_setup_host.sh` | Lean setup-host zip (optional `--embed-toolchain`) |
 | `../cmake/toolchain-mingw-w64.cmake` | Linux→Windows MinGW cross toolchain |
 | `../host/psxrecomp_codegen_host.*` | Portable Generate & rebuild host (via CMake helper) |
@@ -82,7 +82,7 @@ submodule — there is no separate `psxrecomp-sdk/` overlay.
     stage: dist/stage-setup-${{ matrix.artifact }}
     recompiler-build: build-recompiler
     allow-no-toolchain: 'true'
-    runtime-bin: /mingw64/bin   # Windows / MSYS2
+    runtime-bin: /mingw64/bin   # Directory for the compiler runtime that built these PEs
 ```
 
 ## Title responsibilities
