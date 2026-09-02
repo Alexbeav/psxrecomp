@@ -1907,6 +1907,35 @@ function(psxrecomp_add_game_runtime target)
         endif()
     endif()
 
+    # ENABLE_NETPLAY_IF_PRESENT is nearly always a no-op, and used to be one
+    # silently. By the time this function runs, runtime.cmake has already been
+    # INCLUDED, and the include resolved recomp-net and decided whether the
+    # netplay TUs compile for real or as stubs (see the PSX_NETPLAY block near
+    # the top of this file). The option(PSX_NETPLAY ... OFF) up there has also
+    # already made the `NOT DEFINED` test above false. So the flag can only
+    # ever matter to a caller that set PSX_NETPLAY before the include -- which
+    # is exactly what the scaffold's pre-include block does, and that block is
+    # the real switch. Say so instead of leaving the caller to discover from a
+    # stubbed binary that the flag they passed did nothing.
+    if(PSXG_ENABLE_NETPLAY_IF_PRESENT AND NOT PSX_NETPLAY)
+        if(EXISTS "${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt")
+            message(WARNING
+                "ENABLE_NETPLAY_IF_PRESENT was passed but PSX_NETPLAY is OFF, so "
+                "netplay stays stubbed. This argument is read after "
+                "runtime.cmake has already been included and wired netplay, so "
+                "it cannot turn it on by itself. Set it BEFORE the include:\n"
+                "  if(EXISTS \"\${PSXRECOMP_ROOT}/lib/recomp-net/CMakeLists.txt\")\n"
+                "      set(PSX_NETPLAY ON CACHE BOOL \"\" FORCE)\n"
+                "  endif()")
+        else()
+            message(WARNING
+                "ENABLE_NETPLAY_IF_PRESENT was passed but recomp-net is not "
+                "checked out (${PSXRECOMP_ROOT}/lib/recomp-net), so netplay "
+                "stays stubbed. Run: git -C psxrecomp submodule update --init "
+                "lib/recomp-net")
+        endif()
+    endif()
+
     # Title default lobby WebSocket URL (compile-time; env PSX_NET_LOBBY_URL wins).
     if(PSXG_NETPLAY_LOBBY_URL)
         set(PSX_NET_LOBBY_DEFAULT_URL "${PSXG_NETPLAY_LOBBY_URL}" CACHE STRING
