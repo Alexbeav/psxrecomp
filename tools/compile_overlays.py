@@ -148,6 +148,26 @@ def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
     print(f'recompiler codegen hash verified: {baked} == cg tag hash')
 
 
+def cache_tag(runtime_include: str, recompiler: str, game_toml: str,
+              flavor: int = 0) -> str:
+    """THE cache-namespace string. Single source of truth.
+
+    The release packagers used to rebuild this string themselves in PowerShell.
+    That parallel implementation went stale the moment the flavor suffix was
+    added: the packager derived cg<N>_<hash>_gc<hash> while this tool wrote
+    cg<N>_<hash>_gc<hash>_f<flavor>, so its tag filter matched nothing and a
+    perfectly good regenerated cache staged ZERO shards (measured on Tomba 2,
+    2026-09-01). Anything that needs the tag must call this, never reformat it.
+
+    Must stay identical to overlay_loader.c scan_cache_dir().
+    """
+    return 'cg%d_%08x_gc%08x_f%d' % (
+        codegen_ver(runtime_include),
+        codegen_hash(runtime_include),
+        overlay_config_hash(recompiler, game_toml),
+        int(flavor))
+
+
 def overlay_config_hash(recompiler: str, game_toml: str) -> int:
     """Ask the recompiler for the canonical hash of config fields that affect
     generated overlay code. Keeping the serializer in the shared C++ config
@@ -5519,7 +5539,8 @@ def main():
         ch = codegen_hash(args.runtime_include)
         gh = overlay_config_hash(args.recompiler, args.game_toml)
         cache_dir = os.path.join(args.out_dir, game_id, args.compiler, cache_arch_abi(),
-                                 f'cg{cg}_{ch:08x}_gc{gh:08x}_f{int(args.flavor)}')
+                                 cache_tag(args.runtime_include, args.recompiler,
+                                           args.game_toml, args.flavor))
         os.makedirs(cache_dir, exist_ok=True)
         print(f'Cache dir: {cache_dir}  '
               f'(codegen ver {cg}, emitter {ch:08x}, config {gh:08x})')
