@@ -78,6 +78,17 @@ $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
 if (-not $proc) { throw "no process with PID $ProcessId" }
 $nCpu = [Environment]::ProcessorCount
 
+function Get-AffinityMask([int]$n) {
+    # [math]::Pow(2,$n)-1 overflows Int64 at $n >= 63 and THROWS, so on a host
+    # with 64 logical processors -Off and -Cores both died instead of doing
+    # anything. Shift instead, and special-case a full 64 because .NET masks a
+    # 64-bit shift count to 63 (shifting by 64 quietly yields 1, not 0).
+    # Note ProcessorAffinity covers a single processor group, so a >64-CPU host
+    # is inherently limited to the group the process is already in.
+    if ($n -ge 64) { return [int64]-1 }
+    return [int64](([uint64]1 -shl $n) - 1)
+}
+
 function Measure-Draw([System.Diagnostics.Process]$p, [int]$secs) {
     $t1 = $p.TotalProcessorTime
     Start-Sleep -Seconds $secs
@@ -139,7 +150,7 @@ if ($Off) {
     if (-not [JobCpu]::SetInformationJobObject($job, [JobCpu]::InfoClass, [ref]$info, 8)) {
         throw "SetInformationJobObject(off) failed: $([ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()).Message)"
     }
-    $proc.ProcessorAffinity = [IntPtr]([int64]([math]::Pow(2, $nCpu) - 1))
+    $proc.ProcessorAffinity = [IntPtr](Get-AffinityMask $nCpu)
     Write-Host "cap     : REMOVED (affinity restored to all $nCpu processors)"
 } elseif ($CoresWorth -gt 0) {
     # CpuRate is in 1/100 of a percent of TOTAL machine capacity, so a cores'
@@ -158,7 +169,7 @@ if ($Off) {
 
 if ($Cores -gt 0) {
     if ($Cores -gt $nCpu) { $Cores = $nCpu }
-    $mask = [int64]([math]::Pow(2, $Cores) - 1)
+    $mask = Get-AffinityMask $Cores
     $proc.ProcessorAffinity = [IntPtr]$mask
     Write-Host "affinity: $Cores of $nCpu logical processors (mask 0x$('{0:X}' -f $mask))"
 }
