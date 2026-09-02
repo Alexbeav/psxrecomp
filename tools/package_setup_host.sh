@@ -519,19 +519,12 @@ assert_no_private_payload() {
 assert_no_private_payload
 
 assert_no_private_build_paths() {
-  local hits
-  hits="$(grep -rIEn \
-    -e '[D-Zd-z]:[\\/](Users|Projects)[\\/]' \
-    -e 'C:[\\/]Users[\\/]' \
-    "${STAGE}" 2>/dev/null \
-    | grep -Ev 'C:[\\/]Users[\\/](You|username|\.\.\.)[\\/]' \
-    | grep -Ev 'C:[\\/]Users[\\/]\.\.\.([^A-Za-z0-9_]|$)' \
-    || true)"
-  if [[ -n "${hits}" ]]; then
-    echo "error: staged source contains a developer-machine path:" >&2
-    printf '%s\n' "${hits}" >&2
+  local gate="${SCRIPT_DIR}/check_private_paths.sh"
+  [[ -f "${gate}" ]] || {
+    echo "error: missing private-path gate: ${gate}" >&2
     exit 1
-  fi
+  }
+  bash "${gate}" "${STAGE}"
 }
 
 assert_no_private_build_paths
