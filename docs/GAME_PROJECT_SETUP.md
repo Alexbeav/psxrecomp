@@ -464,7 +464,7 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 | `tools/ci/build_emitters.sh`    | Build `psxrecomp-game` + `psxrecomp-bios`                |
 | `tools/fetch_toolchain.sh`      | Optional download/unpack (embed packs only)              |
 | `tools/stage_setup_sdk.sh`      | Emitters + OpenBIOS + optional `toolchain/` + MinGW DLLs |
-| `tools/bundle_mingw_dlls.sh`    | Windows runtime DLL copy                                 |
+| `tools/bundle_mingw_dlls.sh`    | Compiler-matched Windows runtime DLL copy                |
 | `tools/package_setup_host.sh`   | Full setup-host zip (title args)                         |
 
 
