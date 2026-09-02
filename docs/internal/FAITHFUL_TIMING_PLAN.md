@@ -222,9 +222,11 @@ on a fixed region -> next.
   RAM differs. The second fork review found three more valid issues. Late
   service now consumes every elapsed DMA boundary. Header and link rewrites
   now invalidate cached prepass topology at the exact header-read boundary.
-  The obsolete opt-in polygon-drop filter was removed. The focused regressions,
-  full build, and all 55 enabled runtime tests pass. Two pre-existing tests
-  remain disabled. Fresh Spot and Vampire Hunter D builds also pass their
+  The obsolete opt-in polygon-drop filter was removed. The focused regressions
+  and full build pass. The runtime suite passes 61 of 62 enabled tests. The
+  remaining `mod_runtime_test` crash reproduces on the unchanged upstream base,
+  and two pre-existing tests remain disabled. Fresh Spot and Vampire Hunter D
+  builds also pass their
   600-frame headless gates. Visible software-renderer routes and another fork
   review are still required before the public branch can change.
 
