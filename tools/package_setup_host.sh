@@ -298,9 +298,11 @@ fi
 
 # Exe-relative runtime data (mods catalog, bezels, ...): the runtime resolves
 # these from the exe's own directory, so ship them at the stage root exactly
-# as the build tree staged them. mods/state.toml is the LOCAL machine's mod
-# enable/disable state -- preloaded catalogs ship default-disabled, so a dev
-# machine's selections must never leak into a release.
+# as the build tree staged them. Two things under mods/ belong to the local
+# machine and must never leak into a release: state.toml is this machine's mod
+# enable/disable state (preloaded catalogs ship default-disabled), and
+# installed/ holds .psxmod archives the developer installed as a player would.
+# Only mods/bundled/ is build output, and only build output ships.
 copy_runtime_dir() {
   local name="$1" optional="$2"
   if [[ ! -d "${EXE_DIR}/${name}" ]]; then
@@ -315,36 +317,40 @@ copy_runtime_dir() {
   mkdir -p "${STAGE}/${name}"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --exclude 'state.toml' --exclude 'state.toml.tmp' \
+      --exclude 'installed' --exclude 'installed/***' \
       "${EXE_DIR}/${name}/" "${STAGE}/${name}/"
   else
     cp -a "${EXE_DIR}/${name}/." "${STAGE}/${name}/"
     rm -f "${STAGE}/${name}/state.toml" "${STAGE}/${name}/state.toml.tmp"
+    rm -rf "${STAGE}/${name}/installed"
   fi
   echo "staged runtime dir ${name}/"
 }
 
-# Remove every channel = "developer" package from a staged catalog tree.
-# <tree>/packages/<id>/<version>/manifest.toml is the layout; drop the VERSION
-# directory that declares the channel, then the package directory once it has
-# no versions left. Matching is on the manifest's own declaration so a package
-# carries its own status -- nothing here maintains a list of names to exclude.
-prune_dev_mods() {  # prune_dev_mods <staged-catalog-root>
-  local tree="$1" manifest pkgdir verdir dropped=0
-  [[ -d "${tree}/packages" ]] || return 0
-  while IFS= read -r manifest; do
-    # Tolerate spacing/quoting variants; anchor to a top-level key so a
-    # feature description mentioning the word cannot trigger a drop.
-    if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
-        "${manifest}"; then
-      verdir="$(dirname "${manifest}")"
-      pkgdir="$(dirname "${verdir}")"
-      rm -rf "${verdir}"
-      rmdir "${pkgdir}" 2>/dev/null || true
-      echo "  excluded developer package: $(basename "${pkgdir}")/$(basename "${verdir}")"
-      dropped=$((dropped + 1))
-    fi
-  done < <(find "${tree}/packages" -mindepth 3 -maxdepth 3 -name manifest.toml 2>/dev/null)
-  return 0
+# Drop developer-channel work from a staged catalog tree.
+#
+# Channels are per FEATURE, so this cannot be a grep: a line-anchored match on
+# `channel = "developer"` cannot tell a package-level key from one inside a
+# [[feature]] block, and would drop a whole catalog because one instrument in
+# it is unfinished. mod_channel_filter.py parses the manifest, removes the
+# version directory when nothing in it ships, and otherwise emits a manifest
+# without the developer features and the entries that only served them.
+#
+# Fails closed: if the filter cannot run, packaging stops rather than
+# publishing unfinished work.
+prune_dev_mods() {  # prune_dev_mods <dir of <id>/<version>/manifest.toml>...
+  local python=""
+  for candidate in python3 python; do
+    if command -v "${candidate}" >/dev/null 2>&1; then python="${candidate}"; break; fi
+  done
+  if [[ -z "${python}" ]]; then
+    echo "error: no python3 on PATH; cannot filter developer-channel mods" >&2
+    exit 1
+  fi
+  if ! "${python}" "${SCRIPT_DIR}/mod_channel_filter.py" "$@"; then
+    echo "error: developer-channel filtering failed" >&2
+    exit 1
+  fi
 }
 
 if ((${#RUNTIME_DIRS[@]})); then
@@ -384,14 +390,16 @@ for d in "${PROJECT_DIRS[@]}"; do
 done
 
 # Developer-channel pruning runs AFTER every catalog is staged, and covers BOTH
-# copies: the runtime catalog under mods/packages that the launcher lists, and
+# copies: the runtime catalog under mods/bundled that the launcher lists, and
 # the source catalog under mods/preloaded that the setup-host rebuild re-stages
 # from. Pruning only the first would publish the package in source form and let
-# the player's own rebuild put it straight back.
+# the player's own rebuild put it straight back. mods/packages is the pre-split
+# layout, kept here so an older staged tree is still pruned rather than shipped.
 if [[ "${EXCLUDE_DEV_MODS}" -eq 1 ]]; then
   echo "excluding developer-channel mods from this package"
-  prune_dev_mods "${STAGE}/mods"
-  prune_dev_mods "${STAGE}/mods/preloaded"
+  prune_dev_mods "${STAGE}/mods/bundled" \
+                 "${STAGE}/mods/preloaded/packages" \
+                 "${STAGE}/mods/packages"
   _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
       "${STAGE}" --include=manifest.toml 2>/dev/null || true; } | wc -l)
   if [[ "${_dev_left}" -ne 0 ]]; then

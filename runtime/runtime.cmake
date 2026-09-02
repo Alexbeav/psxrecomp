@@ -1377,8 +1377,14 @@ function(psxrecomp_add_runtime_target target)
         # Clear first: copy_directory MERGES, so a mod deleted from source
         # would otherwise survive in the build output forever and keep
         # appearing on the Mods page (and inflate release catalog assertions).
-        # Scoped to mods/packages, not mods/: state.toml is launcher-owned user
-        # state and must survive a rebuild.
+        #
+        # Scoped to mods/bundled, which is build output and nothing else.
+        # mods/installed/ is the launcher's (player-installed .psxmod archives)
+        # and mods/state.toml is user selection state; a build must never touch
+        # either. Before that split this wipe was scoped to mods/packages,
+        # which ALSO held everything the player had installed -- so a rebuild,
+        # including the one a self-compiling setup release runs on the player's
+        # own machine, deleted their mods without a word.
         set(_psx_builtin_mod_copy_commands "")
         if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
            "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
@@ -1390,17 +1396,17 @@ function(psxrecomp_add_runtime_target target)
                 list(APPEND _psx_builtin_mod_copy_commands
                     COMMAND ${CMAKE_COMMAND} -E copy_directory
                         "${PSXRECOMP_ROOT}/mods/builtin/packages/${_psx_builtin_mod}"
-                        "$<TARGET_FILE_DIR:${target}>/mods/packages/${_psx_builtin_mod}")
+                        "$<TARGET_FILE_DIR:${target}>/mods/bundled/${_psx_builtin_mod}")
             endforeach()
         else()
             list(APPEND _psx_builtin_mod_copy_commands
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${PSXRECOMP_ROOT}/mods/builtin"
-                    "$<TARGET_FILE_DIR:${target}>/mods")
+                    "${PSXRECOMP_ROOT}/mods/builtin/packages"
+                    "$<TARGET_FILE_DIR:${target}>/mods/bundled")
         endif()
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E rm -rf
-                "$<TARGET_FILE_DIR:${target}>/mods/packages"
+                "$<TARGET_FILE_DIR:${target}>/mods/bundled"
             ${_psx_builtin_mod_copy_commands}
             COMMENT "Staging framework-owned mod catalog"
             VERBATIM)
@@ -1418,6 +1424,22 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSX_SHELLWIN_INTERP)
         target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
+    endif()
+
+    # Developer-channel mod features do not ship. A contributor reaches them by
+    # cloning the repo and building locally; a release build must not carry
+    # them at all -- not hidden behind a toggle, absent. Keying the default off
+    # $CI matches what the packagers already do for EXCLUDE_DEV_MODS, so one
+    # rule covers the catalog on disk and the catalog in the binary.
+    if(NOT DEFINED PSX_MOD_DEVELOPER_CHANNEL)
+        if(DEFINED ENV{CI} AND NOT "$ENV{CI}" STREQUAL "")
+            set(PSX_MOD_DEVELOPER_CHANNEL OFF)
+        else()
+            set(PSX_MOD_DEVELOPER_CHANNEL ON)
+        endif()
+    endif()
+    if(PSX_MOD_DEVELOPER_CHANNEL)
+        target_compile_definitions(${target} PRIVATE PSX_MOD_DEVELOPER_CHANNEL=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)

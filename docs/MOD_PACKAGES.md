@@ -12,10 +12,49 @@ The player selects a verified stock BIN/CUE. Resolution produces guarded native
 operations and sparse disc overlays without rewriting or replacing that stock
 image.
 
+## Where packages live
+
+Two catalog roots sit beside the executable, split by who owns the files:
+
+```text
+<exe>/mods/
+  bundled/     build output — the framework's mods/builtin/packages plus the
+               title's mods/preloaded/packages. Every build WIPES and re-stages
+               this tree, so nothing a player owns may live here.
+  installed/   launcher-owned — .psxmod archives installed through the Mods
+               manager. No build ever touches this tree.
+  state.toml   user selection state (enabled features, option values).
+```
+
+Both roots use the same `<package-id>/<version>/manifest.toml` layout and are
+scanned into one catalog, bundled first. An installed package with the same id
+as a bundled one deliberately shadows it and records that it did so, so an
+override is visible rather than decided by directory-iteration order.
+
+A bundled package is not removable from the Mods page: deleting build output
+would succeed and then be undone by the next build. Remove it from the title's
+`mods/preloaded/packages` instead.
+
+Only `bundled/` ships in a release. `installed/` and `state.toml` are the local
+machine's and are excluded by every packager.
+
+**Migration.** A pre-split install has one `mods/packages/` tree holding both.
+The first scan moves each package the current build did not also stage into
+`installed/`, drops the rest as redundant build output, and removes the old
+tree — but only once every version directory has been dealt with. Anything that
+could not be moved is left exactly where it is and reported.
+
+A manifest that fails to parse is never skipped silently: it is reported by
+`scan_errors()` and logged, naming the path and the reason.
+
 ## Feature manifest
 
+Write new manifests at the current format version, which is **6**. Older
+versions stay readable so installed packages survive an update, and each
+section below notes the version a field first required.
+
 ```toml
-format_version = 1
+format_version = 6
 id = "example.localization"
 version = "1.2.0"
 name = "Example Localization Pack"
@@ -261,31 +300,63 @@ Sparse fields and integer predicates are still pre-boot plan construction.
 They do not provide a general expression evaluator, masks, arithmetic beyond
 the checked field addend, package code execution, or per-frame dispatch.
 
-## Developer channel
+## Channels
 
-A package may declare itself unfinished:
+A feature declares how finished it is. Format 6 puts `channel` on the
+**feature**, not the package:
 
 ```toml
-format_version = 5
+format_version = 6
 id = "example.enhancements"
-channel = "developer"
+
+[[feature]]
+id = "widescreen"
+channel = "experimental"     # ships, badged, default off
+
+[[feature]]
+id = "hook-trace"
+channel = "developer"        # absent from any release build
 ```
 
-`channel = "developer"` marks work in progress. Such a package is staged next
-to the executable by an ordinary build and ships in a locally exported
-package, so it can be tested exactly as a player would see it — but release
-packaging drops it, so unfinished work is never published.
+| Channel | Ships | In the launcher |
+|---|---|---|
+| `stable` (default) | yes | no tag — the absence is the stable case |
+| `experimental` | yes | amber `EXP` tag, and a line saying it is unvalidated |
+| `developer` | **no** | secondary-accent `DEV` tag; only ever visible on a local build |
 
-Packaging defaults the exclusion from `$CI`: on under any CI provider, off
+An absent `channel` means `stable`. A package may still declare one, which its
+features inherit unless they state their own — which is how a format-5 manifest
+carrying a package-level `channel` keeps working unchanged.
+
+**Why the feature and not the package.** A package is the installation and
+**trust** boundary; how finished one of its features is has nothing to do with
+that. When the marker sat on the package, a catalog holding one player-ready
+feature and one developer instrument had to declare itself entirely
+developer — so neither shipped, and the documented workaround was to split the
+catalog into two packages. Channels per feature remove that trade.
+
+**"Developer does not ship" means absent, not hidden.** Two mechanisms, one per
+catalog root:
+
+- **`bundled/` is filtered when it is staged.** `tools/mod_channel_filter.py`
+  emits a manifest without the developer features and without the `[[option]]`,
+  `[[patch]]`, `[[overlay]]`, `[[plugin]]`, `[[resource]]` and `[[constraint]]`
+  entries that only served them; a package whose every feature is developer has
+  its directory removed. This is generation, not rewriting: the staged catalog
+  is build output and the author's manifest in the repo is never touched.
+- **`installed/` is refused at load.** A third-party archive is never modified,
+  so the runtime declines to surface developer features from one instead.
+
+The runtime gate is the build definition `PSX_MOD_DEVELOPER_CHANNEL`, which
+`runtime.cmake` sets for a local build and clears under `$CI`. A contributor
+reaches developer features by cloning the repo and building; a release build
+carries neither the features nor their operations, so a stale `state.toml`
+naming one cannot reach them either.
+
+Packaging defaults the exclusion from `$CI` — on under any CI provider, off
 locally. `--exclude-dev-mods` / `--include-dev-mods` (or `EXCLUDE_DEV_MODS=0|1`)
 override it, and `project_studio build export --exclude-dev-mods` reproduces
-what a release would contain. Any absent `channel` means stable.
-
-Pruning removes the whole package directory. A manifest is never rewritten
-during packaging — a package's content stays exactly what its author shipped,
-so the maturity marker is package-level. Split a player-ready feature into its
-own stable package rather than promoting a catalog that still holds
-in-progress work.
+what a release would contain.
 
 ## Trusted static plugins
 

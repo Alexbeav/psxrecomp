@@ -620,7 +620,7 @@ chmod +x "$ROOT/tools/sync_symbols.py"
 if [ -f "$TEMPLATE_DIR/raid-discord.png" ]; then
     cp "$TEMPLATE_DIR/raid-discord.png" "$ROOT/.github/raid-discord.png"
 fi
-# Empty mod catalog tree (runtime copies mods/preloaded → beside the exe as mods/).
+# Empty mod catalog tree (build stages mods/preloaded/packages → <exe>/mods/bundled).
 cat > "$ROOT/mods/preloaded/README.md" <<'EOF'
 # Preloaded mods
 
@@ -632,9 +632,15 @@ packages/<package-id>/<version>/
   …
 ```
 
-Build wiring copies `mods/preloaded` next to the game executable as `mods/`.
-Install player `.psxmod` archives through the launcher Mods manager instead of
-committing them here. See `psxrecomp/docs/MOD_PACKAGES.md`.
+Build wiring copies `mods/preloaded/packages` next to the game executable as
+`mods/bundled/`. That tree is build output: every build wipes and re-stages it,
+so nothing you place there by hand survives.
+
+Player-installed `.psxmod` archives live in `mods/installed/`, which the
+launcher owns and no build ever touches. Install them through the launcher Mods
+manager rather than committing them here.
+
+See `psxrecomp/docs/MOD_PACKAGES.md`.
 EOF
 : > "$ROOT/mods/preloaded/packages/.gitkeep"
 

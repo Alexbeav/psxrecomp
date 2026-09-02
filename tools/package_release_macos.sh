@@ -40,7 +40,7 @@
 #   --mods-src DIR     override catalog source   (default: the build tree's
 #                      mods/, which carries framework builtins AND the title's
 #                      own packages; per-machine state.toml is stripped)
-#   --require-mod PKG  path under mods/packages that must exist (repeatable)
+#   --require-mod PKG  path under mods/bundled that must exist (repeatable)
 #   --data FILE        file the runtime reads BESIDE the executable, relative to
 #                      repo, e.g. keybinds.ini (repeatable)
 #   --doc FILE         extra doc to ship, relative to repo (repeatable)
@@ -142,7 +142,7 @@ cp "$BIN" "$APPDIR/Contents/MacOS/$BIN_NAME"
 # they must be reachable from Contents/MacOS. They cannot literally live there:
 # codesign treats every non-executable under Contents/MacOS as a nested-code
 # candidate and rejects the whole bundle ("bundle format unrecognized, invalid,
-# or unsuitable") — mods/packages/<pkg>/<version>/ parses as a versioned bundle,
+# or unsuitable") — mods/bundled/<pkg>/<version>/ parses as a versioned bundle,
 # assets/img/*.tga as stray nested code. So data lives in Contents/Resources and
 # Contents/MacOS carries symlinks: codesign seals a symlink as a symlink instead
 # of descending into it, and runtime path resolution is unchanged.
@@ -189,19 +189,22 @@ _mod_manifests=$(find "$APPDIR/Contents/Resources/mods" -name manifest.toml 2>/d
     || die "staged mods/ contains no manifest.toml; the catalog would ship empty"
 [ -z "$(find "$APPDIR/Contents/Resources/mods" -name 'state.toml*' 2>/dev/null)" ] \
     || die "per-machine mods/state.toml survived staging"
-# Developer-channel packages (channel = "developer") are unfinished work that
-# ships with local builds but must not be published. Prune by PACKAGE
-# directory; never rewrite a manifest during packaging.
+# Developer-channel work is unfinished: it ships with local builds and must
+# never be published. Channels are per FEATURE, so this cannot be a grep -- a
+# line-anchored match cannot tell a package-level key from one inside a
+# [[feature]] block, and would drop a whole catalog over one instrument.
+# mod_channel_filter.py parses instead, dropping the version directory when
+# nothing in it ships and otherwise emitting a manifest without the developer
+# features. The staged catalog is build output, so emitting it filtered is
+# generation; the author's manifest in the repo is never touched.
 if [ "${EXCLUDE_DEV_MODS:-0}" = "1" ]; then
     note "excluding developer-channel mods"
-    find "$APPDIR/Contents/Resources/mods/packages" -mindepth 3 -maxdepth 3 \
-        -name manifest.toml 2>/dev/null | while read -r m; do
-        if grep -Eq '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' "$m"; then
-            v=$(dirname "$m"); p=$(dirname "$v")
-            rm -rf "$v"; rmdir "$p" 2>/dev/null || true
-            note "  excluded developer package: $(basename "$p")/$(basename "$v")"
-        fi
-    done
+    command -v python3 >/dev/null 2>&1 \
+        || die "no python3 on PATH; cannot filter developer-channel mods"
+    python3 "$(dirname "$0")/mod_channel_filter.py" \
+        "$APPDIR/Contents/Resources/mods/bundled" \
+        "$APPDIR/Contents/Resources/mods/packages" \
+        || die "developer-channel filtering failed"
     _dev_left=$( { grep -rlE '^[[:space:]]*channel[[:space:]]*=[[:space:]]*"developer"[[:space:]]*$' \
         "$APPDIR" --include=manifest.toml 2>/dev/null || true; } | wc -l)
     [ "$_dev_left" -eq 0 ] || die "developer manifest(s) survived pruning: $_dev_left"
@@ -334,8 +337,8 @@ note "bundled OpenBIOS (512 KiB) + MIT notice"
 # 4. Required mod packages. A silently mod-less launcher looks fine but has no
 #    Mods page at all, which is indistinguishable from the feature being cut.
 for m in "${REQUIRE_MODS[@]}"; do
-    [ -f "$APPDIR/Contents/Resources/mods/packages/$m" ] \
-        || die "required mod package missing: mods/packages/$m"
+    [ -f "$APPDIR/Contents/Resources/mods/bundled/$m" ] \
+        || die "required mod package missing: mods/bundled/$m"
 done
 [ ${#REQUIRE_MODS[@]} -eq 0 ] || note "mod catalog: ${#REQUIRE_MODS[@]} required package(s) present"
 

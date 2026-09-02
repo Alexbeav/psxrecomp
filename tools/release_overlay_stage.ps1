@@ -298,17 +298,25 @@ silently drops them (pattern and rationale from MegaManX6).
 #>
 function Add-ModCatalog {
     param(
-        [Parameter(Mandatory)][string]$BuildPath,          # build dir (has mods/packages)
+        [Parameter(Mandatory)][string]$BuildPath,          # build dir (has mods/bundled)
         [Parameter(Mandatory)][string]$Stage,
         [string]$GameModSource      = "",                  # <repo>/mods/preloaded
         [string]$FrameworkModSource = ""                   # <framework>/mods/builtin
     )
     $ModsSrc = Join-Path $BuildPath "mods"
-    if (-not (Test-Path (Join-Path $ModsSrc "packages"))) {
+    if (-not (Test-Path (Join-Path $ModsSrc "bundled"))) {
         throw "No mod catalog staged at $ModsSrc - build the runtime first (the framework stages its builtin packages there)"
     }
     Copy-Item -Recurse -Force $ModsSrc (Join-Path $Stage "mods")
-    $StagedPkgDir = Join-Path $Stage "mods\packages"
+    # mods/bundled is build output and ships. Two things under mods/ belong to
+    # this machine and must never reach a release: installed/ holds .psxmod
+    # archives the developer installed as a player would, and state.toml is
+    # their own enable/disable selection over a catalog that ships default-off.
+    $StagedMods = Join-Path $Stage "mods"
+    Remove-Item -Recurse -Force (Join-Path $StagedMods "installed") -ErrorAction SilentlyContinue
+    Remove-Item -Force (Join-Path $StagedMods "state.toml") -ErrorAction SilentlyContinue
+    Remove-Item -Force (Join-Path $StagedMods "state.toml.tmp") -ErrorAction SilentlyContinue
+    $StagedPkgDir = Join-Path $Stage "mods\bundled"
 
     $stagedIds = @(Get-ChildItem $StagedPkgDir -Directory -ErrorAction SilentlyContinue |
                    ForEach-Object { $_.Name })
