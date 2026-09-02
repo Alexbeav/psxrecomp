@@ -93,6 +93,16 @@ void psx_rfe_mark_escape(void) {
     overlay_flush_cycles();
     g_cbs.rfe_mark_escape();
 }
+/* Stale-static guard (ABI v22). The emitter emits this at block entry and
+ * before every direct jal, but it is DEFINED IN THE GENERATED DISPATCH SHARD
+ * (executable side), so an overlay DLL cannot resolve it without this shim.
+ * Its absence is what made 107 shards fail to link on the 2026-09-02 bump.
+ * NULL-guarded: returning 0 sends the guest down the dispatcher path, which is
+ * slower but never wrong -- the opposite choice (returning 1) would let an
+ * overlay run native code the guard was trying to reject. */
+int psx_game_text_native_ok(uint32_t addr) {
+    return g_cbs.game_text_native_ok ? g_cbs.game_text_native_ok(addr) : 0;
+}
 /* Faithful-timing functions (ABI v9): overlay code built with PSX_ENABLE_BLOCK_CYCLES
  * emits these; forward to the runtime's real impls so native overlays charge cycles on
  * the SAME timeline as the interp/BIOS (a local copy would diverge). NULL-guarded so a
