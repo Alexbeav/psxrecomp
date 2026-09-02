@@ -8,14 +8,15 @@ cmake --build recompiler/build
 cd recompiler/build && ctest --output-on-failure
 ```
 
-That is the whole thing. The suite has 66 active tests and three disabled tests.
+That is the whole thing. The suite has 69 active tests and three disabled tests.
 It needs **no BIOS dump, no disc image, and no generated code**. A plain
 recompiler build is enough. Run this check before you open a PR.
 
-The `psxrecomp-game` build writes the codegen hash to its build directory and
-to `runtime/include/overlay_codegen_hash.h`. Git ignores the runtime header.
-The overlay tests use it to make sure that the recompiler matches the runtime
-cache tag.
+The `psxrecomp-game` build writes both codegen-hash headers inside its build
+directory. A standalone runtime build writes its header inside the runtime
+build directory. Tests verify that neither build writes into the source tree.
+The setup packager stages the exact emitter-build header so overlay tools can
+still verify that the recompiler matches the runtime cache tag.
 
 Until 2026-07-27 no document in this repository mentioned `ctest`, `pytest`, or
 how to run a test at all, so the suite was effectively invisible. If you add a

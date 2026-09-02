@@ -75,7 +75,7 @@ shards up automatically.
 | `--captures` | The `overlay_captures.json` to read. If the runtime set `PSX_OVERLAY_CAPTURES`, that wins; for a manual run pass this explicitly. |
 | `--game-toml` | Reads the game id (used in the cache path) and the `[widescreen]` site lists. |
 | `--recompiler` | `psxrecomp-game.exe`. **Must be built from the same source tree** — a stale binary is rejected up front (see "Staleness guard"). |
-| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version + hash that namespace the cache. Also supplies the default `--project-root`. |
+| `--runtime-include` | The runtime `include/` dir. Supplies the codegen version and the packaged fallback hash that namespace the cache. A development run first uses the exact emitter build's adjacent hash header. Also supplies the default `--project-root`. |
 | `--project-root` | The root the recompiler resolves the BIOS profile against. Defaults to the framework root derived from `--runtime-include`, which is right for every normal invocation — pass it only if that derivation is wrong. See "Packaged configs" below. |
 | `--out-dir` | Cache root. Point it at the `cache` folder next to the exe. |
 | `--gcc` | Absolute path to your mingw gcc, e.g. `C:/msys64/mingw64/bin/gcc.exe`. gcc gives the best-optimized shards. |
@@ -134,9 +134,10 @@ cache for everything else.
 ## Staleness guard (read this if it refuses to run)
 
 The recompiler *binary* and the codegen *source* are tied together by a hash.
-Before compiling anything, the script runs `psxrecomp-game.exe --codegen-hash`
-and compares it to the hash baked into `--runtime-include`. If they differ — or
-the binary is too old to support the flag — it **aborts** rather than silently
+Before compiling anything, the script runs `psxrecomp-game.exe --codegen-hash`.
+A development run compares it with the build-owned header beside that exact
+emitter. A packaged run falls back to the staged `--runtime-include` header.
+If they differ — or the binary is too old to support the flag — it **aborts** rather than silently
 emitting shards with stale codegen (a real bug class: read-tag matches,
 semantics are old). The fix is always the same:
 

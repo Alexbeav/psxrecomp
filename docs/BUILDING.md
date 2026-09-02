@@ -116,9 +116,11 @@ cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build runtime/build --target psx-runtime
 ```
 
-The recompiler build also writes `runtime/include/overlay_codegen_hash.h`.
-Git ignores this generated file. The runtime and overlay compiler use the
-file to reject a stale `psxrecomp-game` binary.
+The recompiler writes `runtime/include/overlay_codegen_hash.h` inside its build
+directory. A runtime build writes its copy inside that runtime build directory.
+Neither build changes the source checkout. Setup packaging copies the exact
+recompiler-built header into the staged SDK. The runtime and overlay compiler
+use the value to reject a stale `psxrecomp-game` binary.
 
 On Linux/macOS, `tools/setup_dev.sh` performs the same source-checkout setup:
 
@@ -139,7 +141,7 @@ After step 1 above — no BIOS or disc needed — verify the tree is sane:
 cd recompiler/build && ctest --output-on-failure
 ```
 
-The suite has 66 active tests and three disabled tests. See
+The suite has 69 active tests and three disabled tests. See
 [`TESTING.md`](TESTING.md).
 
 On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generator

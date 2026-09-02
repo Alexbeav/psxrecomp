@@ -3425,7 +3425,7 @@ def check_full_candidate_cli_fastpath(recompiler):
         # the assertion (issue #72).
         leaf = (cache_root / 'CYCT-00101' / 'gcc' / MOD.cache_arch_abi() /
                 f'cg{MOD.codegen_ver(str(runtime_include))}_'
-                f'{MOD.codegen_hash(str(runtime_include)):08x}_'
+                f'{MOD.codegen_hash(str(runtime_include), recompiler):08x}_'
                 f'gc{MOD.overlay_config_hash(recompiler, str(game_toml)):08x}_f0')
         leaf.mkdir(parents=True)
         pair_id = 0x123456789ABCDEF0

@@ -557,7 +557,10 @@ else()
     set(PSXRECOMP_LOBBY_INCLUDE_DIR "")
 endif()
 
+set(PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_codegen_include")
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
+    ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
     ${PSXRECOMP_ROOT}/runtime/include
     ${PSXRECOMP_ROOT}/recompiler/src
     ${PSXRECOMP_ROOT}/recompiler/include
@@ -1128,13 +1131,15 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     # ---- overlay codegen hash (auto cache key) -----------------------------
-    # Hash the recompiler's codegen sources into runtime/include/overlay_codegen_hash.h
-    # (gitignored) so the overlay cache path carries cg<N>_<hash>: any emitter change
+    # Hash the recompiler's codegen sources into a build-owned include directory
+    # so the overlay cache path carries cg<N>_<hash> without writing into source:
+    # any emitter change
     # auto-invalidates the cache instead of silently reusing a stale-but-cgN DLL (the
     # v0.3.0 black-screen). The loader (via overlay_api.h) and compile_overlays.py both
     # read the same generated PSX_OVERLAY_CODEGEN_HASH, so they never drift. Defined
     # once (shared across psx-runtime/psx-beetle); idempotent write avoids rebuilds.
-    set(_codegen_hash_hdr ${PSXRECOMP_ROOT}/runtime/include/overlay_codegen_hash.h)
+    set(_codegen_hash_hdr
+        ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}/overlay_codegen_hash.h)
     if(NOT TARGET psxrecomp_codegen_hash)
         # Canonical source list shared with recompiler/CMakeLists.txt (which bakes
         # the SAME hash into psxrecomp-game for the --codegen-hash staleness guard).
@@ -1143,6 +1148,8 @@ function(psxrecomp_add_runtime_target target)
         set(_codegen_srcs ${PSXRECOMP_CODEGEN_HASH_SRCS})
         add_custom_command(
             OUTPUT  ${_codegen_hash_hdr}
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
             COMMAND ${CMAKE_COMMAND} -DOUT=${_codegen_hash_hdr} "-DSRCS=${_codegen_srcs}"
                     -P ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake
             DEPENDS ${_codegen_srcs} ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake

@@ -92,27 +92,48 @@ def overlay_candidate_cap(runtime_include: str) -> int:
     return value
 
 
-def codegen_hash(runtime_include: str) -> int:
-    """Parse PSX_OVERLAY_CODEGEN_HASH from the build-generated overlay_codegen_hash.h
-    (next to overlay_api.h). Folded into the cache path as cg<N>_<hash> so ANY
-    emitter change auto-invalidates the cache (no stale-but-cgN reuse). Falls back
-    to 0 when the header is absent (a tree not yet built) — matching overlay_api.h's
-    __has_include fallback, so the loader and compiler still agree on the path."""
-    hdr = os.path.join(runtime_include, 'overlay_codegen_hash.h')
-    try:
-        with open(hdr) as f:
-            m = re.search(r'#define\s+PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]+)', f.read())
-        if m:
-            return int(m.group(1), 16)
-    except FileNotFoundError:
-        pass
+def codegen_hash(runtime_include: str, recompiler: str = None) -> int:
+    """Read the hash owned by the exact emitter build when available.
+
+    A development build writes the header below the recompiler build directory.
+    Multi-config generators put the executable one directory lower. A packaged
+    SDK has no emitter-adjacent build header, so it falls back to the staged
+    runtime include directory. This prevents an ignored source-tree header from
+    overriding the exact recompiler binary while preserving package use.
+    """
+    candidates = []
+    if recompiler:
+        binary_dir = os.path.dirname(os.path.abspath(recompiler))
+        candidates.extend([
+            os.path.join(binary_dir, 'runtime', 'include',
+                         'overlay_codegen_hash.h'),
+            os.path.join(os.path.dirname(binary_dir), 'runtime', 'include',
+                         'overlay_codegen_hash.h'),
+        ])
+    candidates.append(os.path.join(runtime_include, 'overlay_codegen_hash.h'))
+
+    seen = set()
+    for hdr in candidates:
+        normalized = os.path.normcase(os.path.abspath(hdr))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            with open(hdr) as f:
+                m = re.search(
+                    r'#define\s+PSX_OVERLAY_CODEGEN_HASH\s+0x([0-9A-Fa-f]+)',
+                    f.read())
+            if m:
+                return int(m.group(1), 16)
+        except FileNotFoundError:
+            continue
     return 0
 
 
 def verify_recompiler_matches_tag(recompiler: str, tag_hash: int) -> None:
     """Stale-recompiler-binary guard. The cg tag hash is computed from the
-    EMITTER SOURCES (via --runtime-include's overlay_codegen_hash.h), but the
-    code is emitted by the --recompiler BINARY — nothing else ties the two.
+    emitter build header (or the staged package header), but the code is emitted
+    by the --recompiler BINARY — nothing else ties the two.
     A recompiler built before the last emitter change happily emits OLD code
     that gets stamped with the CURRENT tag: read tag == write tag, content
     stale (the 2026-07-01 Tomba pause-menu wedge; loaded-save scene shards
@@ -5335,7 +5356,8 @@ def main():
 
     # Stale-recompiler-binary guard — BOTH modes (static overlays are just as
     # wrong when emitted by a stale binary; they simply have no tag to hide in).
-    verify_recompiler_matches_tag(args.recompiler, codegen_hash(args.runtime_include))
+    verify_recompiler_matches_tag(
+        args.recompiler, codegen_hash(args.runtime_include, args.recompiler))
 
     if args.static:
         static_out = os.path.join(args.out_dir, 'overlays_static.c')
@@ -5350,7 +5372,7 @@ def main():
         # build never reuses a stale DLL, old versions coexist). MUST match
         # overlay_loader.c scan_cache_dir(). Pre-1.0: no legacy fallback.
         cg = codegen_ver(args.runtime_include)
-        ch = codegen_hash(args.runtime_include)
+        ch = codegen_hash(args.runtime_include, args.recompiler)
         gh = overlay_config_hash(args.recompiler, args.game_toml)
         cache_dir = os.path.join(args.out_dir, game_id, args.compiler, cache_arch_abi(),
                                  f'cg{cg}_{ch:08x}_gc{gh:08x}_f{int(args.flavor)}')
