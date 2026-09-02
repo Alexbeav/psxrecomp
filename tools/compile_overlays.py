@@ -192,14 +192,17 @@ def overlay_config_hash(recompiler: str, game_toml: str) -> int:
     return int(value, 16)
 
 
+_TARGET_OS = None
+
+def set_target_os(target_os: str | None) -> None:
+    global _TARGET_OS
+    _TARGET_OS = target_os
+
 def is_windows() -> bool:
-    """True on native Windows AND under MSYS/Cygwin/MinGW pythons.
-    platform.system() there returns 'MSYS_NT-...'/'CYGWIN_NT-...', NOT
-    'Windows' — the naive check filed a whole session's overlay DLLs under
-    gcc/linux-x64/ while the Windows loader read gcc/win-x64/: the runtime
-    interpreted 'covered' functions forever (Tomba2 attract ran ~half its
-    instruction volume on the interpreter, 2026-07-02) while autocompile
-    kept reporting 'already covered - no new native code to build'."""
+    if _TARGET_OS == 'win':
+        return True
+    if _TARGET_OS in ('linux', 'macos'):
+        return False
     return (os.name == 'nt'
             or platform.system() == 'Windows'
             or platform.system().startswith(('MSYS', 'CYGWIN', 'MINGW')))
@@ -5445,7 +5448,16 @@ def main():
                          'fragments, and filenames all key on the region), '
                          'captures within one region stay ordered. 1 = the '
                          'sequential path. --static always runs sequential.')
+    ap.add_argument('--target-os', choices=['auto', 'win', 'linux', 'macos'], default='auto',
+                    help='target operating system for compiled overlay shards (default: auto)')
     args = ap.parse_args()
+    target_os = args.target_os
+    if target_os == 'auto':
+        if 'mingw' in args.gcc.lower() or 'w64' in args.gcc.lower() or args.gcc.lower().endswith('.exe'):
+            target_os = 'win'
+        else:
+            target_os = None
+    set_target_os(target_os)
     forced_interiors = {
         (int(v, 0) & 0x1FFFFFFF) | 0x80000000
         for v in args.force_interior
