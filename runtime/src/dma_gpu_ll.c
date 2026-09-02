@@ -2,13 +2,12 @@
 
 #include <string.h>
 
-/* PSX DMA2 linked-list timing used by the clean-room state machine. The header
- * read costs eight guest clocks. A non-empty node then has five setup clocks,
- * followed by one clock per payload word. Keeping these as separate events is
- * important: the guest CPU can change a packet after it starts DMA and before
- * DMA reaches that packet. */
-#define DMA_GPU_LL_HEADER_CYCLES 8u
-#define DMA_GPU_LL_SETUP_CYCLES  5u
+/* Charge one guest clock for each 32-bit word read: one header per node and
+ * one clock per payload word. There is no separate setup charge. Header and
+ * payload reads remain separate events so guest writes can affect an active
+ * transfer before DMA reaches the changed word. */
+#define DMA_GPU_LL_HEADER_CYCLES 1u
+#define DMA_GPU_LL_SETUP_CYCLES  0u
 
 static uint32_t resolve_address(const DMAGPULinkedListOps *ops, void *opaque,
                                 uint32_t address) {
@@ -130,6 +129,9 @@ void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,
             return;
         }
 
-        if (!state->active || cycles == 0) return;
+        if (!state->active) return;
+        /* Consume a zero-cost phase transition in this service call. A later
+         * read still waits for its own non-zero event. */
+        if (cycles == 0 && state->cycles_remaining != 0) return;
     }
 }
