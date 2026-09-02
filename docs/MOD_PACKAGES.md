@@ -47,6 +47,68 @@ could not be moved is left exactly where it is and reported.
 A manifest that fails to parse is never skipped silently: it is reported by
 `scan_errors()` and logged, naming the path and the reason.
 
+## How `bundled/` gets staged (titles: read this)
+
+**The framework owns the layout. A title declares a directory, never a path
+shape.** Hand the title's catalog to `psxrecomp_add_runtime_target()`:
+
+```cmake
+set(MYGAME_PRELOADED_MODS "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded")
+
+psxrecomp_add_runtime_target(psx-runtime
+    ...
+    PRELOADED_MODS_DIR "${MYGAME_PRELOADED_MODS}"
+)
+```
+
+`PRELOADED_MODS_DIR` names a directory shaped like
+`<dir>/packages/<package-id>/<version>/manifest.toml`, optionally with a
+`README.md` beside `packages/`. On every build of that target the framework:
+
+1. wipes `<exe-dir>/mods/bundled` (build output only — never `installed/` or
+   `state.toml`),
+2. removes exactly the ids it is about to stage from any pre-existing
+   `mods/packages`, which migrates a build directory made before the split
+   while leaving a player's own legacy packages for `migrate_legacy_root()`,
+3. copies the framework's `mods/builtin/packages/<id>` then the title's
+   `<dir>/packages/<id>` into `mods/bundled/<id>` — in that order, so a title
+   may deliberately OVERRIDE a builtin at the same id and version (Tomba 2's
+   Italian runtime ships localized `psx.*` manifests exactly this way),
+4. copies `<dir>/README.md` to `mods/README.md`, and
+5. verifies the result with `runtime/psx_check_mod_catalog.cmake`.
+
+Pass `PRELOADED_MODS_DIR NONE` to declare that a target intentionally ships no
+game catalog. A target built with `COSIM` stages nothing: it has no launcher,
+and it shares an output directory with the real runtime.
+
+**Do NOT write your own `copy_directory` into `<exe-dir>/mods`.** Five titles
+did, and the reason it is now a build error is worth stating: a hand-written
+copy names the destination as a *string*, so when framework commit `4cc04be3`
+renamed the staged catalog from `mods/packages` to `mods/bundled`, all five
+kept staging into a directory nothing reads. Nothing failed to configure,
+compile or link — the coupling has no compile-time or link-time consumer — and
+the defect surfaced only when a release packager ran, in a different
+repository, on a later day. Two guards now close that window:
+
+* **configure time** — a project with packages under
+  `mods/preloaded/packages` that does not declare `PRELOADED_MODS_DIR` is a
+  `FATAL_ERROR`, naming the packages and the argument to add.
+* **build time** — `psx_check_mod_catalog.cmake` runs as the *last* `POST_BUILD`
+  step (registered through `cmake_language(DEFER)`, so it lands after anything
+  the title registered) and fails the build if a declared package did not reach
+  `mods/bundled`, or if any package this build stages turned up under
+  `mods/packages`. It is also registered as the ctest
+  `psx_staged_mod_catalog_test`.
+
+Both are exercised by `runtime/tests/test_mod_catalog_layout.py`.
+
+The release packagers assert the same invariant one layer out:
+`Add-ModCatalog` in `tools/release_overlay_stage.ps1` reads `mods/bundled` and
+refuses to package when a package the *sources* define is missing from it. It
+asserts that invariant rather than a hard-coded count, because a count
+describes only one side of a catalog two repositories contribute to and goes
+stale the moment either side gains a mod.
+
 ## Feature manifest
 
 Write new manifests at the current format version, which is **6**. Older

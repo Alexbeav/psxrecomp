@@ -267,8 +267,14 @@ YourGameRecomp/                 # your git repo
 │   ├── boxart.tga              # optional: --fetch-boxart (libretro Named_Boxarts)
 │   └── BOXART_SOURCE.txt       # attribution URL
 ├── mods/preloaded/             # scaffold: empty catalog for shipped .psxmod packages
-│   ├── README.md
+│   ├── README.md               # staged to <exe>/mods/README.md
 │   └── packages/               # packages/<id>/<version>/manifest.toml …
+│                               # declared to the framework as
+│                               #   PRELOADED_MODS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded"
+│                               # which stages it into <exe>/mods/bundled beside
+│                               # the framework's builtins. NEVER copy it with
+│                               # your own POST_BUILD command — see
+│                               # docs/MOD_PACKAGES.md ("How bundled/ gets staged").
 ├── scripts/
 │   └── package_setup_release.sh   # scaffold fills from package_setup_release.sh.in
 ├── .github/workflows/
