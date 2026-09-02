@@ -510,18 +510,12 @@ assert_no_private_payload() {
 assert_no_private_payload
 
 assert_no_private_build_paths() {
-  local hits
-  hits="$(grep -rIEn \
-    -e '[D-Zd-z]:[\\/](Users|Projects)[\\/]' \
-    -e 'C:[\\/]Users[\\/]' \
-    "${STAGE}" 2>/dev/null \
-    | grep -Ev 'C:[\\/]Users[\\/](You|username|\.\.\.)[\\/]' \
-    || true)"
-  if [[ -n "${hits}" ]]; then
-    echo "error: staged source contains a developer-machine path:" >&2
-    printf '%s\n' "${hits}" >&2
+  local gate="${SCRIPT_DIR}/check_private_paths.sh"
+  [[ -f "${gate}" ]] || {
+    echo "error: missing private-path gate: ${gate}" >&2
     exit 1
-  fi
+  }
+  bash "${gate}" "${STAGE}"
 }
 
 assert_no_private_build_paths
@@ -554,14 +548,11 @@ fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
 
-<<<<<<< HEAD
-=======
 # The SDK stage runs after the first scrub. Check the complete package tree
 # again so future SDK changes cannot restore a forbidden file.
 assert_no_private_payload
 assert_no_private_build_paths
 
->>>>>>> 06d8121e7 (Prevent private paths in setup packages)
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}

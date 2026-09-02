@@ -437,6 +437,10 @@ Retro / the wizard download `cmake-clang-v1` from
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
 
+The setup packager removes owned-input and player-state files, including backup
+suffixes. It checks the staged tree after adding the SDK and rejects developer
+machine paths. Audit the final ZIP independently before publication.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |

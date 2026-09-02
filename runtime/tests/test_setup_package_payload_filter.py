@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
+PRIVATE_PATH_GATE = ROOT / "tools" / "check_private_paths.sh"
 ATTRIBUTES = ROOT / ".gitattributes"
 
 
@@ -20,6 +21,8 @@ def main() -> None:
     assert text.count("assert_no_private_payload") >= 3
     assert "assert_no_private_build_paths" in text
     assert text.count("assert_no_private_build_paths") >= 3
+    assert 'check_private_paths.sh"' in text
+    assert 'bash "${gate}" "${STAGE}"' in text
     for private_source in (
         "CLAUDE.md",
         "docs/internal",
@@ -28,7 +31,10 @@ def main() -> None:
         "recomp-ui/docs/HANDOFF.md",
     ):
         assert private_source in text
-    assert "developer-machine path" in text
+    gate_text = PRIVATE_PATH_GATE.read_text(encoding="utf-8")
+    assert "developer-machine path" in gate_text
+    for token in ("Users", "Projects", "AgentData", "OneDrive", "Share", "/mnt/"):
+        assert token in gate_text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
     print("setup package payload filter test: PASS")
 
