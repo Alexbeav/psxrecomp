@@ -12396,9 +12396,13 @@ int main(int argc, char** argv) {
                      * 5% normalization then silently reduced to 15%. */
                     ls.deadzone[i] =
                         (player_deadzone[i] * 100 + 32767 / 2) / 32767;
-                    ls.pad_mode[i] = (ls.player_src[i] == 1)
-                                        ? PSXRecompV4::PAD_MODE_DIGITAL
-                                        : player_mode[i];
+                    /* The seat's configured mode, verbatim. A keyboard seat
+                     * is NOT rewritten to DIGITAL on the way in: that told the
+                     * launcher a lie about what the seat is configured for,
+                     * and the launcher then handed the lie back for us to
+                     * persist. The keyboard's runtime behaviour does not
+                     * depend on this value (effective_player_mode). */
+                    ls.pad_mode[i] = player_mode[i];
                     ls.player_gamepad_guid[i][0] = '\0';
                     if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                         d != "gamepad" && d != "controller") {
@@ -12674,21 +12678,30 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < n; ++i) {
                         if (ls.player_src[i] == 1) {
                             player_device[i] = "keyboard";
-                            /* Keyboard is always a digital pad at runtime. */
-                            player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
                         } else if (ls.player_src[i] == 0) {
                             player_device[i] = "none";
-                            player_mode[i] = ls.pad_mode[i];
                         } else if (ls.player_gamepad_guid[i][0]) {
                             player_device[i] = ls.player_gamepad_guid[i];
-                            player_mode[i] = ls.pad_mode[i];
                         } else if (PSXRecompV4::launcher_source_from_device(
                                        player_device[i]) <= 1) {
                             player_device[i] = "gamepad";
-                            player_mode[i] = ls.pad_mode[i];
-                        } else {
-                            player_mode[i] = ls.pad_mode[i];
                         }
+                        /* Mode is resolved separately from the device, because
+                         * the launcher round-trip is the SECOND way a locked
+                         * game could boot an unsupported pad type: the clamp at
+                         * the top of main() runs BEFORE the launcher, so
+                         * ls.pad_mode[] (seeded from settings.toml, or from a
+                         * selector the player never saw because lock_mode hides
+                         * it) would otherwise win here -- and then be persisted
+                         * into seed.p_mode[] a few lines down. Defense in depth:
+                         * the launcher itself no longer corrupts a locked mode
+                         * (recomp-ui launcher_model.c), but the host must not
+                         * depend on that to boot the declared pad type. */
+                        player_mode[i] =
+                            PSXRecompV4::resolve_player_mode_after_launcher(
+                                ls.pad_mode[i], ctrl_lock_mode,
+                                ctrl_locked_mode[i],
+                                g_mod_controller_mode_override[i]);
                         player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                         if (i < un) {
                             seed.p_device[i] = player_device[i];
@@ -14493,9 +14506,8 @@ soft_return_lobby:
                     PSXRecompV4::launcher_source_from_device(d);
                 ls.deadzone[i] =
                     (player_deadzone[i] * 100 + 32767 / 2) / 32767;
-                ls.pad_mode[i] = (ls.player_src[i] == 1)
-                                    ? PSXRecompV4::PAD_MODE_DIGITAL
-                                    : player_mode[i];
+                /* Verbatim, as in the first launcher entry above. */
+                ls.pad_mode[i] = player_mode[i];
                 ls.player_gamepad_guid[i][0] = '\0';
                 if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                     d != "gamepad" && d != "controller") {
@@ -14633,20 +14645,27 @@ soft_return_lobby:
                 for (int i = 0; i < n; ++i) {
                     if (ls.player_src[i] == 1) {
                         player_device[i] = "keyboard";
-                        player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
                     } else if (ls.player_src[i] == 0) {
                         player_device[i] = "none";
-                        player_mode[i] = ls.pad_mode[i];
                     } else if (ls.player_gamepad_guid[i][0]) {
                         player_device[i] = ls.player_gamepad_guid[i];
-                        player_mode[i] = ls.pad_mode[i];
                     } else if (PSXRecompV4::launcher_source_from_device(
                                    player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
-                        player_mode[i] = ls.pad_mode[i];
-                    } else {
-                        player_mode[i] = ls.pad_mode[i];
                     }
+                    /* Same resolution as the first launcher-exit path, and the
+                     * mod-override arm matters HERE specifically: `goto
+                     * session_reboot` re-enters the emulator BELOW the block
+                     * that applies g_mod_controller_mode_override, so a soft
+                     * return from the lobby never re-runs it. Before this
+                     * helper existed, an override survived a rematch only
+                     * because it round-tripped through ls.pad_mode[]; a bare
+                     * lock clamp here would have silently dropped it. */
+                    player_mode[i] =
+                        PSXRecompV4::resolve_player_mode_after_launcher(
+                            ls.pad_mode[i], ctrl_lock_mode,
+                            ctrl_locked_mode[i],
+                            g_mod_controller_mode_override[i]);
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }

@@ -29,6 +29,17 @@ if(BUILD_TESTING)
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 
+    # Pad-mode resolution at the launcher exit seam: a lock_mode title must
+    # boot the pad type its game.toml declared whatever the launcher hands
+    # back, an active mod controller-mode override must outrank the lock, and
+    # neither may let an unsupported mode reach settings.toml. Header-only, so
+    # it needs nothing but runtime/include.
+    add_executable(launcher_pad_mode_resolve_test
+        tests/test_launcher_pad_mode_resolve.cpp)
+    target_include_directories(launcher_pad_mode_resolve_test PRIVATE include)
+    add_test(NAME launcher_pad_mode_resolve_test
+             COMMAND launcher_pad_mode_resolve_test)
+
     # COP0.CAUSE IP2 must mirror the INTC line combinationally, never latch.
     add_executable(cause_ip2_combinational_test
         tests/test_cause_ip2_combinational.c)
