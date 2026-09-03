@@ -12,11 +12,12 @@ DIRTY = (ROOT / "src/dirty_ram_interp.c").read_text(encoding="utf-8")
 BOOT_STATE_H = (ROOT / "include/boot_state.h").read_text(encoding="utf-8")
 DMA = (ROOT / "src/dma.c").read_text(encoding="utf-8")
 
-# The per-word DMA2 cursor adds four bytes to the v5 DMA wire. Lock the format
-# change to v6 so an old file is rejected before any state section is applied.
+# The per-word DMA2 cursor and XA DATA_END pending bit grow the snapshot wire.
+# Lock the format change to v7 so an old file is rejected before any state
+# section is applied.
 assert "#define DMA_GPU_LL_WIRE (4u + (10u * 4u))" in DMA
-assert "#define BOOT_STATE_VERSION 6u" in BOOT_STATE_H
-assert "#define BOOT_STATE_VERSION_MIN_READ 6u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION 7u" in BOOT_STATE_H
+assert "#define BOOT_STATE_VERSION_MIN_READ 7u" in BOOT_STATE_H
 assert "Reject\n * them at the header before any section changes the live machine." in BOOT_STATE_H
 
 assert "void savestate_status_json(char* buf, size_t cap);" in HEADER
