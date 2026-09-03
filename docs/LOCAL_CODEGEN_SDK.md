@@ -54,7 +54,8 @@ default is none — wizard/`ensure-toolchain` fetch GitHub `/releases/latest`).
 
 On Linux and macOS, the setup host uses native CMake, Ninja, Python 3, and C/C++
 compilers from `PATH`. It does not download the Windows portable pack. Install
-the native tools before you start the wizard.
+the native tools before you start the wizard. The setup host ignores cached
+Windows pack paths on these platforms.
 
 ## Commands
 
