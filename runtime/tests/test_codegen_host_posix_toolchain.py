@@ -9,6 +9,33 @@ import sys
 def main() -> int:
     root = Path(__file__).resolve().parents[2]
     source = (root / "host/psxrecomp_codegen_host.c").read_text(encoding="utf-8")
+    cli = (root / "psxrecomp_cli.py").read_text(encoding="utf-8")
+
+    resolve_cli = re.search(
+        r"def resolve_embedded_toolchain_bin\(.*?(?=\n\ndef )",
+        cli,
+        re.DOTALL,
+    )
+    if not resolve_cli or 'sys.platform != "win32"' not in resolve_cli.group():
+        raise AssertionError("POSIX CLI can resolve a cached Windows toolchain")
+    if "return None" not in resolve_cli.group():
+        raise AssertionError("POSIX CLI does not reject cached toolchain paths")
+
+    activate_cli = re.search(
+        r"def activate_embedded_toolchain\(.*?(?=\n\ndef )",
+        cli,
+        re.DOTALL,
+    )
+    if not activate_cli or "_native_toolchain_ready(log)" not in activate_cli.group():
+        raise AssertionError("POSIX CLI does not accept native build tools")
+
+    ensure_cli = re.search(
+        r"def ensure_toolchain_for_rebuild\(.*?(?=\n\ndef )",
+        cli,
+        re.DOTALL,
+    )
+    if not ensure_cli or "_native_toolchain_ready(progress.log)" not in ensure_cli.group():
+        raise AssertionError("POSIX CLI can still download a Windows toolchain")
 
     activate = re.search(
         r"static void activate_toolchain_path\(void\) \{(?P<body>.*?)\n\}",
@@ -67,7 +94,7 @@ def main() -> int:
     if not update or "#if !defined(_WIN32)\n    return 0;" not in update.group("body"):
         raise AssertionError("POSIX setup can still offer the Windows pack update")
 
-    print("POSIX setup native-toolchain source guard: ok")
+    print("POSIX setup and CLI native-toolchain source guard: ok")
     return 0
 
 
