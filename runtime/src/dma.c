@@ -21,6 +21,7 @@
 #include "mdec.h"
 #include "mod_memory.h"
 #include "overlay_capture.h"
+#include "psx_cycles.h"
 #include "spu.h"
 #include "audio_trace.h"
 #include "event_ring.h"
@@ -63,6 +64,9 @@ typedef struct {
 static DMAAsyncChannel mdec_async[2];
 static DMAAsyncChannel cdrom_async;
 static DMAGPULinkedList gpu_linked_list;
+static DMAGpuOtStats gpu_ot_stats;
+static uint64_t gpu_ot_start_cycle;
+static uint32_t gpu_ot_polls_this_walk;
 
 /* ---- CD DMA transfer log ---- */
 /* Every forward CH3 DMA that lands below 0x1C0000 (game data region) records
@@ -200,6 +204,18 @@ static void trace_dma_reg_write(uint32_t addr, uint32_t val, uint32_t mask,
     e->i_stat_after = i_stat;
     e->func = g_debug_current_func_addr;
     e->pc = g_debug_last_store_pc;
+}
+
+static void gpu_ot_record_walk_stats(uint64_t cycles) {
+    gpu_ot_stats.nodes_last = gpu_linked_list.nodes_processed;
+    gpu_ot_stats.words_last = gpu_linked_list.total_words;
+    gpu_ot_stats.cycles_last = cycles;
+    if (gpu_ot_stats.nodes_last > gpu_ot_stats.nodes_max)
+        gpu_ot_stats.nodes_max = gpu_ot_stats.nodes_last;
+    if (gpu_ot_stats.words_last > gpu_ot_stats.words_max)
+        gpu_ot_stats.words_max = gpu_ot_stats.words_last;
+    if (gpu_ot_stats.cycles_last > gpu_ot_stats.cycles_max)
+        gpu_ot_stats.cycles_max = gpu_ot_stats.cycles_last;
 }
 
 /* ---- Helpers ---- */
@@ -392,6 +408,18 @@ static void cancel_async_transfer(int ch) {
         cdrom_async.cycles_accum = 0;
     }
     if (ch == 2 && gpu_linked_list.active) {
+        uint64_t cycles = psx_cycle_count - gpu_ot_start_cycle;
+        gpu_ot_record_walk_stats(cycles);
+        DMAGpuOtCancel *c = &gpu_ot_stats.cancel_ring[
+            gpu_ot_stats.cancel_ring_count % DMA_GPU_OT_CANCEL_RING];
+        c->pc     = g_debug_last_store_pc;
+        c->chcr   = channels[2].chcr;
+        c->nodes  = gpu_linked_list.nodes_processed;
+        c->words  = gpu_linked_list.total_words;
+        c->cycles = cycles > UINT32_MAX ? UINT32_MAX : (uint32_t)cycles;
+        c->polls  = gpu_ot_polls_this_walk;
+        gpu_ot_stats.cancel_ring_count++;
+        gpu_ot_stats.cancels++;
         gpu_ws_end_linked_list();
         dma_gpu_ll_cancel(&gpu_linked_list);
     }
@@ -691,6 +719,8 @@ static void gpu_ll_emit_word(void *opaque, uint32_t address, uint32_t word) {
 
 static void gpu_ll_complete(void *opaque, int hit_limit) {
     (void)opaque;
+    gpu_ot_stats.completes++;
+    gpu_ot_record_walk_stats(psx_cycle_count - gpu_ot_start_cycle);
     channels[2].madr = hit_limit ? gpu_linked_list.current_addr
                                  : 0x00FFFFFFu;
     gpu_ws_end_linked_list();
@@ -707,7 +737,10 @@ static const DMAGPULinkedListOps gpu_ll_ops = {
 };
 
 static void start_async_gpu_linked_list(void) {
-    if (gpu_linked_list.active) return;
+    if (gpu_linked_list.active) {
+        gpu_ot_stats.starts_dropped++;
+        return;
+    }
     uint32_t start_addr = psx_mod_gpu_dma_resolve_address(channels[2].madr);
     gpu_ws_begin_linked_list();
     /* This scan only prepares optional widescreen grouping. It does not send
@@ -716,6 +749,9 @@ static void start_async_gpu_linked_list(void) {
     gpu_ws_prepass_linked_list(start_addr);
     dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);
     event_ring_record_aux(EV_DMA_SCHED, 2u, channels[2].chcr);
+    gpu_ot_stats.starts++;
+    gpu_ot_start_cycle = psx_cycle_count;
+    gpu_ot_polls_this_walk = 0;
 }
 
 static uint32_t execute_ch2_gpu(void) {
@@ -1181,7 +1217,15 @@ uint32_t dma_read(uint32_t addr) {
         switch (reg) {
             case 0x00: return channels[ch].madr;
             case 0x04: return channels[ch].bcr;
-            case 0x08: return channels[ch].chcr;
+            case 0x08:
+                if (ch == 2) {
+                    gpu_ot_stats.chcr_reads_total++;
+                    if (gpu_linked_list.active) {
+                        gpu_ot_stats.chcr_reads_in_walk++;
+                        gpu_ot_polls_this_walk++;
+                    }
+                }
+                return channels[ch].chcr;
             case 0x0C: return 0;
             default: goto bad;
         }
@@ -1266,6 +1310,13 @@ bad:
 
 void dma_write(uint32_t addr, uint32_t val) {
     dma_write_masked(addr, val, 0xFFFFFFFFu);
+}
+
+void dma_debug_get_gpu_ot_stats(DMAGpuOtStats* out) {
+    if (!out) return;
+    *out = gpu_ot_stats;
+    out->initiator_pc = s_dma_ch_initiator_pc[2];
+    out->active = gpu_linked_list.active;
 }
 
 uint64_t dma_debug_get_trace(const DMATraceEntry** out_entries) {
