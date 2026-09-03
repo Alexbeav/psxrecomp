@@ -1310,6 +1310,21 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRT_GAME_OVERLAY_STATIC_C AND EXISTS "${PSXRT_GAME_OVERLAY_STATIC_C}")
         set_source_files_properties("${PSXRT_GAME_OVERLAY_STATIC_C}" PROPERTIES GENERATED TRUE)
         list(APPEND generated_sources "${PSXRT_GAME_OVERLAY_STATIC_C}")
+        # compile_overlays.py --static splits its output: overlays_static.c is
+        # the dispatcher and each overlay is its own translation unit,
+        # overlays_static_NNNN.c, beside it. One 300 MB file compiled on one
+        # core is what that replaced. CONFIGURE_DEPENDS re-globs at build time,
+        # so a run that changes the part count needs no reconfigure (a
+        # --static-single-file run simply has no parts to glob).
+        get_filename_component(_ov_static_dir  "${PSXRT_GAME_OVERLAY_STATIC_C}" DIRECTORY)
+        get_filename_component(_ov_static_stem "${PSXRT_GAME_OVERLAY_STATIC_C}" NAME_WE)
+        file(GLOB _ov_static_parts CONFIGURE_DEPENDS
+             "${_ov_static_dir}/${_ov_static_stem}_[0-9][0-9][0-9][0-9].c")
+        list(SORT _ov_static_parts)
+        foreach(_ov_part IN LISTS _ov_static_parts)
+            set_source_files_properties("${_ov_part}" PROPERTIES GENERATED TRUE)
+        endforeach()
+        list(APPEND generated_sources ${_ov_static_parts})
         set(has_overlay_dispatch TRUE)
     endif()
 

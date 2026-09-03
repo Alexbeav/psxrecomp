@@ -118,10 +118,25 @@ python psxrecomp/tools/compile_overlays.py \
     --cps
 ```
 
-Output: `generated/overlays_static.c`, containing every in-overlay
-`func_XXXXXXXX` plus an auto-generated `psx_overlay_dispatch()` switch. Add that
-file to the runtime build (it's a normal translation unit) and rebuild the exe.
-No `cache/` folder and no DLL loading are involved at runtime.
+Output: `generated/overlays_static.c` — the auto-generated, content-validated
+`psx_overlay_dispatch()` plus an extern prototype for every compiled entry —
+and **one translation unit per overlay** beside it, `overlays_static_0000.c`,
+`overlays_static_0001.c`, … (each carries its own `#include`s and a private
+symbol namespace, so it compiles standalone). Point the runtime build at
+`overlays_static.c` (`GAME_OVERLAY_STATIC_C` in `psxrecomp_add_game_runtime`);
+`runtime.cmake` globs the sibling parts with `CONFIGURE_DEPENDS`, so a run that
+changes the part count needs no reconfigure. No `cache/` folder and no DLL
+loading are involved at runtime.
+
+Why split: a whole title's overlays make a single C file of hundreds of MB
+(BoF3: 309 MB, 8.6 M lines), which one `gcc` invocation compiles on one core.
+Per-overlay units build across every core, and because the tool only rewrites
+a part whose content changed, an incremental rebuild recompiles only the
+overlays that changed. `--static-single-file` restores the monolithic output.
+
+The tool side parallelizes too: `--jobs N` (default cores−2) runs each
+capture's recompile + audit in a process pool and merges results in capture
+order, so the emitted C is byte-identical to `--jobs 1`.
 
 **Trade-off vs. the DLL cache:** `--static` is a fixed snapshot chosen at build
 time — it will *not* grow as the player explores new areas. The DLL cache (§0/§1)
