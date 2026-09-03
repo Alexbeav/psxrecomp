@@ -10,6 +10,28 @@ def main() -> int:
     root = Path(__file__).resolve().parents[2]
     source = (root / "host/psxrecomp_codegen_host.c").read_text(encoding="utf-8")
 
+    activate = re.search(
+        r"static void activate_toolchain_path\(void\) \{(?P<body>.*?)\n\}",
+        source,
+        re.DOTALL,
+    )
+    if not activate:
+        raise AssertionError("Toolchain PATH activation is missing")
+    posix_activate = activate.group("body").split("#endif", 1)[0]
+    if "#if !defined(_WIN32)" not in posix_activate or "return;" not in posix_activate:
+        raise AssertionError("POSIX setup can activate a cached Windows toolchain")
+
+    find_python = re.search(
+        r"static int find_python\(char\* out, size_t cap\) \{(?P<body>.*?)\n\}",
+        source,
+        re.DOTALL,
+    )
+    if not find_python:
+        raise AssertionError("Python resolver is missing")
+    posix_python = find_python.group("body").split("#if defined(_WIN32)", 1)[0]
+    if "find_toolchain_python(" in posix_python:
+        raise AssertionError("POSIX setup can select Python from a cached Windows pack")
+
     ready = re.search(
         r"static int host_system_toolchain_ready\(void\) \{(?P<body>.*?)\n\}",
         source,

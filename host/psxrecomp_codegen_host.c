@@ -462,9 +462,9 @@ static int find_python(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if defined(_WIN32)
     if (find_toolchain_python(out, cap))
         return 1;
-#if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
     char resolved[1100];
@@ -769,6 +769,11 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
+#if !defined(_WIN32)
+    /* Linux and macOS use native build tools. A stale Windows pack can exist
+     * in the shared cache, but it must never shadow tools from the host PATH. */
+    return;
+#endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
