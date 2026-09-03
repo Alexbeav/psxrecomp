@@ -29,6 +29,8 @@ def main() -> None:
     assert text.count("remove_non_sdk_helpers") >= 3
     assert "tomba1_extract.py" in text
     assert "tomba2_extract.py" in text
+    assert "--exclude 'test_data'" in text
+    assert 'rm -rf "${STAGE}/recomp-ui/test_data"' in text
     print("setup package payload filter test: PASS")
 
 

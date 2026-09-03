@@ -369,6 +369,9 @@ embedded `toolchain/`. The zip includes:
 - `recomp-ui/` sources (needed to rebuild)
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
+The packager excludes developer-only helpers and dependency test data. These
+files are not inputs for the setup SDK.
+
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
 run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
 On Windows, RetComM or the wizard downloads `cmake-clang-v1` from

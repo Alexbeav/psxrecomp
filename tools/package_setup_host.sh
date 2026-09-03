@@ -339,15 +339,17 @@ copy_tree_filtered "${ROOT}/psxrecomp" "${STAGE}/psxrecomp" \
 copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude '.git' \
   --exclude 'build' \
+  --exclude 'test_data' \
   --exclude '__pycache__'
 
-# These one-off overlay extraction helpers are development oracles, not setup
-# SDK inputs. They contain workstation-specific paths, so a public source
-# package must not include them.
+# These one-off overlay extraction helpers and dependency test fixtures are
+# development inputs, not setup SDK inputs. A public source package must not
+# include them.
 remove_non_sdk_helpers() {
   rm -f \
     "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba1_extract.py" \
     "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba2_extract.py"
+  rm -rf "${STAGE}/recomp-ui/test_data"
 }
 
 remove_non_sdk_helpers
