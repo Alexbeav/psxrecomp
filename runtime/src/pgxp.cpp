@@ -1,4 +1,4 @@
-/* pgxp.cpp — PGXP value-propagation engine (ENHANCEMENTS.md G1.2/G1.3).
+/* pgxp.cpp — PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3).
  *
  * CLEAN-ROOM implementation of the publicly documented PGXP technique
  * (psx-spx GTE docs + public design write-ups + our own G1 measurements).

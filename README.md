@@ -155,6 +155,9 @@ Details: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md). Legacy CLI
 | Setup-host CI template | [`docs/ci/templates/setup-release.yml`](docs/ci/templates/setup-release.yml) |
 | Local Generate & rebuild CLI | [`docs/LOCAL_CODEGEN_SDK.md`](docs/LOCAL_CODEGEN_SDK.md) |
 | Mods | [`docs/MOD_PACKAGES.md`](docs/MOD_PACKAGES.md) |
+| Widescreen / native-wide | [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) |
+| Enhancement tier (PGXP, renderers, load accel) | [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md) |
+| TCP debug command reference | [`docs/TCP_COMMANDS.md`](docs/TCP_COMMANDS.md) |
 | Contributing | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Which PlayStation BIOS does it use?
@@ -215,7 +218,7 @@ have to be widened in step with the renderer.
   <tr><td align="center"><sub><b>Tomba! 2 — adaptive.</b> The view tracks the window, up to an ultrawide cap.</sub></td></tr>
 </table>
 
-See [`WIDESCREEN.md`](WIDESCREEN.md) for the per-game configuration.
+See [`docs/WIDESCREEN.md`](docs/WIDESCREEN.md) for the per-game configuration.
 
 ## Mods
 
@@ -445,7 +448,7 @@ supersampling         = 2
 
 Both are visual-only: the GTE's guest-visible screen coordinates stay integer
 and fully faithful, so game logic and culling are unaffected. Supported on all
-three renderers. See [`ENHANCEMENTS.md`](ENHANCEMENTS.md) §G1.
+three renderers. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md) §G1.
 
 ## How to use PSXRecomp
 

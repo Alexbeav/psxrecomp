@@ -1172,7 +1172,7 @@ endfunction()
 function(psxrecomp_add_runtime_target target)
     # PGXP: build this target's objects with -DPSX_PGXP=1 so the PGXP_*()
     # hook macros the emitter writes into ALL generated C become real calls
-    # into the value-propagation engine (pgxp_hooks.h; ENHANCEMENTS.md G1.10),
+    # into the value-propagation engine (pgxp_hooks.h; docs/ENHANCEMENTS.md G1.10),
     # and stamp the pgxp overlay flavor so the shard cache and the ABI gate
     # keep pgxp and base DLLs fully separate. The base target is untouched —
     # the macros preprocess away without the define.
@@ -2170,7 +2170,7 @@ function(psxrecomp_add_runtime_target target)
             VERBATIM)
     endif()
 
-    # PGXP variant auto-clone (ENHANCEMENTS.md G1.10): with
+    # PGXP variant auto-clone (docs/ENHANCEMENTS.md G1.10): with
     # -DPSX_PGXP_VARIANT=ON, every primary runtime target grows an
     # <exe>_pgxp sibling — the SAME arguments (same generated C, extras,
     # ports) compiled with -DPSX_PGXP=1 (see the PGXP option above). Done

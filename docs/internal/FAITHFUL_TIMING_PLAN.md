@@ -783,7 +783,7 @@ on a fixed region -> next.
   config_loader (+ settings.toml bios_hle mirror), PSX_BIOS_HLE / PSX_BIOS_HLE_KEEP_INTRO
   env, startup banner bios_backend=/bios_boot=. PSX_HLE_SCHEDULER spike folded in
   (default via psx_hle_scheduler_set_default, env wins). (5) OBSERVABILITY — always-on
-  16K HLE ring (route LLE/HLE/boot-skip) + hle_dump TCP command (TCP_COMMANDS.md).
+  16K HLE ring (route LLE/HLE/boot-skip) + hle_dump TCP command (../TCP_COMMANDS.md).
   Regen era-consistent: BIOS + Tomba + MMX6 images (emitter changed). NEXT: Tomba
   save+load validation under BOTH backends (user drives); overlay-shard cg-tag refresh
   per title; grow the handler set (UnDeliverEvent, RCnt, A0 libc) with kernel-decompile

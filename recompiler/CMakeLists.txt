@@ -476,6 +476,18 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli_project_packaging.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        # tools/coverage_vault.py's history compaction and streaming JSON
+        # reader. Pure unit test — loads the module by path, needs no built
+        # target and no generated BIOS. It sat in tools/ with no add_test()
+        # entry anywhere, which is exactly the orphan class
+        # runtime/check_test_registration.cmake exists to prevent; moving it
+        # under tests/ puts it inside that guard's glob.
+        add_test(
+            NAME coverage_vault
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_coverage_vault.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
         # The runtime exe name must come from CMake, not be re-derived.
         add_test(
             NAME runtime_exe_name

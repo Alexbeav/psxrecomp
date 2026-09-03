@@ -3356,7 +3356,7 @@ uint32_t gpu_texture_correction_hits(void) {
     return sw_perspective_triangle_count();
 }
 
-/* Per-vertex precise positions (PGXP, ENHANCEMENTS.md G1). Each of the three
+/* Per-vertex precise positions (PGXP, docs/ENHANCEMENTS.md G1). Each of the three
  * packet words is resolved independently: the address-keyed dataflow shadow
  * first (validated against the actual word — exact provenance, survives
  * ordering-table reordering), the ambiguity-gated position cache second, the

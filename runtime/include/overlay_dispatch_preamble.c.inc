@@ -280,7 +280,7 @@ void gte_precision_store_word(uint32_t addr, uint8_t reg) {
     if (g_cbs.gte_precision_store_word) g_cbs.gte_precision_store_word(addr, reg);
 }
 #if defined(PSX_PGXP) && PSX_PGXP
-/* PGXP dataflow-shadowing hooks (pgxp_hooks.h; ENHANCEMENTS.md G1.10). Only a
+/* PGXP dataflow-shadowing hooks (pgxp_hooks.h; docs/ENHANCEMENTS.md G1.10). Only a
  * pgxp-flavour shard (compiled -DPSX_PGXP=1, flavor bit set) references these
  * — base-flavour shards preprocess the PGXP_*() macros away, so this block is
  * compiled out of them entirely. Forwards to the host engine through the

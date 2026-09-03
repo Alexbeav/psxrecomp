@@ -333,7 +333,7 @@ typedef struct {
      * flavour shards never reference it. Appended LAST; NULL on an older host
      * no-ops every hook — precision shadowing is visual-only, never
      * load-bearing. The ABI version bump that arms this ships with the
-     * emitter change (Phase 2 of ENHANCEMENTS.md G1 value propagation). */
+     * emitter change (Phase 2 of docs/ENHANCEMENTS.md G1 value propagation). */
     const PGXPHooks *pgxp;
 } OverlayCallbacks;
 
