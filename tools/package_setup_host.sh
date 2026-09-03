@@ -341,6 +341,17 @@ copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude 'build' \
   --exclude '__pycache__'
 
+# These one-off overlay extraction helpers are development oracles, not setup
+# SDK inputs. They contain workstation-specific paths, so a public source
+# package must not include them.
+remove_non_sdk_helpers() {
+  rm -f \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba1_extract.py" \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba2_extract.py"
+}
+
+remove_non_sdk_helpers
+
 # Never ship local player state or owned inputs copied from an ignored framework
 # path. The source tree can contain these files even when Git reports it clean.
 find "${STAGE}" -type f \( \
@@ -406,6 +417,8 @@ else
 fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
+
+remove_non_sdk_helpers
 
 # A retail-BIOS-only title does not use OpenBIOS. Remove its redistributable
 # image, profile, and notice when the title package selects that boundary.

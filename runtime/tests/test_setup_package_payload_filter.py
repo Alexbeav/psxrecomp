@@ -26,6 +26,9 @@ def main() -> None:
     assert "*.mcr'" not in text
     assert "elif command -v cmake" in text
     assert 'cmake -E tar cf "${DIST}/${ZIP_NAME}" --format=zip .' in text
+    assert text.count("remove_non_sdk_helpers") >= 3
+    assert "tomba1_extract.py" in text
+    assert "tomba2_extract.py" in text
     print("setup package payload filter test: PASS")
 
 
