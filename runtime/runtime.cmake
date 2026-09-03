@@ -1646,12 +1646,17 @@ function(psxrecomp_add_runtime_target target)
             # ${_vk_inc} itself would not be. vk_video/ has to come along too;
             # vulkan_core.h includes the H.264/H.265 codec headers from it, so
             # staging vulkan/ alone still fails to compile.
-            set(_vk_stage "${CMAKE_CURRENT_BINARY_DIR}/${target}_vkinc")
+            string(SHA256 _vk_stage_key "${_vk_inc}")
+            string(SUBSTRING "${_vk_stage_key}" 0 12 _vk_stage_key)
+            set(_vk_stage "${CMAKE_CURRENT_BINARY_DIR}/${target}_vkinc_${_vk_stage_key}")
             file(MAKE_DIRECTORY "${_vk_stage}")
             foreach(_vk_sub vulkan vk_video)
                 if(EXISTS "${_vk_inc}/${_vk_sub}")
-                    file(CREATE_LINK "${_vk_inc}/${_vk_sub}"
-                         "${_vk_stage}/${_vk_sub}" SYMBOLIC COPY_ON_ERROR)
+                    if(NOT EXISTS "${_vk_stage}/${_vk_sub}" AND
+                       NOT IS_SYMLINK "${_vk_stage}/${_vk_sub}")
+                        file(CREATE_LINK "${_vk_inc}/${_vk_sub}"
+                             "${_vk_stage}/${_vk_sub}" SYMBOLIC COPY_ON_ERROR)
+                    endif()
                 endif()
             endforeach()
             _psx_header_compiles(_psx_vk_ok "vulkan/vulkan.h" INCLUDES "${_vk_stage}")
