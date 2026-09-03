@@ -371,11 +371,15 @@ embedded `toolchain/`. The zip includes:
 
 Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
 run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
-RetComM / the wizard download `cmake-clang-v1` from
+On Windows, RetComM or the wizard downloads `cmake-clang-v1` from
 [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
 (or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
+
+On Linux and macOS, the wizard uses native CMake, Ninja, Python 3, and C/C++
+compilers from `PATH`. Install these tools before you start setup. The wizard
+does not download the Windows portable pack on these platforms.
 
 The setup packager removes owned-input and player-state files, including files
 with backup suffixes. Audit the final ZIP independently before publication.
