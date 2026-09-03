@@ -556,6 +556,9 @@ if(BUILD_TESTING)
         add_test(NAME bios_registry_zero_entry_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_registry_zero_entry.py)
+        add_test(NAME overlay_loader_c11_source_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_loader_c11_source.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
