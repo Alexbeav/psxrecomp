@@ -5360,19 +5360,31 @@ static void gpu_write_gp0_body(uint32_t val) {
         return;
     }
 
-    /* State: mono polyline — each word is a vertex (or terminator) */
+    /* Polyline terminator rule (Beetle mednafen/psx/gpu.c INCMD_PLINE,
+     * DuckStation gpu.cpp HandleRenderPolyLineCommand/DrawingPolyLine):
+     *
+     *  1. A polyline always has at least two vertices. The words of the first
+     *     two vertices are consumed unconditionally — mono [V0][V1], shaded
+     *     [V0][C1][V1] — and are NEVER tested for the terminator.
+     *  2. From the third vertex on, only the FIRST word of each vertex unit
+     *     is tested: the vertex word itself for mono, the colour word for
+     *     shaded. Shaded vertex words are never tested.
+     *  3. The test is (word & 0xF000F000) == 0x50005000 (0x55555555).
+     *
+     * Testing every word is wrong in a way games actually hit: Psy-Q leaves
+     * the top byte of LINE_G* colour words as junk, so a colour such as
+     * 0x52545454 satisfies the mask and ended the polyline early here. The
+     * leftover words were then parsed as fresh GP0 commands, and one of them,
+     * a colour word 0x02010101, became a 341x341 FILL that wiped the terrain
+     * texture page (Breath of Fire III item-use effect, 2026-09-03). The
+     * earlier `(val & 0xF000F000) != 0` test was worse still — it fired on
+     * negative vertex coordinates too (Tomba2 attract garble, "GP0 unknown
+     * command 0xFE" fatal). */
+
+    /* State: mono polyline — each word is a vertex (or terminator).
+     * polyline_has_prev counts vertices received, clamped at 2. */
     if (gp0_state == GP0_POLYLINE_MONO) {
-        if ((val & 0xF000F000u) == 0x50005000u) {
-            /* Terminator: hardware ends a polyline ONLY when the masked word
-             * matches 0x50005000 (the 0x55555555 terminator) — Beetle
-             * gpu.cpp:1030, psx-spx. The old `(val & 0xF000F000) != 0` test
-             * also fired on any NEGATIVE vertex coordinate (Y=0xFFxx) and, at
-             * shaded color positions, on any color component >= 0x10 in the
-             * G byte — ending the polyline early and re-parsing its remaining
-             * words as new GP0 commands. That de-phased the whole command
-             * stream: garbage prims all over the Tomba2 attract (texture
-             * garble) and eventually a legit texcoord word 0xFE65FE58 parsed
-             * in IDLE state -> "GP0 unknown command 0xFE" fatal (village). */
+        if (polyline_has_prev >= 2 && (val & 0xF000F000u) == 0x50005000u) {
             gp0_state = GP0_IDLE;
             return;
         }
@@ -5384,24 +5396,21 @@ static void gpu_write_gp0_body(uint32_t val) {
             gr_draw_line(polyline_prev_x, polyline_prev_y, x, y, polyline_color);
         }
         polyline_prev_x = x; polyline_prev_y = y;
-        polyline_has_prev = 1;
+        if (polyline_has_prev < 2) polyline_has_prev++;
         return;
     }
 
-    /* State: shaded polyline — alternating color, vertex words */
+    /* State: shaded polyline — alternating colour, vertex words.
+     * Sequence: [cmd+C0] [V0] [C1] [V1] [C2] [V2] ... [terminator]
+     * polyline_has_prev: 0 = need V0
+     *                    1 = need C1 (part of the mandatory second vertex,
+     *                        not a terminator candidate)
+     *                    2 = need V_n
+     *                    3 = need C_n, n >= 2 (terminator candidate)
+     * The encoding stays inside the existing int so the GPU savestate
+     * section keeps its size. */
     if (gp0_state == GP0_POLYLINE_SHADED) {
-        /* The terminator can arrive in either the color or vertex position.
-         * Check it before interpreting the alternating shaded-polyline stream;
-         * otherwise a vertex-position terminator is consumed as coordinates and
-         * de-phases all following GP0 commands. */
-        if ((val & 0xF000F000u) == 0x50005000u) {
-            gp0_state = GP0_IDLE;
-            return;
-        }
-        /* Even words (after cmd) are colors, odd words are vertices.
-         * Sequence: [cmd+C0] [V0] [C1] [V1] [C2] [V2] ...
-         * polyline_has_prev tracks: 0=need V0, 1=need C_next, 2=need V_next */
-        if (!polyline_has_prev) {
+        if (polyline_has_prev == 0) {
             /* First vertex */
             int32_t x, y;
             parse_vertex(val, &x, &y);
@@ -5411,13 +5420,18 @@ static void gpu_write_gp0_body(uint32_t val) {
             polyline_has_prev = 1;
             return;
         }
-        if (polyline_has_prev == 1) {
-            /* Expecting color word. */
+        if (polyline_has_prev == 1 || polyline_has_prev == 3) {
+            /* Colour word. Only the third and later vertices' colour words
+             * can be the terminator. */
+            if (polyline_has_prev == 3 && (val & 0xF000F000u) == 0x50005000u) {
+                gp0_state = GP0_IDLE;
+                return;
+            }
             polyline_color = rgb888_to_rgb555(val & 0xFFFFFFu);
             polyline_has_prev = 2;
             return;
         }
-        /* polyline_has_prev == 2: vertex word */
+        /* polyline_has_prev == 2: vertex word — never a terminator */
         {
             int32_t x, y;
             parse_vertex(val, &x, &y);
@@ -5427,7 +5441,7 @@ static void gpu_write_gp0_body(uint32_t val) {
                                     polyline_prev_c, x, y, polyline_color);
             polyline_prev_x = x; polyline_prev_y = y;
             polyline_prev_c = polyline_color;
-            polyline_has_prev = 1;
+            polyline_has_prev = 3;
         }
         return;
     }
