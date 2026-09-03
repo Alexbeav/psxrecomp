@@ -3441,7 +3441,9 @@ std::string CodeGenerator::generate_file(
     if (config_.split_mid_function_targets) {
         std::set<uint32_t> cfgs_to_scan;  // Which CFGs to scan (empty = all)
         uint32_t exe_start = exe_.header.load_address;
-        uint32_t exe_end = exe_.end_address();
+        // Analysis bound: a split at a trailing delay-slot guard word would
+        // mint a function whose first instruction has no successor word.
+        uint32_t exe_end = exe_.analysis_end_address();
         int total_new = 0;
         // Safety cap only — the loop must run to convergence. Unconverged
         // targets emit `call_by_address(mid-func); return;` which misses the
@@ -3675,6 +3677,27 @@ std::string CodeGenerator::generate_ranges_manifest(
                 blk.exit_instr.address == blk.end_addr && hi <= UINT32_MAX - 4u) {
                 hi += 4u;
             }
+            /* A validity range may never claim a byte the shard never saw.
+             * The candidate CRC and the page-generation watch are computed
+             * over these ranges, so a range past the image end would validate
+             * the shard against bytes that were not part of its input — the
+             * cache would then "confirm" garbage.
+             *
+             * Two ways the +4 above can overrun, both real:
+             *   - a block leading at a trailing guard word (the defect this
+             *     manifest is a second-order victim of; fixed upstream by the
+             *     analysis bound, clamped here as well so the invariant does
+             *     not depend on that fix staying in place), and
+             *   - a branch-likely opcode (0x14-0x17, RESERVED on the R3000A)
+             *     as the image's very last word. translate_basic_block
+             *     short-circuits those into an inline RI raise BEFORE reading
+             *     any delay slot, so the mandatory-delay-slot throw never
+             *     fires and generation succeeds with hi == image_end + 4.
+             * Clamp to the READ bound, not the analysis bound: a guard word
+             * genuinely IS compiled into the shard when it serves as a delay
+             * slot, and must participate in the CRC. */
+            const uint32_t image_hi = exe_.end_address();
+            if (hi > image_hi) hi = image_hi;
             if (hi > lo) iv.emplace_back(lo, hi);
         }
         if (iv.empty()) continue;

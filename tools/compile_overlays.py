@@ -331,14 +331,92 @@ class ShardStats:
 # PS-EXE fake header
 # ---------------------------------------------------------------------------
 
-def make_psxexe(load_addr: int, entry_pc: int, data: bytes) -> bytes:
-    """Wrap raw overlay bytes in a minimal PS-EXE header."""
+# Analysis-bound tag read by the recompiler (recompiler/include/ps1_exe_parser.h,
+# namespace exe_tag). Offsets are into the 2048-byte PS-EXE header, whose tail
+# is zero-filled in every retail image; the 8-byte magic makes a false positive
+# on a genuine EXE effectively impossible.
+GUARD_TAG_MAGIC_OFFSET = 0x7E0
+GUARD_TAG_COUNT_OFFSET = 0x7E8
+GUARD_TAG_MAGIC = b'PSXRGRD1'
+CAPTURE_PAGE_BYTES = 4096
+
+
+def capture_guard_bytes(cap: dict, size: int, label: str = '') -> int:
+    """Trailing bytes of a captured region that are guard words ONLY.
+
+    overlay_capture.c write_json_window appends one coherent guard instruction
+    past the end of a dirty-page run so that a MIPS branch at the run's final
+    word (...FFC) has its architectural delay slot (...000) available. Those
+    bytes must stay READABLE by the recompiler and must NEVER be discovered as
+    code: the word after a guard word is not in the image, so a control
+    transfer AT the guard word could not emit its own delay slot. The
+    recompiler is TOLD the count (see make_psxexe) rather than inferring it.
+
+    Precedence:
+      1. the capture's explicit ``guard_bytes`` field — the writer stating its
+         own intent, which survives any future change to capture granularity;
+      2. for captures recorded BEFORE that field existed, reconstruct from the
+         format invariant write_json_window has always obeyed: a dirty-page run
+         is a whole number of 4 KiB pages, plus one 4-byte guard word whenever
+         the next word is still inside RAM. ``size % 4096 == 4`` is exactly
+         that signature and means one guard word.
+
+    Every OTHER shape reconstructs to zero, and that is ordinary traffic rather
+    than an anomaly, so this stays quiet:
+      * ``size % 4096 == 0`` — a page run whose guard word was suppressed
+        because it would have left RAM, or a pre-2026-07-25 page-exact capture.
+      * any other residue — a STATIC extraction, not a RAM page run. Those
+        records carry an exact file extent (tools/aot_overlay_spike/
+        extract_generic.py; they are the ones with static_dispatch_entry_pcs /
+        producer_ranges) and append no guard word. MEASURED: 52 of the 946
+        records in the SCUS-94454 vault are this shape, with residues from 112
+        to 3996 bytes and one that is not even 4-byte aligned.
+
+    Zero is also the fail-closed answer. If some future producer ever appends a
+    guard word in a shape this cannot recognise, that word is analysed as code
+    and the emitter's mandatory-delay-slot check refuses the transfer LOUDLY at
+    generation time; it never silently emits a transfer without its slot. The
+    way to opt in is the explicit field, not a wider guess here.
+    """
+    declared = cap.get('guard_bytes') if cap else None
+    if declared is not None:
+        try:
+            guard = int(declared)
+        except (TypeError, ValueError):
+            guard = -1
+        if guard in (0, 4) and guard < size:
+            return guard
+        # A malformed DECLARATION is a producer bug, unlike the shapes above.
+        print(f'  WARNING: {label or "capture"} declares guard_bytes='
+              f'{declared!r} with size {size}; ignoring (treating as 0)')
+        return 0
+    if size % CAPTURE_PAGE_BYTES == 4 and size > 4:
+        return 4
+    return 0
+
+
+def make_psxexe(load_addr: int, entry_pc: int, data: bytes, *,
+                guard_bytes: int) -> bytes:
+    """Wrap raw overlay bytes in a minimal PS-EXE header.
+
+    ``guard_bytes`` is keyword-only and has NO default on purpose: every
+    producer of an overlay image must state how many of its trailing bytes are
+    delay-slot guard words (see capture_guard_bytes). A new call site that
+    forgets is a TypeError, not a silently mis-analysed shard.
+    """
+    if guard_bytes < 0 or guard_bytes % 4 or guard_bytes >= len(data):
+        raise ValueError(
+            f'invalid guard_bytes={guard_bytes} for {len(data)}-byte image')
     header = bytearray(2048)
     header[0:8]   = b'PS-X EXE'
     struct.pack_into('<I', header, 0x10, entry_pc)   # initial PC
     struct.pack_into('<I', header, 0x14, 0)           # initial GP
     struct.pack_into('<I', header, 0x18, load_addr)   # load address
     struct.pack_into('<I', header, 0x1C, len(data))   # text size
+    if guard_bytes:
+        header[GUARD_TAG_MAGIC_OFFSET:
+               GUARD_TAG_MAGIC_OFFSET + len(GUARD_TAG_MAGIC)] = GUARD_TAG_MAGIC
+        struct.pack_into('<I', header, GUARD_TAG_COUNT_OFFSET, guard_bytes)
     return bytes(header) + data
 
 
@@ -3120,14 +3198,18 @@ INTERIOR_FAIL_MEMO = 'interior_fail_memo.txt'
 def _interior_fail_key(phys_addr: int, interior: int, data: bytes,
                        load_addr: int, size: int, producer_ranges,
                        cross_call_allow, expected_abi: int, cps: bool,
-                       toml_doc: dict) -> str:
+                       toml_doc: dict, guard_bytes: int = 0) -> str:
     """Stable identity of every input to deterministic fragment generation."""
     recipe = {
-        'schema': 'psxrecomp fragment fail key v2',
+        # v3 adds guard_bytes: the analysis bound is an input to generation, so
+        # a memo recorded under the old (guard-word-as-code) analysis must not
+        # suppress a retry under the corrected one.
+        'schema': 'psxrecomp fragment fail key v3',
         'phys_addr': phys_addr,
         'interior': interior & 0x1FFFFFFF,
         'load_addr': load_addr,
         'size': size,
+        'guard_bytes': guard_bytes,
         'data_sha256': hashlib.sha256(data).hexdigest(),
         'producer_ranges': [list(pair) for pair in producer_ranges],
         'cross_call_allow': sorted(set(cross_call_allow)),
@@ -3202,12 +3284,14 @@ def append_interior_fail_memo(cache_dir: str, key: str, reason: str) -> None:
 
 def generate_interior_fragment_static(interior: int, data: bytes,
                                       load_addr: int, size: int,
-                                      phys_addr: int, args):
+                                      phys_addr: int, args, *,
+                                      guard_bytes: int):
     """Generate one isolated, exact-range-gated static interior shard."""
     with tempfile.TemporaryDirectory() as tmp:
         psx = os.path.join(tmp, 'frag.psx')
         with open(psx, 'wb') as f:
-            f.write(make_psxexe(load_addr, interior, data))
+            f.write(make_psxexe(load_addr, interior, data,
+                                guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
         with open(seeds_path, 'w') as f:
             f.write(f'dispatch_root 0x{interior:08X}\n')
@@ -3459,6 +3543,11 @@ def make_interior_fragment_job(phys_addr: int, load_addr: int, size: int,
         'load_addr': load_addr,
         'size': size,
         'data': data,
+        # Trailing delay-slot guard words in `data` (readable, not
+        # discoverable). Stated by the capture writer where the field exists,
+        # reconstructed from the page-run format otherwise.
+        'guard_bytes': capture_guard_bytes(
+            capture, size, f'region 0x{load_addr:08X}'),
         'candidates': interiors | dispatch_roots | static_demands | forced,
         'executed': executed,
         'static_demands': static_demands,
@@ -4009,7 +4098,8 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
                            args, sub_env: dict, toml_doc: dict,
                            producer_ranges=(), cross_call_allow=(),
                            hosted_owners: dict | None = None,
-                           manifest_provenance: str | None = None):
+                           manifest_provenance: str | None = None,
+                           *, guard_bytes: int):
     """Compile an ISOLATED interior-entry 'island' fragment that ENTERS at an
     executed orphan DISPATCH_INTERIOR PC (a host that static analysis never
     discovered, e.g. an FMV driver reached via a computed jump) and covers the
@@ -4052,7 +4142,8 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
     with tempfile.TemporaryDirectory() as tmp:
         psx = os.path.join(tmp, 'frag.psx')
         with open(psx, 'wb') as f:
-            f.write(make_psxexe(load_addr, first_entry, data))
+            f.write(make_psxexe(load_addr, first_entry, data,
+                                guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
         with open(seeds_path, 'w') as f:
             for range_lo, range_hi in producer_ranges:
@@ -4244,7 +4335,8 @@ def compile_fragment_batch(requested_entries, data: bytes, load_addr: int,
 def compile_interior_fragment(interior: int, data: bytes, load_addr: int,
                               size: int, phys_addr: int, cache_dir: str,
                               args, sub_env: dict, toml_doc: dict,
-                              producer_ranges=(), cross_call_allow=()):
+                              producer_ranges=(), cross_call_allow=(),
+                              *, guard_bytes: int):
     """Compile one isolated uncertain interior entry.
 
     Executed, operator-forced, and interval-only aliases deliberately use this
@@ -4254,7 +4346,8 @@ def compile_interior_fragment(interior: int, data: bytes, load_addr: int,
     return compile_fragment_batch(
         {interior}, data, load_addr, size, phys_addr, cache_dir, args, sub_env,
         toml_doc, producer_ranges, cross_call_allow,
-        manifest_provenance=ORPHAN_MANIFEST_PROVENANCE)
+        manifest_provenance=ORPHAN_MANIFEST_PROVENANCE,
+        guard_bytes=guard_bytes)
 
 
 def fragment_shard_key(func_ids: list,
@@ -5506,6 +5599,10 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
     phys_addr = (load_addr & 0x1FFFFFFF)
     _label = f'overlay 0x{load_addr:08X} crc {crc32:08X}'
     result['label'] = _label
+    # Trailing delay-slot guard words appended by the capture writer.
+    # Declared to the recompiler through the PS-EXE analysis-bound tag so
+    # they stay readable but are never discovered as code.
+    guard_bytes = capture_guard_bytes(cap, size, _label)
 
     def fail(cls, detail):
         result['outcome'] = 'fail'
@@ -5514,7 +5611,8 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
     for captured_entry in _parse_addr_list(cap.get('dispatch_entry_pcs', [])):
         entry = ((captured_entry & 0x1FFFFFFF) | 0x80000000)
         result['requested_entries'].add(entry)
-        result['entry_sources'][entry] = (data, load_addr, size, phys_addr)
+        result['entry_sources'][entry] = (
+            data, load_addr, size, phys_addr, guard_bytes)
     # --force-interior is an explicit operator assertion that a live dispatch
     # entry was observed even if the retained capture lost its classifier
     # provenance. Bind the requested PC to this capture's exact bytes; the
@@ -5525,11 +5623,14 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         if phys_addr <= forced_phys < region_hi:
             entry = forced_phys | 0x80000000
             result['requested_entries'].add(entry)
-            result['entry_sources'][entry] = (data, load_addr, size, phys_addr)
+            result['entry_sources'][entry] = (
+                data, load_addr, size, phys_addr, guard_bytes)
 
     seeds, seed_audit = classify_overlay_seeds(cap, data, load_addr, size,
                                                crc32, toml)
-    print(f'Overlay  load=0x{load_addr:08X}  size={size}  crc32=0x{crc32:08X}')
+    print(f'Overlay  load=0x{load_addr:08X}  size={size}  crc32=0x{crc32:08X}'
+          + (f'  guard={guard_bytes}B (delay-slot only, not analysed)'
+             if guard_bytes else ''))
     print(f'  seeds: {len(seeds)}  mode: static -> {static_out}')
     print_seed_audit(seed_audit)
 
@@ -5549,7 +5650,8 @@ def _static_capture_job(cap, args, toml, forced_interiors, static_out, result):
         entry_pc = int(root_seeds[0].split()[-1], 16)
         psx_path = os.path.join(tmp, f'overlay_{load_addr:08X}.psx')
         with open(psx_path, 'wb') as f:
-            f.write(make_psxexe(load_addr, entry_pc, data))
+            f.write(make_psxexe(load_addr, entry_pc, data,
+                                guard_bytes=guard_bytes))
         seeds_path = os.path.join(tmp, 'seeds.txt')
         with open(seeds_path, 'w') as f:
             for seed in seeds:
@@ -5975,6 +6077,10 @@ def main():
         crc32     = binascii.crc32(data) & 0xFFFFFFFF
         phys_addr = (load_addr & 0x1FFFFFFF)
         _label = f'overlay 0x{load_addr:08X} crc {crc32:08X}'
+        # Trailing delay-slot guard words appended by the capture writer.
+        # Declared to the recompiler through the PS-EXE analysis-bound tag so
+        # they stay readable but are never discovered as code.
+        guard_bytes = capture_guard_bytes(cap, size, _label)
         if args.static:
             # Static mode is one self-contained job per capture (see
             # static_capture_job); the sequential and --jobs paths share it.
@@ -6040,7 +6146,9 @@ def main():
         if not args.static:
             dll_path = os.path.join(cache_dir, f'{phys_addr:08X}_{crc32:08X}{overlay_ext()}')
 
-        print(f'Overlay  load=0x{load_addr:08X}  size={size}  crc32=0x{crc32:08X}')
+        print(f'Overlay  load=0x{load_addr:08X}  size={size}  crc32=0x{crc32:08X}'
+              + (f'  guard={guard_bytes}B (delay-slot only, not analysed)'
+                 if guard_bytes else ''))
         print(f'  seeds: {len(seeds)}  dll: {dll_path}')
         print_seed_audit(seed_audit)
 
@@ -6092,7 +6200,8 @@ def main():
             entry_pc = int(root_seeds[0].split()[-1], 16)
             psx_path = os.path.join(tmp, f'overlay_{load_addr:08X}.psx')
             with open(psx_path, 'wb') as f:
-                f.write(make_psxexe(load_addr, entry_pc, data))
+                f.write(make_psxexe(load_addr, entry_pc, data,
+                                    guard_bytes=guard_bytes))
 
             # Write seeds file
             seeds_path = os.path.join(tmp, 'seeds.txt')
@@ -6391,7 +6500,8 @@ def main():
                         job['phys_addr'], entry, job['data'],
                         job['load_addr'], job['size'],
                         job['producer_ranges'], job['cross_call_allow'],
-                        expected_abi, args.cps, toml)
+                        expected_abi, args.cps, toml,
+                        job['guard_bytes'])
                     if key in fail_memo:
                         memo_entries[entry] = fail_memo[key]
                 if not memo_entries:
@@ -6456,7 +6566,8 @@ def main():
                 key = _interior_fail_key(
                     phys_addr, entry, data, load_addr, size,
                     job['producer_ranges'], job['cross_call_allow'],
-                    expected_abi, args.cps, toml)
+                    expected_abi, args.cps, toml,
+                    job['guard_bytes'])
                 memo_action = interior_fail_memo_action(
                     entry, job, args.force)
                 if key in fail_memo and memo_action != 'retry':
@@ -6505,7 +6616,8 @@ def main():
                 return compile_fragment_batch(
                     entries, data, load_addr, size, phys_addr, cache_dir,
                     args, frag_env, toml, job['producer_ranges'],
-                    job['cross_call_allow'])
+                    job['cross_call_allow'],
+                    guard_bytes=job['guard_bytes'])
 
             def strong_batch_success(entries, frag_ids, status):
                 strong_handled.update(entries)
@@ -6541,7 +6653,8 @@ def main():
                 key = _interior_fail_key(
                     phys_addr, entry, data, load_addr, size,
                     job['producer_ranges'], job['cross_call_allow'],
-                    expected_abi, args.cps, toml)
+                    expected_abi, args.cps, toml,
+                    job['guard_bytes'])
                 optional_reject = optional_static_fragment_rejection(
                     entry, job, status)
                 if optional_reject:
@@ -6738,7 +6851,8 @@ def main():
                 key = _interior_fail_key(
                     phys_addr, entry, data, load_addr, size,
                     job['producer_ranges'], job['cross_call_allow'],
-                    expected_abi, args.cps, toml)
+                    expected_abi, args.cps, toml,
+                    job['guard_bytes'])
                 optional_reject = optional_static_fragment_rejection(
                     entry, job, status)
                 if optional_reject:
@@ -6782,7 +6896,8 @@ def main():
                 return compile_fragment_batch(
                     specs, data, load_addr, size, phys_addr, cache_dir,
                     args, frag_env, toml, job['producer_ranges'],
-                    job['cross_call_allow'], hosted_owners=specs)
+                    job['cross_call_allow'], hosted_owners=specs,
+                    guard_bytes=job['guard_bytes'])
 
             hosted_rejected = set()
             hosted_published = False
@@ -6934,7 +7049,8 @@ def main():
                 key = _interior_fail_key(
                     phys_addr, a, data, load_addr, size,
                     job['producer_ranges'], job['cross_call_allow'],
-                    expected_abi, args.cps, toml)
+                    expected_abi, args.cps, toml,
+                    job['guard_bytes'])
                 memo_action = interior_fail_memo_action(a, job, args.force)
                 if key in fail_memo and memo_action != 'retry':
                     # Deterministically doomed from these exact bytes — skip the
@@ -6951,7 +7067,8 @@ def main():
                 frag_ids, status = compile_interior_fragment(
                     a, data, load_addr, size, phys_addr, cache_dir, args,
                     frag_env, toml, job['producer_ranges'],
-                    job['cross_call_allow'])
+                    job['cross_call_allow'],
+                    guard_bytes=job['guard_bytes'])
                 if frag_ids:
                     built += 1
                     record_fragment_success(
@@ -7168,9 +7285,10 @@ def main():
             source = static_entry_sources.get(entry)
             if source is None:
                 continue
-            data, load_addr, size, phys_addr = source
+            data, load_addr, size, phys_addr, guard_bytes = source
             part = generate_interior_fragment_static(
-                entry, data, load_addr, size, phys_addr, args)
+                entry, data, load_addr, size, phys_addr, args,
+                guard_bytes=guard_bytes)
             if part is None:
                 continue
             static_parts.append(part)
