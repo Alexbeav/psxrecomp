@@ -42,7 +42,27 @@ EXIT_VERIFY = 3
 
 def resolve_embedded_toolchain_bin(project_root: Path) -> Optional[Path]:
     """Return a usable toolchain bin/ (project, env, or shared cache)."""
+    if sys.platform != "win32":
+        return None
     return resolve_toolchain_bin(project_root)
+
+
+def _native_toolchain_ready(log=None) -> bool:
+    """Return true when Unix has the build tools required by setup."""
+    groups = (
+        ("CMake", ("cmake",)),
+        ("Ninja", ("ninja",)),
+        ("C compiler", ("cc", "gcc", "clang")),
+        ("C++ compiler", ("c++", "g++", "clang++")),
+    )
+    missing = [label for label, tools in groups if not any(shutil.which(t) for t in tools)]
+    if missing:
+        if log:
+            log(f"Missing native build tools: {', '.join(missing)}")
+        return False
+    if log:
+        log("Using native CMake, Ninja, and C/C++ compilers on PATH")
+    return True
 
 
 def activate_embedded_toolchain(
@@ -50,6 +70,8 @@ def activate_embedded_toolchain(
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
     log = progress.log if progress else None
+    if sys.platform != "win32":
+        return _native_toolchain_ready(log)
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
         return False
@@ -68,6 +90,8 @@ def ensure_toolchain_for_rebuild(
     min_version: str = "",
 ) -> bool:
     """Ensure cmake is available via cache / download / offline zip."""
+    if sys.platform != "win32":
+        return _native_toolchain_ready(progress.log)
     try:
         _ensure_toolchain_pack(
             project_root,
