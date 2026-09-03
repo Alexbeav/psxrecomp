@@ -67,7 +67,7 @@ TranslateResult StrictTranslator::translate(const PSXRecomp::DecodedInstruction&
     TranslateResult r = translate_impl(d);
     if (!r.supported) return r;
     const uint32_t opcode = (d.raw >> 26) & 0x3F;
-    /* Shared PGXP hook grammar (docs/ENHANCEMENTS.md G1.10). LWC2/SWC2 capture
+    /* Shared PGXP hook grammar (ENHANCEMENTS.md G1.10). LWC2/SWC2 capture
      * their raw word inside translate_impl and are skipped here. */
     if (opcode != 0x32 && opcode != 0x3A && !r.c_code.empty())
         PSXRecomp::append_pgxp_hooks(d.raw, r.c_code);
