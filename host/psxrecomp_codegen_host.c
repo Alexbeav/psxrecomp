@@ -2781,7 +2781,11 @@ static int host_system_toolchain_ready(void) {
     if (!find_on_path("cmake", g_cmake, sizeof(g_cmake)) ||
         !posix_command_runs(g_cmake))
         return 0;
-    if (!find_python(python, sizeof(python)) || !posix_command_runs(python))
+    /* Do not call find_python here. A failed Windows pack can remain in the
+     * shared cache and its python.exe must not shadow native Python on Unix. */
+    if (!(find_on_path("python3", python, sizeof(python)) ||
+          find_on_path("python", python, sizeof(python))) ||
+        !posix_command_runs(python))
         return 0;
     if (!find_on_path("ninja", tool, sizeof(tool)) ||
         !posix_command_runs(tool))

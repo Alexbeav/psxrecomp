@@ -20,8 +20,10 @@ def main() -> int:
     for tool in ("cmake", "ninja", "cc", "c++"):
         if f'find_on_path("{tool}"' not in ready.group("body"):
             raise AssertionError(f"POSIX readiness does not check {tool}")
-    if "find_python(" not in ready.group("body"):
-        raise AssertionError("POSIX readiness does not check Python")
+    if 'find_on_path("python3"' not in ready.group("body"):
+        raise AssertionError("POSIX readiness does not check native Python")
+    if "find_python(" in ready.group("body"):
+        raise AssertionError("POSIX readiness can select a cached Windows Python")
     if ready.group("body").count("posix_command_runs(") < 5:
         raise AssertionError("POSIX readiness does not execute every selected tool")
 
