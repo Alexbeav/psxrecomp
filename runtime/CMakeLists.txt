@@ -527,6 +527,14 @@ if(BUILD_TESTING)
         add_test(NAME bios_registry_zero_entry_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_registry_zero_entry.py)
+        # Exercises runtime/psx_check_mod_catalog.cmake -- the build-time guard
+        # that fails a build when a title's mod packages land in the legacy
+        # mods/packages layout instead of mods/bundled (bead beads-eio.3.101).
+        # Needs the cmake executable, since the guard is a cmake -P script.
+        add_test(NAME mod_catalog_layout_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
+                         --cmake ${CMAKE_COMMAND})
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
