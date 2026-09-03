@@ -448,6 +448,17 @@ copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude 'build' \
   --exclude '__pycache__'
 
+# These one-off overlay extraction helpers are development oracles, not setup
+# SDK inputs. They contain workstation-specific paths, so a public source
+# package must not include them.
+remove_non_sdk_helpers() {
+  rm -f \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba1_extract.py" \
+    "${STAGE}/psxrecomp/tools/aot_overlay_spike/tomba2_extract.py"
+}
+
+remove_non_sdk_helpers
+
 # Never ship owned inputs or player state copied from the title or framework
 # worktrees. These files can be tracked or ignored, so a clean Git status is
 # not evidence that the package is clean. Backup suffixes are included.
@@ -521,6 +532,7 @@ bash "${STAGE_SDK}" "${stage_args[@]}"
 
 # The SDK stage runs after the first scrub. Check the complete package tree
 # again so future SDK changes cannot restore a forbidden file.
+remove_non_sdk_helpers
 assert_no_private_payload
 
 cat >"${STAGE}/README-SETUP.txt" <<EOF
