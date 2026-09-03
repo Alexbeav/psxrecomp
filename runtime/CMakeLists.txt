@@ -562,6 +562,9 @@ if(BUILD_TESTING)
         add_test(NAME overlay_loader_c11_source_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_loader_c11_source.py)
+        add_test(NAME fntrace_linkage_source_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_linkage_source.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
