@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGER = ROOT / "tools" / "package_setup_host.sh"
+WRAPPER_TEMPLATE = ROOT / "tools" / "new_project_layout" / "templates" / "package_setup_release.sh.in"
 
 
 def main() -> None:
@@ -31,6 +32,7 @@ def main() -> None:
     assert "tomba2_extract.py" in text
     assert "--exclude 'test_data'" in text
     assert 'rm -rf "${STAGE}/recomp-ui/test_data"' in text
+    assert "--project-file project-manifest.toml" in WRAPPER_TEMPLATE.read_text(encoding="utf-8")
     print("setup package payload filter test: PASS")
 
 

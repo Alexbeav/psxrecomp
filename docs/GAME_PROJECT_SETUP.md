@@ -364,7 +364,7 @@ CI ships a zip **without** `generated/` game C, retail BIOS dumps, or an
 embedded `toolchain/`. The zip includes:
 
 - Setup host exe (`recomp-ui` + generate/rebuild wizard)
-- Your game sources (`game.toml`, seeds, CMake, host glue, …)
+- Your game sources (`project-manifest.toml`, `game.toml`, seeds, CMake, host glue, …)
 - `psxrecomp/` (runtime + CLI + OpenBIOS profiles + emitters)
 - `recomp-ui/` sources (needed to rebuild)
 - On Windows: MinGW runtime DLLs beside the host and emitters
