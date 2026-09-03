@@ -155,6 +155,33 @@ class CacheStagingTest(unittest.TestCase):
         self.assertFalse([f for f in names if f.endswith('.c')])
         self.assertFalse([f for f in names if f.endswith('.pair-lock')])
 
+    def test_real_producer_artifacts_never_ship(self):
+        """The exact set of non-shard files a REAL cache holds.
+
+        Taken verbatim from a live Tomba 2 Linux cache build, 2026-09-02
+        (184 shards, and beside them: 184 .pair-lock, 185 .c, a capacity lock,
+        and a pair of in-progress temp artifacts). The temp pair is the one
+        that matters, because both members END IN A SHIPPABLE SUFFIX -- a
+        suffix-only filter ships them, and the shell `find -name '*.so'` these
+        packagers used did exactly that.
+        """
+        touch(os.path.join(self.tagdir, '80040000.so.pair-lock'))
+        touch(os.path.join(self.tagdir, '80040000.c'))
+        touch(os.path.join(self.tagdir, '.overlay-candidate-capacity.lock'))
+        touch(os.path.join(self.tagdir, '.overlay-candidate-capacity.lock.invocation'))
+        touch(os.path.join(self.tagdir, '.00096000_407B1780.so.tmp.ryt4jqca.so'))
+        touch(os.path.join(self.tagdir, '.00096000_407B1780.so.tmp.ryt4jqca.ranges'))
+        touch(os.path.join(self.tagdir, '.abi_%s.ok' % TAG))
+        n, _ = self.stage_it()
+        self.assertEqual(n, 5, 'only the finished shards are shippable')
+        staged = os.path.join(self.stage, 'cache', GAME, 'gcc', ARCH, TAG)
+        names = sorted(os.listdir(staged))
+        self.assertEqual(len(names), 11, names)   # 5 .so + 5 .ranges + 1 .resident
+        self.assertFalse([f for f in names if f.startswith('.')],
+                         'no shippable cache artifact is hidden')
+        self.assertFalse([f for f in names if '.tmp.' in f])
+        self.assertFalse([f for f in names if f.endswith(('.c', '.pair-lock'))])
+
     # ---- the escape hatch -------------------------------------------------
     def test_missing_cache_dir_fails_by_default(self):
         shutil.rmtree(os.path.join(self.src, GAME))

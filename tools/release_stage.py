@@ -12,9 +12,11 @@ missing. Until now it was implemented FIVE times:
   * tools/release_overlay_stage.ps1 in this repo (the shared Windows module,
     added by beads-eio.2.6 after a packager that re-derived the tag in
     PowerShell staged ZERO shards from a perfectly good cache), and
-  * tools/package_appimage.sh forked into ApeEscapeRecomp (403 lines),
+  * tools/package_appimage.sh forked into ApeEscapeRecomp (416 lines),
     Tomba2Recomp (436) and MegaManX6Recomp (408), each with its own copy of
-    the tag derivation.
+    the tag derivation. (Line counts are of each repo's origin/master. Reading
+    a working tree gives the wrong answer here -- the Ape checkout is parked on
+    an old branch and reports 403.)
 
 Every one of those four hand-built the tag string. Measured 2026-09-02, on each
 repo's origin/master:
@@ -112,12 +114,15 @@ def _shippable_suffixes(shared_ext):
     return (shared_ext, '.ranges', '.resident')
 
 
-# Things that exist in a producer's cache directory and MUST NOT ship. This is
-# a belt-and-braces assertion, not the selection mechanism: selection is an
-# ALLOWLIST of the three suffixes above, so a new artifact kind appearing in the
-# cache is excluded by default rather than shipped by default. The assertion
-# exists because "excluded by default" is a property of code that can be
-# edited, and this one is worth failing a release over.
+# Things that exist in a producer's cache directory and MUST NOT ship.
+#
+# Selection is the suffix ALLOWLIST above, so a new artifact kind appearing in a
+# producer's cache is excluded by default rather than shipped by default. This
+# denylist is checked FIRST anyway, for two reasons: some producer-internal
+# files end in a shippable suffix (see the temp-shard note below), and the
+# staged tree is re-scanned against this same list after copying, so a bug in
+# the selection code fails the release instead of shipping a memo that
+# suppresses the runtime's ABI preflight.
 #
 #   .abi_<tag>.ok   a completed-sweep memo. The runtime's ABI preflight skips
 #                   re-verifying every shard when it finds this file. Shipping
@@ -128,10 +133,25 @@ def _shippable_suffixes(shared_ext):
 #                   is producer input, not a runtime artifact.
 #   *.pair-lock     a producer-side concurrency lock. Meaningless to a player
 #                   and actively confusing if a stale one ships.
+#   .<name>.so.tmp.<rand>.so   an IN-PROGRESS shard. compile_overlays writes
+#                   each shard to a hidden temp name and renames it into place,
+#                   so a cache directory that is being written, or was written
+#                   by an interrupted run, holds files that END IN THE SHIPPABLE
+#                   SUFFIX. Measured 2026-09-02 in a live Tomba 2 cache build:
+#                     .00096000_407B1780.so.tmp.ryt4jqca.so
+#                     .00096000_407B1780.so.tmp.ryt4jqca.ranges
+#                   A suffix allowlist alone therefore SHIPS them, and so did
+#                   the old shell `find -name '*.so'`. Every producer-internal
+#                   file observed in a real cache is HIDDEN, and no shippable
+#                   artifact ever is, so a leading dot is the reliable
+#                   discriminator and is applied before the suffix test.
 _FORBIDDEN_PATTERNS = (
     (re.compile(r'^\.abi_.*\.ok$'), 'ABI sweep memo (suppresses the runtime ABI preflight)'),
     (re.compile(r'\.c$'), 'generated C source (producer input, not a runtime artifact)'),
     (re.compile(r'\.pair-lock$'), 'producer-side concurrency lock'),
+    (re.compile(r'^\.'), 'producer-internal hidden file (in-progress shard, lock '
+                         'or sweep memo); no shippable cache artifact is hidden'),
+    (re.compile(r'\.tmp\.'), 'in-progress producer temp file'),
 )
 
 
@@ -231,7 +251,7 @@ def stage_cache(game_id, cache_src_root, stage, cg_tag,
     selected = []          # (abs_src, rel_dst)
     wrong_arch = set()
     other_tags = set()
-    skipped_shape = []
+    excluded = []
     for dirpath, dirnames, filenames in os.walk(cache_src):
         rel_dir = os.path.relpath(dirpath, cache_src)
         parts = _split_rel(rel_dir)
@@ -252,18 +272,17 @@ def stage_cache(game_id, cache_src_root, stage, cg_tag,
             wrong_arch.add('%s/%s/%s' % (tier, seen_arch, seen_tag))
             continue
         for name in filenames:
-            if not name.endswith(keep_suffixes):
-                why = _forbidden_reason(name)
-                if why:
-                    skipped_shape.append((os.path.join(rel_dir, name), why))
+            # FORBIDDEN IS CHECKED FIRST, and beats the suffix allowlist. It has
+            # to: an in-progress shard is named .<crc>.so.tmp.<rand>.so, so it
+            # ends in a shippable suffix and a suffix-first test ships it. That
+            # is not a hypothetical layout -- it is what a cache directory looks
+            # like while it is being written, or after an interrupted run.
+            why = _forbidden_reason(name)
+            if why:
+                excluded.append((os.path.join(rel_dir, name), why))
                 continue
-            if _forbidden_reason(name):
-                # A file that ends in a shippable suffix AND matches a
-                # forbidden pattern cannot exist today; if the cache layout ever
-                # creates one, refuse rather than resolve the ambiguity silently.
-                _die('cache file %s matches both the shippable suffix set and a '
-                     'forbidden pattern; refusing to guess'
-                     % os.path.join(rel_dir, name))
+            if not name.endswith(keep_suffixes):
+                continue
             selected.append((os.path.join(dirpath, name),
                              os.path.join(rel_dir, name)))
 
@@ -314,8 +333,15 @@ def stage_cache(game_id, cache_src_root, stage, cg_tag,
         log('release_stage: note - the source cache also holds shards under '
             'foreign tag(s) %s; those are NOT shippable (the runtime ignores '
             'other namespaces) and were skipped.' % ', '.join(sorted(other_tags)))
-    for rel, why in skipped_shape:
-        log('release_stage: excluded %s (%s)' % (rel, why))
+    # Report exclusions as a grouped tally rather than a line each: a real
+    # cache holds one .pair-lock and one .c PER SHARD, so per-file lines would
+    # bury the shard count under hundreds of notes in every release log.
+    if excluded:
+        tally = {}
+        for _rel, why in excluded:
+            tally[why] = tally.get(why, 0) + 1
+        for why in sorted(tally):
+            log('release_stage: excluded %d file(s): %s' % (tally[why], why))
     return n, sorted(tag_dirs)
 
 
