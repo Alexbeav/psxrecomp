@@ -657,15 +657,28 @@ def stage_toolchain(stage, recomp_dir, recomp_tools, recomp_include, dl_cache,
              % os.path.relpath(probe, toolchain))
     os.chmod(probe, 0o755)
 
+    # lstat, and skip symlinks. os.path.getsize() follows them, and a
+    # relocatable CPython is dense with them -- the staged Linux toolchain has
+    # over a thousand, so following them reported ~110 MB for a tree that is
+    # 80 MB on disk. A release log that overstates what it just staged by 38%
+    # is a number nobody can use.
     total = 0
+    links = 0
     for dirpath, _d, files in os.walk(toolchain):
         for f in files:
+            p = os.path.join(dirpath, f)
             try:
-                total += os.path.getsize(os.path.join(dirpath, f))
+                st = os.lstat(p)
             except OSError:
-                pass
+                continue
+            if os.path.islink(p):
+                links += 1
+                continue
+            total += st.st_size
     log('Bundled overlay toolchain (pinned python%s + recompiler + headers): '
-        '~%d MB' % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20)))
+        '~%d MB in %d file(s) + %d symlink(s)'
+        % (' + tcc' if pins['tcc_url'] else '', total // (1 << 20),
+           sum(len(f) for _r, _d, f in os.walk(toolchain)) - links, links))
     return toolchain
 
 
