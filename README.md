@@ -101,47 +101,45 @@ repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
 and game code (`game.toml`, seeds, CMake) at the repo root. See
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
-### New Project Layout (preview)
+### Set up a game project (recommended)
 
-Scaffold a title repo: pass **`--disc`** (required path — tab-complete it);
-the script **prompts** for name, players, marketing, recomp-ui, wizard/netplay,
-lobby URL (default `netplay.retcomm.net`), CI, boxart, Generate, optional
-build, and optional `gh` repo create. Seeds `symbols.toml` + a rich
-`.gitignore`. Full flow: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
+Clone this repo with submodules, then run the setup script. Pass your disc
+(`.cue`) and, optionally, a legally obtained retail BIOS dump. The script
+prompts for everything else; answer **Y** to Generate to produce the game and
+BIOS C. The new project is created under `--dir` / `-Dir` with the name you
+choose.
 
-```bash
-# Linux / macOS — interactive prompts after --disc
-sh tools/new_project_layout/setup_project.sh --disc /path/to/game.cue --dir ~/src
-```
+**Windows**
 
 ```powershell
-# Windows
-powershell -File tools\new_project_layout\setup_project.ps1 -Disc C:\dumps\game.cue
+# Disc + BIOS
+powershell -File tools\new_project_layout\setup_project.ps1 `
+  -Disc C:\dumps\game.cue -Bios C:\BIOS\SCPH1001.BIN -Dir C:\src
+
+# Multi-disc + BIOS: scaffold from disc 1, then register the whole set
+powershell -File tools\new_project_layout\setup_project.ps1 `
+  -Disc C:\dumps\game-disc1.cue -Bios C:\BIOS\SCPH1001.BIN -Dir C:\src
+python tools\new_project_layout\update_disc_set.py --game-toml C:\src\MyGameRecomp\game.toml `
+  C:\dumps\game-disc1.cue C:\dumps\game-disc2.cue C:\dumps\game-disc3.cue
 ```
 
-**Migrate an older title** (e.g. `psxrecomp-v4` / prebuilt `packaging/`) onto
-setup-host with Project Studio — audit → plan → apply (CLI or GUI). Releases
-stay setup-host only (no prebuilt game C):
+**macOS / Linux**
 
-```bash
-python3 tools/new_project_layout/migrate_project.py audit --root ~/src/MyGameRecomp
-python3 tools/new_project_layout/migrate_project.py apply --root ~/src/MyGameRecomp --dry-run
-python3 tools/new_project_layout/migrate_project.py gui
+```sh
+# Disc + BIOS
+sh tools/new_project_layout/setup_project.sh \
+  --disc ~/dumps/game.cue --bios ~/bios/SCPH1001.BIN --dir ~/src
+
+# Multi-disc + BIOS: scaffold from disc 1, then register the whole set
+sh tools/new_project_layout/setup_project.sh \
+  --disc ~/dumps/game-disc1.cue --bios ~/bios/SCPH1001.BIN --dir ~/src
+python3 tools/new_project_layout/update_disc_set.py --game-toml ~/src/MyGameRecomp/game.toml \
+  ~/dumps/game-disc1.cue ~/dumps/game-disc2.cue ~/dumps/game-disc3.cue
 ```
 
-Details: [`tools/new_project_layout/README.md`](tools/new_project_layout/README.md)
-and [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
-
-Launcher features that are still in active development are **opt-in at
-configure time** (defaults OFF — other platforms sharing `recomp-ui` stay dark):
-
-| Flag | Default | Enables |
-|------|---------|---------|
-| `-DPSX_SETUP_WIZARD=ON` | OFF | First-run setup wizard + Generate & rebuild |
-| `-DPSX_NETPLAY=ON` | OFF | Full netplay UI (needs `lib/recomp-net`) |
-
-Details: [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md). Legacy CLI
-`psxrecomp build` / `tools/setup_dev.sh` remain available.
+Then build with the generated `build.ps1` / `build.sh` in the new project.
+Full flow, every flag, CI, and the release checklist:
+[`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
 **New here?** The fastest way in:
 
@@ -450,106 +448,6 @@ Both are visual-only: the GTE's guest-visible screen coordinates stay integer
 and fully faithful, so game logic and culling are unaffected. Supported on all
 three renderers. See [`docs/ENHANCEMENTS.md`](docs/ENHANCEMENTS.md) §G1.
 
-## How to use PSXRecomp
-
-PSXRecomp takes a PlayStation disc image and creates a recompilation project
-that supports the bundled OpenBIOS and a compatible retail BIOS. The CLI asks
-for a retail BIOS dump so it can generate that backend alongside OpenBIOS.
-
-### Generate a project with the released CLI
-
-1. Download `psxrecomp-cli-windows-x86_64.zip` from
-   [Releases](https://github.com/mstan/psxrecomp/releases).
-2. Extract the whole zip to a folder. Keep its contents together.
-3. Open PowerShell in that folder and run:
-
-```powershell
-.\psxrecomp.exe build `
-  --disc "C:\Games\My Game\game.cue" `
-  --bios "C:\BIOS\SCPH1001.BIN" `
-  --output "C:\Projects\MyGameRecomp"
-```
-
-Use the `.cue` file when a game has one, and keep its `.bin` track files beside
-it. Single-file `.bin` and `.iso` images are also accepted.
-
-The output folder contains:
-
-- generated C source for the game and compatible retail BIOS, with the bundled
-  OpenBIOS backend supplied by the framework;
-- `game.toml`, which you can edit for game-specific settings;
-- `CMakeLists.txt` and build scripts; and
-- a local copy of the PSXRecomp runtime source needed by the project.
-
-The downloaded CLI is self-contained. You do not need to install Python or
-build this repository to generate a project.
-
-### Build the generated project
-
-Install CMake, Ninja, and a C/C++ compiler. The build fetches its integrity-
-pinned SDL3 release automatically. Then run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Projects\MyGameRecomp\build.ps1"
-```
-
-The generated project must keep the `psxrecomp/` framework folder beside
-`CMakeLists.txt`; that folder contains `runtime/runtime.cmake`. If CMake says it
-cannot find that file, the framework tree is missing or incomplete. For a git
-checkout, run `git submodule update --init --recursive` from the project root.
-For a project made by the released `psxrecomp.exe`, regenerate it from the full
-CLI zip and keep the generated `psxrecomp/` folder.
-
-The generated project also includes a shell build script for macOS and Linux:
-
-```sh
-sh /path/to/MyGameRecomp/build.sh
-```
-
-The ready-made CLI release is currently for 64-bit Windows. You can build the
-CLI from source on another operating system using the instructions below.
-
-The generated project is a practical starting point, not a promise that every
-game works without game-specific fixes. PSX games can load extra code and use
-hardware in ways that require additional configuration or development.
-
-Use only disc and retail BIOS files you obtained legally. PSXRecomp does not
-include those copyrighted files; it includes only the redistributable OpenBIOS
-image. Generated game and retail BIOS source is derived from your files, so do
-not redistribute it.
-
-### Build the CLI from source
-
-You need Git, Python 3, CMake, Ninja, and a C++20 compiler.
-
-```sh
-git clone --recurse-submodules https://github.com/mstan/psxrecomp.git
-cd psxrecomp
-python tools/build_cli.py release
-```
-
-The ready-to-use CLI archive is written to `dist/`. To package debug binaries
-instead, run `python tools/build_cli.py debug`.
-
-On Linux/macOS source checkouts, the same development setup can be driven by:
-
-```sh
-sh tools/setup_dev.sh
-```
-
-That script builds the CLI/recompiler tools and, when the OpenBIOS and retail
-BIOS generated sources are available, the standalone BIOS runtime. Game
-projects should still be generated with `psxrecomp build` and built from their
-generated `build.sh`.
-
-> **Where the project is headed.** Development so far has been **breadth-first**:
-> bring up varied games as playable public builds and prove that the framework
-> generalizes. With that foundation established, the project is now focused on a
-> **depth / optimization** phase: pushing each game toward 100% static coverage,
-> tightening timing accuracy, driving load times toward zero, and hardening the
-> renderer and audio paths. Expect existing projects to get *faster and more
-> accurate* from here.
-
 ## Release Package
 
 **This repository's release is a standalone BIOS runtime, not a game.** It can
@@ -575,6 +473,14 @@ configures video, controls, and per-game settings. Keyboard/controller mappings
 live in each game's repo and launcher, not here.
 
 ## Philosophy — toward 100% static recompilation
+
+> **Where the project is headed.** Development so far has been **breadth-first**:
+> bring up varied games as playable public builds and prove that the framework
+> generalizes. With that foundation established, the project is now focused on a
+> **depth / optimization** phase: pushing each game toward 100% static coverage,
+> tightening timing accuracy, driving load times toward zero, and hardening the
+> renderer and audio paths. Expect existing projects to get *faster and more
+> accurate* from here.
 
 The goal is simple and absolute: **a PS1 game should run as native code, not be
 emulated.** Every MIPS instruction the game executes should ideally have been
