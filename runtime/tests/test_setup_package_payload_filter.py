@@ -18,6 +18,9 @@ def main() -> None:
     assert "forbidden owned-input or player-state payload" in text
     assert "forbidden retail BIOS payload" in text
     assert text.count("assert_no_private_payload") >= 3
+    assert text.count("remove_non_sdk_helpers") >= 3
+    assert "tomba1_extract.py" in text
+    assert "tomba2_extract.py" in text
     assert "*.sh text eol=lf" in ATTRIBUTES.read_text(encoding="utf-8")
     print("setup package payload filter test: PASS")
 
