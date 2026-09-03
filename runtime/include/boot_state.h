@@ -40,11 +40,12 @@ extern "C" {
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
  * v5 = v4 + CD-ROM Sub-Q replacement state;
- * v6 = v5 + per-word GPU DMA2 linked-list progress. */
-#define BOOT_STATE_VERSION 6u
-/* v6 intentionally breaks older savestates after the DMA wire grew. Reject
+ * v6 = v5 + per-word GPU DMA2 linked-list progress;
+ * v7 = v6 + pending XA DATA_END IRQ state. */
+#define BOOT_STATE_VERSION 7u
+/* v7 intentionally breaks older savestates after the CD-ROM wire grew. Reject
  * them at the header before any section changes the live machine. */
-#define BOOT_STATE_VERSION_MIN_READ 6u
+#define BOOT_STATE_VERSION_MIN_READ 7u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 

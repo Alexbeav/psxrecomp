@@ -265,6 +265,7 @@ static uint8_t cd_muted;
 
 #define XA_SUBMODE_AUDIO 0x04
 #define XA_SUBMODE_REALTIME 0x40
+#define XA_SUBMODE_EOF 0x80
 #define CDROM_SECTOR_MODE2 0x02
 
 
@@ -289,6 +290,7 @@ static uint8_t xa_stream_file;
 static uint8_t xa_stream_channel;
 static uint8_t xa_stream_coding;
 static int xa_stream_active;
+static int xa_data_end_pending;
 
 /* Red Book CD-DA playback state. One raw audio sector contains exactly 588
  * stereo frames; at 75 sectors/second this is the SPU's native 44.1 kHz. */
@@ -925,6 +927,7 @@ static void set_irq(int type) {
 }
 
 static void fire_cdrom_irq(void);
+static void stop_read_stream(void);
 
 static void present_lid_open_irq_if_ready(void)
 {
@@ -1442,6 +1445,17 @@ static int read_sector_at(int min, int sec, int sect) {
         delivery.data_delivered = 0;
         delivery.skip_reason = CDROM_SKIP_XA_AUDIO_REALTIME;
     }
+    if ((delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
+        (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) {
+        if (!(mode_reg & 0x08u) ||
+            (delivery.xa_file == filter_file &&
+             delivery.xa_channel == filter_channel)) {
+            xa_data_end_pending = 1;
+            if (mode_reg & 0x02u) {
+                stop_read_stream();
+            }
+        }
+    }
 
     CdSectorBuf *wb = NULL;
     if (delivery.data_delivered) {
@@ -1671,6 +1685,15 @@ static void deliver_cdda_data_end(void) {
     fire_cdrom_irq();
 }
 
+static void deliver_xa_data_end(void) {
+    if (!xa_data_end_pending || irq_flag != 0) return;
+    xa_data_end_pending = 0;
+    response_clear();
+    response_push(stat_reg);
+    set_irq(CDIRQ_DATA_END);
+    fire_cdrom_irq();
+}
+
 /* CD-DA position reports (Setmode bit2), psx-spx "Command 03h - Play":
  * INT1(stat, track, index, mm/amm, ss+80h/ass, sect/asect, peaklo, peakhi)
  * on every 10th frame of absolute time — asect BCD 00/20/40/60h absolute,
@@ -1836,6 +1859,14 @@ uint64_t cdrom_get_dataready_fires(void) { return s_dataready_fires; }
 static int deliver_read_sector(void) {
     int delivered = read_sector_at(read_min, read_sec, read_sect);
     advance_msf(&read_min, &read_sec, &read_sect);
+    if (xa_data_end_pending) {
+        xa_data_end_pending = 0;
+        response_clear();
+        response_push(stat_reg);
+        set_irq(CDIRQ_DATA_END);
+        fire_cdrom_irq();
+        return 1;
+    }
     if (!delivered) return 0;
     response_clear();
     response_push(stat_reg);
@@ -2386,9 +2417,13 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        stop_read_stream();
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        read_min = seek_min;
+        read_sec = seek_sec;
+        read_sect = seek_sect;
         stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);
@@ -2786,6 +2821,7 @@ void cdrom_init(const char* cue_path) {
     filter_file = 0;
     filter_channel = 0;
     cd_muted = 0;
+    xa_data_end_pending = 0;
     xa_reset_decode();
     spu_cd_audio_reset();
     /* Rematch: pending.cmd/delay/phase and read MSF used to survive with
@@ -3024,6 +3060,7 @@ void cdrom_advance(uint32_t cycles) {
     }
     process_read_stream(cycles);
     process_cdda_stream(cycles);
+    deliver_xa_data_end();
     process_lid_state();
     refresh_cdrom_irq_line();
 }
@@ -3315,7 +3352,7 @@ static int cdrom_snap_emit(PstW *w) {
     WI(reading); WI(read_min); WI(read_sec); WI(read_sect); W8(mode_reg);
     W8(read_cmd); WI(read_delay); W8(filter_file); W8(filter_channel); W8(cd_muted);
     WI(cdda_playing); WI(cdda_track); WU(cdda_lba); WI(cdda_delay);
-    WI(cdda_data_end_pending); W64(cdda_sectors_played);
+    WI(cdda_data_end_pending); WI(xa_data_end_pending); W64(cdda_sectors_played);
     if (!pst_w_i32(w, xa_hist_l[0]) || !pst_w_i32(w, xa_hist_l[1]) ||
         !pst_w_i32(w, xa_hist_r[0]) || !pst_w_i32(w, xa_hist_r[1]))
         return 0;
@@ -3381,7 +3418,7 @@ static int cdrom_snap_parse(PstR *r) {
     RI(reading); RI(read_min); RI(read_sec); RI(read_sect); R8(mode_reg);
     R8(read_cmd); RI(read_delay); R8(filter_file); R8(filter_channel); R8(cd_muted);
     RI(cdda_playing); RI(cdda_track); RU(cdda_lba); RI(cdda_delay);
-    RI(cdda_data_end_pending); R64(cdda_sectors_played);
+    RI(cdda_data_end_pending); RI(xa_data_end_pending); R64(cdda_sectors_played);
     if (!pst_r_i32(r, &xa_hist_l[0]) || !pst_r_i32(r, &xa_hist_l[1]) ||
         !pst_r_i32(r, &xa_hist_r[0]) || !pst_r_i32(r, &xa_hist_r[1]))
         return 0;

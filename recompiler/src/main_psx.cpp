@@ -514,6 +514,13 @@ int main(int argc, char** argv) {
     fmt::print("  Code Size:      {} bytes ({} KB)\n",
                exe->header.file_size, exe->header.file_size / 1024);
     fmt::print("  End Address:    0x{:08X}\n", exe->end_address());
+    if (exe->has_analysis_guard()) {
+        // Only printed for a producer-tagged capture, so a non-overlay image's
+        // log stays byte-identical to the untagged build.
+        fmt::print("  Analysis End:   0x{:08X}  ({} trailing delay-slot guard "
+                   "byte(s), readable but not discoverable)\n",
+                   exe->analysis_end_address(), exe->analysis_guard_bytes);
+    }
     fmt::print("  Global Pointer: 0x{:08X}\n", exe->header.initial_gp);
     fmt::print("  Stack Pointer:  0x{:08X}\n\n", exe->header.initial_sp);
 
@@ -656,7 +663,7 @@ int main(int argc, char** argv) {
         std::ifstream ef(extra_funcs_path);
         if (ef.is_open()) {
             const uint32_t seed_lo = exe->header.load_address;
-            const uint32_t seed_hi = exe->end_address();
+            const uint32_t seed_hi = exe->analysis_end_address();
             std::string line;
             while (std::getline(ef, line)) {
                 if (line.empty() || line[0] == '#') continue;
@@ -822,7 +829,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < 3u; i++) {
                 auto value = exe->read_word(a + i * 4u);
                 if (!value.has_value() || (*value & 3u) != 0u ||
-                    *value < exe_lo || *value >= exe->end_address()) {
+                    *value < exe_lo || *value >= exe->analysis_end_address()) {
                     return false;
                 }
             }
@@ -1006,7 +1013,7 @@ int main(int argc, char** argv) {
         std::set<uint32_t> forced;
         forced.insert(exe->header.initial_pc);
         const uint32_t exe_lo = exe->header.load_address;
-        const uint32_t exe_hi = exe->end_address();
+        const uint32_t exe_hi = exe->analysis_end_address();
         auto read_w = [&](uint32_t a) -> uint32_t {
             auto w = exe->read_word(a);
             return w.has_value() ? *w : 0u;
