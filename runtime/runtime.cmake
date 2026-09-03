@@ -836,6 +836,339 @@ function(psxrecomp_ensure_zlib)
         "(expected zlibstatic or zlib).")
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Mod catalog staging -- THE FRAMEWORK OWNS THE LAYOUT
+# ---------------------------------------------------------------------------
+# docs/MOD_PACKAGES.md defines <exe-dir>/mods/bundled as "build output -- the
+# framework's mods/builtin/packages plus the title's mods/preloaded/packages".
+# Until now only the first half of that sentence was implemented here, and the
+# second half was implemented five times, once per title, as a hand-written
+#
+#     add_custom_command(TARGET psx-runtime POST_BUILD
+#         COMMAND ${CMAKE_COMMAND} -E copy_directory
+#             "${<TITLE>_PRELOADED_MODS}" "$<TARGET_FILE_DIR:psx-runtime>/mods")
+#
+# in ApeEscapeRecomp, Tomba2Recomp, MegaManX4/5/6Recomp. Because those blocks
+# name the destination as a STRING, framework commit 4cc04be3 -- which renamed
+# the staged directory from mods/packages to mods/bundled so a rebuild could
+# stop deleting the player's installed mods -- broke all five without breaking
+# anything a compiler, linker or configure step can see. The titles kept
+# writing mods/packages; the launcher and the release packager had moved to
+# mods/bundled. Discovery was deferred to whichever title next ran a release
+# packager (bead beads-eio.3.101).
+#
+# So the layout string now appears in exactly one place. A title declares WHERE
+# its packages live (PRELOADED_MODS_DIR) and never HOW they are laid out, and a
+# future rename touches this file only.
+#
+# Two guards keep it that way:
+#   * configure time -- a title that has mods/preloaded/packages in its source
+#     tree but did not declare it is a hard configure error, because that is
+#     exactly the missed-title state, and it is detectable before any build.
+#   * build time -- runtime/psx_check_mod_catalog.cmake runs as the LAST
+#     POST_BUILD step (registered via cmake_language(DEFER), so it lands after
+#     anything the title itself registered) and fails the build if a declared
+#     package did not reach mods/bundled, or if any package this build stages
+#     turned up in the legacy mods/packages instead.
+
+# Immediate subdirectory names of `root` (package ids), sorted.
+function(_psxrt_package_ids root out_var)
+    set(_ids "")
+    file(GLOB _entries CONFIGURE_DEPENDS LIST_DIRECTORIES true "${root}/*")
+    foreach(_e IN LISTS _entries)
+        if(IS_DIRECTORY "${_e}")
+            get_filename_component(_n "${_e}" NAME)
+            list(APPEND _ids "${_n}")
+        endif()
+    endforeach()
+    list(SORT _ids)
+    set(${out_var} "${_ids}" PARENT_SCOPE)
+endfunction()
+
+# Write `content` to `path` only when it differs, so re-configuring does not
+# churn the mtime of a file the build depends on.
+function(_psxrt_write_if_changed path content)
+    set(_prev "")
+    if(EXISTS "${path}")
+        file(READ "${path}" _prev)
+    endif()
+    if(NOT _prev STREQUAL "${content}")
+        file(WRITE "${path}" "${content}")
+    endif()
+endfunction()
+
+# Registered via cmake_language(DEFER) so it runs at the END of the directory
+# that created the runtime targets. POST_BUILD commands execute in registration
+# order, so deferring is what puts this check AFTER any add_custom_command a
+# title registered after its psxrecomp_add_runtime_target() call -- including
+# the stray legacy copy this check exists to catch.
+#
+# Takes NO arguments and reads the pending targets out of global properties:
+# cmake_language(DEFER CALL <fn> <arg>) does not carry a function-local
+# variable through (measured with cmake 4.2.2 -- the callee receives an empty
+# argument, and an add_custom_command built from it fails at directory end
+# with "CMakeLists.txt:DEFERRED"), so nothing may be passed positionally here.
+function(_psxrt_finalize_mod_catalog_guards)
+    get_property(_targets   GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS)
+    get_property(_manifests GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS)
+    get_property(_dirs      GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_DIRS)
+    list(LENGTH _targets _n)
+    if(_n EQUAL 0)
+        return()
+    endif()
+    math(EXPR _last "${_n} - 1")
+
+    # add_custom_command(TARGET) only accepts a target created in the current
+    # directory, and a deferred call runs in the directory that scheduled it,
+    # so a project with runtime targets in several directories gets one
+    # deferred pass per directory and each pass handles only its own.
+    set(_here_targets "")
+    set(_here_manifests "")
+    foreach(_i RANGE 0 ${_last})
+        list(GET _dirs ${_i} _d)
+        if(_d STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
+            list(GET _targets ${_i} _t)
+            list(GET _manifests ${_i} _m)
+            list(APPEND _here_targets "${_t}")
+            list(APPEND _here_manifests "${_m}")
+        endif()
+    endforeach()
+    list(LENGTH _here_targets _n_here)
+    if(_n_here EQUAL 0)
+        return()
+    endif()
+    math(EXPR _last_here "${_n_here} - 1")
+
+    foreach(_i RANGE 0 ${_last_here})
+        list(GET _here_targets ${_i} _t)
+        list(GET _here_manifests ${_i} _own)
+
+        # Sibling runtime targets in this directory. Two of them can share one
+        # output directory (Tomba 2's US and Italian runtimes both land in the
+        # build root), in which case mods/bundled holds whichever linked last.
+        set(_alts "")
+        foreach(_j RANGE 0 ${_last_here})
+            if(NOT _j EQUAL _i)
+                list(GET _here_manifests ${_j} _m)
+                list(APPEND _alts "${_m}")
+            endif()
+        endforeach()
+        # "|" not ";": a semicolon inside an add_custom_command argument is a
+        # cmake list separator and would split the -D into two arguments.
+        list(JOIN _alts "|" _alts_joined)
+
+        add_custom_command(TARGET ${_t} POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_t}>/mods"
+                "-DPSX_CATALOG_MANIFEST=${_own}"
+                "-DPSX_CATALOG_ALT_MANIFESTS=${_alts_joined}"
+                "-DPSX_REQUIRE_STAGED=1"
+                "-DPSX_LABEL=${_t}"
+                -P "${PSXRECOMP_ROOT}/runtime/psx_check_mod_catalog.cmake"
+            COMMENT "Verifying staged mod catalog for ${_t}"
+            VERBATIM)
+    endforeach()
+
+    # One ctest, registered against the first staging target's output
+    # directory. REQUIRE_STAGED is 0 here: `ctest` may run in a tree where the
+    # runtime was never built, and a skip is more useful there than a spurious
+    # failure. The POST_BUILD invocations above pass 1, since they run
+    # immediately after staging where an absent catalog IS the defect.
+    get_property(_test_done GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TEST_ADDED)
+    if(BUILD_TESTING AND NOT _test_done)
+        set_property(GLOBAL PROPERTY PSXRECOMP_MOD_CATALOG_TEST_ADDED TRUE)
+        list(GET _here_targets 0 _first)
+        list(GET _here_manifests 0 _first_manifest)
+        set(_first_alts "")
+        foreach(_j RANGE 0 ${_last_here})
+            if(NOT _j EQUAL 0)
+                list(GET _here_manifests ${_j} _m)
+                list(APPEND _first_alts "${_m}")
+            endif()
+        endforeach()
+        list(JOIN _first_alts "|" _first_alts_joined)
+        add_test(NAME psx_staged_mod_catalog_test
+            COMMAND ${CMAKE_COMMAND}
+                "-DPSX_MODS_DIR=$<TARGET_FILE_DIR:${_first}>/mods"
+                "-DPSX_CATALOG_MANIFEST=${_first_manifest}"
+                "-DPSX_CATALOG_ALT_MANIFESTS=${_first_alts_joined}"
+                "-DPSX_REQUIRE_STAGED=0"
+                "-DPSX_LABEL=${_first}"
+                -P "${PSXRECOMP_ROOT}/runtime/psx_check_mod_catalog.cmake")
+    endif()
+endfunction()
+
+# Stage the framework's builtin packages and the title's own packages into
+# <exe-dir>/mods/bundled, and register the guards described above.
+function(_psxrt_stage_mod_catalog target preloaded_dir)
+    set(_out "$<TARGET_FILE_DIR:${target}>")
+    set(_ids "")
+    set(_copy "")
+
+    # ---- framework-owned builtins (psx.*) ---------------------------------
+    # These target game_id "*" -- emulated-hardware features rather than
+    # per-disc content -- so every game gets them without carrying a copy of
+    # the manifests.
+    set(_builtin_root "${PSXRECOMP_ROOT}/mods/builtin/packages")
+    if(EXISTS "${_builtin_root}")
+        if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
+           "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
+            set(_builtin_ids ${PSX_BUILTIN_MOD_ALLOWLIST})
+            foreach(_id IN LISTS _builtin_ids)
+                if(NOT EXISTS "${_builtin_root}/${_id}")
+                    message(FATAL_ERROR
+                        "PSX_BUILTIN_MOD_ALLOWLIST names missing package: ${_id}")
+                endif()
+            endforeach()
+        else()
+            _psxrt_package_ids("${_builtin_root}" _builtin_ids)
+        endif()
+        foreach(_id IN LISTS _builtin_ids)
+            list(APPEND _ids "${_id}")
+            list(APPEND _copy
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${_builtin_root}/${_id}"
+                    "${_out}/mods/bundled/${_id}")
+        endforeach()
+    endif()
+
+    # ---- title-owned packages ---------------------------------------------
+    set(_readme_copy "")
+    if(preloaded_dir STREQUAL "")
+        # The missed-title tripwire. A title whose source tree carries a mod
+        # catalog but does not declare it used to stage it itself into the
+        # wrong directory and find out at release time; now it cannot configure.
+        #
+        # Requires at least one package: the project scaffold creates an EMPTY
+        # mods/preloaded/packages (with a .gitkeep), and a title that has not
+        # written a mod yet must still configure.
+        set(_undeclared_ids "")
+        if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/mods/preloaded/packages")
+            _psxrt_package_ids(
+                "${CMAKE_SOURCE_DIR}/mods/preloaded/packages" _undeclared_ids)
+        endif()
+        if(_undeclared_ids)
+            list(JOIN _undeclared_ids "\n    " _undeclared_pretty)
+            message(FATAL_ERROR
+                "This project has a mod catalog at "
+                "${CMAKE_SOURCE_DIR}/mods/preloaded/packages:\n"
+                "    ${_undeclared_pretty}\n"
+                "but target '${target}' did not declare it, so those packages "
+                "would not be staged into <exe-dir>/mods/bundled and would not "
+                "appear on the Mods page or in a release.\n\n"
+                "Add it to the psxrecomp_add_runtime_target() call:\n\n"
+                "    psxrecomp_add_runtime_target(${target}\n"
+                "        ...\n"
+                "        PRELOADED_MODS_DIR \"\${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded\"\n"
+                "    )\n\n"
+                "and DELETE any add_custom_command(TARGET ${target} POST_BUILD "
+                "... copy_directory ... /mods) block: the framework now stages "
+                "both its own mods/builtin/packages and the title's packages, "
+                "so the layout lives in one place instead of six repositories. "
+                "Pass PRELOADED_MODS_DIR NONE if this target genuinely ships "
+                "no game catalog.\n\n"
+                "See docs/MOD_PACKAGES.md and bead beads-eio.3.101.")
+        endif()
+    elseif(NOT preloaded_dir STREQUAL "NONE")
+        if(NOT IS_DIRECTORY "${preloaded_dir}")
+            message(FATAL_ERROR
+                "PRELOADED_MODS_DIR for target '${target}' is not a directory: "
+                "${preloaded_dir}")
+        endif()
+        # An empty (or not-yet-created) packages/ subdirectory is the project
+        # scaffold's initial state and must still configure -- only a bad path
+        # is an error, because a wrong path is exactly how a title ends up
+        # shipping an empty Mods page.
+        set(_game_ids "")
+        if(IS_DIRECTORY "${preloaded_dir}/packages")
+            _psxrt_package_ids("${preloaded_dir}/packages" _game_ids)
+        endif()
+        if(NOT _game_ids)
+            message(STATUS
+                "psxrecomp: ${target} declares an empty mod catalog at "
+                "${preloaded_dir}/packages; staging framework packages only")
+        endif()
+        foreach(_id IN LISTS _game_ids)
+            list(APPEND _ids "${_id}")
+            list(APPEND _copy
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${preloaded_dir}/packages/${_id}"
+                    "${_out}/mods/bundled/${_id}")
+        endforeach()
+        # mods/README.md used to arrive only as a side effect of copying the
+        # whole mods/preloaded tree into mods/. Now that only packages/ is
+        # staged, it has to be copied on purpose or it silently disappears.
+        if(EXISTS "${preloaded_dir}/README.md")
+            set(_readme_copy
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${preloaded_dir}/README.md"
+                    "${_out}/mods/README.md")
+        endif()
+    endif()
+
+    # The COPY commands above may legitimately name an id twice -- a title's
+    # catalog is allowed to OVERRIDE a framework builtin at the same id and
+    # version, and Tomba 2's Italian catalog does exactly that with localized
+    # psx.* manifests. Order carries that: the framework's copy runs first and
+    # the title's overwrites it. The id LIST, though, is an identity set used
+    # for the legacy purge, the staged-catalog assertion and the reported
+    # count, so it must be deduplicated or the build claims to stage 11
+    # packages when the catalog holds 7.
+    list(REMOVE_DUPLICATES _ids)
+    if(NOT _ids)
+        return()
+    endif()
+
+    # Removing the ids THIS build stages from any pre-existing mods/packages
+    # migrates a build directory made before the bundled/ split, so the
+    # build-time guard's "an id turned up in mods/packages" report can only
+    # mean a stray copy made by this build. Ids the build does not stage are
+    # deliberately left alone: on a self-compiling setup release they can be
+    # packages the player installed under the old layout, and the runtime's
+    # migrate_legacy_root() relocates those into mods/installed on next launch.
+    set(_purge "")
+    foreach(_id IN LISTS _ids)
+        list(APPEND _purge "${_out}/mods/packages/${_id}")
+    endforeach()
+
+    list(LENGTH _ids _n_ids)
+    add_custom_command(TARGET ${target} POST_BUILD
+        # Wipe first: copy_directory MERGES, so a package deleted from source
+        # would otherwise survive in the build output forever and keep
+        # appearing on the Mods page (and inflate release catalog assertions).
+        #
+        # Scoped to mods/bundled, which is build output and nothing else.
+        # mods/installed/ is the launcher's (player-installed .psxmod archives)
+        # and mods/state.toml is user selection state; a build must never touch
+        # either. Before the split this wipe was scoped to mods/packages, which
+        # ALSO held everything the player had installed -- so a rebuild,
+        # including the one a self-compiling setup release runs on the player's
+        # own machine, deleted their mods without a word.
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_out}/mods/bundled"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_purge}
+        ${_copy}
+        ${_readme_copy}
+        COMMENT "Staging mod catalog for ${target} (${_n_ids} package(s) -> mods/bundled)"
+        VERBATIM)
+
+    # The id list the build-time guard and the ctest assert against.
+    set(_manifest "${CMAKE_CURRENT_BINARY_DIR}/psx_mod_catalog_${target}.txt")
+    list(SORT _ids)
+    string(JOIN "\n" _manifest_text ${_ids})
+    _psxrt_write_if_changed("${_manifest}" "${_manifest_text}\n")
+
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_TARGETS "${target}")
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_MANIFESTS "${_manifest}")
+    set_property(GLOBAL APPEND PROPERTY PSXRECOMP_MOD_CATALOG_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Schedule the guard pass once per directory, not once per target.
+    get_property(_scheduled DIRECTORY PROPERTY PSXRECOMP_MOD_CATALOG_DEFERRED)
+    if(NOT _scheduled)
+        set_property(DIRECTORY PROPERTY PSXRECOMP_MOD_CATALOG_DEFERRED TRUE)
+        cmake_language(DEFER CALL _psxrt_finalize_mod_catalog_guards)
+    endif()
+endfunction()
+
 function(psxrecomp_add_runtime_target target)
     # PGXP: build this target's objects with -DPSX_PGXP=1 so the PGXP_*()
     # hook macros the emitter writes into ALL generated C become real calls
@@ -863,6 +1196,14 @@ function(psxrecomp_add_runtime_target target)
         GAME_VERSION
         MAX_PLAYERS
         APP_ICON
+        # The title's own mod catalog source directory -- the one shaped like
+        # <repo>/mods/preloaded, holding packages/<id>/<version>/manifest.toml
+        # and an optional README.md. The FRAMEWORK stages it, together with its
+        # own mods/builtin/packages, into <exe-dir>/mods/bundled. Titles must
+        # not stage it themselves; see _psxrt_stage_mod_catalog below for why
+        # that is now a build error rather than a convention. Pass the literal
+        # NONE to declare, explicitly, that this target ships no game catalog.
+        PRELOADED_MODS_DIR
     )
     # GAME_GENERATED_FULL_C is a list (not a single value): the split-TU build
     # writes the recompiled game as N full_NN.c shards instead of one
@@ -969,6 +1310,21 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRT_GAME_OVERLAY_STATIC_C AND EXISTS "${PSXRT_GAME_OVERLAY_STATIC_C}")
         set_source_files_properties("${PSXRT_GAME_OVERLAY_STATIC_C}" PROPERTIES GENERATED TRUE)
         list(APPEND generated_sources "${PSXRT_GAME_OVERLAY_STATIC_C}")
+        # compile_overlays.py --static splits its output: overlays_static.c is
+        # the dispatcher and each overlay is its own translation unit,
+        # overlays_static_NNNN.c, beside it. One 300 MB file compiled on one
+        # core is what that replaced. CONFIGURE_DEPENDS re-globs at build time,
+        # so a run that changes the part count needs no reconfigure (a
+        # --static-single-file run simply has no parts to glob).
+        get_filename_component(_ov_static_dir  "${PSXRT_GAME_OVERLAY_STATIC_C}" DIRECTORY)
+        get_filename_component(_ov_static_stem "${PSXRT_GAME_OVERLAY_STATIC_C}" NAME_WE)
+        file(GLOB _ov_static_parts CONFIGURE_DEPENDS
+             "${_ov_static_dir}/${_ov_static_stem}_[0-9][0-9][0-9][0-9].c")
+        list(SORT _ov_static_parts)
+        foreach(_ov_part IN LISTS _ov_static_parts)
+            set_source_files_properties("${_ov_part}" PROPERTIES GENERATED TRUE)
+        endforeach()
+        list(APPEND generated_sources ${_ov_static_parts})
         set(has_overlay_dispatch TRUE)
     endif()
 
@@ -1030,8 +1386,32 @@ function(psxrecomp_add_runtime_target target)
         target_compile_definitions(${target} PRIVATE
             PSX_PGXP=1
             PSX_OVERLAY_FLAVOR=2)   # PSX_OVERLAY_FLAVOR_PGXP (overlay_api.h)
+        set(_psxrt_overlay_flavor 2)
+    else()
+        set(_psxrt_overlay_flavor 0)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
+
+    # Publish the OVERLAY CODEGEN FLAVOR this target links with, for the same
+    # reason the exe name is published just below: so nothing downstream has to
+    # re-derive it.
+    #
+    # The flavor is the high half of overlay_abi() and the `_f<n>` field of the
+    # shard cache tag (overlay_api.h PSX_OVERLAY_FLAVOR; 0 base, 2 pgxp). It is
+    # a property of the BINARY, decided right here, and it is NOT
+    # platform-dependent — a Windows and a Linux build of the same target share
+    # it. Every release packager needs it to name the cache namespace the
+    # shipped runtime will actually read, and until now every packager simply
+    # assumed 0. That assumption is invisible when it is wrong: a PGXP runtime
+    # reads cache/<id>/gcc/<arch-abi>/cg..._f2/ while the packager stages
+    # ..._f0/, so the package ships a cache the binary ignores completely and
+    # every overlay runs interpreted, with nothing failing anywhere.
+    #
+    # tools/release_stage.py reads this file (cg-tag --flavor-from-build), so a
+    # packager can stop guessing. See bead beads-eio.3.102.
+    file(GENERATE
+         OUTPUT "${CMAKE_BINARY_DIR}/psxrecomp_overlay_flavor-${target}.txt"
+         CONTENT "${_psxrt_overlay_flavor}\n")
 
     # Publish the name we just chose, so nothing downstream has to re-derive it.
     #
@@ -1368,43 +1748,14 @@ function(psxrecomp_add_runtime_target target)
                 "${PSXRECOMP_BUNDLED_BIOS_LICENSE}")
         endif()
 
-    # Framework-owned mod catalog (loading speed). These target game_id "*" and
-    # are emulator features rather than per-disc content, so every game gets
-    # them without carrying a copy of the manifests. Staged BEFORE the game's
-    # own POST_BUILD copy so a title may still override an id if it ever needs
-    # to; copy_directory merges rather than replacing the tree.
-    if(EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages")
-        # Clear first: copy_directory MERGES, so a mod deleted from source
-        # would otherwise survive in the build output forever and keep
-        # appearing on the Mods page (and inflate release catalog assertions).
-        # Scoped to mods/packages, not mods/: state.toml is launcher-owned user
-        # state and must survive a rebuild.
-        set(_psx_builtin_mod_copy_commands "")
-        if(DEFINED PSX_BUILTIN_MOD_ALLOWLIST AND NOT
-           "${PSX_BUILTIN_MOD_ALLOWLIST}" STREQUAL "")
-            foreach(_psx_builtin_mod IN LISTS PSX_BUILTIN_MOD_ALLOWLIST)
-                if(NOT EXISTS "${PSXRECOMP_ROOT}/mods/builtin/packages/${_psx_builtin_mod}")
-                    message(FATAL_ERROR
-                        "PSX_BUILTIN_MOD_ALLOWLIST names missing package: ${_psx_builtin_mod}")
-                endif()
-                list(APPEND _psx_builtin_mod_copy_commands
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory
-                        "${PSXRECOMP_ROOT}/mods/builtin/packages/${_psx_builtin_mod}"
-                        "$<TARGET_FILE_DIR:${target}>/mods/packages/${_psx_builtin_mod}")
-            endforeach()
-        else()
-            list(APPEND _psx_builtin_mod_copy_commands
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${PSXRECOMP_ROOT}/mods/builtin"
-                    "$<TARGET_FILE_DIR:${target}>/mods")
-        endif()
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E rm -rf
-                "$<TARGET_FILE_DIR:${target}>/mods/packages"
-            ${_psx_builtin_mod_copy_commands}
-            COMMENT "Staging framework-owned mod catalog"
-            VERBATIM)
-        unset(_psx_builtin_mod_copy_commands)
+    # Mod catalog: the framework's builtin packages AND the title's own, both
+    # staged into mods/bundled by _psxrt_stage_mod_catalog (see its header).
+    # Skipped for cosim oracles: they have no launcher and no Mods page, and
+    # because a cosim exe lands in the same output directory as the runtime,
+    # letting it stage would have it wipe and re-stage the runtime's catalog
+    # with only the framework half.
+    if(NOT PSXRT_COSIM)
+        _psxrt_stage_mod_catalog("${target}" "${PSXRT_PRELOADED_MODS_DIR}")
     endif()
     endif()
 
@@ -1418,6 +1769,22 @@ function(psxrecomp_add_runtime_target target)
     endif()
     if(PSX_SHELLWIN_INTERP)
         target_compile_definitions(${target} PRIVATE PSX_SHELLWIN_INTERP_DEFAULT=1)
+    endif()
+
+    # Developer-channel mod features do not ship. A contributor reaches them by
+    # cloning the repo and building locally; a release build must not carry
+    # them at all -- not hidden behind a toggle, absent. Keying the default off
+    # $CI matches what the packagers already do for EXCLUDE_DEV_MODS, so one
+    # rule covers the catalog on disk and the catalog in the binary.
+    if(NOT DEFINED PSX_MOD_DEVELOPER_CHANNEL)
+        if(DEFINED ENV{CI} AND NOT "$ENV{CI}" STREQUAL "")
+            set(PSX_MOD_DEVELOPER_CHANNEL OFF)
+        else()
+            set(PSX_MOD_DEVELOPER_CHANNEL ON)
+        endif()
+    endif()
+    if(PSX_MOD_DEVELOPER_CHANNEL)
+        target_compile_definitions(${target} PRIVATE PSX_MOD_DEVELOPER_CHANNEL=1)
     endif()
     if(has_game_dispatch)
         target_compile_definitions(${target} PRIVATE PSX_HAS_GAME_DISPATCH=1)

@@ -29,6 +29,17 @@ if(BUILD_TESTING)
     add_test(NAME launcher_device_roundtrip_test
              COMMAND launcher_device_roundtrip_test)
 
+    # Pad-mode resolution at the launcher exit seam: a lock_mode title must
+    # boot the pad type its game.toml declared whatever the launcher hands
+    # back, an active mod controller-mode override must outrank the lock, and
+    # neither may let an unsupported mode reach settings.toml. Header-only, so
+    # it needs nothing but runtime/include.
+    add_executable(launcher_pad_mode_resolve_test
+        tests/test_launcher_pad_mode_resolve.cpp)
+    target_include_directories(launcher_pad_mode_resolve_test PRIVATE include)
+    add_test(NAME launcher_pad_mode_resolve_test
+             COMMAND launcher_pad_mode_resolve_test)
+
     # COP0.CAUSE IP2 must mirror the INTC line combinationally, never latch.
     add_executable(cause_ip2_combinational_test
         tests/test_cause_ip2_combinational.c)
@@ -527,6 +538,33 @@ if(BUILD_TESTING)
         add_test(NAME bios_registry_zero_entry_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bios_registry_zero_entry.py)
+        # Exercises runtime/psx_check_mod_catalog.cmake -- the build-time guard
+        # that fails a build when a title's mod packages land in the legacy
+        # mods/packages layout instead of mods/bundled (bead beads-eio.3.101).
+        # Needs the cmake executable, since the guard is a cmake -P script.
+        add_test(NAME mod_catalog_layout_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
+                         --cmake ${CMAKE_COMMAND})
+        # The overlay cache tag may be formatted in exactly two files. Three
+        # release packagers hand-built it instead, the flavor-suffix fix reached
+        # one of them, and the other two could not stage a matching Linux cache
+        # at all -- Tomba 2 v0.0.9 shipped with no AppImage as a result.
+        # bead beads-eio.3.102. This test is also the SHARED check a title's own
+        # suite runs against its own tree (pass --root <repo>), so the rule has
+        # one implementation like the staging it guards.
+        add_test(NAME packagers_never_format_cache_tag_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packagers_never_format_cache_tag.py)
+        # Behavioural half of the same bead: tools/release_stage.py must select
+        # shards by the tag DIRECTORY's identity (the old `-path "*/<tag>/*"`
+        # substring match rejected the real ..._f0 directory and staged zero),
+        # must never ship .abi_<tag>.ok / .c / .pair-lock, and must fail rather
+        # than warn on an empty selection. Hermetic: synthetic cache trees, no
+        # recompiler or captures needed.
+        add_test(NAME release_stage_cache_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_cache.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,

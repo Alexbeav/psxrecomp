@@ -1217,6 +1217,7 @@ static int           g_rewind_depth  = 50;  /* local rewind snap count (50/100/1
 static int           g_rewind_interval = 15; /* frames between snaps (1/4/8/12/15) */
 static int           g_hotkey_pad_rewind = 1272;       /* select + r3 */
 static int           g_hotkey_pad_save_state_menu = 2040;/* select + r1 */
+static int           g_hotkey_pad_fast_forward = 1528;   /* select + l1 (hold) */
 static uint32_t      g_savestate_input_guard_min_until = 0;
 static uint32_t      g_savestate_input_guard_max_until = 0;
 static int           g_headless       = 0;   /* debug/CI frontend: no SDL window/audio */
@@ -5968,6 +5969,7 @@ static void depth24_stage_scanout(const GpuDisplayInfo *di, uint32_t *buf,
 enum {
     PSX_ASSIST_BIND_REWIND = 0,
     PSX_ASSIST_BIND_SAVE_STATE_MENU,
+    PSX_ASSIST_BIND_FAST_FORWARD,   /* hold-to-fast-forward; pad twin of [KeyMap] Turbo */
     PSX_ASSIST_BIND_COUNT
 };
 
@@ -5986,6 +5988,9 @@ enum {
 #define PSX_HOTKEY_PAD_SELECT_R1 \
     PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
                                 ((uint32_t)1u << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))
+#define PSX_HOTKEY_PAD_SELECT_L1 \
+    PSX_HOTKEY_PAD_BUTTON_COMBO(((uint32_t)1u << SDL_CONTROLLER_BUTTON_BACK) | \
+                                ((uint32_t)1u << SDL_CONTROLLER_BUTTON_LEFTSHOULDER))
 
 static int normalize_hotkey_pad_binding(int binding, int fallback) {
     if (PSX_HOTKEY_PAD_IS_BUTTON(binding)) {
@@ -6859,8 +6864,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
-        if (host_hotkey_input_focused() &&
-            host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
+        /* Keyboard ([KeyMap] Turbo, default Tab) or the controller host
+         * shortcut ([hotkeys] fast_forward_pad, default select+L1). Both are
+         * hold-to-run; the pad chord goes through the same combo matcher as
+         * Rewind / Save states so the launcher's binding editor covers it. */
+        const bool kb_turbo = host_hotkey_input_focused() &&
+            host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState());
+        if (kb_turbo || hotkey_pad_binding_down(g_hotkey_pad_fast_forward)) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
@@ -10850,6 +10860,7 @@ namespace {
     static const char* const kPsxHostShortcutLabels[] = {
         "Rewind",
         "Save states",
+        "Fast-forward",
     };
 
     void ae_rui_set_sidecar_paths(const char* argv0) {
@@ -11784,6 +11795,10 @@ int main(int argc, char** argv) {
             g_hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
                 us.hotkey_pad_save_state_menu,
                 PSX_HOTKEY_PAD_SELECT_R1);
+        if (us.has_hotkey_pad_fast_forward)
+            g_hotkey_pad_fast_forward = normalize_hotkey_pad_binding(
+                us.hotkey_pad_fast_forward,
+                PSX_HOTKEY_PAD_SELECT_L1);
         if (us.has_bios_path && !bios_from_cli && !us.bios_path.empty()) {
             settings_bios_storage = us.bios_path.string();
             bios_path = settings_bios_storage.c_str();
@@ -12095,7 +12110,32 @@ int main(int argc, char** argv) {
         extern int g_psx_cps_mode;
         const std::filesystem::path tk_xd = exe_dir_from_argv(argv[0]);
         const std::filesystem::path tk_dir = tk_xd / "overlay_toolchain";
-        const std::filesystem::path tk_py = tk_dir / "python" / "python.exe";
+        /* The bundle's layout is identical on every platform; only the file
+         * NAMES differ. These were hardcoded to the Windows spellings
+         * ("python/python.exe", "psxrecomp-game.exe", "tcc/tcc.exe"), so on
+         * Linux the gate below could never be true no matter what a packager
+         * staged — a bundled Linux toolchain would have been dead weight the
+         * runtime never looked at. (No Linux packager staged one either, so
+         * this had no observable symptom to report: measured 2026-09-02,
+         * `grep -c overlay_toolchain` was 0 in all three forked
+         * tools/package_appimage.sh. Bead beads-eio.3.102.)
+         *
+         * python-build-standalone, the pinned relocatable CPython that
+         * tools/release_stage.py stages on Linux, puts the interpreter at
+         * python/bin/python3; python.org's embeddable zip puts it at
+         * python/python.exe. Keep these in lockstep with
+         * release_stage.TOOLCHAIN_PY_REL / TOOLCHAIN_RECOMPILER. */
+#ifdef _WIN32
+        const std::filesystem::path tk_py =
+            tk_dir / "python" / "python.exe";
+        const char *tk_recompiler = "psxrecomp-game.exe";
+        const char *tk_tcc        = "tcc.exe";
+#else
+        const std::filesystem::path tk_py =
+            tk_dir / "python" / "bin" / "python3";
+        const char *tk_recompiler = "psxrecomp-game";
+        const char *tk_tcc        = "tcc";
+#endif
         const bool tk_present = std::filesystem::exists(tk_py);
         auto build_toolchain_cmd = [&](const char *compiler) {
             auto cmd_quote = [](const std::string& s) {
@@ -12107,13 +12147,14 @@ int main(int argc, char** argv) {
                 " --captures " + cmd_quote(captures_path.string()) +
                 " --game-toml " + cmd_quote(std::string(
                     game_config_path ? game_config_path : "game.toml")) +
-                " --recompiler " + cmd_quote((tk_dir / "psxrecomp-game.exe").string()) +
+                " --recompiler " + cmd_quote((tk_dir / tk_recompiler).string()) +
                 " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
+                " --project-root " + cmd_quote(tk_dir.string()) +
                 " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
                 (g_psx_cps_mode ? " --cps" : "") +
                 " --compiler " + compiler;
             if (std::string(compiler) == "tcc")
-                c += " --tcc " + cmd_quote((tk_dir / "tcc" / "tcc.exe").string());
+                c += " --tcc " + cmd_quote((tk_dir / "tcc" / tk_tcc).string());
             return c;
         };
         int gcc_avail = (deferred_has_overlay_ac || tk_present)
@@ -12272,6 +12313,8 @@ int main(int argc, char** argv) {
             seed.has_hotkey_pad_rewind = true;
             seed.hotkey_pad_save_state_menu = g_hotkey_pad_save_state_menu;
             seed.has_hotkey_pad_save_state_menu = true;
+            seed.hotkey_pad_fast_forward = g_hotkey_pad_fast_forward;
+            seed.has_hotkey_pad_fast_forward = true;
             seed.skip_launcher = skip_launcher_setting;   seed.has_skip_launcher = true;
             if (has_netplay_player_name) {
                 seed.netplay_player_name = netplay_player_name;
@@ -12396,9 +12439,13 @@ int main(int argc, char** argv) {
                      * 5% normalization then silently reduced to 15%. */
                     ls.deadzone[i] =
                         (player_deadzone[i] * 100 + 32767 / 2) / 32767;
-                    ls.pad_mode[i] = (ls.player_src[i] == 1)
-                                        ? PSXRecompV4::PAD_MODE_DIGITAL
-                                        : player_mode[i];
+                    /* The seat's configured mode, verbatim. A keyboard seat
+                     * is NOT rewritten to DIGITAL on the way in: that told the
+                     * launcher a lie about what the seat is configured for,
+                     * and the launcher then handed the lie back for us to
+                     * persist. The keyboard's runtime behaviour does not
+                     * depend on this value (effective_player_mode). */
+                    ls.pad_mode[i] = player_mode[i];
                     ls.player_gamepad_guid[i][0] = '\0';
                     if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                         d != "gamepad" && d != "controller") {
@@ -12452,6 +12499,9 @@ int main(int argc, char** argv) {
             ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU] =
                 normalize_hotkey_pad_binding(seed.hotkey_pad_save_state_menu,
                     PSX_HOTKEY_PAD_SELECT_R1);
+            ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD] =
+                normalize_hotkey_pad_binding(seed.hotkey_pad_fast_forward,
+                    PSX_HOTKEY_PAD_SELECT_L1);
             ls.auto_skip_fmv      = seed.auto_skip_fmv ? 1 : 0;
             ls.turbo_loads        = seed.turbo_loads ? 1 : 0;
             /* Localization: index of resolved_language within lang_menu_options
@@ -12674,21 +12724,30 @@ int main(int argc, char** argv) {
                     for (int i = 0; i < n; ++i) {
                         if (ls.player_src[i] == 1) {
                             player_device[i] = "keyboard";
-                            /* Keyboard is always a digital pad at runtime. */
-                            player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
                         } else if (ls.player_src[i] == 0) {
                             player_device[i] = "none";
-                            player_mode[i] = ls.pad_mode[i];
                         } else if (ls.player_gamepad_guid[i][0]) {
                             player_device[i] = ls.player_gamepad_guid[i];
-                            player_mode[i] = ls.pad_mode[i];
                         } else if (PSXRecompV4::launcher_source_from_device(
                                        player_device[i]) <= 1) {
                             player_device[i] = "gamepad";
-                            player_mode[i] = ls.pad_mode[i];
-                        } else {
-                            player_mode[i] = ls.pad_mode[i];
                         }
+                        /* Mode is resolved separately from the device, because
+                         * the launcher round-trip is the SECOND way a locked
+                         * game could boot an unsupported pad type: the clamp at
+                         * the top of main() runs BEFORE the launcher, so
+                         * ls.pad_mode[] (seeded from settings.toml, or from a
+                         * selector the player never saw because lock_mode hides
+                         * it) would otherwise win here -- and then be persisted
+                         * into seed.p_mode[] a few lines down. Defense in depth:
+                         * the launcher itself no longer corrupts a locked mode
+                         * (recomp-ui launcher_model.c), but the host must not
+                         * depend on that to boot the declared pad type. */
+                        player_mode[i] =
+                            PSXRecompV4::resolve_player_mode_after_launcher(
+                                ls.pad_mode[i], ctrl_lock_mode,
+                                ctrl_locked_mode[i],
+                                g_mod_controller_mode_override[i]);
                         player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                         if (i < un) {
                             seed.p_device[i] = player_device[i];
@@ -12741,6 +12800,10 @@ int main(int argc, char** argv) {
                     ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
                     PSX_HOTKEY_PAD_SELECT_R1);
                 seed.has_hotkey_pad_save_state_menu = true;
+                seed.hotkey_pad_fast_forward = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD],
+                    PSX_HOTKEY_PAD_SELECT_L1);
+                seed.has_hotkey_pad_fast_forward = true;
                 seed.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 seed.has_auto_skip_fmv = skip_fmv_offered;
                 seed.turbo_loads = ls.turbo_loads != 0;
@@ -12958,6 +13021,9 @@ int main(int argc, char** argv) {
                 g_hotkey_pad_save_state_menu = seed.has_hotkey_pad_save_state_menu
                     ? seed.hotkey_pad_save_state_menu
                     : PSX_HOTKEY_PAD_SELECT_R1;
+                g_hotkey_pad_fast_forward = seed.has_hotkey_pad_fast_forward
+                    ? seed.hotkey_pad_fast_forward
+                    : PSX_HOTKEY_PAD_SELECT_L1;
                 skip_launcher_setting = seed.skip_launcher;
                 if (seed.has_bios_path) {
                     settings_bios_storage = seed.bios_path.string();
@@ -14444,6 +14510,10 @@ soft_return_lobby:
             normalize_hotkey_pad_binding(
                 g_hotkey_pad_save_state_menu,
                 PSX_HOTKEY_PAD_SELECT_R1);
+        ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD] =
+            normalize_hotkey_pad_binding(
+                g_hotkey_pad_fast_forward,
+                PSX_HOTKEY_PAD_SELECT_L1);
         ls.aspect_index = (g_video_aspect_num * 9 == g_video_aspect_den * 21) ? 2
             : (g_video_aspect_num == 16 && g_video_aspect_den == 9) ? 1 : 0;
         ls.language_index = 0;
@@ -14493,9 +14563,8 @@ soft_return_lobby:
                     PSXRecompV4::launcher_source_from_device(d);
                 ls.deadzone[i] =
                     (player_deadzone[i] * 100 + 32767 / 2) / 32767;
-                ls.pad_mode[i] = (ls.player_src[i] == 1)
-                                    ? PSXRecompV4::PAD_MODE_DIGITAL
-                                    : player_mode[i];
+                /* Verbatim, as in the first launcher entry above. */
+                ls.pad_mode[i] = player_mode[i];
                 ls.player_gamepad_guid[i][0] = '\0';
                 if (ls.player_src[i] == 2 && !d.empty() && d != "auto" &&
                     d != "gamepad" && d != "controller") {
@@ -14633,20 +14702,27 @@ soft_return_lobby:
                 for (int i = 0; i < n; ++i) {
                     if (ls.player_src[i] == 1) {
                         player_device[i] = "keyboard";
-                        player_mode[i] = PSXRecompV4::PAD_MODE_DIGITAL;
                     } else if (ls.player_src[i] == 0) {
                         player_device[i] = "none";
-                        player_mode[i] = ls.pad_mode[i];
                     } else if (ls.player_gamepad_guid[i][0]) {
                         player_device[i] = ls.player_gamepad_guid[i];
-                        player_mode[i] = ls.pad_mode[i];
                     } else if (PSXRecompV4::launcher_source_from_device(
                                    player_device[i]) <= 1) {
                         player_device[i] = "gamepad";
-                        player_mode[i] = ls.pad_mode[i];
-                    } else {
-                        player_mode[i] = ls.pad_mode[i];
                     }
+                    /* Same resolution as the first launcher-exit path, and the
+                     * mod-override arm matters HERE specifically: `goto
+                     * session_reboot` re-enters the emulator BELOW the block
+                     * that applies g_mod_controller_mode_override, so a soft
+                     * return from the lobby never re-runs it. Before this
+                     * helper existed, an override survived a rematch only
+                     * because it round-tripped through ls.pad_mode[]; a bare
+                     * lock clamp here would have silently dropped it. */
+                    player_mode[i] =
+                        PSXRecompV4::resolve_player_mode_after_launcher(
+                            ls.pad_mode[i], ctrl_lock_mode,
+                            ctrl_locked_mode[i],
+                            g_mod_controller_mode_override[i]);
                     player_deadzone[i] = ls.deadzone[i] * 32767 / 100;
                 }
             }
@@ -14737,6 +14813,10 @@ soft_return_lobby:
                     ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
                     PSX_HOTKEY_PAD_SELECT_R1);
                 us.has_hotkey_pad_save_state_menu = true;
+                us.hotkey_pad_fast_forward = normalize_hotkey_pad_binding(
+                    ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD],
+                    PSX_HOTKEY_PAD_SELECT_L1);
+                us.has_hotkey_pad_fast_forward = true;
                 us.auto_skip_fmv = ls.auto_skip_fmv != 0;
                 us.has_auto_skip_fmv = skip_fmv_offered;
                 us.turbo_loads = ls.turbo_loads != 0;
@@ -14817,6 +14897,9 @@ soft_return_lobby:
             g_hotkey_pad_save_state_menu = normalize_hotkey_pad_binding(
                 ls.assist_pad_bind[PSX_ASSIST_BIND_SAVE_STATE_MENU],
                 PSX_HOTKEY_PAD_SELECT_R1);
+            g_hotkey_pad_fast_forward = normalize_hotkey_pad_binding(
+                ls.assist_pad_bind[PSX_ASSIST_BIND_FAST_FORWARD],
+                PSX_HOTKEY_PAD_SELECT_L1);
             switch (ls.aspect_index) {
                 case 2:  g_video_aspect_num = 21; g_video_aspect_den = 9; break;
                 case 1:  g_video_aspect_num = 16; g_video_aspect_den = 9; break;

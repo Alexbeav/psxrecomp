@@ -45,6 +45,18 @@
  *        masked, aliased, read-only, precision-sensitive, flag/IR, and derived
  *        GTE regs; GTE-heavy overlays failed to LINK without shims (undefined
  *        gte_read_ctrl), silently blocking new coverage. */
+/* v22: game_text_native_ok callback - the emitter emits a direct
+ *      psx_game_text_native_ok() stale-static guard (code_generator.cpp, at
+ *      block entry and before every direct jal). The function is DEFINED IN THE
+ *      GENERATED DISPATCH SHARD, which lives in the executable, so an overlay
+ *      DLL cannot see it: 107 of 109 shard failures on the 2026-09-02 Tomba 2
+ *      framework bump were `undefined reference to psx_game_text_native_ok`.
+ *      Exactly the rfe / gte_read_ctrl / gte_precision_store_word class again -
+ *      an emitter gained a runtime call without the overlay ABI gaining the
+ *      shim, and the only symptom is shards that silently fail to build so the
+ *      code runs interpreted forever. NULL-guarded: a host predating v22 makes
+ *      the shim return 0, which routes the guest through the dispatcher instead
+ *      of native code - slower, never wrong. */
 /* v11 batches per-instruction cycle charges inside overlay DLLs and flushes at
  * block/device/store boundaries, removing a cross-DLL callback per instruction
  * without changing the shared guest-cycle timeline. */
@@ -93,7 +105,7 @@
  *      host/DLL flavor mix — base-flavour DLLs and hosts are untouched, so
  *      the version stays. The emit-content change (PGXP_*() macros in all
  *      generated C) is covered by the codegen hash + CODEGEN_VER below. */
-#define PSX_OVERLAY_ABI_VERSION 21
+#define PSX_OVERLAY_ABI_VERSION 22
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -308,6 +320,12 @@ typedef struct {
 
     /* Aspect-scaled terrain-frustum angle helper (ABI v21). */
     uint32_t (*ws_angle_widen)(uint32_t vanilla);
+
+    /* Stale-static guard (ABI v22; see the version-history note above).
+     * Defined by the generated dispatch shard in the executable, so overlay
+     * DLLs must forward. Appended last; may be NULL on a host that predates
+     * it - the shim then returns 0 and the guest takes the dispatcher path. */
+    int      (*game_text_native_ok)(uint32_t addr);
 
     /* PGXP dataflow-shadowing hook table (pgxp_hooks.h). Only pgxp-flavour
      * shards (PSX_OVERLAY_FLAVOR pgxp bit, compiled with -DPSX_PGXP=1) emit
