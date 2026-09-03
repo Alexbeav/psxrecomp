@@ -3516,6 +3516,7 @@ int overlay_loader_dispatch(CPUState *cpu, uint32_t addr) {
     }
     int lazy_loaded = 0;
 retry_candidates:
+    ; /* A label must precede a statement before C23 (for example GCC 9). */
     int head = idx_head(phys);
     int loaded_range_ci = -1;
     int lazy_exact = 0;
