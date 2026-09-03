@@ -1,10 +1,12 @@
-# release_overlay_stage.ps1 — THE shared overlay-shard release staging for every
-# psxrecomp title. Dot-source it from a title's tools/package_release.ps1:
+# release_overlay_stage.ps1 — THE shared overlay-shard release staging surface
+# for every psxrecomp title on Windows. Dot-source it from a title's
+# tools/package_release.ps1:
 #
 #   . "$FrameworkRoot\tools\release_overlay_stage.ps1"
 #   $CgTag = Get-OverlayCgTag -RecompTools ... -RecompInc ... -GameExe ... -GameToml ...
 #   Add-OverlayCache     -GameId "SCUS-94423" -CacheSrcRoot ... -Stage ... -CgTag $CgTag
 #   Add-OverlayToolchain -Stage ... -RecompDir ... -RecompTools ... -RecompInc ... -MingwBin ... -DlCache ...
+#   Add-ModCatalog       -BuildPath ... -Stage ... -GameModSource ... -FrameworkModSource ...
 #
 # WHY THIS FILE EXISTS
 # --------------------
@@ -25,8 +27,39 @@
 # The copies drifted because improvements never flow back between forks AND
 # because nothing fails when a title lacks the feature: the runtime silently
 # falls back to interpretation, so a stripped packager looks perfectly healthy.
-# That is why Add-OverlayCache THROWS by default instead of warning — a missing
+# That is why Add-OverlayCache FAILS by default instead of warning — a missing
 # cache has to stop a release, not scroll past in a log.
+#
+# WHY IT IS NOW A THIN WRAPPER (bead beads-eio.3.102)
+# ---------------------------------------------------
+# Consolidating the five Windows copies into this one module did not stop the
+# defect class, it only halved it. Linux was never consolidated at all: three
+# title repos carried a forked tools/package_appimage.sh (403/436/408 lines),
+# each hand-building the SAME tag string this module used to build here. When
+# the framework added the `_f<flavor>` field, one of those three forks was
+# hand-patched and two were not, so two titles' packagers staged zero shards
+# from a valid cache and could not produce a Linux release at all.
+#
+# Two implementations, one per platform, have to be kept in step by review —
+# which is exactly the argument that made cache_tag() the fix on the Windows
+# side in the first place, and this bug is the proof that review does not hold.
+# So the staging logic now lives in ONE place, tools/release_stage.py, which
+# both platforms call:
+#
+#   tools/release_stage.py            the implementation
+#   tools/release_overlay_stage.ps1   this file  (Windows packagers)
+#   tools/release_overlay_stage.sh    the sh counterpart (AppImage packagers)
+#
+# The parameter surface of every function below is UNCHANGED, so no title's
+# packager needs editing for this. What changed is that none of these functions
+# contains a tag format string, a shard filter, an extension list, an arch-abi
+# string, or a catalog rule any more.
+#
+# RULES FOR EDITING THIS FILE
+#   * No tag format string. `cache_tag()` in tools/compile_overlays.py is the
+#     only place that knows the tag's shape.
+#   * If a function here grows real logic, the logic belongs in
+#     release_stage.py, where both platforms get it at once.
 #
 # Keep this file title-agnostic. Anything game-specific belongs in the caller.
 
@@ -35,19 +68,63 @@
 # that script -- a framework helper must not silently change how a title's
 # packager evaluates. (Measured: it broke an unrelated caller epilogue.)
 
-# Pinned toolchain archives. Single source of truth for every title: a game
-# cannot ship an unpinned toolchain by forgetting to pass a hash.
-$script:PsxToolchainPins = @{
-    PythonVersion = "3.13.1"
-    PythonSha256  = "7b7923ff0183a8b8fca90f6047184b419b108cb437f75fc1c002f9d2f8bcec16"
-    TccVersion    = "0.9.27"
-    TccSha256     = "34a721949a2583fdff725312da092fa0f5f1f284b702e6f811c6954714faabb2"
-}
+# Path to the shared implementation, resolved relative to THIS file so a title
+# never has to know it exists.
+$script:PsxReleaseStageTool = Join-Path $PSScriptRoot "release_stage.py"
 
 function New-PsxDir {
     param([Parameter(Mandatory)][string]$Path)
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
     return $Path
+}
+
+<#
+.SYNOPSIS
+Run the shared staging tool, failing the caller on a non-zero exit.
+
+.DESCRIPTION
+`py -3`, never a bare `python`: on this machine a bare `python` can resolve to a
+Cygwin build that SIGSEGVs when spawned from a job, and the failure reads as a
+silent fallback rather than an error. Output is passed through so the tool's own
+messages (which carry the rebuild recipes) reach the release log verbatim.
+#>
+function Invoke-PsxReleaseStage {
+    # ONE array parameter, always passed by name. PowerShell 5.1 tries to bind
+    # any token starting with '-' as a parameter name, so a call written as
+    #   Invoke-PsxReleaseStage stage-cache --game-id $Id ...
+    # dies with "A parameter cannot be found that matches parameter name
+    # 'game-id'". Every caller below therefore builds an array and passes
+    # -StageArgs, and the array is splatted into the native `py` call where
+    # PowerShell passes each element through verbatim.
+    param([Parameter(Mandatory)][string[]]$StageArgs)
+    if (-not (Test-Path -LiteralPath $script:PsxReleaseStageTool)) {
+        throw ("Shared release staging tool is missing: $($script:PsxReleaseStageTool). " +
+               "The pinned framework predates it (bead beads-eio.3.102); bump the " +
+               "psxrecomp submodule.")
+    }
+    $out = & py -3 $script:PsxReleaseStageTool @StageArgs 2>&1
+    $code = $LASTEXITCODE
+    foreach ($line in $out) { Write-Host $line }
+    if ($code -ne 0) {
+        throw ("release staging failed (release_stage.py " + $StageArgs[0] +
+               " exited $code). See the message above.")
+    }
+    return $out
+}
+
+# Read an integer a subcommand wrote to a temp file. The tool's stdout carries
+# human-readable progress; counts come back out-of-band so a wrapper never has
+# to parse prose.
+function Get-PsxStageCount {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    $text = (Get-Content -LiteralPath $Path -Raw).Trim()
+    if ($text -match '^\d+$') { return [int]$text }
+    return 0
+}
+
+function New-PsxStageTempFile {
+    return (Join-Path ([IO.Path]::GetTempPath()) ("psx_stage_" + [guid]::NewGuid().ToString("N")))
 }
 
 <#
@@ -60,6 +137,10 @@ served the day the cache was first filled, forever. This verifies the cached
 copy too, refetching when it does not match. python.org and savannah both 502
 periodically, so transient failures retry with backoff rather than losing a
 whole release build.
+
+The fetch itself now lives in release_stage.py (`fetch-pinned`), so the Windows
+toolchain and the Linux toolchain cannot end up with different retry, cache or
+verification behaviour.
 #>
 function Get-PinnedArchive {
     param(
@@ -68,46 +149,29 @@ function Get-PinnedArchive {
         [Parameter(Mandatory)][string]$Destination,
         [int]$Retries = 4
     )
-    $name = Split-Path -Leaf $Destination
-    if (Test-Path -LiteralPath $Destination) {
-        $have = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLower()
-        if ($have -eq $Sha256.ToLower()) { return $Destination }
-        Write-Warning "$name in the download cache has SHA256 $have (expected $Sha256); refetching"
-        Remove-Item -LiteralPath $Destination -Force
-    }
-    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
-        try {
-            $tmp = "$Destination.tmp"
-            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
-            Invoke-WebRequest -Uri $Uri -OutFile $tmp -UseBasicParsing
-            $got = (Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()
-            if ($got -ne $Sha256.ToLower()) {
-                Remove-Item -LiteralPath $tmp -Force
-                throw "SHA256 mismatch for $name : got $got, expected $Sha256"
-            }
-            Move-Item -LiteralPath $tmp -Destination $Destination -Force
-            return $Destination
-        } catch {
-            if ($attempt -eq $Retries) {
-                throw ("Failed to fetch $name after $Retries attempts: $($_.Exception.Message). " +
-                       "Place a verified copy at $Destination and re-run.")
-            }
-            $delay = [Math]::Min(30, [Math]::Pow(2, $attempt))
-            Write-Warning "$name fetch attempt $attempt failed ($($_.Exception.Message)); retrying in ${delay}s"
-            Start-Sleep -Seconds $delay
-        }
-    }
+    Invoke-PsxReleaseStage -StageArgs @(
+        'fetch-pinned', '--url', $Uri, '--sha256', $Sha256,
+        '--destination', $Destination, '--retries', "$Retries") | Out-Null
+    return $Destination
 }
 
 <#
 .SYNOPSIS
-Derive the codegen cache tag (cg<ver>_<hash>_gc<cfghash>) for a release.
+Derive the codegen cache tag for a release.
 
 .DESCRIPTION
 The tag namespaces the shard cache. It is derived from the PACKAGED game.toml,
 not the dev one: a cache built against the dev config lands under a different
 tag and the shipped runtime silently ignores it. Callers must pass the staged
 game.toml for exactly this reason.
+
+-Flavor is the codegen flavor baked into the runtime BINARY being packaged
+(overlay_api.h: 0 base, 2 pgxp; runtime/runtime.cmake sets 2 for a PGXP
+target). It is NOT platform-dependent -- a Windows and a Linux build of the same
+target have the same flavor -- so do not add a platform branch for it. Prefer
+-BuildPath/-RuntimeTarget, which reads the value the build itself published and
+therefore cannot disagree with the binary being shipped; the -Flavor default of
+0 exists only so the already-shipped title packagers keep working unchanged.
 #>
 function Get-OverlayCgTag {
     param(
@@ -115,25 +179,32 @@ function Get-OverlayCgTag {
         [Parameter(Mandatory)][string]$RecompInc,     # framework runtime/include
         [Parameter(Mandatory)][string]$GameExe,       # psxrecomp-game.exe
         [Parameter(Mandatory)][string]$GameToml,      # the STAGED game.toml
-        [int]$Flavor = 0                              # 0 base, 1 widescreen, 2 pgxp
+        [int]$Flavor = 0,
+        [string]$BuildPath = "",                      # derive the flavor instead
+        [string]$RuntimeTarget = "psx-runtime"
     )
-    $tagScript = Join-Path ([IO.Path]::GetTempPath()) ("psx_cgtag_" + [guid]::NewGuid().ToString("N") + ".py")
-    @"
-import importlib.util
-s = importlib.util.spec_from_file_location('co', r'$RecompTools\compile_overlays.py')
-m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
-# Ask the tool that OWNS the cache layout for the tag. Never reformat it here:
-# a parallel PowerShell format string is exactly how this went stale when the
-# _f<flavor> suffix was added, staging zero shards from a valid cache.
-print(m.cache_tag(r'$RecompInc', r'$GameExe', r'$GameToml', $Flavor))
-"@ | Set-Content -Encoding ASCII $tagScript
-    try {
-        $tag = (& py -3 $tagScript).Trim()
-    } finally {
-        Remove-Item -Force -ErrorAction SilentlyContinue $tagScript
+    # $RecompTools is accepted for source compatibility with every existing
+    # caller. The tool is found relative to THIS file, which is in that same
+    # directory, so the parameter is no longer load-bearing.
+    $stageArgs = @('cg-tag', '--runtime-include', $RecompInc,
+                   '--recompiler', $GameExe, '--game-toml', $GameToml)
+    if ($BuildPath) {
+        $stageArgs += @('--flavor-from-build', $BuildPath,
+                        '--runtime-target', $RuntimeTarget)
+    } else {
+        $stageArgs += @('--flavor', "$Flavor")
     }
-    if (-not $tag) { throw "Could not derive the overlay codegen tag (compile_overlays.py probe returned nothing)" }
-    return $tag
+    if (-not (Test-Path -LiteralPath $script:PsxReleaseStageTool)) {
+        throw ("Shared release staging tool is missing: $($script:PsxReleaseStageTool). " +
+               "The pinned framework predates it (bead beads-eio.3.102).")
+    }
+    # stdout is the tag and nothing else, so it is read directly rather than
+    # through Invoke-PsxReleaseStage (which echoes for the log).
+    $tag = (& py -3 $script:PsxReleaseStageTool @stageArgs) | Select-Object -Last 1
+    if ($LASTEXITCODE -ne 0 -or -not $tag) {
+        throw "Could not derive the overlay codegen tag (release_stage.py cg-tag failed)"
+    }
+    return $tag.Trim()
 }
 
 <#
@@ -145,6 +216,11 @@ Only shards under $CgTag are copied: the runtime ignores every other namespace,
 so shipping them would just inflate the download. Shipping with NO cache is a
 real downgrade -- every player's first visit to every area runs interpreted --
 so it throws unless -AllowNoCache makes that a deliberate, recorded choice.
+
+-AllowNoCache is DEPRECATED and is retained only because unmigrated title
+packagers still pass it. It maps to release_stage.py's
+--ship-without-overlay-cache-because, which is loud, names what it does, and
+prints the reason. Do not add it to a release recipe.
 #>
 function Add-OverlayCache {
     param(
@@ -154,79 +230,32 @@ function Add-OverlayCache {
         [Parameter(Mandatory)][string]$CgTag,
         [switch]$AllowNoCache
     )
-    $CacheSrc = Join-Path $CacheSrcRoot $GameId
-    if (Test-Path $CacheSrc) {
-        $CacheDst = Join-Path $Stage "cache/$GameId"
-        $cacheFiles = @(Get-ChildItem $CacheSrc -Recurse -File -Include *.dll,*.ranges,*.resident |
-            Where-Object { $_.FullName -notmatch '[\\/]sljit[\\/]' -and $_.FullName -match "[\\/]$CgTag[\\/]" })
-        if ($cacheFiles.Count -eq 0 -and -not $AllowNoCache) {
-            throw ("Overlay cache at $CacheSrc has no shards for this build's codegen tag $CgTag - " +
-                   "rebuild the cache with compile_overlays.py against this runtime, or pass " +
-                   "-AllowNoCache to release without one deliberately")
+    $countFile = New-PsxStageTempFile
+    try {
+        $stageArgs = @('stage-cache', '--game-id', $GameId,
+                       '--cache-src-root', $CacheSrcRoot, '--stage', $Stage,
+                       '--cg-tag', $CgTag, '--count-file', $countFile)
+        if ($AllowNoCache) {
+            $stageArgs += @('--ship-without-overlay-cache-because',
+                            'the caller passed the deprecated -AllowNoCache switch')
         }
-        foreach ($f in $cacheFiles) {
-            $rel  = $f.FullName.Substring($CacheSrc.Length).TrimStart('\','/')
-            $dest = Join-Path $CacheDst $rel
-            New-PsxDir (Split-Path $dest) | Out-Null
-            Copy-Item $f.FullName $dest
-        }
-        $dllCount = @(Get-ChildItem $CacheDst -Recurse -Filter *.dll -ErrorAction SilentlyContinue).Count
-        Write-Host "Bundled overlay cache: $dllCount native overlay DLL(s) [$CgTag]"
-
-        # Assert the STAGED LAYOUT, not just the copied count (pattern from
-        # MegaManX6). The loader scans cache/<id>/<compiler>/<arch-abi>/<tag>/
-        # exactly; a shard that lands anywhere else is worth exactly as much as
-        # no shard at all, and a count can never tell the difference.
-        if ($dllCount -gt 0) {
-            # Locate the tag DIRECTORY by name and count what is inside it. A path
-            # regex here is separator-fragile: "[\/]" matches only a forward
-            # slash, so on Windows it silently matched nothing and failed a
-            # perfectly correct 78-shard layout. Directory identity has no such trap.
-            $tagDirs = @(Get-ChildItem $CacheDst -Recurse -Directory -ErrorAction SilentlyContinue |
-                         Where-Object { $_.Name -eq $CgTag })
-            $staged = @($tagDirs | ForEach-Object {
-                Get-ChildItem $_.FullName -File -Filter *.dll -ErrorAction SilentlyContinue })
-            if ($staged.Count -ne $dllCount) {
-                throw ("Staged overlay cache layout is wrong: expected $dllCount shard(s) under " +
-                       "cache/$GameId/<compiler>/<arch-abi>/$CgTag/ but found $($staged.Count). " +
-                       "The loader scans that exact path, so the bundled cache would never load.")
-            }
-        }
-        return $dllCount
-    } elseif ($AllowNoCache) {
-        Write-Warning "No overlay cache at $CacheSrc - shipping without one because -AllowNoCache was given"
-        return 0
-    } else {
-        throw @"
-No overlay cache found at $CacheSrc, so this package would ship without one and
-every player's first session would run overlays on the dirty-RAM interpreter.
-
-Build a cache for THIS release's codegen tag ($CgTag). The tag is derived from
-the PACKAGED game.toml, so a cache built against the dev game.toml lands under a
-different tag and the shipped runtime will silently ignore it:
-
-  py -3 <framework>\tools\compile_overlays.py ``
-      --captures    <coverage vault>\overlay_captures.json ``
-      --game-toml   <staged game.toml> ``
-      --recompiler  <framework>\recompiler\build\psxrecomp-game.exe ``
-      --runtime-include <framework>\runtime\include ``
-      --out-dir     $CacheSrcRoot ``
-      --gcc         C:\msys64\mingw64\bin\gcc.exe --cps
-
-Then re-run this packager. Pass -AllowNoCache to ship without one anyway.
-"@
+        Invoke-PsxReleaseStage -StageArgs $stageArgs | Out-Null
+        return (Get-PsxStageCount $countFile)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $countFile
     }
 }
 
 <#
 .SYNOPSIS
-Stage the self-contained overlay toolchain (embedded python + tcc + recompiler).
+Stage the self-contained overlay toolchain (pinned python + tcc + recompiler).
 
 .DESCRIPTION
 This is the fallback that lets a player with NO compiler installed still turn
 captured overlays into native code. Without it the runtime's autocompile gate
 (tk_present) is false and overlays stay interpreted forever, which is exactly
-how Ape Escape shipped for its entire life.
+how Ape Escape shipped for its entire life -- and how EVERY Linux release of
+every title has shipped, since no AppImage packager staged one at all.
 #>
 function Add-OverlayToolchain {
     param(
@@ -237,43 +266,12 @@ function Add-OverlayToolchain {
         [Parameter(Mandatory)][string]$MingwBin,
         [Parameter(Mandatory)][string]$DlCache
     )
-    $Toolchain = New-PsxDir (Join-Path $Stage "overlay_toolchain")
-    New-PsxDir $DlCache | Out-Null
-
-    $PyVer = $script:PsxToolchainPins.PythonVersion
-    $PyZip = Get-PinnedArchive `
-        -Uri "https://www.python.org/ftp/python/$PyVer/python-$PyVer-embed-amd64.zip" `
-        -Sha256 $script:PsxToolchainPins.PythonSha256 `
-        -Destination (Join-Path $DlCache "python-$PyVer-embed-amd64.zip")
-    Expand-Archive -LiteralPath $PyZip -DestinationPath (Join-Path $Toolchain "python") -Force
-
-    $TccVer = $script:PsxToolchainPins.TccVersion
-    $TccZip = Get-PinnedArchive `
-        -Uri "https://download.savannah.gnu.org/releases/tinycc/tcc-$TccVer-win64-bin.zip" `
-        -Sha256 $script:PsxToolchainPins.TccSha256 `
-        -Destination (Join-Path $DlCache "tcc-$TccVer-win64-bin.zip")
-    $TccTmp = Join-Path $DlCache "tcc_extract"
-    if (Test-Path -LiteralPath $TccTmp) { Remove-Item -LiteralPath $TccTmp -Recurse -Force }
-    Expand-Archive -LiteralPath $TccZip -DestinationPath $TccTmp -Force
-    Copy-Item -Recurse -Force (Join-Path $TccTmp "tcc") (Join-Path $Toolchain "tcc")
-
-    Copy-Item (Join-Path $RecompDir "psxrecomp-game.exe") $Toolchain
-    foreach ($d in @("libgcc_s_seh-1.dll","libstdc++-6.dll","libwinpthread-1.dll")) {
-        Copy-Item (Join-Path $MingwBin $d) $Toolchain
-    }
-    Copy-Item (Join-Path $RecompTools "compile_overlays.py") $Toolchain
-    $ToolInc = New-PsxDir (Join-Path $Toolchain "include")
-    Copy-Item (Join-Path $RecompInc "*.h") $ToolInc
-
-    # The runtime gates autocompile on this exact file. If the layout ever
-    # changes, fail here rather than shipping a toolchain the runtime ignores.
-    $probe = Join-Path $Toolchain "python\python.exe"
-    if (-not (Test-Path -LiteralPath $probe)) {
-        throw "Staged overlay_toolchain is missing python\python.exe ($probe); the runtime's autocompile gate would be false and overlays would stay interpreted"
-    }
-    $tcMB = "{0:N0}" -f ((Get-ChildItem $Toolchain -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
-    Write-Host "Bundled overlay toolchain (embedded python + tcc + recompiler): ~$tcMB MB"
-    return $Toolchain
+    Invoke-PsxReleaseStage -StageArgs @(
+        'stage-toolchain', '--stage', $Stage, '--recomp-dir', $RecompDir,
+        '--recomp-tools', $RecompTools, '--recomp-include', $RecompInc,
+        '--dl-cache', $DlCache, '--platform', 'win',
+        '--mingw-bin', $MingwBin) | Out-Null
+    return (Join-Path $Stage "overlay_toolchain")
 }
 
 <#
@@ -295,51 +293,30 @@ catches the failure that actually matters -- a mod silently not shipping.
 Staging copies from the BUILD dir, never the source tree: the framework stages
 its own builtin packages there at build time, and copying the source tree
 silently drops them (pattern and rationale from MegaManX6).
+
+release_stage.py additionally prefers the catalog manifest the BUILD published
+(psx_mod_catalog_<target>.txt, written by runtime.cmake's
+_psxrt_stage_mod_catalog) when -RuntimeTarget is given, which is a strictly
+better authority than re-globbing the source trees.
 #>
 function Add-ModCatalog {
     param(
         [Parameter(Mandatory)][string]$BuildPath,          # build dir (has mods/bundled)
         [Parameter(Mandatory)][string]$Stage,
         [string]$GameModSource      = "",                  # <repo>/mods/preloaded
-        [string]$FrameworkModSource = ""                   # <framework>/mods/builtin
+        [string]$FrameworkModSource = "",                  # <framework>/mods/builtin
+        [string]$RuntimeTarget      = ""
     )
-    $ModsSrc = Join-Path $BuildPath "mods"
-    if (-not (Test-Path (Join-Path $ModsSrc "bundled"))) {
-        throw "No mod catalog staged at $ModsSrc - build the runtime first (the framework stages its builtin packages there)"
+    $countFile = New-PsxStageTempFile
+    try {
+        $stageArgs = @('stage-mods', '--build-path', $BuildPath,
+                       '--stage', $Stage, '--count-file', $countFile)
+        if ($GameModSource)      { $stageArgs += @('--mod-source', $GameModSource) }
+        if ($FrameworkModSource) { $stageArgs += @('--mod-source', $FrameworkModSource) }
+        if ($RuntimeTarget)      { $stageArgs += @('--runtime-target', $RuntimeTarget) }
+        Invoke-PsxReleaseStage -StageArgs $stageArgs | Out-Null
+        return (Get-PsxStageCount $countFile)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue $countFile
     }
-    Copy-Item -Recurse -Force $ModsSrc (Join-Path $Stage "mods")
-    # mods/bundled is build output and ships. Two things under mods/ belong to
-    # this machine and must never reach a release: installed/ holds .psxmod
-    # archives the developer installed as a player would, and state.toml is
-    # their own enable/disable selection over a catalog that ships default-off.
-    $StagedMods = Join-Path $Stage "mods"
-    Remove-Item -Recurse -Force (Join-Path $StagedMods "installed") -ErrorAction SilentlyContinue
-    Remove-Item -Force (Join-Path $StagedMods "state.toml") -ErrorAction SilentlyContinue
-    Remove-Item -Force (Join-Path $StagedMods "state.toml.tmp") -ErrorAction SilentlyContinue
-    $StagedPkgDir = Join-Path $Stage "mods\bundled"
-
-    $stagedIds = @(Get-ChildItem $StagedPkgDir -Directory -ErrorAction SilentlyContinue |
-                   ForEach-Object { $_.Name })
-    if ($stagedIds.Count -eq 0) { throw "Staged mod catalog at $StagedPkgDir is empty" }
-
-    # Every package the sources define must be present. Missing = a real defect.
-    $missing = @()
-    foreach ($src in @($GameModSource, $FrameworkModSource)) {
-        if (-not $src -or -not (Test-Path (Join-Path $src "packages"))) { continue }
-        foreach ($want in (Get-ChildItem (Join-Path $src "packages") -Directory)) {
-            if ($stagedIds -notcontains $want.Name) { $missing += $want.Name }
-        }
-    }
-    if ($missing.Count -gt 0) {
-        throw ("Mod catalog is missing package(s) the sources define: " + ($missing -join ", ") +
-               ". They exist in the source tree but did not reach $StagedPkgDir, so the release " +
-               "would ship a Mods page the dev build does not have.")
-    }
-
-    # Report the derived breakdown. Framework-owned packages are the psx.* ones.
-    $fw   = @($stagedIds | Where-Object { $_ -like "psx.*" })
-    $game = @($stagedIds | Where-Object { $_ -notlike "psx.*" })
-    Write-Host ("Bundled mod catalog: {0} package(s) = {1} game-owned + {2} framework-owned" -f `
-                $stagedIds.Count, $game.Count, $fw.Count)
-    return $stagedIds.Count
 }

@@ -1371,8 +1371,32 @@ function(psxrecomp_add_runtime_target target)
         target_compile_definitions(${target} PRIVATE
             PSX_PGXP=1
             PSX_OVERLAY_FLAVOR=2)   # PSX_OVERLAY_FLAVOR_PGXP (overlay_api.h)
+        set(_psxrt_overlay_flavor 2)
+    else()
+        set(_psxrt_overlay_flavor 0)
     endif()
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${_psxrt_exe_name}")
+
+    # Publish the OVERLAY CODEGEN FLAVOR this target links with, for the same
+    # reason the exe name is published just below: so nothing downstream has to
+    # re-derive it.
+    #
+    # The flavor is the high half of overlay_abi() and the `_f<n>` field of the
+    # shard cache tag (overlay_api.h PSX_OVERLAY_FLAVOR; 0 base, 2 pgxp). It is
+    # a property of the BINARY, decided right here, and it is NOT
+    # platform-dependent — a Windows and a Linux build of the same target share
+    # it. Every release packager needs it to name the cache namespace the
+    # shipped runtime will actually read, and until now every packager simply
+    # assumed 0. That assumption is invisible when it is wrong: a PGXP runtime
+    # reads cache/<id>/gcc/<arch-abi>/cg..._f2/ while the packager stages
+    # ..._f0/, so the package ships a cache the binary ignores completely and
+    # every overlay runs interpreted, with nothing failing anywhere.
+    #
+    # tools/release_stage.py reads this file (cg-tag --flavor-from-build), so a
+    # packager can stop guessing. See bead beads-eio.3.102.
+    file(GENERATE
+         OUTPUT "${CMAKE_BINARY_DIR}/psxrecomp_overlay_flavor-${target}.txt"
+         CONTENT "${_psxrt_overlay_flavor}\n")
 
     # Publish the name we just chose, so nothing downstream has to re-derive it.
     #

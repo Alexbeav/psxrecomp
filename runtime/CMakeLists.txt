@@ -535,6 +535,25 @@ if(BUILD_TESTING)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mod_catalog_layout.py
                          --cmake ${CMAKE_COMMAND})
+        # The overlay cache tag may be formatted in exactly two files. Three
+        # release packagers hand-built it instead, the flavor-suffix fix reached
+        # one of them, and the other two could not stage a matching Linux cache
+        # at all -- Tomba 2 v0.0.9 shipped with no AppImage as a result.
+        # bead beads-eio.3.102. This test is also the SHARED check a title's own
+        # suite runs against its own tree (pass --root <repo>), so the rule has
+        # one implementation like the staging it guards.
+        add_test(NAME packagers_never_format_cache_tag_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_packagers_never_format_cache_tag.py)
+        # Behavioural half of the same bead: tools/release_stage.py must select
+        # shards by the tag DIRECTORY's identity (the old `-path "*/<tag>/*"`
+        # substring match rejected the real ..._f0 directory and staged zero),
+        # must never ship .abi_<tag>.ok / .c / .pair-lock, and must fail rather
+        # than warn on an empty selection. Hermetic: synthetic cache trees, no
+        # recompiler or captures needed.
+        add_test(NAME release_stage_cache_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_release_stage_cache.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,

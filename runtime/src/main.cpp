@@ -12095,7 +12095,32 @@ int main(int argc, char** argv) {
         extern int g_psx_cps_mode;
         const std::filesystem::path tk_xd = exe_dir_from_argv(argv[0]);
         const std::filesystem::path tk_dir = tk_xd / "overlay_toolchain";
-        const std::filesystem::path tk_py = tk_dir / "python" / "python.exe";
+        /* The bundle's layout is identical on every platform; only the file
+         * NAMES differ. These were hardcoded to the Windows spellings
+         * ("python/python.exe", "psxrecomp-game.exe", "tcc/tcc.exe"), so on
+         * Linux the gate below could never be true no matter what a packager
+         * staged — a bundled Linux toolchain would have been dead weight the
+         * runtime never looked at. (No Linux packager staged one either, so
+         * this had no observable symptom to report: measured 2026-09-02,
+         * `grep -c overlay_toolchain` was 0 in all three forked
+         * tools/package_appimage.sh. Bead beads-eio.3.102.)
+         *
+         * python-build-standalone, the pinned relocatable CPython that
+         * tools/release_stage.py stages on Linux, puts the interpreter at
+         * python/bin/python3; python.org's embeddable zip puts it at
+         * python/python.exe. Keep these in lockstep with
+         * release_stage.TOOLCHAIN_PY_REL / TOOLCHAIN_RECOMPILER. */
+#ifdef _WIN32
+        const std::filesystem::path tk_py =
+            tk_dir / "python" / "python.exe";
+        const char *tk_recompiler = "psxrecomp-game.exe";
+        const char *tk_tcc        = "tcc.exe";
+#else
+        const std::filesystem::path tk_py =
+            tk_dir / "python" / "bin" / "python3";
+        const char *tk_recompiler = "psxrecomp-game";
+        const char *tk_tcc        = "tcc";
+#endif
         const bool tk_present = std::filesystem::exists(tk_py);
         auto build_toolchain_cmd = [&](const char *compiler) {
             auto cmd_quote = [](const std::string& s) {
@@ -12107,13 +12132,13 @@ int main(int argc, char** argv) {
                 " --captures " + cmd_quote(captures_path.string()) +
                 " --game-toml " + cmd_quote(std::string(
                     game_config_path ? game_config_path : "game.toml")) +
-                " --recompiler " + cmd_quote((tk_dir / "psxrecomp-game.exe").string()) +
+                " --recompiler " + cmd_quote((tk_dir / tk_recompiler).string()) +
                 " --runtime-include " + cmd_quote((tk_dir / "include").string()) +
                 " --out-dir " + cmd_quote((tk_xd / "cache").string()) +
                 (g_psx_cps_mode ? " --cps" : "") +
                 " --compiler " + compiler;
             if (std::string(compiler) == "tcc")
-                c += " --tcc " + cmd_quote((tk_dir / "tcc" / "tcc.exe").string());
+                c += " --tcc " + cmd_quote((tk_dir / "tcc" / tk_tcc).string());
             return c;
         };
         int gcc_avail = (deferred_has_overlay_ac || tk_present)
