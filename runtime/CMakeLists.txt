@@ -559,6 +559,9 @@ if(BUILD_TESTING)
         add_test(NAME mingw_reproducible_link_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mingw_reproducible_link.py)
+        add_test(NAME overlay_loader_c11_source_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_loader_c11_source.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
