@@ -103,28 +103,52 @@ and game code (`game.toml`, seeds, CMake) at the repo root. See
 
 ### Build requirements
 
-You need Git, Python 3, CMake 3.20+, Ninja, and a C/C++ compiler (the
-recompiler is C++20; the runtime is C99 + C++17). SDL3 is fetched
-automatically if no system package is found.
+Every platform needs **Git**, **Python 3**, **CMake 3.20+**, **Ninja**, and a
+C/C++ compiler (the recompiler is C++20; the runtime is C99 + C++17). SDL3 is
+fetched automatically if no system package is found.
+
+**Windows** (PowerShell)
+
+```powershell
+winget install Git.Git Python.Python.3.12
+```
+
+Git for Windows also provides the `bash` the setup script uses. Then pick one
+of these for the compiler, CMake, and Ninja:
+
+- **Bundled toolchain (recommended).** Download `cmake-clang-v1-windows-x64.zip`
+  from [retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains/releases/latest),
+  unzip it (for example to `C:\retcomm-toolchain`), and in the PowerShell
+  window you will run the setup from:
+
+  ```powershell
+  $env:PSXRECOMP_TOOLCHAIN_DIR = "C:\retcomm-toolchain"
+  $env:Path = "C:\retcomm-toolchain\bin;$env:Path"
+  ```
+
+- **Visual Studio.** Install
+  [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/downloads/)
+  with the "Desktop development with C++" workload, plus
+  `winget install Kitware.CMake Ninja-build.Ninja`, and run the setup from a
+  "Developer PowerShell for VS 2022" window.
+
+**macOS**
 
 ```sh
-# Windows (MSYS2 MinGW64 shell)
-pacman -S --needed git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
-                   mingw-w64-x86_64-ninja mingw-w64-x86_64-python
-
-# macOS (Xcode command-line tools for the compiler)
+xcode-select --install
 brew install git cmake ninja python
+```
 
-# Linux (Debian/Ubuntu)
+**Linux** (Debian/Ubuntu)
+
+```sh
 sudo apt install git build-essential cmake ninja-build python3
 ```
 
-**Optional:** instead of installing a compiler and CMake yourself, grab a bundled
-`cmake-clang-v1` pack from
-[retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
-(unpack it and point `RETCOMM_TOOLCHAIN_DIR` at it, or run
-`tools/fetch_toolchain.sh --artifact <platform>`). The full dependency table and
-per-platform notes are in [`docs/BUILDING.md`](docs/BUILDING.md).
+Linux and macOS users can also use the bundled toolchain pack instead of a
+system compiler: `tools/fetch_toolchain.sh --artifact <linux-x64|macos-arm64|macos-x64>`
+unpacks it and prints the directory to export. The full dependency table,
+MSYS2 notes, and troubleshooting are in [`docs/BUILDING.md`](docs/BUILDING.md).
 
 ### Set up a game project (recommended)
 
