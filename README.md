@@ -152,7 +152,13 @@ MSYS2 notes, and troubleshooting are in [`docs/BUILDING.md`](docs/BUILDING.md).
 
 ### Set up a game project (recommended)
 
-Clone this repo with submodules, then run the setup script. Pass your disc
+#### Source Code Required
+
+Clone the master branch of this repo with submodules, or download one of the latest nightly releases.  You store this wherever you like on your project space, as it's own project - you do NOT build your recomp game data inside the psxrecomp folder.
+
+#### New Project Scaffolding
+
+Run the setup script. Pass your disc
 (`.cue`) and, optionally, a legally obtained retail BIOS dump. The script
 prompts for everything else; answer **Y** to Generate to produce the game and
 BIOS C. The new project is created under `--dir` / `-Dir` with the name you
@@ -190,7 +196,25 @@ Then build with the generated `build.ps1` / `build.sh` in the new project.
 Full flow, every flag, CI, and the release checklist:
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
-**New here?** The fastest way in:
+#### Project Folder Structure
+
+After running the project setup wizard script as per above, you will have a project layout made for you, as seen here:
+
+<img width="910" height="567" alt="image" src="https://github.com/user-attachments/assets/3ef66dec-b594-4332-8067-307a23ee1f21" />
+
+These are the 3 most important folders to be aware of:
+
+**psxrecomp** This is the module for the runtime engine.  It also contains nested submodules under lib/recomp-net and lib/retcomm-rbengine which are used for netplay connectivity, and also for certain offline features as well like frame rewind.
+
+**recomp-ui** This module is for the UI.  It handles user interface at the startup of the released/compiled program for configuring controls, settings, a netplay browser, and also manages setup wizards for self-compilation on end user machines.
+
+**mods/preloaded** in this directory, mod manifests are stored which catalog the mods available for the title.  Adding new mods requires an additonal manifest or an entry in an existing manifest.
+
+**Other Folders** the other folders produced are generated from template files by the setup script run above, which provide various features and tools specific to the title itself and might be referenced by the compiler, or by diagnostics/dev software.
+
+### New here? 
+
+**The fastest way in:**
 
 | Path | Doc |
 |------|-----|
