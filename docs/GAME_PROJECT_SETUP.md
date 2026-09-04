@@ -384,6 +384,8 @@ On Linux and macOS, the wizard uses native CMake, Ninja, Python 3, and C/C++
 compilers from `PATH`. Install these tools before you start setup. The wizard
 does not download the Windows portable pack on these platforms. It also ignores
 cached Windows pack paths. The rebuild CLI follows the same native-tool rule.
+The generated `README-SETUP.txt` lists these native requirements for Linux and
+macOS. It lists the portable download and offline zip only for Windows.
 
 The setup packager removes owned-input and player-state files, including files
 with backup suffixes. It checks the complete staged tree again after it adds the
