@@ -69,21 +69,28 @@ python psxrecomp/psxrecomp_cli.py generate \
   [--bios path/to/compatible-retail-bios.bin] [--force-bios] \
   [--skip-hash-check] [--force-prepare] [--json-progress]
 
-python psxrecomp/psxrecomp_cli.py ensure-toolchain \
-  [--project-root .] [--from-zip cmake-clang-v1-linux-x64.zip] [--no-download]
-
 python psxrecomp/psxrecomp_cli.py rebuild \
   --config game.toml --project-root . \
   --build-dir build-release --target psx-runtime \
   --exe-basename Bomberman_Party_Edition_Recompiled \
-  [--disc path/to/game.cue] [--toolchain-zip path/to/pack.zip] \
-  [--no-toolchain-download] [--no-pgo] [--force-pgo] [--json-progress]
+  [--disc path/to/game.cue] [--no-pgo] [--force-pgo] [--json-progress]
 
 python psxrecomp/psxrecomp_cli.py pgo-train \
   --config game.toml --build-dir build-release \
   --exe-basename Bomberman_Party_Edition_Recompiled \
   [--disc …] [--train-secs 120] [--train-runs 3] [--json-progress]
 ```
+
+On Windows, you can prepare the portable pack before a rebuild:
+
+```bash
+python psxrecomp/psxrecomp_cli.py ensure-toolchain \
+  [--project-root .] [--from-zip cmake-clang-v1-windows-x64.zip] [--no-download]
+```
+
+You can also add `--toolchain-zip path/to/pack.zip` or
+`--no-toolchain-download` to the Windows `rebuild` command. Linux and macOS
+ignore portable packs and use native build tools from `PATH`.
 
 `generate` normalizes the dump via `tools/prepare_disc.py` when needed, then
 runs `psxrecomp-game --config game.toml` into `[recompiler] out_dir`.
