@@ -22,6 +22,7 @@ typedef enum HostKeymapAction {
     HOST_KEYMAP_REWIND,           /* default F8 */
     HOST_KEYMAP_SAVE_STATE_MENU,  /* default F7 */
     HOST_KEYMAP_SCANLINES,        /* default F6 */
+    HOST_KEYMAP_TURBO_TOGGLE,     /* default F9; latches Turbo until pressed again */
     HOST_KEYMAP_ACTION_COUNT
 } HostKeymapAction;
 
