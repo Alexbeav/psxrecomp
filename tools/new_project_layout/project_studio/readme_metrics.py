@@ -212,7 +212,7 @@ def render_launcher_block() -> str:
             "</p>",
             "",
             "RetComM checks for updates, rebuilds with existing build data when possible,",
-            "shares the portable toolchain used by per-title launchers, and automates",
+            "uses the same platform build tools as per-title launchers, and automates",
             "BIOS/ROM/save plumbing so you are not stuck repeating each game’s wizard by hand.",
             LAUNCHER_END,
         ]
