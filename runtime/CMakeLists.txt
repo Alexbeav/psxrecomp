@@ -571,6 +571,9 @@ if(BUILD_TESTING)
         add_test(NAME setup_package_platform_copy_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_platform_copy.py)
+        add_test(NAME setup_package_archive_platform_copy_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_archive_platform_copy.py)
     endif()
 
     # Full card protocol regression: read, write, address echo, per-slot state,
