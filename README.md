@@ -101,6 +101,31 @@ repositories with **`psxrecomp/` and `recomp-ui/` as root-level submodules**
 and game code (`game.toml`, seeds, CMake) at the repo root. See
 [`docs/GAME_PROJECT_SETUP.md`](docs/GAME_PROJECT_SETUP.md).
 
+### Build requirements
+
+You need Git, Python 3, CMake 3.20+, Ninja, and a C/C++ compiler (the
+recompiler is C++20; the runtime is C99 + C++17). SDL3 is fetched
+automatically if no system package is found.
+
+```sh
+# Windows (MSYS2 MinGW64 shell)
+pacman -S --needed git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
+                   mingw-w64-x86_64-ninja mingw-w64-x86_64-python
+
+# macOS (Xcode command-line tools for the compiler)
+brew install git cmake ninja python
+
+# Linux (Debian/Ubuntu)
+sudo apt install git build-essential cmake ninja-build python3
+```
+
+**Optional:** instead of installing a compiler and CMake yourself, grab a bundled
+`cmake-clang-v1` pack from
+[retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
+(unpack it and point `RETCOMM_TOOLCHAIN_DIR` at it, or run
+`tools/fetch_toolchain.sh --artifact <platform>`). The full dependency table and
+per-platform notes are in [`docs/BUILDING.md`](docs/BUILDING.md).
+
 ### Set up a game project (recommended)
 
 Clone this repo with submodules, then run the setup script. Pass your disc
