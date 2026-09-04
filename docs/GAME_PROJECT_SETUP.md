@@ -574,6 +574,7 @@ Use this before tagging a setup-host release that matches other titles
 
 ### Publish
 
+- [ ] Run `audit_setup_package_platform_copy.py` on every finished zip before upload
 - [ ] Tag `vX.Y.Z`; GitHub Release attaches all four platform zips
 - [ ] Release notes say the zip is a setup host (no disc / no retail BIOS /
   ```
