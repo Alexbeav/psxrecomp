@@ -33,6 +33,7 @@ product binary (`psxrecomp_codegen_host_forward_if_built`). Opt out with
 | `psxrecomp_cli.py` | Generate / rebuild / verify-disc (in the submodule) |
 | `tools/package_setup_host.sh` | Universal setup-host zip packager |
 | `tools/ci/*.sh` | normalize version, clear generated, record pins, build emitters |
+| `tools/ci/audit_setup_package_platform_copy.py` | Verify final setup copy and controls match the archive platform before upload |
 | `tools/fetch_toolchain.sh` | Optional: download/unpack `cmake-clang-v1` (CI embed or local) |
 | `tools/toolchain_pack.py` | CLI: resolve / download / unpack into `toolchain/` + shared cache |
 | `tools/stage_setup_sdk.sh` | Pack: emitters, OpenBIOS checks, optional `toolchain/`, MinGW DLLs |
