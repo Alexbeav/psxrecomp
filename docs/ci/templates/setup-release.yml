@@ -549,7 +549,11 @@ jobs:
         run: |
           set -euo pipefail
           ZIP=$(ls dist/YOUR_ZIP_PREFIX-*-"${{ matrix.artifact }}".zip | head -1)
-          python psxrecomp/tools/ci/audit_setup_package_platform_copy.py "${ZIP}"
+          if command -v python3 >/dev/null 2>&1; then
+            python3 psxrecomp/tools/ci/audit_setup_package_platform_copy.py "${ZIP}"
+          else
+            python psxrecomp/tools/ci/audit_setup_package_platform_copy.py "${ZIP}"
+          fi
 
       - name: Verify zip ships the mod catalog
         shell: bash

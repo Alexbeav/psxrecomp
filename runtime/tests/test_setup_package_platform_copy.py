@@ -41,6 +41,7 @@ def main() -> None:
     workflow = WORKFLOW_TEMPLATE.read_text(encoding="utf-8")
     assert "Linux/macOS use native tools from PATH" in workflow
     assert "audit_setup_package_platform_copy.py" in workflow
+    assert "command -v python3" in workflow
 
     print("setup package platform-copy test: PASS")
 
