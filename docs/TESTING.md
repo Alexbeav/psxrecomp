@@ -58,6 +58,18 @@ and catch whole regression classes without running a game. Registered from
 runtime tree cannot configure until a BIOS has been generated, and these need
 neither.
 
+### OpenGL display-mode transition ordering
+
+`gl_depth24_transition_test` runs from both CMake test trees. It compiles the
+production GP1 display-mode handler, renderer dispatch and depth24 policy with
+synthetic one-word VRAM storage. No retail data, generated BIOS or GL context is
+needed. The configured C compiler must be available when the test runs.
+
+The test checks that movie cleanup precedes later GP0 texture restoration while
+preserving queued uploads, repeated mode writes and backends without a callback.
+It complements `gl_depth24_upload_order_test`, which checks order inside the
+cleanup function. Real GL and retail transition coverage remain separate gates.
+
 ## Known-failing tests (not registered)
 
 Three tests exist and are **deliberately left out of `ctest`** because they fail

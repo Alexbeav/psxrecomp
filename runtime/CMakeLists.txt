@@ -528,6 +528,12 @@ if(BUILD_TESTING)
         add_test(NAME screenshot_hires_pitch_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshot_hires_pitch.py)
+        add_test(NAME gl_depth24_transition_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_depth24_transition.py
+                         --compiler ${CMAKE_C_COMPILER}
+                         --output ${CMAKE_CURRENT_BINARY_DIR}/depth24-transition-test)
+
         add_test(NAME gl_depth24_upload_order_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_depth24_upload_order.py)

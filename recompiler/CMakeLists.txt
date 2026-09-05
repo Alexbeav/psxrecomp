@@ -605,6 +605,12 @@ if(BUILD_TESTING)
                     --recompiler $<TARGET_FILE:psxrecomp-game>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+        add_test(NAME gl_depth24_transition_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gl_depth24_transition.py
+                         --compiler ${CMAKE_C_COMPILER}
+                         --output ${CMAKE_CURRENT_BINARY_DIR}/depth24-transition-test)
+
         # ---- runtime source-invariant guards --------------------------------
         # These live in runtime/tests/ but only READ runtime source, so they
         # need neither a generated BIOS nor a built runtime. Registering them
