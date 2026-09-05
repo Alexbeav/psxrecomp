@@ -314,6 +314,8 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
     if (action < 0 || action >= HOST_KEYMAP_ACTION_COUNT) return out;
     a = &s_actions[action];
     if (a->count <= 0) {
+        if (a->explicit_unbound)
+            return out;
 #if defined(PSX_HAS_RBENGINE_SNAP)
         if (action == HOST_KEYMAP_REWIND)
             snprintf(out, cap, "F8");
