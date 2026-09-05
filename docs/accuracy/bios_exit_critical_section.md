@@ -16,6 +16,15 @@ The specification allows K0 to change; this direct handler preserves it too.
 The host-only `cpu->pc = 0` continuation and C return value remain unchanged.
 
 `exit_critical_section_test` compiles the real `traps.c` implementation with
-GNU LTO and tests 16 combinations of incoming `v0` and SR. It checks the full
-CPU state, allowing only the documented SR update and host continuation change.
+LTO and tests 16 combinations of incoming `v0` and SR. It checks the full CPU
+state, allowing only the documented SR update and host continuation change.
 The test uses no BIOS, generated retail code, or game data.
+
+The fixture links only the real trap unit and its test driver. It relies on
+interprocedural optimization removing syscall paths that the driver never
+calls, rather than providing fake scheduler or exception implementations.
+This link contract is verified with Windows x64 MinGW GCC 16.1.0 and is enabled
+only for that toolchain. Other configurations still register the test, but
+CTest reports it as **Skipped** with the unsupported compiler and reason.
+They do not provide register-preservation coverage until the fixture's link
+contract is validated there or a portable real-dependency harness replaces it.
