@@ -498,8 +498,15 @@ if(BUILD_TESTING)
     target_include_directories(spu_gaussian_test PRIVATE include)
     add_test(NAME spu_gaussian_test COMMAND spu_gaussian_test)
 
+    add_executable(cdrom_lid_state_test tests/test_cdrom_lid_state.c)
+    target_include_directories(cdrom_lid_state_test PRIVATE src)
+    add_test(NAME cdrom_lid_state_test COMMAND cdrom_lid_state_test)
+
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME cdrom_lid_integration_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_lid_integration.py)
         foreach(_t IN ITEMS
                 bundled_bios_stage_guard
                 cli_retail_bios_profile
