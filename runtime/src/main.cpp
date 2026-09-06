@@ -2379,27 +2379,8 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
 }
 
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path p = fs::absolute(path, ec);
-    if (ec) p = path;
-
-    if (uppercase_ascii(p.extension().string()) == ".CUE") {
-        fs::path bin = p;
-        bin.replace_extension(".bin");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-        ec.clear();
-        bin.replace_extension(".BIN");
-        if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
-            return ec ? bin : abs;
-        }
-    }
-
-    return p;
+    // Keep the selected CUE and its CD audio tracks through every launch path.
+    return PSXRecompV4::resolve_disc_path(path).mount;
 }
 
 /* Which image of a MULTI-DISC set to mount, given the roster this build was
@@ -2413,15 +2394,14 @@ static std::filesystem::path normalize_disc_path_for_launch(const std::filesyste
  * who browsed for their own copy of the selected disc is still honoured,
  * because a relocated or container-swapped image keeps its stem -- a Redump
  * dump names the disc in the file name and only the extension moves
- * (".. (Disc 2).cue" -> ".. (Disc 2).bin", which is exactly the substitution
- * normalize_disc_path_for_launch performs).
+ * (".. (Disc 2).cue" -> ".. (Disc 2).bin", container conversion preserves that disc identity).
  *
  * Single-disc titles (roster of 0 or 1) are returned unchanged: the persisted
  * path wins, exactly as it did before any of this existed. */
 /* Roster position of `disc`, or -1. Stem-compared for the same reason
  * resolve_selected_disc() is: the roster holds .cue entries while everything
- * downstream has already been through normalize_disc_path_for_launch(), which
- * swaps a .cue for its .bin. */
+ * downstream can have been through normalize_disc_path_for_launch(), which
+ * may resolve a raw image to its owning CUE. */
 static int roster_index_for_disc(
     const std::vector<std::filesystem::path>& roster,
     const std::filesystem::path& disc) {

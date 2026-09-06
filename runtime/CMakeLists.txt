@@ -562,6 +562,10 @@ if(BUILD_TESTING)
         add_test(NAME mingw_reproducible_link_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mingw_reproducible_link.py)
+        add_test(NAME launch_disc_path_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py
+                         --compiler ${CMAKE_CXX_COMPILER})
         add_test(NAME codegen_host_posix_toolchain_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_posix_toolchain.py)
