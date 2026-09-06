@@ -198,3 +198,5 @@ so the player can redownload — without deleting the cache by hand.
 
 On Linux and macOS, readiness checks native CMake, Ninja, Python, and both C and
 C++ compilers. If a tool is missing, install it and restart setup.
+
+Disc verification and preparation check and retain user-supplied [SBI companions](DISC_COMPANIONS.md). Main-track hashes alone do not prove complete subchannel input.
