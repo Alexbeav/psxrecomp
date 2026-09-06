@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "type": "sse",
+      "url": "http://localhost:7777/sse"
+    },
+    "ghidra_psx": {
+      "type": "sse",
+      "url": "http://localhost:7777/sse"
+    }
+  }
+}
