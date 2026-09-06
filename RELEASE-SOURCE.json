@@ -1,11 +1,13 @@
 {
-  "accepted_framework_commit": "63446a28111a21a0cb7e8b5106c3614c898fc4b5",
+  "accepted_framework_commit": "0fc2b04150360cfeaa8094620e5ad89a1c2ee01a",
   "setup_backport_commit": "fd6e4d99e4b5625329010f4eaf60563fb29f2766",
   "history": "Reviewed source snapshot; no private parent history imported.",
   "dependencies": {
     "lib/recomp-net": "268e74fe718b38fe38643c358588bbc1e0f0af70",
     "lib/retcomm-rbengine": "ebd94a4729abe2c0615070cef3ffe05b3f9ebf28"
   },
-  "code_identity": "Retained source files match the setup backport byte for byte. Runtime and recompiler functional code is unchanged from the accepted base.",
-  "additional_release_change": "PSX-CD-012: preserve player-selected CUE via the existing resolver; eight adapter/parser regressions pass."
+  "code_identity": "Accepted title correction plus the shared portable setup backport and CUE launch adapter correction.",
+  "additional_release_change": "PSX-CD-012: preserve player-selected CUE via the existing resolver; eight adapter/parser regressions pass.",
+  "title_correction": "timeshock",
+  "accepted_patch_sha256": "ad10b46cdf5712c2f1e85c49b7c7c40d204373a295c21ddc45b438a45fbc2ffc"
 }
