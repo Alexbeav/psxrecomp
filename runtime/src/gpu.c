@@ -2696,6 +2696,7 @@ static void gpu_reset_state(int clear_vram) {
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
     s_d24_prev_disp_h = 0;
+    gr_display_mode_changed();
 }
 
 void gpu_init(void) {
@@ -5611,6 +5612,8 @@ static void gp1_display_mode(uint32_t val) {
         interlace_field = 0;
     hres2 = (val >> 6) & 1;
     reverse_flag = (val >> 7) & 1;
+    /* Retire backend movie state before later GP0 texture writes. */
+    gr_display_mode_changed();
 }
 
 static void gp1_get_info(uint32_t val) {

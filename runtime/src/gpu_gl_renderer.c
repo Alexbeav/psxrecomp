@@ -4390,6 +4390,7 @@ static const GpuRenderBackend GL_BACKEND = {
     .wide_clear_margins = glb_wide_clear_margins,
     .render_wide_display = glb_render_wide_display,
     .wide_dump_full = glb_wide_dump_full,
+    .display_mode_changed = depth24_upload_policy,
 };
 
 const GpuRenderBackend *gl_backend_get(void) { return &GL_BACKEND; }

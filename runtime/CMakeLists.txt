@@ -562,6 +562,10 @@ if(BUILD_TESTING)
         add_test(NAME mingw_reproducible_link_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mingw_reproducible_link.py)
+        add_test(NAME phantom_menace_release_regression
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_depth24_transition.py
+                         ${PSXRECOMP_ROOT} --compiler ${CMAKE_C_COMPILER} --output ${CMAKE_CURRENT_BINARY_DIR}/depth24-transition)
         add_test(NAME launch_disc_path_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py
