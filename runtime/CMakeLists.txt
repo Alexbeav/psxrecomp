@@ -23,6 +23,14 @@ psxrecomp_add_runtime_target(psx-runtime
 # (ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c)
+        target_include_directories(depth24_row_policy_test PRIVATE include)
+        target_compile_options(depth24_row_policy_test PRIVATE
+            -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
+        target_link_options(depth24_row_policy_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME depth24_row_policy_test COMMAND depth24_row_policy_test)
+    endif()
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)
     target_include_directories(launcher_device_roundtrip_test PRIVATE include)
