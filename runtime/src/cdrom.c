@@ -2386,9 +2386,17 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        /* SeekL/SeekP stops the previous ReadN/ReadS generation. Otherwise
+         * completion consumes Setloc while the old read remains active, so
+         * the next Read command incorrectly continues at the old location.
+         * Keep implicit-read deadlines independent from explicit ownership. */
+        stop_read_stream();
+        clear_sector_buffer();
+        request_reg &= (uint8_t)~CDROM_REQUEST_BFRD;
         xa_reset_decode();
         spu_cd_audio_reset();
         stop_cdda_playback();
+        stat_reg &= (uint8_t)~(CDSTAT_READ | CDSTAT_PLAY);
         stat_reg |= CDSTAT_SEEK;
         response_push(stat_reg);
         set_irq(CDIRQ_ACK);

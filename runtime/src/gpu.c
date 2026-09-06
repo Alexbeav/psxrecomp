@@ -5371,20 +5371,14 @@ static void gpu_write_gp0_body(uint32_t val) {
 
     /* State: mono polyline — each word is a vertex (or terminator) */
     if (gp0_state == GP0_POLYLINE_MONO) {
-        if ((val & 0xF000F000u) == 0x50005000u) {
-            /* Terminator: hardware ends a polyline ONLY when the masked word
-             * matches 0x50005000 (the 0x55555555 terminator) — Beetle
-             * gpu.cpp:1030, psx-spx. The old `(val & 0xF000F000) != 0` test
-             * also fired on any NEGATIVE vertex coordinate (Y=0xFFxx) and, at
-             * shaded color positions, on any color component >= 0x10 in the
-             * G byte — ending the polyline early and re-parsing its remaining
-             * words as new GP0 commands. That de-phased the whole command
-             * stream: garbage prims all over the Tomba2 attract (texture
-             * garble) and eventually a legit texcoord word 0xFE65FE58 parsed
-             * in IDLE state -> "GP0 unknown command 0xFE" fatal (village). */
+        /* Both initial vertices are mandatory, even if they match the mask.
+         * gp0_words_collected saturates at the required prefix length. */
+        if (gp0_words_collected >= 2 &&
+            (val & 0xF000F000u) == 0x50005000u) {
             gp0_state = GP0_IDLE;
             return;
         }
+        if (gp0_words_collected < 2) gp0_words_collected++;
         int32_t x, y;
         parse_vertex(val, &x, &y);
         x += draw_offset_x; y += draw_offset_y;
@@ -5399,14 +5393,15 @@ static void gpu_write_gp0_body(uint32_t val) {
 
     /* State: shaded polyline — alternating color, vertex words */
     if (gp0_state == GP0_POLYLINE_SHADED) {
-        /* The terminator can arrive in either the color or vertex position.
-         * Check it before interpreting the alternating shaded-polyline stream;
-         * otherwise a vertex-position terminator is consumed as coordinates and
-         * de-phases all following GP0 commands. */
-        if ((val & 0xF000F000u) == 0x50005000u) {
+        /* PSX-SPX GPU Render Line Commands: consume V0,C1,V1 before
+         * testing termination, then test only at the next color position.
+         * A sentinel-like C1 is color data, not an empty/one-vertex line. */
+        if (gp0_words_collected >= 3 && polyline_has_prev == 1 &&
+            (val & 0xF000F000u) == 0x50005000u) {
             gp0_state = GP0_IDLE;
             return;
         }
+        if (gp0_words_collected < 3) gp0_words_collected++;
         /* Even words (after cmd) are colors, odd words are vertices.
          * Sequence: [cmd+C0] [V0] [C1] [V1] [C2] [V2] ...
          * polyline_has_prev tracks: 0=need V0, 1=need C_next, 2=need V_next */
@@ -5473,6 +5468,8 @@ static void gpu_write_gp0_body(uint32_t val) {
         polyline_color = rgb888_to_rgb555(val & 0xFFFFFFu);
         polyline_prev_c = polyline_color;
         polyline_has_prev = 0;
+        gp0_words_collected = 0;
+        gp0_cmd_source_addr = gp0_next_source_addr;
         gr_set_semi_transparency(polyline_semi_trans, (int)semi_transparency);
         gp0_state = shaded ? GP0_POLYLINE_SHADED : GP0_POLYLINE_MONO;
         gp0_draw_count++;

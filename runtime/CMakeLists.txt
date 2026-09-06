@@ -349,6 +349,15 @@ if(BUILD_TESTING)
     # comments were reduced to a `ctest -R <name>` pointer so there is exactly
     # one description of how a test is built, and it is one the build executes.
 
+    add_executable(cdrom_explicit_seek_test tests/test_cdrom_explicit_seek.c)
+    target_include_directories(cdrom_explicit_seek_test PRIVATE include src)
+    add_test(NAME cdrom_explicit_seek_test COMMAND cdrom_explicit_seek_test)
+
+    add_executable(disc_roster_test tests/test_disc_roster.cpp)
+    target_include_directories(disc_roster_test PRIVATE include)
+    target_compile_features(disc_roster_test PRIVATE cxx_std_17)
+    add_test(NAME disc_roster_test COMMAND disc_roster_test)
+
     add_executable(cdrom_irq_mask_test tests/test_cdrom_irq_mask.c)
     target_include_directories(cdrom_irq_mask_test PRIVATE src)
     add_test(NAME cdrom_irq_mask_test COMMAND cdrom_irq_mask_test)
@@ -511,6 +520,12 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            add_test(NAME gpu_polyline_test
+                     COMMAND ${Python3_EXECUTABLE}
+                             ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gpu_polyline.py
+                             --cc ${CMAKE_C_COMPILER})
+        endif()
         add_test(NAME setup_package_bios_hint_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_bios_hint.py)

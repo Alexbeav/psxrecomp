@@ -117,6 +117,14 @@ respective files.
 | `discs` | game (multi-disc) | array of .cue paths; `disc` is sugar for `discs = [disc]` |
 | `disc_serials` | game (multi-disc, optional) | array parallel to `discs`: the serial each disc carries (`["SCUS-94163", "SCUS-94164", "SCUS-94165"]`). Without it every disc is checked against `[game] id` — the BOOT disc's serial — so selecting disc 2 reports "wrong disc". A disc with no entry here is not serial-gated; the ISO-header check still applies. |
 
+Multi-disc metadata uses the declared roster order. Disc paths include their
+directories, so separate cache folders can both contain `disc.cue`. A CUE and
+same-directory BIN with the same stem resolve to the same roster entry. A
+relocated image is matched by filename stem only when that stem is unique in
+the roster. The one-based persisted `disc.selected` index wins over a path
+that identifies another disc or has an ambiguous relocated name.
+
+
 ### Multi-disc selection
 
 A build whose `discs` array has more than one entry grows a **Disc Selection**
