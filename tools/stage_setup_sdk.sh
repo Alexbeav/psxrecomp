@@ -222,12 +222,17 @@ cat >"${STAGE}/psxrecomp/retcomm-sdk.json" <<'EOF'
 }
 EOF
 
-for f in OpenBIOS.toml openbios.bin OpenBIOS.LICENSE SCPH1001.toml; do
-  if [[ ! -f "${STAGE}/psxrecomp/bios/${f}" ]]; then
-    echo "error: missing psxrecomp/bios/${f} in staged tree" >&2
-    exit 1
-  fi
-done
+# Check the title's selected BIOS policy. Retail-only kits ship the profile,
+# while OpenBIOS-enabled kits must still ship both image and license.
+if command -v python3 >/dev/null 2>&1; then
+  SDK_PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  SDK_PYTHON=python
+else
+  echo "error: Python is required to check the staged BIOS policy" >&2
+  exit 1
+fi
+"${SDK_PYTHON}" "${SCRIPT_DIR}/check_setup_bios_assets.py" "${STAGE}"
 
 if [[ "${REQUIRE_CLI}" -eq 1 && ! -f "${STAGE}/psxrecomp/psxrecomp_cli.py" ]]; then
   echo "error: missing psxrecomp/psxrecomp_cli.py in staged tree" >&2
