@@ -526,6 +526,9 @@ if(BUILD_TESTING)
         add_test(NAME setup_package_bios_hint_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_package_bios_hint.py)
+        add_test(NAME fntrace_c_linkage_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fntrace_c_linkage.py)
         add_test(NAME setup_bios_assets_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
