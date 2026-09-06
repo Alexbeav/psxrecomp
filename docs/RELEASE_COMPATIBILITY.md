@@ -13,3 +13,8 @@ This test uses synthetic files and exercises the production asset gate.
 The overlay candidate retry label carries an empty C statement before declarations.
 This preserves its control flow on the release's GCC9/C11 build route.
 Native platform builds remain required after a source change.
+
+The C++ runtime uses `fntrace.h` as the only declaration of the C game-start function.
+Redundant block-scope declarations fail the GCC9 link, as recorded by PSX-BUILD-024.
+Run `python runtime/tests/test_fntrace_c_linkage.py` for the source guard.
+The corresponding native Linux link is the decisive platform test.

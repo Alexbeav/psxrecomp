@@ -7195,7 +7195,6 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     ep.override = override;
 
     /* Turbo-active / multitap arming share game-started detection. */
-    extern int fntrace_is_game_started(void);
 
     if (psx_netplay_active()) {
         psx_netplay_finish_frame();
@@ -7518,8 +7517,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         return ep;
     /* Engage widescreen at game entry: BIOS boot stays authentic 4:3. */
     if (!g_ws_engaged) {
-        extern int fntrace_is_game_started(void);
-        if (fntrace_is_game_started()) {
+            if (fntrace_is_game_started()) {
             g_ws_engaged = true;
             g_ws_projection_mode = -1;
             refresh_widescreen_projection();
