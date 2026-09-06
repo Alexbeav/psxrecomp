@@ -6,8 +6,12 @@
     "lib/recomp-net": "268e74fe718b38fe38643c358588bbc1e0f0af70",
     "lib/retcomm-rbengine": "ebd94a4729abe2c0615070cef3ffe05b3f9ebf28"
   },
-  "code_identity": "Accepted title correction plus the shared portable setup backport and CUE launch adapter correction.",
+  "code_identity": "Accepted functional source plus the recorded portable setup backport, applicable title/CUE corrections, and C11-compatible empty statement.",
   "additional_release_change": "PSX-CD-012: preserve player-selected CUE via the existing resolver; eight adapter/parser regressions pass.",
   "title_correction": "g-police",
-  "accepted_patch_sha256": "d97824b4a65007079c2e0eaba1a2610e967a9a73ebceaaee6656effcfd513c81"
+  "accepted_patch_sha256": "d97824b4a65007079c2e0eaba1a2610e967a9a73ebceaaee6656effcfd513c81",
+  "portable_build_corrections": [
+    "C11 label before declaration",
+    "BIOS assets follow explicit title policy"
+  ]
 }
