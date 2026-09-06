@@ -6,5 +6,9 @@
     "lib/recomp-net": "268e74fe718b38fe38643c358588bbc1e0f0af70",
     "lib/retcomm-rbengine": "ebd94a4729abe2c0615070cef3ffe05b3f9ebf28"
   },
-  "code_identity": "Retained source files match the setup backport byte for byte. Runtime and recompiler functional code is unchanged from the accepted base."
+  "code_identity": "Accepted functional source plus the recorded portable setup backport and C11-compatible empty statement.",
+  "portable_build_corrections": [
+    "C11 label before declaration",
+    "BIOS assets follow explicit title policy"
+  ]
 }
