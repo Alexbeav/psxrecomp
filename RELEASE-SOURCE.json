@@ -1,10 +1,10 @@
 {
-  "accepted_framework_commit": "63446a28111a21a0cb7e8b5106c3614c898fc4b5",
+  "accepted_framework_commit": "f33b412cc084689c268d95c8b5c9a04318254701",
   "setup_backport_commit": "fd6e4d99e4b5625329010f4eaf60563fb29f2766",
   "history": "Reviewed source snapshot; no private parent history imported.",
   "dependencies": {
     "lib/recomp-net": "268e74fe718b38fe38643c358588bbc1e0f0af70",
     "lib/retcomm-rbengine": "ebd94a4729abe2c0615070cef3ffe05b3f9ebf28"
   },
-  "code_identity": "Retained source files match the setup backport byte for byte. Runtime and recompiler functional code is unchanged from the accepted base."
+  "code_identity": "Accepted Ghost in the Shell runtime and recompiler code retained byte for byte; common portable setup backport and its test registrations added."
 }

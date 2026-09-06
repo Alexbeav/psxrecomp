@@ -183,6 +183,18 @@ if(BUILD_TESTING)
     add_test(NAME mod_gpu_dma_aperture_test
              COMMAND mod_gpu_dma_aperture_test)
 
+    # Compile the real syscall branch. GNU LTO discards the unrelated scheduler
+    # and exception paths, avoiding stubs which could hide register corruption.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
+        add_executable(exit_critical_section_test
+            tests/test_exit_critical_section.c src/traps.c)
+        target_include_directories(exit_critical_section_test PRIVATE include)
+        target_compile_definitions(exit_critical_section_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
+        target_compile_options(exit_critical_section_test PRIVATE -O3 -flto -ffunction-sections)
+        target_link_options(exit_critical_section_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME exit_critical_section_test COMMAND exit_critical_section_test)
+    endif()
+
     add_executable(dma_gpu_linked_list_timing_test
         tests/test_dma_gpu_linked_list_timing.c
         src/dma_gpu_ll.c)
