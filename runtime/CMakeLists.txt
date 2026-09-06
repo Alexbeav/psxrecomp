@@ -562,6 +562,10 @@ if(BUILD_TESTING)
         add_test(NAME mingw_reproducible_link_guard_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mingw_reproducible_link.py)
+        add_test(NAME vib_ribbon_release_regression
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cdrom_audio_disc_read.py
+                         ${CMAKE_C_COMPILER} ${CMAKE_CURRENT_BINARY_DIR}/audio-disc-read)
         add_test(NAME launch_disc_path_test
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py

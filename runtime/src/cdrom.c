@@ -2019,6 +2019,21 @@ static int pause_complete_delay_cycles(void) {
     return (int)cycles;
 }
 
+/* Audio-only media cannot satisfy a normal data read. CDDA mode explicitly
+ * permits audio-sector reads; mixed-mode game discs retain their data path.
+ * PSX-SPX: ReadN/ReadS on an audio CD without Setmode bit 0 return 40h. */
+static int reject_audio_disc_data_read(void) {
+    if (mode_reg & 0x01u) return 0;
+    int tracks = iso_handle ? iso_track_count(iso_handle) : 0;
+    if (tracks <= 0) return 0;
+    for (int track = 1; track <= tracks; ++track)
+        if (!iso_track_is_audio(iso_handle, track)) return 0;
+    response_push(stat_reg | CDSTAT_ERROR);
+    response_push(0x40);
+    set_irq(CDIRQ_ERROR);
+    return 1;
+}
+
 static void exec_command(uint8_t cmd) {
 #if !defined(PSX_NO_DEBUG_TOOLS) && !defined(_WIN32)
     /* Self-stop trap: PSX_CD_TRAP_CMD=<byte> makes the process SIGSTOP
@@ -2106,6 +2121,7 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        if (reject_audio_disc_data_read()) break;
         if (read_continues_current_stream()) break;   /* ACKed inside */
         start_read_stream(cmd);
         response_push(stat_reg);
@@ -2417,6 +2433,7 @@ static void exec_command(uint8_t cmd) {
             set_irq(CDIRQ_ERROR);
             break;
         }
+        if (reject_audio_disc_data_read()) break;
         if (read_continues_current_stream()) break;   /* ACKed inside */
         start_read_stream(cmd);
         response_push(stat_reg);
