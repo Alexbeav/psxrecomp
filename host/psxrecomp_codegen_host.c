@@ -4344,9 +4344,92 @@ static int host_paths_same_file(const char* a, const char* b) {
 #endif
 }
 
+/* --setup-selfcheck: report what the setup host believes about this tree, as
+ * JSON on stdout, then exit. 0 = generated sources complete, 2 = the wizard
+ * would reopen, 1 = could not tell (no project root).
+ *
+ * This exists because the decision layer -- "are the generated sources
+ * present?" -- had no headless entry point. Disc selection, BIOS selection and
+ * generation were already scriptable via psxrecomp_cli.py; the verdict on
+ * whether setup is DONE was reachable only by clicking through the wizard, so
+ * nothing in CI could assert it. A stem mismatch there shipped a first-run
+ * loop on 26 titles before anyone noticed.
+ *
+ * Deliberately ahead of the PSX_HAS_GAME_DISPATCH early return below, so a
+ * product build answers too. Every title already calls this function with
+ * argc/argv, so no per-title change is needed to gain the flag. */
+static void host_json_str(const char* s) {
+    putchar('"');
+    for (; s && *s; ++s) {
+        if (*s == '\\' || *s == '"')
+            putchar('\\');
+        putchar(*s);
+    }
+    putchar('"');
+}
+
+static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
+                                     int argc, char** argv) {
+    const PsxKnownBiosImage* want;
+    const char* marker_rel;
+    char marker_abs[1200];
+    int i, missing, game_ok, bios_ok;
+
+    for (i = 1; i < argc; ++i)
+        if (argv[i] && strcmp(argv[i], "--setup-selfcheck") == 0)
+            break;
+    if (i >= argc)
+        return;
+
+    if (!cfg || !cfg->cmake_target || !cfg->exe_basename) {
+        printf("{\"error\": \"no codegen host config linked\"}\n");
+        exit(1);
+    }
+    /* Sets g_cfg and g_project_root as a side effect. */
+    missing = psxrecomp_codegen_host_sources_missing(cfg);
+    if (!g_project_root[0]) {
+        printf("{\"error\": \"project root not found\"}\n");
+        exit(1);
+    }
+
+    marker_rel = cfg_or(cfg->gen_marker_relpath,
+                        "generated/SLUS_011.89_dispatch.c");
+    game_ok = join_path(marker_abs, sizeof(marker_abs), g_project_root,
+                        marker_rel) && path_is_file(marker_abs);
+    bios_ok = !bios_backends_missing();
+    want = psx_expected_bios();
+
+    printf("{\n");
+    printf("  \"display_name\": ");
+    host_json_str(cfg_or(cfg->display_name, "Game"));
+    printf(",\n  \"project_root\": ");
+    host_json_str(g_project_root);
+    printf(",\n  \"expected_bios_stem\": ");
+    host_json_str(PSX_EXPECTED_BIOS_STEM);
+    printf(",\n  \"expected_bios_id\": ");
+    host_json_str(want ? want->id : "");
+    printf(",\n  \"expected_bios_crc32\": ");
+    if (want) {
+        char crcbuf[16];
+        snprintf(crcbuf, sizeof(crcbuf), "0x%08X", want->crc32);
+        host_json_str(crcbuf);
+    } else {
+        printf("null");
+    }
+    printf(",\n  \"game_dispatch\": ");
+    host_json_str(marker_rel);
+    printf(",\n  \"game_dispatch_present\": %s", game_ok ? "true" : "false");
+    printf(",\n  \"bios_backends_present\": %s", bios_ok ? "true" : "false");
+    printf(",\n  \"sources_missing\": %s", missing ? "true" : "false");
+    printf("\n}\n");
+    fflush(stdout);
+    exit(missing ? 2 : 0);
+}
+
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+    host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
