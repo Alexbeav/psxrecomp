@@ -21,12 +21,7 @@ def check(stage):
     profile = config.get("recompiler", {}).get("bios_config")
     required = []
     if profile:
-        path = (stage / profile).resolve()
-        try:
-            path.relative_to(stage)
-        except ValueError:
-            raise ValueError("BIOS profile must remain inside the staged kit")
-        required.append(path)
+        required.append(stage / profile)
     elif not openbios:
         # Existing title recipes without a profile use the CLI default.
         required.append(stage / "psxrecomp/bios/SCPH1001.toml")
@@ -34,6 +29,11 @@ def check(stage):
         required.extend(stage / "psxrecomp/bios" / name for name in
                         ("OpenBIOS.toml", "openbios.bin", "OpenBIOS.LICENSE"))
     for path in required:
+        path = path.resolve()
+        try:
+            path.relative_to(stage)
+        except ValueError:
+            raise ValueError("BIOS asset must remain inside the staged kit")
         if not path.is_file():
             raise ValueError("missing staged BIOS asset: " + str(path.relative_to(stage)))
     return [str(path.relative_to(stage)) for path in required]
