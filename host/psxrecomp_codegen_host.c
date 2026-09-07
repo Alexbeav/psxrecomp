@@ -2,6 +2,8 @@
 
 #include "psxrecomp_codegen_host.h"
 
+#include "psx_bios_known_images.h"
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1273,7 +1275,7 @@ static void write_sidecar_near_exe(const char* near_exe, const char* name,
     write_line_file(path, value ? value : "");
 }
 
-/* IEEE CRC-32 (zlib / Ethernet) — SCPH-1001 identity for setup discovery. */
+/* IEEE CRC-32 (zlib / Ethernet) — retail BIOS identity for setup discovery. */
 static uint32_t host_crc32(const unsigned char* data, size_t len) {
     uint32_t crc = 0xFFFFFFFFu;
     size_t i, j;
@@ -1285,17 +1287,23 @@ static uint32_t host_crc32(const unsigned char* data, size_t len) {
     return ~crc;
 }
 
+/* Does this file match the retail image THIS build pins? A setup host has no
+ * linked backend to ask, so it consults psx_bios_known_images.h rather than
+ * assuming SCPH-1001 — which made every non-SCPH1001 kit reject a perfectly
+ * good dump. An unknown pinned stem adopts nothing and the player is asked. */
 static int retail_bios_file_ok_c(const char* path) {
+    const PsxKnownBiosImage* want = psx_expected_bios();
     FILE* f;
     long size;
     unsigned char* buf;
     uint32_t crc;
+    if (!want) return 0;
     if (!path || !path[0] || !path_is_file(path)) return 0;
     f = fopen(path, "rb");
     if (!f) return 0;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
     size = ftell(f);
-    if (size != 512 * 1024) { fclose(f); return 0; }
+    if (size != (long)want->size) { fclose(f); return 0; }
     if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return 0; }
     buf = (unsigned char*)malloc((size_t)size);
     if (!buf) { fclose(f); return 0; }
@@ -1307,22 +1315,22 @@ static int retail_bios_file_ok_c(const char* path) {
     fclose(f);
     crc = host_crc32(buf, (size_t)size);
     free(buf);
-    return crc == 0x37157331u; /* SCPH-1001 */
+    return crc == want->crc32;
 }
 
-/* Prefer a player-supplied SCPH1001 next to the project/exe for Generate.
- * Missing → leave empty (OpenBIOS). Does not override an explicit OpenBIOS. */
+/* Prefer a player-supplied dump of the pinned retail image next to the
+ * project/exe for Generate. Missing → leave empty (OpenBIOS). Does not
+ * override an explicit OpenBIOS. */
 static int discover_retail_bios_c(char* out, size_t cap) {
-    static const char* names[] = {
-        "SCPH1001.BIN", "scph1001.bin", "SCPH-1001.BIN", "scph-1001.bin",
-        "SCPH1001.bin", "scph1001.BIN",
-    };
+    char names[8][32];
+    int nnames = psx_known_bios_filenames(psx_expected_bios(), names, 8);
     static const char* subs[] = {
         "bios", "", "system", "firmware", "psxrecomp/bios", "psxrecomp-v4/bios",
     };
     char roots[3][1100];
     int nroots = 0;
     int r, s, n;
+    if (nnames <= 0) { out[0] = 0; return 0; }
     if (g_project_root[0]) {
         snprintf(roots[nroots], sizeof(roots[0]), "%s", g_project_root);
         ++nroots;
@@ -1346,7 +1354,7 @@ static int discover_retail_bios_c(char* out, size_t cap) {
                 } else {
                     snprintf(dir, sizeof(dir), "%s", walk);
                 }
-                for (n = 0; n < (int)(sizeof(names) / sizeof(names[0])); ++n) {
+                for (n = 0; n < nnames; ++n) {
                     char cand[1300];
                     if (!join_path(cand, sizeof(cand), dir, names[n])) continue;
                     if (!retail_bios_file_ok_c(cand)) continue;

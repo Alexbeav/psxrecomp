@@ -895,15 +895,18 @@ function(psxrecomp_add_runtime_target target)
     # where releases are validated. Dev checkouts still resolve the relative
     # default without prompting via the exe-dir upward search, which also tries
     # <ancestor>/psxrecomp-v4/<relative> for game-project layouts.
+    # Follow the stem this build actually pins; assuming SCPH1001 here handed
+    # every non-SCPH1001 kit a default path that could never resolve.
+    set(_psxrt_stem_bios "bios/${PSXRECOMP_BIOS_STEM}.BIN")
     if(NOT PSXRT_DEFAULT_BIOS_PATH)
-        set(PSXRT_DEFAULT_BIOS_PATH "bios/SCPH1001.BIN")
+        set(PSXRT_DEFAULT_BIOS_PATH "${_psxrt_stem_bios}")
     elseif(IS_ABSOLUTE "${PSXRT_DEFAULT_BIOS_PATH}")
         message(WARNING
             "DEFAULT_BIOS_PATH '${PSXRT_DEFAULT_BIOS_PATH}' is absolute; refusing to "
             "bake a build-machine path into the binary (release exes must prompt on "
-            "user machines). Using relative 'bios/SCPH1001.BIN' instead — drop the "
+            "user machines). Using relative '${_psxrt_stem_bios}' instead — drop the "
             "DEFAULT_BIOS_PATH argument from this game's CMakeLists.")
-        set(PSXRT_DEFAULT_BIOS_PATH "bios/SCPH1001.BIN")
+        set(PSXRT_DEFAULT_BIOS_PATH "${_psxrt_stem_bios}")
     endif()
     if(NOT DEFINED PSXRT_DEFAULT_GAME_CONFIG_PATH)
         set(PSXRT_DEFAULT_GAME_CONFIG_PATH "")
@@ -1301,6 +1304,10 @@ function(psxrecomp_add_runtime_target target)
     target_compile_definitions(${target} PRIVATE
         DEFAULT_DEBUG_PORT=${PSXRT_DEBUG_PORT}
         PSX_DEFAULT_BIOS_PATH="${PSXRT_DEFAULT_BIOS_PATH}"
+        # The retail stem this build pins. A setup host has no linked
+        # backend to ask, so this is how it knows which image to look for
+        # and name (psx_bios_known_images.h) instead of assuming SCPH-1001.
+        PSX_EXPECTED_BIOS_STEM="${PSXRECOMP_BIOS_STEM}"
         # Where the shipped redistributable image lives, relative to the exe.
         # This is what a player gets when they choose no BIOS.
         PSX_BUNDLED_BIOS_PATH="${PSXRECOMP_BUNDLED_BIOS_PATH}"

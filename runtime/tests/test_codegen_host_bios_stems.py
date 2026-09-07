@@ -84,6 +84,7 @@ def main() -> int:
         build = subprocess.run(
             [cc, "-std=c11", "-o", str(exe), str(probe_c), str(HOST_C),
              "-I", str(ROOT / "host"),
+             "-I", str(ROOT / "runtime" / "include"),
              "-I", str(ui / "src"), "-I", str(ui / "src" / "common")],
             capture_output=True, text=True)
         if build.returncode != 0:
