@@ -1,89 +1,56 @@
-name: CLI release
-
-# Release packaging ONLY. Deliberately does NOT run on pull_request or on
-# pushes to master.
-#
-# It ran on both until 2026-07-25 and was a net negative: the Windows `build`
-# job failed often enough that a red check stopped carrying information, so it
-# was routinely ignored -- at which point it is pure noise plus CI minutes. A
-# check nobody trusts is worse than no check, because it still costs attention.
-#
-# What remains is the part that does real work: attaching the CLI package to a
-# published GitHub release, plus workflow_dispatch so it can be run by hand
-# before cutting one. If per-PR verification comes back, it should come back as
-# something fast and reliable enough to be believed.
+name: Native portability checks
 on:
   workflow_dispatch:
-  release:
-    types: [published]
-
 permissions:
   contents: read
-
 jobs:
-  build:
-    runs-on: windows-latest
+  gcc9-runtime:
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04@sha256:c664f8f86ed5a386b0a340d981b8f81714e21a8b9c73f658c4bea56aa179d54a
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: baseline
+            ref: 8d56cf659fd84367c3f778e17851674ac7896371
+            expect_failure: true
+          - name: corrected
+            ref: d8725466bcbae7b235f33a6d334bfd455e39e7f6
+            expect_failure: false
     steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      - name: Install MinGW toolchain (Windows)
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-python
-      - name: Build CLI package
-        shell: msys2 {0}
-        run: python tools/build_cli.py release
-      - name: Test boot path handling
-        shell: msys2 {0}
+      - name: Install native compiler and build dependencies
         run: |
-          cmake --build recompiler/build-cli --target cli_boot_path_test --parallel 2
-          ctest --test-dir recompiler/build-cli -R '^cli_boot_path_test$' --output-on-failure
-      - name: Smoke test packaged CLI
-        shell: msys2 {0}
-        run: dist/psxrecomp-cli-windows-x86_64/psxrecomp.exe --help
-      - uses: actions/upload-artifact@v6
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential git ca-certificates curl python3 python3-pip ninja-build pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libxinerama-dev libgl1-mesa-dev libasound2-dev libpulse-dev libudev-dev libdbus-1-dev libwayland-dev libxkbcommon-dev
+          python3 -m pip install cmake==3.31.6 tomli
+          gcc --version
+      - uses: actions/checkout@v4
         with:
-          name: psxrecomp-cli-windows-x86_64
-          path: dist/psxrecomp-cli-*.zip
-          if-no-files-found: error
-
-  linux-boot-path-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
+          ref: ${{ matrix.ref }}
           submodules: recursive
-      - name: Configure boot path test
-        run: cmake -S recompiler -B recompiler/build-boot-path-test -DBUILD_TESTING=ON
-      - name: Build boot path test
-        run: cmake --build recompiler/build-boot-path-test --target cli_boot_path_test --parallel 2
-      - name: Run boot path test
-        run: >-
-          ctest --test-dir recompiler/build-boot-path-test
-          -R '^cli_boot_path_test$' --output-on-failure
-
-  publish-release-assets:
-    if: github.event_name == 'release'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v6
-        with:
-          pattern: psxrecomp-cli-*
-          merge-multiple: true
-      - name: Attach CLI packages to release
+          persist-credentials: false
+      - name: Configure native setup host
+        run: cmake -S runtime -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPSXRECOMP_ALLOW_NO_BIOS=ON -DPSX_RECOMP_UI=OFF -DPSX_SETUP_WIZARD=OFF -DPSX_DEBUG_TOOLS=OFF -DPSX_NETPLAY=OFF -DPSX_REWIND=OFF -DPSX_ENABLE_VULKAN=OFF
+      - name: Compare the full runtime build outcome
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: >-
-          gh release upload "$RELEASE_TAG" psxrecomp-cli-*.zip
-          --repo "$GITHUB_REPOSITORY" --clobber
+          EXPECT_FAILURE: ${{ matrix.expect_failure }}
+        run: |
+          status=0
+          cmake --build build --target psx-runtime --parallel 4 > native-build.log 2>&1 || status=$?
+          cat native-build.log
+          if [ "$EXPECT_FAILURE" = "true" ]; then
+            test "$status" -ne 0
+            grep -E 'a label can only be part of a statement|undefined reference to.*fntrace_is_game_started' native-build.log
+          else
+            test "$status" -eq 0
+            python3 runtime/tests/test_fntrace_c_linkage.py
+            python3 runtime/tests/test_overlay_retry_c11.py --compiler gcc
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gcc9-${{ matrix.name }}-evidence
+          path: |
+            native-build.log
+            build/CMakeCache.txt
+          if-no-files-found: error
