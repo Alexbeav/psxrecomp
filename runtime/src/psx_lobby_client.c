@@ -172,6 +172,16 @@ void psx_lobby_clear_launch_pending(void) {}
 #include <unistd.h>
 #endif
 
+/* Every free-text value in an outbound frame goes through json_escape, and
+ * JSON_ESC_CAP is the buffer its result needs. Escaping at most doubles a
+ * value (only " \\ \n \r \t expand, each to two bytes; anything else below
+ * 0x20 is dropped), so 2x + 8 never truncates -- which matters most for a
+ * password, where a dropped character would put a secret on the wire that is
+ * not the one the host typed. Declared up here because the first frame that
+ * needs it is built well above the definition. */
+#define JSON_ESC_CAP(n) ((n) * 2 + 8)
+static size_t json_escape(const char *in, char *out, size_t cap);
+
 /* Winsock sets WSAGetLastError(), not errno — bare errno checks drop the
  * non-blocking WS handshake on Windows (list/create look permanently dead). */
 static int socket_would_block(void)
@@ -702,9 +712,13 @@ static void lobby_host_advertise_tick(void)
     g_host_adv_state = HOST_ADV_DONE;
     if (!g_lc.join.host_endpoint[0])
         return;
-    snprintf(msg, sizeof(msg),
-             "{\"op\":\"set_host_endpoint\",\"host_endpoint\":\"%s\"}",
-             g_lc.join.host_endpoint);
+    {
+        char ep_esc[JSON_ESC_CAP(PSX_LOBBY_ENDPOINT_LEN)];
+        json_escape(g_lc.join.host_endpoint, ep_esc, sizeof(ep_esc));
+        snprintf(msg, sizeof(msg),
+                 "{\"op\":\"set_host_endpoint\",\"host_endpoint\":\"%s\"}",
+                 ep_esc);
+    }
     queue_send(msg);
     flush_pending();
     fprintf(stderr, "psx_lobby: advertised host_endpoint=%s (LAN via local beacon)\n",
@@ -1017,15 +1031,19 @@ static int queue_turn_credentials_request(void)
 static void queue_list_request(void)
 {
     char msg[384];
+    char gn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
+    char gv_esc[JSON_ESC_CAP(PSX_LOBBY_VERSION_LEN)];
     const char *gn = g_lc.filter_game_name;
     const char *gv = effective_game_version(NULL);
+    json_escape(gn, gn_esc, sizeof(gn_esc));
+    json_escape(gv ? gv : "dev", gv_esc, sizeof(gv_esc));
     if (list_filter_version_strict() && (gn[0] || (gv && gv[0]))) {
         snprintf(msg, sizeof(msg),
                  "{\"op\":\"list\",\"game_name\":\"%s\",\"game_version\":\"%s\"}",
-                 gn, gv ? gv : "dev");
+                 gn_esc, gv_esc);
         queue_send(msg);
     } else if (gn[0]) {
-        snprintf(msg, sizeof(msg), "{\"op\":\"list\",\"game_name\":\"%s\"}", gn);
+        snprintf(msg, sizeof(msg), "{\"op\":\"list\",\"game_name\":\"%s\"}", gn_esc);
         queue_send(msg);
     } else {
         queue_send("{\"op\":\"list\"}");
@@ -3275,8 +3293,15 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
                      const char *password, const char *host_bind,
                      const PsxLobbyMatchCaps *match_caps)
 {
-    char msg[1536];
+    char msg[2304];
     char caps_json[512];
+    char name_esc[JSON_ESC_CAP(128)];
+    char gn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
+    char gv_esc[JSON_ESC_CAP(PSX_LOBBY_VERSION_LEN)];
+    char pw_esc[JSON_ESC_CAP(128)];
+    char bind_esc[JSON_ESC_CAP(PSX_LOBBY_ENDPOINT_LEN)];
+    char dn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
+    char fp_esc[JSON_ESC_CAP(72)];
     const char *gn;
     const char *gv;
     int n;
@@ -3297,16 +3322,23 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
         g_lc.match_caps = *match_caps;
         append_match_caps_json(caps_json, sizeof(caps_json), match_caps);
     }
+    json_escape(name && name[0] ? name : "Lobby", name_esc, sizeof(name_esc));
+    json_escape(gn, gn_esc, sizeof(gn_esc));
+    json_escape(gv, gv_esc, sizeof(gv_esc));
+    json_escape(password ? password : "", pw_esc, sizeof(pw_esc));
+    json_escape(g_lc.my_bind, bind_esc, sizeof(bind_esc));
+    json_escape(g_lc.display_name[0] ? g_lc.display_name : "Host",
+                dn_esc, sizeof(dn_esc));
+    json_escape(g_lc.disc_fp, fp_esc, sizeof(fp_esc));
     n = snprintf(msg, sizeof(msg),
                  "{\"op\":\"create\",\"name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
                  "\"password\":\"%s\",\"max_slots\":%d,\"allow_spectators\":%s,"
                  "\"host_bind\":\"%s\",\"display_name\":\"%s\","
                  "\"disc_fp\":\"%s\"%s}",
-                 name && name[0] ? name : "Lobby", gn, gv,
-                 password ? password : "", g_lobby_max_slots,
-                 g_allow_spectators_pref ? "true" : "false", g_lc.my_bind,
-                 g_lc.display_name[0] ? g_lc.display_name : "Host",
-                 g_lc.disc_fp, caps_json);
+                 name_esc, gn_esc, gv_esc,
+                 pw_esc, g_lobby_max_slots,
+                 g_allow_spectators_pref ? "true" : "false", bind_esc,
+                 dn_esc, fp_esc, caps_json);
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);
     flush_pending();
@@ -3315,9 +3347,17 @@ int psx_lobby_create(const char *name, const char *game_name, const char *game_v
 
 int psx_lobby_join(const char *lobby_id, const char *password, const char *guest_bind)
 {
-    char msg[1024];
+    char msg[1536];
+    char lid_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
+    char pw_esc[JSON_ESC_CAP(128)];
+    char bind_esc[JSON_ESC_CAP(PSX_LOBBY_ENDPOINT_LEN)];
+    char dn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
+    char gn_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
+    char gv_esc[JSON_ESC_CAP(PSX_LOBBY_VERSION_LEN)];
+    char fp_esc[JSON_ESC_CAP(72)];
     const char *gn;
     const char *gv;
+    int n;
     if (!psx_lobby_connected() || !lobby_id) {
         return -1;
     }
@@ -3326,13 +3366,22 @@ int psx_lobby_join(const char *lobby_id, const char *password, const char *guest
     strncpy(g_lc.my_bind, guest_bind && guest_bind[0] ? guest_bind : "0.0.0.0:7778",
             sizeof(g_lc.my_bind) - 1);
     g_lc.join.last_error[0] = '\0';
-    snprintf(msg, sizeof(msg),
+    json_escape(lobby_id, lid_esc, sizeof(lid_esc));
+    json_escape(password ? password : "", pw_esc, sizeof(pw_esc));
+    json_escape(g_lc.my_bind, bind_esc, sizeof(bind_esc));
+    json_escape(g_lc.display_name[0] ? g_lc.display_name : "Guest",
+                dn_esc, sizeof(dn_esc));
+    json_escape(gn, gn_esc, sizeof(gn_esc));
+    json_escape(gv, gv_esc, sizeof(gv_esc));
+    json_escape(g_lc.disc_fp, fp_esc, sizeof(fp_esc));
+    n = snprintf(msg, sizeof(msg),
              "{\"op\":\"join\",\"lobby_id\":\"%s\",\"password\":\"%s\",\"guest_bind\":\"%s\","
              "\"display_name\":\"%s\",\"game_name\":\"%s\",\"game_version\":\"%s\","
              "\"disc_fp\":\"%s\"}",
-             lobby_id, password ? password : "", g_lc.my_bind,
-             g_lc.display_name[0] ? g_lc.display_name : "Guest",
-             gn, gv, g_lc.disc_fp);
+             lid_esc, pw_esc, bind_esc, dn_esc, gn_esc, gv_esc, fp_esc);
+    /* A truncated frame is a frame the server drops whole, so the join would
+     * silently never happen. create checked this; join did not. */
+    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);
     flush_pending();
     return 0;
@@ -3621,10 +3670,14 @@ int psx_lobby_seat_swap_respond(int accept)
     if (!g_lc.swap_in_valid) return -1;
     g_lc.swap_in_valid = 0;
     if (!psx_lobby_connected() || !g_lc.in_lobby) return -1;
-    snprintf(msg, sizeof(msg),
-             "{\"op\":\"seat_swap_answer\",\"accept\":%s,"
-             "\"asker_player_id\":\"%s\"}",
-             accept ? "true" : "false", g_lc.swap_in_asker_id);
+    {
+        char asker_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
+        json_escape(g_lc.swap_in_asker_id, asker_esc, sizeof(asker_esc));
+        snprintf(msg, sizeof(msg),
+                 "{\"op\":\"seat_swap_answer\",\"accept\":%s,"
+                 "\"asker_player_id\":\"%s\"}",
+                 accept ? "true" : "false", asker_esc);
+    }
     queue_send(msg);
     flush_pending();
     return 0;
@@ -3663,6 +3716,7 @@ int psx_lobby_chat_count(void)
 int psx_lobby_send_server_chat(const char *text)
 {
     char esc[PSX_LOBBY_CHAT_TEXT_LEN * 2 + 8];
+    char game_esc[JSON_ESC_CAP(PSX_LOBBY_NAME_LEN)];
     char msg[PSX_LOBBY_CHAT_TEXT_LEN * 2 + 256];
     int n;
     if (!psx_lobby_connected()) return -1;
@@ -3670,9 +3724,10 @@ int psx_lobby_send_server_chat(const char *text)
     json_escape(text, esc, sizeof(esc));
     /* Carry the title on the line itself: the server scopes by it, and this
      * works even against a server that has not seen our `list` yet. */
+    json_escape(g_lc.filter_game_name, game_esc, sizeof(game_esc));
     n = snprintf(msg, sizeof(msg),
                  "{\"op\":\"server_chat\",\"game_name\":\"%s\",\"text\":\"%s\"}",
-                 g_lc.filter_game_name, esc);
+                 game_esc, esc);
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     queue_send(msg);
     flush_pending();
@@ -3835,6 +3890,7 @@ void psx_lobby_resume_waiting_room_rtt(void)
 int psx_lobby_send_signal(int type, int flag, const char *text)
 {
     char esc[4096];
+    char lid_esc[JSON_ESC_CAP(PSX_LOBBY_ID_LEN)];
     char msg[4608];
     const char *lid;
     if (!psx_lobby_connected() || !g_lc.in_lobby) {
@@ -3842,10 +3898,11 @@ int psx_lobby_send_signal(int type, int flag, const char *text)
     }
     lid = g_lc.join.lobby_id[0] ? g_lc.join.lobby_id : "";
     json_escape(text ? text : "", esc, sizeof(esc));
+    json_escape(lid, lid_esc, sizeof(lid_esc));
     snprintf(msg, sizeof(msg),
              "{\"op\":\"signal\",\"lobby_id\":\"%s\",\"to_player_id\":\"\","
              "\"type\":%d,\"flag\":%d,\"text\":\"%s\"}",
-             lid, type, flag, esc);
+             lid_esc, type, flag, esc);
     /* Write immediately — ICE candidates arrive in bursts larger than pending_tx. */
     if (g_lc.handshake_done && g_lc.fd >= 0) {
         if (rnet_ws_write_text(g_lc.fd, msg, 1) < 0)
