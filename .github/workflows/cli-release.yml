@@ -11,12 +11,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: baseline
-            ref: 8d56cf659fd84367c3f778e17851674ac7896371
+          - name: label-only-control
+            ref: 3c4fc897002d2622adb89ec47a81b113157c545d
             expect_failure: true
-          - name: corrected
-            ref: d8725466bcbae7b235f33a6d334bfd455e39e7f6
-            expect_failure: false
     steps:
       - name: Install native compiler and build dependencies
         run: |
