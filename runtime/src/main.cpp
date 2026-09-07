@@ -14216,6 +14216,15 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
+        resolved_disc = resolve_disc_for_runtime(
+            resolved_disc, disc_override_path, game_id, argv[0]);
+        if (game_config_path && resolved_disc.empty()) {
+            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
+            return 1;
+        }
+    }
+
     {
         /* Netplay must stay vanilla: launcher commit_netplay clears the plan,
          * but a following offline-style commit would re-resolve enabled mods
@@ -14304,14 +14313,6 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "psxrecomp: no BIOS selected; exiting.\n");
         return 1;
     }
-    if (game_config_path || disc_override_path || !resolved_disc.empty()) {
-        resolved_disc = resolve_disc_for_runtime(resolved_disc, disc_override_path, game_id, argv[0]);
-        if (game_config_path && resolved_disc.empty()) {
-            std::fprintf(stderr, "psxrecomp: no disc image selected; exiting.\n");
-            return 1;
-        }
-    }
-
     /* memcard_dir was resolved to its default before the launcher (above). */
 
     std::string bios_path_str    = resolved_bios.string();
