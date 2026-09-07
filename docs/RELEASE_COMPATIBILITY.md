@@ -18,3 +18,5 @@ The C++ runtime uses `fntrace.h` as the only declaration of the C game-start fun
 Redundant block-scope declarations fail the GCC9 link, as recorded by PSX-BUILD-024.
 Run `python runtime/tests/test_fntrace_c_linkage.py` for the source guard.
 The corresponding native Linux link is the decisive platform test.
+
+Timeshock retains the original real-GL coherence fixture. CTest now builds it on its qualified Windows GCC/SDL3 toolchain and runs both scale1 and4. Other toolchains report an explicit skip. This completes test registration without changing the accepted rendering code.

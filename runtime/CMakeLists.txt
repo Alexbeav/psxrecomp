@@ -23,6 +23,23 @@ psxrecomp_add_runtime_target(psx-runtime
 # (ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    # Original real-GL coherence test; the accepted runner needs Windows GCC/SDL3.
+    if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU" AND PSX_SDL3)
+        add_executable(gl_readback_region_test tests/test_gl_readback_region.c src/gpu_sw_renderer.c)
+        target_include_directories(gl_readback_region_test PRIVATE include src ${PSX_SDL_INCLUDE_DIRS})
+        target_compile_definitions(gl_readback_region_test PRIVATE PSX_SDL3=1 PSX_NO_DEBUG_TOOLS=1)
+        target_compile_options(gl_readback_region_test PRIVATE -O2 -flto)
+        target_link_options(gl_readback_region_test PRIVATE -flto)
+        target_link_libraries(gl_readback_region_test PRIVATE ${PSX_SDL_LIBRARIES} opengl32 m)
+        set_target_properties(gl_readback_region_test PROPERTIES LINKER_LANGUAGE CXX)
+        foreach(_scale IN ITEMS 1 4)
+            add_test(NAME gl_readback_region_${_scale} COMMAND gl_readback_region_test ${_scale})
+        endforeach()
+    else()
+        add_test(NAME gl_readback_region_unsupported
+                 COMMAND ${CMAKE_COMMAND} -E echo "SKIP: GL readback test requires Windows GCC and SDL3")
+        set_tests_properties(gl_readback_region_unsupported PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+    endif()
     add_executable(launcher_device_roundtrip_test
         tests/test_launcher_device_roundtrip.cpp)
     target_include_directories(launcher_device_roundtrip_test PRIVATE include)
