@@ -1513,11 +1513,20 @@ function(psxrecomp_add_runtime_target target)
     if(PSX_RECOMP_UI AND NOT PSXRT_ORACLE)
         if(NOT RECOMP_UI_ROOT OR NOT EXISTS "${RECOMP_UI_ROOT}/recomp_ui.cmake")
             message(FATAL_ERROR
-                "PSX_RECOMP_UI=ON but recomp-ui is missing.\n"
-                "Add at the game repo root:\n"
-                "  git submodule add -b master "
-                "https://github.com/mstan/recomp-ui.git recomp-ui\n"
-                "Or set -DRECOMP_UI_ROOT=/path/to/recomp-ui")
+                "PSX_RECOMP_UI=ON but recomp-ui is missing from the game "
+                "repo root.\n"
+                "A source ZIP downloaded from GitHub never contains "
+                "submodule contents and cannot build. Clone instead:\n"
+                "  git clone --recurse-submodules <repo-url>\n"
+                "In a clone that already declares recomp-ui, fetch the "
+                "pinned commit:\n"
+                "  git submodule update --init --recursive\n"
+                "Only if this repo does not declare recomp-ui yet, add it "
+                "(use the fork this project pins, not necessarily "
+                "upstream):\n"
+                "  git submodule add <recomp-ui-url> recomp-ui\n"
+                "Or point at an existing checkout: "
+                "-DRECOMP_UI_ROOT=/path/to/recomp-ui")
         endif()
         # recomp-ui gates its Mods view behind RECOMP_UI_ENABLE_MODS, which
         # defaults OFF there -- correct for a cross-console launcher, since a
