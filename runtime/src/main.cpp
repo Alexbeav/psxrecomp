@@ -2510,11 +2510,32 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
     const bool bundled_only =
         openbios_allowed && bundled && !player_bios_selectable;
 
+    /* 0. Setup host (CI zip root): no BIOS backends are linked yet, so there
+     * is nothing an image could be validated against — bios_backend_for_file()
+     * rejects every file, including the correct one, and a title with
+     * openbios = false has no fallback to land on. This MUST precede the
+     * explicit-choice branch below: a remembered bios.cfg pick reached
+     * validate_bios_for_launch() first and deadlocked first-run setup — the
+     * player was told their good SCPH-1001 was "not an image this build was
+     * compiled from", and could never supply the BIOS that Generate needs in
+     * order to emit the backend. Play belongs to the product binary under
+     * build-release/ after Generate & rebuild. */
+    if (psx_bios_registry_count == 0) {
+        launcher_warning("Setup host — finish Generate & rebuild",
+            "This executable is the first-run setup host (no game/BIOS code "
+            "linked).\n\n"
+            "Use Generate & rebuild in the launcher. After that succeeds, open "
+            "this same shortcut again — it starts the game from build-release/ "
+            "(where bios/, mods/, and settings live).\n\n"
+            "Or run build-release/<game>.exe directly.");
+        return {};
+    }
+
     /* 1. An explicit choice: --bios, else a remembered pick. A product build
      * with only its bundled backend has no meaningful player choice: ignore
      * stale settings/bios.cfg paths instead of validating an image the hidden
-     * launcher row cannot clear. Setup hosts (registry_count == 0) retain their
-     * picker/generation flow. */
+     * launcher row cannot clear. Setup hosts (registry_count == 0) already
+     * returned above. */
     std::filesystem::path chosen;
     if (!bundled_only) {
         if (requested_is_explicit && requested && requested[0]) {
@@ -2544,19 +2565,6 @@ static std::filesystem::path resolve_bios_for_runtime(const char* requested,
             "or does not match.\n\nExpected next to the executable:\n" +
             (s_bundled_bios_rel.empty() ? "(default path)" : s_bundled_bios_rel) +
             "\n\nReinstall or rebuild.");
-        return {};
-    }
-
-    /* Setup host (CI zip root): no BIOS backends linked yet. Play belongs to
-     * the product binary under build-release/ after Generate & rebuild. */
-    if (psx_bios_registry_count == 0) {
-        launcher_warning("Setup host — finish Generate & rebuild",
-            "This executable is the first-run setup host (no game/BIOS code "
-            "linked).\n\n"
-            "Use Generate & rebuild in the launcher. After that succeeds, open "
-            "this same shortcut again — it starts the game from build-release/ "
-            "(where bios/, mods/, and settings live).\n\n"
-            "Or run build-release/<game>.exe directly.");
         return {};
     }
 
