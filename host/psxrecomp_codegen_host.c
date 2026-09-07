@@ -3788,6 +3788,7 @@ static const char* host_loop_breaker_note(void) {
     char sidecar[1200], line[64], found[512], marker_abs[1200];
     long long then, now;
     const char* marker_rel;
+    const char* cause;
     int game_missing, bios_missing;
     if (!join_path(sidecar, sizeof(sidecar), g_project_root,
                    HOST_LAST_GENERATE_SIDECAR))
@@ -3808,16 +3809,30 @@ static const char* host_loop_breaker_note(void) {
     if (!game_missing && !bios_missing)
         return NULL;
     list_generated_dispatch(found, sizeof(found));
+    /* Each branch has its own cause, so do not assert a single one. A missing
+     * game dispatch really does point at disagreeing boot-EXE names. Missing
+     * BIOS backends do not: they mean Generate never emitted them, normally
+     * because no retail BIOS was available to emit them from. Blaming
+     * boot-EXE names for that sent players after the wrong thing. */
+    if (game_missing)
+        cause = "please report this to the port maintainer: the project's "
+                "boot-EXE names disagree";
+    else
+        cause = "Generate produced the game code but no BIOS backend, which "
+                "normally means it had no retail BIOS to work from. Select "
+                "the PlayStation BIOS dump this port requires (named in the "
+                "README; it must be exactly 512 KB) in the launcher, then "
+                "run Generate again";
     snprintf(g_loop_breaker_note, sizeof(g_loop_breaker_note),
              "A Generate completed here recently, yet the launcher still "
              "cannot find %s%s%s. generated/ contains: %s. Running Generate "
-             "again will very likely loop — please report this to the port "
-             "maintainer: the project's boot-EXE names disagree.",
+             "again will very likely loop — %s.",
              game_missing ? marker_rel : "",
              (game_missing && bios_missing) ? " and " : "",
              bios_missing ? "the BIOS backends under psxrecomp/generated/"
                           : "",
-             found[0] ? found : "no *_dispatch.c at all");
+             found[0] ? found : "no *_dispatch.c at all",
+             cause);
     fprintf(stderr, "psxrecomp-codegen: %s\n", g_loop_breaker_note);
     return g_loop_breaker_note;
 }
