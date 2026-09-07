@@ -122,15 +122,27 @@ endforeach()
 # dependency. That is not merely a different copy: cmake-clang-v1 compiles
 # against its own sysroot and never searches /usr/include, so a host package is
 # found, reported as "using prebuilt/system", and then fails to compile.
+#
+# The exception is a compiler that lives in the *host* prefix. A distro cross
+# compiler does: /usr/bin/x86_64-w64-mingw32-gcc yields /usr, whose
+# lib/cmake and include/ hold Linux packages that compiler cannot use. Hinting
+# there is this block's own failure inverted — the hints below are consumed by
+# setting SDL3_DIR / ZLIB_ROOT outright, which bypasses the CMAKE_FIND_ROOT_PATH
+# the cross toolchain file set precisely to keep host packages out. It is also
+# the one hint that buys nothing: a build that *can* use the host prefix already
+# searches it by default. So drop it and let find_package decide.
+set(_PSX_HOST_PREFIXES "/" "/usr" "/usr/local" "/opt/local" "/opt/homebrew")
 if(CMAKE_C_COMPILER)
     get_filename_component(_psx_cc_bin "${CMAKE_C_COMPILER}" DIRECTORY)
     get_filename_component(_psx_cc_pfx "${_psx_cc_bin}" DIRECTORY)
-    if(_psx_cc_pfx AND EXISTS "${_psx_cc_pfx}")
+    if(_psx_cc_pfx AND EXISTS "${_psx_cc_pfx}"
+       AND NOT _psx_cc_pfx IN_LIST _PSX_HOST_PREFIXES)
         list(APPEND _PSX_TOOLCHAIN_PREFIX_HINTS "${_psx_cc_pfx}")
     endif()
     unset(_psx_cc_bin)
     unset(_psx_cc_pfx)
 endif()
+unset(_PSX_HOST_PREFIXES)
 list(REMOVE_DUPLICATES _PSX_TOOLCHAIN_PREFIX_HINTS)
 
 # A dependency found outside the compiler's sysroot may still be unusable: the
