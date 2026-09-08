@@ -1648,10 +1648,28 @@ GameConfig load_game_config(const fs::path& config_path_in) {
                                          "widescreen.signed_x_bound.address");
                 site.expected = parse_hex(toml::find<std::string>(item, "expected"),
                                           "widescreen.signed_x_bound.expected");
-                if ((site.expected >> 26) != 0x0Fu)
+                const uint32_t opcode = site.expected >> 26;
+                if (opcode != 0x0Fu && opcode != 0x09u && opcode != 0x0Du)
                     throw std::runtime_error(fmt::format(
-                        "{}: [[widescreen.signed_x_bound]] expected must be LUI",
+                        "{}: [[widescreen.signed_x_bound]] expected must be LUI or ADDIU/ORI",
                         config_path.string()));
+                if (opcode == 0x09u || opcode == 0x0Du) {
+                    const uint32_t rs = (site.expected >> 21) & 0x1Fu;
+                    const uint32_t rt = (site.expected >> 16) & 0x1Fu;
+                    const uint32_t imm = site.expected & 0xFFFFu;
+                    if (rs != 0u)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.signed_x_bound]] ADDIU/ORI expected must use rs=$zero",
+                            config_path.string()));
+                    if (rt == 0u)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.signed_x_bound]] ADDIU/ORI expected must not write $zero",
+                            config_path.string()));
+                    if (imm == 0u)
+                        throw std::runtime_error(fmt::format(
+                            "{}: [[widescreen.signed_x_bound]] ADDIU/ORI expected must have a non-zero signed screen edge",
+                            config_path.string()));
+                }
                 if (!seen.insert(site.address & 0x1FFFFFFFu).second)
                     throw std::runtime_error(fmt::format(
                         "{}: duplicate [[widescreen.signed_x_bound]] address 0x{:08X}",

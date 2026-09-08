@@ -87,7 +87,7 @@ inline bool video_fmv_filter_parse(const std::string& s, int* out) {
 
 struct WidescreenSignedBoundSite {
     uint32_t address = 0;
-    uint32_t expected = 0; // guarded LUI instruction
+    uint32_t expected = 0; // guarded LUI or ADDIU rt,zero,imm instruction
 };
 
 // One exact compare whose verdict is forced while a widescreen reveal is
@@ -1101,9 +1101,9 @@ struct GameConfig {
     // transformed in the mirror.
     bool ws_nw_full_mirror = false;
 
-    // [[widescreen.signed_x_bound]] guarded LUI sites whose signed Q16
-    // constants scale with the active native-wide field and remain identity in
-    // 4:3/menus/FMV. Shared by static codegen, overlay JIT, and interpreter.
+    // [[widescreen.signed_x_bound]] guarded LUI signed-Q16 bounds or ADDIU/ORI
+    // rt,zero,imm screen-pixel bounds. Both remain identity in 4:3/menus/FMV.
+    // Shared by static codegen, overlay JIT, and interpreter.
     std::vector<WidescreenSignedBoundSite> ws_signed_x_bound_sites;
     // [widescreen] offer — whether the launcher OFFERS its EXPERIMENTAL
     // Widescreen toggle for this title. Default true. Set false while a

@@ -30,6 +30,8 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME interp_mod_entry_guards_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_entry_guards.py")
         add_test(NAME gl_readback_runner_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gl_readback_runner.py")
     endif()
@@ -203,6 +205,14 @@ if(BUILD_TESTING)
         tests/test_ws_prepass_guard.c)
     target_include_directories(ws_prepass_guard_test PRIVATE include)
     add_test(NAME ws_prepass_guard_test COMMAND ws_prepass_guard_test)
+
+    add_executable(ws_hud_anchor_test
+        tests/test_ws_hud_anchor.c)
+    target_include_directories(ws_hud_anchor_test PRIVATE include)
+    add_test(NAME ws_hud_anchor_test COMMAND ws_hud_anchor_test)
+    add_executable(ws_repeat_rect_test tests/test_ws_repeat_rect.c)
+    target_include_directories(ws_repeat_rect_test PRIVATE include)
+    add_test(NAME ws_repeat_rect_test COMMAND ws_repeat_rect_test)
 
     add_executable(mod_gpu_dma_aperture_test
         tests/test_mod_gpu_dma_aperture.c)

@@ -304,6 +304,22 @@ queue_guard = false     # this lower-level predicate appends to no fixed queue
 The debug server’s `ws_aspect_cone_site` command accepts an `address` string
 and reports exact-site identity/keep/reject counters.
 
+Signed horizontal bounds can be widened at the constant-load site:
+
+```toml
+[[widescreen.signed_x_bound]]
+address = "0x800BD290"
+expected = "0x2402FF00" # addiu v0,zero,-256
+```
+
+- `LUI rt,imm` sites are signed Q16 gameplay bounds and use the gameplay-field
+  scaler.
+- `ADDIU rt,zero,imm` and `ORI rt,zero,imm` sites are screen-pixel bounds and
+  move by the live horizontal margin. ADDIU sign-extends the constant; ORI
+  zero-extends it. The destination and immediate must both be nonzero.
+- Site identity is the normalized physical address plus the complete
+  instruction word. The helper is identity at 4:3.
+
 Explicit `bias_sites` / `range_sites` may opt into an additional resident
 object lead without widening terrain or render queues:
 

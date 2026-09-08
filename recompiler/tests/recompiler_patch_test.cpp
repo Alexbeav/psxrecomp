@@ -311,6 +311,28 @@ result = 0
               keep_config.ws_cull_keep_sites[1].result == 0u,
           "parser preserves full-word-guarded maximal-participation sites");
 
+    const auto signed_bound = write_config(root, "signed-x-bound", R"toml(
+[[widescreen.signed_x_bound]]
+address = "0x8002D290"
+expected = "0x2402FF00"
+
+[[widescreen.signed_x_bound]]
+address = "0x8002D298"
+expected = "0x3C02FFF0"
+)toml");
+    const auto signed_bound_config =
+        PSXRecompV4::load_game_config(signed_bound);
+    check(signed_bound_config.ws_signed_x_bound_sites.size() == 2 &&
+              signed_bound_config.ws_signed_x_bound_sites[0].address ==
+                  0x8002D290u &&
+              signed_bound_config.ws_signed_x_bound_sites[0].expected ==
+                  0x2402FF00u &&
+              signed_bound_config.ws_signed_x_bound_sites[1].address ==
+                  0x8002D298u &&
+              signed_bound_config.ws_signed_x_bound_sites[1].expected ==
+                  0x3C02FFF0u,
+          "parser preserves guarded signed pixel and Q16 X bounds");
+
     const auto bad_keep = write_config(root, "cull-keep-bad", R"toml(
 [[widescreen.cull.keep]]
 address = "0x8002B310"
@@ -699,6 +721,30 @@ void codegen_tests() {
         0x24827FFFu, {}, true, depth_config); // addiu v0,a0,0x7fff
     check(depth_overlay_mismatch.find("ws cull depth") == std::string::npos,
           "overlay nonmatching depth variant remains unchanged");
+
+    PSXRecomp::CodeGenConfig signed_bound_config;
+    signed_bound_config.ws_signed_x_bound_sites.push_back(
+        {0x80010000u, 0x2402FF00u}); // addiu v0,zero,-256
+    const std::string signed_pixel_bound = generate_first_instruction(
+        0x2402FF00u, {}, false, signed_bound_config);
+    check(signed_pixel_bound.find("psx_ws_screen_x_bound(-256)") !=
+              std::string::npos,
+          "codegen emits guarded signed screen-pixel X bound");
+
+    signed_bound_config.ws_signed_x_bound_sites[0] =
+        {0x80010000u, 0x3C02FFF0u}; // lui v0,0xfff0
+    const std::string signed_q16_bound = generate_first_instruction(
+        0x3C02FFF0u, {}, false, signed_bound_config);
+    check(signed_q16_bound.find(
+              "psx_ws_player_x_bound((int32_t)0xFFF00000)") !=
+              std::string::npos,
+          "codegen keeps guarded LUI X bounds on the Q16 helper");
+
+    const std::string signed_bound_overlay_mismatch = generate_first_instruction(
+        0x24020078u, {}, true, signed_bound_config);
+    check(signed_bound_overlay_mismatch.find("typed native-wide signed") ==
+              std::string::npos,
+          "overlay nonmatching signed-bound variant remains unchanged");
 
     PSXRecomp::CodeGenConfig range_config;
     range_config.ws_cull_range_sites.insert(0x80010000u);
