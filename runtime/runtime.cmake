@@ -2233,6 +2233,7 @@ function(psxrecomp_add_game_runtime target)
         VERSION_FILE
         CODEGEN_SETUP_INCLUDE_DIR
         NETPLAY_LOBBY_URL
+        PRELOADED_MODS_DIR
     )
     set(multiValueArgs GEN_FULL_GLOB CODEGEN_SETUP_SOURCES)
     cmake_parse_arguments(PSXG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -2408,16 +2409,22 @@ function(psxrecomp_add_game_runtime target)
     # psxrecomp_codegen_host.c unconditionally includes recomp_launcher.h, so
     # the title's setup host and the shared host implementation can only be
     # built alongside the recomp-ui submodule (PSX_RECOMP_UI).
-    if(PSX_RECOMP_UI)
+    if(PSX_RECOMP_UI AND PSXG_CODEGEN_SETUP_SOURCES)
         list(APPEND _psxg_extras ${PSXG_CODEGEN_SETUP_SOURCES})
         list(APPEND _psxg_extras
             "${PSXRECOMP_ROOT}/host/psxrecomp_codegen_host.c")
     endif()
 
+    set(_psxg_forwarded_args ${PSXG_UNPARSED_ARGUMENTS})
+    if(NOT "${PSXG_PRELOADED_MODS_DIR}" STREQUAL "")
+        list(APPEND _psxg_forwarded_args
+            PRELOADED_MODS_DIR "${PSXG_PRELOADED_MODS_DIR}")
+    endif()
+
     set(_psxg_rt_args
         GAME_VERSION "${PSX_GAME_VERSION}"
+        ${_psxg_forwarded_args}
         EXTRAS_SOURCES ${_psxg_extras}
-        ${PSXG_UNPARSED_ARGUMENTS}
     )
 
     if(_psxg_has_game_c)

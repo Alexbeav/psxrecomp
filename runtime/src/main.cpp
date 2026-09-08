@@ -92,7 +92,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
 extern "C" void psx_game_codegen_setup_apply(RecompLauncherCGameInfo* gi);
 extern "C" void psx_game_codegen_relaunch_or_exit(const char* disc_path);
 #endif
@@ -13761,7 +13761,7 @@ int main(int argc, char** argv) {
                 }
                 gi.needs_setup = (!bios_ok || !disc_ok) ? 1 : 0;
             }
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
             /* Local codegen: missing generated/ or MOTK_FORCE_SETUP opens the
              * generate & rebuild wizard (may also set prepare_required). */
             psx_game_codegen_setup_apply(&gi);
@@ -14041,7 +14041,7 @@ int main(int argc, char** argv) {
                 SDL_Quit();
                 return 0;
             }
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
             if (lr == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
                 const char* disc_for_relaunch =
                     rui_out_disc[0] ? rui_out_disc
@@ -15758,7 +15758,7 @@ soft_return_lobby:
             /*resume_netplay_room=*/1);
         gi.discs = rui_discs.empty() ? nullptr : rui_discs.data();
         gi.num_discs = (int)rui_discs.size();
-#if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_SETUP_WIZARD) && defined(PSX_HAS_CODEGEN_SETUP_HOST)
         psx_game_codegen_setup_apply(&gi);
 #endif
 
@@ -15778,7 +15778,7 @@ soft_return_lobby:
             SDL_Quit();
             return 0;
         }
-#if defined(PSX_HAS_GAME_CODEGEN)
+#if defined(PSX_HAS_CODEGEN_SETUP_HOST)
         if (rui_rc == RECOMP_LAUNCHER_RESULT_RELAUNCH) {
             const char* disc_for_relaunch =
                 rui_out_disc[0] ? rui_out_disc
