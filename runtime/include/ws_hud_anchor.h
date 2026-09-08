@@ -34,6 +34,13 @@ static inline int32_t ws_hud_anchor_native_delta(int native_active,
     return (int32_t)ws_hud_anchor_clamp(anchor) * offset;
 }
 
+static inline int32_t ws_hud_anchor_apply_native_x(int32_t x,
+                                                   int native_active,
+                                                   int32_t offset,
+                                                   int anchor) {
+    return x + ws_hud_anchor_native_delta(native_active, offset, anchor);
+}
+
 static inline uint32_t ws_hud_anchor_slot(uint32_t command_addr) {
     return (command_addr >> 2) & (WS_HUD_ANCHOR_TABLE_SIZE - 1u);
 }

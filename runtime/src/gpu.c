@@ -4357,6 +4357,25 @@ static void gp0_exec_mono_dot(void) {
     gr_draw_flat_rect(x, y, 1, 1, color);
 }
 
+/* Execute textured 1x1 dot (GP0 0x6C-0x6F) */
+static void gp0_exec_textured_dot(void) {
+    uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
+    int semi_trans = (gp0_cmd_buf[0] >> 25) & 1;
+    int raw_texture = (gp0_cmd_buf[0] >> 24) & 1;
+    int32_t x0, y0;
+    parse_vertex(gp0_cmd_buf[1], &x0, &y0);
+    (void)ws_sprt_fixed_transform(&x0, y0, 1);  /* position only; 1px stays 1px */
+    x0 += ws_nw_hud_shift(x0, 1);
+    x0 += draw_offset_x; y0 += draw_offset_y;
+    int u0 = gp0_cmd_buf[2] & 0xFF;
+    int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
+    uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
+    uint16_t clut_x = (clut & 0x3F) * 16;
+    uint16_t clut_y = (clut >> 6) & 0x1FF;
+    setup_textured_draw(color24, semi_trans, raw_texture);
+    gr_draw_textured_rect(x0, y0, 1, 1, u0, v0, clut_x, clut_y, current_texpage());
+}
+
 /* Execute 8x8 textured sprite (GP0 0x74-0x77) */
 static void gp0_exec_textured_8x8(void) {
     uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
@@ -5427,25 +5446,9 @@ static void gp0_execute_command(void) {
         case 0x68: case 0x69: case 0x6A: case 0x6B:
             gp0_exec_mono_dot();
             break;
-        case 0x6C: case 0x6D: case 0x6E: case 0x6F: {
-            /* 1x1 textured dot: cmd, vertex, texcoord+clut (no size word) */
-            uint32_t color24 = gp0_cmd_buf[0] & 0xFFFFFFu;
-            int semi_trans = (gp0_cmd_buf[0] >> 25) & 1;
-            int raw_texture = (gp0_cmd_buf[0] >> 24) & 1;
-            int32_t x0, y0;
-            parse_vertex(gp0_cmd_buf[1], &x0, &y0);
-            (void)ws_sprt_fixed_transform(&x0, y0, 1);  /* position only; 1px stays 1px */
-            x0 += draw_offset_x; y0 += draw_offset_y;
-            x0 = ws_nw_hud_shift(x0, 1);
-            int u0 = gp0_cmd_buf[2] & 0xFF;
-            int v0 = (gp0_cmd_buf[2] >> 8) & 0xFF;
-            uint16_t clut = (uint16_t)(gp0_cmd_buf[2] >> 16);
-            uint16_t clut_x = (clut & 0x3F) * 16;
-            uint16_t clut_y = (clut >> 6) & 0x1FF;
-            setup_textured_draw(color24, semi_trans, raw_texture);
-            gr_draw_textured_rect(x0, y0, 1, 1, u0, v0, clut_x, clut_y, current_texpage());
+        case 0x6C: case 0x6D: case 0x6E: case 0x6F:
+            gp0_exec_textured_dot();
             break;
-        }
         case 0x70: case 0x71: case 0x72: case 0x73:
             gp0_exec_mono_8x8();
             break;

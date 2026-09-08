@@ -28,6 +28,10 @@ int main(void) {
     assert(ws_hud_anchor_native_delta(1, 53, -1) == -53);
     assert(ws_hud_anchor_native_delta(1, 53, 0) == 0);
     assert(ws_hud_anchor_native_delta(1, 53, 1) == 53);
+    assert(ws_hud_anchor_apply_native_x(137, 0, 53, -1) == 137);
+    assert(ws_hud_anchor_apply_native_x(137, 1, 0, 1) == 137);
+    assert(ws_hud_anchor_apply_native_x(137, 1, 53, -1) == 84);
+    assert(ws_hud_anchor_apply_native_x(137, 1, 53, 1) == 190);
 
     ws_hud_anchor_insert(tags, WS_HUD_ANCHOR_TABLE_SIZE,
                          0x80010004u, 9, &guard, 10u);
