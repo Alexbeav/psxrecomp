@@ -529,7 +529,13 @@ if(PSX_REWIND)
         message(FATAL_ERROR
             "psxrecomp: PSX_REWIND=ON exposes the Rewind launcher controls "
             "but no retcomm-rbengine snap-ring backend was found.\n"
-            "  git submodule update --init lib/retcomm-rbengine\n"
+            "A source ZIP downloaded from GitHub never contains submodule "
+            "contents and cannot build. Clone instead:\n"
+            "  git clone --recurse-submodules <repo-url>\n"
+            "In an existing clone, run this from the GAME repo root. Note "
+            "--recursive: rbengine is a submodule of psxrecomp, not of the "
+            "game, so a non-recursive init leaves it empty.\n"
+            "  git submodule update --init --recursive\n"
             "  or -DRECOMP_RBENGINE_ROOT=/path/to/retcomm-rbengine\n"
             "  or configure with -DPSX_REWIND=OFF to hide Rewind.")
     endif()
