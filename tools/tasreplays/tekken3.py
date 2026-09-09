@@ -288,7 +288,7 @@ def run(args) -> None:
             '--exe', info['executable'], '--game', info['game'], '--disc', info['disc'],
             '--bios', info['bios'], '--route', info['route'], '--cd-source-clock-tape', info['tape'],
             '--neutral-tail', '426', '--timeout', str(args.timeout), '--checkpoint-every', '300',
-            '--renderer', 'software', *PROFILE]
+            '--renderer', 'software', '--speed', args.speed, *PROFILE]
     if not args.headless:
         argv.append('--show')
     # The runtime writes settings beside its executable; the runner creates an
@@ -309,6 +309,8 @@ def main():
     prepare.add_argument('--jobs', type=int, default=min(12, os.cpu_count() or 1))
     play = sub.add_parser('run', help='play through the victory and compare every RAM/clock checkpoint')
     play.add_argument('--headless', action='store_true')
+    play.add_argument('--speed', choices=('1', '2', '4', '8', '16', '32', '64', 'max'), default='1',
+                      help='visible replay speed cap; actual speed depends on the host')
     play.add_argument('--timeout', type=int, default=1800, help='host seconds; increase for a slower machine')
     play.add_argument('--output', type=Path, help='new run directory; defaults to a unique build subdirectory')
     args = parser.parse_args()
@@ -320,6 +322,8 @@ def main():
         else:
             if args.timeout < 1:
                 raise ValueError('--timeout must be positive')
+            if args.headless and args.speed != '1':
+                raise ValueError('--speed requires visible playback; --headless is already uncapped')
             run(args)
     except (ValueError, RuntimeError, OSError, KeyError) as error:
         print(f'ERROR: {error}', file=sys.stderr)
