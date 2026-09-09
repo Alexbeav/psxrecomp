@@ -113,6 +113,8 @@ def main():
                         help="explicit source-core pipeline comparison; not full timing compatibility")
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
+    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3'),default='default',
+                        help='cold source MDEC FIFO/work and request DMA model; color output only')
     parser.add_argument('--cd-dma-model',choices=('default','octoshock-2.2.2'),default='default',
                         help='experimental manual CD DMA service and CPU wait; cold boot only')
     parser.add_argument("--cd-toc-seek-model", choices=("default", "octoshock-2.2.2"), default="default",
@@ -158,6 +160,8 @@ def main():
         raise ValueError("timer1 model requires NTSC raster field model")
     if args.gpu_status_model!='default' and args.field_model!='octoshock-2.2.2-ntsc-raster':
         raise ValueError('GPU status model requires NTSC raster field model')
+    if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
+        raise ValueError('source MDEC requires the qualified source service scheduler')
     if args.gpu_dma_model=='octoshock-2.2.2-bounded-quad' and args.field_model!='octoshock-2.2.2-ntsc-raster':
         raise ValueError('GPU quad model requires NTSC raster field model')
     if (args.update_decisions or args.update_predictor != "gate") and not args.update_profile:
@@ -297,6 +301,8 @@ p2_mode = "digital"
         selected_env["PSX_CD_READ_START_MODEL"] = args.cd_read_start_model
     if clock_tape:
         selected_env['PSX_CD_SOURCE_CLOCK_TAPE'] = clock_tape['path']
+    if args.mdec_source_model!='default':
+        selected_env['PSX_MDEC_SOURCE_MODEL']=args.mdec_source_model
     if args.cd_dma_model!='default':
         selected_env['PSX_CD_DMA_MODEL']=args.cd_dma_model
     if args.cd_toc_seek_model != "default":

@@ -408,7 +408,7 @@ static void complete_transfer(int ch) {
     channels[ch].chcr &= ~((1u << 24) | (1u << 28));
     /* Source channel4 latches its enabled completion flag even when the
      * master IRQ output is disabled; the master gate belongs to IRQ output. */
-    if ((ch==4 && source_gpu_runtime_active()) ?
+    if (((ch==4 && source_gpu_runtime_active()) || (ch<2 && mdec_source_active())) ?
         ((dicr>>(16+ch))&1u) : channel_irq_flag_armed(ch)) {
         dicr |= (1u << (24 + ch));
         raise_dma_irq_on_master_edge(dicr_before);
@@ -416,6 +416,68 @@ static void complete_transfer(int ch) {
     trace_dma('C', ch, 0, dicr_before, i_stat_before);
     event_ring_record_aux(EV_DMA_DONE, (uint8_t)ch, channels[ch].chcr);
     event_ring_record_aux(EV_DEQ, (uint8_t)(SRC_DMA0 + ch), channels[ch].chcr);
+}
+
+/* Cold Octoshock2.3 MDEC request DMA. Decoder readiness is sampled once
+ * per block; payload costs one source clock per word. The decoder's own
+ * FIFO/work clock is advanced before channels0/1 at the common DMA boundary.
+ * This profile intentionally rejects modes outside the authored contracts. */
+static struct { uint32_t address, in_block; int32_t credit; } mdec_source_dma[2];
+static uint64_t mdec_source_last_cycle;
+static void source_mdec_dma_words(int ch,uint32_t elapsed) {
+    DMAChannel *r=&channels[ch];
+    mdec_source_dma[ch].credit+=(int32_t)elapsed;
+    while(mdec_source_dma[ch].credit>0 && (r->chcr&(1u<<24))) {
+        if(!mdec_source_dma[ch].in_block) {
+            if(ch==0?!mdec_dma_write_ready():!mdec_dma_read_ready())break;
+            mdec_source_dma[ch].address=r->madr;
+            mdec_source_dma[ch].in_block=r->bcr&65535u;
+            r->bcr=(r->bcr&65535u)|((r->bcr-0x10000u)&0xffff0000u);
+        }
+        uint32_t address=mdec_source_dma[ch].address;
+        if(address&0x800000u) {
+            fprintf(stderr,"[dma-model] unqualified MDEC RAM bus error\n");exit(2);
+        }
+        g_dma_cur_ch=ch;g_dma_initiator_pc=s_dma_ch_initiator_pc[ch];
+        g_dma_cur_madr=address;g_dma_cur_bcr=r->bcr;
+        if(ch==0)mdec_dma_write_word(psx_read_word(address&0x1ffffcu));
+        else {
+            uint32_t offset=0,value=mdec_source_dma_read(&offset);
+            psx_write_word((address+(offset<<2))&0x1ffffcu,value);
+        }
+        mdec_source_dma[ch].address=(address+4u)&0xffffffu;
+        mdec_source_dma[ch].credit--;
+        if(!--mdec_source_dma[ch].in_block) {
+            r->madr=mdec_source_dma[ch].address;
+            if(!(r->bcr>>16))complete_transfer(ch);
+        }
+    }
+    if(mdec_source_dma[ch].credit>0)mdec_source_dma[ch].credit=0;
+}
+static void start_source_mdec(int ch) {
+    DMAChannel *r=&channels[ch];
+    if(!source_gpu_runtime_active() || r->chcr!=(ch==0?0x01000201u:0x01000200u) ||
+       (r->bcr&65535u)!=32 || !(r->bcr>>16) || (r->madr&3u)) {
+        fprintf(stderr,"[dma-model] unqualified MDEC request ch%d MADR=%08X BCR=%08X CHCR=%08X\n",ch,r->madr,r->bcr,r->chcr);exit(2);
+    }
+    memset(&mdec_source_dma[ch],0,sizeof(mdec_source_dma[ch]));
+    source_mdec_dma_words(ch,64);
+}
+static void service_source_mdec(uint64_t cycle) {
+    if(!mdec_source_active())return;
+    if(cycle<mdec_source_last_cycle || cycle-mdec_source_last_cycle>1000000u) {
+        fprintf(stderr,"[dma-model] invalid MDEC service interval\n");exit(2);
+    }
+    uint32_t elapsed=(uint32_t)(cycle-mdec_source_last_cycle);
+    mdec_source_last_cycle=cycle;
+    mdec_source_advance(elapsed);
+    source_mdec_dma_words(0,elapsed);source_mdec_dma_words(1,elapsed);
+}
+static uint32_t source_mdec_dma_bound(int deliverable) {
+    if(mdec_source_active())for(int ch=0;ch<2;ch++)
+        if((channels[ch].chcr&(1u<<24)) && (!deliverable || channel_irq_flag_armed(ch)))
+            return source_gpu_runtime_cycles_to_event();
+    return 0xffffffffu;
 }
 
 /* ---- Transfer execution ---- */
@@ -841,6 +903,7 @@ void dma_source_gpu_service_at(uint64_t cycle) {
         fprintf(stderr,"[dma-model] source GPU service outside scheduler cycle\n");exit(2);
     }
     g_dma_exec_depth++;
+    service_source_mdec(cycle);
     advance_source_gpu();
     if(gpu_upload_source.remaining && cycle>gpu_upload_source.last_cycle) {
         gpu_upload_source.budget+=(int32_t)(cycle-gpu_upload_source.last_cycle);
@@ -1361,10 +1424,12 @@ static void try_execute(int ch) {
     g_dma_cur_ch = ch; g_dma_cur_madr = channels[ch].madr; g_dma_cur_bcr = channels[ch].bcr;
     switch (ch) {
         case 0:
-            start_async_mdec_transfer(0);
+            if(mdec_source_active())start_source_mdec(0);
+            else start_async_mdec_transfer(0);
             break;
         case 1:
-            start_async_mdec_transfer(1);
+            if(mdec_source_active())start_source_mdec(1);
+            else start_async_mdec_transfer(1);
             break;
         case 2:
             if(gpu_upload_source_model && ((channels[2].chcr>>9)&3u)==1u)
@@ -1438,6 +1503,7 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask) {
      * can raise its completion IRQ. This is a conservative bound, not a new
      * transfer duration: readiness can postpone completion beyond the event. */
     uint32_t best = source_gpu_dma_irq_bound();
+    uint32_t mdec_bound=source_mdec_dma_bound(0);if(mdec_bound<best)best=mdec_bound;
     if(spu_source.remaining) {
         uint32_t d=spu_source.next_cycle>psx_cycle_count?
             (uint32_t)(spu_source.next_cycle-psx_cycle_count):1u;
@@ -1460,7 +1526,7 @@ uint32_t dma_cycles_to_irq(uint32_t i_mask) {
 }
 
 uint32_t dma_cycles_to_internal_event(void) {
-    uint32_t best = 0xFFFFFFFFu;
+    uint32_t best = source_mdec_dma_bound(0);
     if(gpu_ll_source.active) {
         best=gpu_ll_source.next_cycle>psx_cycle_count?
             (uint32_t)(gpu_ll_source.next_cycle-psx_cycle_count):1u;
@@ -1532,6 +1598,7 @@ uint32_t dma_cycles_to_internal_event(void) {
 uint32_t dma_cycles_to_deliverable_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 3))) return 0xFFFFFFFFu;
     uint32_t best = channel_irq_flag_armed(2)?source_gpu_dma_irq_bound():0xFFFFFFFFu;
+    uint32_t mdec_bound=source_mdec_dma_bound(1);if(mdec_bound<best)best=mdec_bound;
     if(spu_source.remaining && channel_irq_flag_armed(4)) {
         uint32_t d=spu_source.next_cycle>psx_cycle_count?
             (uint32_t)(spu_source.next_cycle-psx_cycle_count):1u;
@@ -1629,6 +1696,7 @@ void dma_advance(uint32_t cycles) {
 }
 
 void dma_init(void) {
+    memset(mdec_source_dma,0,sizeof(mdec_source_dma));mdec_source_last_cycle=0;
     g_dma_cpu_read_wait=0;
     gpu_upload_live_read_wait=0;cpu_read_wait_latched=0;
     memset(&gpu_ll_source,0,sizeof(gpu_ll_source));
@@ -1704,6 +1772,12 @@ bad:
 
 void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
     source_gpu_runtime_dma_write();
+    if(mdec_source_active())for(int ch=0;ch<2;ch++)
+        if((channels[ch].chcr&(1u<<24)) &&
+           ((addr>=0x1f801080u+16u*ch && addr<=0x1f80108bu+16u*ch) ||
+            (addr==0x1f8010f0u && ((dpcr^val)&mask&(15u<<(4*ch)))))) {
+            fprintf(stderr,"[dma-model] active MDEC register replacement unsupported\n");exit(2);
+        }
     if(spu_source.remaining &&
        ((addr>=0x1f8010c0u && addr<=0x1f8010cbu) ||
         (addr==0x1f8010f0u && ((dpcr^val)&mask&0xf0000u)))) {
@@ -1790,6 +1864,7 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
         switch (reg) {
             case 0x00:
                 channels[ch].madr = (channels[ch].madr & ~mask) | (val & mask);
+                if(ch<2 && mdec_source_active())channels[ch].madr&=0xffffffu;
                 return;
             case 0x04:
                 channels[ch].bcr = (channels[ch].bcr & ~mask) | (val & mask);
@@ -1899,6 +1974,7 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
 uint32_t dma_snapshot_bytes(void) { return DMA_SNAP_WIRE_BYTES; }
 
 void dma_snapshot_write(uint8_t *p) {
+    if(mdec_source_active()){fprintf(stderr,"[dma-model] source MDEC capture unsupported\n");exit(2);}
     if(spu_source.remaining) {
         fprintf(stderr,"[dma-model] active source SPU request capture unsupported\n");exit(2);
     }
@@ -1932,6 +2008,7 @@ void dma_snapshot_write(uint8_t *p) {
 }
 
 int dma_snapshot_read(const uint8_t *p, uint32_t len) {
+    if(mdec_source_active())return 0;
     if(gpu_upload_source_model) {
         fprintf(stderr,"[dma-model] source GPU upload timing requires cold boot\n");return 0;
     }

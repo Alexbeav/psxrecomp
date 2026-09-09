@@ -90,6 +90,20 @@ if(BUILD_TESTING)
     add_test(NAME input_route_file_test COMMAND input_route_file_test)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        foreach(_kind IN ITEMS pipeline dma)
+            foreach(_opt IN ITEMS 0 2)
+                set(_target mdec_source_${_kind}_O${_opt}_test)
+                add_executable(${_target} tests/test_mdec_source_${_kind}.c)
+                target_include_directories(${_target} PRIVATE src include ../recompiler/include)
+                target_compile_options(${_target} PRIVATE -O${_opt} -UNDEBUG -ffunction-sections -fdata-sections)
+                target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+                add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mdec_source_contracts.py
+                    $<TARGET_FILE:${_target}> ${_kind})
+            endforeach()
+        endforeach()
+    endif()
     add_executable(input_route_observer_test tests/test_input_route_observer.c
         src/input_route_observer.c src/psx_sha256.c)
     target_include_directories(input_route_observer_test PRIVATE include)
