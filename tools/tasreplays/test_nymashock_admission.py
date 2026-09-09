@@ -1,7 +1,7 @@
 """Authored failures must not become admitted independent source observations."""
 from pathlib import Path
 import tempfile
-from nymashock_admission import return_rows,qualify
+from nymashock_admission import return_rows,qualify,terminal_card_evidence,FINAL_CARD
 
 def rejects(call):
     try:call()
@@ -24,4 +24,13 @@ with tempfile.TemporaryDirectory() as directory:
     assert not (root/'ref.json').exists()
     out=root/'existing.json';out.write_bytes(b'preserve')
     rejects(lambda:qualify(root,root/'other',out));assert out.read_bytes()==b'preserve'
+    stock,observed=root/'stock',root/'observed'
+    a,b=[p/FINAL_CARD for p in (stock,observed)]
+    for path in (a,b):path.parent.mkdir(parents=True)
+    raw=b'MC'+bytes(131070)
+    a.write_bytes(raw);b.write_bytes(raw)
+    assert terminal_card_evidence(stock,observed)==[a,b]
+    for different in (raw[:-1]+b'\1',raw[:-1],bytes(131072)):
+        b.write_bytes(different);rejects(lambda:terminal_card_evidence(stock,observed))
+        assert a.read_bytes()==raw
 print('Nymashock admission:source continuity/clock/lag/shape failures and reference overwrite rejected')

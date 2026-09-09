@@ -19,14 +19,17 @@ adds 512 page hashes per completed return and one terminal raw 2 MiB RAM dump.
 Page clocks must match the independent stock record; the terminal dump must
 match all 512 page hashes and the independent full-RAM SHA-256. Missing rows,
 gaps, invalid clocks, mismatched endings/settings or existing output reject
-reference creation.
+reference creation. Both cleanly exited source runs must also retain identical
+persisted128KiB card1 files; a missing, malformed or differing card rejects
+admission even when every RAM/clock row matches.
 
 ```text
 python tools/tasreplays/nymashock_admission.py STOCK_RUN OBSERVER_RUN NEW_REFERENCE.json
 ```
 
 The output is `biohazard-independent-source-v1`. It binds the complete
-source artifacts, terminal RAM, page index, initial card and ending evidence.
+source artifacts, terminal RAM, page index, initial and persisted terminal card,
+and ending evidence.
 Native input, clocks, RAM, repeated playback and progression-save gates remain
 separate; a completed source replay is not a native gameplay pass.
 
@@ -47,7 +50,11 @@ disc, BIOS, movie and Nymashock raw-generator qualification receipt. It creates
 a fresh candidate from clean source, freezes the original input and initial
 card, and records generated-code/build identities. No installed old title
 binary is used. `biohazard.py run` compares every declared source/native RAM
-page and clock, and full playback additionally compares terminal RAM bytes.
+page and clock, and full playback additionally compares terminal RAM bytes and
+the candidate's persisted card after clean exit. Native normal initialization
+registers `memcard_flush_all` with `atexit`, so the observation-end exit follows
+the existing persistence path. Terminal evidence errors produce a failed
+comparison receipt; they cannot leave an apparent successful playback.
 An optional diagnostic cutoff retains only an unchanged original prefix;
 it cannot qualify full playback or replace the original movie.
 
