@@ -24,7 +24,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_REPO = "TechnicallyComputers/retcomm-toolchains"
+DEFAULT_REPO = "RetroPortingToolKit/RetroPorting-Toolchains"
 PACK_ID = "cmake-clang-v1"
 
 _ASSET = {

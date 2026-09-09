@@ -53,8 +53,8 @@ _REMOTE_RE = re.compile(
     re.I,
 )
 
-DEFAULT_GITHUB_OWNER = "TechnicallyComputers"
-LAUNCHER_REPO = "https://github.com/TechnicallyComputers/RetComM-Launcher"
+DEFAULT_GITHUB_OWNER = "RetroPortingToolKit"
+LAUNCHER_REPO = "https://github.com/RetroPortingToolKit/Retro-Launcher"
 
 
 def parse_github_remote(url: str) -> tuple[str, str] | None:
@@ -185,10 +185,12 @@ def render_boxart_block(game_name: str) -> str:
 
 
 def render_launcher_block() -> str:
-    shots = (
-        "https://raw.githubusercontent.com/TechnicallyComputers/"
-        "RetComM-Launcher/main/docs/screenshots"
-    )
+    # Derived from LAUNCHER_REPO rather than spelled out again: this was a
+    # second copy of the slug, split across two string literals, and the org
+    # rename swept past it — every regenerated README kept the dead owner.
+    shots = LAUNCHER_REPO.replace(
+        "https://github.com/", "https://raw.githubusercontent.com/"
+    ) + "/main/docs/screenshots"
     return "\n".join(
         [
             LAUNCHER_BEGIN,
@@ -250,7 +252,17 @@ def boxart_png_present(root: Path) -> bool:
 
 
 def readme_has_launcher(text: str) -> bool:
-    return "TechnicallyComputers/RetComM-Launcher" in text
+    # Both slugs: every port generated before the RetroPortingToolKit transfer
+    # carries the old one, and matching only the new one would report each of
+    # them as missing its launcher section — and append a second copy to any
+    # README that has neither the markers nor a "## RetComM Launcher" heading.
+    return any(
+        slug in text
+        for slug in (
+            "RetroPortingToolKit/Retro-Launcher",
+            "TechnicallyComputers/RetComM-Launcher",
+        )
+    )
 
 
 def readme_has_raid(text: str) -> bool:

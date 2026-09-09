@@ -429,10 +429,10 @@ embedded `toolchain/`. The zip includes:
 - `recomp-ui/` sources (needed to rebuild)
 - On Windows: MinGW runtime DLLs beside the host and emitters
 
-Players (or [RetComM](https://github.com/TechnicallyComputers/RetComM-Launcher))
+Players (or [RetComM](https://github.com/RetroPortingToolKit/Retro-Launcher))
 run **Generate once** (wizard or RetComM Build & Install) with a legal disc.
 RetComM / the wizard download `cmake-clang-v1` from
-[retcomm-toolchains](https://github.com/TechnicallyComputers/retcomm-toolchains)
+[retcomm-toolchains](https://github.com/RetroPortingToolKit/RetroPorting-Toolchains)
 (or accept an offline zip / `RETCOMM_TOOLCHAIN_DIR`). Pass
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
