@@ -147,6 +147,10 @@ if(BUILD_TESTING)
     target_include_directories(input_route_file_test PRIVATE include)
     add_test(NAME input_route_file_test COMMAND input_route_file_test)
 
+    add_executable(input_dualshock_route_file_test tests/test_input_dualshock_route_file.c)
+    target_include_directories(input_dualshock_route_file_test PRIVATE include)
+    add_test(NAME input_dualshock_route_file_test COMMAND input_dualshock_route_file_test)
+
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(input_route_observer_test tests/test_input_route_observer.c
         src/input_route_observer.c src/psx_sha256.c)
