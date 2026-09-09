@@ -149,8 +149,8 @@ def main():
         raise ValueError('RAM page probe requires source raster frontend boundaries')
     if args.ram_snapshot_frame and (not args.ram_page_probe or len(args.ram_snapshot_frame)>32 or
             len(set(args.ram_snapshot_frame))!=len(args.ram_snapshot_frame) or
-            any(f<1 or f>20000 for f in args.ram_snapshot_frame)):
-        raise ValueError('RAM snapshots require page probe and1..32 unique frames in1..20000')
+            any(f<1 for f in args.ram_snapshot_frame)):
+        raise ValueError('RAM snapshots require page probe and 1..32 unique positive frames')
     if args.timer2_model!="default" and args.timer1_model!="octoshock-2.2.2":
         raise ValueError("timer2 model requires source timer1 model")
     if args.timer1_model!="default" and args.field_model!="octoshock-2.2.2-ntsc-raster":
@@ -187,6 +187,13 @@ def main():
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
     identity = route_identity(paths["route"])
+    # The completion hook exits before the final return observer. Bind every
+    # enabled RAM capture to the exact declared number of observed returns.
+    ram_returns = identity['frames'] + args.neutral_tail - 1
+    if args.ram_page_probe and not 1 <= ram_returns <= 1000000:
+        raise ValueError('RAM capture requires 1..1000000 declared completed returns')
+    if any(frame > ram_returns for frame in args.ram_snapshot_frame):
+        raise ValueError('RAM snapshot exceeds the declared completed-return boundary')
     update_profile = None
     update_contexts = None
     context_values = None
@@ -328,6 +335,7 @@ p2_mode = "digital"
         selected_env['PSX_SOURCE_CPU_RETURN_PROBE']='1'
     if args.ram_page_probe:
         selected_env['PSX_SOURCE_RAM_PAGE_PROBE']='1'
+        selected_env['PSX_SOURCE_RAM_MAX_FRAMES']=str(ram_returns)
     if args.ram_snapshot_frame:
         selected_env['PSX_SOURCE_RAM_SNAPSHOT_FRAMES']=','.join(map(str,args.ram_snapshot_frame))
     if args.update_predictor != "gate":
