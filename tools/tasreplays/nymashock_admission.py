@@ -13,6 +13,7 @@ FRAMES=227202
 SOURCE_COMMIT='745efb1dd8eb82f31ba9201a79cdfc5bcaf1f5d1'
 MOVIE_SHA='821e4aff88eadab5c7b175b70c9ccfbfee65d59eec27256d4ce86cd7c83e88aa'
 CARD_SHA='78b6d4ac9ab4d23caf7e5f04f83539bf5d994cccfb0a709d14ac53d05c8e21ef'
+FINAL_CARD="SaveRAM/Bio Hazard - Director's Cut (Japan).SaveRAM"
 FIXED={
     "Bio Hazard - Director's Cut (Japan).bin":'007dc49b5899ff0aa55b6df7caea082c89aa137ff32d29ed36f28546e28e417e',
     "Bio Hazard - Director's Cut (Japan).cue":'0acbf59f7d28e632c7d8f55de72380b028c00c14ad88deb940a0d9aac6afe515',
@@ -41,6 +42,16 @@ def digest(path):
 def read(path):return json.loads(Path(path).read_text())
 
 def bind(path):return {'path':str(Path(path).resolve()),'sha256':digest(path)}
+
+def card_bytes(path):
+    data=Path(path).read_bytes()
+    if len(data)!=131072 or data[:2]!=b'MC':raise ValueError('invalid persisted raw source card')
+    return data
+
+def terminal_card_evidence(stock,observed):
+    paths=[Path(root)/FINAL_CARD for root in (stock,observed)]
+    if card_bytes(paths[0])!=card_bytes(paths[1]):raise ValueError('source observer persisted card differs')
+    return paths
 
 def return_rows(path,endpoint):
     """Validate every independent full-RAM digest and public master clock."""
@@ -148,12 +159,14 @@ def qualify(stock,observed,output):
     for a,b in zip_longest(rows,read_pages(pages)):
         if a is None or b is None or a[:2]!=b[:2]:raise ValueError('source page clocks/coverage differ')
     terminal_consistency(pages,raw,endpoint,terminal[3])
-    evidence += [pages,raw]
+    final_cards=terminal_card_evidence(stock,observed)
+    evidence += [pages,raw,*final_cards]
     result={'schema':'biohazard-independent-source-v1','source_qualification':'pass',
             'stock_source':str(stock),'observer_source':str(observed),
             'admission_tool_sha256':digest(__file__),'movie_sha256':MOVIE_SHA,'original_inputs':FRAMES,
             'neutral_tail':endpoint-FRAMES,'observed_returns':endpoint,'ram_pages':str(pages),
             'terminal_ram':str(raw),'initial_card1':str(stock/'initial-Memcard-1.bin'),
+            'terminal_card1':str(final_cards[1]),'terminal_card1_sha256':digest(final_cards[1]),
             'terminal_clock':terminal[1],'terminal_ram_sha256':terminal[3].lower(),
             'images_equal':len(captured_frames(endpoint,FRAMES)),
             'bindings':[bind(p) for p in sorted(set(evidence))],
