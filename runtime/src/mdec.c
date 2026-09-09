@@ -2,8 +2,10 @@
 #include "psx_align.h"
 #include "pst_wire.h"
 #include "psx_cycles.h"
+#include "source_mdec_fifo.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -113,6 +115,9 @@ typedef struct MDECState {
 } MDECState;
 
 static MDECState mdec;
+static SourceMDEC source_mdec;
+static int source_mdec_enabled;
+static int16_t source_cr[64],source_cb[64];
 
 #define MDEC_TRACE_CAP 4096u
 static MDECDebugEvent mdec_trace[MDEC_TRACE_CAP];
@@ -414,15 +419,15 @@ static void idct_block(int16_t *block)
 }
 #endif
 
-static int decode_rle_block(int16_t *block, const uint8_t *quant,
+static int decode_rle_block_from(const uint16_t *encoded,int16_t *block, const uint8_t *quant,
                             uint32_t *pos, uint32_t end) {
     memset(block, 0, 64 * sizeof(int16_t));
     if (*pos >= end) return 0;
     mdec.decode_blocks++;
 
-    uint16_t word = mdec.input[(*pos)++];
+    uint16_t word = encoded[(*pos)++];
     while (word == 0xFE00u && *pos < end) {
-        word = mdec.input[(*pos)++];
+        word = encoded[(*pos)++];
     }
 
     /* Dequant in Beetle's <<4 fixed-point domain (mdec.cpp:439-485), clamp
@@ -438,7 +443,7 @@ static int decode_rle_block(int16_t *block, const uint8_t *quant,
     block[0] = (int16_t)clamp_int(tmp, -0x4000, 0x3FFF);
 
     while (*pos < end && k < 63u) {
-        word = mdec.input[(*pos)++];
+        word = encoded[(*pos)++];
         if (word == 0xFE00u) break;
 
         k += ((word >> 10) & 0x3Fu) + 1u;
@@ -453,6 +458,10 @@ static int decode_rle_block(int16_t *block, const uint8_t *quant,
 
     idct_block(block);
     return 1;
+}
+
+static int decode_rle_block(int16_t *block,const uint8_t *quant,uint32_t *pos,uint32_t end){
+    return decode_rle_block_from(mdec.input,block,quant,pos,end);
 }
 
 static uint8_t to_output_u8(int value) {
@@ -508,6 +517,47 @@ static void append_luma_block(const int16_t *yblk) {
     if (!out) return;
     for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
     mdec.output_size += 64u;
+}
+
+static unsigned source_decode_block(void *context,uint32_t command,unsigned block,
+                                    const uint16_t *encoded,unsigned count,uint32_t *pixels){
+    (void)context;
+    int16_t y[64];int16_t *decoded=block==0?source_cr:block==1?source_cb:y;
+    uint32_t position=0;
+    if(!decode_rle_block_from(encoded,decoded,block<2?mdec.uv_quant:mdec.y_quant,&position,count) || position!=count)
+        return 49; /* Rejected by the controller, never a partial decode. */
+    if(block<2)return 0;
+    mdec.output_depth=(uint8_t)((command>>27)&3u);
+    mdec.output_signed=(uint8_t)((command>>26)&1u);
+    mdec.output_bit15=(uint8_t)((command>>25)&1u);
+    if(mdec.output_depth<2)return 49; /* Monochrome source formats need their own gate. */
+    uint8_t *out=(uint8_t*)pixels,*begin=out;
+    unsigned quadrant=block-2;
+    for(unsigned row=0;row<8;row++)for(unsigned x=0;x<8;x++){
+        unsigned chroma=((row>>1)+((quadrant>>1)*4))*8+(quadrant&1u)*4+(x>>1);
+        out=emit_rgb_pixel(out,y[row*8+x],source_cr[chroma],source_cb[chroma]);
+    }
+    if(block==5){mdec.decode_macroblocks++;mdec_last_color_decode_frame=s_frame_count;mdec_last_color_decode_cycle=psx_cycle_count;}
+    return (unsigned)(out-begin)/4;
+}
+static void source_table_word(void *context,unsigned kind,unsigned index,uint32_t value){
+    (void)context;
+    if(kind==2){
+        for(unsigned i=0;i<4;i++){unsigned at=index+i;(at<64?mdec.y_quant:mdec.uv_quant)[at&63u]=(uint8_t)(value>>(i*8));}
+    } else {
+        for(unsigned i=0;i<2;i++){unsigned at=index+i;mdec.scale[((at&7u)<<3)|(at>>3)]=(int16_t)((int16_t)(value>>(i*16))>>3);}
+    }
+}
+static void source_mdec_require(void){
+    if(source_mdec.error){fprintf(stderr,"[mdec-source] unqualified operation or decode\n");exit(2);}
+}
+int mdec_source_active(void){return source_mdec_enabled;}
+void mdec_source_advance(uint32_t clocks){
+    if(source_mdec_enabled){source_mdec_run(&source_mdec,clocks);source_mdec_require();}
+}
+uint32_t mdec_source_dma_read(uint32_t *word_offset){
+    if(!source_mdec_enabled)abort();
+    uint32_t value=source_mdec_read(&source_mdec,1,word_offset);source_mdec_require();return value;
 }
 
 #if defined(MDEC_HAVE_SSE2)
@@ -860,9 +910,19 @@ void mdec_init(void) {
         mdec.output_depth = 3;
     }
 #endif
+    source_mdec_enabled=0;
+    const char *source_mode=getenv("PSX_MDEC_SOURCE_MODEL");
+    if(source_mode && *source_mode){
+        if(strcmp(source_mode,"octoshock-2.3")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
+        source_mdec_enabled=1;
+        memset(mdec.y_quant,0,sizeof(mdec.y_quant));memset(mdec.uv_quant,0,sizeof(mdec.uv_quant));
+        memset(mdec.scale,0,sizeof(mdec.scale));memset(source_cr,0,sizeof(source_cr));memset(source_cb,0,sizeof(source_cb));
+        source_mdec_power(&source_mdec,source_decode_block,source_table_word,0);
+    }
 }
 
 uint32_t mdec_read(uint32_t addr) {
+    if(source_mdec_enabled)return (addr&4u)?source_mdec_status(&source_mdec):source_mdec_read(&source_mdec,0,0);
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         return mdec_dma_read_word();
@@ -889,6 +949,11 @@ uint32_t mdec_read(uint32_t addr) {
 }
 
 void mdec_write(uint32_t addr, uint32_t value) {
+    if(source_mdec_enabled){
+        if(addr&4u)source_mdec_control(&source_mdec,value);
+        else source_mdec_write(&source_mdec,value,0);
+        source_mdec_require();return;
+    }
     uint32_t offset = addr & 7u;
     if (offset == 0) {
         write_data(value);
@@ -905,6 +970,7 @@ void mdec_write(uint32_t addr, uint32_t value) {
 }
 
 void mdec_dma_write_word(uint32_t value) {
+    if(source_mdec_enabled){source_mdec_write(&source_mdec,value,1);source_mdec_require();return;}
     write_data(value);
 }
 
@@ -912,6 +978,7 @@ void mdec_dma_write_word(uint32_t value) {
  * early if the FIFO becomes not-ready after a decode completes mid-burst.
  * Guest bytes + decode triggers match N× mdec_dma_write_word. */
 uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.in_count<32)mdec_dma_write_word(src[n++]);return n;}
     uint32_t moved = 0;
     while (moved < max_words) {
         if (!mdec_dma_write_ready()) break;
@@ -940,6 +1007,7 @@ uint32_t mdec_dma_write_words(const uint32_t *src, uint32_t max_words) {
 }
 
 uint32_t mdec_dma_read_word(void) {
+    if(source_mdec_enabled){uint32_t offset;return mdec_source_dma_read(&offset);}
     uint32_t value = 0;
     uint32_t start_pos = mdec.output_pos;
     uint32_t avail = (start_pos < mdec.output_size)
@@ -970,6 +1038,7 @@ uint32_t mdec_dma_read_word(void) {
 
 /* Drain up to `max_words` into a contiguous LE destination (DMA ch1). */
 uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
+    if(source_mdec_enabled){unsigned n=0;while(n<max_words && source_mdec.out_count)dst[n++]=mdec_dma_read_word();return n;}
     uint32_t moved = 0;
     while (moved < max_words && mdec.output_pos < mdec.output_size) {
         dst[moved] = mdec_dma_read_word();
@@ -979,11 +1048,13 @@ uint32_t mdec_dma_read_words(uint32_t *dst, uint32_t max_words) {
 }
 
 int mdec_dma_write_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_write(&source_mdec);
     if (mdec.output_pos < mdec.output_size) return 0;
     return !mdec.busy || mdec.input_count < mdec.expected_halfwords;
 }
 
 int mdec_dma_read_ready(void) {
+    if(source_mdec_enabled)return source_mdec_can_read(&source_mdec);
     return mdec.output_pos < mdec.output_size;
 }
 
@@ -1073,6 +1144,7 @@ static uint32_t mdec_snap_fixed_bytes(void) {
 }
 
 uint32_t mdec_snapshot_bytes(void) {
+    if(source_mdec_enabled){fprintf(stderr,"[mdec-source] state capture unsupported\n");exit(2);}
     uint64_t n = (uint64_t)mdec_snap_fixed_bytes() +
                  (uint64_t)mdec.input_count * 2u +
                  (uint64_t)mdec.output_size;
@@ -1128,6 +1200,7 @@ void mdec_snapshot_write(uint8_t *p) {
 }
 
 int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
+    if(source_mdec_enabled)return 0;
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
     uint64_t age = 1000ull;
