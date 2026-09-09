@@ -1441,8 +1441,10 @@ m.publish_shard_pair(sys.argv[2], sys.argv[3], sys.argv[4])
             import _ctypes
             import ctypes
             import shutil
-            gcc = r'C:\msys64\mingw64\bin\gcc.exe'
-            assert os.path.isfile(gcc), "real loaded-DLL regression needs MinGW gcc"
+            gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
+                   if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
+                   else shutil.which('gcc'))
+            assert gcc and os.path.isfile(gcc), "real loaded-DLL regression needs MinGW gcc"
             with tempfile.TemporaryDirectory() as tmp:
                 # The actual host compiler must export the same 64-bit identity
                 # serialized in P; this catches width/decorated-name mistakes
@@ -2145,8 +2147,10 @@ def check_candidate_capacity_publication():
     if os.name == 'nt':
         # Exact pairs racing to distinct names may both commit: the namespace
         # lock makes the second writer observe the first pair's dedup identity.
-        gcc = r'C:\msys64\mingw64\bin\gcc.exe'
-        assert os.path.isfile(gcc)
+        gcc = (r'C:\msys64\mingw64\bin\gcc.exe'
+               if os.path.isfile(r'C:\msys64\mingw64\bin\gcc.exe')
+               else shutil.which('gcc'))
+        assert gcc and os.path.isfile(gcc)
         with tempfile.TemporaryDirectory() as tmp:
             pair_id = 0x1020304050607080
             source = pathlib.Path(tmp) / 'capacity.c'
@@ -2924,7 +2928,9 @@ def check_interior_fragment_contract():
                 f"P {pair_id:016X}\nF {entry:08X} {code_crc:08X} junk\n"
                 f"R {entry:08X} 8\n")
             assert MOD.load_shard_entry_set(str(dll)) == set()
-            outside = 0x80200000
+            # The loader also accepts high-bank code for 8 MiB modifications.
+            # Exercise the actual host-capacity boundary, not retail RAM size.
+            outside = 0x80000000 + MOD.PSX_RAM_SIZE
             ranges.write_text(
                 f"P {pair_id:016X}\nF {outside:08X} {code_crc:08X}\n"
                 f"R {outside:08X} 4\n")
@@ -3421,7 +3427,7 @@ def check_full_candidate_cli_fastpath(recompiler):
         leaf = (cache_root / 'CYCT-00101' / 'gcc' / MOD.cache_arch_abi() /
                 f'cg{MOD.codegen_ver(str(runtime_include))}_'
                 f'{MOD.codegen_hash(str(runtime_include)):08x}_'
-                f'gc{MOD.overlay_config_hash(recompiler, str(game_toml)):08x}')
+                f'gc{MOD.overlay_config_hash(recompiler, str(game_toml)):08x}_f0')
         leaf.mkdir(parents=True)
         pair_id = 0x123456789ABCDEF0
         captured_bytes = b'\x08\x00\xE0\x03\x00\x00\x00\x00'
@@ -3723,4 +3729,19 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if os.name == 'nt':
+        # This test deliberately loads malformed DLL bytes. CTest may clear
+        # the shell's inherited error mode, leaving LoadLibrary in a modal
+        # Windows error dialog instead of returning the expected OSError.
+        import ctypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetErrorMode.restype = ctypes.c_uint
+        kernel.SetErrorMode.argtypes = [ctypes.c_uint]
+        previous_mode = kernel.GetErrorMode()
+        kernel.SetErrorMode(previous_mode | 0x0001 | 0x8000)
+        try:
+            sys.exit(main())
+        finally:
+            kernel.SetErrorMode(previous_mode)
+    else:
+        sys.exit(main())

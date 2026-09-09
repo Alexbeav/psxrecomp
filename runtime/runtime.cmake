@@ -244,6 +244,7 @@ if(PSX_RECOMP_UI AND (NOT RECOMP_UI_ROOT OR RECOMP_UI_ROOT STREQUAL ""))
 endif()
 
 set(PSXRECOMP_RUNTIME_SOURCES
+    ${PSXRECOMP_ROOT}/runtime/src/input_route_observer.c
     ${PSXRECOMP_ROOT}/runtime/src/main.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_window_icon.cpp
     ${PSXRECOMP_ROOT}/runtime/src/psx_sdl_audio.cpp
@@ -251,6 +252,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/memory.c
     ${PSXRECOMP_ROOT}/runtime/src/guest_tty.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu.c
+    ${PSXRECOMP_ROOT}/runtime/src/source_gpu_runtime.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_ui_group.c
     ${PSXRECOMP_ROOT}/runtime/src/ws_aspect_cone_math.c
     ${PSXRECOMP_ROOT}/runtime/src/gpu_sw_renderer.c

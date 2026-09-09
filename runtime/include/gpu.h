@@ -16,6 +16,10 @@ extern "C" {
 #endif
 
 void     gpu_init(void);
+uint32_t gpu_dma_vram_upload_words(void); /* Active GP0(A0) payload remaining. */
+/* Experimental LL gate: 1 idle, 0 qualified mono-polyline wait, -1 outside
+ * scope. This does not represent source draw budget or FIFO occupancy. */
+int gpu_dma_source_ll_ready(void);
 uint32_t gpu_read_gpustat(void);   /* 0x1F801814 read */
 uint32_t gpu_read_gpuread(void);   /* 0x1F801810 read */
 void     gpu_write_gp0(uint32_t val);  /* 0x1F801810 write */
@@ -52,6 +56,7 @@ void gpu_texture_correction_stats(uint64_t *attempts, uint64_t *armed,
  * both wastes bandwidth and force-flushes when UP_RECTS_MAX is hit (MotK FMV). */
 int  gpu_display_is_depth24(void);
 int  gpu_video_standard_is_pal(void);   /* GP1(08h) bit 3: 0 NTSC, 1 PAL */
+int  gpu_display_is_interlaced(void);   /* GP1(08h) bit 5, passive accessor */
 void gpu_display_pixel_rgb(const GpuDisplayInfo* di, uint32_t x, uint32_t y,
                            uint8_t* r, uint8_t* g, uint8_t* b);
 uint32_t gpu_display_pixel_argb(const GpuDisplayInfo* di, uint32_t x, uint32_t y);

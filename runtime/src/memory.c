@@ -14,6 +14,7 @@
 #include "dma.h"
 #include "fntrace.h"
 #include "gpu.h"
+#include "source_gpu_runtime.h"
 #include "mdec.h"
 #include "mod_memory.h"
 #include "sio.h"
@@ -24,6 +25,7 @@
 #include "dirty_ram_interp.h"
 #include "guest_tty.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"
 #include "starvation_ring.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -114,9 +116,24 @@ static inline uint32_t psx_phys_addr(uint32_t addr) {
 
 /* Expose RAM pointer for oracle comparison (find_first_divergence). */
 uint8_t *memory_get_ram_ptr(void) { return ram; }
+int memory_peek_instruction_word(uint32_t address, uint32_t *value) {
+    if (!value || (address & 3u) || address >= 0xC0000000u) return 0;
+    uint32_t phys = address & 0x1FFFFFFFu;
+    const uint8_t *bytes;
+    if (phys < RAM_SIZE) bytes = ram + phys;
+    else if (phys >= 0x1FC00000u && phys < 0x1FC00000u + BIOS_ROM_SIZE)
+        bytes = bios_rom + (phys - 0x1FC00000u);
+    else return 0;
+    *value = (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+             ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+    return 1;
+}
 uint8_t *memory_get_scratchpad_ptr(void) { return scratchpad; }
 
 void memory_clear_low_boot_scratch(void) {
+    /* Game entry is a host bookkeeping event. The source profile preserves
+     * guest RAM across it, including BIOS scratch and trampoline words. */
+    if (source_gpu_runtime_active()) return;
     memset(ram, 0, 0x10u);
 }
 
@@ -1103,6 +1120,14 @@ static void unmapped_fatal(uint32_t vaddr, uint32_t phys, const char* op) {
 
 /* --- MMIO read/write helpers --- */
 
+static uint32_t irq_read_image(uint32_t value) {
+    /* Retained Octoshock 2.2.2 IRQ_Read supplies these fixed upper bits
+     * before selecting the byte lane. This is source compatibility, not
+     * an emulation of a measured physical open bus. Keep stored IRQ state
+     * and the default runtime's read image unchanged. */
+    return value | (source_gpu_runtime_active() ? 0x1F800000u : 0u);
+}
+
 static uint32_t mmio_read32_impl(uint32_t addr) {
     SHADOW_NOTE_MMIO();
     /* Memory control: 0x1F801000..0x1F801020 */
@@ -1118,8 +1143,8 @@ static uint32_t mmio_read32_impl(uint32_t addr) {
         return ram_size_reg;
     }
     /* Interrupts: 0x1F801070, 0x1F801074 */
-    if (addr == 0x1F801070u) { sio_tick(0); return i_stat; }
-    if (addr == 0x1F801074u) return i_mask;
+    if (addr == 0x1F801070u) { sio_tick(0); return irq_read_image(i_stat); }
+    if (addr == 0x1F801074u) return irq_read_image(i_mask);
     /* DMA: 0x1F801080..0x1F8010FF */
     if (addr >= 0x1F801080u && addr <= 0x1F8010FFu) {
         return dma_read(addr);
@@ -1241,14 +1266,17 @@ static uint16_t mmio_read16_impl(uint32_t addr) {
     if (addr >= 0x1F801070u && addr <= 0x1F801072u) {
         sio_tick(0);
         uint32_t shift = (addr & 2u) ? 16u : 0u;
-        return (uint16_t)(i_stat >> shift);
+        return (uint16_t)(irq_read_image(i_stat) >> shift);
     }
     if (addr >= 0x1F801074u && addr <= 0x1F801076u) {
         uint32_t shift = (addr & 2u) ? 16u : 0u;
-        return (uint16_t)(i_mask >> shift);
+        return (uint16_t)(irq_read_image(i_mask) >> shift);
     }
     /* Timers: 0x1F801100..0x1F80112F */
     if (addr >= 0x1F801100u && addr <= 0x1F80112Fu) {
+        if(source_gpu_runtime_active() && timers_source_raster_enabled() &&
+           addr>=0x1f801110u && addr<=0x1f80111fu)
+            return (uint16_t)(timers_read(addr&~3u) >> (8u*(addr&3u)));
         return (uint16_t)timers_read(addr);
     }
     /* DMA: 0x1F801080..0x1F8010FF */
@@ -1345,6 +1373,11 @@ static void mmio_write16(uint32_t addr, uint16_t val) {
 
 static uint8_t mmio_read8_impl(uint32_t addr) {
     SHADOW_NOTE_MMIO();
+    /* The source Timer1 read decodes the register before selecting its lane.
+     * Reading an upper mode lane still performs the mode read-to-clear. */
+    if(source_gpu_runtime_active() && timers_source_raster_enabled() &&
+       addr>=0x1f801110u && addr<=0x1f80111fu)
+        return (uint8_t)(timers_read(addr&~3u) >> (8u*(addr&3u)));
     /* Memory control: 0x1F801000..0x1F80103C — byte lane of the 32-bit reg. */
     if (addr >= 0x1F801000u && addr <= 0x1F80103Fu) {
         uint32_t v = mem_ctrl[(addr - 0x1F801000u) >> 2];
@@ -1357,7 +1390,7 @@ static uint8_t mmio_read8_impl(uint32_t addr) {
     if (addr >= 0x1F801070u && addr <= 0x1F801077u) {
         if (addr < 0x1F801074u) sio_tick(0);
         uint32_t val = (addr < 0x1F801074u) ? i_stat : i_mask;
-        return (uint8_t)(val >> (8 * (addr & 3)));
+        return (uint8_t)(irq_read_image(val) >> (8 * (addr & 3)));
     }
     /* SIO: 0x1F801040..0x1F80104F */
     if (addr >= 0x1F801040u && addr <= 0x1F80104Fu) {
@@ -1628,6 +1661,11 @@ void psx_write_word(uint32_t addr, uint32_t val) {
 }
 static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     g_guest_store_count++;
+    /* Isolated stores target the cache before memory-address routing. */
+    if (sr_ptr && (*sr_ptr & 0x10000u)) {
+        psx_icache_isolated_store(addr, cache_ctrl);
+        return;
+    }
     /* (pgxp) plain-store shadow invalidation retired: the PGXP engine
      * validates tracked words against the actual packet word on read, so an
      * overwritten word can never be believed (ENHANCEMENTS.md G1). */
@@ -1636,25 +1674,16 @@ static void psx_write_word_raw(uint32_t addr, uint32_t val) {
     /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
 
-    /* IsC (Isolate Cache): when set, writes go to D-cache only.
-     * We have no cache model, so silently discard RAM/scratchpad writes. */
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
-
     uint32_t phys = psx_phys_addr(addr);
 
-    /* The generated BIOS mirrors its exception trampoline to 0x80000000 during
-     * boot. On hardware this mirror copy is not visible in RAM; only the real
-     * exception vector at 0x80000080 is. Tomba 2 later passes buffer=0 to the
-     * BIOS card write routine, so stale mirror bytes at 0 corrupt the sector 63
-     * management write and leave the load menu stuck checking the card. */
-    if (fntrace_is_game_started() &&
+    /* Legacy Tomba 2 card-buffer workaround. Source execution writes ordinary
+     * RAM here, so the source profile must not suppress the guest store. */
+    if (!source_gpu_runtime_active() && fntrace_is_game_started() &&
         phys < 0x10u && g_debug_last_store_pc == 0xBFC10A00u) return;
 
-    /* BIOS helpers use RAM address zero as a tiny delay-loop scratch between
-     * device-register polls. Treat these two dummy stores as non-visible; real
-     * hardware / Beetle preserve Tomba 2's sector-63 card-management payload
-     * when it passes buffer=0 to _card_write. */
-    if (fntrace_is_game_started() && phys == 0u) {
+    /* Retain the legacy card-buffer store filter outside the source profile.
+     * BIOS delay-loop scratch stores are observable guest RAM writes. */
+    if (!source_gpu_runtime_active() && fntrace_is_game_started() && phys == 0u) {
         switch (g_debug_last_store_pc) {
         case 0xBFC04E90u:
         case 0xBFC04EF0u:
@@ -1783,7 +1812,9 @@ static uint16_t psx_read_half_raw(uint32_t addr) {
     uint32_t phys = psx_phys_addr(addr);
 
     if (phys < RAM_SIZE) {
-        return (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
+        uint16_t v = (uint16_t)ram[phys] | ((uint16_t)ram[phys + 1] << 8);
+        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(phys, v);
+        return v;
     }
     {
         uint32_t off;
@@ -1830,7 +1861,10 @@ void psx_write_half(uint32_t addr, uint16_t val) {
 }
 static void psx_write_half_raw(uint32_t addr, uint16_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (sr_ptr && (*sr_ptr & 0x10000u)) {
+        psx_icache_isolated_store(addr, cache_ctrl);
+        return;
+    }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }
@@ -1902,7 +1936,9 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
     uint32_t phys = psx_phys_addr(addr);
 
     if (phys < RAM_SIZE) {
-        return ram[phys];
+        uint8_t v = ram[phys];
+        if (g_ram_read_watch_active) debug_server_trace_ram_read_watch(phys, v);
+        return v;
     }
     {
         uint32_t off;
@@ -1947,7 +1983,9 @@ static uint8_t psx_read_byte_raw(uint32_t addr) {
  * (libretro.cpp:868-869). That is non-zero only while a DMA channel is actively
  * stealing the bus; modeling it needs the live steal count threaded out of the DMA
  * controller, and it can't be isolated by a static ruler. It remains an unmodeled
- * dynamic axis; the per-region device waits below are the static, validatable piece. */
+ * dynamic axis by default. The optional source VRAM-upload DMA profile now supplies
+ * that live count for its bounded request-mode context. It is sampled before the
+ * read charge dispatches device events, and joins the absorbed region cost. */
 
 /* Runtime-only production cycle charge for data-load timing.  Overlay DLLs
  * flush their local pending-cycle accumulator before entering these host
@@ -2010,8 +2048,8 @@ static inline uint32_t psx_mmio_read_wait(uint32_t phys, uint32_t size) {
 /* Beetle ReadMemory data-access timing (cpu.cpp:369-448), after §1/deps/DO_LDS.
  * compl_cost = 2 (CPU load) / 1 (LWC2); arm_rt = GPR to arm as pending load, or
  * 0x20 = none (LWC2, dest is a GTE reg). size = access width in bytes (1/2/4). */
-static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
-                                   uint32_t compl_cost, uint32_t arm_rt) {
+static inline uint32_t psx_cyc_readmem_prepare(CPUState* cpu, uint32_t phys, uint32_t size,
+                                   uint32_t compl_cost, uint32_t arm_rt, int defer_gpu_wait) {
     /* ReadMemory start (369-370): clear the current give-back slot. */
     cpu->read_absorb[cpu->read_absorb_which] = 0u;
     cpu->read_absorb_which = 0u;
@@ -2019,16 +2057,29 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
     if (phys >= 0x1F800000u && phys <= 0x1F8003FFu) {
         cpu->ld_absorb = 0u;
         cpu->ld_which_t = (uint8_t)arm_rt;
-        return;
+        return 0u;
     }
-    /* fudge (424): +2 iff the predecessor committed no load (read_fudge==0x20).
-     * Combined with region+completion into one advance — deadline catch-up
-     * replays exact event boundaries, so splitting the charge is only host cost. */
-    uint32_t region = psx_mmio_read_wait(phys, size);  /* device-region wait */
+    /* The device supplies its value after the bus wait, before the CPU load
+     * completion cycles. Advancing through completion before an MMIO read can
+     * sample the next timer tick or consume a newly arrived device response.
+     * Preserve the existing RAM/ROM path; its DMA/read-order coverage is separate. */
+    uint32_t region = psx_mmio_read_wait(phys, size) + dma_cpu_read_penalty();
     uint32_t cost = region + compl_cost;               /* LDAbsorb = region + completion */
     uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
     cpu->ld_absorb = cost;
-    psx_advance_cycles(fudge + cost);
+    uint32_t completion = (phys >= 0x1F801000u && phys <= 0x1F802FFFu)
+                            ? compl_cost : 0u;
+    /* Source MemRW services events after ReadFudge and DMA steal, before
+     * the device's one-cycle region wait. That final wait does not service again.
+     * Returning it with completion keeps the value/GPUREAD side effect ahead
+     * of an event crossed only by that wait, while earlier events stay visible.
+     * HBlank-driven Timer1 counters likewise have no CPU tick in that wait;
+     * TIMER_Read updates timers, but does not service a newly due GPU event.
+     * DMA_Read and IRQ_Read likewise return stored registers without another
+     * event update. IRQ status must not include an edge crossed by that wait. */
+    if(defer_gpu_wait)completion+=psx_mmio_read_wait(phys,size);
+    psx_advance_cycles(fudge + cost - completion);
+    if(defer_gpu_wait)psx_devices_service_to_now();
     cpu->ld_which_t = (uint8_t)arm_rt;
     /* PROOF GATE (PSX_POLL_PROOF=N, default 0/off): a FLAT, non-absorbed extra N
      * cycles per main-RAM data read — replicates the historical "+6 cyc/main-RAM
@@ -2043,6 +2094,14 @@ static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
         if (s_pp < 0) { const char* e = getenv("PSX_POLL_PROOF"); s_pp = (e && e[0]) ? atoi(e) : 0; }
         if (s_pp > 0) psx_load_charge_cycles((uint32_t)s_pp);
     }
+    return completion;
+}
+
+/* Timing-only callers still consume the complete load duration. */
+static inline void psx_cyc_readmem(CPUState* cpu, uint32_t phys, uint32_t size,
+                                  uint32_t compl_cost, uint32_t arm_rt) {
+    uint32_t completion = psx_cyc_readmem_prepare(cpu, phys, size, compl_cost, arm_rt, 0);
+    if (completion) psx_advance_cycles(completion);
 }
 
 /* Resolve PSX_LOAD_DELAY once (shared with inlined psx_cyc.h helpers). */
@@ -2056,23 +2115,24 @@ int psx_load_delay_enabled(void) {
 
 /* The interlock half of a load (§1+deps+(cancel)+DO_LDS+ReadMemory). Gated on
  * PSX_ENABLE_BLOCK_CYCLES so the Beetle-oracle build (cycles off) does a plain read. */
-static inline void psx_cyc_load_timing(CPUState* cpu, uint32_t addr, uint32_t size,
-                                       uint32_t rt, uint32_t reg_mask) {
+static inline uint32_t psx_cyc_load_timing(CPUState* cpu, uint32_t addr, uint32_t size,
+                                       uint32_t rt, uint32_t reg_mask, int defer_gpu_wait) {
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     /* Bisect gate (PSX_LOAD_DELAY=0): disable the R3000A load-delay interlock
      * timing (the d8c4a8e/fade560/d597797 feature) to test whether it moves the
      * MMX6 cutscene ordering. Read once; default on. */
     if (!psx_load_delay_enabled()) {
         (void)addr; (void)size; (void)rt; (void)reg_mask;
-        return;
+        return 0u;
     }
     psx_cyc_base(cpu);
     psx_cyc_deps(cpu, reg_mask);
     if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;   /* cancel pending load to same dest */
     psx_cyc_lds(cpu);
-    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, size, 2u, rt);
+    return psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, size, 2u, rt, defer_gpu_wait);
 #else
     (void)cpu; (void)addr; (void)size; (void)rt; (void)reg_mask;
+    return 0u;
 #endif
 }
 
@@ -2104,33 +2164,64 @@ static inline int psx_cyc_main_ram_fast_addr(uint32_t addr, uint32_t width,
 #endif
 
 /* Slow paths for the inlined helpers in psx_cyc.h (MMIO / lockstep / shards). */
+static int source_hblank_counter_sample(uint32_t addr) {
+    return source_gpu_runtime_active() && addr<0xc0000000u &&
+           timers_source_hblank_counter_read(addr&0x1fffffffu);
+}
+static int source_dma_register_sample(uint32_t addr) {
+    uint32_t physical=addr&0x1fffffffu;
+    return source_gpu_runtime_active() && addr<0xc0000000u &&
+           physical>=0x1f801080u && physical<=0x1f8010ffu;
+}
+static int source_irq_register_sample(uint32_t addr) {
+    uint32_t physical=addr&0x1fffffffu;
+    return source_gpu_runtime_active() && addr<0xc0000000u &&
+           physical>=0x1f801070u && physical<=0x1f801077u;
+}
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
-    return psx_read_word(addr);
+    uint32_t physical=addr&0x1fffffffu;
+    int source_gpu_sample=source_gpu_runtime_active() && addr<0xc0000000u &&
+        (physical==0x1f801810u || physical==0x1f801814u);
+    uint32_t completion=psx_cyc_load_timing(cpu,addr,4u,rt,reg_mask,
+        source_gpu_sample || source_hblank_counter_sample(addr) ||
+        source_dma_register_sample(addr) || source_irq_register_sample(addr));
+    uint32_t value = psx_read_word(addr);
+    if (completion) psx_advance_cycles(completion);
+    return value;
 }
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask);
-    return psx_read_half(addr);
+    uint32_t completion = psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask,
+        source_hblank_counter_sample(addr) || source_dma_register_sample(addr) ||
+        source_irq_register_sample(addr));
+    uint16_t value = psx_read_half(addr);
+    if (completion) psx_advance_cycles(completion);
+    return value;
 }
 void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
                                    uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask);
+    uint32_t completion = psx_cyc_load_timing(cpu, addr, 4u, rt, reg_mask, 0);
+    if (completion) psx_advance_cycles(completion);
 }
 uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
-    psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask);
+    uint32_t completion = psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask,
+        source_hblank_counter_sample(addr) || source_dma_register_sample(addr) ||
+        source_irq_register_sample(addr));
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
     uint32_t phys;
     if (psx_cyc_main_ram_fast_addr(addr, 1u, &phys)) return ram[phys];
 #endif
-    return psx_read_byte(addr);
+    uint8_t value = psx_read_byte(addr);
+    if (completion) psx_advance_cycles(completion);
+    return value;
 }
 
 /* LWC2 (GTE load): §1/DO_LDS done by psx_cyc_step(cpu,0); the GTE deadline stall by
  * psx_gte_stall — both emitted before this call. 32-bit access, completion +1, no
  * LDWhich arm. */
 uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
+    uint32_t completion = 0u;
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-    psx_cyc_readmem(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u);
+    completion = psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u, 0);
 #else
     (void)cpu;
 #endif
@@ -2143,7 +2234,9 @@ uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
              | ((uint32_t)ram[phys + 3] << 24);
     }
 #endif
-    return psx_read_word(addr);
+    uint32_t value = psx_read_word(addr);
+    if (completion) psx_advance_cycles(completion);
+    return value;
 }
 
 /* Deprecated uncharged passthroughs (the +4 flat wait-state model is gone; load
@@ -2165,7 +2258,10 @@ void psx_write_byte(uint32_t addr, uint8_t val) {
 }
 static void psx_write_byte_raw(uint32_t addr, uint8_t val) {
     g_guest_store_count++;
-    if (sr_ptr && (*sr_ptr & 0x10000u)) return;
+    if (sr_ptr && (*sr_ptr & 0x10000u)) {
+        psx_icache_isolated_store(addr, cache_ctrl);
+        return;
+    }
 
         /* KSEG2 guard — see psx_read_word_raw. */
     if (addr >= 0xC0000000u) { g_kseg2_ignored_writes++; return; }

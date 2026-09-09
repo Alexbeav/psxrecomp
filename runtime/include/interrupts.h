@@ -49,6 +49,9 @@ void psx_check_interrupts(struct CPUState* cpu);
  * raised by psx_advance_cycles(); this reports whether the comparatively
  * expensive delivery/scheduler path can have an architectural effect now. */
 int psx_interrupt_delivery_needed(const struct CPUState* cpu);
+/* Existing runtime compatibility delay, shared by precise take prediction.
+ * This reports policy state only; it does not advance or alter guest time. */
+int psx_interrupt_cooldown_active(void);
 void psx_interrupt_delivery_diag(uint64_t *need_defer, uint64_t *need_irq,
                                  uint64_t *skip_none, uint64_t *skip_sr,
                                  uint64_t *skip_cooldown, uint64_t *skip_nested);
@@ -66,6 +69,10 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
 /* Interrupt check with the compiled guest PC to resume if a game-installed
  * handler later RFEs to the sentinel outside the synchronous host window. */
 void psx_check_interrupts_at(struct CPUState* cpu, uint32_t resume_pc);
+/* Source-profile precise interpreter: accept a pending IRQ at a branch's
+ * unexecuted delay slot, fetching that slot while saving the branch as EPC. */
+int psx_check_interrupts_delay_slot(struct CPUState* cpu,uint32_t slot_pc,
+                                  uint32_t target,int taken,uint32_t instruction);
 int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc);
 /* Dispatch-entry check for re-enterable compiled PCs. De-dupes an immediately
  * preceding check at the same guest PC/cycle so generated transfers can keep
@@ -80,6 +87,10 @@ void psx_check_interrupts_dispatch_entry(struct CPUState* cpu, uint32_t resume_p
 void interrupts_advance_cycles(uint32_t cycles);
 void interrupts_service_scheduled_events(void);
 uint32_t interrupts_cycles_to_vblank(void);
+/* Optional source raster comparison: called after an already synchronized GP1
+ * write. Inactive profiles return immediately. No guest RAM is modified. */
+void interrupts_raster_gp1(uint32_t word);
+int interrupts_raster_gpu_status(uint32_t *bits);
 /* While IRQ9 is enabled, expose the next 44.1-kHz sample as a first-class
  * device deadline so the CPU can observe and acknowledge an IRQ before the
  * following sample. UINT32_MAX means inactive. PSX_SPU_SAMPLE_EVENTS=0 is a
@@ -100,6 +111,10 @@ uint32_t cycles_to_next_event(void);
 
 /* Query whether we are currently inside an exception handler dispatch. */
 int psx_get_in_exception(void);
+
+/* The source CPU's pending-interrupt opcode table still executes COP2.
+ * Unknown instruction addresses and the default profile remain eligible. */
+int psx_irq_opcode_eligible(uint32_t pc);
 
 /* Most recent block-leader IRQ-check guest PC / compiled resume latch.
  * Used by the post-savestate freeze probe (vblank-time "where was the game"). */

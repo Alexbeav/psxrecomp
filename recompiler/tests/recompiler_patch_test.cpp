@@ -1056,6 +1056,76 @@ void cfg_codegen_load_delay_test() {
           "CFG codegen preserves MIPS-I dependent load-delay value semantics");
 }
 
+void uncached_fetch_codegen_test() {
+    for (const uint32_t base : {0x00010000u, 0x80010000u, 0xA0010000u}) {
+        PSXRecomp::PS1Executable exe{};
+        exe.header.load_address = base;
+        exe.header.initial_pc = base;
+        exe.header.file_size = 24u;
+        for (const uint32_t word : {0x24080001u, 0x25080001u, 0x25080001u,
+                                   0x25080001u, 0x03E00008u, 0x00000000u})
+            append_word(exe.code_data, word);
+        PSXRecomp::Function function{};
+        function.start_addr = base;
+        function.end_addr = base + 24u;
+        function.size = 24u;
+        function.name = "fetch_test";
+        PSXRecomp::ControlFlowAnalyzer analyzer(exe);
+        const auto cfg = analyzer.analyze_function(function);
+        PSXRecomp::CodeGenerator generator(exe);
+        const std::string code = generator.generate_function(function, cfg).full_code;
+        if (const char* output = std::getenv("PSX_TEST_FETCH_OUTPUT_DIR")) {
+            std::ofstream generated(fs::path(output)/fmt::format("cfg-fetch-{:08X}.c",base));
+            generated << "#include \"cpu_state.h\"\n#include \"psx_icache.h\"\n#include \"psx_cyc.h\"\n" << code;
+        }
+        for (uint32_t offset = 0; offset < 24; offset += 4) {
+            const std::string needle = fmt::format("psx_icache_fetch(cpu, 0x{:08X}u);", base + offset);
+            const size_t found = code.find(needle);
+            check((found != std::string::npos) == (base >= 0xA0000000u || (offset & 15u) == 0),
+                  fmt::format("virtual fetch policy at {:08X}, including return slot", base + offset));
+            check(found == std::string::npos || code.find(needle, found + 1) == std::string::npos,
+                  "one fetch per emitted instruction site");
+        }
+    }
+}
+
+void syscall_codegen_transfer_test() {
+    for (const uint32_t base : {0x80010000u, 0xA0010000u}) {
+        PSXRecomp::PS1Executable exe{};
+        exe.header.load_address = base; exe.header.initial_pc = base;
+        exe.header.file_size = 20;
+        for (uint32_t word : {0x24040001u, 0x0000000Cu, 0x25080001u,
+                              0x03E00008u, 0x00000000u}) append_word(exe.code_data, word);
+        PSXRecomp::Function function{};
+        function.start_addr=base; function.end_addr=base+20; function.size=20;
+        function.name=fmt::format("func_{:08X}",base);
+        PSXRecomp::ControlFlowAnalyzer analyzer(exe);
+        auto cfg=analyzer.analyze_function(function);
+        PSXRecomp::CodeGenerator generator(exe);
+        auto generated=generator.generate_function(function,cfg);
+        check(generated.full_code.find(fmt::format(
+            "cpu->pc = 0x{:08X}u; if (psx_syscall(cpu, 0)) return;",base+4))!=std::string::npos,
+            "game syscall sets executing virtual PC and preserves transfer");
+        check(cfg.blocks.count(base+8)==1 && generator.cps_continuations().count(base+8)==1,
+            "post-syscall instruction has a dispatchable continuation");
+        if (const char *dir=std::getenv("PSX_TEST_SYSCALL_OUTPUT_DIR")) {
+            std::ofstream out(fs::path(dir)/fmt::format("syscall-{:08X}.c",base));
+            out << "#include <assert.h>\n#include <stdint.h>\n#include \"cpu_state.h\"\n"
+                   "#define PSX_NO_DEBUG_TOOLS 1\n"
+                   "static int transfer; static uint32_t seen;\n"
+                   "void debug_server_log_call_entry(uint32_t x) {(void)x;}\n"
+                   "void psx_check_interrupts_at(CPUState*c,uint32_t p){(void)c;(void)p;}\n"
+                   "int psx_syscall(CPUState*c,uint32_t code){seen=c->pc;c->pc=transfer?0x80000080:0;return transfer;}\n";
+            out << generated.full_code;
+            out << fmt::format("\nint main(void){{CPUState c={{0}};c.gpr[31]=0x80090000;transfer=1;"
+                "func_{0:08X}(&c);assert(seen==0x{1:08X}u&&c.pc==0x80000080&&c.gpr[8]==0);"
+                "c.pc=0x{2:08X}u;func_{0:08X}(&c);assert(c.gpr[8]==1&&c.pc==c.gpr[31]);"
+                "c.pc=0;c.gpr[8]=0;transfer=0;func_{0:08X}(&c);assert(c.gpr[8]==1&&seen==0x{1:08X}u);return 0;}}\n",
+                base,base+4,base+8);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1071,6 +1141,8 @@ int main() {
         gte_codegen_classification_tests();
         jump_table_producer_codegen_test();
         cfg_codegen_load_delay_test();
+        uncached_fetch_codegen_test();
+        syscall_codegen_transfer_test();
     } catch (const std::exception& e) {
         fmt::print(stderr, "FAIL  unexpected exception: {}\n", e.what());
         ++failures;

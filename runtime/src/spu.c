@@ -36,6 +36,9 @@ static uint8_t  spu_ram[SPU_RAM_SIZE];
 static uint16_t spu_regs[SPU_REG_COUNT];
 static uint32_t transfer_addr;
 static uint32_t key_on_count;
+static int source_key_timing;
+static uint32_t source_key_on_pending, source_key_off_pending;
+static uint8_t source_play_delay[24];
 static uint64_t render_frames;
 static uint64_t nonzero_frames;
 static int32_t last_peak;
@@ -152,6 +155,16 @@ typedef struct {
 } SpuVoice;
 
 static SpuVoice voices[SPU_VOICE_COUNT];
+
+/* The retained source profile decodes one four-sample word when fewer than
+ * eleven samples remain. Its END/loop/envelope readbacks belong to that
+ * decoder boundary, not to the mixer's whole-block consumption boundary.
+ * Keep this queue separate from the default renderer's 28-sample blocks. */
+typedef struct {
+    int16_t samples[32];
+    uint8_t read_pos, write_pos, available, shift, filter, ignore_loop;
+} SourceSpuDecode;
+static SourceSpuDecode source_decode[SPU_VOICE_COUNT];
 
 static void spu_event_record(uint8_t kind, int voice, uint32_t addr) {
     SpuEvent *e = &s_events[s_event_idx & (SPU_EVENT_CAP - 1u)];
@@ -804,9 +817,115 @@ typedef char spu_shadow_voice_count_check[
 const void* spu_shadow_tap_buffer(void) { return s_shadow_tap; }
 int         spu_shadow_tap_count(void)  { return s_shadow_tap_frame; }
 
-static int16_t voice_next_sample(int idx) {
+static void source_decode_irq(uint32_t address) {
+    uint32_t irq_address = (uint32_t)spu_regs[reg_index(0x1F801DA4u)] << 3;
+    address &= SPU_RAM_SIZE - 1u;
+    if (irq_address == address || irq_address == (address & ~15u))
+        spu_irq_check(irq_address, 1u);
+}
+
+static void source_decode_word(int idx, uint32_t noise_mask) {
     SpuVoice *v = &voices[idx];
-    if (!v->active) return 0;
+    SourceSpuDecode *d = &source_decode[idx];
+    if (d->available >= 11) {
+        source_decode_irq(v->cur_addr - 2u);
+        return;
+    }
+    if (!(v->cur_addr & 15u)) {
+        if (v->flags & 1u) {
+            v->cur_addr = v->repeat_addr & ~15u;
+            endx_latch |= 1u << idx;
+            if (!(v->flags & 2u) && !(noise_mask & (1u << idx))) {
+                v->env_level = 0;
+                v->adsr_phase = ADSR_RELEASE;
+                /* Source END keeps the envelope divider; KEYOFF resets it. */
+            }
+            spu_event_record((v->flags & 2u) ? SPU_EV_END_LOOP : SPU_EV_END_STOP,
+                             idx, v->cur_addr);
+        }
+        source_decode_irq(v->cur_addr);
+        uint8_t header = spu_ram[v->cur_addr];
+        v->flags = spu_ram[v->cur_addr + 1u];
+        d->shift = header & 15u;
+        d->filter = header >> 4;
+        if ((v->flags & 4u) && !d->ignore_loop) {
+            v->repeat_addr = v->cur_addr;
+            spu_regs[(uint32_t)idx * 8u + 7u] = (uint16_t)(v->cur_addr >> 3);
+        }
+        v->cur_addr = (v->cur_addr + 2u) & (SPU_RAM_SIZE - 1u);
+    } else {
+        source_decode_irq(v->cur_addr);
+    }
+    uint16_t word = (uint16_t)(spu_ram[v->cur_addr] |
+                              (uint16_t)spu_ram[v->cur_addr + 1u] << 8);
+    unsigned shift = d->shift;
+    if (shift > 12u) { shift = 8u; word &= 0x8888u; }
+    static const int16_t weights[5][2] = {{0,0},{60,0},{115,-52},{98,-55},{122,-60}};
+    int w1 = d->filter < 5u ? weights[d->filter][0] : 0;
+    int w2 = d->filter < 5u ? weights[d->filter][1] : 0;
+    for (unsigned n = 0; n < 4; ++n) {
+        int32_t value = (int16_t)((word & 15u) << 12);
+        value = (value >> shift) + (((int32_t)v->hist1 * w1) >> 6) +
+                                  (((int32_t)v->hist2 * w2) >> 6);
+        int16_t sample = clamp16(value);
+        d->samples[(d->write_pos + n) & 31u] = sample;
+        v->hist2 = v->hist1; v->hist1 = sample;
+        word >>= 4;
+    }
+    d->write_pos = (d->write_pos + 4u) & 31u;
+    d->available += 4;
+    v->cur_addr = (v->cur_addr + 2u) & (SPU_RAM_SIZE - 1u);
+}
+
+static int16_t source_voice_sample(int idx) {
+    SpuVoice *v = &voices[idx];
+    SourceSpuDecode *d = &source_decode[idx];
+    uint32_t noise_mask = (uint32_t)spu_regs[reg_index(0x1F801D94u)] |
+                         (uint32_t)spu_regs[reg_index(0x1F801D96u)] << 16;
+    source_decode_word(idx, noise_mask);
+    unsigned gi = (v->phase >> 4) & 255u;
+    int32_t raw = noise_mask & (1u << idx) ? (int16_t)noise_lfsr :
+        ((int32_t)d->samples[d->read_pos] * spu_gauss_table[255u - gi] +
+         (int32_t)d->samples[(d->read_pos + 1u) & 31u] * spu_gauss_table[511u - gi] +
+         (int32_t)d->samples[(d->read_pos + 2u) & 31u] * spu_gauss_table[256u + gi] +
+         (int32_t)d->samples[(d->read_pos + 3u) & 31u] * spu_gauss_table[gi]) >> 15;
+    int32_t shaped = (raw * (int16_t)v->env_level) >> 15;
+    /* Every voice is visited in ascending order within one sample, including
+     * silent/disabled voices. This value is only used by the following voice. */
+    static int32_t previous_voice;
+    if (!source_play_delay[idx]) {
+        adsr_run(idx, v);
+        uint32_t pitch = voice_reg(idx, 2);
+        uint32_t pmon = (uint32_t)spu_regs[reg_index(0x1F801D90u)] |
+                        (uint32_t)spu_regs[reg_index(0x1F801D92u)] << 16;
+        if (idx && (pmon & (1u << idx)))
+            pitch += ((int16_t)pitch * previous_voice) >> 15;
+        if (pitch > 0x3FFFu) pitch = 0x3FFFu;
+        uint32_t phase = v->phase + pitch;
+        unsigned consumed = phase >> 12;
+        v->phase = phase & 4095u;
+        d->available -= consumed;
+        d->read_pos = (d->read_pos + consumed) & 31u;
+    } else source_play_delay[idx]--;
+    previous_voice = shaped;
+    v->sample_idx = d->read_pos; /* diagnostic position in the source ring */
+    return (int16_t)shaped;
+}
+
+static int16_t voice_next_sample(int idx) {
+    if (source_key_timing) return source_voice_sample(idx);
+    SpuVoice *v = &voices[idx];
+    if (!v->active) {
+        /* The retained source has no inactive-envelope shortcut. Cold
+         * voices start in Attack; a cancelled key-on still leaves their
+         * envelope clock running. Keep this readback behavior independent
+         * of our silent-voice decoder optimization. */
+        if (source_key_timing) {
+            if (source_play_delay[idx]) source_play_delay[idx]--;
+            else adsr_run(idx, v);
+        }
+        return 0;
+    }
 
     if (v->sample_idx >= SPU_BLOCK_SAMPLES) {
         if (v->flags & 0x01u) {
@@ -839,6 +958,13 @@ static int16_t voice_next_sample(int idx) {
             }
         }
         decode_block(v);
+    }
+
+    /* Original source key-on is sample-applied, followed by four samples
+     * without envelope or pitch advancement. Keep ordinary decoder work. */
+    if (source_key_timing && source_play_delay[idx]) {
+        source_play_delay[idx]--;
+        return 0;
     }
 
     /* Noise mode (NON bit set): the voice outputs the live noise LFSR value
@@ -926,6 +1052,13 @@ static void key_on(uint32_t mask) {
         v->env_level = 0;
         v->adsr_divider = 0;
         v->adsr_phase = ADSR_ATTACK;
+        if (source_key_timing) {
+            SourceSpuDecode *d = &source_decode[i];
+            d->read_pos = d->write_pos = d->available = 0;
+            d->ignore_loop = 0;
+            v->repeat_addr = (uint32_t)voice_reg(i, 7) << 3;
+            /* The source retains decoded sample contents across KEYON. */
+        }
         key_on_count++;
         endx_latch &= ~(1u << i);  /* KEYON clears ENDX bit on real hw */
         spu_event_record(SPU_EV_KEYON, i, v->cur_addr);
@@ -939,7 +1072,8 @@ static void key_on(uint32_t mask) {
 static void key_off(uint32_t mask) {
     for (int i = 0; i < SPU_VOICE_COUNT; i++) {
         if (!(mask & (1u << i))) continue;
-        if (!voices[i].active) continue;
+        if (!voices[i].active && !source_key_timing) continue;
+        if (source_key_timing && voices[i].adsr_phase == ADSR_RELEASE) continue;
         spu_event_record(SPU_EV_KEYOFF, i, voices[i].cur_addr);
         voices[i].adsr_phase = ADSR_RELEASE;
         voices[i].adsr_divider = 0;
@@ -947,7 +1081,27 @@ static void key_off(uint32_t mask) {
     }
 }
 
+static void source_apply_keys(int enabled) {
+    key_off(source_key_off_pending);
+    key_on(source_key_on_pending);
+    for (int i = 0; i < SPU_VOICE_COUNT; ++i) {
+        if (source_key_on_pending & (1u << i)) source_play_delay[i] = 4;
+        if (!enabled) {
+            voices[i].adsr_phase = ADSR_RELEASE;
+            voices[i].env_level = 0;
+        }
+    }
+    source_key_on_pending = source_key_off_pending = 0;
+}
+
 void spu_init(void) {
+    const char *model = getenv("PSX_GPU_DMA_MODEL");
+    source_key_timing = model &&
+        (!strcmp(model, "octoshock-2.2.2-bounded-linked-list") ||
+         !strcmp(model, "octoshock-2.2.2-bounded-quad"));
+    source_key_on_pending = source_key_off_pending = 0;
+    memset(source_play_delay, 0, sizeof(source_play_delay));
+    memset(source_decode, 0, sizeof(source_decode));
     memset(spu_ram, 0, sizeof(spu_ram));
     memset(spu_regs, 0, sizeof(spu_regs));
     memset(voices, 0, sizeof(voices));
@@ -987,6 +1141,11 @@ void spu_render(int16_t* out_stereo, int frames) {
     if (!out_stereo || frames <= 0) return;
 
     uint16_t ctrl = spu_regs[reg_index(0x1F801DAAu)];
+    /* SPUSTAT reports the applied low control bits, not the pending write.
+     * Apply at the existing output-sample boundary. This is the SPU model's
+     * sample granularity; it does not assert a measured hardware subphase.
+     * The register image already participates in snapshot save/restore. */
+    spu_regs[reg_index(0x1F801DAEu)] = ctrl & 0x3Fu;
     int enabled  = (ctrl & 0x8000u) != 0;
     int cd_on    = (ctrl & 0x0001u) != 0;
     int cd_rev   = cd_on && (ctrl & 0x0004u) != 0;  /* CD reverb send needs CD enable */
@@ -1002,6 +1161,9 @@ void spu_render(int16_t* out_stereo, int frames) {
             if (voices[v].active) { any_voice = 1; break; }
         }
     }
+
+    if (source_key_timing)
+        any_voice = 1; /* source envelopes clock even without an active voice */
 
     /* Shadow tap: arm recording for this block if the float SPU shadow is on.
      * Off by default => s_shadow_tap_on stays 0 and the mix loop is unchanged
@@ -1131,7 +1293,7 @@ void spu_render(int16_t* out_stereo, int frames) {
         int16_t main_l = chan_volume(spu_regs[reg_index(0x1F801D80u)], &sweep_main_env[0]);
         int16_t main_r = chan_volume(spu_regs[reg_index(0x1F801D82u)], &sweep_main_env[1]);
 
-        if (enabled) {
+        if (enabled || source_key_timing) {
             int32_t voice_l = 0;
             int32_t voice_r = 0;
             int32_t rev_send_l = 0;
@@ -1177,6 +1339,11 @@ void spu_render(int16_t* out_stereo, int frames) {
                     }
                 }
             }
+            /* The retained source clocks capture/decoder state even with
+             * SPU enable clear. Its separate mute bit gates the voice mix
+             * and reverb sends, after voice capture and before CD mixing. */
+            if (source_key_timing && !(ctrl & 0x4000u))
+                voice_l = voice_r = rev_send_l = rev_send_r = 0;
             mix_l = voice_l;
             mix_r = voice_r;
             if (voice_sum_pos < voice_sum_cap) {
@@ -1267,6 +1434,11 @@ void spu_render(int16_t* out_stereo, int frames) {
             mix_r = ((int32_t)mix_r * main_r) >> 15;
         }
 
+        if (source_key_timing) {
+            /* Disable forces Release/zero after each source sample; its
+             * divider and startup delay still clock before that reset. */
+            source_apply_keys(enabled);
+        }
         out_stereo[f * 2 + 0] = clamp16(mix_l);
         out_stereo[f * 2 + 1] = clamp16(mix_r);
         int32_t frame_peak = abs32(out_stereo[f * 2 + 0]);
@@ -1343,8 +1515,8 @@ uint32_t spu_read(uint32_t addr) {
         uint32_t idx = reg_index(addr);
         if (idx < SPU_REG_COUNT) {
             if (addr == 0x1F801DAEu) {
-                /* SPUSTAT (psx-spx): bits 5-0 mirror SPUCNT bits 5-0 (the
-                 * current SPU mode), bit 6 is the IRQ flag (cleared by
+                /* SPUSTAT (psx-spx): bits 5-0 mirror the applied SPUCNT
+                 * mode at the sample boundary, bit 6 is the IRQ flag (cleared by
                  * writing SPUCNT with bit 6 clear), bit 7 follows SPUCNT.5
                  * (DMA r/w request), bit 10 is the data-transfer busy flag —
                  * 0 here because this runtime completes FIFO/DMA transfers
@@ -1355,7 +1527,7 @@ uint32_t spu_read(uint32_t addr) {
                  * "currently writing the SECOND half of the capture
                  * buffers" (capture offset >= 0x200). */
                 uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
-                uint32_t st = (uint32_t)((cnt & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
+                uint32_t st = (uint32_t)((spu_regs[idx] & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
                 if (irq_flag) st |= 0x40u;
                 if (capture_pos & 0x200u) st |= 0x800u;
                 return st;
@@ -1439,6 +1611,12 @@ void spu_write(uint32_t addr, uint32_t value) {
             audio_trace_event(AUDIO_EV_REG_WRITE, addr, value & 0xFFFFu);
             spu_regs[idx] = (uint16_t)value;
 
+            /* Source voice register 6 writes the live envelope, without
+             * resetting its phase or divider (PS_SPU::Write, case 0x0C). */
+            if (source_key_timing && idx < (uint32_t)SPU_VOICE_COUNT * 8u &&
+                (idx & 7u) == 6u)
+                voices[idx >> 3].env_level = (uint16_t)value;
+
             /* Voice repeat/loop address (voice reg 7) is LIVE state on real
              * hardware: writing it after KEYON retargets where the next
              * END+REPEAT block jumps (Beetle spu.cpp:1150/333). X5's driver
@@ -1452,6 +1630,10 @@ void spu_write(uint32_t addr, uint32_t value) {
                 /* bit0 ignored (16-byte alignment) — same masking as KEYON. */
                 voices[v].repeat_addr =
                     ((uint32_t)((uint16_t)value & ~1u) << 3) & (SPU_RAM_SIZE - 1u);
+                if (source_key_timing) {
+                    voices[v].repeat_addr = ((uint32_t)(uint16_t)value << 3) & (SPU_RAM_SIZE - 1u);
+                    source_decode[v].ignore_loop = 1;
+                }
             }
 
             /* Volume registers feed the sweep envelopes: a direct write
@@ -1484,19 +1666,27 @@ void spu_write(uint32_t addr, uint32_t value) {
 
             if (addr == 0x1F801D88u) {
                 kon_latch = (kon_latch & 0xFFFF0000u) | (uint32_t)(uint16_t)value;
-                key_on((uint32_t)(uint16_t)value);
+                if (source_key_timing)
+                    source_key_on_pending = (source_key_on_pending & 0xFFFF0000u) | (uint16_t)value;
+                else key_on((uint32_t)(uint16_t)value);
             }
             if (addr == 0x1F801D8Au) {
                 kon_latch = (kon_latch & 0x0000FFFFu) | ((uint32_t)(uint16_t)value << 16);
-                key_on((uint32_t)(uint16_t)value << 16);
+                if (source_key_timing)
+                    source_key_on_pending = (source_key_on_pending & 0x0000FFFFu) | ((uint32_t)(value & 0xFFu) << 16);
+                else key_on((uint32_t)(uint16_t)value << 16);
             }
             if (addr == 0x1F801D8Cu) {
                 koff_latch = (koff_latch & 0xFFFF0000u) | (uint32_t)(uint16_t)value;
-                key_off((uint32_t)(uint16_t)value);
+                if (source_key_timing)
+                    source_key_off_pending = (source_key_off_pending & 0xFFFF0000u) | (uint16_t)value;
+                else key_off((uint32_t)(uint16_t)value);
             }
             if (addr == 0x1F801D8Eu) {
                 koff_latch = (koff_latch & 0x0000FFFFu) | ((uint32_t)(uint16_t)value << 16);
-                key_off((uint32_t)(uint16_t)value << 16);
+                if (source_key_timing)
+                    source_key_off_pending = (source_key_off_pending & 0x0000FFFFu) | ((uint32_t)(value & 0xFFu) << 16);
+                else key_off((uint32_t)(uint16_t)value << 16);
             }
 
             if (addr == 0x1F801DA6u) {
@@ -1722,9 +1912,13 @@ static int spu_r_voice(PstR *r, int idx) {
 #define SPU_SNAPSHOT_TAIL_BYTES \
     (20u + 1u + 2u + 4u + 4u + 1u + 4u + 4u + 4u + 4u + 4u + 2u * (2u + 4u))
 
+/* SPK2 extends the source-only footer with each decoder's complete queue. */
+#define SOURCE_SPU_TAIL_BYTES (36u + SPU_VOICE_COUNT * (64u + 6u))
+
 uint32_t spu_snapshot_bytes(void) {
     return (uint32_t)(SPU_REG_COUNT * 2u) +
-           (SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES) + SPU_SNAPSHOT_TAIL_BYTES;
+           (SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES) + SPU_SNAPSHOT_TAIL_BYTES +
+           (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u);
 }
 
 void spu_snapshot_write(uint8_t *p) {
@@ -1754,6 +1948,19 @@ void spu_snapshot_write(uint8_t *p) {
         pst_w_i16(&w, sweep_main_env[ch].level);
         pst_w_u32(&w, sweep_main_env[ch].divider);
     }
+    if (source_key_timing) {
+        pst_w_u32(&w, 0x324B5053u); /* SPK2: source keys and decoder queue */
+        pst_w_u32(&w, source_key_on_pending);
+        pst_w_u32(&w, source_key_off_pending);
+        for (int i = 0; i < SPU_VOICE_COUNT; ++i) pst_w_u8(&w, source_play_delay[i]);
+        for (int i = 0; i < SPU_VOICE_COUNT; ++i) {
+            const SourceSpuDecode *d = &source_decode[i];
+            for (int j = 0; j < 32; ++j) pst_w_i16(&w, d->samples[j]);
+            pst_w_u8(&w, d->read_pos); pst_w_u8(&w, d->write_pos);
+            pst_w_u8(&w, d->available); pst_w_u8(&w, d->shift);
+            pst_w_u8(&w, d->filter); pst_w_u8(&w, d->ignore_loop);
+        }
+    }
 }
 
 int spu_snapshot_read(const uint8_t *p, uint32_t len) {
@@ -1779,6 +1986,25 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
         if (!pst_r_i16(&r, &sweep_main_env[ch].level) ||
             !pst_r_u32(&r, &sweep_main_env[ch].divider))
             return 0;
+    }
+    if (source_key_timing) {
+        uint32_t magic;
+        if (!pst_r_u32(&r, &magic) || magic != 0x324B5053u ||
+            !pst_r_u32(&r, &source_key_on_pending) ||
+            !pst_r_u32(&r, &source_key_off_pending)) return 0;
+        for (int i = 0; i < SPU_VOICE_COUNT; ++i)
+            if (!pst_r_u8(&r, &source_play_delay[i]) || source_play_delay[i] > 4) return 0;
+        for (int i = 0; i < SPU_VOICE_COUNT; ++i) {
+            SourceSpuDecode *d = &source_decode[i];
+            for (int j = 0; j < 32; ++j)
+                if (!pst_r_i16(&r, &d->samples[j])) return 0;
+            if (!pst_r_u8(&r, &d->read_pos) || d->read_pos > 31 ||
+                !pst_r_u8(&r, &d->write_pos) || d->write_pos > 31 ||
+                !pst_r_u8(&r, &d->available) || d->available > 14 ||
+                !pst_r_u8(&r, &d->shift) || d->shift > 15 ||
+                !pst_r_u8(&r, &d->filter) || d->filter > 15 ||
+                !pst_r_u8(&r, &d->ignore_loop) || d->ignore_loop > 1) return 0;
+        }
     }
     return 1;
 }
@@ -1810,7 +2036,8 @@ void spu_snapshot_part_digests(SpuSnapPartDigests *out)
     spu_snapshot_write(buf);
     regs_n = (uint32_t)(SPU_REG_COUNT * 2u);
     voices_n = (uint32_t)(SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES);
-    if (regs_n + voices_n + SPU_SNAPSHOT_TAIL_BYTES != n)
+    uint32_t tail_n = SPU_SNAPSHOT_TAIL_BYTES + (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u);
+    if (regs_n + voices_n + tail_n != n)
         return;
     crc = 0xFFFFFFFFu;
     crc = crc32_update(crc, buf, regs_n);
@@ -1819,6 +2046,6 @@ void spu_snapshot_part_digests(SpuSnapPartDigests *out)
     crc = crc32_update(crc, buf + regs_n, voices_n);
     out->voices = crc ^ 0xFFFFFFFFu;
     crc = 0xFFFFFFFFu;
-    crc = crc32_update(crc, buf + regs_n + voices_n, SPU_SNAPSHOT_TAIL_BYTES);
+    crc = crc32_update(crc, buf + regs_n + voices_n, tail_n);
     out->tail = crc ^ 0xFFFFFFFFu;
 }

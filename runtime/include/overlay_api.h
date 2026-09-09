@@ -93,7 +93,9 @@
  *      host/DLL flavor mix — base-flavour DLLs and hosts are untouched, so
  *      the version stays. The emit-content change (PGXP_*() macros in all
  *      generated C) is covered by the codegen hash + CODEGEN_VER below. */
-#define PSX_OVERLAY_ABI_VERSION 21
+/* v22: instruction-boundary observation forwards to the host, including
+ * cached followers. DLL batches flush before observation; replay is excluded. */
+#define PSX_OVERLAY_ABI_VERSION 22
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -317,6 +319,10 @@ typedef struct {
      * load-bearing. The ABI version bump that arms this ships with the
      * emitter change (Phase 2 of ENHANCEMENTS.md G1 value propagation). */
     const PGXPHooks *pgxp;
+    /* ABI v22. include_replay=1 queries installation for the fused-stub
+     * admission guard; zero queries whether a boundary must be observed now. */
+    int      (*cpu_step_boundary_enabled)(int include_replay);
+    void     (*cpu_step_boundary)(CPUState *cpu, uint32_t address);
 } OverlayCallbacks;
 
 #ifdef __cplusplus

@@ -1432,7 +1432,8 @@ std::string CodeGenerator::translate_instruction(uint32_t addr, uint32_t instr) 
             case 0x0C:                                          // syscall
                 {
                     uint32_t syscall_code = (instr >> 6) & 0xFFFFF;
-                    code = fmt::format("psx_syscall(cpu, {});  /* syscall {} */", syscall_code, syscall_code);
+                    code = fmt::format("cpu->pc = 0x{:08X}u; if (psx_syscall(cpu, {})) return;  /* syscall {} */",
+                                       addr, syscall_code, syscall_code);
                 }
                 break;
             case 0x0D:                                          // break
@@ -1767,14 +1768,19 @@ std::string CodeGenerator::translate_basic_block(
     // emitted at cache-line LEADERS: a block leader / mid-block jump-table target (any
     // address reachable other than by fall-through, i.e. a possibly-cold cache entry) OR
     // a 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line
-    // followers reached by fall-through are guaranteed hits — the leader's fetch
-    // refilled the line to its end — so they need no call (+0). Extra fetch points are
+    // followers reached by fall-through are hits only at cached virtual addresses;
+    // uncached instructions each require a fetch, including delay slots. Extra fetch points are
     // harmless (a hit is +0); only UNDER-counting a cold entry would diverge, which the
     // leader set prevents. The game runs at its KSEG0 load address, so `insn_addr` is
     // already the runtime guest PC (matching the dirty-RAM interp's cpu->pc and Beetle).
     auto emit_pre_icache = [&](uint32_t insn_addr, const std::string& indent) {
-        if (!(insn_addr == block.start_addr || (insn_addr & 0xCu) == 0 ||
-              extra_labels_.count(insn_addr))) return;
+        if (!(insn_addr >= 0xA0000000u || insn_addr == block.start_addr || (insn_addr & 0xCu) == 0 ||
+              extra_labels_.count(insn_addr))) {
+            ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
+            ss << indent << fmt::format("psx_cpu_step_boundary(cpu, 0x{:08X}u);\n", insn_addr);
+            ss << "#endif\n";
+            return;
+        }
         ss << "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
         ss << indent << fmt::format("psx_icache_fetch(cpu, 0x{:08X}u);\n", insn_addr);
         ss << "#endif\n";

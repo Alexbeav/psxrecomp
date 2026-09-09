@@ -488,7 +488,10 @@ static void card_handoff_push(uint8_t kind, uint8_t byte) {
  * (bit31 / 0xFFFFFFFF) after pop. Merged IRQ7 edges leave depth≥1 so one
  * pop lands on 0 and skips B4E38 — guest never re-arms bit7 / directory.
  * Repair = re-edge IRQ7 only (no host B4E* / A6C10 stores).
- * Default ON; PSX_APE_CARD_UNSTICK=0 disables. */
+ * PSX-COMPAT-001: fixed Ape RAM addresses are not a device invariant.
+ * Unrelated data in Tekken triggered IRQ7 and changed I_MASK after an
+ * absent-card probe. Keep this historical repair explicit opt-in only:
+ * PSX_APE_CARD_UNSTICK=1. It is not enabled by ordinary controller/card use. */
 static int s_ape_unstick_env = -1;
 static int s_ape_unstick_pending = 0;
 static uint64_t s_ape_unstick_cool_cyc = 0;
@@ -497,10 +500,7 @@ static int s_ape_torn_pulses = 0;
 static int ape_unstick_enabled(void) {
     if (s_ape_unstick_env < 0) {
         const char *e = getenv("PSX_APE_CARD_UNSTICK");
-        if (e && e[0] == '0')
-            s_ape_unstick_env = 0;
-        else
-            s_ape_unstick_env = 1;
+        s_ape_unstick_env = (e && e[0] == '1') ? 1 : 0;
     }
     return s_ape_unstick_env;
 }
@@ -637,6 +637,11 @@ volatile int g_sio_timing_active = 0;
 #if SIO_MODEL_CYCLE_PACED
 #define SIO_BAUD_CYCLES_DEFAULT 1088
 #define SIO_ACK_CYCLES_DEFAULT  170
+/* Explicit digital-pad source compatibility, not a hardware/default profile.
+ * Original 2.2.2 gamepad.cpp requests delay 64; frontio.cpp exposes 32 clocks. */
+static int sio_source_pad_ack;
+static int sio_ack_pulse_remaining;
+static int sio_pending_ack_timed;
 static int sio_tick_quantum_cycles = 64;
 static int     sio_shift_active     = 0;
 static uint8_t sio_shift_byte       = 0;
@@ -934,6 +939,21 @@ static int sio_ack_visible_reads = 0;
 #define SIO_CTRL_SLOT        (1 << 13)
 
 void sio_init(void) {
+#if SIO_MODEL_CYCLE_PACED
+    const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+    sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
+    if (ack_model && *ack_model && !sio_source_pad_ack) {
+        fprintf(stderr, "Unsupported input route pad ACK model: %s\n", ack_model);
+        abort();
+    }
+    if (sio_source_pad_ack && getenv("PSX_SIO_PAD_SYNC_RX") &&
+        getenv("PSX_SIO_PAD_SYNC_RX")[0] == '1') {
+        fprintf(stderr, "Source pad ACK timing requires cycle-paced RX\n");
+        abort();
+    }
+    sio_ack_pulse_remaining = 0;
+    sio_pending_ack_timed = 0;
+#endif
     sio_tx_data = 0;
     sio_rx_data = 0xFF;
     sio_stat = SIO_STAT_TX_RDY | SIO_STAT_TX_EMPTY;
@@ -1415,7 +1435,7 @@ static void pad_process_byte(uint8_t tx_byte) {
         if (tx_byte == 0x42) {
             /* Read poll. Analog (or in-config) uses the 8-byte format with the
              * four stick axes; a plain digital pad uses the 4-byte format. */
-            const uint16_t btn = pad_buttons[lp];
+            const uint16_t btn = debug_server_update_poll(lp, pad_buttons[lp], pad_analog[lp]);
             pad_response[0] = cur_id;
             pad_response[1] = 0x5A;
             pad_response[2] = (uint8_t)(btn & 0xFF);
@@ -2308,7 +2328,12 @@ void sio_write(uint32_t addr, uint32_t value) {
         sr_record(SR_EVT_CTRL_WRITE, (uint8_t)(value & 0xFF), (uint8_t)((value >> 8) & 0xFF));
         if (value & SIO_CTRL_ACK) {
             sio_stat &= ~SIO_STAT_IRQ;
-            sio_stat &= ~SIO_STAT_ACK;
+            /* Original source clears the IRQ latch, not the DSR pulse. Its
+             * optional level-sensitive reassert-on-clear is disabled. */
+#if SIO_MODEL_CYCLE_PACED
+            if (!sio_ack_pulse_remaining)
+#endif
+                sio_stat &= ~SIO_STAT_ACK;
             sio_ack_visible_reads = 0;
         }
         if (value & SIO_CTRL_RESET) {
@@ -2337,6 +2362,8 @@ void sio_write(uint32_t addr, uint32_t value) {
             sio_irq_countdown = 0;
             sio_ack_visible_reads = 0;
 #if SIO_MODEL_CYCLE_PACED
+            sio_ack_pulse_remaining = 0; sio_pending_ack_timed = 0;
+            if (sio_source_pad_ack) sio_stat &= ~SIO_STAT_ACK;
             sio_shift_active = 0; sio_shift_remaining = 0;
             sio_tx_buffered = 0;
             sio_shift_ack_irq_en = 0; sio_tx_buffer_ack_irq_en = 0;
@@ -2368,7 +2395,7 @@ void sio_write(uint32_t addr, uint32_t value) {
                     sio_bus_owner = SIO_OWNER_NONE;
                     sio_bus_byte_index = 0;
                 }
-                g_sio_timing_active = 0;
+                g_sio_timing_active = sio_ack_pulse_remaining > 0;
                 sio_stat |= SIO_STAT_TX_RDY | SIO_STAT_TX_EMPTY;
             }
         }
@@ -2451,6 +2478,8 @@ void sio_write(uint32_t addr, uint32_t value) {
             pad_current_cmd = 0;
             active_device = DEV_NONE;
 #if SIO_MODEL_CYCLE_PACED
+            sio_ack_pulse_remaining = 0; sio_pending_ack_timed = 0;
+            if (sio_source_pad_ack) sio_stat &= ~SIO_STAT_ACK;
             sio_shift_active = 0; sio_shift_remaining = 0;
             sio_tx_buffered = 0;
             sio_shift_ack_irq_en = 0; sio_tx_buffer_ack_irq_en = 0;
@@ -2636,7 +2665,11 @@ static void sio_fire_ack_irq(void) {
                     active_device == DEV_MEMCARD);
 
     sio_stat |= SIO_STAT_ACK;
-    sio_ack_visible_reads = 2;
+    sio_ack_visible_reads = sio_pending_ack_timed ? 0 : 2;
+    if (sio_pending_ack_timed) {
+        sio_ack_pulse_remaining = 32;
+        g_sio_timing_active = 1;
+    }
     sr_record(SR_EVT_ACK_FIRE, 0, 0);
     int irq_enabled = sio_pending_ack_irq_en
                    || ((sio_ctrl & SIO_CTRL_ACK_IRQ_EN) ? 1 : 0);
@@ -2689,7 +2722,8 @@ static void sio_fire_ack_irq(void) {
     sio_irq_idx = (sio_irq_idx + 1) % SIO_IRQ_RING_CAP;
     sio_irq_seq++;
     s_pace_ack_fires++;
-    if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack) {
+    if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack &&
+        !sio_ack_pulse_remaining) {
         g_sio_timing_active = 0;
     }
 }
@@ -2709,13 +2743,17 @@ static void sio_handle_shift_complete(void) {
     sio_irq_pending_source   = (active_device == DEV_MEMCARD)
                                ? SIO_IRQ_SRC_CARD_ACK : SIO_IRQ_SRC_PAD_ACK;
     sio_irq_pending_slot     = (uint8_t)selected_slot;
-    sio_irq_pending_delay    = (uint8_t)SIO_ACK_CYCLES_DEFAULT;
+    int timed_pad = sio_source_pad_ack && active_device == DEV_PAD &&
+                    !pad_analog[pad_active_logical] && !sio_multitap_active();
+    int ack_delay = timed_pad ? 64 : SIO_ACK_CYCLES_DEFAULT;
+    sio_irq_pending_delay    = (uint8_t)ack_delay;
     sio_irq_pending_mc_state = (uint8_t)mc_state;
     sio_irq_pending_byte_seq = sio_trace_seq;
 
     if (acked) {
         sio_pending_ack   = 1;
-        sio_ack_remaining = SIO_ACK_CYCLES_DEFAULT;
+        sio_ack_remaining = ack_delay;
+        sio_pending_ack_timed = timed_pad;
         sio_pending_ack_irq_en = sio_shift_ack_irq_en;
     }
 
@@ -2734,7 +2772,8 @@ static void sio_handle_shift_complete(void) {
     } else {
         sio_stat |= SIO_STAT_TX_RDY | SIO_STAT_TX_EMPTY;
     }
-    if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack) {
+    if (!sio_shift_active && !sio_tx_buffered && !sio_pending_ack &&
+        !sio_ack_pulse_remaining) {
         g_sio_timing_active = 0;
     }
 }
@@ -2765,7 +2804,10 @@ uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 static void sio_pace_walk(int cycles) {
     int remaining = cycles;
     int transitions = 0;
-    const int MAX_TRANSITIONS = 1;
+    /* Preserve the legacy card walker. The source-pad experiment consumes
+     * the whole supplied interval across shift, ACK-on and ACK-off edges. */
+    const int MAX_TRANSITIONS = sio_source_pad_ack &&
+        (sio_bus_owner == SIO_OWNER_PAD || sio_ack_pulse_remaining) ? 32 : 1;
     while (transitions < MAX_TRANSITIONS &&
            (remaining > 0 ||
             (sio_shift_active && sio_shift_remaining <= 0) ||
@@ -2783,6 +2825,12 @@ static void sio_pace_walk(int cycles) {
             dt = sio_ack_remaining;
             next_event = 1;
         }
+        if (sio_ack_pulse_remaining > 0 &&
+            (sio_ack_pulse_remaining < dt ||
+             (sio_ack_pulse_remaining == dt && next_event < 0))) {
+            dt = sio_ack_pulse_remaining;
+            next_event = 2;
+        }
         if (sio_shift_active && sio_shift_remaining <= 0) {
             dt = 0; next_event = 0;
         } else if (sio_pending_ack && sio_ack_remaining <= 0) {
@@ -2790,6 +2838,10 @@ static void sio_pace_walk(int cycles) {
         }
         if (sio_shift_active) sio_shift_remaining -= dt;
         if (sio_pending_ack)  sio_ack_remaining   -= dt;
+        if (sio_ack_pulse_remaining > 0) {
+            sio_ack_pulse_remaining -= dt;
+            if (!sio_ack_pulse_remaining) sio_stat &= ~SIO_STAT_ACK;
+        }
         remaining -= dt;
         if (next_event == 0) {
             sio_handle_shift_complete();
@@ -2798,10 +2850,15 @@ static void sio_pace_walk(int cycles) {
             sio_pending_ack = 0;
             sio_fire_ack_irq();
             transitions++;
+        } else if (next_event == 2) {
+            sio_stat &= ~SIO_STAT_ACK;
+            transitions++;
         } else {
             break;
         }
     }
+    if (sio_source_pad_ack && !sio_shift_active && !sio_tx_buffered &&
+        !sio_pending_ack && !sio_ack_pulse_remaining) g_sio_timing_active = 0;
 }
 
 void sio_advance(uint32_t cycles) {
@@ -3137,6 +3194,9 @@ static int sio_snap_parse(PstR *r) {
 }
 
 uint32_t sio_snapshot_bytes(void) {
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack) return 0; /* explicit cold-boot experiment only */
+#endif
     PstW w;
     pst_w_init(&w, NULL, 0);
     (void)sio_snap_emit(&w);
@@ -3146,6 +3206,7 @@ uint32_t sio_snapshot_bytes(void) {
 void sio_snapshot_write(uint8_t *p) {
     PstW w;
     uint32_t n = sio_snapshot_bytes();
+    if (!n) return;
     pst_w_init(&w, p, n);
     (void)sio_snap_emit(&w);
 }
@@ -3153,6 +3214,7 @@ void sio_snapshot_write(uint8_t *p) {
 int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     const uint32_t current = sio_snapshot_bytes();
+    if (!current) return 0;
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
                                   sizeof(pad_rumble_small) +
                                   sizeof(pad_rumble_large));

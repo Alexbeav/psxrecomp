@@ -18,6 +18,7 @@
 #include "bios_hle_plan.h"
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
+#include "source_gpu_runtime.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
@@ -7041,6 +7042,9 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                 sample_headless_pad_into_sio(override);
             else
                 sample_pad_into_sio(override);
+#ifndef PSX_NO_DEBUG_TOOLS
+            debug_server_note_input_applied();
+#endif
         }
         /* Offline vblank boundary: record/replay/compare (PSX_RB_SELFCHECK).
          * Defer opening a window while multitap arming is still pending —
@@ -13513,6 +13517,15 @@ session_reboot:
     interrupts_init();
     sio_init();
     psx_event_step_conservative_env_init();
+    const char *gpu_work_model=std::getenv("PSX_GPU_DMA_MODEL");
+    if(gpu_work_model && !std::strcmp(gpu_work_model,"octoshock-2.2.2-bounded-quad")) {
+        const char *field=std::getenv("PSX_INPUT_ROUTE_FIELD_MODEL");
+        if(!std::getenv("PSX_INPUT_ROUTE_FILE") || !field || std::strcmp(field,"octoshock-2.2.2-ntsc-raster")) {
+            std::fprintf(stderr,"[source-gpu-service] bounded quad mode requires a route and source NTSC raster clock\n");
+            return 2;
+        }
+        source_gpu_runtime_init();
+    }
     /* Seed per-player device routing from the resolved [controller] config.
      * SDL controller handles are opened later (after SDL_Init); here we only
      * set the PSX-visible connection + pad type so the BIOS sees the right
@@ -13642,8 +13655,22 @@ session_reboot:
         std::atexit(game_options_save_now);
 #ifndef PSX_NO_DEBUG_TOOLS
         debug_server_init(debug_port);
+        /* Private deterministic route gate: no TCP-upload timing in guest
+         * history. An explicit malformed route aborts before guest execution. */
+        if (const char *route = std::getenv("PSX_INPUT_ROUTE_FILE")) {
+            if (!route[0] || net_cfg.enabled ||
+                !debug_server_preload_input_route(route)) {
+                std::fprintf(stderr, "psxrecomp: prestart input route rejected\n");
+                debug_server_shutdown();
+                return 2;
+            }
+        }
 #else
         (void)debug_port;
+        if (std::getenv("PSX_INPUT_ROUTE_FILE")) {
+            std::fprintf(stderr, "psxrecomp: input routes require debug tools\n");
+            return 2;
+        }
 #endif
 #ifdef PSX_COSIM
         cosim_init();  /* first-divergence oracle server */

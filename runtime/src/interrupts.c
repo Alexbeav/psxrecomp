@@ -36,8 +36,14 @@
 #include "event_ring.h"
 #include "lockstep.h"
 #include "psx_cycles.h"
+#include "psx_icache.h"
+#include "psx_memory.h"
+#include "psx_cyc.h"
 #include "psx_scheduler.h"
 #include "spu.h"
+#include "input_route_field_clock.h"
+#include "input_route_raster_clock.h"
+#include "source_gpu_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,8 +191,30 @@ void psx_irq_raise(uint32_t bit, uint32_t detail)
  * (T32, MGS PAL: measured 564,480 cycles/VBlank with GPUSTAT.20 = PAL). */
 #define VBLANK_CYCLES_NTSC 564480u
 #define VBLANK_CYCLES_PAL  677376u
+static int input_route_source_fields;
+static InputRouteFieldClock input_route_field_clock;
+static int input_route_source_raster;
+static int input_route_source_gpu_status;
+static InputRouteRasterClock input_route_raster;
+static uint64_t input_route_raster_deadline;
+static uint32_t input_route_raster_pending;
+static void input_route_raster_recompute(void) {
+    uint32_t distance=input_route_raster_until_rise(&input_route_raster);
+    input_route_raster_deadline=distance==UINT32_MAX ? UINT64_MAX : input_route_raster.cycle+distance;
+}
 extern int gpu_video_standard_is_pal(void);
 static inline uint32_t vblank_period_cycles(void) {
+    if (input_route_source_raster) {
+        if (input_route_raster_deadline==UINT64_MAX) return UINT32_MAX;
+        return (uint32_t)(input_route_raster_deadline-input_route_raster.last_rise);
+    }
+    if (input_route_source_fields) {
+        if (gpu_video_standard_is_pal()) {
+            fprintf(stderr, "[input-field-clock] NTSC comparison profile cannot run PAL display mode\n");
+            exit(4);
+        }
+        return input_route_field_clock.current_cycles;
+    }
     return gpu_video_standard_is_pal() ? VBLANK_CYCLES_PAL : VBLANK_CYCLES_NTSC;
 }
 #define VBLANK_CYCLES   vblank_period_cycles()
@@ -194,6 +222,37 @@ static inline uint32_t vblank_period_cycles(void) {
 static uint32_t dispatch_count;
 static uint64_t total_checks;
 static uint32_t cycles_since_vblank;  /* incremented by interrupts_advance_cycles */
+void interrupts_observer_field_state(uint32_t *out) {
+    out[0]=cycles_since_vblank; out[1]=VBLANK_CYCLES;
+    out[2]=input_route_source_fields ? input_route_field_clock.field : UINT32_MAX;
+    if (input_route_source_raster) out[2]=input_route_raster.field;
+}
+void interrupts_raster_gp1(uint32_t word) {
+    if (!input_route_source_raster) return;
+    if (input_route_raster.cycle!=psx_cycle_count || !input_route_raster_gp1(&input_route_raster,word)) {
+        fprintf(stderr,"[input-raster-clock] unsynchronized GP1 or unsupported PAL mode\n");
+        exit(4);
+    }
+    uint32_t command=(word>>24)&63u;
+    if (command==0 || command==7 || command==8) {
+        extern uint64_t g_psx_cycle_fast_limit;
+        input_route_raster_recompute();
+        g_psx_cycle_fast_limit=0;
+        /* Existing MMIO sync ran before this write. Publish the new deadline
+         * after changing the raster controls so a prior later deadline cannot
+         * let the CPU cross an earlier newly programmed vertical boundary. */
+        psx_devices_mmio_sync();
+    }
+}
+int interrupts_raster_gpu_status(uint32_t *bits) {
+    if (!input_route_source_gpu_status) return 0;
+    if (input_route_raster.cycle!=psx_cycle_count) {
+        fprintf(stderr,"[input-raster-status] unsynchronized GPUSTAT read\n");
+        exit(4);
+    }
+    *bits=input_route_raster_status(&input_route_raster);
+    return 1;
+}
 extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
 
@@ -203,6 +262,7 @@ static int in_exception;
  * below this. 0 = no cooldown active. Counted in guest cycles (not calls) so both
  * backends make the identical delivery decision — see the cooldown constants. */
 static uint64_t post_exception_cooldown_until;
+static struct {uint32_t pc,target,cause;} source_irq_slot;
 
 static uint32_t last_sio_seq_seen;
 static uint64_t last_sio_progress_cycle;
@@ -413,11 +473,11 @@ uint64_t g_spu_sample_ctrl_rejects;
 
 void psx_set_midframe_audio_pump(void (*fn)(void)) { s_midframe_audio_pump = fn; }
 
-/* While SPU IRQ9 is enabled, expose each 44.1-kHz sample as a device deadline
- * so guest code can acknowledge and re-arm an IRQ-address hit before the next
- * sample. Rendering a whole VBlank's accumulated samples as one chunk collapses
- * multiple hardware IRQ edges into one latch, slowing IRQ-driven audio engines
- * and blocking cutscene synchronization. Keep an explicit opt-out for bisecting
+/* Expose each 44.1-kHz sample as a device deadline. Status-control application
+ * progresses even with IRQ9 disabled; gating this on IRQ enable leaves a
+ * polling guest's applied control stale until a later VBlank pump. IRQ-enabled
+ * code also needs to acknowledge and re-arm between sample address hits.
+ * Keep an explicit opt-out for bisecting
  * old captures; faithful per-sample scheduling is the production default. */
 static int spu_sample_event_mode(void) {
     static int enabled = -1;
@@ -429,7 +489,6 @@ static int spu_sample_event_mode(void) {
 }
 
 uint32_t psx_spu_sample_event_cycles_to_next(void) {
-    SpuGlobalState state;
     g_spu_sample_deadline_queries++;
     if (!spu_sample_event_mode()) {
         g_spu_sample_mode_rejects++;
@@ -437,11 +496,6 @@ uint32_t psx_spu_sample_event_cycles_to_next(void) {
     }
     if (!s_midframe_audio_pump) {
         g_spu_sample_pump_null_rejects++;
-        return UINT32_MAX;
-    }
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) == 0) {
-        g_spu_sample_ctrl_rejects++;
         return UINT32_MAX;
     }
     g_spu_sample_enabled_queries++;
@@ -471,8 +525,7 @@ void psx_spu_sample_event_service(void) {
         if ((psx_get_cycle_count() % 768u) != 0)
             g_spu_sample_deferred_mismatches++;
     }
-    if ((state.ctrl & 0x0040u) != 0 &&
-        (psx_get_cycle_count() % 768u) == 0) {
+    if ((psx_get_cycle_count() % 768u) == 0) {
         g_spu_sample_service_pumps++;
         s_midframe_audio_pump();
     }
@@ -482,7 +535,13 @@ static void fire_vblank_edge(void) {
     /* Subtract one VBlank period rather than reset to 0 so cycle overshoot
      * carries forward. Prevents long-running blocks from rounding multiple
      * VBlanks together. */
-    cycles_since_vblank -= VBLANK_CYCLES;
+    if (input_route_source_raster) {
+        input_route_raster_pending--;
+        cycles_since_vblank=(uint32_t)(input_route_raster.cycle-input_route_raster.last_rise);
+    } else cycles_since_vblank -= VBLANK_CYCLES;
+    if (input_route_source_fields)
+        input_route_field_clock_next(&input_route_field_clock,
+                                     gpu_display_is_interlaced());
     dispatch_count = 0;
     /* DEQUEUE: this VBlank fired. ENQUEUE: next VBlank scheduled one period out. */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_VBLANK,
@@ -503,7 +562,13 @@ static void fire_vblank_edge(void) {
 
 void interrupts_service_scheduled_events(void) {
     note_sio_progress_cycle();
-    if (in_exception) return;
+    /* A source raster edge latches I_STAT even while an interrupt handler
+     * runs with IEc clear. CPU delivery remains gated separately below. */
+    if (in_exception && !source_gpu_runtime_active()) return;
+    if (input_route_source_raster) {
+        if (input_route_raster_pending && !should_defer_vblank_for_sio()) fire_vblank_edge();
+        return;
+    }
     while (cycles_since_vblank >= VBLANK_CYCLES) {
         if (should_defer_vblank_for_sio()) return;
         fire_vblank_edge();
@@ -511,6 +576,11 @@ void interrupts_service_scheduled_events(void) {
 }
 
 uint32_t interrupts_cycles_to_vblank(void) {
+    if (input_route_source_raster) {
+        if (input_route_raster_pending) return 0;
+        if (input_route_raster_deadline==UINT64_MAX) return UINT32_MAX;
+        return input_route_raster_deadline<=input_route_raster.cycle ? 0 : (uint32_t)(input_route_raster_deadline-input_route_raster.cycle);
+    }
     if (cycles_since_vblank >= VBLANK_CYCLES) return 0;
     return VBLANK_CYCLES - cycles_since_vblank;
 }
@@ -520,11 +590,30 @@ uint32_t interrupts_get_cycles_since_vblank(void) {
 }
 
 void interrupts_set_cycles_since_vblank(uint32_t v) {
+    if (input_route_source_fields || input_route_source_raster) {
+        fprintf(stderr, "[input-field-clock] comparison profile requires a cold boot; state restore is unsupported\n");
+        exit(4);
+    }
     cycles_since_vblank = v;
 }
 
 void interrupts_advance_cycles(uint32_t cycles) {
     cycles_since_vblank += cycles;
+    if (input_route_source_raster) {
+        uint32_t old=input_route_raster.rises;
+        if(timers_source_raster_enabled()) {
+            input_route_raster_advance_observed(&input_route_raster,cycles,timers_source_raster_event,NULL);
+            timers_source_raster_finish(input_route_raster.cycle);
+        } else input_route_raster_advance(&input_route_raster,cycles);
+        if (input_route_raster.rises!=old) {
+            input_route_raster_pending+=input_route_raster.rises-old;
+            if (input_route_raster_pending>1) {
+                fprintf(stderr,"[input-raster-clock] more than one undelivered VBlank; comparison unsupported\n");
+                exit(4);
+            }
+            input_route_raster_recompute();
+        }
+    }
     interrupts_service_scheduled_events();
 }
 
@@ -817,6 +906,39 @@ void psx_get_freeze_diag(uint64_t *out_total_checks,
 }
 
 void interrupts_init(void) {
+    const char *field_model = getenv("PSX_INPUT_ROUTE_FIELD_MODEL");
+    input_route_source_fields = 0;
+    input_route_source_raster = 0;
+    input_route_raster_pending = 0;
+    input_route_source_gpu_status = 0;
+    if (field_model && *field_model) {
+        int raster=strcmp(field_model,"octoshock-2.2.2-ntsc-raster")==0;
+        if ((!raster && strcmp(field_model, "octoshock-2.2.2-ntsc-fields") != 0) ||
+            !getenv("PSX_INPUT_ROUTE_FILE")) {
+            fprintf(stderr, "[input-field-clock] invalid model or missing input route\n");
+            exit(4);
+        }
+        if (raster) {
+            input_route_source_raster=1;
+            input_route_raster_reset(&input_route_raster);
+            input_route_raster_recompute();
+            fprintf(stderr,"[input-raster-clock] experimental NTSC raster VBlank deadlines; first=%llu; native IRQ deferral/GPUSTAT/timers retained\n",(unsigned long long)input_route_raster_deadline);
+        } else {
+        input_route_source_fields = 1;
+        input_route_field_clock_reset(&input_route_field_clock);
+        fprintf(stderr, "[input-field-clock] experimental cold-boot NTSC field durations; first=%u, ratio=103896/65536\n",
+                input_route_field_clock.current_cycles);
+        }
+    }
+    const char *status_model=getenv("PSX_GPU_STATUS_MODEL");
+    if (status_model && *status_model) {
+        if (strcmp(status_model,"octoshock-2.2.2-raster") || !input_route_source_raster) {
+            fprintf(stderr,"[input-raster-status] invalid model or missing NTSC raster clock\n");
+            exit(4);
+        }
+        input_route_source_gpu_status=1;
+        fprintf(stderr,"[input-raster-status] experimental source GPUSTAT31/13; native readiness and rendering retained\n");
+    }
     dispatch_count = 0;
     in_exception = 0;
     exception_nest_depth = 0;
@@ -1009,8 +1131,7 @@ uint32_t cycles_to_next_event(void) {
      * card-SIO case only pushes VBlank LATER, so this estimate stays a safe
      * under-estimate. */
     if (i_mask & (1u << IRQ_VBLANK)) {
-        uint32_t d = (cycles_since_vblank >= VBLANK_CYCLES)
-                       ? 0u : (VBLANK_CYCLES - cycles_since_vblank);
+        uint32_t d = interrupts_cycles_to_vblank();
         if (d < best) best = d;
     }
     uint32_t t = timers_cycles_to_irq(i_mask); if (t < best) best = t;
@@ -1051,6 +1172,11 @@ void psx_interrupt_check_path_diag(uint64_t *entry, uint64_t *fast_sr,
     if (irq_deliv) *irq_deliv = g_irq_deliver_count;
 }
 
+int psx_interrupt_cooldown_active(void) {
+    return post_exception_cooldown_until != 0 &&
+           psx_get_cycle_count() < post_exception_cooldown_until;
+}
+
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
     if ((i_stat & i_mask) == 0) { s_skip_none++; return 0; }
@@ -1058,8 +1184,7 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
     uint32_t sr = cpu->cop0[COP0_SR];
     if (!(sr & 0x01u) || !(sr & (1u << 10))) { s_skip_sr++; return 0; }
 
-    if (post_exception_cooldown_until != 0 &&
-        psx_get_cycle_count() < post_exception_cooldown_until) {
+    if (psx_interrupt_cooldown_active()) {
         s_skip_cooldown++;
         return 0;
     }
@@ -1073,6 +1198,12 @@ int psx_interrupt_delivery_needed(const CPUState* cpu) {
     }
     s_need_irq++;
     return 1;
+}
+
+int psx_irq_opcode_eligible(uint32_t pc) {
+    uint32_t instruction;
+    return !source_gpu_runtime_active() ||
+        !memory_peek_instruction_word(pc,&instruction) || (instruction>>26)!=0x12u;
 }
 
 void psx_check_interrupts(CPUState* cpu) {
@@ -1463,7 +1594,7 @@ irq_deliver_eval:
      * RFE before the next delivery. Gated on the guest-cycle deadline (not a
      * per-call countdown) so compiled and interp agree on the delivery cycle. */
     if (post_exception_cooldown_until != 0) {
-        if (psx_get_cycle_count() < post_exception_cooldown_until) {
+        if (psx_interrupt_cooldown_active()) {
             irq_record_outcome(EV_IRQ_GATE, GATE_COOLDOWN, 0);
 #ifdef PSX_COSIM
             COSIM_IRQ_NOTE(3u);
@@ -1496,6 +1627,7 @@ irq_deliver_eval:
         PSX_CHECK_INTERRUPTS_RETURN();
     } /* No deliverable interrupt source (hw masked and no sw pending) */
 
+    uint32_t source_irq_cause_ce = 0;
     /* Architectural take-PC = the resume PC (same selection the async-RFE block
      * below uses): the dirty-interp commits the exact interrupted instruction in
      * g_dirty_safe_resume_pc; compiled code passes its block-entry PC via
@@ -1505,6 +1637,42 @@ irq_deliver_eval:
         extern uint32_t g_dirty_safe_resume_pc;
         uint32_t take_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc
                                                   : s_compiled_interrupt_resume_pc;
+        /* The existing cache/cycle model fetches the interrupted opcode before
+         * selecting the interrupt operation. Preserve that fetch's tags and
+         * load-absorb effects, but never execute its register/store effects.
+         * Authored original-core IRQ/JR/RFE cases own this source-model order;
+         * it is not a claim of physical pipeline timing. Unknown legacy entry
+         * sentinels have no guest fetch identity and retain their old behavior.
+         * Keep this before SR/EPC mutation and before the delivery timestamp. */
+        uint32_t fetch_pc = source_irq_slot.pc?source_irq_slot.pc:take_pc;
+        if (fetch_pc == 0u) {
+            extern int psx_scheduler_top_level_resume_active(void);
+            if (psx_scheduler_top_level_resume_active()) fetch_pc = cpu->pc;
+        }
+        /* Source IPCache selects COP2 itself even with an IRQ pending. Do not
+         * fetch/charge a synthetic interrupt operation at that opcode; the
+         * normal executor owns its effects and the next recognition point. */
+        if(fetch_pc && !psx_irq_opcode_eligible(fetch_pc))
+            PSX_CHECK_INTERRUPTS_RETURN();
+        uint32_t fetch_phys = fetch_pc & 0x1FFFFFFFu;
+        if (fetch_pc != 0u && (fetch_pc & 3u) == 0u &&
+            (fetch_phys < 0x00200000u ||
+             (fetch_phys >= 0x1FC00000u && fetch_phys < 0x1FC80000u &&
+              psx_is_dispatchable(fetch_pc)))) {
+            extern int source_gpu_runtime_active(void);
+            if (source_gpu_runtime_active() && !source_irq_slot.pc) {
+                uint32_t instruction;
+                if (memory_peek_instruction_word(fetch_pc, &instruction))
+                    source_irq_cause_ce = (instruction << 2) & 0x30000000u;
+            }
+            psx_icache_fetch(cpu, fetch_pc);
+#ifdef PSX_ENABLE_BLOCK_CYCLES
+            /* Interrupt dispatch has no dependencies on the preempted opcode.
+             * Its ordinary step still consumes base/load-absorb timing. */
+            psx_cyc_step(cpu, 0u);
+            psx_cyc_batch_flush();
+#endif
+        }
         irq_record_outcome(EV_IRQ_DELIVER, 0, take_pc);
     }
     g_irq_deliver_count++;
@@ -1553,6 +1721,17 @@ irq_deliver_eval:
      * software-interrupt delivery gets IP2 reflecting the true line state
      * instead of whatever bit 10 happened to be left as. */
     cpu->cop0[COP0_CAUSE] = (cpu->cop0[COP0_CAUSE] & ~0x7C) | (0 << 2);
+    if(source_irq_slot.pc) {
+        cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_slot.cause;
+        cpu->cop0[6]=source_irq_slot.target; /* source TAR / branch destination */
+        source_irq_slot.pc=0; /* nested handler entries have their own context */
+    } else {
+        extern int source_gpu_runtime_active(void);
+        /* Original Exception derives CE from the fetched opcode for IRQ too.
+         * This is source-model compatibility, not a physical-CPU CE claim. */
+        if(source_gpu_runtime_active())
+            cpu->cop0[COP0_CAUSE]=(cpu->cop0[COP0_CAUSE]&0x0000ff00u)|source_irq_cause_ce;
+    }
     psx_irq_refresh_cause_ip2();
 
     /* Push SR exception stack: shift bits [5:0] left by 2. */
@@ -1698,25 +1877,11 @@ irq_deliver_eval:
      *     (e.g. VSync callback loop at 0xBFC421D8), still in exception
      *     context.  The redirected code eventually calls ReturnFromException.
      *   - Code 1: ReturnFromException — exit the loop entirely. */
-    uint32_t target_pc;
-    if (sr & 0x00400000u) {
-        target_pc = 0xBFC00180u;
-    } else {
-        uint32_t w0 = cpu->read_word(0x80000080u);
-        uint32_t w1 = cpu->read_word(0x80000084u);
-        uint32_t hi_val = (w0 & 0xFFFF) << 16;
-        int16_t lo_val = (int16_t)(w1 & 0xFFFF);
-        target_pc = hi_val + (uint32_t)(int32_t)lo_val;
-        /* The RAM exception vector is a LUI/ADDIU pair that materializes the
-         * installed handler address in $k0 before transferring to it.  The
-         * host-side fast path decodes that pair and dispatches straight to the
-         * target, so it must also commit the pair's architectural register
-         * result.  Vigilante 8's handler uses $k0 as its table base on its very
-         * first instruction; leaving the interrupted value in $k0 made it load
-         * a BIOS instruction word (0xAD400000) as a jump target. */
-        uint32_t vector_reg = (w1 >> 16) & 31u;
-        if (vector_reg != 0u) cpu->gpr[vector_reg] = target_pc;
-    }
+    uint32_t target_pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    /* Execute the installed vector through the ordinary guest dispatcher.
+     * Decoding LUI/ADDIU here skipped its instruction fetches and effects,
+     * charged data reads instead, and assumed every vector used that encoding.
+     * The real vector sets $k0 when required by its installed handler. */
 
     /* Record which fiber owns this setjmp. Any subsequent longjmp must
      * happen on this same fiber; if a non-owner fiber needs to longjmp
@@ -2017,7 +2182,13 @@ irq_deliver_eval:
      * executes at least one instruction between exceptions; in our model
      * each "block" is many instructions, but the handler also consumes
      * hundreds of sub-dispatches per invocation. */
-    if ((i_stat & i_mask) != 0 && i_stat == pre_handler_istat) {
+    extern int source_gpu_runtime_active(void);
+    if (source_gpu_runtime_active()) {
+        /* The original instruction loop recognizes an eligible IRQ again after
+         * guest RFE, including a newly armed or still-pending line. Legacy
+         * dispatcher breathing room must not add guest clocks to this profile. */
+        post_exception_cooldown_until = 0;
+    } else if ((i_stat & i_mask) != 0 && i_stat == pre_handler_istat) {
         /* unclaimed: give main code guest-time to install handlers */
         post_exception_cooldown_until = psx_get_cycle_count() + POST_EXC_UNCLAIMED_COOLDOWN_CYCLES;
     } else {
@@ -2186,6 +2357,21 @@ void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {
     }
     psx_check_interrupts(cpu); /* flushes load-charge batch on entry */
     s_compiled_interrupt_resume_pc = prev;
+}
+
+int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,
+                                  uint32_t target,int taken,uint32_t instruction) {
+    if(source_gpu_runtime_active() && (instruction>>26)==0x12u)return 0;
+    extern uint32_t g_dirty_safe_resume_pc;
+    uint32_t previous=g_dirty_safe_resume_pc;
+    uint64_t before=g_irq_deliver_count;
+    source_irq_slot.pc=slot_pc;source_irq_slot.target=target;
+    source_irq_slot.cause=0x80000000u|(taken?0x40000000u:0u)|((instruction<<2)&0x30000000u);
+    g_dirty_safe_resume_pc=slot_pc-4u;cpu->pc=slot_pc-4u;
+    psx_check_interrupts_at(cpu,slot_pc-4u);
+    g_dirty_safe_resume_pc=previous;source_irq_slot.pc=0;
+    if(g_irq_deliver_count!=before && !cpu->pc)cpu->pc=slot_pc-4u;
+    return g_irq_deliver_count!=before;
 }
 
 int psx_interrupts_checked_at_current_cycle(uint32_t resume_pc) {

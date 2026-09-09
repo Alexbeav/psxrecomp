@@ -10,6 +10,12 @@ extern "C" {
 #define TIMER_BASE 0x1F801100
 
 void timers_init(void);
+int timers_source_raster_enabled(void);
+/* HBlank-driven counter reads see GPU events before the final bus wait.
+ * CPU-clock counter modes still sample after that wait. Physical address. */
+int timers_source_hblank_counter_read(uint32_t addr);
+void timers_source_raster_event(void *context, uint64_t cycle, unsigned event, int blank);
+void timers_source_raster_finish(uint64_t cycle);
 void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
                          uint16_t target[3], int32_t irq_line[3],
                          uint32_t frac[3]);

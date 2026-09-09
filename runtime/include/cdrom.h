@@ -152,6 +152,8 @@ void cdrom_tick(void);
 
 /* DMA channel 3 interface */
 uint32_t cdrom_dma_read(void);
+/* Source-compatible DMA byte drain: unavailable bytes are zero. */
+uint32_t cdrom_dma_read_padded(void);
 int cdrom_dma_ready(void);
 uint32_t cdrom_dma_sector_word_count(void);
 
@@ -235,6 +237,8 @@ typedef struct CDROMSectorDebugState {
 
 typedef struct CDROMTraceEntry {
     uint64_t seq;
+    uint64_t cycle;
+    uint32_t guest_ra;
     uint32_t addr;
     uint32_t val;
     uint32_t func;
@@ -299,6 +303,9 @@ typedef struct CDROMCommandHistoryEntry {
     uint8_t pending_pending;
     uint8_t queued_cmd;
     uint8_t queued_pending;
+    uint8_t source_clock;
+    uint32_t source_random_cursor;
+    uint32_t source_random_calls;
 } CDROMCommandHistoryEntry;
 
 typedef struct CDROMSectorHistoryEntry {

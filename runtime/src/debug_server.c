@@ -282,7 +282,8 @@ static inline void rec_event(uint8_t kind, uint32_t addr, uint32_t val,
 void debug_server_trace_ram_read_watch(uint32_t phys, uint32_t val)
 {
     if (phys >= s_rwatch_lo && phys < s_rwatch_hi)
-        rec_event(REC_KIND_RAM_R, phys, val, 0, 0);
+        rec_event(REC_KIND_RAM_R, phys, val, 0,
+                  debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0);
 }
 
 /* ---- CPU state pointer (set at init) ---- */
@@ -322,16 +323,54 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
  * queue in debug_server_get_input_override() avoids host/TCP timing gaps
  * between short presses and remains deterministic while turbo loads are active.
  */
-#define INPUT_ROUTE_MAX_STEPS 4096
-typedef struct {
-    uint32_t frames;
-    uint16_t buttons;
-} InputRouteStep;
+#include "input_route_file.h"
+#include "input_route_observer.h"
 static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
 static uint32_t s_input_route_count = 0;
 static uint32_t s_input_route_index = 0;
 static uint32_t s_input_route_remaining = 0;
 static int      s_input_route_active = 0;
+static int      s_input_route_file_mode = 0;
+static uint32_t s_input_route_consumed = 0;
+#include "input_update_replay.h"
+#include "input_instruction_histogram_impl.h"
+
+/* Called on the emulator thread before guest execution. Fail closed; a bad
+ * file never exposes a partial route. Existing TCP routes remain unchanged. */
+int debug_server_preload_input_route(const char *path)
+{
+    InputRouteStep *staged;
+    uint32_t count = 0, frames = 0;
+    FILE *f;
+    const char *error;
+    if (s_frame_count || s_input_route_active || s_input_route_count) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    staged = (InputRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*staged));
+    if (!staged) { fclose(f); return 0; }
+    error = input_route_read(f, staged, &count, &frames);
+    if (fclose(f) != 0 && !error) error = "close error";
+    if (error) {
+        fprintf(stderr, "input route rejected: %s\n", error);
+        free(staged);
+        return 0;
+    }
+    memcpy(s_input_route, staged, count * sizeof(*staged));
+    free(staged);
+    if (!update_configure(s_input_route,count,frames)) return 0;
+    if (!input_route_observer_init(s_update_enabled ? s_update_config[7] : frames)) return 0;
+    if (!input_instruction_histogram_configure()) return 0;
+    if (s_update_enabled) s_update_log=input_route_observer_output("update-clock.jsonl");
+    s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+    s_input_route_count = count; s_input_route_index = 0;
+    s_input_route_remaining = s_input_route[0].frames;
+    s_input_route_active = 1;
+    s_input_route_file_mode = 1;
+    s_input_route_consumed = 0;
+    fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u\n",
+            (unsigned)frames, (unsigned)count);
+    return 1;
+}
 
 /* ---- Frontend turbo override ---- */
 static volatile int s_turbo_enabled = 0;
@@ -9486,6 +9525,7 @@ static void handle_card_trace_dump(int id, const char *json)
 void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
                                     uint32_t new_val, uint8_t width)
 {
+    update_accept_write(phys,width,g_debug_last_store_pc,debug_cpu_ptr ? debug_cpu_ptr->gpr[31] : 0,old_val,new_val);
 #ifdef PSX_NO_DEBUG_TOOLS
     (void)phys; (void)old_val; (void)new_val; (void)width;
     return;
@@ -12864,6 +12904,52 @@ static void handle_overlay_dump(int id, const char *json)
  * (very rare at dump time) cannot make us walk off the end.
  * ==================================================================== */
 
+void debug_server_dump_watched_writes(FILE *f, const uint32_t *addresses, uint32_t count)
+{
+    if (!f || !addresses || count > 32) return;
+    uint64_t total = s_wtrace_all_seq;
+    uint32_t avail = total < WRITE_TRACE_ALL_CAP ? (uint32_t)total : WRITE_TRACE_ALL_CAP;
+    uint32_t start = total < WRITE_TRACE_ALL_CAP ? 0 : s_wtrace_all_head;
+    fprintf(f, "{\"kind\":\"coverage\",\"total_writes\":%llu,\"retained_writes\":%u}\n",
+            (unsigned long long)total, s_wtrace_all ? avail : 0);
+    if (s_rec_frame >= 0) {
+        fprintf(f, "{\"kind\":\"recorded_frame_coverage\",\"frame\":%lld,\"count\":%u,\"overflow\":%u}\n",
+                (long long)s_rec_frame,s_rec_count,s_rec_overflow);
+        for (uint32_t i = 0; i < s_rec_count; ++i) {
+            const RecEntry *e = &s_rec_buf[i];
+            if (e->kind == REC_KIND_MMIO_W && e->addr == 0x1F801040u) {
+                fprintf(f, "{\"kind\":\"recorded_sio_write\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                        i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->val,e->pc,e->ra);
+            }
+            if (e->kind == REC_KIND_MMIO_W || e->kind == REC_KIND_MMIO_R) {
+                fprintf(f, "{\"kind\":\"%s\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                        e->kind == REC_KIND_MMIO_R ? "recorded_mmio_read" : "recorded_mmio_write",
+                        i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->addr,e->val,e->pc,e->ra);
+            }
+            if (e->kind != REC_KIND_RAM_W && e->kind != REC_KIND_RAM_R) continue;
+            for (uint32_t j = 0; j < count; ++j) {
+                if (e->addr == addresses[j]) {
+                    fprintf(f, "{\"kind\":\"%s\",\"i\":%u,\"frame\":%lld,\"cycle\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u}\n",
+                            e->kind == REC_KIND_RAM_R ? "recorded_read" : "recorded_write",
+                            i,(long long)s_rec_frame,(unsigned long long)e->cyc,e->addr,e->val,e->pc,e->ra);
+                    break;
+                }
+            }
+        }
+    }
+    if (!s_wtrace_all) return;
+    for (uint32_t i = 0; i < avail; ++i) {
+        const WriteTraceAllEntry *e = &s_wtrace_all[(start + i) % WRITE_TRACE_ALL_CAP];
+        for (uint32_t j = 0; j < count; ++j) {
+            if (e->addr < addresses[j] + 2 && addresses[j] < e->addr + e->w) {
+                fprintf(f, "{\"seq\":%llu,\"addr\":%u,\"new\":%u,\"pc\":%u,\"ra\":%u,\"frame\":%u,\"width\":%u}\n",
+                        (unsigned long long)e->seq,e->addr,e->new_val,e->pc,e->ra,e->frame,e->w);
+                break;
+            }
+        }
+    }
+}
+
 void debug_server_freeze_dump_wtrace_all_json(FILE *f, uint32_t max_count)
 {
     if (!f) return;
@@ -13963,6 +14049,13 @@ static void process_command(const char *line)
 
     int id = json_get_int(line, "id", 0);
 
+    /* A preloaded evidence run cannot be edited or rescheduled over TCP. */
+    if (s_input_route_file_mode && strcmp(cmd, "input_route_status") != 0 &&
+        strcmp(cmd, "pad_status") != 0) {
+        send_err(id, "file replay permits only input_route_status and pad_status");
+        return;
+    }
+
     for (const CmdEntry *e = s_commands; e->name; e++) {
         if (strcmp(cmd, e->name) == 0) {
             /* Suppress lockstep memory recording for the WHOLE handler.
@@ -14689,10 +14782,28 @@ int debug_server_is_connected(void)
     return s_client != SOCK_INVALID;
 }
 
+void debug_server_note_input_applied(void)
+{
+    if (s_input_route_file_mode)
+        input_route_observer_applied(sio_get_pad_buttons_slot(0),
+                                    sio_get_pad_connected(0), sio_get_pad_analog(0));
+}
+
 int debug_server_get_input_override(void)
 {
+    update_boundary();
+    input_instruction_histogram_boundary(s_frame_count);
+    if (s_input_route_file_mode)
+        input_route_observer_boundary(s_input_route_consumed, s_frame_count);
+    if (s_update_enabled) {
+        input_route_observer_input(0xFFFF); ++s_input_route_consumed; return 0xFFFF;
+    }
     if (s_input_route_active && s_input_route_index < s_input_route_count) {
         int current = (int)s_input_route[s_input_route_index].buttons;
+        if (s_input_route_file_mode) {
+            input_route_observer_input((uint16_t)current);
+            ++s_input_route_consumed;
+        }
         if (s_input_route_remaining > 0 && --s_input_route_remaining == 0) {
             s_input_route_index++;
             if (s_input_route_index < s_input_route_count) {
@@ -14703,6 +14814,12 @@ int debug_server_get_input_override(void)
             }
         }
         return current;
+    }
+    /* A file route never releases P1 to physical input at EOF. */
+    if (s_input_route_file_mode) {
+        input_route_observer_input(0xFFFF);
+        ++s_input_route_consumed;
+        return 0xFFFF;
     }
     int current = s_input_override;
     if (s_input_override >= 0 && s_input_frames > 0) {
