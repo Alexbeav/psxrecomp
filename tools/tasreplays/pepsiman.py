@@ -14,6 +14,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from itertools import zip_longest
 
 import bk2_intake
 from bk2_to_psxrti import convert
@@ -209,15 +210,89 @@ def run(args):
     info=json.loads((args.project/'setup.json').read_text())
     for binding in info['bindings']: tekken3.require_hash(Path(binding['path']),binding['sha256'])
     tekken3.require_hash(Path(info['executable']),info['executable_sha256'])
+    reference=None
+    observation_end=FRAMES
+    if args.reference:
+        reference=json.loads(args.reference.read_text())
+        if reference.get('schema')!='pepsiman-independent-source-v1' or reference.get('movie_sha256')!=MOVIE_SHA:
+            raise ValueError('wrong independent source reference')
+        for binding in reference['bindings']:
+            tekken3.require_hash(Path(binding['path']),binding['sha256'])
+        observation_end=reference['observed_returns']
+        if type(observation_end) is not int or not FRAMES<=observation_end<=FRAMES+6000:
+            raise ValueError('invalid reference boundary')
     argv=[sys.executable,HERE/'run_native.py',args.output,'--exe',info['executable'],
           '--game',info['game'],'--disc',info['disc'],'--bios',info['bios'],'--route',info['route'],
-          '--cd-source-clock-tape',info['tape'],'--neutral-tail','1','--timeout',str(args.timeout),
+          '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(observation_end-FRAMES+1),'--timeout',str(args.timeout),
           '--checkpoint-every','1200','--renderer','software',*tekken3.PROFILE]
     # The same native implementations are an explicit candidate: all psx/
     # source bytes match 2.2.2 -> 2.3, but this title still needs its own gates.
     if args.show: argv.append('--show')
-    command(argv,args.output.parent/(args.output.name+'-launch.log'))
-    print('Native input run ended; compare against the admitted independent source before claiming a pass.')
+    if reference: argv += ['--ram-snapshot-frame',str(observation_end)]
+    args.output.parent.mkdir(parents=True,exist_ok=True)
+    if args.output.exists(): raise ValueError('choose a fresh native output directory')
+    log=args.output.parent/(args.output.name+'-launch.log')
+    with log.open('x') as stream:
+        process=subprocess.run([str(v) for v in argv],cwd=ROOT,stdout=stream,stderr=subprocess.STDOUT)
+    report={'status':'incomplete','original_inputs':FRAMES,'compared_returns':0,
+            'end_frame':observation_end+1,'source_observation_end':observation_end,
+            'native_runner_exit':process.returncode,'first_divergence':None,
+            'scope':'unchanged original inputs and declared neutral ending; full RAM/clock source compatibility'}
+    if reference:
+        try:
+            count=0
+            for expected,actual in zip_longest(read_pages(Path(reference['ram_pages'])),read_pages(args.output/'ram-pages.tsv')):
+                if expected is None or actual is None:
+                    if report['first_divergence'] is None:
+                        report['first_divergence']={'kind':'missing_return','frame':(expected or actual)[0]}
+                    break
+                count+=1
+                changed=[f'{i*4096:06X}' for i,(s,n) in enumerate(zip(expected[2],actual[2])) if s!=n]
+                if (expected[1]!=actual[1] or changed) and report['first_divergence'] is None:
+                    report['first_divergence']={'kind':'state_or_clock','frame':expected[0],
+                        'source_cycle':expected[1],'native_cycle':actual[1],'changed_pages':changed}
+            report['compared_returns']=count
+            complete=json.loads((args.output/'complete.json').read_text())
+            report['input_identity_matches']=(complete['input_frames']==FRAMES and complete['applied_words_sha256']==WORDS_SHA
+                and complete['frame']==observation_end+1 and complete['neutral_tail_ticks']==observation_end-FRAMES+1)
+            raw=Path(reference['terminal_ram']).read_bytes()
+            report['terminal_ram_matches']=(len(raw)==2097152 and (args.output/f'ram-frame-{observation_end:06d}.bin').read_bytes()==raw)
+            okay=process.returncode==0 and report['input_identity_matches'] and report['terminal_ram_matches']
+            okay=okay and count==observation_end and report['first_divergence'] is None
+            report['status']='pass' if okay else 'fail'
+        except (ValueError,OSError,KeyError) as error:
+            report.update(status='fail',error=str(error))
+    elif process.returncode:
+        report['status']='fail'
+    write(args.output/'verification.json',report)
+    print(json.dumps(report))
+    return 0 if report['status']=='pass' else 2 if report['status']=='incomplete' else 1
+
+def reference(args):
+    stock=args.stock.resolve(strict=True)
+    observed=args.observed.resolve(strict=True)
+    stock_identity=admit_source_control(stock)
+    observed_identity=admit_source_control(observed)
+    comparison=json.loads((observed/'stock-comparison.json').read_text())
+    if comparison.get('match') is not True: raise ValueError('source observer must reproduce the stock control')
+    endpoint=json.loads((observed/'complete.json').read_text())['frame']
+    if sum(1 for _ in read_pages(observed/'ram-pages.tsv'))!=endpoint:
+        raise ValueError('source observer does not cover every declared return')
+    raw=observed/f'ram-frame-{endpoint:06d}.bin'
+    if raw.stat().st_size!=2097152: raise ValueError('missing source terminal RAM')
+    if args.output.exists(): raise ValueError('never replace an admitted reference')
+    files=[observed/'ram-pages.tsv',raw,observed/'loaded-core.json',observed/'stock-comparison.json',
+           observed/'semantic-review.json',stock/'semantic-review.json',stock/'ram-frames.tsv',
+           observed/'manifest.json',stock/'manifest.json']
+    result={'schema':'pepsiman-independent-source-v1','movie_sha256':MOVIE_SHA,'bios_sha256':BIOS_SHA,
+            'observed_returns':endpoint,'original_inputs':FRAMES,'neutral_tail':endpoint-FRAMES,
+            'ram_pages':str(observed/'ram-pages.tsv'),'terminal_ram':str(raw),
+            'stock_control':stock_identity,'observed_control':observed_identity,
+            'bindings':[{'path':str(f),'sha256':digest(f)} for f in files],
+            'scope':'qualified Octoshock 2.3 observer and witnessed source endpoint; not whole-machine hardware accuracy'}
+    write(args.output,result)
+    print(args.output)
+    return 0
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -231,7 +306,10 @@ def main():
     r.add_argument('--output',type=Path,required=True)
     r.add_argument('--timeout',type=int,default=43200)
     r.add_argument('--show',action='store_true')
+    r.add_argument('--reference',type=Path)
+    ref=sub.add_parser('reference')
+    for field in ['stock','observed','output']: ref.add_argument('--'+field,type=Path,required=True)
     args=p.parse_args()
-    (setup if args.action=='setup' else run)(args)
+    return {'setup':setup,'run':run,'reference':reference}[args.action](args)
 
-if __name__=='__main__': main()
+if __name__=='__main__': raise SystemExit(main())
