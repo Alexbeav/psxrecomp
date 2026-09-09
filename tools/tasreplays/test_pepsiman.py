@@ -20,6 +20,7 @@ class PepsimanAdmission(unittest.TestCase):
              original.replace('track8.bin','track7.bin'),
              original.replace('track1.bin','../outside.bin'),
              original.replace('track1.bin','/outside.bin'),
+             original.replace('track1.bin','C:outside.bin'),
              original+'REM undeclared\n',original[:original.index('FILE "track8.bin"')]]
         for text in bad:
             with self.subTest(text=text):

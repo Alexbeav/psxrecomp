@@ -49,7 +49,7 @@ def cue_files(text):
         match=re.fullmatch(r'FILE "([^"\r\n]+)" BINARY',lines.pop(0))
         if not match: raise ValueError('invalid CUE file line')
         name=match[1]
-        if Path(name).is_absolute() or '..' in Path(name).parts:
+        if Path(name).anchor or ':' in name or '..' in Path(name).parts:
             raise ValueError('CUE companion must remain below the CUE directory')
         expected=[f'TRACK {track:02d} '+('MODE2/2352' if track==1 else 'AUDIO')]
         expected+=['INDEX 01 00:00:00'] if track==1 else ['INDEX 00 00:00:00','INDEX 01 00:02:00']
