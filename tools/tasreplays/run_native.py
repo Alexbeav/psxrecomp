@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--update-predictor",choices=("gate", "previous-accept"),default="gate",
                         help="experimental prediction only; actual packet/context acceptance stays authoritative")
     parser.add_argument("--checkpoint-every", type=int, default=300)
+    parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
                         help="read a physical RAM u16 before each next input (max32)")
     parser.add_argument("--record-frame", type=int,
@@ -165,6 +166,8 @@ def main():
         raise ValueError("neutral tail outside 0..60000 ticks")
     if not 1 <= args.checkpoint_every <= 10000:
         raise ValueError("checkpoint interval outside 1..10000")
+    if args.storage_budget_mib is not None and not 1<=args.storage_budget_mib<=16384:
+        raise ValueError('storage budget must be in 1..16384 MiB')
     if len(args.watch_u16) > 32 or len(set(args.watch_u16)) != len(args.watch_u16) or any(
             a < 0 or a > 0x1ffffe or a % 2 for a in args.watch_u16):
         raise ValueError("watch addresses must be unique aligned physical RAM u16 offsets (max32)")
@@ -378,7 +381,8 @@ p2_mode = "digital"
         "launcher_sha256": digest(Path(__file__)),
         "boundary": "N records supplied before the next normal VBlank sample",
         "guest_controller_polls_measured": False,
-        "source_timing_equivalence": "unqualified", "timeout_seconds": args.timeout})
+        "source_timing_equivalence": "unqualified", "timeout_seconds": args.timeout,
+        "storage_budget_mib":args.storage_budget_mib})
     startup = None
     if os.name == "nt":
         startup = subprocess.STARTUPINFO()
@@ -391,19 +395,19 @@ p2_mode = "digital"
                                    stdout=out, stderr=err)
         write_json(run / "process.json", {"pid": process.pid})
         print(f"Native PID {process.pid}; evidence: {run}", flush=True)
-        try:
-            code = process.wait(timeout=args.timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            process.terminate()
-            code = process.wait(timeout=15)
+        from process_budget import wait_budgeted
+        budget=wait_budgeted(process,run,args.timeout,
+                             args.storage_budget_mib*1024**2 if args.storage_budget_mib is not None else None)
+        code=budget['exit_code']
+        timed_out=budget['stop_reason']=='host_timeout'
     write_json(run / "exit.json", {"pid": process.pid, "exit_code": code,
+               "stop_reason":budget['stop_reason'],"diagnostic_inventory":budget['last_inventory'],
                "timed_out": timed_out, "host_seconds": time.monotonic() - start,
                "completion_exists": (run / "complete.json").exists()})
     complete = None
     if (run / "complete.json").exists():
         complete = json.loads((run / "complete.json").read_text())
-    qualified = (not timed_out and code == 0 and complete is not None
+    qualified = (budget['stop_reason'] is None and code == 0 and complete is not None
                  and complete["frame"] == identity["frames"] + args.neutral_tail
                  and complete["input_frames"] == identity["frames"]
                  and complete["neutral_tail_ticks"] == args.neutral_tail
@@ -411,7 +415,7 @@ p2_mode = "digital"
     if update_profile:
         endpath=run/'update-input-end.json'
         end=json.loads(endpath.read_text()) if endpath.exists() else None
-        qualified=(not timed_out and code==0 and complete is not None and end is not None
+        qualified=(budget['stop_reason'] is None and code==0 and complete is not None and end is not None
                    and end['accepted_samples']==identity['frames']
                    and end['accepted_words_sha256']==identity['words_sha256']
                    and complete['frame']==end['frame']+args.neutral_tail

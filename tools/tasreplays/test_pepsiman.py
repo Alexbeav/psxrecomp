@@ -4,11 +4,15 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import os
+import subprocess
+import sys
 from unittest.mock import patch
 import pepsiman
 from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
 from verify_scph5500_seeds import derive
 from compare_ram_pages import MAGIC, page_hash
+from process_budget import wait_budgeted
 
 def cue():
     parts=[]
@@ -148,5 +152,35 @@ class Observations(unittest.TestCase):
         compare()
         (observed/'frame-000002.png').unlink()
         with self.assertRaisesRegex(ValueError,'inventory'):compare()
+
+
+class HostBudgets(unittest.TestCase):
+    def start(self,root,program):
+        return subprocess.Popen([sys.executable,'-c',program,str(root)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+
+    def test_storage_budget_stops_active_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            p=self.start(root,"import pathlib,sys,time;pathlib.Path(sys.argv[1],'capture').write_bytes(b'x'*4096);time.sleep(10)")
+            result=wait_budgeted(p,root,3,max_bytes=1024,interval=0.02)
+            self.assertEqual(result['stop_reason'],'host_storage_budget')
+            self.assertIsNotNone(p.poll())
+
+    def test_terminal_storage_budget_and_timeout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            p=self.start(root,"import pathlib,sys;pathlib.Path(sys.argv[1],'capture').write_bytes(b'x'*4096)")
+            p.wait(timeout=5)
+            self.assertEqual(wait_budgeted(p,root,3,max_bytes=1024)['stop_reason'],'host_storage_budget')
+            p=self.start(root,'import time;time.sleep(10)')
+            self.assertEqual(wait_budgeted(p,root,0.1,interval=0.02)['stop_reason'],'host_timeout')
+
+    def test_complete_process_has_no_guest_verdict(self):
+        with tempfile.TemporaryDirectory() as temp:
+            p=self.start(Path(temp),'pass')
+            result=wait_budgeted(p,Path(temp),3,max_bytes=1024,interval=0.02)
+            self.assertEqual(result['exit_code'],0)
+            self.assertIsNone(result['stop_reason'])
 
 if __name__=='__main__': unittest.main()
