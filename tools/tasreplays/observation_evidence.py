@@ -2,7 +2,26 @@
 from itertools import zip_longest
 from pathlib import Path
 import hashlib
+import re
 from compare_ram_pages import read_pages, page_hash, PAGE_COUNT, PAGE_BYTES, RAM_BYTES
+
+
+def validate_cpu_capture(directory, expected_frames):
+    header=['frame','pc','cycle','sr','cause','epc']+[f'r{i}' for i in range(32)]
+    count=0;previous=0
+    with (directory/'cpu-return.tsv').open() as stream:
+        if stream.readline().rstrip('\r\n').split('\t')!=header:
+            raise ValueError('invalid CPU return columns')
+        for count,line in enumerate(stream,1):
+            columns=line.rstrip('\r\n').split('\t')
+            if len(columns)!=38 or int(columns[0])!=count:
+                raise ValueError('incomplete or discontinuous CPU return capture')
+            cycle=int(columns[2])
+            if cycle<=previous or any(not re.fullmatch('[0-9A-F]{8}',columns[i]) for i in [1,*range(3,38)]):
+                raise ValueError('invalid CPU return state/clock')
+            previous=cycle
+    if count!=expected_frames:raise ValueError(f'CPU capture has {count} returns, expected {expected_frames}')
+    return {'valid':True,'frames':count,'scope':'native return capture completeness; no independent source CPU equivalence claim'}
 
 
 def compare_returns(source, native, expected_frames):

@@ -9,7 +9,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 import pepsiman
-from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
+from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames, validate_cpu_capture
 from verify_scph5500_seeds import derive
 from compare_ram_pages import MAGIC, page_hash
 from process_budget import wait_budgeted
@@ -98,6 +98,18 @@ class Observations(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
         self.zero=page_hash(bytes(4096))
+
+    def test_cpu_return_coverage_is_mandatory(self):
+        path=self.root/'cpu-return.tsv'
+        header='\t'.join(['frame','pc','cycle','sr','cause','epc']+[f'r{i}' for i in range(32)])+'\n'
+        row=lambda frame:'\t'.join([str(frame),'80000000',str(frame*564480)]+['00000000']*35)+'\n'
+        path.write_text(header+row(1)+row(2))
+        self.assertTrue(validate_cpu_capture(self.root,2)['valid'])
+        with self.assertRaises(ValueError):validate_cpu_capture(self.root,3)
+        path.write_text(header+row(1)+row(3))
+        with self.assertRaises(ValueError):validate_cpu_capture(self.root,2)
+        path.write_text(header+row(1).replace('80000000','bad'))
+        with self.assertRaises(ValueError):validate_cpu_capture(self.root,1)
 
     def capture(self,name,frames=3,cycle_change=None,page_change=None,frame_skew=0):
         path=self.root/name
