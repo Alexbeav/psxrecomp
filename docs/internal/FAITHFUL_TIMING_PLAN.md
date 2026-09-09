@@ -213,6 +213,14 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-09 (TAS host-speed validation):** The published Tekken 3 cold-boot
+  route reproduces the 8.80 victory with 7,974 unchanged inputs and 8,399 exact
+  RAM/clock returns. Added replay `--speed` control using the existing host
+  fast-forward path, including 32x/64x caps and an uncapped mode. Guest timing,
+  code generation and controller routing are unchanged. Full visible 4x, 8x,
+  32x and uncapped checks use the same fingerprint gate; results belong in the
+  speed-validation PR. Requested caps and measured throughput are separate.
+
 - **2026-07-28 (per-game host audio cushion — implemented, parser validated):**
   Added `[audio] buffer_ms` as a runtime-only developer setting with a guarded
   30–500 ms range. The compatibility default remains 180 ms, preserving the

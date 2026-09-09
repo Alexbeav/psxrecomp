@@ -608,7 +608,7 @@ static int manual_fast_forward_multiplier(void) {
                 value = -1;
             } else {
                 int parsed = std::atoi(e);
-                if (parsed >= 2 && parsed <= 16)
+                if (parsed >= 2 && parsed <= 64)
                     value = parsed;
             }
         }
@@ -7182,13 +7182,20 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool turbo_load_paced = false;
 
     /* Manual fast-forward: bounded by default so the game visibly advances and
-     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..16 changes the cap;
+     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..64 changes the cap;
      * PSX_FAST_FORWARD_SPEED=max restores the old unbounded simulation rate. */
     {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
-        if (host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
+        /* Automated replay uses the same host pacing/presentation path as
+         * holding the fast-forward key. Guest clocks and input are unchanged. */
+        static const bool startup_fast_forward = [] {
+            const char *e = std::getenv("PSX_FAST_FORWARD");
+            return e && std::strcmp(e, "1") == 0;
+        }();
+        if (startup_fast_forward ||
+            host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState())) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
             manual_turbo_active = true;
