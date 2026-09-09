@@ -3,12 +3,24 @@ import gzip
 import hashlib
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import tekken3
 
 
 class RecipeTests(unittest.TestCase):
+    def test_old_setup_cannot_silently_ignore_speed_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # An older receipt has no capability marker. Reject before asset
+            # access or launching a player that would ignore the new switch.
+            (root / 'setup.json').write_text('{}', encoding='utf-8')
+            with patch.object(tekken3, 'PROJECT', root):
+                for speed in ('4', '8', '32', 'max'):
+                    with self.subTest(speed=speed), self.assertRaisesRegex(ValueError, 'Rerun setup'):
+                        tekken3.run(SimpleNamespace(speed=speed))
+
     def test_renamed_tracks_keep_qualified_layout(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
