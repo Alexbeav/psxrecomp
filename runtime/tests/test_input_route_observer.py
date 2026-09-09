@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 
@@ -54,4 +55,31 @@ with tempfile.TemporaryDirectory() as root:
             assert not (out / "complete.json").exists()
         if case == "collision":
             assert (out / "checkpoints.jsonl").read_bytes() == b"preserve"
-print("input_route_observer: 18 compiled cases passed")
+with tempfile.TemporaryDirectory() as directory:
+    for case in ('ds_valid', 'ds_wrong_axis', 'ds_unconverted', 'ds_missing',
+                 'ds_disconnected', 'ds_plainpad', 'ds_tail_axis', 'ds_digital'):
+        out = Path(directory) / case
+        out.mkdir()
+        env = dict(os.environ, PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1',
+                   PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0',
+                   PSX_INPUT_ROUTE_CPU_STATE='0', PSX_INPUT_ROUTE_VIDEO_STATE='0')
+        env.pop('PSX_INPUT_ROUTE_WATCH_U16', None)
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        assert run.returncode == (0 if case == 'ds_valid' else 3), (case, run.returncode, run.stderr)
+        if case != 'ds_valid':
+            assert not (out / 'complete.json').exists()
+            continue
+        source = struct.pack('<H5B', 0xFFEF, 1,0,128,255,0) + struct.pack('<H5B', 0xFFFF,129,130,131,132,0)
+        protocol = struct.pack('<H5B', 0xFFEF, 1,0,128,254,0) + struct.pack('<H5B', 0xFFFF,128,129,130,131,0)
+        for name in ('complete.json', 'input-end.json'):
+            record = json.loads((out / name).read_text())
+            assert record['original_controller_sha256'] == hashlib.sha256(source).hexdigest()
+            assert record['applied_controller_sha256'] == record['expected_protocol_sha256'] == hashlib.sha256(protocol).hexdigest()
+            assert record['guest_analog_mode'] == 1
+            assert 'applied_words_sha256' not in record
+        rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text().splitlines()]
+        assert [row['frame'] for row in rows] == [0,1,2,3]
+        assert [row['guest_analog_mode'] for row in rows] == [0,0,1,1]
+        assert rows[2]['supplied_controller_sha256'] != rows[2]['applied_controller_sha256']
+        assert rows[2]['supplied_controller_sha256'] == rows[3]['supplied_controller_sha256']
+print('input_route_observer: digital cases and eight complete DualShock delivery cases passed')

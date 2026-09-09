@@ -47,6 +47,28 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
 }
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
+    if (!strncmp(argv[1], "ds_", 3)) {
+        if (!input_route_observer_dualshock_init(2)) return 4;
+        const uint8_t source[4] = {1,0,128,255}, source2[4] = {129,130,131,132};
+        uint8_t sticks[4] = {0,1,254,128};
+        const uint8_t sticks2[4] = {129,128,131,130}, neutral[4] = {128,128,128,128};
+        input_route_observer_boundary(0, 1);
+        input_route_observer_dualshock_input(0xFFEF, source);
+        if (!strcmp(argv[1], "ds_missing")) input_route_observer_boundary(1, 2);
+        if (!strcmp(argv[1], "ds_wrong_axis")) sticks[0] = 1;
+        if (!strcmp(argv[1], "ds_unconverted")) sticks[2] = 255;
+        if (!strcmp(argv[1], "ds_digital")) input_route_observer_applied(0xFFEF, 1, 0);
+        input_route_observer_dualshock_applied(0xFFEF, sticks,
+            strcmp(argv[1], "ds_disconnected") != 0, strcmp(argv[1], "ds_plainpad") != 0, 0);
+        input_route_observer_boundary(1, 2);
+        input_route_observer_dualshock_input(0xFFFF, source2);
+        input_route_observer_dualshock_applied(0xFFFF, sticks2, 1, 1, 1);
+        input_route_observer_boundary(2, 3);
+        input_route_observer_dualshock_input(0xFFFF, !strcmp(argv[1], "ds_tail_axis") ? source : neutral);
+        input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
+        input_route_observer_boundary(3, 4);
+        return 8;
+    }
     CPUState cpu = {0};
     if (!strcmp(argv[1], "cpu")) {
         cpu.pc=0x80012340; cpu.gpr[31]=0x80054320;

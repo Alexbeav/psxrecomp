@@ -31,3 +31,25 @@ all227,202 original inputs against an independently expanded canonical
 record:2,824 segments and28 noncenter rows. Original one-based noncenter
 frames are44930..44952 and45232..45236. No physical Analog press occurs.
 These codec checks do not qualify native SIO, core timing or a game ending.
+
+Native PSXRTI2 preload rejects physical Analog presses, experimental input
+retiming and the older Octoshock digital ACK profile. Once the whole file
+and observer configuration pass, it establishes one cold P1 DualShock,
+digital mode, neutral sticks and no multitap. Card contents remain separately
+bound peripheral inputs. The ordinary input boundary consumes every record
+once, then supplies fully neutral buttons and axes for the declared tail.
+
+Delivery updates only buttons and sticks. It bypasses the interactive
+D-pad/stick folding and host-driven mode requests. The observer reads back
+the SIO button word, all four sticks, connectivity, config capability and
+reported mode after delivery. Guest mode may change through the protocol.
+Missing samples, wrong axes, a disconnected or plain pad, unexpected other
+devices and non-neutral tail input fail the observation.
+
+PSXRTI2 evidence has separately named original-controller, expected-protocol
+and applied-controller digests in LY/LX/RY/RX order with the admitted neutral
+physical Analog byte. The expected and delivered protocol digests must match;
+the original digest may differ because of the source axis conversion. Legacy
+PSXRTI1 word hashes and its digital-only delivery guard retain their meaning.
+Full source protocol/ACK, return-clock and retail playback qualification are
+still separate gates; codec or delivery tests do not satisfy them.
