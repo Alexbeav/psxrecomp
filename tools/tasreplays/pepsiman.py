@@ -45,6 +45,14 @@ digest=tekken3.digest
 write=tekken3.write_json
 command=tekken3.command
 
+def control_binding_path(control, binding):
+    path=Path(binding['path'])
+    # Historical stock-control-v1 launchers accepted a reference relative to
+    # the campaign directory containing the control runs. Seal absolute paths
+    # so consumers launched from isolated case directories retain that meaning.
+    if not path.is_absolute(): path=control.parent/path
+    return path.resolve(strict=True)
+
 def verify_control_identity(path, manifest, tail, role='stock'):
     if role not in {'stock','observer'}: raise ValueError('explicit stock/observer role required')
     if manifest.get('role',role)!=role: raise ValueError('source role differs from requested admission')
@@ -53,7 +61,7 @@ def verify_control_identity(path, manifest, tail, role='stock'):
         raise ValueError('source manifest does not describe the completed original movie')
     bindings=manifest['bindings']
     for binding in bindings:
-        target=Path(binding['path'])
+        target=control_binding_path(path,binding)
         # Legacy controls bound the host's writable config. A separately recorded
         # byte-identical copy preserves that input if EmuHawk rewrites it on exit.
         if target.name=='config.ini' and (path/'launch-config.json').exists():
@@ -376,11 +384,11 @@ def reference(args):
            observed/'manifest.json',stock/'manifest.json',*compared_files]
     for directory in [stock,observed]:
         manifest=json.loads((directory/'manifest.json').read_text())
-        files += [Path(b['path']) if Path(b['path']).name!='config.ini' else directory/'launch-config.json'
+        files += [control_binding_path(directory,b) if Path(b['path']).name!='config.ini' else directory/'launch-config.json'
                   for b in manifest['bindings']]
         files += [Path(b['path']) for b in json.loads((directory/'host-closure.json').read_text())]
         files += [Path(v['path']) for v in (stock_identity if directory==stock else observed_identity).values()]
-    files=sorted(set(files))
+    files=sorted({p.resolve(strict=True) for p in files})
     result={'schema':'pepsiman-independent-source-v1','movie_sha256':MOVIE_SHA,'bios_sha256':BIOS_SHA,
             'observed_returns':endpoint,'original_inputs':FRAMES,'neutral_tail':endpoint-FRAMES,
             'ram_pages':str(observed/'ram-pages.tsv'),'terminal_ram':str(raw),
