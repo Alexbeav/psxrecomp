@@ -82,4 +82,19 @@ with tempfile.TemporaryDirectory() as directory:
         assert [row['guest_analog_mode'] for row in rows] == [0,0,1,1]
         assert rows[2]['supplied_controller_sha256'] != rows[2]['applied_controller_sha256']
         assert rows[2]['supplied_controller_sha256'] == rows[3]['supplied_controller_sha256']
-print('input_route_observer: digital cases and eight complete DualShock delivery cases passed')
+with tempfile.TemporaryDirectory() as directory:
+    digest = hashlib.sha256(bytes(range(256))*512).hexdigest()
+    for case in ('card_valid','card_missing','card_extra','card_short','card_changed','card_wrong_hash','card_bad_hash','ds_card_undeclared'):
+        out = Path(directory)/case; out.mkdir()
+        env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out),PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+        if case != 'ds_card_undeclared':
+            env['PSX_INPUT_ROUTE_CARD1_SHA256'] = '0'*64 if case=='card_wrong_hash' else 'xyz' if case=='card_bad_hash' else digest
+        run = subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode == (0 if case=='card_valid' else 3), (case,run.returncode,run.stderr)
+        if case=='card_valid':
+            assert json.loads((out/'initial-cards.json').read_text()) == dict(card1_present=True,card2_present=False,card1_sha256=digest,bytes=131072)
+            assert (out/'complete.json').is_file()
+        else:
+            assert not (out/'complete.json').exists()
+print('input_route_observer: digital, complete DualShock delivery and eight loaded-card identity cases passed')
