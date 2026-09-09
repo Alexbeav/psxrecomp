@@ -193,7 +193,7 @@ def main():
     # The completion hook exits before the final return observer. Bind every
     # enabled RAM capture to the exact declared number of observed returns.
     ram_returns = identity['frames'] + args.neutral_tail - 1
-    if args.ram_page_probe and not 1 <= ram_returns <= 1000000:
+    if (args.ram_page_probe or args.cpu_return_probe) and not 1 <= ram_returns <= 1000000:
         raise ValueError('RAM capture requires 1..1000000 declared completed returns')
     if any(frame > ram_returns for frame in args.ram_snapshot_frame):
         raise ValueError('RAM snapshot exceeds the declared completed-return boundary')
@@ -336,6 +336,7 @@ p2_mode = "digital"
         selected_env['PSX_SOURCE_CPU_BOUNDARY_WINDOW']=f'{low},{high}'
     if args.cpu_return_probe:
         selected_env['PSX_SOURCE_CPU_RETURN_PROBE']='1'
+        selected_env['PSX_SOURCE_CPU_MAX_FRAMES']=str(ram_returns)
     if args.ram_page_probe:
         selected_env['PSX_SOURCE_RAM_PAGE_PROBE']='1'
         selected_env['PSX_SOURCE_RAM_MAX_FRAMES']=str(ram_returns)
@@ -437,6 +438,14 @@ p2_mode = "digital"
                        'expected_sha256':update_contexts['sha256'],
                        'additional_neutral_refreshes':sum(x['kind']=='neutral_refresh' for x in events)})
             qualified=qualified and effects_match
+    if args.cpu_return_probe:
+        from observation_evidence import validate_cpu_capture
+        try:
+            cpu_validation=validate_cpu_capture(run,ram_returns)
+        except (ValueError,OSError) as error:
+            cpu_validation={'valid':False,'error':str(error)}
+        write_json(run/'cpu-capture-validation.json',cpu_validation)
+        qualified=qualified and cpu_validation['valid']
     if args.ram_page_probe:
         from compare_ram_pages import validate_capture
         try:

@@ -226,7 +226,7 @@ def setup(args):
     payload,receipt=convert(movie.read_bytes())
     (project/'input.psxrti').write_bytes(payload)
     write(project/'input.json',receipt)
-    tools=project/'tools'
+    tools=args.tools_dir.resolve() if args.tools_dir else project/'tools'
     common=['-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER=gcc','-DCMAKE_CXX_COMPILER=g++']
     command(['cmake','-S',ROOT/'recompiler','-B',tools,*common,'-DBUILD_TESTING=ON',
              '-DPSXRECOMP_ENABLE_CHD=ON','-DPython3_EXECUTABLE='+sys.executable],project/'configure-tools.log')
@@ -291,6 +291,7 @@ renderer = "software"
           'generated':generated,'executable':str(build),'executable_sha256':digest(build),
           'disc':str(disc),'bios':str(bios),'game':str(game),'route':str(project/'input.psxrti'),'tape':str(tape),
           'compiler':subprocess.check_output(['gcc','--version'],text=True).splitlines()[0],
+          'tools_build_dir':str(tools),
           'qualification':'candidate only; source/native comparison pending'}
     write(project/'setup.json',info)
     print(json.dumps({'candidate':str(build),'sha256':digest(build)}))
@@ -397,6 +398,7 @@ def main():
     for field in ['disc','bios','movie','project','cache','source-control']:
         s.add_argument('--'+field,type=Path,required=True)
     s.add_argument('--jobs',type=int,default=4)
+    s.add_argument('--tools-dir',type=Path,help='Reuse a CMake tool build for this source; reconfigure, rebuild and rerun all tests')
     r=sub.add_parser('run')
     r.add_argument('--project',type=Path,required=True)
     r.add_argument('--output',type=Path,required=True)

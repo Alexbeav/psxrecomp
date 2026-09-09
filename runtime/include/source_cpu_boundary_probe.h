@@ -2,17 +2,21 @@
 #define PSX_SOURCE_CPU_BOUNDARY_PROBE_H
 #include <stdio.h>
 #include <stdlib.h>
+#include "source_observer_limit.h"
 /* One passive snapshot per original-model frontend return. Unlike input-route
  * fields, these boundaries include the CPU instruction's event overshoot. */
 static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,unsigned frame) {
     static int initialized,enabled;
+    static unsigned max_frames=20000;
     static FILE *stream;
     if(!initialized) {
         initialized=1;
         const char *setting=getenv("PSX_SOURCE_CPU_RETURN_PROBE");
         enabled=setting && setting[0]=='1' && !setting[1];
+        if(enabled)max_frames=source_observer_max_frames("PSX_SOURCE_CPU_MAX_FRAMES");
     }
     if(!enabled)return;
+    if(frame<1 || frame>max_frames)abort();
     if(!stream) {
         char path[4096];const char *directory=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
         if(!directory || snprintf(path,sizeof(path),"%s/cpu-return.tsv",directory)>=(int)sizeof(path))abort();
@@ -21,7 +25,6 @@ static void source_cpu_return_probe(CPUState *cpu,uint32_t pc,uint64_t cycle,uns
         for(unsigned i=0;i<32;i++)fprintf(stream,"\tr%u",i);
         fputc('\n',stream);
     }
-    if(frame>20000u)abort();
     fprintf(stream,"%u\t%08X\t%llu\t%08X\t%08X\t%08X",frame,pc,(unsigned long long)cycle,cpu->cop0[12],cpu->cop0[13],cpu->cop0[14]);
     for(unsigned i=0;i<32;i++)fprintf(stream,"\t%08X",cpu->gpr[i]);
     fputc('\n',stream);fflush(stream);
