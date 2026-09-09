@@ -698,6 +698,21 @@ target_include_directories(reachable_discovery_test PRIVATE
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
 
+# GTE deadline ownership includes pending CPU charges from both host sinks.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "tas_gte_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gte_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
+
 # ---- test-registration completeness guard -----------------------------------
 if(BUILD_TESTING)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
