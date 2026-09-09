@@ -18,9 +18,36 @@ static SourceGPUServiceClock return_clock;
 static SourceGPUCommandProjection return_command;
 static SourceGPUDispatchSink dispatch_sink;
 void source_gpu_runtime_set_dispatch_sink(SourceGPUDispatchSink sink) {dispatch_sink=sink;}
+/* Bounded leaf diagnosis. No guest reads, device service, or clock writes. */
+static void command_probe(void) {
+    static int initialized; static FILE *output;
+    static unsigned long long low,high; static unsigned rows;
+    if(!initialized) {
+        initialized=1; const char *range=getenv("PSX_SOURCE_GPU_COMMAND_WINDOW");
+        if(range) {
+            if(sscanf(range,"%llu,%llu",&low,&high)!=2 || high<=low || high-low>1000000)abort();
+            output=fopen("gpu-commands.tsv","wx");if(!output)abort();
+            fputs("cycle\tbudget\tphase\tqueued\tkind\twords\n",output);
+        }
+    }
+    uint64_t cycle=psx_get_cycle_count();
+    if(output && cycle>=low && cycle<=high && command_state.dispatch.kind &&
+       command_state.dispatch.kind!=SOURCE_GPU_DISPATCH_UPLOAD_WORD) {
+        if(++rows>50000)abort();
+        const SourceGPUCommandDispatch *d=&command_state.dispatch;
+        unsigned first=d->kind==SOURCE_GPU_DISPATCH_QUAD_SECOND?
+            d->count-source_gpu_polygon_stride(d->words[0]>>24):0;
+        fprintf(output,"%llu\t%d\t%u\t%u\t%u\t",(unsigned long long)cycle,
+                command_state.budget,command_state.phase,command_state.count,d->kind);
+        for(unsigned i=first;i<d->count;i++)fprintf(output,"%s%08X",i>first?" ":"",d->words[i]);
+        fputc('\n',output);
+    }
+    if(output && cycle>high){fclose(output);output=NULL;}
+}
 static void dispatch(void) {
     if(command_state.dispatch.kind && dispatch_sink)
         command_state.budget-=dispatch_sink(&command_state.dispatch);
+    command_probe();
     command_state.dispatch.kind=SOURCE_GPU_DISPATCH_NONE;
 }
 static void fail(const char *reason) {

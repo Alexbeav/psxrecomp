@@ -101,6 +101,8 @@ def main():
                         help="ordered passive timestamps for up to 16 selected fetch PCs, capped at 8192 per interval")
     parser.add_argument('--cpu-boundary-window',type=int,nargs=2,metavar=('LOW','HIGH'),
                         help='source-profile passive pre-fetch CPU scalars in a bounded absolute cycle interval')
+    parser.add_argument('--gpu-command-window',type=int,nargs=2,metavar=('LOW','HIGH'),
+                        help='Bounded read-only GPU command diagnostic')
     parser.add_argument('--cpu-return-probe',action='store_true',
                         help='passive CPU scalars at original-model frontend return boundaries')
     parser.add_argument('--ram-page-probe',action='store_true',
@@ -346,6 +348,10 @@ p2_mode = "digital"
         low,high=args.cpu_boundary_window
         if low<0 or high<=low or high-low>1000000:raise ValueError('invalid CPU boundary window')
         selected_env['PSX_SOURCE_CPU_BOUNDARY_WINDOW']=f'{low},{high}'
+    if args.gpu_command_window:
+        low,high=args.gpu_command_window
+        if low<0 or high<=low or high-low>1000000:raise ValueError('invalid GPU command window')
+        selected_env['PSX_SOURCE_GPU_COMMAND_WINDOW']=f'{low},{high}'
     if args.cpu_return_probe:
         selected_env['PSX_SOURCE_CPU_RETURN_PROBE']='1'
         selected_env['PSX_SOURCE_CPU_MAX_FRAMES']=str(ram_returns)
@@ -450,6 +456,10 @@ p2_mode = "digital"
                        'expected_sha256':update_contexts['sha256'],
                        'additional_neutral_refreshes':sum(x['kind']=='neutral_refresh' for x in events)})
             qualified=qualified and effects_match
+    if args.gpu_command_window:
+        low,high=args.gpu_command_window
+        if low<0 or high<=low or high-low>1000000:raise ValueError('invalid GPU command window')
+        selected_env['PSX_SOURCE_GPU_COMMAND_WINDOW']=f'{low},{high}'
     if args.cpu_return_probe:
         from observation_evidence import validate_cpu_capture
         try:
