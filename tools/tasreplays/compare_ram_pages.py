@@ -30,7 +30,7 @@ def read_pages(path):
             raise ValueError(f'unsupported RAM index: {path}')
         rows = csv.reader(stream, delimiter='\t')
         header = ['frame', 'cycle'] + [f'{p*PAGE_BYTES:06X}' for p in range(PAGE_COUNT)]
-        if next(rows) != header:
+        if next(rows, None) != header:
             raise ValueError(f'invalid page columns: {path}')
         previous = 0
         for expected_frame, row in enumerate(rows, 1):

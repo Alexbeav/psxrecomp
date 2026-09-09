@@ -14,12 +14,12 @@ import shutil
 import struct
 import subprocess
 import sys
-from itertools import zip_longest
 
 import bk2_intake
 from bk2_to_psxrti import convert
 import tekken3
 from compare_ram_pages import read_pages
+from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations
 
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parent.parent
@@ -28,6 +28,8 @@ MOVIE_SHA='de3fe8065a8adf068adf2cdbc2732b754df8e26aa08dc3a6f332c7dca7e5d578'
 WORDS_SHA='025f465a3ff008c4bf70f9cef46ebae04c4f0c726b38a79b88bbd90e064da68d'
 BIOS_SHA='9c0421858e217805f4abe18698afea8d5aa36ff0727eb8484944e00eb5e7eadb'
 EXE_SHA='96960e14406b58dd71c6717bb374537313ff7b64215330671c989ba2926f3718'
+STOCK_CORE_SHA='749d6dd58430d010e46ae97c628e113adad5f420c05c2ada0ad35e58191781c0'
+STOCK_COMMIT='a15b31a46bdac27d843d3ebbc5a860012d8452fb'
 TRACKS=[
  (124164432,'6452e78fa5d65abec2a5084afa28878bf478c9c63d6ba739b6b542cad366eded'),
  (10936800,'6cd94daf5173b9f84469683fd0270621a8ca2fbd614a6d8af1e75375c36f2531'),
@@ -35,12 +37,52 @@ TRACKS=[
  (10936800,'8bfcd406e12e3cea8cd83f232272ef2a81581bafc0c98ffa2ed55608c6d2f8b9'),
  (10936800,'2beda20a27697e13bf84921cbca5d7363c0455ce95400ffaacd8d799ad3f7121'),
  (10936800,'bb784ddc940277585042209a07368995cc32470b9fa42e3c5245b199c5243e7d'),
- (5630688,'fcc2bbb43914bac5b3dfa79e92baaa0a94d21fc57a5d7c4b5b144643cd5a75c4d'),
+ (5630688,'fcc2bbb43914bac5b3dfa79e92baa0a94d21fc57a5d7c4b5b144643cd5a75c4d'),
  (32149488,'19c7d810996b3b56ce08ea46adcebcb6a57695b140d2d037fca409c2e409d196')]
 
 digest=tekken3.digest
 write=tekken3.write_json
 command=tekken3.command
+
+def verify_control_identity(path, manifest, tail):
+    if (manifest.get('schema'),manifest.get('source_tag'),manifest.get('original_inputs'),
+        manifest.get('cutoff'),manifest.get('neutral_tail')) != ('pepsiman-stock-control-v1','2.3',FRAMES,FRAMES,tail):
+        raise ValueError('source manifest does not describe the completed original movie')
+    bindings=manifest['bindings']
+    for binding in bindings:
+        target=Path(binding['path'])
+        # Legacy controls bound the host's writable config. A separately recorded
+        # byte-identical copy preserves that input if EmuHawk rewrites it on exit.
+        if target.name=='config.ini' and (path/'launch-config.json').exists():
+            target=path/'launch-config.json'
+        tekken3.require_hash(target,binding['sha256'])
+    names={Path(b['path']).name:b for b in bindings}
+    required={'EmuHawk.exe','octoshock.dll','start.lua','source_control.lua','source_control.py','host-closure.json'}
+    if not required<=names.keys(): raise ValueError('source execution closure is incomplete')
+    for entry in json.loads((path/'host-closure.json').read_text()):
+        tekken3.require_hash(Path(entry['path']),entry['sha256'])
+    hashes={b['sha256'] for b in bindings}
+    if not {MOVIE_SHA,BIOS_SHA,*[sha for _,sha in TRACKS]}<=hashes:
+        raise ValueError('source control does not bind the exact original media')
+    cue=Path(next(b['path'] for b in bindings if Path(b['path']).suffix.lower()=='.cue'))
+    companions=[(cue.parent/name).resolve(strict=True) for name in cue_files(cue.read_text())]
+    bound={Path(b['path']).resolve():b['sha256'] for b in bindings}
+    if any(bound.get(p)!=sha for p,(_,sha) in zip(companions,TRACKS)):
+        raise ValueError('CUE does not resolve to the bound tracks in order')
+    bios=json.loads((path/'loaded-bios.json').read_text())
+    sync=json.loads((path/'effective-sync.json').read_text())
+    if bios != {'sha256':BIOS_SHA,'start':'power_on','movie_length':FRAMES}:
+        raise ValueError('loaded source BIOS/start identity differs')
+    if sync != {'EnableLEC':False,'FIOConfig':{'Multitaps':[False,False],'Memcards':[False,False],
+                                             'Devices8':[1,0,0,0,0,0,0,0]}}:
+        raise ValueError('source effective controller/card configuration differs')
+    if (path/'loaded-core.json').exists():
+        loaded=json.loads((path/'loaded-core.json').read_text())
+        core=names['octoshock.dll']
+        if loaded['sha256']!=core['sha256'] or Path(loaded['path']).resolve()!=Path(core['path']).resolve():
+            raise ValueError('observed loaded core differs from its bound binary')
+    elif names['octoshock.dll']['sha256']!=STOCK_CORE_SHA or manifest.get('source_commit')!=STOCK_COMMIT:
+        raise ValueError('stock control must use the pinned unmodified release core')
 
 def cue_files(text):
     lines=[line.strip() for line in text.splitlines() if line.strip()]
@@ -91,6 +133,7 @@ def boot_program(track):
     return data
 
 def admit_source_control(path):
+    path=path.resolve(strict=True)
     complete=json.loads((path/'complete.json').read_text())
     end=json.loads((path/'exit.json').read_text())
     semantic=json.loads((path/'semantic-review.json').read_text())
@@ -99,17 +142,16 @@ def admit_source_control(path):
     if type(tail) is not int or not 0<=tail<=6000:
         raise ValueError('source tail must be explicit and bounded')
     endpoint=FRAMES+tail
-    if (complete.get('frame'),complete.get('original_inputs'),complete.get('full_movie'))!=(endpoint,FRAMES,True):
+    if (complete.get('frame'),complete.get('original_inputs'))!=(endpoint,FRAMES) or complete.get('full_movie') is not True:
         raise ValueError('full original source control required')
     if end.get('exit_code')!=0 or end.get('stop_reason') is not None:
         raise ValueError('source did not complete cleanly')
-    if semantic.get('completion_observed') is not True or not FRAMES<=semantic.get('frame',-1)<=endpoint:
+    if semantic.get('completion_observed') is not True or type(semantic.get('frame')) is not int or not FRAMES<=semantic['frame']<=endpoint:
         raise ValueError('source completion needs semantic review')
     evidence=path/semantic['image']
     if not evidence.resolve().is_relative_to(path) or digest(evidence)!=semantic['image_sha256']:
         raise ValueError('source completion image identity changed')
-    if not any(x['sha256']==MOVIE_SHA for x in manifest['bindings']):
-        raise ValueError('source used a different movie')
+    verify_control_identity(path,manifest,tail)
     with (path/'ram-frames.tsv').open() as rows:
         if rows.readline().strip()!='frame\tlag_count\tpc\tram_sha256':
             raise ValueError('unrecognized stock RAM capture')
@@ -121,7 +163,8 @@ def admit_source_control(path):
             count+=1
         if count!=endpoint+1: raise ValueError('stock control misses declared input/neutral boundaries')
     return {name:{'path':str(path/name),'sha256':digest(path/name)} for name in
-            ['complete.json','exit.json','semantic-review.json','manifest.json','ram-frames.tsv']}
+            ['complete.json','exit.json','semantic-review.json','manifest.json','ram-frames.tsv',
+             'loaded-bios.json','effective-sync.json','effective-settings.json']}
 
 def setup(args):
     if os.name!='nt': raise ValueError('Windows UCRT build required for this candidate')
@@ -240,25 +283,16 @@ def run(args):
             'scope':'unchanged original inputs and declared neutral ending; full RAM/clock source compatibility'}
     if reference:
         try:
-            count=0
-            for expected,actual in zip_longest(read_pages(Path(reference['ram_pages'])),read_pages(args.output/'ram-pages.tsv')):
-                if expected is None or actual is None:
-                    if report['first_divergence'] is None:
-                        report['first_divergence']={'kind':'missing_return','frame':(expected or actual)[0]}
-                    break
-                count+=1
-                changed=[f'{i*4096:06X}' for i,(s,n) in enumerate(zip(expected[2],actual[2])) if s!=n]
-                if (expected[1]!=actual[1] or changed) and report['first_divergence'] is None:
-                    report['first_divergence']={'kind':'state_or_clock','frame':expected[0],
-                        'source_cycle':expected[1],'native_cycle':actual[1],'changed_pages':changed}
-            report['compared_returns']=count
+            comparison=compare_returns(Path(reference['ram_pages']),args.output/'ram-pages.tsv',observation_end)
+            report.update({k:v for k,v in comparison.items() if k!='match'})
             complete=json.loads((args.output/'complete.json').read_text())
             report['input_identity_matches']=(complete['input_frames']==FRAMES and complete['applied_words_sha256']==WORDS_SHA
                 and complete['frame']==observation_end+1 and complete['neutral_tail_ticks']==observation_end-FRAMES+1)
-            raw=Path(reference['terminal_ram']).read_bytes()
-            report['terminal_ram_matches']=(len(raw)==2097152 and (args.output/f'ram-frame-{observation_end:06d}.bin').read_bytes()==raw)
+            raw=terminal_consistency(Path(reference['ram_pages']),Path(reference['terminal_ram']),observation_end)
+            actual=terminal_consistency(args.output/'ram-pages.tsv',args.output/f'ram-frame-{observation_end:06d}.bin',observation_end)
+            report['terminal_ram_matches']=actual==raw
             okay=process.returncode==0 and report['input_identity_matches'] and report['terminal_ram_matches']
-            okay=okay and count==observation_end and report['first_divergence'] is None
+            okay=okay and comparison['match']
             report['status']='pass' if okay else 'fail'
         except (ValueError,OSError,KeyError) as error:
             report.update(status='fail',error=str(error))
@@ -273,17 +307,27 @@ def reference(args):
     observed=args.observed.resolve(strict=True)
     stock_identity=admit_source_control(stock)
     observed_identity=admit_source_control(observed)
-    comparison=json.loads((observed/'stock-comparison.json').read_text())
-    if comparison.get('match') is not True: raise ValueError('source observer must reproduce the stock control')
+    if (stock/'loaded-core.json').exists() or not (observed/'loaded-core.json').exists():
+        raise ValueError('reference requires distinct stock and rebuilt observer roles')
     endpoint=json.loads((observed/'complete.json').read_text())['frame']
-    if sum(1 for _ in read_pages(observed/'ram-pages.tsv'))!=endpoint:
-        raise ValueError('source observer does not cover every declared return')
+    if json.loads((stock/'complete.json').read_text())['frame']!=endpoint:
+        raise ValueError('stock and observer endpoints differ')
+    compared_files=compare_stock_observations(stock,observed,endpoint)
     raw=observed/f'ram-frame-{endpoint:06d}.bin'
-    if raw.stat().st_size!=2097152: raise ValueError('missing source terminal RAM')
+    with (observed/'ram-frames.tsv').open() as stream:
+        for line in stream: terminal_line=line
+    terminal_consistency(observed/'ram-pages.tsv',raw,endpoint,terminal_line.rstrip().split('\t')[3])
     if args.output.exists(): raise ValueError('never replace an admitted reference')
     files=[observed/'ram-pages.tsv',raw,observed/'loaded-core.json',observed/'stock-comparison.json',
            observed/'semantic-review.json',stock/'semantic-review.json',stock/'ram-frames.tsv',
-           observed/'manifest.json',stock/'manifest.json']
+           observed/'manifest.json',stock/'manifest.json',*compared_files]
+    for directory in [stock,observed]:
+        manifest=json.loads((directory/'manifest.json').read_text())
+        files += [Path(b['path']) if Path(b['path']).name!='config.ini' else directory/'launch-config.json'
+                  for b in manifest['bindings']]
+        files += [Path(b['path']) for b in json.loads((directory/'host-closure.json').read_text())]
+        files += [Path(v['path']) for v in (stock_identity if directory==stock else observed_identity).values()]
+    files=sorted(set(files))
     result={'schema':'pepsiman-independent-source-v1','movie_sha256':MOVIE_SHA,'bios_sha256':BIOS_SHA,
             'observed_returns':endpoint,'original_inputs':FRAMES,'neutral_tail':endpoint-FRAMES,
             'ram_pages':str(observed/'ram-pages.tsv'),'terminal_ram':str(raw),
