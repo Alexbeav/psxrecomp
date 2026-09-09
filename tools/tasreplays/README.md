@@ -22,10 +22,10 @@ python tools/tasreplays/tekken3.py run
 ```
 
 The setup verifies all three original disc tracks and the BIOS before building.
-It copies the verified media into the ignored `build/tekken3/media` directory,
-extracts the boot executable, downloads the TAS, preserves every input, builds
-the tools, runs their tests, generates BIOS/game C, checks all 57 generated
-source fingerprints, and builds the player. No emulator, reference oracle,
+It binds the original CUE and tracks in place, caches the verified boot executable
+and BIOS, downloads the TAS, preserves every input, builds the tools, runs their
+tests, generates BIOS/game C, checks all 57 generated source fingerprints, and
+builds the player. BIOS emitter freshness checking stays enabled. No emulator, reference oracle,
 Ghidra, prebuilt game binary, generated game C, or files from the research
 workspace are required. No retail disc, firmware, or extracted game code is
 distributed in the branch.
@@ -55,15 +55,21 @@ already uncapped, so combining `--headless` with a speed override is rejected.
 The standalone runtime accepts `PSX_FAST_FORWARD=1` to hold fast-forward from
 startup and `PSX_FAST_FORWARD_SPEED=2..64|max` to choose its cap. The replay
 command sets these explicitly and records them in each run's manifest.
-After updating an older checkout, rerun `setup` before selecting a speed.
+After updating an older checkout, run `setup` with a fresh `--project` directory
+and pass that same directory to `run` before selecting a speed.
 The runner rejects older setup receipts so a player cannot silently ignore
 the requested fast-forward control.
 
 Use `--timeout 3600` on a slower machine, or `setup --jobs 4` to reduce peak
 compiler memory. An original `.bk2` or its TASVideos download ZIP can be supplied
 with `setup --movie "D:/TAS/spikestuffv3-tekken3-ps1.bk2"`; it must have the
-same identity as publication4164. Setup can be repeated in the same checkout;
-moving a configured checkout requires rerunning setup to resolve its new paths.
+same identity as publication4164. Each setup requires a fresh output directory.
+Use `setup --project "D:/psx-tas/tekken3-build-02"` to preserve a previous build,
+then use `run --project "D:/psx-tas/tekken3-build-02"`. An explicit project directory
+must be outside the source checkout. `--cache` selects an existing verified
+private boot/firmware cache, and `--tools-dir` selects a reusable tools build
+that setup reconfigures and tests. Moving a configured checkout requires a new
+setup so generated paths and firmware provenance are verified again.
 The native executable imports only Windows system libraries; the launcher does
 not need the compiler's DLL directory at playback time.
 
