@@ -5375,6 +5375,7 @@ static void netplay_barrier_admit(int override) {
         s_np_timing_frames++;
     }
     int liveness_rearamed = 0;
+    freeze_heartbeat_set_paused(1);
     for (;;) {
         uint32_t dt = 0, lh = 0, rh = 0;
         const Uint64 now_ms = SDL_GetTicks64();
@@ -5400,13 +5401,13 @@ static void netplay_barrier_admit(int override) {
                     ? 0u
                     : psx_netplay_running_liveness_timeout_ms())) {
             netplay_soft_exit("netplay_peer_disconnect");
-            if (psx_return_to_lobby_requested()) return;
+            if (psx_return_to_lobby_requested()) goto done;
         }
         /* Staged .pst rejected (stale codegen / BIOS / missing) — do not wait
          * out the 90s load barrier with stall=load_apply_done. */
         if (psx_netplay_consume_load_apply_failed()) {
             netplay_soft_exit("netplay_load_failed");
-            if (psx_return_to_lobby_requested()) return;
+            if (psx_return_to_lobby_requested()) goto done;
         }
         /* Mutual INPUT/CONFIRM stall still refreshes last_peer_rx — detect
          * "no sim progress" separately (common rematch + TURN loss mode).
@@ -5424,7 +5425,7 @@ static void netplay_barrier_admit(int override) {
                          "stall=%s lead=%d — returning to lobby\n",
                          (unsigned)sim, stall[0] ? stall : "?", lead);
             netplay_soft_exit("netplay_load_stall");
-            if (psx_return_to_lobby_requested()) return;
+            if (psx_return_to_lobby_requested()) goto done;
         } else if (!psx_netplay_in_load_barrier() && !running &&
                    now_ms - barrier_t0 >= 90000u) {
             char stall[64];
@@ -5436,7 +5437,7 @@ static void netplay_barrier_admit(int override) {
                          "stall=%s lead=%d — returning to lobby\n",
                          (unsigned)sim, stall[0] ? stall : "?", lead);
             netplay_soft_exit("netplay_link_stall");
-            if (psx_return_to_lobby_requested()) return;
+            if (psx_return_to_lobby_requested()) goto done;
         } else if (!psx_netplay_in_load_barrier() && running &&
                    progress_t0 != 0 && now_ms - progress_t0 >= 20000u) {
             char stall[64];
@@ -5448,7 +5449,7 @@ static void netplay_barrier_admit(int override) {
                          "stall=%s lead=%d — returning to lobby\n",
                          (unsigned)sim, stall[0] ? stall : "?", lead);
             netplay_soft_exit("netplay_admit_stall");
-            if (psx_return_to_lobby_requested()) return;
+            if (psx_return_to_lobby_requested()) goto done;
         } else if (now_ms - last_stall_log_ms >= 2000u) {
             char stall[96];
             uint32_t sim = 0;
@@ -5514,12 +5515,14 @@ static void netplay_barrier_admit(int override) {
                 if (t1 >= admit_t0) s_np_admit_ticks += t1 - admit_t0;
                 s_np_last_admit_end = t1;
             }
-            return;
+            goto done;
         }
         /* Episode snap may have been applied during pump/try_admit without
          * longjmp — flush here (no present-body C++ RAII) before spinning.
          * try_admit refuses to arm needs_advance while resume is pending. */
+        freeze_heartbeat_set_paused(0);
         psx_netplay_rb_flush_resume();
+        freeze_heartbeat_set_paused(1);
 #ifndef PSX_NO_DEBUG_TOOLS
         debug_server_poll();
 #endif
@@ -5528,7 +5531,7 @@ static void netplay_barrier_admit(int override) {
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) {
                     netplay_soft_exit("sdl_window_close");
-                    if (psx_return_to_lobby_requested()) return;
+                    if (psx_return_to_lobby_requested()) goto done;
                 }
                 if (ev.type == SDL_KEYDOWN) {
 #if defined(PSX_SDL3)
@@ -5538,7 +5541,7 @@ static void netplay_barrier_admit(int override) {
 #endif
                     if (key == SDLK_ESCAPE) {
                         netplay_soft_exit("netplay_barrier_escape");
-                        if (psx_return_to_lobby_requested()) return;
+                        if (psx_return_to_lobby_requested()) goto done;
                     }
                 }
                 if (ev.type == SDL_CONTROLLERDEVICEADDED ||
@@ -5551,7 +5554,7 @@ static void netplay_barrier_admit(int override) {
             if (!psx_start_bisect_no_gc_update_in_admit())
                 SDL_GameControllerUpdate();
         }
-        if (psx_return_to_lobby_requested()) return;
+        if (psx_return_to_lobby_requested()) goto done;
         /* §35: TipHold invent-cap stall freezes guest (no vblank present).
          * Keep Swap alive on the last Live frame so SAFETY/held waits do not
          * open a ~250ms present gap.
@@ -5569,6 +5572,8 @@ static void netplay_barrier_admit(int override) {
         /* Admit barriers (save/load sync) can last seconds without guest cycles. */
         starvation_watchdog_heartbeat();
     }
+done:
+    freeze_heartbeat_set_paused(0);
 }
 
 static void sample_pad_into_sio(int override) {
@@ -6326,6 +6331,7 @@ static void rewind_pause_present(void) {
 
 /* Freeze guest in vblank present while the rewind filmstrip is open. */
 static void rewind_host_pause_loop(void) {
+    freeze_heartbeat_set_paused(1);
     while (psx_rewind_is_open()) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -6362,12 +6368,14 @@ static void rewind_host_pause_loop(void) {
         starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
+    freeze_heartbeat_set_paused(0);
     /* Swallow the still-held close press so it doesn't bleed into the game. */
     savestate_input_guard_arm();
 }
 
 /* Freeze guest in vblank present while the save-state slot menu is open. */
 static void savestate_menu_host_pause_loop(void) {
+    freeze_heartbeat_set_paused(1);
     while (savestate_menu_open) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -6408,6 +6416,7 @@ static void savestate_menu_host_pause_loop(void) {
         starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
+    freeze_heartbeat_set_paused(0);
     /* Swallow the close press; a just-queued save must not snapshot it. */
     savestate_input_guard_arm();
 }
