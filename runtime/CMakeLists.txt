@@ -97,6 +97,10 @@ if(BUILD_TESTING)
     target_include_directories(input_route_file_test PRIVATE include)
     add_test(NAME input_route_file_test COMMAND input_route_file_test)
 
+    add_executable(input_dualshock_route_file_test tests/test_input_dualshock_route_file.c)
+    target_include_directories(input_dualshock_route_file_test PRIVATE include)
+    add_test(NAME input_dualshock_route_file_test COMMAND input_dualshock_route_file_test)
+
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         foreach(_kind IN ITEMS pipeline dma)
