@@ -171,23 +171,30 @@ def setup(args) -> None:
                                      input='', text=True)
     if not re.search(r'^#define _UCRT\b', macros, re.M):
         raise ValueError('Use a UCRT MinGW toolchain (WinLibs UCRT or MSYS2 UCRT64), not MSVCRT.')
+    if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
+        raise ValueError('Commit all candidate source before setup')
+    head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
+    bash=Path(shutil.which('git')).resolve().parents[1]/'bin/bash.exe'
+    if not bash.is_file(): raise ValueError('Git for Windows bash is required for BIOS fingerprint verification')
     bios = args.bios.resolve(strict=True)
     require_hash(bios, BIOS_SHA)
     tracks = verify_cue(args.disc.resolve(strict=True))
-    PROJECT.mkdir(parents=True, exist_ok=True)
-    media = PROJECT / 'media'
-    media.mkdir(exist_ok=True)
-    for index, (source, (_, sha)) in enumerate(zip(tracks, TRACKS), 1):
-        target = media / f'track{index}.bin'
-        if not target.exists() or digest(target) != sha:
-            shutil.copyfile(source, target)
-        require_hash(target, sha)
-    shutil.copyfile(bios, media / 'SCPH1001.BIN')
-    cue = media / 'tekken3.cue'
-    cue.write_text('FILE "track1.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n'
-                   'FILE "track2.bin" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n'
-                   'FILE "track3.bin" BINARY\n  TRACK 03 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n', newline='\n')
-    (PROJECT / 'SLUS_004.02').write_bytes(extract_executable(media / 'track1.bin'))
+    PROJECT.mkdir(parents=True, exist_ok=False)
+    cue=args.disc.resolve(strict=True)
+    cache=(args.cache or PROJECT/'input-cache').resolve()
+    def store_private(data,sha,name):
+        folder=cache/sha;folder.mkdir(parents=True,exist_ok=True);target=folder/name
+        if not target.exists():
+            with target.open('xb') as stream:stream.write(data)
+        require_hash(target,sha);return target
+    boot=store_private(extract_executable(tracks[0]),EXE_SHA,'SLUS_004.02')
+    staged_bios=store_private(bios.read_bytes(),BIOS_SHA,'SCPH1001.BIN')
+    q=lambda path:json.dumps(path.as_posix())
+    bios_profile=PROJECT/'bios.toml'
+    profile=(ROOT/'bios/SCPH1001.toml').read_text()
+    for key,path in [('rom',staged_bios),('seeds',ROOT/'recompiler/seeds/phase2_ghidra_seeds.json'),('out_dir',ROOT/'generated')]:
+        profile=re.sub(r'^'+key+r'\s*=.*$',lambda _:key+' = '+q(path),profile,flags=re.M)
+    bios_profile.write_text(profile,encoding='utf8')
     route = prepare_movie(args.movie)
     tape = PROJECT / 'octoshock222-cold-random.psxrng'
     if not tape.exists():
@@ -199,14 +206,14 @@ def setup(args) -> None:
     game.write_text(f'''[game]
 name = "Tekken 3 TAS test"
 id = "SLUS-00402"
-exe = {q(PROJECT / 'SLUS_004.02')}
+exe = {q(boot)}
 load_address = "0x80010000"
 entry_pc = "0x80079C70"
 text_size = "0x121000"
 stack_base = "0x801FFFF0"
 [recompiler]
 seeds = {q(HERE / 'tekken3-seeds.txt')}
-bios_config = {q(ROOT / 'bios/SCPH1001.toml')}
+bios_config = {q(bios_profile)}
 strict = true
 out_dir = {q(PROJECT / 'generated')}
 [runtime]
@@ -221,23 +228,33 @@ renderer = "software"
              '-DPython3_EXECUTABLE=' + sys.executable], PROJECT / 'configure-tools.log')
     command(['cmake', '--build', TOOLS, '--parallel', args.jobs], PROJECT / 'build-tools.log')
     command(['ctest', '--test-dir', TOOLS, '--output-on-failure', '-j', args.jobs], PROJECT / 'test-tools.log')
-    command([TOOLS / 'psxrecomp-bios.exe', '--config', ROOT / 'bios/SCPH1001.toml',
-             '--rom', media / 'SCPH1001.BIN', '--out-dir', ROOT / 'generated'], PROJECT / 'generate-bios.log')
+    command([TOOLS / 'psxrecomp-bios.exe', '--config', bios_profile,
+             '--rom', staged_bios, '--out-dir', ROOT / 'generated'], PROJECT / 'generate-bios.log')
+    fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
+    if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS emitter fingerprint')
+    (ROOT/'generated/SCPH1001.emitter.sha').write_text(fingerprint+'\n')
     command([TOOLS / 'psxrecomp-game.exe', '--config', game], PROJECT / 'generate-game.log')
     # Check generated text against the winning build, independent of CRLF/LF.
     expected = json.loads((HERE / 'tekken3-codegen.json').read_text())
     for name, sha in expected.items():
-        path = ROOT / name
+        path = PROJECT/name.removeprefix('build/tekken3/') if name.startswith('build/tekken3/') else ROOT/name
         if hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() != sha:
             raise ValueError(f'Generated source differs from the qualified build: {name}')
     command(['cmake', '-S', HERE, '-B', NATIVE, *common,
              '-DPSX_RECOMP_UI=OFF', '-DPSX_NETPLAY=OFF', '-DPSX_REWIND=OFF',
              '-DPSX_SETUP_WIZARD=OFF', '-DPSX_DEBUG_TOOLS=ON', '-DPSX_ENABLE_VULKAN=OFF',
-             '-DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON',
+             '-DTAS_PROJECT_DIR='+str(PROJECT),'-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
+             '-D_psxrt_bash='+str(bash),
              '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE',
              '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'], PROJECT / 'configure-native.log')
     command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log')
-    build_info = {'schema': 'psx-tas-setup-v1', 'disc': str(cue), 'bios': str(media / 'SCPH1001.BIN'),
+    if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:
+        raise ValueError('Source changed during setup')
+    build_info = {'schema': 'psx-tas-setup-v1','source_head':head,'tracks':[str(p) for p in tracks],
+                  'source_tree':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],text=True).strip(),
+                  'original_bios':str(bios),'bios_profile':str(bios_profile),'bios_profile_sha256':digest(bios_profile),
+                  'bios_emitter_fingerprint':fingerprint,'qualified_codegen_sha256':expected,
+                  'disc': str(cue), 'bios': str(staged_bios),
                   'replay_speed_control': 1,
                   'game': str(game), 'route': str(route), 'tape': str(tape),
                   'executable': str(NATIVE / 'Tekken3-TAS.exe'),
@@ -290,7 +307,7 @@ def run(args) -> None:
     argv = [sys.executable, HERE / 'run_native.py', run_dir,
             '--exe', info['executable'], '--game', info['game'], '--disc', info['disc'],
             '--bios', info['bios'], '--route', info['route'], '--cd-source-clock-tape', info['tape'],
-            '--neutral-tail', '426', '--timeout', str(args.timeout), '--checkpoint-every', '300',
+            '--storage-budget-mib','1536','--neutral-tail', '426', '--timeout', str(args.timeout), '--checkpoint-every', '300',
             '--renderer', 'software', '--speed', args.speed, *PROFILE]
     if not args.headless:
         argv.append('--show')
@@ -303,14 +320,19 @@ def run(args) -> None:
 
 
 def main():
+    global PROJECT,TOOLS,NATIVE
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     prepare = sub.add_parser('setup', help='verify owned assets, download the TAS, generate and build')
     prepare.add_argument('--disc', type=Path, required=True, help='USA three-track .cue')
     prepare.add_argument('--bios', type=Path, required=True, help='SCPH1001.BIN')
+    prepare.add_argument('--project',type=Path,help='fresh private generated/build directory')
+    prepare.add_argument('--cache',type=Path,help='verified private boot/firmware cache')
+    prepare.add_argument('--tools-dir',type=Path,help='reusable tools build; configured and tested for this source')
     prepare.add_argument('--movie', type=Path, help='optional original BK2/download ZIP; otherwise download movie4164')
     prepare.add_argument('--jobs', type=int, default=min(12, os.cpu_count() or 1))
     play = sub.add_parser('run', help='play through the victory and compare every RAM/clock checkpoint')
+    play.add_argument('--project',type=Path,help='directory containing setup.json')
     play.add_argument('--headless', action='store_true')
     play.add_argument('--speed', choices=('1', '2', '4', '8', '16', '32', '64', 'max'), default='1',
                       help='visible replay speed cap; actual speed depends on the host')
@@ -318,6 +340,11 @@ def main():
     play.add_argument('--output', type=Path, help='new run directory; defaults to a unique build subdirectory')
     args = parser.parse_args()
     try:
+        if args.project:
+            PROJECT=args.project.resolve()
+            if PROJECT==ROOT or PROJECT.is_relative_to(ROOT):raise ValueError('Explicit project must be outside source')
+            NATIVE=PROJECT/'native'
+        if args.action=='setup':TOOLS=args.tools_dir.resolve() if args.tools_dir else PROJECT/'tools'
         if args.action == 'setup':
             if not 1 <= args.jobs <= 64:
                 raise ValueError('--jobs must be in 1..64')
