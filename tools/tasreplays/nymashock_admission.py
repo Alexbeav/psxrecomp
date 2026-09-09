@@ -149,7 +149,9 @@ def qualify(stock,observed,output):
         if a is None or b is None or a[:2]!=b[:2]:raise ValueError('source page clocks/coverage differ')
     terminal_consistency(pages,raw,endpoint,terminal[3])
     evidence += [pages,raw]
-    result={'schema':'biohazard-independent-source-v1','movie_sha256':MOVIE_SHA,'original_inputs':FRAMES,
+    result={'schema':'biohazard-independent-source-v1','source_qualification':'pass',
+            'stock_source':str(stock),'observer_source':str(observed),
+            'admission_tool_sha256':digest(__file__),'movie_sha256':MOVIE_SHA,'original_inputs':FRAMES,
             'neutral_tail':endpoint-FRAMES,'observed_returns':endpoint,'ram_pages':str(pages),
             'terminal_ram':str(raw),'initial_card1':str(stock/'initial-Memcard-1.bin'),
             'terminal_clock':terminal[1],'terminal_ram_sha256':terminal[3].lower(),

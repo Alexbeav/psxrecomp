@@ -41,3 +41,21 @@ The external generator remains separate from the generic native tape reader.
 Progression saves require fresh per-run raw-card copies, in-game loads and
 save/reload checks on both source and native. Emulator states are not raw
 cards and cannot satisfy those gates.
+
+`biohazard.py setup` requires that admitted reference plus the exact owned
+disc, BIOS, movie and Nymashock raw-generator qualification receipt. It creates
+a fresh candidate from clean source, freezes the original input and initial
+card, and records generated-code/build identities. No installed old title
+binary is used. `biohazard.py run` compares every declared source/native RAM
+page and clock, and full playback additionally compares terminal RAM bytes.
+An optional diagnostic cutoff retains only an unchanged original prefix;
+it cannot qualify full playback or replace the original movie.
+
+The candidate explicitly selects available runtime comparison models, including
+the separately qualified Nymashock controller/card models. Older profile names
+on other devices describe implementations being compared; they do not assert
+automatic compatibility with Nymashock. Native timing remains unqualified
+until the independent comparison passes. Source endpoint N needs one extra
+neutral native input boundary because native completion precedes its final
+return observer. Full runs keep the original input count intact and record
+that declared tail. The per-run storage bound is3GiB for full page/CPU checks.
