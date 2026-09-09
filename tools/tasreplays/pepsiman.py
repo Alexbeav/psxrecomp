@@ -94,11 +94,15 @@ def admit_source_control(path):
     end=json.loads((path/'exit.json').read_text())
     semantic=json.loads((path/'semantic-review.json').read_text())
     manifest=json.loads((path/'manifest.json').read_text())
-    if (complete.get('frame'),complete.get('original_inputs'),complete.get('full_movie'))!=(FRAMES,FRAMES,True):
+    tail=complete.get('neutral_tail')
+    if type(tail) is not int or not 0<=tail<=6000:
+        raise ValueError('source tail must be explicit and bounded')
+    endpoint=FRAMES+tail
+    if (complete.get('frame'),complete.get('original_inputs'),complete.get('full_movie'))!=(endpoint,FRAMES,True):
         raise ValueError('full original source control required')
     if end.get('exit_code')!=0 or end.get('stop_reason') is not None:
         raise ValueError('source did not complete cleanly')
-    if semantic.get('completion_observed') is not True or semantic.get('frame')!=FRAMES:
+    if semantic.get('completion_observed') is not True or not FRAMES<=semantic.get('frame',-1)<=endpoint:
         raise ValueError('source completion needs semantic review')
     evidence=path/semantic['image']
     if not evidence.resolve().is_relative_to(path) or digest(evidence)!=semantic['image_sha256']:
@@ -114,7 +118,7 @@ def admit_source_control(path):
             if len(columns)!=4 or int(columns[0])!=expected or not re.fullmatch('[0-9A-Fa-f]{64}',columns[3]):
                 raise ValueError('incomplete or discontinuous stock RAM capture')
             count+=1
-        if count!=FRAMES+1: raise ValueError('stock control misses original input boundaries')
+        if count!=endpoint+1: raise ValueError('stock control misses declared input/neutral boundaries')
     return {name:{'path':str(path/name),'sha256':digest(path/name)} for name in
             ['complete.json','exit.json','semantic-review.json','manifest.json','ram-frames.tsv']}
 
