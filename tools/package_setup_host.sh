@@ -3,7 +3,7 @@
 #
 # Stages the host exe, title sources, filtered psxrecomp/ + recomp-ui/, then
 # finishes with stage_setup_sdk.sh (emitters, OpenBIOS, MinGW DLLs).
-# Portable cmake/clang is NOT embedded by default — RetComM / the setup wizard
+# Portable cmake/clang is NOT embedded by default — Retro / the setup wizard
 # download cmake-clang-v1 from retcomm-toolchains (or accept an offline zip).
 #
 # Usage (from game repo root):
@@ -262,7 +262,7 @@ ZIP_NAME="${ZIP_PREFIX}-${VERSION}-${ARTIFACT}.zip"
 rm -f "${DIST}/${ZIP_NAME}"
 
 cp -a "${EXE}" "${STAGE}/"
-# Ship the stamp beside the exe so installers / RetComM can prefer it over VERSION.
+# Ship the stamp beside the exe so installers / Retro can prefer it over VERSION.
 if [[ -f "$(dirname "${EXE}")/psx_game_version.txt" ]]; then
   cp -a "$(dirname "${EXE}")/psx_game_version.txt" "${STAGE}/psx_game_version.txt"
 else
@@ -502,7 +502,7 @@ Standalone:
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
    also works if already on PATH.
 
-RetComM uses this same zip: it harvests emitters into a shared SDK cache,
+Retro uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
 EOF

@@ -1,4 +1,4 @@
-"""README download-badge + RetComM Launcher blocks for scaffold and migrate."""
+"""README download-badge + Retro Launcher blocks for scaffold and migrate."""
 
 from __future__ import annotations
 
@@ -41,7 +41,10 @@ _RAID_RE = re.compile(
     re.S,
 )
 _LEGACY_LAUNCHER_RE = re.compile(
-    r"^## RetComM Launcher\n.*?(?=^## |\Z)",
+    # Both headings: this section was "## RetComM Launcher" until the
+    # rename, and every README generated before it still says so. Matching
+    # only the new one leaves the old block in place and appends a second.
+    r"^## (?:Retro|RetComM) Launcher\n.*?(?=^## |\Z)",
     re.M | re.S,
 )
 _LEGACY_RAID_RE = re.compile(
@@ -194,26 +197,26 @@ def render_launcher_block() -> str:
     return "\n".join(
         [
             LAUNCHER_BEGIN,
-            "## RetComM Launcher",
+            "## Retro Launcher",
             "",
             "You can run this title **standalone** (release zip + the built-in recomp-ui",
             "Generate & Build flow), or manage installs, updates, ROM/BIOS wiring, and queued",
             "builds more intuitively with",
-            f"**[RetComM Launcher]({LAUNCHER_REPO})** —",
+            f"**[Retro Launcher]({LAUNCHER_REPO})** —",
             "the Retro Compilation Manager hub for self-compiling recomps.",
             "",
             f"[Downloads]({LAUNCHER_REPO}/releases) ·",
             f"[Full README & features]({LAUNCHER_REPO}#readme)",
             "",
             "<p align=\"center\">",
-            f'  <img src="{shots}/hub-and-game-launcher.png" alt="RetComM hub with a background build, next to a title’s recomp-ui launcher" width="720">',
+            f'  <img src="{shots}/hub-and-game-launcher.png" alt="Retro hub with a background build, next to a title’s recomp-ui launcher" width="720">',
             "</p>",
             "",
             "<p align=\"center\">",
             f'  <img src="{shots}/queue-and-background-build.png" alt="Background cmake build with titles queued" width="720">',
             "</p>",
             "",
-            "RetComM checks for updates, rebuilds with existing build data when possible,",
+            "Retro checks for updates, rebuilds with existing build data when possible,",
             "shares the portable toolchain used by per-title launchers, and automates",
             "BIOS/ROM/save plumbing so you are not stuck repeating each game’s wizard by hand.",
             LAUNCHER_END,
@@ -255,7 +258,7 @@ def readme_has_launcher(text: str) -> bool:
     # Both slugs: every port generated before the RetroPortingToolKit transfer
     # carries the old one, and matching only the new one would report each of
     # them as missing its launcher section — and append a second copy to any
-    # README that has neither the markers nor a "## RetComM Launcher" heading.
+    # README that has neither the markers nor a "## Retro Launcher" heading.
     return any(
         slug in text
         for slug in (
