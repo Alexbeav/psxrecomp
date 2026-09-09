@@ -17,17 +17,31 @@ static uint64_t source_ram_page_hash(const uint8_t *bytes, unsigned count) {
 static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
     static int initialized, enabled;
     static FILE *stream;
-    static unsigned snapshots[32], snapshot_count;
+    static unsigned snapshots[32], snapshot_count, max_frames = 20000;
     if (!initialized) {
         initialized = 1;
         const char *setting = getenv("PSX_SOURCE_RAM_PAGE_PROBE");
         enabled = setting && strcmp(setting, "1") == 0;
+        const char *limit = getenv("PSX_SOURCE_RAM_MAX_FRAMES");
+        if (enabled && limit) {
+            /* A declared route may exceed the historical short-TAS bound.
+             * Parse without strtoul overflow or accepting signs/whitespace. */
+            unsigned value = 0;
+            if (!*limit) abort();
+            for (const char *p = limit; *p; ++p) {
+                if (*p < '0' || *p > '9' || value > 100000) abort();
+                value = value * 10 + (unsigned)(*p - '0');
+                if (value > 1000000) abort();
+            }
+            if (!value) abort();
+            max_frames = value;
+        }
         const char *cursor = getenv("PSX_SOURCE_RAM_SNAPSHOT_FRAMES");
         while (enabled && cursor && *cursor) {
             if (*cursor < '0' || *cursor > '9') abort();
             char *end;
             unsigned long value = strtoul(cursor, &end, 10);
-            if (end == cursor || value < 1 || value > 20000 || snapshot_count == 32 ||
+            if (end == cursor || value < 1 || value > max_frames || snapshot_count == 32 ||
                 (*end && *end != ',')) abort();
             for (unsigned i = 0; i < snapshot_count; ++i)
                 if (snapshots[i] == value) abort();
@@ -37,7 +51,7 @@ static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
         }
     }
     if (!enabled) return;
-    if (frame < 1 || frame > 20000) abort();
+    if (frame < 1 || frame > max_frames) abort();
     extern uint8_t *memory_get_ram_ptr(void);
     const uint8_t *ram = memory_get_ram_ptr();
     char path[4096];
