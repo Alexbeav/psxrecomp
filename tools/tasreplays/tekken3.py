@@ -238,6 +238,7 @@ renderer = "software"
              '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'], PROJECT / 'configure-native.log')
     command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log')
     build_info = {'schema': 'psx-tas-setup-v1', 'disc': str(cue), 'bios': str(media / 'SCPH1001.BIN'),
+                  'replay_speed_control': 1,
                   'game': str(game), 'route': str(route), 'tape': str(tape),
                   'executable': str(NATIVE / 'Tekken3-TAS.exe'),
                   'executable_sha256': digest(NATIVE / 'Tekken3-TAS.exe'),
@@ -277,6 +278,8 @@ def run(args) -> None:
     if not setup_path.exists():
         raise ValueError('Run the setup command with your disc and SCPH1001 BIOS first.')
     info = json.loads(setup_path.read_text())
+    if args.speed != '1' and info.get('replay_speed_control') != 1:
+        raise ValueError('Rerun setup to build a player with replay speed control before using --speed.')
     require_hash(Path(info['executable']), info['executable_sha256'])
     require_hash(Path(info['bios']), BIOS_SHA)
     require_hash(Path(info['tape']), TAPE_SHA)
