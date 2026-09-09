@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "source_observer_limit.h"
 
 /* Passive diagnostic index. A hash mismatch locates bytes to inspect; hashes
  * are not a substitute for comparing the selected raw RAM snapshots. */
@@ -22,20 +23,7 @@ static void source_ram_page_probe(unsigned frame, uint64_t cycle) {
         initialized = 1;
         const char *setting = getenv("PSX_SOURCE_RAM_PAGE_PROBE");
         enabled = setting && strcmp(setting, "1") == 0;
-        const char *limit = getenv("PSX_SOURCE_RAM_MAX_FRAMES");
-        if (enabled && limit) {
-            /* A declared route may exceed the historical short-TAS bound.
-             * Parse without strtoul overflow or accepting signs/whitespace. */
-            unsigned value = 0;
-            if (!*limit) abort();
-            for (const char *p = limit; *p; ++p) {
-                if (*p < '0' || *p > '9' || value > 100000) abort();
-                value = value * 10 + (unsigned)(*p - '0');
-                if (value > 1000000) abort();
-            }
-            if (!value) abort();
-            max_frames = value;
-        }
+        if (enabled) max_frames = source_observer_max_frames("PSX_SOURCE_RAM_MAX_FRAMES");
         const char *cursor = getenv("PSX_SOURCE_RAM_SNAPSHOT_FRAMES");
         while (enabled && cursor && *cursor) {
             if (*cursor < '0' || *cursor > '9') abort();
