@@ -55,6 +55,9 @@ already uncapped, so combining `--headless` with a speed override is rejected.
 The standalone runtime accepts `PSX_FAST_FORWARD=1` to hold fast-forward from
 startup and `PSX_FAST_FORWARD_SPEED=2..64|max` to choose its cap. The replay
 command sets these explicitly and records them in each run's manifest.
+After updating an older checkout, rerun `setup` before selecting a speed.
+The runner rejects older setup receipts so a player cannot silently ignore
+the requested fast-forward control.
 
 Use `--timeout 3600` on a slower machine, or `setup --jobs 4` to reduce peak
 compiler memory. An original `.bk2` or its TASVideos download ZIP can be supplied
