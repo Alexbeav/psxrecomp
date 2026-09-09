@@ -22,6 +22,13 @@ def cue():
     return '\n'.join(parts)+'\n'
 
 class PepsimanAdmission(unittest.TestCase):
+    def test_legacy_control_reference_keeps_campaign_base(self):
+        with tempfile.TemporaryDirectory() as temp:
+            campaign=Path(temp);stock=campaign/'stock';observed=campaign/'observed'
+            stock.mkdir();observed.mkdir();file=stock/'ram-frames.tsv';file.write_text('bound capture')
+            binding={'path':'stock/ram-frames.tsv','sha256':pepsiman.digest(file)}
+            resolved=pepsiman.control_binding_path(observed,binding)
+            self.assertTrue(resolved.is_absolute());self.assertEqual(resolved,file.resolve())
     def test_seed_window_keeps_only_exact_bytes(self):
         original=bytes(256);target=bytearray(original);target[63]=1
         seeds=[{'address':f'0x{0xBFC00000+i:08X}'} for i in [0,64,192,193]]
