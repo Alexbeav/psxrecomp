@@ -4,6 +4,8 @@
 
 # PSXRecomp
 
+> ℹ️ **Note from mstan:** This repo and I are now part of [RetroPortingToolkit](https://retroportingtoolkit.com/). I remain a primary maintainer of psxrecomp alongside the team. [More info](https://1379.tech/forming-a-collective-retro-porting-toolkit/).
+
 **A general-purpose static recompiler for the PlayStation 1.** It turns a PS1
 disc into a native executable — MIPS R3000A translated to C, compiled to x64,
 linked against a hardware-accurate runtime. Not an emulator: the game becomes a
@@ -819,7 +821,14 @@ for build failures); design discussion happens in the **R.A.I.D.** Discord
 
 ## License
 
-PolyForm Noncommercial 1.0.0. See `LICENSE`.
+PolyForm Noncommercial 1.0.0. See `LICENSE`. Copyright © 2026 Matthew
+Stanley; commercial licensing inquiries go to him at <https://1379.tech>.
+
+Third-party components vendored into the runtime keep their own terms, and
+their notices ship with every release under `licenses/` in the package
+(sources in [`runtime/licenses/`](runtime/licenses)). See
+[`THIRD_PARTY_ATTRIBUTION.md`](THIRD_PARTY_ATTRIBUTION.md) for what is
+vendored and why.
 
 Retail PS1 BIOS images and game disc images remain copyrighted by their
 respective owners and are not distributed. This project does distribute the
