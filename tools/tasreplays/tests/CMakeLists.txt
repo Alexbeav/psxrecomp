@@ -24,3 +24,16 @@ foreach(_mode IN ITEMS O0 O2)
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
 endforeach()
+
+foreach(_kind IN ITEMS pipeline dma)
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "tas_mdec_source_${_kind}_${_mode}")
+        add_executable(${_target} "${_tas_runtime}/tests/test_mdec_source_${_kind}.c")
+        target_include_directories(${_target} PRIVATE "${_tas_runtime}/src"
+            "${_tas_runtime}/include" "${CMAKE_CURRENT_LIST_DIR}/../../../recompiler/include")
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+            "${_tas_runtime}/tests/test_mdec_source_contracts.py" $<TARGET_FILE:${_target}> ${_kind})
+    endforeach()
+endforeach()
