@@ -21,6 +21,17 @@ void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3], uint16_t target[
 #include <string.h>
 #include <stdio.h>
 static uint8_t ram[PSX_MAIN_RAM_BYTES];
+static const char *card_case = "";
+int memcard_is_present(int slot) {
+    if (!strstr(card_case,"card_")) return 0;
+    return slot == 0 ? strcmp(card_case,"card_missing") != 0 : !strcmp(card_case,"card_extra");
+}
+int memcard_debug_read_buffer(int slot,uint32_t offset,uint32_t length,uint8_t *out) {
+    if (slot || (!strcmp(card_case,"card_short") && offset==4096)) return 0;
+    for (unsigned i=0;i<length;++i) out[i]=(uint8_t)(offset+i);
+    if (!strcmp(card_case,"card_changed") && !offset) out[0]^=1;
+    return (int)length;
+}
 uint8_t *g_psx_ram = ram;
 int event_ring_dump_stream(FILE *f) { fputs("[]\n", f); return 0; }
 uint64_t cdrom_debug_get_command_history(const CDROMCommandHistoryEntry **out) { *out = NULL; return 0; }
@@ -47,6 +58,7 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
 }
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
+    card_case = argv[1];
     if (!strncmp(argv[1], "ds_", 3)) {
         if (!input_route_observer_dualshock_init(2)) return 4;
         const uint8_t source[4] = {1,0,128,255}, source2[4] = {129,130,131,132};
