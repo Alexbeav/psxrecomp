@@ -498,7 +498,7 @@ Standalone:
 3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
    OpenBIOS is regenerated locally).
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
-   cmake-clang-v1 from TechnicallyComputers/retcomm-toolchains (or you can
+   cmake-clang-v1 from RetroPortingToolKit/RetroPorting-Toolchains (or you can
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
    also works if already on PATH.
 

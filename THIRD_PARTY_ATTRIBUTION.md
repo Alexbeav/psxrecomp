@@ -86,7 +86,7 @@ All reuse keeps the original copyright and dual MIT/Apache-2.0 license.
 
 ## retcomm-studio — multi-disc project tooling
 
-[retcomm-studio](https://github.com/TechnicallyComputers/retcomm-studio) by
+[retcomm-studio](https://github.com/RetroPortingToolKit/Retro-Studio) by
 Alex Vanderveen, licensed **MIT** (notice: `LICENSE` in that repository).
 psxrecomp is PolyForm-NC, so this is permissive vendored into stricter — the
 MIT notice must ride along and is why this entry exists.

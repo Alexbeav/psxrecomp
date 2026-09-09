@@ -1905,7 +1905,7 @@ static int run_cli_posix(char* const argv[],
 
 /* ---- Host-native toolchain install (no Store Python AppData redirect) ---- */
 
-static const char* k_tc_repo = "TechnicallyComputers/retcomm-toolchains";
+static const char* k_tc_repo = "RetroPortingToolKit/RetroPorting-Toolchains";
 
 static const char* toolchain_zip_asset_name(void) {
 #if defined(_WIN32)

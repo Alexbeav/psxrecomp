@@ -146,9 +146,9 @@ if (-not $ZipPrefix) {
 
 if (-not $GithubOwner) {
     if ($interactive) {
-        $GithubOwner = Prompt-Line "GitHub owner / org (README download badges)" "TechnicallyComputers"
+        $GithubOwner = Prompt-Line "GitHub owner / org (README download badges)" "RetroPortingToolKit"
     } else {
-        $GithubOwner = "TechnicallyComputers"
+        $GithubOwner = "RetroPortingToolKit"
     }
 }
 $derivedRepo = (python -c "from fill_tokens import sanitize_github_name; import sys; print(sanitize_github_name(sys.argv[1]))" $Name).Trim()
