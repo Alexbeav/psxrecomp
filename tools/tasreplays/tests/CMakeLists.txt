@@ -4,6 +4,8 @@ add_test(NAME tas_dualshock_route_export COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_dualshock_route.py")
 add_test(NAME tas_native_input_identity COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_native_input_identity.py")
+add_test(NAME tas_nymashock_admission COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock_admission.py")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(STATUS "TAS model fixtures currently require GCC")
     return()
