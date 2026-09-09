@@ -60,7 +60,7 @@ int main(int argc,char **argv) {
     assert(source_gpu_command_update(&s,595)); assert(s.second_triangles==1);
     assert(source_gpu_command_update(&s,638)); assert(s.second_triangles==2 && s.budget==-45);
     assert(!source_gpu_command_update(&s,637)); assert(s.error==SOURCE_GPU_COMMAND_REVERSE_TIME);
-    setup(&s); assert(!source_gpu_command_write(&s,0x2a000000));
+    setup(&s); assert(!source_gpu_command_write(&s,0x40000000));
     assert(s.error==SOURCE_GPU_COMMAND_UNSUPPORTED);
     setup(&s); assert(source_gpu_command_update(&s,146)); quad(&s,32);
     for(unsigned i=1;i<16;++i) assert(source_gpu_command_write(&s,0));
