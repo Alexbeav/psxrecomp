@@ -42,7 +42,11 @@ static inline int source_poly_walk(const int *input_x,const int *input_y,
     int right= v[1].y==v[0].y ? v[1].x>v[0].x :
         source_poly_slope(v[1].x-v[0].x,v[1].y-v[0].y)>long_step;
     int cost=0;
-    for(int half=0;half<2;half++) {
+    /* Source traversal starts at the leftmost core vertex. For a middle or
+     * bottom core, visit the lower half before the upper half. Texture-cache
+     * residency and texture reads of the draw destination observe this order. */
+    for(int part=0;part<2;part++) {
+        int half=core?1-part:part;
         int lo=half,hi=half+1;
         if(v[hi].y==v[lo].y)continue;
         int down=half==0?core==0:core!=2;
