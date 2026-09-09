@@ -13,6 +13,7 @@
 #include "sio.h"
 #include "starvation_ring.h"
 #include "timers.h"
+#include "source_gpu_runtime.h"
 #if defined(PSX_HAS_RECOMP_NET)
 #include "psx_netplay.h"
 #endif
@@ -77,6 +78,7 @@ static void advance_devices(uint32_t c) {
     psx_cycle_count += (uint64_t)c;
     sio_advance(c);
     cdrom_advance(c);
+    source_gpu_runtime_advance();
     dma_advance(c);
     timers_advance(c);
     interrupts_advance_cycles(c);
@@ -139,6 +141,7 @@ static uint32_t devices_cycles_to_next_internal_event(void) {
     uint32_t t = timers_cycles_to_irq(0xFFFFFFFFu);  if (t < best) best = t;
     uint32_t c = cdrom_cycles_to_irq(0xFFFFFFFFu);   if (c < best) best = c;
     uint32_t d = dma_cycles_to_internal_event();     if (d < best) best = d;
+    uint32_t g = source_gpu_runtime_cycles_to_event(); if (g < best) best = g;
     uint32_t s = sio_cycles_to_irq(0xFFFFFFFFu);     if (s < best) best = s;
     uint32_t a = psx_spu_sample_event_cycles_to_next(); if (a < best) best = a;
     if (best == 0) best = 1;    /* due/overdue: process within one cycle */
@@ -674,10 +677,16 @@ uint32_t psx_mult_latency_u(uint32_t rs) {  /* MULTU (unsigned) */
 /* DIV/DIVU latency is the fixed constant 37 — emitted directly at the op site. */
 
 void psx_muldiv_set(CPUState* cpu, uint32_t latency) {
+    /* The deadline belongs to this instruction, including unpublished CPU
+     * work from generated blocks and local charge accumulators. */
+    psx_cyc_batch_flush();
     cpu->muldiv_ts_done = psx_cycle_count + (uint64_t)latency;
 }
 
 void psx_muldiv_stall(CPUState* cpu) {
+    /* Publish once before comparing; otherwise advance would add the pending
+     * work a second time on top of a stall computed from a stale clock. */
+    psx_cyc_batch_flush();
     /* MFLO/MFHI stall to the mult/div completion deadline (Beetle cpu.cpp:1723-1736).
      * While stalling it CONSUMES a pending load-delay give-back (read_absorb) — each
      * stalled cycle decrements read_absorb[read_absorb_which] — so cycles that would

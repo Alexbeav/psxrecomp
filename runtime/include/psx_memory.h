@@ -24,6 +24,10 @@ extern "C" {
 #define PSX_MAIN_RAM_MASK (PSX_MAIN_RAM_BYTES - 1u)
 #define PSX_MAIN_RAM_WORD_MASK (PSX_MAIN_RAM_MASK & ~3u)
 
+/* Read instruction bytes from the native RAM/BIOS backing only. No MMIO,
+ * data-read observers, device service or cycle charge. Returns 0 when invalid. */
+int memory_peek_instruction_word(uint32_t address, uint32_t *value);
+
 /* Strip KUSEG/KSEG0/KSEG1 and canonicalize within the 8 MiB DRAM decode
  * window. Retail targets fold all four aliases; expanded targets preserve all
  * 23 address bits. */

@@ -83,6 +83,10 @@ typedef struct {
  * port=0 uses the default (4370). */
 void debug_server_init(int port);
 
+/* Opt-in PSXRTI1 route, validated before guest execution. First record is
+ * consumed at the first normal VBlank input-sampling boundary. */
+int debug_server_preload_input_route(const char *path);
+
 /* Current listener status for heartbeat diagnostics. error is the platform
  * socket error captured by init, or 0 when the listener is active. */
 void debug_server_get_status(int *listening, int *port, int *error);
@@ -129,6 +133,7 @@ extern uint32_t g_debug_current_func_addr;
  * writes into the 1M-entry ring buffer with function + frame attribution. */
 void debug_server_trace_write_check(uint32_t phys, uint32_t old_val,
                                     uint32_t new_val, uint8_t width);
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog);
 
 /* MMIO write trace — separate ring buffer for 0x1F801xxx writes. */
 void debug_server_trace_mmio_write(uint32_t addr, uint32_t val, uint8_t width);
@@ -202,6 +207,8 @@ int debug_server_get_axis_override(unsigned char st[4]);
 /* TCP-controlled turbo mode. When enabled the frontend skips presentation and
  * wall-clock pacing at vblank, matching the keyboard TAB turbo path. */
 int debug_server_turbo_enabled(void);
+/* File playback only: assert actual P1 SIO state after normal VBlank sampling. */
+void debug_server_note_input_applied(void);
 
 /* TCP-controlled turbo mode. When enabled the frontend skips presentation and
  * wall-clock pacing at vblank, matching the keyboard TAB turbo path. */
@@ -233,6 +240,8 @@ void debug_server_send_fmt(const char *fmt, ...);
  * ring head. Forensic value is in the bulk of older entries which are
  * stable. */
 void debug_server_freeze_dump_wtrace_all_json(FILE *f, uint32_t max_count);
+/* Passive scalar filter of existing write history; no new recording or RAM reads. */
+void debug_server_dump_watched_writes(FILE *f, const uint32_t *u16_addresses, uint32_t count);
 void debug_server_freeze_dump_wtrace_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_mmio_json(FILE *f, uint32_t max_count);
 void debug_server_freeze_dump_frame_history_json(FILE *f, uint32_t max_count);

@@ -11,6 +11,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+int g_input_instruction_histogram_active;
+void (*g_psx_cpu_step_boundary_callback)(CPUState *,uint32_t,uint64_t);
+int psx_cpu_step_boundary_enabled(int include_replay) {
+    return g_psx_cpu_step_boundary_callback != NULL &&
+           (include_replay || !g_ls_replay_active);
+}
+void psx_cpu_step_boundary_fn(CPUState *cpu,uint32_t address) {
+    psx_cpu_step_boundary(cpu,address);
+}
+void (*g_input_instruction_histogram_callback)(uint32_t pc);
+void input_instruction_histogram_sample(uint32_t pc) {
+    if(g_input_instruction_histogram_callback)g_input_instruction_histogram_callback(pc);
+}
 
 int psx_icache_enabled(void) {
     static int s = -1;
@@ -67,6 +80,18 @@ void psx_icache_reset(void) {
     for (int i = 0; i < 1024; i++) g_psx_icache_tv[i] = 0x1u;
 }
 
+void psx_icache_isolated_store(uint32_t addr, uint32_t cache_control) {
+    /* PSX-SPX Memory Control: IsC + I-cache enable + tag-test mode flushes
+     * the indexed 16-byte line. The original Octoshock 2.2.2 WriteMemory
+     * comparison invalidates all four words, independent of store width/value.
+     * Keep the existing tag representation (bit 1 means invalid). This is a
+     * timing-tag correction; it does not add cache data execution semantics. */
+    if ((cache_control & 0x804u) != 0x804u) return;
+    if (g_ls_replay_active && s_icache_shadow_state != 2) return;
+    uint32_t first = (addr & 0xFF0u) >> 2;
+    for (unsigned i = 0; i < 4; i++) g_psx_icache_tv[first + i] = 0x2u;
+}
+
 void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
     { extern int g_ls_replay_active;
       /* Ordinary lockstep replay must not perturb the shared cache. The whole-
@@ -108,6 +133,8 @@ void psx_icache_fetch_miss(CPUState* cpu, uint32_t addr) {
 }
 
 void psx_icache_fetch(CPUState* cpu, uint32_t addr) {
+    psx_cpu_step_boundary(cpu,addr);
+    if (g_input_instruction_histogram_active) input_instruction_histogram_sample(addr);
     psx_icache_fetch_miss(cpu, addr);
 }
 

@@ -4,6 +4,11 @@
 static OverlayCallbacks g_cbs;
 static uint32_t s_pending_cycles;
 
+/* Generated fused-stub admission reads this as a predicate. Query the host's
+ * live installation state, including replay, rather than a DLL-local copy. */
+#define g_psx_cpu_step_boundary_callback \
+    (g_cbs.cpu_step_boundary_enabled && g_cbs.cpu_step_boundary_enabled(1))
+
 #ifdef _WIN32
 __declspec(dllexport)
 #else
@@ -116,6 +121,13 @@ uint32_t psx_cyc_lwc2_read(CPUState *cpu, uint32_t addr) {
 void psx_icache_fetch(CPUState *cpu, uint32_t addr) {
     overlay_flush_cycles();
     if (g_cbs.icache_fetch) g_cbs.icache_fetch(cpu, addr);
+}
+void psx_cpu_step_boundary(CPUState *cpu, uint32_t addr) {
+    if (g_cbs.cpu_step_boundary_enabled &&
+        g_cbs.cpu_step_boundary_enabled(0) && g_cbs.cpu_step_boundary) {
+        overlay_flush_cycles();
+        g_cbs.cpu_step_boundary(cpu, addr);
+    }
 }
 void psx_muldiv_set(CPUState *cpu, uint32_t latency) {
     overlay_flush_cycles();

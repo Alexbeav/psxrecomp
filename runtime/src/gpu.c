@@ -11,6 +11,8 @@
  */
 
 #include "gpu.h"
+#include "source_gpu_runtime.h"
+#include "interrupts.h"
 #include "pgxp.h"
 #include "mod_memory.h"
 #include "gpu_primitive_reject.h"
@@ -32,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int gpu_source_dispatch(const SourceGPUCommandDispatch *);
 
 extern uint16_t psx_read_half(uint32_t addr);
 extern uint8_t  psx_read_byte(uint32_t addr);
@@ -2278,12 +2282,17 @@ static int32_t  polyline_prev_x, polyline_prev_y;  /* previous vertex */
 static uint16_t polyline_prev_c;      /* shaded polyline: previous color */
 static int      polyline_semi_trans;  /* semi-transparency flag from command word */
 static int      polyline_has_prev;    /* have we seen at least one vertex? */
+/* Read-only admission metadata for the bounded source DMA experiment. It
+ * never changes parser behavior. Source restore is excluded by dma.c. */
+static unsigned source_ll_polyline_vertices;
+static int source_ll_incomplete_terminator;
 
 /* VRAM write transfer state (CPU→VRAM, command 0xA0) */
 static uint16_t vram_write_x, vram_write_y;   /* start coords */
 static uint16_t vram_write_w, vram_write_h;   /* dimensions */
 static uint16_t vram_write_col, vram_write_row; /* current offset */
 static uint32_t vram_write_remaining;          /* words remaining */
+uint32_t gpu_dma_vram_upload_words(void) { return vram_write_remaining; }
 /* Stage one complete GP0(A0) transfer so renderer backends receive one bulk
  * rectangle instead of hundreds of thousands of single-pixel callbacks. The
  * CPU-visible transfer remains ordered because GP0 accepts no next command
@@ -2314,6 +2323,14 @@ static void gp0_commit_cpu_to_vram(void) {
 
 /* VRAM read transfer state (VRAM→CPU, command 0xC0) */
 static int      vram_read_active;
+int gpu_dma_source_ll_ready(void) {
+    int projected=source_gpu_runtime_ready();
+    if(projected!=-2)return projected;
+    if(source_ll_incomplete_terminator || vram_read_active)return -1;
+    if(gp0_state==GP0_IDLE)return 1;
+    if(gp0_state==GP0_POLYLINE_MONO && source_ll_polyline_vertices>=2)return 0;
+    return -1;
+}
 static uint16_t vram_read_x, vram_read_y;
 static uint16_t vram_read_w, vram_read_h;
 static uint16_t vram_read_col, vram_read_row;
@@ -2629,6 +2646,7 @@ static void gpu_reset_state(int clear_vram) {
     polyline_prev_c = 0;
     polyline_semi_trans = 0;
     polyline_has_prev = 0;
+    source_ll_polyline_vertices=0;source_ll_incomplete_terminator=0;
     vram_write_x = vram_write_y = 0;
     vram_write_w = vram_write_h = 0;
     vram_write_col = vram_write_row = 0;
@@ -2695,6 +2713,8 @@ static void gpu_reset_state(int clear_vram) {
 
 void gpu_init(void) {
     gpu_reset_state(1);
+    source_gpu_runtime_set_dispatch_sink(gpu_source_dispatch);
+    gr_source_texture_control(0,0);
 }
 
 /* ---- GPUSTAT read (0x1F801814) ---- */
@@ -2790,6 +2810,15 @@ uint32_t gpu_read_gpustat(void) {
     /* Bit 31: LCF — drawing even/odd lines in interlace mode */
     stat |= (lcf & 1) << 31;
 
+    uint32_t raster_bits;
+    if (interrupts_raster_gpu_status(&raster_bits))
+        stat=(stat&~0x80002000u)|raster_bits;
+
+    /* Source-profile busy and feedback bits describe the same queue that
+     * owns command effects. A status read observes it without servicing it. */
+    if(source_gpu_runtime_active())
+        stat=(stat&~0x1e000000u)|source_gpu_runtime_status_bits();
+
     return stat;
 }
 
@@ -2810,12 +2839,17 @@ uint32_t gpu_read_gpuread(void) {
         value |= (uint32_t)gr_vram_read((int)rx, (int)ry) << (i * 16);
 
         if (++vram_read_col == vram_read_w) {
-            vram_read_col = 0;
-            if (++vram_read_row == vram_read_h) {
+            if(source_gpu_runtime_active()) {
+                /* Original source reads both halves of the final word. For
+                 * odd extents its extra half uses the next X on the final row. */
+                if(vram_read_row+1==vram_read_h)vram_read_active=0;
+                else {vram_read_row++;vram_read_col=0;}
+            } else if (++vram_read_row == vram_read_h) {
                 /* Transfer complete */
+                vram_read_col = 0;
                 vram_read_active = 0;
                 break;
-            }
+            } else vram_read_col=0;
         }
     }
 
@@ -2828,7 +2862,8 @@ uint32_t gpu_read_gpuread(void) {
             c0_capture_slot_fwd = -1;  /* transfer complete */
     }
 
-    gpuread_latch = value;
+    if(source_gpu_runtime_active())source_gpu_runtime_read();
+    else gpuread_latch = value;
     return value;
 }
 
@@ -3195,6 +3230,18 @@ int gpu_display_is_depth24(void) {
  * interrupts.c/timers.c and the wall-clock pacer in main.cpp (T32, MGS PAL). */
 int gpu_video_standard_is_pal(void) {
     return (int)(video_mode & 1u);
+}
+
+int gpu_display_is_interlaced(void) {
+    return (int)(vertical_interlace & 1u);
+}
+
+/* Passive private observer: no GPUSTAT read, polling side effect or time pump. */
+void gpu_observer_video_state(uint32_t *out) {
+    out[0]=(hres1&3u)|((vres&1u)<<2)|((video_mode&1u)<<3)|
+           ((display_depth&1u)<<4)|((vertical_interlace&1u)<<5)|((hres2&1u)<<6);
+    out[1]=v_display_y1; out[2]=v_display_y2;
+    out[3]=(uint32_t)interlace_field; out[4]=(uint32_t)lcf;
 }
 
 void gpu_get_display_info(GpuDisplayInfo* out) {
@@ -4494,6 +4541,10 @@ static void gp0_exec_vram_to_cpu(void) {
     uint32_t h = (gp0_cmd_buf[2] >> 16) & 0x1FFu;
     vram_read_w = (w == 0) ? 0x400 : (uint16_t)w;
     vram_read_h = (h == 0) ? 0x200 : (uint16_t)h;
+    if(source_gpu_runtime_active()) {
+        uint32_t raw_height=(gp0_cmd_buf[2]>>16)&1023u;
+        vram_read_h=(uint16_t)(raw_height>512 ? raw_height&511u : raw_height);
+    }
 
     /* Record for debug */
     if (c0_history_count < C0_HISTORY_CAP) {
@@ -4512,7 +4563,7 @@ static void gp0_exec_vram_to_cpu(void) {
 
     vram_read_col = 0;
     vram_read_row = 0;
-    vram_read_active = 1;
+    vram_read_active = vram_read_h != 0;
 }
 
 /* Determine how many words a GP0 command requires (header only, not counting
@@ -5292,7 +5343,6 @@ uint16_t gpu_vram_peek(int x, int y) {
 }
 
 static void gpu_write_gp0_body(uint32_t val) {
-    gp0_write_count++;
 
     /* State: consuming pixel data for CPU→VRAM transfer */
     if (gp0_state == GP0_VRAM_WRITE) {
@@ -5345,6 +5395,7 @@ static void gpu_write_gp0_body(uint32_t val) {
     /* State: mono polyline — each word is a vertex (or terminator) */
     if (gp0_state == GP0_POLYLINE_MONO) {
         if ((val & 0xF000F000u) == 0x50005000u) {
+            if(source_ll_polyline_vertices<2)source_ll_incomplete_terminator=1;
             /* Terminator: hardware ends a polyline ONLY when the masked word
              * matches 0x50005000 (the 0x55555555 terminator) — Beetle
              * gpu.cpp:1030, psx-spx. The old `(val & 0xF000F000) != 0` test
@@ -5359,6 +5410,7 @@ static void gpu_write_gp0_body(uint32_t val) {
             return;
         }
         int32_t x, y;
+        if(source_ll_polyline_vertices<2)source_ll_polyline_vertices++;
         parse_vertex(val, &x, &y);
         x += draw_offset_x; y += draw_offset_y;
         if (polyline_has_prev &&
@@ -5448,6 +5500,7 @@ static void gpu_write_gp0_body(uint32_t val) {
         polyline_has_prev = 0;
         gr_set_semi_transparency(polyline_semi_trans, (int)semi_transparency);
         gp0_state = shaded ? GP0_POLYLINE_SHADED : GP0_POLYLINE_MONO;
+        source_ll_polyline_vertices=0;
         gp0_draw_count++;
         /* Record polyline header (variable-length body not captured;
          * just enough so per-frame stream shows the polyline existed). */
@@ -5475,7 +5528,95 @@ static void gpu_write_gp0_body(uint32_t val) {
  * rasterization / batching / VRAM transfer work on the emu thread — as its
  * own phase so it is separable from the guest code that issued the write.
  * Covers both the MMIO store chokepoint and DMA channel-2 feeds. */
+static int gpu_source_draw_triangle(const uint32_t *words,int second) {
+    unsigned opcode=words[0]>>24,stride=source_gpu_polygon_stride(opcode);
+    int x[3],y[3],extra_work=0;uint32_t colors[3];SourceGPUTexture texture={0};
+    SourceGPUCommandProjection state;source_gpu_runtime_copy(0,&state);
+    if((opcode&4) && !second) {
+        uint32_t page=words[4+!!(opcode&0x10)]>>16;
+        gr_source_texture_control(3,page);
+        set_tpage_from_poly((uint16_t)page);
+    }
+    texture.page=current_texpage();texture.window=texture_window_value;
+    texture.clut=words[2]>>16;texture.raw=!!(opcode&1);texture.load_clut=!second;
+    for(unsigned i=0;i<3;i++) {
+        unsigned v=i+(second?1:0);
+        x[i]=source_gpu_command_coord(words[1+stride*v],0)+draw_offset_x;
+        y[i]=source_gpu_command_coord(words[1+stride*v],16)+draw_offset_y;
+        colors[i]=words[(opcode&0x10)?stride*v:0]&0xffffffu;
+        if(opcode&4)texture.uv[i]=words[2+stride*v]&0xffff;
+    }
+    gr_set_semi_transparency(!!(opcode&2),(int)semi_transparency);
+    if(!gr_draw_source_triangle(x,y,colors,!!(opcode&0x10),(int)dither_enabled,
+        (state.display_mode&0x24)==0x24 && !(state.draw_mode&0x400),state.skip_field,
+        (opcode&4)?&texture:0,&extra_work))
+        psx_fatal_halt("Source GPU triangle requires native software rendering without geometry enhancement");
+    return extra_work;
+}
+
+static int gpu_source_draw_block(const uint32_t *words) {
+    unsigned opcode=words[0]>>24;int extra=0;
+    SourceGPUCommandProjection state;source_gpu_runtime_copy(0,&state);
+    SourceGPUBlock block={0};block.words=words;block.draw_mode=state.draw_mode;
+    block.texture_window=state.texture_window;
+    block.clip_left=state.clip_x0;block.clip_top=state.clip_y0;
+    block.clip_right=state.clip_x1;block.clip_bottom=state.clip_y1;
+    block.x=source_gpu_sprite_origin(words[1],0,state.offset_x);
+    block.y=source_gpu_sprite_origin(words[1],16,state.offset_y);
+    block.interlace=(state.display_mode&0x24)==0x24 && !(state.draw_mode&0x400);
+    block.skip_field=state.skip_field;
+    if(opcode==0x80)gr_source_texture_control(2,0);
+    gr_set_semi_transparency(!!(opcode&2),(int)semi_transparency);
+    if(!gr_draw_source_block(&block,&extra))psx_fatal_halt("Source GPU block requires native software rendering without enhancement");
+    return extra;
+}
+
+static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
+    extern int g_exec_phase;
+    int previous_phase=g_exec_phase,extra_work=0;
+    g_exec_phase=4;
+    memcpy(gp0_cmd_buf,event->words,event->count*sizeof(uint32_t));
+    gp0_cmd_source_addr=gp0_next_source_addr;
+    gp0_words_collected=gp0_words_needed=(int)event->count;
+    if(event->kind==SOURCE_GPU_DISPATCH_UPLOAD_WORD) {
+        gpu_write_gp0_body(event->words[0]);
+    } else if(event->kind==SOURCE_GPU_DISPATCH_COMMAND) {
+        unsigned opcode=event->words[0]>>24;
+        if(source_gpu_block_supported(opcode)) {
+            gp0_opcode_count[opcode]++;
+            if(opcode==2)gp0_fill_count++;else if(opcode==0x80)gp0_copy_count++;else gp0_draw_count++;
+            gp0_ring_record(gp0_cmd_buf,event->count);
+            extra_work=gpu_source_draw_block(event->words);
+        } else if(source_gpu_polygon_supported(opcode)) {
+            gp0_opcode_count[opcode]++;gp0_draw_count++;
+            gp0_ring_record(gp0_cmd_buf,event->count);
+            extra_work=gpu_source_draw_triangle(event->words,0);
+        } else {
+            if(opcode==1)gr_source_texture_control(1,0);
+            if(opcode==0xa0 || opcode==0x80)gr_source_texture_control(2,0);
+            if(opcode==0xe1)gr_source_texture_control(3,event->words[0]);
+            gp0_execute_command();
+        }
+    } else if(event->kind==SOURCE_GPU_DISPATCH_QUAD_FIRST) {
+        /* Dispatch only the first three vertex groups. */
+        unsigned opcode=event->words[0]>>24;
+        gp0_opcode_count[opcode]++;gp0_draw_count++;
+        extra_work=gpu_source_draw_triangle(event->words,0);
+    } else if(event->kind==SOURCE_GPU_DISPATCH_QUAD_SECOND) {
+        /* The completed packet supplies source vertex groups (1,2,3). */
+        gp0_ring_record(gp0_cmd_buf,event->count);
+        extra_work=gpu_source_draw_triangle(event->words,1);
+    }
+    g_exec_phase=previous_phase;
+    return extra_work;
+}
+
 void gpu_write_gp0(uint32_t val) {
+    gp0_write_count++;
+    if(source_gpu_runtime_active()) {
+        source_gpu_runtime_gp0(val);
+        return;
+    }
     extern int g_exec_phase;
     int prev_phase = g_exec_phase;
     g_exec_phase = 4;
@@ -5495,6 +5636,7 @@ static void gp1_reset(void) {
 static void gp1_reset_command_buffer(void) {
     /* GP1(01h): Reset command buffer — clears FIFO, aborts current command */
     gp0_state = GP0_IDLE;
+    source_ll_polyline_vertices=0;source_ll_incomplete_terminator=0;
     gp0_words_collected = 0;
     gp0_words_needed = 0;
     vram_write_remaining = 0;
@@ -5620,10 +5762,14 @@ static void gp1_get_info(uint32_t val) {
 }
 
 void gpu_write_gp1(uint32_t val) {
+    source_gpu_runtime_gp1(val);
+    interrupts_raster_gp1(val);
     uint32_t cmd = (val >> 24) & 0x3F;
 
     switch (cmd) {
-        case 0x00: gp1_reset(); break;
+        case 0x00: gp1_reset();
+            if(source_gpu_runtime_active())gr_source_texture_control(4,0);
+            break;
         case 0x01: gp1_reset_command_buffer(); break;
         case 0x02: gp1_ack_irq1(); break;
         case 0x03: gp1_display_enable(val); break;

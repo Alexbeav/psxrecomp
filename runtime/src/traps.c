@@ -18,6 +18,7 @@
 #include "savestate.h"   /* scheduler-top coherent disk save/load boundary */
 #include "parity_trace.h"  /* general two-process control-flow parity ring */
 #include "pst_wire.h"
+#include "source_gpu_runtime.h"
 
 /* RAM reader adapter for the parity trace (cpu->read_word takes only addr). */
 static uint32_t traps_parity_rw(void* ctx, uint32_t addr) {
@@ -1028,6 +1029,21 @@ void psx_scheduler_run(CPUState* cpu)
     }
 }
 
+/* Explicit research control: execute the installed guest SYS01/02 handler.
+ * This does not select a BIOS image, scheduler, delay, or title-specific PC.
+ * The old direct mode remains the default until the exception route has wider
+ * validation. Non-delay-slot entry is the existing psx_syscall API contract.
+ * Nested synchronous IRQ windows need a separate RFE owner stack; fail closed
+ * rather than let an inner RFE unwind the outer handler's native stack. */
+static int critical_exception_enabled(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char* value = getenv("PSX_CRITICAL_SECTION_MODEL");
+        mode = value && strcmp(value, "exception") == 0;
+    }
+    return mode;
+}
+
 int psx_syscall(CPUState* cpu, uint32_t code) {
     /*
      * PS1 BIOS SYSCALL convention:
@@ -1045,6 +1061,24 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
      */
     uint32_t func = cpu->gpr[4]; /* $a0 = syscall function number */
     uint32_t sr = cpu->cop0[12];
+
+    if ((func == 1 || func == 2) && critical_exception_enabled()) {
+        if (psx_get_in_exception()) {
+            fprintf(stderr, "SYS01/02 exception model: nested synchronous IRQ entry unsupported at %08X\n", cpu->pc);
+            exit(1);
+        }
+        /* Return the vector to the flat dispatcher. Calling psx_dispatch here
+         * would create a host continuation that could outlive the guest RFE.
+         * Guest code owns result registers, TCB stores, and EPC advancement. */
+        cpu->cop0[14] = cpu->pc;
+        /* Source exception entry retains only pending interrupt bits. A
+         * non-delay SYSCALL has no CE, BD, or BT bits of its own. */
+        cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()
+            ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (8u << 2);
+        cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
+        cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+        return 1;
+    }
 
     switch (func) {
         case 1: /* EnterCriticalSection: disable interrupts */

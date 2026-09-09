@@ -195,16 +195,22 @@ endif()
 set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
 set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
+set(_runtime_hash_hdr ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include/overlay_codegen_hash.h)
 add_custom_command(
-    OUTPUT  ${_baked_hash_hdr}
+    OUTPUT  ${_baked_hash_hdr} ${_runtime_hash_hdr}
     COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
+            "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_runtime_hash_hdr}
             "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
     VERBATIM)
-add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr})
+# Overlay generation is usable immediately after a tools-only build, before
+# configuring any runtime. Both consumers must have the same cache identity.
+add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
 add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 # Force main_psx.cpp to recompile whenever the hash header content changes
 # (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
@@ -346,6 +352,17 @@ target_include_directories(emitter_directive_line_test PRIVATE
 target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(source_cpu_block_bound_test
+        ../runtime/tests/test_source_cpu_block_bound.c
+        ../runtime/src/psx_icache.c)
+    target_include_directories(source_cpu_block_bound_test PRIVATE ../runtime/include)
+    target_compile_definitions(source_cpu_block_bound_test PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+    if(MSVC)
+        target_compile_options(source_cpu_block_bound_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(source_cpu_block_bound_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME source_cpu_block_bound_test COMMAND source_cpu_block_bound_test)
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
     add_executable(guest_tty_test
@@ -582,6 +599,7 @@ if(BUILD_TESTING)
                 runtime_overlay_guards
                 sdl3_main_single_include
                 spu_sample_scheduler_default
+                overlay_step_boundary
                 savestate_capture_boundary_guards
                 vk_build_default
                 vk_color_self_barrier
@@ -646,6 +664,11 @@ target_include_directories(reachable_discovery_test PRIVATE
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
 
 # ---- test-registration completeness guard -----------------------------------
+if(BUILD_TESTING)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
+                     "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
+endif()
+
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either
 # project from whichever one is being configured. Placed before the collision
 # guard, which must stay last because it needs every target declared; this one

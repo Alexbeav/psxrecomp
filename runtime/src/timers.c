@@ -15,6 +15,10 @@
  */
 
 #include "timers.h"
+#include "timer1_source_clock.h"
+#include "timer2_source_clock.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include "event_ring.h"
 #include <string.h>
 
@@ -47,6 +51,34 @@ typedef struct {
 } Timer;
 
 static Timer timers[3];
+static PsxTimer1Source source_timer1;
+static int source_timer1_enabled;
+static uint64_t source_timer1_cycle;
+static PsxTimer2Source source_timer2;
+static int source_timer2_enabled;
+static uint32_t source_timer2_elapsed,source_timer2_deadline;
+static void source_timer2_flush(void);
+int timers_source_raster_enabled(void) { return source_timer1_enabled; }
+int timers_source_hblank_counter_read(uint32_t addr) {
+    return source_timer1_enabled && (addr&~3u)==0x1f801110u &&
+           (source_timer1.mode&0x100u);
+}
+void timers_source_raster_finish(uint64_t cycle) {
+    if(!source_timer1_enabled) return;
+    if(cycle<source_timer1_cycle || cycle-source_timer1_cycle>UINT32_MAX) {
+        fprintf(stderr,"[timer1-source-clock] invalid ordered clock interval\n");exit(4);
+    }
+    timer1_source_cpu(&source_timer1,(uint32_t)(cycle-source_timer1_cycle));
+    source_timer1_cycle=cycle;
+}
+void timers_source_raster_event(void *context,uint64_t cycle,unsigned event,int blank) {
+    (void)context;
+    if(!source_timer1_enabled) return;
+    timers_source_raster_finish(cycle);
+    if(event==1) timer1_source_hblank(&source_timer1,1);
+    else if(event==2) timer1_source_blank(&source_timer1,blank);
+}
+
 static uint32_t timer_frac[3];
 
 /* Always-on RootCounter/Timer IRQ-fire telemetry (Tomba 2 RCnt-wait diag):
@@ -71,6 +103,28 @@ extern uint32_t i_stat;
 extern void psx_irq_raise(uint32_t bit, uint32_t detail);
 
 void timers_init(void) {
+    const char *model=getenv("PSX_TIMER1_MODEL");
+    source_timer1_enabled=model && *model;
+    if(source_timer1_enabled) {
+        const char *field=getenv("PSX_INPUT_ROUTE_FIELD_MODEL");
+        if(strcmp(model,"octoshock-2.2.2") || !getenv("PSX_INPUT_ROUTE_FILE") ||
+           !field || strcmp(field,"octoshock-2.2.2-ntsc-raster")) {
+            fprintf(stderr,"[timer1-source-clock] requires named model, file route and NTSC raster clock\n");exit(4);
+        }
+        fprintf(stderr,"[timer1-source-clock] experimental original source timer1; IRQ-enabled modes and restore unsupported; timer2 has a separate option\n");
+    }
+    timer1_source_reset(&source_timer1);source_timer1_cycle=0;
+    model=getenv("PSX_TIMER2_MODEL");source_timer2_enabled=model && *model;
+    if(source_timer2_enabled) {
+#ifndef PSX_ENABLE_BLOCK_CYCLES
+        fprintf(stderr,"[timer2-source-clock] block-cycle execution required\n");exit(4);
+#endif
+        if(strcmp(model,"octoshock-2.2.2") || !source_timer1_enabled) {
+            fprintf(stderr,"[timer2-source-clock] requires named model and source timer1 profile\n");exit(4);
+        }
+        fprintf(stderr,"[timer2-source-clock] experimental original source timer2; timer0 IRQ modes and restore unsupported\n");
+    }
+    timer2_source_reset(&source_timer2);source_timer2_elapsed=0;source_timer2_deadline=1024;
     memset(timers, 0, sizeof(timers));
     memset(timer_frac, 0, sizeof(timer_frac));
 }
@@ -85,11 +139,24 @@ void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
         irq_line[i] = timers[i].irq_line;
         frac[i]     = timer_frac[i];
     }
+    if(source_timer1_enabled) {
+        counter[1]=(uint16_t)source_timer1.counter; mode[1]=source_timer1.mode;
+        target[1]=(uint16_t)source_timer1.target; irq_line[1]=0; frac[1]=0;
+    }
+    if(source_timer2_enabled) {
+        PsxTimer2Source view=source_timer2;
+        (void)timer2_source_cpu(&view,source_timer2_elapsed);
+        counter[2]=(uint16_t)view.counter;mode[2]=view.mode;target[2]=(uint16_t)view.target;
+        irq_line[2]=0;frac[2]=view.divider;
+    }
 }
 
 void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
                          const uint16_t target[3],  const int32_t  irq_line[3],
                          const uint32_t frac[3]) {
+    if(source_timer1_enabled || source_timer2_enabled) {
+        fprintf(stderr,"[timer1-source-clock] cold boot only; restore unsupported\n");exit(4);
+    }
     for (int i = 0; i < 3; i++) {
         timers[i].counter  = counter[i];
         timers[i].mode     = mode[i];
@@ -97,6 +164,18 @@ void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
         timers[i].irq_line = irq_line[i];
         timer_frac[i]      = frac[i];
     }
+}
+
+static void source_timer2_pulses(unsigned pulses) {
+    while(pulses--) {
+        g_timer_irq_fired[2]++;psx_irq_raise(IRQ_TIMER2,2);
+        event_ring_record_aux(EV_DEQ,(uint8_t)(SRC_TIMER0+2),source_timer2.counter);
+    }
+}
+static void source_timer2_flush(void) {
+    if(!source_timer2_enabled)return;
+    source_timer2_pulses(timer2_source_cpu(&source_timer2,source_timer2_elapsed));
+    source_timer2_elapsed=0;source_timer2_deadline=timer2_source_next(&source_timer2);
 }
 
 /* Determine whether this timer uses system clock ticks */
@@ -203,6 +282,17 @@ void timers_advance(uint32_t cycles) {
     if (cycles == 0) return;
 
     for (int t = 0; t < 3; t++) {
+        if(t==1 && source_timer1_enabled) continue; /* supplied by raster events */
+        if(t==2 && source_timer2_enabled) {
+            /* Only source timer deadlines and timer MMIO update this model.
+             * Unrelated device service boundaries must not reset its cadence. */
+            if(cycles>source_timer2_deadline-source_timer2_elapsed) {
+                fprintf(stderr,"[timer2-source-clock] scheduler crossed timer deadline\n");exit(4);
+            }
+            source_timer2_elapsed+=cycles;
+            if(source_timer2_elapsed==source_timer2_deadline)source_timer2_flush();
+            continue;
+        }
         int src = (timers[t].mode >> 8) & 3;
         if (t == 2 && (src == 2 || src == 3)) {
             timer_advance_divided(t, cycles, 8);
@@ -240,6 +330,12 @@ static uint32_t timer_divisor(int t) {
 uint32_t timers_cycles_to_irq(uint32_t i_mask) {
     uint32_t best = 0xFFFFFFFFu;
     for (int t = 0; t < 3; t++) {
+        if(t==1 && source_timer1_enabled) continue; /* IRQ modes rejected on write */
+        if(t==2 && source_timer2_enabled) {
+            uint32_t next=source_timer2_deadline-source_timer2_elapsed;
+            if(next<best)best=next;
+            continue; /* source periodic updates are independent of I_MASK */
+        }
         if (!(i_mask & (1u << timer_irq[t]))) continue;   /* IRQ masked: not deliverable */
         const Timer* tm = &timers[t];
         int want_target   = (tm->mode & MODE_IRQ_TARGET)   != 0;
@@ -275,6 +371,9 @@ uint32_t timers_read(uint32_t addr) {
     int reg   = (addr - TIMER_BASE) & 0x0F;
 
     if (timer < 0 || timer > 2) return 0;
+    source_timer2_flush(); /* Original TIMER_Read updates every timer first. */
+    if(timer==2 && source_timer2_enabled)return timer2_source_read(&source_timer2,(unsigned)reg);
+    if(timer==1 && source_timer1_enabled) return timer1_source_read(&source_timer1,(unsigned)reg);
 
     switch (reg) {
         case 0x00: {
@@ -313,6 +412,28 @@ void timers_write(uint32_t addr, uint32_t value) {
     int reg   = (addr - TIMER_BASE) & 0x0F;
 
     if (timer < 0 || timer > 2) return;
+    source_timer2_flush(); /* Original TIMER_Write updates every timer first. */
+    if(source_timer2_enabled) {
+        /* The MMIO wrapper synchronized against the OLD timer configuration.
+         * Its cached absolute deadline cannot survive a guest reprogramming
+         * the timer to an earlier event. The next CPU charge must recompute
+         * both scheduler paths; no guest clocks or counter values are added. */
+        extern uint64_t psx_next_service_cycle,g_psx_cycle_fast_limit;
+        psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
+    }
+    if(source_timer2_enabled && timer==0 && reg==4 && (value&0x30)) {
+        fprintf(stderr,"[timer2-source-clock] timer0 IRQ modes unsupported in combined source profile\n");exit(4);
+    }
+    if(timer==2 && source_timer2_enabled) {
+        source_timer2_pulses(timer2_source_write(&source_timer2,(unsigned)reg,(uint16_t)value));
+        source_timer2_deadline=timer2_source_next(&source_timer2);return;
+    }
+    if(timer==1 && source_timer1_enabled) {
+        if(!timer1_source_write(&source_timer1,(unsigned)reg,(uint16_t)value)) {
+            fprintf(stderr,"[timer1-source-clock] IRQ-enabled mode 0x%04X unsupported\n",(unsigned)value);exit(4);
+        }
+        return;
+    }
 
     switch (reg) {
         case 0x00:

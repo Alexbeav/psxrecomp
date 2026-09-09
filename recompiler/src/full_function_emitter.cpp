@@ -226,6 +226,24 @@ bool FullFunctionEmitter::emit_function(
     // The function entry is always a leader.
     block_leaders.insert(func.entry_addr);
 
+    // A normal syscall resumes at the following guest instruction. Register
+    // that interior address with the owning function, like a call return.
+    // Without it, the unknown-dispatch trampoline can resolve a JR directly
+    // and omit both instruction fetches and its delay-slot effects.
+    for (const auto& [addr, raw] : addr_to_raw) {
+        if ((raw & 0xFC00003Fu) != 0x0000000Cu || !addr_to_raw.count(addr + 4u))
+            continue;
+        const auto previous = addr_to_raw.find(addr - 4u);
+        if (previous != addr_to_raw.end()) {
+            const auto prior = StrictTranslator::translate(
+                PSXRecomp::MipsDecoder::decode(previous->second, previous->first));
+            if (prior.is_terminator &&
+                std::string(prior.terminator_kind ? prior.terminator_kind : "") != "rfe")
+                continue; // Delay-slot exception restart is a separate contract.
+        }
+        block_leaders.insert(addr + 4u);
+    }
+
     // Collect continuation labels for this function (populated during emit).
     std::vector<ContinuationLabel> local_continuations;
 
@@ -740,8 +758,9 @@ bool FullFunctionEmitter::emit_function(
     // cache-line LEADERS: a block leader (any branch/dispatch entry — a possibly-cold
     // cache entry; cross-function targets are inserted into block_leaders above) OR a
     // 16-byte-line start (addr&0xC==0, a sequential line crossing). Intra-line followers
-    // reached by fall-through are guaranteed hits (the leader refilled the line to its
-    // end) → no call (+0). `rom_addr` is the ROM/compile-time address; relocate_ra maps
+    // reached by fall-through are hits only in cached address space. Uncached code
+    // pays a fetch for every instruction, including delay slots. `rom_addr` is the
+    // ROM/compile-time address; relocate_ra maps
     // it to the RUNTIME guest PC the CPU actually fetches from (BIOS main stays in-place
     // KSEG1 0xBFC..; relocated kernel Part 2 → 0x500+, shell → 0x80030000+), so the
     // shared I-cache evolves identically to the dirty-RAM interp (cpu->pc) and Beetle —
@@ -749,9 +768,14 @@ bool FullFunctionEmitter::emit_function(
     // relocation preserves bits[3:0], so the line-leader test is space-independent.
     auto emit_icache_fetch = [&](uint32_t rom_addr) {
         if (!per_insn_cycles) return;
-        if (!(block_leaders.count(rom_addr) || (rom_addr & 0xCu) == 0)) return;
+        const uint32_t runtime_addr = relocate_ra(rom_addr);
+        if (!(runtime_addr >= 0xA0000000u || block_leaders.count(rom_addr) ||
+              (runtime_addr & 0xCu) == 0)) {
+            out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_cpu_step_boundary(cpu, 0x{:08X}u);\n#endif\n", runtime_addr);
+            return;
+        }
         out += fmt::format("#ifdef PSX_ENABLE_BLOCK_CYCLES\n    psx_icache_fetch(cpu, 0x{:08X}u);\n#endif\n",
-                           relocate_ra(rom_addr));
+                           runtime_addr);
     };
 
     for (auto it = addr_to_raw.begin(); it != addr_to_raw.end(); ++it) {
@@ -780,6 +804,42 @@ bool FullFunctionEmitter::emit_function(
             out += "#ifdef PSX_COSIM\n";
             out += fmt::format("    cosim_block(0x{:08X}u);\n", normalize_address(addr));
             out += "#endif\n";
+            // Existing opt-in slicing also covers BIOS ROM in the explicit
+            // original-source profile. The runtime guards that admission;
+            // ordinary BIOS execution keeps its compiled path.
+            // A leader reached as a live delay slot cannot start a new slice.
+            bool follows_branch = false;
+            auto prev = addr_to_raw.find(addr - 4u);
+            if (prev != addr_to_raw.end()) {
+                const auto p = StrictTranslator::translate(
+                    PSXRecomp::MipsDecoder::decode(prev->second, prev->first));
+                const std::string kind = p.terminator_kind ? p.terminator_kind : "";
+                follows_branch = p.is_terminator &&
+                    kind != "syscall" && kind != "break" && kind != "rfe";
+            }
+            const uint32_t execution_phys = relocate_ra(addr) & 0x1FFFFFFFu;
+            const bool bios_rom = execution_phys >= 0x1FC00000u &&
+                                  execution_phys < 0x1FC80000u;
+            if (per_insn_cycles && !follows_branch &&
+                (execution_phys < 0x00200000u || bios_rom)) {
+                uint32_t count = 0;
+                bool may_stall_or_change_irq = false;
+                for (auto scan = it; scan != addr_to_raw.end(); ++scan) {
+                    if (scan != it && block_leaders.count(scan->first)) break;
+                    ++count;
+                    const uint32_t op = scan->second >> 26;
+                    const uint32_t fn = scan->second & 63u;
+                    may_stall_or_change_irq |= op >= 0x20u || op == 0x10u ||
+                        op == 0x12u || (op == 0u && fn >= 0x10u && fn <= 0x1Bu);
+                }
+                // Current shared cache model: <=7 refill cycles plus one base
+                // cycle. This conservative guard budget is not a guest charge.
+                out += "#ifdef PSX_ENABLE_BLOCK_CYCLES\n";
+                out += fmt::format(
+                    "    if (psx_slice_block(cpu, 0x{:08X}u, {}u, {})) return;\n",
+                    relocate_ra(addr), count * 8u, may_stall_or_change_irq ? 1 : 0);
+                out += "#endif\n";
+            }
             // Phase 1.0e-d: advance guest cycles for this block. Macro-
             // gated; when off, generated code matches pre-1.0e-d output.
             // In per-instruction mode the charge is emitted per instruction
@@ -810,6 +870,10 @@ bool FullFunctionEmitter::emit_function(
 
         // Decode and translate.
         PSXRecomp::DecodedInstruction d = PSXRecomp::MipsDecoder::decode(raw, addr);
+        // SYSCALL publishes the guest exception PC. The ROM address remains
+        // the discovery/label identity, but copied code executes in RAM.
+        if ((raw & 0xFC00003Fu) == 0x0000000Cu)
+            d.address = relocate_ra(addr);
         TranslateResult tr = StrictTranslator::translate(d);
 
         if (!tr.supported) {
@@ -1836,6 +1900,7 @@ void FullFunctionEmitter::emit_dispatch(
     out += "typedef struct {\n";
     out += "    uint32_t addr;\n";
     out += "    PsxRecompFunc func;\n";
+    out += "    uint32_t runtime_pc; /* represented guest alias, not lookup key */\n";
     out += "} DispatchEntry;\n\n";
 
     const size_t total_entries = emitted_normalized.size() + vec_handlers.size();
@@ -1844,16 +1909,21 @@ void FullFunctionEmitter::emit_dispatch(
 
     // Vector entries first (addresses 0xA0/0xB0/0xC0 < 0x500, always first).
     for (const auto& vh : vec_handlers) {
-        out += fmt::format("    {{ 0x{:08X}u, {} }},\n", vh.ram_addr, vh.func_name);
+        out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n", vh.ram_addr, vh.func_name, vh.ram_addr);
     }
 
+    std::map<uint32_t, uint32_t> runtime_by_norm;
+    for (const auto& fn : dr.functions)
+        runtime_by_norm[normalize_address(fn.entry_addr)] = bios_runtime_pc(fn.entry_addr);
     for (uint32_t norm : emitted_normalized) {
         if (continuations.count(norm)) {
             const auto& cl = continuations.at(norm);
-            out += fmt::format("    {{ 0x{:08X}u, {} }},\n",
-                               norm, cont_sym(cl.parent_func_norm, cl.rom_addr));
+            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n",
+                               norm, cont_sym(cl.parent_func_norm, cl.rom_addr), bios_runtime_pc(cl.rom_addr));
         } else {
-            out += fmt::format("    {{ 0x{:08X}u, {} }},\n", norm, fn_sym(norm));
+            const auto entry = runtime_by_norm.find(norm);
+            const uint32_t runtime = entry == runtime_by_norm.end() ? norm : entry->second;
+            out += fmt::format("    {{ 0x{:08X}u, {}, 0x{:08X}u }},\n", norm, fn_sym(norm), runtime);
         }
     }
     out += "};\n\n";
@@ -1966,6 +2036,8 @@ void FullFunctionEmitter::emit_dispatch(
     out += "static int psx_bios_try_native_call_stub(CPUState* cpu, "
            "uint32_t addr) {\n";
     out += "    uint32_t phys = addr & 0x1FFFFFFFu;\n";
+    out += "    if (g_psx_cpu_step_boundary_callback) return 0; /* fused stub has no intermediate retirement boundary */\n";
+    out += "    if (addr >= 0xA0000000u) return 0; /* uncached RAM stubs need every fetch */\n";
     out += "    if (phys != 0xA0u && phys != 0xB0u && phys != 0xC0u) return 0;\n";
     out += "    uint32_t w0 = cpu->read_word(phys + 0u);\n";
     out += "    uint32_t w1 = cpu->read_word(phys + 4u);\n";
@@ -1998,6 +2070,7 @@ void FullFunctionEmitter::emit_dispatch(
 
     out += "extern int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr);\n";
     out += "extern int dirty_ram_is_dirty(uint32_t phys);\n";
+    out += "extern void dirty_ram_mark_executable_range(uint32_t phys, uint32_t len);\n";
     out += "extern int psx_kernel_bless_dispatchable(uint32_t phys);\n";
     out += "extern void fntrace_record(CPUState* cpu, uint32_t target);\n";
     out += "extern uint64_t g_dispatch_static_hits;\n";
@@ -2109,6 +2182,16 @@ void FullFunctionEmitter::emit_dispatch(
     out += "        while (lo <= hi) {\n";
     out += "            int mid = (lo + hi) / 2;\n";
     out += "            if (dispatch_table[mid].addr == phys) {\n";
+    out += "                /* Normalization locates bytes; it does not change the guest\n";
+    out += "                 * execution alias. Fixed native bodies encode fetch/link/PC\n";
+    out += "                 * addresses. Interpret unrepresented RAM aliases as supplied. */\n";
+    out += "                if ((addr & 0x1FFFFFFFu) < 0x200000u &&\n";
+    out += "                    addr != dispatch_table[mid].runtime_pc) {\n";
+    out += "                    /* A known entry also admits clean RAM to the interpreter.\n";
+    out += "                     * This marks host executable metadata, never guest bytes. */\n";
+    out += "                    dirty_ram_mark_executable_range(addr & 0x1FFFFFFFu, 4u);\n";
+    out += "                    break;\n";
+    out += "                }\n";
     if (addr_model().has_kbless()) {
         out += fmt::format(
         "                /* Kernel-image bless guard (CLAUDE.md Rule 18). The keys in\n"

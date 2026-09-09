@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as temporary:
     (stage / "mods" / "package").mkdir(parents=True)
     (stage / "Tomba Recompiled.exe").write_bytes(b"exe")
     (stage / "mods" / "package" / "manifest.toml").write_text(
-        'id = "test"\n', encoding="utf-8"
+        'id = "test"\n', encoding="utf-8", newline="\n"
     )
     output = base / "release.zip"
     subprocess.run(
