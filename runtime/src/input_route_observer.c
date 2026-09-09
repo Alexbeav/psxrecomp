@@ -2,6 +2,7 @@
  * Boundary N is before input N+1, after N records were supplied. This does
  * not claim equivalence with another engine's frame counter. */
 #include "input_route_observer.h"
+#include "input_dualshock_delivery.h"
 #include "psx_sha256.h"
 #include "psx_memory.h"
 #include "gpu.h"
@@ -48,6 +49,10 @@ static uint32_t delivered_inputs;
 static uint16_t pending_word;
 static int pending;
 static int first_non_neutral_seen;
+static int dualshock_mode;
+static psx_sha256_ctx expected_protocol_hash;
+static uint8_t pending_controller[7];
+static int last_protocol_mode;
 
 static void fail(const char *message) {
     fprintf(stderr, "input route observation failed: %s\n", message);
@@ -80,6 +85,25 @@ static void hex_hash(const uint8_t bytes[32], char text[65]) {
         text[i*2] = h[bytes[i] >> 4]; text[i*2+1] = h[bytes[i] & 15];
     }
     text[64] = 0;
+}
+static const char *applied_key(void) {
+    return dualshock_mode ? "applied_controller_sha256" : "applied_words_sha256";
+}
+static const char *supplied_key(void) {
+    return dualshock_mode ? "supplied_controller_sha256" : "supplied_words_sha256";
+}
+static void close_observation_json(FILE *f) {
+    if (dualshock_mode) {
+        uint8_t bytes[32]; char expected[65], supplied[65];
+        psx_sha256_ctx hash = expected_protocol_hash;
+        psx_sha256_final(&hash, bytes); hex_hash(bytes, expected);
+        hash = input_hash;
+        psx_sha256_final(&hash, bytes); hex_hash(bytes, supplied);
+        fprintf(f, ",\"controller_profile\":\"nymashock-2.9.1-dualshock-neutral-analog\","
+                   "\"expected_protocol_sha256\":\"%s\",\"original_controller_sha256\":\"%s\","
+                   "\"guest_analog_mode\":%d", expected, supplied, last_protocol_mode);
+    }
+    if (fputs("}\n", f) < 0 || ferror(f)) fail("observation JSON write");
 }
 FILE *input_route_observer_output(const char *name) { return open_output(name); }
 static void capture_cd_metadata(void) {
@@ -214,8 +238,15 @@ int input_route_observer_init(uint32_t total) {
     if (trace && strcmp(trace, "1") == 0) sio_trace_file = open_output("sio-bytes.jsonl");
     return 1;
 }
+int input_route_observer_dualshock_init(uint32_t total) {
+    if (log_file || dualshock_mode || !total) return 0;
+    dualshock_mode = 1;
+    psx_sha256_init(&expected_protocol_hash);
+    return input_route_observer_init(total);
+}
 void input_route_observer_input(uint16_t buttons) {
     if (!log_file) return;
+    if (dualshock_mode) fail("digital input used for DualShock route");
     if (pending) fail("previous input was not delivered to SIO");
     pending_word = buttons;
     pending = 1;
@@ -230,6 +261,7 @@ void input_route_observer_set_end(uint32_t total) {
 }
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
     if (!log_file) return;
+    if (dualshock_mode) fail("digital observation used for DualShock route");
     if (!pending || pending_word != buttons || !connected || analog)
         fail("SIO delivery differs from digital route");
     const uint8_t word[2] = {(uint8_t)buttons, (uint8_t)(buttons >> 8)};
@@ -243,6 +275,36 @@ void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
         fflush(stdout);
         first_non_neutral_seen = 1;
     }
+}
+void input_route_observer_dualshock_input(uint16_t buttons, const uint8_t source_axes[4]) {
+    if (!log_file) return;
+    if (!dualshock_mode || pending) fail("invalid DualShock sample sequence");
+    uint8_t row[7] = {(uint8_t)buttons, (uint8_t)(buttons >> 8), 0,0,0,0,0};
+    memcpy(row + 2, source_axes, 4);
+    if (delivered_inputs < total_inputs) psx_sha256_update(&input_hash, row, sizeof(row));
+    else if (buttons != 0xFFFF || source_axes[0] != 128 || source_axes[1] != 128 ||
+             source_axes[2] != 128 || source_axes[3] != 128)
+        fail("post-input DualShock sample was not neutral");
+    memcpy(pending_controller, row, sizeof(row));
+    for (unsigned i = 2; i < 6; ++i)
+        pending_controller[i] = input_dualshock_protocol_axis(row[i]);
+    if (delivered_inputs < total_inputs)
+        psx_sha256_update(&expected_protocol_hash, pending_controller, sizeof(pending_controller));
+    pending = 1;
+}
+void input_route_observer_dualshock_applied(uint16_t buttons, const uint8_t sticks[4],
+                                          int connected, int config_capable, int analog) {
+    if (!log_file) return;
+    uint8_t row[7] = {(uint8_t)buttons, (uint8_t)(buttons >> 8),
+                     sticks[1], sticks[0], sticks[3], sticks[2], 0};
+    if (!dualshock_mode || !pending || !connected || !config_capable ||
+        (analog != 0 && analog != 1) || memcmp(row, pending_controller, sizeof(row)))
+        fail("SIO delivery differs from complete DualShock route");
+    if (delivered_inputs < total_inputs)
+        psx_sha256_update(&delivered_hash, row, sizeof(row));
+    last_protocol_mode = analog;
+    ++delivered_inputs;
+    pending = 0;
 }
 void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
     if (log_file && (pending || completed != delivered_inputs))
@@ -330,22 +392,26 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
     if (fclose(png) || !ok) fail("screenshot write");
     if (fprintf(log_file,
         "{\"frame\":%u,\"runtime_frame\":%llu,\"boundary\":\"before_next_input\","
-        "\"ram_bytes\":%u,\"ram_sha256\":\"%s\",\"applied_words_sha256\":\"%s\","
-        "\"supplied_words_sha256\":\"%s\",\"sio_samples\":%u,"
+        "\"ram_bytes\":%u,\"ram_sha256\":\"%s\",\"%s\":\"%s\","
+        "\"%s\":\"%s\",\"sio_samples\":%u,"
         "\"input_frames\":%u,\"neutral_tail_ticks\":%u,"
-        "\"width\":%u,\"height\":%u,\"display_disabled\":%s}\n",
+        "\"width\":%u,\"height\":%u,\"display_disabled\":%s",
         (unsigned)completed, (unsigned long long)runtime_frame,
-        (unsigned)PSX_MAIN_RAM_BYTES, ram_hash, applied_hash, supplied_hash,
+        (unsigned)PSX_MAIN_RAM_BYTES, ram_hash, applied_key(), applied_hash, supplied_key(), supplied_hash,
         (unsigned)delivered_inputs,
         (unsigned)(completed < total_inputs ? completed : total_inputs),
         (unsigned)(completed > total_inputs ? completed - total_inputs : 0), w, h,
-        di.disabled ? "true" : "false") < 0 || fflush(log_file)) fail("checkpoint write");
+        di.disabled ? "true" : "false") < 0) fail("checkpoint write");
+    close_observation_json(log_file);
+    if (fflush(log_file)) fail("checkpoint flush");
     if (completed == total_inputs) {
         FILE *input_end = open_output("input-end.json");
         if (fprintf(input_end,
-            "{\"frame\":%u,\"applied_words_sha256\":\"%s\",\"neutral_tail_ticks_planned\":%u}\n",
-            (unsigned)completed, applied_hash, (unsigned)tail_ticks) < 0 || fclose(input_end))
+            "{\"frame\":%u,\"%s\":\"%s\",\"neutral_tail_ticks_planned\":%u",
+            (unsigned)completed, applied_key(), applied_hash, (unsigned)tail_ticks) < 0)
             fail("input end write");
+        close_observation_json(input_end);
+        if (fclose(input_end)) fail("input end close");
     }
     if (completed == total_inputs + tail_ticks) {
         if (watch_count) {
@@ -366,9 +432,11 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
         if (fprintf(done,
             "{\"frame\":%u,\"input_frames\":%u,\"neutral_tail_ticks\":%u,"
             "\"stop_reason\":\"declared_observation_end_before_next_sample\","
-            "\"applied_words_sha256\":\"%s\",\"game_outcome\":\"unclassified\"}\n",
+            "\"%s\":\"%s\",\"game_outcome\":\"unclassified\"",
             (unsigned)completed, (unsigned)total_inputs, (unsigned)tail_ticks,
-            applied_hash) < 0 || fclose(done)) fail("completion write");
+            applied_key(), applied_hash) < 0) fail("completion write");
+        close_observation_json(done);
+        if (fclose(done)) fail("completion close");
         fprintf(stdout, "input_route_complete: frames=%u words_sha256=%s\n", completed, applied_hash);
         fflush(stdout);
         exit(0);
