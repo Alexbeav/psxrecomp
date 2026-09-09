@@ -4,8 +4,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 
-# libchdr is needed by exactly one target here: the user-facing `psxrecomp`
-# media CLI. It arrives via FetchContent + ExternalProject, which is by far the
+# libchdr is needed by the user-facing `psxrecomp` media CLI and optional
+# production disc-reader tests. It arrives via FetchContent + ExternalProject, which is by far the
 # heaviest and most fragile thing in this configure — it needs the network on a
 # cold cache, and ExternalProject cannot handle a source path containing a colon
 # (a repo directory like "Marvel vs. Capcom: Clash of Super Heroes Recomp"
@@ -13,7 +13,8 @@ include(CTest)
 #
 # Turning it off lets a caller that only wants an analysis or emitter binary
 # configure this project without any of that. Nothing but the media CLI is
-# affected; the emitters, psxrecomp-analyze, and every test are chd-free.
+# affected apart from the conditional disc-reader tests; emitters and
+# psxrecomp-analyze remain chd-free.
 option(PSXRECOMP_ENABLE_CHD
        "Build the psxrecomp media CLI (requires libchdr via FetchContent)" ON)
 
@@ -358,6 +359,33 @@ if(BUILD_TESTING)
 
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         foreach(_mode IN ITEMS O0 O2)
+            add_executable(tas_cdrom_subq_position_${_mode}
+                ../runtime/tests/test_cdrom_subq_position.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_cdrom_subq_position_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_cdrom_subq_position_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_cdrom_subq_position_${_mode} PRIVATE m)
+            add_test(NAME tas_cdrom_subq_position_${_mode} COMMAND tas_cdrom_subq_position_${_mode})
+            if(PSXRECOMP_ENABLE_CHD)
+                foreach(_disc_test IN ITEMS source_subq sbi)
+                    if(_disc_test STREQUAL "source_subq")
+                        set(_disc_source ../runtime/tests/test_iso_reader_source_subq.cpp)
+                    else()
+                        set(_disc_source ../runtime/tests/test_iso_reader_sbi.cpp)
+                    endif()
+                    add_executable(tas_iso_${_disc_test}_${_mode}
+                        ${_disc_source}
+                        ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp)
+                    target_include_directories(tas_iso_${_disc_test}_${_mode} PRIVATE ../runtime/include include)
+                    target_compile_options(tas_iso_${_disc_test}_${_mode} PRIVATE -${_mode} -UNDEBUG)
+                    target_link_libraries(tas_iso_${_disc_test}_${_mode} PRIVATE chdr-static)
+                endforeach()
+                add_test(NAME tas_iso_source_subq_${_mode} COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_iso_reader_source_subq_contracts.py
+                    $<TARGET_FILE:tas_iso_source_subq_${_mode}>)
+                file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+                add_test(NAME tas_iso_sbi_${_mode} COMMAND tas_iso_sbi_${_mode})
+                set_tests_properties(tas_iso_sbi_${_mode} PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sbi-${_mode})
+            endif()
             add_executable(tas_gpu_sprite_blend_${_mode}
                 ../runtime/tests/test_source_gpu_sprite_blend.c
                 ../runtime/src/gpu_sw_renderer.c
