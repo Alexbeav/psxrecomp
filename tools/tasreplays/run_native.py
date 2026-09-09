@@ -1,4 +1,4 @@
-"""Run an isolated PSXRTI1 playback and retain process and input evidence.
+"""Run isolated PSXRTI1/PSXRTI2 playback and retain process and input evidence.
 
 The native observer owns input checkpoints. A clean process exit alone does
 not qualify playback. Default execution has no window and uses software video.
@@ -27,10 +27,33 @@ def write_json(path, value):
 
 
 def route_identity(path):
+    if path.stat().st_size > 24 + 12 * 1000000:
+        raise ValueError('route exceeds frame capacity')
     data = path.read_bytes()
     if len(data) < 24:
         raise ValueError("short route")
     magic, version, size, count, reserved = struct.unpack_from("<8sIIII", data)
+    if magic == b'PSXRTI2\0':
+        if (version, size, reserved) != (2, 12, 0) or not 0 < count <= 1000000 or len(data) != 24+12*count:
+            raise ValueError('invalid DualShock route header/count/size')
+        original, protocol = hashlib.sha256(), hashlib.sha256()
+        previous, steps = None, 0
+        for index in range(count):
+            sequence, buttons, ly, lx, ry, rx, analog, zero = struct.unpack_from('<IH6B', data, 24+12*index)
+            if sequence != index+1 or zero or analog:
+                raise ValueError('DualShock sequence/reserved bytes or unqualified physical Analog press')
+            row = struct.pack('<H5B', buttons, ly, lx, ry, rx, analog)
+            steps += row != previous; previous = row
+            if steps > 4096:
+                raise ValueError('DualShock step capacity exceeded')
+            original.update(row)
+            # Nyma expands axes to u16 with value<<8; the device rescales to u8.
+            axes = [((value << 8)*255+32767)//65535 for value in (ly,lx,ry,rx)]
+            protocol.update(struct.pack('<H5B', buttons, *axes, analog))
+        return {'format':'PSXRTI2', 'frames':count, 'steps':steps,
+                'sha256':hashlib.sha256(data).hexdigest(),
+                'original_controller_sha256':original.hexdigest(),
+                'expected_protocol_sha256':protocol.hexdigest()}
     if (magic, version, size, reserved) != (b"PSXRTI1\0", 1, 8, 0):
         raise ValueError("unsupported route header")
     if not 0 < count <= 1000000 or len(data) != 24 + 8 * count:
@@ -43,6 +66,23 @@ def route_identity(path):
         words.extend(struct.pack("<H", word))
     return {"frames": count, "sha256": digest(path),
             "words_sha256": hashlib.sha256(words).hexdigest()}
+
+
+def card_identity(path):
+    if path.stat().st_size != 131072:
+        raise ValueError('card1 must be an exact raw 128 KiB card')
+    return {'path':str(path), 'bytes':131072, 'sha256':digest(path)}
+
+
+def playback_identity_matches(complete, identity, tail):
+    if (not isinstance(complete, dict) or complete.get('frame') != identity['frames']+tail or
+            complete.get('input_frames') != identity['frames'] or complete.get('neutral_tail_ticks') != tail):
+        return False
+    if identity.get('format') == 'PSXRTI2':
+        return (complete.get('controller_profile') == 'nymashock-2.9.1-dualshock-neutral-analog' and
+                complete.get('original_controller_sha256') == identity['original_controller_sha256'] and
+                complete.get('applied_controller_sha256') == complete.get('expected_protocol_sha256') == identity['expected_protocol_sha256'])
+    return complete.get('applied_words_sha256') == identity['words_sha256']
 
 
 def source_clock_identity(path, toc_model, seek_model, read_model):
@@ -66,6 +106,8 @@ def main():
     parser.add_argument("run_directory", type=Path)
     for name in ("exe", "game", "route", "disc", "bios"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument('--card1', type=Path, help='raw initial card1; staged as a fresh writable copy and verified in the loaded peripheral')
+    parser.add_argument('--card-model', choices=('default','nymashock-1.29.0'), default='default')
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
@@ -137,7 +179,7 @@ def main():
                         help='source GPUSTAT field/line bits only; requires the NTSC raster clock')
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
-    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital"), default="default",
+    parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock"), default="default",
                         help="Experimental source digital-pad ACK delay/pulse; cold boot only")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
@@ -200,6 +242,17 @@ def main():
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
     identity = route_identity(paths["route"])
+    dualshock = identity.get('format') == 'PSXRTI2'
+    if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
+        raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
+    initial_card = None
+    if args.card1:
+        if args.card_model != 'nymashock-1.29.0' or args.legacy_card_repair != 'off':
+            raise ValueError('card replay requires the qualified explicit card model and legacy repair off')
+        paths['card1'] = args.card1.resolve(strict=True)
+        initial_card = card_identity(paths['card1'])
+    elif args.card_model != 'default':
+        raise ValueError('card model requires an explicit initial card1')
     # The completion hook exits before the final return observer. Bind every
     # enabled RAM capture to the exact declared number of observed returns.
     ram_returns = identity['frames'] + args.neutral_tail - 1
@@ -244,6 +297,19 @@ def main():
     shutil.copyfile(paths["exe"], launch_exe)
     if digest(launch_exe) != digest(paths["exe"]):
         raise ValueError("staged executable differs")
+    staged_card = None
+    if initial_card:
+        (run / 'cards').mkdir()
+        staged_card = run / 'cards/card1.mcd'
+        shutil.copyfile(paths['card1'], staged_card)
+        if digest(staged_card) != initial_card['sha256']:
+            raise ValueError('staged initial card differs')
+    route_path = paths['route']
+    if dualshock:
+        route_path = run / 'input.psxrti2'
+        shutil.copyfile(paths['route'], route_path)
+        if digest(route_path) != identity['sha256']:
+            raise ValueError('staged controller route differs')
     renderer = args.renderer
     settings = f'''[video]
 renderer = "{renderer}"
@@ -272,7 +338,7 @@ path = "{paths['disc'].as_posix()}"
 dir = "cards"
 card1 = "cards/card1.mcd"
 card2 = "cards/card2.mcd"
-enable1 = false
+enable1 = {str(initial_card is not None).lower()}
 enable2 = false
 [controller]
 p1_device = "keyboard"
@@ -290,7 +356,7 @@ p2_mode = "digital"
     # A replay cannot inherit unrelated diagnostic, load-state or enhancement
     # switches from another task. Retain the complete selected PSX environment.
     env = {k: v for k, v in os.environ.items() if not k.startswith("PSX_")}
-    selected_env = {"PSX_INPUT_ROUTE_FILE": str(paths["route"]),
+    selected_env = {"PSX_INPUT_ROUTE_FILE": str(route_path),
                     "PSX_INPUT_ROUTE_CAPTURE_DIR": str(run),
                     "PSX_HLE_SCHEDULER": "1" if args.scheduler == "hle" else "0",
                     "PSX_LOW_LATENCY_INPUT": "0",
@@ -338,6 +404,9 @@ p2_mode = "digital"
         selected_env["PSX_APE_CARD_UNSTICK"] = "0"
     if args.pad_ack_model != "default":
         selected_env["PSX_INPUT_ROUTE_PAD_ACK_MODEL"] = args.pad_ack_model
+    if initial_card:
+        selected_env['PSX_INPUT_ROUTE_CARD_MODEL'] = args.card_model
+        selected_env['PSX_INPUT_ROUTE_CARD1_SHA256'] = initial_card['sha256']
     if args.dma_model != "default":
         selected_env["PSX_INPUT_ROUTE_DMA_MODEL"] = args.dma_model
     if args.instruction_histogram:
@@ -396,6 +465,8 @@ p2_mode = "digital"
         "inputs": {name: {"path": str(path), "sha256": digest(path)}
                    for name, path in paths.items()},
         "route": identity, "psx_environment": selected_env,
+        "initial_card1":initial_card,
+        "staged_card1":str(staged_card) if staged_card else None,
         "settings_sha256": digest(run / "settings.toml"),
         "launcher_sha256": digest(Path(__file__)),
         "boundary": "N records supplied before the next normal VBlank sample",
@@ -426,11 +497,15 @@ p2_mode = "digital"
     complete = None
     if (run / "complete.json").exists():
         complete = json.loads((run / "complete.json").read_text())
-    qualified = (budget['stop_reason'] is None and code == 0 and complete is not None
-                 and complete["frame"] == identity["frames"] + args.neutral_tail
-                 and complete["input_frames"] == identity["frames"]
-                 and complete["neutral_tail_ticks"] == args.neutral_tail
-                 and complete["applied_words_sha256"] == identity["words_sha256"])
+    qualified = (budget['stop_reason'] is None and code == 0 and
+                 playback_identity_matches(complete, identity, args.neutral_tail))
+    if initial_card or dualshock:
+        initial_path = run / 'initial-cards.json'
+        actual_cards = json.loads(initial_path.read_text()) if initial_path.exists() else None
+        expected_cards = {'card1_present':bool(initial_card), 'card2_present':False,
+                          'card1_sha256':initial_card['sha256'] if initial_card else None,
+                          'bytes':131072 if initial_card else 0}
+        qualified = qualified and actual_cards == expected_cards
     if update_profile:
         endpath=run/'update-input-end.json'
         end=json.loads(endpath.read_text()) if endpath.exists() else None

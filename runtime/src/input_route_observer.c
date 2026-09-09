@@ -7,6 +7,7 @@
 #include "psx_memory.h"
 #include "gpu.h"
 #include "sio.h"
+#include "memcard.h"
 #include "cdrom.h"
 #include "dma.h"
 #include "timers.h"
@@ -85,6 +86,36 @@ static void hex_hash(const uint8_t bytes[32], char text[65]) {
         text[i*2] = h[bytes[i] >> 4]; text[i*2+1] = h[bytes[i] & 15];
     }
     text[64] = 0;
+}
+static void capture_initial_cards(void) {
+    const char *expected = getenv("PSX_INPUT_ROUTE_CARD1_SHA256");
+    if (!expected && !dualshock_mode) return;
+    if (expected) {
+        if (strlen(expected) != 64) fail("invalid initial card identity");
+        for (unsigned i=0;i<64;++i)
+            if (!((expected[i]>='0' && expected[i]<='9') ||
+                  (expected[i]>='a' && expected[i]<='f'))) fail("invalid initial card identity");
+    }
+    const int present = memcard_is_present(0) != 0;
+    if (present != (expected != NULL) || memcard_is_present(1)) fail("initial card presence differs");
+    char text[65] = {0};
+    if (present) {
+        uint8_t bytes[4096], result[32]; psx_sha256_ctx hash;
+        psx_sha256_init(&hash);
+        for (unsigned offset=0;offset<MEMCARD_SIZE;offset+=sizeof bytes) {
+            if (memcard_debug_read_buffer(0,offset,sizeof bytes,bytes)!=sizeof bytes)
+                fail("short initial card buffer read");
+            psx_sha256_update(&hash,bytes,sizeof bytes);
+        }
+        psx_sha256_final(&hash,result);hex_hash(result,text);
+        if (strcmp(text,expected)) fail("loaded initial card bytes differ");
+    }
+    FILE *f=open_output("initial-cards.json");
+    fprintf(f,"{\"card1_present\":%s,\"card2_present\":false,\"card1_sha256\":",
+            present ? "true" : "false");
+    if (present) fprintf(f,"\"%s\"",text); else fputs("null",f);
+    fprintf(f,",\"bytes\":%u}\n",present ? (unsigned)MEMCARD_SIZE : 0);
+    if (ferror(f) || fclose(f)) fail("initial card observation write");
 }
 static const char *applied_key(void) {
     return dualshock_mode ? "applied_controller_sha256" : "applied_words_sha256";
@@ -190,6 +221,7 @@ int input_route_observer_init(uint32_t total) {
     output_dir = getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
     if (!output_dir) return 1;
     if (!output_dir[0]) return 0;
+    capture_initial_cards();
     total_inputs = total;
     const char *watch = getenv("PSX_INPUT_ROUTE_WATCH_U16");
     if (watch) {
