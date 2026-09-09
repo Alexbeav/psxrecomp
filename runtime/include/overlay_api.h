@@ -105,8 +105,8 @@
  *      host/DLL flavor mix — base-flavour DLLs and hosts are untouched, so
  *      the version stays. The emit-content change (PGXP_*() macros in all
  *      generated C) is covered by the codegen hash + CODEGEN_VER below. */
-/* v23: native overlay forwarding for signed screen bounds and mod entry hooks. */
-#define PSX_OVERLAY_ABI_VERSION 23
+/* v24: instruction-boundary callbacks appended after v23 mod callbacks. */
+#define PSX_OVERLAY_ABI_VERSION 24
 
 /* Process-lifetime overlay candidate capacity.  Every accepted manifest F
  * record consumes one slot, even when another DLL carries an identical
@@ -340,6 +340,10 @@ typedef struct {
     const PGXPHooks *pgxp;
     int32_t (*ws_screen_x_bound)(int32_t vanilla);
     void (*mod_function_entry)(CPUState *cpu, uint32_t address);
+    /* ABI v22. include_replay=1 queries installation for the fused-stub
+     * admission guard; zero queries whether a boundary must be observed now. */
+    int      (*cpu_step_boundary_enabled)(int include_replay);
+    void     (*cpu_step_boundary)(CPUState *cpu, uint32_t address);
 } OverlayCallbacks;
 
 #ifdef __cplusplus

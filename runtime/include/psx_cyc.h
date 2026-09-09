@@ -216,6 +216,10 @@ extern uint8_t *g_psx_ram;
 extern int      g_psx_load_delay;
 extern int      g_ls_mode;
 extern volatile int g_ds_recording;
+/* Active source upload DMA requires the host helper's live bus-read charge. */
+extern uint32_t g_dma_cpu_read_wait;
+extern int g_ram_read_watch_active;
+void debug_server_trace_ram_read_watch(uint32_t phys, uint32_t val);
 int psx_load_delay_enabled(void);
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);
@@ -235,7 +239,7 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (g_ls_mode == 0 && !g_ds_recording && !g_dma_cpu_read_wait && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -251,6 +255,8 @@ static inline uint32_t psx_cyc_load_word(CPUState* cpu, uint32_t addr,
         }
         uint32_t value;
         memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        if (g_ram_read_watch_active)
+            debug_server_trace_ram_read_watch(phys & 0x1FFFFFu, value);
         return value;
     }
     return psx_cyc_load_word_slow(cpu, addr, rt, reg_mask);
@@ -265,7 +271,7 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
                                           uint32_t rt, uint32_t reg_mask) {
 #ifdef PSX_ENABLE_BLOCK_CYCLES
     uint32_t phys = addr & 0x1FFFFFFFu;
-    if (g_ls_mode == 0 && !g_ds_recording && phys < 0x00800000u) {
+    if (g_ls_mode == 0 && !g_ds_recording && !g_dma_cpu_read_wait && phys < 0x00800000u) {
         if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();
         if (g_psx_load_delay) {
             psx_cyc_base(cpu);
@@ -281,6 +287,8 @@ static inline uint16_t psx_cyc_load_half(CPUState* cpu, uint32_t addr,
         }
         uint16_t value;
         memcpy(&value, g_psx_ram + (phys & 0x1FFFFFu), sizeof(value));
+        if (g_ram_read_watch_active)
+            debug_server_trace_ram_read_watch(phys & 0x1FFFFFu, value);
         return value;
     }
     return psx_cyc_load_half_slow(cpu, addr, rt, reg_mask);
