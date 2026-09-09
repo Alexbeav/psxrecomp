@@ -94,6 +94,17 @@ void gr_set_backend(GrBackend backend) {
 GrBackend gr_backend(void) { return g_effective; }
 
 /* ---- Dispatch wrappers (one line each; forward to the active backend) ---- */
+int gr_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
+    return g_b==&SW_BACKEND && sw_draw_source_block(block,extra_work);
+}
+void gr_source_texture_control(unsigned action,uint32_t page) {
+    if(g_b==&SW_BACKEND)sw_source_texture_control(action,page);
+}
+int gr_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,
+                            int shaded,int dither,int interlace,unsigned skip_field,
+                            const SourceGPUTexture *texture,int *extra_work) {
+    return g_b==&SW_BACKEND && sw_draw_source_triangle(x,y,colors,shaded,dither,interlace,skip_field,texture,extra_work);
+}
 void gr_init(uint16_t *vram)                         { g_b->init(vram); }
 void gr_set_scale(int scale)                         { g_b->set_scale(scale); }
 int  gr_scale(void)                                  { return g_b->scale(); }

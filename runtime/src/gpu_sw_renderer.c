@@ -30,6 +30,7 @@
 #include "gpu_sw_renderer.h"
 #include "gpu_vram_dirty.h"
 #include "gpu_sw_edges.h"
+#include "source_gpu_polygon_projection.h"
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -280,7 +281,187 @@ static inline void put_opaque(const RTarget *t, int x, int y, uint16_t color) {
         gpu_vram_dirty_mark_row((uint32_t)y);
 }
 
-/* Write a textured pixel — semi-trans only if texel bit 15 is set */
+/* Native cache state for the opt-in source-comparison profile. Cache reads
+ * sample only g_vram. Uploads invalidate texture tags, but deliberately leave
+ * the palette cached until a palette-key change or GP0 cache clear. */
+static struct {
+    uint32_t tag[256],palette_key,page;
+    uint16_t line[256][4],palette[256];
+} source_texture_cache;
+void sw_source_texture_control(unsigned action,uint32_t page) {
+    int clear=action==0 || action==1 || action==2 || action==4;
+    if(action==3) {
+        unsigned old=source_texture_cache.page;
+        clear=((old^page)&31u)!=0 || (!!(old&0x180u)!=!!(page&0x180u));
+    }
+    if(action==0)memset(&source_texture_cache,0,sizeof(source_texture_cache));
+    if(action==0 || action==1 || action==4)source_texture_cache.palette_key=UINT32_MAX;
+    if(clear)for(unsigned i=0;i<256;i++)source_texture_cache.tag[i]=UINT32_MAX;
+    if(action==3 || action==4)source_texture_cache.page=page&511u;
+}
+typedef struct SourceTriangleColors {
+    RTarget target;
+    int core_x,core_y,dither,extra_work,mode;
+    uint32_t base[5],dx[5],dy[5];
+    const SourceGPUTexture *texture;
+} SourceTriangleColors;
+static uint16_t source_texture_fetch(SourceTriangleColors *c,unsigned u,unsigned v) {
+    unsigned window=c->texture->window,page=c->texture->page;
+    unsigned mx=window&31u,my=(window>>5)&31u;
+    unsigned ux=(u&~(mx<<3))+(((window>>10)&mx)<<3)+((page&15u)<<(8-c->mode));
+    unsigned vy=(v&~(my<<3))+(((window>>15)&my)<<3)+((page&16u)<<4);
+    unsigned address=vy*1024u+((ux>>(2-c->mode))&1023u);
+    unsigned entry=c->mode==0?((address>>2)&3u)|((address>>8)&252u):
+                                ((address>>2)&7u)|((address>>7)&248u);
+    unsigned tag=address&~3u;
+    if(source_texture_cache.tag[entry]!=tag) {
+        c->extra_work+=4;
+        for(unsigned i=0;i<4;i++)source_texture_cache.line[entry][i]=g_vram[tag+i];
+        source_texture_cache.tag[entry]=tag;
+    }
+    uint16_t value=source_texture_cache.line[entry][address&3u];
+    if(c->mode==0)return source_texture_cache.palette[(value>>((ux&3u)*4))&15u];
+    if(c->mode==1)return source_texture_cache.palette[(value>>((ux&1u)*8))&255u];
+    return value;
+}
+static void source_texture_palette(SourceTriangleColors *c) {
+    unsigned clut=c->texture->clut;
+    uint32_t key=(clut&32767u)|((unsigned)c->mode<<16);
+    if(c->mode>=2 || !c->texture->load_clut || source_texture_cache.palette_key==key)return;
+    unsigned count=c->mode?256:16;
+    c->extra_work+=(int)count;
+    for(unsigned i=0;i<count;i++)
+        source_texture_cache.palette[i]=g_vram[((clut>>6)&511u)*1024u+(((clut&63u)*16u+i)&1023u)];
+    source_texture_cache.palette_key=key;
+}
+static unsigned source_triangle_component(const SourceTriangleColors *c,unsigned channel,int x,int y) {
+    uint32_t fraction=c->base[channel]+c->dx[channel]*(uint32_t)(x-c->core_x)+c->dy[channel]*(uint32_t)(y-c->core_y);
+    return (fraction>>12)&255u;
+}
+static void source_triangle_span(void *context,int y,int x,int width) {
+    SourceTriangleColors *c=context;
+    static const int matrix[4][4]={{-4,0,-3,1},{2,-2,3,-1},{-3,1,-4,0},{3,-1,2,-2}};
+    for(int end=x+width;x<end;x++) {
+        uint16_t pixel=0,texel=0;
+        if(c->texture) {
+            texel=source_texture_fetch(c,source_triangle_component(c,3,x,y),source_triangle_component(c,4,x,y));
+            if(!texel)continue;
+            pixel=texel&0x8000u;
+        }
+        if(c->texture && c->texture->raw)pixel=texel;
+        else for(unsigned channel=0;channel<3;channel++) {
+            int component=(int)source_triangle_component(c,channel,x,y);
+            if(c->texture)component=(((texel>>(channel*5))&31)*component)>>4;
+            if(c->dither)component+=matrix[y&3][x&3];
+            if(component<0)component=0;
+            if(component>255)component=255;
+            pixel|=(uint16_t)((component>>3)<<(5*channel));
+        }
+        /* Coverage was clipped in logical draw-area coordinates. Installed
+         * VRAM has nine Y bits; wrapping happens only at the pixel store. */
+        unsigned physical_y=(unsigned)y&511u,address=physical_y*1024u+(unsigned)x;
+        if(g_mask_check_bit && (g_vram[address]&0x8000u))continue;
+        if(g_semi_trans_enabled && (!c->texture || (texel&0x8000u))) {
+            pixel=blend_pixels(g_vram[address],pixel,g_semi_trans_mode);
+            if(c->texture)pixel|=0x8000u;
+        }
+        if(g_mask_set_bit)pixel|=0x8000u;
+        g_vram[address]=pixel;gpu_vram_dirty_mark_row(physical_y);
+    }
+}
+int sw_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,
+                            int shaded,int dither,int interlace,unsigned skip_field,
+                            const SourceGPUTexture *texture,int *extra_work) {
+    *extra_work=0;
+    if(g_hr || g_wide_cur || g_precise_valid || g_perspective_valid)return 0;
+    int area=(x[1]-x[0])*(y[2]-y[0])-(x[2]-x[0])*(y[1]-y[0]);
+    int core=x[1]<=x[0]?(x[2]<=x[1]?2:1):x[2]<x[0]?2:0;
+    SourceTriangleColors c={0};c.target=rt_native();c.core_x=x[core];c.core_y=y[core];
+    c.dither=(shaded || texture)&&dither;c.texture=texture;
+    if(texture) {
+        c.mode=(texture->page>>7)&3;if(c.mode>2)c.mode=2;
+        source_texture_palette(&c); /* CLUT fill precedes even degenerate draws. */
+    }
+    if(area)for(unsigned channel=0;channel<(texture?5u:3u);channel++) {
+        int values[3];
+        for(unsigned i=0;i<3;i++)values[i]=channel<3?(colors[i]>>(channel*8))&255u:
+                                                    (texture->uv[i]>>((channel-3)*8))&255u;
+        c.base[channel]=((uint32_t)values[core]<<12)+2048u;
+        if(shaded || channel>=3) {
+            int64_t ax=(int64_t)(values[1]-values[0])*(y[2]-y[0])-(int64_t)(values[2]-values[0])*(y[1]-y[0]);
+            int64_t ay=(int64_t)(x[1]-x[0])*(values[2]-values[0])-(int64_t)(x[2]-x[0])*(values[1]-values[0]);
+            c.dx[channel]=(uint32_t)(ax*4096/area);c.dy[channel]=(uint32_t)(ay*4096/area);
+        }
+    }
+    int result=source_poly_walk(x,y,g_clip_x1,g_clip_y1,g_clip_x2,g_clip_y2,shaded||texture,
+        g_mask_check_bit||g_semi_trans_enabled,interlace,skip_field,source_triangle_span,&c);
+    *extra_work=c.extra_work;
+    return result>=0;
+}
+
+int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
+    *extra_work=0;
+    if(g_hr || g_wide_cur || g_precise_valid || g_perspective_valid)return 0;
+    const uint32_t *words=block->words;unsigned opcode=words[0]>>24;
+    if(opcode==2) {
+        unsigned x0=words[1]&1008u,y0=(words[1]>>16)&511u;
+        unsigned width=((words[2]&1023u)+15u)&~15u,height=(words[2]>>16)&511u;
+        uint16_t color=((words[0]>>3)&31u)|((words[0]>>6)&992u)|((words[0]>>9)&31744u);
+        for(unsigned row=0;row<height;row++) {
+            unsigned y=(y0+row)&511u;
+            if(block->interlace && (y&1u)==block->skip_field)continue;
+            for(unsigned col=0;col<width;col++)g_vram[y*1024u+((x0+col)&1023u)]=color;
+            if(width)gpu_vram_dirty_mark_row(y);
+        }
+        return 1;
+    }
+    if(opcode==0x80) {
+        unsigned sx=words[1]&1023u,sy=(words[1]>>16)&511u;
+        unsigned dx=words[2]&1023u,dy=(words[2]>>16)&511u;
+        unsigned width=words[3]&1023u,height=(words[3]>>16)&511u;
+        if(!width)width=1024;if(!height)height=512;
+        uint16_t row_chunk[128];
+        for(unsigned row=0;row<height;row++) {
+            unsigned source_row=((sy+row)&511u)*1024u,dest_y=(dy+row)&511u;
+            for(unsigned first=0;first<width;first+=128) {
+                unsigned count=width-first;if(count>128)count=128;
+                for(unsigned i=0;i<count;i++)row_chunk[i]=g_vram[source_row+((sx+first+i)&1023u)];
+                for(unsigned i=0;i<count;i++) {
+                    unsigned address=dest_y*1024u+((dx+first+i)&1023u);
+                    if(g_mask_check_bit && (g_vram[address]&0x8000u))continue;
+                    g_vram[address]=row_chunk[i]|(g_mask_set_bit?0x8000u:0);
+                }
+            }
+            gpu_vram_dirty_mark_row(dest_y);
+        }
+        return 1;
+    }
+    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65)return 0;
+    int textured=!!(opcode&4);unsigned dimensions=words[textured?3:2];
+    int left=block->x,top=block->y,right=left+(int)(dimensions&1023u),bottom=top+(int)((dimensions>>16)&511u);
+    SourceGPUTexture texture={0};SourceTriangleColors c={0};
+    c.target=rt_native();c.core_x=left;c.core_y=top;
+    for(unsigned channel=0;channel<3;channel++)c.base[channel]=((words[0]>>(channel*8))&255u)*4096u;
+    if(textured) {
+        texture.page=block->draw_mode&511u;texture.window=block->texture_window;
+        texture.clut=words[2]>>16;texture.raw=opcode&1;texture.load_clut=1;
+        c.texture=&texture;c.mode=(texture.page>>7)&3;if(c.mode>2)c.mode=2;
+        source_texture_palette(&c);
+        unsigned u=words[2]&255u,v=(words[2]>>8)&255u;
+        if(block->draw_mode&0x1000u)u|=1;
+        c.base[3]=u*4096u;c.base[4]=v*4096u;
+        c.dx[3]=(block->draw_mode&0x1000u)?(uint32_t)-4096:4096u;
+        c.dy[4]=(block->draw_mode&0x2000u)?(uint32_t)-4096:4096u;
+    }
+    if(left<block->clip_left)left=block->clip_left;if(top<block->clip_top)top=block->clip_top;
+    if(right>block->clip_right+1)right=block->clip_right+1;if(bottom>block->clip_bottom+1)bottom=block->clip_bottom+1;
+    if(right>left)for(int row=top;row<bottom;row++) {
+        if(block->interlace && ((unsigned)row&1u)==block->skip_field)continue;
+        source_triangle_span(&c,row,left,right-left);
+    }
+    *extra_work=c.extra_work;return 1;
+}
+
 static inline void put_textured(const RTarget *t, int x, int y, uint16_t texel,
                                 int mod_r, int mod_g, int mod_b,
                                 int raw_texture) {

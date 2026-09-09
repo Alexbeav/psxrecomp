@@ -18,12 +18,24 @@
 #define PSXRECOMP_DMA_H
 
 #include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Source service owner: GPU, CD, SPU and OTC channel work at the supplied actual
+ * runtime cycle, including DMA writes and frame returns between periodic
+ * events. No register/input/state override is performed. */
+void dma_source_gpu_service_at(uint64_t cycle);
+
 void     dma_init(void);
+uint32_t dma_cpu_read_penalty(void); /* Optional source upload's bus-read wait. */
+/* Source-profile CPU owner calls after prior-instruction service, before fetch.
+ * Direct device fixtures retain the live wait until this owner is entered. */
+void     dma_cpu_read_wait_boundary(void);
+/* Source-profile CPU owns the halt between instruction fetch attempts. */
+int      dma_cpu_otc_halted(void);
+/* OTC or manual, non-chopped CD DMA in the source profile. */
+int      dma_cpu_source_halted(void);
 uint32_t dma_read(uint32_t addr);
 void     dma_write(uint32_t addr, uint32_t val);
 void     dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask);
