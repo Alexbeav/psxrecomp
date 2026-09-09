@@ -132,3 +132,5 @@ recompiler/build-*/
 # Project Studio GUI venv (customtkinter)
 tools/new_project_layout/.venv/
 tools/new_project_layout/project_studio_repos.json
+# TAS setup, generated title, owned media and replay evidence are local output.
+/build/
