@@ -44,6 +44,18 @@ For unattended verification:
 python tools/tasreplays/tekken3.py run --headless
 ```
 
+To fast-forward a visible replay, use `run --speed 4`, `--speed 8`,
+`--speed 32`, or `--speed max`. Supported caps are 1, 2, 4, 8, 16, 32 and 64;
+`max` removes the wall-clock cap. These use the same host pacing and
+presentation path as holding the fast-forward key. Every original input and
+RAM/clock checkpoint is still verified. The cap is a ceiling: CPU, rendering
+and capture costs can keep the achieved rate below it. Headless playback is
+already uncapped, so combining `--headless` with a speed override is rejected.
+
+The standalone runtime accepts `PSX_FAST_FORWARD=1` to hold fast-forward from
+startup and `PSX_FAST_FORWARD_SPEED=2..64|max` to choose its cap. The replay
+command sets these explicitly and records them in each run's manifest.
+
 Use `--timeout 3600` on a slower machine, or `setup --jobs 4` to reduce peak
 compiler memory. An original `.bk2` or its TASVideos download ZIP can be supplied
 with `setup --movie "D:/TAS/spikestuffv3-tekken3-ps1.bk2"`; it must have the

@@ -617,7 +617,7 @@ static int manual_fast_forward_multiplier(void) {
                 value = -1;
             } else {
                 int parsed = std::atoi(e);
-                if (parsed >= 2 && parsed <= 16)
+                if (parsed >= 2 && parsed <= 64)
                     value = parsed;
             }
         }
@@ -6912,12 +6912,18 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
     bool turbo_load_paced = false;
 
     /* Manual fast-forward: bounded by default so the game visibly advances and
-     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..16 changes the cap;
+     * audio is less hostile. PSX_FAST_FORWARD_SPEED=2..64 changes the cap;
      * PSX_FAST_FORWARD_SPEED=max restores the old unbounded simulation rate. */
     {
         const Uint8* keys = SDL_GetKeyboardState(NULL);
         static int turbo_skip = 0;
         static int turbo_was_down = 0;
+        /* Automated replay uses the same host pacing/presentation path as
+         * holding the fast-forward key. Guest clocks and input are unchanged. */
+        static const bool startup_fast_forward = [] {
+            const char *e = std::getenv("PSX_FAST_FORWARD");
+            return e && std::strcmp(e, "1") == 0;
+        }();
         /* Keyboard ([KeyMap] Turbo, default Tab) or the controller host
          * shortcut ([hotkeys] fast_forward_pad, default select+L1). Both are
          * hold-to-run; the pad chord goes through the same combo matcher as
@@ -6926,7 +6932,7 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
          * fast_forward_toggle_pad) and drives the same path. */
         const bool kb_turbo = host_hotkey_input_focused() &&
             host_keymap_down(HOST_KEYMAP_TURBO, keys, (int)SDL_GetModState());
-        if (kb_turbo || g_manual_turbo_latched ||
+        if (startup_fast_forward || kb_turbo || g_manual_turbo_latched ||
             hotkey_pad_binding_down(g_hotkey_pad_fast_forward)) {
             const int mult = manual_fast_forward_multiplier();
             const int present_every = (mult < 0) ? 4 : (mult <= 4 ? 2 : 4);
