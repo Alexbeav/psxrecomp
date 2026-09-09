@@ -1256,6 +1256,10 @@ int sio_get_pad_analog(int slot) {
     return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_analog[slot] : 0;
 }
 
+int sio_get_pad_config_capable(int slot) {
+    return (slot >= 0 && slot < PSX_MAX_PLAYERS) ? pad_supports_config[slot] : 0;
+}
+
 void sio_get_pad_sticks(int slot, uint8_t out[4]) {
     if (!out) return;
     if (slot < 0 || slot >= PSX_MAX_PLAYERS) {

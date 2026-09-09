@@ -8,7 +8,7 @@ if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
 endif()
 foreach(_mode IN ITEMS O0 O2)
     foreach(_model IN ITEMS
-            input_route_file input_dualshock_route_file input_route_field_clock input_route_raster_clock
+            input_route_file input_dualshock_route_file input_dualshock_delivery input_route_field_clock input_route_raster_clock
             input_instruction_histogram input_update_clock compiled_ram_read_watch
             spu_status_visibility cdrom_boot_model cdrom_explicit_seek
             cdrom_implicit_seek cdrom_source_explicit_timing cdrom_random_tape)
@@ -25,6 +25,16 @@ foreach(_mode IN ITEMS O0 O2)
         target_link_libraries(${_target} PRIVATE m)
         add_test(NAME ${_target} COMMAND ${_target})
     endforeach()
+endforeach()
+
+foreach(_mode IN ITEMS O0 O2)
+    set(_target "tas_input_route_observer_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_input_route_observer.c"
+        "${_tas_runtime}/src/input_route_observer.c" "${_tas_runtime}/src/psx_sha256.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+        "${_tas_runtime}/tests/test_input_route_observer.py" $<TARGET_FILE:${_target}>)
 endforeach()
 
 foreach(_kind IN ITEMS pipeline dma)

@@ -83,9 +83,11 @@ typedef struct {
  * port=0 uses the default (4370). */
 void debug_server_init(int port);
 
-/* Opt-in PSXRTI1 route, validated before guest execution. First record is
+/* Opt-in PSXRTI1 digital or PSXRTI2 DualShock route, validated before guest execution. First record is
  * consumed at the first normal VBlank input-sampling boundary. */
 int debug_server_preload_input_route(const char *path);
+/* Exact PSXRTI2 delivery bypasses interactive folding/type policy. */
+int debug_server_apply_dualshock_input(int buttons);
 
 /* Current listener status for heartbeat diagnostics. error is the platform
  * socket error captured by init, or 0 when the listener is active. */

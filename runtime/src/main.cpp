@@ -4839,6 +4839,9 @@ static int savestate_input_guard_active(void) {
  * sampling — never slammed mid-
  * handshake (the v0.5.0 phantom-input lesson). */
 static void apply_input_override_to_sio(int override_word) {
+#ifndef PSX_NO_DEBUG_TOOLS
+    if (debug_server_apply_dualshock_input(override_word)) return;
+#endif
     PlayerInput& p = g_players[0];
     const uint16_t w = (uint16_t)override_word;
     sio_set_pad_state_slot(0, w);

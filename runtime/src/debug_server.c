@@ -324,6 +324,8 @@ static uint8_t s_axis_st[4]    = { 0x80, 0x80, 0x80, 0x80 };
  * between short presses and remains deterministic while turbo loads are active.
  */
 #include "input_route_file.h"
+#include "input_dualshock_route_file.h"
+#include "input_dualshock_delivery.h"
 #include "input_route_observer.h"
 static PSX_BSS InputRouteStep s_input_route[INPUT_ROUTE_MAX_STEPS];
 static uint32_t s_input_route_count = 0;
@@ -332,6 +334,9 @@ static uint32_t s_input_route_remaining = 0;
 static int      s_input_route_active = 0;
 static int      s_input_route_file_mode = 0;
 static uint32_t s_input_route_consumed = 0;
+static PSX_BSS InputDualShockRouteStep s_dualshock_route[INPUT_ROUTE_MAX_STEPS];
+static uint8_t s_dualshock_axes[4] = {128,128,128,128};
+static int s_dualshock_route_mode;
 #include "input_update_replay.h"
 #include "input_instruction_histogram_impl.h"
 
@@ -346,6 +351,48 @@ int debug_server_preload_input_route(const char *path)
     if (s_frame_count || s_input_route_active || s_input_route_count) return 0;
     f = fopen(path, "rb");
     if (!f) return 0;
+    unsigned char magic[8];
+    if (fread(magic, 1, sizeof(magic), f) != sizeof(magic) || fseek(f, 0, SEEK_SET)) {
+        fclose(f); return 0;
+    }
+    if (!memcmp(magic, "PSXRTI2\0", 8)) {
+        InputDualShockRouteStep *dual = (InputDualShockRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*dual));
+        if (!dual) { fclose(f); return 0; }
+        error = input_dualshock_route_read(f, dual, &count, &frames);
+        if (fclose(f) && !error) error = "close error";
+        if (getenv("PSX_INPUT_UPDATE_CLOCK")) error = "DualShock does not admit input retiming";
+        const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
+        if (ack_model && !strcmp(ack_model, "octoshock-2.2.2-digital"))
+            error = "digital Octoshock ACK profile cannot qualify a Nymashock DualShock";
+        for (uint32_t i = 0; !error && i < count; ++i)
+            if (dual[i].analog_button) error = "physical Analog press is not qualified";
+        if (error) {
+            fprintf(stderr, "input route rejected: %s\n", error);
+            free(dual); return 0;
+        }
+        if (!input_route_observer_dualshock_init(frames) || !input_instruction_histogram_configure()) {
+            free(dual); return 0;
+        }
+        memcpy(s_dualshock_route, dual, count * sizeof(*dual));
+        free(dual);
+        /* This format declares one cold DualShock at P1. Guest protocol mode
+         * is untouched by subsequent samples. Cards are separate inputs. */
+        sio_set_multitap(0);
+        for (int slot = 0; slot < PSX_MAX_PLAYERS; ++slot) {
+            sio_set_pad_connected(slot, slot == 0);
+            sio_set_pad_config_capable(slot, slot == 0);
+            sio_set_pad_analog(slot, 0, 128, 128, 128, 128);
+            sio_set_pad_state_slot(slot, 0xFFFF);
+        }
+        s_input_override = -1; s_input_frames = 0; s_axis_override = 0;
+        s_input_route_count = count; s_input_route_index = 0;
+        s_input_route_remaining = s_dualshock_route[0].frames;
+        s_input_route_active = s_input_route_file_mode = s_dualshock_route_mode = 1;
+        s_input_route_consumed = 0;
+        fprintf(stdout, "input_route_preloaded: start_frame=0 frames=%u steps=%u format=PSXRTI2 physical_analog=neutral_only\n",
+                (unsigned)frames, (unsigned)count);
+        return 1;
+    }
     staged = (InputRouteStep *)calloc(INPUT_ROUTE_MAX_STEPS, sizeof(*staged));
     if (!staged) { fclose(f); return 0; }
     error = input_route_read(f, staged, &count, &frames);
@@ -14784,6 +14831,16 @@ int debug_server_is_connected(void)
 
 void debug_server_note_input_applied(void)
 {
+    if (s_dualshock_route_mode) {
+        uint8_t st[4];
+        sio_get_pad_sticks(0, st);
+        int connected = sio_get_pad_connected(0) && !sio_get_multitap();
+        for (int slot = 1; slot < PSX_MAX_PLAYERS; ++slot)
+            if (sio_get_pad_connected(slot)) connected = 0;
+        input_route_observer_dualshock_applied(sio_get_pad_buttons_slot(0), st,
+            connected, sio_get_pad_config_capable(0), sio_get_pad_analog(0));
+        return;
+    }
     if (s_input_route_file_mode)
         input_route_observer_applied(sio_get_pad_buttons_slot(0),
                                     sio_get_pad_connected(0), sio_get_pad_analog(0));
@@ -14795,6 +14852,23 @@ int debug_server_get_input_override(void)
     input_instruction_histogram_boundary(s_frame_count);
     if (s_input_route_file_mode)
         input_route_observer_boundary(s_input_route_consumed, s_frame_count);
+    if (s_dualshock_route_mode) {
+        uint16_t current = 0xFFFF;
+        memset(s_dualshock_axes, 128, sizeof(s_dualshock_axes));
+        if (s_input_route_active && s_input_route_index < s_input_route_count) {
+            const InputDualShockRouteStep *step = &s_dualshock_route[s_input_route_index];
+            current = step->buttons;
+            memcpy(s_dualshock_axes, step->axes_ly_lx_ry_rx, 4);
+            if (--s_input_route_remaining == 0) {
+                if (++s_input_route_index < s_input_route_count)
+                    s_input_route_remaining = s_dualshock_route[s_input_route_index].frames;
+                else s_input_route_active = 0;
+            }
+        }
+        input_route_observer_dualshock_input(current, s_dualshock_axes);
+        ++s_input_route_consumed;
+        return current;
+    }
     if (s_update_enabled) {
         input_route_observer_input(0xFFFF); ++s_input_route_consumed; return 0xFFFF;
     }
@@ -14834,6 +14908,13 @@ int debug_server_get_axis_override(unsigned char st[4])
     if (!s_axis_override) return 0;
     st[0] = s_axis_st[0]; st[1] = s_axis_st[1];
     st[2] = s_axis_st[2]; st[3] = s_axis_st[3];
+    return 1;
+}
+
+int debug_server_apply_dualshock_input(int buttons)
+{
+    if (!s_dualshock_route_mode) return 0;
+    input_dualshock_deliver((uint16_t)buttons, s_dualshock_axes);
     return 1;
 }
 
