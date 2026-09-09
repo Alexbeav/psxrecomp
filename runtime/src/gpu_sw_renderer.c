@@ -338,19 +338,20 @@ static unsigned source_triangle_component(const SourceTriangleColors *c,unsigned
     uint32_t fraction=c->base[channel]+c->dx[channel]*(uint32_t)(x-c->core_x)+c->dy[channel]*(uint32_t)(y-c->core_y);
     return (fraction>>12)&255u;
 }
-static void source_triangle_span(void *context,int y,int x,int width) {
+/* x is the store address; logical_x retains source span interpolation. */
+static void source_triangle_span(void *context,int y,int x,int width,int logical_x) {
     SourceTriangleColors *c=context;
     static const int matrix[4][4]={{-4,0,-3,1},{2,-2,3,-1},{-3,1,-4,0},{3,-1,2,-2}};
-    for(int end=x+width;x<end;x++) {
+    for(int end=x+width;x<end;x++,logical_x++) {
         uint16_t pixel=0,texel=0;
         if(c->texture) {
-            texel=source_texture_fetch(c,source_triangle_component(c,3,x,y),source_triangle_component(c,4,x,y));
+            texel=source_texture_fetch(c,source_triangle_component(c,3,logical_x,y),source_triangle_component(c,4,logical_x,y));
             if(!texel)continue;
             pixel=texel&0x8000u;
         }
         if(c->texture && c->texture->raw)pixel=texel;
         else for(unsigned channel=0;channel<3;channel++) {
-            int component=(int)source_triangle_component(c,channel,x,y);
+            int component=(int)source_triangle_component(c,channel,logical_x,y);
             if(c->texture)component=(((texel>>(channel*5))&31)*component)>>4;
             if(c->dither)component+=matrix[y&3][x&3];
             if(component<0)component=0;
@@ -457,7 +458,7 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
     if(right>block->clip_right+1)right=block->clip_right+1;if(bottom>block->clip_bottom+1)bottom=block->clip_bottom+1;
     if(right>left)for(int row=top;row<bottom;row++) {
         if(block->interlace && ((unsigned)row&1u)==block->skip_field)continue;
-        source_triangle_span(&c,row,left,right-left);
+        source_triangle_span(&c,row,left,right-left,left);
     }
     *extra_work=c.extra_work;return 1;
 }
