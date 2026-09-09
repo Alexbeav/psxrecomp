@@ -674,6 +674,9 @@ if(BUILD_TESTING)
         add_test(NAME tas_replay_recipe
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_tekken3.py")
+        add_test(NAME tas_pepsiman_admission
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
         # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
         add_test(NAME tas_ram_long_route
             COMMAND ${Python3_EXECUTABLE}
