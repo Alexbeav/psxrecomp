@@ -667,6 +667,14 @@ target_link_libraries(reachable_discovery_test PRIVATE fmt)
 if(BUILD_TESTING)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
                      "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME tas_bk2_intake
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_bk2_intake.py")
+        add_test(NAME tas_replay_recipe
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_tekken3.py")
+    endif()
 endif()
 
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either

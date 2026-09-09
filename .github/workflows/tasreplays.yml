@@ -1,0 +1,29 @@
+name: TAS replay source checks
+on:
+  pull_request:
+    branches: [tasreplays]
+  push:
+    branches: [tasreplays]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-ucrt:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+      - name: Build and test without retail assets
+        shell: msys2 {0}
+        run: |
+          cmake -S recompiler -B build/tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          cmake --build build/tests --parallel 4
+          ctest --test-dir build/tests --output-on-failure -j 4
