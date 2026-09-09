@@ -322,7 +322,7 @@ def run(args):
     argv=[sys.executable,HERE/'run_native.py',args.output,'--exe',info['executable'],
           '--game',info['game'],'--disc',info['disc'],'--bios',info['bios'],'--route',info['route'],
           '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(observation_end-FRAMES+1),'--timeout',str(args.timeout),
-          '--storage-budget-mib','1536','--mdec-source-model','octoshock-2.3',
+          '--storage-budget-mib','1536','--cd-cdda-model','octoshock-2.3','--mdec-source-model','octoshock-2.3',
           '--checkpoint-every','1200','--renderer','software',*tekken3.PROFILE]
     # The same native implementations are an explicit candidate: all psx/
     # source bytes match 2.2.2 -> 2.3, but this title still needs its own gates.

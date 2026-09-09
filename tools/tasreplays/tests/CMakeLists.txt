@@ -37,3 +37,12 @@ foreach(_kind IN ITEMS pipeline dma)
             "${_tas_runtime}/tests/test_mdec_source_contracts.py" $<TARGET_FILE:${_target}> ${_kind})
     endforeach()
 endforeach()
+
+foreach(_mode IN ITEMS O0 O2)
+    set(_target "tas_cdrom_source_cdda_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_cdrom_source_cdda.c" "${_tas_runtime}/src/psx_sha256.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+        "${_tas_runtime}/tests/test_cdrom_source_cdda_contracts.py" $<TARGET_FILE:${_target}>)
+endforeach()
