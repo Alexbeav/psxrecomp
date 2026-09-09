@@ -31,12 +31,12 @@ static void advance(unsigned n) { while(n--) { clock_now++;sio_advance(1); } }
 
 static void setup(int source, int irq) {
 #ifdef _WIN32
-    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source?"octoshock-2.2.2-digital":"");
+    _putenv_s("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source==2?"nymashock-1.29.0-dualshock":source?"octoshock-2.2.2-digital":"");
 #else
-    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source?"octoshock-2.2.2-digital":"",1);
+    setenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL",source==2?"nymashock-1.29.0-dualshock":source?"octoshock-2.2.2-digital":"",1);
 #endif
     clock_now=0; i_stat=1u<<9;
-    sio_init(); sio_connect_pad(0); sio_set_pad_config_capable(0,0);
+    sio_init(); sio_connect_pad(0); sio_set_pad_config_capable(0,source==2);
     sio_write(0x1F801048,0xD); sio_write(0x1F80104E,0x88);
     sio_write(0x1F80104A,irq?0x1003:3);
 }
@@ -53,8 +53,11 @@ int main(void) {
     assert(sio_snapshot_bytes()>0);
 
     /* Source pulse is independent of reads and of IRQ enable. */
-    for(int irq=0;irq<2;irq++) {
-        setup(1,irq);sio_write(0x1F801040,1);
+    for(int profile=1;profile<=2;profile++) for(int irq=0;irq<2;irq++)
+    for(int analog=0;analog<=(profile==2);analog++) {
+        setup(profile,irq);
+        if(analog) sio_set_pad_analog(0,1,128,128,128,128);
+        sio_write(0x1F801040,1);
         advance(1088+63);assert(!(stat()&0x80));advance(1);
         assert(stat()&0x80);assert(!!(i_stat&0x80)==irq);
         for(int i=0;i<100;i++)assert(stat()&0x80);

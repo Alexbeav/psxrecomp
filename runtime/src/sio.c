@@ -637,8 +637,9 @@ volatile int g_sio_timing_active = 0;
 #if SIO_MODEL_CYCLE_PACED
 #define SIO_BAUD_CYCLES_DEFAULT 1088
 #define SIO_ACK_CYCLES_DEFAULT  170
-/* Explicit digital-pad source compatibility, not a hardware/default profile.
- * Original 2.2.2 gamepad.cpp requests delay 64; frontio.cpp exposes 32 clocks. */
+/* Explicit source compatibility, not a hardware/default profile.
+ * 1: Octoshock2.2.2 digital; 2: Nymashock1.29.0 DualShock, both modes.
+ * The respective source devices request delay64; FrontIO exposes32 clocks. */
 static int sio_source_pad_ack;
 static int sio_ack_pulse_remaining;
 static int sio_pending_ack_timed;
@@ -942,6 +943,7 @@ void sio_init(void) {
 #if SIO_MODEL_CYCLE_PACED
     const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
     sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
+    if (ack_model && !strcmp(ack_model, "nymashock-1.29.0-dualshock")) sio_source_pad_ack = 2;
     if (ack_model && *ack_model && !sio_source_pad_ack) {
         fprintf(stderr, "Unsupported input route pad ACK model: %s\n", ack_model);
         abort();
@@ -2748,7 +2750,8 @@ static void sio_handle_shift_complete(void) {
                                ? SIO_IRQ_SRC_CARD_ACK : SIO_IRQ_SRC_PAD_ACK;
     sio_irq_pending_slot     = (uint8_t)selected_slot;
     int timed_pad = sio_source_pad_ack && active_device == DEV_PAD &&
-                    !pad_analog[pad_active_logical] && !sio_multitap_active();
+                    (sio_source_pad_ack == 2 ? pad_supports_config[pad_active_logical] :
+                                              !pad_analog[pad_active_logical]) && !sio_multitap_active();
     int ack_delay = timed_pad ? 64 : SIO_ACK_CYCLES_DEFAULT;
     sio_irq_pending_delay    = (uint8_t)ack_delay;
     sio_irq_pending_mc_state = (uint8_t)mc_state;

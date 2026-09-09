@@ -53,3 +53,36 @@ the original digest may differ because of the source axis conversion. Legacy
 PSXRTI1 word hashes and its digital-only delivery guard retain their meaning.
 Full source protocol/ACK, return-clock and retail playback qualification are
 still separate gates; codec or delivery tests do not satisfy them.
+
+## Nymashock controller ACK profile
+
+`PSX_INPUT_ROUTE_PAD_ACK_MODEL=nymashock-1.29.0-dualshock` selects a64-cycle
+ACK delay and32-cycle visible pulse for a standalone config-capable pad,
+in digital, analog and config modes. It is separate from the existing
+Octoshock digital profile; default behavior and card timing stay unchanged.
+
+The authored source fixture compiled the unmodified DualShock translation
+unit from Mednafen `ddf225cf63b7b355cb2ac7772450cf473f4b53ac`, with the exact
+InputDevice base-method region from FrontIO. It uses ordinary controller
+input and serial configuration commands, with state serialization guarded
+by aborting link stubs. It does not execute a full core or a game.
+
+The260 source transactions cover cold digital polling, entering config,
+guest selection and locking of analog mode, leaving config, and all256
+axis values with four asymmetric sticks. Every reply byte already matched
+native before the profile;2,072 ACK requests differed (170 versus64 cycles).
+With the explicit profile, every complete transaction and delay matches
+at O0/O2. The default170-cycle negative control remains covered. The
+registered deadline test also checks both source profiles' read-independent
+32-cycle pulse, IRQ enable behavior and preservation of unrelated IRQ bits.
+FrontIO's pinned source Update method supplies the32-cycle pulse contract;
+the extracted base-method fixture does not independently execute FrontIO's
+scheduler. Full source/native guest timing remains a separate acceptance gate.
+
+The checked-in transaction golden is authored data. Its SHA256 after newline
+normalization is `169e53e7a555e5f7f3d5ec4f755011c881412d14fc9a424da3660ce91618bd40`;
+the original Windows capture hash is
+`b03eef7659af34c0ff99a6493d7257c2e606285a7876723dccef47a4c50576e6`.
+`tools/tasreplays/collect_nymashock_dualshock.py` reproduces that normalized
+capture at O0/O2 from the pinned clean source checkout, recording compiler,
+source, extracted base-region and binary hashes in a fresh output directory.
