@@ -25,8 +25,8 @@ def main() -> int:
     resolver = main_cpp[resolver_start:resolver_end]
     require(
         resolver,
-        "if (p.is_absolute())\n"
-        "        return fs::exists(p, ec) ? fs::absolute(p, ec) : fs::path{};",
+        "if (PSXRecompV4::host_path_is_absolute(p))\n"
+        "        return fs::exists(p, ec) ? PSXRecompV4::host_absolute(p, ec) : fs::path{};",
         "absolute config paths are not validated explicitly",
     )
     if "if (fs::exists(p, ec))" in resolver:

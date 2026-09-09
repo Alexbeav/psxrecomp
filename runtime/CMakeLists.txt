@@ -310,7 +310,7 @@ if(BUILD_TESTING)
         src/disc_path.cpp
         src/cue_sheet.cpp
         src/iso_reader.cpp)
-    target_include_directories(disc_path_resolve_test PRIVATE include)
+    target_include_directories(disc_path_resolve_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
     target_link_libraries(disc_path_resolve_test PRIVATE chdr-static)
     add_test(NAME disc_path_resolve_test COMMAND disc_path_resolve_test)
 
@@ -326,7 +326,7 @@ if(BUILD_TESTING)
         tests/test_iso_reader_cdda.cpp
         src/iso_reader.cpp
         src/cue_sheet.cpp)
-    target_include_directories(iso_reader_cdda_test PRIVATE include)
+    target_include_directories(iso_reader_cdda_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
     target_link_libraries(iso_reader_cdda_test PRIVATE chdr-static)
     add_test(NAME iso_reader_cdda_test COMMAND iso_reader_cdda_test)
 
@@ -334,7 +334,7 @@ if(BUILD_TESTING)
         tests/test_iso_reader_sbi.cpp
         src/iso_reader.cpp
         src/cue_sheet.cpp)
-    target_include_directories(iso_reader_sbi_test PRIVATE include)
+    target_include_directories(iso_reader_sbi_test PRIVATE include ${PSXRECOMP_ROOT}/recompiler/include)
     target_link_libraries(iso_reader_sbi_test PRIVATE chdr-static)
     add_test(NAME iso_reader_sbi_test COMMAND iso_reader_sbi_test)
 
@@ -367,6 +367,7 @@ if(BUILD_TESTING)
         src/psx_sha256.c)
     target_include_directories(mod_runtime_test PRIVATE
         include
+        ../recompiler/include
         ../recompiler/lib/toml11)
     target_link_libraries(mod_runtime_test PRIVATE chdr-static)
     add_test(NAME mod_runtime_test COMMAND mod_runtime_test)

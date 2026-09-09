@@ -75,6 +75,7 @@ extern "C" void psx_event_step_conservative_env_init(void);
 #include "freeze_heartbeat.h"
 #include "config_loader.h"
 #include "bios_rom_alias.h"
+#include "host_path.h"
 #include "launcher_device.h"
 #include "game_options.h"
 #include "mod_plugins.h"
@@ -2078,7 +2079,7 @@ static void sdl_drc_callback(void* /*user*/, Uint8* stream, int len) {
 static std::filesystem::path find_upward(std::filesystem::path start,
                                          const std::filesystem::path& marker) {
     std::error_code ec;
-    start = std::filesystem::absolute(start, ec);
+    start = PSXRecompV4::host_absolute(start, ec);
     if (ec) start = std::filesystem::current_path();
     if (!std::filesystem::is_directory(start, ec)) start = start.parent_path();
 
@@ -2117,12 +2118,12 @@ static std::filesystem::path exe_dir_from_argv(const char* argv0) {
     // is the .AppImage's own path, so settings.toml anchors next to it.
     if (exe_dir.empty()) {
         if (const char* appimg = std::getenv("APPIMAGE"); appimg && appimg[0]) {
-            exe_dir = fs::absolute(appimg, ec).parent_path();
+            exe_dir = PSXRecompV4::host_absolute(appimg, ec).parent_path();
             if (ec) exe_dir.clear();
         }
     }
     if (exe_dir.empty() && argv0 && argv0[0]) {
-        exe_dir = fs::absolute(argv0, ec).parent_path();
+        exe_dir = PSXRecompV4::host_absolute(argv0, ec).parent_path();
         if (ec) exe_dir.clear();
     }
     // Last-ditch only (should be unreachable on a normal launch); a bare "." so
@@ -2138,15 +2139,15 @@ static std::filesystem::path resolve_existing_runtime_path(const char* requested
 
     std::error_code ec;
     fs::path p(requested);
-    if (p.is_absolute())
-        return fs::exists(p, ec) ? fs::absolute(p, ec) : fs::path{};
+    if (PSXRecompV4::host_path_is_absolute(p))
+        return fs::exists(p, ec) ? PSXRecompV4::host_absolute(p, ec) : fs::path{};
 
     // Anchor exclusively on the exe directory — never cwd (see exe_dir_from_argv).
     const fs::path root = exe_dir_from_argv(argv0);
     fs::path direct = root / p;
-    if (fs::exists(direct, ec)) return fs::absolute(direct, ec);
+    if (fs::exists(direct, ec)) return PSXRecompV4::host_absolute(direct, ec);
     fs::path found = find_upward(root, p);
-    if (!found.empty()) return fs::absolute(found / p, ec);
+    if (!found.empty()) return PSXRecompV4::host_absolute(found / p, ec);
     return {};
 }
 
@@ -2311,20 +2312,20 @@ static bool validate_disc_for_launch(const std::filesystem::path& path,
 static std::filesystem::path normalize_disc_path_for_launch(const std::filesystem::path& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::path p = fs::absolute(path, ec);
+    fs::path p = PSXRecompV4::host_absolute(path, ec);
     if (ec) p = path;
 
     if (uppercase_ascii(p.extension().string()) == ".CUE") {
         fs::path bin = p;
         bin.replace_extension(".bin");
         if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
+            fs::path abs = PSXRecompV4::host_absolute(bin, ec);
             return ec ? bin : abs;
         }
         ec.clear();
         bin.replace_extension(".BIN");
         if (fs::exists(bin, ec)) {
-            fs::path abs = fs::absolute(bin, ec);
+            fs::path abs = PSXRecompV4::host_absolute(bin, ec);
             return ec ? bin : abs;
         }
     }
@@ -2561,24 +2562,24 @@ static std::filesystem::path resolve_bios_path(const char* requested, const char
     if (!requested || !requested[0]) return {};
     fs::path p(requested);
     if (fs::exists(p, ec)) {
-        fs::path abs = fs::absolute(p, ec);
+        fs::path abs = PSXRecompV4::host_absolute(p, ec);
         return ec ? p : abs;
     }
     // Either BIOS filename convention is acceptable: a dump folder holding
     // "US-PSX-SCPH1001.BIN" satisfies a request for "SCPH1001.BIN" and vice
     // versa (see recompiler/include/bios_rom_alias.h).
     if (fs::path aliased = PSXRecompV4::resolve_bios_rom(p); aliased != p) {
-        fs::path abs = fs::absolute(aliased, ec);
+        fs::path abs = PSXRecompV4::host_absolute(aliased, ec);
         return ec ? aliased : abs;
     }
-    if (p.is_absolute()) return p;
+    if (PSXRecompV4::host_path_is_absolute(p)) return p;
 
     // Anchor on the exe directory — never cwd (see exe_dir_from_argv).
     fs::path found = find_upward(exe_dir_from_argv(argv0), p);
     if (!found.empty()) return found / p;
     // Same walk, accepting the other naming convention at each rung: the
     // literal name is absent but a region-qualified sibling may be present.
-    for (fs::path dir = fs::absolute(exe_dir_from_argv(argv0), ec);
+    for (fs::path dir = PSXRecompV4::host_absolute(exe_dir_from_argv(argv0), ec);
          !dir.empty(); dir = dir.parent_path()) {
         const fs::path aliased = PSXRecompV4::resolve_bios_rom(dir / p);
         if (aliased != dir / p && fs::exists(aliased, ec)) return aliased;
@@ -2637,7 +2638,7 @@ static std::filesystem::path discover_retail_bios_near(const char* argv0) {
                 const fs::path cand = dir / name;
                 if (retail_bios_file_ok(cand)) {
                     auto abs = fs::weakly_canonical(cand, ec);
-                    if (ec) abs = fs::absolute(cand, ec);
+                    if (ec) abs = PSXRecompV4::host_absolute(cand, ec);
                     return abs;
                 }
             }
@@ -3753,7 +3754,7 @@ static std::filesystem::path resolve_overlay_capture_path(
 
     auto root_relative = [&](const std::string& raw) {
         std::filesystem::path p(raw);
-        return p.is_absolute() ? p : value_base / p;
+        return PSXRecompV4::host_path_is_absolute(p) ? p : value_base / p;
     };
     std::filesystem::path result;
     if (!direct.empty()) result = root_relative(direct);
@@ -11432,7 +11433,7 @@ int main(int argc, char** argv) {
             default_game_config_storage = default_game_config.string();
             game_config_path = default_game_config_storage.c_str();
         }
-    } else if (!std::filesystem::path(game_config_path).is_absolute()) {
+    } else if (!PSXRecompV4::host_path_is_absolute(std::filesystem::path(game_config_path))) {
         // An explicit --game with a relative path must ALSO anchor on the exe
         // dir, never cwd — otherwise the disc / memcard_dir / game_options.toml
         // that resolve against this file's parent silently point at cwd. Resolve
@@ -12540,7 +12541,7 @@ int main(int argc, char** argv) {
                 std::error_code ec;
                 if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
                     seed.bios_path = std::filesystem::weakly_canonical(resolved, ec);
-                    if (ec) seed.bios_path = std::filesystem::absolute(resolved, ec);
+                    if (ec) seed.bios_path = PSXRecompV4::host_absolute(resolved, ec);
                     seed.has_bios_path = true;
                 } else {
                     seed.bios_path.clear();
@@ -12792,7 +12793,7 @@ int main(int argc, char** argv) {
                         if (!resolved.empty() &&
                             std::filesystem::exists(resolved, ec)) {
                             auto abs = std::filesystem::weakly_canonical(resolved, ec);
-                            if (ec) abs = std::filesystem::absolute(resolved, ec);
+                            if (ec) abs = PSXRecompV4::host_absolute(resolved, ec);
                             std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
                                           abs.string().c_str());
                         }
@@ -12946,7 +12947,7 @@ int main(int argc, char** argv) {
                         seed.bios_path =
                             std::filesystem::weakly_canonical(resolved, ec);
                         if (ec)
-                            seed.bios_path = std::filesystem::absolute(resolved, ec);
+                            seed.bios_path = PSXRecompV4::host_absolute(resolved, ec);
                     } else {
                         seed.bios_path = ls.bios_path;
                     }
@@ -14636,7 +14637,7 @@ soft_return_lobby:
                 std::error_code ec;
                 if (!resolved.empty() && std::filesystem::exists(resolved, ec)) {
                     auto abs = std::filesystem::weakly_canonical(resolved, ec);
-                    if (ec) abs = std::filesystem::absolute(resolved, ec);
+                    if (ec) abs = PSXRecompV4::host_absolute(resolved, ec);
                     std::snprintf(ls.bios_path, sizeof(ls.bios_path), "%s",
                                   abs.string().c_str());
                 } else {

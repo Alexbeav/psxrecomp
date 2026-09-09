@@ -352,6 +352,10 @@ target_include_directories(emitter_directive_line_test PRIVATE
 target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    add_executable(host_path_test tests/host_path_test.cpp)
+    target_include_directories(host_path_test PRIVATE include)
+    add_test(NAME host_path_test COMMAND host_path_test)
+
     add_executable(source_cpu_block_bound_test
         ../runtime/tests/test_source_cpu_block_bound.c
         ../runtime/src/psx_icache.c)
