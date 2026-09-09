@@ -436,7 +436,7 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
         }
         return 1;
     }
-    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65)return 0;
+    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65 && opcode!=0x66)return 0;
     int textured=!!(opcode&4);unsigned dimensions=words[textured?3:2];
     int left=block->x,top=block->y,right=left+(int)(dimensions&1023u),bottom=top+(int)((dimensions>>16)&511u);
     SourceGPUTexture texture={0};SourceTriangleColors c={0};

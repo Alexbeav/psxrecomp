@@ -62,17 +62,17 @@ static inline unsigned source_gpu_polygon_setup(unsigned opcode) {
     return opcode&4 ? (opcode&0x10 ? 450:180) : (opcode&0x10 ? 288:0);
 }
 static inline int source_gpu_block_supported(unsigned command) {
-    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65;
+    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66;
 }
 static inline unsigned source_gpu_command_length(uint32_t word) {
     unsigned command=word>>24;
-    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65?4:3;
+    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66?4:3;
     if(source_gpu_polygon_supported(command))return 1+3*source_gpu_polygon_stride(command)-!!(command&0x10);
     return command==0xa0 || command==0xc0 ? 3u : 1u;
 }
 static inline unsigned source_gpu_command_feedback_length(uint32_t word) {
     unsigned command=word>>24;
-    if(command==2 || (command>=0x60 && command<=0x65))return 3;
+    if(command==2 || (command>=0x60 && command<=0x66))return 3;
     return command==0x80 || command==1 || command==0xa0 || command==0xc0 || command==0xe1 || command==0xe2 || command==0xe6 ? 2u : 1u;
 }
 

@@ -356,6 +356,19 @@ if(BUILD_TESTING)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
 
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        foreach(_mode IN ITEMS O0 O2)
+            add_executable(tas_gpu_sprite_blend_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_blend.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_sprite_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+        endforeach()
+    endif()
+
     add_executable(source_cpu_block_bound_test
         ../runtime/tests/test_source_cpu_block_bound.c
         ../runtime/src/psx_icache.c)
