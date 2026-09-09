@@ -41,7 +41,7 @@ def verify_reference(path):
     bindings={str(Path(x['path']).resolve()):x['sha256'] for x in ref['bindings']}
     if len(bindings)!=len(ref['bindings']):raise ValueError('duplicate source reference binding')
     for p,h in bindings.items():require_hash(Path(p),h)
-    for key in ('ram_pages','terminal_ram','initial_card1'):
+    for key in ('ram_pages','terminal_ram','initial_card1','terminal_card1'):
         if str(Path(ref[key]).resolve()) not in bindings:raise ValueError('unbound source reference field')
     if ref.get('admission_tool_sha256')!=source.digest(Path(source.__file__)):
         raise ValueError('source reference admission tool differs')
@@ -49,7 +49,8 @@ def verify_reference(path):
     if stock==observed:raise ValueError('source reference roles must be independent')
     if (Path(ref['ram_pages']).resolve()!=observed/'ram-pages.tsv' or
         Path(ref['terminal_ram']).resolve()!=observed/f'ram-frame-{endpoint:06d}.bin' or
-        Path(ref['initial_card1']).resolve()!=stock/'initial-Memcard-1.bin'):
+        Path(ref['initial_card1']).resolve()!=stock/'initial-Memcard-1.bin' or
+        Path(ref['terminal_card1']).resolve()!=observed/source.FINAL_CARD):
         raise ValueError('source reference fields do not belong to the admitted roles')
     for root,role in ((stock,'stock-control'),(observed,'pages-observer')):
         for name in ('manifest.json','complete.json','exit.json','semantic-review.json'):
@@ -58,6 +59,8 @@ def verify_reference(path):
         if admitted!=endpoint or terminal[1]!=ref['terminal_clock'] or terminal[3].lower()!=ref['terminal_ram_sha256']:
             raise ValueError('source reference terminal differs')
     require_hash(Path(ref['initial_card1']),source.CARD_SHA)
+    require_hash(Path(ref['terminal_card1']),ref['terminal_card1_sha256'])
+    source.terminal_card_evidence(stock,observed)
     return ref
 
 def media(cue,bios):
@@ -232,17 +235,22 @@ def run(args):
             comparison={'match':first is None and counts==[wanted,wanted],'returns':counts,'first_divergence':first}
         except (ValueError,OSError) as error:
             comparison={'match':False,'returns':counts,'first_divergence':first,'observation_error':str(error)}
-    terminal_match=None
+    terminal_match=None;terminal_card_match=None;terminal_error=None
     if wanted==endpoint and result.returncode==0:
-        actual=terminal_consistency(args.output/'ram-pages.tsv',args.output/f'ram-frame-{wanted:06d}.bin',wanted)
-        terminal_match=actual==Path(reference['terminal_ram']).read_bytes()
+        try:
+            actual=terminal_consistency(args.output/'ram-pages.tsv',args.output/f'ram-frame-{wanted:06d}.bin',wanted)
+            terminal_match=actual==Path(reference['terminal_ram']).read_bytes()
+            terminal_card_match=source.card_bytes(args.output/'cards/card1.mcd')==source.card_bytes(reference['terminal_card1'])
+        except (ValueError,OSError) as error:
+            terminal_error=str(error);terminal_match=False;terminal_card_match=False
     receipt={'candidate_sha256':info['executable_sha256'],'source_reference':source.bind(Path(info['reference'])),
              'diagnostic_prefix':wanted<endpoint,'original_input_prefix_unchanged':True,'full_original_input_and_tail':wanted==endpoint,
              'observed_returns':wanted,'native_input_exit':result.returncode,'comparison':comparison,'terminal_ram_match':terminal_match,
+             'terminal_card1_match':terminal_card_match,'terminal_observation_error':terminal_error,
              'qualification':'mechanical comparison only; ending/semantic review and repeated gameplay remain required'}
     write_json(args.output/'source-comparison.json',receipt)
     print(json.dumps(receipt))
-    return 0 if result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or terminal_match) else 1
+    return 0 if result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or (terminal_match and terminal_card_match)) else 1
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='action',required=True)
