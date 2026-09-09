@@ -68,6 +68,8 @@ def main():
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--show", action="store_true")
+    parser.add_argument("--speed", choices=("1", "2", "4", "8", "16", "32", "64", "max"), default="1",
+                        help="visible replay fast-forward cap; headless runs are always uncapped")
     parser.add_argument("--renderer", choices=("software", "opengl"), default="software",
                         help="rendering backend; window visibility is independent")
     parser.add_argument("--fast-boot", action="store_true")
@@ -141,6 +143,8 @@ def main():
     parser.add_argument("--precise-slice", choices=("off", "on"), default="off",
                         help="Experimental existing instruction-boundary IRQ slicer; RAM BIOS guard requires the qualified candidate emitter")
     args = parser.parse_args()
+    if args.speed != "1" and not args.show:
+        parser.error('--speed requires --show; headless playback is already uncapped')
     if args.ram_page_probe and args.field_model!='octoshock-2.2.2-ntsc-raster':
         raise ValueError('RAM page probe requires source raster frontend boundaries')
     if args.ram_snapshot_frame and (not args.ram_page_probe or len(args.ram_snapshot_frame)>32 or
@@ -274,6 +278,9 @@ p2_mode = "digital"
                     "PSX_INPUT_ROUTE_TRACE": "1" if args.sio_trace else "0",
                     "PSX_INPUT_ROUTE_CAPTURE_EVERY": str(args.checkpoint_every),
                     "PSX_BIOS_HLE": "1" if args.hle else "0"}
+    if args.speed != "1":
+        selected_env["PSX_FAST_FORWARD"] = "1"
+        selected_env["PSX_FAST_FORWARD_SPEED"] = args.speed
     if refresh_guard is not None:
         selected_env["PSX_INPUT_UPDATE_REFRESH_GUARD"]=','.join(map(str,refresh_guard))
     if args.cd_read_start_model != "default":
@@ -351,6 +358,7 @@ p2_mode = "digital"
     env.update(selected_env)
     write_json(run / "manifest.json", {
         "schema": "psx-native-tas-run-v1", "command": command,
+        "requested_speed": args.speed if args.show else "headless-uncapped",
         "update_profile":update_profile,
         "update_contexts":update_contexts,
         "update_profile_sha256":digest(args.update_profile) if update_profile else None,
