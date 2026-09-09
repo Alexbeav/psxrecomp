@@ -19,7 +19,7 @@ import bk2_intake
 from bk2_to_psxrti import convert
 import tekken3
 from compare_ram_pages import read_pages
-from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations
+from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
 
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parent.parent
@@ -30,6 +30,7 @@ BIOS_SHA='9c0421858e217805f4abe18698afea8d5aa36ff0727eb8484944e00eb5e7eadb'
 EXE_SHA='96960e14406b58dd71c6717bb374537313ff7b64215330671c989ba2926f3718'
 STOCK_CORE_SHA='749d6dd58430d010e46ae97c628e113adad5f420c05c2ada0ad35e58191781c0'
 STOCK_COMMIT='a15b31a46bdac27d843d3ebbc5a860012d8452fb'
+OBSERVER_CORE_SHA='fce723aa1e2b73ede285863d4b1841445be47e5dd2ccb054b2e170830a7b5167'
 TRACKS=[
  (124164432,'6452e78fa5d65abec2a5084afa28878bf478c9c63d6ba739b6b542cad366eded'),
  (10936800,'6cd94daf5173b9f84469683fd0270621a8ca2fbd614a6d8af1e75375c36f2531'),
@@ -44,7 +45,9 @@ digest=tekken3.digest
 write=tekken3.write_json
 command=tekken3.command
 
-def verify_control_identity(path, manifest, tail):
+def verify_control_identity(path, manifest, tail, role='stock'):
+    if role not in {'stock','observer'}: raise ValueError('explicit stock/observer role required')
+    if manifest.get('role',role)!=role: raise ValueError('source role differs from requested admission')
     if (manifest.get('schema'),manifest.get('source_tag'),manifest.get('original_inputs'),
         manifest.get('cutoff'),manifest.get('neutral_tail')) != ('pepsiman-stock-control-v1','2.3',FRAMES,FRAMES,tail):
         raise ValueError('source manifest does not describe the completed original movie')
@@ -76,11 +79,12 @@ def verify_control_identity(path, manifest, tail):
     if sync != {'EnableLEC':False,'FIOConfig':{'Multitaps':[False,False],'Memcards':[False,False],
                                              'Devices8':[1,0,0,0,0,0,0,0]}}:
         raise ValueError('source effective controller/card configuration differs')
-    if (path/'loaded-core.json').exists():
+    if role=='observer':
         loaded=json.loads((path/'loaded-core.json').read_text())
         core=names['octoshock.dll']
         if loaded['sha256']!=core['sha256'] or Path(loaded['path']).resolve()!=Path(core['path']).resolve():
             raise ValueError('observed loaded core differs from its bound binary')
+        if core['sha256']!=OBSERVER_CORE_SHA: raise ValueError('observer core is not the pinned candidate getter build')
         build=json.loads((path/'observer-build.json').read_text())
         if (build.get('exit_code'),build.get('source_head'),build.get('upstream_commit'),build.get('core_sha256')) != (
                 0,manifest.get('source_commit'),STOCK_COMMIT,loaded['sha256']):
@@ -89,7 +93,8 @@ def verify_control_identity(path, manifest, tail):
             raise ValueError('observer source must be the reviewed leaf-getter-only revision')
         if not {'Observation230.cs','Observation230.dll','observer-build.json'}<=names.keys():
             raise ValueError('observer helper source/build closure is incomplete')
-    elif names['octoshock.dll']['sha256']!=STOCK_CORE_SHA or manifest.get('source_commit')!=STOCK_COMMIT:
+    elif (names['octoshock.dll']['sha256']!=STOCK_CORE_SHA or manifest.get('source_commit')!=STOCK_COMMIT
+          or (path/'loaded-core.json').exists()):
         raise ValueError('stock control must use the pinned unmodified release core')
 
 def cue_files(text):
@@ -140,7 +145,7 @@ def boot_program(track):
     if hashlib.sha256(data).hexdigest()!=EXE_SHA: raise ValueError('wrong boot executable')
     return data
 
-def admit_source_control(path):
+def admit_source_control(path,role='stock'):
     path=path.resolve(strict=True)
     complete=json.loads((path/'complete.json').read_text())
     end=json.loads((path/'exit.json').read_text())
@@ -156,10 +161,12 @@ def admit_source_control(path):
         raise ValueError('source did not complete cleanly')
     if semantic.get('completion_observed') is not True or type(semantic.get('frame')) is not int or not FRAMES<=semantic['frame']<=endpoint:
         raise ValueError('source completion needs semantic review')
+    if semantic['image']!=f"frame-{semantic['frame']:06d}.png" or semantic['frame'] not in captured_frames(endpoint,FRAMES):
+        raise ValueError('semantic evidence must name its actual captured frame')
     evidence=path/semantic['image']
     if not evidence.resolve().is_relative_to(path) or digest(evidence)!=semantic['image_sha256']:
         raise ValueError('source completion image identity changed')
-    verify_control_identity(path,manifest,tail)
+    verify_control_identity(path,manifest,tail,role)
     with (path/'ram-frames.tsv').open() as rows:
         if rows.readline().strip()!='frame\tlag_count\tpc\tram_sha256':
             raise ValueError('unrecognized stock RAM capture')
@@ -172,7 +179,7 @@ def admit_source_control(path):
         if count!=endpoint+1: raise ValueError('stock control misses declared input/neutral boundaries')
     return {name:{'path':str(path/name),'sha256':digest(path/name)} for name in
             ['complete.json','exit.json','semantic-review.json','manifest.json','ram-frames.tsv',
-             'loaded-bios.json','effective-sync.json','effective-settings.json']}
+             'loaded-bios.json','effective-sync.json','effective-settings.json',semantic['image']]}
 
 def setup(args):
     if os.name!='nt': raise ValueError('Windows UCRT build required for this candidate')
@@ -180,8 +187,12 @@ def setup(args):
         raise ValueError('commit source changes before building')
     build_head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
     if not 1<=args.jobs<=64: raise ValueError('jobs must be in 1..64')
-    for tool in ['gcc','g++','cmake','ninja']:
+    for tool in ['gcc','g++','cmake','ninja','git']:
         if not shutil.which(tool): raise ValueError('missing tool: '+tool)
+    # The Windows System32 bash launcher is WSL, not the Git/coreutils runtime
+    # used by this fingerprint script and by the Windows CMake check.
+    bash=Path(shutil.which('git')).resolve().parents[1]/'bin/bash.exe'
+    if not bash.is_file(): raise ValueError('Git for Windows bash is required for BIOS fingerprint verification')
     macros=subprocess.check_output(['gcc','-dM','-E','-include','_mingw.h','-'],input='',text=True)
     if not re.search(r'^#define _UCRT\b',macros,re.M): raise ValueError('UCRT compiler required')
     control=admit_source_control(args.source_control.resolve(strict=True))
@@ -223,6 +234,12 @@ def setup(args):
     command(['ctest','--test-dir',tools,'--output-on-failure','-j',str(args.jobs)],project/'test-tools.log')
     command([tools/'psxrecomp-toml.exe',exe,'--output',project/'census.toml','--seeds',project/'seeds.txt'],project/'census.log')
     q=lambda p:json.dumps(p.as_posix())
+    bios_profile=project/'bios.toml'
+    profile=(ROOT/'bios/SCPH5500.toml').read_text()
+    profile=re.sub(r'^rom\s*=.*$',lambda _: 'rom = '+q(staged_bios),profile,flags=re.M)
+    profile=re.sub(r'^seeds\s*=.*$',lambda _: 'seeds = '+q(ROOT/'recompiler/seeds/phase2_ghidra_seeds_SCPH5500.json'),profile,flags=re.M)
+    profile=re.sub(r'^out_dir\s*=.*$',lambda _: 'out_dir = '+q(ROOT/'generated'),profile,flags=re.M)
+    bios_profile.write_text(profile,encoding='utf8')
     game=project/'game.toml'
     game.write_text(f'''[game]
 name = "Pepsiman TAS"
@@ -234,7 +251,7 @@ text_size = "0x85800"
 stack_base = "0x801FFFF0"
 [recompiler]
 seeds = {q(project/'seeds.txt')}
-bios_config = {q(ROOT/'bios/SCPH5500.toml')}
+bios_config = {q(bios_profile)}
 strict = true
 out_dir = {q(project/'generated')}
 [runtime]
@@ -243,21 +260,27 @@ bios_hle = false
 [video]
 renderer = "software"
 ''',encoding='utf8')
-    command([tools/'psxrecomp-bios.exe','--config',ROOT/'bios/SCPH5500.toml','--rom',staged_bios,
+    command([tools/'psxrecomp-bios.exe','--config',bios_profile,'--rom',staged_bios,
              '--out-dir',ROOT/'generated'],project/'generate-bios.log')
+    fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),
+                                         bios_profile.as_posix()],cwd=ROOT,text=True).strip()
+    if not re.fullmatch('[0-9a-f]{64}',fingerprint): raise ValueError('invalid generated BIOS fingerprint')
+    (ROOT/'generated/SCPH5500.emitter.sha').write_text(fingerprint+'\n')
     command([tools/'psxrecomp-game.exe','--config',game],project/'generate-game.log')
     native=project/'native'
     command(['cmake','-S',HERE,'-B',native,*common,'-DTAS_PROJECT_DIR='+str(project),
              '-DTAS_GAME_STEM=SLPS_017.62','-DTAS_EXE_NAME=Pepsiman-TAS','-DTAS_WINDOW_TITLE=Pepsiman TAS',
              '-DPSXRECOMP_BIOS_STEMS=SCPH5500','-DPSX_SHELLWIN_INTERP=ON',
+             '-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
+             '-D_psxrt_bash='+str(bash),
              '-DPSX_RECOMP_UI=OFF','-DPSX_NETPLAY=OFF','-DPSX_REWIND=OFF','-DPSX_SETUP_WIZARD=OFF',
-             '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON',
+             '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF',
              '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'],project/'configure-native.log')
     command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log')
     if (subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or
         subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=build_head):
         raise ValueError('source changed during candidate build')
-    files=[disc,bios,staged_bios,movie,exe,game,tape,project/'input.psxrti',project/'seeds.txt',*tracks]
+    files=[disc,bios,staged_bios,bios_profile,movie,exe,game,tape,project/'input.psxrti',project/'seeds.txt',*tracks]
     build=native/'Pepsiman-TAS.exe'
     generated={str(f.relative_to(ROOT)):digest(f) for f in (ROOT/'generated').glob('SCPH5500*') if f.is_file()}
     generated.update({str(f):digest(f) for f in (project/'generated').glob('*') if f.is_file()})
@@ -329,7 +352,7 @@ def reference(args):
     stock=args.stock.resolve(strict=True)
     observed=args.observed.resolve(strict=True)
     stock_identity=admit_source_control(stock)
-    observed_identity=admit_source_control(observed)
+    observed_identity=admit_source_control(observed,'observer')
     if (stock/'loaded-core.json').exists() or not (observed/'loaded-core.json').exists():
         raise ValueError('reference requires distinct stock and rebuilt observer roles')
     endpoint=json.loads((observed/'complete.json').read_text())['frame']

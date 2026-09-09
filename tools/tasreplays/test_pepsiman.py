@@ -6,7 +6,8 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 import pepsiman
-from observation_evidence import compare_returns, terminal_consistency
+from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
+from verify_scph5500_seeds import derive
 from compare_ram_pages import MAGIC, page_hash
 
 def cue():
@@ -17,6 +18,12 @@ def cue():
     return '\n'.join(parts)+'\n'
 
 class PepsimanAdmission(unittest.TestCase):
+    def test_seed_window_keeps_only_exact_bytes(self):
+        original=bytes(256);target=bytearray(original);target[63]=1
+        seeds=[{'address':f'0x{0xBFC00000+i:08X}'} for i in [0,64,192,193]]
+        kept,dropped=derive(seeds,original,target)
+        self.assertEqual(kept,[seeds[1],seeds[2]])
+        self.assertEqual(dropped,[seeds[0],seeds[3]])
     def test_input_identity_shape(self):
         for size,sha in pepsiman.TRACKS:
             self.assertEqual(size%2352,0)
@@ -123,5 +130,23 @@ class Observations(unittest.TestCase):
         with self.assertRaises(ValueError): terminal_consistency(pages,raw,3,'0'*64)
         raw.write_bytes(data[:-1]+b'\1')
         with self.assertRaises(ValueError): terminal_consistency(pages,raw,3)
+
+    def test_passivity_compares_complete_image_inventory(self):
+        stock=self.root/'stock';observed=self.root/'observed';stock.mkdir();observed.mkdir()
+        for root in [stock,observed]:
+            (root/'ram-frames.tsv').write_text('header\n'+'same\n'*7)
+            for name in ['loaded-bios.json','effective-sync.json','effective-settings.json']:(root/name).write_text('{}')
+            for frame in captured_frames(6,3,2,2):(root/f'frame-{frame:06d}.png').write_bytes(b'pixels')
+        compare=lambda:compare_stock_observations(stock,observed,6,3,2,2)
+        compare()
+        (observed/'frame-000003.png').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'screenshot differs'):compare()
+        (observed/'frame-000003.png').write_bytes(b'pixels')
+        (observed/'frame-000005.png').write_bytes(b'extra')
+        with self.assertRaisesRegex(ValueError,'inventory'):compare()
+        (stock/'frame-000005.png').write_bytes(b'extra')
+        compare()
+        (observed/'frame-000002.png').unlink()
+        with self.assertRaisesRegex(ValueError,'inventory'):compare()
 
 if __name__=='__main__': unittest.main()

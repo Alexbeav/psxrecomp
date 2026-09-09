@@ -43,7 +43,14 @@ def terminal_consistency(pages, raw_path, expected_frames, full_sha=None):
     return raw
 
 
-def compare_stock_observations(stock, observed, endpoint):
+def captured_frames(endpoint, input_frames=71806, checkpoint_every=1200, tail_every=60):
+    frames = {0, endpoint, input_frames}
+    frames.update(range(checkpoint_every, endpoint+1, checkpoint_every))
+    frames.update(frame for frame in range(input_frames+1, endpoint+1) if frame % tail_every == 0)
+    return frames
+
+
+def compare_stock_observations(stock, observed, endpoint, input_frames=71806, checkpoint_every=1200, tail_every=60):
     """Recompute passivity from captures, including all declared sparse images."""
     a, b = stock/'ram-frames.tsv', observed/'ram-frames.tsv'
     with a.open() as left, b.open() as right:
@@ -53,16 +60,17 @@ def compare_stock_observations(stock, observed, endpoint):
                 raise ValueError(f'stock/observer RAM or lag mismatch at line {count}')
         if count != endpoint + 2:
             raise ValueError('stock/observer return coverage differs')
-    frames = {0, endpoint, 71806}
-    frames.update(range(1200, endpoint+1, 1200))
-    frames.update(frame for frame in range(71807, endpoint+1) if frame % 60 == 0)
+    frames = captured_frames(endpoint,input_frames,checkpoint_every,tail_every)
+    required = {f'frame-{frame:06d}.png' for frame in frames}
+    inventories = [{p.name for p in root.glob('frame-*.png')} for root in [stock,observed]]
+    if inventories[0] != inventories[1] or not required <= inventories[0]:
+        raise ValueError('stock/observer screenshot inventory differs or is incomplete')
     evidence = [a, b]
-    for frame in sorted(frames):
-        name = f'frame-{frame:06d}.png'
+    for name in sorted(inventories[0]):
         s, n = stock/name, observed/name
         # Identical encoded PNG bytes also establish identical decoded pixels.
         if s.read_bytes() != n.read_bytes():
-            raise ValueError(f'stock/observer screenshot differs at frame {frame}')
+            raise ValueError(f'stock/observer screenshot differs: {name}')
         evidence += [s, n]
     for name in ['loaded-bios.json', 'effective-sync.json', 'effective-settings.json']:
         s, n = stock/name, observed/name
