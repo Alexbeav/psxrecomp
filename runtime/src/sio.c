@@ -298,7 +298,11 @@ typedef enum {
     MC_GETID_2,
     MC_GETID_3,
     MC_GETID_4,
+    MC_SOURCE_DONE, /* Nymashock stays silent until DTR drops. */
 } McState;
+
+/* Explicit source compatibility; defaults retain the existing card model. */
+static int sio_source_card;
 
 /* Per-slot card state.  On real hardware each card controller is a
  * separate physical device that retains its protocol state independently.
@@ -792,7 +796,7 @@ static uint32_t  sio_irq_seq = 0;
 /* Pending-IRQ context — captured when the countdown is armed, used when it fires. */
 static uint8_t   sio_irq_pending_source     = SIO_IRQ_SRC_UNKNOWN;
 static uint8_t   sio_irq_pending_slot       = 0;
-static uint8_t   sio_irq_pending_delay      = 0;
+static uint16_t  sio_irq_pending_delay      = 0;
 static uint8_t   sio_irq_pending_mc_state   = 0;
 static uint32_t  sio_irq_pending_byte_seq   = 0;
 
@@ -940,6 +944,15 @@ static int sio_ack_visible_reads = 0;
 #define SIO_CTRL_SLOT        (1 << 13)
 
 void sio_init(void) {
+    const char *card_model = getenv("PSX_INPUT_ROUTE_CARD_MODEL");
+    sio_source_card = card_model && !strcmp(card_model, "nymashock-1.29.0");
+    if (card_model && *card_model && !sio_source_card) {
+        fprintf(stderr, "Unsupported input route card model: %s\n", card_model);
+        abort();
+    }
+#if !SIO_MODEL_CYCLE_PACED
+    if (sio_source_card) abort();
+#endif
 #if SIO_MODEL_CYCLE_PACED
     const char *ack_model = getenv("PSX_INPUT_ROUTE_PAD_ACK_MODEL");
     sio_source_pad_ack = ack_model && strcmp(ack_model, "octoshock-2.2.2-digital") == 0;
@@ -1687,7 +1700,7 @@ static void mc_process_byte(uint8_t tx_byte) {
     case MC_CMD:
         mc_cmd = tx_byte;
         sio_mc_cmd_count++;
-        if (tx_byte == 0x52 || tx_byte == 0x57 || tx_byte == 0x53) {
+        if (tx_byte == 0x52 || tx_byte == 0x57 || (tx_byte == 0x53 && !sio_source_card)) {
             if (tx_byte == 0x52) sio_mc_read_count++;
             mc_state = MC_ID1;
             sio_rx_data = mc_flag;
@@ -1696,8 +1709,8 @@ static void mc_process_byte(uint8_t tx_byte) {
              * only after a write; BIOS card initialization normally performs
              * a dummy write to sector 003Fh for exactly that purpose. */
         } else {
-            mc_state = MC_IDLE;
-            sio_rx_data = 0xFF;
+            mc_state = sio_source_card ? MC_SOURCE_DONE : MC_IDLE;
+            sio_rx_data = sio_source_card ? mc_flag : 0xFF;
         }
         break;
 
@@ -1764,7 +1777,7 @@ static void mc_process_byte(uint8_t tx_byte) {
             for (int i = 0; i < 128; i++)
                 mc_checksum ^= mc_data[i];
             mc_state = MC_READ_ACK1;
-            sio_rx_data = 0x00;
+            sio_rx_data = sio_source_card ? mc_sector_msb : 0x00;
         } else {
             mc_data_idx = 0;
             mc_state = MC_WRITE_LSB_ECHO;
@@ -1795,11 +1808,16 @@ static void mc_process_byte(uint8_t tx_byte) {
         /* Per no$psx: card echoes the requested sector address back to host
          * as a confirm-the-address handshake, BEFORE sending the data bytes. */
         mc_state = MC_READ_LSB_ECHO;
-        sio_rx_data = mc_sector_msb;
+        sio_rx_data = sio_source_card && mc_sector >= MEMCARD_SECTORS ? 0xFF : mc_sector_msb;
         sio_stat |= SIO_STAT_ACK;
         break;
 
     case MC_READ_LSB_ECHO:
+        if (sio_source_card && mc_sector >= MEMCARD_SECTORS) {
+            sio_rx_data = 0xFF;
+            mc_state = MC_SOURCE_DONE;
+            break;
+        }
         mc_state = MC_READ_DATA;
         mc_data_idx = 0;
         sio_rx_data = mc_sector_lsb;
@@ -1821,7 +1839,7 @@ static void mc_process_byte(uint8_t tx_byte) {
         break;
 
     case MC_READ_END: {
-        mc_state = MC_IDLE;
+        mc_state = sio_source_card ? MC_SOURCE_DONE : MC_IDLE;
         sio_mc_read_done++;
         extern void card_read_summary_record(uint8_t slot, uint8_t cmd,
                                              uint16_t sector,
@@ -1847,8 +1865,8 @@ static void mc_process_byte(uint8_t tx_byte) {
         break;
 
     case MC_WRITE_DATA:
+        sio_rx_data = sio_source_card ? mc_data[mc_data_idx-1] : 0x00;
         mc_data[mc_data_idx++] = tx_byte;
-        sio_rx_data = 0x00;
         if (mc_data_idx >= 128) {
             mc_state = MC_WRITE_CHK;
         }
@@ -1861,10 +1879,15 @@ static void mc_process_byte(uint8_t tx_byte) {
             expected ^= mc_data[i];
 
         mc_state = MC_WRITE_ACK1;
-        sio_rx_data = 0x00;
+        sio_rx_data = sio_source_card ? mc_data[127] : 0x00;
         sio_stat |= SIO_STAT_ACK;
 
-        if (tx_byte == expected && mc_sector < MEMCARD_SECTORS) {
+        if (sio_source_card) {
+            /* Source accepts the checksum here but commits only while
+             * shifting the second confirmation (5D), two bytes later. */
+            mc_checksum = tx_byte != expected ? 0x4E :
+                          mc_sector >= MEMCARD_SECTORS ? 0xFF : 0x47;
+        } else if (tx_byte == expected && mc_sector < MEMCARD_SECTORS) {
             memcard_write_sector(mc_slot, mc_sector, mc_data);
             memcard_flush(mc_slot);
             mc_checksum = 0x47; /* Good */
@@ -1886,12 +1909,21 @@ static void mc_process_byte(uint8_t tx_byte) {
         mc_state = MC_WRITE_END;
         sio_rx_data = 0x5D;
         sio_stat |= SIO_STAT_ACK;
+        if (sio_source_card && mc_checksum == 0x47) {
+            memcard_write_sector(mc_slot, mc_sector, mc_data);
+            memcard_flush(mc_slot);
+            mc_flag = 0;
+        }
         break;
 
     case MC_WRITE_END:
-        mc_state = MC_IDLE;
+        mc_state = sio_source_card ? MC_SOURCE_DONE : MC_IDLE;
         sio_rx_data = mc_checksum;
-        mc_flag = 0x00; /* Clear "new data" flag after first write */
+        if (!sio_source_card) mc_flag = 0x00;
+        break;
+
+    case MC_SOURCE_DONE:
+        sio_rx_data = 0xFF;
         break;
 
     default:
@@ -2032,7 +2064,8 @@ static void sio_process_byte(uint8_t tx_byte) {
                         got_ack, sio_trace_seq);
 
         /* Natural close: mc_state went IDLE this byte from non-IDLE. */
-        if (mc_state == MC_IDLE && txn_pre_state != MC_IDLE) {
+        if ((mc_state == MC_IDLE || mc_state == MC_SOURCE_DONE) &&
+            txn_pre_state != MC_IDLE && txn_pre_state != MC_SOURCE_DONE) {
             uint8_t reason;
             switch (txn_pre_state) {
             case MC_READ_END:
@@ -2369,7 +2402,7 @@ void sio_write(uint32_t addr, uint32_t value) {
             sio_ack_visible_reads = 0;
 #if SIO_MODEL_CYCLE_PACED
             sio_ack_pulse_remaining = 0; sio_pending_ack_timed = 0;
-            if (sio_source_pad_ack) sio_stat &= ~SIO_STAT_ACK;
+            if (sio_source_pad_ack || sio_source_card) sio_stat &= ~SIO_STAT_ACK;
             sio_shift_active = 0; sio_shift_remaining = 0;
             sio_tx_buffered = 0;
             sio_shift_ack_irq_en = 0; sio_tx_buffer_ack_irq_en = 0;
@@ -2435,7 +2468,7 @@ void sio_write(uint32_t addr, uint32_t value) {
              * libcard A6C10 nested so B4E38 never arms the next transfer. */
             int preserve_card_ack = 0;
             int preserve_ack_rem = 0;
-            if (active_device == DEV_MEMCARD) {
+            if (active_device == DEV_MEMCARD && !sio_source_card) {
                 if (sio_shift_active && sio_shift_remaining <= 0)
                     sio_handle_shift_complete();
                 if (sio_pending_ack) {
@@ -2485,7 +2518,7 @@ void sio_write(uint32_t addr, uint32_t value) {
             active_device = DEV_NONE;
 #if SIO_MODEL_CYCLE_PACED
             sio_ack_pulse_remaining = 0; sio_pending_ack_timed = 0;
-            if (sio_source_pad_ack) sio_stat &= ~SIO_STAT_ACK;
+            if (sio_source_pad_ack || sio_source_card) sio_stat &= ~SIO_STAT_ACK;
             sio_shift_active = 0; sio_shift_remaining = 0;
             sio_tx_buffered = 0;
             sio_shift_ack_irq_en = 0; sio_tx_buffer_ack_irq_en = 0;
@@ -2689,7 +2722,7 @@ static void sio_fire_ack_irq(void) {
      * → A6C10 stays nested → B4E38 never set → LOAD wedges after the
      * presence probe. Re-queue until the guest clears bit7.
      * EXPERIMENT: was offline-only; ungated for TM4 netplay test. */
-    if (card_ack && (i_stat & 0x80u)) {
+    if (card_ack && !sio_source_card && (i_stat & 0x80u)) {
         sio_pending_ack = 1;
         sio_ack_remaining = 16;
         sio_pending_ack_irq_en = 1;
@@ -2704,7 +2737,7 @@ static void sio_fire_ack_irq(void) {
     uint32_t i_stat_before = i_stat;
     psx_irq_raise(IRQ_SIO0, 0); /* SIO ACK IRQ */
     event_ring_record_aux(EV_DEQ, (uint8_t)SRC_SIO, 0u); /* SIO ACK IRQ fired */
-    if (card_ack) {
+    if (card_ack && !sio_source_card) {
         sio_arm_card_ct_defer_guard();
         if (s_card_handoff_armed)
             card_handoff_push(5, 0);
@@ -2752,15 +2785,16 @@ static void sio_handle_shift_complete(void) {
     int timed_pad = sio_source_pad_ack && active_device == DEV_PAD &&
                     (sio_source_pad_ack == 2 ? pad_supports_config[pad_active_logical] :
                                               !pad_analog[pad_active_logical]) && !sio_multitap_active();
-    int ack_delay = timed_pad ? 64 : SIO_ACK_CYCLES_DEFAULT;
-    sio_irq_pending_delay    = (uint8_t)ack_delay;
+    int timed_card = sio_source_card && active_device == DEV_MEMCARD;
+    int ack_delay = timed_pad ? 64 : timed_card ? 256 : SIO_ACK_CYCLES_DEFAULT;
+    sio_irq_pending_delay    = (uint16_t)ack_delay;
     sio_irq_pending_mc_state = (uint8_t)mc_state;
     sio_irq_pending_byte_seq = sio_trace_seq;
 
     if (acked) {
         sio_pending_ack   = 1;
         sio_ack_remaining = ack_delay;
-        sio_pending_ack_timed = timed_pad;
+        sio_pending_ack_timed = timed_pad || timed_card;
         sio_pending_ack_irq_en = sio_shift_ack_irq_en;
     }
 
@@ -2811,10 +2845,11 @@ uint64_t sio_get_advance_with_work(void) { return s_sio_advance_with_work; }
 static void sio_pace_walk(int cycles) {
     int remaining = cycles;
     int transitions = 0;
-    /* Preserve the legacy card walker. The source-pad experiment consumes
-     * the whole supplied interval across shift, ACK-on and ACK-off edges. */
-    const int MAX_TRANSITIONS = sio_source_pad_ack &&
-        (sio_bus_owner == SIO_OWNER_PAD || sio_ack_pulse_remaining) ? 32 : 1;
+    /* Preserve the legacy walker outside explicit source profiles. Qualified
+     * devices consume the interval across shift, ACK-on and ACK-off edges. */
+    const int MAX_TRANSITIONS =
+        ((sio_source_pad_ack && sio_bus_owner == SIO_OWNER_PAD) ||
+         (sio_source_card && sio_bus_owner == SIO_OWNER_CARD) || sio_ack_pulse_remaining) ? 32 : 1;
     while (transitions < MAX_TRANSITIONS &&
            (remaining > 0 ||
             (sio_shift_active && sio_shift_remaining <= 0) ||
@@ -2864,7 +2899,7 @@ static void sio_pace_walk(int cycles) {
             break;
         }
     }
-    if (sio_source_pad_ack && !sio_shift_active && !sio_tx_buffered &&
+    if ((sio_source_pad_ack || sio_source_card) && !sio_shift_active && !sio_tx_buffered &&
         !sio_pending_ack && !sio_ack_pulse_remaining) g_sio_timing_active = 0;
 }
 
@@ -3102,6 +3137,7 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
 
 static int sio_snap_parse(PstR *r) {
     uint32_t u;
+    uint8_t saved_delay;
     int32_t i;
     int16_t tr;
     if (!pst_r_u8(r, &sio_tx_data) || !pst_r_u8(r, &sio_rx_data) ||
@@ -3172,9 +3208,10 @@ static int sio_snap_parse(PstR *r) {
     if (!pst_r_i32(r, &i)) return 0;
     sio_ack_visible_reads = (int)i;
     if (!pst_r_u8(r, &sio_irq_pending_source) || !pst_r_u8(r, &sio_irq_pending_slot) ||
-        !pst_r_u8(r, &sio_irq_pending_delay) || !pst_r_u8(r, &sio_irq_pending_mc_state) ||
+        !pst_r_u8(r, &saved_delay) || !pst_r_u8(r, &sio_irq_pending_mc_state) ||
         !pst_r_u32(r, &sio_irq_pending_byte_seq))
         return 0;
+    sio_irq_pending_delay = saved_delay;
     /* sio_trace_seq is host-local and not on the wire; reseat it from the
      * restored byte_seq so the next TX does not stamp a peer-divergent
      * seq into sio_irq_pending_byte_seq (was forking fsm digests alone). */
@@ -3202,7 +3239,7 @@ static int sio_snap_parse(PstR *r) {
 
 uint32_t sio_snapshot_bytes(void) {
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack) return 0; /* explicit cold-boot experiment only */
+    if (sio_source_pad_ack || sio_source_card) return 0; /* explicit cold-boot experiment only */
 #endif
     PstW w;
     pst_w_init(&w, NULL, 0);
