@@ -313,6 +313,7 @@ def run(args):
     argv=[sys.executable,HERE/'run_native.py',args.output,'--exe',info['executable'],
           '--game',info['game'],'--disc',info['disc'],'--bios',info['bios'],'--route',info['route'],
           '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(observation_end-FRAMES+1),'--timeout',str(args.timeout),
+          '--storage-budget-mib','1536',
           '--checkpoint-every','1200','--renderer','software',*tekken3.PROFILE]
     # The same native implementations are an explicit candidate: all psx/
     # source bytes match 2.2.2 -> 2.3, but this title still needs its own gates.
@@ -344,6 +345,11 @@ def run(args):
             report.update(status='fail',error=str(error))
     elif process.returncode:
         report['status']='fail'
+    if (args.output/'exit.json').exists():
+        host=json.loads((args.output/'exit.json').read_text())
+        if host.get('timed_out') or host.get('stop_reason') in {'host_timeout','host_storage_budget'}:
+            report.update(status='incomplete',host_limit=host.get('stop_reason') or 'host_timeout',
+                          classification='host resource limit; no guest failure inferred')
     write(args.output/'verification.json',report)
     print(json.dumps(report))
     return 0 if report['status']=='pass' else 2 if report['status']=='incomplete' else 1
