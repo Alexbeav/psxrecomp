@@ -38,6 +38,12 @@ foreach(_mode IN ITEMS O0 O2)
 endforeach()
 
 foreach(_mode IN ITEMS O0 O2)
+    set(_target "tas_sio_nymashock_card_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_sio_nymashock_card.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -Werror=incompatible-pointer-types)
+    add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+        "${_tas_runtime}/tests/test_sio_nymashock_card.py" $<TARGET_FILE:${_target}>)
     set(_target "tas_sio_nymashock_dualshock_${_mode}")
     add_executable(${_target} "${_tas_runtime}/tests/test_sio_nymashock_dualshock.c")
     target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
