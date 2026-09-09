@@ -81,6 +81,14 @@ def verify_control_identity(path, manifest, tail):
         core=names['octoshock.dll']
         if loaded['sha256']!=core['sha256'] or Path(loaded['path']).resolve()!=Path(core['path']).resolve():
             raise ValueError('observed loaded core differs from its bound binary')
+        build=json.loads((path/'observer-build.json').read_text())
+        if (build.get('exit_code'),build.get('source_head'),build.get('upstream_commit'),build.get('core_sha256')) != (
+                0,manifest.get('source_commit'),STOCK_COMMIT,loaded['sha256']):
+            raise ValueError('observed core build provenance differs')
+        if build['source_head']!='b3ec859cc082d13b9d229dba2036fefeee96289d':
+            raise ValueError('observer source must be the reviewed leaf-getter-only revision')
+        if not {'Observation230.cs','Observation230.dll','observer-build.json'}<=names.keys():
+            raise ValueError('observer helper source/build closure is incomplete')
     elif names['octoshock.dll']['sha256']!=STOCK_CORE_SHA or manifest.get('source_commit')!=STOCK_COMMIT:
         raise ValueError('stock control must use the pinned unmodified release core')
 
@@ -170,6 +178,8 @@ def setup(args):
     if os.name!='nt': raise ValueError('Windows UCRT build required for this candidate')
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('commit source changes before building')
+    build_head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
+    if not 1<=args.jobs<=64: raise ValueError('jobs must be in 1..64')
     for tool in ['gcc','g++','cmake','ninja']:
         if not shutil.which(tool): raise ValueError('missing tool: '+tool)
     macros=subprocess.check_output(['gcc','-dM','-E','-include','_mingw.h','-'],input='',text=True)
@@ -189,6 +199,16 @@ def setup(args):
     exe=cache/'SLPS_017.62'
     if exe.exists(): tekken3.require_hash(exe,EXE_SHA)
     else: exe.write_bytes(data)
+    # WinLibs std::filesystem::absolute rebases a valid UNC path onto the
+    # current drive. Use the same verified private content cache as the boot
+    # executable; record both original and staged firmware identities.
+    bios_cache=args.cache.resolve()/BIOS_SHA
+    bios_cache.mkdir(parents=True,exist_ok=True)
+    staged_bios=bios_cache/'SCPH5500.BIN'
+    if staged_bios.exists(): tekken3.require_hash(staged_bios,BIOS_SHA)
+    else:
+        shutil.copyfile(bios,staged_bios)
+        tekken3.require_hash(staged_bios,BIOS_SHA)
     tape=project/'octoshock-cold-random.psxrng'
     command([sys.executable,HERE/'external/source_random_tape.py',tape],project/'random-tape.log')
     tekken3.require_hash(tape,tekken3.TAPE_SHA)
@@ -223,7 +243,7 @@ bios_hle = false
 [video]
 renderer = "software"
 ''',encoding='utf8')
-    command([tools/'psxrecomp-bios.exe','--config',ROOT/'bios/SCPH5500.toml','--rom',bios,
+    command([tools/'psxrecomp-bios.exe','--config',ROOT/'bios/SCPH5500.toml','--rom',staged_bios,
              '--out-dir',ROOT/'generated'],project/'generate-bios.log')
     command([tools/'psxrecomp-game.exe','--config',game],project/'generate-game.log')
     native=project/'native'
@@ -234,12 +254,15 @@ renderer = "software"
              '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DPSXRECOMP_SKIP_BIOS_STALE_CHECK=ON',
              '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'],project/'configure-native.log')
     command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log')
-    files=[disc,bios,movie,exe,game,tape,project/'input.psxrti',project/'seeds.txt',*tracks]
+    if (subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or
+        subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=build_head):
+        raise ValueError('source changed during candidate build')
+    files=[disc,bios,staged_bios,movie,exe,game,tape,project/'input.psxrti',project/'seeds.txt',*tracks]
     build=native/'Pepsiman-TAS.exe'
     generated={str(f.relative_to(ROOT)):digest(f) for f in (ROOT/'generated').glob('SCPH5500*') if f.is_file()}
     generated.update({str(f):digest(f) for f in (project/'generated').glob('*') if f.is_file()})
     info={'schema':'pepsiman-tas-candidate-v1','source_control':control,
-          'source_head':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
+          'source_head':build_head,
           'source_tree':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],text=True).strip(),
           'bindings':[{'path':str(f),'sha256':digest(f)} for f in files],
           'generated':generated,'executable':str(build),'executable_sha256':digest(build),
