@@ -352,6 +352,9 @@ if(BUILD_TESTING)
     target_include_directories(control_flow_metadata_test PRIVATE include)
     target_link_libraries(control_flow_metadata_test PRIVATE fmt)
     add_test(NAME control_flow_metadata_test COMMAND control_flow_metadata_test)
+    add_executable(host_path_test tests/host_path_test.cpp)
+    target_include_directories(host_path_test PRIVATE include)
+    add_test(NAME host_path_test COMMAND host_path_test)
 
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
