@@ -833,6 +833,12 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_scheduler_precise_escape.py"
                 --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_bk2_intake
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_bk2_intake.py")
+        add_test(NAME tas_replay_recipe
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_tekken3.py")
     endif()
 endif()
 
