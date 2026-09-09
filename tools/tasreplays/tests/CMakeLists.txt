@@ -38,3 +38,18 @@ foreach(_mode IN ITEMS O0 O2)
     add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
         "${_tas_runtime}/tests/test_input_route_observer.py" $<TARGET_FILE:${_target}>)
 endforeach()
+
+foreach(_mode IN ITEMS O0 O2)
+    set(_target "tas_sio_nymashock_dualshock_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_sio_nymashock_dualshock.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${Python3_EXECUTABLE}
+        "${_tas_runtime}/tests/test_sio_nymashock_dualshock.py" $<TARGET_FILE:${_target}>)
+    set(_target "tas_sio_ack_timing_${_mode}")
+    add_executable(${_target} "${_tas_runtime}/tests/test_sio_ack_timing.c")
+    target_include_directories(${_target} PRIVATE "${_tas_runtime}/include")
+    target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG)
+    add_test(NAME ${_target} COMMAND ${_target})
+endforeach()
+

@@ -155,6 +155,11 @@ if(BUILD_TESTING)
     add_test(NAME input_dualshock_delivery_test COMMAND input_dualshock_delivery_test)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(sio_nymashock_dualshock_test tests/test_sio_nymashock_dualshock.c)
+    target_include_directories(sio_nymashock_dualshock_test PRIVATE include)
+    add_test(NAME sio_nymashock_dualshock_test COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sio_nymashock_dualshock.py
+        $<TARGET_FILE:sio_nymashock_dualshock_test>)
     add_executable(input_route_observer_test tests/test_input_route_observer.c
         src/input_route_observer.c src/psx_sha256.c)
     target_include_directories(input_route_observer_test PRIVATE include)
