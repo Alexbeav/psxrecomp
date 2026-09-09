@@ -11,8 +11,9 @@
  * explicitly qualified source GPU service event; reads do not advance it.
  * Current scope: NOP/cache-clear, drawing environment, A0/C0 transfers,02 fills,80 copies, variable rectangles,
  * observed untextured/textured polygons, including general opaque flat quads,
- * with inclusive clipping. Vertex coordinates after offsets must stay in the
- * signed 11-bit range; clipping stays inside VRAM.
+ * with inclusive clipping. Vertex and drawing offset are independently signed11-bit. Their sum stays
+ * within[-2048,2046]; source signed clipping and raw interpolation are separate.
+ * Clipping stays inside the admitted VRAM draw area.
  * Interlaced row skipping requires explicitly supplied live readout parity.
  * Other command families and state restoration remain unsupported. Ordinary GP1 reset
  * preserves nonnegative credit and clamps debt, rather than granting new work.

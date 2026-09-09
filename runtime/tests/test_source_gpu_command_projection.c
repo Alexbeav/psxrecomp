@@ -83,9 +83,10 @@ int main(int argc,char **argv) {
     assert(!source_gpu_command_write(&s,0x10000));
     setup(&s); assert(source_gpu_command_write(&s,0xe5000001)); /* Offset X1. */
     assert(source_gpu_command_write(&s,0x28000000));
-    assert(source_gpu_command_write(&s,0x000003ff)); /* Offset makes X1024: still unqualified. */
+    assert(source_gpu_command_write(&s,0x000003ff)); /* Offset makes X1024: qualified source clipping. */
     assert(source_gpu_command_write(&s,0x000003fe));
-    assert(!source_gpu_command_write(&s,0x000103ff));
+    assert(source_gpu_command_write(&s,0x000103ff));
+    assert(s.phase==2 && s.budget==171); /* One clipped pixel at X1023. */
     const uint32_t ordinary[]={0x01000000,0xe1000200,0xe2007fff,0xe6000001};
     for(unsigned c=0;c<sizeof(ordinary)/sizeof(ordinary[0]);++c) {
         setup(&s);s.budget=-100;
