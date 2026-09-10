@@ -106,6 +106,20 @@ def native_span(input_frames,source_endpoint,wanted):
     if wanted>=input_frames:raise ValueError('use full replay for the ending tail')
     return wanted+1,0
 
+def compare_terminal_observations(run,reference,endpoint):
+    """Keep independently observed RAM and persisted-card failures distinct."""
+    errors=[]
+    try:
+        actual=terminal_consistency(run/'ram-pages.tsv',run/f'ram-frame-{endpoint:06d}.bin',endpoint)
+        ram_match=actual==Path(reference['terminal_ram']).read_bytes()
+    except (ValueError,OSError) as error:
+        ram_match=False;errors.append('RAM: '+str(error))
+    try:
+        card_match=source.card_bytes(run/'cards/card1.mcd')==source.card_bytes(reference['terminal_card1'])
+    except (ValueError,OSError) as error:
+        card_match=False;errors.append('card1: '+str(error))
+    return ram_match,card_match,'; '.join(errors) if errors else None
+
 def setup(args):
     if os.name!='nt':raise ValueError('Windows UCRT build required')
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():raise ValueError('commit source before building')
@@ -237,12 +251,7 @@ def run(args):
             comparison={'match':False,'returns':counts,'first_divergence':first,'observation_error':str(error)}
     terminal_match=None;terminal_card_match=None;terminal_error=None
     if wanted==endpoint and result.returncode==0:
-        try:
-            actual=terminal_consistency(args.output/'ram-pages.tsv',args.output/f'ram-frame-{wanted:06d}.bin',wanted)
-            terminal_match=actual==Path(reference['terminal_ram']).read_bytes()
-            terminal_card_match=source.card_bytes(args.output/'cards/card1.mcd')==source.card_bytes(reference['terminal_card1'])
-        except (ValueError,OSError) as error:
-            terminal_error=str(error);terminal_match=False;terminal_card_match=False
+        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(args.output,reference,wanted)
     receipt={'candidate_sha256':info['executable_sha256'],'source_reference':source.bind(Path(info['reference'])),
              'diagnostic_prefix':wanted<endpoint,'original_input_prefix_unchanged':True,'full_original_input_and_tail':wanted==endpoint,
              'observed_returns':wanted,'native_input_exit':result.returncode,'comparison':comparison,'terminal_ram_match':terminal_match,
