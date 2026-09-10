@@ -2802,13 +2802,18 @@ static void present_track_video_standard(void) {
     static int s_last_pal = -1;
     const int pal = present_video_standard_is_pal();
     if (pal == s_last_pal) return;
-    if (s_last_pal >= 0) {
-        apply_present_cadence();
-        std::printf("psxrecomp: video standard now %s; present cadence %s (%.4f ms/frame)\n",
-                    pal ? "PAL (50 Hz)" : "NTSC (59.94 Hz)",
-                    present_vsync_owns_cadence() ? "driver vsync" : "wall-clock pacer",
-                    present_effective_frame_period_ms());
-    }
+    /* Apply on the FIRST observation too: with fast boot a PAL title is
+     * already in PAL mode at the first tracked present, so there is no
+     * later transition to re-apply cadence — the init-time swap interval
+     * (chosen while the GPU still sat in its NTSC default) would stay
+     * vsync-on while the live PAL check enables the 20 ms wall pacer,
+     * and the two waits stack to ~46 FPS (Kula World, wave-2 playtest). */
+    apply_present_cadence();
+    std::printf("psxrecomp: video standard %s%s; present cadence %s (%.4f ms/frame)\n",
+                s_last_pal >= 0 ? "now " : "",
+                pal ? "PAL (50 Hz)" : "NTSC (59.94 Hz)",
+                present_vsync_owns_cadence() ? "driver vsync" : "wall-clock pacer",
+                present_effective_frame_period_ms());
     s_last_pal = pal;
 }
 

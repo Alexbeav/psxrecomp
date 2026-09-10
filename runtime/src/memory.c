@@ -538,6 +538,14 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
         g_text_native_blocked++;
         return 0;
     }
+    /* NOTE (2026-08-30): ranges are validated IN FULL regardless of exec_pc.
+     * The former [exec_pc, end) clip assumed a continuation "never fetches
+     * the patched bytes" behind its resume PC — false for any entry with a
+     * backward edge: a post-call continuation re-enters mid-function and
+     * loops back into the clipped-away region, executing stale static code
+     * (CMR2 overlay corruption, second locus 0x80016B34). A genuinely
+     * patched prologue now blocks the whole entry to the interpreter —
+     * correct, merely slower. */
     int any = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t phys = lo_len_pairs[i * 2u] & 0x1FFFFFFFu;
@@ -547,12 +555,26 @@ int dirty_ram_text_native_ok_ranges_from(const uint32_t *lo_len_pairs,
             g_text_native_blocked++;
             return 0;
         }
-        if (phys + len <= at) continue;
-        if (phys < at) {
-            len -= at - phys;
-            phys = at;
-        }
         any = 1;
+        /* Page-clean fast path: every page this range touches is neither
+         * guard-modified nor runtime-dirty, so its bytes still equal the
+         * reference image — skip the memcmp. This keeps the emitted
+         * stale-static guards on inter-piece host transfers near-free on
+         * the (overwhelmingly common) pristine pages. */
+        {
+            uint32_t p0 = phys >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p1 = (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT;
+            uint32_t p;
+            int clean = 1;
+            for (p = p0; p <= p1; p++) {
+                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||
+                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {
+                    clean = 0;
+                    break;
+                }
+            }
+            if (clean) continue;
+        }
         if (memcmp(ram + phys, text_ref_image + (phys - text_ref_lo), len) != 0) {
             uint32_t off = 0;
             const uint8_t *live = ram + phys;
