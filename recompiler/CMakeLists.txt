@@ -814,6 +814,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_cpu_return_probe.py"
                 --cc ${CMAKE_C_COMPILER})
+        # The Python driver compiles test_source_tas_stateio.c at O0/O2.
+        add_test(NAME tas_stateio_identity
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py"
+                --cc ${CMAKE_C_COMPILER})
     endif()
 endif()
 

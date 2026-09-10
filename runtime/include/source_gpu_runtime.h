@@ -12,6 +12,9 @@ typedef int (*SourceGPUDispatchSink)(const SourceGPUCommandDispatch *);
 void source_gpu_runtime_set_dispatch_sink(SourceGPUDispatchSink);
 void source_gpu_runtime_init(void);
 int source_gpu_runtime_active(void);
+/* TAS checkpoint resume: set the frontend-return counter to match a restored
+ * state so probes and the input route continue from the saved return. */
+int source_gpu_runtime_set_frame_returns(uint32_t frame);
 int source_gpu_runtime_ready(void);
 uint32_t source_gpu_runtime_status_bits(void);
 void source_gpu_runtime_advance(void);

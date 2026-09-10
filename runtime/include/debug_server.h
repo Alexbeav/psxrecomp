@@ -86,6 +86,8 @@ void debug_server_init(int port);
 /* Opt-in PSXRTI1 digital or PSXRTI2 DualShock route, validated before guest execution. First record is
  * consumed at the first normal VBlank input-sampling boundary. */
 int debug_server_preload_input_route(const char *path);
+/* TAS checkpoint resume: seek the preloaded route to a consumed-frame count. */
+int debug_server_seek_input_route(uint32_t frame);
 /* Exact PSXRTI2 delivery bypasses interactive folding/type policy. */
 int debug_server_apply_dualshock_input(int buttons);
 

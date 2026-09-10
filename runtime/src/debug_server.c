@@ -419,6 +419,35 @@ int debug_server_preload_input_route(const char *path)
     return 1;
 }
 
+/* TAS checkpoint resume: reposition the preloaded file route to a saved return.
+ * Walks the run-length steps so the next applied frame is exactly `frame`
+ * (frames already consumed). Returns 0 if the route cannot be seeked. */
+int debug_server_seek_input_route(uint32_t frame)
+{
+    uint32_t i = 0, remaining = frame;
+    if (!s_input_route_active) return 0;
+    if (s_dualshock_route_mode) {
+        while (i < s_input_route_count && remaining >= s_dualshock_route[i].frames) {
+            remaining -= s_dualshock_route[i].frames;
+            ++i;
+        }
+        if (i >= s_input_route_count) return 0;
+        s_input_route_index = i;
+        s_input_route_remaining = s_dualshock_route[i].frames - remaining;
+        s_input_route_consumed = frame;
+        return 1;
+    }
+    while (i < s_input_route_count && remaining >= s_input_route[i].frames) {
+        remaining -= s_input_route[i].frames;
+        ++i;
+    }
+    if (i >= s_input_route_count) return 0;
+    s_input_route_index = i;
+    s_input_route_remaining = s_input_route[i].frames - remaining;
+    s_input_route_consumed = frame;
+    return 1;
+}
+
 /* ---- Frontend turbo override ---- */
 static volatile int s_turbo_enabled = 0;
 

@@ -4,6 +4,10 @@
 #include "dma.h"
 #include "source_cpu_boundary_probe.h"
 #include "source_ram_page_probe.h"
+#include "source_tas_stateio.h"
+#include "boot_state.h"
+#include "savestate.h"
+#include "psx_sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -73,6 +77,54 @@ static void service(void *context,uint64_t cycle,unsigned kind) {
     if(kind==SOURCE_GPU_EVENT_DMA || kind==SOURCE_GPU_EVENT_WRITE)
         dma_source_gpu_service_at(cycle);
 }
+extern uint8_t *memory_get_ram_ptr(void);
+/* TAS checkpoint production. Opt-in via PSX_TAS_SAVE_STATE_AT=<return>: one save
+ * at that frontend return, beside the RAM-page probe. The manifest binds
+ * frame/cycle/RAM digest and the boot_state integrity key so a later resume can
+ * prove identity; host-only caches are re-derived by boot_state on load. */
+static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
+    static int initialized; static unsigned save_at;
+    if(!initialized) { initialized=1; save_at=source_tas_stateio_save_at(); }
+    if(!save_at || frame!=save_at || !cpu) return;
+    const char *path=getenv("PSX_TAS_SAVE_STATE_PATH");
+    char auto_path[4096];
+    if(!path || !*path) {
+        const char *dir=getenv("PSX_INPUT_ROUTE_CAPTURE_DIR");
+        if(!dir || snprintf(auto_path,sizeof auto_path,"%s/tas-state-%06u.pst",dir,frame)>=(int)sizeof auto_path) {
+            fprintf(stderr,"[tas-stateio] save refused: no state path or capture dir at return %u\n",frame);
+            return;
+        }
+        path=auto_path;
+    }
+    uint32_t bios_checksum=0,entry_pc=0;
+    savestate_get_integrity(&bios_checksum,&entry_pc);
+    if(!boot_state_save(cpu,bios_checksum,entry_pc,path)) {
+        fprintf(stderr,"[tas-stateio] save failed at return %u\n",frame);
+        return;
+    }
+    char sha_hex[65]; unsigned long long state_bytes=0;
+    FILE *state=fopen(path,"rb");
+    if(!state) { fprintf(stderr,"[tas-stateio] save wrote no readable state at return %u\n",frame); return; }
+    psx_sha256_ctx ctx; psx_sha256_init(&ctx);
+    uint8_t buffer[65536]; size_t got;
+    while((got=fread(buffer,1,sizeof buffer,state))>0) { psx_sha256_update(&ctx,buffer,got); state_bytes+=got; }
+    fclose(state);
+    uint8_t digest[32]; psx_sha256_final(&ctx,digest);
+    for(unsigned i=0;i<32;i++) sprintf(sha_hex+i*2,"%02x",digest[i]);
+    sha_hex[64]='\0';
+    TasStateManifest m; memset(&m,0,sizeof m);
+    m.frame=frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
+    m.state_bytes=state_bytes;
+    m.ram_digest=source_tas_stateio_ram_digest(memory_get_ram_ptr(),2097152u);
+    char manifest_path[4160];
+    if(snprintf(manifest_path,sizeof manifest_path,"%s.json",path)>=(int)sizeof manifest_path ||
+       !source_tas_stateio_manifest_write(manifest_path,&m,path,sha_hex)) {
+        fprintf(stderr,"[tas-stateio] save manifest failed at return %u\n",frame);
+        return;
+    }
+    fprintf(stderr,"[tas-stateio] saved return %u cycle %llu RAM %016llX -> %s\n",frame,
+            (unsigned long long)cycle,(unsigned long long)m.ram_digest,path);
+}
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
     for(;;) {
         if(clock_state.frame_pending) {
@@ -81,6 +133,7 @@ static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
             return_clock=clock_state;return_command=command_state;
             source_cpu_return_probe(cpu,pc,cycle,clock_state.frame_returns);
             source_ram_page_probe(clock_state.frame_returns,cycle);
+            tas_stateio_save(cpu,clock_state.frame_returns,cycle);
             psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
         }
         dma_cpu_read_wait_boundary();
@@ -112,6 +165,14 @@ void source_gpu_runtime_init(void) {
     psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
 }
 int source_gpu_runtime_active(void) {return enabled;}
+/* Resume support: restore the frontend-return counter after a checkpoint load,
+ * so subsequent probes and the input route line up with the original run. */
+int source_gpu_runtime_set_frame_returns(uint32_t frame) {
+    if(!enabled)return 0;
+    clock_state.frame_returns=frame;
+    return_clock=clock_state;
+    return 1;
+}
 int source_gpu_runtime_ready(void) {return enabled?source_gpu_command_ready(&command_state):-2;}
 uint32_t source_gpu_runtime_status_bits(void) {
     uint32_t bits=(command_state.dma_direction&2u)?1u<<25:0;

@@ -19,6 +19,7 @@
 #include "psx_bios_backend.h"
 #include "psx_cycles.h"
 #include "source_gpu_runtime.h"
+#include "source_tas_stateio.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
@@ -14275,6 +14276,52 @@ session_reboot:
             }
         }
     }
+#ifndef PSX_NO_DEBUG_TOOLS
+    /* TAS checkpoint resume (accuracy diagnostic loop): restore a saved
+     * full-machine state and continue the SAME input route from the saved
+     * return. The manifest gate proves the restored RAM digest and cycle match
+     * the checkpoint before the run is admitted; a foreign or truncated state
+     * aborts instead of producing a silently wrong replay. Final qualification
+     * runs stay from-scratch; this path is for diagnosis only. */
+    if (const char *resume_state = std::getenv("PSX_TAS_RESUME_STATE")) {
+        char manifest_path[4160], text[4096], state_path_field[1024], reason[160];
+        TasStateManifest m;
+        const char *mp = std::getenv("PSX_TAS_RESUME_MANIFEST");
+        uint32_t resume_bios = 0, resume_entry = 0;
+        savestate_get_integrity(&resume_bios, &resume_entry);
+        if (!mp || !*mp) {
+            std::snprintf(manifest_path, sizeof manifest_path, "%s.json", resume_state);
+            mp = manifest_path;
+        }
+        if (!source_tas_stateio_read_text(mp, text, sizeof text) ||
+            !source_tas_stateio_manifest_parse(text, &m, state_path_field,
+                                               sizeof state_path_field)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: malformed manifest %s\n", mp);
+            return 2;
+        }
+        if (!boot_state_load(resume_state, resume_bios, resume_entry, &cpu)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
+            return 2;
+        }
+        if (!source_tas_stateio_manifest_accept(&m, m.frame, psx_get_cycle_count(),
+                source_tas_stateio_ram_digest(memory_get_ram_ptr(), 2097152u),
+                resume_bios, resume_entry, reason, sizeof reason)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: %s\n", reason);
+            return 2;
+        }
+        if (!debug_server_seek_input_route(m.frame)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: route cannot seek to return %u\n", m.frame);
+            return 2;
+        }
+        if (!source_gpu_runtime_set_frame_returns(m.frame)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: source GPU runtime not active\n");
+            return 2;
+        }
+        std::fprintf(stdout, "psxrecomp: [tas-stateio] resumed return %u cycle %llu from %s\n",
+                     m.frame, (unsigned long long)m.cycle, resume_state);
+    }
+#endif
+
     /* Netplay: refresh RB bios/entry after savestate_configure (start() ran
      * earlier with zeros); guest also sandboxes .pst/.mcd under saves/netplay/. */
     psx_netplay_bind_guest_saves();
