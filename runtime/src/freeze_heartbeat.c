@@ -14,6 +14,14 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <dbghelp.h>
+#else
+/* POSIX (Linux/macOS): pthread heartbeat thread + signal-based main-thread
+ * stack capture. Best effort by design — see hb_sig_stack_handler. */
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
+#include <execinfo.h>
+#include <dlfcn.h>
 #endif
 
 /* State accessors. All defined in other compilation units; declared here
@@ -81,6 +89,20 @@ static HANDLE s_thread = NULL;
 static HANDLE s_main_thread = NULL;       /* DuplicateHandle of main thread */
 static DWORD  s_main_thread_id = 0;
 static int    s_sym_initialized = 0;
+#else
+static pthread_t s_thread;
+static pthread_t s_main_pthread;          /* main-thread identity, captured at start */
+static int      s_sig_installed = 0;
+/* Signal-capture mailbox: the handler runs ON the main thread, fills the
+ * preallocated frame buffer, and raises the flag. The heartbeat thread
+ * polls the flag with a bounded timeout (a main thread wedged inside an
+ * uninterruptible syscall keeps the signal pending — capture returns
+ * empty, which is the honest result). */
+static volatile sig_atomic_t s_sig_captured = 0;
+static volatile int s_sig_depth = 0;
+#define HB_SIG              SIGUSR2
+#define HB_MAX_STACK_FRAMES 64
+static void *s_sig_frames[HB_MAX_STACK_FRAMES];
 #endif
 
 #define HB_FILE        "psx_freeze_heartbeat.json"
@@ -305,6 +327,77 @@ static void freeze_dump_main_stack_samples_json(FILE *f, int n) {
         if (i) fputc(',', f);
         freeze_dump_main_stack_json(f);   /* one suspend/walk/resume snapshot */
         Sleep(2);
+    }
+    fputc(']', f);
+}
+#else /* POSIX stack capture */
+
+static void hb_sig_stack_handler(int sig) {
+    (void)sig;
+    /* Runs ON the main thread at delivery, so backtrace() walks the main
+     * thread's stack above the interrupted point — the same snapshot the
+     * Windows walker gets from SuspendThread+GetThreadContext. backtrace()
+     * is not officially async-signal-safe (glibc unwinds in place);
+     * documented best effort: no allocation, preallocated static buffer,
+     * bounded depth, single flag raise. */
+    s_sig_depth = backtrace((void **)s_sig_frames, HB_MAX_STACK_FRAMES);
+    __sync_synchronize();   /* frames visible before the capture flag */
+    s_sig_captured = 1;
+}
+
+static int hb_sig_capture_main_stack(int timeout_ms) {
+    /* Never signal self: a capture running on the main thread (fatal path)
+     * must not walk the main thread — same rule as the Windows walker. */
+    if (pthread_equal(pthread_self(), s_main_pthread)) return 0;
+    if (!s_sig_installed) return 0;
+    s_sig_captured = 0;
+    s_sig_depth = 0;
+    if (pthread_kill(s_main_pthread, HB_SIG) != 0) return 0;
+    for (int i = 0; i < timeout_ms; i++) {
+        if (s_sig_captured) {
+            __sync_synchronize();   /* acquire: frames filled before the flag */
+            return s_sig_depth > 0;
+        }
+        usleep(1000);
+    }
+    return 0;  /* signal still pending (uninterruptible wedge) — empty result */
+}
+
+static void freeze_dump_main_stack_json(FILE *f) {
+    if (!f) return;
+    int depth = hb_sig_capture_main_stack(64);
+    fputc('[', f);
+    int first = 1;
+    for (int i = 0; i < depth; i++) {
+        void *addr = s_sig_frames[i];
+        if (!addr) break;
+        Dl_info info;
+        memset(&info, 0, sizeof(info));
+        int got = dladdr(addr, &info);
+        fprintf(f, "%s{\"depth\":%d,\"addr\":\"0x%016llX\"",
+                first ? "" : ",", i, (unsigned long long)(uintptr_t)addr);
+        if (got && info.dli_sname) {
+            fprintf(f, ",\"symbol\":\"%s\"", info.dli_sname);
+        }
+        if (got && info.dli_fname) {
+            fprintf(f, ",\"module\":\"%s\",\"rva\":\"0x%llX\"",
+                    info.dli_fname,
+                    (unsigned long long)((uintptr_t)addr - (uintptr_t)info.dli_fbase));
+        }
+        fputc('}', f);
+        first = 0;
+    }
+    fputc(']', f);
+}
+
+static void freeze_dump_main_stack_samples_json(FILE *f, int n) {
+    if (!f) return;
+    if (pthread_equal(pthread_self(), s_main_pthread)) { fputs("[]", f); return; }
+    fputc('[', f);
+    for (int i = 0; i < n; i++) {
+        if (i) fputc(',', f);
+        freeze_dump_main_stack_json(f);   /* one signal/capture snapshot */
+        usleep(2000);
     }
     fputc(']', f);
 }
@@ -676,7 +769,19 @@ static int freeze_dump_write(long long wall, uint64_t frame, uint64_t cyc,
     }
     fputs("\n", f);
 #else
-    fputs("  \"main_stack\":[]\n", f);
+    fputs("  \"main_stack\":", f);
+    if (wedge_kind == 1) {
+        freeze_dump_main_stack_json(f);
+    } else {
+        fputs("[]", f);
+    }
+    fputs(",\n  \"main_stack_samples\":", f);
+    if (wedge_kind == 2 || wedge_kind == 3 || wedge_kind == 5) {
+        freeze_dump_main_stack_samples_json(f, 8);
+    } else {
+        fputs("[]", f);
+    }
+    fputs("\n", f);
 #endif
 
     {
@@ -1095,6 +1200,17 @@ static DWORD WINAPI heartbeat_thread(LPVOID arg) {
         Sleep(HB_INTERVAL_MS);
     }
 }
+#else
+static void *heartbeat_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        heartbeat_write();
+        struct timespec ts = { HB_INTERVAL_MS / 1000,
+                               (HB_INTERVAL_MS % 1000) * 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
 #endif
 
 void freeze_heartbeat_start(const char *backend_label) {
@@ -1124,5 +1240,21 @@ void freeze_heartbeat_start(const char *backend_label) {
     }
     s_thread = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
     if (s_thread) s_started = 1;
+#else
+    /* Install the stack-capture handler and pin the main-thread identity.
+     * This function is called from the main thread at boot (same call-site
+     * contract as the Windows handle duplication); s_main_pthread is what
+     * hb_sig_capture_main_stack compares against. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = hb_sig_stack_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(HB_SIG, &sa, NULL) == 0) s_sig_installed = 1;
+    s_main_pthread = pthread_self();
+    if (pthread_create(&s_thread, NULL, heartbeat_thread, NULL) == 0) {
+        pthread_detach(s_thread);
+        s_started = 1;
+    }
 #endif
 }
