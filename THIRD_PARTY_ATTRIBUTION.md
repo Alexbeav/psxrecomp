@@ -130,5 +130,5 @@ written here because neither repository had it: `probe_disc.py
 scaffolding a project and destructive on a live one.
 
 Keep the pin above accurate when re-syncing. These files are the reason a
-standalone setup-wizard install and a RetComM build produce the same
+standalone setup-wizard install and a Retro build produce the same
 multi-disc `game.toml`; if the two drift, so do those two paths.
