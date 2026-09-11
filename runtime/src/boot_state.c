@@ -79,6 +79,7 @@ extern int      dma_snapshot_read(const uint8_t* p, uint32_t len);
 extern uint32_t sio_snapshot_bytes(void);
 extern void     sio_snapshot_write(uint8_t* p);
 extern int      sio_snapshot_read(const uint8_t* p, uint32_t len);
+extern int      sio_snapshot_shape_ok(uint32_t len);
 extern uint32_t mdec_snapshot_bytes(void);
 extern void     mdec_snapshot_write(uint8_t* p);
 extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
@@ -1045,6 +1046,39 @@ int boot_state_peek_cpu_context(const char* path, uint32_t* out_pc,
     return ok;
 }
 
+/* Pass-1 shape validation. Mirrors the length rule each reader enforces, but
+ * reads no machine state and mutates nothing -- so a malformed stream is refused
+ * BEFORE any section is applied. Without this, a failure part-way through left a
+ * HALF-APPLIED machine (live state changed, replay then runs on a mix), and the
+ * first failing section masked every later one. */
+static int section_shape_ok(uint32_t tag, uint32_t len) {
+    switch (tag) {
+    case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;
+    case BS_SEC_RAM:        return len == RAM_SIZE;
+    case BS_SEC_SCHED:      return len == PSX_SCHEDULER_SNAPSHOT_BYTES;
+    case BS_SEC_SPAD:       return len == SPAD_SIZE;
+    case BS_SEC_IRQ:        return len == 8u || len == 12u;
+    case BS_SEC_TIMER:      return len == TIMER_REGS_WIRE_BYTES;
+    case BS_SEC_CLOCK:      return len == 8u;
+    case BS_SEC_GPU:        return len == gpu_snapshot_bytes();
+    case BS_SEC_VRAM:       return len == VRAM_SIZE;
+    case BS_SEC_SPU:        return len == spu_snapshot_bytes();
+    case BS_SEC_SPURAM:     return len == spu_get_ram_bytes();
+    case BS_SEC_CDROM:      return len == cdrom_snapshot_bytes();
+    case BS_SEC_DMA:        return len == dma_snapshot_bytes();
+    case BS_SEC_SIO:        return sio_snapshot_shape_ok(len);
+    case BS_SEC_MDEC:       return len == mdec_snapshot_bytes();
+    case BS_SEC_ICACHE:     return len == 1024u * 4u;
+    case BS_SEC_DIRTY:      return (len % 4u) == 0u;
+    case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
+    case BS_SEC_GPU_SERVICE:return len == 240u;
+    case BS_SEC_TIMER_SRC:  return len == 60u;
+    case BS_SEC_DMA_SRC:    return len == 152u;
+    case BS_SEC_IRQ_TIMING: return len == 64u;
+    default:                return 0;   /* unknown tag: refuse */
+    }
+}
+
 int boot_state_load_buffer(const uint8_t* file, size_t file_len,
                            uint32_t bios_checksum, uint32_t entry_pc,
                            CPUState* cpu) {
@@ -1078,6 +1112,67 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     cur = file + BOOT_STATE_HEADER_WIRE_BYTES;
     end = file + file_len;
+
+    /* ---- Pass 1: validate every section's SHAPE before touching anything ---- */
+    {
+        const uint8_t* v = file + BOOT_STATE_HEADER_WIRE_BYTES;
+        uint32_t bad_tags[8];
+        uint32_t bad_lens[8];
+        uint32_t nbad = 0, nchecked = 0;
+        for (uint32_t i = 0; i < h.section_count; i++) {
+            PstR sh;
+            uint32_t tag = 0, pad = 0, apply_len = 0;
+            uint64_t len = 0;
+            const uint8_t* payload;
+            if ((size_t)(end - v) < 16u) { nbad = 0; nchecked = 0; break; }
+            pst_r_init(&sh, v, 16);
+            if (!pst_r_u32(&sh, &tag) || !pst_r_u32(&sh, &pad) || !pst_r_u64(&sh, &len)) break;
+            v += 16;
+            if (len > 64u * 1024u * 1024u || (uint64_t)(end - v) < len) break;
+            payload = v;
+            v += (size_t)len;
+            if (h.version >= 4u && pad == BOOT_STATE_SEC_ZLIB) {
+                PstR lr;
+                uint32_t raw_len = 0;
+                uLong dest_len;
+                uint8_t* scratch;
+                if (len < 4u) { apply_len = 0; }
+                else {
+                    pst_r_init(&lr, payload, 4);
+                    if (!pst_r_u32(&lr, &raw_len)) apply_len = 0;
+                    else if (raw_len == 0 || raw_len > 64u * 1024u * 1024u) apply_len = 0;
+                    else {
+                    scratch = (uint8_t*)malloc(raw_len);
+                    if (!scratch) apply_len = 0;
+                    else {
+                        dest_len = (uLong)raw_len;
+                        if (uncompress(scratch, &dest_len, payload + 4, (uLong)(len - 4u)) != Z_OK ||
+                            dest_len != (uLong)raw_len) apply_len = 0;
+                        else apply_len = raw_len;
+                        free(scratch);
+                    }
+                    }
+                }
+            } else if (pad != 0u) {
+                apply_len = 0;
+            } else {
+                apply_len = len > 0xffffffffu ? 0u : (uint32_t)len;
+            }
+            ++nchecked;
+            if (!section_shape_ok(tag, apply_len)) {
+                if (nbad < 8) { bad_tags[nbad] = tag; bad_lens[nbad] = apply_len; }
+                ++nbad;
+            }
+        }
+        if (nbad) {
+            fprintf(stderr, "boot_state: reject — %u of %u sections failed shape "
+                            "validation (nothing applied):", nbad, nchecked);
+            for (uint32_t i = 0; i < nbad && i < 8; i++)
+                fprintf(stderr, " 0x%02X(len=%u)", bad_tags[i], bad_lens[i]);
+            fprintf(stderr, "\n");
+            return 0;
+        }
+    }
 
     for (uint32_t i = 0; ok && i < h.section_count; i++) {
         PstR sh;

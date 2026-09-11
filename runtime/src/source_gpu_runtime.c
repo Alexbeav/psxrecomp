@@ -11,6 +11,7 @@
 #include "pst_wire.h"
 #include "input_route_raster_clock_wire.h"
 #include "source_stateio_identity.h"
+#include "interrupts.h"               /* E survey: IRQ_TIMING transients */
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -148,6 +149,7 @@ static struct {
     int initialized, enabled;
     unsigned long long boundaries, queue_nonzero, words_nonzero, words_total, budget_nonzero;
     unsigned long long upload_live, ll_live, spu_live;
+    unsigned long long irq_slot_nonzero, defer_switch_nonzero;
 } s_e_survey;
 static void e_survey_report(void) {
     if(!s_e_survey.enabled) return;
@@ -156,6 +158,8 @@ static void e_survey_report(void) {
         s_e_survey.words_total,s_e_survey.budget_nonzero);
     fprintf(stderr,"[e-survey] source-dma live: upload=%llu ll=%llu spu=%llu (of %llu boundaries)\n",
         s_e_survey.upload_live,s_e_survey.ll_live,s_e_survey.spu_live,s_e_survey.boundaries);
+    fprintf(stderr,"[e-survey] IRQ_TIMING transient: source_irq_slot_nonzero=%llu s_defer_switch_nonzero=%llu (of %llu)\n",
+        s_e_survey.irq_slot_nonzero,s_e_survey.defer_switch_nonzero,s_e_survey.boundaries);
 }
 static void e_survey(void) {
     if(!s_e_survey.initialized) {
@@ -178,6 +182,12 @@ static void e_survey(void) {
         if(up) ++s_e_survey.upload_live;
         if(ll) ++s_e_survey.ll_live;
         if(sp) ++s_e_survey.spu_live;
+    }
+    {
+        /* IRQ_TIMING transients: are they ever non-zero at a boundary? If never,
+         * keep serializing them but assert zero on save, like queue[32]. */
+        if (interrupts_source_irq_slot_live()) ++s_e_survey.irq_slot_nonzero;
+        if (psx_defer_switch_pending()) ++s_e_survey.defer_switch_nonzero;
     }
 }
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {

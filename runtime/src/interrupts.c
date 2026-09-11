@@ -931,6 +931,10 @@ int interrupts_timing_wire_read(const uint8_t *in, uint32_t len) {
 _Static_assert(sizeof(InputRouteFieldClock) == 16,
                "field clock layout changed; update interrupts_timing_wire_write");
 
+int interrupts_source_irq_slot_live(void) {
+    return source_irq_slot.pc != 0u || source_irq_slot.target != 0u || source_irq_slot.cause != 0u;
+}
+
 int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
 
 static int same_guest_pc(uint32_t a, uint32_t b) {

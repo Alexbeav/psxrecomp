@@ -3255,6 +3255,18 @@ void sio_snapshot_write(uint8_t *p) {
     (void)sio_snap_emit(&w);
 }
 
+/* Pass-1 shape validator for boot_state: does `len` match the wire shape of the
+ * SIO section this build would write? Pure -- reads no machine state, mutates
+ * nothing -- so a malformed stream can be refused before anything is applied. */
+int sio_snapshot_shape_ok(uint32_t len) {
+    const uint32_t current = sio_snapshot_bytes();
+    const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
+                                 sizeof(pad_rumble_small) +
+                                 sizeof(pad_rumble_large));
+    if (!current) return 0;
+    return len == current || (len < current && len + rumble_bytes == current);
+}
+
 int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     const uint32_t current = sio_snapshot_bytes();
