@@ -125,6 +125,35 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
     fprintf(stderr,"[tas-stateio] saved return %u cycle %llu RAM %016llX -> %s\n",frame,
             (unsigned long long)cycle,(unsigned long long)m.ram_digest,path);
 }
+/* E-recon: bounded survey of source-GPU-service quiescence at frame boundaries.
+ * Opt-in via PSX_E_SURVEY=1. Answers the pre-registered abort condition in the
+ * campaign scope doc: is command_state near-zero at the checkpoint boundary? */
+static struct {
+    int initialized, enabled;
+    unsigned long long boundaries, queue_nonzero, words_nonzero, words_total, budget_nonzero;
+} s_e_survey;
+static void e_survey_report(void) {
+    if(!s_e_survey.enabled) return;
+    fprintf(stderr,"[e-survey] boundaries=%llu queue_nonzero=%llu words_nonzero=%llu words_total=%llu budget_nonzero=%llu\n",
+        s_e_survey.boundaries,s_e_survey.queue_nonzero,s_e_survey.words_nonzero,
+        s_e_survey.words_total,s_e_survey.budget_nonzero);
+}
+static void e_survey(void) {
+    if(!s_e_survey.initialized) {
+        s_e_survey.initialized=1;
+        const char *e=getenv("PSX_E_SURVEY");
+        s_e_survey.enabled=e && e[0]=='1' && !e[1];
+        if(s_e_survey.enabled) atexit(e_survey_report);
+    }
+    if(!s_e_survey.enabled) return;
+    ++s_e_survey.boundaries;
+    s_e_survey.words_total+=command_state.count;
+    if(command_state.count) {
+        ++s_e_survey.queue_nonzero;
+        for(unsigned i=0;i<command_state.count;i++) if(command_state.queue[i]) ++s_e_survey.words_nonzero;
+    }
+    if(command_state.budget) ++s_e_survey.budget_nonzero;
+}
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
     for(;;) {
         if(clock_state.frame_pending) {
@@ -134,6 +163,7 @@ static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
             source_cpu_return_probe(cpu,pc,cycle,clock_state.frame_returns);
             source_ram_page_probe(clock_state.frame_returns,cycle);
             tas_stateio_save(cpu,clock_state.frame_returns,cycle);
+            e_survey();
             psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
         }
         dma_cpu_read_wait_boundary();
