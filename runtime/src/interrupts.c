@@ -878,9 +878,15 @@ static int defer_switch_enabled(void) {
  *                                      decides whether a VBlank edge fires.
  *                                      Absolute stamp (psx_cycle_count base)
  *   post_exception_cooldown_until  8 B  gates IRQ delivery. Absolute stamp
- *   source_irq_slot               12 B  source-IRQ context; transient within an
- *                                      instruction, zero at a frame boundary
- *   s_defer_switch_*              12 B  scheduler deferral; transient likewise
+ *   source_irq_slot               12 B  source-IRQ context. NOT transient: the
+ *                                      e-survey measured it non-zero at 5901 of
+ *                                      6000 frame boundaries (98.4%), so it must
+ *                                      be serialized and must never be asserted
+ *                                      zero on save.
+ *   s_defer_switch_*              12 B  scheduler deferral. Serialized (it is a
+ *                                      real mechanism, live on MGS PAL); the
+ *                                      0/6000 figure is RE1-only and is not a
+ *                                      licence to assert it zero.
  *
  * input_route_raster_deadline is NOT serialized: DERIVED from the raster clock
  * (cycle + until_rise), recomputed at end of load in interrupts_note_state_load()
