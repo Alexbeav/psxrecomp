@@ -270,6 +270,33 @@ int interrupts_raster_wire_read(const uint8_t *in, uint32_t len) {
  * the profile-dependent required-set rule (the section is required when this is
  * true, and its presence is a profile mismatch when it is false). */
 int interrupts_raster_comparison_active(void) { return input_route_source_raster; }
+
+/* E negative control (PSX_TAS_PERTURB_RESTORE): deliberately corrupt ONE
+ * restored field immediately after a resume, so the ladder's comparison is
+ * required to fail. A gate that has never been observed to fail is not
+ * evidence; this is how it is observed failing. Test/diagnostic only. */
+int interrupts_raster_perturb(const char *field) {
+    if (!field || !*field) return 0;
+    if (strcmp(field, "raster_fraction") == 0) {
+        input_route_raster.fraction += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.fraction -> %u\n",
+                input_route_raster.fraction);
+        return 1;
+    }
+    if (strcmp(field, "raster_cycle") == 0) {
+        input_route_raster.cycle += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.cycle -> %llu\n",
+                (unsigned long long)input_route_raster.cycle);
+        return 1;
+    }
+    if (strcmp(field, "raster_rises") == 0) {
+        input_route_raster.rises += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: raster.rises -> %u\n",
+                input_route_raster.rises);
+        return 1;
+    }
+    return 0;
+}
 extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
 
@@ -606,9 +633,31 @@ uint32_t interrupts_get_cycles_since_vblank(void) {
     return cycles_since_vblank;
 }
 
+/* Reshaped #5 guard (was: refuse whenever the comparison profile is active).
+ *
+ * Restoring the VBlank phase is only meaningful when the state that DEFINES
+ * that phase came with it. Under the raster comparison profile the phase lives
+ * in BS_SEC_RASTER, so a blob written without that section would leave a zeroed
+ * raster clock behind a plausible-looking run — exactly the v4 no-stub
+ * violation the old model-based refusal existed to prevent.
+ *
+ * So the predicate is now a PRESENCE question, not a model question: refuse
+ * when the comparison profile is active and the load did not carry
+ * BS_SEC_RASTER. Non-comparison profiles restore plain cycles_since_vblank and
+ * are unaffected. boot_state.c records the section's presence once per load via
+ * interrupts_note_state_load(); psx_selfcheck.c's post-load re-apply of the
+ * latched phase stays valid because that record persists for the process. */
+static int s_state_load_raster_present;
+
+void interrupts_note_state_load(int raster_section_present) {
+    s_state_load_raster_present = raster_section_present ? 1 : 0;
+}
+
 void interrupts_set_cycles_since_vblank(uint32_t v) {
-    if (input_route_source_fields || input_route_source_raster) {
-        fprintf(stderr, "[input-field-clock] comparison profile requires a cold boot; state restore is unsupported\n");
+    if ((input_route_source_fields || input_route_source_raster) &&
+        !s_state_load_raster_present) {
+        fprintf(stderr, "[input-field-clock] refuse: comparison profile restore "
+                        "without BS_SEC_RASTER (raster clock would be a stub)\n");
         exit(4);
     }
     cycles_since_vblank = v;

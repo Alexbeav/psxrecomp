@@ -2007,6 +2007,23 @@ void dma_snapshot_write(uint8_t *p) {
         dma_w_delay(&w, &delayed_complete[i]);
 }
 
+/* E survey (M2 apparatus): report whether each source-DMA state machine holds
+ * live mid-transfer state at the frame boundary that arms a checkpoint. If a
+ * machine is provably idle there, a quiescence precondition can replace both
+ * serializing it and the model-based refusal; if it is live, it must be
+ * serialized field by field. */
+void dma_source_dma_live(int *upload, int *ll, int *spu) {
+    if (upload)
+        *upload = (gpu_upload_source.remaining != 0u) || (gpu_upload_source.in_block != 0u) ||
+                  (gpu_upload_source.address != 0u) || (gpu_upload_source.budget != 0);
+    if (ll)
+        *ll = (gpu_ll_source.active != 0u) || (gpu_ll_source.remaining != 0u) ||
+              (gpu_ll_source.nodes != 0u) || (gpu_ll_source.budget != 0);
+    if (spu)
+        *spu = (spu_source.remaining != 0u) || (spu_source.in_block != 0u) ||
+               (spu_source.budget != 0);
+}
+
 int dma_snapshot_read(const uint8_t *p, uint32_t len) {
     if(mdec_source_active())return 0;
     if(gpu_upload_source_model) {

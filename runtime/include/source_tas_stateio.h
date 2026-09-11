@@ -46,7 +46,36 @@ typedef struct TasStateManifest {
     uint32_t           bios_checksum;
     uint32_t           entry_pc;
     unsigned long long state_bytes;
+    /* v7 identity: the whole resolved configuration, not a hand-written flag
+     * list, plus the two things a flag list can never cover — the exact runtime
+     * binary and the exact route content. */
+    char               config_digest[17];
+    char               exe_sha256[65];
+    char               route_sha256[65];
 } TasStateManifest;
+
+/* PSX_* variables that may legitimately DIFFER between a save and a resume.
+ * Everything else the runtime reads is part of the identity, so a newly added
+ * model flag is covered automatically instead of being forgotten. */
+static inline int source_tas_stateio_env_allowed_to_differ(const char *key, size_t klen) {
+    static const char *const allow[] = {
+        "PSX_INPUT_ROUTE_CAPTURE_DIR",  /* output location            */
+        "PSX_INPUT_ROUTE_FILE",         /* path only; CONTENT is hashed
+                                           separately as route_sha256, because
+                                           each run dir holds its own copy */
+        "PSX_TAS_SAVE_STATE_AT",        /* checkpoint request         */
+        "PSX_TAS_SAVE_STATE_PATH",      /* checkpoint request         */
+        "PSX_TAS_RESUME_STATE",         /* resume request             */
+        "PSX_TAS_RESUME_MANIFEST",      /* resume request             */
+        "PSX_LOAD_SLOT",                /* user slot load request     */
+        "PSX_E_SURVEY",                 /* diagnostic only            */
+        "PSX_TAS_PERTURB_RESTORE",      /* negative-control injection */
+        NULL
+    };
+    for (int i = 0; allow[i]; i++)
+        if (strlen(allow[i]) == klen && strncmp(key, allow[i], klen) == 0) return 1;
+    return 0;
+}
 
 /* FNV-1a over guest RAM — same family as the RAM page probe, cheap enough to
  * run once per checkpoint. */
@@ -55,6 +84,28 @@ static inline uint64_t source_tas_stateio_ram_digest(const uint8_t *ram, size_t 
     if (!ram) return 0;
     for (size_t i = 0; i < bytes; ++i) h = (h ^ (uint64_t)ram[i]) * UINT64_C(1099511628211);
     return h;
+}
+
+/* Order-independent digest over the PSX_* entries of a NULL-terminated
+ * "KEY=VALUE" environment array. XOR of per-entry hashes keeps it commutative,
+ * so enumeration order cannot change the result. */
+static inline uint64_t source_tas_stateio_env_digest(const char *const *env) {
+    uint64_t acc = 0;
+    if (!env) return 0;
+    for (size_t i = 0; env[i]; i++) {
+        const char *e = env[i];
+        const char *eq = strchr(e, '=');
+        size_t klen;
+        if (!eq) continue;
+        klen = (size_t)(eq - e);
+        if (klen < 4 || strncmp(e, "PSX_", 4) != 0) continue;
+        if (source_tas_stateio_env_allowed_to_differ(e, klen)) continue;
+        acc ^= source_tas_stateio_ram_digest((const uint8_t *)e, strlen(e));
+    }
+    return acc;
+}
+static inline void source_tas_stateio_hex64(uint64_t v, char out[17]) {
+    snprintf(out, 17, "%016llX", (unsigned long long)v);
 }
 
 static inline int source_tas_stateio_manifest_write(const char *path, const TasStateManifest *m,
@@ -74,11 +125,15 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "  \"entry_pc\": %u,\n"
                  "  \"state_path\": \"%s\",\n"
                  "  \"state_sha256\": \"%s\",\n"
-                 "  \"state_bytes\": %llu\n"
+                 "  \"state_bytes\": %llu,\n"
+                 "  \"config_digest\": \"%s\",\n"
+                 "  \"exe_sha256\": \"%s\",\n"
+                 "  \"route_sha256\": \"%s\"\n"
                  "}\n",
                  PSX_TAS_STATEIO_SCHEMA, m->frame, (unsigned long long)m->cycle,
                  (unsigned long long)m->ram_digest, m->bios_checksum, m->entry_pc,
-                 state_path, state_sha256 ? state_sha256 : "", m->state_bytes) > 0;
+                 state_path, state_sha256 ? state_sha256 : "", m->state_bytes,
+                 m->config_digest, m->exe_sha256, m->route_sha256) > 0;
     if (fclose(f) != 0) ok = 0;
     return ok;
 }
@@ -153,6 +208,12 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
     if (!source_tas_stateio_parse_u64(text, "entry_pc", &v) || v > 0xFFFFFFFFull) return 0;
     out->entry_pc = (uint32_t)v;
     if (!source_tas_stateio_parse_u64(text, "state_bytes", &out->state_bytes)) return 0;
+    if (!source_tas_stateio_find_field(text, "config_digest", out->config_digest,
+                                       sizeof out->config_digest)) return 0;
+    if (!source_tas_stateio_find_field(text, "exe_sha256", out->exe_sha256,
+                                       sizeof out->exe_sha256)) return 0;
+    if (!source_tas_stateio_find_field(text, "route_sha256", out->route_sha256,
+                                       sizeof out->route_sha256)) return 0;
     if (state_path && state_path_cap) {
         if (!source_tas_stateio_find_field(text, "state_path", state_path, state_path_cap))
             return 0;
@@ -170,6 +231,9 @@ static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
                                               unsigned frame, uint64_t cycle,
                                               uint64_t ram_digest, uint32_t bios_checksum,
                                               uint32_t entry_pc,
+                                              const char *config_digest,
+                                              const char *exe_sha256,
+                                              const char *route_sha256,
                                               char *reason, size_t reason_cap) {
     if (!m) { source_tas_stateio_reject(reason, reason_cap, "missing manifest"); return 0; }
     if (m->frame != frame) {
@@ -192,6 +256,18 @@ static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
         source_tas_stateio_reject(reason, reason_cap, "foreign entry point");
         return 0;
     }
+    if (strcmp(m->config_digest, config_digest ? config_digest : "") != 0) {
+        source_tas_stateio_reject(reason, reason_cap, "configuration digest mismatch");
+        return 0;
+    }
+    if (strcmp(m->exe_sha256, exe_sha256 ? exe_sha256 : "") != 0) {
+        source_tas_stateio_reject(reason, reason_cap, "runtime binary mismatch");
+        return 0;
+    }
+    if (strcmp(m->route_sha256, route_sha256 ? route_sha256 : "") != 0) {
+        source_tas_stateio_reject(reason, reason_cap, "input route mismatch");
+        return 0;
+    }
     if (reason && reason_cap) reason[0] = '\0';
     return 1;
 }
@@ -211,15 +287,21 @@ static inline size_t source_tas_stateio_read_text(const char *path, char *out, s
     return n;
 }
 
-/* Parse the save-at return from the environment. 0 = disabled. */
-static inline unsigned source_tas_stateio_save_at(void) {
+/* Parse the save-at return list from the environment. Comma-separated so the
+ * E test ladder can checkpoint at K and K+1 in one from-scratch run. An empty,
+ * malformed or zero entry list is disabled. */
+static inline int source_tas_stateio_save_at_match(unsigned frame) {
     const char *e = getenv("PSX_TAS_SAVE_STATE_AT");
-    char *end;
-    unsigned long v;
-    if (!e || !*e) return 0;
-    v = strtoul(e, &end, 10);
-    if (end == e || *end || v == 0 || v > 0xFFFFFFFFul) return 0;
-    return (unsigned)v;
+    if (!e || !*e || frame == 0) return 0;
+    while (*e) {
+        char *end;
+        unsigned long v = strtoul(e, &end, 10);
+        if (end == e) return 0;
+        if (v == (unsigned long)frame) return 1;
+        if (*end != ',') return 0;
+        e = end + 1;
+    }
+    return 0;
 }
 
 #endif /* PSX_SOURCE_TAS_STATEIO_H */

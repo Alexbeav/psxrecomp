@@ -10,6 +10,7 @@
 #include "psx_sha256.h"
 #include "pst_wire.h"
 #include "input_route_raster_clock_wire.h"
+#include "source_stateio_identity.h"
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -80,14 +81,13 @@ static void service(void *context,uint64_t cycle,unsigned kind) {
         dma_source_gpu_service_at(cycle);
 }
 extern uint8_t *memory_get_ram_ptr(void);
-/* TAS checkpoint production. Opt-in via PSX_TAS_SAVE_STATE_AT=<return>: one save
- * at that frontend return, beside the RAM-page probe. The manifest binds
- * frame/cycle/RAM digest and the boot_state integrity key so a later resume can
- * prove identity; host-only caches are re-derived by boot_state on load. */
+/* TAS checkpoint production. Opt-in via PSX_TAS_SAVE_STATE_AT=<return>[,<return>]:
+ * one save per listed frontend return, beside the RAM-page probe. The manifest
+ * binds frame/cycle/RAM digest, the resolved configuration, the runtime binary
+ * and the route content, so a later resume can prove identity; host-only caches
+ * are re-derived by boot_state on load. */
 static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
-    static int initialized; static unsigned save_at;
-    if(!initialized) { initialized=1; save_at=source_tas_stateio_save_at(); }
-    if(!save_at || frame!=save_at || !cpu) return;
+    if(!cpu || !source_tas_stateio_save_at_match(frame)) return;
     const char *path=getenv("PSX_TAS_SAVE_STATE_PATH");
     char auto_path[4096];
     if(!path || !*path) {
@@ -118,6 +118,20 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
     m.frame=frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
     m.state_bytes=state_bytes;
     m.ram_digest=source_tas_stateio_ram_digest(memory_get_ram_ptr(),2097152u);
+    /* v7 identity: whole resolved configuration, the exact runtime binary, and
+     * the exact route content. */
+    source_stateio_config_digest_hex(m.config_digest);
+    if(!source_stateio_exe_sha256(m.exe_sha256)) {
+        fprintf(stderr,"[tas-stateio] save refused: cannot hash the runtime binary\n");
+        return;
+    }
+    {
+        const char *route=getenv("PSX_INPUT_ROUTE_FILE");
+        if(!source_stateio_file_sha256(route,m.route_sha256)) {
+            fprintf(stderr,"[tas-stateio] save refused: cannot hash the input route\n");
+            return;
+        }
+    }
     char manifest_path[4160];
     if(snprintf(manifest_path,sizeof manifest_path,"%s.json",path)>=(int)sizeof manifest_path ||
        !source_tas_stateio_manifest_write(manifest_path,&m,path,sha_hex)) {
@@ -133,12 +147,15 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
 static struct {
     int initialized, enabled;
     unsigned long long boundaries, queue_nonzero, words_nonzero, words_total, budget_nonzero;
+    unsigned long long upload_live, ll_live, spu_live;
 } s_e_survey;
 static void e_survey_report(void) {
     if(!s_e_survey.enabled) return;
     fprintf(stderr,"[e-survey] boundaries=%llu queue_nonzero=%llu words_nonzero=%llu words_total=%llu budget_nonzero=%llu\n",
         s_e_survey.boundaries,s_e_survey.queue_nonzero,s_e_survey.words_nonzero,
         s_e_survey.words_total,s_e_survey.budget_nonzero);
+    fprintf(stderr,"[e-survey] source-dma live: upload=%llu ll=%llu spu=%llu (of %llu boundaries)\n",
+        s_e_survey.upload_live,s_e_survey.ll_live,s_e_survey.spu_live,s_e_survey.boundaries);
 }
 static void e_survey(void) {
     if(!s_e_survey.initialized) {
@@ -155,6 +172,13 @@ static void e_survey(void) {
         for(unsigned i=0;i<command_state.count;i++) if(command_state.queue[i]) ++s_e_survey.words_nonzero;
     }
     if(command_state.budget) ++s_e_survey.budget_nonzero;
+    {
+        int up=0,ll=0,sp=0;
+        dma_source_dma_live(&up,&ll,&sp);
+        if(up) ++s_e_survey.upload_live;
+        if(ll) ++s_e_survey.ll_live;
+        if(sp) ++s_e_survey.spu_live;
+    }
 }
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
     for(;;) {
@@ -235,6 +259,30 @@ int source_gpu_service_queue_empty(void) { return command_state.count == 0; }
 void source_gpu_runtime_rederive_returns(void) {
     return_clock = clock_state;
     return_command = command_state;
+}
+/* E negative control: corrupt one restored service/projection field so the
+ * ladder comparison must fail. Test/diagnostic only. */
+int source_gpu_service_perturb(const char *field) {
+    if (!field || !*field || !enabled) return 0;
+    if (strcmp(field, "service_cycle") == 0) {
+        clock_state.cycle += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: service cycle -> %llu\n",
+                (unsigned long long)clock_state.cycle);
+        return 1;
+    }
+    if (strcmp(field, "service_frame_returns") == 0) {
+        clock_state.frame_returns += 1u;
+        fprintf(stderr, "[tas-stateio] negative control: service frame_returns -> %u\n",
+                clock_state.frame_returns);
+        return 1;
+    }
+    if (strcmp(field, "service_budget") == 0) {
+        command_state.budget += 1;
+        fprintf(stderr, "[tas-stateio] negative control: service budget -> %d\n",
+                command_state.budget);
+        return 1;
+    }
+    return 0;
 }
 void source_gpu_service_wire_write(uint8_t *out) {
     PstW w; pst_w_init(&w, out, SOURCE_GPU_SERVICE_WIRE_BYTES);

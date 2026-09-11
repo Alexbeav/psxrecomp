@@ -128,10 +128,16 @@ def main():
     parser.add_argument("--update-predictor",choices=("gate", "previous-accept"),default="gate",
                         help="experimental prediction only; actual packet/context acceptance stays authoritative")
     parser.add_argument("--checkpoint-every", type=int, default=300)
-    parser.add_argument('--save-state-at', type=int, metavar='RETURN',
-                        help='TAS checkpoint: save a full-machine state once at this frontend return')
+    parser.add_argument('--save-state-at', type=int, nargs='+', metavar='RETURN',
+                        help='TAS checkpoint: save a full-machine state once at each listed frontend return')
     parser.add_argument('--resume-from', type=Path, metavar='FILE',
                         help='TAS checkpoint: restore this saved state and continue the route from its frame')
+    parser.add_argument('--e-survey', action='store_true',
+                        help='diagnostic: report source-GPU/source-DMA quiescence counts at frame boundaries')
+    parser.add_argument('--perturb-restore', metavar='FIELD',
+                        help='negative control: corrupt exactly one restored field '
+                             '(raster_fraction, raster_cycle, raster_rises, '
+                             'service_cycle, service_frame_returns, service_budget)')
     parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
                         help="read a physical RAM u16 before each next input (max32)")
@@ -402,10 +408,14 @@ p2_mode = "digital"
     if args.timer2_model!='default':
         selected_env['PSX_TIMER2_MODEL']=args.timer2_model
     selected_env['PSX_PRECISE_SLICE']='1' if args.precise_slice=='on' else '0'
-    if args.save_state_at is not None:
-        selected_env['PSX_TAS_SAVE_STATE_AT'] = str(args.save_state_at)
+    if args.save_state_at:
+        selected_env['PSX_TAS_SAVE_STATE_AT'] = ','.join(str(f) for f in args.save_state_at)
     if args.resume_from is not None:
         selected_env['PSX_TAS_RESUME_STATE'] = str(args.resume_from)
+    if args.perturb_restore is not None:
+        selected_env['PSX_TAS_PERTURB_RESTORE'] = args.perturb_restore
+    if args.e_survey:
+        selected_env['PSX_E_SURVEY'] = '1'
     if args.gpu_dma_model!='default':
         selected_env['PSX_GPU_DMA_MODEL']=args.gpu_dma_model
     if args.legacy_card_repair == "off":

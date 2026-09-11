@@ -97,6 +97,13 @@ uint32_t interrupts_raster_wire_bytes(void);
 void interrupts_raster_wire_write(uint8_t *out);
 int interrupts_raster_wire_read(const uint8_t *in, uint32_t len);
 int interrupts_raster_comparison_active(void);
+/* Reshaped #5 guard: record whether the state being loaded carried
+ * BS_SEC_RASTER, so restoring the VBlank phase can refuse on a stub raster
+ * clock. Called once per boot_state load, after the profile-presence check. */
+void interrupts_note_state_load(int raster_section_present);
+/* E negative control: corrupt one restored raster field so the ladder
+ * comparison must fail. Returns 1 when the named field was perturbed. */
+int interrupts_raster_perturb(const char *field);
 /* While IRQ9 is enabled, expose the next 44.1-kHz sample as a first-class
  * device deadline so the CPU can observe and acknowledge an IRQ before the
  * following sample. UINT32_MAX means inactive. PSX_SPU_SAMPLE_EVENTS=0 is a

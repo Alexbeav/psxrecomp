@@ -20,6 +20,7 @@
 #include "psx_cycles.h"
 #include "source_gpu_runtime.h"
 #include "source_tas_stateio.h"
+#include "source_stateio_identity.h"
 #include "starvation_ring.h"
 #include "load_accel.h"
 #include "savestate.h"
@@ -14299,13 +14300,41 @@ session_reboot:
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: malformed manifest %s\n", mp);
             return 2;
         }
+        char cfg_hex[17], exe_hex[65], route_hex[65];
+        source_stateio_config_digest_hex(cfg_hex);
+        source_stateio_exe_sha256(exe_hex);
+        {
+            const char *rp = std::getenv("PSX_INPUT_ROUTE_FILE");
+            if (!rp || !source_stateio_file_sha256(rp, route_hex)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: cannot hash the input route\n");
+                return 2;
+            }
+        }
+        /* Identity dimensions that do not depend on the loaded state are checked
+         * BEFORE the load, so a foreign blob is refused without first mutating
+         * the machine. */
+        {
+            if (std::strcmp(m.config_digest, cfg_hex) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: configuration digest mismatch\n");
+                return 2;
+            }
+            if (std::strcmp(m.exe_sha256, exe_hex) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: runtime binary mismatch\n");
+                return 2;
+            }
+            if (std::strcmp(m.route_sha256, route_hex) != 0) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: input route mismatch\n");
+                return 2;
+            }
+        }
         if (!boot_state_load(resume_state, resume_bios, resume_entry, &cpu)) {
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
             return 2;
         }
         if (!source_tas_stateio_manifest_accept(&m, m.frame, psx_get_cycle_count(),
                 source_tas_stateio_ram_digest(memory_get_ram_ptr(), 2097152u),
-                resume_bios, resume_entry, reason, sizeof reason)) {
+                resume_bios, resume_entry, cfg_hex, exe_hex, route_hex,
+                reason, sizeof reason)) {
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: %s\n", reason);
             return 2;
         }
@@ -14319,6 +14348,17 @@ session_reboot:
         }
         std::fprintf(stdout, "psxrecomp: [tas-stateio] resumed return %u cycle %llu from %s\n",
                      m.frame, (unsigned long long)m.cycle, resume_state);
+        /* E negative control: corrupt exactly one restored field, so the test
+         * ladder's from-scratch-vs-resumed comparison is observed FAILING.
+         * A gate never seen to fail is not evidence. Diagnostic only. */
+        if (const char *pf = std::getenv("PSX_TAS_PERTURB_RESTORE")) {
+            if (!interrupts_raster_perturb(pf) && !source_gpu_service_perturb(pf)) {
+                std::fprintf(stderr, "psxrecomp: [tas-stateio] negative control: "
+                                     "unknown field '%s'\n", pf);
+                return 2;
+            }
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] negative control active: %s\n", pf);
+        }
     }
 #endif
 

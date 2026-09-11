@@ -391,6 +391,13 @@ static int boot_state_unserialized_source_gpu_ok(void) {
  * three comparison-profile sections must NOT be always-required — under a
  * normal profile there is no raster clock, no source GPU service and no source
  * timers, and always-requiring them would break every normal boot state. */
+/* Deferred VBlank phase (reshaped #5). BS_SEC_IRQ is written before
+ * BS_SEC_RASTER, so at IRQ-apply time we cannot yet know whether the raster
+ * section is coming. Stage the phase here and commit it after the whole stream
+ * has been read, where the section's presence is known. */
+static int      s_pending_vblank_phase_valid;
+static uint32_t s_pending_vblank_phase;
+
 static int boot_state_raster_section_active(void) {
     return interrupts_raster_comparison_active() || source_gpu_runtime_active();
 }
@@ -666,10 +673,12 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         i_mask = mk;
         if (len == 12) {
             if (!pst_r_u32(&r, &csv)) return 0;
-            interrupts_set_cycles_since_vblank(csv);
+            s_pending_vblank_phase = csv;
+            s_pending_vblank_phase_valid = 1;
         } else {
             /* Legacy UI/disk snaps: no phase — rebase like pre-csv saves. */
-            interrupts_set_cycles_since_vblank(0);
+            s_pending_vblank_phase = 0;
+            s_pending_vblank_phase_valid = 1;
         }
         return 1;
     }
@@ -1149,6 +1158,16 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
      * frame stale. A bit-exact replay cannot afford a frame of stale reads.
      * Re-derive both once, here, after every section has loaded. */
     source_gpu_runtime_rederive_returns();
+
+    /* Reshaped #5: the VBlank phase was staged while BS_SEC_IRQ applied, so
+     * commit it now that BS_SEC_RASTER's presence is known. The guard inside
+     * interrupts_set_cycles_since_vblank refuses a comparison-profile restore
+     * that arrived without the raster section. */
+    interrupts_note_state_load((int)((seen >> BS_SEC_RASTER) & 1u));
+    if (s_pending_vblank_phase_valid) {
+        interrupts_set_cycles_since_vblank(s_pending_vblank_phase);
+        s_pending_vblank_phase_valid = 0;
+    }
 
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();

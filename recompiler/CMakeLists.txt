@@ -819,6 +819,11 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_tas_stateio.py"
                 --cc ${CMAKE_C_COMPILER})
+        # The Python driver compiles test_source_stateio_identity.c at O0/O2.
+        add_test(NAME tas_stateio_identity_dims
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_stateio_identity.py"
+                --cc ${CMAKE_C_COMPILER})
         # The Python driver compiles test_input_route_raster_wire.c at O0/O2.
         add_test(NAME tas_raster_wire
             COMMAND ${Python3_EXECUTABLE}
