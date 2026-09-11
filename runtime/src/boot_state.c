@@ -492,6 +492,9 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     return ok;
 }
 
+/* Atomic replace of `to` by `from`. See boot_state_replace.c (its own TU so the
+ * overwrite/refusal behaviour can be regression-tested in isolation). */
+
 int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                     uint32_t entry_pc, const char* path) {
     BsOut o;
@@ -516,8 +519,7 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
         remove(tmp);
         return 0;
     }
-    remove(path);   /* Windows rename() does not replace an existing target */
-    if (rename(tmp, path) != 0) {
+    if (!boot_state_replace_file(tmp, path)) {
         remove(tmp);
         return 0;
     }

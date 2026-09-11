@@ -110,6 +110,10 @@ enum {
 int  boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                      uint32_t entry_pc, const char* path);
 
+/* Atomic replace of `to` by `from` (Windows: MoveFileExW REPLACE_EXISTING).
+ * Exposed so the overwrite/refusal behaviour can be regression-tested. */
+int  boot_state_replace_file(const char* from, const char* to);
+
 /* Same as boot_state_save, but into a malloc'd buffer (caller frees *out_data).
  * Compresses large sections (disk-oriented). */
 int  boot_state_save_buffer(const CPUState* cpu, uint32_t bios_checksum,
