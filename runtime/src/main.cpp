@@ -14300,7 +14300,7 @@ session_reboot:
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: malformed manifest %s\n", mp);
             return 2;
         }
-        char cfg_hex[17], exe_hex[65], route_hex[65];
+        char cfg_hex[65], exe_hex[65], route_hex[65];
         source_stateio_config_digest_hex(cfg_hex);
         source_stateio_exe_sha256(exe_hex);
         {

@@ -9,7 +9,7 @@ static void check(int cond, const char *what) {
 }
 
 int main(int argc, char **argv) {
-    char a[65], b[65], cfg[17], cfg2[17];
+    char a[65], b[65], cfg[65], cfg2[65];
     FILE *f;
 
     if (argc != 2) return 2;
@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
 
     /* config digest is present; the value itself is environment dependent, so
      * only shape and stability are asserted here. */
-    check(source_stateio_config_digest_hex(cfg) == 1 && strlen(cfg) == 16, "config digest shape");
+    check(source_stateio_config_digest_hex(cfg) == 1 && strlen(cfg) == 64, "config digest shape");
     check(source_stateio_config_digest_hex(cfg2) == 1 && strcmp(cfg, cfg2) == 0,
           "config digest stable");
 

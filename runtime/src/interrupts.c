@@ -43,6 +43,7 @@
 #include "psx_scheduler.h"
 #include "spu.h"
 #include "input_route_field_clock.h"
+#include "pst_wire.h"
 #include "input_route_raster_clock.h"
 #include "source_gpu_runtime.h"
 #include <stdio.h>
@@ -651,6 +652,10 @@ static int s_state_load_raster_present;
 
 void interrupts_note_state_load(int raster_section_present) {
     s_state_load_raster_present = raster_section_present ? 1 : 0;
+    /* input_route_raster_deadline is DERIVED from the raster clock
+     * (cycle + until_rise), so it is not on the wire; recompute it here, after
+     * every section has loaded -- the same treatment as return_clock. */
+    input_route_raster_recompute();
 }
 
 void interrupts_set_cycles_since_vblank(uint32_t v) {
@@ -859,6 +864,73 @@ static int defer_switch_enabled(void) {
  * poll on its own, so the guest's switch would be deferred forever and every
  * other task starves (MGS PAL boot black screen, T32). The interpreter uses
  * this to surface to the dispatcher at its next committed transfer. */
+/* BS_SEC_IRQ_TIMING: comparison-clock / IRQ-deferral state that is live but was
+ * covered by NO section -- found by the step-8 forward sweep, i.e. an UNGUARDED
+ * surface (the earlier "catalogue what refuses" inventory structurally could not
+ * see it).
+ *
+ *   input_route_field_clock       16 B  field-duration clock, advanced on every
+ *                                      VBlank while the field model is active
+ *   input_route_raster_pending     4 B  accumulated VBlank edges not yet fired;
+ *                                      NOT derivable from the raster struct
+ *   last_sio_seq_seen              4 B  SIO progress; drives
+ *   last_sio_progress_cycle        8 B  should_defer_vblank_for_sio(), which
+ *                                      decides whether a VBlank edge fires.
+ *                                      Absolute stamp (psx_cycle_count base)
+ *   post_exception_cooldown_until  8 B  gates IRQ delivery. Absolute stamp
+ *   source_irq_slot               12 B  source-IRQ context; transient within an
+ *                                      instruction, zero at a frame boundary
+ *   s_defer_switch_*              12 B  scheduler deferral; transient likewise
+ *
+ * input_route_raster_deadline is NOT serialized: DERIVED from the raster clock
+ * (cycle + until_rise), recomputed at end of load in interrupts_note_state_load()
+ * -- the same treatment as return_clock.
+ *
+ * No field here is model-gated, so the section is present in EVERY profile and
+ * is always required (which is why it is not part of the profile-exact rule). */
+#define IRQ_TIMING_WIRE_BYTES 64u
+uint32_t interrupts_timing_wire_bytes(void) { return IRQ_TIMING_WIRE_BYTES; }
+void interrupts_timing_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, IRQ_TIMING_WIRE_BYTES);
+    pst_w_u32(&w, input_route_field_clock.remainder);
+    pst_w_u32(&w, input_route_field_clock.line_phase);
+    pst_w_u32(&w, input_route_field_clock.field);
+    pst_w_u32(&w, input_route_field_clock.current_cycles);
+    pst_w_u32(&w, input_route_raster_pending);
+    pst_w_u32(&w, last_sio_seq_seen);
+    pst_w_u64(&w, last_sio_progress_cycle);
+    pst_w_u64(&w, post_exception_cooldown_until);
+    pst_w_u32(&w, source_irq_slot.pc);
+    pst_w_u32(&w, source_irq_slot.target);
+    pst_w_u32(&w, source_irq_slot.cause);
+    pst_w_u32(&w, s_defer_switch_from);
+    pst_w_u32(&w, s_defer_switch_target);
+    pst_w_u32(&w, (uint32_t)s_defer_switch_pending);
+}
+int interrupts_timing_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r; uint32_t pending;
+    if (len != IRQ_TIMING_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u32(&r, &input_route_field_clock.remainder)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.line_phase)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.field)) return 0;
+    if (!pst_r_u32(&r, &input_route_field_clock.current_cycles)) return 0;
+    if (!pst_r_u32(&r, &input_route_raster_pending)) return 0;
+    if (!pst_r_u32(&r, &last_sio_seq_seen)) return 0;
+    if (!pst_r_u64(&r, &last_sio_progress_cycle)) return 0;
+    if (!pst_r_u64(&r, &post_exception_cooldown_until)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.pc)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.target)) return 0;
+    if (!pst_r_u32(&r, &source_irq_slot.cause)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_from)) return 0;
+    if (!pst_r_u32(&r, &s_defer_switch_target)) return 0;
+    if (!pst_r_u32(&r, &pending)) return 0;
+    s_defer_switch_pending = pending ? 1 : 0;
+    return 1;
+}
+_Static_assert(sizeof(InputRouteFieldClock) == 16,
+               "field clock layout changed; update interrupts_timing_wire_write");
+
 int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
 
 static int same_guest_pc(uint32_t a, uint32_t b) {

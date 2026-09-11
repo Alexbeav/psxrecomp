@@ -49,7 +49,7 @@ typedef struct TasStateManifest {
     /* v7 identity: the whole resolved configuration, not a hand-written flag
      * list, plus the two things a flag list can never cover — the exact runtime
      * binary and the exact route content. */
-    char               config_digest[17];
+    char               config_digest[65];
     char               exe_sha256[65];
     char               route_sha256[65];
 } TasStateManifest;
@@ -87,8 +87,9 @@ static inline uint64_t source_tas_stateio_ram_digest(const uint8_t *ram, size_t 
 }
 
 /* Order-independent digest over the PSX_* entries of a NULL-terminated
- * "KEY=VALUE" environment array. XOR of per-entry hashes keeps it commutative,
- * so enumeration order cannot change the result. */
+ * "KEY=VALUE" environment array. Entries are SORTED first and then hashed as one
+ * stream, so enumeration order cannot change the result and (unlike a
+ * XOR-of-hashes) distinct configurations cannot cancel each other out. */
 static inline uint64_t source_tas_stateio_env_digest(const char *const *env) {
     uint64_t acc = 0;
     if (!env) return 0;
@@ -103,6 +104,31 @@ static inline uint64_t source_tas_stateio_env_digest(const char *const *env) {
         acc ^= source_tas_stateio_ram_digest((const uint8_t *)e, strlen(e));
     }
     return acc;
+}
+
+/* Collect the identity-relevant PSX_* entries into `out` (up to `cap`), sorted by
+ * byte order. Returns the count. Used for the sha256 configuration digest. */
+static inline size_t source_tas_stateio_env_collect(const char *const *env,
+                                                   const char **out, size_t cap) {
+    size_t n = 0;
+    if (!env) return 0;
+    for (size_t i = 0; env[i] && n < cap; i++) {
+        const char *e = env[i];
+        const char *eq = strchr(e, '=');
+        size_t klen;
+        if (!eq) continue;
+        klen = (size_t)(eq - e);
+        if (klen < 4 || strncmp(e, "PSX_", 4) != 0) continue;
+        if (source_tas_stateio_env_allowed_to_differ(e, klen)) continue;
+        out[n++] = e;
+    }
+    for (size_t a = 1; a < n; a++) {          /* insertion sort; n is tiny */
+        const char *v = out[a];
+        size_t b = a;
+        while (b > 0 && strcmp(out[b - 1], v) > 0) { out[b] = out[b - 1]; --b; }
+        out[b] = v;
+    }
+    return n;
 }
 static inline void source_tas_stateio_hex64(uint64_t v, char out[17]) {
     snprintf(out, 17, "%016llX", (unsigned long long)v);

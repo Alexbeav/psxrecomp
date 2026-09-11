@@ -51,8 +51,24 @@ int source_stateio_exe_sha256(char out[65]) {
     return source_stateio_file_sha256(path, out);
 }
 
-int source_stateio_config_digest_hex(char out[17]) {
+int source_stateio_config_digest_hex(char out[65]) {
+    /* sha256 over the SORTED identity-relevant NAME=value list. Sorted so
+     * enumeration order cannot change the result; a stream hash rather than an
+     * XOR so two distinct configurations cannot cancel each other out. */
+    const char *entries[512];
+    size_t n;
+    psx_sha256_ctx ctx;
+    uint8_t dig[32];
     if (!out) return 0;
-    source_tas_stateio_hex64(source_tas_stateio_env_digest(PSX_ENVIRON), out);
+    out[0] = '\0';
+    n = source_tas_stateio_env_collect(PSX_ENVIRON, entries, 512);
+    psx_sha256_init(&ctx);
+    for (size_t i = 0; i < n; i++) {
+        psx_sha256_update(&ctx, (const uint8_t *)entries[i], strlen(entries[i]));
+        psx_sha256_update(&ctx, (const uint8_t *)"\n", 1);
+    }
+    psx_sha256_final(&ctx, dig);
+    for (int i = 0; i < 32; i++) sprintf(out + i * 2, "%02x", (unsigned)dig[i]);
+    out[64] = '\0';
     return 1;
 }

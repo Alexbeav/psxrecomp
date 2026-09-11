@@ -125,6 +125,19 @@ enum {
                               with no queue would restore as a stub.           */
     BS_SEC_TIMER_SRC = 0x14, /* source timer state machines (the IRQ-disabled
                               comparison timers).                               */
+    BS_SEC_DMA_SRC   = 0x15, /* source-DMA state machines: bounded-quad GPU
+                              upload, GPU linked list, SPU request, OTC (152 B).
+                              Measured live at 98.1%/98.4%/57.7% of frame
+                              boundaries, so they cannot be quiescence-guarded;
+                              every member is a flat scalar, and the address
+                              fields are GUEST physical addresses, never host
+                              pointers. Required exactly when a source DMA model
+                              is active (profile-exact, like RASTER).           */
+    BS_SEC_IRQ_TIMING = 0x16, /* field clock + VBlank-edge/IRQ-deferral state
+                              (64 B). Found by the step-8 forward sweep: live in
+                              every profile and previously covered by NO section.
+                              Always required. input_route_raster_deadline is
+                              derived and recomputed at load, not serialized.    */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */

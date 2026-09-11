@@ -11,6 +11,7 @@
 #include "psx_scheduler.h"
 #include "source_gpu_runtime.h" /* v7: source GPU service + raster sections */
 #include "timers.h"             /* v7: BS_SEC_TIMER_SRC */
+#include "dma.h"                /* v7: BS_SEC_DMA_SRC */
 #include "input_route_raster_clock_wire.h"
 #include "pst_wire.h"
 #include <stdint.h>
@@ -406,6 +407,7 @@ static uint32_t boot_state_extra_sections(void) {
     if (boot_state_raster_section_active()) n++;
     if (source_gpu_runtime_active()) n++;
     if (timers_source_active()) n++;
+    if (dma_src_active()) n++;
     return n;
 }
 
@@ -421,7 +423,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 17u + boot_state_extra_sections();
+    h.section_count = 18u + boot_state_extra_sections();
 
     ok = write_header_le(o, &h);
 
@@ -531,6 +533,17 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         uint8_t buf[60u];                     /* source timer state machines */
         timers_source_wire_write(buf);
         ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
+    }
+    if (ok && dma_src_active()) {
+        uint8_t buf[152u];                    /* four source-DMA state machines */
+        dma_src_wire_write(buf);
+        ok = write_section(o, BS_SEC_DMA_SRC, buf, sizeof buf);
+    }
+    if (ok) {
+        /* Always present: none of these fields is model-gated. */
+        uint8_t buf[64u];
+        interrupts_timing_wire_write(buf);
+        ok = write_section(o, BS_SEC_IRQ_TIMING, buf, sizeof buf);
     }
     return ok;
 }
@@ -655,6 +668,10 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
         return source_gpu_service_wire_read(p, len);
     case BS_SEC_TIMER_SRC:
         return timers_source_wire_read(p, len);
+    case BS_SEC_DMA_SRC:
+        return dma_src_wire_read(p, len);
+    case BS_SEC_IRQ_TIMING:
+        return interrupts_timing_wire_read(p, len);
     case BS_SEC_SCHED:
         /* RAM precedes this section in every v6 stream, so guest TCB pointers
          * can be validated against the restored kernel state. */
@@ -1040,7 +1057,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
         (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY)|
-        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE);
+        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE)|(1u<<BS_SEC_IRQ_TIMING);
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();
@@ -1120,7 +1137,13 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         }
 
         t_sec = boot_state_mono_ms();
-        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) ok = 0;
+        if (!apply_section(tag, apply_ptr, apply_len, cpu, entry_pc)) {
+            /* Name the section: a silent load failure is undiagnosable against
+             * an hour-long run. */
+            fprintf(stderr, "boot_state: reject — section 0x%02X failed to apply "
+                            "(len=%u)\n", tag, apply_len);
+            ok = 0;
+        }
         else if (tag < 32) seen |= (1u << tag);
         {
             double dt = boot_state_mono_ms() - t_sec;
@@ -1132,8 +1155,13 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         free(inflated);
     }
 
-    if (!ok || (seen & required) != required)
+    if (!ok || (seen & required) != required) {
+        if (ok && (seen & required) != required)
+            fprintf(stderr, "boot_state: reject — required sections missing: "
+                            "seen=0x%08X required=0x%08X missing=0x%08X\n",
+                    seen, required, required & ~seen);
         return 0;
+    }
 
     /* Amendment A: the three comparison-profile sections must be present
      * EXACTLY when their subsystem is active. Missing -> refuse (the blob could
@@ -1143,13 +1171,15 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
      * machine. */
     if (boot_state_raster_section_active() != ((seen >> BS_SEC_RASTER) & 1u) ||
         source_gpu_runtime_active()       != ((seen >> BS_SEC_GPU_SERVICE) & 1u) ||
-        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u)) {
+        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u) ||
+        dma_src_active()                  != ((seen >> BS_SEC_DMA_SRC) & 1u)) {
         fprintf(stderr, "boot_state: reject — comparison-profile section "
                         "presence does not match the active profile "
-                        "(raster=%u service=%u timers=%u)\n",
+                        "(raster=%u service=%u timers=%u dma_src=%u)\n",
                 (unsigned)((seen >> BS_SEC_RASTER) & 1u),
                 (unsigned)((seen >> BS_SEC_GPU_SERVICE) & 1u),
-                (unsigned)((seen >> BS_SEC_TIMER_SRC) & 1u));
+                (unsigned)((seen >> BS_SEC_TIMER_SRC) & 1u),
+                (unsigned)((seen >> BS_SEC_DMA_SRC) & 1u));
         return 0;
     }
 

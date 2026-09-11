@@ -39,7 +39,7 @@ def main():
                 raise AssertionError((opt, out))
             # The digest must move with the resolved configuration, not be a constant.
             cfg_a, cfg_b = config_of(out_a), config_of(out_b)
-            assert len(cfg_a) == 16 and len(cfg_b) == 16, (opt, cfg_a, cfg_b)
+            assert len(cfg_a) == 64 and len(cfg_b) == 64, (opt, cfg_a, cfg_b)
             assert cfg_a != cfg_b, (opt, 'config digest did not react to PSX_TIMER1_MODEL')
     print('PASS: v7 identity dimensions at O0/O2')
 

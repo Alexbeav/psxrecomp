@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     size_t i;
     uint64_t digest, v = 0;
     static const char *const SHA = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF";
-    static const char *const CFG = "00000000000000AB";
+    static const char *const CFG = "00000000000000ab00000000000000ab00000000000000ab00000000000000ab";
     static const char *const EXE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     static const char *const ROUTE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
           m.bios_checksum, 0x80010000u, CFG, EXE, ROUTE, reason, sizeof reason) == 0 &&
           strstr(reason, "entry"), "reject foreign entry");
     check(source_tas_stateio_manifest_accept(&parsed, 300u, m.cycle, digest,
-          m.bios_checksum, m.entry_pc, "0000000000000000", EXE, ROUTE,
+          m.bios_checksum, m.entry_pc, "0000000000000000000000000000000000000000000000000000000000000000", EXE, ROUTE,
           reason, sizeof reason) == 0 && strstr(reason, "configuration"), "reject config digest");
     check(source_tas_stateio_manifest_accept(&parsed, 300u, m.cycle, digest,
           m.bios_checksum, m.entry_pc, CFG, SHA, ROUTE,
