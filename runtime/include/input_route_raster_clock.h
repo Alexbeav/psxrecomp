@@ -16,6 +16,18 @@ typedef struct InputRouteRasterClock {
     uint32_t y_start, y_offset, readout_y, readout_field;
 } InputRouteRasterClock;
 
+/* Layout guard for #6 (see the campaign scope doc). 18 scalar fields
+ * (2 x uint64_t + 16 x uint32_t) = 16 + 64 = 80 bytes, no padding.
+ * If this fires, a field was added/removed/reordered and any serializer for the
+ * raster clock is stale. Resolve the discrepancy — do not "fix" the assert. */
+#if defined(__cplusplus)
+static_assert(sizeof(InputRouteRasterClock) == 80,
+              "raster clock layout changed; update the serializer");
+#else
+_Static_assert(sizeof(InputRouteRasterClock) == 80,
+               "raster clock layout changed; update the serializer");
+#endif
+
 static inline void input_route_raster_reset(InputRouteRasterClock *s) {
     memset(s, 0, sizeof(*s));
     s->remaining=3212; s->lines=263; s->start=16; s->end=256; s->blank=1;

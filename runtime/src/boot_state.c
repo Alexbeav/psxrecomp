@@ -496,17 +496,32 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                     uint32_t entry_pc, const char* path) {
     BsOut o;
     FILE* f;
-    boot_state_refuse_unserialized_source_gpu();
-    f = fopen(path, "wb");
+    char tmp[1024];
     int ok;
+    /* Validate BEFORE creating anything, and write to a temporary that is only
+     * renamed into place on success. This kills the trap class where a refusal
+     * (or any write failure) inside the serializer leaves a zero-byte or short
+     * artifact at `path` — a truncated file that still parses is the same
+     * silent-stub failure, one layer down. */
+    boot_state_refuse_unserialized_source_gpu();
+    if (!path || snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp)
+        return 0;
+    f = fopen(tmp, "wb");
     if (!f) return 0;
     memset(&o, 0, sizeof o);
     o.f = f;
     ok = boot_state_save_to(&o, cpu, bios_checksum, entry_pc);
-    fclose(f);
-    if (!ok)
-        remove(path);
-    return ok;
+    if (fclose(f) != 0) ok = 0;
+    if (!ok) {
+        remove(tmp);
+        return 0;
+    }
+    remove(path);   /* Windows rename() does not replace an existing target */
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
 }
 
 static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum,
@@ -963,7 +978,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
         (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY)|
-        (1u<<BS_SEC_SCHED);
+        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE);
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();
