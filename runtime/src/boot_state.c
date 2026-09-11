@@ -369,13 +369,21 @@ static int write_vram_section_full(BsOut *o)
  * empty at 100% of frame boundaries) and the loader requires the same on the
  * way back in. Refuse loudly, before any file or buffer is created, so no stub
  * artifact is left behind (amendment D). */
-static void boot_state_refuse_unserialized_source_gpu(void) {
+/* Returns 0 to REFUSE the save (the caller returns 0), 1 when the state is
+ * representable. Deliberately NOT exit(2): boot_state_save_buffer_raw feeds the
+ * rewind ring (psx_rewind.c:472) and netplay ring (netplay_snap_ring.c:50), and
+ * both treat a 0 return as "skip this snapshot and carry on". Exiting there
+ * would kill the emulator mid-play whenever a snapshot landed while the command
+ * FIFO was non-empty — and those rings sample at mid-frame block boundaries,
+ * not frame boundaries, so the queue is not guaranteed empty there. */
+static int boot_state_unserialized_source_gpu_ok(void) {
     if (source_gpu_runtime_active() && !source_gpu_service_queue_empty()) {
         fprintf(stderr,
-                "[stateio] refusing to save: source GPU command queue is "
+                "[stateio] refusing snapshot: source GPU command queue is "
                 "non-empty; the queue is not serialized\n");
-        exit(2);
+        return 0;
     }
+    return 1;
 }
 
 /* v7 profile-aware section presence (amendment A): a section must exist
@@ -398,7 +406,6 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
                               uint32_t bios_checksum, uint32_t entry_pc) {
     BootStateHeader h;
     int ok;
-    boot_state_refuse_unserialized_source_gpu();
     memset(&h, 0, sizeof h);
     h.magic         = BOOT_STATE_MAGIC;
     h.version       = BOOT_STATE_VERSION;
@@ -535,7 +542,7 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
      * (or any write failure) inside the serializer leaves a zero-byte or short
      * artifact at `path` — a truncated file that still parses is the same
      * silent-stub failure, one layer down. */
-    boot_state_refuse_unserialized_source_gpu();
+    if (!boot_state_unserialized_source_gpu_ok()) return 0;
     if (!path || snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp)
         return 0;
     f = fopen(tmp, "wb");
@@ -560,7 +567,9 @@ static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum
                                      size_t* out_len, int no_zlib) {
     BsOut o;
     if (!out_data || !out_len) return 0;
-    boot_state_refuse_unserialized_source_gpu();
+    if (!out_data || !out_len) return 0;
+    if (!boot_state_unserialized_source_gpu_ok()) return 0;
+    *out_data = NULL;
     *out_data = NULL;
     *out_len = 0;
     memset(&o, 0, sizeof o);
