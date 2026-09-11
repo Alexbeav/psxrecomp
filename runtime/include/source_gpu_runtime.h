@@ -23,6 +23,8 @@ int source_gpu_raster_wire_read(const uint8_t *in, uint32_t len);
 uint32_t source_gpu_service_wire_bytes(void);
 int source_gpu_service_queue_empty(void);
 void source_gpu_runtime_rederive_returns(void);
+/* DIAG P3: raw read-back of the restored service clock. */
+void source_gpu_runtime_debug_clock(uint64_t *cycle, uint32_t *frame_returns);
 /* E negative control: corrupt one restored service/projection field so the
  * ladder comparison must fail. Returns 1 when the named field was perturbed. */
 int source_gpu_service_perturb(const char *field);

@@ -13340,7 +13340,11 @@ session_reboot:
                  rematch_session ? " (rematch)" : "");
     /* Soft-exit longjmps out of device service with a leftover guest clock;
      * rematch must start from cycle 0 or vblanks never fire again. */
+    std::fprintf(stderr, "[tas-diag] P2 before reset_for_boot psx_cycle_count=%llu\n",
+                 (unsigned long long)psx_cycle_count);
     psx_cycles_reset_for_boot();
+    std::fprintf(stderr, "[tas-diag] P2 after  reset_for_boot psx_cycle_count=%llu\n",
+                 (unsigned long long)psx_cycle_count);
     starvation_ring_reset();
     present_session_reset();
     /* Rematch ≈ cold start for netplay sim residue a cold peer lacks
@@ -14348,6 +14352,12 @@ session_reboot:
         }
         std::fprintf(stdout, "psxrecomp: [tas-stateio] resumed return %u cycle %llu from %s\n",
                      m.frame, (unsigned long long)m.cycle, resume_state);
+        /* DIAG P1: did the restore itself land? */
+        std::fprintf(stderr, "[tas-diag] P1 after-restore psx_cycle_count=%llu "
+                             "psx_get_cycle_count=%llu manifest_cycle=%llu\n",
+                     (unsigned long long)psx_cycle_count,
+                     (unsigned long long)psx_get_cycle_count(),
+                     (unsigned long long)m.cycle);
         /* E negative control: corrupt exactly one restored field, so the test
          * ladder's from-scratch-vs-resumed comparison is observed FAILING.
          * A gate never seen to fail is not evidence. Diagnostic only. */

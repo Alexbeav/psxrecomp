@@ -363,7 +363,21 @@ uint32_t source_gpu_runtime_status_bits(void) {
     return bits;
 }
 void source_gpu_runtime_advance(void) {
-    if(enabled && !source_gpu_service_to(&clock_state,psx_cycle_count,service,0))fail("reversed device time");
+    if(enabled && !source_gpu_service_to(&clock_state,psx_cycle_count,service,0)) {
+        /* DIAG P5 (+P3): the failing call, with both clocks side by side. */
+        fprintf(stderr,"[tas-diag] P5 advance-fail psx_cycle_count=%llu psx_get_cycle_count=%llu "
+                       "clock_state.cycle=%llu raster.cycle=%llu\n",
+                (unsigned long long)psx_cycle_count,
+                (unsigned long long)psx_get_cycle_count(),
+                (unsigned long long)clock_state.cycle,
+                (unsigned long long)clock_state.raster.cycle);
+        fail("reversed device time");
+    }
+}
+/* DIAG P3: raw read-back of the restored service clock. */
+void source_gpu_runtime_debug_clock(uint64_t *cycle, uint32_t *frame_returns) {
+    if(cycle) *cycle = clock_state.cycle;
+    if(frame_returns) *frame_returns = clock_state.frame_returns;
 }
 uint32_t source_gpu_runtime_cycles_to_event(void) {
     if(!enabled)return UINT32_MAX;

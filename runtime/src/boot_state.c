@@ -1294,6 +1294,19 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         s_pending_vblank_phase_valid = 0;
     }
 
+    /* DIAG P3: raw read-back of clock_state.cycle, immediately after every
+     * section (including BS_SEC_CLOCK and BS_SEC_GPU_SERVICE) has applied and
+     * before any code runs. Separates "restored wrong" from "restored right,
+     * corrupted before use". */
+    {
+        uint64_t dc = 0; uint32_t dfr = 0;
+        source_gpu_runtime_debug_clock(&dc, &dfr);
+        fprintf(stderr, "[tas-diag] P3 after-apply psx_cycle_count=%llu "
+                        "clock_state.cycle=%llu frame_returns=%u\n",
+                (unsigned long long)psx_cycle_count,
+                (unsigned long long)dc, dfr);
+    }
+
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();
 

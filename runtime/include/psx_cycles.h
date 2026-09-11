@@ -22,6 +22,8 @@ extern int      g_event_step_conservative;
  * servicing devices, then restore the authoritative live clock afterward.
  * Used only while g_ls_replay_active is set. */
 int      psx_cycle_replay_begin(uint64_t start_cycle);
+/* DIAG P4: replay-window state for the resume diagnostic. */
+void     psx_cycle_replay_debug(int *active, uint64_t *live);
 uint64_t psx_cycle_replay_end(void);
 
 /* Transactional I-cache view for the overlay differential harness. The

@@ -4300,6 +4300,15 @@ static void run_shadow_diff(CPUState *cpu, Candidate *c, uint32_t addr) {
 
     CPUState cpu0 = *cpu;
     uint64_t cycle0 = psx_get_cycle_count();
+    /* DIAG P4: the clock and replay-window state at the moment the window opens. */
+    {
+        int r_active = 0; uint64_t r_live = 0;
+        psx_cycle_replay_debug(&r_active, &r_live);
+        fprintf(stderr, "[tas-diag] P4 open cycle0=%llu psx_cycle_count=%llu "
+                        "s_cycle_replay_active=%d s_cycle_replay_live=%llu ls_active=%d\n",
+                (unsigned long long)cycle0, (unsigned long long)psx_cycle_count,
+                r_active, (unsigned long long)r_live, g_ls_replay_active);
+    }
     uint32_t stop_ra = cpu0.gpr[31];
     uint32_t record_ops = 0, replay_ops = 0;
     int saw_exception = 0;
@@ -4336,6 +4345,8 @@ static void run_shadow_diff(CPUState *cpu, Candidate *c, uint32_t addr) {
     if (replay_ok) replay_owned = 1;
     int icache_ok = replay_ok && psx_icache_shadow_replay_begin();
     int clock_ok = icache_ok && psx_cycle_replay_begin(cycle0);
+    fprintf(stderr, "[tas-diag] P4 begin-return clock_ok=%d psx_cycle_count=%llu\n",
+            clock_ok, (unsigned long long)psx_cycle_count);
     int gte_ok = clock_ok && gte_replay_side_effects_begin();
     uint32_t saved_debug_func = g_debug_current_func_addr;
     uint32_t saved_irq_callcount = s_irq_callcount;

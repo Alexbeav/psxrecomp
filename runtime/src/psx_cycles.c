@@ -354,6 +354,12 @@ uint64_t psx_get_cycle_count(void) {
     return n;
 }
 
+/* DIAG P4: replay-window state for the resume diagnostic. */
+void psx_cycle_replay_debug(int *active, uint64_t *live) {
+    if (active) *active = s_cycle_replay_active;
+    if (live) *live = s_cycle_replay_live;
+}
+
 /* ===== Idle-loop cycle skip (wait-loop elision, 2026-07-06) ==================
  *
  * A pure poll loop (Tomba2 main loop: `do {} while (vbl_count < target)`)
