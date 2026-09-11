@@ -14335,6 +14335,27 @@ session_reboot:
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
             return 2;
         }
+        /* Resync host-only cycle bookkeeping to the restored clock.
+         *
+         * s_devices_synced_cycle (psx_cycles.c:114) is the device-servicing
+         * watermark. It is in NO boot_state section: psx_cycles_reset_for_boot()
+         * zeroes it at boot and the restore does not set it. So after a resume
+         * psx_devices_service_to_now() sees devices "behind" by the whole
+         * restored timeline, rewinds psx_cycle_count to the stale watermark and
+         * re-plays the gap (observed: 170170042 -> 120, then "reversed device
+         * time" in source_gpu_runtime_advance). The guard on that rewind is
+         * s_devices_synced_cycle < target, which is TRUE BY CONSTRUCTION after a
+         * restore — so it must be made resume-aware, not skipped.
+         *
+         * Every other loader in the tree already does this after a load
+         * (savestate.c:1102, psx_rewind.c:508, psx_selfcheck.c:787,
+         * psx_netplay_rb.c:6550/6681). This path calls boot_state_load directly
+         * and bypasses savestate.c's loader, so it was the one place missing it.
+         * The call is assignment-only, hence idempotent. It does not touch the
+         * VBlank phase, raster clocks, GPU service clock or source timers, so it
+         * neither duplicates nor conflicts with BS_SEC_IRQ_TIMING, RASTER,
+         * GPU_SERVICE or TIMER_SRC. */
+        psx_cycles_resync_after_restore(&cpu);
         if (!source_tas_stateio_manifest_accept(&m, m.frame, psx_get_cycle_count(),
                 source_tas_stateio_ram_digest(memory_get_ram_ptr(), 2097152u),
                 resume_bios, resume_entry, cfg_hex, exe_hex, route_hex,
