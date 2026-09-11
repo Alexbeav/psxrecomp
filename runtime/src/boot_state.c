@@ -9,6 +9,7 @@
 #include "psx_cycles.h"
 #include "psx_icache.h"    /* g_psx_icache_tv — fetch-cost tags in BS_SEC_ICACHE */
 #include "psx_scheduler.h"
+#include "source_gpu_runtime.h" /* source GPU service state is NOT serialized */
 #include "pst_wire.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -359,10 +360,34 @@ static int write_vram_section_full(BsOut *o)
     return ok;
 }
 
+/* Source-GPU-service state is NOT serialized. Under the bounded-quad comparison
+ * profile (--gpu-dma-model octoshock-2.2.2-bounded-quad) the service holds live
+ * per-frame state with no section here:
+ *   SourceGPUServiceClock clock_state        (128 B, embeds a raster clock +
+ *                                             gpu/dma deadlines +
+ *                                             frame_pending/zero_reached)
+ *   SourceGPUCommandProjection command_state (328 B, a 32-entry command FIFO +
+ *                                             budget + clip/offset/mode +
+ *                                             polygon_words[12])
+ *   draw_raster / return_clock / return_command
+ * Emitting a state that omits them would restore as a stub — the exact v4
+ * no-stub violation. The CDDA/MDEC/DMA snapshot writers already refuse in this
+ * situation; this surface previously failed SILENTLY. Refuse loudly, and do it
+ * BEFORE any file or buffer is created so no stub artifact is left behind. */
+static void boot_state_refuse_unserialized_source_gpu(void) {
+    if (source_gpu_runtime_active()) {
+        fprintf(stderr,
+                "[stateio] source GPU service state is not serialized; "
+                "refusing to save under the bounded-quad profile\n");
+        exit(2);
+    }
+}
+
 static int boot_state_save_to(BsOut* o, const CPUState* cpu,
                               uint32_t bios_checksum, uint32_t entry_pc) {
     BootStateHeader h;
     int ok;
+    boot_state_refuse_unserialized_source_gpu();
     memset(&h, 0, sizeof h);
     h.magic         = BOOT_STATE_MAGIC;
     h.version       = BOOT_STATE_VERSION;
@@ -470,7 +495,9 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
 int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
                     uint32_t entry_pc, const char* path) {
     BsOut o;
-    FILE* f = fopen(path, "wb");
+    FILE* f;
+    boot_state_refuse_unserialized_source_gpu();
+    f = fopen(path, "wb");
     int ok;
     if (!f) return 0;
     memset(&o, 0, sizeof o);
@@ -487,6 +514,7 @@ static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum
                                      size_t* out_len, int no_zlib) {
     BsOut o;
     if (!out_data || !out_len) return 0;
+    boot_state_refuse_unserialized_source_gpu();
     *out_data = NULL;
     *out_len = 0;
     memset(&o, 0, sizeof o);
