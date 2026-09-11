@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include "event_ring.h"
 #include <string.h>
+#include "pst_wire.h"
 
 /* Mode register bit definitions */
 #define MODE_SYNC_EN       (1 << 0)
@@ -154,9 +155,10 @@ void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3],
 void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
                          const uint16_t target[3],  const int32_t  irq_line[3],
                          const uint32_t frac[3]) {
-    if(source_timer1_enabled || source_timer2_enabled) {
-        fprintf(stderr,"[timer1-source-clock] cold boot only; restore unsupported\n");exit(4);
-    }
+    /* The source timers now carry their own section (BS_SEC_TIMER_SRC) and
+     * restore their state machines directly, so this no longer refuses outright.
+     * Indices 1/2 are overridden by the source structs on read-out while the
+     * source clocks are enabled, so restoring the normal array is harmless. */
     for (int i = 0; i < 3; i++) {
         timers[i].counter  = counter[i];
         timers[i].mode     = mode[i];
@@ -164,6 +166,45 @@ void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
         timers[i].irq_line = irq_line[i];
         timer_frac[i]      = frac[i];
     }
+}
+
+/* ---- BS_SEC_TIMER_SRC (#4 read-side rewrite) ---------------------------- */
+/* The source timer state machines. The OLD projection (timers_get_snapshot)
+ * dropped timer1's `counting`/`blank` and timer2's `irq_done`/`counting`, and
+ * emitted a derived view of timer2 rather than the live state; the OLD reader
+ * wrote into timers[1]/timers[2], never into these structs. So this is a
+ * deliberate widening plus a read-side retarget, not a projection. */
+#define TIMERS_SOURCE_WIRE_BYTES 60u
+uint32_t timers_source_wire_bytes(void) { return TIMERS_SOURCE_WIRE_BYTES; }
+int timers_source_active(void) { return source_timer1_enabled || source_timer2_enabled; }
+void timers_source_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, TIMERS_SOURCE_WIRE_BYTES);
+    pst_w_u32(&w, source_timer1.mode);      pst_w_u32(&w, source_timer1.counter);
+    pst_w_u32(&w, source_timer1.target);    pst_w_i32(&w, source_timer1.counting);
+    pst_w_i32(&w, source_timer1.blank);
+    /* Absolute guest-cycle stamp: psx_cycle_count restores exactly (BS_SEC_CLOCK),
+     * so written as-is. Note cycles_until_due() would CLAMP a past value to 0 —
+     * it is for future deadlines and must not be reused for a past stamp. */
+    pst_w_u64(&w, source_timer1_cycle);
+    pst_w_u32(&w, source_timer2.counter);   pst_w_u32(&w, source_timer2.mode);
+    pst_w_u32(&w, source_timer2.target);    pst_w_u32(&w, source_timer2.divider);
+    pst_w_i32(&w, source_timer2.irq_done);  pst_w_i32(&w, source_timer2.counting);
+    /* Relative period counters (timers.c:289-293 uses deadline-elapsed and
+     * flushes when elapsed==deadline; timers.c:178 reloads it as a period
+     * length) — not absolute, so no rebase. */
+    pst_w_u32(&w, source_timer2_elapsed);   pst_w_u32(&w, source_timer2_deadline);
+}
+int timers_source_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r;
+    if (len != TIMERS_SOURCE_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    return pst_r_u32(&r,&source_timer1.mode)      && pst_r_u32(&r,&source_timer1.counter) &&
+           pst_r_u32(&r,&source_timer1.target)    && pst_r_i32(&r,&source_timer1.counting) &&
+           pst_r_i32(&r,&source_timer1.blank)     && pst_r_u64(&r,&source_timer1_cycle) &&
+           pst_r_u32(&r,&source_timer2.counter)   && pst_r_u32(&r,&source_timer2.mode) &&
+           pst_r_u32(&r,&source_timer2.target)    && pst_r_u32(&r,&source_timer2.divider) &&
+           pst_r_i32(&r,&source_timer2.irq_done)  && pst_r_i32(&r,&source_timer2.counting) &&
+           pst_r_u32(&r,&source_timer2_elapsed)   && pst_r_u32(&r,&source_timer2_deadline);
 }
 
 static void source_timer2_pulses(unsigned pulses) {

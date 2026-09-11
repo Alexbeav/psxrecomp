@@ -9,7 +9,9 @@
 #include "psx_cycles.h"
 #include "psx_icache.h"    /* g_psx_icache_tv — fetch-cost tags in BS_SEC_ICACHE */
 #include "psx_scheduler.h"
-#include "source_gpu_runtime.h" /* source GPU service state is NOT serialized */
+#include "source_gpu_runtime.h" /* v7: source GPU service + raster sections */
+#include "timers.h"             /* v7: BS_SEC_TIMER_SRC */
+#include "input_route_raster_clock_wire.h"
 #include "pst_wire.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -360,27 +362,36 @@ static int write_vram_section_full(BsOut *o)
     return ok;
 }
 
-/* Source-GPU-service state is NOT serialized. Under the bounded-quad comparison
- * profile (--gpu-dma-model octoshock-2.2.2-bounded-quad) the service holds live
- * per-frame state with no section here:
- *   SourceGPUServiceClock clock_state        (128 B, embeds a raster clock +
- *                                             gpu/dma deadlines +
- *                                             frame_pending/zero_reached)
- *   SourceGPUCommandProjection command_state (328 B, a 32-entry command FIFO +
- *                                             budget + clip/offset/mode +
- *                                             polygon_words[12])
- *   draw_raster / return_clock / return_command
- * Emitting a state that omits them would restore as a stub — the exact v4
- * no-stub violation. The CDDA/MDEC/DMA snapshot writers already refuse in this
- * situation; this surface previously failed SILENTLY. Refuse loudly, and do it
- * BEFORE any file or buffer is created so no stub artifact is left behind. */
+/* Bounded-quad source GPU service: the scalar state (service clock + command
+ * projection tail) is now serialized as BS_SEC_GPU_SERVICE and the raster
+ * clocks as BS_SEC_RASTER. The only part NOT serialized is the command FIFO
+ * `queue[32]`, so a save requires it to be EMPTY at the checkpoint (measured
+ * empty at 100% of frame boundaries) and the loader requires the same on the
+ * way back in. Refuse loudly, before any file or buffer is created, so no stub
+ * artifact is left behind (amendment D). */
 static void boot_state_refuse_unserialized_source_gpu(void) {
-    if (source_gpu_runtime_active()) {
+    if (source_gpu_runtime_active() && !source_gpu_service_queue_empty()) {
         fprintf(stderr,
-                "[stateio] source GPU service state is not serialized; "
-                "refusing to save under the bounded-quad profile\n");
+                "[stateio] refusing to save: source GPU command queue is "
+                "non-empty; the queue is not serialized\n");
         exit(2);
     }
+}
+
+/* v7 profile-aware section presence (amendment A): a section must exist
+ * exactly when its subsystem is active. boot_state.c is shared code, so the
+ * three comparison-profile sections must NOT be always-required — under a
+ * normal profile there is no raster clock, no source GPU service and no source
+ * timers, and always-requiring them would break every normal boot state. */
+static int boot_state_raster_section_active(void) {
+    return interrupts_raster_comparison_active() || source_gpu_runtime_active();
+}
+static uint32_t boot_state_extra_sections(void) {
+    uint32_t n = 0;
+    if (boot_state_raster_section_active()) n++;
+    if (source_gpu_runtime_active()) n++;
+    if (timers_source_active()) n++;
+    return n;
 }
 
 static int boot_state_save_to(BsOut* o, const CPUState* cpu,
@@ -396,7 +407,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 17;
+    h.section_count = 17u + boot_state_extra_sections();
 
     ok = write_header_le(o, &h);
 
@@ -488,6 +499,24 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
             if (ok) ok = write_section(o, BS_SEC_DIRTY, db, nbytes);
             free(db);
         }
+    }
+    /* v7 comparison-profile sections, written ONLY when their subsystem is
+     * active, so a normal-profile boot state keeps the v6 shape. */
+    if (ok && boot_state_raster_section_active()) {
+        uint8_t buf[INPUT_ROUTE_RASTER_WIRE_BYTES * 3u];
+        interrupts_raster_wire_write(buf);                                   /* [0]   */
+        source_gpu_raster_wire_write(buf + INPUT_ROUTE_RASTER_WIRE_BYTES);   /* [1][2] */
+        ok = write_section(o, BS_SEC_RASTER, buf, sizeof buf);
+    }
+    if (ok && source_gpu_runtime_active()) {
+        uint8_t buf[240u];                    /* service clock + projection tail */
+        source_gpu_service_wire_write(buf);
+        ok = write_section(o, BS_SEC_GPU_SERVICE, buf, sizeof buf);
+    }
+    if (ok && timers_source_active()) {
+        uint8_t buf[60u];                     /* source timer state machines */
+        timers_source_wire_write(buf);
+        ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
     }
     return ok;
 }
@@ -597,6 +626,19 @@ static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
             psx_kernel_bless_note_range(0, RAM_SIZE);
         }
         return 1;
+    case BS_SEC_RASTER: {
+        /* 3 x 80 B in fixed order. Each instance's read refuses on its own
+         * fraction/cycle cross-check, so a cross-instance swap is caught. */
+        if (len != INPUT_ROUTE_RASTER_WIRE_BYTES * 3u) return 0;
+        if (!interrupts_raster_wire_read(p, INPUT_ROUTE_RASTER_WIRE_BYTES)) return 0;
+        if (!source_gpu_raster_wire_read(p + INPUT_ROUTE_RASTER_WIRE_BYTES,
+                                         INPUT_ROUTE_RASTER_WIRE_BYTES * 2u)) return 0;
+        return 1;
+    }
+    case BS_SEC_GPU_SERVICE:
+        return source_gpu_service_wire_read(p, len);
+    case BS_SEC_TIMER_SRC:
+        return timers_source_wire_read(p, len);
     case BS_SEC_SCHED:
         /* RAM precedes this section in every v6 stream, so guest TCB pointers
          * can be validated against the restored kernel state. */
@@ -1074,6 +1116,30 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     if (!ok || (seen & required) != required)
         return 0;
+
+    /* Amendment A: the three comparison-profile sections must be present
+     * EXACTLY when their subsystem is active. Missing -> refuse (the blob could
+     * not have been written by this profile). Present while inactive -> refuse
+     * (the blob came from a different profile; restoring it is a mismatch).
+     * Both directions fail loudly rather than restoring a half-configured
+     * machine. */
+    if (boot_state_raster_section_active() != ((seen >> BS_SEC_RASTER) & 1u) ||
+        source_gpu_runtime_active()       != ((seen >> BS_SEC_GPU_SERVICE) & 1u) ||
+        timers_source_active()            != ((seen >> BS_SEC_TIMER_SRC) & 1u)) {
+        fprintf(stderr, "boot_state: reject — comparison-profile section "
+                        "presence does not match the active profile "
+                        "(raster=%u service=%u timers=%u)\n",
+                (unsigned)((seen >> BS_SEC_RASTER) & 1u),
+                (unsigned)((seen >> BS_SEC_GPU_SERVICE) & 1u),
+                (unsigned)((seen >> BS_SEC_TIMER_SRC) & 1u));
+        return 0;
+    }
+
+    /* Amendment C: return_clock/return_command are assigned once per frame
+     * boundary on the normal path, so right after a restore they would be one
+     * frame stale. A bit-exact replay cannot afford a frame of stale reads.
+     * Re-derive both once, here, after every section has loaded. */
+    source_gpu_runtime_rederive_returns();
 
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();

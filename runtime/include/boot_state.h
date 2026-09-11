@@ -40,10 +40,16 @@ extern "C" {
  * v3 = little-endian field wire (portable Win/Linux/macOS ARM);
  * v4 = v3 + optional zlib on large sections (section pad bit0 = compressed);
  * v5 = v4 + CD-ROM Sub-Q replacement state;
- * v6 = v5 + deterministic scheduler continuation state. */
-#define BOOT_STATE_VERSION 6u
-/* v6 intentionally rejects states that omitted the scheduler continuation. */
-#define BOOT_STATE_VERSION_MIN_READ 6u
+ * v6 = v5 + deterministic scheduler continuation state;
+ * v7 = v6 + comparison-profile state: raster clocks (3 instances), source GPU
+ *      service, and source timer state. */
+#define BOOT_STATE_VERSION 7u
+/* The version field is the ONLY guard against a blob written by an older
+ * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
+ * so a runtime-only change (new sections, changed snapshot writers) leaves all
+ * three unchanged. A pin bump without a code regen would otherwise hand an old
+ * runtime's blob to a new loader. v7 therefore rejects every v6 state. */
+#define BOOT_STATE_VERSION_MIN_READ 7u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -104,6 +110,21 @@ enum {
                               from identical baselines). Optional on load for
                               old blobs (left untouched when absent).          */
     BS_SEC_SCHED  = 0x11,  /* deterministic scheduler return continuation       */
+    BS_SEC_RASTER = 0x12,  /* comparison raster clocks, 3 instances x 80 B:
+                              [0]   input_route_raster (interrupts.c)
+                              [80]  clock_state.raster  (source_gpu_runtime.c)
+                              [160] draw_raster         (source_gpu_runtime.c)
+                              These `cycle`/`last_rise` values are INTERNAL
+                              counters, not psx_cycle_count's time base — never
+                              rebase them; the fraction cross-check depends on
+                              that time base.                                   */
+    BS_SEC_GPU_SERVICE = 0x13, /* bounded-quad source GPU service: the service
+                              clock scalars + the command-projection scalar
+                              tail. queue[32] is NOT serialized: save AND load
+                              both require count==0, since a non-zero count
+                              with no queue would restore as a stub.           */
+    BS_SEC_TIMER_SRC = 0x14, /* source timer state machines (the IRQ-disabled
+                              comparison timers).                               */
 };
 
 /* Save a COMPLETE snapshot at game handoff. Returns 1 on success. */

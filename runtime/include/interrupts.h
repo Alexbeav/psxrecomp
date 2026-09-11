@@ -91,6 +91,12 @@ uint32_t interrupts_cycles_to_vblank(void);
  * write. Inactive profiles return immediately. No guest RAM is modified. */
 void interrupts_raster_gp1(uint32_t word);
 int interrupts_raster_gpu_status(uint32_t *bits);
+/* BS_SEC_RASTER instance [0] (comparison raster clock) + the active-profile
+ * predicate that drives the section's required-set rule. */
+uint32_t interrupts_raster_wire_bytes(void);
+void interrupts_raster_wire_write(uint8_t *out);
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len);
+int interrupts_raster_comparison_active(void);
 /* While IRQ9 is enabled, expose the next 44.1-kHz sample as a first-class
  * device deadline so the CPU can observe and acknowledge an IRQ before the
  * following sample. UINT32_MAX means inactive. PSX_SPU_SAMPLE_EVENTS=0 is a

@@ -8,6 +8,8 @@
 #include "boot_state.h"
 #include "savestate.h"
 #include "psx_sha256.h"
+#include "pst_wire.h"
+#include "input_route_raster_clock_wire.h"
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -201,6 +203,97 @@ int source_gpu_runtime_set_frame_returns(uint32_t frame) {
     if(!enabled)return 0;
     clock_state.frame_returns=frame;
     return_clock=clock_state;
+    return 1;
+}
+
+/* ---- BS_SEC_RASTER instances [1] and [2] -------------------------------- */
+uint32_t source_gpu_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES*2u; }
+void source_gpu_raster_wire_write(uint8_t *out) {
+    input_route_raster_wire_write(&clock_state.raster, out);
+    input_route_raster_wire_write(&draw_raster, out+INPUT_ROUTE_RASTER_WIRE_BYTES);
+}
+int source_gpu_raster_wire_read(const uint8_t *in, uint32_t len) {
+    if (len != INPUT_ROUTE_RASTER_WIRE_BYTES*2u) return 0;
+    if (!input_route_raster_wire_read(&clock_state.raster, in, INPUT_ROUTE_RASTER_WIRE_BYTES))
+        return 0;
+    if (!input_route_raster_wire_read(&draw_raster, in+INPUT_ROUTE_RASTER_WIRE_BYTES,
+                                      INPUT_ROUTE_RASTER_WIRE_BYTES))
+        return 0;
+    return 1;
+}
+
+/* ---- BS_SEC_GPU_SERVICE ------------------------------------------------- */
+/* 240 B = the service clock's scalars + the command projection's scalar TAIL.
+ * queue[32] is deliberately NOT serialized: both save and load require count==0,
+ * because a non-zero count with no queue would restore as a stub. */
+#define SOURCE_GPU_SERVICE_WIRE_BYTES 240u
+uint32_t source_gpu_service_wire_bytes(void) { return SOURCE_GPU_SERVICE_WIRE_BYTES; }
+int source_gpu_service_queue_empty(void) { return command_state.count == 0; }
+/* Amendment C: the two derived copies are refreshed once per frame boundary on
+ * the normal path, so after a restore they would lag by a frame. A bit-exact
+ * replay cannot afford a frame of stale reads. Re-derive them once post-load. */
+void source_gpu_runtime_rederive_returns(void) {
+    return_clock = clock_state;
+    return_command = command_state;
+}
+void source_gpu_service_wire_write(uint8_t *out) {
+    PstW w; pst_w_init(&w, out, SOURCE_GPU_SERVICE_WIRE_BYTES);
+    /* psx_cycle_count is restored exactly by BS_SEC_CLOCK, so every absolute
+     * stamp here (cycle, deadlines, frame_request_cycle, last_update) is
+     * written as-is — no rebase. #7's existing delta-rebase is an identity op. */
+    pst_w_u64(&w, clock_state.cycle);             pst_w_u64(&w, clock_state.gpu_deadline);
+    pst_w_u64(&w, clock_state.dma_deadline);      pst_w_u64(&w, clock_state.frame_request_cycle);
+    pst_w_u32(&w, clock_state.zero_reached);      pst_w_u32(&w, clock_state.frame_pending);
+    pst_w_u32(&w, clock_state.frame_returns);
+    pst_w_i32(&w, command_state.budget);
+    pst_w_u32(&w, command_state.count);           pst_w_u32(&w, command_state.phase);
+    pst_w_u32(&w, command_state.command);         pst_w_u64(&w, command_state.last_update);
+    pst_w_i32(&w, command_state.clip_x0);         pst_w_i32(&w, command_state.clip_y0);
+    pst_w_i32(&w, command_state.clip_x1);         pst_w_i32(&w, command_state.clip_y1);
+    pst_w_i32(&w, command_state.offset_x);        pst_w_i32(&w, command_state.offset_y);
+    pst_w_u32(&w, command_state.draw_mode);       pst_w_u32(&w, command_state.texture_window);
+    pst_w_u32(&w, command_state.mask_bits);       pst_w_u32(&w, command_state.display_mode);
+    pst_w_u32(&w, command_state.dma_direction);
+    pst_w_u32(&w, command_state.field_valid);     pst_w_u32(&w, command_state.skip_field);
+    pst_w_u32(&w, command_state.first_triangles); pst_w_u32(&w, command_state.second_triangles);
+    for (unsigned i=0;i<12u;i++) pst_w_u32(&w, command_state.polygon_words[i]);
+    pst_w_u32(&w, command_state.transfer_words);
+    pst_w_u32(&w, command_state.dispatch.kind);   pst_w_u32(&w, command_state.dispatch.count);
+    for (unsigned i=0;i<12u;i++) pst_w_u32(&w, command_state.dispatch.words[i]);
+    pst_w_i32(&w, command_state.error);
+}
+int source_gpu_service_wire_read(const uint8_t *in, uint32_t len) {
+    PstR r;
+    if (len != SOURCE_GPU_SERVICE_WIRE_BYTES) return 0;
+    pst_r_init(&r, in, len);
+    if (!pst_r_u64(&r,&clock_state.cycle)              || !pst_r_u64(&r,&clock_state.gpu_deadline) ||
+        !pst_r_u64(&r,&clock_state.dma_deadline)       || !pst_r_u64(&r,&clock_state.frame_request_cycle) ||
+        !pst_r_u32(&r,&clock_state.zero_reached)       || !pst_r_u32(&r,&clock_state.frame_pending) ||
+        !pst_r_u32(&r,&clock_state.frame_returns)      || !pst_r_i32(&r,&command_state.budget) ||
+        !pst_r_u32(&r,&command_state.count)            || !pst_r_u32(&r,&command_state.phase) ||
+        !pst_r_u32(&r,&command_state.command)          || !pst_r_u64(&r,&command_state.last_update) ||
+        !pst_r_i32(&r,&command_state.clip_x0)          || !pst_r_i32(&r,&command_state.clip_y0) ||
+        !pst_r_i32(&r,&command_state.clip_x1)          || !pst_r_i32(&r,&command_state.clip_y1) ||
+        !pst_r_i32(&r,&command_state.offset_x)         || !pst_r_i32(&r,&command_state.offset_y) ||
+        !pst_r_u32(&r,&command_state.draw_mode)        || !pst_r_u32(&r,&command_state.texture_window) ||
+        !pst_r_u32(&r,&command_state.mask_bits)        || !pst_r_u32(&r,&command_state.display_mode) ||
+        !pst_r_u32(&r,&command_state.dma_direction)    || !pst_r_u32(&r,&command_state.field_valid) ||
+        !pst_r_u32(&r,&command_state.skip_field)       || !pst_r_u32(&r,&command_state.first_triangles) ||
+        !pst_r_u32(&r,&command_state.second_triangles) || !pst_r_u32(&r,&command_state.transfer_words) ||
+        !pst_r_u32(&r,&command_state.dispatch.kind)    || !pst_r_u32(&r,&command_state.dispatch.count) ||
+        !pst_r_i32(&r,&command_state.error))
+        return 0;
+    for (unsigned i=0;i<12u;i++)
+        if (!pst_r_u32(&r,&command_state.polygon_words[i])) return 0;
+    for (unsigned i=0;i<12u;i++)
+        if (!pst_r_u32(&r,&command_state.dispatch.words[i])) return 0;
+    /* Amendment D: a non-zero count with no serialized queue is a stub. */
+    if (command_state.count != 0) {
+        fprintf(stderr,"[stateio] refusing GPU service state: command queue "
+                       "count=%u but the queue is not serialized\n",
+                (unsigned)command_state.count);
+        return 0;
+    }
     return 1;
 }
 int source_gpu_runtime_ready(void) {return enabled?source_gpu_command_ready(&command_state):-2;}

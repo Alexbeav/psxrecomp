@@ -37,6 +37,7 @@
 #include "lockstep.h"
 #include "psx_cycles.h"
 #include "psx_icache.h"
+#include "input_route_raster_clock_wire.h"
 #include "psx_memory.h"
 #include "psx_cyc.h"
 #include "psx_scheduler.h"
@@ -253,6 +254,22 @@ int interrupts_raster_gpu_status(uint32_t *bits) {
     *bits=input_route_raster_status(&input_route_raster);
     return 1;
 }
+
+/* BS_SEC_RASTER, instance [0]: the comparison raster clock owned by this module.
+ * `cycle`/`last_rise` are INTERNAL counters (accumulated advanced cycles), not
+ * psx_cycle_count's time base — written as-is, never rebased. The wire reader
+ * refuses on a failed fraction/cycle cross-check. */
+uint32_t interrupts_raster_wire_bytes(void) { return INPUT_ROUTE_RASTER_WIRE_BYTES; }
+void interrupts_raster_wire_write(uint8_t *out) {
+    input_route_raster_wire_write(&input_route_raster, out);
+}
+int interrupts_raster_wire_read(const uint8_t *in, uint32_t len) {
+    return input_route_raster_wire_read(&input_route_raster, in, len);
+}
+/* TRUE when the NTSC raster comparison clock is the active timing model. Drives
+ * the profile-dependent required-set rule (the section is required when this is
+ * true, and its presence is a profile mismatch when it is false). */
+int interrupts_raster_comparison_active(void) { return input_route_source_raster; }
 extern uint64_t g_vblank_raise_count;
 extern int g_cosim_dirty_pump_site;
 

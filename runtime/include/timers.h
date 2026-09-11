@@ -10,6 +10,12 @@ extern "C" {
 #define TIMER_BASE 0x1F801100
 
 void timers_init(void);
+/* BS_SEC_TIMER_SRC: full source-timer state (write + read-side rewrite that
+ * targets source_timer1/source_timer2, not the normal timer array). */
+uint32_t timers_source_wire_bytes(void);
+int timers_source_active(void);
+void timers_source_wire_write(uint8_t *out);
+int timers_source_wire_read(const uint8_t *in, uint32_t len);
 int timers_source_raster_enabled(void);
 /* HBlank-driven counter reads see GPU events before the final bus wait.
  * CPU-clock counter modes still sample after that wait. Physical address. */
