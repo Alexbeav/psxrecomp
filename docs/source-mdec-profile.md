@@ -39,7 +39,9 @@ REPRODUCE: configure the existing runtime CMake test build with GNU C and run
 `ctest --test-dir <build> -R mdec_source_ --output-on-failure`.
 Both O0 and O2 variants replay the complete oracle transcripts. DMA variants
 also reject unsupported block sizes, direction/step modes, active register
-replacement, DPCR changes and state capture. The transcript driver protocol
+replacement and DPCR changes. Each transcript also runs with a decoder reset
+and checkpoint restore after every operation, preserving decoder and DMA state.
+The transcript driver protocol
 is defined in `test_mdec_source_pipeline.c` and `test_mdec_source_dma.c`.
 
 BINDS: all golden cases carry source build, input and expected-state hashes.
@@ -47,7 +49,8 @@ The authoring recipes and external-oracle recovery bundle are retained in
 the T52 campaign recovery checkpoint, separate from the MIT runtime source.
 
 Scope: cold source scheduler, enabled forward request DMA with 32-word blocks,
-and 15/24-bit color decoding. Unsupported modes fail explicitly. Save-state
-capture/restore, monochrome output, cancellation mid-block and hardware timing
-are not qualified by these tests. Full Pepsiman movie parity, native ending
+and 15/24-bit color decoding. Unsupported modes fail explicitly. Monochrome
+output, cancellation mid-block and hardware timing are not qualified by these
+tests. See [TAS checkpoints](TAS_CHECKPOINTS.md) for replay qualification.
+Full Pepsiman movie parity, native ending
 and the registered Tekken route remain separate acceptance gates.

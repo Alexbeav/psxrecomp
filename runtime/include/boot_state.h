@@ -44,14 +44,15 @@ extern "C" {
  * v7 = v6 + comparison-profile state: raster clocks (3 instances), source GPU
  *      service, and source timer state;
  * v8 = v7 + CPU timing/instruction continuation, SPU sample clock and exact
- *      MDEC timestamp. */
-#define BOOT_STATE_VERSION 8u
+ *      MDEC timestamp;
+ * v9 = v8 + game-start latch, source peripheral pipelines and queued GPU work. */
+#define BOOT_STATE_VERSION 9u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v8 therefore rejects every earlier state. */
-#define BOOT_STATE_VERSION_MIN_READ 8u
+ * runtime's blob to a new loader. v9 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 9u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -71,7 +72,7 @@ typedef struct {
     uint32_t codegen_ver;    /* PSX_OVERLAY_CODEGEN_VER                           */
     /* ---- layout ---- */
     uint32_t section_count;  /* number of sections that follow                    */
-    uint32_t reserved;       /* 0                                                 */
+    uint32_t reserved;       /* v9: bit 0 = game-start transition already applied */
 } BootStateHeader;
 
 #define BOOT_STATE_HEADER_WIRE_BYTES 36u

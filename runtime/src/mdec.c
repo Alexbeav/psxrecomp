@@ -1132,6 +1132,52 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 #define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u) /* halfwords */
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
+/* Host callbacks stay attached to this executable; only guest state is wired. */
+#define SOURCE_MDEC_WIRE_BYTES 905u
+#define SOURCE_MDEC_SCALARS(X) \
+    X(in_at) X(in_count) X(out_at) X(out_count) X(command) X(control) \
+    X(phase) X(busy) X(coefficient) X(encoded_count) X(block) \
+    X(pixel_count) X(pixel_at) X(quant_index) X(matrix_index)
+static int mdec_source_snap_emit(PstW *w) {
+    SourceMDEC *s=&source_mdec;
+    for (unsigned i=0;i<32;i++) if (!pst_w_u32(w,s->in[i])) return 0;
+    for (unsigned i=0;i<32;i++) if (!pst_w_u32(w,s->out[i])) return 0;
+    for (unsigned i=0;i<48;i++) if (!pst_w_u32(w,s->pixels[i])) return 0;
+#define EMIT(f) if (!pst_w_u32(w,s->f)) return 0;
+    SOURCE_MDEC_SCALARS(EMIT)
+#undef EMIT
+    if (!pst_w_i32(w,s->credit) || !pst_w_u16(w,s->remaining)) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_w_u16(w,s->encoded[i])) return 0;
+    if (!pst_w_u8(w,s->row) || !pst_w_u8(w,s->word_in_row) ||
+        !pst_w_u8(w,s->row_words) || !pst_w_i32(w,s->error)) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_w_i16(w,source_cr[i])) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_w_i16(w,source_cb[i])) return 0;
+    return 1;
+}
+static int mdec_source_snap_parse(PstR *r, int apply) {
+    SourceMDEC s=source_mdec;
+    int16_t cr[64],cb[64];int32_t error;
+    for (unsigned i=0;i<32;i++) if (!pst_r_u32(r,&s.in[i])) return 0;
+    for (unsigned i=0;i<32;i++) if (!pst_r_u32(r,&s.out[i])) return 0;
+    for (unsigned i=0;i<48;i++) if (!pst_r_u32(r,&s.pixels[i])) return 0;
+#define READ(f) if (!pst_r_u32(r,&s.f)) return 0;
+    SOURCE_MDEC_SCALARS(READ)
+#undef READ
+    if (!pst_r_i32(r,&s.credit) || !pst_r_u16(r,&s.remaining)) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_r_u16(r,&s.encoded[i])) return 0;
+    if (!pst_r_u8(r,&s.row) || !pst_r_u8(r,&s.word_in_row) ||
+        !pst_r_u8(r,&s.row_words) || !pst_r_i32(r,&error)) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_r_i16(r,&cr[i])) return 0;
+    for (unsigned i=0;i<64;i++) if (!pst_r_i16(r,&cb[i])) return 0;
+    if (s.in_at>31 || s.out_at>31 || s.in_count>32 || s.out_count>32 ||
+        s.phase>SMDEC_OUTPUT || s.busy>1 || s.coefficient>64 || s.encoded_count>64 ||
+        s.block>5 || s.pixel_count>48 || s.pixel_at>48 ||
+        s.quant_index>127 || s.matrix_index>63 || error) return 0;
+    s.error=error;
+    if (apply) {source_mdec=s;memcpy(source_cr,cr,sizeof cr);memcpy(source_cb,cb,sizeof cb);}
+    return 1;
+}
+
 static uint32_t mdec_snap_fixed_bytes(void) {
     /* ver + scalars + tables + counts + last_color_age (guest cycles) */
     return 4u + /* ver */
@@ -1144,10 +1190,9 @@ static uint32_t mdec_snap_fixed_bytes(void) {
 }
 
 uint32_t mdec_snapshot_bytes(void) {
-    if(source_mdec_enabled){fprintf(stderr,"[mdec-source] state capture unsupported\n");exit(2);}
     uint64_t n = (uint64_t)mdec_snap_fixed_bytes() +
                  (uint64_t)mdec.input_count * 2u +
-                 (uint64_t)mdec.output_size;
+                 (uint64_t)mdec.output_size + (source_mdec_enabled?SOURCE_MDEC_WIRE_BYTES:0u);
     if (n > 0xffffffffu) return 0;
     return (uint32_t)n;
 }
@@ -1192,15 +1237,21 @@ void mdec_snapshot_write(uint8_t *p) {
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
     if (mdec.output_size && mdec.output)
         (void)pst_w_bytes(&w, mdec.output, mdec.output_size);
+    if (source_mdec_enabled && (!mdec_source_snap_emit(&w) || w.written!=n)) abort();
 }
 
 int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
-    if(source_mdec_enabled)return 0;
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
     uint64_t last_decode_cycle = 0, age;
     int16_t s16;
     if (!p || len < mdec_snap_fixed_bytes()) return 0;
+    if (source_mdec_enabled) {
+        if (len<mdec_snap_fixed_bytes()+SOURCE_MDEC_WIRE_BYTES) return 0;
+        PstR source;
+        pst_r_init(&source,p+len-SOURCE_MDEC_WIRE_BYTES,SOURCE_MDEC_WIRE_BYTES);
+        if (!mdec_source_snap_parse(&source,0)) return 0;
+    }
     pst_r_init(&r, p, len);
     if (!pst_r_u32(&r, &ver) || ver != MDEC_SNAP_VER) return 0;
     if (!pst_r_u32(&r, &mdec.command) ||
@@ -1254,6 +1305,8 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
         return 0;
+    if (source_mdec_enabled && !mdec_source_snap_parse(&r,1)) return 0;
+    if (r.p!=r.end) return 0;
     mdec_last_color_decode_cycle = last_decode_cycle;
     age = psx_cycle_count >= last_decode_cycle ? psx_cycle_count-last_decode_cycle : UINT64_MAX;
     /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈

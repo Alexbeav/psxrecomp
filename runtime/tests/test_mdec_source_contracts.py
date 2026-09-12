@@ -11,15 +11,17 @@ with tempfile.TemporaryDirectory(prefix='mdec-source-') as temp:
   data=zlib.decompress(base64.b64decode(case['input_zlib_base64']))
   assert sha(data)==case['input_sha256'],case['name']
   source=root/f'{i}.input';actual=root/f'{i}.output';source.write_bytes(data)
-  run=subprocess.run([str(exe),str(source),str(actual)],env=env,capture_output=True,timeout=30)
-  assert run.returncode==0,(case['name'],run.returncode,run.stderr)
-  output=actual.read_bytes()
-  assert len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256'],case['name']
+  for mode in ('cold','checkpoint'):
+   target=actual.with_suffix('.'+mode)
+   mode_env=dict(env,**({'PSX_TEST_ROUNDTRIP':'1'} if mode=='checkpoint' else {}))
+   run=subprocess.run([str(exe),str(source),str(target)],env=mode_env,capture_output=True,timeout=30)
+   assert run.returncode==0,(case['name'],mode,run.returncode,run.stderr)
+   output=target.read_bytes()
+   assert len(output)==case['expected_bytes'] and sha(output)==case['expected_sha256'],(case['name'],mode)
  if kind=='dma':
   cold=[(0,0,0,0),(2,0,0x1f8010f0,0x99)]
   start=[(2,0,0x1f801080,0x3000),(2,0,0x1f801084,0x10020),(2,0,0x1f801088,0x01000201)]
   cases={
-   'capture-mdec':cold+[(11,0,0,0)],'capture-dma':cold+[(12,0,0,0)],
    'block-size':cold+[(2,0,0x1f801084,0x10010),start[-1]],
    'reverse':cold+start[:2]+[(2,0,0x1f801088,0x01000203)],
    'wrong-direction':cold+start[:2]+[(2,0,0x1f801088,0x01000200)],

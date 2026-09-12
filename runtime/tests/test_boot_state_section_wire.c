@@ -73,6 +73,7 @@ static const Field gpu_service_fields[] = {
     F("command.transfer_words", 4),    F("command.dispatch.kind", 4),
     F("command.dispatch.count", 4),    REP("command.dispatch.words", 4, 12),
     F("command.error", 4),
+    REP("command.queue", 4, 32),
 };
 
 static const Field dma_src_fields[] = {
@@ -142,12 +143,13 @@ static uint64_t field_value(unsigned field_index, unsigned width) {
 }
 
 /* Two fields are constrained by their readers and cannot hold an arbitrary
- * sentinel: the GPU reader refuses count!=0 (an unsynchronized queue is a stub),
+ * sentinel: the GPU reader bounds count at the 32-word queue capacity,
  * and the IRQ reader normalizes pending to 0/1. Both stay distinct from every
  * other field; they just cannot be arbitrary. */
 static int seeded_constant(const char *name, unsigned width, uint8_t *out) {
     if (strcmp(name, "command.count") == 0) {
         memset(out, 0, width);
+        out[0] = 32u;
         return 1;
     }
     if (strcmp(name, "defer_switch.pending") == 0) {

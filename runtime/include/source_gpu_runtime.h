@@ -21,6 +21,7 @@ void source_gpu_raster_wire_write(uint8_t *out);
 int source_gpu_raster_wire_read(const uint8_t *in, uint32_t len);
 /* BS_SEC_GPU_SERVICE: service clock scalars + command-projection scalar tail. */
 uint32_t source_gpu_service_wire_bytes(void);
+#define SOURCE_GPU_SERVICE_WIRE_BYTES 368u
 int source_gpu_service_queue_empty(void);
 void source_gpu_runtime_rederive_returns(void);
 /* DIAG P3: raw read-back of the restored service clock. */

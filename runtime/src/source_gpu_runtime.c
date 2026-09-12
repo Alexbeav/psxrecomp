@@ -280,10 +280,7 @@ int source_gpu_raster_wire_read(const uint8_t *in, uint32_t len) {
 }
 
 /* ---- BS_SEC_GPU_SERVICE ------------------------------------------------- */
-/* 240 B = the service clock's scalars + the command projection's scalar TAIL.
- * queue[32] is deliberately NOT serialized: both save and load require count==0,
- * because a non-zero count with no queue would restore as a stub. */
-#define SOURCE_GPU_SERVICE_WIRE_BYTES 240u
+/* Service clock, command projection, and all 32 queued command words. */
 uint32_t source_gpu_service_wire_bytes(void) { return SOURCE_GPU_SERVICE_WIRE_BYTES; }
 int source_gpu_service_queue_empty(void) { return command_state.count == 0; }
 /* Amendment C: the two derived copies are refreshed once per frame boundary on
@@ -346,10 +343,14 @@ void source_gpu_service_wire_write(uint8_t *out) {
     pst_w_u32(&w, command_state.dispatch.kind);   pst_w_u32(&w, command_state.dispatch.count);
     for (unsigned i=0;i<12u;i++) pst_w_u32(&w, command_state.dispatch.words[i]);
     pst_w_i32(&w, command_state.error);
+    for (unsigned i=0;i<32u;i++) pst_w_u32(&w, command_state.queue[i]);
 }
 int source_gpu_service_wire_read(const uint8_t *in, uint32_t len) {
     PstR r;
-    if (len != SOURCE_GPU_SERVICE_WIRE_BYTES) return 0;
+    if (!in || len != SOURCE_GPU_SERVICE_WIRE_BYTES) return 0;
+    { PstR count_wire;uint32_t count;
+      pst_r_init(&count_wire,in+48,4);
+      if (!pst_r_u32(&count_wire,&count) || count>32u) return 0; }
     pst_r_init(&r, in, len);
     if (!pst_r_u64(&r,&clock_state.cycle)              || !pst_r_u64(&r,&clock_state.gpu_deadline) ||
         !pst_r_u64(&r,&clock_state.dma_deadline)       || !pst_r_u64(&r,&clock_state.frame_request_cycle) ||
@@ -380,13 +381,8 @@ int source_gpu_service_wire_read(const uint8_t *in, uint32_t len) {
         if (!pst_r_u32(&r,&command_state.dispatch.words[i])) return 0;
     if (!pst_r_i32(&r,&command_state.error))
         return 0;
-    /* Amendment D: a non-zero count with no serialized queue is a stub. */
-    if (command_state.count != 0) {
-        fprintf(stderr,"[stateio] refusing GPU service state: command queue "
-                       "count=%u but the queue is not serialized\n",
-                (unsigned)command_state.count);
-        return 0;
-    }
+    for (unsigned i=0;i<32u;i++)
+        if (!pst_r_u32(&r,&command_state.queue[i])) return 0;
     return 1;
 }
 int source_gpu_runtime_ready(void) {return enabled?source_gpu_command_ready(&command_state):-2;}

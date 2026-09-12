@@ -106,6 +106,15 @@ int main(int argc,char **argv) {
             fprintf(stderr,"source startup mismatch ready=%d words=%u irq=%u expected=%u busy=%u sent=%u\n",ready,n,irqs,expected,!!(channels[2].chcr&(1u<<24)),upload_count);return 1;
         }
 #ifdef PSX_TEST_SOURCE_LL_IMPLEMENTED
+        /* Capture while stalled or part-way through a linked list, then
+         * continue the same live RAM payload after restoring both sections. */
+        uint8_t base[512],source[512];
+        assert(dma_snapshot_bytes()<=sizeof base && dma_src_wire_bytes()<=sizeof source);
+        dma_snapshot_write(base);dma_src_wire_write(source);
+        memset(&gpu_ll_source,0,sizeof gpu_ll_source);
+        memset(&channels[2],0,sizeof channels[2]);
+        assert(dma_snapshot_read(base,dma_snapshot_bytes()));
+        assert(dma_src_wire_read(source,dma_src_wire_bytes()));
         psx_cycle_count=512;advance_source_gpu_ll();
         if(!ready){assert(!upload_count&&!irqs);ready_state=1;}
         psx_cycle_count=640;advance_source_gpu_ll();
@@ -140,4 +149,8 @@ int main(int argc,char **argv) {
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
+uint32_t source_gpu_runtime_cycles_to_event(void) {return UINT32_MAX;}
+void source_gpu_runtime_copy(SourceGPUServiceClock *clock,SourceGPUCommandProjection *command) {
+    (void)clock;(void)command;abort();
+}
 void source_gpu_runtime_dma_write(void) {}

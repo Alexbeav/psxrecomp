@@ -170,7 +170,7 @@ def main():
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
                         help='source CDDA single-speed seek, two-sector pipe and report ownership')
     parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3'),default='default',
-                        help='cold source MDEC FIFO/work and request DMA model; color output only')
+                        help='source MDEC FIFO/work and request DMA model; color output only')
     parser.add_argument('--cd-dma-model',choices=('default','octoshock-2.2.2'),default='default',
                         help='experimental manual CD DMA service and CPU wait; cold boot only')
     parser.add_argument("--cd-toc-seek-model", choices=("default", "octoshock-2.2.2"), default="default",
@@ -190,7 +190,7 @@ def main():
     parser.add_argument("--legacy-card-repair", choices=("default", "off"), default="default",
                         help="Disable inherited global Ape Escape fixed-address card repair explicitly")
     parser.add_argument("--pad-ack-model", choices=("default", "octoshock-2.2.2-digital", "nymashock-1.29.0-dualshock"), default="default",
-                        help="Experimental source digital-pad ACK delay/pulse; cold boot only")
+                        help="Experimental source pad ACK delay/pulse; DualShock checkpoints remain unsupported")
     parser.add_argument("--dma-model", choices=("default", "octoshock-2.2.2-otc"), default="default",
                         help="experimental source OTC service and CPU-wait rule; cold boot only")
     parser.add_argument('--gpu-dma-model', choices=('default','octoshock-2.2.2-vram-upload','octoshock-2.2.2-bounded-linked-list','octoshock-2.2.2-bounded-quad'), default='default',

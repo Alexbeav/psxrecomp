@@ -3112,8 +3112,18 @@ static int sio_snap_emit_fsm(PstW *w) {
 }
 
 static int sio_snap_emit(PstW *w) {
-    return sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
-           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w);
+    if (!(sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
+          sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w))) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack == 1) {
+        if (!pst_w_i32(w, sio_ack_pulse_remaining) ||
+            !pst_w_i32(w, sio_pending_ack_timed)) return 0;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_w_u16(w, pad_buttons[s])) return 0;
+        if (!pst_w_bytes(w, pad_stick, sizeof pad_stick)) return 0;
+    }
+#endif
+    return 1;
 }
 
 /* Cumulative section end offsets in the snapshot wire:
@@ -3132,6 +3142,9 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
     out[3] = (uint32_t)w.written;
     (void)sio_snap_emit_fsm_meta(&w);
     (void)sio_snap_emit_rumble(&w);
+    /* Source extension is part of the full wire, outside the old digest cuts. */
+    pst_w_init(&w, NULL, 0);
+    (void)sio_snap_emit(&w);
     out[4] = (uint32_t)w.written;
 }
 
@@ -3161,9 +3174,10 @@ void sio_source_survey_sizes(uint32_t out[5]) {
     out[2] = ends[3] - ends[2];   /* pacing FSM subset (shift/ACK pipeline) */
     out[3] = 0;
 #if SIO_MODEL_CYCLE_PACED
-    /* The two source-mode scalars the snapshot deliberately does not emit. */
-    out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
-                        sizeof sio_pending_ack_timed);
+    /* Digital source checkpoints now emit both previously missing scalars. */
+    if (sio_source_pad_ack != 1)
+        out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
+                            sizeof sio_pending_ack_timed);
 #endif
     out[4] = (uint32_t)sizeof mc_slots;  /* per-slot card FSM state (2 slots) */
 }
@@ -3266,13 +3280,24 @@ static int sio_snap_parse(PstR *r) {
         !pst_r_bytes(r, pad_rumble_small, sizeof(pad_rumble_small)) ||
         !pst_r_bytes(r, pad_rumble_large, sizeof(pad_rumble_large)))
         return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack == 1) {
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_ack_pulse_remaining = i;
+        if (!pst_r_i32(r, &i)) return 0;
+        sio_pending_ack_timed = i;
+        for (int s = 0; s < PSX_MAX_PLAYERS; s++)
+            if (!pst_r_u16(r, &pad_buttons[s])) return 0;
+        if (!pst_r_bytes(r, pad_stick, sizeof pad_stick)) return 0;
+    }
+#endif
     if (r->p != r->end) return 0;
     return 1;
 }
 
 uint32_t sio_snapshot_bytes(void) {
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack || sio_source_card) return 0; /* explicit cold-boot experiment only */
+    if (sio_source_pad_ack == 2 || sio_source_card) return 0;
 #endif
     PstW w;
     pst_w_init(&w, NULL, 0);
@@ -3297,13 +3322,26 @@ int sio_snapshot_shape_ok(uint32_t len) {
                                  sizeof(pad_rumble_small) +
                                  sizeof(pad_rumble_large));
     if (!current) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack == 1) return len == current;
+#endif
     return len == current || (len < current && len + rumble_bytes == current);
 }
 
 int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     PstR r;
     const uint32_t current = sio_snapshot_bytes();
-    if (!current) return 0;
+    if (!p || !current || !sio_snapshot_shape_ok(len)) return 0;
+#if SIO_MODEL_CYCLE_PACED
+    if (sio_source_pad_ack == 1) {
+        PstR extra;
+        int32_t pulse, timed;
+        pst_r_init(&extra, p + len - 8u - 6u * PSX_MAX_PLAYERS,
+                   8u + 6u * PSX_MAX_PLAYERS);
+        if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||
+            pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;
+    }
+#endif
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
                                   sizeof(pad_rumble_small) +
                                   sizeof(pad_rumble_large));

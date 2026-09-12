@@ -98,6 +98,10 @@ int main(int argc,char **argv) {
     for(uint32_t phase=0;phase<128;phase++) {
         setup(512,phase);start_async_cdrom_transfer();start_source_cdrom();
         assert(writes==8 && cdrom_async.remaining_words==504 && irqs==0);
+        uint8_t wire[512];assert(dma_snapshot_bytes()<=sizeof wire);
+        dma_snapshot_write(wire);
+        memset(&cdrom_async,0,sizeof cdrom_async);memset(&cd_source,0,sizeof cd_source);
+        assert(dma_snapshot_read(wire,dma_snapshot_bytes()));
         assert(ram[0x10000/4]==0xCA000000 && ram[0x10020/4]==0xCCCCCCCC);
         uint64_t expected=((phase+4536+127)/128)*128;
         psx_cycle_count=expected-1;advance_source_cdrom();
@@ -131,6 +135,7 @@ int gpu_dma_source_ll_ready(void) {abort();}
 
 /* Source GPU projection is inactive in this isolated controller fixture. */
 int source_gpu_runtime_active(void) {return 0;}
+uint32_t source_gpu_runtime_cycles_to_event(void) {return UINT32_MAX;}
 void source_gpu_runtime_copy(SourceGPUServiceClock *clock, SourceGPUCommandProjection *command) {
     (void)clock; (void)command;
     assert(!"inactive source GPU must not be sampled");

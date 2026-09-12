@@ -1,4 +1,5 @@
 #include "boot_state.h"
+#include "fntrace.h"
 #include "overlay_api.h"   /* PSX_OVERLAY_CODEGEN_HASH / _ABI_TAG / _CODEGEN_VER */
 #include "dirty_ram_interp.h"
 #include "gpu.h"           /* gpu_get_vram — CPU-auth mirror under dual-raster   */
@@ -284,6 +285,10 @@ static int write_module_section(BsOut* o, uint32_t tag,
                                 uint32_t (*bytes)(void),
                                 void (*write)(uint8_t*)) {
     uint32_t n = bytes();
+    if (!n) {
+        fprintf(stderr, "[stateio] refusing snapshot: required section %u has no serializer\n", tag);
+        return 0;
+    }
     uint8_t* buf = (uint8_t*)malloc(n ? n : 1);
     if (!buf) return 0;
     write(buf);
@@ -356,30 +361,6 @@ static int write_vram_section_full(BsOut *o)
     return ok;
 }
 
-/* Bounded-quad source GPU service: the scalar state (service clock + command
- * projection tail) is now serialized as BS_SEC_GPU_SERVICE and the raster
- * clocks as BS_SEC_RASTER. The only part NOT serialized is the command FIFO
- * `queue[32]`, so a save requires it to be EMPTY at the checkpoint (measured
- * empty at 100% of frame boundaries) and the loader requires the same on the
- * way back in. Refuse loudly, before any file or buffer is created, so no stub
- * artifact is left behind (amendment D). */
-/* Returns 0 to REFUSE the save (the caller returns 0), 1 when the state is
- * representable. Deliberately NOT exit(2): boot_state_save_buffer_raw feeds the
- * rewind ring (psx_rewind.c:472) and netplay ring (netplay_snap_ring.c:50), and
- * both treat a 0 return as "skip this snapshot and carry on". Exiting there
- * would kill the emulator mid-play whenever a snapshot landed while the command
- * FIFO was non-empty — and those rings sample at mid-frame block boundaries,
- * not frame boundaries, so the queue is not guaranteed empty there. */
-static int boot_state_unserialized_source_gpu_ok(void) {
-    if (source_gpu_runtime_active() && !source_gpu_service_queue_empty()) {
-        fprintf(stderr,
-                "[stateio] refusing snapshot: source GPU command queue is "
-                "non-empty; the queue is not serialized\n");
-        return 0;
-    }
-    return 1;
-}
-
 /* v7 profile-aware section presence (amendment A): a section must exist
  * exactly when its subsystem is active. boot_state.c is shared code, so the
  * three comparison-profile sections must NOT be always-required — under a
@@ -411,6 +392,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     memset(&h, 0, sizeof h);
     h.magic         = BOOT_STATE_MAGIC;
     h.version       = BOOT_STATE_VERSION;
+    h.reserved      = (uint32_t)fntrace_is_game_started();
     h.bios_checksum = bios_checksum;
     h.entry_pc      = entry_pc;
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
@@ -523,7 +505,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         ok = write_section(o, BS_SEC_RASTER, buf, sizeof buf);
     }
     if (ok && source_gpu_runtime_active()) {
-        uint8_t buf[240u];                    /* service clock + projection tail */
+        uint8_t buf[SOURCE_GPU_SERVICE_WIRE_BYTES];
         source_gpu_service_wire_write(buf);
         ok = write_section(o, BS_SEC_GPU_SERVICE, buf, sizeof buf);
     }
@@ -560,7 +542,6 @@ int boot_state_save(const CPUState* cpu, uint32_t bios_checksum,
      * (or any write failure) inside the serializer leaves a zero-byte or short
      * artifact at `path` — a truncated file that still parses is the same
      * silent-stub failure, one layer down. */
-    if (!boot_state_unserialized_source_gpu_ok()) return 0;
     if (!path || snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp)
         return 0;
     f = fopen(tmp, "wb");
@@ -586,7 +567,6 @@ static int boot_state_save_buffer_ex(const CPUState* cpu, uint32_t bios_checksum
     BsOut o;
     if (!out_data || !out_len) return 0;
     if (!out_data || !out_len) return 0;
-    if (!boot_state_unserialized_source_gpu_ok()) return 0;
     *out_data = NULL;
     *out_data = NULL;
     *out_len = 0;
@@ -822,7 +802,7 @@ static int boot_state_parse_header(const uint8_t* file, size_t file_len,
         !pst_r_i32(&hr, &h_out->abi_tag) ||
         !pst_r_u32(&hr, &h_out->codegen_ver) ||
         !pst_r_u32(&hr, &h_out->section_count) ||
-        !pst_r_u32(&hr, &h_out->reserved)) {
+        !pst_r_u32(&hr, &h_out->reserved) || h_out->reserved > 1u) {
         return 0;
     }
     return 1;
@@ -1056,7 +1036,7 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     case BS_SEC_ICACHE:     return len == 1024u * 4u;
     case BS_SEC_DIRTY:      return (len % 4u) == 0u;
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
-    case BS_SEC_GPU_SERVICE:return len == 240u;
+    case BS_SEC_GPU_SERVICE:return len == SOURCE_GPU_SERVICE_WIRE_BYTES;
     case BS_SEC_TIMER_SRC:  return len == 60u;
     case BS_SEC_DMA_SRC:    return len == dma_src_wire_bytes();
     case BS_SEC_IRQ_TIMING: return len == 64u;
@@ -1294,6 +1274,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
 
     /* RAM was memcpy'd; force overlay revalidation before resume. */
     overlay_watch_invalidate_after_ram_restore();
+    fntrace_restore_game_started((int)h.reserved);
 
     {
         const double total_ms = boot_state_mono_ms() - t0;

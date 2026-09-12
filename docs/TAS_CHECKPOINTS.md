@@ -10,17 +10,42 @@ route, BIOS, game entry, guest clock and RAM digest. Rebuild before recording
 both sides of a comparison. A checkpoint from another executable is refused.
 Each run uses a new output directory.
 
+For repeatable cross-game qualification, `verify_checkpoint_cohort.py` accepts
+`--run-args OPTIONS.json --output NEW_DIRECTORY --terminal 3000`. The JSON file
+contains the normal `run_native.py` option strings, including the executable,
+route, assets and profile, without an output directory or save/resume options.
+The route and neutral tail must end at the requested terminal return. The driver
+requires committed source, records two cold runs, then independently resumes
+500, 1500 and 2500. It compares every CPU/clock row, every RAM-page hash and all
+later saved sections. A timer-2 corruption must produce a state mismatch.
+Use `--midpoint-only` with the full route and its terminal return for a separate
+cold run and midpoint resume. Results, commands and raw evidence stay together
+in the output directory; any missing evidence fails the cohort.
+
 ## Format and continuation
 
-Boot-state format **v8** requires a 580-byte CPU section, a 36-byte CPU_EXEC
+Boot-state format **v9** requires a 580-byte CPU section, a 36-byte CPU_EXEC
 section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
 The research branch currently rejects earlier boot states and player save slots.
-The operator's decision on 2026-09-12 is to **preserve v6/v7 player slots and
-block release until a compatible read path is tested**. That path remains
-unimplemented in this research branch; its current rejection is not an approved
-player migration policy. Merge and release remain blocked. Rewind and netplay
-share this loader. TAS checkpoints retain strict same-binary identity checks;
-successful replay tests do not authorize discarding player slots.
+The operator superseded the earlier compatibility hold on 2026-09-12:
+**development may break existing player slots; a v6/v7 reader is not required**.
+Rewind and netplay share this loader. TAS checkpoints retain strict same-binary
+identity checks. Recapture checkpoints after rebuilding the executable.
+
+The header preserves whether the game-start transition has already run. Restore
+sets this latch without repeating the boot-only RAM clears or CD speed change.
+GPU_SERVICE includes all 32 queued command words. Source digital-pad snapshots
+retain the ACK pulse, pending timed ACK, and latched controller inputs. The source
+CD profile retains all eight sector buffers and absolute deadlines; source CDDA
+also retains its two-sector audio pipeline and pending response. Source MDEC
+retains its decoder FIFOs, partially decoded block, chroma buffers, DMA transfer
+positions and service clock. Host callback pointers remain local to the binary.
+SPU snapshots also retain the CD input audio ring, its cursors and counters;
+queued audio affects the guest-visible sound-RAM capture buffers after resume.
+Active CD DMA retains its service budget and absolute clock deadlines.
+
+A required module with no serializer makes the save fail. It cannot create a
+successful checkpoint containing an empty device section.
 
 CPU_EXEC records the current instruction, pending branch delay slot and target,
 and pending load writeback. Resume enters the instruction interpreter before
@@ -64,6 +89,11 @@ per-return CPU and RAM-page/clock observations. A controlled restore perturbatio
 must make a previously passing comparison fail; a refused or crashed run alone
 does not establish detection by the comparator.
 
+For the full suffix, `compare_checkpoint_runs.py BASELINE RESUMED --start 1500
+--terminal 3000 --captures 1501 1560 2500 2501 2560 3000 --output result.json`
+checks every CPU/clock record and RAM-page hash as well as all requested states.
+Missing states, incomplete coverage and discontinuous return numbers fail.
+
 Portable checks:
 
 ```powershell
@@ -81,9 +111,9 @@ python -B tools/tasreplays/test_pepsiman.py
 
 The results below describe their recorded experimental revisions. The durable
 `checkpoint-status.json` and its hash-bound evidence set identify which gates
-have been reverified at the current Lane B head. Lane A (the independent-source
-frame-464 investigation) remains parked; its disc-identity change was reverted
-from this branch and requires separate review.
+have been reverified at the recorded head. The operator authorized resuming the
+Biohazard independent-source investigation after the known-game checkpoint tests
+pass. The earlier disc-identity change remains reverted in this branch.
 
 The 2026-09-12 reduced-profile ladder passed using the unchanged diagnostic
 route with 6,001 input records and 6,000 captured returns. Two cold runs matched
@@ -127,8 +157,9 @@ test also detects the inherited P7 logger's early return, which had skipped
 GPU dispatch, draw-raster advancement and DMA service. The accepted ladder
 was recorded after removing that logger and restoring normal service.
 
-The initial verification uses the reduced no-card profile. Source SIO card/pad
-models, source CDDA and source MDEC still retain their capture/restore refusals.
+The initial verification used the reduced no-card profile. Source SIO card and
+DualShock models still retain their capture/restore refusals. Digital-pad, CDDA
+and MDEC checkpoint support is under cross-game verification on this branch.
 The reduced profile is infrastructure evidence, not Biohazard TAS fidelity or
-full-profile checkpoint qualification. Source GPU command queues must be empty.
+full-profile checkpoint qualification. GPU command queues are now serialized.
 No public release or shared pin promotion follows from these diagnostic gates.

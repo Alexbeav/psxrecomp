@@ -24,6 +24,11 @@ int main(int argc,char **argv){
    case 6:result=mdec_read(0x1f801820);break;
    default:abort();
   }
+  if(getenv("PSX_TEST_ROUNDTRIP")) {
+   uint32_t n=mdec_snapshot_bytes();uint8_t *wire=malloc(n);if(!wire)abort();
+   mdec_snapshot_write(wire);mdec_init();
+   if(!mdec_snapshot_read(wire,n))abort();free(wire);
+  }
   SourceMDEC *s=&source_mdec;
   uint32_t row[]={result,aux,mdec_read(0x1f801824),(uint32_t)s->credit,s->command,s->control,s->remaining,s->in_count,s->out_count,
                  s->coefficient,s->block,s->pixel_count,s->pixel_at,s->row,s->word_in_row,s->row_words,s->busy,s->quant_index,s->matrix_index};

@@ -24,16 +24,23 @@ static int draw(const SourceGPUCommandDispatch *command) {
     return 0;
 }
 int main(void) {
-    uint8_t wire[240], rasters[160];
+    uint8_t wire[SOURCE_GPU_SERVICE_WIRE_BYTES], empty[SOURCE_GPU_SERVICE_WIRE_BYTES], rasters[160];
     source_gpu_runtime_init();
     source_gpu_runtime_set_dispatch_sink(draw);
     source_gpu_service_wire_write(wire);
     PstW w; pst_w_init(&w,wire+44,4); pst_w_i32(&w,-20);
     assert(source_gpu_service_wire_read(wire,sizeof wire));
+    source_gpu_service_wire_write(empty);
     source_gpu_runtime_gp0(0x020000ffu);
     source_gpu_runtime_gp0(0);
     source_gpu_runtime_gp0(0x00010010u);
     assert(draws == 0u);
+    assert(!source_gpu_service_queue_empty());
+    source_gpu_service_wire_write(wire);
+    assert(source_gpu_service_wire_read(empty,sizeof empty));
+    assert(source_gpu_service_queue_empty());
+    assert(source_gpu_service_wire_read(wire,sizeof wire));
+    assert(!source_gpu_service_queue_empty());
     psx_cycle_count=128u;
     source_gpu_runtime_advance();
     assert(draws == 1u && dma_calls == 1u);

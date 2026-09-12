@@ -1971,28 +1971,16 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
            pst_r_u32(r, &d->cycles_remaining);
 }
 
-uint32_t dma_snapshot_bytes(void) { return DMA_SNAP_WIRE_BYTES; }
+uint32_t dma_snapshot_bytes(void) {
+    return DMA_SNAP_WIRE_BYTES + (mdec_source_active()?32u:0u) + (cd_source_model?20u:0u);
+}
 
 void dma_snapshot_write(uint8_t *p) {
-    if(mdec_source_active()){fprintf(stderr,"[dma-model] source MDEC capture unsupported\n");exit(2);}
-    if(spu_source.remaining) {
-        fprintf(stderr,"[dma-model] active source SPU request capture unsupported\n");exit(2);
-    }
-    if(gpu_ll_source.active) {
-        fprintf(stderr,"[dma-model] active source linked-list capture unsupported\n");exit(2);
-    }
-    if(gpu_upload_source.remaining) {
-        fprintf(stderr,"[dma-model] active source GPU upload capture unsupported\n");exit(2);
-    }
-    if(cd_source_model && cdrom_async.active) {
-        fprintf(stderr,"[dma-model] state capture during source CD transfer is unsupported\n");exit(2);
-    }
-    if (otc_source.remaining) {
-        fprintf(stderr, "[dma-model] state capture during experimental OTC transfer is unsupported\n");
-        exit(2);
-    }
+    /* Source GPU/SPU/OTC continuations live in the required DMA_SRC section.
+     * CD and MDEC continuations are included below, including active transfers. */
     PstW w;
-    pst_w_init(&w, p, DMA_SNAP_WIRE_BYTES);
+    if (!p) return;
+    pst_w_init(&w, p, dma_snapshot_bytes());
     for (int i = 0; i < 7; i++) {
         pst_w_u32(&w, channels[i].madr);
         pst_w_u32(&w, channels[i].bcr);
@@ -2005,6 +1993,19 @@ void dma_snapshot_write(uint8_t *p) {
     dma_w_async(&w, &cdrom_async);
     for (int i = 0; i < 7; i++)
         dma_w_delay(&w, &delayed_complete[i]);
+    if (mdec_source_active()) {
+        for (int i=0;i<2;i++) {
+            pst_w_u32(&w,mdec_source_dma[i].address);
+            pst_w_u32(&w,mdec_source_dma[i].in_block);
+            pst_w_i32(&w,mdec_source_dma[i].credit);
+        }
+        pst_w_u64(&w,mdec_source_last_cycle);
+    }
+    if (cd_source_model) {
+        pst_w_i32(&w,cd_source.budget);
+        pst_w_u64(&w,cd_source.last_cycle);
+        pst_w_u64(&w,cd_source.next_cycle);
+    }
 }
 
 /* BS_SEC_DMA_SRC: the four source-DMA state machines (bounded-quad GPU upload,
@@ -2128,11 +2129,8 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
      * Every restore path funnels through boot_state_load_buffer -> apply_section
      * (savestate, rewind, netplay rings, selfcheck, TAS resume), so the leaf
      * guard is redundant; keeping it would refuse the very state we now write. */
-    /* MDEC is a separate surface (#2) and keeps its own model-based refusal
-     * until that surface is serialized. */
-    if (mdec_source_active()) return 0;
     PstR r;
-    if (len != DMA_SNAP_WIRE_BYTES) return 0;
+    if (!p || len != dma_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
     for (int i = 0; i < 7; i++) {
         if (!pst_r_u32(&r, &channels[i].madr) || !pst_r_u32(&r, &channels[i].bcr) ||
@@ -2145,5 +2143,18 @@ int dma_snapshot_read(const uint8_t *p, uint32_t len) {
         return 0;
     for (int i = 0; i < 7; i++)
         if (!dma_r_delay(&r, &delayed_complete[i])) return 0;
+    if (mdec_source_active()) {
+        for (int i=0;i<2;i++) {
+            if (!pst_r_u32(&r,&mdec_source_dma[i].address) ||
+                !pst_r_u32(&r,&mdec_source_dma[i].in_block) ||
+                !pst_r_i32(&r,&mdec_source_dma[i].credit)) return 0;
+        }
+        if (!pst_r_u64(&r,&mdec_source_last_cycle)) return 0;
+    }
+    if (cd_source_model) {
+        if (!pst_r_i32(&r,&cd_source.budget) ||
+            !pst_r_u64(&r,&cd_source.last_cycle) ||
+            !pst_r_u64(&r,&cd_source.next_cycle)) return 0;
+    }
     return 1;
 }
