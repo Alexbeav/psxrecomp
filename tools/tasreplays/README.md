@@ -1,5 +1,8 @@
 # Tekken 3 TAS replay
 
+For explicit, bounded multi-step investigations and read-only evidence analysis,
+see the [unattended investigation controller guide](investigation.md).
+
 Build and play [Spikestuff's tool-assisted speedrun](https://tasvideos.org/4164M)
 from your own Tekken 3 USA disc and SCPH1001 BIOS. The original 7,974 inputs
 finish Arcade with Yoshimitsu at **8.80 seconds**. This branch reproduces the
