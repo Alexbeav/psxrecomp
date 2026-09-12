@@ -15,10 +15,12 @@ Each run uses a new output directory.
 Boot-state format **v8** requires a 580-byte CPU section, a 36-byte CPU_EXEC
 section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
 The research branch currently rejects earlier boot states and player save slots.
-That is an unresolved compatibility break, not an approved player migration
-policy. **Merge and release are blocked pending the operator's v6/v7 player-slot
-decision and validation of the selected policy.** Rewind and netplay share this
-loader. Do not treat successful TAS replay tests as approval to discard old slots.
+The operator's decision on 2026-09-12 is to **preserve v6/v7 player slots and
+block release until a compatible read path is tested**. That path remains
+unimplemented in this research branch; its current rejection is not an approved
+player migration policy. Merge and release remain blocked. Rewind and netplay
+share this loader. TAS checkpoints retain strict same-binary identity checks;
+successful replay tests do not authorize discarding player slots.
 
 CPU_EXEC records the current instruction, pending branch delay slot and target,
 and pending load writeback. Resume enters the instruction interpreter before
