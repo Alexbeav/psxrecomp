@@ -23,6 +23,11 @@ the existing `gte_data[23]`. Generated access helpers already cover the affected
 registers. Full TAS/PGXP composition must separately bind its callback, codegen
 and save identities.
 
-The independent 4-bit output-size control currently reports 64 bytes for a
-32-byte mono block. This pre-existing packing defect is separate from Busy
-lifetime; do not weaken that expected size or count it as a PGXP regression.
+The independent 4-bit output-size control exposed 64 bytes for a 32-byte mono
+block. Existing correction `6a2588c60ab0e2ba95ae5f082d05fb7e6fc2b049` restores
+rounded signed/unsigned packed nibbles. It is separate from Busy lifetime and
+is not a new PGXP defect. A public 8-bit/4-bit comparison covers all 1024 signed
+DC inputs and both output signs; it tests packing, not IDCT accuracy. The
+[Beetle EncodeImage reference](https://github.com/libretro/beetle-psx-libretro/blob/master/mednafen/psx/mdec.c)
+describes this rounded packing, while DuckStation uses its own decoder/output
+convention. No new external implementation was imported.

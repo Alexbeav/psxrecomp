@@ -504,10 +504,25 @@ static uint8_t *emit_rgb_pixel(uint8_t *out, int y, int cr, int cb) {
 }
 
 static void append_luma_block(const int16_t *yblk) {
-    uint8_t *out = output_reserve(64u);
-    if (!out) return;
-    for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
-    mdec.output_size += 64u;
+    if (mdec.output_depth == 0) {
+        const uint8_t output_xor = mdec.output_signed ? 0x00u : 0x88u;
+        uint8_t *out = output_reserve(32u);
+        int i;
+        if (!out) return;
+        for (i = 0; i < 64; i += 2) {
+            int v0 = yblk[i] + 8;
+            int v1 = yblk[i + 1] + 8;
+            uint8_t p0 = (uint8_t)(v0 > 127 ? 127 : v0);
+            uint8_t p1 = (uint8_t)(v1 > 127 ? 127 : v1);
+            out[i >> 1] = (uint8_t)(((p0 >> 4) | (p1 & 0xF0u)) ^ output_xor);
+        }
+        mdec.output_size += 32u;
+    } else {
+        uint8_t *out = output_reserve(64u);
+        if (!out) return;
+        for (int i = 0; i < 64; i++) out[i] = to_output_u8(yblk[i]);
+        mdec.output_size += 64u;
+    }
 }
 
 #if defined(MDEC_HAVE_SSE2)

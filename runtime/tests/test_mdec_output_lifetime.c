@@ -23,6 +23,39 @@ static void decode(unsigned depth) {
     for (unsigned i = 0; i < blocks; ++i) mdec_dma_write_word(0xFE000000u);
 }
 
+static void check_mono_packing(void) {
+    /* Use the public 8-bit decoder as the input to a separate quantization
+     * expectation. This tests packing, not IDCT accuracy. */
+    mdec_write(4, 0x80000000u);
+    mdec_write(0, 3u << 29);
+    for (unsigned i = 0; i < 32; ++i) mdec_write(0, 0x7FFF7FFFu);
+    for (int dc = -512; dc < 512; ++dc) {
+        uint8_t decoded[64];
+        mdec_write(0, (1u << 29) | (1u << 27) | 1u);
+        mdec_write(0, 0xFE000000u | ((uint32_t)dc & 0x3FFu));
+        for (unsigned i = 0; i < 64; i += 4) {
+            uint32_t word = mdec_read(0);
+            for (unsigned byte = 0; byte < 4; ++byte)
+                decoded[i + byte] = (uint8_t)(word >> (byte * 8));
+        }
+        for (unsigned sign = 0; sign < 2; ++sign) {
+            mdec_write(0, (1u << 29) | (sign << 26) | 1u);
+            mdec_write(0, 0xFE000000u | ((uint32_t)dc & 0x3FFu));
+            for (unsigned i = 0; i < 64; i += 8) {
+                uint32_t word = mdec_read(0);
+                for (unsigned pixel = 0; pixel < 8; ++pixel) {
+                    unsigned expected = (decoded[i + pixel] + 8u) / 16u;
+                    if (expected > 15) expected = 15;
+                    if (sign) expected ^= 8;
+                    check(((word >> (pixel * 4)) & 15) == expected,
+                          "4-bit signed/unsigned rounding and pixel order");
+                }
+            }
+            check(!mdec_dma_read_ready(), "exact 32-byte mono drain");
+        }
+    }
+}
+
 int main(void) {
     mdec_init();
     const unsigned bytes[] = {32, 64, 768, 512};
@@ -62,6 +95,7 @@ int main(void) {
     }
     mdec_write(0, 0); /* zero-parameter command does not stay busy */
     check(!(mdec_read(4) & (1u << 29)), "empty command completes");
+    check_mono_packing();
     printf("PASS: MDEC public output lifetime, %u checks\n", checks);
     return 0;
 }
