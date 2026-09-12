@@ -73,7 +73,44 @@ static void fail(const char *reason) {
 }
 static void service(void *context,uint64_t cycle,unsigned kind) {
     (void)context;
-    if(!source_gpu_command_update(&command_state,cycle))fail("unsupported command service");
+    /* TAS-DIAG P7: log EVERY command_update call (service() is its only caller)
+     * so a sticky error cannot hide an earlier event. error is printed by name:
+     * 1=UNSUPPORTED 2=OVERFLOW 3=REVERSE_TIME. */
+    {
+        static unsigned long long p7_n;
+        /* Audited logger: NO transformations, NO name mapping (a value outside
+         * 0-3 previously printed as "clean" and masked the real error). Every
+         * field is read straight from the struct at the call. The return path is
+         * inferred, not assumed: last_update advancing proves the tail
+         * (source_gpu_command_process) was reached; unchanged proves an early
+         * return. */
+        uint64_t lu_b = command_state.last_update, lu_a;
+        uint64_t bgt_b = (uint64_t)(int64_t)command_state.budget, bgt_a;
+        unsigned cnt_b = command_state.count, cnt_a;
+        unsigned ph_b = command_state.phase, ph_a;
+        int e_b = command_state.error, e_a;
+        int rc = source_gpu_command_update(&command_state, cycle);
+        lu_a = command_state.last_update;
+        bgt_a = (uint64_t)(int64_t)command_state.budget;
+        cnt_a = command_state.count;
+        ph_a = command_state.phase;
+        e_a = command_state.error;
+        /* BOUNDED: first 64 calls, plus any call that is not a plain success.
+         * The unbounded version grew stderr to 3.17 GB and tripped the harness
+         * storage budget, so the instrument changed the thing it measured. */
+        if (p7_n < 64 || rc != 1 || e_b != 0 || e_a != 0)
+            fprintf(stderr,
+                "[tas-diag] P7 call=%llu cycle=%llu lu=%llu->%llu cnt=%u->%u "
+                "ph=%u->%u bgt=%llu->%llu err=%d->%d rc=%d\n",
+                p7_n, (unsigned long long)cycle,
+                (unsigned long long)lu_b, (unsigned long long)lu_a,
+                cnt_b, cnt_a, ph_b, ph_a,
+                (unsigned long long)bgt_b, (unsigned long long)bgt_a,
+                e_b, e_a, rc);
+        ++p7_n;
+        if(!rc) fail("unsupported command service");
+        return;
+    }
     dispatch();
     if(cycle<draw_raster.cycle || cycle-draw_raster.cycle>UINT32_MAX)fail("invalid draw raster time");
     input_route_raster_advance(&draw_raster,(uint32_t)(cycle-draw_raster.cycle));
