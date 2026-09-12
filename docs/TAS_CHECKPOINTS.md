@@ -14,8 +14,11 @@ Each run uses a new output directory.
 
 Boot-state format **v8** requires a 580-byte CPU section, a 36-byte CPU_EXEC
 section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
-It rejects earlier boot states and player save slots; recapture them with
-the current executable. Rewind and netplay use the same format.
+The research branch currently rejects earlier boot states and player save slots.
+That is an unresolved compatibility break, not an approved player migration
+policy. **Merge and release are blocked pending the operator's v6/v7 player-slot
+decision and validation of the selected policy.** Rewind and netplay share this
+loader. Do not treat successful TAS replay tests as approval to discard old slots.
 
 CPU_EXEC records the current instruction, pending branch delay slot and target,
 and pending load writeback. Resume enters the instruction interpreter before
@@ -73,6 +76,12 @@ python -B tools/tasreplays/test_pepsiman.py
 ```
 
 ## Scope
+
+The results below describe their recorded experimental revisions. The durable
+`checkpoint-status.json` and its hash-bound evidence set identify which gates
+have been reverified at the current Lane B head. Lane A (the independent-source
+frame-464 investigation) remains parked; its disc-identity change was reverted
+from this branch and requires separate review.
 
 The 2026-09-12 reduced-profile ladder passed using the unchanged diagnostic
 route with 6,001 input records and 6,000 captured returns. Two cold runs matched
