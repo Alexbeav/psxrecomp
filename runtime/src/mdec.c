@@ -913,11 +913,12 @@ void mdec_init(void) {
     source_mdec_enabled=0;
     const char *source_mode=getenv("PSX_MDEC_SOURCE_MODEL");
     if(source_mode && *source_mode){
-        if(strcmp(source_mode,"octoshock-2.3")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
+        if(strcmp(source_mode,"octoshock-2.3") && strcmp(source_mode,"nymashock-1.29.0")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
         source_mdec_enabled=1;
         memset(mdec.y_quant,0,sizeof(mdec.y_quant));memset(mdec.uv_quant,0,sizeof(mdec.uv_quant));
         memset(mdec.scale,0,sizeof(mdec.scale));memset(source_cr,0,sizeof(source_cr));memset(source_cb,0,sizeof(source_cb));
         source_mdec_power(&source_mdec,source_decode_block,source_table_word,0);
+        if(!strcmp(source_mode,"nymashock-1.29.0"))source_mdec.block_cycles=512;
     }
 }
 

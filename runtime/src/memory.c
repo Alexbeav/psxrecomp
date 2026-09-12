@@ -2097,8 +2097,9 @@ static inline uint32_t psx_cyc_readmem_prepare(CPUState* cpu, uint32_t phys, uin
      * of an event crossed only by that wait, while earlier events stay visible.
      * HBlank-driven Timer1 counters likewise have no CPU tick in that wait;
      * TIMER_Read updates timers, but does not service a newly due GPU event.
-     * DMA_Read and IRQ_Read likewise return stored registers without another
-     * event update. IRQ status must not include an edge crossed by that wait. */
+     * DMA_Read, IRQ_Read and CDC::Read likewise return stored registers without
+     * another event update. CD status/FIFO reads must not observe an ACK or
+     * data arrival crossed only by their width-dependent six-cycle wait. */
     if(defer_gpu_wait)completion+=psx_mmio_read_wait(phys,size);
     psx_advance_cycles(fudge + cost - completion);
     if(defer_gpu_wait)psx_devices_service_to_now();
@@ -2200,13 +2201,19 @@ static int source_irq_register_sample(uint32_t addr) {
     return source_gpu_runtime_active() && addr<0xc0000000u &&
            physical>=0x1f801070u && physical<=0x1f801077u;
 }
+static int source_cd_register_sample(uint32_t addr) {
+    uint32_t physical=addr&0x1fffffffu;
+    return source_gpu_runtime_active() && addr<0xc0000000u &&
+           physical>=0x1f801800u && physical<=0x1f80180fu;
+}
 uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     uint32_t physical=addr&0x1fffffffu;
     int source_gpu_sample=source_gpu_runtime_active() && addr<0xc0000000u &&
         (physical==0x1f801810u || physical==0x1f801814u);
     uint32_t completion=psx_cyc_load_timing(cpu,addr,4u,rt,reg_mask,
         source_gpu_sample || source_hblank_counter_sample(addr) ||
-        source_dma_register_sample(addr) || source_irq_register_sample(addr));
+        source_dma_register_sample(addr) || source_irq_register_sample(addr) ||
+        source_cd_register_sample(addr));
     uint32_t value = psx_read_word(addr);
     if (completion) psx_advance_cycles(completion);
     return value;
@@ -2214,7 +2221,7 @@ uint32_t psx_cyc_load_word_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint3
 uint16_t psx_cyc_load_half_slow(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     uint32_t completion = psx_cyc_load_timing(cpu, addr, 2u, rt, reg_mask,
         source_hblank_counter_sample(addr) || source_dma_register_sample(addr) ||
-        source_irq_register_sample(addr));
+        source_irq_register_sample(addr) || source_cd_register_sample(addr));
     uint16_t value = psx_read_half(addr);
     if (completion) psx_advance_cycles(completion);
     return value;
@@ -2227,7 +2234,7 @@ void psx_cyc_load_word_timing_only(CPUState* cpu, uint32_t addr,
 uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {
     uint32_t completion = psx_cyc_load_timing(cpu, addr, 1u, rt, reg_mask,
         source_hblank_counter_sample(addr) || source_dma_register_sample(addr) ||
-        source_irq_register_sample(addr));
+        source_irq_register_sample(addr) || source_cd_register_sample(addr));
 #if defined(PSX_NO_DEBUG_TOOLS) && !defined(PSX_COSIM)
     uint32_t phys;
     if (psx_cyc_main_ram_fast_addr(addr, 1u, &phys)) return ram[phys];
@@ -2243,7 +2250,8 @@ uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t re
 uint32_t psx_cyc_lwc2_read(CPUState* cpu, uint32_t addr) {
     uint32_t completion = 0u;
 #ifdef PSX_ENABLE_BLOCK_CYCLES
-    completion = psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u, 0);
+    completion = psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u,
+                                         source_cd_register_sample(addr));
 #else
     (void)cpu;
 #endif

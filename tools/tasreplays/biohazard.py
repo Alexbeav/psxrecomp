@@ -17,7 +17,7 @@ EXE_SHA='44850e2aa72edebdb986141b49874a08160fbb103bffa505ceba9ba0a19bd0b2'
 CONTROLLER_SHA='09d4015e5801e62311334b22f38e766cfe0b46ba38fe45f2caf5f3fd0a5c6baa'
 TAPE_SHA='d85f0dec13b00e50b10a52ce0fda3cdaa9797f058ad16dd57caa8e926fad7a6a'
 PROFILE=[
-    '--critical-section-model','exception',
+    '--critical-section-model','exception','--syscall-model','guest-exception',
     '--field-model','octoshock-2.2.2-ntsc-raster',
     '--dma-model','octoshock-2.2.2-otc',
     '--pad-ack-model','nymashock-1.29.0-dualshock',
@@ -25,7 +25,8 @@ PROFILE=[
     '--cd-firmware-model','octoshock-2.2.2','--cd-cold-status-model','octoshock-2.2.2',
     '--cd-toc-seek-model','octoshock-2.2.2','--cd-explicit-seek-model','octoshock-2.2.2',
     '--cd-read-start-model','octoshock-2.2.2-pipeline','--cd-dma-model','octoshock-2.2.2',
-    '--cd-cdda-model','octoshock-2.3','--mdec-source-model','octoshock-2.3',
+    '--cd-drive-model','nymashock-1.29.0',
+    '--cd-cdda-model','octoshock-2.3','--mdec-source-model','nymashock-1.29.0',
     '--gpu-status-model','octoshock-2.2.2-raster','--gpu-dma-model','octoshock-2.2.2-bounded-quad',
     '--timer1-model','octoshock-2.2.2','--timer2-model','octoshock-2.2.2',
     '--precise-slice','on','--cpu-return-probe','--ram-page-probe',
