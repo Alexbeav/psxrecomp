@@ -337,14 +337,22 @@ int source_gpu_service_wire_read(const uint8_t *in, uint32_t len) {
         !pst_r_u32(&r,&command_state.mask_bits)        || !pst_r_u32(&r,&command_state.display_mode) ||
         !pst_r_u32(&r,&command_state.dma_direction)    || !pst_r_u32(&r,&command_state.field_valid) ||
         !pst_r_u32(&r,&command_state.skip_field)       || !pst_r_u32(&r,&command_state.first_triangles) ||
-        !pst_r_u32(&r,&command_state.second_triangles) || !pst_r_u32(&r,&command_state.transfer_words) ||
-        !pst_r_u32(&r,&command_state.dispatch.kind)    || !pst_r_u32(&r,&command_state.dispatch.count) ||
-        !pst_r_i32(&r,&command_state.error))
+        !pst_r_u32(&r,&command_state.second_triangles))
         return 0;
+    /* The tail is POSITIONAL: this order must match source_gpu_service_wire_write
+     * exactly. A divergence here is invisible to the total-length check and to
+     * the _Static_assert(sizeof), which is how the shipped version read `error`
+     * and both word arrays at the wrong offsets (test_boot_state_section_wire). */
     for (unsigned i=0;i<12u;i++)
         if (!pst_r_u32(&r,&command_state.polygon_words[i])) return 0;
+    if (!pst_r_u32(&r,&command_state.transfer_words) ||
+        !pst_r_u32(&r,&command_state.dispatch.kind) ||
+        !pst_r_u32(&r,&command_state.dispatch.count))
+        return 0;
     for (unsigned i=0;i<12u;i++)
         if (!pst_r_u32(&r,&command_state.dispatch.words[i])) return 0;
+    if (!pst_r_i32(&r,&command_state.error))
+        return 0;
     /* Amendment D: a non-zero count with no serialized queue is a stub. */
     if (command_state.count != 0) {
         fprintf(stderr,"[stateio] refusing GPU service state: command queue "
