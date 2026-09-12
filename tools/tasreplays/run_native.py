@@ -155,12 +155,14 @@ def main():
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
                         help="explicit source-core pipeline comparison; not full timing compatibility")
+    parser.add_argument('--cd-drive-model',choices=('default','nymashock-1.29.0'),default='default',
+                        help='experimental Nymashock drive head, seek, Pause and Reset timing; cold diagnostics only')
     parser.add_argument('--cd-source-clock-tape', type=Path,
                         help='experimental command/seek clock using an immutable raw random-word tape')
     parser.add_argument('--cd-cdda-model',choices=('default','octoshock-2.3'),default='default',
                         help='source CDDA single-speed seek, two-sector pipe and report ownership')
-    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3'),default='default',
-                        help='cold source MDEC FIFO/work and request DMA model; color output only')
+    parser.add_argument('--mdec-source-model',choices=('default','octoshock-2.3','nymashock-1.29.0'),default='default',
+                        help='source MDEC FIFO/work and request DMA model; color output only')
     parser.add_argument('--cd-dma-model',choices=('default','octoshock-2.2.2'),default='default',
                         help='experimental manual CD DMA service and CPU wait; cold boot only')
     parser.add_argument("--cd-toc-seek-model", choices=("default", "octoshock-2.2.2"), default="default",
@@ -171,6 +173,8 @@ def main():
                         help="source PU-18 Test20 identity; does not change seek timing")
     parser.add_argument("--cd-cold-status-model", choices=("default", "octoshock-2.2.2"), default="default",
                         help="source cold sticky shell-open bit cleared after first GetStat; cold boot only")
+    parser.add_argument("--syscall-model", choices=("default", "guest-exception"), default="default",
+                        help="route every syscall through the installed guest exception handler")
     parser.add_argument("--critical-section-model", choices=("direct", "exception"), default="direct",
                         help="experimental non-nested SYS01/02 guest exception execution")
     parser.add_argument("--field-model", choices=("default", "octoshock-2.2.2-ntsc-fields", "octoshock-2.2.2-ntsc-raster"), default="default",
@@ -206,6 +210,11 @@ def main():
         raise ValueError("timer1 model requires NTSC raster field model")
     if args.gpu_status_model!='default' and args.field_model!='octoshock-2.2.2-ntsc-raster':
         raise ValueError('GPU status model requires NTSC raster field model')
+    if args.syscall_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
+        raise ValueError('guest syscall model requires the source CPU/service profile')
+    if args.cd_drive_model!='default':
+        if not args.cd_source_clock_tape:
+            raise ValueError('source drive model requires a clock tape and cold diagnostics')
     if args.cd_cdda_model!='default' and not args.cd_source_clock_tape:
         raise ValueError('source CDDA requires an explicit source clock tape')
     if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
@@ -373,6 +382,8 @@ p2_mode = "digital"
         selected_env["PSX_CD_READ_START_MODEL"] = args.cd_read_start_model
     if clock_tape:
         selected_env['PSX_CD_SOURCE_CLOCK_TAPE'] = clock_tape['path']
+    if args.cd_drive_model!='default':
+        selected_env['PSX_CD_DRIVE_MODEL']=args.cd_drive_model
     if args.cd_cdda_model!='default':
         selected_env['PSX_CD_CDDA_MODEL']=args.cd_cdda_model
     if args.mdec_source_model!='default':
@@ -387,6 +398,8 @@ p2_mode = "digital"
         selected_env["PSX_CD_FIRMWARE_MODEL"] = args.cd_firmware_model
     if args.cd_cold_status_model != "default":
         selected_env["PSX_CD_COLD_STATUS_MODEL"] = args.cd_cold_status_model
+    if args.syscall_model != "default":
+        selected_env["PSX_SYSCALL_MODEL"] = args.syscall_model
     if args.critical_section_model != "direct":
         selected_env["PSX_CRITICAL_SECTION_MODEL"] = args.critical_section_model
     if args.field_model != "default":

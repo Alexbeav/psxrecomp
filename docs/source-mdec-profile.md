@@ -4,6 +4,10 @@
 compatibility model. The default runtime retains its existing MDEC scheduling.
 The Pepsiman adapter selects the new profile; the original movie is unchanged.
 
+The separate experimental `nymashock-1.29.0` option selects 512 clocks per
+completed block. Its scope and cold-replay restrictions are described in
+[Bio Hazard source comparison](NYMASHOCK_SOURCE_REPLAY.md#experimental-bio-hazard-drive-comparison).
+
 CLAIM: the original source advances MDEC decode work and both DMA channels at
 the common DMA service boundary. A fixed output-word delay cannot express its
 32-word FIFO backpressure, 474-clock completed-block work, positive-credit
