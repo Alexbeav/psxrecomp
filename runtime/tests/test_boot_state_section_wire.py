@@ -1,6 +1,6 @@
-"""Per-field sentinel round-trip for the four comparison-profile wire sections.
+"""Per-field sentinel round-trip for comparison-profile and CPU continuation sections.
 
-The four section codecs own module state, so this test links the four runtime
+The section codecs own module state, so this test links the five runtime
 translation units and calls the real wire functions. Their unrelated external
 references (device service, tracing, scheduler, GPU, CD, MDEC, ...) are
 satisfied with auto-generated no-op stubs: the test exercises only the wire
@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-MODULES = ["source_gpu_runtime.c", "dma.c", "interrupts.c", "timers.c"]
+MODULES = ["source_gpu_runtime.c", "dma.c", "interrupts.c", "timers.c", "dirty_ram_interp.c"]
 SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MULTIPLE = re.compile(r"multiple definition of [`']([^`']+)[`']")
 UNDEFINED = re.compile(r"undefined reference to [`']([^`']+)[`']")
@@ -77,11 +77,11 @@ def write_stubs(path, symbols):
     path.write_text("\n".join(lines) + "\n")
 
 
-def build_and_run(cc, here, src_root, opt, work):
+def build_and_run(cc, here, src_root, opt, work, modules=MODULES, test_name="test_boot_state_section_wire.c"):
     tag = opt.replace("-", "")
     include = str(src_root / "include")
     objs = []
-    for src in MODULES:
+    for src in modules:
         obj = work / (Path(src).stem + tag + ".o")
         subprocess.run([cc, "-std=c11", opt, "-w", "-I", include,
                         "-c", str(src_root / "src" / src), "-o", str(obj)],
@@ -94,7 +94,7 @@ def build_and_run(cc, here, src_root, opt, work):
     stub_c = work / ("stubs" + tag + ".c")
     stub_o = work / ("stubs" + tag + ".o")
 
-    test_c = here / "test_boot_state_section_wire.c"
+    test_c = here / test_name
     test_o = work / ("sectionwire" + tag + ".o")
     subprocess.run([cc, "-std=c11", opt, "-Wall", "-Wextra", "-Werror",
                     "-I", include, "-c", str(test_c), "-o", str(test_o)],

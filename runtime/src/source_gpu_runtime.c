@@ -7,6 +7,8 @@
 #include "source_tas_stateio.h"
 #include "boot_state.h"
 #include "savestate.h"
+#include "debug_server.h"
+#include "dirty_ram_interp.h"
 #include "psx_sha256.h"
 #include "pst_wire.h"
 #include "input_route_raster_clock_wire.h"
@@ -74,44 +76,7 @@ static void fail(const char *reason) {
 }
 static void service(void *context,uint64_t cycle,unsigned kind) {
     (void)context;
-    /* TAS-DIAG P7: log EVERY command_update call (service() is its only caller)
-     * so a sticky error cannot hide an earlier event. error is printed by name:
-     * 1=UNSUPPORTED 2=OVERFLOW 3=REVERSE_TIME. */
-    {
-        static unsigned long long p7_n;
-        /* Audited logger: NO transformations, NO name mapping (a value outside
-         * 0-3 previously printed as "clean" and masked the real error). Every
-         * field is read straight from the struct at the call. The return path is
-         * inferred, not assumed: last_update advancing proves the tail
-         * (source_gpu_command_process) was reached; unchanged proves an early
-         * return. */
-        uint64_t lu_b = command_state.last_update, lu_a;
-        uint64_t bgt_b = (uint64_t)(int64_t)command_state.budget, bgt_a;
-        unsigned cnt_b = command_state.count, cnt_a;
-        unsigned ph_b = command_state.phase, ph_a;
-        int e_b = command_state.error, e_a;
-        int rc = source_gpu_command_update(&command_state, cycle);
-        lu_a = command_state.last_update;
-        bgt_a = (uint64_t)(int64_t)command_state.budget;
-        cnt_a = command_state.count;
-        ph_a = command_state.phase;
-        e_a = command_state.error;
-        /* BOUNDED: first 64 calls, plus any call that is not a plain success.
-         * The unbounded version grew stderr to 3.17 GB and tripped the harness
-         * storage budget, so the instrument changed the thing it measured. */
-        if (p7_n < 64 || rc != 1 || e_b != 0 || e_a != 0)
-            fprintf(stderr,
-                "[tas-diag] P7 call=%llu cycle=%llu lu=%llu->%llu cnt=%u->%u "
-                "ph=%u->%u bgt=%llu->%llu err=%d->%d rc=%d\n",
-                p7_n, (unsigned long long)cycle,
-                (unsigned long long)lu_b, (unsigned long long)lu_a,
-                cnt_b, cnt_a, ph_b, ph_a,
-                (unsigned long long)bgt_b, (unsigned long long)bgt_a,
-                e_b, e_a, rc);
-        ++p7_n;
-        if(!rc) fail("unsupported command service");
-        return;
-    }
+    if(!source_gpu_command_update(&command_state,cycle))fail("unsupported command service");
     dispatch();
     if(cycle<draw_raster.cycle || cycle-draw_raster.cycle>UINT32_MAX)fail("invalid draw raster time");
     input_route_raster_advance(&draw_raster,(uint32_t)(cycle-draw_raster.cycle));
@@ -127,6 +92,10 @@ extern uint8_t *memory_get_ram_ptr(void);
  * are re-derived by boot_state on load. */
 static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
     if(!cpu || !source_tas_stateio_save_at_match(frame)) return;
+    if (!dirty_ram_checkpoint_pc(0)) {
+        fprintf(stderr,"[tas-stateio] save refused: no instruction continuation at return %u\n",frame);
+        return;
+    }
     const char *path=getenv("PSX_TAS_SAVE_STATE_PATH");
     char auto_path[4096];
     if(!path || !*path) {
@@ -155,6 +124,7 @@ static void tas_stateio_save(CPUState *cpu,unsigned frame,uint64_t cycle) {
     sha_hex[64]='\0';
     TasStateManifest m; memset(&m,0,sizeof m);
     m.frame=frame; m.cycle=cycle; m.bios_checksum=bios_checksum; m.entry_pc=entry_pc;
+    m.input_consumed=debug_server_input_route_consumed();
     m.state_bytes=state_bytes;
     m.ram_digest=source_tas_stateio_ram_digest(memory_get_ram_ptr(),2097152u);
     /* v7 identity: whole resolved configuration, the exact runtime binary, and
@@ -327,6 +297,10 @@ void source_gpu_runtime_rederive_returns(void) {
  * ladder comparison must fail. Test/diagnostic only. */
 int source_gpu_service_perturb(const char *field) {
     if (!field || !*field || !enabled) return 0;
+    if (strcmp(field, "service_budget_debt") == 0) {
+        command_state.budget -= 1000000;
+        return 1;
+    }
     if (strcmp(field, "service_cycle") == 0) {
         clock_state.cycle += 1u;
         fprintf(stderr, "[tas-stateio] negative control: service cycle -> %llu\n",

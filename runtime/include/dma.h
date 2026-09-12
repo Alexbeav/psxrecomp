@@ -31,6 +31,7 @@ void dma_source_gpu_service_at(uint64_t cycle);
 void dma_source_dma_live(int *upload, int *ll, int *spu);
 /* BS_SEC_DMA_SRC: the four source-DMA state machines, field by field (140 B). */
 uint32_t dma_src_wire_bytes(void);
+int dma_src_perturb(const char *field);
 int      dma_src_active(void);
 void     dma_src_wire_write(uint8_t *out);
 int      dma_src_wire_read(const uint8_t *in, uint32_t len);

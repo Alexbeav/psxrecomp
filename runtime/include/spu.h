@@ -165,6 +165,9 @@ const void* spu_shadow_tap_buffer(void);
 int         spu_shadow_tap_count(void);
 
 uint32_t spu_snapshot_bytes(void);
+/* Guest sample clock, shared with the frontend producer and serialized. */
+extern uint64_t spu_sample_last_cycle;
+extern uint64_t spu_sample_cycle_carry;
 void     spu_snapshot_write(uint8_t *p);
 int      spu_snapshot_read(const uint8_t *p, uint32_t len);
 uint8_t *spu_get_ram_ptr(void);

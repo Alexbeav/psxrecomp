@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
     check(digest == source_tas_stateio_ram_digest(ram, sizeof ram), "digest stable");
     check(digest != source_tas_stateio_ram_digest(ram, sizeof ram - 1), "digest length sensitive");
 
-    m.frame = 300u; m.cycle = UINT64_C(262837430); m.ram_digest = digest;
+    m.frame = 300u; m.input_consumed = 301u; m.cycle = UINT64_C(262837430); m.ram_digest = digest;
     m.bios_checksum = 0x11223344u; m.entry_pc = 0x800603F8u; m.state_bytes = 3551234ull;
     snprintf(m.config_digest, sizeof m.config_digest, "%s", CFG);
     snprintf(m.exe_sha256, sizeof m.exe_sha256, "%s", EXE);

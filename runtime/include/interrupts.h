@@ -107,6 +107,7 @@ void     interrupts_timing_wire_write(uint8_t *out);
 int      interrupts_timing_wire_read(const uint8_t *in, uint32_t len);
 /* E survey: is the source-IRQ slot holding a live (non-zero) context? */
 int      interrupts_source_irq_slot_live(void);
+int      interrupts_timing_perturb(const char *field);
 /* E survey: is a scheduler deferral switch armed at this boundary? */
 int      psx_defer_switch_pending(void);
 /* E negative control: corrupt one restored raster field so the ladder

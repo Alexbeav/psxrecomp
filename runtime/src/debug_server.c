@@ -422,6 +422,7 @@ int debug_server_preload_input_route(const char *path)
 /* TAS checkpoint resume: reposition the preloaded file route to a saved return.
  * Walks the run-length steps so the next applied frame is exactly `frame`
  * (frames already consumed). Returns 0 if the route cannot be seeked. */
+uint32_t debug_server_input_route_consumed(void) { return s_input_route_consumed; }
 int debug_server_seek_input_route(uint32_t frame)
 {
     uint32_t i = 0, remaining = frame;

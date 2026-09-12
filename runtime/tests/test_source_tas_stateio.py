@@ -1,5 +1,6 @@
 """TAS checkpoint manifest + identity gate, compiled at O0/O2 with -Werror."""
 import argparse
+import json
 import os
 import subprocess
 import tempfile
@@ -26,6 +27,9 @@ def main():
             assert result.returncode == 0, (opt, result.returncode,
                                             result.stdout, result.stderr)
             assert (workdir / 'tas-state-000300.pst.json').exists(), opt
+            manifest=json.loads((workdir/'tas-state-000300.pst.json').read_text())
+            assert manifest['input_consumed']==301 and manifest['frame']==300
+            assert Path(manifest['state_path'])==workdir/'tas-state-000300.pst'
     print('PASS: TAS checkpoint manifest round-trip and identity gate at O0/O2')
 
 if __name__ == '__main__':

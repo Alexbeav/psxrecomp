@@ -177,6 +177,11 @@ void timers_set_snapshot(const uint16_t counter[3], const uint32_t mode[3],
 #define TIMERS_SOURCE_WIRE_BYTES 60u
 uint32_t timers_source_wire_bytes(void) { return TIMERS_SOURCE_WIRE_BYTES; }
 int timers_source_active(void) { return source_timer1_enabled || source_timer2_enabled; }
+int timers_source_perturb(const char *field) {
+    if (!field || strcmp(field,"timer2_counter")) return 0;
+    source_timer2.counter ^= 1u;
+    return 1;
+}
 void timers_source_wire_write(uint8_t *out) {
     PstW w; pst_w_init(&w, out, TIMERS_SOURCE_WIRE_BYTES);
     pst_w_u32(&w, source_timer1.mode);      pst_w_u32(&w, source_timer1.counter);

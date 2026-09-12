@@ -41,6 +41,7 @@
 #include <string.h>
 #include "source_gpu_runtime.h"
 #include "source_cpu_block_bound.h"
+#include "pst_wire.h"
 
 uint64_t g_dirty_ram_blocks_run = 0;
 uint64_t g_dirty_ram_insns_run  = 0;
@@ -358,6 +359,41 @@ static uint32_t s_ld_pend_rt    = 0;
 static uint32_t s_ld_pend_val   = 0;
 static uint32_t s_ld_pend_age   = 0;  /* 0 = armed; 1 = delay slot has run */
 static int      s_ld_pend_armed = 0;
+
+static struct { uint32_t active,pc,slot,target,taken; } s_checkpoint;
+static int s_checkpoint_resume;
+void dirty_ram_checkpoint_enter(uint32_t pc,int slot,uint32_t target,int taken) {
+    s_checkpoint.active=1;s_checkpoint.pc=pc;s_checkpoint.slot=(uint32_t)slot;
+    s_checkpoint.target=target;s_checkpoint.taken=(uint32_t)taken;
+}
+void dirty_ram_checkpoint_leave(void) { memset(&s_checkpoint,0,sizeof s_checkpoint); }
+uint32_t dirty_ram_checkpoint_pc(uint32_t fallback) {
+    return s_checkpoint.active ? s_checkpoint.pc : fallback;
+}
+void dirty_ram_checkpoint_write(uint8_t *out) {
+    PstW w; pst_w_init(&w,out,DIRTY_RAM_CHECKPOINT_BYTES);
+    pst_w_u32(&w,s_checkpoint.active); pst_w_u32(&w,s_checkpoint.pc);
+    pst_w_u32(&w,s_checkpoint.slot); pst_w_u32(&w,s_checkpoint.target);
+    pst_w_u32(&w,s_checkpoint.taken);
+    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_rt : 0u);
+    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_val : 0u);
+    pst_w_u32(&w,s_ld_pend_armed ? s_ld_pend_age : 0u);
+    pst_w_u32(&w,s_ld_pend_armed ? 1u : 0u);
+}
+int dirty_ram_checkpoint_read(const uint8_t *in,uint32_t len) {
+    PstR r; uint32_t v[9];
+    if(len!=DIRTY_RAM_CHECKPOINT_BYTES)return 0;
+    pst_r_init(&r,in,len);
+    for(unsigned i=0;i<9;i++)if(!pst_r_u32(&r,&v[i]))return 0;
+    if(v[0]>1u || v[2]>1u || v[4]>1u || v[5]>31u || v[7]>1u || v[8]>1u ||
+       (v[1]&3u) || (v[3]&3u) || (!v[0] && (v[1]||v[2]||v[3]||v[4])))return 0;
+    s_checkpoint.active=v[0];s_checkpoint.pc=v[1];s_checkpoint.slot=v[2];
+    s_checkpoint.target=v[3];s_checkpoint.taken=v[4];
+    s_ld_pend_rt=v[5];s_ld_pend_val=v[6];s_ld_pend_age=v[7];s_ld_pend_armed=(int)v[8];
+    s_checkpoint_resume=(int)v[0];
+    return 1;
+}
+int dirty_ram_checkpoint_resume_pending(void) { return s_checkpoint_resume; }
 
 /* Retire a deferred load writeback. Call wherever the interpreter stops
  * stepping instructions (hand-off to compiled code, exception entry), since
@@ -1547,7 +1583,9 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
          * interval preempts this opcode, before its load cancellation or
          * register effects. The IRQ path owns its fetch and ordinary step.
          * Source COP2 bypasses the halt/interrupt opcode table. */
+        dirty_ram_checkpoint_enter(pc,in_slot,target,taken);
         psx_cpu_step_boundary(cpu,pc);
+        dirty_ram_checkpoint_leave();
         if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu)) {
             extern uint64_t g_irq_deliver_count;
             uint64_t before=g_irq_deliver_count;
@@ -2756,6 +2794,16 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
 #endif
     g_slice_exit_want = 0;
     int irq_taken = 0;   /* default profile limits takes; also requests safe exit */
+    if(s_checkpoint_resume) {
+        uint32_t slot=s_checkpoint.slot,target=s_checkpoint.target,taken=s_checkpoint.taken;
+        s_checkpoint_resume=0;
+        memset(&s_checkpoint,0,sizeof s_checkpoint);
+        if(slot) {
+            if(exec_delay_slot(cpu,pc,target,(int)taken))pc=cpu->pc;
+            else pc=taken ? target : pc+4u;
+            cpu->pc=pc;
+        }
+    }
     enum { MAX_PRECISE_INSNS = 200000 };
     /* A host instruction budget cannot retire a pending guest load or create a
      * generated entry. In the source profile retain ownership until the safe
@@ -2924,6 +2972,10 @@ static void psx_run_precise(CPUState *cpu, uint32_t bcyc, int deadline_entry) {
  * inline which returns 0 when this is 0 — no out-of-line call. Opt in with
  * PSX_PRECISE_SLICE=1 (same binary A/B). */
 int g_psx_precise_slice = 0;
+
+void dirty_ram_checkpoint_resume(CPUState *cpu) {
+    if(s_checkpoint_resume)psx_run_precise(cpu,1u,1);
+}
 
 void psx_precise_slice_init_from_env(void) {
     const char *e = getenv("PSX_PRECISE_SLICE");

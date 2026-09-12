@@ -835,6 +835,14 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_boot_state_section_wire.py"
                 --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_cpu_state_wire
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cpu_state_wire.py"
+                --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_gpu_service_path
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_service_path.py"
+                --cc ${CMAKE_C_COMPILER})
         # The Python driver compiles test_boot_state_replace.c with its own TU.
         add_test(NAME tas_state_replace
             COMMAND ${Python3_EXECUTABLE}

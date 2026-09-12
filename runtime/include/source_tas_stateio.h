@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PSX_TAS_STATEIO_SCHEMA "psx-tas-stateio-v1"
+#define PSX_TAS_STATEIO_SCHEMA "psx-tas-stateio-v2"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */
@@ -41,6 +41,7 @@ uint8_t *memory_get_ram_ptr(void);
 
 typedef struct TasStateManifest {
     unsigned           frame;
+    unsigned           input_consumed;
     uint64_t           cycle;
     uint64_t           ram_digest;
     uint32_t           bios_checksum;
@@ -138,13 +139,22 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                                              const char *state_path, const char *state_sha256) {
     FILE *f;
     int ok;
+    char escaped[24577]; size_t used=0;
     if (!path || !m || !state_path) return 0;
+    if (strlen(state_path)>4096u) return 0;
+    for (const unsigned char *p=(const unsigned char *)state_path;*p;p++) {
+        if (*p=='"' || *p=='\\') { escaped[used++]='\\'; escaped[used++]=(char)*p; }
+        else if (*p<32u) { snprintf(escaped+used,7,"\\u%04x",*p); used+=6; }
+        else escaped[used++]=(char)*p;
+    }
+    escaped[used]=0;
     f = fopen(path, "wbx");
     if (!f) return 0;
     ok = fprintf(f,
                  "{\n"
                  "  \"schema\": \"%s\",\n"
                  "  \"frame\": %u,\n"
+                 "  \"input_consumed\": %u,\n"
                  "  \"cycle\": %llu,\n"
                  "  \"ram_digest\": \"%016llX\",\n"
                  "  \"bios_checksum\": %u,\n"
@@ -156,9 +166,9 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "  \"exe_sha256\": \"%s\",\n"
                  "  \"route_sha256\": \"%s\"\n"
                  "}\n",
-                 PSX_TAS_STATEIO_SCHEMA, m->frame, (unsigned long long)m->cycle,
+                 PSX_TAS_STATEIO_SCHEMA, m->frame, m->input_consumed, (unsigned long long)m->cycle,
                  (unsigned long long)m->ram_digest, m->bios_checksum, m->entry_pc,
-                 state_path, state_sha256 ? state_sha256 : "", m->state_bytes,
+                 escaped, state_sha256 ? state_sha256 : "", m->state_bytes,
                  m->config_digest, m->exe_sha256, m->route_sha256) > 0;
     if (fclose(f) != 0) ok = 0;
     return ok;
@@ -183,7 +193,26 @@ static inline int source_tas_stateio_find_field(const char *text, const char *ke
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') ++p;
     if (*p == '"') {
         ++p;
-        while (*p && *p != '"' && *p != '\n' && n + 1 < cap) out[n++] = *p++;
+        while (*p && *p != '"' && *p != '\n' && n + 1 < cap) {
+            if (*p=='\\') {
+                ++p;
+                if (*p=='u') {
+                    unsigned value=0;
+                    for(unsigned i=1;i<=4;i++) {
+                        unsigned char c=(unsigned char)p[i];
+                        if (!c) return 0;
+                        unsigned digit=c>='0'&&c<='9'?(unsigned)(c-'0'):c>='a'&&c<='f'?c-'a'+10u:c>='A'&&c<='F'?c-'A'+10u:16u;
+                        if(digit>15u)return 0;
+                        value=value*16u+digit;
+                    }
+                    if (!value || value>127u) return 0;
+                    out[n++]=(char)value;p+=5;continue;
+                }
+                if (*p!='\\' && *p!='"' && *p!='/')return 0;
+            }
+            out[n++]=*p++;
+        }
+        if (*p!='"')return 0;
     } else {
         while (*p && *p != ',' && *p != '\n' && *p != '}' && *p != ' ' && n + 1 < cap)
             out[n++] = *p++;
@@ -227,6 +256,8 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
     if (strcmp(schema, PSX_TAS_STATEIO_SCHEMA) != 0) return 0;
     if (!source_tas_stateio_parse_u64(text, "frame", &v) || v > 0xFFFFFFFFull) return 0;
     out->frame = (unsigned)v;
+    if (!source_tas_stateio_parse_u64(text, "input_consumed", &v) || v > 0xFFFFFFFFull) return 0;
+    out->input_consumed = (unsigned)v;
     if (!source_tas_stateio_parse_u64(text, "cycle", &out->cycle)) return 0;
     if (!source_tas_stateio_parse_digest(text, &out->ram_digest)) return 0;
     if (!source_tas_stateio_parse_u64(text, "bios_checksum", &v) || v > 0xFFFFFFFFull) return 0;

@@ -155,6 +155,8 @@ typedef struct {
 } SpuVoice;
 
 static SpuVoice voices[SPU_VOICE_COUNT];
+uint64_t spu_sample_last_cycle;
+uint64_t spu_sample_cycle_carry;
 
 /* The retained source profile decodes one four-sample word when fewer than
  * eleven samples remain. Its END/loop/envelope readbacks belong to that
@@ -1095,6 +1097,7 @@ static void source_apply_keys(int enabled) {
 }
 
 void spu_init(void) {
+    spu_sample_last_cycle = spu_sample_cycle_carry = 0;
     const char *model = getenv("PSX_GPU_DMA_MODEL");
     source_key_timing = model &&
         (!strcmp(model, "octoshock-2.2.2-bounded-linked-list") ||
@@ -1918,7 +1921,7 @@ static int spu_r_voice(PstR *r, int idx) {
 uint32_t spu_snapshot_bytes(void) {
     return (uint32_t)(SPU_REG_COUNT * 2u) +
            (SPU_VOICE_COUNT * SPU_VOICE_WIRE_BYTES) + SPU_SNAPSHOT_TAIL_BYTES +
-           (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u);
+           (source_key_timing ? SOURCE_SPU_TAIL_BYTES : 0u) + 16u;
 }
 
 void spu_snapshot_write(uint8_t *p) {
@@ -1961,6 +1964,8 @@ void spu_snapshot_write(uint8_t *p) {
             pst_w_u8(&w, d->filter); pst_w_u8(&w, d->ignore_loop);
         }
     }
+    pst_w_u64(&w,spu_sample_last_cycle);
+    pst_w_u64(&w,spu_sample_cycle_carry);
 }
 
 int spu_snapshot_read(const uint8_t *p, uint32_t len) {
@@ -2006,6 +2011,8 @@ int spu_snapshot_read(const uint8_t *p, uint32_t len) {
                 !pst_r_u8(&r, &d->ignore_loop) || d->ignore_loop > 1) return 0;
         }
     }
+    if (!pst_r_u64(&r,&spu_sample_last_cycle) ||
+        !pst_r_u64(&r,&spu_sample_cycle_carry) || spu_sample_cycle_carry>=768u) return 0;
     return 1;
 }
 uint8_t*  spu_get_ram_ptr(void){ return spu_ram; }

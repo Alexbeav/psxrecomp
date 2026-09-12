@@ -47,6 +47,7 @@ static uint32_t capture_every = 300;
 static psx_sha256_ctx input_hash;
 static psx_sha256_ctx delivered_hash;
 static uint32_t delivered_inputs;
+static uint32_t resumed_inputs;
 static uint16_t pending_word;
 static int pending;
 static int first_non_neutral_seen;
@@ -134,6 +135,7 @@ static void close_observation_json(FILE *f) {
                    "\"expected_protocol_sha256\":\"%s\",\"original_controller_sha256\":\"%s\","
                    "\"guest_analog_mode\":%d", expected, supplied, last_protocol_mode);
     }
+    if (resumed_inputs) fprintf(f,",\"resumed_inputs\":%u",resumed_inputs);
     if (fputs("}\n", f) < 0 || ferror(f)) fail("observation JSON write");
 }
 FILE *input_route_observer_output(const char *name) { return open_output(name); }
@@ -301,6 +303,7 @@ void input_route_observer_set_end(uint32_t total) {
 void input_route_observer_resume(uint32_t consumed) {
     if (!log_file) return;
     delivered_inputs = consumed;
+    resumed_inputs = consumed;
     pending = 0;
 }
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {

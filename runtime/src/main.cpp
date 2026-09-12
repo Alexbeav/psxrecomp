@@ -11,6 +11,8 @@
 #include "device_trace.h"    /* general two-process device-event cycle ring */
 #include "psx_interpreter.h"
 #include "cdrom.h"
+#include "dma.h"
+#include "timers.h"
 #include "fntrace.h"
 #include "text_xlate.h"
 #include "boot_state.h"
@@ -528,7 +530,7 @@ static int      s_fmv_skip_hold = 0;
 static int      s_d24_prev_mdec = 0;
 static int      s_d24_saw_gap = 0;
 static int      s_d24_cutover_blank = 0;
-/* Savestate restore → audio pump: re-anchor last_cycles (declared early so
+/* Savestate restore → audio pump: clear host output (declared early so
  * psx_frontend_on_savestate_loaded can set it). */
 static int      g_audio_cycle_resync = 0;
 
@@ -3052,18 +3054,16 @@ static void sdl_audio_pump(bool discard_output = false) {
      * produced vs 44100/s consumed = recurring ring underruns no +/-0.5%
      * DRC trim could absorb during jitter spikes). */
     extern uint64_t psx_cycle_count;
-    static uint64_t last_cycles = 0;
-    static uint64_t cycle_carry = 0;
+    uint64_t &last_cycles = spu_sample_last_cycle;
+    uint64_t &cycle_carry = spu_sample_cycle_carry;
     const uint64_t now_cycles = psx_cycle_count;
     if (g_audio_cycle_resync) {
-        last_cycles = now_cycles;
-        cycle_carry = 0;
+        /* Restore already restored the guest sample clock. Clear only output. */
         g_audio_cycle_resync = 0;
         if (legacy && sdl_audio_device)
             psx_sdl_audio_clear(sdl_audio_device);
         else
             g_audio_unmute_resync = 1; /* skip mute-drain underrun reports */
-        return;
     }
     if (last_cycles == 0) last_cycles = now_cycles;
     uint64_t delta = (now_cycles - last_cycles) + cycle_carry;
@@ -14363,8 +14363,8 @@ session_reboot:
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: %s\n", reason);
             return 2;
         }
-        if (!debug_server_seek_input_route(m.frame)) {
-            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: route cannot seek to return %u\n", m.frame);
+        if (!debug_server_seek_input_route(m.input_consumed)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: route cannot seek to input %u\n", m.input_consumed);
             return 2;
         }
         if (!source_gpu_runtime_set_frame_returns(m.frame)) {
@@ -14383,7 +14383,9 @@ session_reboot:
          * ladder's from-scratch-vs-resumed comparison is observed FAILING.
          * A gate never seen to fail is not evidence. Diagnostic only. */
         if (const char *pf = std::getenv("PSX_TAS_PERTURB_RESTORE")) {
-            if (!interrupts_raster_perturb(pf) && !source_gpu_service_perturb(pf)) {
+            if (!interrupts_raster_perturb(pf) && !source_gpu_service_perturb(pf) &&
+                !dma_src_perturb(pf) && !timers_source_perturb(pf) &&
+                !interrupts_timing_perturb(pf)) {
                 std::fprintf(stderr, "psxrecomp: [tas-stateio] negative control: "
                                      "unknown field '%s'\n", pf);
                 return 2;

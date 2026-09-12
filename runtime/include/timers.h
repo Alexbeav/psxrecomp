@@ -14,6 +14,7 @@ void timers_init(void);
  * targets source_timer1/source_timer2, not the normal timer array). */
 uint32_t timers_source_wire_bytes(void);
 int timers_source_active(void);
+int timers_source_perturb(const char *field);
 void timers_source_wire_write(uint8_t *out);
 int timers_source_wire_read(const uint8_t *in, uint32_t len);
 int timers_source_raster_enabled(void);

@@ -24,7 +24,7 @@ def page_hash(data):
     return f'{h:016X}'
 
 
-def read_pages(path):
+def read_pages(path, first_frame=1):
     with path.open(encoding='utf-8-sig', newline='') as stream:
         if stream.readline().rstrip('\r\n') != MAGIC:
             raise ValueError(f'unsupported RAM index: {path}')
@@ -33,7 +33,7 @@ def read_pages(path):
         if next(rows, None) != header:
             raise ValueError(f'invalid page columns: {path}')
         previous = 0
-        for expected_frame, row in enumerate(rows, 1):
+        for expected_frame, row in enumerate(rows, first_frame):
             if len(row) != len(header) or int(row[0]) != expected_frame:
                 raise ValueError(f'incomplete or discontinuous RAM index: {path}, frame {expected_frame}')
             cycle = int(row[1])
@@ -43,10 +43,10 @@ def read_pages(path):
             yield expected_frame, cycle, row[2:]
 
 
-def validate_capture(directory, expected_frames, snapshot_frames):
+def validate_capture(directory, expected_frames, snapshot_frames, first_frame=1):
     """Fail if an enabled observer was missing, truncated, or missed a snapshot."""
-    count = sum(1 for _ in read_pages(directory / 'ram-pages.tsv'))
-    if count != expected_frames:
+    count = sum(1 for _ in read_pages(directory / 'ram-pages.tsv', first_frame))
+    if count != expected_frames-first_frame+1:
         raise ValueError(f'RAM capture has {count} frames, expected {expected_frames}')
     for frame in snapshot_frames:
         path = directory / f'ram-frame-{frame:06d}.bin'

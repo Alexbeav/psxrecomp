@@ -88,6 +88,7 @@ void debug_server_init(int port);
 int debug_server_preload_input_route(const char *path);
 /* TAS checkpoint resume: seek the preloaded route to a consumed-frame count. */
 int debug_server_seek_input_route(uint32_t frame);
+uint32_t debug_server_input_route_consumed(void);
 /* Exact PSXRTI2 delivery bypasses interactive folding/type policy. */
 int debug_server_apply_dualshock_input(int buttons);
 

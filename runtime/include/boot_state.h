@@ -42,14 +42,16 @@ extern "C" {
  * v5 = v4 + CD-ROM Sub-Q replacement state;
  * v6 = v5 + deterministic scheduler continuation state;
  * v7 = v6 + comparison-profile state: raster clocks (3 instances), source GPU
- *      service, and source timer state. */
-#define BOOT_STATE_VERSION 7u
+ *      service, and source timer state;
+ * v8 = v7 + CPU timing/instruction continuation, SPU sample clock and exact
+ *      MDEC timestamp. */
+#define BOOT_STATE_VERSION 8u
 /* The version field is the ONLY guard against a blob written by an older
  * RUNTIME: codegen_hash / abi_tag / codegen_ver are keyed to codegen and ABI,
  * so a runtime-only change (new sections, changed snapshot writers) leaves all
  * three unchanged. A pin bump without a code regen would otherwise hand an old
- * runtime's blob to a new loader. v7 therefore rejects every v6 state. */
-#define BOOT_STATE_VERSION_MIN_READ 7u
+ * runtime's blob to a new loader. v8 therefore rejects every earlier state. */
+#define BOOT_STATE_VERSION_MIN_READ 8u
 /* Section pad bit0: payload is u32 LE uncompressed_len + zlib deflate bytes. */
 #define BOOT_STATE_SEC_ZLIB 1u
 
@@ -86,7 +88,8 @@ typedef struct {
  * never allowed) -> normal boot + recapture.
  */
 enum {
-    BS_SEC_CPU    = 0x01,  /* CPUState: gpr/pc/hi/lo/cop0/gte_data/gte_ctrl       */
+    BS_SEC_CPU_EXEC = 0x17, /* interpreter instruction/branch/load continuation */
+    BS_SEC_CPU    = 0x01,  /* CPU registers, completion deadlines and load timing */
     BS_SEC_RAM    = 0x02,  /* 2 MB main RAM                                       */
     BS_SEC_SPAD   = 0x03,  /* 1 KB scratchpad                                     */
     BS_SEC_IRQ    = 0x04,  /* i_stat / i_mask / cycles_since_vblank (12B; 8B ok)  */

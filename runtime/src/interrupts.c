@@ -940,6 +940,11 @@ _Static_assert(sizeof(InputRouteFieldClock) == 16,
 int interrupts_source_irq_slot_live(void) {
     return source_irq_slot.pc != 0u || source_irq_slot.target != 0u || source_irq_slot.cause != 0u;
 }
+int interrupts_timing_perturb(const char *field) {
+    if (!field || strcmp(field,"irq_cooldown")) return 0;
+    post_exception_cooldown_until = psx_get_cycle_count() + 1000000u;
+    return 1;
+}
 
 int psx_defer_switch_pending(void) { return s_defer_switch_pending; }
 
@@ -1813,7 +1818,15 @@ irq_deliver_eval:
                 if (memory_peek_instruction_word(fetch_pc, &instruction))
                     source_irq_cause_ce = (instruction << 2) & 0x30000000u;
             }
+            /* This pre-fetch callback can save a TAS checkpoint while IRQ
+             * entry is pending, including a preempted branch delay slot. */
+            extern void dirty_ram_checkpoint_enter(uint32_t,int,uint32_t,int);
+            extern void dirty_ram_checkpoint_leave(void);
+            dirty_ram_checkpoint_enter(fetch_pc, source_irq_slot.pc != 0u,
+                source_irq_slot.pc ? source_irq_slot.target : 0u,
+                source_irq_slot.pc && (source_irq_slot.cause & 0x40000000u));
             psx_icache_fetch(cpu, fetch_pc);
+            dirty_ram_checkpoint_leave();
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             /* Interrupt dispatch has no dependencies on the preempted opcode.
              * Its ordinary step still consumes base/load-absorb timing. */

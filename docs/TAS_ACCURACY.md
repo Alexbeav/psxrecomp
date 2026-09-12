@@ -3,6 +3,8 @@
 The `tasreplays` branch integrates the source and code-generation corrections
 qualified during the September2026 Tekken 3 TAS campaign. The reproducible
 entry point is [tools/tasreplays](../tools/tasreplays/README.md).
+Checkpoint capture, resume validation and format compatibility are documented
+in [TAS checkpoint diagnostics](TAS_CHECKPOINTS.md).
 It builds on `f23c5ba1a220fe1ca8818cc48c026d6c2f7f2c64`, the base used for the
 measured campaign, with the final native integration's overlay ABI22.
 

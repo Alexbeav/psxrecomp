@@ -26,7 +26,7 @@ def write_json(path, value):
         stream.write("\n")
 
 
-def route_identity(path):
+def route_identity(path, start=0):
     if path.stat().st_size > 24 + 12 * 1000000:
         raise ValueError('route exceeds frame capacity')
     data = path.read_bytes()
@@ -46,10 +46,10 @@ def route_identity(path):
             steps += row != previous; previous = row
             if steps > 4096:
                 raise ValueError('DualShock step capacity exceeded')
-            original.update(row)
+            if index >= start: original.update(row)
             # Nyma expands axes to u16 with value<<8; the device rescales to u8.
             axes = [((value << 8)*255+32767)//65535 for value in (ly,lx,ry,rx)]
-            protocol.update(struct.pack('<H5B', buttons, *axes, analog))
+            if index >= start: protocol.update(struct.pack('<H5B', buttons, *axes, analog))
         return {'format':'PSXRTI2', 'frames':count, 'steps':steps,
                 'sha256':hashlib.sha256(data).hexdigest(),
                 'original_controller_sha256':original.hexdigest(),
@@ -63,7 +63,7 @@ def route_identity(path):
         sequence, word, zero = struct.unpack_from("<IHH", data, 24 + 8 * index)
         if sequence != index + 1 or zero:
             raise ValueError("route sequence or reserved bytes")
-        words.extend(struct.pack("<H", word))
+        if index >= start: words.extend(struct.pack("<H", word))
     return {"frames": count, "sha256": digest(path),
             "words_sha256": hashlib.sha256(words).hexdigest()}
 
@@ -252,6 +252,17 @@ def main():
     if clock_tape:
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
     identity = route_identity(paths["route"])
+    resume_frame = resume_inputs = 0
+    if args.resume_from is not None:
+        resume_manifest = json.loads(Path(str(args.resume_from)+'.json').read_text())
+        resume_frame = resume_manifest['frame']
+        resume_inputs = resume_manifest['input_consumed']
+        if (resume_manifest.get('schema') != 'psx-tas-stateio-v2' or
+                not 0 < resume_frame < identity['frames'] or
+                not 0 < resume_inputs < identity['frames']):
+            raise ValueError('invalid checkpoint resume interval')
+    completion_identity = route_identity(paths['route'], resume_inputs)
+
     dualshock = identity.get('format') == 'PSXRTI2'
     if dualshock and (args.update_profile or args.pad_ack_model == 'octoshock-2.2.2-digital'):
         raise ValueError('DualShock does not admit retiming or the digital Octoshock ACK model')
@@ -516,7 +527,8 @@ p2_mode = "digital"
     if (run / "complete.json").exists():
         complete = json.loads((run / "complete.json").read_text())
     qualified = (budget['stop_reason'] is None and code == 0 and
-                 playback_identity_matches(complete, identity, args.neutral_tail))
+                 playback_identity_matches(complete, completion_identity, args.neutral_tail) and
+                 complete.get("resumed_inputs", 0) == resume_inputs)
     if initial_card or dualshock:
         initial_path = run / 'initial-cards.json'
         actual_cards = json.loads(initial_path.read_text()) if initial_path.exists() else None
@@ -556,7 +568,7 @@ p2_mode = "digital"
     if args.cpu_return_probe:
         from observation_evidence import validate_cpu_capture
         try:
-            cpu_validation=validate_cpu_capture(run,ram_returns)
+            cpu_validation=validate_cpu_capture(run,ram_returns,first_frame=resume_frame+1)
         except (ValueError,OSError) as error:
             cpu_validation={'valid':False,'error':str(error)}
         write_json(run/'cpu-capture-validation.json',cpu_validation)
@@ -565,13 +577,14 @@ p2_mode = "digital"
         from compare_ram_pages import validate_capture
         try:
             # The completion hook exits before the terminal return observer.
-            ram_validation = validate_capture(run, identity['frames'] + args.neutral_tail - 1, args.ram_snapshot_frame)
+            ram_validation = validate_capture(run, identity['frames'] + args.neutral_tail - 1, args.ram_snapshot_frame, first_frame=resume_frame+1)
         except (ValueError, OSError, StopIteration) as error:
             ram_validation = {'valid': False, 'error': str(error)}
         write_json(run / 'ram-capture-validation.json', ram_validation)
         qualified = qualified and ram_validation['valid']
     print(json.dumps({"input_playback_complete": qualified, "exit_code": code,
-                      "gameplay_equivalence": "unclassified"}), flush=True)
+                      "gameplay_equivalence": "unclassified",
+                      "resumed_inputs": resume_inputs, "observed_from_return": resume_frame+1}), flush=True)
     return 0 if qualified else 1
 
 

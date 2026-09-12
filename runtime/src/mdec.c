@@ -1128,7 +1128,7 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 }
 
 /* ---- boot_state snapshot (variable-length input/output FIFOs) ------------ */
-#define MDEC_SNAP_VER 1u
+#define MDEC_SNAP_VER 2u
 #define MDEC_SNAP_INPUT_MAX  (4u * 1024u * 1024u) /* halfwords */
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
@@ -1155,7 +1155,6 @@ uint32_t mdec_snapshot_bytes(void) {
 void mdec_snapshot_write(uint8_t *p) {
     PstW w;
     uint32_t n = mdec_snapshot_bytes();
-    uint64_t age;
     if (!p || n == 0) return;
     pst_w_init(&w, p, n);
     (void)pst_w_u32(&w, MDEC_SNAP_VER);
@@ -1187,12 +1186,8 @@ void mdec_snapshot_write(uint8_t *p) {
         (void)pst_w_i16(&w, mdec.scale[i]);
     (void)pst_w_u32(&w, mdec.input_count);
     (void)pst_w_u32(&w, mdec.output_size);
-    /* Guest-cycle age (not host s_frame_count) — netplay aux digests this blob. */
-    if (psx_cycle_count >= mdec_last_color_decode_cycle)
-        age = psx_cycle_count - mdec_last_color_decode_cycle;
-    else
-        age = 1000ull;
-    (void)pst_w_u64(&w, age);
+    /* Preserve the absolute watermark, including the never-decoded sentinel. */
+    (void)pst_w_u64(&w, mdec_last_color_decode_cycle);
     for (uint32_t i = 0; i < mdec.input_count; i++)
         (void)pst_w_u16(&w, mdec.input ? mdec.input[i] : 0u);
     if (mdec.output_size && mdec.output)
@@ -1203,7 +1198,7 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     if(source_mdec_enabled)return 0;
     PstR r;
     uint32_t ver = 0, input_count = 0, output_size = 0, reserved;
-    uint64_t age = 1000ull;
+    uint64_t last_decode_cycle = 0, age;
     int16_t s16;
     if (!p || len < mdec_snap_fixed_bytes()) return 0;
     pst_r_init(&r, p, len);
@@ -1240,7 +1235,7 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
         mdec.scale[i] = s16;
     }
     if (!pst_r_u32(&r, &input_count) || !pst_r_u32(&r, &output_size) ||
-        !pst_r_u64(&r, &age))
+        !pst_r_u64(&r, &last_decode_cycle))
         return 0;
     if (input_count > MDEC_SNAP_INPUT_MAX || output_size > MDEC_SNAP_OUTPUT_MAX)
         return 0;
@@ -1259,13 +1254,8 @@ int mdec_snapshot_read(const uint8_t *p, uint32_t len) {
     }
     if (output_size && !pst_r_bytes(&r, mdec.output, output_size))
         return 0;
-    /* Age is guest cycles since last colour decode (SNAP_VER=1 payload). */
-    if (age > (1ull << 40))
-        age = (1ull << 40);
-    if (age >= psx_cycle_count)
-        mdec_last_color_decode_cycle = 0;
-    else
-        mdec_last_color_decode_cycle = psx_cycle_count - age;
+    mdec_last_color_decode_cycle = last_decode_cycle;
+    age = psx_cycle_count >= last_decode_cycle ? psx_cycle_count-last_decode_cycle : UINT64_MAX;
     /* Refresh host-frame hysteresis for local FMV policy only (~1 frame ≈
      * 338688 cycles @ NTSC). Cap so recently_active stays meaningful. */
     {

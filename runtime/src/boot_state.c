@@ -14,6 +14,8 @@
 #include "dma.h"                /* v7: BS_SEC_DMA_SRC */
 #include "input_route_raster_clock_wire.h"
 #include "pst_wire.h"
+#include "cpu_state_wire.h"
+#include "dirty_ram_interp.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,8 +86,8 @@ extern uint32_t mdec_snapshot_bytes(void);
 extern void     mdec_snapshot_write(uint8_t* p);
 extern int      mdec_snapshot_read(const uint8_t* p, uint32_t len);
 
-/* CPU regs wire: 32+3+32+32+32 LE u32 = 131 * 4 = 524 bytes (no padding). */
-#define CPU_REGS_WIRE_BYTES (524u)
+/* CPU wire: 524 register bytes + 56 timing bytes, without padding/pointers. */
+#define CPU_REGS_WIRE_BYTES CPU_STATE_WIRE_BYTES
 /* Timer wire: 3*u16 + 3*u32 + 3*u16 + 3*i32 + 3*u32 = 48 bytes (no pad holes). */
 #define TIMER_REGS_WIRE_BYTES (48u)
 
@@ -292,20 +294,10 @@ static int write_module_section(BsOut* o, uint32_t tag,
 
 static int write_cpu_section(BsOut* o, const CPUState* cpu) {
     uint8_t buf[CPU_REGS_WIRE_BYTES];
-    PstW w;
-    pst_w_init(&w, buf, sizeof buf);
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gpr[i])) return 0;
-    if (!pst_w_u32(&w, cpu->pc) || !pst_w_u32(&w, cpu->hi) || !pst_w_u32(&w, cpu->lo))
-        return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->cop0[i])) return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gte_data[i])) return 0;
-    for (int i = 0; i < 32; i++)
-        if (!pst_w_u32(&w, cpu->gte_ctrl[i])) return 0;
-    if (w.written != CPU_REGS_WIRE_BYTES) return 0;
-    return write_section(o, BS_SEC_CPU, buf, CPU_REGS_WIRE_BYTES);
+    CPUState saved = *cpu;
+    saved.pc = dirty_ram_checkpoint_pc(cpu->pc);
+    return cpu_state_wire_write(buf, &saved) &&
+           write_section(o, BS_SEC_CPU, buf, sizeof buf);
 }
 
 static int write_timer_section(BsOut* o) {
@@ -424,11 +416,16 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
     h.codegen_hash  = (uint32_t)PSX_OVERLAY_CODEGEN_HASH;
     h.abi_tag       = (int32_t)PSX_OVERLAY_ABI_TAG;
     h.codegen_ver   = (uint32_t)PSX_OVERLAY_CODEGEN_VER;
-    h.section_count = 18u + boot_state_extra_sections();
+    h.section_count = 19u + boot_state_extra_sections();
 
     ok = write_header_le(o, &h);
 
     if (ok) ok = write_cpu_section(o, cpu);
+    if (ok) {
+        uint8_t exec[DIRTY_RAM_CHECKPOINT_BYTES];
+        dirty_ram_checkpoint_write(exec);
+        ok = write_section(o, BS_SEC_CPU_EXEC, exec, sizeof exec);
+    }
     if (ok) ok = write_section(o, BS_SEC_RAM,  memory_get_ram_ptr(),        RAM_SIZE);
     if (ok) {
         uint8_t sched[PSX_SCHEDULER_SNAPSHOT_BYTES];
@@ -627,27 +624,14 @@ int boot_state_save_buffer_raw(const CPUState* cpu, uint32_t bios_checksum,
 static int apply_section(uint32_t tag, const uint8_t* p, uint32_t len,
                          CPUState* cpu, uint32_t entry_pc) {
     switch (tag) {
-    case BS_SEC_CPU: {
-        PstR r;
-        if (len != CPU_REGS_WIRE_BYTES) return 0;
-        pst_r_init(&r, p, len);
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gpr[i])) return 0;
-        if (!pst_r_u32(&r, &cpu->pc) || !pst_r_u32(&r, &cpu->hi) ||
-            !pst_r_u32(&r, &cpu->lo))
-            return 0;
-        (void)entry_pc;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->cop0[i])) return 0;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gte_data[i])) return 0;
-        for (int i = 0; i < 32; i++)
-            if (!pst_r_u32(&r, &cpu->gte_ctrl[i])) return 0;
-        /* Architectural normalize + drop host-only projection provenance that
-         * belonged to the pre-load timeline (not part of the wire format). */
-        gte_canonicalize_cpu_state(cpu);
+    case BS_SEC_CPU:
+        if (!cpu_state_wire_read(p, len, cpu)) return 0;
+        /* The snapshot is an exact backing-state image, not a guest register
+         * write. Normalization would change untouched cold LZCR from 0 to 32. */
+        gte_precision_timeline_invalidate();
         return 1;
-    }
+    case BS_SEC_CPU_EXEC:
+        return dirty_ram_checkpoint_read(p, len);
     case BS_SEC_RAM:
         if (len != RAM_SIZE) return 0;
         memcpy(memory_get_ram_ptr(), p, RAM_SIZE);
@@ -1054,6 +1038,7 @@ int boot_state_peek_cpu_context(const char* path, uint32_t* out_pc,
 static int section_shape_ok(uint32_t tag, uint32_t len) {
     switch (tag) {
     case BS_SEC_CPU:        return len == CPU_REGS_WIRE_BYTES;
+    case BS_SEC_CPU_EXEC:   return len == DIRTY_RAM_CHECKPOINT_BYTES;
     case BS_SEC_RAM:        return len == RAM_SIZE;
     case BS_SEC_SCHED:      return len == PSX_SCHEDULER_SNAPSHOT_BYTES;
     case BS_SEC_SPAD:       return len == SPAD_SIZE;
@@ -1091,7 +1076,7 @@ int boot_state_load_buffer(const uint8_t* file, size_t file_len,
         (1u<<BS_SEC_TIMER)|(1u<<BS_SEC_CLOCK)|(1u<<BS_SEC_GPU)|(1u<<BS_SEC_VRAM)|
         (1u<<BS_SEC_SPU)|(1u<<BS_SEC_SPURAM)|(1u<<BS_SEC_CDROM)|(1u<<BS_SEC_DMA)|
         (1u<<BS_SEC_SIO)|(1u<<BS_SEC_MDEC)|(1u<<BS_SEC_DIRTY)|
-        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE)|(1u<<BS_SEC_IRQ_TIMING);
+        (1u<<BS_SEC_SCHED)|(1u<<BS_SEC_ICACHE)|(1u<<BS_SEC_IRQ_TIMING)|(1u<<BS_SEC_CPU_EXEC);
     uint32_t seen = 0;
     int ok = 1;
     const double t0 = boot_state_mono_ms();

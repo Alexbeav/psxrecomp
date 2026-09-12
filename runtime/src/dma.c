@@ -2058,6 +2058,11 @@ void dma_src_wire_write(uint8_t *out) {
     pst_w_u64(&w, otc_source.last_cycle);
     pst_w_u64(&w, otc_source.next_cycle);
 }
+int dma_src_perturb(const char *field) {
+    if (!field || strcmp(field,"dma_upload_cycle")) return 0;
+    gpu_upload_source.last_cycle += 1u;
+    return 1;
+}
 int dma_src_wire_read(const uint8_t *in, uint32_t len) {
     PstR r;
     if (len != DMA_SRC_WIRE_BYTES) return 0;

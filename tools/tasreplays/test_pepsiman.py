@@ -112,6 +112,10 @@ class Observations(unittest.TestCase):
         row=lambda frame:'\t'.join([str(frame),'80000000',str(frame*564480)]+['00000000']*35)+'\n'
         path.write_text(header+row(1)+row(2))
         self.assertTrue(validate_cpu_capture(self.root,2)['valid'])
+        path.write_text(header+row(301)+row(302))
+        self.assertTrue(validate_cpu_capture(self.root,302,first_frame=301)['valid'])
+        with self.assertRaises(ValueError):validate_cpu_capture(self.root,302,first_frame=300)
+        path.write_text(header+row(1)+row(2))
         with self.assertRaises(ValueError):validate_cpu_capture(self.root,3)
         path.write_text(header+row(1)+row(3))
         with self.assertRaises(ValueError):validate_cpu_capture(self.root,2)

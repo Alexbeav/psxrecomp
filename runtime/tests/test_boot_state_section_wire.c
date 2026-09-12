@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "dirty_ram_interp.h"
+#include "pst_wire.h"
 
 uint32_t source_gpu_service_wire_bytes(void);
 void     source_gpu_service_wire_write(uint8_t *out);
@@ -263,6 +265,22 @@ static void run_section(const Section *s) {
 int main(void) {
     for (unsigned i = 0; i < sizeof sections / sizeof sections[0]; ++i)
         run_section(&sections[i]);
+    {
+        uint8_t in[DIRTY_RAM_CHECKPOINT_BYTES],out[DIRTY_RAM_CHECKPOINT_BYTES];
+        const uint32_t fields[9]={1,0x80012344u,1,0x80045678u,1,17,0xa1b2c3d4u,1,1};
+        PstW w;pst_w_init(&w,in,sizeof in);
+        for(unsigned i=0;i<9;i++)check(pst_w_u32(&w,fields[i]),"CPU_EXEC sentinel encode");
+        check(dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC read");
+        check(dirty_ram_checkpoint_pc(0)==fields[1],"CPU_EXEC exact instruction PC");
+        check(dirty_ram_checkpoint_resume_pending(),"CPU_EXEC pending continuation");
+        dirty_ram_checkpoint_write(out);
+        check(!memcmp(in,out,sizeof in),"CPU_EXEC round trip with live branch and load");
+        in[20]=32;
+        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid load register");
+        in[20]=17;in[8]=2;
+        check(!dirty_ram_checkpoint_read(in,sizeof in),"CPU_EXEC rejects invalid branch state");
+        check(!dirty_ram_checkpoint_read(in,sizeof in-1),"CPU_EXEC rejects truncated continuation");
+    }
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     puts("PASS: per-field sentinel round-trip for GPU_SERVICE, DMA_SRC, "
          "IRQ_TIMING, TIMER_SRC");

@@ -595,29 +595,10 @@ void psx_cycles_resync_after_restore(CPUState *cpu) {
     s_idle_have_snap = 0;
     s_idle_progress_reg = -2;
     s_idle_last_cycle = psx_cycle_count;
-    /* GTE/muldiv completion deadlines and load-absorb give-back are host-only
-     * absolute cycle stamps (not in BS_SEC_CPU). After a warm load they still
-     * hold the pre-load live timeline; the next psx_gte_stall / muldiv_stall
-     * would then advance (live_ts - restored_cycle) in one shot — tens of
-     * millions of cycles / N nested presents with zero IRQ checks (MotK
-     * transform CTC2 path). Anchor them at the restored clock. */
-    if (cpu) {
-        cpu->gte_ts_done = psx_cycle_count;
-        cpu->muldiv_ts_done = psx_cycle_count;
-        memset(cpu->read_absorb, 0, sizeof(cpu->read_absorb));
-        cpu->read_absorb_which = 0;
-        cpu->read_fudge = 0x20u; /* no committed predecessor load */
-        cpu->ld_which_t = 0x20u; /* no pending load dest */
-        cpu->ld_absorb = 0;
-    }
-    /* Dirty-RAM interpreter load-delay writebacks live in host statics, not
-     * BS_SEC_CPU. Discard (do not flush): snap GPRs are already architectural.
-     * A stale pending v0 write from the pre-load timeline was forking MotK
-     * resim peers (countdown vs BIOS v0=1) at matched guest clocks. */
-    {
-        extern void dirty_ram_ld_delay_discard(void);
-        dirty_ram_ld_delay_discard();
-    }
+    /* v8 restores guest timing and pending load writeback from the snapshot.
+     * They belong to the restored clock and must survive host resynchronization. */
+    (void)cpu;
+    g_psx_cycle_fast_limit = 0;
     /* Entry-poll %%64 stride + 4096-insn pump gap are host-only; reset so
      * both peers take the first post-load dirty wait IRQ on the same phase. */
     {
