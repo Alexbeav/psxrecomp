@@ -185,10 +185,7 @@ bug**, not timing.
       soak PASSED (2026-07-06). Trivially revertable (4 bytes, `cdrom.c` Test 0x20).
     - **Status reg `0x1F801800` bit 2 (ADPBUSY)**: idles at 0 (was wrongly pinned
       set under an "ADPCM empty" label). psx-spx: bit2 = XA playback → 0 when idle.
-    - **GetID license region**: derived from disc serial (`SCEA`/`SCEE`/`SCEI`).
-      Disc identification reads the actual ISO9660 `SYSTEM.CNF` before falling
-      back to an early-image scan, so a late boot file is not missed or replaced
-      by an unrelated `cdrom:` string in executable data.
+    - **GetID license region**: derived from disc serial (`SCEA`/`SCEE`/`SCEI`)
       instead of hardcoded `SCEI`; NTSC-U (MMX6/Tomba) now correctly report `SCEA`.
     - Method reminder (top-of-doc LESSON): these were HYPOTHESES until OUTPUT
       validation — the MMX6/Tomba playtest soak WAS that validation. Revert any
