@@ -9,6 +9,9 @@ It does not establish a percentage of whole-game or hardware accuracy.
 
 This repository provides the [Tekken setup and replay tools](../../tools/tasreplays/README.md)
 and the [qualified TAS comparison](../TAS_ACCURACY.md).
+The [unattended investigation controller](../../tools/tasreplays/investigation.md)
+adds explicit build/test/replay recipes, bounded diagnostics, durable recovery,
+and strict per-return evidence reports. It does not lift operator replay holds.
 The native runner validates original inputs, complete RAM/clock observations,
 and a bounded ending. The visible run --speed 32 or --speed max option sets a cap; run --headless is already uncapped. Measure actual elapsed time separately.
 
