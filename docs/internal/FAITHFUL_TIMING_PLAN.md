@@ -1,5 +1,10 @@
 # Faithful Timing Core — Game Plan (psxrecomp)
 
+2026-09-12 local integration: restore inherited GTE arithmetic/register and MDEC
+output-completion behavior before PGXP consumers. Scope, controls and separate
+packing limit: [core retention](../CORE_CORRECTNESS_RETENTION.md). No timing-mode,
+accepted-pin or title-qualification change.
+
 **READ THIS EACH SESSION.** Referenced from CLAUDE.md Rule -1 and from the
 auto-memory ([[psxrecomp-build-faithful-core-not-hacks]],
 [[precise_irq_slice_state]]). This is the authoritative plan; update the

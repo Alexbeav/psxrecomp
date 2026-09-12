@@ -26,11 +26,15 @@ static void decode(unsigned depth) {
 int main(void) {
     mdec_init();
     const unsigned bytes[] = {32, 64, 768, 512};
-    for (unsigned depth = 0; depth < 4; ++depth) {
+    for (unsigned order = 0; order < 4; ++order) {
+        const unsigned depth = 3 - order; /* T33 colour output before mono packing */
         for (unsigned access = 0; access < 3; ++access) {
             decode(depth);
             MDECDebugState state;
             mdec_debug_get_state(&state);
+            if (state.output_size != bytes[depth])
+                fprintf(stderr, "depth=%u bytes=%u expected=%u\n", depth,
+                        state.output_size, bytes[depth]);
             check(state.output_size == bytes[depth], "decoded output size");
             check(state.busy == 0, "input transaction completed");
             const uint32_t size = mdec_snapshot_bytes();

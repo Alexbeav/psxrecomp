@@ -882,7 +882,15 @@ uint32_t mdec_read(uint32_t addr) {
     if (!write_ready) status |= 1u << 30;
     if (mdec.enable_dma_out && mdec_dma_read_ready()) status |= 1u << 27;
     if (mdec.enable_dma_in && write_ready) status |= 1u << 28;
-    if (mdec.busy) status |= 1u << 29;
+    /* Bit 29 (Command Busy) must stay set until the decoded output has been
+ * drained, not merely until the last input halfword arrived. Beetle keeps
+ * InCommand up for the whole decode state machine, which stalls on its
+ * OutFIFO (mdec.cpp MDEC_Run cases 5-9), so DecDCTinSync(0) blocks for
+ * ~1.3 frames on a 320x240 frame and returns only after the DMA1 slice
+ * callbacks have fired. We decode synchronously and clear busy at once,
+ * so the sync returned early and RE2 read its completion flag before the
+ * producer had set it (T33, 2026-08-23). Hold busy while output pends. */
+    if (mdec.busy || mdec.output_pos < mdec.output_size) status |= 1u << 29;
     if (mdec.output_pos >= mdec.output_size) status |= 1u << 31;
     mdec.last_status = status;
     return status;
