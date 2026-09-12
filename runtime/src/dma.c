@@ -2016,7 +2016,13 @@ void dma_snapshot_write(uint8_t *p) {
  * Cycle classification (amendment B): `last_cycle`/`next_cycle` are absolute
  * stamps in psx_cycle_count's base, which BS_SEC_CLOCK restores exactly, so they
  * are written as-is. */
-#define DMA_SRC_WIRE_BYTES 152u
+/* Encoded size = the sum of the field widths below (no struct padding on the
+ * wire), NOT the sum of sizeof(gpu_upload_source) + sizeof(gpu_ll_source) +
+ * sizeof(spu_source) + sizeof(otc_source) = 40+40+48+24 = 152. Declaring 152
+ * left the last 12 bytes of the section unwritten, and boot_state.c hands this
+ * function an uninitialized buffer, so those bytes were stack garbage in every
+ * save. The _Static_asserts below still pin each struct's sizeof. */
+#define DMA_SRC_WIRE_BYTES 140u
 uint32_t dma_src_wire_bytes(void) { return DMA_SRC_WIRE_BYTES; }
 /* Any source-DMA timing model active -> the section is required. */
 int dma_src_active(void) {

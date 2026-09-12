@@ -536,7 +536,7 @@ static int boot_state_save_to(BsOut* o, const CPUState* cpu,
         ok = write_section(o, BS_SEC_TIMER_SRC, buf, sizeof buf);
     }
     if (ok && dma_src_active()) {
-        uint8_t buf[152u];                    /* four source-DMA state machines */
+        uint8_t buf[140u];                    /* four source-DMA state machines */
         dma_src_wire_write(buf);
         ok = write_section(o, BS_SEC_DMA_SRC, buf, sizeof buf);
     }
@@ -1073,7 +1073,7 @@ static int section_shape_ok(uint32_t tag, uint32_t len) {
     case BS_SEC_RASTER:     return len == INPUT_ROUTE_RASTER_WIRE_BYTES * 3u;
     case BS_SEC_GPU_SERVICE:return len == 240u;
     case BS_SEC_TIMER_SRC:  return len == 60u;
-    case BS_SEC_DMA_SRC:    return len == 152u;
+    case BS_SEC_DMA_SRC:    return len == dma_src_wire_bytes();
     case BS_SEC_IRQ_TIMING: return len == 64u;
     default:                return 0;   /* unknown tag: refuse */
     }
