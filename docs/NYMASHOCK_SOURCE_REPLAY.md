@@ -75,6 +75,8 @@ that declared tail. The per-run storage bound is3GiB for full page/CPU checks.
 The drive model uses both logical-seek pipeline slots, tracks the physical
 head during Pause/standby and ReadTOC, consumes the active-Pause random draw,
 and separates Reset travel/header phases from its command-reply deadline.
+During an established read, GetlocP reports the last physical sector's sub-Q
+position, one sector ahead of the next data delivery.
 The source clock tape is required. The MDEC option uses 512 clocks per block;
 the older Octoshock option keeps 474. Guest syscalls enter the installed BIOS
 exception handler, including thread switches. In this source profile,
@@ -92,9 +94,11 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 3846. The controlled 5,999-return run completes with its first mismatch at
-return 3847. A prior transient mismatch at return 1645 is removed by the CD
-read-order correction; paired raw snapshots at 1644, 1645 and 1646 also match.
+to 5999, with no page-hash or clock mismatch in that controlled replay.
+The retained return-5000 raw RAM snapshot also matches the admitted stock
+SHA-256. These progress captures are not resumable emulator states.
+A prior transient mismatch at return 1645 is removed by the CD read-order
+correction; paired raw snapshots at 1644, 1645 and 1646 also match.
 The flat-call correction removes the prior recursion failure, and Reset
 during an established data read is included in this bounded comparison.
 Full Bio Hazard playback remains unqualified. No release or accepted pin

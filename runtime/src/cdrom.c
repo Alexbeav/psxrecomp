@@ -2647,6 +2647,9 @@ static void exec_command(uint8_t cmd) {
             /* GetlocP reports the drive/sub-Q position. During a read the
              * sector stream has already advanced past the data-ready sector. */
             lba = msf_to_lba(read_min, read_sec, read_sect);
+            /* Nymashock decodes sub-Q before its two-sector data pipeline.
+             * The last physical sector read is one ahead of next delivery. */
+            if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {

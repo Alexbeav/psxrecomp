@@ -159,6 +159,14 @@ int main(void) {
     CHECK(s_source_reset_due==psx_cycle_count+20000,"active Reset seeks from physical sector twelve, beyond the short-distance penalty");
     CHECK(!reading && !(stat_reg&CDSTAT_READ) && (stat_reg&CDSTAT_SEEK),"active Reset stops data delivery and enters seek");
     CHECK(s_source_clock_tape.cursor==2,"active Reset consumes the same two random draws");
+    cdrom_init("synthetic");s_nymashock_drive=1;
+    reading=1;stat_reg=CDSTAT_MOTOR|CDSTAT_READ;
+    lba_to_msf(1234,150,&read_min,&read_sec,&read_sect);
+    response_clear();irq_flag=0;exec_command(0x11);
+    const uint8_t physical_q[8]={1,1,0,0x16,0x35,0,0x18,0x35};
+    CHECK(response_count==8 && !memcmp(response_fifo,physical_q,8),"Nymashock GetlocP reports the last physical read before the data pipeline");
+    s_nymashock_drive=0;response_clear();irq_flag=0;exec_command(0x11);
+    CHECK(response_fifo[4]==0x34 && response_fifo[7]==0x34,"older GetlocP position remains unchanged");
     cd_tape_free(&s_source_clock_tape);s_source_clock=0;s_nymashock_drive=0;
 
     free(wire);free(default_a);free(default_b);
