@@ -3135,6 +3135,39 @@ void sio_snapshot_section_ends(uint32_t out[5]) {
     out[4] = (uint32_t)w.written;
 }
 
+/* ---- E survey (SIO sizing), Part 3. SIZING ONLY: no serialization, no guard,
+ * no mutation. See sio.h for the contract. */
+int sio_source_fsm_live(int *pad_live, int *mc_live) {
+    int pad = 0, mc = 0;
+#if SIO_MODEL_CYCLE_PACED
+    int pad_busy = (sio_bus_owner == SIO_OWNER_PAD) || sio_shift_active ||
+                   sio_tx_buffered || sio_pending_ack || sio_ack_remaining ||
+                   sio_ack_pulse_remaining || sio_pending_ack_timed ||
+                   sio_tx_buffer_ack_irq_en;
+    pad = sio_source_pad_ack && pad_busy;
+    mc  = sio_source_card && ((sio_bus_owner == SIO_OWNER_CARD) ||
+                              sio_card_protocol_active());
+#endif
+    if (pad_live) *pad_live = pad;
+    if (mc_live)  *mc_live  = mc;
+    return pad || mc;
+}
+
+void sio_source_survey_sizes(uint32_t out[5]) {
+    uint32_t ends[5];
+    sio_snapshot_section_ends(ends);
+    out[0] = ends[1] - ends[0];   /* pads subsection of the snapshot wire */
+    out[1] = ends[2] - ends[1];   /* memcard subsection */
+    out[2] = ends[3] - ends[2];   /* pacing FSM subset (shift/ACK pipeline) */
+    out[3] = 0;
+#if SIO_MODEL_CYCLE_PACED
+    /* The two source-mode scalars the snapshot deliberately does not emit. */
+    out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
+                        sizeof sio_pending_ack_timed);
+#endif
+    out[4] = (uint32_t)sizeof mc_slots;  /* per-slot card FSM state (2 slots) */
+}
+
 static int sio_snap_parse(PstR *r) {
     uint32_t u;
     uint8_t saved_delay;

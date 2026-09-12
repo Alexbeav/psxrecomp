@@ -12,6 +12,7 @@
 #include "input_route_raster_clock_wire.h"
 #include "source_stateio_identity.h"
 #include "interrupts.h"               /* E survey: IRQ_TIMING transients */
+#include "sio.h"                      /* E survey (Part 3): SIO FSM sizing */
 #include <stdio.h>
 #include <stdlib.h>
 extern uint64_t g_psx_cycle_fast_limit;
@@ -187,6 +188,7 @@ static struct {
     unsigned long long boundaries, queue_nonzero, words_nonzero, words_total, budget_nonzero;
     unsigned long long upload_live, ll_live, spu_live;
     unsigned long long irq_slot_nonzero, defer_switch_nonzero;
+    unsigned long long sio_pad_live, sio_mc_live;
 } s_e_survey;
 static void e_survey_report(void) {
     if(!s_e_survey.enabled) return;
@@ -197,6 +199,14 @@ static void e_survey_report(void) {
         s_e_survey.upload_live,s_e_survey.ll_live,s_e_survey.spu_live,s_e_survey.boundaries);
     fprintf(stderr,"[e-survey] IRQ_TIMING transient: source_irq_slot_nonzero=%llu s_defer_switch_nonzero=%llu (of %llu)\n",
         s_e_survey.irq_slot_nonzero,s_e_survey.defer_switch_nonzero,s_e_survey.boundaries);
+    fprintf(stderr,"[e-survey] source-sio fsm live: pad_ack=%llu memcard=%llu (of %llu boundaries)\n",
+        s_e_survey.sio_pad_live,s_e_survey.sio_mc_live,s_e_survey.boundaries);
+    {
+        uint32_t sz[5];
+        sio_source_survey_sizes(sz);
+        fprintf(stderr,"[e-survey] source-sio sizes: pads=%u memcard=%u fsm_pace=%u unemitted_scalars=%u mc_slots=%u\n",
+            sz[0],sz[1],sz[2],sz[3],sz[4]);
+    }
 }
 static void e_survey(void) {
     if(!s_e_survey.initialized) {
@@ -225,6 +235,12 @@ static void e_survey(void) {
          * keep serializing them but assert zero on save, like queue[32]. */
         if (interrupts_source_irq_slot_live()) ++s_e_survey.irq_slot_nonzero;
         if (psx_defer_switch_pending()) ++s_e_survey.defer_switch_nonzero;
+    }
+    {
+        int pad=0,mc=0;
+        sio_source_fsm_live(&pad,&mc);
+        if(pad) ++s_e_survey.sio_pad_live;
+        if(mc) ++s_e_survey.sio_mc_live;
     }
 }
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
