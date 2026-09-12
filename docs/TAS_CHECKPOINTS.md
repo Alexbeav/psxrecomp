@@ -42,6 +42,7 @@ retains its decoder FIFOs, partially decoded block, chroma buffers, DMA transfer
 positions and service clock. Host callback pointers remain local to the binary.
 SPU snapshots also retain the CD input audio ring, its cursors and counters;
 queued audio affects the guest-visible sound-RAM capture buffers after resume.
+The CD controller retains both pending and applied audio volume matrices.
 Active CD DMA retains its service budget and absolute clock deadlines.
 
 A required module with no serializer makes the save fail. It cannot create a

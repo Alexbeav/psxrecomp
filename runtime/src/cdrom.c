@@ -3770,6 +3770,7 @@ static int cdrom_snap_emit(PstW *w) {
     W8(pending.cmd); WI(pending.pending); WI(pending_rem_cycles()); WI(pending.phase);
     W8(queued_cmd.cmd); WB(queued_cmd.params); WI(queued_cmd.param_count); WI(queued_cmd.pending);
     W8(pending_dataready); W8(pending_dataready_stat);
+    WB(cd_pending_vol); WB(cd_decode_vol);
     /* This explicit private profile adds its timing state to the CD section.
      * Default bytes stay unchanged. Full-machine/cross-profile restore remains
      * unqualified; matching-profile controller state is not reconstructed. */
@@ -3861,6 +3862,7 @@ static int cdrom_snap_parse(PstR *r) {
     R8(pending.cmd); RI(pending.pending); RI(pending_rem); RI(pending.phase);
     R8(queued_cmd.cmd); RB(queued_cmd.params); RI(queued_cmd.param_count); RI(queued_cmd.pending);
     R8(pending_dataready); R8(pending_dataready_stat);
+    RB(cd_pending_vol); RB(cd_decode_vol);
     if (s_source_explicit_seek_model) R8(s_source_seek_paused);
     if (source_cdda.enabled) {
         RI(source_cdda.seeking); RI(source_cdda.position_valid);
