@@ -177,6 +177,7 @@ if(BUILD_TESTING)
     add_executable(mdec_output_lifetime_test
         tests/test_mdec_output_lifetime.c src/mdec.c)
     target_include_directories(mdec_output_lifetime_test PRIVATE include)
+    target_compile_definitions(mdec_output_lifetime_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
     add_test(NAME mdec_output_lifetime_test COMMAND mdec_output_lifetime_test)
 
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
