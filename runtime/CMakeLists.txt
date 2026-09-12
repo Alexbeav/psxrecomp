@@ -174,6 +174,11 @@ if(BUILD_TESTING)
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME gte_register_access_test COMMAND gte_register_access_test)
 
+    add_executable(mdec_output_lifetime_test
+        tests/test_mdec_output_lifetime.c src/mdec.c)
+    target_include_directories(mdec_output_lifetime_test PRIVATE include)
+    add_test(NAME mdec_output_lifetime_test COMMAND mdec_output_lifetime_test)
+
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read
     # (foreign overwrite + DMA-overwrite rejection), MOVE/repack arithmetic,
