@@ -353,6 +353,18 @@ target_include_directories(emitter_directive_line_test PRIVATE
 target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    if(PSXRECOMP_ENABLE_CHD)
+        add_executable(disc_identity_test ../runtime/tests/test_disc_identity.cpp
+            ../runtime/src/disc_identity.cpp ../runtime/src/disc_path.cpp
+            ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp
+            ../runtime/src/psx_sha256.c ../runtime/src/crc32.c)
+        target_include_directories(disc_identity_test PRIVATE ../runtime/include include)
+        target_compile_options(disc_identity_test PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+        target_link_libraries(disc_identity_test PRIVATE chdr-static)
+        add_test(NAME disc_identity_test COMMAND disc_identity_test)
+    endif()
     add_executable(host_path_test tests/host_path_test.cpp)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
