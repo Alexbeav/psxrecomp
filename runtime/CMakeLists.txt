@@ -228,8 +228,7 @@ if(BUILD_TESTING)
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections
-            -Wl,--error-limit=0)
+            -Wl,--gc-sections)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
