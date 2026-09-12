@@ -3,7 +3,8 @@ import subprocess
 import time
 
 
-def wait_budgeted(process, directory, timeout, max_bytes=None, max_files=1000, interval=2):
+def wait_budgeted(process, directory, timeout, max_bytes=None, max_files=1000, interval=2,
+                  stop_requested=None):
     started=time.monotonic()
     reason=None
     inventory={'bytes':0,'files':0}
@@ -15,7 +16,8 @@ def wait_budgeted(process, directory, timeout, max_bytes=None, max_files=1000, i
             try:sizes.append(p.stat().st_size)
             except FileNotFoundError:pass
         inventory={'bytes':sum(sizes),'files':len(sizes)}
-        if max_bytes is not None and (inventory['bytes']>max_bytes or inventory['files']>max_files):reason='host_storage_budget'
+        if stop_requested and stop_requested():reason='operator_stop'
+        elif max_bytes is not None and (inventory['bytes']>max_bytes or inventory['files']>max_files):reason='host_storage_budget'
         elif not exited and time.monotonic()-started>=timeout:reason='host_timeout'
         if reason:
             if not exited:
