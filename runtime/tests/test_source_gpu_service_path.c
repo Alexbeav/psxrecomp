@@ -12,8 +12,10 @@ uint64_t psx_cycle_count, psx_next_service_cycle, g_psx_cycle_fast_limit;
 void (*g_psx_cpu_step_boundary_callback)(CPUState *,uint32_t,uint64_t);
 uint64_t psx_get_cycle_count(void) { return psx_cycle_count; }
 static unsigned dma_calls, draws;
+static uint64_t last_dma;
 void dma_source_gpu_service_at(uint64_t cycle) {
-    assert(cycle == 128u);
+    assert(cycle >= last_dma && cycle <= psx_cycle_count);
+    last_dma = cycle;
     ++dma_calls;
 }
 static int draw(const SourceGPUCommandDispatch *command) {
@@ -38,5 +40,18 @@ int main(void) {
     source_gpu_raster_wire_write(rasters);
     /* Each raster starts with its absolute cycle. Both must advance. */
     assert(rasters[0] == 128u && rasters[80] == 128u);
+    /* A frontend return can be due before the next scheduled GPU/DMA event.
+     * A compiled block must not pass that boundary without a precise owner. */
+    SourceGPUServiceClock clock;
+    SourceGPUCommandProjection command;
+    do {
+        uint32_t distance = source_gpu_runtime_cycles_to_event();
+        assert(distance > 0 && distance <= 128u);
+        psx_cycle_count += distance;
+        assert(psx_cycle_count < 2000000u);
+        source_gpu_runtime_advance();
+        source_gpu_runtime_copy(&clock, &command);
+    } while (!clock.frame_pending);
+    assert(clock.frame_returns == 0 && source_gpu_runtime_cycles_to_event() == 0);
     return 0;
 }

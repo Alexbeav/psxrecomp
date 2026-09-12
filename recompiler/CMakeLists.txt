@@ -855,6 +855,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_service_path.py"
                 --cc ${CMAKE_C_COMPILER})
+        add_test(NAME tas_scheduler_precise_escape
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_scheduler_precise_escape.py"
+                --cc ${CMAKE_C_COMPILER})
         # The Python driver compiles test_boot_state_replace.c with its own TU.
         add_test(NAME tas_state_replace
             COMMAND ${Python3_EXECUTABLE}

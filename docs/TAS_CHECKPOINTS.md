@@ -23,6 +23,13 @@ returning to the normal dispatcher. The scheduler retains the restored live
 CPU registers rather than loading their older suspended TCB copy. Checkpoint
 capture refuses a boundary without a represented instruction continuation.
 
+Scheduler escapes clear the precise-interpreter mode abandoned by `longjmp`.
+Otherwise later compiled blocks mistake that stale flag for a live interpreter
+and skip precise entry. The source-profile slice gate also includes the next
+GPU service deadline, and an already-pending frontend return is due immediately.
+This keeps the instruction continuation represented across frontend returns
+even when no guest interrupt is due.
+
 The CPU section preserves multiply/divide and GTE completion deadlines and
 load timing credits. Load preserves the exact GTE backing registers. SPU sample
 budgeting resumes from its saved guest-clock watermark and remainder. MDEC
@@ -59,6 +66,7 @@ python -B runtime/tests/test_cpu_state_wire.py --cc gcc
 python -B runtime/tests/test_boot_state_section_wire.py --cc gcc
 python -B runtime/tests/test_source_tas_stateio.py --cc gcc
 python -B runtime/tests/test_source_gpu_service_path.py --cc gcc
+python -B runtime/tests/test_scheduler_precise_escape.py --cc gcc
 python -B tools/tasreplays/test_compare_boot_states.py
 python -B tools/tasreplays/test_native_input_identity.py
 python -B tools/tasreplays/test_pepsiman.py
@@ -72,6 +80,32 @@ at returns 300, 301, 360 and 361. Resume from 300 matched all 23 sections at
 301, 360 and 361, and every CPU register/clock row and all 512 RAM-page hashes
 at returns 301–6000 (5,700 rows). This qualifies that checkpoint and suffix;
 it does not establish arbitrary checkpoint or cross-profile equivalence.
+
+The follow-up multiple-checkpoint test used the unchanged first 3,001 inputs
+of that route. One cold process saved at returns **500, 1500 and 2500**, kept
+running between saves, and stopped after return **3000**. Three fresh processes
+then loaded those original files independently. Each matched all 23 sections
+at K+1, K+60 and return 3000, as well as every other later checkpoint captured
+by the cold run. CPU/register/clock records and all 512 RAM-page hashes matched
+for all 2,500, 1,500 and 500 remaining returns respectively, with no gaps.
+A second cold run reproduced all ten saved states and all 3,000 observation
+records. A negative control changed the restored timer-2 counter at 2500;
+the process completed normally and the section comparison detected the change
+at 2501, 2560 and 3000.
+
+The first attempt exposed the stale interpreter-mode flag: captures at 1500
+and 2500 refused instead of producing files. The scheduler escape regression
+test exercises the real `setjmp`/`longjmp` path at O0/O2 and fails when its mode
+reset is removed. Checkpoint readiness still depends on the profile and the
+existing device-state guards; the three passing positions do not qualify
+every possible capture point.
+
+To repeat this sequence, use `--save-state-at 500 501 560 1500 1501 1560 2500
+2501 2560 3000` with a route that ends after return 3000. After that process
+exits, run `--resume-from` separately for each of the three original `.pst`
+files, requesting only the later save positions. Compare the resulting states
+with the original cold files and require complete observation coverage through
+3000. Keep the executable, route and profile identical across all four runs.
 
 The negative controls changed one restored field in each of RASTER,
 GPU_SERVICE, TIMER_SRC, DMA_SRC and IRQ_TIMING. All completed and produced a

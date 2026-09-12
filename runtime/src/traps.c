@@ -901,6 +901,10 @@ void psx_scheduler_run(CPUState* cpu)
             g_sched_snapshot_boundary = 0;
             g_psx_dispatch_depth = 0;
             g_psx_call_bail      = 0;
+            /* An escape also abandons psx_run_precise's mode restore. The
+             * scheduler owns no interpreter slice; a stale flag here would
+             * disable every later compiled block's precise-entry gate. */
+            { extern int g_precise_mode; g_precise_mode = 0; }
             /* Soft-exit / yield longjmps out of vblank inside
              * psx_devices_service_to_now; without this the re-entrancy guard
              * stays set and every later advance skips device service forever. */

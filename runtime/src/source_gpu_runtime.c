@@ -416,6 +416,7 @@ void source_gpu_runtime_debug_clock(uint64_t *cycle, uint32_t *frame_returns) {
 }
 uint32_t source_gpu_runtime_cycles_to_event(void) {
     if(!enabled)return UINT32_MAX;
+    if(clock_state.frame_pending)return 0;
     uint64_t next=source_gpu_service_next(&clock_state);
     return next>psx_cycle_count?(uint32_t)(next-psx_cycle_count):1u;
 }

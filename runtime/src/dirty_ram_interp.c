@@ -3024,6 +3024,10 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
         psx_devices_service_to_now();
     }
     uint32_t deadline = cycles_to_next_event();
+    /* Frontend returns are GPU events even when no guest IRQ is due. Keep
+     * their instruction/branch/load continuation in the precise owner. */
+    uint32_t gpu_deadline = source_gpu_runtime_cycles_to_event();
+    if (gpu_deadline < deadline) deadline = gpu_deadline;
     uint32_t block_bound=bcyc;
     if(!side_effects && source_gpu_runtime_active() && (block_addr&0x1fffffffu)<0x200000u)
         block_bound=source_cpu_block_bound(cpu,block_addr,bcyc,deadline);
