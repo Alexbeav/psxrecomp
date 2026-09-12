@@ -1058,6 +1058,34 @@ static int critical_exception_enabled(void) {
     return mode;
 }
 
+int psx_guest_syscalls_active(void) {
+    static int mode = -1;
+    if(mode<0) {
+        const char *value=getenv("PSX_SYSCALL_MODEL");
+        mode=value && !strcmp(value,"guest-exception");
+    }
+    return mode;
+}
+
+static int enter_guest_syscall_exception(CPUState *cpu) {
+    uint32_t sr=cpu->cop0[12];
+    if (psx_get_in_exception()) {
+        fprintf(stderr, "Guest syscall exception model: nested synchronous IRQ entry unsupported at %08X\n", cpu->pc);
+        exit(1);
+    }
+    /* Return the vector to the flat dispatcher. Calling psx_dispatch here
+     * would create a host continuation that could outlive the guest RFE.
+     * Guest code owns result registers, TCB stores, and EPC advancement. */
+    cpu->cop0[14] = cpu->pc;
+    /* Source exception entry retains only pending interrupt bits. A
+     * non-delay SYSCALL has no CE, BD, or BT bits of its own. */
+    cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()
+        ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (8u << 2);
+    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
+    cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
+    return 1;
+}
+
 int psx_syscall(CPUState* cpu, uint32_t code) {
     /*
      * PS1 BIOS SYSCALL convention:
@@ -1065,8 +1093,8 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
      *   $a0 = 2: ExitCriticalSection  — enable interrupts, return old SR
      *   $a0 = 3: ReturnFromException  — restore full TCB state + RFE
      *
-     * Syscalls 1 and 2 are always handled directly — they only touch IEc
-     * in SR and don't need the full exception mechanism.
+     * Legacy mode handles critical sections directly. The explicit guest
+     * exception model lets the installed BIOS own all syscall behavior.
      *
      * Syscall 3 and unknown numbers route through the real BIOS exception
      * handler once it's installed, because ReturnFromException must restore
@@ -1076,22 +1104,8 @@ int psx_syscall(CPUState* cpu, uint32_t code) {
     uint32_t func = cpu->gpr[4]; /* $a0 = syscall function number */
     uint32_t sr = cpu->cop0[12];
 
-    if ((func == 1 || func == 2) && critical_exception_enabled()) {
-        if (psx_get_in_exception()) {
-            fprintf(stderr, "SYS01/02 exception model: nested synchronous IRQ entry unsupported at %08X\n", cpu->pc);
-            exit(1);
-        }
-        /* Return the vector to the flat dispatcher. Calling psx_dispatch here
-         * would create a host continuation that could outlive the guest RFE.
-         * Guest code owns result registers, TCB stores, and EPC advancement. */
-        cpu->cop0[14] = cpu->pc;
-        /* Source exception entry retains only pending interrupt bits. A
-         * non-delay SYSCALL has no CE, BD, or BT bits of its own. */
-        cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()
-            ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (8u << 2);
-        cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);
-        cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;
-        return 1;
+    if (psx_guest_syscalls_active() || ((func == 1 || func == 2) && critical_exception_enabled())) {
+        return enter_guest_syscall_exception(cpu);
     }
 
     switch (func) {

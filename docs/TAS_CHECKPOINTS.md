@@ -164,3 +164,7 @@ and MDEC checkpoint support is under cross-game verification on this branch.
 The reduced profile is infrastructure evidence, not Biohazard TAS fidelity or
 full-profile checkpoint qualification. GPU command queues are now serialized.
 No public release or shared pin promotion follows from these diagnostic gates.
+
+The experimental `--cd-drive-model nymashock-1.29.0` option is restricted to
+cold diagnostics; the launcher rejects checkpoint capture and resume with it.
+See [Bio Hazard source comparison](NYMASHOCK_SOURCE_REPLAY.md#experimental-bio-hazard-drive-comparison).

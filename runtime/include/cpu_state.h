@@ -115,6 +115,7 @@ void psx_rfe_escape_check(CPUState* cpu);
  * post-syscall code (the guest's own jr $ra); legacy callers ignore the return
  * value and rely on cpu->pc (0 = handled, resume at caller). */
 extern int psx_syscall(CPUState* cpu, uint32_t code);
+extern int psx_guest_syscalls_active(void);
 extern void psx_arith_overflow(CPUState* cpu);
 /* Mult/div completion-stall timing (psx_cycles.c). MULT/MULTU/DIV/DIVU call
  * psx_muldiv_set with their latency (DIV/DIVU = 37; MULT/MULTU via the latency

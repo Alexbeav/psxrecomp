@@ -21,9 +21,10 @@ typedef struct SourceMDEC {
     uint8_t row,word_in_row,row_words;
     SourceMDECBlock decode; SourceMDECTable table; void *context;
     int error;
+    unsigned block_cycles; /* immutable model configuration */
 } SourceMDEC;
 static inline void source_mdec_power(SourceMDEC *s,SourceMDECBlock decode,SourceMDECTable table,void *context){
-    memset(s,0,sizeof(*s));s->decode=decode;s->table=table;s->context=context;
+    memset(s,0,sizeof(*s));s->block_cycles=474;s->decode=decode;s->table=table;s->context=context;
 }
 static inline int source_mdec_can_write(const SourceMDEC *s){
     return s->in_count==0 && (s->control&(1u<<30)) && s->busy && s->remaining!=65535;
@@ -53,7 +54,7 @@ static inline int source_mdec_half(SourceMDEC *s,uint16_t value){
     if(s->block>=2)s->pixel_count=words;
     s->encoded_count=0;s->block++;
     if(s->block==((s->command&(1u<<28))?6u:3u))s->block=(s->command&(1u<<28))?0u:2u;
-    return 474;
+    return (int)s->block_cycles;
 }
 static inline void source_mdec_run(SourceMDEC *s,unsigned clocks){
     if(s->error)return;

@@ -66,3 +66,49 @@ until the independent comparison passes. Source endpoint N needs one extra
 neutral native input boundary because native completion precedes its final
 return observer. Full runs keep the original input count intact and record
 that declared tail. The per-run storage bound is3GiB for full page/CPU checks.
+
+
+## Experimental Bio Hazard drive comparison
+
+`tools/tasreplays/biohazard.py` selects `--cd-drive-model nymashock-1.29.0`,
+`--mdec-source-model nymashock-1.29.0` and `--syscall-model guest-exception`.
+The drive model uses both logical-seek pipeline slots, tracks the physical
+head during Pause/standby and ReadTOC, consumes the active-Pause random draw,
+and separates Reset travel/header phases from its command-reply deadline.
+The source clock tape is required. The MDEC option uses 512 clocks per block;
+the older Octoshock option keeps 474. Guest syscalls enter the installed BIOS
+exception handler, including thread switches. In this source profile,
+interpreted calls return their target to the dispatcher rather than retaining
+native call frames across guest thread switches.
+
+Source-profile CD register reads sample stored device state before servicing
+events crossed by their width-dependent bus wait. The load still consumes its
+full duration. `runtime/tests/test_cd_read_sample_order.py` checks event ordering,
+byte/half/word reads, LWC2 and address aliases at O0/O2 without retail assets.
+
+These are cold diagnostic options. The drive launcher rejects checkpoint
+capture and resume; the source memory-card/DualShock profile also remains
+unsupported for checkpoints. Device state encoding does not qualify TAS
+continuation. Existing default model options retain their prior behavior.
+
+The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
+to 3846. The controlled 5,999-return run completes with its first mismatch at
+return 3847. A prior transient mismatch at return 1645 is removed by the CD
+read-order correction; paired raw snapshots at 1644, 1645 and 1646 also match.
+The flat-call correction removes the prior recursion failure, and Reset
+during an established data read is included in this bounded comparison.
+Full Bio Hazard playback remains unqualified. No release or accepted pin
+changes. Logical header retry/error behavior and Reset during audio or an
+unfinished data seek remain outside this bounded drive comparison.
+
+Source basis: BizHawk 2.9.1's Mednafen 1.29.0 `psx/cdc.cpp` (`HandlePlayRead`,
+`CalcSeekTime`, `Command_SeekL`, `Command_Pause`, `Command_Reset`,
+`Command_ReadTOC`), `psx/mdec.cpp` (`WriteImageData`, `MDEC_Run`), and guest
+CPU exception entry. Passive observers reading the exact stock Waterbox
+image reproduced all 6,000 reference return RAM hashes, clocks and lag counts
+before their CD/CPU state was used to diagnose divergences. Raw CPU register
+snapshots are diagnostic data, not a claim of CPU-register equality.
+
+Source admission binds the exact bytes of its admission tool. The repository
+keeps that Python file in LF form through .gitattributes so Windows checkout
+conversion does not invalidate an otherwise unchanged reference.

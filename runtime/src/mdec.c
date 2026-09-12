@@ -913,11 +913,12 @@ void mdec_init(void) {
     source_mdec_enabled=0;
     const char *source_mode=getenv("PSX_MDEC_SOURCE_MODEL");
     if(source_mode && *source_mode){
-        if(strcmp(source_mode,"octoshock-2.3")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
+        if(strcmp(source_mode,"octoshock-2.3") && strcmp(source_mode,"nymashock-1.29.0")){fprintf(stderr,"[mdec-source] unknown model\n");exit(2);}
         source_mdec_enabled=1;
         memset(mdec.y_quant,0,sizeof(mdec.y_quant));memset(mdec.uv_quant,0,sizeof(mdec.uv_quant));
         memset(mdec.scale,0,sizeof(mdec.scale));memset(source_cr,0,sizeof(source_cr));memset(source_cb,0,sizeof(source_cb));
         source_mdec_power(&source_mdec,source_decode_block,source_table_word,0);
+        if(!strcmp(source_mode,"nymashock-1.29.0"))source_mdec.block_cycles=512;
     }
 }
 
@@ -1133,7 +1134,7 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words) {
 #define MDEC_SNAP_OUTPUT_MAX (8u * 1024u * 1024u) /* bytes */
 
 /* Host callbacks stay attached to this executable; only guest state is wired. */
-#define SOURCE_MDEC_WIRE_BYTES 905u
+#define SOURCE_MDEC_WIRE_BYTES (905u+(source_mdec.block_cycles==512?4u:0u))
 #define SOURCE_MDEC_SCALARS(X) \
     X(in_at) X(in_count) X(out_at) X(out_count) X(command) X(control) \
     X(phase) X(busy) X(coefficient) X(encoded_count) X(block) \
@@ -1152,6 +1153,7 @@ static int mdec_source_snap_emit(PstW *w) {
         !pst_w_u8(w,s->row_words) || !pst_w_i32(w,s->error)) return 0;
     for (unsigned i=0;i<64;i++) if (!pst_w_i16(w,source_cr[i])) return 0;
     for (unsigned i=0;i<64;i++) if (!pst_w_i16(w,source_cb[i])) return 0;
+    if(s->block_cycles==512 && !pst_w_u32(w,s->block_cycles))return 0;
     return 1;
 }
 static int mdec_source_snap_parse(PstR *r, int apply) {
@@ -1173,6 +1175,7 @@ static int mdec_source_snap_parse(PstR *r, int apply) {
         s.phase>SMDEC_OUTPUT || s.busy>1 || s.coefficient>64 || s.encoded_count>64 ||
         s.block>5 || s.pixel_count>48 || s.pixel_at>48 ||
         s.quant_index>127 || s.matrix_index>63 || error) return 0;
+    if(s.block_cycles==512) { uint32_t cycles; if(!pst_r_u32(r,&cycles) || cycles!=512)return 0; }
     s.error=error;
     if (apply) {source_mdec=s;memcpy(source_cr,cr,sizeof cr);memcpy(source_cb,cb,sizeof cb);}
     return 1;
