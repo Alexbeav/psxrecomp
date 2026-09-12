@@ -435,6 +435,7 @@ int debug_server_seek_input_route(uint32_t frame)
         s_input_route_index = i;
         s_input_route_remaining = s_dualshock_route[i].frames - remaining;
         s_input_route_consumed = frame;
+        input_route_observer_resume(frame);
         return 1;
     }
     while (i < s_input_route_count && remaining >= s_input_route[i].frames) {
@@ -445,6 +446,7 @@ int debug_server_seek_input_route(uint32_t frame)
     s_input_route_index = i;
     s_input_route_remaining = s_input_route[i].frames - remaining;
     s_input_route_consumed = frame;
+    input_route_observer_resume(frame);
     return 1;
 }
 

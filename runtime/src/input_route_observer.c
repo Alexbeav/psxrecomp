@@ -291,6 +291,18 @@ void input_route_observer_set_end(uint32_t total) {
     if (!total || total != delivered_inputs || pending) fail("invalid dynamic input end");
     total_inputs=total;
 }
+/* TAS checkpoint resume: the delivered-input counter is observer state that
+ * starts at zero in each process, while the route is seeked to an ABSOLUTE
+ * return. Without this, the first post-resume boundary compares the absolute
+ * consumed index against a suffix-only delivery count and fails
+ * ("boundary does not follow exact SIO delivery count"). Seed the counter to
+ * the resumed return and drop any half-applied sample, so the boundary
+ * invariant (completed == delivered_inputs) holds from the resume point on. */
+void input_route_observer_resume(uint32_t consumed) {
+    if (!log_file) return;
+    delivered_inputs = consumed;
+    pending = 0;
+}
 void input_route_observer_applied(uint16_t buttons, int connected, int analog) {
     if (!log_file) return;
     if (dualshock_mode) fail("digital observation used for DualShock route");
