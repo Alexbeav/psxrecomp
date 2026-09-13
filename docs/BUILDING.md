@@ -386,3 +386,14 @@ OpenBIOS incompatibility. See [`BIOS_SELECTION.md`](BIOS_SELECTION.md).
 
 OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
 see the pin + regeneration recipe in `bios/OpenBIOS.toml`.
+
+### Controller capacity and live port routing
+
+`psxrecomp_add_game_runtime(MAX_PLAYERS 1)` retains two compiled controller
+slots so the runtime menu can move a controller between the two physical
+console ports. The `players` value in `game.toml` still describes the game.
+Requests from 2 through 8 retain their specified capacity. A custom build with
+`PSX_MAX_PLAYERS=1` disables live routing to avoid indexing a missing port.
+Changing compiled capacity can change the SIO save-state section size; states
+from an earlier one-slot build are not qualified as compatible. Memory cards
+keep their existing file format.

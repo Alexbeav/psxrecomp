@@ -1726,11 +1726,9 @@ function(psxrecomp_add_runtime_target target)
         endif()
     endif()
 
-    # Per-game netplay/local pad ceiling. Default 2 (MotK / dual-shock path).
-    # Single-player titles (Tomba, Ape Escape, …) pass MAX_PLAYERS 1 so rewind
-    # / rbengine still link without advertising multiplayer. Multitap N-player
-    # (Bomberman Party Edition) uses 5; dual SCPH-1070 uses 8. Range matches
-    # sio.h (1..8).
+    # Compiled controller capacity includes both physical console ports.
+    # A one-player game can route its controller to port 2 at runtime.
+    # game.toml players remains the game's logical player count.
     if(NOT PSXRT_MAX_PLAYERS)
         if(DEFINED PSX_MAX_PLAYERS AND NOT PSX_MAX_PLAYERS STREQUAL "")
             set(PSXRT_MAX_PLAYERS "${PSX_MAX_PLAYERS}")
@@ -1741,6 +1739,9 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRT_MAX_PLAYERS LESS 1 OR PSXRT_MAX_PLAYERS GREATER 8)
         message(FATAL_ERROR
             "MAX_PLAYERS must be in 1..8 (got ${PSXRT_MAX_PLAYERS})")
+    endif()
+    if(PSXRT_MAX_PLAYERS LESS 2)
+        set(PSXRT_MAX_PLAYERS 2)
     endif()
     message(STATUS "psxrecomp ${target}: PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}")
 

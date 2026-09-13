@@ -4395,8 +4395,8 @@ static int host_player_for_sio_slot(int sio_slot) {
 }
 
 static int controller_port_swap_available(void) {
-    return !psx_netplay_active() && !sio_get_multitap() &&
-           g_offline_pad_count <= 2;
+    return PSX_MAX_PLAYERS >= 2 && !psx_netplay_active() &&
+           !sio_get_multitap() && g_offline_pad_count <= 2;
 }
 
 /* Reassert console-visible connection and controller type after hotplug or a
