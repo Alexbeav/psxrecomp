@@ -12,6 +12,8 @@ commands.  F1 opens the menu; keyboard arrows/Enter/Escape and controller
 D-pad/Cross/Circle navigate it. Ctrl+F6 changes the controller route directly.
 F6 retains the scanline toggle. Both bindings can be changed or disabled in
 `config.ini` under `[KeyMap]` with `RuntimeMenu` and `SwapControllerPorts`.
+These actions use the same physical-key matching path as the existing host
+shortcuts, including while the runtime menu is open.
 
 ## Apply tiers
 

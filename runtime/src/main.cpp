@@ -6423,11 +6423,11 @@ static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
     savestate_menu_sync_overlay();
 }
 
-static void runtime_settings_menu_handle_key(SDL_Keycode key, int mod,
+static void runtime_settings_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode, int mod,
                                              int repeat) {
     if (runtime_settings_menu_open_key && key == runtime_settings_menu_open_key)
         return;
-    if (host_keymap_match(HOST_KEYMAP_RUNTIME_MENU, (int)key, mod) ||
+    if (host_keymap_match_event(HOST_KEYMAP_RUNTIME_MENU, (int)key, (int)scancode, mod) ||
         key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
 #if defined(RECOMP_LAUNCHER)
         if (g_runtime_settings_ui) {
@@ -6438,8 +6438,8 @@ static void runtime_settings_menu_handle_key(SDL_Keycode key, int mod,
         }
 #endif
         runtime_settings_menu_close();
-    } else if (host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
-                                 (int)key, mod)) {
+    } else if (host_keymap_match_event(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                 (int)key, (int)scancode, mod)) {
         if (!repeat)
             controller_port_route_toggle();
 #if defined(RECOMP_LAUNCHER)
@@ -6896,7 +6896,13 @@ static void runtime_settings_menu_host_pause_loop(void) {
                 const SDL_Keycode key = ev.key.keysym.sym;
                 const int repeat = ev.key.repeat ? 1 : 0;
 #endif
-                runtime_settings_menu_handle_key(key, (int)mod, repeat);
+                runtime_settings_menu_handle_key(key,
+#if defined(PSX_SDL3)
+                                                  ev.key.scancode,
+#else
+                                                  ev.key.keysym.scancode,
+#endif
+                                                  (int)mod, repeat);
             } else if (ev.type == SDL_KEYUP) {
 #if defined(PSX_SDL3)
                 const SDL_Keycode key = ev.key.key;
@@ -7130,13 +7136,13 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                     savestate_menu_toggle(key);
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_RUNTIME_MENU,
-                                           (int)key, (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_RUNTIME_MENU,
+                                           (int)key, (int)scancode, (int)mod)) {
                     runtime_settings_menu_toggle(key);
                 }
                 else if (!key_repeat &&
-                         host_keymap_match(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
-                                           (int)key, (int)mod)) {
+                         host_keymap_match_event(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                           (int)key, (int)scancode, (int)mod)) {
                     controller_port_route_toggle();
                 }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
