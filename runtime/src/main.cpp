@@ -6285,11 +6285,11 @@ static void rewind_poll_nav(uint32_t now_ms) {
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
     int left = keys[SDL_SCANCODE_LEFT] ? 1 : 0;
     int right = keys[SDL_SCANCODE_RIGHT] ? 1 : 0;
-    /* Overlay: A/Cross load, B/Circle close. Also Enter/Space/Esc. */
-    int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE] ||
-               keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_A]) ? 1 : 0;
-    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE] ||
-               keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_B]) ? 1 : 0;
+    /* Direct menu keys supplement the configured pad bindings below. Letter
+     * aliases conflict with remaps: X is Cross by default, so treating X as
+     * Cancel sets both edges and silently cancels every keyboard load. */
+    int acc = (keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_SPACE]) ? 1 : 0;
+    int can = (keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_BACKSPACE]) ? 1 : 0;
     /* Honor remapped Cross/Circle (and Select/R3) via the same pad path as
      * gameplay — GameController A/B alone miss keyboard-as-pad and remaps. */
     uint16_t btn = pad_buttons_for(g_players[0], 1, true);
