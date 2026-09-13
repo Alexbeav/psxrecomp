@@ -31,16 +31,17 @@ struct PS_GPU {enum {INCMD_PLINE=1};};
 static int InCmd,InCmd_CC;static line_point InPLine_PrevPoint;
 static int sign_x_to_s32(unsigned bits,unsigned value){unsigned mask=1u<<(bits-1);return int((value&((mask<<1)-1))^mask)-int(mask);}
 '''
-dispatch='\n'.join(f'case {b}: if(mask&2)Command_DrawLine<false,false,{b},true>(words);else Command_DrawLine<false,false,{b},false>(words);break;' for b in range(-1,4))
-main='''int main(){unsigned op,color,mode,mask,field;int x0,y0,x1,y1,ox,oy,clip;
+dispatch='\n'.join(f'case {b}: if(op&0x10) {{if(mask&2)Command_DrawLine<false,true,{b},true>(words);else Command_DrawLine<false,true,{b},false>(words);}} else {{if(mask&2)Command_DrawLine<false,false,{b},true>(words);else Command_DrawLine<false,false,{b},false>(words);}} break;' for b in range(-1,4))
+main='''int main(){unsigned op,color,mode,mask,field,color1;int x0,y0,x1,y1,ox,oy,clip;
 const int matrix[4][4]={{-4,0,-3,1},{2,-2,3,-1},{-3,1,-4,0},{3,-1,2,-2}};
 for(int y=0;y<4;y++)for(int x=0;x<4;x++)for(int c=0;c<256;c++){int v=c+matrix[y][x];if(v<0)v=0;if(v>255)v=255;DitherLUT[y][x][c]=v>>3;}
-while(scanf("%u %u %d %d %d %d %d %d %u %u %u %d",&op,&color,&x0,&y0,&x1,&y1,&ox,&oy,&mode,&mask,&field,&clip)==12){
+while(scanf("%u %u %d %d %d %d %d %d %u %u %u %d %u",&op,&color,&x0,&y0,&x1,&y1,&ox,&oy,&mode,&mask,&field,&clip,&color1)==13){
 for(unsigned i=0;i<512*1024;i++)GPURAM[i/1024][i%1024]=(uint16)(i*37u+0x1234u);
 ClipX0=ClipY0=clip;ClipX1=1023-clip;ClipY1=511-clip;OffsX=ox;OffsY=oy;
 MaskSetOR=(mask&1)?0x8000:0;MaskEvalAND=(mask&2)?0x8000:0;dtd=!!(mode&512);dfe=!!(mode&1024);
 DisplayMode=field?0x24:0;DisplayFB_YStart=0;field_ram_readout=field==2;
-uint32 words[]={op<<24|color,((uint32)y0&65535u)<<16|((uint32)x0&65535u),((uint32)y1&65535u)<<16|((uint32)x1&65535u)};
+uint32 words[4]={op<<24|color,((uint32)y0&65535u)<<16|((uint32)x0&65535u),color1,0};
+words[2+!!(op&0x10)]=((uint32)y1&65535u)<<16|((uint32)x1&65535u);
 DrawTimeAvail=254;switch((op&2)?int((mode>>5)&3):-1){DISPATCH}
 uint8 hash[32];psx_sha256_compute((uint8*)GPURAM,sizeof(GPURAM),hash);
 printf("%d ",256-DrawTimeAvail);for(unsigned i=0;i<32;i++)printf("%02x",hash[i]);puts("");}}
@@ -55,6 +56,8 @@ for i in range(256):
     xy=geometries[i%len(geometries)] if i<104 else tuple(rng.randrange(-1024,1024) for _ in range(4))
     cases.append([0x40+i%8,[0x00ff00,0xe3942b,0xffffff,0][i%4],*xy,0 if i<104 else rng.choice([-1024,-1,0,240,1023]),240 if i==0 else 0 if i<104 else rng.choice([-1024,-1,0,240,1023]),((i//8)%4)*32+(512 if i&1 else 0)+(1024 if i%7==0 else 0),(i//32)%4,(i//64)%3,0 if i%3 else 4])
 cases[0]=[0x40,0x00ff00,84,162,84,162,0,240,512,0,0,0]
+cases=[c+[c[1]] for c in cases]+[[c[0]+16,*c[1:],rng.randrange(1<<24)] for c in cases]
+cases[256]=[0x50,0x00ff00,84,162,84,162,0,0,512,0,0,0,0x00ff00]
 r=subprocess.run([str(exe)],input=''.join(' '.join(map(str,c))+'\n' for c in cases),capture_output=True,text=True,check=True,timeout=120)
 rows=r.stdout.splitlines();assert len(rows)==len(cases)
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()

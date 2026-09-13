@@ -404,13 +404,15 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
     *extra_work=0;
     if(g_hr || g_wide_cur || g_precise_valid || g_perspective_valid)return 0;
     const uint32_t *words=block->words;unsigned opcode=words[0]>>24;
-    if(opcode>=0x40 && opcode<=0x47) {
-        int dx=(int)((words[2]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);
-        int dy=(int)(((words[2]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);
+    if((opcode>=0x40 && opcode<=0x47) || (opcode>=0x50 && opcode<=0x57)) {
+        unsigned shaded=!!(opcode&0x10),last=2+shaded;
+        int dx=(int)((words[last]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);
+        int dy=(int)(((words[last]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);
         int ax=abs(dx),ay=abs(dy),length=ax>ay?ax:ay;
         if(ax>=1024 || ay>=512)return 1;
         int x=block->x,y=block->y;
-        if(dx<=0 && length){x+=dx;y+=dy;dx=-dx;dy=-dy;}
+        int reversed=dx<=0 && length;
+        if(reversed){x+=dx;y+=dy;dx=-dx;dy=-dy;}
         /* Source line interpolation uses 32 fractional bits, rounds the step
          * away from zero, and biases half-pixel ties by 1024 fractional units. */
         int64_t sx=(int64_t)dx*4294967296LL,sy=(int64_t)dy*4294967296LL;
@@ -421,11 +423,18 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
         uint64_t fx=((uint64_t)(int64_t)x<<32)+2147483648ULL-1024;
         uint64_t fy=((uint64_t)(int64_t)y<<32)+2147483648ULL-(sy<0?1024:0);
         SourceTriangleColors c={0};c.dither=!!(block->draw_mode&512u);
-        for(unsigned channel=0;channel<3;channel++)c.base[channel]=((words[0]>>(8*channel))&255u)*4096u;
+        uint32_t start[3],step[3];
+        for(unsigned channel=0;channel<3;channel++) {
+            int first=(words[shaded && reversed?2:0]>>(8*channel))&255u;
+            int end=(words[shaded && !reversed?2:0]>>(8*channel))&255u;
+            start[channel]=(unsigned)first*4096u+(shaded?2048u:0);
+            step[channel]=(uint32_t)(shaded && length?((end-first)*4096)/length:0);
+        }
         for(int i=0;i<=length;i++,fx+=(uint64_t)sx,fy+=(uint64_t)sy) {
             int px=(int)((fx>>32)&2047u),py=(int)((fy>>32)&2047u);
             if(px<block->clip_left || px>block->clip_right || py<block->clip_top || py>block->clip_bottom)continue;
             if(block->interlace && ((unsigned)py&1u)==block->skip_field)continue;
+            for(unsigned channel=0;channel<3;channel++)c.base[channel]=start[channel]+step[channel]*(unsigned)i;
             source_triangle_span(&c,py,px,1,px);
         }
         return 1;
