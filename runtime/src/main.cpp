@@ -6909,6 +6909,7 @@ static void runtime_settings_menu_host_pause_loop(void) {
         }
         runtime_settings_menu_poll_nav();
         rewind_pause_present();
+        starvation_watchdog_heartbeat();
         SDL_Delay(8);
     }
     freeze_heartbeat_set_paused(0);

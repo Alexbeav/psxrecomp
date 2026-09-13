@@ -9,8 +9,9 @@ Builds without recomp-ui retain the legacy controller-route-only panel.
 The host pauses guest execution at a VBlank boundary while the menu is open.
 Callbacks therefore cannot race guest instructions, SIO transfers, or CD-ROM
 commands.  F1 opens the menu; keyboard arrows/Enter/Escape and controller
-D-pad/Cross/Circle navigate it.  F6 remains the direct controller-route
-shortcut.
+D-pad/Cross/Circle navigate it. Ctrl+F6 changes the controller route directly.
+F6 retains the scanline toggle. Both bindings can be changed or disabled in
+`config.ini` under `[KeyMap]` with `RuntimeMenu` and `SwapControllerPorts`.
 
 ## Apply tiers
 
@@ -54,7 +55,9 @@ Acceptance testing should cover:
 - region changes between identifiable PSX discs;
 - software, OpenGL, and Vulkan overlay presentation.
 
-The drive currently reports the close/reinsert transition immediately, as the
-pre-existing debug action did.  If a title requires guest-observable tray-open
-dwell time, add it as title-neutral CD-controller state with tests; do not add a
-per-title delay.
+The disc actions use the existing timed-lid controller. The guest receives a
+tray-open event and a later close transition through that shared owner.
+The menu marks the host heartbeat paused while it suspends guest execution.
+It also refreshes the starvation watchdog after each paused presentation,
+including after a native file picker returns. Time spent in a host menu must
+not cause the watchdog to terminate the game when guest execution resumes.
