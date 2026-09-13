@@ -168,6 +168,13 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | `PSX_NETPLAY` | OFF | Link recomp-net + lobby; advertise full netplay UI (multiplayer titles) |
 | `PSX_SETUP_WIZARD` | OFF | Advertise first-run setup wizard + Generate & rebuild in recomp-ui |
 
+Distributors can bundle normal and diagnostic executables from the same source
+and generated inputs. Start the normal executable by default. To collect a
+report, close the game and start the diagnostic executable with the same user
+settings and saves. Switching between these already-built executables requires
+a restart, not a compiler. With `PSX_DEBUG_TOOLS=OFF`, the freeze heartbeat does
+not start its background thread or write periodic snapshots.
+
 See [SDL backends](SDL_BACKENDS.md) for the fallback command and the initial
 SDL3/SDL2 game A/B results.
 

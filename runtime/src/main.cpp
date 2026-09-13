@@ -15224,7 +15224,7 @@ session_reboot:
 #ifdef PSX_COSIM
         cosim_init();  /* first-divergence oracle server */
 #endif
-        /* Heartbeat always on — see freeze_heartbeat.c rationale. */
+        /* Diagnostic builds keep an independent stall observer. */
         freeze_heartbeat_start("psx-runtime");
     } else {
 #ifndef PSX_NO_DEBUG_TOOLS
