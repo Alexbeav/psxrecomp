@@ -28,6 +28,30 @@ void psx_mod_function_entry(struct CPUState* cpu, uint32_t address);
 
 /* Narrow guest services available to trusted plugin callbacks. */
 int psx_mod_game_started(void);
+/* Read an original mounted-disc file without changing guest CD state/timing.
+ * Emulation-thread callbacks only. NULL buffer + zero capacity queries size;
+ * otherwise capacity must hold the entire file. Active sector mods apply. */
+int psx_mod_read_disc_file(const char* path, void* buffer, uint32_t capacity,
+                           uint32_t* size);
+/* Experimental retained-texture service (currently OpenGL only). IDs are
+ * nonzero, stable game-owned identities, NOT GL names. Banks are immutable
+ * 16-bit PS1 texels/indices with a caller-selected row pitch (width).
+ * A missing bank may be reconstructed from original assets by the resolver,
+ * including when a restored DMA queue refers to a previously unseen level. */
+typedef int (*PSXModTextureBankResolver)(uint16_t id);
+int psx_mod_texture_banks_supported(void);
+int psx_mod_define_texture_bank(uint16_t id, uint32_t width, uint32_t height,
+                                const uint16_t* pixels);
+void psx_mod_set_texture_bank_resolver(PSXModTextureBankResolver resolver);
+/* A dedicated GPU-DMA packet arena. Only GT3 commands sourced from this
+ * allocation interpret C1/C2's otherwise-unused high bytes as a bank ID:
+ * id = (C1 >> 24) | ((C2 >> 24) << 8). ID zero uses ordinary VRAM. The rest
+ * of the packet is standard GP0, retaining OT order, palettes and STP blend.
+ * Optional 40-byte suffix after the 40-byte tagged GT3: u32 magic 0x48545031,
+ * three IEEE float 1/z weights, six IEEE float x/y coordinates. This enables
+ * precise perspective rendering without transient host-pointer side tables.
+ * Allocate during activation; do not mix stock game packets into this arena. */
+uint32_t psx_mod_alloc_texture_packet_memory(uint32_t size, uint32_t alignment);
 uint8_t psx_mod_read_byte(uint32_t address);
 void psx_mod_write_byte(uint32_t address, uint8_t value);
 uint16_t psx_mod_read_half(uint32_t address);

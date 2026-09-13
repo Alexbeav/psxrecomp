@@ -11,6 +11,8 @@
  */
 
 #include "gpu.h"
+#include "gpu_gl_renderer.h"
+#include "mod_texture_banks.h"
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "mod_memory.h"
@@ -4122,14 +4124,36 @@ static void gp0_exec_shaded_textured_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
+    uint16_t host_bank = mod_texture_packet_bank(gp0_cmd_source_addr, gp0_cmd_buf, 9u);
+    if (host_bank && (gr_backend() != GR_BACKEND_OPENGL ||
+                      !gl_renderer_select_texture_bank(host_bank))) return;
+
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     prepare_precise_triangle(1, 4, 7,
                              vx, vy);
     prepare_texture_triangle(1, 4, 7);
+    if (host_bank) {
+        float q[3], xy[6];
+        if (mod_texture_packet_precision(gp0_cmd_source_addr, q, xy)) {
+            gr_set_precise_triangle(1,
+                (int32_t)((xy[0] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[1] + draw_offset_y) * 65536.0f),
+                (int32_t)((xy[2] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[3] + draw_offset_y) * 65536.0f),
+                (int32_t)((xy[4] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[5] + draw_offset_y) * 65536.0f));
+            gr_set_perspective_triangle(1, q[0], q[1], q[2]);
+        }
+    }
     gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
                                      vx[1], vy[1], u[1], v[1], c[1],
                                      vx[2], vy[2], u[2], v[2], c[2],
                                      clut_x, clut_y, tpage, raw_texture);
+    if (host_bank) (void)gl_renderer_select_texture_bank(0);
+}
+
+int psx_mod_texture_banks_supported(void) {
+    return gr_backend() == GR_BACKEND_OPENGL && gl_renderer_texture_banks_supported();
 }
 
 /* Execute shaded textured quad (GP0 0x3C-0x3F) */

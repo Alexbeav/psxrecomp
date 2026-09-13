@@ -23,6 +23,16 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
+    target_include_directories(mod_texture_banks_test PRIVATE include)
+    add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
+    if(NOT MSVC)
+        add_executable(mod_memory_snapshot_test tests/test_mod_memory_snapshot.c)
+        target_include_directories(mod_memory_snapshot_test PRIVATE include src)
+        target_compile_options(mod_memory_snapshot_test PRIVATE -O2 -flto -ffunction-sections -fdata-sections)
+        target_link_options(mod_memory_snapshot_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME mod_memory_snapshot_test COMMAND mod_memory_snapshot_test)
+    endif()
     # Optional real-hardware regression. Configure its dependencies explicitly;
     # absence must remain visible, never counted as a passing GPU test.
     set(PSX_GL_READBACK_SDL_ROOT "" CACHE PATH "SDL3 static build root for GL readback test")

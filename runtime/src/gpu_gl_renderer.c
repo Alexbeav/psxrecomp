@@ -67,6 +67,7 @@
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
 #include "gpu_gl_renderer.h"
+#include "mod_texture_banks.h"
 #include "frame_interpolation.h"
 #include "host_osd.h"
 #include "psx_savestate_menu.h"
@@ -359,6 +360,8 @@ static void interp_draw_quad(float alpha, int lx, int ly, int lw, int lh);
 static void present_bezel(int ww, int wh, int lx, int ly, int lw, int lh);
 
 static int           s_raster_ok = 0;      /* full GPU pipeline available */
+static GLuint s_bank_tex[65536];
+static GLuint s_selected_bank_tex;
 
 /* Authoritative VRAM: hr color texture + stencil (mask bit) FBO. */
 static GLuint        s_hr_tex = 0, s_hr_fbo = 0, s_hr_rb = 0;
@@ -1107,7 +1110,9 @@ static const char *TEX_FS =
     "uniform int u_filter;    /* 1 = bilinear */\n"
     "uniform float u_shift;\n"
     "int vram_at(int x, int y){\n"
-    "  return int(texelFetch(u_vram, ivec2(x & 1023, y & 511), 0).r);\n"
+    "  ivec2 p = ivec2(x & 1023, y & 511);\n"
+    "  if (any(greaterThanEqual(p, textureSize(u_vram, 0)))) return 0;\n"
+    "  return int(texelFetch(u_vram, p, 0).r);\n"
     "}\n"
     "int fetch_texel(int u, int v){\n"
     "  u &= 255; v &= 255;\n"
@@ -1746,6 +1751,7 @@ static float s_tb[TEXBATCH_MAXV * TEXV];
 static int   s_tb_n = 0;                    /* verts queued */
 static int   s_tb_semi = -2;
 static int   s_tb_mask = 0, s_tb_filter = 0;
+static GLuint s_tb_bank_tex;
 static int   s_tb_twin[4] = {0, 0, 0, 0};
 static uint64_t s_batch_total = 0, s_batch_reason[7];
 
@@ -1857,7 +1863,7 @@ static void flush_tex_batch(void) {
     hr_begin(1);
     p_glUseProgram(s_tex_prog);
     p_glActiveTexture(PSXGL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_raw_tex);
+    glBindTexture(GL_TEXTURE_2D, s_tb_bank_tex ? s_tb_bank_tex : s_raw_tex);
     p_glUniform1i(s_uVram, 0);
     p_glUniform4i(s_uTwin, s_tb_twin[0], s_tb_twin[1], s_tb_twin[2], s_tb_twin[3]);
     p_glUniform1i(s_uMaskset, s_tb_mask);
@@ -2053,7 +2059,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     int depth  = (texpage >> 7) & 3; if (depth > 2) depth = 2;
 
     flush_cpu_upload();   /* if a CPU->VRAM upload is pending it flushes the batch first */
-    flush_pack_if_sampling(base_x, base_y, depth, clut_x, clut_y);  /* flushes batch iff it must pack */
+    if (!s_selected_bank_tex)
+        flush_pack_if_sampling(base_x, base_y, depth, clut_x, clut_y);
     mark_prim_dirty(xs, ys, 3, 1 /* textured */);
 
     /* Append to the textured batch. Flush first if this prim's blend/mask/twin/
@@ -2089,7 +2096,8 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         int isolate = (semi >= 0);
         int reason = -1;
         if (s_tb_n > 0) {
-            if (isolate) reason = 0;
+            if (s_tb_bank_tex != s_selected_bank_tex) reason = 0;
+            else if (isolate) reason = 0;
             else if (batch_semi != s_tb_semi) reason = 1;
             else if (s_mask_set != s_tb_mask) reason = 2;
             else if (s_tex_filter != s_tb_filter) reason = 3;
@@ -2104,6 +2112,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         if (s_tb_n + 3 > TEXBATCH_MAXV) { s_batch_reason[6]++; flush_tex_batch(); }
         if (s_tb_n == 0) {            /* opening a batch: capture its keyed state */
             s_tb_semi = batch_semi; s_tb_mask = s_mask_set; s_tb_filter = s_tex_filter; s_tb_gate = gate;
+            s_tb_bank_tex = s_selected_bank_tex;
             s_tb_twin[0] = twx; s_tb_twin[1] = twy; s_tb_twin[2] = tox; s_tb_twin[3] = toy;
         }
         float *vp = &s_tb[s_tb_n * TEXV];
@@ -2984,6 +2993,41 @@ static int init_gpu_raster(void) {
     return 1;
 }
 
+int gl_renderer_texture_banks_supported(void) { return s_raster_ok && !s_cpu_auth_dual; }
+
+int gl_renderer_select_texture_bank(uint16_t id) {
+    uint32_t width, height;
+    const uint16_t* pixels;
+    GLint alignment, row_length;
+    if (!id) { s_selected_bank_tex = 0; return 1; }
+    if (!gl_renderer_texture_banks_supported()) return 0;
+    if (!s_bank_tex[id]) {
+        pixels = mod_texture_bank_pixels(id, &width, &height);
+        if (!pixels) return 0;
+        glGenTextures(1, &s_bank_tex[id]);
+        p_glActiveTexture(PSXGL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, s_bank_tex[id]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+        glGetIntegerv(PSXGL_UNPACK_ROW_LENGTH, &row_length);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, PSXGL_R16UI, (GLsizei)width,
+                     (GLsizei)height, 0, PSXGL_RED_INTEGER, GL_UNSIGNED_SHORT, pixels);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+        glPixelStorei(PSXGL_UNPACK_ROW_LENGTH, row_length);
+        if (glGetError() != GL_NO_ERROR) {
+            glDeleteTextures(1, &s_bank_tex[id]); s_bank_tex[id] = 0;
+            return 0;
+        }
+    }
+    s_selected_bank_tex = s_bank_tex[id];
+    return 1;
+}
+
 int gl_renderer_init_context(SDL_Window *win) {
     s_win = win;
     s_present_w = 0;
@@ -3084,6 +3128,12 @@ void gl_renderer_set_swap_interval(int interval) {
 }
 
 void gl_renderer_shutdown(void) {
+    if (s_ctx) {
+        for (unsigned i = 1; i < 65536u; ++i)
+            if (s_bank_tex[i]) glDeleteTextures(1, &s_bank_tex[i]);
+    }
+    memset(s_bank_tex, 0, sizeof s_bank_tex);
+    s_selected_bank_tex = s_tb_bank_tex = 0;
     if (s_ctx) {
         ensure_cpu();
         SDL_GL_DeleteContext(s_ctx); s_ctx = NULL;
