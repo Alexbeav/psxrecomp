@@ -94,8 +94,8 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 50,000, with no page-hash or clock mismatch across the completed run.
-All ten raw RAM snapshots at 5,000-return intervals match the admitted stock
+to 100,000, with no page-hash or clock mismatch across the completed run.
+All twenty raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
 are not resumable emulator states.
