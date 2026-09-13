@@ -94,8 +94,9 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 100,000, with no page-hash or clock mismatch across the completed run.
-All twenty raw RAM snapshots at 5,000-return intervals match the admitted stock
+to 122,977, with no page-hash or clock mismatch before an unsupported
+raw blended sprite command stopped execution. The last completed bound is
+100,000 returns. All twenty-four raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
 are not resumable emulator states.
@@ -118,6 +119,15 @@ full VRAM SHA-256 and timing with extracted, unedited Nymashock line functions.
 `tools/tasreplays/source_line_oracle.py` records source and harness identities;
 `runtime/tests/test_source_gpu_line_contracts.py` checks the retained fixtures
 at O0/O2. This is component evidence, not an unmodified-core replay pass.
+
+The source sprite path also admits raw semi-transparent rectangles (GP0 0x67),
+using the existing raw texture and blend implementation. Like 0x66, this is a
+four-word packet with three-word FIFO feedback; raw colour bypasses modulation
+and leaves sprite timing unchanged. The sprite fixture checks both opcodes at
+O0/O2. The stock Octoshock2.3 pixel oracle compares 192 full VRAM images across
+texture depths, blend modes, mask modes and command colours. Nymashock
+`gpu_sprite.cpp` and `SPR_HELPER_SUB` select the same raw/blend semantics.
+This component pass does not yet establish replay progress past return 122,977.
 
 Source basis: BizHawk 2.9.1's Mednafen 1.29.0 `psx/cdc.cpp` (`HandlePlayRead`,
 `CalcSeekTime`, `Command_SeekL`, `Command_Pause`, `Command_Reset`,
