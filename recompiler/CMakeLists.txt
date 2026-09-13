@@ -480,6 +480,15 @@ if(BUILD_TESTING)
             target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
             add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
+            add_executable(tas_gpu_line_${_mode}
+                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_line_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_line_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_line_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
+                $<TARGET_FILE:tas_gpu_line_${_mode}>)
         endforeach()
     endif()
 

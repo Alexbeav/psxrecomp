@@ -74,6 +74,6 @@ int main(int argc,char **argv) {
     const unsigned opcodes[]={0x20,0x21,0x22,0x23,0x28,0x29,0x2a,0x2b};
     for(unsigned op=0;op<8;op++)for(unsigned blend=0;blend<4;blend++)for(unsigned mask=0;mask<4;mask++)run(opcodes[op],blend,mask);
     SourceGPUCommandProjection s;source_gpu_command_cold(&s);
-    check(!source_gpu_command_write(&s,0x40000000) && s.error==SOURCE_GPU_COMMAND_UNSUPPORTED,"unqualified line commands still fail closed");
+    check(!source_gpu_command_write(&s,0x48000000) && s.error==SOURCE_GPU_COMMAND_UNSUPPORTED,"unqualified polyline commands still fail closed");
     printf("source_gpu_flat_blend: %u checks passed\n",checks);
 }
