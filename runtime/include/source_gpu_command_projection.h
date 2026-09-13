@@ -11,7 +11,7 @@
  * explicitly qualified source GPU service event; reads do not advance it.
  * Current scope: NOP/cache-clear, drawing environment, A0/C0 transfers,02 fills,80 copies, variable rectangles,
  * observed untextured/textured polygons, including general opaque flat quads,
- * and flat two-vertex lines (0x40-0x47),
+ * and flat/shaded two-vertex lines (0x40-0x47, 0x50-0x57),
  * with inclusive clipping. Vertex and drawing offset are independently signed11-bit. Their sum stays
  * within[-2048,2046]; source signed clipping and raw interpolation are separate.
  * Clipping stays inside the admitted VRAM draw area.
@@ -65,14 +65,14 @@ static inline unsigned source_gpu_polygon_setup(unsigned opcode) {
     return opcode&4 ? (opcode&0x10 ? 450:180) : (opcode&0x10 ? 288:0);
 }
 static inline int source_gpu_line_supported(unsigned command) {
-    return command>=0x40 && command<=0x47; /* Two-vertex, flat-color lines. */
+    return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);
 }
 static inline int source_gpu_block_supported(unsigned command) {
     return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66;
 }
 static inline unsigned source_gpu_command_length(uint32_t word) {
     unsigned command=word>>24;
-    if(source_gpu_line_supported(command))return 3;
+    if(source_gpu_line_supported(command))return 3+!!(command&0x10);
     if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66?4:3;
     if(source_gpu_polygon_supported(command))return 1+3*source_gpu_polygon_stride(command)-!!(command&0x10);
     return command==0xa0 || command==0xc0 ? 3u : 1u;
@@ -160,8 +160,9 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
 static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,const uint32_t *words) {
     if(s->clip_y0>511 || s->clip_y1>511 ||
        ((s->display_mode&0x24)==0x24 && !(s->draw_mode&0x400) && !s->field_valid))return -1;
-    int dx=source_gpu_command_coord(words[2],0)-source_gpu_command_coord(words[1],0);
-    int dy=source_gpu_command_coord(words[2],16)-source_gpu_command_coord(words[1],16);
+    unsigned last=2+!!((words[0]>>24)&0x10);
+    int dx=source_gpu_command_coord(words[last],0)-source_gpu_command_coord(words[1],0);
+    int dy=source_gpu_command_coord(words[last],16)-source_gpu_command_coord(words[1],16);
     if(dx<0)dx=-dx;if(dy<0)dy=-dy;
     return 16+((dx>=1024 || dy>=512)?0:2*(dx>dy?dx:dy));
 }
@@ -194,11 +195,12 @@ static inline int source_gpu_command_process(SourceGPUCommandProjection *s) {
 
     unsigned command=s->queue[0]>>24;
     if(source_gpu_line_supported(command)) {
-        if(s->budget<0 || s->count<3)return 1;
+        unsigned n=source_gpu_command_length(s->queue[0]);
+        if(s->budget<0 || s->count<n)return 1;
         int cost=source_gpu_command_line_cost(s,s->queue);
         if(cost<0){s->error=SOURCE_GPU_COMMAND_UNSUPPORTED;return 0;}
-        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=3;
-        for(unsigned i=0;i<3;i++)s->dispatch.words[i]=source_gpu_command_pop(s);
+        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=n;
+        for(unsigned i=0;i<n;i++)s->dispatch.words[i]=source_gpu_command_pop(s);
         s->budget-=2+cost;return 1;
     }
     if(source_gpu_block_supported(command)) {
