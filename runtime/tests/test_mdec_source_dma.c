@@ -1,5 +1,6 @@
 /* Authored production-controller fixture. No BIOS, disc or retail code. */
 #define _POSIX_C_SOURCE 200809L
+#include "dma_gpu_ll.c"
 #include "dma.c"
 #include "mdec.c"
 #include <assert.h>
@@ -49,6 +50,9 @@ static int ready_state=1;
 int gpu_dma_source_ll_ready(void) {return ready_state;}
 void gpu_write_gp0(uint32_t v) {uploaded[upload_count++]=v;}
 uint32_t gpu_dma_vram_upload_words(void) {return upload_left;}
+void gpu_ws_validate_linked_list_header(uint32_t a,uint32_t b) {(void)a;(void)b;abort();}
+void gpu_ws_validate_linked_list_node(uint32_t a,uint32_t b) {(void)a;(void)b;abort();}
+void gpu_ws_restore_linked_list_rank(uint32_t a) {(void)a;abort();}
 void gpu_ws_begin_linked_list(void) {}
 void gpu_ws_end_linked_list(void) {}
 void gpu_ws_prepass_linked_list(uint32_t a) {(void)a;}

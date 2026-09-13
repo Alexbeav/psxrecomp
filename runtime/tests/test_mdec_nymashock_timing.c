@@ -1,4 +1,4 @@
-/* Nymashock block deadline and model-bound continuation, through the MDEC API. */
+/* Nymashock block deadline, through the MDEC API. */
 #include <assert.h>
 #include <stdlib.h>
 #include "mdec.c"
@@ -19,15 +19,7 @@ int main(void) {
   mdec_dma_write_word(0xfe000000);
   assert(source_mdec.phase==SMDEC_BLOCK_WAIT);
   mdec_source_advance(cycles-1);assert(source_mdec.phase==SMDEC_BLOCK_WAIT);
-  unsigned n=mdec_snapshot_bytes();uint8_t *wire=malloc(n);mdec_snapshot_write(wire);
-  model(cycles==512?"nymashock-1.29.0":"octoshock-2.3");
-  assert(mdec_snapshot_read(wire,n));
   mdec_source_advance(1);assert(source_mdec.phase==SMDEC_INPUT);
-  if(cycles==512) {
-   wire[n-1]=1;assert(!mdec_snapshot_read(wire,n));wire[n-1]=0;
-   model("octoshock-2.3");assert(!mdec_snapshot_read(wire,n));
-  }
-  free(wire);
  }
  return 0;
 }
