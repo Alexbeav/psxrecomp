@@ -340,7 +340,7 @@ typedef struct {
     const PGXPHooks *pgxp;
     int32_t (*ws_screen_x_bound)(int32_t vanilla);
     void (*mod_function_entry)(CPUState *cpu, uint32_t address);
-    /* ABI v22. include_replay=1 queries installation for the fused-stub
+    /* ABI v24. include_replay=1 queries installation for the fused-stub
      * admission guard; zero queries whether a boundary must be observed now. */
     int      (*cpu_step_boundary_enabled)(int include_replay);
     void     (*cpu_step_boundary)(CPUState *cpu, uint32_t address);

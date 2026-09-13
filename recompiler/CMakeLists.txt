@@ -818,6 +818,14 @@ endif()
 if(BUILD_TESTING)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
                      "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
+    if(Python3_Interpreter_FOUND)
+        # The Python driver compiles test_scheduler_precise_escape.c and
+        # test_source_gpu_pending_deadline.c at O0/O2.
+        add_test(NAME tas_scheduler_precise_escape
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_scheduler_precise_escape.py"
+                --cc ${CMAKE_C_COMPILER})
+    endif()
 endif()
 
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either
