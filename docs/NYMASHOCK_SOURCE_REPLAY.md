@@ -94,9 +94,8 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 122,977, with no page-hash or clock mismatch before an unsupported
-raw blended sprite command stopped execution. The last completed bound is
-100,000 returns. All twenty-four raw RAM snapshots at 5,000-return intervals match the admitted stock
+to 150,000, with no page-hash or clock mismatch across the completed run.
+All thirty raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
 are not resumable emulator states.
@@ -127,7 +126,10 @@ and leaves sprite timing unchanged. The sprite fixture checks both opcodes at
 O0/O2. The stock Octoshock2.3 pixel oracle compares 192 full VRAM images across
 texture depths, blend modes, mask modes and command colours. Nymashock
 `gpu_sprite.cpp` and `SPR_HELPER_SUB` select the same raw/blend semantics.
-This component pass does not yet establish replay progress past return 122,977.
+The 150,000-return replay passes the former 0x67 stop at return 122,977.
+The launcher and RAM probe accept up to 64 selected raw snapshots, enough
+for the full Biohazard route at 5,000-return intervals plus terminal diagnostics.
+The observer tests cover the 64-snapshot boundary and reject a 65th entry.
 
 Source basis: BizHawk 2.9.1's Mednafen 1.29.0 `psx/cdc.cpp` (`HandlePlayRead`,
 `CalcSeekTime`, `Command_SeekL`, `Command_Pause`, `Command_Reset`,

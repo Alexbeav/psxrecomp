@@ -150,7 +150,7 @@ def main():
     parser.add_argument('--ram-page-probe',action='store_true',
                         help='passive hashes of all512 RAM pages at original-model frontend returns')
     parser.add_argument('--ram-snapshot-frame',type=int,action='append',default=[],
-                        help='also save raw RAM at a selected frontend return (requires page probe; max32)')
+                        help='also save raw RAM at a selected frontend return (requires page probe; max64)')
     parser.add_argument("--read-watch", type=lambda x: int(x, 0), nargs=2,
                         metavar=("LOW", "HIGH"), help="record existing RAM reads in physical [LOW,HIGH)")
     parser.add_argument("--cd-read-start-model", choices=("default", "octoshock-2.2.2-pipeline"), default="default",
@@ -200,10 +200,10 @@ def main():
         parser.error('--speed requires --show; headless playback is already uncapped')
     if args.ram_page_probe and args.field_model!='octoshock-2.2.2-ntsc-raster':
         raise ValueError('RAM page probe requires source raster frontend boundaries')
-    if args.ram_snapshot_frame and (not args.ram_page_probe or len(args.ram_snapshot_frame)>32 or
+    if args.ram_snapshot_frame and (not args.ram_page_probe or len(args.ram_snapshot_frame)>64 or
             len(set(args.ram_snapshot_frame))!=len(args.ram_snapshot_frame) or
             any(f<1 for f in args.ram_snapshot_frame)):
-        raise ValueError('RAM snapshots require page probe and 1..32 unique positive frames')
+        raise ValueError('RAM snapshots require page probe and 1..64 unique positive frames')
     if args.timer2_model!="default" and args.timer1_model!="octoshock-2.2.2":
         raise ValueError("timer2 model requires source timer1 model")
     if args.timer1_model!="default" and args.field_model!="octoshock-2.2.2-ntsc-raster":
