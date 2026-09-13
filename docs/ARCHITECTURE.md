@@ -69,6 +69,23 @@ the paths to its generated C. The runtime provides:
   scheduler on host fibers (`psx_fiber.c`: Win32 Fibers / POSIX `ucontext`), and
   the optional debug TCP server (`debug_server.c`).
 
+### Device time during interrupts
+
+Scheduled video events continue while the CPU handles an interrupt, including
+when its interrupt-enable bit is clear. `interrupts_service_scheduled_events`
+advances the field clock and raises pending hardware status;
+`psx_check_interrupts` separately decides whether the CPU can take an interrupt.
+This lets a guest callback poll video status without stopping the video clock.
+
+In 480-line interlace, `gpu_read_gpustat` clears bit31 during the blank interval
+derived from the current field phase and GP1 vertical display range. Reads do
+not advance time. This retains the existing whole-field approximation; it does
+not implement complete raster timing or GPU command execution latency. See
+[GPU timing limits](../accuracy/axis5_gpu.md#d9--field-status-uses-the-existing-whole-field-clock).
+
+The GCC CTest targets `vblank_in_exception_test` and
+`gpu_interlace_status_test` exercise these production owners without retail data.
+
 ### BIOS: LLE baseline + a swappable HLE tier
 
 The recompiled `SCPH1001.BIN` is the **low-level (LLE) baseline**: it *is* the

@@ -90,6 +90,7 @@ void psx_spu_sample_event_service(void);
  * BS_SEC_IRQ (and selfcheck's out-of-band latch) so resim keeps the snap's
  * phase. Legacy 8-byte IRQ sections still rebase to 0 on load. */
 uint32_t interrupts_get_cycles_since_vblank(void);
+extern uint32_t vblank_cycles; /* guest CPU cycles in the current video field */
 void     interrupts_set_cycles_since_vblank(uint32_t v);
 
 /* Cycle-budgeted precise event slicing: minimum guest-CPU-cycle distance to the

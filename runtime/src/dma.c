@@ -408,6 +408,7 @@ static void cancel_async_transfer(int ch) {
         cdrom_async.cycles_accum = 0;
     }
     if (ch == 2 && gpu_linked_list.active) {
+        channels[2].madr = gpu_linked_list.current_addr;
         uint64_t cycles = psx_cycle_count - gpu_ot_start_cycle;
         gpu_ot_record_walk_stats(cycles);
         DMAGpuOtCancel *c = &gpu_ot_stats.cancel_ring[
@@ -1284,6 +1285,17 @@ void dma_write_masked(uint32_t addr, uint32_t val, uint32_t mask) {
                 channels[ch].bcr = (channels[ch].bcr & ~mask) | (val & mask);
                 return;
             case 0x08:
+                /* A linked-list stop takes effect between packets. Keep the
+                 * already-started packet on the normal word-event clock before
+                 * exposing its next header to BreakDraw/DrawOTag callers. */
+                if (ch == 2 && gpu_linked_list.active && channel_enabled(2) &&
+                    (mask & (1u << 24)) && !(val & (1u << 24)) &&
+                    gpu_linked_list.phase == DMA_GPU_LL_PHASE_PAYLOAD) {
+                    uint32_t remaining = gpu_linked_list.word_count -
+                                         gpu_linked_list.payload_index;
+                    psx_advance_cycles(remaining);
+                    psx_devices_service_to_now();
+                }
                 channels[ch].chcr = (channels[ch].chcr & ~mask) | (val & mask);
                 if ((mask & (1u << 24)) && !((channels[ch].chcr >> 24) & 1u)) {
                     cancel_async_transfer(ch);

@@ -34,6 +34,8 @@
 #include <stdlib.h>
 #include <math.h>
 
+#include "gpu_interlace.h"
+
 /* ------------------------------------------------------------------ */
 /* Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -132,11 +134,13 @@ typedef struct {
     uint16_t *buf;
     int       w, h;            /* buffer dimensions */
     int       s;               /* coordinate scale */
+    int       skipped_row;     /* native row parity protected for this primitive */
     int       cx1, cy1, cx2, cy2; /* clip rect (inclusive) in buffer space */
 } RTarget;
 
 static inline RTarget rt_native(void) {
     RTarget t;
+    t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_vram; t.w = VRAM_WIDTH; t.h = VRAM_HEIGHT; t.s = 1;
     t.cx1 = g_clip_x1; t.cy1 = g_clip_y1; t.cx2 = g_clip_x2; t.cy2 = g_clip_y2;
     return t;
@@ -145,6 +149,7 @@ static inline RTarget rt_native(void) {
 static inline RTarget rt_hires(void) {
     int s = g_scale;
     RTarget t;
+    t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_hr; t.w = g_hr_w; t.h = g_hr_h; t.s = s;
     t.cx1 = g_clip_x1 * s;
     t.cy1 = g_clip_y1 * s;
@@ -166,6 +171,7 @@ static inline RTarget rt_hires(void) {
 static inline RTarget rt_wide(void) {
     int s = g_scale;
     RTarget t;
+    t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_wide_cur;
     t.w = g_wide_w * s; t.h = VRAM_HEIGHT * s; t.s = s;
     t.cx1 = 0;             t.cy1 = g_clip_y1 * s;
@@ -258,6 +264,7 @@ static inline uint16_t blend_pixels(uint16_t back, uint16_t front, int mode) {
 
 /* Write an opaque (untextured) pixel with semi-transparency if enabled */
 static inline void put_opaque(const RTarget *t, int x, int y, uint16_t color) {
+    if (((y / t->s) & 1) == t->skipped_row) return;
     if (x < 0 || x >= t->w || y < 0 || y >= t->h) return;
     if (x < t->cx1 || x > t->cx2 || y < t->cy1 || y > t->cy2) return;
 
@@ -284,6 +291,7 @@ static inline void put_opaque(const RTarget *t, int x, int y, uint16_t color) {
 static inline void put_textured(const RTarget *t, int x, int y, uint16_t texel,
                                 int mod_r, int mod_g, int mod_b,
                                 int raw_texture) {
+    if (((y / t->s) & 1) == t->skipped_row) return;
     if (x < 0 || x >= t->w || y < 0 || y >= t->h) return;
     if (x < t->cx1 || x > t->cx2 || y < t->cy1 || y > t->cy2) return;
 
@@ -1373,6 +1381,7 @@ void sw_wide_emit_tile(int band_y, int x, int y, int u, int v,
     if (!g_wide_cur) return;
     int s = g_scale, dx = wide_dx();
     RTarget t;
+    t.skipped_row = gpu_raster_skipped_row();
     t.buf = g_wide_cur; t.w = g_wide_w * s; t.h = VRAM_HEIGHT * s; t.s = s;
     t.cx1 = 0;            t.cx2 = g_wide_w * s - 1;
     t.cy1 = band_y * s;   t.cy2 = (band_y + 240) * s - 1;

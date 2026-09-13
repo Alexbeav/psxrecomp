@@ -520,6 +520,15 @@ if(BUILD_TESTING)
     target_include_directories(gpu_sw_edges_test PRIVATE src)
     add_test(NAME gpu_sw_edges_test COMMAND gpu_sw_edges_test)
 
+    add_executable(gpu_interlace_render_test
+        tests/test_gpu_interlace_render.c src/gpu_render.c
+        src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
+    target_include_directories(gpu_interlace_render_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(gpu_interlace_render_test PRIVATE m)
+    endif()
+    add_test(NAME gpu_interlace_render_test COMMAND gpu_interlace_render_test)
+
     add_executable(gpu_vk_upload_alignment_test
         tests/test_gpu_vk_upload_alignment.c)
     target_include_directories(gpu_vk_upload_alignment_test PRIVATE src)
@@ -623,6 +632,20 @@ if(BUILD_TESTING)
         src/psx_vblank_clock.c)
     target_include_directories(psx_vblank_clock_test PRIVATE include)
     add_test(NAME psx_vblank_clock_test COMMAND psx_vblank_clock_test)
+
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        # Include production owners, then discard unrelated runtime machinery.
+        add_executable(vblank_in_exception_test tests/test_vblank_in_exception.c)
+        add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c)
+        foreach(_test vblank_in_exception gpu_interlace_status)
+            target_include_directories(${_test}_test PRIVATE include)
+            target_compile_definitions(${_test}_test PRIVATE
+                PSX_ENABLE_BLOCK_CYCLES=1 PSX_NO_DEBUG_TOOLS=1)
+            target_compile_options(${_test}_test PRIVATE -O2 -fwhole-program)
+        endforeach()
+        add_test(NAME vblank_in_exception_test COMMAND vblank_in_exception_test)
+        add_test(NAME gpu_interlace_status_test COMMAND gpu_interlace_status_test)
+    endif()
 
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)

@@ -2302,14 +2302,11 @@ static void exec_command(uint8_t cmd) {
             lba = (int)cdda_lba;
             track = cdda_track;
             track_lba = (int)iso_track_start_lba(iso_handle, track);
-        } else if (reading) {
-            /* GetlocP reports the drive/sub-Q position. During a read the
-             * sector stream has already advanced past the data-ready sector. */
-            lba = msf_to_lba(read_min, read_sec, read_sect);
-        } else if (last_sector_lba >= 0) {
-            lba = last_sector_lba;
         } else {
-            lba = msf_to_lba(seek_min, seek_sec, seek_sect);
+            /* The drive cursor also moves on explicit seeks and survives
+             * Pause. Setloc only changes seek_*, while GetlocL owns the last
+             * data-sector header. Do not use that stale header for GetlocP. */
+            lba = msf_to_lba(read_min, read_sec, read_sect);
         }
         if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
         if (subq_replacements_active && last_valid_subq_available) {
@@ -2565,8 +2562,8 @@ static void process_pending(uint32_t cycles) {
 
     case 0x15: /* SeekL complete */
     case 0x16: /* SeekP complete */
-        stat_reg &= ~CDSTAT_SEEK;
-        stat_reg |= CDSTAT_READ;   /* PSX-CD-003: GT1 waits for READ after seek */
+        /* A plain seek finishes paused; only ReadN/ReadS starts reading. */
+        stat_reg &= ~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
         setloc_seek_far = 0;
     setloc_pending = 0;
         response_push(stat_reg);

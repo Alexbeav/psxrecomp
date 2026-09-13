@@ -11,6 +11,8 @@
  */
 
 #include "gpu.h"
+#include "gpu_interlace.h"
+#include "interrupts.h"
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "mod_memory.h"
@@ -2950,8 +2952,23 @@ uint32_t gpu_read_gpustat(void) {
     /* Bits 29-30: DMA direction */
     stat |= (dma_direction & 3) << 29;
 
-    /* Bit 31: LCF — drawing even/odd lines in interlace mode */
-    stat |= (lcf & 1) << 31;
+    /* In 480-line interlace, the drawing-line bit is clear during vertical
+     * blanking. Derive the blank interval from the existing VBlank clock
+     * (phase zero is display end) and GP1(07h), without advancing time on reads.
+     * Keeping the odd-field latch high through blanking makes an IRQ callback
+     * wait for another IRQ every field and can starve the interrupted thread.
+     * This retains the runtime's current whole-field clock approximation. */
+    uint32_t line_bit = lcf & 1u;
+    if (vertical_interlace && vres) {
+        const uint32_t lines = video_mode ? 314u : 263u;
+        const uint32_t start = v_display_y1 < lines ? v_display_y1 : lines;
+        const uint32_t end = v_display_y2 < lines ? v_display_y2 : lines;
+        const uint32_t active = end > start ? end - start : 0u;
+        const uint64_t phase = interrupts_get_cycles_since_vblank();
+        if (phase * lines < (uint64_t)(lines - active) * vblank_cycles)
+            line_bit = 0u;
+    }
+    stat |= line_bit << 31;
 
     return stat;
 }
@@ -3345,6 +3362,11 @@ void gpu_depth24_present_row(const GpuDisplayInfo* di, uint32_t y, uint32_t* out
     }
     for (; x < count; x++)
         out[x] = 0xFF000000u;
+}
+
+int gpu_raster_skipped_row(void) {
+    return psx_gpu_raster_skipped_row(vertical_interlace, vres,
+        draw_to_display, display_area_y, lcf);
 }
 
 int gpu_display_is_depth24(void) {

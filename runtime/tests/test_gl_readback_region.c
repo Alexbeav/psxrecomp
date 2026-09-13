@@ -9,6 +9,8 @@ void gpu_vram_dirty_mark_all(void){}
 int psx_netplay_active(void){return 0;}
 static int test_depth24;
 int gpu_display_is_depth24(void){return test_depth24;}
+static int test_skipped_row = -1;
+int gpu_raster_skipped_row(void){return test_skipped_row;}
 void gpu_get_display_info(GpuDisplayInfo *out){memset(out,0,sizeof(*out));out->display_x=32;out->display_y=32;out->width=320;out->height=16;}
 int psx_ws_prim_in_backdrop(void){return 0;}
 int gpu_ws_nw_flat_backdrop_enabled(void){return 0;}
@@ -36,6 +38,27 @@ int main(int argc,char **argv){
  printf("driver=%s renderer=%s scale=%d\n",glGetString(GL_VERSION),glGetString(GL_RENDERER),scale);
  glb_set_draw_area(0,0,1023,511);glb_set_mask_bits(0,0);glb_set_semi_transparency(0,0);glb_set_color_modulation(128,128,128,1);
  verify("initial upload");
+ /* Each queued primitive retains its own field even if state changes before
+  * readback flushes the batch. Fill and copy still write both fields. */
+ glb_fill_rect(64,0,16,16,0);
+ test_skipped_row=0;glb_draw_flat_rect(64,0,16,16,0x001f);
+ test_skipped_row=1;glb_draw_flat_rect(64,0,16,16,0x03e0);
+ test_skipped_row=-1;gl_renderer_sync_cpu();
+ for(int y=0;y<16;y++)check(image[y*1024+64]==((y&1)?0x001f:0x03e0),"flat batch field lifetime");
+ glb_fill_rect(512,0,16,16,0x7fff);
+ for(int skip=0;skip<2;skip++){
+  glb_fill_rect(64,32,16,16,0);
+  test_skipped_row=skip;uint64_t before=s_batch_total;
+  glb_draw_textured_rect(64,32,16,16,0,0,0,0,0x108);
+  test_skipped_row=-1;gl_renderer_sync_cpu();
+  check(s_batch_total==before+1,"textured primitive uses one batch");
+  for(int y=32;y<48;y++)check(image[y*1024+64]==((y&1)==skip?0:0x7fff),"textured field preservation");
+ }
+ test_skipped_row=0;glb_fill_rect(64,0,16,16,0x1234);
+ glb_copy_rect(64,0,80,0,16,16);test_skipped_row=-1;
+ gl_renderer_sync_cpu();
+ for(int y=0;y<16;y++)check(image[y*1024+80]==0x1234,"transfer keeps both fields");
+ verify("field preservation and transfer coherence");
  glb_draw_flat_rect(1020,511,1,1,0x7fff);
  check(glb_vram_read(1020,511)==0x7fff,"test pixel value");
  GlCohEvent event;int found=0;
