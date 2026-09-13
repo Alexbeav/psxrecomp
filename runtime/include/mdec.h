@@ -84,6 +84,8 @@ void mdec_debug_dma_out_end(uint32_t addr, uint32_t words);
 /* boot_state / savestate: full MDEC FIFO + tables (required for FMV resume). */
 uint32_t mdec_snapshot_bytes(void);
 void     mdec_snapshot_write(uint8_t *p);
+/* Validate and reserve host buffers without changing guest state. */
+int      mdec_snapshot_prepare(const uint8_t *p, uint32_t len);
 int      mdec_snapshot_read(const uint8_t *p, uint32_t len);
 
 #ifdef __cplusplus
