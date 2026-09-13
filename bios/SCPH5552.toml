@@ -42,3 +42,11 @@ table_ram_addr = "0x674"
 [[recompiler.bios_aliases]]
 ram_addr = "0xCF0"
 target_key = "0x641C"
+
+# LoadRunShell (ROM 0xBFC06FF0) calls 0x80030000 after copying the shell.
+# Verified on SCPH-5552 SHA-256 1faaa18f...352c09: ROM [0x6FF0,0x703C)
+# matches SCPH-1001, including lui t6,0x8003 / jalr t6 at 0xBFC07020.
+# Export boot-skip independently; call-HLE remains unavailable until its
+# DeliverEvent continuation and event behavior are qualified for this image.
+[recompiler.runtime_exports]
+shell_entry_phys = "0x00030000"
