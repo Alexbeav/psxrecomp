@@ -4,6 +4,7 @@ This fixture observes pixels only. It does not import runtime state or use the
 patched observer DLL, and makes no CPU/GPU clock or hardware accuracy claim.
 """
 from pathlib import Path
+from itertools import product
 import argparse, ctypes as c, hashlib, json, struct
 p=argparse.ArgumentParser(description=__doc__)
 for name in ['core','native-dumps','output']: p.add_argument('--'+name,type=Path,required=True)
@@ -35,13 +36,13 @@ texels=[0,0x801f,0x03e0,0xfc00]
 for mode in range(3):
  for blend in range(4):
   for mask in range(4):
-   for color in [0x808080,0xe3942b]:
-    name=f'm{mode}-b{blend}-k{mask}-c{color:06x}'
+   for raw_texture,color in product(range(2),[0x808080,0xe3942b]):
+    name=f'op{0x66+raw_texture:02x}-m{mode}-b{blend}-k{mask}-c{color:06x}'
     # Direct fixture inputs are the same explicit uploads on both sides.
     gpu=upload(0,300,texels)+upload(4,4,[0x1234,0x9234,0x1234,0x9234])
     gpu+=upload(0,256,[0x3210,0] if mode==0 else [0x0100,0x0302] if mode==1 else texels)
     gpu += [0xe3000000,0xe407ffff,0xe1000000|16|(mode<<7)|(blend<<5),0xe6000000|mask,
-            0x66000000|color,0x00040004,300<<22,0x00010004]
+            ((0x66+raw_texture)<<24)|color,0x00040004,300<<22,0x00010004]
     program=[0x3c081f80] # t0 = GPU register page
     for word in gpu:
         program += [0x3c090000|(word>>16),0x35290000|(word&65535),0xad091810]
