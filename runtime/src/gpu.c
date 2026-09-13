@@ -4694,7 +4694,9 @@ static void gp0_exec_cpu_to_vram(void) {
     vram_write_w = (w == 0) ? 0x400 : (uint16_t)w;
     vram_write_h = (h == 0) ? 0x200 : (uint16_t)h;
 
-    /* Record for debug */
+    /* A full history retains old uploads; later transfers must not append
+     * to the last slot and overflow its diagnostic word counter. */
+    a0_capture_slot = -1;
     if (a0_history_count < A0_HISTORY_CAP) {
         int slot = a0_history_count++;
         a0_history[slot].x = vram_write_x;

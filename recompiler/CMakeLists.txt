@@ -941,6 +941,10 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/test_pepsiman.py")
         # The Python driver compiles test_source_ram_page_probe.c at O0/O2.
+        add_test(NAME tas_gpu_upload_history
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
+                --cc ${CMAKE_C_COMPILER})
         add_test(NAME tas_ram_long_route
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_ram_page_probe.py"

@@ -94,8 +94,9 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 150,000, with no page-hash or clock mismatch across the completed run.
-All thirty raw RAM snapshots at 5,000-return intervals match the admitted stock
+to 214,410, with no page-hash or clock mismatch before a native diagnostic
+counter overflow stopped the full replay. The last completed bound is 150,000.
+All forty-two raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
 are not resumable emulator states.
@@ -103,6 +104,11 @@ A prior transient mismatch at return 1645 is removed by the CD read-order
 correction; paired raw snapshots at 1644, 1645 and 1646 also match.
 The flat-call correction removes the prior recursion failure, and Reset
 during an established data read is included in this bounded comparison.
+GPU upload history now stops capturing when its 128 retained entries are full.
+Previously later uploads kept incrementing the last entry until its signed
+counter overflowed and indexed outside the history buffer. The regression
+fixture exercises the production capture code at capacity and the maximum
+legal upload size at O0/O2. Replay confirmation past 214,410 remains pending.
 Full Bio Hazard playback remains unqualified. No release or accepted pin
 changes. Logical header retry/error behavior and Reset during audio or an
 unfinished data seek remain outside this bounded drive comparison.
