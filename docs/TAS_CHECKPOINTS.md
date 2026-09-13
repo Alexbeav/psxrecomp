@@ -6,8 +6,11 @@ the same route from a checkpoint. This is a diagnostic path: final TAS
 qualification still uses an uninterrupted run against the independent oracle.
 
 The checkpoint manifest binds the exact executable, resolved configuration,
-route, BIOS, game entry, guest clock and RAM digest. Rebuild before recording
-both sides of a comparison. A checkpoint from another executable is refused.
+route, BIOS, game entry, guest clock and RAM digest. By default, a checkpoint
+from another executable is refused. `--resume-compatible-build` permits a
+diagnostic runtime rebuild with the same checkpoint compatibility identifier.
+The loader still checks the state version, codegen hash/ABI, device sections,
+configuration, assets and route. It verifies the saved file's SHA256 before load.
 Each run uses a new output directory.
 
 For repeatable cross-game qualification, `verify_checkpoint_cohort.py` accepts
@@ -29,13 +32,19 @@ section, a 16-byte SPU sample-clock extension, and MDEC snapshot version 2.
 The research branch currently rejects earlier boot states and player save slots.
 The operator superseded the earlier compatibility hold on 2026-09-12:
 **development may break existing player slots; a v6/v7 reader is not required**.
-Rewind and netplay share this loader. TAS checkpoints retain strict same-binary
-identity checks. Recapture checkpoints after rebuilding the executable.
+Rewind and netplay share this loader. TAS checkpoints default to same-binary
+identity checks. Compatible-build resume is opt-in and does not prove that a
+state from before a fix equals the new build's cold execution at that point.
+Changes affecting earlier execution require recapture or a cold comparison.
 
 The header preserves whether the game-start transition has already run. Restore
 sets this latch without repeating the boot-only RAM clears or CD speed change.
-GPU_SERVICE includes all 32 queued command words. Source digital-pad snapshots
+GPU_SERVICE includes all 32 queued command words. Source pad snapshots
 retain the ACK pulse, pending timed ACK, and latched controller inputs. The source
+DualShock/card profile also retains analog-mode locks and config capability;
+the existing card section retains both slots' protocol machines and buffers.
+Source multitap capture is refused because its full response is not represented.
+The source
 CD profile retains all eight sector buffers and absolute deadlines; source CDDA
 also retains its two-sector audio pipeline and pending response. Source MDEC
 retains its decoder FIFOs, partially decoded block, chroma buffers, DMA transfer
@@ -73,6 +82,34 @@ Resumed observation hashes cover only the newly delivered suffix, labeled
 `resumed_inputs`; CPU and RAM capture validation requires every return after
 the saved return through the declared terminal return. It does not manufacture
 observations for the skipped prefix.
+
+Resume also accepts checkpoints in the declared neutral-input tail. The route
+reader stays at EOF and supplies neutral controller samples. Suffix input hashes
+are empty when all original inputs were consumed before the checkpoint; this
+does not claim to revalidate the skipped original inputs.
+
+## Debugging a late mismatch
+
+Use the same full route, endpoint and device options for capture and resume.
+Add `--save-state-at 233500 233501 233560 239202` to capture before Biohazard's
+known first mismatch at 233568. This is one uninterrupted capture run, not four
+runs. Keep its executable, manifest and states as immutable evidence.
+
+To repeat the suffix, add `--resume-from CAPTURE/tas-state-233500.pst` and save
+only later returns (`--save-state-at 233501 233560 239202`). To test a rebuilt
+runtime, also pass `--resume-compatible-build`. Each attempt needs a new output
+directory. The launcher records the selected executable and resume option;
+runtime output records both saved and running executable hashes.
+
+First compare a same-build resume with the uninterrupted capture using
+`compare_checkpoint_runs.py`: compare every remaining CPU/clock and RAM row,
+plus full states at K+1, K+60 and the endpoint. Repeat with a compatible rebuild
+and check a deliberate timer perturbation is detected. Only then use the state
+for short fix/test iterations. A final uninterrupted comparison remains required.
+
+The compatibility identifier in `source_tas_stateio.h` must change when a runtime
+change alters saved-state representation or continuation meaning, even if its
+section lengths remain the same. The option is not a universal old-state loader.
 
 ## Verification
 
@@ -165,6 +202,8 @@ The reduced profile is infrastructure evidence, not Biohazard TAS fidelity or
 full-profile checkpoint qualification. GPU command queues are now serialized.
 No public release or shared pin promotion follows from these diagnostic gates.
 
-The experimental `--cd-drive-model nymashock-1.29.0` option is restricted to
-cold diagnostics; the launcher rejects checkpoint capture and resume with it.
+The experimental `--cd-drive-model nymashock-1.29.0` option admits checkpoint
+diagnostics with its bound clock tape. Its saved state includes physical head,
+target, deadline, reset phase and random-tape cursor. Component checks pass;
+full Biohazard continuation qualification must be recorded separately.
 See [Bio Hazard source comparison](NYMASHOCK_SOURCE_REPLAY.md#experimental-bio-hazard-drive-comparison).

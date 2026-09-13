@@ -3,8 +3,11 @@
 #undef main
 #include <assert.h>
 int main(void) {
-    for (int clock_profile=0;clock_profile<2;clock_profile++) {
-    s_source_clock=clock_profile;
+    for (int clock_profile=0;clock_profile<3;clock_profile++) {
+    s_source_clock=clock_profile != 0;
+    s_nymashock_drive=clock_profile == 2;
+    source_drive_head_valid=1;source_drive_head_lba=143;source_drive_head_target=145;
+    source_drive_head_due=1200;source_drive_hold_logical=1;source_reset_phase=2;
     source_cdda.enabled = 1;
     source_cdda.seeking = 0; source_cdda.position_valid = 1;
     source_cdda.play_track_match = -1; source_cdda.sectors_read = 123;
@@ -30,11 +33,17 @@ int main(void) {
     uint32_t n=cdrom_snapshot_bytes();
     uint8_t *wire=malloc(n), *again=malloc(n); assert(wire && again);
     cdrom_snapshot_write(wire);
+    source_drive_head_valid=0;source_drive_head_lba=source_drive_head_target=0;
+    source_drive_head_due=0;source_drive_hold_logical=source_reset_phase=0;
     memset(&source_cdda,0,sizeof source_cdda);source_cdda.enabled=1;
     memset(cd_pending_vol,0,sizeof cd_pending_vol);
     memset(cd_decode_vol,0,sizeof cd_decode_vol);
     if (clock_profile) {memset(s_sector_ring,0,sizeof s_sector_ring);s_ring_read=s_ring_write=0;}
     assert(cdrom_snapshot_read(wire,n));
+    if (s_nymashock_drive) {
+        assert(source_drive_head_valid && source_drive_head_lba==143 && source_drive_head_target==145);
+        assert(source_drive_head_due==1200 && source_drive_hold_logical && source_reset_phase==2);
+    }
     {
         int16_t pcm[2]={1000,-2000};
         cd_apply_decode_volume(pcm,1);

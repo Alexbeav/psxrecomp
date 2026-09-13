@@ -3115,12 +3115,16 @@ static int sio_snap_emit(PstW *w) {
     if (!(sio_snap_emit_regs(w) && sio_snap_emit_pads(w) &&
           sio_snap_emit_mc(w) && sio_snap_emit_fsm(w) && sio_snap_emit_rumble(w))) return 0;
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 1) {
+    if (sio_source_pad_ack || sio_source_card) {
         if (!pst_w_i32(w, sio_ack_pulse_remaining) ||
             !pst_w_i32(w, sio_pending_ack_timed)) return 0;
         for (int s = 0; s < PSX_MAX_PLAYERS; s++)
             if (!pst_w_u16(w, pad_buttons[s])) return 0;
         if (!pst_w_bytes(w, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_w_bytes(w, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_w_bytes(w, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
     }
 #endif
     return 1;
@@ -3175,7 +3179,7 @@ void sio_source_survey_sizes(uint32_t out[5]) {
     out[3] = 0;
 #if SIO_MODEL_CYCLE_PACED
     /* Digital source checkpoints now emit both previously missing scalars. */
-    if (sio_source_pad_ack != 1)
+    if (!sio_source_pad_ack && !sio_source_card)
         out[3] = (uint32_t)(sizeof sio_ack_pulse_remaining +
                             sizeof sio_pending_ack_timed);
 #endif
@@ -3281,7 +3285,7 @@ static int sio_snap_parse(PstR *r) {
         !pst_r_bytes(r, pad_rumble_large, sizeof(pad_rumble_large)))
         return 0;
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 1) {
+    if (sio_source_pad_ack || sio_source_card) {
         if (!pst_r_i32(r, &i)) return 0;
         sio_ack_pulse_remaining = i;
         if (!pst_r_i32(r, &i)) return 0;
@@ -3289,6 +3293,10 @@ static int sio_snap_parse(PstR *r) {
         for (int s = 0; s < PSX_MAX_PLAYERS; s++)
             if (!pst_r_u16(r, &pad_buttons[s])) return 0;
         if (!pst_r_bytes(r, pad_stick, sizeof pad_stick)) return 0;
+        if (sio_source_pad_ack == 2 || sio_source_card) {
+            if (!pst_r_bytes(r, analog_mode_locked, sizeof analog_mode_locked) ||
+                !pst_r_bytes(r, pad_supports_config, sizeof pad_supports_config)) return 0;
+        }
     }
 #endif
     if (r->p != r->end) return 0;
@@ -3297,7 +3305,9 @@ static int sio_snap_parse(PstR *r) {
 
 uint32_t sio_snapshot_bytes(void) {
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 2 || sio_source_card) return 0;
+    /* The source profiles below serialize single-pad transactions completely.
+     * The legacy eight-byte pad wire cannot represent a multitap transfer. */
+    if ((sio_source_pad_ack || sio_source_card) && sio_multitap_enabled) return 0;
 #endif
     PstW w;
     pst_w_init(&w, NULL, 0);
@@ -3323,7 +3333,7 @@ int sio_snapshot_shape_ok(uint32_t len) {
                                  sizeof(pad_rumble_large));
     if (!current) return 0;
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 1) return len == current;
+    if (sio_source_pad_ack || sio_source_card) return len == current;
 #endif
     return len == current || (len < current && len + rumble_bytes == current);
 }
@@ -3333,13 +3343,17 @@ int sio_snapshot_read(const uint8_t *p, uint32_t len) {
     const uint32_t current = sio_snapshot_bytes();
     if (!p || !current || !sio_snapshot_shape_ok(len)) return 0;
 #if SIO_MODEL_CYCLE_PACED
-    if (sio_source_pad_ack == 1) {
+    if (sio_source_pad_ack || sio_source_card) {
         PstR extra;
         int32_t pulse, timed;
-        pst_r_init(&extra, p + len - 8u - 6u * PSX_MAX_PLAYERS,
+        uint32_t config_bytes = (sio_source_pad_ack == 2 || sio_source_card) ?
+            2u * PSX_MAX_PLAYERS : 0u;
+        pst_r_init(&extra, p + len - config_bytes - 8u - 6u * PSX_MAX_PLAYERS,
                    8u + 6u * PSX_MAX_PLAYERS);
         if (!pst_r_i32(&extra, &pulse) || !pst_r_i32(&extra, &timed) ||
             pulse < 0 || pulse > 32 || timed < 0 || timed > 1) return 0;
+        for (uint32_t j = 0; j < config_bytes; j++)
+            if (p[len - config_bytes + j] > 1) return 0;
     }
 #endif
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +

@@ -14305,6 +14305,8 @@ session_reboot:
             return 2;
         }
         char cfg_hex[65], exe_hex[65], route_hex[65];
+        const char *compatible_env = std::getenv("PSX_TAS_RESUME_COMPATIBLE_BUILD");
+        const int compatible_build = compatible_env && !std::strcmp(compatible_env, "1");
         source_stateio_config_digest_hex(cfg_hex);
         source_stateio_exe_sha256(exe_hex);
         {
@@ -14322,7 +14324,7 @@ session_reboot:
                 std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: configuration digest mismatch\n");
                 return 2;
             }
-            if (std::strcmp(m.exe_sha256, exe_hex) != 0) {
+            if (!source_tas_stateio_binary_accept(&m, exe_hex, compatible_build)) {
                 std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: runtime binary mismatch\n");
                 return 2;
             }
@@ -14330,6 +14332,14 @@ session_reboot:
                 std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: input route mismatch\n");
                 return 2;
             }
+        }
+        char expected_state_hash[65], actual_state_hash[65];
+        if (!source_tas_stateio_find_field(text, "state_sha256", expected_state_hash,
+                                          sizeof expected_state_hash) ||
+            !source_stateio_file_sha256(resume_state, actual_state_hash) ||
+            std::strcmp(expected_state_hash, actual_state_hash)) {
+            std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state SHA256 mismatch\n");
+            return 2;
         }
         if (!boot_state_load(resume_state, resume_bios, resume_entry, &cpu)) {
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: state load failed (integrity/incomplete)\n");
@@ -14356,9 +14366,9 @@ session_reboot:
          * neither duplicates nor conflicts with BS_SEC_IRQ_TIMING, RASTER,
          * GPU_SERVICE or TIMER_SRC. */
         psx_cycles_resync_after_restore(&cpu);
-        if (!source_tas_stateio_manifest_accept(&m, m.frame, psx_get_cycle_count(),
+        if (!source_tas_stateio_manifest_accept_mode(&m, m.frame, psx_get_cycle_count(),
                 source_tas_stateio_ram_digest(memory_get_ram_ptr(), 2097152u),
-                resume_bios, resume_entry, cfg_hex, exe_hex, route_hex,
+                resume_bios, resume_entry, cfg_hex, exe_hex, route_hex, compatible_build,
                 reason, sizeof reason)) {
             std::fprintf(stderr, "psxrecomp: [tas-stateio] resume rejected: %s\n", reason);
             return 2;
@@ -14373,6 +14383,8 @@ session_reboot:
         }
         std::fprintf(stdout, "psxrecomp: [tas-stateio] resumed return %u cycle %llu from %s\n",
                      m.frame, (unsigned long long)m.cycle, resume_state);
+        std::fprintf(stdout, "psxrecomp: [tas-stateio] diagnostic resume mode=%s saved_exe=%s running_exe=%s\n",
+                     compatible_build ? "compatible-build" : "same-binary", m.exe_sha256, exe_hex);
         /* DIAG P1: did the restore itself land? */
         std::fprintf(stderr, "[tas-diag] P1 after-restore psx_cycle_count=%llu "
                              "psx_get_cycle_count=%llu manifest_cycle=%llu\n",

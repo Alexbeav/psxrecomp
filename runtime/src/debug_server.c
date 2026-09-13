@@ -432,9 +432,9 @@ int debug_server_seek_input_route(uint32_t frame)
             remaining -= s_dualshock_route[i].frames;
             ++i;
         }
-        if (i >= s_input_route_count) return 0;
         s_input_route_index = i;
-        s_input_route_remaining = s_dualshock_route[i].frames - remaining;
+        s_input_route_remaining = i < s_input_route_count ? s_dualshock_route[i].frames - remaining : 0;
+        s_input_route_active = i < s_input_route_count;
         s_input_route_consumed = frame;
         input_route_observer_resume(frame);
         return 1;
@@ -443,9 +443,9 @@ int debug_server_seek_input_route(uint32_t frame)
         remaining -= s_input_route[i].frames;
         ++i;
     }
-    if (i >= s_input_route_count) return 0;
     s_input_route_index = i;
-    s_input_route_remaining = s_input_route[i].frames - remaining;
+    s_input_route_remaining = i < s_input_route_count ? s_input_route[i].frames - remaining : 0;
+    s_input_route_active = i < s_input_route_count;
     s_input_route_consumed = frame;
     input_route_observer_resume(frame);
     return 1;

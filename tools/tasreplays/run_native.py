@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -24,6 +25,23 @@ def write_json(path, value):
     with path.open("x", encoding="utf-8") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")
+
+
+def checkpoint_asset_digest(path):
+    """Bind CUE content and its tracks, not just the small descriptor file."""
+    value = digest(path)
+    if path.suffix.lower() != '.cue':
+        return value
+    tracks = []
+    for line in path.read_text(encoding='utf-8-sig').splitlines():
+        if re.match(r'\s*FILE\b', line, re.I):
+            match = re.fullmatch(r'\s*FILE\s+"([^"\r\n]+)"\s+BINARY\s*', line, re.I)
+            if not match:
+                raise ValueError('checkpoint media requires quoted BINARY cue tracks')
+            tracks.append(digest((path.parent / match[1]).resolve(strict=True)))
+    if not tracks:
+        raise ValueError('checkpoint cue has no tracks')
+    return hashlib.sha256('\n'.join([value, *tracks]).encode('ascii')).hexdigest()
 
 
 def route_identity(path, start=0):
@@ -72,6 +90,16 @@ def card_identity(path):
     if path.stat().st_size != 131072:
         raise ValueError('card1 must be an exact raw 128 KiB card')
     return {'path':str(path), 'bytes':131072, 'sha256':digest(path)}
+
+
+def checkpoint_interval(manifest, frames, tail):
+    frame, consumed = manifest.get('frame'), manifest.get('input_consumed')
+    terminal = frames + tail - 1
+    if (manifest.get('schema') != 'psx-tas-stateio-v2' or
+            type(frame) is not int or type(consumed) is not int or
+            not 0 < frame < terminal or not 0 < consumed < frames + tail):
+        raise ValueError('invalid checkpoint resume interval')
+    return frame, consumed
 
 
 def playback_identity_matches(complete, identity, tail):
@@ -132,6 +160,8 @@ def main():
                         help='TAS checkpoint: save a full-machine state once at each listed frontend return')
     parser.add_argument('--resume-from', type=Path, metavar='FILE',
                         help='TAS checkpoint: restore this saved state and continue the route from its frame')
+    parser.add_argument('--resume-compatible-build', action='store_true',
+                        help='diagnostic only: admit runtime rebuilds with matching state compatibility and codegen ABI')
     parser.add_argument('--e-survey', action='store_true',
                         help='diagnostic: report source-GPU/source-DMA quiescence counts at frame boundaries')
     parser.add_argument('--perturb-restore', metavar='FIELD',
@@ -223,8 +253,8 @@ def main():
     if args.syscall_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
         raise ValueError('guest syscall model requires the source CPU/service profile')
     if args.cd_drive_model!='default':
-        if not args.cd_source_clock_tape or args.save_state_at or args.resume_from:
-            raise ValueError('source drive model requires a clock tape and cold diagnostics')
+        if not args.cd_source_clock_tape:
+            raise ValueError('source drive model requires a clock tape')
     if args.cd_cdda_model!='default' and not args.cd_source_clock_tape:
         raise ValueError('source CDDA requires an explicit source clock tape')
     if args.mdec_source_model!='default' and args.gpu_dma_model!='octoshock-2.2.2-bounded-quad':
@@ -262,14 +292,14 @@ def main():
         paths['cd_source_clock_tape'] = Path(clock_tape['path'])
     identity = route_identity(paths["route"])
     resume_frame = resume_inputs = 0
+    if args.resume_compatible_build and args.resume_from is None:
+        raise ValueError('--resume-compatible-build requires --resume-from')
     if args.resume_from is not None:
         resume_manifest = json.loads(Path(str(args.resume_from)+'.json').read_text())
-        resume_frame = resume_manifest['frame']
-        resume_inputs = resume_manifest['input_consumed']
-        if (resume_manifest.get('schema') != 'psx-tas-stateio-v2' or
-                not 0 < resume_frame < identity['frames'] or
-                not 0 < resume_inputs < identity['frames']):
-            raise ValueError('invalid checkpoint resume interval')
+        resume_frame, resume_inputs = checkpoint_interval(resume_manifest, identity['frames'], args.neutral_tail)
+        if (args.resume_from.stat().st_size != resume_manifest.get('state_bytes') or
+                digest(args.resume_from) != resume_manifest.get('state_sha256')):
+            raise ValueError('checkpoint size or SHA256 mismatch')
     completion_identity = route_identity(paths['route'], resume_inputs)
 
     dualshock = identity.get('format') == 'PSXRTI2'
@@ -290,6 +320,11 @@ def main():
         raise ValueError('RAM capture requires 1..1000000 declared completed returns')
     if any(frame > ram_returns for frame in args.ram_snapshot_frame):
         raise ValueError('RAM snapshot exceeds the declared completed-return boundary')
+    if args.save_state_at and (len(set(args.save_state_at)) != len(args.save_state_at) or
+            any(not resume_frame < frame <= ram_returns for frame in args.save_state_at)):
+        raise ValueError('save-state returns must be unique and inside the executed interval')
+    if args.resume_from and args.update_profile:
+        raise ValueError('checkpoint resume does not support input retiming')
     update_profile = None
     update_contexts = None
     context_values = None
@@ -436,6 +471,11 @@ p2_mode = "digital"
         selected_env['PSX_TAS_SAVE_STATE_AT'] = ','.join(str(f) for f in args.save_state_at)
     if args.resume_from is not None:
         selected_env['PSX_TAS_RESUME_STATE'] = str(args.resume_from)
+    if args.resume_compatible_build:
+        selected_env['PSX_TAS_RESUME_COMPATIBLE_BUILD'] = '1'
+    if args.save_state_at or args.resume_from:
+        for asset in ('game', 'bios', 'disc'):
+            selected_env['PSX_TAS_ASSET_' + asset.upper() + '_SHA256'] = checkpoint_asset_digest(paths[asset])
     if args.perturb_restore is not None:
         selected_env['PSX_TAS_PERTURB_RESTORE'] = args.perturb_restore
     if args.e_survey:
@@ -542,6 +582,19 @@ p2_mode = "digital"
     qualified = (budget['stop_reason'] is None and code == 0 and
                  playback_identity_matches(complete, completion_identity, args.neutral_tail) and
                  complete.get("resumed_inputs", 0) == resume_inputs)
+    if args.save_state_at:
+        saved = []
+        for frame in args.save_state_at:
+            state = run / f'tas-state-{frame:06d}.pst'
+            sidecar = Path(str(state) + '.json')
+            item = {'frame':frame, 'valid':False}
+            if state.exists() and sidecar.exists():
+                m = json.loads(sidecar.read_text())
+                item['valid'] = (m.get('frame') == frame and m.get('state_bytes') == state.stat().st_size
+                                 and m.get('state_sha256') == digest(state))
+            saved.append(item)
+        write_json(run / 'saved-states.json', saved)
+        qualified = qualified and all(item['valid'] for item in saved)
     if initial_card or dualshock:
         initial_path = run / 'initial-cards.json'
         actual_cards = json.loads(initial_path.read_text()) if initial_path.exists() else None

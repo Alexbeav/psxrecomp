@@ -302,6 +302,7 @@ void input_route_observer_set_end(uint32_t total) {
  * invariant (completed == delivered_inputs) holds from the resume point on. */
 void input_route_observer_resume(uint32_t consumed) {
     if (!log_file) return;
+    if (consumed >= total_inputs + tail_ticks) fail("resume is past the observation interval");
     delivered_inputs = consumed;
     resumed_inputs = consumed;
     pending = 0;

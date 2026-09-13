@@ -28,6 +28,10 @@
 #include <string.h>
 
 #define PSX_TAS_STATEIO_SCHEMA "psx-tas-stateio-v2"
+/* Bump when a diagnostic state changes representation or continuation meaning.
+ * This admits runtime-only rebuilds, never a different codegen ABI or profile;
+ * boot_state_load independently checks its header and every device section. */
+#define PSX_TAS_STATEIO_COMPATIBILITY "psx-tas-v9-sio-source-1"
 
 /* Guest RAM accessor (memory.c). Declared here so the manifest/digest call
  * sites — including C++ — share one C-linkage declaration. */
@@ -53,6 +57,7 @@ typedef struct TasStateManifest {
     char               config_digest[65];
     char               exe_sha256[65];
     char               route_sha256[65];
+    char               compatibility[65];
 } TasStateManifest;
 
 /* PSX_* variables that may legitimately DIFFER between a save and a resume.
@@ -68,6 +73,10 @@ static inline int source_tas_stateio_env_allowed_to_differ(const char *key, size
         "PSX_TAS_SAVE_STATE_PATH",      /* checkpoint request         */
         "PSX_TAS_RESUME_STATE",         /* resume request             */
         "PSX_TAS_RESUME_MANIFEST",      /* resume request             */
+        "PSX_TAS_RESUME_COMPATIBLE_BUILD", /* explicit diagnostic mode */
+        "PSX_SOURCE_CPU_BOUNDARY_WINDOW", /* passive diagnostic range */
+        "PSX_SOURCE_GPU_COMMAND_WINDOW",  /* passive diagnostic range */
+        "PSX_SOURCE_RAM_SNAPSHOT_FRAMES", /* passive raw RAM captures */
         "PSX_LOAD_SLOT",                /* user slot load request     */
         "PSX_E_SURVEY",                 /* diagnostic only            */
         "PSX_TAS_PERTURB_RESTORE",      /* negative-control injection */
@@ -164,12 +173,14 @@ static inline int source_tas_stateio_manifest_write(const char *path, const TasS
                  "  \"state_bytes\": %llu,\n"
                  "  \"config_digest\": \"%s\",\n"
                  "  \"exe_sha256\": \"%s\",\n"
-                 "  \"route_sha256\": \"%s\"\n"
+                 "  \"route_sha256\": \"%s\",\n"
+                 "  \"compatibility\": \"%s\"\n"
                  "}\n",
                  PSX_TAS_STATEIO_SCHEMA, m->frame, m->input_consumed, (unsigned long long)m->cycle,
                  (unsigned long long)m->ram_digest, m->bios_checksum, m->entry_pc,
                  escaped, state_sha256 ? state_sha256 : "", m->state_bytes,
-                 m->config_digest, m->exe_sha256, m->route_sha256) > 0;
+                 m->config_digest, m->exe_sha256, m->route_sha256,
+                 PSX_TAS_STATEIO_COMPATIBILITY) > 0;
     if (fclose(f) != 0) ok = 0;
     return ok;
 }
@@ -275,7 +286,17 @@ static inline int source_tas_stateio_manifest_parse(const char *text, TasStateMa
         if (!source_tas_stateio_find_field(text, "state_path", state_path, state_path_cap))
             return 0;
     }
+    /* Older manifests remain same-binary only. */
+    (void)source_tas_stateio_find_field(text, "compatibility", out->compatibility,
+                                       sizeof out->compatibility);
     return 1;
+}
+
+static inline int source_tas_stateio_binary_accept(const TasStateManifest *m,
+                                                   const char *exe, int compatible) {
+    return m && exe && *exe &&
+        (!strcmp(m->exe_sha256, exe) ||
+         (compatible && !strcmp(m->compatibility, PSX_TAS_STATEIO_COMPATIBILITY)));
 }
 
 static inline void source_tas_stateio_reject(char *reason, size_t cap, const char *text) {
@@ -284,13 +305,14 @@ static inline void source_tas_stateio_reject(char *reason, size_t cap, const cha
 
 /* The gate. Returns 1 on accept, else 0 with a reason. The observed_* values
  * are what the resumed run actually reproduced. */
-static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
+static inline int source_tas_stateio_manifest_accept_mode(const TasStateManifest *m,
                                               unsigned frame, uint64_t cycle,
                                               uint64_t ram_digest, uint32_t bios_checksum,
                                               uint32_t entry_pc,
                                               const char *config_digest,
                                               const char *exe_sha256,
                                               const char *route_sha256,
+                                              int compatible_build,
                                               char *reason, size_t reason_cap) {
     if (!m) { source_tas_stateio_reject(reason, reason_cap, "missing manifest"); return 0; }
     if (m->frame != frame) {
@@ -317,7 +339,7 @@ static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
         source_tas_stateio_reject(reason, reason_cap, "configuration digest mismatch");
         return 0;
     }
-    if (strcmp(m->exe_sha256, exe_sha256 ? exe_sha256 : "") != 0) {
+    if (!source_tas_stateio_binary_accept(m, exe_sha256, compatible_build)) {
         source_tas_stateio_reject(reason, reason_cap, "runtime binary mismatch");
         return 0;
     }
@@ -327,6 +349,15 @@ static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
     }
     if (reason && reason_cap) reason[0] = '\0';
     return 1;
+}
+
+static inline int source_tas_stateio_manifest_accept(const TasStateManifest *m,
+        unsigned frame, uint64_t cycle, uint64_t ram_digest, uint32_t bios_checksum,
+        uint32_t entry_pc, const char *config_digest, const char *exe_sha256,
+        const char *route_sha256, char *reason, size_t reason_cap) {
+    return source_tas_stateio_manifest_accept_mode(m, frame, cycle, ram_digest,
+        bios_checksum, entry_pc, config_digest, exe_sha256, route_sha256, 0,
+        reason, reason_cap);
 }
 
 /* Read a whole small file (manifest) into caller storage. Returns bytes read

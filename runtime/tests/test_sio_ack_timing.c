@@ -65,7 +65,7 @@ int main(void) {
         advance(1);assert(!(stat()&0x80));assert(!g_sio_timing_active);
         assert(!!(stat()&0x200)==irq); /* pulse expiry does not clear IRQ latch */
         assert(i_stat&(1u<<9)); /* never consume unrelated SPU IRQ */
-        assert((profile == 1 ? sio_snapshot_bytes()>0 : sio_snapshot_bytes()==0) &&
+        assert(sio_snapshot_bytes()>0 &&
                !sio_snapshot_read(NULL,0));
     }
     /* CTRL ACK clears only IRQ; source intentionally does not reassert it. */

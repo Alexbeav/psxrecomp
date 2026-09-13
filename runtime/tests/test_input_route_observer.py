@@ -97,4 +97,14 @@ with tempfile.TemporaryDirectory() as directory:
             assert (out/'complete.json').is_file()
         else:
             assert not (out/'complete.json').exists()
-print('input_route_observer: digital, complete DualShock delivery and eight loaded-card identity cases passed')
+with tempfile.TemporaryDirectory() as directory:
+    env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+    env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=directory, PSX_INPUT_ROUTE_NEUTRAL_TAIL='2',
+               PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0')
+    result = subprocess.run([str(exe), 'resume_tail'], env=env, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    done = json.loads((Path(directory)/'complete.json').read_text())
+    assert done['frame'] == 4 and done['resumed_inputs'] == 3
+    assert done['input_frames'] == 2 and done['neutral_tail_ticks'] == 2
+    assert done['applied_controller_sha256'] == done['expected_protocol_sha256'] == hashlib.sha256(b'').hexdigest()
+print('input_route_observer: digital, DualShock delivery, loaded-card identity and tail resume passed')

@@ -59,6 +59,16 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
     card_case = argv[1];
+    if (!strcmp(argv[1], "resume_tail")) {
+        const uint8_t neutral[4] = {128,128,128,128};
+        if (!input_route_observer_dualshock_init(2)) return 4;
+        input_route_observer_resume(3);
+        input_route_observer_boundary(3, 3);
+        input_route_observer_dualshock_input(0xFFFF, neutral);
+        input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
+        input_route_observer_boundary(4, 4);
+        return 8;
+    }
     if (!strncmp(argv[1], "ds_", 3)) {
         if (!input_route_observer_dualshock_init(2)) return 4;
         const uint8_t source[4] = {1,0,128,255}, source2[4] = {129,130,131,132};

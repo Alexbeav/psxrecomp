@@ -33,8 +33,16 @@ int main(int argc, char **argv) {
 
     m.frame = 300u; m.input_consumed = 301u; m.cycle = UINT64_C(262837430); m.ram_digest = digest;
     m.bios_checksum = 0x11223344u; m.entry_pc = 0x800603F8u; m.state_bytes = 3551234ull;
+    memset(m.compatibility, 0, sizeof m.compatibility);
     snprintf(m.config_digest, sizeof m.config_digest, "%s", CFG);
     snprintf(m.exe_sha256, sizeof m.exe_sha256, "%s", EXE);
+    check(!source_tas_stateio_binary_accept(&m, SHA, 1), "old manifest cannot cross builds");
+    strcpy(m.compatibility, PSX_TAS_STATEIO_COMPATIBILITY);
+    check(!source_tas_stateio_binary_accept(&m, SHA, 0), "rebuild requires explicit opt-in");
+    check(source_tas_stateio_binary_accept(&m, SHA, 1), "compatible rebuild accepted");
+    m.compatibility[0] ^= 1;
+    check(!source_tas_stateio_binary_accept(&m, SHA, 1), "incompatible rebuild refused");
+    strcpy(m.compatibility, PSX_TAS_STATEIO_COMPATIBILITY);
     snprintf(m.route_sha256, sizeof m.route_sha256, "%s", ROUTE);
 
     check(source_tas_stateio_manifest_write(manifest_path, &m, state_path, SHA) == 1,
@@ -101,6 +109,15 @@ int main(int argc, char **argv) {
     check(source_tas_stateio_manifest_accept(&parsed, 300u, m.cycle, digest,
           m.bios_checksum, m.entry_pc, CFG, SHA, ROUTE,
           reason, sizeof reason) == 0 && strstr(reason, "binary"), "reject foreign binary");
+    check(source_tas_stateio_manifest_accept_mode(&parsed, 300u, m.cycle, digest,
+          m.bios_checksum, m.entry_pc, CFG, SHA, ROUTE, 1,
+          reason, sizeof reason), "diagnostic compatible rebuild accepted");
+    check(!source_tas_stateio_manifest_accept_mode(&parsed, 300u, m.cycle, digest,
+          m.bios_checksum, m.entry_pc, SHA, SHA, ROUTE, 1,
+          reason, sizeof reason), "compatible mode retains configuration guard");
+    check(!source_tas_stateio_manifest_accept_mode(&parsed, 300u, m.cycle, digest,
+          m.bios_checksum, m.entry_pc, CFG, SHA, SHA, 1,
+          reason, sizeof reason), "compatible mode retains route guard");
     check(source_tas_stateio_manifest_accept(&parsed, 300u, m.cycle, digest,
           m.bios_checksum, m.entry_pc, CFG, EXE, SHA,
           reason, sizeof reason) == 0 && strstr(reason, "route"), "reject foreign route");
