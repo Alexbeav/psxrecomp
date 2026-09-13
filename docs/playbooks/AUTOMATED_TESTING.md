@@ -163,5 +163,3 @@ The [TAS accuracy record](../TAS_ACCURACY.md) owns the current replay claim.
 The [runner guide](../../tools/tasreplays/README.md) owns supported commands.
 Private portfolio contracts retain campaign receipts, coverage gaps, and host
 performance admission; this plan does not change a title qualification state.
-
-

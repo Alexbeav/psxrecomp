@@ -117,4 +117,3 @@ def build_and_run(cc, here, src_root, opt, work, modules, test_name):
     if run.returncode != 0:
         raise SystemExit("%s: runtime fixture failed (rc=%d)\n%s%s"
                          % (opt, run.returncode, run.stdout, run.stderr))
-
