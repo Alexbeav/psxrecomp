@@ -10396,7 +10396,9 @@ namespace {
         ae_np_save_identity(nullptr, g_lnch_lobby_url.c_str());
         /* The auth endpoints live on the same host and port as the lobby
          * socket, so the sign-in follows whatever server the player points at. */
-        ae_np_account_sync();
+        #if defined(PSX_HAS_RECOMP_NET)
+            ae_np_account_sync();
+        #endif
     }
 
     int ae_np_connect(void*) {
