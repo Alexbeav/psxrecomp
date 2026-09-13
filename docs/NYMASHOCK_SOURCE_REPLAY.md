@@ -94,9 +94,11 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 5999, with no page-hash or clock mismatch in that controlled replay.
-The retained return-5000 raw RAM snapshot also matches the admitted stock
-SHA-256. These progress captures are not resumable emulator states.
+to 20371, with no page-hash or clock mismatch in the captured prefix.
+The completed 20,000-return run also has raw RAM snapshots at every 5,000
+returns matching the admitted stock SHA-256. A later 50,000-return attempt
+stopped before return 20,372 on an unsupported flat line command; it did not
+complete its requested coverage. These progress captures are not resumable emulator states.
 A prior transient mismatch at return 1645 is removed by the CD read-order
 correction; paired raw snapshots at 1644, 1645 and 1646 also match.
 The flat-call correction removes the prior recursion failure, and Reset
@@ -104,6 +106,17 @@ during an established data read is included in this bounded comparison.
 Full Bio Hazard playback remains unqualified. No release or accepted pin
 changes. Logical header retry/error behavior and Reset during audio or an
 unfinished data seek remain outside this bounded drive comparison.
+
+The source GPU comparison path now handles flat two-vertex lines (GP0
+0x40-0x47), including degenerate single-pixel lines, dithering, blending,
+mask evaluation, clipping and interlaced row skipping. Timing charges two
+dispatch clocks, sixteen setup clocks, and twice the unclipped major-axis
+length; oversize lines pay only dispatch and setup. Shaded lines and polylines
+remain unsupported. The new path has 256 authored component cases comparing
+full VRAM SHA-256 and timing with extracted, unedited Nymashock line functions.
+`tools/tasreplays/source_line_oracle.py` records source and harness identities;
+`runtime/tests/test_source_gpu_line_contracts.py` checks the retained fixtures
+at O0/O2. This is component evidence, not an unmodified-core replay pass.
 
 Source basis: BizHawk 2.9.1's Mednafen 1.29.0 `psx/cdc.cpp` (`HandlePlayRead`,
 `CalcSeekTime`, `Command_SeekL`, `Command_Pause`, `Command_Reset`,
