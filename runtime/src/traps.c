@@ -819,6 +819,8 @@ void psx_scheduler_run(CPUState* cpu)
             overlay_loader_shadow_scheduler_escape_fixup();
             g_psx_dispatch_depth = 0;
             g_psx_call_bail      = 0;
+            /* A longjmp abandons the precise interpreter frame and its mode restore. */
+            { extern int g_precise_mode; g_precise_mode = 0; }
             /* Soft-exit / yield longjmps out of vblank inside
              * psx_devices_service_to_now; without this the re-entrancy guard
              * stays set and every later advance skips device service forever. */

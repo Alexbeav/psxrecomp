@@ -213,6 +213,12 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-13 (TAS upstream submission):** Port the authored replay profile,
+  source-oracle component fixtures and cold launchers onto upstream `85cd26f0`.
+  Preserve current upstream DMA, GPU polyline, CUE mount and overlay callbacks.
+  Retail acceptance remains tied to the earlier campaign builds; see
+  [integration status](../TAS_UPSTREAM_INTEGRATION.md). No release pin promotion.
+
 - **2026-09-12 (FMV brief follow-ups, correctness separated from experiments):**
   `fix/cfg-metadata-integrity` repairs missing live reverse edges and replaces
   address-order loop guesses with multi-entry reachability/dominance metadata.

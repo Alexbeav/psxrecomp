@@ -1,10 +1,11 @@
 # TAS accuracy profile and Tekken 3 validation
 
-The `tasreplays` branch integrates the source and code-generation corrections
-qualified during the September2026 Tekken 3 TAS campaign. The reproducible
-entry point is [tools/tasreplays](../tools/tasreplays/README.md).
-It builds on `f23c5ba1a220fe1ca8818cc48c026d6c2f7f2c64`, the base used for the
-measured campaign, with the final native integration's overlay ABI22.
+This submission ports the TAS comparison profile onto upstream master
+`85cd26f0`. See [integration status](TAS_UPSTREAM_INTEGRATION.md) for the
+current checks, source mapping and exclusions. The results below were measured
+on the earlier campaign builds, whose base was `f23c5ba1`; they do not qualify
+this newly integrated runtime. Its overlay callback ABI is 24, preserving the
+upstream v23 callbacks before appending TAS instruction-boundary callbacks.
 
 The unchanged Spikestuff movie contains7,974 inputs. The integrated native
 build wins Arcade at8.80 seconds. Every original-input return clock and all512
@@ -28,7 +29,7 @@ are not bug counts.
 | CD-ROM | Implicit and explicit seek transitions; asynchronous sector IRQ presentation; firmware/cold tray state; TOC/seek/read pipeline and command clocks; reset; Pause ACK and head rewind/resume; trigger/read-head state. |
 | Timers and SIO | Source raster field clock; timer1 HBlank and read sample; timer2 divider/IRQ/deadline; digital-pad ACK pulse; opt-in handling of an unrelated legacy card repair. |
 | SPU | Delayed control/status visibility with independent sample service; key-on/envelope phase; ADPCM decode queue, END flags, pitch/filter state and guest register readback. |
-| Overlay integration | ABI22 forwards live instruction-boundary callbacks and pending cycle ownership through generated DLLs, preserving replay exclusion and rejecting stale ABI caches. |
+| Overlay integration | ABI24 forwards live instruction-boundary callbacks and pending cycle ownership through generated DLLs, preserving replay exclusion and rejecting stale ABI caches. |
 
 Most detailed timing changes are enabled by explicit `octoshock-2.2.2` profile
 options; they model the exact emulator on which this TAS was authored.
@@ -46,8 +47,10 @@ its arithmetic is not imported into the framework runtime.
 ## Reproduction and validation boundaries
 
 The recipe generates the BIOS and title from owned assets using the repaired
-emitters. All57 resulting C files must match the normalized fingerprints of the
-verified integration. It builds dependencies from pinned archives and uses
+emitters. All 57 resulting C files must match the retained historical
+fingerprints. Until regenerated code and a fresh retail replay are qualified,
+a fingerprint mismatch correctly prevents this integration from being advertised
+as the earlier verified build. It builds dependencies from pinned archives and uses
 software rendering in both visible and headless modes. Recompiler and authored
 O0/O2 tests run without retail assets. The final replay verifier rejects an
 input mismatch, a missing or reordered checkpoint, a different RAM-page hash,

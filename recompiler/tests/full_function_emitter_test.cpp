@@ -441,6 +441,8 @@ int main(int argc, char** argv) {
     complementary_lwl_lwr_stays_native();
     patch_range_guards(config);
     patch_range_delay_boundaries(config);
+    FullFunctionEmitter::set_address_model(&model);
+    FunctionDiscovery::set_address_model(&model);
     linear_fetches_follow_runtime_address(0x500u);
     for (const uint32_t alias : {0x80010000u, 0xA0010000u}) {
         config.address_copies[0].ram_lo = 0x00010000u;

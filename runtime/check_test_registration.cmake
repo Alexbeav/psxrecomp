@@ -86,7 +86,8 @@ function(psxrecomp_check_all_tests_registered)
     # ---- what the build systems say -------------------------------------
     set(_declared "")
     foreach(_cml "${_root}/runtime/CMakeLists.txt"
-                 "${_root}/recompiler/CMakeLists.txt")
+                 "${_root}/recompiler/CMakeLists.txt"
+                 "${_root}/tools/tasreplays/tests/CMakeLists.txt")
         if(NOT EXISTS "${_cml}")
             continue()
         endif()

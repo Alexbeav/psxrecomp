@@ -11388,6 +11388,37 @@ static const char *mdec_event_kind_name(uint32_t kind)
     }
 }
 
+void debug_server_freeze_dump_dma_trace_json(FILE *f, uint32_t max_count)
+{
+    const DMATraceEntry *entries = NULL;
+    uint64_t total = dma_debug_get_trace(&entries);
+    uint64_t oldest = (total > DMA_TRACE_CAP) ? total - DMA_TRACE_CAP : 0;
+    if (max_count > DMA_TRACE_CAP) max_count = DMA_TRACE_CAP;
+    uint64_t start = (total > max_count) ? total - max_count : 0;
+    if (start < oldest) start = oldest;
+    fprintf(f, "{\"total\":%llu,\"oldest\":%llu,\"entries\":[",
+            (unsigned long long)total, (unsigned long long)oldest);
+    uint32_t emitted = 0;
+    for (uint64_t seq = start; seq < total; seq++) {
+        const DMATraceEntry *e = &entries[seq % DMA_TRACE_CAP];
+        if (e->seq != seq) continue;
+        fprintf(f, "%s{\"seq\":%llu,\"frame\":%u,\"kind\":\"%s\",\"ch\":%u,"
+                   "\"words\":%u,\"addr\":\"0x%08X\",\"val\":\"0x%08X\","
+                   "\"mask\":\"0x%08X\",\"madr\":\"0x%08X\",\"bcr\":\"0x%08X\","
+                   "\"chcr\":\"0x%08X\",\"dpcr\":\"0x%08X\","
+                   "\"dicr_before\":\"0x%08X\",\"dicr_after\":\"0x%08X\","
+                   "\"i_stat_before\":\"0x%08X\",\"i_stat_after\":\"0x%08X\","
+                   "\"func\":\"0x%08X\",\"pc\":\"0x%08X\"}",
+                emitted ? "," : "", (unsigned long long)e->seq, e->frame,
+                dma_trace_kind_name(e->kind), e->channel, e->total_words,
+                e->addr, e->val, e->mask, e->madr, e->bcr, e->chcr, e->dpcr,
+                e->dicr_before, e->dicr_after, e->i_stat_before, e->i_stat_after,
+                e->func, e->pc);
+        emitted++;
+    }
+    fprintf(f, "],\"emitted\":%u}", emitted);
+}
+
 static void handle_mdec_state(int id, const char *json)
 {
     (void)json;

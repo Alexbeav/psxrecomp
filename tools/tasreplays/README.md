@@ -5,8 +5,11 @@ see the [unattended investigation controller guide](investigation.md).
 
 Build and play [Spikestuff's tool-assisted speedrun](https://tasvideos.org/4164M)
 from your own Tekken 3 USA disc and SCPH1001 BIOS. The original 7,974 inputs
-finish Arcade with Yoshimitsu at **8.80 seconds**. This branch reproduces the
-qualified Octoshock 2.2.2 timing configuration in the native psxrecomp runtime.
+finish Arcade with Yoshimitsu at **8.80 seconds**. The original campaign
+qualified the Octoshock 2.2.2 comparison configuration. This upstream integration
+is pending fresh retail qualification; see [current status](../../docs/TAS_UPSTREAM_INTEGRATION.md).
+Setup retains the historical generated-code fingerprint gate and can refuse
+changed output from the updated upstream emitter.
 
 ## Quick start: Windows x64
 
@@ -18,7 +21,7 @@ Allow several GB of disk space and a few minutes for the initial build.
 Internet access is needed for the original TAS and the pinned SDL3/zlib sources.
 
 ```powershell
-git clone --branch tasreplays https://github.com/Alexbeav/psxrecomp.git
+git clone --branch codex/tas-upstream-integration-20260913 https://github.com/Alexbeav/psxrecomp.git
 cd psxrecomp
 python tools/tasreplays/tekken3.py setup --disc "D:/Games/Tekken 3 (USA).cue" --bios "D:/BIOS/SCPH1001.BIN"
 python tools/tasreplays/tekken3.py run
@@ -119,13 +122,13 @@ See [accuracy changes](../../docs/TAS_ACCURACY.md) for the repair scope.
 The replay deliberately ends at the observed victory boundary, matching the
 declared426 neutral inputs after the original movie. A longer exploratory tail
 in the research build stopped at the explicit **unqualified CDDA Play seek**
-guard after return10,704. That later behavior is still unresolved. This branch
+guard after return10,704. That statement describes the original Tekken revision; later optional CDDA
+component work is documented in [the source CDDA profile](../../docs/source-cdda-profile.md). This branch
 does not claim unrestricted post-victory playback, complete audio/pixel parity,
 save-state support, PAL support, or other-game TAS success.
 
-The source starts from the exact validated framework base
-`f23c5ba1a220fe1ca8818cc48c026d6c2f7f2c64`; it is a dedicated branch in the
-Alexbeav fork. It does not update that fork's main branch or upstream master.
+The historical campaign started from `f23c5ba1`. This submission starts from
+upstream `85cd26f0`. It does not change release pins or merge itself.
 
 ## Tests without retail assets
 
@@ -135,7 +138,7 @@ cmake --build build/tests --parallel 8
 ctest --test-dir build/tests --output-on-failure
 ```
 
-The suite includes the existing recompiler tests, the ABI22 overlay boundary
+The suite includes the existing recompiler tests, the ABI24 overlay boundary
 tests, O0/O2 TAS input/clock/controller regressions, BK2 validation, and failures
 for incorrect media topology and replay evidence. Three pre-existing disabled
 tests remain visible in CTest. Historical fixtures that need the separately

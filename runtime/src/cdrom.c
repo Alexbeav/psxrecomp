@@ -2087,7 +2087,7 @@ static void process_source_cdda(uint32_t cycles) {
 }
 
 static void process_cdda_stream(uint32_t cycles) {
-    if(source_cdda.enabled || s_nymashock_drive){process_source_cdda(cycles);return;}
+    if(source_cdda.enabled){process_source_cdda(cycles);return;}
     if (!cdda_playing) {
         deliver_cdda_data_end();
         return;
@@ -2522,7 +2522,7 @@ static void exec_command(uint8_t cmd) {
         set_irq(CDIRQ_ACK);
         {
             int lat = source_cdda.enabled?3386880:apply_speed(30000); /* motor spin-up */
-            if(source_cdda.enabled || s_nymashock_drive){stat_reg|=CDSTAT_MOTOR;s_source_seek_paused=0;spu_cd_audio_reset();source_cdda.async_type=source_cdda.async_count=0;}
+            if(source_cdda.enabled){stat_reg|=CDSTAT_MOTOR;s_source_seek_paused=0;spu_cd_audio_reset();source_cdda.async_type=source_cdda.async_count=0;}
             pending_arm(0x07, lat, 1);
             s_cd_probe_motor_count++;
             s_cd_probe_motor_cycles += (uint64_t)lat;
@@ -2550,7 +2550,7 @@ static void exec_command(uint8_t cmd) {
         set_irq(CDIRQ_ACK);
         {
             int lat = source_cdda.enabled?((old_status&CDSTAT_MOTOR)?33868:5000):apply_speed(30000); /* motor spin-down */
-            if(source_cdda.enabled || s_nymashock_drive)stat_reg&=~CDSTAT_MOTOR;
+            if(source_cdda.enabled)stat_reg&=~CDSTAT_MOTOR;
             pending_arm(0x08, lat, 1);
             s_cd_probe_stop_count++;
             s_cd_probe_stop_cycles += (uint64_t)lat;
@@ -2797,7 +2797,7 @@ static void exec_command(uint8_t cmd) {
             break;
         }
         {
-            if(source_cdda.enabled || s_nymashock_drive) {
+            if(source_cdda.enabled) {
                 response_push(stat_reg);set_irq(CDIRQ_ACK);
                 start_source_cdda(param_count?bcd_to_bin(param_fifo[0]):0);break;
             }
@@ -3530,7 +3530,7 @@ void cdrom_write(uint32_t addr, uint32_t value) {
 uint32_t cdrom_cycles_to_irq(uint32_t i_mask) {
     if (!(i_mask & (1u << 2))) return 0xFFFFFFFFu;   /* IRQ_CDROM masked */
     uint32_t best = 0xFFFFFFFFu;
-    if(source_cdda.enabled || s_nymashock_drive) {
+    if(source_cdda.enabled) {
         if(cdda_playing)best=cdda_delay>0?(uint32_t)cdda_delay:0;
         if(source_cdda.async_type && !irq_flag) {
             uint32_t wait=(uint32_t)cycles_until_due(s_source_ready_due);
@@ -4010,14 +4010,14 @@ static int cdrom_snap_parse(PstR *r) {
 }
 
 uint32_t cdrom_snapshot_bytes(void) {
-    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA capture unqualified\n");exit(2);}
+    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
     PstW w;
     pst_w_init(&w, NULL, 0);
     (void)cdrom_snap_emit(&w);
     return (uint32_t)w.written;
 }
 void cdrom_snapshot_write(uint8_t *p) {
-    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA capture unqualified\n");exit(2);}
+    if(source_cdda.enabled || s_nymashock_drive){fprintf(stderr,"[CDROM] Source CDDA/drive capture unqualified\n");exit(2);}
     PstW w;
     uint32_t n = cdrom_snapshot_bytes();
     pst_w_init(&w, p, n);
