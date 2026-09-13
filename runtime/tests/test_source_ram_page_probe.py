@@ -25,6 +25,8 @@ def main():
              ('pepsiman','71806',71806,'71806',0),
              ('re1','227202',227202,'227202',0),
              ('bound','71806',71807,None,4),
+             ('snapshot_capacity','239202',64,','.join(map(str,range(1,65))),0),
+             ('snapshot_over_capacity','239202',65,','.join(map(str,range(1,66))),4),
              ('snapshot_bound','71806',1,'71807',4),
              ('duplicate','71806',1,'71806,71806',4),
              ('zero','0',1,None,4), ('negative','-1',1,None,4),
