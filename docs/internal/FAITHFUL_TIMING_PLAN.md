@@ -213,6 +213,20 @@ on a fixed region -> next.
 
 ## 5. Status / Log (update every session)
 
+- **2026-09-13 (PR361 Python test discovery):** Discover Python before the
+  GNU TAS contract-test registrations expand their commands. A fresh original
+  CHD-enabled configure produced 16 script-as-executable commands; the patched
+  configure discovers Python without a cache override and wraps all 16
+  correctly. Python is required only for the GNU test suite; testing disabled
+  still configures without Python, and Clang retains optional Python tests.
+  Fresh GNU 16.1 / CHD-enabled build and all 160 enabled CTests pass; three
+  pre-existing disabled tests remain disabled. The local mixed-MinGW overlay
+  fixture required matching compiler runtime DLLs staged beside the test-build
+  emitter (not a source change or fingerprint bypass).
+  This is a test-configuration fix, not retail replay qualification or a
+  resolution of the runtime conflicts with the landed no-hack SIO removal.
+  Tracking: central issue `beads-eio.3.157`.
+
 - **2026-09-13 (TAS upstream submission):** Port the authored replay profile,
   source-oracle component fixtures and cold launchers onto upstream `85cd26f0`.
   Preserve current upstream DMA, GPU polyline, CUE mount and overlay callbacks.

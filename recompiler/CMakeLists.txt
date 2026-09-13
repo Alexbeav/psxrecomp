@@ -353,6 +353,15 @@ target_include_directories(emitter_directive_line_test PRIVATE
 target_link_libraries(emitter_directive_line_test PRIVATE fmt rabbitizer)
 
 if(BUILD_TESTING)
+    # Discover the interpreter before expanding any Python-backed TAS test
+    # command. GNU's contract tests require it; non-GNU Python tests remain
+    # optional, and BUILD_TESTING=OFF adds no interpreter dependency.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    else()
+        find_package(Python3 COMPONENTS Interpreter)
+    endif()
+
     add_executable(control_flow_metadata_test
         tests/control_flow_metadata_test.cpp
         src/control_flow.cpp)
@@ -657,7 +666,6 @@ if(BUILD_TESTING)
     add_test(NAME l2_structural_test COMMAND l2_structural_test)
     add_test(NAME reachable_discovery_test COMMAND reachable_discovery_test)
 
-    find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND AND CMAKE_GENERATOR STREQUAL "Ninja")
         add_test(NAME runtime_ipo_configuration
             COMMAND ${Python3_EXECUTABLE}
