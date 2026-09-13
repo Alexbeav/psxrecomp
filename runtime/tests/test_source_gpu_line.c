@@ -9,20 +9,22 @@ static uint16_t vram[1024*512];
 int g_ws_bd_stretch_on,g_ws_bd_stretch_pct;
 int psx_ws_prim_in_backdrop(void){abort();}
 int main(void) {
-    unsigned op,color,mode,mask,field;
+    unsigned op,color,mode,mask,field,color1;
     int x0,y0,x1,y1,ox,oy,clip;
-    while(scanf("%u %u %d %d %d %d %d %d %u %u %u %d",&op,&color,&x0,&y0,&x1,&y1,&ox,&oy,&mode,&mask,&field,&clip)==12) {
-        uint32_t words[]={op<<24|color,((uint32_t)y0&65535u)<<16|((uint32_t)x0&65535u),((uint32_t)y1&65535u)<<16|((uint32_t)x1&65535u)};
+    while(scanf("%u %u %d %d %d %d %d %d %u %u %u %d %u",&op,&color,&x0,&y0,&x1,&y1,&ox,&oy,&mode,&mask,&field,&clip,&color1)==13) {
+        unsigned n=3+!!(op&0x10);
+        uint32_t words[4]={op<<24|color,((uint32_t)y0&65535u)<<16|((uint32_t)x0&65535u),color1,0};
+        words[n-1]=((uint32_t)y1&65535u)<<16|((uint32_t)x1&65535u);
         SourceGPUCommandProjection s;source_gpu_command_cold(&s);
         s.clip_x0=s.clip_y0=clip;s.clip_x1=1023-clip;s.clip_y1=511-clip;
         s.budget=256;s.offset_x=ox;s.offset_y=oy;s.draw_mode=mode;
         s.display_mode=field?0x24:0;s.field_valid=1;s.skip_field=field==2;s.mask_bits=mask;
-        assert(source_gpu_command_length(words[0])==3);
+        assert(source_gpu_command_length(words[0])==n);
         assert(source_gpu_command_feedback_length(words[0])==1);
-        for(unsigned i=0;i<2;i++){assert(source_gpu_command_write(&s,words[i]));assert(s.dispatch.kind==0);}
+        for(unsigned i=0;i<n-1;i++){assert(source_gpu_command_write(&s,words[i]));assert(s.dispatch.kind==0);}
         assert(!source_gpu_command_ready(&s));
-        assert(source_gpu_command_write(&s,words[2]));
-        assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==3 && !s.count);
+        assert(source_gpu_command_write(&s,words[n-1]));
+        assert(s.dispatch.kind==SOURCE_GPU_DISPATCH_COMMAND && s.dispatch.count==n && !s.count);
         for(unsigned i=0;i<1024*512;i++)vram[i]=(uint16_t)(i*37u+0x1234u);
         sw_renderer_init(vram);sw_set_mask_bits(mask&1,!!(mask&2));sw_set_semi_transparency(!!(op&2),(mode>>5)&3);
         SourceGPUBlock b={0};b.words=words;b.draw_mode=mode;
