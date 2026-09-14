@@ -196,7 +196,7 @@ that survive and the entry is marked `evolved`.
 `python tools/tasreplays/archive_run.py <run-dir> <archive-name> [--evidence-root DIR]
 [--mailbox DIR] [--dry-run] [--label TEXT]` copies a finished run directory into
 `<evidence-root>/<archive-name>/runs/<run>/` (default root
-`Z:\Share\psxrecomp	as-evidence`, or `PSX_TAS_EVIDENCE`), verifies every copied
+`Z:\Share\psxrecomp\tas-evidence`, or `PSX_TAS_EVIDENCE`), verifies every copied
 file by SHA-256 and byte total, copies the sibling ladder/prefix receipts and the
 project's `setup.json`/`game.toml`/`bios.toml`/`input.json` into `runs/` and
 `builds/<project>/`, and appends the new files to the archive's `SHA256SUMS.txt`
