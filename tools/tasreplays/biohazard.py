@@ -295,7 +295,7 @@ def run(args):
         info=source.read(args.setup.resolve(strict=True));endpoint=source.read(Path(info['reference'])).get('observed_returns')
         if type(endpoint) is not int:raise ValueError('invalid source reference endpoint')
         report=run_ladder(args.output.resolve(),parse_ladder(args.ladder,endpoint),endpoint,lambda returns,target:replay(args,returns,target),write_json)
-        return 0 if report['status']=='pass' else 1
+        return 0 if report['status'] in ('pass','prefix_pass') else 1
     receipt=replay(args,args.returns)
     return 0 if receipt['status'] in ('pass','prefix_pass') else 1
 

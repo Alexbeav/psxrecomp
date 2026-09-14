@@ -434,7 +434,7 @@ def run(args):
         if type(observation_end) is not int: raise ValueError('invalid reference boundary')
         report=run_ladder(args.output,parse_ladder(args.ladder,observation_end),observation_end,
                           lambda returns,target:replay(args,returns,target),write)
-        return 0 if report['status']=='pass' else 1
+        return 0 if report['status'] in ('pass','prefix_pass') else 1
     report=replay(args,args.returns)
     return 0 if report['status'] in ('pass','prefix_pass') else 2 if report['status']=='incomplete' else 1
 

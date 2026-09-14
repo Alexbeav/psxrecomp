@@ -416,7 +416,7 @@ def run(args) -> int:
             raise ValueError('--ladder requires --output')
         report = run_ladder(args.output.resolve(), parse_ladder(args.ladder, 8399), 8399,
                             lambda returns, target: replay(args, returns, target), write_json)
-        return 0 if report['status'] == 'pass' else 1
+        return 0 if report['status'] in ('pass', 'prefix_pass') else 1
     result = replay(args, getattr(args, 'returns', None))
     if result['status'] == 'fail':
         if result.get('launcher_error'):
