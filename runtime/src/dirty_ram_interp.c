@@ -1830,7 +1830,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #endif
             uint32_t _cr = callret_begin(cpu, pc, target);   /* call-resolution ring */
 #define CRET(code, rv) do { callret_end(_cr, cpu, (code)); return (rv); } while (0)
-            if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */
+            if (g_precise_mode || g_ls_replay_active || (source_gpu_runtime_active() && psx_guest_syscalls_active())) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */
             if (rd != 31) {
                 /* No architectural $ra contract: preserve the transfer as a
                  * pc-chain and let the callee's eventual JR choose the real
@@ -2054,7 +2054,7 @@ static int exec_one_fetched_inner(CPUState *cpu, uint32_t pc, uint32_t insn,
 #else
 #define XRES(code) do { (void)(code); } while (0)
 #endif
-        if (g_precise_mode || g_ls_replay_active) { cpu->pc = target; return 1; }  /* slice / lockstep-replay: plain transfer, never execute the callee */
+        if (g_precise_mode || g_ls_replay_active || (source_gpu_runtime_active() && psx_guest_syscalls_active())) { cpu->pc = target; return 1; }  /* slice / lockstep-replay: plain transfer, never execute the callee */
 #ifdef PSX_HAS_GAME_DISPATCH
         cpu->pc = 0;
         if (interp_enter_compiled(cpu, target)) {

@@ -44,6 +44,9 @@ void dirty_ram_mark_executable_range(uint32_t a,uint32_t n) {(void)a;(void)n;}
 uint64_t g_io_openbus_reads,g_io_openbus_writes;
 uint32_t psx_read_word(uint32_t a) {return ram[(a&0x1ffffc)/4];}
 void psx_fatal_halt(const char *s) {fprintf(stderr,"%s\n",s);abort();}
+int mdec_source_active(void) {return 0;}
+void mdec_source_advance(uint32_t n) {(void)n;abort();}
+uint32_t mdec_source_dma_read(uint32_t *o) {(void)o;abort();}
 int mdec_dma_write_ready(void) {abort();}
 int mdec_dma_read_ready(void) {abort();}
 uint32_t mdec_dma_write_words(const uint32_t *p,uint32_t n) {(void)p;(void)n;abort();}
