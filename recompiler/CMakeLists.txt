@@ -754,6 +754,13 @@ target_include_directories(reachable_discovery_test PRIVATE
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
 
 # ---- test-registration completeness guard -----------------------------------
+if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
+    add_test(NAME gpu_upload_history
+        COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
+            --cc ${CMAKE_C_COMPILER})
+endif()
+
 # Reads both CMakeLists.txt files as text, so it catches an orphan in either
 # project from whichever one is being configured. Placed before the collision
 # guard, which must stay last because it needs every target declared; this one
