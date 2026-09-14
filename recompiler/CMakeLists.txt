@@ -352,9 +352,30 @@ if(BUILD_TESTING)
     target_include_directories(control_flow_metadata_test PRIVATE include)
     target_link_libraries(control_flow_metadata_test PRIVATE fmt)
     add_test(NAME control_flow_metadata_test COMMAND control_flow_metadata_test)
+    if(PSXRECOMP_ENABLE_CHD)
+        add_executable(disc_identity_test ../runtime/tests/test_disc_identity.cpp
+            ../runtime/src/disc_identity.cpp ../runtime/src/disc_path.cpp
+            ../runtime/src/iso_reader.cpp ../runtime/src/cue_sheet.cpp
+            ../runtime/src/psx_sha256.c ../runtime/src/crc32.c)
+        target_include_directories(disc_identity_test PRIVATE ../runtime/include include)
+        target_compile_options(disc_identity_test PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+        target_link_libraries(disc_identity_test PRIVATE chdr-static)
+        add_test(NAME disc_identity_test COMMAND disc_identity_test)
+    endif()
+    add_executable(host_path_test tests/host_path_test.cpp)
+    target_include_directories(host_path_test PRIVATE include)
+    add_test(NAME host_path_test COMMAND host_path_test)
 
     add_test(NAME emitter_directive_line_test
              COMMAND emitter_directive_line_test)
+    add_executable(guest_tty_test
+        ../runtime/tests/test_guest_tty.c
+        ../runtime/src/guest_tty.c)
+    target_include_directories(guest_tty_test PRIVATE ../runtime/include)
+    add_test(NAME guest_tty_test COMMAND guest_tty_test)
+
     add_executable(debug_trace_ranges_test
         ../runtime/tests/test_debug_trace_ranges.c
         ../runtime/src/debug_trace_ranges.c
@@ -680,6 +701,7 @@ if(BUILD_TESTING)
                 frame_interpolation_display_rate
                 hybrid_dev_any_input
                 launcher_pad_mode_wiring
+                jalr_link_register_guards
                 launcher_vulkan_option
                 mod_controller_override
                 mod_load_acceleration
@@ -752,6 +774,21 @@ target_include_directories(reachable_discovery_test PRIVATE
     lib/fmt/include
 )
 target_link_libraries(reachable_discovery_test PRIVATE fmt)
+
+# GTE deadline ownership includes pending CPU charges from both host sinks.
+if(BUILD_TESTING AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    foreach(_mode IN ITEMS O0 O2)
+        set(_target "tas_gte_deferred_${_mode}")
+        add_executable(${_target}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gte_deferred.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/src/psx_cycles.c")
+        target_include_directories(${_target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+        target_compile_definitions(${_target} PRIVATE PSX_ENABLE_BLOCK_CYCLES=1)
+        target_compile_options(${_target} PRIVATE -${_mode} -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(${_target} PRIVATE -Wl,--gc-sections)
+        add_test(NAME ${_target} COMMAND ${_target})
+    endforeach()
+endif()
 
 # ---- test-registration completeness guard -----------------------------------
 if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
