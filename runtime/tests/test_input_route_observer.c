@@ -21,6 +21,17 @@ void timers_get_snapshot(uint16_t counter[3], uint32_t mode[3], uint16_t target[
 #include <string.h>
 #include <stdio.h>
 static uint8_t ram[PSX_MAIN_RAM_BYTES];
+static const char *card_case = "";
+int memcard_is_present(int slot) {
+    if (!strstr(card_case,"card_")) return 0;
+    return slot == 0 ? strcmp(card_case,"card_missing") != 0 : !strcmp(card_case,"card_extra");
+}
+int memcard_debug_read_buffer(int slot,uint32_t offset,uint32_t length,uint8_t *out) {
+    if (slot || (!strcmp(card_case,"card_short") && offset==4096)) return 0;
+    for (unsigned i=0;i<length;++i) out[i]=(uint8_t)(offset+i);
+    if (!strcmp(card_case,"card_changed") && !offset) out[0]^=1;
+    return (int)length;
+}
 uint8_t *g_psx_ram = ram;
 int event_ring_dump_stream(FILE *f) { fputs("[]\n", f); return 0; }
 uint64_t cdrom_debug_get_command_history(const CDROMCommandHistoryEntry **out) { *out = NULL; return 0; }
@@ -47,6 +58,29 @@ void gpu_display_pixel_rgb(const GpuDisplayInfo *di, uint32_t x, uint32_t y,
 }
 int main(int argc, char **argv) {
     if (argc != 2) return 9;
+    card_case = argv[1];
+    if (!strncmp(argv[1], "ds_", 3)) {
+        if (!input_route_observer_dualshock_init(2)) return 4;
+        const uint8_t source[4] = {1,0,128,255}, source2[4] = {129,130,131,132};
+        uint8_t sticks[4] = {0,1,254,128};
+        const uint8_t sticks2[4] = {129,128,131,130}, neutral[4] = {128,128,128,128};
+        input_route_observer_boundary(0, 1);
+        input_route_observer_dualshock_input(0xFFEF, source);
+        if (!strcmp(argv[1], "ds_missing")) input_route_observer_boundary(1, 2);
+        if (!strcmp(argv[1], "ds_wrong_axis")) sticks[0] = 1;
+        if (!strcmp(argv[1], "ds_unconverted")) sticks[2] = 255;
+        if (!strcmp(argv[1], "ds_digital")) input_route_observer_applied(0xFFEF, 1, 0);
+        input_route_observer_dualshock_applied(0xFFEF, sticks,
+            strcmp(argv[1], "ds_disconnected") != 0, strcmp(argv[1], "ds_plainpad") != 0, 0);
+        input_route_observer_boundary(1, 2);
+        input_route_observer_dualshock_input(0xFFFF, source2);
+        input_route_observer_dualshock_applied(0xFFFF, sticks2, 1, 1, 1);
+        input_route_observer_boundary(2, 3);
+        input_route_observer_dualshock_input(0xFFFF, !strcmp(argv[1], "ds_tail_axis") ? source : neutral);
+        input_route_observer_dualshock_applied(0xFFFF, neutral, 1, 1, 1);
+        input_route_observer_boundary(3, 4);
+        return 8;
+    }
     CPUState cpu = {0};
     if (!strcmp(argv[1], "cpu")) {
         cpu.pc=0x80012340; cpu.gpr[31]=0x80054320;

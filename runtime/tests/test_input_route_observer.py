@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 
@@ -54,4 +55,46 @@ with tempfile.TemporaryDirectory() as root:
             assert not (out / "complete.json").exists()
         if case == "collision":
             assert (out / "checkpoints.jsonl").read_bytes() == b"preserve"
-print("input_route_observer: 18 compiled cases passed")
+with tempfile.TemporaryDirectory() as directory:
+    for case in ('ds_valid', 'ds_wrong_axis', 'ds_unconverted', 'ds_missing',
+                 'ds_disconnected', 'ds_plainpad', 'ds_tail_axis', 'ds_digital'):
+        out = Path(directory) / case
+        out.mkdir()
+        env = dict(os.environ, PSX_INPUT_ROUTE_CAPTURE_DIR=str(out), PSX_INPUT_ROUTE_NEUTRAL_TAIL='1',
+                   PSX_INPUT_ROUTE_CAPTURE_EVERY='1', PSX_INPUT_ROUTE_TRACE='0',
+                   PSX_INPUT_ROUTE_CPU_STATE='0', PSX_INPUT_ROUTE_VIDEO_STATE='0')
+        env.pop('PSX_INPUT_ROUTE_WATCH_U16', None)
+        run = subprocess.run([str(exe), case], env=env, capture_output=True)
+        assert run.returncode == (0 if case == 'ds_valid' else 3), (case, run.returncode, run.stderr)
+        if case != 'ds_valid':
+            assert not (out / 'complete.json').exists()
+            continue
+        source = struct.pack('<H5B', 0xFFEF, 1,0,128,255,0) + struct.pack('<H5B', 0xFFFF,129,130,131,132,0)
+        protocol = struct.pack('<H5B', 0xFFEF, 1,0,128,254,0) + struct.pack('<H5B', 0xFFFF,128,129,130,131,0)
+        for name in ('complete.json', 'input-end.json'):
+            record = json.loads((out / name).read_text())
+            assert record['original_controller_sha256'] == hashlib.sha256(source).hexdigest()
+            assert record['applied_controller_sha256'] == record['expected_protocol_sha256'] == hashlib.sha256(protocol).hexdigest()
+            assert record['guest_analog_mode'] == 1
+            assert 'applied_words_sha256' not in record
+        rows = [json.loads(line) for line in (out / 'checkpoints.jsonl').read_text().splitlines()]
+        assert [row['frame'] for row in rows] == [0,1,2,3]
+        assert [row['guest_analog_mode'] for row in rows] == [0,0,1,1]
+        assert rows[2]['supplied_controller_sha256'] != rows[2]['applied_controller_sha256']
+        assert rows[2]['supplied_controller_sha256'] == rows[3]['supplied_controller_sha256']
+with tempfile.TemporaryDirectory() as directory:
+    digest = hashlib.sha256(bytes(range(256))*512).hexdigest()
+    for case in ('card_valid','card_missing','card_extra','card_short','card_changed','card_wrong_hash','card_bad_hash','ds_card_undeclared'):
+        out = Path(directory)/case; out.mkdir()
+        env = {k:v for k,v in os.environ.items() if not k.startswith('PSX_')}
+        env.update(PSX_INPUT_ROUTE_CAPTURE_DIR=str(out),PSX_INPUT_ROUTE_NEUTRAL_TAIL='1')
+        if case != 'ds_card_undeclared':
+            env['PSX_INPUT_ROUTE_CARD1_SHA256'] = '0'*64 if case=='card_wrong_hash' else 'xyz' if case=='card_bad_hash' else digest
+        run = subprocess.run([str(exe),case],env=env,capture_output=True)
+        assert run.returncode == (0 if case=='card_valid' else 3), (case,run.returncode,run.stderr)
+        if case=='card_valid':
+            assert json.loads((out/'initial-cards.json').read_text()) == dict(card1_present=True,card2_present=False,card1_sha256=digest,bytes=131072)
+            assert (out/'complete.json').is_file()
+        else:
+            assert not (out/'complete.json').exists()
+print('input_route_observer: digital, complete DualShock delivery and eight loaded-card identity cases passed')
