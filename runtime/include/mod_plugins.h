@@ -105,13 +105,22 @@ uint32_t psx_mod_display_width(void);
 uint32_t psx_mod_display_height(void);
 
 /* Opt-in presentation hold for a game that retains its previous framebuffer
- * while loading. The pure, cheap emulation-thread predicate returns nonzero
+ * while loading. The pure, cheap emulation-thread predicate returns HOLD
  * only while that SAME scene remains displayed; no GPU/API recursion allowed.
+ * RELEASE resumes normal classification immediately. UNTIL_FLIP releases a
+ * prior HOLD only once the displayed VRAM origin changes: useful when drawing
+ * the next backbuffer finishes before it becomes visible. UNTIL_FLIP without
+ * a prior HOLD does nothing. Do not use it for in-place scene replacements.
  * Native-wide retains its prior wide/4:3 classification, never stretches art
  * and never overrides FMV. NULL removes the opt-in. Host history is discarded
  * on GPU reset/savestate restore, so loading a frozen scene cannot recreate
  * missing widescreen strips. This does not change guest rendering or memory. */
 typedef int (*PSXModRetainedScenePredicate)(void);
+enum {
+    PSX_MOD_SCENE_RELEASE = 0,
+    PSX_MOD_SCENE_HOLD = 1,
+    PSX_MOD_SCENE_UNTIL_FLIP = 2
+};
 void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate);
 
 /*

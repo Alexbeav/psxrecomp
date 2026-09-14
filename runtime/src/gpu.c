@@ -378,6 +378,7 @@ static uint32_t s_ws_fmv_frame_cache = 0xFFFFFFFFu;
 static int      s_ws_fmv_cached = 0;
 static PSXModRetainedScenePredicate s_ws_retained_scene_predicate;
 static WsSceneHold s_ws_scene_hold;
+static uint32_t ws_display_origin(void);
 
 void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate) {
     s_ws_retained_scene_predicate = predicate;
@@ -397,7 +398,8 @@ int gpu_ws_present_native_43(void) {
     }
     if (hold_enabled)
         return ws_scene_hold_classify(&s_ws_scene_hold,
-            s_ws_retained_scene_predicate(), native_43, s_ws_fmv_cached);
+            s_ws_retained_scene_predicate(), native_43, s_ws_fmv_cached,
+            ws_display_origin());
     return s_ws_fmv_cached;
 }
 
@@ -2585,6 +2587,9 @@ extern void psx_irq_raise(uint32_t bit, uint32_t detail);
 /* Display area start (GP1(05h)) */
 static uint32_t display_area_x;
 static uint32_t display_area_y;
+static uint32_t ws_display_origin(void) {
+    return display_area_x | (display_area_y << 10);
+}
 
 /* ----- Native-wide compositor driving (see runtime/src/gpu_sw_renderer.c) ----
  * The renderer keeps a separate wide surface per framebuffer; we tell it which

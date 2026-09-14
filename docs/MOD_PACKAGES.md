@@ -608,19 +608,23 @@ still cannot load native code.
 A trusted game plugin can register
 `psx_mod_set_retained_scene_predicate(predicate)` from `mod_plugins.h` when the
 game keeps displaying its previous framebuffer while loading. The cheap, pure
-emulation-thread callback must return nonzero only while that same scene is
+emulation-thread callback returns `PSX_MOD_SCENE_HOLD` while that same scene is
 retained. It must not call presentation APIs recursively. Passing NULL removes
 the opt-in. Without registration, existing presentation behavior is unchanged.
 
 In native-wide mode this holds the previous wide/4:3 classification even if a
 game-state flag or absent GTE activity would normally classify loading as 2D.
 It does not force menus wide, stretch artwork, change guest rendering or memory,
-or override the FMV veto. Release the predicate when a new scene replaces the
-retained image, so ordinary classification resumes. Crash's experimental
+or override the FMV veto. Return `PSX_MOD_SCENE_RELEASE` when a new scene replaces
+the retained image, so ordinary classification resumes. For double-buffered
+games whose draw-ready signal precedes the actual display flip, return
+`PSX_MOD_SCENE_UNTIL_FLIP`: the prior hold ends only when the displayed VRAM
+origin changes. Without a prior HOLD it behaves like RELEASE. Do not use
+UNTIL_FLIP for in-place image replacement. Crash's experimental
 adaptive feature uses its pending level transition and draw-skip globals for
 this; these game-specific addresses do not belong in the framework.
 
 GPU reset and savestate restore discard this host-only history. A save loaded
 directly into a frozen loading frame cannot recreate wide reveal strips absent
 from the canonical saved framebuffer. `ws_scene_hold_test` covers long holds,
-menu release, retained 4:3 scenes, FMV priority and timeline reset.
+menu release, delayed buffer flips, retained 4:3 scenes, FMV and timeline reset.
