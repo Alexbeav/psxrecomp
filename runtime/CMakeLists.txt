@@ -653,6 +653,14 @@ if(BUILD_TESTING)
         endforeach()
         add_test(NAME vblank_in_exception_test COMMAND vblank_in_exception_test)
         add_test(NAME gpu_interlace_status_test COMMAND gpu_interlace_status_test)
+        # Nightmare Creatures II FMV row-coverage presentation policy (title override).
+        # Same whole-program GCC recipe as tests/README-depth24-row-policy.md.
+        add_executable(depth24_row_policy_test tests/test_depth24_row_policy.c)
+        target_include_directories(depth24_row_policy_test PRIVATE include)
+        target_compile_options(depth24_row_policy_test PRIVATE
+            -O2 -UNDEBUG -flto -fwhole-program -ffunction-sections -fdata-sections)
+        target_link_options(depth24_row_policy_test PRIVATE -flto -Wl,--gc-sections)
+        add_test(NAME depth24_row_policy_test COMMAND depth24_row_policy_test)
     endif()
 
     add_executable(spu_end_without_repeat_test
