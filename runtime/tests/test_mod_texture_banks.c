@@ -18,6 +18,13 @@ static void check(int ok,const char* text){if(!ok){fprintf(stderr,"FAIL %s\n",te
 static int resolve(uint16_t id){uint16_t data=0x4567;++resolves;return psx_mod_define_texture_bank(id,1,1,&data);}
 static uint32_t bits(float f){uint32_t n;memcpy(&n,&f,4);return n;}
 int main(void){
+    check(!mod_texture_bank_batchable(1,0,0),"bank batching defaults off");
+    psx_mod_set_texture_bank_batching(1);
+    for(int mode=-1;mode<=4;++mode) for(int bank=0;bank<=1;++bank) for(int mask=0;mask<=1;++mask)
+        check(mod_texture_bank_batchable(bank,mask,mode)==
+            (bank && !mask && (mode==0 || mode==1 || mode==3)),"single-pass opt-in scope");
+    psx_mod_set_texture_bank_batching(0);
+    check(!mod_texture_bank_batchable(1,0,0),"bank batching disable");
     uint16_t data[4]={1,2,3,4};uint32_t w,h;
     check(!psx_mod_define_texture_bank(0,2,2,data),"bank zero reserved");
     check(!psx_mod_define_texture_bank(1,1025,2,data),"dimensions bounded");

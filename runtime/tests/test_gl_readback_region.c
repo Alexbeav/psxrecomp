@@ -28,6 +28,38 @@ static void verify(const char *label){
  if(n)fprintf(stderr,"%s: %d native words differ\n",label,n);
  check(n==0,label);check(glGetError()==GL_NO_ERROR,"GL error");
 }
+static void verify_bank_batching(void) {
+ static uint16_t bank[256*128], baseline[96*96], result[96*96];
+ for(int i=256;i<256*128;++i)bank[i]=0x3210;
+ bank[0]=0;bank[1]=0x001f;bank[2]=0x83e0;bank[3]=0xfc00;
+ check(psx_mod_define_texture_bank(8,256,128,bank),"batch fixture bank");
+ for(int filter=0;filter<2;++filter) for(int mask=0;mask<2;++mask) {
+  int counts[2];
+  for(int enabled=0;enabled<2;++enabled) {
+   gl_renderer_select_texture_bank(0);
+   glb_set_mask_bits(0,0);glb_set_semi_transparency(0,0);
+   glb_draw_flat_rect(400,300,96,96,0x1234);flush_flat_batch();
+   psx_mod_set_texture_bank_batching(enabled);
+   s_tex_filter=filter;glb_set_mask_bits(0,mask);
+   gl_renderer_select_texture_bank(8);
+   const int before=s_cw_batches;
+   for(int i=0;i<36;++i) {
+    const int x=404+(i%6)*5,y=304+(i%4)*7;
+    glb_set_semi_transparency(1,(i/6)%4);
+    glb_draw_shaded_textured_triangle(x,y,0,2,0x808080,
+        x+44,y+2,63,2,0x507090,x+3,y+48,0,65,0x907050,0,0,0,0);
+   }
+   flush_tex_batch();counts[enabled]=s_cw_batches-before;
+   gl_renderer_select_texture_bank(0);
+   gl_renderer_sync_cpu();
+   check(gl_renderer_fbo_peek(400,300,96,96,enabled?result:baseline),"batch pixel read");
+  }
+  check(memcmp(baseline,result,sizeof baseline)==0,"ordered semi batching pixel equivalence");
+  check(mask?counts[1]==counts[0]:counts[1]<counts[0],"batch reduction only on supported path");
+ }
+ psx_mod_set_texture_bank_batching(0);s_tex_filter=0;
+ glb_set_mask_bits(0,0);glb_set_semi_transparency(0,0);
+}
 int main(int argc,char **argv){
  int scale=argc>1?atoi(argv[1]):1;
  if(SDL_Init(SDL_INIT_VIDEO)!=0)return 2;
@@ -94,6 +126,7 @@ int main(int argc,char **argv){
  check(gl_renderer_select_texture_bank(0),"reset bank after direct texture");
  check(glb_vram_read(302,252)==0x001f,"retained 16-bit texel");
  verify("retained banks and original VRAM ordered together");
+ verify_bank_batching();
  printf("checks=%d failures=%d\n",checks,failures);
  gl_renderer_shutdown();SDL_DestroyWindow(win);SDL_Quit();return failures?1:0;
 }
