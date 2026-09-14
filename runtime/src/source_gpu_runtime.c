@@ -73,7 +73,112 @@ static void service(void *context,uint64_t cycle,unsigned kind) {
     if(kind==SOURCE_GPU_EVENT_DMA || kind==SOURCE_GPU_EVENT_WRITE)
         dma_source_gpu_service_at(cycle);
 }
+static void cpu_boundary_inner(CPUState *cpu,uint32_t pc,uint64_t cycle);
+/* Step-2 IRQ handoff for compiled code (TAS speed task). The precise
+ * interpreter re-tests interrupt deliverability before every instruction; a
+ * compiled block only did so at its leader, so a store to I_MASK/I_STAT (or
+ * any write that makes a pending IRQ deliverable) inside the block moved the
+ * take point to the next block boundary. Compiled code already reaches this
+ * callback before every instruction under the source profile, so run the same
+ * test here and deliver synchronously (the handler runs nested and returns,
+ * exactly as compiled-code takes at block boundaries already do), with the
+ * resume PC = this instruction so EPC matches the interpreter. Delay-slot
+ * boundaries are skipped: a synchronous enable always becomes visible at a
+ * non-slot boundary first (the branch itself, or the branch target when the
+ * enabling store sits in the slot), and asynchronous device IRQs cannot land
+ * inside a compiled block by the guard's deadline construction. */
+int g_psx_slice_irq_handoff;   /* set by the guard when the phase variant is on */
+int g_psx_slice_slot_take;     /* PSX_SLICE_SLOT_TAKE=1: take IRQs at delay-slot boundaries like exec_delay_slot */
+uint64_t g_sd_handoff_slot_taken;
+#include "psx_cyc.h"
+#include "psx_icache.h"
+#include "psx_instr_cost.h"   /* psx_cyc_dep_res_mask (static inline) */
+int g_interp_boundary_in_progress; /* set by the interpreter around its own boundary call: it owns the IRQ test there */
+extern int g_psx_irq_delivering;   /* interrupts.c: delivery is fetching the handler's first instruction */
+extern void psx_check_interrupts(CPUState *cpu);
+extern int memory_peek_instruction_word(uint32_t address,uint32_t *value);
+uint64_t g_sd_handoff_taken, g_sd_handoff_slot_skipped; uint32_t g_sd_handoff_first_pc;
+static int compiled_boundary_in_delay_slot(uint32_t pc) {
+    uint32_t prev;
+    if(!memory_peek_instruction_word(pc-4u,&prev)) return 0;
+    uint32_t op=prev>>26,fn=prev&63u,rs=(prev>>21)&31u;
+    if(op==2u || op==3u) return 1;                          /* j / jal */
+    if(op==1u || (op>=4u && op<=7u)) return 1;              /* bcond / beq bne blez bgtz */
+    if(op==0u && (fn==8u || fn==9u)) return 1;              /* jr / jalr */
+    if(op>=0x10u && op<=0x13u && rs==8u) return 1;          /* bcZf / bcZt */
+    return 0;
+}
+static int s_handoff_active;
+static void compiled_irq_handoff(CPUState *cpu,uint32_t pc) {
+    extern int g_precise_mode;
+    /* g_dirty_interp_active stays set across native calls made from the dirty
+     * interpreter, so it cannot discriminate; the interpreter flags its own
+     * boundary calls instead. */
+    if(!g_psx_slice_irq_handoff || g_precise_mode || g_interp_boundary_in_progress) return;
+    if(s_handoff_active || g_psx_irq_delivering) return;   /* delivery's own handler fetch reaches this callback */
+    extern int psx_precise_irq_before_public(CPUState *cpu,uint32_t pc);
+    if(!psx_precise_irq_before_public(cpu,pc)) return;
+    extern uint64_t g_irq_deliver_count; extern uint32_t g_dirty_safe_resume_pc;
+    if(compiled_boundary_in_delay_slot(pc)) {
+        /* Delay-slot boundary. The interpreter (exec_delay_slot) takes here with
+         * EPC = branch and BD set, then re-executes the branch and the slot after
+         * RFE. Mirror it (PSX_SLICE_SLOT_TAKE=1): recompute the branch's target and
+         * taken flag from the branch word and the current registers (the slot has
+         * not executed, so the branch's operands are as the branch saw them),
+         * deliver through the same routine, then charge the branch's re-execution
+         * (boundary + fetch + interlock step) before the compiled slot proceeds.
+         * jalr with rd == rs and COP branches cannot be recomputed: skip as before. */
+        extern int g_psx_slice_slot_take;
+        if(!g_psx_slice_slot_take) { g_sd_handoff_slot_skipped++; return; }
+        uint32_t bpc=pc-4u,bw,sw; if(!memory_peek_instruction_word(bpc,&bw) || !memory_peek_instruction_word(pc,&sw)) { g_sd_handoff_slot_skipped++; return; }
+        uint32_t op=bw>>26,fn=bw&63u,rs=(bw>>21)&31u,rt=(bw>>16)&31u,rd=(bw>>11)&31u; int32_t simm=(int16_t)(bw&0xFFFFu);
+        uint32_t target=0; int taken=0, ok=1;
+        int32_t vs=(int32_t)cpu->gpr[rs], vt=(int32_t)cpu->gpr[rt];
+        if(op==2u || op==3u) { target=(bpc&0xF0000000u)|((bw&0x03FFFFFFu)<<2); taken=1; }
+        else if(op==0u && (fn==8u || fn==9u)) { if(fn==9u && rd==rs) ok=0; target=cpu->gpr[rs]; taken=1; }
+        else if(op==4u) { target=pc+((uint32_t)simm<<2); taken=vs==vt; }
+        else if(op==5u) { target=pc+((uint32_t)simm<<2); taken=vs!=vt; }
+        else if(op==6u) { target=pc+((uint32_t)simm<<2); taken=vs<=0; }
+        else if(op==7u) { target=pc+((uint32_t)simm<<2); taken=vs>0; }
+        else if(op==1u) { target=pc+((uint32_t)simm<<2); taken=(rt&1u)?(vs>=0):(vs<0); if(rt&0x10u) { /* bltzal/bgezal: link written at branch */ } }
+        else ok=0;
+        if(!ok) { g_sd_handoff_slot_skipped++; return; }
+        extern int psx_check_interrupts_delay_slot(CPUState *cpu,uint32_t slot_pc,uint32_t target,int taken,uint32_t instruction);
+        uint64_t before=g_irq_deliver_count;
+        s_handoff_active=1;
+        int took=psx_check_interrupts_delay_slot(cpu,pc,target,taken,sw);
+        s_handoff_active=0;
+        if(took && g_irq_deliver_count!=before) {
+            g_sd_handoff_slot_taken++;
+            /* re-execution of the branch, as the interpreter does after RFE */
+            cpu_boundary_inner(cpu,bpc,psx_get_cycle_count());
+            psx_icache_fetch(cpu,bpc);
+            psx_cyc_step(cpu,psx_cyc_dep_res_mask(bw));
+            cpu->pc=0;   /* compiled code continues with the slot and its latched target */
+        }
+        return;
+    }
+    uint64_t before=g_irq_deliver_count;
+    uint32_t previous=g_dirty_safe_resume_pc;
+    cpu->pc=pc;g_dirty_safe_resume_pc=pc;
+    s_handoff_active=1;
+    psx_check_interrupts(cpu);              /* handler runs nested; returns here */
+    s_handoff_active=0;
+    g_dirty_safe_resume_pc=previous;
+    if(g_irq_deliver_count!=before) { g_sd_handoff_taken++; if(!g_sd_handoff_first_pc) g_sd_handoff_first_pc=pc; }
+}
 static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
+    /* Same order as psx_run_precise: test deliverability BEFORE the boundary
+     * work (which can charge DMA-halt/fetch cycles and would otherwise move
+     * the take timestamp by that amount), then again after it, because the
+     * boundary work itself can raise an interrupt. Full-route requalification
+     * of the after-only version shifted two returns by 1-2 cycles inside a
+     * DMA-halted wait loop. */
+    compiled_irq_handoff(cpu,pc);
+    cpu_boundary_inner(cpu,pc,cycle);
+    compiled_irq_handoff(cpu,pc);
+}
+static void cpu_boundary_inner(CPUState *cpu,uint32_t pc,uint64_t cycle) {
     for(;;) {
         if(clock_state.frame_pending) {
             psx_devices_service_to_now();
@@ -81,6 +186,7 @@ static void cpu_boundary(CPUState *cpu,uint32_t pc,uint64_t cycle) {
             return_clock=clock_state;return_command=command_state;
             source_cpu_return_probe(cpu,pc,cycle,clock_state.frame_returns);
             source_ram_page_probe(clock_state.frame_returns,cycle);
+            { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* frame end re-arms the GPU service clock */
             psx_next_service_cycle=0;g_psx_cycle_fast_limit=0;
         }
         dma_cpu_read_wait_boundary();
@@ -129,6 +235,34 @@ uint32_t source_gpu_runtime_cycles_to_event(void) {
     uint64_t next=source_gpu_service_next(&clock_state);
     return next>psx_cycle_count?(uint32_t)(next-psx_cycle_count):1u;
 }
+/* Slice deadline for the precise-slice guard (step 2 of the TAS speed task).
+ * The service clock's own 128-cycle re-arm is the source emulator's update
+ * quantum, not a guest-visible instant: the OWN ticks only progress GPU
+ * command work and the draw raster, which every MMIO access re-syncs before
+ * observing, and the service loop replays the same tick sequence at the next
+ * service point. What a compiled block must NOT run across: the raster phase
+ * edge (scanline end / HBlank edge -- the frame request is set there and the
+ * frontend return is consumed at the following instruction boundary), and any
+ * tick while a source DMA transfer is live or halting the CPU (word traffic
+ * and CPU-halt cycles are instruction-ordered). Everything else is caught up. */
+uint32_t source_gpu_runtime_cycles_to_slice_deadline(void) {
+    if(!enabled)return UINT32_MAX;
+    if(clock_state.frame_pending)return 0;
+    uint64_t next=clock_state.cycle+source_gpu_service_until_phase(&clock_state);
+    /* Keep the tick while: a source transfer is moving words, any DMA channel
+     * is busy (its completion IRQ is raised from the DMA tick and is not in
+     * cycles_to_next_event), the CPU is halted for DMA, or an IRQ source the
+     * countdown does not model (GPU bit1, SPU bit9, PIO bit10) is unmasked. */
+    extern int dma_source_transfer_active(void);
+    extern unsigned dma_channels_busy_mask(void);
+    extern uint32_t i_mask;
+    if(dma_source_transfer_active() || dma_channels_busy_mask() || dma_cpu_source_halted() || (i_mask & 0x602u)) {
+        uint64_t tick=source_gpu_service_next(&clock_state);
+        if(tick<next)next=tick;
+    }
+    return next>psx_cycle_count?(uint32_t)(next-psx_cycle_count):1u;
+}
+
 void source_gpu_runtime_dma_write(void) {
     if(enabled && !source_gpu_service_dma_write(&clock_state,psx_cycle_count,service,0))fail("invalid DMA write time");
 }

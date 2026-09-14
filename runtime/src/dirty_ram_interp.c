@@ -1421,12 +1421,27 @@ static int precise_irq_deliverable(CPUState *cpu);
 static int precise_irq_before(CPUState *cpu,uint32_t pc) {
     return precise_irq_deliverable(cpu) && psx_irq_opcode_eligible(pc);
 }
+/* diag: trace every IRQ-check site at one watched PC (PSX_SD_WATCH_PC=hex), first 8 hits */
+static void sd_watch(const char *site, CPUState *cpu, uint32_t pc, int result) {
+    static int init, hits; static uint32_t watch;
+    if (!init) { init = 1; const char *e = getenv("SD_WATCH_PC"); watch = e ? (uint32_t)strtoul(e, 0, 16) : 0; }  /* not PSX_-prefixed: run_native.py strips those */
+    if (!watch || pc != watch || hits >= 8) return;
+    hits++;
+    extern uint32_t i_stat;
+    fprintf(stderr, "[sd-watch] %s pc=%08X cycle=%llu precise=%d istat=%08X imask=%08X sr=%08X inexc=%d cooldown=%d result=%d\n",
+            site, pc, (unsigned long long)psx_get_cycle_count(), g_precise_mode, i_stat, i_mask, cpu->cop0[12],
+            psx_get_in_exception(), psx_interrupt_cooldown_active(), result);
+}
+/* exported for the compiled-code boundary handoff in source_gpu_runtime.c */
+int psx_precise_irq_before_public(CPUState *cpu,uint32_t pc) { return precise_irq_before(cpu,pc); }
 static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
     /* Ordinary dirty/kernel interpretation owns real instruction boundaries
      * even when the compiled-block precision slicer is inactive. A pending
      * source-model IRQ must preempt this opcode, not a later dispatch target. */
+    sd_watch("dirty_irq_before", cpu, pc, !g_precise_mode && source_gpu_runtime_active() ? precise_irq_before(cpu,pc) : -1);
     if(!g_precise_mode && source_gpu_runtime_active() && precise_irq_before(cpu,pc)) {
         extern uint64_t g_irq_deliver_count;
+        extern uint64_t g_sd_nd_taken, g_sd_nd_declined_by_check; extern uint32_t g_sd_nd_first_declined_pc;
         uint64_t before=g_irq_deliver_count;
         uint32_t previous=g_dirty_safe_resume_pc;
         cpu->pc=pc;g_dirty_safe_resume_pc=pc;
@@ -1434,9 +1449,11 @@ static int source_dirty_irq_before(CPUState *cpu,uint32_t pc) {
         psx_check_interrupts(cpu);
         g_dirty_safe_resume_pc=previous;
         if(g_irq_deliver_count!=before) {
+            g_sd_nd_taken++;
             if(!cpu->pc)cpu->pc=pc;
             return 1;
         }
+        g_sd_nd_declined_by_check++; if (!g_sd_nd_first_declined_pc) g_sd_nd_first_declined_pc = pc;
     }
     return 0;
 }
@@ -1534,7 +1551,14 @@ static int exec_one_fetched_context(CPUState *cpu, uint32_t pc, uint32_t insn,
          * interval preempts this opcode, before its load cancellation or
          * register effects. The IRQ path owns its fetch and ordinary step.
          * Source COP2 bypasses the halt/interrupt opcode table. */
-        psx_cpu_step_boundary(cpu,pc);
+        /* The interpreter owns the IRQ test at its own boundary call, so flag it
+         * and let the compiled-code handoff stand down. (The TAS checkpoint save
+         * that brackets this upstream belongs to the save-state resume feature,
+         * which this lineage does not carry; see 155003cb.) */
+        { extern int g_interp_boundary_in_progress; g_interp_boundary_in_progress=1;
+          psx_cpu_step_boundary(cpu,pc);
+          g_interp_boundary_in_progress=0; }
+        sd_watch(in_slot ? "exec_ctx_slot" : "exec_ctx", cpu, pc, op_field(insn)!=0x12u ? precise_irq_deliverable(cpu) : -1);
         if(op_field(insn)!=0x12u && precise_irq_deliverable(cpu)) {
             extern uint64_t g_irq_deliver_count;
             uint64_t before=g_irq_deliver_count;
@@ -2667,6 +2691,9 @@ int dirty_ram_dispatch(CPUState* cpu, uint32_t addr, uint32_t stop_addr) {
 /* Is a hardware interrupt deliverable to the guest at this exact instruction
  * boundary? Mirrors the gate in psx_check_interrupts: a pending+unmasked I_STAT
  * bit, COP0 IEc + IM2 set, and not already inside the exception handler. */
+/* diag: why a pending, unmasked, enabled IRQ was not deliverable / not taken (non-precise dirty path) */
+uint64_t g_sd_nd_in_exception, g_sd_nd_cooldown, g_sd_nd_taken, g_sd_nd_declined_by_check;
+uint32_t g_sd_nd_first_declined_pc, g_sd_nd_first_inexc_pc, g_sd_nd_first_cooldown_pc;
 static int precise_irq_deliverable(CPUState *cpu) {
     /* A caller may own a generated block/local cycle batch. Publish the
      * completed instruction before inspecting the device IRQ line. */
@@ -2677,11 +2704,12 @@ static int precise_irq_deliverable(CPUState *cpu) {
      * mtc0 to CAUSE, independent of the INTC line (see psx_check_interrupts). */
     uint32_t sw_pending = cpu->cop0[13] & sr & 0x0300u;
     if ((i_stat & i_mask) == 0 && sw_pending == 0) return 0;
-    if (psx_get_in_exception()) return 0;
+    int armed = (sr & 0x1u) && ((sr & (1u << 10)) || sw_pending);
+    if (psx_get_in_exception()) { if (armed && !g_precise_mode) { g_sd_nd_in_exception++; if (!g_sd_nd_first_inexc_pc) g_sd_nd_first_inexc_pc = cpu->pc; } return 0; }
     /* The actual delivery routine can decline during its inherited cooldown.
      * Predicting a take here would return at the same PC with no guest cycles,
      * so that cycle-based cooldown could never expire. */
-    if (psx_interrupt_cooldown_active()) return 0;
+    if (psx_interrupt_cooldown_active()) { if (armed && !g_precise_mode) { g_sd_nd_cooldown++; if (!g_sd_nd_first_cooldown_pc) g_sd_nd_first_cooldown_pc = cpu->pc; } return 0; }
     if (!(sr & 0x1u))        return 0;   /* IEc: interrupts globally enabled */
     /* INTC needs IM2; a pending software interrupt is deliverable without it. */
     if (!(sr & (1u << 10)) && sw_pending == 0)  return 0;
@@ -2928,20 +2956,127 @@ void psx_precise_slice_init_from_env(void) {
  * interpreter and left cpu->pc at a dispatchable resume point; the caller MUST
  * `return` so its compiled body does not re-execute the same instructions).
  * Returns 0 if the whole block is provably safe to run as fast compiled C. */
+/* ---- Slice-decision diagnostics (host-side counters only; no guest effect) ----
+ * Why nearly every compiled block leader falls through to the precise
+ * interpreter under the qualifying TAS profile. Written to
+ * <PSX_INPUT_ROUTE_CAPTURE_DIR>/slice-diag.json at route completion. */
+#define SD_HIST_N 8
+static uint64_t g_sd_leaders, g_sd_gate_off, g_sd_bios_skip, g_sd_nested_skip;
+static uint64_t g_sd_compiled, g_sd_compiled_cycles;
+static uint64_t g_sd_sliced, g_sd_slice_cycles, g_sd_slice_insns;
+static uint64_t g_sd_flag_always, g_sd_flag_halted, g_sd_flag_deliverable, g_sd_flag_deadline,
+                g_sd_flag_side_effects, g_sd_flag_gte_delay;
+static uint64_t g_sd_primary[6];               /* first true reason, same order as the flags */
+static uint64_t g_sd_deadline_hist[SD_HIST_N]; /* deadline cycles when sliced for deadline<=budget */
+static uint64_t g_sd_budget_hist[SD_HIST_N];   /* budget (block bound) at every decided leader */
+static uint64_t g_sd_slack_hist[SD_HIST_N];    /* deadline-budget when compiled */
+static uint64_t g_sd_exit_reason[5];           /* g_slice_exit_reason after each slice: 0..4 */
+static uint64_t g_sd_slice_insn_hist[SD_HIST_N]; /* instructions interpreted per slice */
+static uint64_t g_sd_deadline_src_gpu, g_sd_deadline_src_irq; /* which countdown was the binding deadline */
+static uint64_t g_sd_gpu_deadline_hist[SD_HIST_N];            /* GPU service countdown when sliced for deadline */
+static uint64_t g_sd_dma_idle_at_slice, g_sd_would_compile_nosteal, g_sd_would_compile_nomem; /* what-if bounds */
+static int g_sd_variant_phase, g_sd_variant_nosteal, g_sd_variant_bound_mode;   /* step-2/3 env variants in effect */
+static uint64_t g_sd_phase_dma_active, g_sd_phase_dma_idle, g_sd_phase_gpu_hist[SD_HIST_N]; /* phase variant: GPU term at every decision */
+static uint64_t g_sd_phase_dma_bits[10]; /* transfer-state field (0-6), CPU halted (7), any channel busy (8), GPU/SPU/PIO IRQ unmasked (9) */
+static uint64_t g_sd_irq_cache_hits, g_sd_irq_cache_misses;   /* step-4b: guard's masked-countdown cache */
+static const char *const sd_hist_labels[SD_HIST_N] =
+    {"0","1-16","17-64","65-256","257-1024","1025-4096","4097-16384",">16384"};
+static inline unsigned sd_bucket(uint64_t v) {
+    if (v == 0) return 0; if (v <= 16) return 1; if (v <= 64) return 2; if (v <= 256) return 3;
+    if (v <= 1024) return 4; if (v <= 4096) return 5; if (v <= 16384) return 6; return 7;
+}
+static void sd_write_hist(FILE *f, const char *name, const uint64_t *h, int last) {
+    fprintf(f, "  \"%s\": {", name);
+    for (int i = 0; i < SD_HIST_N; i++)
+        fprintf(f, "\"%s\": %llu%s", sd_hist_labels[i], (unsigned long long)h[i], i + 1 < SD_HIST_N ? ", " : "");
+    fprintf(f, "}%s\n", last ? "" : ",");
+}
+void psx_slice_diag_write(const char *dir) {
+    if (!dir) return;
+    char path[4096];
+    if (snprintf(path, sizeof(path), "%s/slice-diag.json", dir) >= (int)sizeof(path)) return;
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    extern uint64_t g_dirty_ram_insns_run;
+    fprintf(f, "{\n  \"schema\": \"psx-slice-diag-v1\",\n  \"precise_slice_enabled\": %d,\n", g_psx_precise_slice);
+    { static const char *const bm[] = {"steal", "nosteal", "icache", "none"};
+      fprintf(f, "  \"variant\": {\"gpu_deadline\": \"%s\", \"bound\": \"%s\"},\n",
+              g_sd_variant_phase ? "phase" : "tick", bm[g_sd_variant_bound_mode & 3]); }
+    fprintf(f, "  \"nonprecise_irq\": {\"taken\": %llu, \"declined_by_check\": %llu, \"first_declined_pc\": \"%08X\", \"not_deliverable_in_exception\": %llu, \"first_in_exception_pc\": \"%08X\", \"not_deliverable_cooldown\": %llu, \"first_cooldown_pc\": \"%08X\"},\n",
+            (unsigned long long)g_sd_nd_taken, (unsigned long long)g_sd_nd_declined_by_check, g_sd_nd_first_declined_pc,
+            (unsigned long long)g_sd_nd_in_exception, g_sd_nd_first_inexc_pc,
+            (unsigned long long)g_sd_nd_cooldown, g_sd_nd_first_cooldown_pc);
+    fprintf(f, "  \"block_facts_cache\": {\"hits\": %llu, \"fills\": %llu, \"uncached\": %llu},\n",
+            (unsigned long long)g_source_cpu_facts_hits, (unsigned long long)g_source_cpu_facts_fills, (unsigned long long)g_source_cpu_facts_uncached);
+    { extern int g_psx_deadline_cache; extern uint64_t g_psx_deadline_cache_hits, g_psx_deadline_cache_misses, g_psx_device_gen;
+      fprintf(f, "  \"deadline_cache\": {\"enabled\": %d, \"service_hits\": %llu, \"service_misses\": %llu, \"guard_hits\": %llu, \"guard_misses\": %llu, \"device_generation\": %llu},\n",
+              g_psx_deadline_cache > 0, (unsigned long long)g_psx_deadline_cache_hits, (unsigned long long)g_psx_deadline_cache_misses,
+              (unsigned long long)g_sd_irq_cache_hits, (unsigned long long)g_sd_irq_cache_misses, (unsigned long long)g_psx_device_gen); }
+    { extern int g_psx_slice_irq_handoff, g_psx_slice_slot_take; extern uint64_t g_sd_handoff_taken, g_sd_handoff_slot_skipped, g_sd_handoff_slot_taken; extern uint32_t g_sd_handoff_first_pc;
+      fprintf(f, "  \"compiled_irq_handoff\": {\"enabled\": %d, \"taken\": %llu, \"delay_slot_skipped\": %llu, \"slot_take_enabled\": %d, \"delay_slot_taken\": %llu, \"first_pc\": \"%08X\"},\n",
+              g_psx_slice_irq_handoff, (unsigned long long)g_sd_handoff_taken, (unsigned long long)g_sd_handoff_slot_skipped,
+              g_psx_slice_slot_take, (unsigned long long)g_sd_handoff_slot_taken, g_sd_handoff_first_pc); }
+    fprintf(f, "  \"leaders\": %llu,\n  \"gate_off\": %llu,\n  \"bios_skip\": %llu,\n  \"nested_skip\": %llu,\n",
+            (unsigned long long)g_sd_leaders, (unsigned long long)g_sd_gate_off,
+            (unsigned long long)g_sd_bios_skip, (unsigned long long)g_sd_nested_skip);
+    fprintf(f, "  \"compiled\": %llu,\n  \"compiled_cycles\": %llu,\n",
+            (unsigned long long)g_sd_compiled, (unsigned long long)g_sd_compiled_cycles);
+    fprintf(f, "  \"sliced\": %llu,\n  \"slice_cycles\": %llu,\n  \"slice_insns\": %llu,\n  \"dirty_ram_insns_total\": %llu,\n",
+            (unsigned long long)g_sd_sliced, (unsigned long long)g_sd_slice_cycles,
+            (unsigned long long)g_sd_slice_insns, (unsigned long long)g_dirty_ram_insns_run);
+    fprintf(f, "  \"flags\": {\"always\": %llu, \"halted\": %llu, \"entry_deliverable\": %llu, \"deadline_le_budget\": %llu, \"side_effects\": %llu, \"gte_value_delay\": %llu},\n",
+            (unsigned long long)g_sd_flag_always, (unsigned long long)g_sd_flag_halted,
+            (unsigned long long)g_sd_flag_deliverable, (unsigned long long)g_sd_flag_deadline,
+            (unsigned long long)g_sd_flag_side_effects, (unsigned long long)g_sd_flag_gte_delay);
+    fprintf(f, "  \"primary_reason\": {\"always\": %llu, \"halted\": %llu, \"entry_deliverable\": %llu, \"deadline_le_budget\": %llu, \"side_effects\": %llu, \"gte_value_delay\": %llu},\n",
+            (unsigned long long)g_sd_primary[0], (unsigned long long)g_sd_primary[1],
+            (unsigned long long)g_sd_primary[2], (unsigned long long)g_sd_primary[3],
+            (unsigned long long)g_sd_primary[4], (unsigned long long)g_sd_primary[5]);
+    fprintf(f, "  \"exit_reason\": {\"0_none\": %llu, \"1_safe\": %llu, \"2_unsupported\": %llu, \"3_bail\": %llu, \"4_guard\": %llu},\n",
+            (unsigned long long)g_sd_exit_reason[0], (unsigned long long)g_sd_exit_reason[1],
+            (unsigned long long)g_sd_exit_reason[2], (unsigned long long)g_sd_exit_reason[3],
+            (unsigned long long)g_sd_exit_reason[4]);
+    fprintf(f, "  \"deadline_source\": {\"gpu_service\": %llu, \"irq_countdown\": %llu},\n",
+            (unsigned long long)g_sd_deadline_src_gpu, (unsigned long long)g_sd_deadline_src_irq);
+    fprintf(f, "  \"what_if\": {\"dma_idle_at_slice\": %llu, \"would_compile_without_dma_steal\": %llu, \"would_compile_without_memory_term\": %llu},\n",
+            (unsigned long long)g_sd_dma_idle_at_slice, (unsigned long long)g_sd_would_compile_nosteal,
+            (unsigned long long)g_sd_would_compile_nomem);
+    fprintf(f, "  \"phase_variant\": {\"decisions_dma_transfer_active\": %llu, \"decisions_dma_idle\": %llu},\n",
+            (unsigned long long)g_sd_phase_dma_active, (unsigned long long)g_sd_phase_dma_idle);
+    fprintf(f, "  \"phase_variant_dma_fields\": {\"upload_remaining\": %llu, \"upload_in_block\": %llu, \"ll_active\": %llu, \"ll_remaining\": %llu, \"spu_remaining\": %llu, \"spu_in_block\": %llu, \"otc_remaining\": %llu, \"cpu_halted\": %llu, \"any_channel_busy\": %llu, \"gpu_spu_pio_irq_unmasked\": %llu},\n",
+            (unsigned long long)g_sd_phase_dma_bits[0], (unsigned long long)g_sd_phase_dma_bits[1],
+            (unsigned long long)g_sd_phase_dma_bits[2], (unsigned long long)g_sd_phase_dma_bits[3],
+            (unsigned long long)g_sd_phase_dma_bits[4], (unsigned long long)g_sd_phase_dma_bits[5],
+            (unsigned long long)g_sd_phase_dma_bits[6], (unsigned long long)g_sd_phase_dma_bits[7],
+            (unsigned long long)g_sd_phase_dma_bits[8], (unsigned long long)g_sd_phase_dma_bits[9]);
+    sd_write_hist(f, "phase_variant_gpu_term_at_decision", g_sd_phase_gpu_hist, 0);
+    sd_write_hist(f, "gpu_deadline_when_sliced", g_sd_gpu_deadline_hist, 0);
+    sd_write_hist(f, "deadline_when_sliced", g_sd_deadline_hist, 0);
+    sd_write_hist(f, "budget_at_decision", g_sd_budget_hist, 0);
+    sd_write_hist(f, "slack_when_compiled", g_sd_slack_hist, 0);
+    sd_write_hist(f, "insns_per_slice", g_sd_slice_insn_hist, 1);
+    fputs("}\n", f);
+    fclose(f);
+    fprintf(stdout, "psxrecomp: [slice diag] leaders=%llu compiled=%llu sliced=%llu compiled_cycles=%llu slice_cycles=%llu slice_insns=%llu\n",
+            (unsigned long long)g_sd_leaders, (unsigned long long)g_sd_compiled, (unsigned long long)g_sd_sliced,
+            (unsigned long long)g_sd_compiled_cycles, (unsigned long long)g_sd_slice_cycles, (unsigned long long)g_sd_slice_insns);
+}
+
 int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int side_effects) {
     /* PARKED (PRECISE_IRQ_SLICE.md): precise take-point slicing is a later
      * correctness upgrade, NOT the current FMV blocker (that is the -8 cycle
      * drift / faithful per-instruction cycle model — see CLAUDE.md Rule -1). */
-    if (!g_psx_precise_slice) return 0;
+    g_sd_leaders++;
+    if (!g_psx_precise_slice) { g_sd_gate_off++; return 0; }
 
     uint32_t block_phys = block_addr & 0x1FFFFFFFu;
     if (block_phys >= 0x1FC00000u && block_phys < 0x1FC80000u &&
-        !source_gpu_runtime_active()) return 0;
+        !source_gpu_runtime_active()) { g_sd_bios_skip++; return 0; }
 
     /* No nested slicing: a handler dispatched from inside precise-mode, and any
      * block executed while in_exception, run compiled (interrupts are gated during
      * exception handling anyway). Keeps re-entrancy structurally impossible. */
-    if (g_precise_mode || psx_get_in_exception()) return 0;
+    if (g_precise_mode || psx_get_in_exception()) { g_sd_nested_skip++; return 0; }
 
     static int s_slice_always = -1;
     static int s_slice_margin = -1;
@@ -2963,14 +3098,84 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
         psx_cyc_batch_flush();
         psx_devices_service_to_now();
     }
-    uint32_t deadline = cycles_to_next_event();
+    /* Step-2 variants (TAS speed task), env-gated so the default binary decides
+     * exactly as before. PSX_SLICE_GPU_DEADLINE=phase: use the raster phase edge
+     * (and DMA ticks only while a transfer is live) instead of the service
+     * clock's 128-cycle re-arm. PSX_SLICE_BOUND=nosteal: drop the 200-cycle DMA
+     * steal from the per-access bound while no source DMA transfer is live. */
+    static int s_gpu_phase_deadline = -1, s_bound_nosteal = -1, s_bound_mode = 0;
+    if (s_gpu_phase_deadline < 0) {
+        const char *e = getenv("PSX_SLICE_GPU_DEADLINE");
+        s_gpu_phase_deadline = (e && strcmp(e, "phase") == 0) ? 1 : 0;
+        e = getenv("PSX_SLICE_BOUND");
+        /* steal (qualified) | nosteal | icache (nosteal + live I-cache refill) | none (no deadline slicing) */
+        s_bound_nosteal = (e && (strcmp(e, "nosteal") == 0 || strcmp(e, "icache") == 0 || strcmp(e, "none") == 0)) ? 1 : 0;
+        s_bound_mode = !e ? 0 : strcmp(e, "icache") == 0 ? 2 : strcmp(e, "none") == 0 ? 3 : s_bound_nosteal;
+        g_sd_variant_phase = s_gpu_phase_deadline; g_sd_variant_nosteal = s_bound_nosteal; g_sd_variant_bound_mode = s_bound_mode;
+        { extern int g_psx_slice_irq_handoff; const char *h = getenv("PSX_SLICE_IRQ_HANDOFF");
+          g_psx_slice_irq_handoff = h ? (h[0] == '1') : s_gpu_phase_deadline; }
+        { extern int g_psx_slice_slot_take; const char *t = getenv("PSX_SLICE_SLOT_TAKE");
+          g_psx_slice_slot_take = (t && t[0] == '1') ? 1 : 0; }
+    }
+    /* Step-4b: the masked IRQ countdown is a function of device state (+ i_mask,
+     * itself MMIO); reuse its absolute clock while the device generation is
+     * unchanged. Same env gate as the service-deadline cache. */
+    uint32_t deadline;
+    {
+        extern uint64_t g_psx_device_gen; extern int g_psx_deadline_cache;
+        static uint64_t s_irq_gen = ~0ull, s_irq_abs;
+        uint64_t now_abs = psx_get_cycle_count();
+        if (g_psx_deadline_cache > 0 && s_irq_gen == g_psx_device_gen) {
+            deadline = s_irq_abs == ~0ull ? 0xFFFFFFFFu : s_irq_abs > now_abs ? (uint32_t)(s_irq_abs - now_abs) : 0u;
+            g_sd_irq_cache_hits++;
+        } else {
+            deadline = cycles_to_next_event();
+            s_irq_gen = g_psx_device_gen; s_irq_abs = deadline == 0xFFFFFFFFu ? ~0ull : now_abs + deadline;
+            g_sd_irq_cache_misses++;
+        }
+    }
     /* Frontend returns are GPU events even when no guest IRQ is due. Keep
      * their instruction/branch/load continuation in the precise owner. */
-    uint32_t gpu_deadline = source_gpu_runtime_cycles_to_event();
+    extern uint32_t source_gpu_runtime_cycles_to_slice_deadline(void);
+    uint32_t gpu_deadline = s_gpu_phase_deadline ? source_gpu_runtime_cycles_to_slice_deadline()
+                                                 : source_gpu_runtime_cycles_to_event();
     if (gpu_deadline < deadline) deadline = gpu_deadline;
     uint32_t block_bound=bcyc;
-    if(!side_effects && source_gpu_runtime_active() && (block_addr&0x1fffffffu)<0x200000u)
-        block_bound=source_cpu_block_bound(cpu,block_addr,bcyc,deadline);
+    const SourceCpuBlockFacts *s_facts = 0;   /* step-4a facts for this block, when the icache mode computed them */
+    if(!side_effects && source_gpu_runtime_active() && (block_addr&0x1fffffffu)<0x200000u) {
+        uint32_t access_cost = 240u;
+        if (s_bound_nosteal) {
+            extern int dma_source_transfer_active(void);
+            extern int dma_cpu_source_halted(void);
+            if (!dma_source_transfer_active() && !dma_cpu_source_halted()) access_cost = 40u;
+        }
+        if (s_bound_mode == 3) block_bound = 0u;                                   /* none: no deadline slicing */
+        else if (s_bound_mode == 2) {
+            /* step-4a: facts cached for clean game text (bytes == recompiled image) */
+            int cacheable = 0;
+#ifdef PSX_HAS_GAME_DISPATCH
+            cacheable = psx_game_address_in_text(block_addr) && !dirty_ram_is_dirty(block_phys);
+#endif
+            s_facts = source_cpu_block_facts(block_addr, bcyc, cacheable);
+            block_bound=source_cpu_block_bound_facts(cpu,block_addr,bcyc,access_cost,s_facts);
+        }
+        else block_bound=source_cpu_block_bound_ex(cpu,block_addr,bcyc,deadline,access_cost);
+    }
+    if (s_gpu_phase_deadline) {
+        /* diagnostics for the phase variant: was the GPU term the 128-cycle tick (DMA live) or the phase edge? */
+        extern unsigned dma_source_transfer_active_mask(void);
+        extern int dma_cpu_source_halted(void);
+        extern unsigned dma_channels_busy_mask(void);
+        extern uint32_t i_mask;
+        unsigned m = dma_source_transfer_active_mask();
+        unsigned busy = dma_channels_busy_mask(), halted = dma_cpu_source_halted() ? 1u : 0u, unmodeled = (i_mask & 0x602u) ? 1u : 0u;
+        if (m || busy || halted || unmodeled) g_sd_phase_dma_active++; else g_sd_phase_dma_idle++;
+        for (unsigned b = 0; b < 7; b++) if (m & (1u << b)) g_sd_phase_dma_bits[b]++;
+        if (halted) g_sd_phase_dma_bits[7]++;
+        if (busy) g_sd_phase_dma_bits[8]++;
+        if (unmodeled) g_sd_phase_dma_bits[9]++;
+        g_sd_phase_gpu_hist[sd_bucket(gpu_deadline)]++;
+    }
     uint32_t budget = block_bound + (uint32_t)s_slice_margin;
     if (budget < block_bound) budget = 0xFFFFFFFFu;
     int entry_deliverable = precise_irq_deliverable(cpu);
@@ -2988,13 +3193,58 @@ int psx_slice_block_impl(CPUState *cpu, uint32_t block_addr, uint32_t bcyc, int 
      * value through the consumer before returning to compiled execution. */
     int gte_value_delay = !has_deadline && !side_effects &&
         source_gpu_runtime_active() && (cpu->cop0[12]&0x40000000u) &&
-        block_phys<0x200000u && source_cpu_block_gte_value_delay(block_addr,bcyc);
-    if (!has_deadline && !side_effects && !gte_value_delay) return 0;
+        block_phys<0x200000u && (s_facts ? (int)s_facts->gte_delay : source_cpu_block_gte_value_delay(block_addr,bcyc));
+    g_sd_budget_hist[sd_bucket(budget)]++;
+    if (!has_deadline && !side_effects && !gte_value_delay) {
+        g_sd_compiled++; g_sd_compiled_cycles += bcyc;
+        g_sd_slack_hist[sd_bucket((uint64_t)deadline - (uint64_t)budget)]++;
+        return 0;
+    }
+    /* diagnostics: which conditions held, and the first one in evaluation order */
+    {
+        int f[6] = { s_slice_always, source_halted, entry_deliverable, (deadline <= budget), side_effects, gte_value_delay };
+        if (f[0]) g_sd_flag_always++; if (f[1]) g_sd_flag_halted++; if (f[2]) g_sd_flag_deliverable++;
+        if (f[3]) g_sd_flag_deadline++; if (f[4]) g_sd_flag_side_effects++; if (f[5]) g_sd_flag_gte_delay++;
+        for (int i = 0; i < 6; i++) if (f[i]) { g_sd_primary[i]++; break; }
+        if (f[3]) {
+            g_sd_deadline_hist[sd_bucket(deadline)]++;
+            /* which countdown produced the deadline, and what a DMA-aware / memory-free bound would have decided */
+            if (gpu_deadline <= deadline) g_sd_deadline_src_gpu++; else g_sd_deadline_src_irq++;
+            g_sd_gpu_deadline_hist[sd_bucket(gpu_deadline)]++;
+            if (!s_slice_always && !source_halted && !entry_deliverable && !side_effects && block_phys < 0x200000u &&
+                bcyc <= 0x80000u && (uint64_t)block_phys + 4ull * bcyc <= 0x200000u) {
+                extern int dma_src_active(void);
+                uint64_t now = psx_get_cycle_count();
+                uint64_t stalls = (cpu->gte_ts_done > now ? cpu->gte_ts_done - now : 0u) +
+                                  (cpu->muldiv_ts_done > now ? cpu->muldiv_ts_done - now : 0u);
+                uint64_t b_nosteal = (uint64_t)bcyc * 8u + stalls, b_nomem = b_nosteal;
+                for (uint32_t i = 0; i < bcyc; i++) {
+                    uint32_t word; memcpy(&word, g_psx_ram + block_phys + 4u * i, 4);
+                    uint32_t op = word >> 26, fn = word & 63u;
+                    if ((op >= 0x20u && op <= 0x26u) || op == 0x32u) b_nosteal += 40u;   /* region36 + fudge2 + completion2, no 200 steal */
+                    if (op == 0x12u && (word & (1u << 25))) { uint32_t l = psx_gte_cmd_latency(word); b_nosteal += l; b_nomem += l; }
+                    if (!op && fn >= 0x18u && fn <= 0x1bu) { b_nosteal += 37u; b_nomem += 37u; }
+                }
+                int dma_idle = !dma_src_active();
+                if (dma_idle) g_sd_dma_idle_at_slice++;
+                if (dma_idle && deadline > b_nosteal + (uint64_t)s_slice_margin) g_sd_would_compile_nosteal++;
+                if (deadline > b_nomem + (uint64_t)s_slice_margin) g_sd_would_compile_nomem++;
+            }
+        }
+    }
 
     g_slice_entry_deliverable = (uint32_t)entry_deliverable;
     g_slice_fired++;
     cpu->pc = block_addr;
-    psx_run_precise(cpu, bcyc, has_deadline);
+    {
+        extern uint64_t g_dirty_ram_insns_run;
+        uint64_t cyc0 = psx_get_cycle_count(), ins0 = g_dirty_ram_insns_run;
+        psx_run_precise(cpu, bcyc, has_deadline);
+        uint64_t dcyc = psx_get_cycle_count() - cyc0, dins = g_dirty_ram_insns_run - ins0;
+        g_sd_sliced++; g_sd_slice_cycles += dcyc; g_sd_slice_insns += dins;
+        g_sd_slice_insn_hist[sd_bucket(dins)]++;
+        g_sd_exit_reason[g_slice_exit_reason < 5 ? g_slice_exit_reason : 0]++;
+    }
     return 1;
 }
 

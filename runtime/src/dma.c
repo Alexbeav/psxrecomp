@@ -2042,6 +2042,31 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
            pst_r_u32(r, &d->cycles_remaining);
 }
 
+/* Is a source-model DMA transfer moving words right now? This ignores leftover
+ * budget/address state that persists after completion; a new transfer resets
+ * budget on start. Used by the precise-slice guard. */
+unsigned dma_source_transfer_active_mask(void) {
+    /* bit0 upload words remaining, bit1 upload mid-block, bit2 LL active, bit3 LL node words
+     * remaining, bit4 SPU words remaining, bit5 SPU mid-block, bit6 OTC remaining.
+     * gpu_ll_source.nodes is a monotonically increasing node index, not transfer state. */
+    return (gpu_upload_source.remaining != 0u) | ((gpu_upload_source.in_block != 0u) << 1) |
+           ((gpu_ll_source.active != 0u) << 2) | ((gpu_ll_source.remaining != 0u) << 3) |
+           ((spu_source.remaining != 0u) << 4) | ((spu_source.in_block != 0u) << 5) |
+           ((otc_source_model && otc_source.remaining != 0u) << 6);
+}
+int dma_source_transfer_active(void) {
+    return dma_source_transfer_active_mask() != 0u;
+}
+/* Any channel with its CHCR start/busy bit (24) set, regardless of model:
+ * MDEC in/out, CD, OTC and the GPU/SPU channels. A busy channel can complete
+ * and raise its IRQ from a DMA service tick, which cycles_to_next_event()
+ * does not predict. Bitmask of busy channels. */
+unsigned dma_channels_busy_mask(void) {
+    unsigned m = 0;
+    for (int i = 0; i < 7; i++) if (channels[i].chcr & 0x01000000u) m |= 1u << i;
+    return m;
+}
+
 uint32_t dma_snapshot_bytes(void) { return DMA_SNAP_WIRE_BYTES; }
 
 void dma_snapshot_write(uint8_t *p) {
