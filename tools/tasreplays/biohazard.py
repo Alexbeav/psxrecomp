@@ -5,6 +5,7 @@ names do not establish Nymashock equivalence; source RAM/clock checks do that.
 """
 from pathlib import Path
 import argparse,hashlib,json,os,re,shutil,struct,subprocess,sys
+import build_cache
 import dualshock_route
 import nymashock_admission as source
 from observation_evidence import terminal_consistency
@@ -148,12 +149,17 @@ def setup(args):
     route=project/'input.psxrti2';receipt=dualshock_route.write_route(rows,route)
     if receipt['canonical_controller_sha256']!=CONTROLLER_SHA:raise ValueError('original controller bytes differ')
     write_json(project/'input.json',receipt)
-    tools=args.tools_dir.resolve() if args.tools_dir else project/'tools'
+    # Build cache (docs/tasreplays/build-cache.md): each stage is reused only on an exact
+    # content-key match and recorded in setup.json; every check below runs on every path.
+    cache_root=build_cache.resolve_root(args)
     common=['-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER=gcc','-DCMAKE_CXX_COMPILER=g++']
-    command(['cmake','-S',ROOT/'recompiler','-B',tools,*common,'-DBUILD_TESTING=ON','-DPSXRECOMP_ENABLE_CHD=ON','-DPython3_EXECUTABLE='+sys.executable],project/'configure-tools.log')
-    command(['cmake','--build',tools,'--parallel',str(args.jobs)],project/'build-tools.log')
-    command(['ctest','--test-dir',tools,'--output-on-failure','-j',str(args.jobs)],project/'test-tools.log')
-    command([tools/'psxrecomp-toml.exe',exe,'--output',project/'census.toml','--seeds',project/'seeds.txt'],project/'census.log')
+    tools_argv=lambda tools:['cmake','-S',ROOT/'recompiler','-B',tools,*common,'-DBUILD_TESTING=ON','-DPSXRECOMP_ENABLE_CHD=ON','-DPython3_EXECUTABLE='+sys.executable]
+    def build_tools(tools):
+        command(tools_argv(tools),project/'configure-tools.log')
+        command(['cmake','--build',tools,'--parallel',str(args.jobs)],project/'build-tools.log')
+        command(['ctest','--test-dir',tools,'--output-on-failure','-j',str(args.jobs)],project/'test-tools.log')
+    tools,tools_record=build_cache.stage_tools(cache_root,ROOT,project,args.tools_dir.resolve() if args.tools_dir else None,
+                                              lambda:build_cache.tools_inputs(ROOT,tools_argv(project/'tools')),build_tools,head)
     q=lambda p:json.dumps(p.as_posix())
     bios_profile=project/'bios.toml';profile=(ROOT/'bios/SCPH5500.toml').read_text()
     for key,value in [('rom',staged_bios),('seeds',ROOT/'recompiler/seeds/phase2_ghidra_seeds_SCPH5500.json'),('out_dir',ROOT/'generated')]:
@@ -179,18 +185,34 @@ bios_hle = false
 [video]
 renderer = "software"
 ''',encoding='utf8')
-    command([tools/'psxrecomp-bios.exe','--config',bios_profile,'--rom',staged_bios,'--out-dir',ROOT/'generated'],project/'generate-bios.log')
-    fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
-    if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS fingerprint')
-    (ROOT/'generated/SCPH5500.emitter.sha').write_text(fingerprint+'\n')
-    command([tools/'psxrecomp-game.exe','--config',game],project/'generate-game.log')
+    def stamp():
+        fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
+        if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS fingerprint')
+        (ROOT/'generated/SCPH5500.emitter.sha').write_text(fingerprint+'\n')
+        return fingerprint
+    stamped=[]
+    def generate():
+        command([tools/'psxrecomp-toml.exe',exe,'--output',project/'census.toml','--seeds',project/'seeds.txt'],project/'census.log')
+        command([tools/'psxrecomp-bios.exe','--config',bios_profile,'--rom',staged_bios,'--out-dir',ROOT/'generated'],project/'generate-bios.log')
+        stamped.append(stamp())
+        command([tools/'psxrecomp-game.exe','--config',game],project/'generate-game.log')
+    generated_record=build_cache.stage_generated(cache_root,ROOT,project,'SCPH5500',
+        lambda:build_cache.generated_inputs(tools,'SCPH5500',staged_bios,ROOT/'recompiler/seeds/phase2_ghidra_seeds_SCPH5500.json',
+                                            build_cache.blob_id(ROOT,'bios/SCPH5500.toml'),build_cache.portable_emitter_fingerprint(bash,ROOT,bios_profile),exe,game),
+        True,generate,head)
+    # On a cache hit the emitter fingerprint is recomputed and written exactly as on a miss.
+    fingerprint=stamped[0] if stamped else stamp()
     native=project/'native'
-    command(['cmake','-S',HERE,'-B',native,*common,'-DTAS_PROJECT_DIR='+str(project),
+    native_argv=['cmake','-S',HERE,'-B',native,*common,'-DTAS_PROJECT_DIR='+str(project),
              '-DTAS_GAME_STEM='+BOOT,'-DTAS_EXE_NAME=BioHazard-TAS','-DTAS_WINDOW_TITLE=Bio Hazard TAS',
              '-DPSXRECOMP_BIOS_STEMS=SCPH5500','-DPSX_SHELLWIN_INTERP=ON','-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
              '-D_psxrt_bash='+str(bash),'-DPSX_RECOMP_UI=OFF','-DPSX_NETPLAY=OFF','-DPSX_REWIND=OFF','-DPSX_SETUP_WIZARD=OFF',
-             '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'],project/'configure-native.log')
-    command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log')
+             '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
+    def build_native():
+        command(native_argv,project/'configure-native.log')
+        command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log')
+    native_record=build_cache.stage_native(cache_root,ROOT,project,native,'BioHazard-TAS',
+        lambda:build_cache.native_inputs(ROOT,build_cache.generated_set(ROOT,'SCPH5500',project),native_argv,bios_profile),build_native,head)
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:raise ValueError('source changed during build')
     build=native/'BioHazard-TAS.exe'
     files=[disc,track,bios,staged_bios,bios_profile,movie,exe,game,tape,card,route,project/'seeds.txt',reference_path,random_receipt_path]
@@ -201,6 +223,7 @@ renderer = "software"
           'executable':str(build),'executable_sha256':source.digest(build),'disc':str(disc),'bios':str(staged_bios),'game':str(game),
           'route':str(route),'card1':str(card),'tape':str(tape),'profile':PROFILE,
           'compiler':subprocess.check_output(['gcc','--version'],text=True).splitlines()[0],
+          'build_cache':build_cache.receipt_block(cache_root,tools_record,generated_record,native_record),
           'qualification':'candidate only; source/native timing and gameplay unqualified'}
     write_json(project/'setup.json',info);print(json.dumps({'candidate':str(build),'sha256':source.digest(build)}))
 
@@ -281,6 +304,7 @@ def main():
     build=sub.add_parser('setup')
     for name in ('project','reference','disc','bios','movie','random-receipt'):build.add_argument('--'+name,type=Path,required=True)
     build.add_argument('--tools-dir',type=Path);build.add_argument('--jobs',type=int,default=4)
+    build_cache.add_arguments(build)
     play=sub.add_parser('run');play.add_argument('setup',type=Path);play.add_argument('output',type=Path)
     play.add_argument('--timeout',type=int,default=129600);add_launch_arguments(play)
     args=parser.parse_args();return {'setup':setup,'run':run}[args.action](args)

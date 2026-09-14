@@ -211,6 +211,59 @@ binary identity fields, ladder and setup receipts when present): it archives
 evidence and drafts notes; it qualifies nothing. `--dry-run` prints the summary,
 the planned paths and both texts without writing.
 
+## Setup build cache
+
+Every title `setup` reuses its three build stages through a content-keyed cache
+(design: `docs/tasreplays/build-cache.md`, code: `build_cache.py`). Stage 1 is
+the tools build plus ctest, stage 2 the generated BIOS/game C (and census
+outputs), stage 3 the native player. A stage is reused only when every input
+that can influence it is identical by content hash (git tree ids of the
+committed source trees, SHA-256 of ROM/boot/seeds/generated files and tool
+executables, the toolchain banner lines and the CMake flags); paths, mtimes and
+branch names are never inputs. Reuse is a shortcut for building only: media,
+movie, reference and firmware hashes, the BIOS emitter fingerprint and the
+Tekken codegen guard still run on every setup, and `run` never consults the
+cache. A partial or corrupt entry is a miss, never an error.
+
+Flags shared by `tekken3.py`, `pepsiman.py` and `biohazard.py setup`:
+
+- `--build-cache DIR` selects the cache; otherwise `PSX_TAS_BUILD_CACHE`,
+  otherwise `%LOCALAPPDATA%\psxrecomp\build-cache`.
+- `--no-build-cache` builds every stage fresh and stores nothing.
+- `--tools-dir DIR` keeps its meaning (reconfigure, rebuild and retest there)
+  and bypasses the tools stage of the cache.
+
+On a miss the stage runs exactly the commands it always ran; the tools build
+lands in `<cache>/tools/<key>/build/` instead of `<project>/tools`. On a hit the
+entry's files are copied into place and re-hashed, and the stage logs
+(`configure-tools.log`, `generate-bios.log`, `build-native.log`, ...) are copied
+into the project with a first line naming the entry they came from. A native hit
+copies only the executable into `<project>/native/`; no CMake build directory is
+created. `setup.json` records every stage:
+
+```
+"build_cache": {
+  "root": "<dir>",
+  "tools":     {"key": "<hex>", "hit": true,  "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"},
+  "generated": {"key": "<hex>", "hit": false, "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"},
+  "native":    {"key": "<hex>", "hit": false, "entry": "<path>", "built_at": "<iso>", "source_head": "<sha>"}
+}
+```
+
+`source_head` names the commit whose setup produced the entry; a stage that was
+not keyed (`--no-build-cache`, or `--tools-dir` for the tools stage) has
+`key: null`. `executable_sha256` and every other field keep their meaning.
+`python tools/tasreplays/build_cache.py list` shows the entries;
+`build_cache.py prune --keep-days N` deletes older ones. Nothing in setup deletes.
+
+The player used to embed `<project>/game.toml` as its default game-config path
+(`DEFAULT_GAME_CONFIG_PATH` in `tools/tasreplays/CMakeLists.txt`), the only
+absolute path in the binary and the reason two byte-identical builds in
+different project directories never shared a hash. It is now the relative
+`game.toml`, resolved beside the executable; the harness is unaffected because
+`run_native.py` always passes `--game`. Binaries built after this change do not
+reproduce the 2026-09-14 hashes, which were project-directory specific anyway.
+
 ## Tests without retail assets
 
 ```powershell

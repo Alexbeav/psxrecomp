@@ -20,6 +20,7 @@ from launch_identity import resolve_binary, receipt_fields, add_launch_arguments
 from replay_prefix import native_span, write_prefix_route, parse_ladder, run_ladder
 from run_native import route_identity
 from stream_compare import Watcher, line_hash_reference
+import build_cache
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -162,6 +163,7 @@ def prepare_movie(source: Path | None) -> Path:
 
 
 def setup(args) -> None:
+    global TOOLS
     if os.name != 'nt':
         raise ValueError('The reproducible build is currently qualified for Windows x64 with MinGW GCC.')
     if sys.version_info < (3, 11):
@@ -228,31 +230,62 @@ bios_hle = false
 renderer = "software"
 ''', encoding='utf8', newline='\n')
     common = ['-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++']
-    command(['cmake', '-S', ROOT / 'recompiler', '-B', TOOLS, *common,
-             '-DPSXRECOMP_ENABLE_CHD=ON', '-DBUILD_TESTING=ON',
-             '-DPython3_EXECUTABLE=' + sys.executable], PROJECT / 'configure-tools.log')
-    command(['cmake', '--build', TOOLS, '--parallel', args.jobs], PROJECT / 'build-tools.log')
-    command(['ctest', '--test-dir', TOOLS, '--output-on-failure', '-j', args.jobs], PROJECT / 'test-tools.log')
-    command([TOOLS / 'psxrecomp-bios.exe', '--config', bios_profile,
-             '--rom', staged_bios, '--out-dir', ROOT / 'generated'], PROJECT / 'generate-bios.log')
-    fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
-    if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS emitter fingerprint')
-    (ROOT/'generated/SCPH1001.emitter.sha').write_text(fingerprint+'\n')
-    command([TOOLS / 'psxrecomp-game.exe', '--config', game], PROJECT / 'generate-game.log')
-    # Check generated text against the winning build, independent of CRLF/LF.
+    # Build cache (docs/tasreplays/build-cache.md): each stage is reused only on an exact
+    # content-key match and recorded in setup.json; the checks below run on every path.
+    cache_root = build_cache.resolve_root(args)
+    def tools_argv(tools):
+        return ['cmake', '-S', ROOT / 'recompiler', '-B', tools, *common,
+                '-DPSXRECOMP_ENABLE_CHD=ON', '-DBUILD_TESTING=ON',
+                '-DPython3_EXECUTABLE=' + sys.executable]
+    def build_tools(tools):
+        command(tools_argv(tools), PROJECT / 'configure-tools.log')
+        command(['cmake', '--build', tools, '--parallel', args.jobs], PROJECT / 'build-tools.log')
+        command(['ctest', '--test-dir', tools, '--output-on-failure', '-j', args.jobs], PROJECT / 'test-tools.log')
+    TOOLS, tools_record = build_cache.stage_tools(
+        cache_root, ROOT, PROJECT, TOOLS if args.tools_dir else None,
+        lambda: build_cache.tools_inputs(ROOT, tools_argv(TOOLS)), build_tools, head)
+    def stamp():
+        fingerprint=subprocess.check_output([str(bash),(ROOT/'tools/bios_emitter_fingerprint.sh').as_posix(),bios_profile.as_posix()],cwd=ROOT,text=True).strip()
+        if not re.fullmatch('[0-9a-f]{64}',fingerprint):raise ValueError('invalid BIOS emitter fingerprint')
+        (ROOT/'generated/SCPH1001.emitter.sha').write_text(fingerprint+'\n')
+        return fingerprint
+    stamped = []
+    def generate():
+        command([TOOLS / 'psxrecomp-bios.exe', '--config', bios_profile,
+                 '--rom', staged_bios, '--out-dir', ROOT / 'generated'], PROJECT / 'generate-bios.log')
+        stamped.append(stamp())
+        command([TOOLS / 'psxrecomp-game.exe', '--config', game], PROJECT / 'generate-game.log')
+    generated_record = build_cache.stage_generated(
+        cache_root, ROOT, PROJECT, 'SCPH1001',
+        lambda: build_cache.generated_inputs(
+            TOOLS, 'SCPH1001', staged_bios, ROOT / 'recompiler/seeds/phase2_ghidra_seeds.json',
+            build_cache.blob_id(ROOT, 'bios/SCPH1001.toml'),
+            build_cache.portable_emitter_fingerprint(bash, ROOT, bios_profile),
+            boot, game, HERE / 'tekken3-seeds.txt'),
+        False, generate, head)
+    # On a cache hit the emitter fingerprint is recomputed and written exactly as on a miss.
+    fingerprint = stamped[0] if stamped else stamp()
+    # Check generated text against the winning build, independent of CRLF/LF; every setup, cached or not.
+    print('Checking generated text against tekken3-codegen.json', flush=True)
     expected = json.loads((HERE / 'tekken3-codegen.json').read_text())
     for name, sha in expected.items():
         path = PROJECT/name.removeprefix('build/tekken3/') if name.startswith('build/tekken3/') else ROOT/name
         if hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() != sha:
             raise ValueError(f'Generated source differs from the qualified build: {name}')
-    command(['cmake', '-S', HERE, '-B', NATIVE, *common,
-             '-DPSX_RECOMP_UI=OFF', '-DPSX_NETPLAY=OFF', '-DPSX_REWIND=OFF',
-             '-DPSX_SETUP_WIZARD=OFF', '-DPSX_DEBUG_TOOLS=ON', '-DPSX_ENABLE_VULKAN=OFF',
-             '-DTAS_PROJECT_DIR='+str(PROJECT),'-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
-             '-D_psxrt_bash='+str(bash),
-             '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE',
-             '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE'], PROJECT / 'configure-native.log')
-    command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log')
+    native_argv = ['cmake', '-S', HERE, '-B', NATIVE, *common,
+                   '-DPSX_RECOMP_UI=OFF', '-DPSX_NETPLAY=OFF', '-DPSX_REWIND=OFF',
+                   '-DPSX_SETUP_WIZARD=OFF', '-DPSX_DEBUG_TOOLS=ON', '-DPSX_ENABLE_VULKAN=OFF',
+                   '-DTAS_PROJECT_DIR='+str(PROJECT),'-DPSXRECOMP_BIOS_PROFILE='+str(bios_profile),
+                   '-D_psxrt_bash='+str(bash),
+                   '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE',
+                   '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
+    def build_native():
+        command(native_argv, PROJECT / 'configure-native.log')
+        command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log')
+    native_record = build_cache.stage_native(
+        cache_root, ROOT, PROJECT, NATIVE, 'Tekken3-TAS',
+        lambda: build_cache.native_inputs(ROOT, build_cache.generated_set(ROOT, 'SCPH1001', PROJECT), native_argv, bios_profile),
+        build_native, head)
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:
         raise ValueError('Source changed during setup')
     build_info = {'schema': 'psx-tas-setup-v1','source_head':head,'tracks':[str(p) for p in tracks],
@@ -264,7 +297,8 @@ renderer = "software"
                   'game': str(game), 'route': str(route), 'tape': str(tape),
                   'executable': str(NATIVE / 'Tekken3-TAS.exe'),
                   'executable_sha256': digest(NATIVE / 'Tekken3-TAS.exe'),
-                  'compiler': subprocess.check_output(['gcc', '--version'], text=True).splitlines()[0]}
+                  'compiler': subprocess.check_output(['gcc', '--version'], text=True).splitlines()[0],
+                  'build_cache': build_cache.receipt_block(cache_root, tools_record, generated_record, native_record)}
     write_json(PROJECT / 'setup.json', build_info)
     print('Build ready. Run: python tools/tasreplays/tekken3.py run', flush=True)
 
@@ -403,6 +437,7 @@ def main():
     prepare.add_argument('--tools-dir',type=Path,help='reusable tools build; configured and tested for this source')
     prepare.add_argument('--movie', type=Path, help='optional original BK2/download ZIP; otherwise download movie4164')
     prepare.add_argument('--jobs', type=int, default=min(12, os.cpu_count() or 1))
+    build_cache.add_arguments(prepare)
     play = sub.add_parser('run', help='play through the victory and compare every RAM/clock checkpoint')
     play.add_argument('--project',type=Path,help='directory containing setup.json')
     play.add_argument('--headless', action='store_true')

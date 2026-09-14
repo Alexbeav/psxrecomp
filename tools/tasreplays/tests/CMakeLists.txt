@@ -24,6 +24,8 @@ add_test(NAME tas_qualified_hunks COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_qualified_hunks.py")
 add_test(NAME tas_archive_run COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_archive_run.py")
+add_test(NAME tas_build_cache COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_build_cache.py")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(STATUS "TAS model fixtures currently require GCC")
     return()

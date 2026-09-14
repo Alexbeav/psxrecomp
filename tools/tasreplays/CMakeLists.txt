@@ -15,6 +15,8 @@ endif()
 psxrecomp_add_runtime_target(psx-runtime
     EXE_NAME "${TAS_EXE_NAME}"
     WINDOW_TITLE "${TAS_WINDOW_TITLE}"
-    DEFAULT_GAME_CONFIG_PATH "${TAS_PROJECT_DIR}/game.toml"
+    # Relative on purpose so the player binary embeds no project path (build cache, docs/tasreplays/build-cache.md);
+    # it is inert for the harness because run_native.py always passes --game.
+    DEFAULT_GAME_CONFIG_PATH "game.toml"
     GAME_GENERATED_FULL_C ${TAS_GAME_SHARDS}
     GAME_GENERATED_DISPATCH_C "${TAS_PROJECT_DIR}/generated/${TAS_GAME_STEM}_dispatch.c")
