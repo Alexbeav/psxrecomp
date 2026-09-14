@@ -155,9 +155,9 @@ def setup(args):
     common=['-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_C_COMPILER=gcc','-DCMAKE_CXX_COMPILER=g++']
     tools_argv=lambda tools:['cmake','-S',ROOT/'recompiler','-B',tools,*common,'-DBUILD_TESTING=ON','-DPSXRECOMP_ENABLE_CHD=ON','-DPython3_EXECUTABLE='+sys.executable]
     def build_tools(tools):
-        command(tools_argv(tools),project/'configure-tools.log')
-        command(['cmake','--build',tools,'--parallel',str(args.jobs)],project/'build-tools.log')
-        command(['ctest','--test-dir',tools,'--output-on-failure','-j',str(args.jobs)],project/'test-tools.log')
+        command(tools_argv(tools),project/'configure-tools.log',env=build_cache.build_env())
+        command(['cmake','--build',tools,'--parallel',str(args.jobs)],project/'build-tools.log',env=build_cache.build_env())
+        command(['ctest','--test-dir',tools,'--output-on-failure','-j',str(args.jobs)],project/'test-tools.log',env=build_cache.build_env())
     tools,tools_record=build_cache.stage_tools(cache_root,ROOT,project,args.tools_dir.resolve() if args.tools_dir else None,
                                               lambda:build_cache.tools_inputs(ROOT,tools_argv(project/'tools')),build_tools,head)
     q=lambda p:json.dumps(p.as_posix())
@@ -209,8 +209,8 @@ renderer = "software"
              '-D_psxrt_bash='+str(bash),'-DPSX_RECOMP_UI=OFF','-DPSX_NETPLAY=OFF','-DPSX_REWIND=OFF','-DPSX_SETUP_WIZARD=OFF',
              '-DPSX_DEBUG_TOOLS=ON','-DPSX_ENABLE_VULKAN=OFF','-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE','-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
     def build_native():
-        command(native_argv,project/'configure-native.log')
-        command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log')
+        command(native_argv,project/'configure-native.log',env=build_cache.build_env())
+        command(['cmake','--build',native,'--parallel',str(args.jobs)],project/'build-native.log',env=build_cache.build_env())
     native_record=build_cache.stage_native(cache_root,ROOT,project,native,'BioHazard-TAS',
         lambda:build_cache.native_inputs(ROOT,build_cache.generated_set(ROOT,'SCPH5500',project),native_argv,bios_profile),build_native,head)
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip() or subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=head:raise ValueError('source changed during build')

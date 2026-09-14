@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
 
     # ------------------------------------------------ tools key: stable, and sensitive to each input
     doc = bc.tools_inputs(repo, tools_argv, TOOLCHAIN)
-    assert set(doc) == {'trees', 'cmake_args', 'toolchain'} and doc['trees'] == trees2
+    assert set(doc) == {'trees', 'cmake_args', 'toolchain', 'source_date_epoch'} and doc['trees'] == trees2
     key_tools = bc.key_of(doc)
     assert key_tools == bc.tools_key(repo, tools_argv, TOOLCHAIN) == bc.tools_key(repo, shuffled, TOOLCHAIN)
     assert key_tools == bc.tools_key(repo, tools_argv[:-1] + ['-DPython3_EXECUTABLE=C:/other/python.exe'], TOOLCHAIN)
@@ -167,6 +167,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
                                    git(repo, 'hash-object', 'bios/SCPH1001.toml'), fingerprint, p / 'SLUS_000.01', p / 'game.toml', seeds)
     gen_a = generated_doc(A)
     assert set(gen_a) == {'tools', 'bios', 'game'}
+    assert bc.build_env()['SOURCE_DATE_EPOCH'] == bc.SOURCE_DATE_EPOCH and bc.SOURCE_DATE_EPOCH.isdigit()
     assert set(gen_a['tools']) == {'bios_exe_sha', 'game_exe_sha', 'toml_exe_sha'}
     assert set(gen_a['bios']) == {'stem', 'rom_sha', 'seeds_sha', 'profile_template_blob', 'emitter_fingerprint'}
     assert set(gen_a['game']) == {'boot_exe_sha', 'game_toml_normalized_sha', 'seeds'}
@@ -192,7 +193,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
     assert list(gs) == ['bios/SCPH1001_full.c', 'bios/SCPH1001_dispatch.c', 'bios/SCPH1001_skipped_functions.json',
                         'game/SLUS_000.01_dispatch.c', 'game/SLUS_000.01_full_0.c'], list(gs)
     nat_a = bc.native_inputs(repo, gs, native_argv(A, A / 'bios.toml'), A / 'bios.toml', TOOLCHAIN)
-    assert set(nat_a) == {'generated', 'trees', 'tas_cmake', 'cmake_args', 'bios_profile_normalized_sha', 'toolchain'}
+    assert set(nat_a) == {'generated', 'trees', 'tas_cmake', 'cmake_args', 'bios_profile_normalized_sha', 'toolchain', 'source_date_epoch'}
     assert nat_a['tas_cmake'] == blob1 and list(nat_a['trees']) == list(bc.NATIVE_TREES)
     nat_b = bc.native_inputs(repo, bc.generated_set(repo, 'SCPH1001', B), native_argv(B, B / 'bios.toml'), B / 'bios.toml', TOOLCHAIN)
     assert bc.key_of(nat_a) == bc.key_of(nat_b)
@@ -310,7 +311,7 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             write(P / name, name + ' output\n')
 
     def tools_doc():
-        return {'trees': trees2, 'cmake_args': bc.cmake_key_args(tools_argv, bc.TOOLS_DROP), 'toolchain': TOOLCHAIN}
+        return {'trees': trees2, 'cmake_args': bc.cmake_key_args(tools_argv, bc.TOOLS_DROP), 'toolchain': TOOLCHAIN, 'source_date_epoch': bc.SOURCE_DATE_EPOCH}
 
     P = root / 'stage-p'; P.mkdir()
     tools_dir, record = bc.stage_tools(None, repo, P, None, tools_doc, fake_tools, head)

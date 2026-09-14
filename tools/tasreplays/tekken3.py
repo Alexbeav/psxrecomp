@@ -238,9 +238,9 @@ renderer = "software"
                 '-DPSXRECOMP_ENABLE_CHD=ON', '-DBUILD_TESTING=ON',
                 '-DPython3_EXECUTABLE=' + sys.executable]
     def build_tools(tools):
-        command(tools_argv(tools), PROJECT / 'configure-tools.log')
-        command(['cmake', '--build', tools, '--parallel', args.jobs], PROJECT / 'build-tools.log')
-        command(['ctest', '--test-dir', tools, '--output-on-failure', '-j', args.jobs], PROJECT / 'test-tools.log')
+        command(tools_argv(tools), PROJECT / 'configure-tools.log',env=build_cache.build_env())
+        command(['cmake', '--build', tools, '--parallel', args.jobs], PROJECT / 'build-tools.log',env=build_cache.build_env())
+        command(['ctest', '--test-dir', tools, '--output-on-failure', '-j', args.jobs], PROJECT / 'test-tools.log',env=build_cache.build_env())
     TOOLS, tools_record = build_cache.stage_tools(
         cache_root, ROOT, PROJECT, TOOLS if args.tools_dir else None,
         lambda: build_cache.tools_inputs(ROOT, tools_argv(TOOLS)), build_tools, head)
@@ -280,8 +280,8 @@ renderer = "software"
                    '-DCMAKE_DISABLE_FIND_PACKAGE_SDL3=TRUE',
                    '-DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=TRUE']
     def build_native():
-        command(native_argv, PROJECT / 'configure-native.log')
-        command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log')
+        command(native_argv, PROJECT / 'configure-native.log',env=build_cache.build_env())
+        command(['cmake', '--build', NATIVE, '--parallel', args.jobs], PROJECT / 'build-native.log',env=build_cache.build_env())
     native_record = build_cache.stage_native(
         cache_root, ROOT, PROJECT, NATIVE, 'Tekken3-TAS',
         lambda: build_cache.native_inputs(ROOT, build_cache.generated_set(ROOT, 'SCPH1001', PROJECT), native_argv, bios_profile),

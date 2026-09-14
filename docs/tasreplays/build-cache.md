@@ -117,6 +117,16 @@ implementation's acceptance. Binaries built after the change will not reproduce 
 that was never possible across project directories anyway, and replay receipts bind the binary by hash
 at run time.
 
+Two more facts bound what "reproducible" means, both measured on 2026-09-15. First, two fresh builds of the
+same content differed in exactly 8 bytes: the PE header link timestamp, the PE checksum derived from it, and
+the `__TIME__` literal in `runtime/src/crash_trace.c`. Every cached build stage therefore runs with
+`SOURCE_DATE_EPOCH` fixed (`build_cache.SOURCE_DATE_EPOCH`), which GCC folds into `__DATE__`/`__TIME__` and
+GNU ld into the PE timestamp; the value is part of the tools and native keys. Second, `runtime.cmake` compiles
+`git describe --always --dirty --tags` into the same build id (`PSX_BUILD_REV`), so two commits with identical
+trees produce binaries that differ in that string alone. The native key deliberately excludes the commit (a
+content-identical tree is the point of the cache); a hit across commits reuses a binary whose embedded build
+id and receipt `source_head` name the producing commit, and the fresh-equals-cached proof holds per commit.
+
 Entry: `<cache>/native/<key>/<EXE_NAME>.exe` + `receipt.json` (inputs, exe SHA-256, configure/build log
 hashes, timestamp, project it was built for). Hit: the executable is copied to
 `<project>/native/<EXE_NAME>.exe`, re-hashed, and the logs are copied with a provenance first line; no

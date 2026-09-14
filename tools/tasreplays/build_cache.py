@@ -63,6 +63,11 @@ TOOLS_DROP = ('-DPython3_EXECUTABLE=',)
 # -DTAS_PROJECT_DIR only locates files already keyed by content; the BIOS profile
 # is read at configure time for the staleness warning only; bash is a host detail.
 NATIVE_DROP = ('-DTAS_PROJECT_DIR=', '-DPSXRECOMP_BIOS_PROFILE=', '-D_psxrt_bash=')
+# GCC folds SOURCE_DATE_EPOCH into __DATE__/__TIME__ and GNU ld into the PE header
+# timestamp (and therefore the PE checksum); those were the only bytes that differed
+# between two fresh builds of the same content (2026-09-15, 8 of 33,859,820 bytes).
+# A fixed value makes a fresh build reproduce a cached one byte for byte.
+SOURCE_DATE_EPOCH = '1000000000'
 TOOL_EXES = ('psxrecomp-bios.exe', 'psxrecomp-game.exe', 'psxrecomp-toml.exe')
 TOOLS_LOGS = ('configure-tools.log', 'build-tools.log', 'test-tools.log')
 GENERATED_LOGS = ('generate-bios.log', 'generate-game.log')
@@ -132,6 +137,11 @@ def _toolchain_identity() -> tuple:
 def toolchain_identity() -> dict:
     """Banner lines of gcc/g++/cmake/ninja, the gcc target and the python version."""
     return dict(_toolchain_identity())
+
+
+def build_env() -> dict:
+    """The environment every cached build stage runs in: the caller's, plus the fixed epoch."""
+    return {**os.environ, 'SOURCE_DATE_EPOCH': SOURCE_DATE_EPOCH}
 
 
 def cmake_key_args(argv, drop=()) -> list:
@@ -218,7 +228,8 @@ def portable_emitter_fingerprint(bash, repo, profile) -> str:
 def tools_inputs(repo, cmake_argv, toolchain=None) -> dict:
     return {'trees': tree_ids(repo, TOOLS_TREES),
             'cmake_args': cmake_key_args(cmake_argv, TOOLS_DROP),
-            'toolchain': toolchain or toolchain_identity()}
+            'toolchain': toolchain or toolchain_identity(),
+            'source_date_epoch': SOURCE_DATE_EPOCH}
 
 
 def generated_inputs(tools_dir, stem, rom, bios_seeds, profile_template_blob, emitter_fingerprint,
@@ -261,7 +272,8 @@ def native_inputs(repo, generated_files, cmake_argv, bios_profile, toolchain=Non
             'tas_cmake': blob_id(repo, TAS_CMAKE),
             'cmake_args': cmake_key_args(cmake_argv, NATIVE_DROP),
             'bios_profile_normalized_sha': normalized_toml_sha(bios_profile),
-            'toolchain': toolchain or toolchain_identity()}
+            'toolchain': toolchain or toolchain_identity(),
+            'source_date_epoch': SOURCE_DATE_EPOCH}
 
 
 def tools_key(repo, cmake_argv, toolchain=None) -> str:
