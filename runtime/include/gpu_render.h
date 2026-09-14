@@ -12,6 +12,7 @@
  * (a requested backend that fails to initialize falls back to software). */
 
 #include <stdint.h>
+#include "source_gpu_texture.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,6 +57,13 @@ void gr_set_precise_triangle(int enabled,
 void gr_set_perspective_triangle(int enabled, float q0, float q1, float q2);
 
 /* Primitives */
+/* Experimental native-software source-profile polygon path; full RGB888
+ * interpolation, field skip and shared directed span/work traversal. */
+int gr_draw_source_block(const SourceGPUBlock *block,int *extra_work);
+void gr_source_texture_control(unsigned action,uint32_t page);
+int gr_draw_source_triangle(const int *x,const int *y,const uint32_t *colors,
+                            int shaded,int dither,int interlace,unsigned skip_field,
+                            const SourceGPUTexture *texture,int *extra_work);
 void gr_fill_rect(int x, int y, int w, int h, uint16_t color);
 void gr_copy_rect(int src_x, int src_y, int dst_x, int dst_y, int w, int h);
 void gr_draw_flat_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
