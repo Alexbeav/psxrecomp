@@ -2092,8 +2092,12 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
          * mis-orders against neighbouring opaque geometry. Isolate EVERY
          * semi-transparent textured prim: drain the open batch, draw this
          * prim alone (composited fully before the next), let opaque prims
-         * keep batching. Cost is one draw per semi prim. */
-        int isolate = (semi >= 0);
+         * keep batching. Cost is one draw per semi prim. A separately opted-in
+         * immutable bank may batch the single-pass dual-source cases: it
+         * cannot alias a render target, keeps painter order, and still splits
+         * on opaque transitions, bank/state changes, masking or subtraction. */
+        int isolate = semi >= 0 &&
+            !mod_texture_bank_batchable(s_selected_bank_tex != 0, s_mask_check, semi);
         int reason = -1;
         if (s_tb_n > 0) {
             if (s_tb_bank_tex != s_selected_bank_tex) reason = 0;
