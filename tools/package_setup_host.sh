@@ -17,6 +17,7 @@
 #     [--project-file REL]... [--project-dir REL]... \
 #     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
+#     [--bios-hint "a legal SCPH-1001 BIOS dump"] \
 #     [--omit-openbios]     # retail-BIOS-only titles; game.toml openbios=false
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
@@ -65,6 +66,9 @@ DISPLAY_NAME=""
 RECOMPILER_BUILD="build-recompiler"
 VERSION_ENV="RELEASE_VERSION"
 DISC_HINT="your legally owned game disc"
+# Player-facing BIOS wording for README-SETUP.txt. Default derives from the
+# staged recipe (retail-only titles name their pinned image); --bios-hint overrides.
+BIOS_HINT=""
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
@@ -106,6 +110,7 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
+    --bios-hint) BIOS_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --no-mods) STAGE_MODS=0; shift ;;
@@ -584,19 +589,34 @@ if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
   fi
 fi
 
+if [[ -z "${BIOS_HINT}" ]]; then
+  _stem="$(grep -oE '^[[:space:]]*bios_config[[:space:]]*=[[:space:]]*"[^"]*"' "${STAGE}/game.toml" 2>/dev/null | sed -E 's/.*\/([^\/"]+)\.toml"$/\1/' | head -1)"
+  if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${STAGE}/game.toml" 2>/dev/null; then
+    BIOS_HINT="your own legally dumped ${_stem:-retail PlayStation} BIOS image (required; OpenBIOS is not supported by this title)"
+  else
+    BIOS_HINT="an optional retail ${_stem:-SCPH-1001} BIOS dump; otherwise OpenBIOS is regenerated locally"
+  fi
+fi
+
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}
 
 One zip for first install and updates. Does NOT include disc images, retail
-BIOS dumps, pre-generated game C, or a portable cmake/clang pack. Emitters
+BIOS dumps, pre-generated game C, or a bundled build-tool pack. Emitters
 (psxrecomp-game / psxrecomp-bios) and the CLI are inside psxrecomp/.
+EOF
 
+# The platform-copy audit reads this text: Windows names the downloadable
+# toolchain pack, POSIX names the native build tools and must not mention a
+# toolchain pack at all.
+case "${ARTIFACT}" in
+  windows-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
 Standalone:
 1. Install Python 3.
 2. Run ${EXE_BASENAME}.
-3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
-   OpenBIOS is regenerated locally).
+3. Provide ${DISC_HINT} and ${BIOS_HINT}.
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
    cmake-clang-v1 from RetroPortingToolKit/RetroPorting-Toolchains (or you can
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
@@ -605,6 +625,27 @@ Standalone:
 Retro uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
+EOF
+    ;;
+  linux-*|macos-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
+Standalone:
+1. Install CMake, Ninja, Python 3, and a C/C++ compiler with your system
+   package manager.
+2. Make sure cmake, ninja, python3, and either clang/clang++ or gcc/g++ are
+   available on PATH.
+3. Run ${EXE_BASENAME}.
+4. Provide ${DISC_HINT} and ${BIOS_HINT}.
+5. Follow the Generate & rebuild wizard. The host checks the native build
+   tools before it continues.
+
+Retro uses this same zip. It uses the same native build tools and preserves
+saves/user config across updates.
+EOF
+    ;;
+esac
+
+cat >>"${STAGE}/README-SETUP.txt" <<EOF
 
 Diagnostic mode (if the game crashes, freezes, or misbehaves):
 - Setup builds two products: build-release/ (normal, the default) and
