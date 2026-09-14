@@ -175,6 +175,22 @@ comparison still decides a pass exactly as before.
   directories that already hold traces. Exit 0 reports a difference, 2 identical
   traces, 1 an error.
 
+## Qualified-hunk registry
+
+`qualified-hunks.json` records, for every accuracy change a replay pass depends
+on, the file and the exact added lines as they exist in the qualified tree
+(`227e9057`). `python tools/tasreplays/qualified_hunks.py check --rev <rev>`
+verifies each block is still present contiguously at that revision (CRLF and
+trailing-whitespace insensitive, indentation exact); `check-all` prints an
+entry-by-revision matrix over `origin/split/01..07` and `HEAD` (pass
+`--revs upstream/master,...` after a fetch). This is an integrity check on
+source trees, not a replay verdict: presence proves nothing about behaviour,
+absence is a definite finding. It is how the dropped `b1413e71`
+`dirty_ram_interp.c` hunk of 2026-09-14 would have been caught before a full
+replay. New fixes are added with `seed --commit SHA --id ID --titles ...
+--as-of 227e9057`; blocks a later commit rewrote are split into the sub-runs
+that survive and the entry is marked `evolved`.
+
 ## Tests without retail assets
 
 ```powershell

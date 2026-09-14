@@ -1,0 +1,785 @@
+{
+  "schema": "psx-tas-qualified-hunks-v1",
+  "entries": [
+    {
+      "id": "67b5d16e-biohazard-return-3846-cd-cpu-mdec",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "67b5d16e4c06e1a31a22fa7b626fd8ad98f087d8",
+      "subject": "Advance Bio Hazard source replay through return 3846",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "evolved": {
+        "dropped_lines": 24,
+        "from_blocks": 47,
+        "to_blocks": 35
+      },
+      "blocks": [
+        {
+          "file": "runtime/include/cpu_state.h",
+          "lines": [
+            "extern int psx_guest_syscalls_active(void);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_mdec_fifo.h",
+          "lines": [
+            "    unsigned block_cycles; /* immutable model configuration */"
+          ]
+        },
+        {
+          "file": "runtime/include/source_mdec_fifo.h",
+          "lines": [
+            "    memset(s,0,sizeof(*s));s->block_cycles=474;s->decode=decode;s->table=table;s->context=context;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_mdec_fifo.h",
+          "lines": [
+            "    return (int)s->block_cycles;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "static int s_nymashock_drive;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    else if(s_nymashock_drive && distance>=3 && distance<12)",
+            "        cycles+=4*CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode&0x80)?2:1);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* Nymashock 1.29.0 HandlePlayRead: after two pipeline fills and the",
+            " * verified target header, standby advances to target+3 then retreats nine.",
+            " * Keep this physical cursor separate from the guest's next-delivery cursor. */",
+            "static int source_drive_head_valid, source_drive_head_lba, source_drive_head_target;",
+            "static uint64_t source_drive_head_due;",
+            "static int source_drive_hold_logical, source_reset_phase;",
+            "static void source_drive_head_update(void) {",
+            "    if(!s_nymashock_drive || !source_drive_head_valid)return;",
+            "    while(psx_cycle_count>=source_drive_head_due) {",
+            "        source_drive_head_lba++;",
+            "        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;",
+            "        if(source_drive_head_lba < -150)source_drive_head_lba=-150;",
+            "        source_drive_head_due += CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg&0x80)?2:1);",
+            "    }",
+            "}"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        source_drive_head_update();",
+            "        if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        source_drive_head_valid=0;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        (s_nymashock_drive ? 2 : 1) * CDROM_SINGLE_SPEED_SECTOR_CYCLES / ((mode_reg & 0x80) ? 2 : 1) : 0;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive)source_drive_hold_logical=1;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive) {",
+            "        source_drive_head_valid=1;",
+            "        source_drive_head_lba=source_drive_head_target=lba;",
+            "        source_drive_head_due=psx_cycle_count+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive && s_source_clock)cycles+=source_clock_random(100000);"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    source_drive_head_update();"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_source_clock && !s_nymashock_drive && s_source_reset_due && cmd!=0x01 && cmd!=0x0A) {"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        if(s_nymashock_drive) {",
+            "            if(cdda_playing || (reading && (stat_reg&CDSTAT_SEEK))) {",
+            "                fprintf(stderr,\"[CDROM] Nymashock reset during audio/read seek is not qualified\\n\");exit(2);",
+            "            }",
+            "            /* An established read keeps two physical sectors ahead of the",
+            "             * next sector delivered to the guest. Reset does not rewind it. */",
+            "            int origin=reading?msf_to_lba(read_min,read_sec,read_sect)+2:",
+            "                source_drive_head_valid?source_drive_head_lba:msf_to_lba(read_min,read_sec,read_sect);",
+            "            response_push(stat_reg);set_irq(CDIRQ_ACK);",
+            "            cd_muted=0;mode_reg=0x20;setloc_pending=0;s_setloc_lba=0;",
+            "            if(source_reset_phase==1) {",
+            "                pending_arm(0x0A,256,1);",
+            "            } else if(has_disc()) {",
+            "                /* Stock clang evaluates the broad Reset draw before CalcSeekTime. */",
+            "                int delay=(int)source_clock_random(3250000);",
+            "                int seek=source_seek_lower_bound(origin,0,!!(stat_reg&CDSTAT_MOTOR),s_source_seek_paused,mode_reg);",
+            "                seek+=(int)source_clock_random(25000);",
+            "                if(delay<seek)delay=seek;",
+            "                stop_read_stream();stop_cdda_playback();",
+            "                s_source_reset_due=psx_cycle_count+(uint64_t)delay;source_reset_phase=1;",
+            "                source_drive_head_valid=1;source_drive_head_lba=source_drive_head_target=0;",
+            "                source_drive_head_due=UINT64_MAX;",
+            "                clear_sector_buffer();cdrom_clear_pending_dataready();spu_cd_audio_reset();xa_reset_decode();",
+            "                stat_reg=(stat_reg&~(CDSTAT_READ|CDSTAT_PLAY))|CDSTAT_MOTOR|CDSTAT_SEEK;",
+            "                s_source_seek_paused=0;",
+            "                pending_arm(0x0A,4100000,1);",
+            "            } else pending_arm(0x0A,70000,1);",
+            "            break;",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "            if(s_nymashock_drive) {",
+            "                source_drive_head_target=0;source_drive_hold_logical=0;",
+            "                cdrom_clear_pending_dataready();",
+            "            }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive) {",
+            "        while(s_source_reset_due && psx_cycle_count>=s_source_reset_due) {",
+            "            uint64_t due=s_source_reset_due;",
+            "            if(source_drive_hold_logical && source_reset_phase<3) {",
+            "                source_drive_head_lba=source_reset_phase++;",
+            "                s_source_reset_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES;",
+            "            } else {",
+            "                s_source_reset_due=0;source_reset_phase=0;",
+            "                source_drive_head_lba=source_drive_hold_logical?-6:-8;",
+            "                source_drive_head_due=due+CDROM_SINGLE_SPEED_SECTOR_CYCLES*(source_drive_hold_logical?1:2);",
+            "                stat_reg&=~CDSTAT_SEEK;s_source_seek_paused=1;",
+            "                read_min=seek_min=0;read_sec=seek_sec=2;read_sect=seek_sect=0;",
+            "                source_drive_head_update();",
+            "            }",
+            "        }",
+            "        return;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive && pending.cmd==0x0A && s_source_reset_due) {",
+            "        pending.due_cyc=s_source_reset_due>psx_cycle_count+256?s_source_reset_due:psx_cycle_count+256;",
+            "        return;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive && done_cmd==0x15) {",
+            "        source_drive_hold_logical=1;",
+            "        source_drive_head_valid=1;source_drive_head_target=msf_to_lba(seek_min,seek_sec,seek_sect);",
+            "        source_drive_head_lba=source_drive_head_target-6;",
+            "        source_drive_head_due=pending.due_cyc+CDROM_SINGLE_SPEED_SECTOR_CYCLES/((mode_reg&0x80)?2:1);",
+            "        source_drive_head_update();",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    const char *drive_model=getenv(\"PSX_CD_DRIVE_MODEL\");",
+            "    s_nymashock_drive=drive_model && !strcmp(drive_model,\"nymashock-1.29.0\");",
+            "    if(drive_model && *drive_model && (!s_nymashock_drive || !s_source_clock)) {",
+            "        fprintf(stderr,\"[CDROM] Invalid source drive model or missing clock\\n\");exit(2);",
+            "    }",
+            "    source_drive_head_valid=source_drive_head_lba=source_drive_head_target=0;",
+            "    source_drive_head_due=0;source_drive_hold_logical=source_reset_phase=0;"
+          ]
+        },
+        {
+          "file": "runtime/src/dirty_ram_interp.c",
+          "lines": [
+            "            if (g_precise_mode || g_ls_replay_active || (source_gpu_runtime_active() && psx_guest_syscalls_active())) { cpu->pc = target; CRET(CRES_PLAIN, 1); }  /* slice / lockstep-replay: plain transfer, never execute the callee */"
+          ]
+        },
+        {
+          "file": "runtime/src/dirty_ram_interp.c",
+          "lines": [
+            "        if (g_precise_mode || g_ls_replay_active || (source_gpu_runtime_active() && psx_guest_syscalls_active())) { cpu->pc = target; return 1; }  /* slice / lockstep-replay: plain transfer, never execute the callee */"
+          ]
+        },
+        {
+          "file": "runtime/src/mdec.c",
+          "lines": [
+            "        if(strcmp(source_mode,\"octoshock-2.3\") && strcmp(source_mode,\"nymashock-1.29.0\")){fprintf(stderr,\"[mdec-source] unknown model\\n\");exit(2);}"
+          ]
+        },
+        {
+          "file": "runtime/src/mdec.c",
+          "lines": [
+            "        if(!strcmp(source_mode,\"nymashock-1.29.0\"))source_mdec.block_cycles=512;"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "     * DMA_Read, IRQ_Read and CDC::Read likewise return stored registers without",
+            "     * another event update. CD status/FIFO reads must not observe an ACK or",
+            "     * data arrival crossed only by their width-dependent six-cycle wait. */"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "static int source_cd_register_sample(uint32_t addr) {",
+            "    uint32_t physical=addr&0x1fffffffu;",
+            "    return source_gpu_runtime_active() && addr<0xc0000000u &&",
+            "           physical>=0x1f801800u && physical<=0x1f80180fu;",
+            "}"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        source_dma_register_sample(addr) || source_irq_register_sample(addr) ||",
+            "        source_cd_register_sample(addr));"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        source_irq_register_sample(addr) || source_cd_register_sample(addr));"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "        source_irq_register_sample(addr) || source_cd_register_sample(addr));"
+          ]
+        },
+        {
+          "file": "runtime/src/memory.c",
+          "lines": [
+            "    completion = psx_cyc_readmem_prepare(cpu, addr & 0x1FFFFFFFu, 4u, 1u, 0x20u,",
+            "                                         source_cd_register_sample(addr));"
+          ]
+        },
+        {
+          "file": "runtime/src/traps.c",
+          "lines": [
+            "int psx_guest_syscalls_active(void) {",
+            "    static int mode = -1;",
+            "    if(mode<0) {",
+            "        const char *value=getenv(\"PSX_SYSCALL_MODEL\");",
+            "        mode=value && !strcmp(value,\"guest-exception\");",
+            "    }",
+            "    return mode;",
+            "}",
+            "",
+            "static int enter_guest_syscall_exception(CPUState *cpu) {",
+            "    uint32_t sr=cpu->cop0[12];",
+            "    if (psx_get_in_exception()) {",
+            "        fprintf(stderr, \"Guest syscall exception model: nested synchronous IRQ entry unsupported at %08X\\n\", cpu->pc);",
+            "        exit(1);",
+            "    }",
+            "    /* Return the vector to the flat dispatcher. Calling psx_dispatch here",
+            "     * would create a host continuation that could outlive the guest RFE.",
+            "     * Guest code owns result registers, TCB stores, and EPC advancement. */",
+            "    cpu->cop0[14] = cpu->pc;",
+            "    /* Source exception entry retains only pending interrupt bits. A",
+            "     * non-delay SYSCALL has no CE, BD, or BT bits of its own. */",
+            "    cpu->cop0[13] = (cpu->cop0[13] & (source_gpu_runtime_active()",
+            "        ? 0x0000FF00u : ~(0x80000000u | 0x7Cu))) | (8u << 2);",
+            "    cpu->cop0[12] = (sr & ~0x3Fu) | ((sr & 0x0Fu) << 2);",
+            "    cpu->pc = (sr & 0x00400000u) ? 0xBFC00180u : 0x80000080u;",
+            "    return 1;",
+            "}",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/src/traps.c",
+          "lines": [
+            "     * Legacy mode handles critical sections directly. The explicit guest",
+            "     * exception model lets the installed BIOS own all syscall behavior."
+          ]
+        },
+        {
+          "file": "runtime/src/traps.c",
+          "lines": [
+            "    if (psx_guest_syscalls_active() || ((func == 1 || func == 2) && critical_exception_enabled())) {",
+            "        return enter_guest_syscall_exception(cpu);"
+          ]
+        }
+      ],
+      "note": "Bundles the early Bio Hazard CD/drive (Nymashock 1.29.0 physical head, reset, sub-Q), CPU/kernel (guest syscall exception model, CD register sample) and MDEC (512-cycle block model) fixes; the CPU/kernel lines are shared infrastructure but only the Bio Hazard pass depends on them. evolved: 3 dropped lines were rewritten by fa4d2267 (seek origin from the physical head); the other 21 are the Nymashock-drive savestate serialisation (cdrom_snap_emit/parse WI/RI fields, cdrom_snapshot_read drive_bytes validation and offsets, MDEC 512-cycle wire bytes) that split/06's cherry-pick 6224a262 left out - split refuses snapshots under that drive profile instead (cdrom_snapshot_bytes/write exit 2, 'Source CDDA/drive capture unqualified'). The power-on replay passes do not exercise savestates."
+    },
+    {
+      "id": "22fbb932-nymashock-subq-ahead-of-delivery",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "22fbb932fe3aeb25e5a906532b1157aa232d0708",
+      "subject": "Report Nymashock sub-Q ahead of queued sector delivery",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "            /* Nymashock decodes sub-Q before its two-sector data pipeline.",
+            "             * The last physical sector read is one ahead of next delivery. */",
+            "            if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "82112c00-source-gpu-flat-lines",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "82112c00d11eb99dd119169d1cc9baa3e7ea95c0",
+      "subject": "Support source GPU flat lines for Biohazard replay",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "evolved": {
+        "dropped_lines": 14,
+        "from_blocks": 8,
+        "to_blocks": 11
+      },
+      "blocks": [
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "/* gpu_line.cpp charges setup and the unclipped major-axis length. Degenerate",
+            " * lines still draw one pixel; oversize lines pay setup without raster work. */",
+            "static inline int source_gpu_command_line_cost(const SourceGPUCommandProjection *s,const uint32_t *words) {",
+            "    if(s->clip_y0>511 || s->clip_y1>511 ||",
+            "       ((s->display_mode&0x24)==0x24 && !(s->draw_mode&0x400) && !s->field_valid))return -1;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if(dx<0)dx=-dx;if(dy<0)dy=-dy;",
+            "    return 16+((dx>=1024 || dy>=512)?0:2*(dx>dy?dx:dy));",
+            "}",
+            ""
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        int cost=source_gpu_command_line_cost(s,s->queue);",
+            "        if(cost<0){s->error=SOURCE_GPU_COMMAND_UNSUPPORTED;return 0;}"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=3;",
+            "        for(unsigned i=0;i<3;i++)s->dispatch.words[i]=source_gpu_command_pop(s);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->budget-=2+cost;return 1;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu.c",
+          "lines": [
+            "    if(source_gpu_line_supported(opcode)) {",
+            "        block.x=source_gpu_command_coord(words[1],0)+state.offset_x;",
+            "        block.y=source_gpu_command_coord(words[1],16)+state.offset_y;",
+            "    }"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu.c",
+          "lines": [
+            "        if(source_gpu_block_supported(opcode) || source_gpu_line_supported(opcode)) {"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        int ax=abs(dx),ay=abs(dy),length=ax>ay?ax:ay;",
+            "        if(ax>=1024 || ay>=512)return 1;",
+            "        int x=block->x,y=block->y;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        /* Source line interpolation uses 32 fractional bits, rounds the step",
+            "         * away from zero, and biases half-pixel ties by 1024 fractional units. */",
+            "        int64_t sx=(int64_t)dx*4294967296LL,sy=(int64_t)dy*4294967296LL;",
+            "        if(length) {",
+            "            sx=(sx+(sx<0?1-length:sx>0?length-1:0))/length;",
+            "            sy=(sy+(sy<0?1-length:sy>0?length-1:0))/length;",
+            "        }",
+            "        uint64_t fx=((uint64_t)(int64_t)x<<32)+2147483648ULL-1024;",
+            "        uint64_t fy=((uint64_t)(int64_t)y<<32)+2147483648ULL-(sy<0?1024:0);",
+            "        SourceTriangleColors c={0};c.dither=!!(block->draw_mode&512u);"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        for(int i=0;i<=length;i++,fx+=(uint64_t)sx,fy+=(uint64_t)sy) {",
+            "            int px=(int)((fx>>32)&2047u),py=(int)((fy>>32)&2047u);",
+            "            if(px<block->clip_left || px>block->clip_right || py<block->clip_top || py>block->clip_bottom)continue;",
+            "            if(block->interlace && ((unsigned)py&1u)==block->skip_field)continue;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "            source_triangle_span(&c,py,px,1,px);",
+            "        }",
+            "        return 1;",
+            "    }"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "b010335b-source-gpu-shaded-lines",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "b010335b60ea0934a90d77f81d72e36c61a24112",
+      "subject": "Support shaded source GPU lines for Biohazard replay",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            " * and flat/shaded two-vertex lines (0x40-0x47, 0x50-0x57),"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if(source_gpu_line_supported(command))return 3+!!(command&0x10);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    unsigned last=2+!!((words[0]>>24)&0x10);",
+            "    int dx=source_gpu_command_coord(words[last],0)-source_gpu_command_coord(words[1],0);",
+            "    int dy=source_gpu_command_coord(words[last],16)-source_gpu_command_coord(words[1],16);"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        unsigned n=source_gpu_command_length(s->queue[0]);",
+            "        if(s->budget<0 || s->count<n)return 1;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "        s->dispatch.kind=SOURCE_GPU_DISPATCH_COMMAND;s->dispatch.count=n;",
+            "        for(unsigned i=0;i<n;i++)s->dispatch.words[i]=source_gpu_command_pop(s);"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    if((opcode>=0x40 && opcode<=0x47) || (opcode>=0x50 && opcode<=0x57)) {",
+            "        unsigned shaded=!!(opcode&0x10),last=2+shaded;",
+            "        int dx=(int)((words[last]&2047u)^1024u)-(int)((words[1]&2047u)^1024u);",
+            "        int dy=(int)(((words[last]>>16)&2047u)^1024u)-(int)(((words[1]>>16)&2047u)^1024u);"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        int reversed=dx<=0 && length;",
+            "        if(reversed){x+=dx;y+=dy;dx=-dx;dy=-dy;}"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "        uint32_t start[3],step[3];",
+            "        for(unsigned channel=0;channel<3;channel++) {",
+            "            int first=(words[shaded && reversed?2:0]>>(8*channel))&255u;",
+            "            int end=(words[shaded && !reversed?2:0]>>(8*channel))&255u;",
+            "            start[channel]=(unsigned)first*4096u+(shaded?2048u:0);",
+            "            step[channel]=(uint32_t)(shaded && length?((end-first)*4096)/length:0);",
+            "        }"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "            for(unsigned channel=0;channel<3;channel++)c.base[channel]=start[channel]+step[channel]*(unsigned)i;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f5f5b16e-source-gpu-raw-blended-sprites",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "f5f5b16e9b8c7ca422a91e8714634111022e21f4",
+      "subject": "Admit raw blended source GPU sprites for Biohazard",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66 || command==0x67;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66 || command==0x67?4:3;"
+          ]
+        },
+        {
+          "file": "runtime/include/source_gpu_command_projection.h",
+          "lines": [
+            "    if(command==2 || (command>=0x60 && command<=0x67))return 3;"
+          ]
+        },
+        {
+          "file": "runtime/src/gpu_sw_renderer.c",
+          "lines": [
+            "    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65 && opcode!=0x66 && opcode!=0x67)return 0;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1a73216a-gpu-upload-history-capture-stop",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "1a73216a6009c14df01cc996606fc5f67398a53a",
+      "subject": "Stop GPU upload debug capture when history fills",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/src/gpu.c",
+          "lines": [
+            "    /* A full history retains old uploads; later transfers must not append",
+            "     * to the last slot and overflow its diagnostic word counter. */",
+            "    a0_capture_slot = -1;"
+          ]
+        }
+      ],
+      "note": "Crash fix. Reached the split branches through upstream #360 (693c7be0, different subject), not through a cherry-pick of this hash."
+    },
+    {
+      "id": "fa4d2267-explicit-seek-from-physical-head",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "fa4d22678c4219e176cca7fa8df03541bf955e4c",
+      "subject": "Time an explicit seek from the physical read head during a read",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "     * physical head while paused or in standby. Both use the source tape.",
+            "     *",
+            "     * The source measures a seek from CurSector, its physical read head. An",
+            "     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors",
+            "     * ahead of the sector handed to the guest, because HandlePlayRead fills",
+            "     * the pipe before the guest drains it. A seek issued mid-read therefore",
+            "     * starts two sectors further along than the delivery cursor says, and",
+            "     * timing it from the delivery cursor makes its travel two sectors too",
+            "     * long. Command_Reset already accounts for the same lead below. */",
+            "    int cursor = msf_to_lba(read_min, read_sec, read_sect);",
+            "    if (cursor < 0) cursor = 0;",
+            "    int origin = reading ? cursor + 2 : cursor;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "b1413e71-precise-slice-frontend-deadline",
+      "titles": [
+        "tekken3",
+        "pepsiman",
+        "biohazard"
+      ],
+      "origin_commit": "b1413e7147cefc8f58449685114639da4113c4b4",
+      "subject": "runtime: keep frontend returns in the precise slice owner (restore b1413e71)",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "seed_commit": "9a24638ff3d8eb9c90e6f0f6fa7b4033d1897cbe",
+      "blocks": [
+        {
+          "file": "runtime/src/dirty_ram_interp.c",
+          "lines": [
+            "    /* Frontend returns are GPU events even when no guest IRQ is due. Keep",
+            "     * their instruction/branch/load continuation in the precise owner. */",
+            "    uint32_t gpu_deadline = source_gpu_runtime_cycles_to_event();",
+            "    if (gpu_deadline < deadline) deadline = gpu_deadline;"
+          ]
+        }
+      ],
+      "note": "Origin is b1413e71 (T52); the dirty_ram_interp.c hunk was dropped when the fork was re-integrated into split/01..07 and restored verbatim by 9a24638f. Fold source_gpu_runtime_cycles_to_event() into the precise-slice deadline in psx_slice_block_impl."
+    },
+    {
+      "id": "cd55e8a4-xa-eof-data-end-gate",
+      "titles": [
+        "biohazard"
+      ],
+      "origin_commit": "5ff58b29dab0d2c7af4d30517930a1eed3666175",
+      "subject": "cdrom: keep XA end-of-file DATA_END out of the Nymashock drive profile",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    /* The Nymashock 1.29.0 drive profile was qualified without an XA end-of-file",
+            "     * event: on Bio Hazard (SLPS-00998) the source core raises no CD interrupt at",
+            "     * the EOF sector of the intro stream, and delivering DATA_END here (cd55e8a4)",
+            "     * diverged the 239,202-return reference route at return 5149. Keep the",
+            "     * DATA_END delivery for the default drive model only. */",
+            "    if (!s_nymashock_drive &&",
+            "        (delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) =="
+          ]
+        }
+      ],
+      "note": "Gates upstream cd55e8a4's XA EOF DATA_END delivery out of the Nymashock drive profile; docs/NYMASHOCK_SOURCE_REPLAY.md from the same commit is not part of the hunk."
+    },
+    {
+      "id": "tekken3-codegen-repin-split07",
+      "titles": [
+        "tekken3"
+      ],
+      "origin_commit": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "subject": "tasreplays: re-pin the Tekken 3 codegen guard to the split/07 recompiler output",
+      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "blocks": [
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"generated/SCPH1001_dispatch.c\": \"cbc528bb00908b500b1077edcaf80f26aa986e8725d97c2f8a3c60b192256f49\",",
+            "  \"generated/SCPH1001_full.c\": \"30cb48aa3084d4dd6658c8536c23114ddd03ed304f4c4338f92b03fbf3ba2fb5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_dispatch.c\": \"169ccb091b2cd839a75ecb355608bcf7ddd1c685a96950199eb1f4df792b0b0d\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_00.c\": \"8242b142266b99594204f11f361c6c51024402b6d6170d6715806215ea849da3\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_01.c\": \"62b053909d3be2b69eda9fb13333abb695658f7bd74ad5ebe48d9d65983afb3e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_02.c\": \"37264bf88cc61e9b085970a13260c677174f7e90cfaaa6f98517690412052fe6\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_04.c\": \"104a33f02e98dd789e0928cac7fd71900d7c4025a582b78f32fc06dd1a1474e5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_05.c\": \"8f6d27a188271ac0057f090b8d69f2f243ab342dc46b3bff94c4bee47da09516\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_06.c\": \"509bcddf7886ae839bcc02f40b515dcb058526d431ae713e8608f7b763381314\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_07.c\": \"6193d1b980433431aac12c07ad46522f398076d31ed1b983b829e383c1df9581\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_08.c\": \"a2a2e690bd6567e63e2625b487cff54881beb38f8d52d7635039a1b3923c6d26\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_09.c\": \"76727e0b880b58ba1642d074a1277b13b342447da14be67ce93b2b6a554ca704\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_10.c\": \"48c618682b5cd9a378ac6b7be3b7d00c9b2d9a56c97493f8178fd4ed290353bd\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_11.c\": \"c2412d4413a4260112e65f30884803f1fe3df379b9fcb43bf4741e011716634f\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_12.c\": \"b4da4df16b5ec73ac36784c23da76dbb7c7f1c6057af5b9baab6ec1b0857d789\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_13.c\": \"ab93fbd0244eade8703ec5a326d50d078394f81b996b102754c594669e8ea643\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_14.c\": \"14f692c1f7b10967699e2ccf7f128dc6f92b6a4fd8af2670e802d17d1891a2c2\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_15.c\": \"7c014541b851cfa4a49388452be232f5aa6d5f8c84d77ad63f847e5eab6ec562\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_16.c\": \"b78f9757f4205159bf43320d650f46b4b82baeb7a2c2264ea2086624a5a4c6c7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_17.c\": \"f7e8a3cbd8675cde0dc44a9480d985d29ce0efecb4eb4f3dbbe3ccc14a4e7c34\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_18.c\": \"867af660a37966d21729cb82bccd728a37ae1210f43de1c237457ef56c1e2d28\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_19.c\": \"bee8653194d2674b34157062ed4a35831d1d719228af5f781d1ae22018f5dd90\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_20.c\": \"70451f818266b76229c99b0815f8b1a50ae9a0d098627cee331c151b1741c3a6\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_21.c\": \"0065ca67d2797fe0bd0a1c0a2eedc5d301afac04e9e792ddd7a9f0f3b43d6146\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_22.c\": \"62fb6ad5ecefa6ee8acccdb461038cb0d22ba4b928a5692a91ddaf5e78afdf73\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_23.c\": \"6b241cfc341337dcc2f07db59edb7a07ce6a74d429b0ca7db2bdff4b68aaf06f\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_24.c\": \"3461476f9e22a625b12cb5252a31025f47ae969e14b0dfabd2577886973b78c5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_25.c\": \"84bf3bd0159731f7c552ac18be00a8d60f6458fcfe88651700edbc76cc4e9260\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_26.c\": \"d09612b475651be3be145187a42084e2e1d535397a6399b27a423e1ed97bc2c5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_27.c\": \"8bd2193d14de87510378811de60969a5c587e990900f8e009a50ca4824451911\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_28.c\": \"72cf2ae4d70bb4383ffce7e53080a931baa2474a8231a0ced687a2b442218ad7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_29.c\": \"3c2dd65f66ed3749c3ef1e77e81e783a5c340fd81477a90a9ed08b0c11c03115\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_30.c\": \"54674425b372af0a640be6d4fea15887ec5f269263ac117996a62cc923464e59\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_31.c\": \"aeb429eb3dc6762d2de00cbc72416bcc81197e5603ca5107fa7541867bb5f4c7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_32.c\": \"520b8a8f8741b5bc2d436425b87a5bb4c3850a8271f0a258b84dc7bfddd4ad44\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_33.c\": \"c657fe78f85dfc7ef49e945c03d2a59b40e4021cf670e683a366a1b82d3feb79\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_34.c\": \"f6474e871318690cc4447c8c4e089d06c4ab3161b0c63d4a2d49499c87e7c3d7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_35.c\": \"de6c6af2813dc5fe53149db58864cc41070669e4d8b06eee58e2f0d1c3e36ff5\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_36.c\": \"152dd966c2527382c3048d1c948a24330cf527b3ed79c3e598c87950e57491fc\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_37.c\": \"2cb325a7806ae90cedb14776f171214a6d5d3d70106d78d5f94f1fe0f47112dd\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_38.c\": \"34f3e1f369c0f1a4beb94f532f1c0c46663aa79fdb0b08c3adb015beffe3e04d\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_39.c\": \"982c957cf03c35cbfba55ff2719db6564300119f006e715a6d6ecb7355b23dbc\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_40.c\": \"59cc64629a2df9a4e3b7d816c78bab89917eba8f53acb7809a29078c94b17b90\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_41.c\": \"c8ce623cd218b94c94eb45b6b0dc3c2e0bcb0e851cd7a0d09a045b21ea6003b7\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_42.c\": \"39b552541b4c8be5e50130f865779c3cde54da450bdf7e0eab9b419ed94a5bde\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_43.c\": \"c42a8115307aa6603e2025fc3c20a065043b1d3bd766315dff40b36478ce8a78\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_44.c\": \"25b993d24a26908e79522435cb54a493a92ddfdbcf12767a5ff150f5b4334a6e\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_45.c\": \"2e5f5c1200e616a30ff8eb8d6d93665cebe7f67f3f56cec970096dece6cc2ea6\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_46.c\": \"a3a0fc82ba1041419a873a0cd2a8d2708617305faf4f2d13f92bbfe36130cc05\","
+          ]
+        },
+        {
+          "file": "tools/tasreplays/tekken3-codegen.json",
+          "lines": [
+            "  \"build/tekken3/generated/SLUS_004.02_full_49.c\": \"38a72cbdad01d0577726522496e8d73239eae1f5fe932dbc2843d5ab47c7b19a\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_50.c\": \"2f834507156a4eff8a3449bdc4ef31cd0fe57e663ecb5ce1db6988178d3cff7f\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_51.c\": \"81e1a80e47f8702ffb2626530acf1c899e8af53801729e0e883924167c665ad3\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_52.c\": \"353071bdc15d6af32e98f6eaffee673ac3695666d8eff94465bcd89cd6520b5a\",",
+            "  \"build/tekken3/generated/SLUS_004.02_full_53.c\": \"76b83125bd5f6f4ae789f72c440c1a2cd61545917b4358cbb4e7e44f9efac0fb\""
+          ]
+        }
+      ],
+      "note": "Re-pins the Tekken 3 codegen guard hashes to the split/07 recompiler output; only this JSON file qualifies."
+    }
+  ]
+}
