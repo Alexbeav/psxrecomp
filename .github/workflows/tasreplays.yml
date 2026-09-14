@@ -1,9 +1,9 @@
 name: TAS replay source checks
 on:
   pull_request:
-    branches: [tasreplays]
+    branches: [master, tasreplays, "codex/tas-upstream-integration-20260913"]
   push:
-    branches: [tasreplays]
+    branches: [master, tasreplays, "codex/tas-upstream-integration-20260913"]
   workflow_dispatch:
 permissions:
   contents: read

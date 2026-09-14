@@ -91,7 +91,7 @@ with existing launcher options such as `--ram-snapshot-frame`. Configure bounded
 CPU/device windows explicitly with the launcher's supported options. The controller
 does not invent clock conversions, patch a source observer, or bypass checkpoint
 guards. In particular, the full Biohazard profile cannot capture/resume checkpoints,
-and supported checkpoint profiles remain bound to the same executable.
+and this upstream integration does not include the separate TAS state format.
 
 Top-level `snapshots: {"source": "...", "native": "..."}` optionally selects the
 diagnostic directories; otherwise the original comparison pair is used. The first
