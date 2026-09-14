@@ -29,6 +29,7 @@ def main() -> None:
         "recompiler/lib/ELFIO/tests",
         "tools/aot_overlay_spike",
         "recomp-ui/docs/HANDOFF.md",
+        "recomp-ui/test_data",
     ):
         assert private_source in text
     gate_text = PRIVATE_PATH_GATE.read_text(encoding="utf-8")

@@ -1193,6 +1193,29 @@ static int generated_has_bios_backend(const char* dir) {
     return 0;
 }
 
+/* First retail stem CMake linked (PSX_SETUP_BIOS_STEMS minus OpenBIOS), or ""
+ * when the title links OpenBIOS only. Forwarded to generate as --bios-stem so
+ * the CLI emits the backend pair this host probes and links, instead of an
+ * SCPH1001 pair a title pinned to another image can never complete with. */
+static const char* setup_retail_bios_stem(void) {
+    static char stem[512];
+    const char* next = PSX_SETUP_BIOS_STEMS;
+    stem[0] = 0;
+    while (*next) {
+        const char* end = strchr(next, '|');
+        size_t len = end ? (size_t)(end - next) : strlen(next);
+        if (len && len < sizeof(stem) &&
+            !(len == 8 && strncmp(next, "OpenBIOS", 8) == 0)) {
+            memcpy(stem, next, len);
+            stem[len] = 0;
+            return stem;
+        }
+        if (!end) break;
+        next = end + 1;
+    }
+    return stem;
+}
+
 static int bios_backends_missing(void) {
     char framework[1100], gen[1200];
     if (!join_path(framework, sizeof(framework), g_project_root, PSX_SETUP_FRAMEWORK_REL) ||
@@ -3896,12 +3919,17 @@ static int host_prepare_generate(const char* source_path, char* out_path,
 #if defined(_WIN32)
     char cmdline[4096];
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
+        char stem_arg[600];
+        stem_arg[0] = 0;
+        if (stem[0])
+            snprintf(stem_arg, sizeof(stem_arg), " --bios-stem \"%s\"", stem);
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
-                 "--disc \"%s\" --bios \"%s\" --gen-marker \"%s\" "
+                 "--disc \"%s\" --bios \"%s\"%s --gen-marker \"%s\" "
                  "--json-progress",
                  g_python, g_cli_path, g_project_root, g_game_toml, source_path,
-                 bios_path, marker_name);
+                 bios_path, stem_arg, marker_name);
     } else {
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
@@ -3913,7 +3941,7 @@ static int host_prepare_generate(const char* source_path, char* out_path,
                      "psxrecomp generate"))
         return 0;
 #else
-    char* argv[16];
+    char* argv[20];
     int argc = 0;
     argv[argc++] = g_python;
     argv[argc++] = g_cli_path;
@@ -3925,8 +3953,13 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     argv[argc++] = "--disc";
     argv[argc++] = (char*)source_path;
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
         argv[argc++] = "--bios";
         argv[argc++] = bios_path;
+        if (stem[0]) {
+            argv[argc++] = "--bios-stem";
+            argv[argc++] = (char*)stem;
+        }
     }
     argv[argc++] = "--gen-marker";
     argv[argc++] = (char*)marker_name;

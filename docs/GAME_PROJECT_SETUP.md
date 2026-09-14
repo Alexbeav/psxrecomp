@@ -446,6 +446,14 @@ The setup packager removes owned-input and player-state files, including backup
 suffixes. It checks the staged tree after adding the SDK and rejects developer
 machine paths. Audit the final ZIP independently before publication.
 
+If `game.toml` sets `openbios = false`, pass `--omit-openbios`. This option
+removes the unused OpenBIOS image, profile, and notice from the final package.
+The packager repeats the BIOS payload gate after it stages the SDK.
+
+The player's Generate stages their retail dump where the pinned profile loads it
+and emits that profile's backend. The setup host forwards the stem CMake linked
+(`PSXRECOMP_BIOS_STEMS`) as `--bios-stem`; a standalone `psxrecomp_cli.py generate`
+resolves it from `[recompiler] bios_config`, then falls back to `SCPH1001`.
 
 ### Player updates (after first Generate)
 

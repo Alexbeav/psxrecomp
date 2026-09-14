@@ -467,7 +467,8 @@ rm -rf \
   "${STAGE}/psxrecomp/tools/aot_overlay_spike" \
   "${STAGE}/psxrecomp/tools/audio_capture_ab.py" \
   "${STAGE}/psxrecomp/tools/launch_tomba2_interp_perf.ps1" \
-  "${STAGE}/recomp-ui/docs/HANDOFF.md"
+  "${STAGE}/recomp-ui/docs/HANDOFF.md" \
+  "${STAGE}/recomp-ui/test_data"
 
 # Never ship owned inputs or player state copied from the title or framework
 # worktrees. These files can be tracked or ignored, so a clean Git status is
