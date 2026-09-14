@@ -1550,7 +1550,21 @@ function(psxrecomp_add_runtime_target target)
                 string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
                 set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
                 file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
-                target_sources(${target} PRIVATE "${_psxrt_rc}")
+                # Compile the icon resource in an isolated object library. Added
+                # straight to ${target}, the .rc inherits every include directory
+                # and compile definition of the runtime, and GNU windres hands
+                # that -I list to the C preprocessor on an unquoted command line:
+                # one space in the project path ("D:/Retro Games/...", or
+                # any install under a folder with a space) splits the path and
+                # the player's first-run rebuild dies with "cc1.exe: fatal error:
+                # <fragment>: No such file or directory". The .rc needs neither
+                # includes nor defines, so give the resource compiler none.
+                add_library(${target}_app_icon OBJECT "${_psxrt_rc}")
+                set_target_properties(${target}_app_icon PROPERTIES
+                    INCLUDE_DIRECTORIES ""
+                    COMPILE_DEFINITIONS ""
+                    COMPILE_OPTIONS "")
+                target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_app_icon>)
                 message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
             else()
                 message(WARNING
