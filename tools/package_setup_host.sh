@@ -493,6 +493,22 @@ fi
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
 
+recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording for README-SETUP.txt
+  # A recipe may omit bios_config and rely on the host default stem; grep's
+  # no-match status must not abort the packager under `set -euo pipefail`
+  # (it did, silently, right after stage_setup_sdk on the Wave 4 pilot).
+  local recipe="$1" line stem="" q='"'
+  line="$(grep -E '^[[:space:]]*bios_config[[:space:]]*=' "${recipe}" 2>/dev/null | head -1 || true)"
+  if [[ "${line}" == *"${q}"*".toml${q}"* ]]; then
+    stem="${line%${q}*}"; stem="${stem##*/}"; stem="${stem%.toml}"
+  fi
+  if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${recipe}" 2>/dev/null; then
+    echo "your own legally dumped ${stem:-retail PlayStation} BIOS image (required; OpenBIOS is not supported by this title)"
+  else
+    echo "an optional retail ${stem:-SCPH-1001} BIOS dump; otherwise OpenBIOS is regenerated locally"
+  fi
+}
+
 assert_no_private_payload() {
   local forbidden_payload forbidden_bios
   forbidden_payload="$(find "${STAGE}" -type f \( \
@@ -590,12 +606,7 @@ if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
 fi
 
 if [[ -z "${BIOS_HINT}" ]]; then
-  _stem="$(grep -oE '^[[:space:]]*bios_config[[:space:]]*=[[:space:]]*"[^"]*"' "${STAGE}/game.toml" 2>/dev/null | sed -E 's/.*\/([^\/"]+)\.toml"$/\1/' | head -1)"
-  if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${STAGE}/game.toml" 2>/dev/null; then
-    BIOS_HINT="your own legally dumped ${_stem:-retail PlayStation} BIOS image (required; OpenBIOS is not supported by this title)"
-  else
-    BIOS_HINT="an optional retail ${_stem:-SCPH-1001} BIOS dump; otherwise OpenBIOS is regenerated locally"
-  fi
+  BIOS_HINT="$(recipe_bios_hint "${STAGE}/game.toml")"
 fi
 
 cat >"${STAGE}/README-SETUP.txt" <<EOF
