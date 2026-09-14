@@ -18,6 +18,7 @@ import sys
 import bk2_intake
 import build_cache
 from bk2_to_psxrti import convert
+import media_container
 import tekken3
 from compare_ram_pages import read_pages
 from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
@@ -204,12 +205,14 @@ def setup(args):
         if not shutil.which(tool): raise ValueError('missing tool: '+tool)
     # The Windows System32 bash launcher is WSL, not the Git/coreutils runtime
     # used by this fingerprint script and by the Windows CMake check.
-    bash=Path(shutil.which('git')).resolve().parents[1]/'bin/bash.exe'
-    if not bash.is_file(): raise ValueError('Git for Windows bash is required for BIOS fingerprint verification')
+    bash=media_container.find_git_bash()
     macros=subprocess.check_output(['gcc','-dM','-E','-include','_mingw.h','-'],input='',text=True)
     if not re.search(r'^#define _UCRT\b',macros,re.M): raise ValueError('UCRT compiler required')
     control=admit_source_control(args.source_control.resolve(strict=True))
-    disc,bios,movie=[p.resolve(strict=True) for p in (args.disc,args.bios,args.movie)]
+    # A .chd is split back to the original 1+7 track layout first; media()
+    # below is the same pinned check a supplied .cue goes through.
+    container=media_container.resolve_disc(args.disc,cache=args.chd_cache,chdman=args.chdman)
+    disc,bios,movie=[p.resolve(strict=True) for p in (container,args.bios,args.movie)]
     tracks=media(disc,bios)
     route,intake=bk2_intake.inspect(movie.read_bytes())
     if (intake['movie_sha256'],intake['frame_count'],intake['pad_words_le_sha256'])!=(MOVIE_SHA,FRAMES,WORDS_SHA):
@@ -481,6 +484,8 @@ def main():
     for field in ['disc','bios','movie','project','cache','source-control']:
         s.add_argument('--'+field,type=Path,required=True)
     s.add_argument('--jobs',type=int,default=4)
+    s.add_argument('--chdman',type=Path,help='chdman.exe for .chd input; otherwise PSX_CHDMAN or PATH')
+    s.add_argument('--chd-cache',type=Path,help='private directory for split .chd tracks, keyed by container hash')
     s.add_argument('--tools-dir',type=Path,help='Reuse a CMake tool build for this source; reconfigure, rebuild and rerun all tests')
     build_cache.add_arguments(s)
     r=sub.add_parser('run')

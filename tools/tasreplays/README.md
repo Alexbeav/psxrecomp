@@ -84,8 +84,16 @@ not need the compiler's DLL directory at playback time.
 The supported disc is the original three-track USA BIN/CUE layout from the
 [TASVideos version record](https://tasvideos.org/Games/1530/Versions/View/1913).
 Renaming files is fine when the CUE names them correctly. Track order, raw
-sectors and audio pregaps must match. Merged BIN, ISO, CHD, other regions and
+sectors and audio pregaps must match. Merged BIN, ISO, other regions and
 revisions are not admitted by this setup.
+
+A `.chd` of that same layout is also accepted for `--disc`: setup splits it
+with `chdman extractcd -sb` into one BIN per track plus a CUE, in a private
+directory keyed by the container's own SHA-256, and then runs the identical
+size/hash/layout check over the result. The check is not relaxed for a
+container, so a CHD of a merged, ISO or wrong dump fails exactly as the
+equivalent CUE does. `chdman` is taken from `--chdman`, else `PSX_CHDMAN`, else
+`PATH`; `--chd-cache` overrides where the split tracks are kept.
 
 | Input | SHA-1 |
 |---|---|

@@ -7,6 +7,7 @@ import datetime
 import gzip
 import hashlib
 import json
+import media_container
 import os
 from pathlib import Path
 import re
@@ -181,13 +182,15 @@ def setup(args) -> None:
     if subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('Commit all candidate source before setup')
     head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
-    bash=Path(shutil.which('git')).resolve().parents[1]/'bin/bash.exe'
-    if not bash.is_file(): raise ValueError('Git for Windows bash is required for BIOS fingerprint verification')
+    bash=media_container.find_git_bash()
     bios = args.bios.resolve(strict=True)
     require_hash(bios, BIOS_SHA)
-    tracks = verify_cue(args.disc.resolve(strict=True))
+    # A .chd is split back to the original three-track layout first; the pinned
+    # size/hash check below is the same one a supplied .cue goes through.
+    cue = media_container.resolve_disc(args.disc, cache=args.chd_cache,
+                                       chdman=args.chdman).resolve(strict=True)
+    tracks = verify_cue(cue)
     PROJECT.mkdir(parents=True, exist_ok=False)
-    cue=args.disc.resolve(strict=True)
     cache=(args.cache or PROJECT/'input-cache').resolve()
     def store_private(data,sha,name):
         folder=cache/sha;folder.mkdir(parents=True,exist_ok=True);target=folder/name
@@ -430,8 +433,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     prepare = sub.add_parser('setup', help='verify owned assets, download the TAS, generate and build')
-    prepare.add_argument('--disc', type=Path, required=True, help='USA three-track .cue')
+    prepare.add_argument('--disc', type=Path, required=True, help='USA three-track .cue, or a .chd of it')
     prepare.add_argument('--bios', type=Path, required=True, help='SCPH1001.BIN')
+    prepare.add_argument('--chdman',type=Path,help='chdman.exe for .chd input; otherwise PSX_CHDMAN or PATH')
+    prepare.add_argument('--chd-cache',type=Path,help='private directory for split .chd tracks, keyed by container hash')
     prepare.add_argument('--project',type=Path,help='fresh private generated/build directory')
     prepare.add_argument('--cache',type=Path,help='verified private boot/firmware cache')
     prepare.add_argument('--tools-dir',type=Path,help='reusable tools build; configured and tested for this source')
