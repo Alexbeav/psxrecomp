@@ -155,3 +155,20 @@ snapshots are diagnostic data, not a claim of CPU-register equality.
 Source admission binds the exact bytes of its admission tool. The repository
 keeps that Python file in LF form through .gitattributes so Windows checkout
 conversion does not invalidate an otherwise unchanged reference.
+
+## Split-branch re-qualification (2026-09-14)
+
+Re-qualified against `split/07-campaign-docs` (f7652e2b, upstream 4be26f16). Tekken 3
+(8,399/8,399) and Pepsiman (75,406/75,406, terminal RAM match) pass unchanged on the
+uncapped `sio_pace_walk`. Bio Hazard first diverged at return 1142 (+4 cycles, RAM
+equal) and, once that was fixed, at return 5149 (-11 cycles, seven pages). Neither
+moved with the pre-#362 transition cap restored, and both reproduce on #361's runtime
+with byte-identical qualified-era generated code, so the recompiler is not involved.
+
+Return 1142: the b1413e71 hunk that folds the frontend-return deadline into the
+precise slice owner was missing (the integration predates it). Return 5149: upstream
+cd55e8a4 delivers CDIRQ_DATA_END on an XA end-of-file sector during the intro stream;
+the source core raises no CD interrupt there (`cpu-boundary.tsv` shows I_STAT bit 2
+pending at cycle 2,914,352,327 only on the split build). The DATA_END delivery is now
+kept out of the Nymashock drive profile. With both changes the full 239,202-return
+route matches, with terminal RAM and persisted card equality.

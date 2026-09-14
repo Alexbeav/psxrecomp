@@ -1524,7 +1524,13 @@ static int read_sector_at(int min, int sec, int sect) {
         delivery.data_delivered = 0;
         delivery.skip_reason = CDROM_SKIP_XA_AUDIO_REALTIME;
     }
-    if ((delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
+    /* The Nymashock 1.29.0 drive profile was qualified without an XA end-of-file
+     * event: on Bio Hazard (SLPS-00998) the source core raises no CD interrupt at
+     * the EOF sector of the intro stream, and delivering DATA_END here (cd55e8a4)
+     * diverged the 239,202-return reference route at return 5149. Keep the
+     * DATA_END delivery for the default drive model only. */
+    if (!s_nymashock_drive &&
+        (delivery.xa_submode & (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) ==
         (XA_SUBMODE_EOF | XA_SUBMODE_AUDIO)) {
         if (!(mode_reg & 0x08u) ||
             (delivery.xa_file == filter_file &&
