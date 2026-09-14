@@ -1714,12 +1714,21 @@ static int source_toc_seek_cycles(void) {
 
 static int source_explicit_seek_cycles(uint8_t cmd) {
     /* The older model uses the delivery cursor; Nymashock also tracks the
-     * physical head while paused or in standby. Both use the source tape. */
-    int origin = msf_to_lba(read_min, read_sec, read_sect);
+     * physical head while paused or in standby. Both use the source tape.
+     *
+     * The source measures a seek from CurSector, its physical read head. An
+     * established read keeps that head CDC_SECTOR_PIPE_COUNT (2) sectors
+     * ahead of the sector handed to the guest, because HandlePlayRead fills
+     * the pipe before the guest drains it. A seek issued mid-read therefore
+     * starts two sectors further along than the delivery cursor says, and
+     * timing it from the delivery cursor makes its travel two sectors too
+     * long. Command_Reset already accounts for the same lead below. */
+    int cursor = msf_to_lba(read_min, read_sec, read_sect);
+    if (cursor < 0) cursor = 0;
+    int origin = reading ? cursor + 2 : cursor;
     int target = msf_to_lba(seek_min, seek_sec, seek_sect);
-    if (origin < 0) origin = 0;
     if (target < 0) target = 0;
-    if(s_nymashock_drive && source_drive_head_valid)origin=source_drive_head_lba;
+    if(s_nymashock_drive && !reading && source_drive_head_valid)origin=source_drive_head_lba;
     source_drive_head_valid=0;
     int seek = source_seek_lower_bound(origin, target,
         !!(stat_reg & CDSTAT_MOTOR), s_source_seek_paused, mode_reg);
