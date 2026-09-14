@@ -11,6 +11,8 @@
  */
 
 #include "gpu.h"
+#include "gpu_gl_renderer.h"
+#include "mod_texture_banks.h"
 #include "display_scanout.h"
 #include "pgxp.h"
 #include "mod_memory.h"
@@ -25,6 +27,8 @@
 #include "event_ring.h"
 #include "color_lut.h"
 #include "mod_runtime.h"
+#include "mod_plugins.h"
+#include "ws_scene_hold.h"
 #include "sio.h"
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
@@ -372,17 +376,30 @@ static int ws_2d_only_scene(void) {
 
 static uint32_t s_ws_fmv_frame_cache = 0xFFFFFFFFu;
 static int      s_ws_fmv_cached = 0;
+static PSXModRetainedScenePredicate s_ws_retained_scene_predicate;
+static WsSceneHold s_ws_scene_hold;
+static uint32_t ws_display_origin(void);
+
+void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate) {
+    s_ws_retained_scene_predicate = predicate;
+    ws_scene_hold_reset(&s_ws_scene_hold);
+}
 
 int gpu_ws_present_native_43(void) {
     if (!ws_engaged()) return 0;
-    if (!ws_game_mode()) return 1;                 /* full-2D screen */
-    if (ws_2d_only_scene()) return 1;              /* 2D-only gameplay scene */
+    int native_43 = !ws_game_mode() || ws_2d_only_scene();
+    int hold_enabled = ws_mode == 2 && s_ws_retained_scene_predicate != NULL;
+    if (!hold_enabled && native_43) return 1;      /* unchanged default */
     uint32_t f = (uint32_t)s_frame_count;
     if (f != s_ws_fmv_frame_cache) {
         s_ws_fmv_frame_cache = f;
         GpuDisplayInfo di; gpu_get_display_info(&di);
         s_ws_fmv_cached = di.depth24 || mdec_recently_active(WS_FMV_HYSTERESIS);
     }
+    if (hold_enabled)
+        return ws_scene_hold_classify(&s_ws_scene_hold,
+            s_ws_retained_scene_predicate(), native_43, s_ws_fmv_cached,
+            ws_display_origin());
     return s_ws_fmv_cached;
 }
 
@@ -2570,6 +2587,9 @@ extern void psx_irq_raise(uint32_t bit, uint32_t detail);
 /* Display area start (GP1(05h)) */
 static uint32_t display_area_x;
 static uint32_t display_area_y;
+static uint32_t ws_display_origin(void) {
+    return display_area_x | (display_area_y << 10);
+}
 
 /* ----- Native-wide compositor driving (see runtime/src/gpu_sw_renderer.c) ----
  * The renderer keeps a separate wide surface per framebuffer; we tell it which
@@ -2851,6 +2871,7 @@ static void gpu_reset_state(int clear_vram) {
     gpustat_poll_count = 0;
     s_ws_fmv_frame_cache = 0xFFFFFFFFu;
     s_ws_fmv_cached = 0;
+    ws_scene_hold_reset(&s_ws_scene_hold);
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
     s_d24_prev_disp_h = 0;
@@ -4116,14 +4137,36 @@ static void gp0_exec_shaded_textured_tri(void) {
     }
     if (draw_area_out_bbox(vx, vy, 3)) return;
 
+    uint16_t host_bank = mod_texture_packet_bank(gp0_cmd_source_addr, gp0_cmd_buf, 9u);
+    if (host_bank && (gr_backend() != GR_BACKEND_OPENGL ||
+                      !gl_renderer_select_texture_bank(host_bank))) return;
+
     gr_set_semi_transparency(semi_trans, (int)semi_transparency);
     prepare_precise_triangle(1, 4, 7,
                              vx, vy);
     prepare_texture_triangle(1, 4, 7);
+    if (host_bank) {
+        float q[3], xy[6];
+        if (mod_texture_packet_precision(gp0_cmd_source_addr, q, xy)) {
+            gr_set_precise_triangle(1,
+                (int32_t)((xy[0] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[1] + draw_offset_y) * 65536.0f),
+                (int32_t)((xy[2] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[3] + draw_offset_y) * 65536.0f),
+                (int32_t)((xy[4] + draw_offset_x) * 65536.0f),
+                (int32_t)((xy[5] + draw_offset_y) * 65536.0f));
+            gr_set_perspective_triangle(1, q[0], q[1], q[2]);
+        }
+    }
     gr_draw_shaded_textured_triangle(vx[0], vy[0], u[0], v[0], c[0],
                                      vx[1], vy[1], u[1], v[1], c[1],
                                      vx[2], vy[2], u[2], v[2], c[2],
                                      clut_x, clut_y, tpage, raw_texture);
+    if (host_bank) (void)gl_renderer_select_texture_bank(0);
+}
+
+int psx_mod_texture_banks_supported(void) {
+    return gr_backend() == GR_BACKEND_OPENGL && gl_renderer_texture_banks_supported();
 }
 
 /* Execute shaded textured quad (GP0 0x3C-0x3F) */
@@ -6095,6 +6138,7 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     if (len != gpu_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
+    ws_scene_hold_reset(&s_ws_scene_hold);
     ws_hud_anchor_clear(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_hud_anchor_clear(ws_reveal_clear_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_repeat_rect_tag_clear(ws_repeat_rect_tags);

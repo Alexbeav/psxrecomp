@@ -16,6 +16,7 @@
 #include "gpu.h"
 #include "mdec.h"
 #include "mod_memory.h"
+#include "pst_wire.h"
 #include "sio.h"
 #include "spu.h"
 #include "timers.h"
@@ -42,6 +43,45 @@ static uint8_t mod_memory[MOD_MEMORY_SIZE];
 static uint32_t mod_memory_used;
 static uint8_t mod_gpu_dma_memory[PSX_MOD_GPU_DMA_APERTURE_SIZE];
 static uint32_t mod_gpu_dma_memory_used;
+
+uint32_t psx_mod_memory_snapshot_bytes(void) {
+    return mod_memory_used || mod_gpu_dma_memory_used
+        ? 16u + mod_memory_used + mod_gpu_dma_memory_used : 0u;
+}
+
+uint32_t psx_mod_memory_layout_cookie(void) {
+    /* Compatibility guard, not a cryptographic identity. Include aperture
+     * revision; old enabled-mod saves must be rejected before applying RAM. */
+    if (!psx_mod_memory_snapshot_bytes()) return 0u;
+    return 0x4D4F4402u ^ (mod_memory_used * 16777619u) ^ mod_gpu_dma_memory_used;
+}
+
+void psx_mod_memory_snapshot_write(uint8_t* out) {
+    PstW w;
+    if (!out || !psx_mod_memory_snapshot_bytes()) return;
+    pst_w_init(&w, out, psx_mod_memory_snapshot_bytes());
+    pst_w_u32(&w, 1u);
+    pst_w_u32(&w, PSX_MOD_GPU_DMA_APERTURE_BASE);
+    pst_w_u32(&w, mod_memory_used);
+    pst_w_u32(&w, mod_gpu_dma_memory_used);
+    memcpy(out + 16u, mod_memory, mod_memory_used);
+    memcpy(out + 16u + mod_memory_used, mod_gpu_dma_memory, mod_gpu_dma_memory_used);
+}
+
+int psx_mod_memory_snapshot_read(const uint8_t* data, uint32_t size) {
+    PstR r;
+    uint32_t version, base, cpu_bytes, dma_bytes;
+    if (!data || size < 16u || size != psx_mod_memory_snapshot_bytes()) return 0;
+    pst_r_init(&r, data, size);
+    if (!pst_r_u32(&r, &version) || !pst_r_u32(&r, &base) ||
+        !pst_r_u32(&r, &cpu_bytes) || !pst_r_u32(&r, &dma_bytes) ||
+        version != 1u || base != PSX_MOD_GPU_DMA_APERTURE_BASE ||
+        cpu_bytes != mod_memory_used || dma_bytes != mod_gpu_dma_memory_used)
+        return 0;
+    memcpy(mod_memory, data + 16u, cpu_bytes);
+    memcpy(mod_gpu_dma_memory, data + 16u + cpu_bytes, dma_bytes);
+    return 1;
+}
 
 /*
  * Trusted mods may opt into host-backed guest memory in Expansion 1. Before

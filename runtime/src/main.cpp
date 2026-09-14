@@ -1774,6 +1774,22 @@ extern "C" void psx_ws_set_native_wide(int on) {
 }
 extern "C" int psx_ws_get_native_wide(void) { return g_ws_native_wide; }
 
+/* TCP diagnostics: change the rendered view without moving, resizing, raising
+ * or focusing the user's window. Transient; never writes settings.toml. */
+extern "C" int psx_debug_display_aspect(int num, int den, int adaptive) {
+    if (adaptive) return psx_mod_set_adaptive_display_aspect(num, den);
+    if (!psx_mod_set_fixed_display_aspect(num, den)) return 0;
+    gl_renderer_set_display_aspect(num, den);
+    vk_renderer_set_display_aspect(num, den);
+    if (sdl_renderer) {
+        g_logical_w = 480 * num * g_video_scale / den;
+        SDL_RenderSetLogicalSize(sdl_renderer, g_logical_w, 480 * g_video_scale);
+    }
+    g_ws_projection_mode = -1;
+    refresh_widescreen_projection();
+    return 1;
+}
+
 static bool          g_gl_active = false;    /* GL context live -> GL present path */
 static bool          g_vk_active = false;    /* Vulkan context live -> VK present path */
 

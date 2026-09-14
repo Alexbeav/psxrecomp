@@ -1294,6 +1294,43 @@ extern "C" void mod_runtime_enable_disc_patches(void) {
     PSXRecompV4::state().disc_enabled = true;
 }
 
+extern "C" int psx_mod_read_disc_file(const char* path, void* buffer,
+                                      uint32_t capacity, uint32_t* size) {
+    using namespace PSXRecompV4;
+    if (size) *size = 0;
+    if (!path || !*path || !size || (!buffer && capacity)) return 0;
+    try {
+        const auto& s = state();
+        const auto& mount = s.effective_disc_path.empty() ? s.disc_path : s.effective_disc_path;
+        if (mount.empty()) return 0;
+        PS1::ISOReader reader;
+        PS1::ISOFileEntry entry;
+        if (!reader.Open(mount.string()) || !reader.FindFile(path, entry) ||
+            entry.is_directory || !entry.size || entry.size > 64u * 1024u * 1024u)
+            return 0;
+        if (!buffer) { *size = entry.size; return 1; }
+        if (capacity < entry.size) return 0;
+        uint8_t sector[2048], raw[2352];
+        for (uint32_t offset = 0; offset < entry.size; offset += 2048u) {
+            const uint32_t lba = entry.lba + offset / 2048u;
+            if (reader.ReadRawSector(lba, raw)) {
+                if (raw[15] != 1 && (raw[15] != 2 || (raw[18] & 0x20u))) return 0;
+                mod_runtime_patch_disc_sector(lba, 1, raw, sizeof raw);
+                std::memcpy(sector, raw + (raw[15] == 1 ? 16 : 24), sizeof sector);
+                if (raw[15] == 1) mod_runtime_patch_disc_sector(lba, 0, sector, sizeof sector);
+            } else {
+                if (!reader.ReadSector(lba, sector)) return 0;
+                mod_runtime_patch_disc_sector(lba, 0, sector, sizeof sector);
+            }
+            if (state().disc_guard_failed) return 0;
+            const uint32_t count = std::min(2048u, entry.size - offset);
+            std::memcpy(static_cast<uint8_t*>(buffer) + offset, sector, count);
+        }
+        *size = entry.size;
+        return 1;
+    } catch (...) { return 0; }
+}
+
 extern "C" void mod_runtime_activate_plugins(void) {
     using namespace PSXRecompV4;
     RuntimeMods& s = state();

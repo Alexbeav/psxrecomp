@@ -1,5 +1,8 @@
 /* Original source-owned GL readback-coherence regression. No retail payload. */
 #include "gpu_gl_renderer.c"
+#include "mod_texture_banks.c"
+uint32_t psx_mod_gpu_dma_memory_alloc(uint32_t n,uint32_t a){(void)n;(void)a;return 0;}
+uint32_t psx_mod_read_word(uint32_t a){(void)a;return 0;}
 static uint16_t image[1024*512], oracle[1024*512];
 int g_psx_vram_dirty_tracking=0;
 uint64_t s_frame_count=0;
@@ -73,6 +76,24 @@ int main(int argc,char **argv){
  check(glb_vram_read(40,40)==0,"depth24 cleared band immediate CPU read");
  check(glb_vram_read(33,33)==0x3210,"newer overlapping texture survives clear");
  verify("depth24 leave coherence without subsequent primitive");
+ /* Retained banks use their own texels AND CLUT, and bank/VRAM transitions
+  * must split batches without changing painter order. No retail assets. */
+ static uint16_t bank[256*128];
+ bank[0]=0x001f; bank[1]=0x03e0; bank[2]=0x7c00;
+ bank[16]=0x1111; /* 4-bit indices, CLUT at (0,0) */
+ check(psx_mod_define_texture_bank(7,256,128,bank),"define retained bank");
+ check(gl_renderer_select_texture_bank(7),"select retained bank");
+ glb_draw_shaded_textured_triangle(100,250,64,0,0x808080,132,250,64,0,0x808080,100,282,64,0,0x808080,0,0,0,1);
+ check(gl_renderer_select_texture_bank(0),"select original VRAM");
+ glb_vram_write(512,0,0x7c00);
+ glb_draw_shaded_textured_triangle(116,250,0,0,0x808080,148,250,0,0,0x808080,116,282,0,0,0x808080,0,0,0x108,1);
+ check(glb_vram_read(102,252)==0x03e0,"retained 4-bit CLUT independent of guest VRAM");
+ check(glb_vram_read(118,252)==0x7c00,"following stock texture wins overlap");
+ check(gl_renderer_select_texture_bank(7),"reselect retained bank");
+ glb_draw_shaded_textured_triangle(300,250,0,0,0x808080,332,250,0,0,0x808080,300,282,0,0,0x808080,0,0,0x100,1);
+ check(gl_renderer_select_texture_bank(0),"reset bank after direct texture");
+ check(glb_vram_read(302,252)==0x001f,"retained 16-bit texel");
+ verify("retained banks and original VRAM ordered together");
  printf("checks=%d failures=%d\n",checks,failures);
  gl_renderer_shutdown();SDL_DestroyWindow(win);SDL_Quit();return failures?1:0;
 }

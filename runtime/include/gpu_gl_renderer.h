@@ -18,6 +18,10 @@ extern "C" {
 /* Create the GL context on a window made with SDL_WINDOW_OPENGL.
  * Returns 1 on success, 0 to fall back to the SDL_Renderer present path. */
 int  gl_renderer_init_context(struct SDL_Window *win);
+/* Select a retained immutable bank for the next textured submission; zero
+ * selects live VRAM. Emulation/GL owning thread only. Returns 0 if unavailable. */
+int gl_renderer_select_texture_bank(uint16_t id);
+int gl_renderer_texture_banks_supported(void);
 
 /* Set the GL swap interval / vsync mode (1=vsync, 0=immediate, -1=adaptive).
  * Safe before or after context creation; applies live when a context exists. */
