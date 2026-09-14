@@ -489,9 +489,9 @@ static int find_python(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if defined(_WIN32)
     if (find_toolchain_python(out, cap))
         return 1;
-#if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
     char resolved[1100];
@@ -796,6 +796,11 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
+#if !defined(_WIN32)
+    /* Linux and macOS use native build tools. A stale Windows pack can exist
+     * in the shared cache, but it must never shadow tools from the host PATH. */
+    return;
+#endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
@@ -3338,6 +3343,47 @@ static void discard_unhealthy_active_toolchain(void) {
     }
 }
 
+#if !defined(_WIN32)
+/* Unix release kits use the host's native build tools.  The published
+ * cmake-clang-v1 archive is a Windows pack, so the setup wizard must not offer
+ * to download it on Linux or macOS. */
+static int posix_command_runs(const char* command) {
+    char cmd[1600];
+    if (!command || !command[0])
+        return 0;
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", command);
+    return run_cmd_exit_zero(cmd);
+}
+
+static int host_system_toolchain_ready(void) {
+    char python[1200], tool[1200];
+
+    if (!find_on_path("cmake", g_cmake, sizeof(g_cmake)) ||
+        !posix_command_runs(g_cmake))
+        return 0;
+    /* Do not call find_python here. A failed Windows pack can remain in the
+     * shared cache and its python.exe must not shadow native Python on Unix. */
+    if (!(find_on_path("python3", python, sizeof(python)) ||
+          find_on_path("python", python, sizeof(python))) ||
+        !posix_command_runs(python))
+        return 0;
+    if (!find_on_path("ninja", tool, sizeof(tool)) ||
+        !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("cc", tool, sizeof(tool)) ||
+          find_on_path("gcc", tool, sizeof(tool)) ||
+          find_on_path("clang", tool, sizeof(tool))) ||
+        !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("c++", tool, sizeof(tool)) ||
+          find_on_path("g++", tool, sizeof(tool)) ||
+          find_on_path("clang++", tool, sizeof(tool))) ||
+        !posix_command_runs(tool))
+        return 0;
+    return 1;
+}
+#endif
+
 static int active_toolchain_meets_min(void) {
     char pack[1400];
     if (!g_toolchain_bin[0] && !resolve_toolchain_bin(g_toolchain_bin,
@@ -3370,6 +3416,9 @@ static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
     g_tc_repair_note[0] = '\0';
+#if !defined(_WIN32)
+    return host_system_toolchain_ready();
+#endif
     migrate_legacy_psxrecomp_toolchain();
     /* Wizard open: drop broken latest/ before treating the pack as ready. */
     heal_broken_toolchain_pointers();
@@ -3541,6 +3590,9 @@ static int host_toolchain_update_available(char* local_ver, size_t local_cap,
         local_ver[0] = '\0';
     if (remote_ver && remote_cap)
         remote_ver[0] = '\0';
+#if !defined(_WIN32)
+    return 0;
+#endif
     if (skip && skip[0] && skip[0] != '0')
         return 0;
     if (!g_project_root[0])
@@ -3571,6 +3623,16 @@ static int host_ensure_toolchain_with_progress(
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
+#if !defined(_WIN32)
+    if (on_progress)
+        on_progress(progress_ctx, 0.02f, "Checking native build tools…");
+    if (host_system_toolchain_ready())
+        return 1;
+    snprintf(err_msg, err_cap,
+             "Native build tools are missing. Install CMake, Ninja, Python, "
+             "and C/C++ compilers, then restart setup.");
+    return 0;
+#endif
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
     if (!force && host_portable_cmake_ready())
