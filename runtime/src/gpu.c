@@ -3161,12 +3161,6 @@ void gpu_vblank_tick(void) {
     /* Trusted package-selected plugins run on guest VBlank, independent of
      * host presentation, pacing, turbo, or skipped frames. */
     mod_runtime_on_vblank();
-    /* Ape LOAD: RAM-only libcard waiter + idle-skip can starve sio_tick /
-     * interrupt-check pumps; VBlank always runs. */
-    {
-        extern void sio_ape_card_unstick_pump(void);
-        sio_ape_card_unstick_pump();
-    }
     psx_irq_raise(0, 0); /* IRQ_VBLANK (gpu_vblank_tick) */
     if (!vblank_callback)
         return;
@@ -4681,7 +4675,9 @@ static void gp0_exec_cpu_to_vram(void) {
     vram_write_w = (w == 0) ? 0x400 : (uint16_t)w;
     vram_write_h = (h == 0) ? 0x200 : (uint16_t)h;
 
-    /* Record for debug */
+    /* A full history retains old uploads; later transfers must not append
+     * to the last slot and overflow its diagnostic word counter. */
+    a0_capture_slot = -1;
     if (a0_history_count < A0_HISTORY_CAP) {
         int slot = a0_history_count++;
         a0_history[slot].x = vram_write_x;
