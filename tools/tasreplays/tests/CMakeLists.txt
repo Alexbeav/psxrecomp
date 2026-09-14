@@ -22,6 +22,8 @@ add_test(NAME tas_diverge_trace COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_diverge_trace.py")
 add_test(NAME tas_qualified_hunks COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_qualified_hunks.py")
+add_test(NAME tas_archive_run COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_archive_run.py")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(STATUS "TAS model fixtures currently require GCC")
     return()

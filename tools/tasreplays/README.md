@@ -191,6 +191,26 @@ replay. New fixes are added with `seed --commit SHA --id ID --titles ...
 --as-of 227e9057`; blocks a later commit rewrote are split into the sub-runs
 that survive and the entry is marked `evolved`.
 
+## Archiving a run
+
+`python tools/tasreplays/archive_run.py <run-dir> <archive-name> [--evidence-root DIR]
+[--mailbox DIR] [--dry-run] [--label TEXT]` copies a finished run directory into
+`<evidence-root>/<archive-name>/runs/<run>/` (default root
+`Z:\Share\psxrecomp	as-evidence`, or `PSX_TAS_EVIDENCE`), verifies every copied
+file by SHA-256 and byte total, copies the sibling ladder/prefix receipts and the
+project's `setup.json`/`game.toml`/`bios.toml`/`input.json` into `runs/` and
+`builds/<project>/`, and appends the new files to the archive's `SHA256SUMS.txt`
+without ever rewriting an existing hash (a conflicting hash fails before anything
+is copied; an identical existing copy is reported as already archived). It then
+writes `runs/<run>.archive.json` and, under `notes/`, a mailbox note
+(`YYYYMMDD-HHMM-<AUTHOR>-<title>-<run>.md`, dropped into `--mailbox DIR` with its
+`.md.sha256` sidecar only when that flag is given) and a one-paragraph board
+amendment that is also printed. The summary restates the run's own receipt
+(`source-comparison.json` or `verification.json`, the `streaming` block, the
+binary identity fields, ladder and setup receipts when present): it archives
+evidence and drafts notes; it qualifies nothing. `--dry-run` prints the summary,
+the planned paths and both texts without writing.
+
 ## Tests without retail assets
 
 ```powershell
