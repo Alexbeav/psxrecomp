@@ -92,12 +92,25 @@ The drive and source memory-card/DualShock profiles admit checkpoint diagnostics
 See [TAS checkpoints](TAS_CHECKPOINTS.md#debugging-a-late-mismatch) for same-build
 and compatible-build resume. Device state encoding and component tests do not
 qualify full Biohazard continuation; cold-versus-resumed evidence is required.
+That evidence now exists for the ending tail: a compatible-build resume from the
+return-233,500 state reproduces the uninterrupted run's raw RAM byte for byte at
+returns 233,567, 233,568, 233,569, 235,000 and 239,202, and all 5,702 resumed
+returns match the admitted reference. The persisted card file of a resumed run
+covers only post-resume writes and is not comparable to a cold terminal card.
 
-The measured Bio Hazard RAM-page/clock prefix has advanced from return 463
-to 233,567. Full execution now reaches all 239,202 returns and exits cleanly;
-the first state/clock difference is at 233,568 in the neutral ending tail.
-The native return clock is one cycle earlier, with two differing RAM pages.
-Terminal RAM differs by nine bytes; the persisted memory card matches.
+The measured Bio Hazard RAM-page/clock prefix now covers all 239,202 returns.
+A cold full-route replay executes to the declared endpoint, exits cleanly, and
+every compared return matches the admitted stock reference on RAM page hashes
+and return clocks with no divergence; terminal RAM and the persisted memory
+card both match.
+
+The last correction was timing an explicit seek from the physical read head.
+An established read keeps the source's CurSector two sectors ahead of the
+sector handed to the guest, so a mid-read SeekL timed from the delivery cursor
+travelled two sectors too far and completed 209 cycles late. That pushed the
+driver's following ReadS past the return boundary and left the guest one CD
+command behind for the rest of the ending tail, which surfaced as a one-cycle
+clock difference and nine differing terminal RAM bytes at return 233,568.
 All forty-six raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
