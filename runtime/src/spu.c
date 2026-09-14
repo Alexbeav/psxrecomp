@@ -1794,6 +1794,12 @@ uint32_t spu_ram_peek(uint32_t addr, uint8_t *out, uint32_t len) {
     return len;
 }
 
+/* Hot-path accessor for the sample-event service: SPUCNT alone, no struct
+ * build. Same value spu_get_global_state() reports in ->ctrl. */
+uint16_t spu_get_ctrl(void) {
+    return spu_regs[reg_index(0x1F801DAAu)];
+}
+
 void spu_get_global_state(SpuGlobalState* out) {
     if (!out) return;
     memset(out, 0, sizeof(*out));

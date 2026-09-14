@@ -75,6 +75,7 @@ void psx_event_step_conservative_env_init(void) {
 }
 
 static void advance_devices(uint32_t c) {
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* device state may change below */
     psx_cycle_count += (uint64_t)c;
     sio_advance(c);
     cdrom_advance(c);
@@ -177,8 +178,29 @@ uint32_t psx_idle_cycles_to_next_observable_event(void) {
     return devices_cycles_to_next_idle_event();
 }
 
+/* Device-state generation (step 4b of the TAS speed task). Bumped whenever
+ * device state can change: any device advance, scheduled-event service, MMIO
+ * access (reads with side effects at the top, writes on wrapper exit) and the
+ * explicit deadline-dirty sites. While it is unchanged, every device's next
+ * internal event is at the same absolute clock, so the seven countdown queries
+ * need not be repeated on every block leader. Enabled by PSX_DEADLINE_CACHE=1
+ * (run_native.py --deadline-cache on); default recomputes exactly as before. */
+uint64_t g_psx_device_gen;
+int g_psx_deadline_cache = -1;
+static uint64_t s_deadline_cache_gen = ~0ull, s_deadline_cache_abs;
+uint64_t g_psx_deadline_cache_hits, g_psx_deadline_cache_misses;
 static void psx_devices_recompute_deadline(void) {
-    uint32_t next = devices_cycles_to_next_internal_event();
+    if (g_psx_deadline_cache < 0) { const char *e = getenv("PSX_DEADLINE_CACHE"); g_psx_deadline_cache = (e && e[0] == '1') ? 1 : 0; }
+    uint32_t next;
+    if (g_psx_deadline_cache && s_deadline_cache_gen == g_psx_device_gen) {
+        g_psx_deadline_cache_hits++;
+        next = s_deadline_cache_abs > psx_cycle_count ? (uint32_t)(s_deadline_cache_abs - psx_cycle_count) : 1u;
+    } else {
+        g_psx_deadline_cache_misses++;
+        next = devices_cycles_to_next_internal_event();
+        s_deadline_cache_gen = g_psx_device_gen;
+        s_deadline_cache_abs = psx_cycle_count + (uint64_t)next;
+    }
     if (next > PSX_DEADLINE_HARD_CAP) next = PSX_DEADLINE_HARD_CAP;
     psx_next_service_cycle = psx_cycle_count + (uint64_t)next;
 }
@@ -245,6 +267,7 @@ void psx_devices_service_to_now(void) {
  * advance through service_to_now even when already synced — MotK FMV pays
  * that on every GPU/CD/MDEC MMIO touch. Recompute here instead. */
 void psx_devices_mmio_sync(void) {
+    g_psx_device_gen++;   /* MMIO reads can have side effects; writes bump again on wrapper exit */
     psx_cyc_batch_flush();
     if (s_devices_synced_cycle != psx_cycle_count) {
         psx_devices_service_to_now();

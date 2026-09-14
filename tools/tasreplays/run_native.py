@@ -235,6 +235,15 @@ def main():
                         help="experimental source timer2 clock/IRQ state; requires source timer1; timer0 IRQ modes and restore reject")
     parser.add_argument("--precise-slice", choices=("off", "on"), default="off",
                         help="Experimental existing instruction-boundary IRQ slicer; RAM BIOS guard requires the qualified candidate emitter")
+    parser.add_argument("--slice-gpu-deadline", choices=("tick", "phase"), default="tick",
+                        help="precise-slice GPU deadline: the service clock's 128-cycle tick (qualified) or the raster phase edge (step-2 candidate)")
+    parser.add_argument("--slice-bound", choices=("steal", "nosteal", "icache", "none"), default="steal",
+                        help="precise-slice block bound: 240 cycles per access (qualified); 40 while no source DMA transfer is live (step-2); "
+                             "icache = nosteal + refill charged per I-cache line from the live tags (step-3); none = no deadline slicing (step-3 probe)")
+    parser.add_argument("--deadline-cache", choices=("off", "on"), default="off",
+                        help="step-4b: reuse device deadlines while the device-state generation is unchanged (PSX_DEADLINE_CACHE=1)")
+    parser.add_argument("--slot-take", choices=("off", "on"), default="off",
+                        help="take interrupts at compiled delay-slot boundaries the way exec_delay_slot does (PSX_SLICE_SLOT_TAKE=1)")
     args = parser.parse_args()
     if args.speed != "1" and not args.show:
         parser.error('--speed requires --show; headless playback is already uncapped')
@@ -467,6 +476,14 @@ p2_mode = "digital"
     if args.timer2_model!='default':
         selected_env['PSX_TIMER2_MODEL']=args.timer2_model
     selected_env['PSX_PRECISE_SLICE']='1' if args.precise_slice=='on' else '0'
+    if args.slice_gpu_deadline != 'tick':
+        selected_env['PSX_SLICE_GPU_DEADLINE'] = args.slice_gpu_deadline
+    if args.slice_bound != 'steal':
+        selected_env['PSX_SLICE_BOUND'] = args.slice_bound
+    if args.deadline_cache == 'on':
+        selected_env['PSX_DEADLINE_CACHE'] = '1'
+    if args.slot_take == 'on':
+        selected_env['PSX_SLICE_SLOT_TAKE'] = '1'
     if args.save_state_at:
         selected_env['PSX_TAS_SAVE_STATE_AT'] = ','.join(str(f) for f in args.save_state_at)
     if args.resume_from is not None:

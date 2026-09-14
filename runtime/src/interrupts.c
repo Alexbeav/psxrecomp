@@ -559,9 +559,10 @@ void psx_spu_sample_event_service(void) {
     g_spu_sample_service_checks++;
     if (!spu_sample_event_mode() || !s_midframe_audio_pump)
         return;
-    SpuGlobalState state;
-    spu_get_global_state(&state);
-    if ((state.ctrl & 0x0040u) != 0) {
+    /* Step-4c: read SPUCNT directly instead of building the full global-state
+     * struct (memset + ~20 register reads) on every sample-event service. */
+    extern uint16_t spu_get_ctrl(void);
+    if ((spu_get_ctrl() & 0x0040u) != 0) {
         g_spu_sample_enabled_services++;
         g_spu_sample_last_service_phase = (uint32_t)(psx_cycle_count % 768u);
     }
@@ -606,6 +607,7 @@ static void fire_vblank_edge(void) {
 }
 
 void interrupts_service_scheduled_events(void) {
+    { extern uint64_t g_psx_device_gen; g_psx_device_gen++; }   /* scheduled events may fire below */
     note_sio_progress_cycle();
     /* A source raster edge latches I_STAT even while an interrupt handler
      * runs with IEc clear. CPU delivery remains gated separately below. */
@@ -1329,6 +1331,9 @@ int psx_interrupt_cooldown_active(void) {
     return post_exception_cooldown_until != 0 &&
            psx_get_cycle_count() < post_exception_cooldown_until;
 }
+/* Nonzero while delivery fetches the handler's first instruction (see the take
+ * path); the compiled-code IRQ handoff in source_gpu_runtime.c tests it. */
+int g_psx_irq_delivering;
 
 int psx_interrupt_delivery_needed(const CPUState* cpu) {
     if (s_defer_switch_pending) { s_need_defer++; return 1; }
@@ -1825,7 +1830,11 @@ irq_deliver_eval:
             dirty_ram_checkpoint_enter(fetch_pc, source_irq_slot.pc != 0u,
                 source_irq_slot.pc ? source_irq_slot.target : 0u,
                 source_irq_slot.pc && (source_irq_slot.cause & 0x40000000u));
-            psx_icache_fetch(cpu, fetch_pc);
+            /* This fetch reaches the CPU boundary callback before in_exception is
+             * set; the compiled-code IRQ handoff must not re-enter delivery here. */
+            { extern int g_psx_irq_delivering; g_psx_irq_delivering++;
+              psx_icache_fetch(cpu, fetch_pc);
+              g_psx_irq_delivering--; }
             dirty_ram_checkpoint_leave();
 #ifdef PSX_ENABLE_BLOCK_CYCLES
             /* Interrupt dispatch has no dependencies on the preempted opcode.

@@ -486,6 +486,7 @@ void input_route_observer_boundary(uint32_t completed, uint64_t runtime_frame) {
         close_observation_json(done);
         if (fclose(done)) fail("completion close");
         fprintf(stdout, "input_route_complete: frames=%u words_sha256=%s\n", completed, applied_hash);
+        { extern void psx_slice_diag_write(const char *dir); psx_slice_diag_write(output_dir); }
         fflush(stdout);
         exit(0);
     }
