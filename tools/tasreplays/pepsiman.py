@@ -20,6 +20,10 @@ from bk2_to_psxrti import convert
 import tekken3
 from compare_ram_pages import read_pages
 from observation_evidence import compare_returns, terminal_consistency, compare_stock_observations, captured_frames
+from replay_prefix import native_span, write_prefix_route, compare_prefix_returns, parse_ladder, run_ladder
+from launch_identity import resolve_binary, receipt_fields, add_launch_arguments, check_launch_arguments, run_native_arguments
+from run_native import route_identity
+from stream_compare import Watcher, page_reference
 
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parent.parent
@@ -304,10 +308,13 @@ renderer = "software"
     write(project/'setup.json',info)
     print(json.dumps({'candidate':str(build),'sha256':digest(build)}))
 
-def run(args):
+def replay(args,returns=None,output=None):
+    """One replay: full when returns is None or the endpoint, otherwise a diagnostic prefix."""
+    output=args.output if output is None else Path(output)
     info=json.loads((args.project/'setup.json').read_text())
     for binding in info['bindings']: tekken3.require_hash(Path(binding['path']),binding['sha256'])
-    tekken3.require_hash(Path(info['executable']),info['executable_sha256'])
+    if args.exe is None and args.diagnostic_binary is None: tekken3.require_hash(Path(info['executable']),info['executable_sha256'])
+    binary=resolve_binary(info['executable'],info['executable_sha256'],args.exe,args.diagnostic_binary)
     reference=None
     observation_end=FRAMES
     if args.reference:
@@ -319,49 +326,94 @@ def run(args):
         observation_end=reference['observed_returns']
         if type(observation_end) is not int or not FRAMES<=observation_end<=FRAMES+6000:
             raise ValueError('invalid reference boundary')
-    argv=[sys.executable,HERE/'run_native.py',args.output,'--exe',info['executable'],
-          '--game',info['game'],'--disc',info['disc'],'--bios',info['bios'],'--route',info['route'],
-          '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(observation_end-FRAMES+1),'--timeout',str(args.timeout),
+    wanted=observation_end if returns is None else returns
+    # Full: records=FRAMES, tail=observation_end-FRAMES+1 exactly as before; prefix: N+1 records, no tail.
+    records,tail=native_span(FRAMES,observation_end,wanted)
+    prefix=wanted<observation_end
+    route=Path(info['route']);words_sha=WORDS_SHA
+    if prefix:
+        output.parent.mkdir(parents=True,exist_ok=True)
+        route=write_prefix_route(route,records,output.with_name(output.name+'-input.psxrti'))
+        words_sha=route_identity(route)['words_sha256']
+    argv=[sys.executable,HERE/'run_native.py',output,'--exe',binary['path'],
+          '--game',info['game'],'--disc',info['disc'],'--bios',info['bios'],'--route',route,
+          '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(tail),'--timeout',str(args.timeout),
           '--storage-budget-mib','1536','--cd-cdda-model','octoshock-2.3','--mdec-source-model','octoshock-2.3',
-          '--checkpoint-every','1200','--renderer','software',*tekken3.PROFILE]
+          '--checkpoint-every','1200','--renderer','software',*run_native_arguments(args,binary),*tekken3.PROFILE]
     # The same native implementations are an explicit candidate: all psx/
     # source bytes match 2.2.2 -> 2.3, but this title still needs its own gates.
     if args.show: argv.append('--show')
-    if reference: argv += ['--ram-snapshot-frame',str(observation_end)]
-    args.output.parent.mkdir(parents=True,exist_ok=True)
-    if args.output.exists(): raise ValueError('choose a fresh native output directory')
-    log=args.output.parent/(args.output.name+'-launch.log')
-    with log.open('x') as stream:
-        process=subprocess.run([str(v) for v in argv],cwd=ROOT,stdout=stream,stderr=subprocess.STDOUT)
+    if reference: argv += ['--ram-snapshot-frame',str(wanted)]
+    output.parent.mkdir(parents=True,exist_ok=True)
+    if output.exists(): raise ValueError('choose a fresh native output directory')
+    log=output.parent/(output.name+'-launch.log')
+    # Streaming evidence only: it may stop the process early, never decide a pass.
+    watcher=None
+    if reference:
+        watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted),wanted,stop_on_divergence=args.stop_on_divergence)
+        watcher.start()
+    try:
+        with log.open('x') as stream:
+            process=subprocess.run([str(v) for v in argv],cwd=ROOT,stdout=stream,stderr=subprocess.STDOUT)
+    finally:
+        streaming=watcher.finish() if watcher else None
     report={'status':'incomplete','original_inputs':FRAMES,'compared_returns':0,
-            'end_frame':observation_end+1,'source_observation_end':observation_end,
-            'native_runner_exit':process.returncode,'first_divergence':None,
-            'scope':'unchanged original inputs and declared neutral ending; full RAM/clock source compatibility'}
+            'end_frame':wanted+1,'source_observation_end':observation_end,'observed_returns':wanted,
+            'diagnostic_prefix':prefix,'full_original_input_and_tail':not prefix,
+            'native_runner_exit':process.returncode,'first_divergence':None,'mechanical_match':False,
+            **receipt_fields(binary),'streaming':streaming,
+            'scope':('diagnostic prefix of unchanged original inputs; no ending or terminal RAM claim' if prefix else
+                     'unchanged original inputs and declared neutral ending; full RAM/clock source compatibility')}
     if reference:
         try:
-            comparison=compare_returns(Path(reference['ram_pages']),args.output/'ram-pages.tsv',observation_end)
-            report.update({k:v for k,v in comparison.items() if k!='match'})
-            complete=json.loads((args.output/'complete.json').read_text())
-            report['input_identity_matches']=(complete['input_frames']==FRAMES and complete['applied_words_sha256']==WORDS_SHA
-                and complete['frame']==observation_end+1 and complete['neutral_tail_ticks']==observation_end-FRAMES+1)
-            raw=terminal_consistency(Path(reference['ram_pages']),Path(reference['terminal_ram']),observation_end)
-            actual=terminal_consistency(args.output/'ram-pages.tsv',args.output/f'ram-frame-{observation_end:06d}.bin',observation_end)
-            report['terminal_ram_matches']=actual==raw
-            okay=process.returncode==0 and report['input_identity_matches'] and report['terminal_ram_matches']
-            okay=okay and comparison['match']
+            if prefix:
+                comparison=compare_prefix_returns(Path(reference['ram_pages']),output/'ram-pages.tsv',wanted)
+                report.update({k:v for k,v in comparison.items() if k!='match'})
+                complete=json.loads((output/'complete.json').read_text())
+                report['input_identity_matches']=(complete['input_frames']==records and complete['applied_words_sha256']==words_sha
+                    and complete['frame']==wanted+1 and complete['neutral_tail_ticks']==0)
+                okay=process.returncode==0 and report['input_identity_matches'] and comparison['match']
+            else:
+                comparison=compare_returns(Path(reference['ram_pages']),output/'ram-pages.tsv',observation_end)
+                report.update({k:v for k,v in comparison.items() if k!='match'})
+                complete=json.loads((output/'complete.json').read_text())
+                report['input_identity_matches']=(complete['input_frames']==FRAMES and complete['applied_words_sha256']==WORDS_SHA
+                    and complete['frame']==observation_end+1 and complete['neutral_tail_ticks']==observation_end-FRAMES+1)
+                raw=terminal_consistency(Path(reference['ram_pages']),Path(reference['terminal_ram']),observation_end)
+                actual=terminal_consistency(output/'ram-pages.tsv',output/f'ram-frame-{observation_end:06d}.bin',observation_end)
+                report['terminal_ram_matches']=actual==raw
+                okay=process.returncode==0 and report['input_identity_matches'] and report['terminal_ram_matches']
+                okay=okay and comparison['match']
+            report['mechanical_match']=bool(okay)
             report['status']='pass' if okay else 'fail'
         except (ValueError,OSError,KeyError) as error:
             report.update(status='fail',error=str(error))
     elif process.returncode:
         report['status']='fail'
-    if (args.output/'exit.json').exists():
-        host=json.loads((args.output/'exit.json').read_text())
+    if report['status']=='pass':
+        # A non-setup binary or a prefix never claims the qualifying full pass.
+        if not binary['binary_matches_setup']: report['status']='diagnostic'
+        elif prefix: report['status']='prefix_pass'
+    if (output/'exit.json').exists():
+        host=json.loads((output/'exit.json').read_text())
         if host.get('timed_out') or host.get('stop_reason') in {'host_timeout','host_storage_budget'}:
             report.update(status='incomplete',host_limit=host.get('stop_reason') or 'host_timeout',
                           classification='host resource limit; no guest failure inferred')
-    write(args.output/'verification.json',report)
+    write(output/'verification.json',report)
     print(json.dumps(report))
-    return 0 if report['status']=='pass' else 2 if report['status']=='incomplete' else 1
+    return report
+
+def run(args):
+    check_launch_arguments(args)
+    if args.ladder is not None:
+        if not args.reference: raise ValueError('--ladder requires --reference')
+        observation_end=json.loads(args.reference.read_text()).get('observed_returns')
+        if type(observation_end) is not int: raise ValueError('invalid reference boundary')
+        report=run_ladder(args.output,parse_ladder(args.ladder,observation_end),observation_end,
+                          lambda returns,target:replay(args,returns,target),write)
+        return 0 if report['status']=='pass' else 1
+    report=replay(args,args.returns)
+    return 0 if report['status'] in ('pass','prefix_pass') else 2 if report['status']=='incomplete' else 1
 
 def reference(args):
     stock=args.stock.resolve(strict=True)
@@ -413,6 +465,7 @@ def main():
     r.add_argument('--timeout',type=int,default=43200)
     r.add_argument('--show',action='store_true')
     r.add_argument('--reference',type=Path)
+    add_launch_arguments(r)
     ref=sub.add_parser('reference')
     for field in ['stock','observed','output']: ref.add_argument('--'+field,type=Path,required=True)
     args=p.parse_args()

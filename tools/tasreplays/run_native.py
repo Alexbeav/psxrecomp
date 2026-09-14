@@ -129,6 +129,7 @@ def main():
                         help="experimental prediction only; actual packet/context acceptance stays authoritative")
     parser.add_argument("--checkpoint-every", type=int, default=300)
     parser.add_argument('--storage-budget-mib',type=int,help='Stop with host_storage_budget if diagnostic output exceeds this bound')
+    parser.add_argument('--expected-exe-sha256',help='refuse to launch unless the staged executable copy has exactly this SHA-256')
     parser.add_argument("--watch-u16", type=lambda x: int(x, 0), action="append", default=[],
                         help="read a physical RAM u16 before each next input (max32)")
     parser.add_argument("--record-frame", type=int,
@@ -229,6 +230,10 @@ def main():
         raise ValueError("checkpoint interval outside 1..10000")
     if args.storage_budget_mib is not None and not 1<=args.storage_budget_mib<=16384:
         raise ValueError('storage budget must be in 1..16384 MiB')
+    if args.expected_exe_sha256 is not None:
+        args.expected_exe_sha256=args.expected_exe_sha256.lower()
+        if len(args.expected_exe_sha256)!=64 or any(c not in '0123456789abcdef' for c in args.expected_exe_sha256):
+            raise ValueError('expected executable SHA-256 must be 64 hex digits')
     if len(args.watch_u16) > 32 or len(set(args.watch_u16)) != len(args.watch_u16) or any(
             a < 0 or a > 0x1ffffe or a % 2 for a in args.watch_u16):
         raise ValueError("watch addresses must be unique aligned physical RAM u16 offsets (max32)")
@@ -304,8 +309,12 @@ def main():
     # A private copy also freezes the executable while later builds proceed.
     launch_exe = run / paths["exe"].name
     shutil.copyfile(paths["exe"], launch_exe)
-    if digest(launch_exe) != digest(paths["exe"]):
+    staged_sha = digest(launch_exe)
+    if staged_sha != digest(paths["exe"]):
         raise ValueError("staged executable differs")
+    # Binary identity gate: after staging, before settings, manifest and launch.
+    if args.expected_exe_sha256 is not None and staged_sha != args.expected_exe_sha256:
+        raise ValueError(f'staged executable {launch_exe} has SHA-256 {staged_sha}; expected {args.expected_exe_sha256}')
     staged_card = None
     if initial_card:
         (run / 'cards').mkdir()
@@ -477,6 +486,8 @@ p2_mode = "digital"
         "update_decisions_sha256":digest(args.update_decisions) if args.update_decisions else None,
         "inputs": {name: {"path": str(path), "sha256": digest(path)}
                    for name, path in paths.items()},
+        "staged_executable": {"path": str(launch_exe), "sha256": staged_sha},
+        "expected_exe_sha256": args.expected_exe_sha256,
         "route": identity, "psx_environment": selected_env,
         "initial_card1":initial_card,
         "staged_card1":str(staged_card) if staged_card else None,
@@ -499,12 +510,21 @@ p2_mode = "digital"
         write_json(run / "process.json", {"pid": process.pid})
         print(f"Native PID {process.pid}; evidence: {run}", flush=True)
         from process_budget import wait_budgeted
+        # A harness (e.g. stream_compare) stops playback by publishing <run>/stop-request.json.
+        stop_path=run/'stop-request.json';stop_request={}
+        def harness_stop():
+            if not stop_path.exists():return None
+            try:stop_request['content']=json.loads(stop_path.read_text(encoding='utf-8'))
+            except (OSError,ValueError) as error:stop_request['content']={'unreadable':str(error)}
+            return 'harness_stop'
         budget=wait_budgeted(process,run,args.timeout,
-                             args.storage_budget_mib*1024**2 if args.storage_budget_mib is not None else None)
+                             args.storage_budget_mib*1024**2 if args.storage_budget_mib is not None else None,
+                             stop_requested=harness_stop)
         code=budget['exit_code']
         timed_out=budget['stop_reason']=='host_timeout'
     write_json(run / "exit.json", {"pid": process.pid, "exit_code": code,
-               "stop_reason":budget['stop_reason'],"diagnostic_inventory":budget['last_inventory'],
+               "stop_reason":budget['stop_reason'],"stop_request":stop_request.get('content'),
+               "diagnostic_inventory":budget['last_inventory'],
                "timed_out": timed_out, "host_seconds": time.monotonic() - start,
                "completion_exists": (run / "complete.json").exists()})
     complete = None

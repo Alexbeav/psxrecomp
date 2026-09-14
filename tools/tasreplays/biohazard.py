@@ -10,6 +10,9 @@ import nymashock_admission as source
 from observation_evidence import terminal_consistency
 from run_native import route_identity
 from tekken3 import command,require_hash,write_json
+from replay_prefix import native_span,write_prefix_route,parse_ladder,run_ladder
+from launch_identity import resolve_binary,receipt_fields,add_launch_arguments,check_launch_arguments,run_native_arguments
+from stream_compare import Watcher,page_reference
 
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parent.parent
 BOOT='SLPS_009.98'
@@ -99,13 +102,7 @@ def boot_program(track):
     if hashlib.sha256(data).hexdigest()!=EXE_SHA:raise ValueError('wrong Bio Hazard executable')
     return data
 
-def native_span(input_frames,source_endpoint,wanted):
-    """The native completion hook precedes its last return observation."""
-    if any(type(x) is not int for x in (input_frames,source_endpoint,wanted)) or not 1<=input_frames<=source_endpoint or not 1<=wanted<=source_endpoint:
-        raise ValueError('invalid input/source/native boundary')
-    if wanted==source_endpoint:return input_frames,source_endpoint-input_frames+1
-    if wanted>=input_frames:raise ValueError('use full replay for the ending tail')
-    return wanted+1,0
+# native_span lives in replay_prefix and is re-exported here for existing importers.
 
 def compare_terminal_observations(run,reference,endpoint):
     """Keep independently observed RAM and persisted-card failures distinct."""
@@ -207,42 +204,45 @@ renderer = "software"
           'qualification':'candidate only; source/native timing and gameplay unqualified'}
     write_json(project/'setup.json',info);print(json.dumps({'candidate':str(build),'sha256':source.digest(build)}))
 
-def run(args):
-    args.output=args.output.resolve()
+def replay(args,returns=None,output=None):
+    """One replay: full when returns is None or the endpoint, otherwise a diagnostic prefix."""
+    output=(args.output if output is None else Path(output)).resolve()
     setup_path=args.setup.resolve(strict=True);info=source.read(setup_path)
     if info.get('schema')!='biohazard-tas-candidate-v1':raise ValueError('wrong Bio Hazard candidate')
     for binding in info['bindings']:require_hash(Path(binding['path']),binding['sha256'])
-    require_hash(Path(info['executable']),info['executable_sha256'])
+    if args.exe is None and args.diagnostic_binary is None:require_hash(Path(info['executable']),info['executable_sha256'])
+    binary=resolve_binary(info['executable'],info['executable_sha256'],args.exe,args.diagnostic_binary)
     reference=verify_reference(Path(info['reference']));endpoint=reference['observed_returns']
     if info['profile']!=PROFILE:raise ValueError('candidate profile differs; build a new candidate')
-    if args.output.exists():raise ValueError('fresh output required')
-    args.output.parent.mkdir(parents=True,exist_ok=True)
-    wanted=endpoint if args.returns is None else args.returns
+    if output.exists():raise ValueError('fresh output required')
+    output.parent.mkdir(parents=True,exist_ok=True)
+    wanted=endpoint if returns is None else returns
     records,tail=native_span(source.FRAMES,endpoint,wanted)
     route=Path(info['route']);identity=route_identity(route)
     if identity.get('format')!='PSXRTI2' or identity['frames']!=source.FRAMES or identity['original_controller_sha256']!=CONTROLLER_SHA:
         raise ValueError('candidate does not contain the full original controller route')
     if wanted<endpoint:
-        data=route.read_bytes();short=args.output.with_name(args.output.name+'-input.psxrti2')
-        with short.open('xb') as f:
-            f.write(struct.pack('<8sIIII',b'PSXRTI2\0',2,12,records,0));f.write(data[24:24+12*records])
-        route=short
-    argv=[sys.executable,str(HERE/'run_native.py'),str(args.output),'--exe',info['executable'],'--game',info['game'],
+        route=write_prefix_route(route,records,output.with_name(output.name+'-input.psxrti2'))
+    argv=[sys.executable,str(HERE/'run_native.py'),str(output),'--exe',binary['path'],'--game',info['game'],
           '--route',str(route),'--disc',info['disc'],'--bios',info['bios'],'--card1',info['card1'],
           '--cd-source-clock-tape',info['tape'],'--neutral-tail',str(tail),'--timeout',str(args.timeout),
           '--checkpoint-every','1200','--renderer','software','--storage-budget-mib','3072',
-          '--ram-snapshot-frame',str(wanted),*PROFILE]
-    result=subprocess.run(argv)
-    if not args.output.is_dir():raise RuntimeError('native launcher rejected before creating its evidence directory')
+          '--ram-snapshot-frame',str(wanted),*run_native_arguments(args,binary),*PROFILE]
+    # Streaming evidence only: it may stop the process early, never decide a pass.
+    watcher=Watcher(output,page_reference(Path(reference['ram_pages']),wanted),wanted,stop_on_divergence=args.stop_on_divergence)
+    watcher.start()
+    try:result=subprocess.run(argv)
+    finally:streaming=watcher.finish()
+    if not output.is_dir():raise RuntimeError('native launcher rejected before creating its evidence directory')
     comparison=None
-    if (args.output/'ram-pages.tsv').exists():
+    if (output/'ram-pages.tsv').exists():
         # Prefix comparison reads the same independent source, bounded to the
         # diagnostic endpoint; full playback never drops original inputs.
         from compare_ram_pages import read_pages
         from itertools import islice,zip_longest
         first=None;counts=[0,0]
         try:
-            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),wanted),read_pages(args.output/'ram-pages.tsv')):
+            for left,right in zip_longest(islice(read_pages(Path(reference['ram_pages'])),wanted),read_pages(output/'ram-pages.tsv')):
                 counts[0]+=left is not None;counts[1]+=right is not None
                 if first is None and left!=right:
                     first={'frame':(left or right)[0],'source_cycle':left[1] if left else None,'native_cycle':right[1] if right else None,
@@ -252,23 +252,37 @@ def run(args):
             comparison={'match':False,'returns':counts,'first_divergence':first,'observation_error':str(error)}
     terminal_match=None;terminal_card_match=None;terminal_error=None
     if wanted==endpoint and result.returncode==0:
-        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(args.output,reference,wanted)
-    receipt={'candidate_sha256':info['executable_sha256'],'source_reference':source.bind(Path(info['reference'])),
+        terminal_match,terminal_card_match,terminal_error=compare_terminal_observations(output,reference,wanted)
+    mechanical=bool(result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or (terminal_match and terminal_card_match)))
+    status=('fail' if not mechanical else 'diagnostic' if not binary['binary_matches_setup'] else 'prefix_pass' if wanted<endpoint else 'pass')
+    receipt={'candidate_sha256':binary['binary_sha256'],**receipt_fields(binary),'source_reference':source.bind(Path(info['reference'])),
              'diagnostic_prefix':wanted<endpoint,'original_input_prefix_unchanged':True,'full_original_input_and_tail':wanted==endpoint,
              'observed_returns':wanted,'native_input_exit':result.returncode,'comparison':comparison,'terminal_ram_match':terminal_match,
              'terminal_card1_match':terminal_card_match,'terminal_observation_error':terminal_error,
+             'mechanical_match':mechanical,'status':status,'first_divergence':comparison['first_divergence'] if comparison else None,
+             'streaming':streaming,
              'qualification':'mechanical comparison only; ending/semantic review and repeated gameplay remain required'}
-    write_json(args.output/'source-comparison.json',receipt)
+    write_json(output/'source-comparison.json',receipt)
     print(json.dumps(receipt))
-    return 0 if result.returncode==0 and comparison and comparison['match'] and (wanted<endpoint or (terminal_match and terminal_card_match)) else 1
+    return receipt
+
+def run(args):
+    check_launch_arguments(args)
+    if args.ladder is not None:
+        info=source.read(args.setup.resolve(strict=True));endpoint=source.read(Path(info['reference'])).get('observed_returns')
+        if type(endpoint) is not int:raise ValueError('invalid source reference endpoint')
+        report=run_ladder(args.output.resolve(),parse_ladder(args.ladder,endpoint),endpoint,lambda returns,target:replay(args,returns,target),write_json)
+        return 0 if report['status']=='pass' else 1
+    receipt=replay(args,args.returns)
+    return 0 if receipt['status'] in ('pass','prefix_pass') else 1
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='action',required=True)
     build=sub.add_parser('setup')
     for name in ('project','reference','disc','bios','movie','random-receipt'):build.add_argument('--'+name,type=Path,required=True)
     build.add_argument('--tools-dir',type=Path);build.add_argument('--jobs',type=int,default=4)
-    replay=sub.add_parser('run');replay.add_argument('setup',type=Path);replay.add_argument('output',type=Path)
-    replay.add_argument('--returns',type=int);replay.add_argument('--timeout',type=int,default=129600)
+    play=sub.add_parser('run');play.add_argument('setup',type=Path);play.add_argument('output',type=Path)
+    play.add_argument('--timeout',type=int,default=129600);add_launch_arguments(play)
     args=parser.parse_args();return {'setup':setup,'run':run}[args.action](args)
 
 if __name__=='__main__':raise SystemExit(main())

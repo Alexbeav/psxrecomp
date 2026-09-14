@@ -12,6 +12,14 @@ add_test(NAME tas_biohazard_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_biohazard.py")
 add_test(NAME tas_nymashock_progression COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock_progression.py")
+add_test(NAME tas_stream_compare COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_stream_compare.py")
+add_test(NAME tas_replay_prefix COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_replay_prefix.py")
+add_test(NAME tas_launch_identity COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_launch_identity.py")
+add_test(NAME tas_diverge_trace COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_diverge_trace.py")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(STATUS "TAS model fixtures currently require GCC")
     return()

@@ -16,7 +16,9 @@ def wait_budgeted(process, directory, timeout, max_bytes=None, max_files=1000, i
             try:sizes.append(p.stat().st_size)
             except FileNotFoundError:pass
         inventory={'bytes':sum(sizes),'files':len(sizes)}
-        if stop_requested and stop_requested():reason='operator_stop'
+        # The callback may return a reason string (e.g. 'harness_stop'); a bare True keeps 'operator_stop'.
+        requested=stop_requested() if stop_requested else None
+        if requested:reason=requested if isinstance(requested,str) else 'operator_stop'
         elif max_bytes is not None and (inventory['bytes']>max_bytes or inventory['files']>max_files):reason='host_storage_budget'
         elif not exited and time.monotonic()-started>=timeout:reason='host_timeout'
         if reason:

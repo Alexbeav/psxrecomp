@@ -130,6 +130,51 @@ save-state support, PAL support, or other-game TAS success.
 The historical campaign started from `f23c5ba1`. This submission starts from
 upstream `85cd26f0`. It does not change release pins or merge itself.
 
+## Diagnostic runs: prefixes, ladders, streaming stop and binary identity
+
+The three title `run` commands (`tekken3.py`, `pepsiman.py`, `biohazard.py`)
+share these flags. None of them changes the verdict: the existing post-run
+comparison still decides a pass exactly as before.
+
+- `--returns N` replays the first N original inputs plus one record with no
+  neutral tail and compares N returns (`N` below the input count); `N` equal to
+  the endpoint is the full run. The shortened route is written beside the run
+  as `<output>-input.psxrti` / `.psxrti2`. Receipts carry `diagnostic_prefix:
+  true` and `status: "prefix_pass"`; a prefix never claims the full pass.
+- `--ladder 6000,60000,full` runs strictly increasing prefix tiers into
+  `<output>-t<N>` and the optional final `full` tier into `<output>` itself,
+  stops at the first tier that does not match, and writes
+  `<output>-ladder.json`. Mutually exclusive with `--returns`.
+- `--stop-on-divergence` lets the streaming watcher (`stream_compare.py`),
+  which follows `ram-pages.tsv` while the runtime writes it, publish
+  `<run>/stop-request.json`; `run_native.py` then terminates playback with
+  `stop_reason: "harness_stop"` and records the request in `exit.json`. The
+  run is a failure like any divergence. The watcher result is always recorded
+  under `streaming` in the receipt (`verification.json` for Tekken 3 and
+  Pepsiman, `source-comparison.json` for Bio Hazard).
+- `--exe PATH` runs another executable than the setup receipt's; it must be
+  declared with `--diagnostic-binary SHA256` naming the bytes that actually run,
+  otherwise the launch is refused. Receipts record `setup_executable_sha256`,
+  `binary_sha256`, `binary_matches_setup` and `diagnostic_binary`; a mismatching
+  binary yields `status: "diagnostic"` and a nonzero exit, never a qualifying
+  pass. `run_native.py` binds the staged copy with `--expected-exe-sha256` and
+  records `staged_executable` in `manifest.json`.
+- `--cpu-boundary-window LO HI` is forwarded unchanged to `run_native.py`.
+- `diverge_trace.py <run-a> <run-b> <return> --output <dir>` is a diagnostic, not a
+  qualification. It takes the return clocks at R-1 and R from both `cpu-return.tsv`
+  files, forms the window [cycle at R-1, cycle at R + `--margin-cycles`] clamped to
+  the 1,000,000-cycle runtime limit, resolves each side's binary by SHA-256 (the
+  staged copy in the run directory, then `manifest.inputs.exe.path`, then any
+  `<evidence-root>/*/SHA256SUMS.txt` entry that still hashes correctly), reruns
+  both sides through the title harness of run-b's project with `--returns`,
+  `--diagnostic-binary` and `--cpu-boundary-window`, and streams the two
+  `cpu-boundary.tsv` traces row by row ignoring the cumulative `slice_takes` and
+  `slice_cycle` counters. It prints the identical-row count and the first differing
+  row with every differing column, and writes `<output>/diverge-trace.json`.
+  `--dry-run` prints the window and commands; `--compare-only` diffs two
+  directories that already hold traces. Exit 0 reports a difference, 2 identical
+  traces, 1 an error.
+
 ## Tests without retail assets
 
 ```powershell
