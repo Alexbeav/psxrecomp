@@ -94,10 +94,15 @@ unsupported for checkpoints. Device state encoding does not qualify TAS
 continuation. Existing default model options retain their prior behavior.
 
 On historical replay revision `7a0d0ff4`, the measured Bio Hazard RAM-page/clock prefix advanced from return 463
-to 233,567. Full execution now reaches all 239,202 returns and exits cleanly;
-the first state/clock difference is at 233,568 in the neutral ending tail.
-The native return clock is one cycle earlier, with two differing RAM pages.
-Terminal RAM differs by nine bytes; the persisted memory card matches.
+to 233,567, with the first state/clock difference at 233,568 in the neutral
+ending tail. That difference is closed by timing an explicit seek from the
+physical read head: an established read keeps the source's CurSector two
+sectors ahead of the sector handed to the guest, so a mid-read SeekL timed
+from the delivery cursor travelled two sectors too far and completed 209
+cycles late, pushing the driver's following ReadS past the return boundary.
+A cold full-route replay carrying that correction matches the admitted stock
+reference on all 239,202 returns with no divergence, and terminal RAM and the
+persisted memory card both match.
 All forty-six raw RAM snapshots at 5,000-return intervals match the admitted stock
 SHA-256. The flat-line and shaded-line stops previously encountered before
 returns 20,372 and 20,387 are passed by this replay. These progress captures
