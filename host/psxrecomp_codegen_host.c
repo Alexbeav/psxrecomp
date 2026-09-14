@@ -1144,6 +1144,68 @@ static int resolve_build_paths(void) {
 #define PSX_SETUP_FRAMEWORK_REL "psxrecomp"
 #endif
 
+/* Diagnostic mode (docs/DIAGNOSTIC_MODE.md). Setup builds the normal product
+ * into build_dir_name and a second, debug-tools product into
+ * PSX_DIAGNOSTIC_DIR_NAME. The player switches without recompiling: an empty
+ * PSX_DIAGNOSTIC_MARKER file beside the setup exe, the --diagnostic argument,
+ * or PSXRECOMP_DIAGNOSTIC=1 in the environment. --collect-diagnostics zips the
+ * runtime's report files for a GitHub issue. */
+#define PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"
+#define PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"
+#define PSX_DIAGNOSTIC_ENV "PSXRECOMP_DIAGNOSTIC"
+
+static int argv_has(int argc, char** argv, const char* flag) {
+    int i;
+    for (i = 1; i < argc; ++i)
+        if (argv && argv[i] && strcmp(argv[i], flag) == 0)
+            return 1;
+    return 0;
+}
+
+static int diagnostic_marker_present(void) {
+    char marker[1200];
+    return g_project_root[0] &&
+           join_path(marker, sizeof(marker), g_project_root, PSX_DIAGNOSTIC_MARKER) &&
+           path_is_file(marker);
+}
+
+static int diagnostic_requested(int argc, char** argv) {
+    const char* env = getenv(PSX_DIAGNOSTIC_ENV);
+    if (argv_has(argc, argv, "--diagnostic"))
+        return 1;
+    if (env && env[0] && env[0] != '0')
+        return 1;
+    return diagnostic_marker_present();
+}
+
+/* build-diagnostic/<exe>, honouring the name runtime.cmake published there. */
+static int resolve_diagnostic_exe_path(char* out, size_t cap) {
+    char dir[1100], basename[256], exe_name[300];
+    if (!g_project_root[0] ||
+        !join_path(dir, sizeof(dir), g_project_root, PSX_DIAGNOSTIC_DIR_NAME))
+        return 0;
+    snprintf(basename, sizeof(basename), "%s", g_exe_basename);
+    if (g_cfg && g_cfg->cmake_target && g_cfg->cmake_target[0]) {
+        char marker[1200], published[256];
+        snprintf(published, sizeof(published), "psxrecomp_exe_name-%s.txt",
+                 g_cfg->cmake_target);
+        if (join_path(marker, sizeof(marker), dir, published) &&
+            read_first_line(marker, published, sizeof(published)) && published[0])
+            snprintf(basename, sizeof(basename), "%s", published);
+    }
+#if defined(_WIN32)
+    snprintf(exe_name, sizeof(exe_name), "%s.exe", basename);
+#else
+    snprintf(exe_name, sizeof(exe_name), "%s", basename);
+#endif
+    return join_path(out, cap, dir, exe_name);
+}
+
+static int diagnostic_build_present(void) {
+    char exe[1300];
+    return resolve_diagnostic_exe_path(exe, sizeof(exe)) && path_is_file(exe);
+}
+
 /* Match runtime.cmake: a requested pair with its backend descriptor. A stale
  * pre-descriptor pair or unrelated game dispatch cannot complete BIOS setup. */
 static int generated_bios_backend_linkable(const char* dir, const char* stem) {
@@ -4032,6 +4094,12 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
     {
+        char diag_dir[1200];
+        if (join_path(diag_dir, sizeof(diag_dir), g_project_root,
+                      PSX_DIAGNOSTIC_DIR_NAME))
+            bat_write_set(f, "DIAG_DIR", diag_dir);
+    }
+    {
         /* Post-build sanity: the dispatch file the launcher will gate on. */
         char marker_abs[1200];
         if (join_path(marker_abs, sizeof(marker_abs), g_project_root,
@@ -4069,14 +4137,16 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--disc \"%%DISC%%\" --force-pgo --pgo-video\r\n");
+                "--disc \"%%DISC%%\" --force-pgo --pgo-video "
+                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
     } else {
         fprintf(f,
                 "echo Building...\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates\r\n");
+                "--no-pgo --prune-after build-intermediates "
+                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
     }
     fprintf(f,
             "if errorlevel 1 (\r\n"
@@ -4179,6 +4249,7 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
                               : "Starting rebuild (cmake)…");
 
     char disc_arg_storage[1100];
+    char diag_dir_storage[1200];
     char* argv[40];
     int argc = 0;
     argv[argc++] = g_python;
@@ -4206,6 +4277,11 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--no-pgo";
         argv[argc++] = "--prune-after";
         argv[argc++] = "build-intermediates";
+    }
+    if (join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
+                  PSX_DIAGNOSTIC_DIR_NAME)) {
+        argv[argc++] = "--diagnostic-dir";
+        argv[argc++] = diag_dir_storage;
     }
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
@@ -4386,15 +4462,67 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
     printf(",\n  \"game_dispatch_present\": %s", game_ok ? "true" : "false");
     printf(",\n  \"bios_backends_present\": %s", bios_ok ? "true" : "false");
     printf(",\n  \"sources_missing\": %s", missing ? "true" : "false");
+    printf(",\n  \"diagnostic_dir\": ");
+    host_json_str(PSX_DIAGNOSTIC_DIR_NAME);
+    printf(",\n  \"diagnostic_build_present\": %s",
+           diagnostic_build_present() ? "true" : "false");
+    printf(",\n  \"diagnostic_marker\": ");
+    host_json_str(PSX_DIAGNOSTIC_MARKER);
+    printf(",\n  \"diagnostic_mode_requested\": %s",
+           diagnostic_requested(argc, argv) ? "true" : "false");
     printf("\n}\n");
     fflush(stdout);
     exit(missing ? 2 : 0);
 }
 
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
+/* --collect-diagnostics: run `psxrecomp_cli.py diagnostics` for this project
+ * and exit with its status. The zip lands beside the setup exe; the player
+ * attaches it to a GitHub issue (docs/DIAGNOSTIC_MODE.md). */
+static void host_collect_diagnostics_or_return(
+    const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+    char python[1100], cli[1200], cmd[4096];
+    int status;
+    if (!argv_has(argc, argv, "--collect-diagnostics"))
+        return;
+    if (!cfg) {
+        fprintf(stderr, "psxrecomp-codegen: no codegen host config linked\n");
+        exit(1);
+    }
+    g_cfg = cfg;
+    if (!g_project_root[0] &&
+        !discover_project_root(g_project_root, sizeof(g_project_root))) {
+        fprintf(stderr, "psxrecomp-codegen: project root not found\n");
+        exit(1);
+    }
+    activate_toolchain_path();
+    if (!find_python(python, sizeof(python))) {
+        fprintf(stderr,
+                "psxrecomp-codegen: no usable Python; install Python 3 or the "
+                "portable toolchain, then rerun --collect-diagnostics\n");
+        exit(1);
+    }
+    if (!join_path(cli, sizeof(cli), g_project_root,
+                   cfg_or(cfg->psxrecomp_cli_relpath, "psxrecomp/psxrecomp_cli.py"))) {
+        fprintf(stderr, "psxrecomp-codegen: CLI path too long\n");
+        exit(1);
+    }
+#if defined(_WIN32)
+    /* cmd.exe drops the outer quotes of a quoted command line; wrap once more. */
+    snprintf(cmd, sizeof(cmd), "\"\"%s\" \"%s\" diagnostics --project-root \"%s\"\"",
+             python, cli, g_project_root);
+#else
+    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" diagnostics --project-root \"%s\"",
+             python, cli, g_project_root);
+#endif
+    status = system(cmd);
+    exit(status == 0 ? 0 : 1);
+}
+
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
     host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
+    host_collect_diagnostics_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
@@ -4433,6 +4561,23 @@ void psxrecomp_codegen_host_forward_if_built(
         return;
     if (!resolve_build_paths())
         return;
+    if (diagnostic_requested(argc, argv)) {
+        char diag_exe[1300];
+        if (resolve_diagnostic_exe_path(diag_exe, sizeof(diag_exe)) &&
+            path_is_file(diag_exe)) {
+            snprintf(g_exe_path, sizeof(g_exe_path), "%s", diag_exe);
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested (%s / --diagnostic / %s):\n"
+                    "  reports land under %s\n",
+                    PSX_DIAGNOSTIC_MARKER, PSX_DIAGNOSTIC_ENV, PSX_DIAGNOSTIC_DIR_NAME);
+        } else {
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested but %s/ has no "
+                    "product yet; starting the normal build. Run Generate & rebuild "
+                    "again (or the CLI rebuild with --diagnostic-dir) to create it.\n",
+                    PSX_DIAGNOSTIC_DIR_NAME);
+        }
+    }
     if (!g_exe_path[0] || !path_is_file(g_exe_path))
         return;
     if (!host_self_exe_path(self, sizeof(self)))
@@ -4462,6 +4607,8 @@ void psxrecomp_codegen_host_forward_if_built(
             int has_launcher = 0;
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 int n;
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
                 if (strcmp(argv[i], "--launcher") == 0)
                     has_launcher = 1;
                 n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
@@ -4500,11 +4647,17 @@ void psxrecomp_codegen_host_forward_if_built(
         if (!args)
             return;
         args[0] = g_exe_path;
-        for (i = 1; i < argc && argv && argv[i]; ++i)
-            args[i] = argv[i];
-        if (!has_launcher)
-            args[i++] = "--launcher";
-        args[i] = NULL;
+        {
+            int n = 1;
+            for (i = 1; i < argc && argv && argv[i]; ++i) {
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
+                args[n++] = argv[i];
+            }
+            if (!has_launcher)
+                args[n++] = "--launcher";
+            args[n] = NULL;
+        }
         if (g_project_root[0] && chdir(g_project_root) != 0) {
             fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
                     g_project_root, strerror(errno));

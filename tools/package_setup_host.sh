@@ -605,6 +605,18 @@ Standalone:
 Retro uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
+
+Diagnostic mode (if the game crashes, freezes, or misbehaves):
+- Setup builds two products: build-release/ (normal, the default) and
+  build-diagnostic/ (debug server, freeze heartbeat, freeze dumps).
+- To switch, create an empty file named diagnostic-mode.txt next to
+  ${EXE_BASENAME} and start the game as usual (or run ${EXE_BASENAME} --diagnostic).
+  Delete the file to go back to normal mode.
+- Reproduce the problem, quit, then run ${EXE_BASENAME} --collect-diagnostics.
+  It writes diagnostics-<date>.zip next to ${EXE_BASENAME}: attach that file to
+  a GitHub issue on this title's repository. It contains only the runtime's
+  report files (never saves, BIOS, or disc images).
+See psxrecomp/docs/DIAGNOSTIC_MODE.md for details.
 EOF
 
 # --- Gate: the staged tree must be able to configure itself ----------------

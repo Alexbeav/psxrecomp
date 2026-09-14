@@ -450,6 +450,11 @@ If `game.toml` sets `openbios = false`, pass `--omit-openbios`. This option
 removes the unused OpenBIOS image, profile, and notice from the final package.
 The packager repeats the BIOS payload gate after it stages the SDK.
 
+Setup builds two products: the normal one in `build-release/` and a
+diagnostic one (`PSX_DEBUG_TOOLS=ON`) in `build-diagnostic/`. Players switch
+with an empty `diagnostic-mode.txt` beside the setup exe and collect reports
+with `--collect-diagnostics`; see [DIAGNOSTIC_MODE.md](DIAGNOSTIC_MODE.md).
+
 The player's Generate stages their retail dump where the pinned profile loads it
 and emits that profile's backend. The setup host forwards the stem CMake linked
 (`PSXRECOMP_BIOS_STEMS`) as `--bios-stem`; a standalone `psxrecomp_cli.py generate`

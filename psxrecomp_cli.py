@@ -1842,8 +1842,147 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         progress.phase("prune", pct=0.97, message="Pruning toolchain / build bulk...")
         prune_after_rebuild(project_root, build_dir, modes, progress)
 
+    diagnostic_exe = None
+    diagnostic_error = ""
+    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
+    if diag_raw:
+        diag_dir = Path(diag_raw).expanduser()
+        if not diag_dir.is_absolute():
+            diag_dir = (project_root / diag_dir).resolve()
+        else:
+            diag_dir = diag_dir.resolve()
+        diagnostic_exe, diagnostic_error = build_diagnostic_product(
+            project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
+        )
+
     progress.phase("done", pct=1.0, message="Rebuild complete")
-    progress.result(ok=True, exe=str(exe), pgo=pgo_enabled)
+    progress.result(
+        ok=True,
+        exe=str(exe),
+        pgo=pgo_enabled,
+        diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
+        diagnostic_error=diagnostic_error or None,
+    )
+    return EXIT_OK
+
+
+def build_diagnostic_product(
+    project_root: Path,
+    diag_dir: Path,
+    target: str,
+    exe_basename: str,
+    cmake_extra: list[str],
+    *,
+    progress: ProgressReporter,
+):
+    """Build the same generated sources once more with PSX_DEBUG_TOOLS=ON.
+
+    Players run the normal product by default. When something goes wrong they
+    switch to this build (see docs/DIAGNOSTIC_MODE.md): it carries the TCP
+    debug server, the freeze heartbeat and freeze dumps that the normal build
+    deliberately omits, and it writes them under its own directory. Building
+    it during setup means the switch never needs another compilation.
+
+    Best effort: a diagnostic build failure never takes the playable normal
+    product away. The failure is reported in the result so the docs can tell
+    the player to rebuild.
+    """
+    try:
+        progress.phase("diagnostic", pct=0.9, message="cmake diagnostic build (PSX_DEBUG_TOOLS=ON)...")
+        _cmake_configure(
+            project_root, diag_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"], progress=progress
+        )
+        _cmake_build(diag_dir, target, progress)
+        exe, err = _resolve_runtime_exe(diag_dir, target, exe_basename)
+        if exe is None:
+            raise RuntimeError(err)
+        progress.log(f"diagnostic product ready: {exe}")
+        return exe, ""
+    except Exception as exc:  # noqa: BLE001
+        progress.log(f"WARNING: diagnostic build failed (normal product unaffected): {exc}")
+        return None, str(exc)
+
+
+DIAGNOSTIC_REPORT_NAMES = (
+    "psx_last_run_report.json",
+    "psx_crash.txt",
+    "psx_freeze_heartbeat.json",
+    "psx_game_version.txt",
+    "BUILDINFO.json",
+)
+DIAGNOSTIC_REPORT_GLOBS = ("psx_freeze_dump_*.json", "psxrecomp_exe_name-*.txt")
+DIAGNOSTIC_ROOT_FILES = ("framework_pins.txt", "VERSION", "project-manifest.toml", "diagnostic-mode.txt")
+DIAGNOSTIC_BUILD_DIRS = ("build-release", "build-diagnostic", "build")
+
+
+def collect_diagnostics(project_root: Path, output: Path) -> dict[str, Any]:
+    """Zip the runtime's own report files for a GitHub issue.
+
+    Only report and identity files are taken: never saves, memory cards, BIOS
+    images, disc images, settings, or anything else under the project.
+    """
+    import datetime
+    import json
+    import platform
+    import zipfile
+
+    entries: list[tuple[Path, str]] = []
+    for d in DIAGNOSTIC_BUILD_DIRS:
+        base = project_root / d
+        if not base.is_dir():
+            continue
+        found: list[Path] = [base / n for n in DIAGNOSTIC_REPORT_NAMES if (base / n).is_file()]
+        for pattern in DIAGNOSTIC_REPORT_GLOBS:
+            found.extend(p for p in sorted(base.glob(pattern)) if p.is_file())
+        for p in found:
+            entries.append((p, f"{d}/{p.name}"))
+    for n in DIAGNOSTIC_ROOT_FILES:
+        p = project_root / n
+        if p.is_file():
+            entries.append((p, n))
+    summary = {
+        "schema": "psxrecomp.diagnostics.v1",
+        "collected_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "host": platform.platform(),
+        "python": platform.python_version(),
+        "project_root": str(project_root),
+        "diagnostic_mode_marker": (project_root / "diagnostic-mode.txt").is_file(),
+        "build_dirs_present": {d: (project_root / d).is_dir() for d in DIAGNOSTIC_BUILD_DIRS},
+        "files": [rel for _, rel in entries],
+        "not_included": "saves, memory cards, BIOS images, disc images, settings",
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, rel in entries:
+            archive.write(path, rel)
+        archive.writestr("diagnostics-summary.json", json.dumps(summary, indent=2))
+    summary["output"] = str(output)
+    return summary
+
+
+def cmd_diagnostics(args: argparse.Namespace, progress: ProgressReporter) -> int:
+    project_root = (
+        Path(args.project_root).expanduser().resolve()
+        if getattr(args, "project_root", "")
+        else Path.cwd().resolve()
+    )
+    out_raw = (getattr(args, "output", None) or "").strip()
+    if out_raw:
+        output = Path(out_raw).expanduser()
+        if not output.is_absolute():
+            output = project_root / output
+    else:
+        import datetime
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        output = project_root / f"diagnostics-{stamp}.zip"
+    try:
+        summary = collect_diagnostics(project_root, output.resolve())
+    except OSError as exc:
+        progress.error(f"could not collect diagnostics: {exc}", code=EXIT_ERROR)
+        return EXIT_ERROR
+    progress.log(f"Diagnostics written to {summary['output']} ({len(summary['files'])} report files)")
+    progress.log("Attach that zip to a GitHub issue on the title repository.")
+    progress.result(ok=True, output=summary["output"], files=summary["files"])
     return EXIT_OK
 
 
@@ -2156,7 +2295,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not fetch cmake-clang-v1 when no local pack is found",
     )
     r.add_argument("--cmake-extra", action="append", default=[])
+    r.add_argument(
+        "--diagnostic-dir",
+        default="",
+        help="also build a diagnostic product (PSX_DEBUG_TOOLS=ON: debug server, "
+        "heartbeat, freeze dumps) into this directory after the normal build",
+    )
     r.set_defaults(handler=cmd_rebuild)
+
+    dg = sub.add_parser(
+        "diagnostics",
+        help="collect runtime diagnostic reports into one zip for a bug report",
+    )
+    add_common(dg)
+    dg.add_argument("--output", default="", help="zip path (default: <project>/diagnostics-<UTC>.zip)")
+    dg.set_defaults(handler=cmd_diagnostics)
 
     e = sub.add_parser(
         "ensure-toolchain",

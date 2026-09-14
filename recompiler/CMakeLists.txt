@@ -631,6 +631,11 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_app_icon_rc_spaces.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
         add_test(
+            NAME cli_diagnostics
+            COMMAND ${Python3_EXECUTABLE} -m unittest
+                    runtime.tests.test_cli_diagnostics
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
             NAME codegen_hash_build_tree
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_codegen_hash_build_tree.py
