@@ -6,6 +6,7 @@ names do not establish Nymashock equivalence; source RAM/clock checks do that.
 from pathlib import Path
 import argparse,hashlib,json,os,re,shutil,struct,subprocess,sys
 import dualshock_route
+import media_container
 import nymashock_admission as source
 from observation_evidence import terminal_consistency
 from run_native import route_identity
@@ -13,6 +14,9 @@ from tekken3 import command,require_hash,write_json
 
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parent.parent
 BOOT='SLPS_009.98'
+# media() pins the .cue file's own bytes, so a split .chd must carry the exact
+# original dump name; the regenerated cue is byte-identical to the pinned one.
+DISC_STEM="Bio Hazard - Director's Cut (Japan)"
 EXE_SHA='44850e2aa72edebdb986141b49874a08160fbb103bffa505ceba9ba0a19bd0b2'
 CONTROLLER_SHA='09d4015e5801e62311334b22f38e766cfe0b46ba38fe45f2caf5f3fd0a5c6baa'
 TAPE_SHA='d85f0dec13b00e50b10a52ce0fda3cdaa9797f058ad16dd57caa8e926fad7a6a'
@@ -129,11 +133,12 @@ def setup(args):
     if not 1<=args.jobs<=64:raise ValueError('jobs outside1..64')
     for tool in ('gcc','g++','cmake','ninja','git'):
         if not shutil.which(tool):raise ValueError('missing tool: '+tool)
-    bash=Path(shutil.which('git')).resolve().parents[1]/'bin/bash.exe'
-    if not bash.is_file():raise ValueError('Git for Windows bash required')
+    bash=media_container.find_git_bash()
     macros=subprocess.check_output(['gcc','-dM','-E','-include','_mingw.h','-'],input='',text=True)
     if not re.search(r'^#define _UCRT\b',macros,re.M):raise ValueError('UCRT compiler required')
-    disc,bios,movie=[p.resolve(strict=True) for p in (args.disc,args.bios,args.movie)]
+    container=media_container.resolve_disc(args.disc,cache=args.chd_cache,chdman=args.chdman,stem=DISC_STEM)
+    disc,bios,movie=[p.resolve(strict=True) for p in (container,args.bios,args.movie)]
+    # media() is the unchanged pinned cue/track check for either container.
     track=media(disc,bios);require_hash(movie,source.MOVIE_SHA)
     rows=dualshock_route.read_movie(movie)
     if len(rows)!=source.FRAMES:raise ValueError('incomplete original movie')
@@ -267,6 +272,8 @@ def main():
     build=sub.add_parser('setup')
     for name in ('project','reference','disc','bios','movie','random-receipt'):build.add_argument('--'+name,type=Path,required=True)
     build.add_argument('--tools-dir',type=Path);build.add_argument('--jobs',type=int,default=4)
+    build.add_argument('--chdman',type=Path,help='chdman.exe for .chd input; otherwise PSX_CHDMAN or PATH')
+    build.add_argument('--chd-cache',type=Path,help='private directory for split .chd tracks, keyed by container hash')
     replay=sub.add_parser('run');replay.add_argument('setup',type=Path);replay.add_argument('output',type=Path)
     replay.add_argument('--returns',type=int);replay.add_argument('--timeout',type=int,default=129600)
     args=parser.parse_args();return {'setup':setup,'run':run}[args.action](args)
