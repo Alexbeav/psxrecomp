@@ -104,6 +104,16 @@ uint32_t psx_mod_display_width(void);
 /* Height companion to psx_mod_display_width(); same conventions. */
 uint32_t psx_mod_display_height(void);
 
+/* Opt-in presentation hold for a game that retains its previous framebuffer
+ * while loading. The pure, cheap emulation-thread predicate returns nonzero
+ * only while that SAME scene remains displayed; no GPU/API recursion allowed.
+ * Native-wide retains its prior wide/4:3 classification, never stretches art
+ * and never overrides FMV. NULL removes the opt-in. Host history is discarded
+ * on GPU reset/savestate restore, so loading a frozen scene cannot recreate
+ * missing widescreen strips. This does not change guest rendering or memory. */
+typedef int (*PSXModRetainedScenePredicate)(void);
+void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate);
+
 /*
  * Read the committed value of one of this package's declared options, as the
  * player left it in the launcher (or the manifest default when untouched).

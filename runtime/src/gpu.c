@@ -27,6 +27,8 @@
 #include "event_ring.h"
 #include "color_lut.h"
 #include "mod_runtime.h"
+#include "mod_plugins.h"
+#include "ws_scene_hold.h"
 #include "sio.h"
 #include "ws_cull_detect.h"
 #include "ws_aspect_cone_math.h"
@@ -374,17 +376,28 @@ static int ws_2d_only_scene(void) {
 
 static uint32_t s_ws_fmv_frame_cache = 0xFFFFFFFFu;
 static int      s_ws_fmv_cached = 0;
+static PSXModRetainedScenePredicate s_ws_retained_scene_predicate;
+static WsSceneHold s_ws_scene_hold;
+
+void psx_mod_set_retained_scene_predicate(PSXModRetainedScenePredicate predicate) {
+    s_ws_retained_scene_predicate = predicate;
+    ws_scene_hold_reset(&s_ws_scene_hold);
+}
 
 int gpu_ws_present_native_43(void) {
     if (!ws_engaged()) return 0;
-    if (!ws_game_mode()) return 1;                 /* full-2D screen */
-    if (ws_2d_only_scene()) return 1;              /* 2D-only gameplay scene */
+    int native_43 = !ws_game_mode() || ws_2d_only_scene();
+    int hold_enabled = ws_mode == 2 && s_ws_retained_scene_predicate != NULL;
+    if (!hold_enabled && native_43) return 1;      /* unchanged default */
     uint32_t f = (uint32_t)s_frame_count;
     if (f != s_ws_fmv_frame_cache) {
         s_ws_fmv_frame_cache = f;
         GpuDisplayInfo di; gpu_get_display_info(&di);
         s_ws_fmv_cached = di.depth24 || mdec_recently_active(WS_FMV_HYSTERESIS);
     }
+    if (hold_enabled)
+        return ws_scene_hold_classify(&s_ws_scene_hold,
+            s_ws_retained_scene_predicate(), native_43, s_ws_fmv_cached);
     return s_ws_fmv_cached;
 }
 
@@ -2853,6 +2866,7 @@ static void gpu_reset_state(int clear_vram) {
     gpustat_poll_count = 0;
     s_ws_fmv_frame_cache = 0xFFFFFFFFu;
     s_ws_fmv_cached = 0;
+    ws_scene_hold_reset(&s_ws_scene_hold);
     s_d24_upload_x1 = 0;
     s_d24_present_hold = 0;
     s_d24_prev_disp_h = 0;
@@ -6123,6 +6137,7 @@ int gpu_snapshot_read(const uint8_t *p, uint32_t len) {
     if (len != gpu_snapshot_bytes()) return 0;
     pst_r_init(&r, p, len);
     if (!gpu_snap_parse(&r)) return 0;
+    ws_scene_hold_reset(&s_ws_scene_hold);
     ws_hud_anchor_clear(ws_hud_anchor_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_hud_anchor_clear(ws_reveal_clear_tags, WS_HUD_ANCHOR_TABLE_SIZE);
     ws_repeat_rect_tag_clear(ws_repeat_rect_tags);

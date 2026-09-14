@@ -23,6 +23,9 @@ psxrecomp_add_runtime_target(psx-runtime
 # (docs/ENHANCEMENTS.md G1.10). Titles get their <exe>_pgxp the same way.
 
 if(BUILD_TESTING)
+    add_executable(ws_scene_hold_test tests/test_ws_scene_hold.c)
+    target_include_directories(ws_scene_hold_test PRIVATE include)
+    add_test(NAME ws_scene_hold_test COMMAND ws_scene_hold_test)
     add_executable(mod_texture_banks_test tests/test_mod_texture_banks.c src/mod_texture_banks.c)
     target_include_directories(mod_texture_banks_test PRIVATE include)
     add_test(NAME mod_texture_banks_test COMMAND mod_texture_banks_test)
