@@ -393,6 +393,25 @@ def parse_root_entries(root: bytes) -> dict[str, tuple[int, int]]:
     return entries
 
 
+def resolve_root_entry(entries: dict[str, tuple[int, int]], name: str) -> str | None:
+    """Find a root-directory record by name without regard to case.
+
+    ISO 9660 records are upper case, but SYSTEM.CNF frequently names the boot
+    program in lower case (``BOOT = cdrom:\\slus_006.63;1``), and the probe
+    keeps that spelling in game.toml. A case-sensitive lookup made first-run
+    setup fail with "missing slus_006.63 on disc" on such titles. The staged
+    file keeps the requested spelling so game.toml's exe path stays valid on
+    case-sensitive filesystems too.
+    """
+    if name in entries:
+        return name
+    want = name.upper()
+    for key in entries:
+        if key.upper() == want:
+            return key
+    return None
+
+
 def extract_via(
     read_user, data: bytes, boot_exe: str
 ) -> tuple[dict[str, tuple[int, int]], dict[str, bytes]]:
@@ -412,8 +431,8 @@ def extract_via(
     # already accepts these discs (5ab7a053); staging has to accept the same
     # ones or a clean worktree can never prepare them.
     needed = ["SYSTEM.CNF", boot_exe]
-    if "SYSTEM.CNF" not in entries:
-        if boot_exe not in entries:
+    if resolve_root_entry(entries, "SYSTEM.CNF") is None:
+        if resolve_root_entry(entries, boot_exe) is None:
             raise SystemExit(
                 f"SYSTEM.CNF missing on disc and no {boot_exe} fallback "
                 f"(found {sorted(entries)[:20]})"
@@ -424,9 +443,10 @@ def extract_via(
         )
         needed = [boot_exe]
     for need in needed:
-        if need not in entries:
+        key = resolve_root_entry(entries, need)
+        if key is None:
             raise SystemExit(f"missing {need} on disc (found {sorted(entries)[:20]})")
-        extent, size = entries[need]
+        extent, size = entries[key]
         out = bytearray()
         rem, lba = size, extent
         while rem > 0:
