@@ -1,4 +1,6 @@
 # BIOS/disc-free controller, cycle and input regressions from the TAS work.
+add_test(NAME tas_investigation_controller COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_investigate.py")
 set(_tas_runtime "${CMAKE_CURRENT_LIST_DIR}/../../../runtime")
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(STATUS "TAS model fixtures currently require GCC")
