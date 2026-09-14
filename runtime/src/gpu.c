@@ -5905,6 +5905,10 @@ static int gpu_source_draw_block(const uint32_t *words) {
     block.clip_right=state.clip_x1;block.clip_bottom=state.clip_y1;
     block.x=source_gpu_sprite_origin(words[1],0,state.offset_x);
     block.y=source_gpu_sprite_origin(words[1],16,state.offset_y);
+    if(source_gpu_line_supported(opcode)) {
+        block.x=source_gpu_command_coord(words[1],0)+state.offset_x;
+        block.y=source_gpu_command_coord(words[1],16)+state.offset_y;
+    }
     block.interlace=(state.display_mode&0x24)==0x24 && !(state.draw_mode&0x400);
     block.skip_field=state.skip_field;
     if(opcode==0x80)gr_source_texture_control(2,0);
@@ -5924,7 +5928,7 @@ static int gpu_source_dispatch(const SourceGPUCommandDispatch *event) {
         gpu_write_gp0_body(event->words[0]);
     } else if(event->kind==SOURCE_GPU_DISPATCH_COMMAND) {
         unsigned opcode=event->words[0]>>24;
-        if(source_gpu_block_supported(opcode)) {
+        if(source_gpu_block_supported(opcode) || source_gpu_line_supported(opcode)) {
             gp0_opcode_count[opcode]++;
             if(opcode==2)gp0_fill_count++;else if(opcode==0x80)gp0_copy_count++;else gp0_draw_count++;
             gp0_ring_record(gp0_cmd_buf,event->count);

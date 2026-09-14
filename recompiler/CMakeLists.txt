@@ -383,6 +383,96 @@ if(BUILD_TESTING)
     target_include_directories(host_path_test PRIVATE include)
     add_test(NAME host_path_test COMMAND host_path_test)
 
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        foreach(_mode IN ITEMS O0 O2)
+            add_executable(tas_gpu_sprite_blend_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_blend.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_sprite_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+            add_executable(tas_gpu_textured_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_textured_triangle.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_textured_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_textured_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_textured_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_textured_triangle_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_textured_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_textured_triangle_${_mode}>)
+            add_executable(tas_gpu_polygon_order_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_order.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_order_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_order_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_order_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_order_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_order_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_order_${_mode}>)
+            add_executable(tas_gpu_shaded_texture_family_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_texture_family.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_texture_family_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_texture_family_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_texture_family_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_texture_family_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_texture_family_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_texture_family_${_mode}>)
+            add_executable(tas_gpu_shaded_triangle_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_triangle.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_triangle_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_triangle_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_triangle_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_triangle_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_triangle_${_mode}>)
+            add_executable(tas_gpu_shaded_quad_${_mode}
+                ../runtime/tests/test_source_gpu_shaded_quad.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_shaded_quad_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_shaded_quad_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_shaded_quad_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_shaded_quad_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_shaded_quad_contracts.py
+                $<TARGET_FILE:tas_gpu_shaded_quad_${_mode}>)
+            add_executable(tas_gpu_polygon_wrap_${_mode}
+                ../runtime/tests/test_source_gpu_polygon_wrap.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_polygon_wrap_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_polygon_wrap_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_polygon_wrap_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_polygon_wrap_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_polygon_wrap_contracts.py
+                $<TARGET_FILE:tas_gpu_polygon_wrap_${_mode}>)
+            add_executable(tas_gpu_flat_blend_${_mode}
+                ../runtime/tests/test_source_gpu_flat_blend.c
+                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c)
+            target_include_directories(tas_gpu_flat_blend_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
+            add_executable(tas_gpu_line_${_mode}
+                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
+            target_include_directories(tas_gpu_line_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_line_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            target_link_libraries(tas_gpu_line_${_mode} PRIVATE m)
+            add_test(NAME tas_gpu_line_${_mode} COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_source_gpu_line_contracts.py
+                $<TARGET_FILE:tas_gpu_line_${_mode}>)
+        endforeach()
+    endif()
+
     add_executable(source_cpu_block_bound_test
         ../runtime/tests/test_source_cpu_block_bound.c
         ../runtime/src/psx_icache.c)
