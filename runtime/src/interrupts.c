@@ -499,6 +499,15 @@ uint32_t psx_spu_sample_event_cycles_to_next(void) {
         g_spu_sample_pump_null_rejects++;
         return UINT32_MAX;
     }
+    /* Gate on SPUCNT alone — this runs on every deadline recompute, and the
+     * full SpuGlobalState snapshot here dominated the emu thread under an
+     * MMIO-polling guest loop (Capcom FMV, gdb-sampled 2026-09-01).
+     * Returning a deadline unconditionally also caps the device catch-up
+     * chunk at 768 cycles for every title, measured at -27% throughput. */
+    if ((spu_ctrl_read() & 0x0040u) == 0) {
+        g_spu_sample_ctrl_rejects++;
+        return UINT32_MAX;
+    }
     g_spu_sample_enabled_queries++;
 
     /* The PS1 CPU/SPU ratio is exactly 768 CPU cycles per 44.1-kHz sample.
@@ -526,7 +535,8 @@ void psx_spu_sample_event_service(void) {
         if ((psx_get_cycle_count() % 768u) != 0)
             g_spu_sample_deferred_mismatches++;
     }
-    if ((psx_get_cycle_count() % 768u) == 0) {
+    if ((ctrl & 0x0040u) != 0 &&
+        (psx_get_cycle_count() % 768u) == 0) {
         g_spu_sample_service_pumps++;
         s_midframe_audio_pump();
     }

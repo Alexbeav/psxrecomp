@@ -1527,7 +1527,11 @@ uint32_t spu_read(uint32_t addr) {
                  * "currently writing the SECOND half of the capture
                  * buffers" (capture offset >= 0x200). */
                 uint16_t cnt = spu_regs[reg_index(0x1F801DAAu)];
-                uint32_t st = (uint32_t)((spu_regs[idx] & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
+                /* Read SPUCNT live rather than the render-time shadow: with
+                 * the sample-event gate restored the pump may not run for a
+                 * whole frame, and never under hard mute, so a shadow would
+                 * leave a polling guest waiting on stale transfer bits. */
+                uint32_t st = (uint32_t)((cnt & 0x3Fu) | (((cnt >> 5) & 1u) << 7));
                 if (irq_flag) st |= 0x40u;
                 if (capture_pos & 0x200u) st |= 0x800u;
                 return st;
