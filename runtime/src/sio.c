@@ -1391,7 +1391,11 @@ static void pad_process_byte(uint8_t tx_byte) {
              * responses; only valid while in config mode (a digital pad ignores
              * them, handled by the else branch below). */
             static const uint8_t r_def[8] = { 0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00 };
-            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x03,0x02,0x01,0x02,0x01,0x00 };
+            /* 0x45 "Query Model and Mode". The source builds this reply in two
+             * phases (frontio.c case 0x4500/0x4501): transmit_buffer[0] = 0x01 for
+             * the device type, then 0x02, analog_mode ? 1 : 0, 0x02, 0x01, 0x00.
+             * After the 0xF3 0x5A header that is  01 02 <mode> 02 01 00. */
+            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x01,0x02,0x00,0x02,0x01,0x00 };
             static const uint8_t r_46[8]  = { 0xF3,0x5A,0x00,0x00,0x01,0x02,0x00,0x0A };
             static const uint8_t r_47[8]  = { 0xF3,0x5A,0x00,0x00,0x02,0x00,0x01,0x00 };
             static const uint8_t r_4c[8]  = { 0xF3,0x5A,0x00,0x00,0x00,0x04,0x00,0x00 };
@@ -1403,12 +1407,18 @@ static void pad_process_byte(uint8_t tx_byte) {
             memcpy(pad_response, r, 8);
             /* 0x45 reports the analog-status byte: a driver polling 0x45 to learn
              * the live mode must read the CURRENT analog state, not a hard-coded
-             * analog-on (dualshock.cpp:743 transmit_buffer[1]=analog_mode?1:0).
+             * analog-on (frontio.c case 0x4501, transmit_buffer[1]=analog_mode?1:0).
              * Reporting "analog" while we present digital (or vice-versa) makes the
              * driver mis-parse the poll frame length → off-by-frame garbage buttons
-             * (axis5_sio_controller.md D8). */
+             * (axis5_sio_controller.md D8).
+             * That source index is the SECOND byte of the 0x4501 phase, i.e. the
+             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not
+             * pad_response[3], which is the constant 0x02. Writing it there
+             * destroyed the constant and left a hard-coded analog-on in the real
+             * mode slot, so we answered 03 00 01 where the source answers
+             * 01 02 00 (Mega Man X5 return 1090). */
             if (tx_byte == 0x45)
-                pad_response[3] = pad_analog[lp] ? 0x01 : 0x00;
+                pad_response[4] = pad_analog[lp] ? 0x01 : 0x00;
             /* 0x4D returns the previous six-byte motor map while latching the
              * replacement bytes later in this same transaction. */
             if (tx_byte == 0x4D)
