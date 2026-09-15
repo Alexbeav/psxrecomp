@@ -12,8 +12,8 @@ add_test(NAME tas_biohazard_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_biohazard.py")
 add_test(NAME tas_megamanx5_adapter COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_megamanx5.py")
-add_test(NAME tas_megamanx5_admission_firmware COMMAND ${Python3_EXECUTABLE}
-    "${CMAKE_CURRENT_LIST_DIR}/../test_megamanx5_admission_firmware.py")
+add_test(NAME tas_admission_firmware COMMAND ${Python3_EXECUTABLE}
+    "${CMAKE_CURRENT_LIST_DIR}/../test_admission_firmware.py")
 add_test(NAME tas_nymashock28_movie COMMAND ${Python3_EXECUTABLE}
     "${CMAKE_CURRENT_LIST_DIR}/../test_nymashock28_movie.py")
 add_test(NAME tas_nymashock_progression COMMAND ${Python3_EXECUTABLE}
