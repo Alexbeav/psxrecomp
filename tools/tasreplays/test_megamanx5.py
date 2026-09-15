@@ -2,7 +2,7 @@
 from pathlib import Path
 import json,tempfile
 from megamanx5 import native_span,verify_reference,PROFILE,compare_terminal_observations,BOOT,CONTROLLER_SHA
-from megamanx5_admission import FRAMES,FIXED,LOCAL,SETTINGS,MOVIE_SHA,return_rows,qualify,terminal_card_evidence,verify_identity,launch_config,FINAL_CARD
+from megamanx5_admission import FRAMES,FIXED,FIRMWARE_NAME,LOCAL,SETTINGS,MOVIE_SHA,return_rows,qualify,terminal_card_evidence,verify_identity,launch_config,FINAL_CARD
 from compare_ram_pages import MAGIC,PAGE_BYTES,PAGE_COUNT,page_hash
 import biohazard,nymashock_admission
 
@@ -36,8 +36,8 @@ with tempfile.TemporaryDirectory() as directory:
                   dict(schema='megamanx5-independent-source-v1',source_qualification='pass',movie_sha256=MOVIE_SHA,original_inputs=FRAMES,observed_returns=FRAMES+12001,neutral_tail=12001)):
         p.write_text(json.dumps(value));rejects(lambda:verify_reference(p))
     root=Path(directory)
-    for manifest in ({},dict(schema='re1-stock-control-v1'),dict(schema='nymashock-stock-control-v2',title='other',source_commit=nymashock_admission.SOURCE_COMMIT,source_tag='2.9.1',original_inputs=FRAMES,cutoff=FRAMES,role='stock-control',neutral_tail=0,firmware_key='PSX+U',firmware_sha256=FIXED['SCPH1001.BIN']),
-                     dict(schema='nymashock-stock-control-v2',title='Mega Man X5 (USA) Training X 6377M',source_commit=nymashock_admission.SOURCE_COMMIT,source_tag='2.9.1',original_inputs=FRAMES,cutoff=FRAMES,role='stock-control',neutral_tail=0,firmware_key='PSX+J',firmware_sha256=FIXED['SCPH1001.BIN'])):
+    for manifest in ({},dict(schema='re1-stock-control-v1'),dict(schema='nymashock-stock-control-v2',title='other',source_commit=nymashock_admission.SOURCE_COMMIT,source_tag='2.9.1',original_inputs=FRAMES,cutoff=FRAMES,role='stock-control',neutral_tail=0,firmware_key='PSX+U',firmware_sha256=FIXED[FIRMWARE_NAME]),
+                     dict(schema='nymashock-stock-control-v2',title='Mega Man X5 (USA) Training X 6377M',source_commit=nymashock_admission.SOURCE_COMMIT,source_tag='2.9.1',original_inputs=FRAMES,cutoff=FRAMES,role='stock-control',neutral_tail=0,firmware_key='PSX+J',firmware_sha256=FIXED[FIRMWARE_NAME])):
         rejects(lambda:verify_identity(root,manifest,'stock-control',0))
 with tempfile.TemporaryDirectory() as directory:
     root=Path(directory);run=root/'native';(run/'cards').mkdir(parents=True)
