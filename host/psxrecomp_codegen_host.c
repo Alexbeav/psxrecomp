@@ -489,9 +489,9 @@ static int find_python(char* out, size_t cap) {
         snprintf(out, cap, "%s", env);
         return 1;
     }
+#if defined(_WIN32)
     if (find_toolchain_python(out, cap))
         return 1;
-#if defined(_WIN32)
     /* Prefer python.org / py-launcher installs over the Microsoft Store
      * stub: Store Python redirects LocalAppData writes into LocalCache. */
     char resolved[1100];
@@ -796,6 +796,11 @@ static int resolve_toolchain_bin(char* out, size_t cap) {
 static void activate_toolchain_path(void) {
     char pack_root[1400];
     g_toolchain_bin[0] = '\0';
+#if !defined(_WIN32)
+    /* Linux and macOS use native build tools. A stale Windows pack can exist
+     * in the shared cache, but it must never shadow tools from the host PATH. */
+    return;
+#endif
     if (!resolve_toolchain_bin(g_toolchain_bin, sizeof(g_toolchain_bin)))
         return;
     /* Pack root (parent of bin/) — Windows cmake-clang-v1 ships zlib here. */
@@ -1144,6 +1149,68 @@ static int resolve_build_paths(void) {
 #define PSX_SETUP_FRAMEWORK_REL "psxrecomp"
 #endif
 
+/* Diagnostic mode (docs/DIAGNOSTIC_MODE.md). Setup builds the normal product
+ * into build_dir_name and a second, debug-tools product into
+ * PSX_DIAGNOSTIC_DIR_NAME. The player switches without recompiling: an empty
+ * PSX_DIAGNOSTIC_MARKER file beside the setup exe, the --diagnostic argument,
+ * or PSXRECOMP_DIAGNOSTIC=1 in the environment. --collect-diagnostics zips the
+ * runtime's report files for a GitHub issue. */
+#define PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"
+#define PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"
+#define PSX_DIAGNOSTIC_ENV "PSXRECOMP_DIAGNOSTIC"
+
+static int argv_has(int argc, char** argv, const char* flag) {
+    int i;
+    for (i = 1; i < argc; ++i)
+        if (argv && argv[i] && strcmp(argv[i], flag) == 0)
+            return 1;
+    return 0;
+}
+
+static int diagnostic_marker_present(void) {
+    char marker[1200];
+    return g_project_root[0] &&
+           join_path(marker, sizeof(marker), g_project_root, PSX_DIAGNOSTIC_MARKER) &&
+           path_is_file(marker);
+}
+
+static int diagnostic_requested(int argc, char** argv) {
+    const char* env = getenv(PSX_DIAGNOSTIC_ENV);
+    if (argv_has(argc, argv, "--diagnostic"))
+        return 1;
+    if (env && env[0] && env[0] != '0')
+        return 1;
+    return diagnostic_marker_present();
+}
+
+/* build-diagnostic/<exe>, honouring the name runtime.cmake published there. */
+static int resolve_diagnostic_exe_path(char* out, size_t cap) {
+    char dir[1100], basename[256], exe_name[300];
+    if (!g_project_root[0] ||
+        !join_path(dir, sizeof(dir), g_project_root, PSX_DIAGNOSTIC_DIR_NAME))
+        return 0;
+    snprintf(basename, sizeof(basename), "%s", g_exe_basename);
+    if (g_cfg && g_cfg->cmake_target && g_cfg->cmake_target[0]) {
+        char marker[1200], published[256];
+        snprintf(published, sizeof(published), "psxrecomp_exe_name-%s.txt",
+                 g_cfg->cmake_target);
+        if (join_path(marker, sizeof(marker), dir, published) &&
+            read_first_line(marker, published, sizeof(published)) && published[0])
+            snprintf(basename, sizeof(basename), "%s", published);
+    }
+#if defined(_WIN32)
+    snprintf(exe_name, sizeof(exe_name), "%s.exe", basename);
+#else
+    snprintf(exe_name, sizeof(exe_name), "%s", basename);
+#endif
+    return join_path(out, cap, dir, exe_name);
+}
+
+static int diagnostic_build_present(void) {
+    char exe[1300];
+    return resolve_diagnostic_exe_path(exe, sizeof(exe)) && path_is_file(exe);
+}
+
 /* Match runtime.cmake: a requested pair with its backend descriptor. A stale
  * pre-descriptor pair or unrelated game dispatch cannot complete BIOS setup. */
 static int generated_bios_backend_linkable(const char* dir, const char* stem) {
@@ -1191,6 +1258,29 @@ static int generated_has_bios_backend(const char* dir) {
         next = end + 1;
     }
     return 0;
+}
+
+/* First retail stem CMake linked (PSX_SETUP_BIOS_STEMS minus OpenBIOS), or ""
+ * when the title links OpenBIOS only. Forwarded to generate as --bios-stem so
+ * the CLI emits the backend pair this host probes and links, instead of an
+ * SCPH1001 pair a title pinned to another image can never complete with. */
+static const char* setup_retail_bios_stem(void) {
+    static char stem[512];
+    const char* next = PSX_SETUP_BIOS_STEMS;
+    stem[0] = 0;
+    while (*next) {
+        const char* end = strchr(next, '|');
+        size_t len = end ? (size_t)(end - next) : strlen(next);
+        if (len && len < sizeof(stem) &&
+            !(len == 8 && strncmp(next, "OpenBIOS", 8) == 0)) {
+            memcpy(stem, next, len);
+            stem[len] = 0;
+            return stem;
+        }
+        if (!end) break;
+        next = end + 1;
+    }
+    return stem;
 }
 
 static int bios_backends_missing(void) {
@@ -3253,6 +3343,47 @@ static void discard_unhealthy_active_toolchain(void) {
     }
 }
 
+#if !defined(_WIN32)
+/* Unix release kits use the host's native build tools.  The published
+ * cmake-clang-v1 archive is a Windows pack, so the setup wizard must not offer
+ * to download it on Linux or macOS. */
+static int posix_command_runs(const char* command) {
+    char cmd[1600];
+    if (!command || !command[0])
+        return 0;
+    snprintf(cmd, sizeof(cmd), "\"%s\" --version >/dev/null 2>&1", command);
+    return run_cmd_exit_zero(cmd);
+}
+
+static int host_system_toolchain_ready(void) {
+    char python[1200], tool[1200];
+
+    if (!find_on_path("cmake", g_cmake, sizeof(g_cmake)) ||
+        !posix_command_runs(g_cmake))
+        return 0;
+    /* Do not call find_python here. A failed Windows pack can remain in the
+     * shared cache and its python.exe must not shadow native Python on Unix. */
+    if (!(find_on_path("python3", python, sizeof(python)) ||
+          find_on_path("python", python, sizeof(python))) ||
+        !posix_command_runs(python))
+        return 0;
+    if (!find_on_path("ninja", tool, sizeof(tool)) ||
+        !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("cc", tool, sizeof(tool)) ||
+          find_on_path("gcc", tool, sizeof(tool)) ||
+          find_on_path("clang", tool, sizeof(tool))) ||
+        !posix_command_runs(tool))
+        return 0;
+    if (!(find_on_path("c++", tool, sizeof(tool)) ||
+          find_on_path("g++", tool, sizeof(tool)) ||
+          find_on_path("clang++", tool, sizeof(tool))) ||
+        !posix_command_runs(tool))
+        return 0;
+    return 1;
+}
+#endif
+
 static int active_toolchain_meets_min(void) {
     char pack[1400];
     if (!g_toolchain_bin[0] && !resolve_toolchain_bin(g_toolchain_bin,
@@ -3285,6 +3416,9 @@ static int host_toolchain_is_ready(void) {
     if (!g_project_root[0])
         return 0;
     g_tc_repair_note[0] = '\0';
+#if !defined(_WIN32)
+    return host_system_toolchain_ready();
+#endif
     migrate_legacy_psxrecomp_toolchain();
     /* Wizard open: drop broken latest/ before treating the pack as ready. */
     heal_broken_toolchain_pointers();
@@ -3456,6 +3590,9 @@ static int host_toolchain_update_available(char* local_ver, size_t local_cap,
         local_ver[0] = '\0';
     if (remote_ver && remote_cap)
         remote_ver[0] = '\0';
+#if !defined(_WIN32)
+    return 0;
+#endif
     if (skip && skip[0] && skip[0] != '0')
         return 0;
     if (!g_project_root[0])
@@ -3486,6 +3623,16 @@ static int host_ensure_toolchain_with_progress(
         snprintf(err_msg, err_cap, "Project root is not available.");
         return 0;
     }
+#if !defined(_WIN32)
+    if (on_progress)
+        on_progress(progress_ctx, 0.02f, "Checking native build tools…");
+    if (host_system_toolchain_ready())
+        return 1;
+    snprintf(err_msg, err_cap,
+             "Native build tools are missing. Install CMake, Ninja, Python, "
+             "and C/C++ compilers, then restart setup.");
+    return 0;
+#endif
     migrate_legacy_psxrecomp_toolchain();
     activate_toolchain_path();
     if (!force && host_portable_cmake_ready())
@@ -3896,12 +4043,17 @@ static int host_prepare_generate(const char* source_path, char* out_path,
 #if defined(_WIN32)
     char cmdline[4096];
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
+        char stem_arg[600];
+        stem_arg[0] = 0;
+        if (stem[0])
+            snprintf(stem_arg, sizeof(stem_arg), " --bios-stem \"%s\"", stem);
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
-                 "--disc \"%s\" --bios \"%s\" --gen-marker \"%s\" "
+                 "--disc \"%s\" --bios \"%s\"%s --gen-marker \"%s\" "
                  "--json-progress",
                  g_python, g_cli_path, g_project_root, g_game_toml, source_path,
-                 bios_path, marker_name);
+                 bios_path, stem_arg, marker_name);
     } else {
         snprintf(cmdline, sizeof(cmdline),
                  "\"%s\" \"%s\" generate --project-root \"%s\" --config \"%s\" "
@@ -3913,7 +4065,7 @@ static int host_prepare_generate(const char* source_path, char* out_path,
                      "psxrecomp generate"))
         return 0;
 #else
-    char* argv[16];
+    char* argv[20];
     int argc = 0;
     argv[argc++] = g_python;
     argv[argc++] = g_cli_path;
@@ -3925,8 +4077,13 @@ static int host_prepare_generate(const char* source_path, char* out_path,
     argv[argc++] = "--disc";
     argv[argc++] = (char*)source_path;
     if (have_bios) {
+        const char* stem = setup_retail_bios_stem();
         argv[argc++] = "--bios";
         argv[argc++] = bios_path;
+        if (stem[0]) {
+            argv[argc++] = "--bios-stem";
+            argv[argc++] = (char*)stem;
+        }
     }
     argv[argc++] = "--gen-marker";
     argv[argc++] = (char*)marker_name;
@@ -3999,6 +4156,12 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
     bat_write_set(f, "EXE", g_exe_path);
     bat_write_set(f, "DISPLAY", g_display);
     {
+        char diag_dir[1200];
+        if (join_path(diag_dir, sizeof(diag_dir), g_project_root,
+                      PSX_DIAGNOSTIC_DIR_NAME))
+            bat_write_set(f, "DIAG_DIR", diag_dir);
+    }
+    {
         /* Post-build sanity: the dispatch file the launcher will gate on. */
         char marker_abs[1200];
         if (join_path(marker_abs, sizeof(marker_abs), g_project_root,
@@ -4036,14 +4199,16 @@ static int write_windows_deferred_rebuild_helper(int force_pgo,
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--disc \"%%DISC%%\" --force-pgo --pgo-video\r\n");
+                "--disc \"%%DISC%%\" --force-pgo --pgo-video "
+                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
     } else {
         fprintf(f,
                 "echo Building...\r\n"
                 "\"%%PYTHON%%\" \"%%CLI%%\" rebuild --project-root \"%%ROOT%%\" "
                 "--config \"%%CONFIG%%\" --build-dir \"%%BUILD_DIR%%\" "
                 "--target \"%%TARGET%%\" --exe-basename \"%%EXE_BASE%%\" "
-                "--no-pgo --prune-after build-intermediates\r\n");
+                "--no-pgo --prune-after build-intermediates "
+                "--diagnostic-dir \"%%DIAG_DIR%%\"\r\n");
     }
     fprintf(f,
             "if errorlevel 1 (\r\n"
@@ -4146,6 +4311,7 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
                               : "Starting rebuild (cmake)…");
 
     char disc_arg_storage[1100];
+    char diag_dir_storage[1200];
     char* argv[40];
     int argc = 0;
     argv[argc++] = g_python;
@@ -4173,6 +4339,11 @@ static int host_rebuild_game_ex(const char* disc_path, int force_pgo,
         argv[argc++] = "--no-pgo";
         argv[argc++] = "--prune-after";
         argv[argc++] = "build-intermediates";
+    }
+    if (join_path(diag_dir_storage, sizeof(diag_dir_storage), g_project_root,
+                  PSX_DIAGNOSTIC_DIR_NAME)) {
+        argv[argc++] = "--diagnostic-dir";
+        argv[argc++] = diag_dir_storage;
     }
     argv[argc++] = "--json-progress";
     argv[argc] = NULL;
@@ -4353,15 +4524,67 @@ static void host_selfcheck_or_return(const PsxrecompCodegenHostConfig* cfg,
     printf(",\n  \"game_dispatch_present\": %s", game_ok ? "true" : "false");
     printf(",\n  \"bios_backends_present\": %s", bios_ok ? "true" : "false");
     printf(",\n  \"sources_missing\": %s", missing ? "true" : "false");
+    printf(",\n  \"diagnostic_dir\": ");
+    host_json_str(PSX_DIAGNOSTIC_DIR_NAME);
+    printf(",\n  \"diagnostic_build_present\": %s",
+           diagnostic_build_present() ? "true" : "false");
+    printf(",\n  \"diagnostic_marker\": ");
+    host_json_str(PSX_DIAGNOSTIC_MARKER);
+    printf(",\n  \"diagnostic_mode_requested\": %s",
+           diagnostic_requested(argc, argv) ? "true" : "false");
     printf("\n}\n");
     fflush(stdout);
     exit(missing ? 2 : 0);
 }
 
 /* Setup-host zip-root exe → build-release product (bios/mods/assets/settings). */
+/* --collect-diagnostics: run `psxrecomp_cli.py diagnostics` for this project
+ * and exit with its status. The zip lands beside the setup exe; the player
+ * attaches it to a GitHub issue (docs/DIAGNOSTIC_MODE.md). */
+static void host_collect_diagnostics_or_return(
+    const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
+    char python[1100], cli[1200], cmd[4096];
+    int status;
+    if (!argv_has(argc, argv, "--collect-diagnostics"))
+        return;
+    if (!cfg) {
+        fprintf(stderr, "psxrecomp-codegen: no codegen host config linked\n");
+        exit(1);
+    }
+    g_cfg = cfg;
+    if (!g_project_root[0] &&
+        !discover_project_root(g_project_root, sizeof(g_project_root))) {
+        fprintf(stderr, "psxrecomp-codegen: project root not found\n");
+        exit(1);
+    }
+    activate_toolchain_path();
+    if (!find_python(python, sizeof(python))) {
+        fprintf(stderr,
+                "psxrecomp-codegen: no usable Python; install Python 3 or the "
+                "portable toolchain, then rerun --collect-diagnostics\n");
+        exit(1);
+    }
+    if (!join_path(cli, sizeof(cli), g_project_root,
+                   cfg_or(cfg->psxrecomp_cli_relpath, "psxrecomp/psxrecomp_cli.py"))) {
+        fprintf(stderr, "psxrecomp-codegen: CLI path too long\n");
+        exit(1);
+    }
+#if defined(_WIN32)
+    /* cmd.exe drops the outer quotes of a quoted command line; wrap once more. */
+    snprintf(cmd, sizeof(cmd), "\"\"%s\" \"%s\" diagnostics --project-root \"%s\"\"",
+             python, cli, g_project_root);
+#else
+    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" diagnostics --project-root \"%s\"",
+             python, cli, g_project_root);
+#endif
+    status = system(cmd);
+    exit(status == 0 ? 0 : 1);
+}
+
 void psxrecomp_codegen_host_forward_if_built(
     const PsxrecompCodegenHostConfig* cfg, int argc, char** argv) {
     host_selfcheck_or_return(cfg, argc, argv); /* exits when requested */
+    host_collect_diagnostics_or_return(cfg, argc, argv); /* exits when requested */
 #if defined(PSX_HAS_GAME_DISPATCH)
     /* Full game binary — already the product tree. */
     (void)cfg;
@@ -4400,6 +4623,23 @@ void psxrecomp_codegen_host_forward_if_built(
         return;
     if (!resolve_build_paths())
         return;
+    if (diagnostic_requested(argc, argv)) {
+        char diag_exe[1300];
+        if (resolve_diagnostic_exe_path(diag_exe, sizeof(diag_exe)) &&
+            path_is_file(diag_exe)) {
+            snprintf(g_exe_path, sizeof(g_exe_path), "%s", diag_exe);
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested (%s / --diagnostic / %s):\n"
+                    "  reports land under %s\n",
+                    PSX_DIAGNOSTIC_MARKER, PSX_DIAGNOSTIC_ENV, PSX_DIAGNOSTIC_DIR_NAME);
+        } else {
+            fprintf(stderr,
+                    "psxrecomp-codegen: diagnostic mode requested but %s/ has no "
+                    "product yet; starting the normal build. Run Generate & rebuild "
+                    "again (or the CLI rebuild with --diagnostic-dir) to create it.\n",
+                    PSX_DIAGNOSTIC_DIR_NAME);
+        }
+    }
     if (!g_exe_path[0] || !path_is_file(g_exe_path))
         return;
     if (!host_self_exe_path(self, sizeof(self)))
@@ -4429,6 +4669,8 @@ void psxrecomp_codegen_host_forward_if_built(
             int has_launcher = 0;
             for (i = 1; i < argc && argv && argv[i]; ++i) {
                 int n;
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
                 if (strcmp(argv[i], "--launcher") == 0)
                     has_launcher = 1;
                 n = snprintf(cmd + pos, sizeof(cmd) - pos, " \"%s\"", argv[i]);
@@ -4467,11 +4709,17 @@ void psxrecomp_codegen_host_forward_if_built(
         if (!args)
             return;
         args[0] = g_exe_path;
-        for (i = 1; i < argc && argv && argv[i]; ++i)
-            args[i] = argv[i];
-        if (!has_launcher)
-            args[i++] = "--launcher";
-        args[i] = NULL;
+        {
+            int n = 1;
+            for (i = 1; i < argc && argv && argv[i]; ++i) {
+                if (strcmp(argv[i], "--diagnostic") == 0)
+                    continue; /* host-only switch; the runtime does not take it */
+                args[n++] = argv[i];
+            }
+            if (!has_launcher)
+                args[n++] = "--launcher";
+            args[n] = NULL;
+        }
         if (g_project_root[0] && chdir(g_project_root) != 0) {
             fprintf(stderr, "psxrecomp-codegen: chdir(%s) failed: %s\n",
                     g_project_root, strerror(errno));

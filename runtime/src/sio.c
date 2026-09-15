@@ -3028,8 +3028,7 @@ void sio_snapshot_write(uint8_t *p) {
     (void)sio_snap_emit(&w);
 }
 
-int sio_snapshot_read(const uint8_t *p, uint32_t len) {
-    PstR r;
+int sio_snapshot_size_valid(uint32_t len) {
     const uint32_t current = sio_snapshot_bytes();
     if (!current) return 0;
     const uint32_t rumble_bytes = (uint32_t)(sizeof(pad_rumble_map) +
@@ -3037,6 +3036,12 @@ int sio_snapshot_read(const uint8_t *p, uint32_t len) {
                                   sizeof(pad_rumble_large));
     if (len != current && (len > current || len + rumble_bytes != current))
         return 0;
+    return 1;
+}
+
+int sio_snapshot_read(const uint8_t *p, uint32_t len) {
+    PstR r;
+    if (!p || !sio_snapshot_size_valid(len)) return 0;
     pst_r_init(&r, p, len);
     return sio_snap_parse(&r);
 }

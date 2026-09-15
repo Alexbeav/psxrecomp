@@ -28,6 +28,7 @@
 #include "host_osd.h"
 #include "host_keymap.h"
 #include "png_write.h"       /* png_write_rgb — present_shot readback */
+#include "controller_port_route.h"
 #include "overlay_capture.h"
 #include "overlay_loader.h"
 #include "autocompile.h"
@@ -94,6 +95,8 @@ extern "C" void psx_event_step_conservative_env_init(void);
 
 #if defined(RECOMP_LAUNCHER)
 #include "recomp_launcher.h"   /* shared recomp-ui Dear ImGui launcher */
+#include "recomp_runtime_ui.h" /* shared renderer-neutral in-game settings */
+#include "launcher_files.h"    /* session-only in-game disc picker */
 #include "launcher_profile.h"  /* per-system variant profile (theme/caps bundle) */
 #include "launcher_boot_timing.h" /* PSX_LAUNCHER_BOOT_TIMING stamps */
 #if defined(PSX_HAS_CODEGEN_SETUP_HOST)
@@ -385,6 +388,10 @@ struct PlayerInput {
     bool    rumble_warned = false;
 };
 static PlayerInput g_players[PSX_MAX_PLAYERS];
+/* Host-side routing permutation. False: host P1->console port 1. True: host
+ * P1->console port 2 (and host P2->console port 1). It deliberately is not
+ * serialized in guest save states: this models physically moving plugs. */
+static bool g_controller_ports_swapped = false;
 /* Offline SIO sample loop bound (from game.toml players; clamped). */
 static int g_offline_pad_count = 2;
 /* Set when [controller] lock_mode pins every seat to digital — blocks the
@@ -1215,6 +1222,10 @@ static int           g_fullscreen     = 0;  /* tri-state: 0 windowed, 1 borderle
 static int           g_video_screen   = 0;  /* 0=raw,1=crt,2=composite,3=trinitron */
 static int           g_video_win_w    = 0;    /* 0 = fit the display; see clamp_window_aspect */
 static bool          g_video_win_w_explicit = false; /* user chose a width */
+/* Resolved settings.toml for the live runtime UI.  The overlay only writes
+ * standard settings it actually exposes and never persists a session disc or
+ * the transient controller-port route. */
+static std::filesystem::path g_runtime_settings_path;
 static bool          g_audio_spu_hq   = false; /* SPU float-shadow (env overrides) */
 static int           g_audio_freq     = 44100; /* host device request */
 static int           g_auto_skip_fmv  = 0;   /* skip FMVs the instant they're detected */
@@ -4327,10 +4338,12 @@ static void update_controller_rumble(void) {
         const char* e = std::getenv("PSX_RUMBLE_TRACE");
         return e && e[0] && e[0] != '0';
     }();
-    for (int s = 0; s < PSX_MAX_PLAYERS; s++) {
-        PlayerInput& p = g_players[s];
+    for (int host = 0; host < PSX_MAX_PLAYERS; host++) {
+        const int sio_slot = controller_port_route_sio_for_host(
+            host, g_controller_ports_swapped ? 1 : 0);
+        PlayerInput& p = g_players[host];
         uint8_t small = 0, large = 0;
-        sio_get_pad_rumble(s, &small, &large);
+        sio_get_pad_rumble(sio_slot, &small, &large);
         if (!p.handle) {
             p.rumble_small = small;
             p.rumble_large = large;
@@ -4355,14 +4368,14 @@ static void update_controller_rumble(void) {
             if (rc != 0 && !p.rumble_warned) {
                 std::fprintf(stderr,
                     "psxrecomp runtime: controller for slot %d rejected rumble: %s\n",
-                    s + 1, SDL_GetError());
+                    host + 1, SDL_GetError());
                 p.rumble_warned = true;
             }
         }
         if (trace && changed) {
             std::fprintf(stdout,
-                "psxrecomp rumble: slot=%d small=%u large=%u\n",
-                s + 1, (unsigned)small, (unsigned)large);
+                "psxrecomp rumble: host=%d sio_port=%d small=%u large=%u\n",
+                host + 1, sio_slot + 1, (unsigned)small, (unsigned)large);
         }
         p.rumble_small = small;
         p.rumble_large = large;
@@ -4393,6 +4406,41 @@ static int effective_player_mode_for_sio(const PlayerInput& p, int sio_slot) {
     return effective_player_mode(p);
 }
 
+static bool dev_any_input_enabled();
+
+static int host_player_for_sio_slot(int sio_slot) {
+    return controller_port_route_host_for_sio(
+        sio_slot, g_controller_ports_swapped ? 1 : 0);
+}
+
+static int controller_port_swap_available(void) {
+    return PSX_MAX_PLAYERS >= 2 && !psx_netplay_active() &&
+           !sio_get_multitap() && g_offline_pad_count <= 2;
+}
+
+/* Reassert console-visible connection and controller type after hotplug or a
+ * routing change. The host device array is never reordered: every consumer
+ * maps through the same permutation, including rumble and dev-any input. */
+static void refresh_sio_port_routes(void) {
+    if (psx_netplay_active())
+        return;
+    for (int sio_slot = 0; sio_slot < PSX_MAX_PLAYERS; sio_slot++) {
+        const int host = host_player_for_sio_slot(sio_slot);
+        PlayerInput& p = g_players[host];
+        const bool dev_host_p1 = dev_any_input_enabled() && host == 0;
+        const int mode = effective_player_mode_for_sio(p, sio_slot);
+        const ModControllerPresentationPolicy& policy = g_mod_controller_policy[sio_slot];
+        const int boot_mode = policy.callback ? policy.initial_mode : mode;
+        sio_set_pad_connected(sio_slot,
+                              (p.kind != 0 || dev_host_p1) ? 1 : 0);
+        sio_set_pad_analog(sio_slot, pad_mode_boot_analog(boot_mode),
+                           0x80, 0x80, 0x80, 0x80);
+        sio_set_pad_config_capable(
+            sio_slot, policy.callback ? policy.config_capable
+                                      : mode != PSXRecompV4::PAD_MODE_DIGITAL);
+    }
+}
+
 /* Open/close SDL handles so they match g_players, and (re)assert each slot's
  * PSX connection + pad type. Safe to call repeatedly (hotplug, boot).
  * While delay-sync netplay is active, SIO connection/type are owned by
@@ -4403,24 +4451,9 @@ static void refresh_player_devices(void) {
         PlayerInput& p = g_players[s];
         if (p.kind != 2) close_player(p);           /* keyboard/none: no handle */
         else open_player(p, s);
-        if (netplay) continue;
-        const int mode = effective_player_mode_for_sio(p, s);
-        const ModControllerPresentationPolicy& policy =
-            g_mod_controller_policy[s];
-        const int boot_mode = policy.callback ? policy.initial_mode : mode;
-        sio_set_pad_connected(s, p.kind != 0 ? 1 : 0);
-        sio_set_pad_analog(s, pad_mode_boot_analog(boot_mode),
-                           0x80, 0x80, 0x80, 0x80);
-        /* DIGITAL mode == a plain digital controller that ignores the DualShock
-         * config-mode commands (real SCPH-1080 behaviour); ANALOG or an
-         * explicitly config-capable mod policy == a config-capable DualShock.
-         * A digital pad that wrongly answered 0x43 sent Tomba 2's pad driver
-         * down the config path -> phantom 0x00 reads.
-         * Multitap taps are always digital (see sio_pad_on_multitap). */
-        sio_set_pad_config_capable(
-            s, policy.callback ? policy.config_capable
-                               : mode != PSXRecompV4::PAD_MODE_DIGITAL);
     }
+    if (!netplay)
+        refresh_sio_port_routes();
 }
 
 /* Parse a [controller] device string into a player slot:
@@ -5034,11 +5067,12 @@ static int capture_pad_slot(int s, PsxNetPad* out) {
     out->analog = 0;
     out->connected = 0;
 
-    PlayerInput& p = g_players[s];
-    const int  player  = s + 1;             /* keybinds.ini section (1..5) */
+    const int host = host_player_for_sio_slot(s);
+    PlayerInput& p = g_players[host];
+    const int  player  = host + 1;          /* keybinds.ini section (1..5) */
     /* Opt-in dev merge: P1 is driven by the keyboard AND every connected
      * controller (PSX_DEV_INPUT=1). Default is strict per-slot routing. */
-    const bool dev_here = (dev_any_input_enabled() && s == 0);
+    const bool dev_here = (dev_any_input_enabled() && host == 0);
     if (p.kind == 0 && !dev_here) return 0;  /* no device in this port */
 
     /* Resolve the pad type this frame FIRST — the effective analog/digital
@@ -5624,6 +5658,8 @@ static void sample_pad_into_sio(int override) {
     }
     int n = g_offline_pad_count;
     if (n < 1) n = 1;
+    /* A one-player title still needs console port 2 sampled after a live swap. */
+    if (g_controller_ports_swapped && n < 2) n = 2;
     if (n > PSX_MAX_PLAYERS) n = PSX_MAX_PLAYERS;
     const uint32_t consumer_sim =
         psx_start_consumer_enabled() ? psx_start_consumer_offline_frame() : 0u;
@@ -5639,7 +5675,7 @@ static void sample_pad_into_sio(int override) {
         if (psx_start_consumer_enabled())
             psx_start_consumer_note(s, consumer_sim, pad.buttons);
         if (psx_start_bisect_enabled() && s == 0) {
-            const int sdl = netplay_sdl_start_held(s);
+            const int sdl = netplay_sdl_start_held(host_player_for_sio_slot(s));
             const int cap = ((uint16_t)(~pad.buttons) & 0x0008u) != 0;
             const int sio =
                 ((uint16_t)(~sio_get_pad_buttons_slot(s)) & 0x0008u) != 0;
@@ -6085,6 +6121,306 @@ static int savestate_menu_open = 0;
 static int savestate_menu_slot = 0;
 static int savestate_menu_ignore_toggle_release = 0;
 static SDL_Keycode savestate_menu_open_key = 0;
+static int runtime_settings_menu_open = 0;
+static SDL_Keycode runtime_settings_menu_open_key = 0;
+
+static void runtime_settings_menu_sync_overlay(void);
+static void controller_port_route_toggle(void);
+
+#if defined(RECOMP_LAUNCHER)
+static RecompRuntimeUi *g_runtime_settings_ui;
+
+struct PsxRuntimeUiContext {
+    RecompRuntimeUi *ui = nullptr;
+};
+static PsxRuntimeUiContext g_runtime_ui_context;
+
+static const char kRuntimeControllerRoute[] = "psx.controller_route";
+static const char kRuntimeDiscChange[] = "psx.disc_change";
+static const char kRuntimeDiscReinsert[] = "psx.disc_reinsert";
+static const char *const kControllerRouteChoices[] = { "Port 1", "Port 2" };
+
+static int runtime_ui_get_value(void*, const RecompRuntimeUiItem *item,
+                                int *value_out) {
+    if (!item || !item->key || !value_out) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0)
+        *value_out = g_fullscreen;
+    else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0)
+        *value_out = std::max(1, std::min(4, (g_video_win_w + 320) / 640));
+    else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_LINEAR_FILTER) == 0)
+        *value_out = g_video_aa ? 1 : 0;
+    else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0)
+        *value_out = g_video_texfilter ? 1 : 0;
+    else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0)
+        *value_out = host_volume_get();
+    else if (std::strcmp(item->key, kRuntimeControllerRoute) == 0)
+        *value_out = g_controller_ports_swapped ? 1 : 0;
+    else
+        return 0;
+    return 1;
+}
+
+static int runtime_ui_set_value(void*, const RecompRuntimeUiItem *item,
+                                int value) {
+    if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_FULLSCREEN) == 0) {
+        if (value < 0 || value > 2) return 0;
+        g_fullscreen = value;
+        if (sdl_window)
+            SDL_SetWindowFullscreen(sdl_window,
+                                    psx_fullscreen_flag_for_mode(value));
+    } else if (std::strcmp(item->key,
+                           RECOMP_RUNTIME_UI_KEY_WINDOW_SCALE) == 0) {
+        if (value < 1 || value > 4) return 0;
+        g_video_win_w = value * 640;
+        g_video_win_w_explicit = true;
+        if (sdl_window) {
+            int height = g_video_win_w * g_video_aspect_den /
+                         std::max(1, g_video_aspect_num);
+            SDL_SetWindowSize(sdl_window, g_video_win_w, height);
+        }
+    } else if (std::strcmp(item->key,
+                           RECOMP_RUNTIME_UI_KEY_LINEAR_FILTER) == 0) {
+        g_video_aa = value != 0;
+        if (sdl_texture)
+            SDL_SetTextureScaleMode(
+                sdl_texture,
+                g_video_aa ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    } else if (std::strcmp(item->key,
+                           RECOMP_RUNTIME_UI_KEY_TEXTURE_FILTER) == 0) {
+        g_video_texfilter = value ? 1 : 0;
+        gr_set_texture_filter(g_video_texfilter);
+    } else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) {
+        host_volume_set(value);
+    } else if (std::strcmp(item->key, kRuntimeControllerRoute) == 0) {
+        if (!controller_port_swap_available()) return 0;
+        const int requested = value ? 1 : 0;
+        if (requested != (g_controller_ports_swapped ? 1 : 0))
+            controller_port_route_toggle();
+    } else {
+        return 0;
+    }
+    psx_savestate_menu_note_runtime_changed();
+    return 1;
+}
+
+static void runtime_ui_save(void*) {
+    if (g_runtime_settings_path.empty()) return;
+    PSXRecompV4::UserSettings settings =
+        PSXRecompV4::load_user_settings(g_runtime_settings_path);
+    if (settings.parse_error) {
+        host_osd_push("Settings not saved: settings.toml has a parse error",
+                      2600);
+        return;
+    }
+    settings.fullscreen = g_fullscreen;
+    settings.has_fullscreen = true;
+    settings.window_width = g_video_win_w;
+    settings.has_window_width = true;
+    settings.antialiasing = g_video_aa;
+    settings.has_antialiasing = true;
+    settings.texture_filter = g_video_texfilter;
+    settings.has_texture_filter = true;
+    settings.volume = host_volume_get();
+    settings.has_volume = true;
+    if (!PSXRecompV4::save_user_settings(g_runtime_settings_path, settings))
+        host_osd_push("Settings changed live but could not be saved", 2200);
+}
+
+static int runtime_ui_change_disc(PsxRuntimeUiContext *context) {
+    static const char *const patterns[] = {
+        "*.cue", "*.chd", "*.bin", "*.iso", "*.img", "*.car"
+    };
+    char picked[4096] = {};
+    if (!launcher_pick_file("Change PlayStation disc", patterns,
+                            (int)(sizeof(patterns) / sizeof(patterns[0])),
+                            "PlayStation disc images", picked,
+                            sizeof(picked)))
+        return 0;
+
+    const auto resolved = PSXRecompV4::resolve_disc_path(picked);
+    const auto identity = PSXRecompV4::identify_disc(
+        picked, std::string(), 0, false, false);
+    if (!identity.toc_opened || resolved.mount.empty()) {
+        host_osd_push("Disc change failed: image or cue could not be opened",
+                      2600);
+        return 0;
+    }
+
+    char scex[4];
+    const char *scex_ptr = nullptr;
+    if (identity.region == "PAL") {
+        std::memcpy(scex, "SCEE", sizeof(scex)); scex_ptr = scex;
+    } else if (identity.region == "NTSC-J") {
+        std::memcpy(scex, "SCEI", sizeof(scex)); scex_ptr = scex;
+    } else if (identity.region == "NTSC-U") {
+        std::memcpy(scex, "SCEA", sizeof(scex)); scex_ptr = scex;
+    }
+
+    const std::string mount = resolved.mount.string();
+    if (!cdrom_replace_disc(mount.c_str(), scex_ptr)) {
+        host_osd_push("Disc change failed; current disc is still mounted",
+                      2600);
+        return 0;
+    }
+
+    const std::string leaf = resolved.mount.filename().string();
+    char message[320];
+    std::snprintf(message, sizeof(message), "Disc changed: %s", leaf.c_str());
+    host_osd_push(message, 2400);
+    if (context && context->ui)
+        recomp_runtime_ui_close(context->ui);
+    return 1;
+}
+
+static int runtime_ui_run_action(void *opaque,
+                                 const RecompRuntimeUiItem *item) {
+    auto *context = static_cast<PsxRuntimeUiContext*>(opaque);
+    if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_RESUME) == 0) {
+        if (context && context->ui) recomp_runtime_ui_close(context->ui);
+        return 1;
+    }
+    if (std::strcmp(item->key, kRuntimeDiscChange) == 0)
+        return runtime_ui_change_disc(context);
+    if (std::strcmp(item->key, kRuntimeDiscReinsert) == 0) {
+        if (!cdrom_has_disc() || psx_netplay_active()) return 0;
+        debug_force_cd_reinsert();
+        host_osd_push("Current disc reinserted", 1800);
+        if (context && context->ui) recomp_runtime_ui_close(context->ui);
+        return 1;
+    }
+    return 0;
+}
+
+static int runtime_ui_is_enabled(void*, const RecompRuntimeUiItem *item) {
+    if (!item || !item->key) return 0;
+    if (std::strcmp(item->key, kRuntimeControllerRoute) == 0)
+        return controller_port_swap_available();
+    if (std::strcmp(item->key, kRuntimeDiscChange) == 0)
+        return !psx_netplay_active();
+    if (std::strcmp(item->key, kRuntimeDiscReinsert) == 0)
+        return !psx_netplay_active() && cdrom_has_disc();
+    return 1;
+}
+
+static void runtime_ui_visibility_changed(void*, int open) {
+    runtime_settings_menu_open = open ? 1 : 0;
+    runtime_settings_menu_sync_overlay();
+}
+
+static void runtime_settings_ui_ensure_created(void) {
+    if (g_runtime_settings_ui) return;
+
+    static const RecompRuntimeUiItem extras[] = {
+        { kRuntimeControllerRoute, "Input", "Controller 1 route",
+          "Move host controller 1 between console ports without restarting.",
+          RECOMP_RUNTIME_UI_CHOICE, 0, 1, 1, kControllerRouteChoices, 2,
+          nullptr },
+        { kRuntimeDiscChange, "Disc", "Change disc...",
+          "Mount another disc for this session. Startup settings are unchanged.",
+          RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, nullptr, 0, nullptr },
+        { kRuntimeDiscReinsert, "Disc", "Reinsert current disc",
+          "Signal a tray-open/close cycle without changing the mounted image.",
+          RECOMP_RUNTIME_UI_ACTION, 0, 0, 0, nullptr, 0, nullptr },
+    };
+
+    RecompRuntimeUiStandardConfig config{};
+    config.menu.title = "Runtime settings";
+    config.menu.subtitle = "Paused - live settings and session tools";
+    config.menu.theme = "psx";
+    config.menu.accept_label = "Enter / Cross";
+    config.menu.back_label = "Esc / Circle";
+    config.menu.callbacks.context = &g_runtime_ui_context;
+    config.menu.callbacks.get_value = runtime_ui_get_value;
+    config.menu.callbacks.set_value = runtime_ui_set_value;
+    config.menu.callbacks.run_action = runtime_ui_run_action;
+    config.menu.callbacks.is_enabled = runtime_ui_is_enabled;
+    config.menu.callbacks.save = runtime_ui_save;
+    config.menu.callbacks.visibility_changed = runtime_ui_visibility_changed;
+    config.features =
+        RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
+        RECOMP_RUNTIME_UI_STANDARD_WINDOW_SCALE |
+        RECOMP_RUNTIME_UI_STANDARD_LINEAR_FILTER |
+        RECOMP_RUNTIME_UI_STANDARD_TEXTURE_FILTER |
+        RECOMP_RUNTIME_UI_STANDARD_VOLUME |
+        RECOMP_RUNTIME_UI_STANDARD_RESUME;
+    config.window_scale_max = 4;
+    config.extra_items = extras;
+    config.extra_item_count = sizeof(extras) / sizeof(extras[0]);
+    g_runtime_settings_ui = recomp_runtime_ui_create_standard(&config);
+    g_runtime_ui_context.ui = g_runtime_settings_ui;
+    psx_savestate_menu_set_runtime_ui(g_runtime_settings_ui);
+}
+#endif
+
+static void runtime_settings_menu_sync_overlay(void) {
+#if defined(RECOMP_LAUNCHER)
+    psx_savestate_menu_set_runtime_ui(g_runtime_settings_ui);
+#endif
+    psx_savestate_menu_set_runtime_settings(
+        runtime_settings_menu_open, g_controller_ports_swapped ? 1 : 0,
+        controller_port_swap_available());
+}
+
+static void runtime_settings_menu_close(void) {
+#if defined(RECOMP_LAUNCHER)
+    if (g_runtime_settings_ui &&
+        recomp_runtime_ui_is_open(g_runtime_settings_ui)) {
+        recomp_runtime_ui_close(g_runtime_settings_ui);
+    } else
+#endif
+    {
+        runtime_settings_menu_open = 0;
+        runtime_settings_menu_sync_overlay();
+    }
+    host_osd_push("Runtime settings closed", 800);
+}
+
+static void controller_port_route_toggle(void) {
+    if (!controller_port_swap_available()) {
+        host_osd_push(psx_netplay_active()
+                          ? "Controller swap is unavailable during netplay"
+                          : "Controller swap is unavailable with multitap",
+                      1800);
+        runtime_settings_menu_sync_overlay();
+        return;
+    }
+    g_controller_ports_swapped = !g_controller_ports_swapped;
+    refresh_sio_port_routes();
+    runtime_settings_menu_sync_overlay();
+    host_osd_push(g_controller_ports_swapped
+                      ? "Controller 1 moved to console port 2"
+                      : "Controller 1 moved to console port 1",
+                  1800);
+    /* A physical unplug/replug cannot carry a held button across ports. */
+    savestate_input_guard_arm();
+}
+
+static void runtime_settings_menu_toggle(SDL_Keycode opened_by_key) {
+    if (psx_netplay_active()) {
+        host_osd_push("Runtime settings are unavailable during netplay", 1800);
+        return;
+    }
+    if (psx_rewind_is_open() || savestate_menu_open)
+        return;
+    if (runtime_settings_menu_open) {
+        runtime_settings_menu_close();
+        return;
+    }
+#if defined(RECOMP_LAUNCHER)
+    runtime_settings_ui_ensure_created();
+    if (g_runtime_settings_ui) {
+        runtime_settings_menu_open_key = opened_by_key;
+        recomp_runtime_ui_open(g_runtime_settings_ui);
+        runtime_settings_menu_sync_overlay();
+        return;
+    }
+#endif
+    runtime_settings_menu_open = 1;
+    runtime_settings_menu_open_key = opened_by_key;
+    runtime_settings_menu_sync_overlay();
+}
 
 static void savestate_menu_sync_overlay(void) {
     psx_savestate_menu_set_state(savestate_menu_open, savestate_menu_slot);
@@ -6097,7 +6433,7 @@ static void savestate_menu_close(void) {
 }
 
 static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
-    if (psx_rewind_is_open())
+    if (psx_rewind_is_open() || runtime_settings_menu_open)
         return;
     if (savestate_menu_open) {
         savestate_menu_close();
@@ -6107,6 +6443,105 @@ static void savestate_menu_toggle(SDL_Keycode opened_by_key) {
     savestate_menu_ignore_toggle_release = 1;
     savestate_menu_open_key = opened_by_key;
     savestate_menu_sync_overlay();
+}
+
+static void runtime_settings_menu_handle_key(SDL_Keycode key, SDL_Scancode scancode, int mod,
+                                             int repeat) {
+    if (runtime_settings_menu_open_key && key == runtime_settings_menu_open_key)
+        return;
+    if (host_keymap_match_event(HOST_KEYMAP_RUNTIME_MENU, (int)key, (int)scancode, mod) ||
+        key == SDLK_ESCAPE || key == SDLK_BACKSPACE) {
+#if defined(RECOMP_LAUNCHER)
+        if (g_runtime_settings_ui) {
+            recomp_runtime_ui_handle_input(
+                g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_BACK,
+                1, repeat);
+            return;
+        }
+#endif
+        runtime_settings_menu_close();
+    } else if (host_keymap_match_event(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                 (int)key, (int)scancode, mod)) {
+        if (!repeat)
+            controller_port_route_toggle();
+#if defined(RECOMP_LAUNCHER)
+    } else if (g_runtime_settings_ui) {
+        RecompRuntimeUiInput input;
+        if (key == SDLK_UP) input = RECOMP_RUNTIME_UI_INPUT_UP;
+        else if (key == SDLK_DOWN) input = RECOMP_RUNTIME_UI_INPUT_DOWN;
+        else if (key == SDLK_LEFT) input = RECOMP_RUNTIME_UI_INPUT_LEFT;
+        else if (key == SDLK_RIGHT) input = RECOMP_RUNTIME_UI_INPUT_RIGHT;
+        else if (key == SDLK_RETURN || key == SDLK_SPACE)
+            input = RECOMP_RUNTIME_UI_INPUT_ACCEPT;
+        else return;
+        recomp_runtime_ui_handle_input(g_runtime_settings_ui, input, 1,
+                                       repeat);
+#endif
+    } else if (!repeat &&
+               (key == SDLK_LEFT || key == SDLK_RIGHT ||
+                key == SDLK_RETURN || key == SDLK_SPACE)) {
+        controller_port_route_toggle();
+    }
+}
+
+static void runtime_settings_menu_poll_nav(void) {
+#if defined(RECOMP_LAUNCHER)
+    if (g_runtime_settings_ui) {
+        static uint32_t previous;
+        uint32_t current = 0;
+        SDL_GameController *h = g_players[0].handle;
+        if (h) {
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_UP))
+                current |= 1u << 0;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_DOWN))
+                current |= 1u << 1;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_LEFT))
+                current |= 1u << 2;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_DPAD_RIGHT))
+                current |= 1u << 3;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A))
+                current |= 1u << 4;
+            if (SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B) ||
+                SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK))
+                current |= 1u << 5;
+        }
+        const uint32_t pressed = current & ~previous;
+        if (pressed & (1u << 0)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_UP, 1, 0);
+        if (pressed & (1u << 1)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_DOWN, 1, 0);
+        if (pressed & (1u << 2)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_LEFT, 1, 0);
+        if (pressed & (1u << 3)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_RIGHT, 1, 0);
+        if (pressed & (1u << 4)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_ACCEPT, 1, 0);
+        if (pressed & (1u << 5)) recomp_runtime_ui_handle_input(
+            g_runtime_settings_ui, RECOMP_RUNTIME_UI_INPUT_BACK, 1, 0);
+        previous = current;
+        return;
+    }
+#endif
+    static int prev_toggle;
+    static int prev_cancel;
+    int toggle = 0;
+    int cancel = 0;
+    SDL_GameController *h = g_players[0].handle;
+    if (h) {
+        toggle = SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_A) ||
+                 SDL_GameControllerGetButton(h,
+                                             SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
+                 SDL_GameControllerGetButton(h,
+                                             SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+        cancel = SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_B) ||
+                 SDL_GameControllerGetButton(h, SDL_CONTROLLER_BUTTON_BACK);
+    }
+    if (toggle && !prev_toggle)
+        controller_port_route_toggle();
+    if (cancel && !prev_cancel)
+        runtime_settings_menu_close();
+    prev_toggle = toggle;
+    prev_cancel = cancel;
 }
 
 static void savestate_menu_move(int delta) {
@@ -6456,6 +6891,59 @@ static void savestate_menu_host_pause_loop(void) {
     savestate_input_guard_arm();
 }
 
+/* Freeze guest at the VBlank host boundary while runtime settings are open.
+ * Applying the routing permutation here means no guest instruction or SIO byte
+ * transfer runs concurrently with the change. */
+static void runtime_settings_menu_host_pause_loop(void) {
+    freeze_heartbeat_set_paused(1);
+    while (runtime_settings_menu_open) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) {
+                psx_crash_trace_set_exit_origin("sdl_window_close");
+                shutdown_runtime();
+                std::exit(0);
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                refresh_player_devices();
+            } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                close_controller();
+                refresh_player_devices();
+            } else if (ev.type == SDL_KEYDOWN) {
+#if defined(PSX_SDL3)
+                const SDL_Keymod mod = ev.key.mod;
+                const SDL_Keycode key = ev.key.key;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#else
+                const Uint16 mod = ev.key.keysym.mod;
+                const SDL_Keycode key = ev.key.keysym.sym;
+                const int repeat = ev.key.repeat ? 1 : 0;
+#endif
+                runtime_settings_menu_handle_key(key,
+#if defined(PSX_SDL3)
+                                                  ev.key.scancode,
+#else
+                                                  ev.key.keysym.scancode,
+#endif
+                                                  (int)mod, repeat);
+            } else if (ev.type == SDL_KEYUP) {
+#if defined(PSX_SDL3)
+                const SDL_Keycode key = ev.key.key;
+#else
+                const SDL_Keycode key = ev.key.keysym.sym;
+#endif
+                if (runtime_settings_menu_open_key == key)
+                    runtime_settings_menu_open_key = 0;
+            }
+        }
+        runtime_settings_menu_poll_nav();
+        rewind_pause_present();
+        starvation_watchdog_heartbeat();
+        SDL_Delay(8);
+    }
+    freeze_heartbeat_set_paused(0);
+    savestate_input_guard_arm();
+}
+
 /* Epilogue for netplay admit/pace AFTER all C++ RAII in the present body
  * is destroyed — episode snap load longjmps via psx_netplay_rb_flush_resume and
  * must not cross non-trivial destructors (UB / guest crash). */
@@ -6669,6 +7157,16 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
                                                  (int)mod)) {
                     savestate_menu_toggle(key);
                 }
+                else if (!key_repeat &&
+                         host_keymap_match_event(HOST_KEYMAP_RUNTIME_MENU,
+                                           (int)key, (int)scancode, (int)mod)) {
+                    runtime_settings_menu_toggle(key);
+                }
+                else if (!key_repeat &&
+                         host_keymap_match_event(HOST_KEYMAP_SWAP_CONTROLLER_PORTS,
+                                           (int)key, (int)scancode, (int)mod)) {
+                    controller_port_route_toggle();
+                }
                 else if (key == SDLK_c && (mod & KMOD_CTRL)) {
                     std::fprintf(stdout, "[DEBUG] Forzando reinserción de CD...\n");
                     debug_force_cd_reinsert();
@@ -6744,6 +7242,8 @@ static NetplayVblankEpilogue sdl_vblank_present_body(void) {
         psx_rewind_present_tick((uint32_t)SDL_GetTicks());
         if (savestate_menu_open)
             savestate_menu_host_pause_loop();
+        if (runtime_settings_menu_open)
+            runtime_settings_menu_host_pause_loop();
         if (psx_rewind_is_open())
             rewind_host_pause_loop();
     }
@@ -13103,6 +13603,7 @@ int main(int argc, char** argv) {
     {
         std::filesystem::path settings_path =
             exe_dir_from_argv(argv[0]) / "settings.toml";
+        g_runtime_settings_path = settings_path;
 #if defined(RECOMP_LAUNCHER)
         g_lnch_settings_path = settings_path;
 #endif
@@ -13186,6 +13687,7 @@ int main(int argc, char** argv) {
             g_video_aspect_den = us.aspect_den;
         }
         if (us.has_audio_freq)     g_audio_freq      = us.audio_freq;
+        if (us.has_volume)         host_volume_set(us.volume);
         if (us.has_spu_hq)         g_audio_spu_hq    = us.spu_hq;
         if (us.has_rewind)        g_rewind_enabled = us.rewind ? 1 : 0;
         if (us.has_rewind_depth)  g_rewind_depth   = us.rewind_depth;
@@ -14198,6 +14700,7 @@ int main(int argc, char** argv) {
                 seed.frame_interpolation   = ls.frame_interp != 0;     seed.has_frame_interpolation   = true;
                 seed.frame_interpolation_fps = ls.frame_interp_fps;    seed.has_frame_interpolation_fps = true;
                 seed.audio_freq            = ls.audio_freq;            seed.has_audio_freq            = true;
+                seed.volume                = ls.volume;                seed.has_volume                = true;
                 seed.spu_hq                = ls.spu_hq != 0;           seed.has_spu_hq                = true;
                 seed.rewind                = ls.rewind_enabled != 0;
                 seed.has_rewind            = true;
@@ -15028,7 +15531,7 @@ session_reboot:
 #ifdef PSX_COSIM
         cosim_init();  /* first-divergence oracle server */
 #endif
-        /* Heartbeat always on — see freeze_heartbeat.c rationale. */
+        /* Diagnostic builds keep an independent stall observer. */
         freeze_heartbeat_start("psx-runtime");
     } else {
 #ifndef PSX_NO_DEBUG_TOOLS
@@ -16346,6 +16849,8 @@ soft_return_lobby:
                 us.has_fullscreen = true;
                 us.window_width = ls.window_width > 0 ? ls.window_width : g_video_win_w;
                 us.has_window_width = true;
+                us.volume = ls.volume;
+                us.has_volume = true;
                 switch (ls.aspect_index) {
                     case 2:  us.aspect_num = 21; us.aspect_den = 9; break;
                     case 1:  us.aspect_num = 16; us.aspect_den = 9; break;

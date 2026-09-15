@@ -304,6 +304,47 @@ int test_hardware_register_semantics() {
     return 0;
 }
 
+int test_retained_arithmetic() {
+    /* PSX-SPX MAC1..3 are signed 44-bit accumulators before sf shifting.
+     * Fixed expectations are independent of the GTEState marshaling oracle. */
+    GTEState gte;
+    constexpr int64_t edge = int64_t{1} << 43;
+    const int64_t values[] = {int64_t{1} << 35, -(int64_t{1} << 35),
+                              edge - 1, -edge, edge, -edge - 1};
+    const uint32_t flags[] = {0, 0, 0, 0, 1u << 30, 1u << 27};
+    for (unsigned i = 0; i < 6; ++i) {
+        gte.FLAG = 0;
+        gte.check_mac_overflow(values[i], 1);
+        if (gte.FLAG != flags[i])
+            return fail_value("44-bit MAC bound", i, 1, 0, flags[i], gte.FLAG);
+    }
+    for (unsigned sf = 0; sf < 2; ++sf) {
+        for (unsigned lm = 0; lm < 2; ++lm) {
+            CPUState cpu{};
+            /* First partial sum overflows positive, second overflows negative,
+             * final value is in range. Both intermediate flags must survive. */
+            cpu.gte_ctrl[5] = 0x7FFFFFFFu;
+            cpu.gte_ctrl[0] = 0x80007FFFu;
+            cpu.gte_data[0] = 0x7FFF7FFFu;
+            gte_execute(&cpu, 0x12u | (sf << 19) | (lm << 10));
+            const uint32_t mac = sf ? 0x7FFFFFF7u : 0xFFFF7001u;
+            const uint32_t ir = sf ? 0x7FFFu : (lm ? 0u : 0xFFFF8000u);
+            if (cpu.gte_data[25] != mac || cpu.gte_data[9] != ir ||
+                (cpu.gte_ctrl[31] & 0x48000000u) != 0x48000000u)
+                return fail_value("staged MVMVA sf/lm", sf, lm,
+                                  cpu.gte_ctrl[31], mac, cpu.gte_data[25]);
+            cpu = {};
+            cpu.gte_data[6] = 18;
+            gte_execute(&cpu, 0x10u | (sf << 19) | (lm << 10));
+            const uint32_t color_mac = sf ? 288u : 1179648u;
+            if (cpu.gte_data[25] != color_mac)
+                return fail_value("DPCS sf/lm", sf, lm, 0,
+                                  color_mac, cpu.gte_data[25]);
+        }
+    }
+    return 0;
+}
+
 int test_writes() {
     for (unsigned iteration = 0; iteration < 64; ++iteration) {
         CPUState seed;
@@ -731,6 +772,7 @@ int test_precision_speculative_transaction() {
 } // namespace
 
 int main() {
+    if (int rc = test_retained_arithmetic()) return rc;
     if (int rc = test_hardware_register_semantics()) return rc;
     if (int rc = test_canonicalizer()) return rc;
     if (int rc = test_reads()) return rc;

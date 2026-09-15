@@ -2728,17 +2728,17 @@ static void exec_command(uint8_t cmd) {
             lba = (int)cdda_lba;
             track = cdda_track;
             track_lba = (int)iso_track_start_lba(iso_handle, track);
-        } else if (reading) {
-            /* GetlocP reports the drive/sub-Q position. During a read the
-             * sector stream has already advanced past the data-ready sector. */
-            lba = msf_to_lba(read_min, read_sec, read_sect);
-            /* Nymashock decodes sub-Q before its two-sector data pipeline.
-             * The last physical sector read is one ahead of next delivery. */
-            if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;
-        } else if (last_sector_lba >= 0) {
-            lba = last_sector_lba;
+        } else if (s_nymashock_drive && reading && !(stat_reg & CDSTAT_SEEK)) {
+            /* Source profile only. Nymashock decodes sub-Q before its
+             * two-sector data pipeline, so the last physical sector read is
+             * one ahead of the next delivery. With the profile off this
+             * branch is never taken and the default below runs. */
+            lba = msf_to_lba(read_min, read_sec, read_sect) + 1;
         } else {
-            lba = msf_to_lba(seek_min, seek_sec, seek_sect);
+            /* The drive cursor also moves on explicit seeks and survives
+             * Pause. Setloc only changes seek_*, while GetlocL owns the last
+             * data-sector header. Do not use that stale header for GetlocP. */
+            lba = msf_to_lba(read_min, read_sec, read_sect);
         }
         if (subq_replacements_active) update_last_valid_subq((uint32_t)lba);
         if (subq_replacements_active && last_valid_subq_available) {
@@ -3055,8 +3055,7 @@ static void process_pending(uint32_t cycles) {
 
     case 0x15: /* SeekL complete */
     case 0x16: /* SeekP complete */
-        /* A plain seek finishes paused. Only a subsequent Read starts READ;
-         * the implicit ReadN/S seek is a separate transition. */
+        /* A plain seek finishes paused; only ReadN/ReadS starts reading. */
         stat_reg &= ~(CDSTAT_SEEK | CDSTAT_READ | CDSTAT_PLAY);
         setloc_seek_far = 0;
         setloc_pending = 0;
@@ -3400,6 +3399,46 @@ void cdrom_init(const char* cue_path) {
 
 int cdrom_has_disc(void) {
     return has_disc();
+}
+
+int cdrom_replace_disc(const char* cue_path, const char scex[4]) {
+    void* replacement;
+    void* previous;
+
+    if (!cue_path || !cue_path[0] || psx_netplay_active())
+        return 0;
+
+    /* Open first.  Never sacrifice a known-good mounted disc for a picker
+     * typo, an incomplete multi-track cue, or an unreadable CHD. */
+    replacement = iso_open(cue_path);
+    if (!replacement)
+        return 0;
+
+    stop_read_stream();
+    stop_cdda_playback();
+    xa_reset_decode();
+    spu_cd_audio_reset();
+    clear_sector_buffer();
+    cdrom_clear_pending_dataready();
+
+    previous = iso_handle;
+    iso_handle = replacement;
+    if (scex)
+        memcpy(disc_scex, scex, sizeof(disc_scex));
+
+    last_valid_subq_available = 0;
+    subq_replacements_active = iso_has_subq_replacements(iso_handle);
+    if (subq_replacements_active)
+        update_last_valid_subq(0);
+
+    /* The handle swap is complete before the guest is notified, so any
+     * command awakened by the ACK can only observe the replacement image. */
+    debug_force_cd_reinsert();
+    if (previous)
+        iso_close(previous);
+    trace_cdrom('W', 0, iso_sector_count(iso_handle),
+                (uint32_t)iso_track_count(iso_handle));
+    return 1;
 }
 
 uint32_t cdrom_read(uint32_t addr) {

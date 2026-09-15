@@ -110,6 +110,11 @@ static void apply_defaults(void) {
         add_bind(HOST_KEYMAP_SCANLINES, (int)SDLK_F6, (int)SDL_SCANCODE_F6, 0);
     if (want_default(HOST_KEYMAP_TURBO_TOGGLE))
         add_bind(HOST_KEYMAP_TURBO_TOGGLE, (int)SDLK_F9, (int)SDL_SCANCODE_F9, 0);
+    if (want_default(HOST_KEYMAP_RUNTIME_MENU))
+        add_bind(HOST_KEYMAP_RUNTIME_MENU, (int)SDLK_F1, (int)SDL_SCANCODE_F1, 0);
+    if (want_default(HOST_KEYMAP_SWAP_CONTROLLER_PORTS))
+        add_bind(HOST_KEYMAP_SWAP_CONTROLLER_PORTS, (int)SDLK_F6,
+                 (int)SDL_SCANCODE_F6, KMOD_CTRL);
 }
 
 /* Parse one "Ctrl+Alt+PageUp" token into key+mods. */
@@ -169,6 +174,9 @@ static HostKeymapAction action_for_key(const char *name) {
     if (ieq(name, "SaveStateMenu")) return HOST_KEYMAP_SAVE_STATE_MENU;
     if (ieq(name, "Scanlines")) return HOST_KEYMAP_SCANLINES;
     if (ieq(name, "TurboToggle")) return HOST_KEYMAP_TURBO_TOGGLE;
+    if (ieq(name, "RuntimeMenu")) return HOST_KEYMAP_RUNTIME_MENU;
+    if (ieq(name, "SwapControllerPorts"))
+        return HOST_KEYMAP_SWAP_CONTROLLER_PORTS;
     return HOST_KEYMAP_ACTION_COUNT;
 }
 
@@ -323,6 +331,10 @@ const char *host_keymap_label(HostKeymapAction action, char *out, size_t cap) {
 #endif
         if (action == HOST_KEYMAP_SAVE_STATE_MENU)
             snprintf(out, cap, "F7");
+        else if (action == HOST_KEYMAP_RUNTIME_MENU)
+            snprintf(out, cap, "F1");
+        else if (action == HOST_KEYMAP_SWAP_CONTROLLER_PORTS)
+            snprintf(out, cap, "F6");
         return out;
     }
     b = &a->binds[0];

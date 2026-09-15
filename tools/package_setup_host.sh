@@ -17,6 +17,8 @@
 #     [--project-file REL]... [--project-dir REL]... \
 #     [--runtime-dir NAME]... [--runtime-dir-optional NAME]... \
 #     [--disc-hint "your legally owned disc"] \
+#     [--bios-hint "a legal SCPH-1001 BIOS dump"] \
+#     [--omit-openbios]     # retail-BIOS-only titles; game.toml openbios=false
 #     [--version-env BPE_RELEASE_VERSION] \
 #     [--embed-toolchain]   # optional: copy PSXRECOMP_TOOLCHAIN_DIR into zip
 #
@@ -64,6 +66,9 @@ DISPLAY_NAME=""
 RECOMPILER_BUILD="build-recompiler"
 VERSION_ENV="RELEASE_VERSION"
 DISC_HINT="your legally owned game disc"
+# Player-facing BIOS wording for README-SETUP.txt. Default derives from the
+# staged recipe (retail-only titles name their pinned image); --bios-hint overrides.
+BIOS_HINT=""
 PROJECT_FILES=()
 PROJECT_DIRS=()
 RUNTIME_DIRS=()
@@ -84,6 +89,7 @@ if [[ -z "${EXCLUDE_DEV_MODS:-}" ]]; then
 fi
 RUNTIME_BIN_DIR="${PSXRECOMP_RUNTIME_BIN_DIR:-${BPE_RUNTIME_BIN_DIR:-/usr/x86_64-w64-mingw32/bin}}"
 EMBED_TOOLCHAIN=0
+OMIT_OPENBIOS=0
 if [[ "${PSXRECOMP_EMBED_TOOLCHAIN:-0}" == "1" ]]; then
   EMBED_TOOLCHAIN=1
 fi
@@ -104,6 +110,7 @@ while [[ $# -gt 0 ]]; do
     --recompiler-build) RECOMPILER_BUILD="${2:?}"; shift 2 ;;
     --version-env) VERSION_ENV="${2:?}"; shift 2 ;;
     --disc-hint) DISC_HINT="${2:?}"; shift 2 ;;
+    --bios-hint) BIOS_HINT="${2:?}"; shift 2 ;;
     --project-file) PROJECT_FILES+=("${2:?}"); shift 2 ;;
     --project-dir) PROJECT_DIRS+=("${2:?}"); shift 2 ;;
     --no-mods) STAGE_MODS=0; shift ;;
@@ -115,6 +122,7 @@ while [[ $# -gt 0 ]]; do
     --root) ROOT="${2:?}"; shift 2 ;;
     --embed-toolchain) EMBED_TOOLCHAIN=1; shift ;;
     --no-embed-toolchain) EMBED_TOOLCHAIN=0; shift ;;
+    --omit-openbios) OMIT_OPENBIOS=1; shift ;;
     *)
       echo "error: unknown arg: $1" >&2
       usage 2
@@ -453,8 +461,89 @@ copy_tree_filtered "${ROOT}/recomp-ui" "${STAGE}/recomp-ui" \
   --exclude 'build' \
   --exclude '__pycache__'
 
+# Developer notes, one-off capture helpers, and dependency test fixtures are
+# not setup SDK inputs. Some contain paths from their authors' workstations.
+# Keep those paths out of a public source package on both rsync and cp routes.
+rm -rf \
+  "${STAGE}/psxrecomp/CLAUDE.md" \
+  "${STAGE}/psxrecomp/docs/internal" \
+  "${STAGE}/psxrecomp/docs/STRING_TRANSLATION.md" \
+  "${STAGE}/psxrecomp/recompiler/lib/ELFIO/tests" \
+  "${STAGE}/psxrecomp/tools/aot_overlay_spike" \
+  "${STAGE}/psxrecomp/tools/audio_capture_ab.py" \
+  "${STAGE}/psxrecomp/tools/launch_tomba2_interp_perf.ps1" \
+  "${STAGE}/recomp-ui/docs/HANDOFF.md" \
+  "${STAGE}/recomp-ui/test_data"
+
+# Never ship owned inputs or player state copied from the title or framework
+# worktrees. These files can be tracked or ignored, so a clean Git status is
+# not evidence that the package is clean. Backup suffixes are included.
+find "${STAGE}" -type f \( \
+  -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+  -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+  -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+  -iname '*.mcd*' -o -iname '*.mcr*' \
+\) -delete
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+    \( -iname '*.bin*' -o -iname '*.rom*' \) \
+    ! -iname 'openbios.bin' -delete
+fi
+
 # Never ship game generated C or common disc working trees.
 rm -rf "${STAGE}/generated" "${STAGE}/bpe" "${STAGE}/motk" "${STAGE}/disc"
+
+recipe_bios_hint() {  # recipe_bios_hint <game.toml>: player-facing BIOS wording for README-SETUP.txt
+  # A recipe may omit bios_config and rely on the host default stem; grep's
+  # no-match status must not abort the packager under `set -euo pipefail`
+  # (it did, silently, right after stage_setup_sdk on the Wave 4 pilot).
+  local recipe="$1" line stem="" q='"'
+  line="$(grep -E '^[[:space:]]*bios_config[[:space:]]*=' "${recipe}" 2>/dev/null | head -1 || true)"
+  if [[ "${line}" == *"${q}"*".toml${q}"* ]]; then
+    stem="${line%${q}*}"; stem="${stem##*/}"; stem="${stem%.toml}"
+  fi
+  if grep -qE '^[[:space:]]*openbios[[:space:]]*=[[:space:]]*false' "${recipe}" 2>/dev/null; then
+    echo "your own legally dumped ${stem:-retail PlayStation} BIOS image (required; OpenBIOS is not supported by this title)"
+  else
+    echo "an optional retail ${stem:-SCPH-1001} BIOS dump; otherwise OpenBIOS is regenerated locally"
+  fi
+}
+
+assert_no_private_payload() {
+  local forbidden_payload forbidden_bios
+  forbidden_payload="$(find "${STAGE}" -type f \( \
+    -iname '*.cue*' -o -iname '*.iso*' -o -iname '*.chd*' -o \
+    -iname '*.ccd*' -o -iname '*.sub*' -o -iname '*.img*' -o \
+    -iname '*.mdf*' -o -iname '*.mds*' -o -iname '*.pbp*' -o \
+    -iname '*.mcd*' -o -iname '*.mcr*' \
+  \) -print -quit)"
+  if [[ -n "${forbidden_payload}" ]]; then
+    echo "error: forbidden owned-input or player-state payload: ${forbidden_payload}" >&2
+    exit 1
+  fi
+  if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+    forbidden_bios="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) \
+      ! -iname 'openbios.bin' -print -quit)"
+    if [[ -n "${forbidden_bios}" ]]; then
+      echo "error: forbidden retail BIOS payload: ${forbidden_bios}" >&2
+      exit 1
+    fi
+  fi
+}
+
+assert_no_private_payload
+
+assert_no_private_build_paths() {
+  local gate="${SCRIPT_DIR}/check_private_paths.sh"
+  [[ -f "${gate}" ]] || {
+    echo "error: missing private-path gate: ${gate}" >&2
+    exit 1
+  }
+  bash "${gate}" "${STAGE}"
+}
+
+assert_no_private_build_paths
 
 STAGE_SDK="${SCRIPT_DIR}/stage_setup_sdk.sh"
 if [[ ! -f "${STAGE_SDK}" ]]; then
@@ -484,19 +573,61 @@ fi
 
 bash "${STAGE_SDK}" "${stage_args[@]}"
 
+# The SDK stage runs after the first scrub. Check the complete package tree
+# again so future SDK changes cannot restore a forbidden file.
+assert_no_private_payload
+assert_no_private_build_paths
+
+# A retail-BIOS-only title does not use OpenBIOS. Remove its redistributable
+# image, profile, and notice when the title package selects that boundary.
+if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+  rm -f \
+    "${STAGE}/psxrecomp/bios/openbios.bin" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.toml" \
+    "${STAGE}/psxrecomp/bios/OpenBIOS.LICENSE"
+fi
+
+# stage_setup_sdk.sh runs after the first scrub. Repeat the BIOS payload gate
+# against the complete stage so a later SDK change cannot restore a forbidden
+# image.
+if [[ -d "${STAGE}/psxrecomp/bios" ]]; then
+  if [[ "${OMIT_OPENBIOS}" -eq 1 ]]; then
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) -print -quit)"
+  else
+    FORBIDDEN_FINAL_BIOS="$(find "${STAGE}/psxrecomp/bios" -maxdepth 1 -type f \
+      \( -iname '*.bin*' -o -iname '*.rom*' \) \
+      ! -iname 'openbios.bin' -print -quit)"
+  fi
+  if [[ -n "${FORBIDDEN_FINAL_BIOS}" ]]; then
+    echo "error: forbidden final BIOS payload: ${FORBIDDEN_FINAL_BIOS}" >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "${BIOS_HINT}" ]]; then
+  BIOS_HINT="$(recipe_bios_hint "${STAGE}/game.toml")"
+fi
+
 cat >"${STAGE}/README-SETUP.txt" <<EOF
 ${DISPLAY_NAME} ${VERSION} — setup package
 Platform: ${ARTIFACT}
 
 One zip for first install and updates. Does NOT include disc images, retail
-BIOS dumps, pre-generated game C, or a portable cmake/clang pack. Emitters
+BIOS dumps, pre-generated game C, or a bundled build-tool pack. Emitters
 (psxrecomp-game / psxrecomp-bios) and the CLI are inside psxrecomp/.
+EOF
 
+# The platform-copy audit reads this text: Windows names the downloadable
+# toolchain pack, POSIX names the native build tools and must not mention a
+# toolchain pack at all.
+case "${ARTIFACT}" in
+  windows-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
 Standalone:
 1. Install Python 3.
 2. Run ${EXE_BASENAME}.
-3. Provide ${DISC_HINT} (and optional retail SCPH-1001 BIOS; otherwise
-   OpenBIOS is regenerated locally).
+3. Provide ${DISC_HINT} and ${BIOS_HINT}.
 4. Follow the Generate & rebuild wizard. On first rebuild the host downloads
    cmake-clang-v1 from RetroPortingToolKit/RetroPorting-Toolchains (or you can
    pick a local cmake-clang-v1-*.zip for offline builds). System cmake/ninja
@@ -505,6 +636,39 @@ Standalone:
 Retro uses this same zip: it harvests emitters into a shared SDK cache,
 downloads the toolchain pack (or uses RETCOMM_TOOLCHAIN_DIR), and preserves
 saves/user config across updates.
+EOF
+    ;;
+  linux-*|macos-*)
+    cat >>"${STAGE}/README-SETUP.txt" <<EOF
+Standalone:
+1. Install CMake, Ninja, Python 3, and a C/C++ compiler with your system
+   package manager.
+2. Make sure cmake, ninja, python3, and either clang/clang++ or gcc/g++ are
+   available on PATH.
+3. Run ${EXE_BASENAME}.
+4. Provide ${DISC_HINT} and ${BIOS_HINT}.
+5. Follow the Generate & rebuild wizard. The host checks the native build
+   tools before it continues.
+
+Retro uses this same zip. It uses the same native build tools and preserves
+saves/user config across updates.
+EOF
+    ;;
+esac
+
+cat >>"${STAGE}/README-SETUP.txt" <<EOF
+
+Diagnostic mode (if the game crashes, freezes, or misbehaves):
+- Setup builds two products: build-release/ (normal, the default) and
+  build-diagnostic/ (debug server, freeze heartbeat, freeze dumps).
+- To switch, create an empty file named diagnostic-mode.txt next to
+  ${EXE_BASENAME} and start the game as usual (or run ${EXE_BASENAME} --diagnostic).
+  Delete the file to go back to normal mode.
+- Reproduce the problem, quit, then run ${EXE_BASENAME} --collect-diagnostics.
+  It writes diagnostics-<date>.zip next to ${EXE_BASENAME}: attach that file to
+  a GitHub issue on this title's repository. It contains only the runtime's
+  report files (never saves, BIOS, or disc images).
+See psxrecomp/docs/DIAGNOSTIC_MODE.md for details.
 EOF
 
 # --- Gate: the staged tree must be able to configure itself ----------------

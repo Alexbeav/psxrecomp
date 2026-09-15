@@ -190,13 +190,19 @@ vs `beetle-psx/mednafen/psx/<file>:line` (oracle).
   that gate timing on bit 26/28 transitions see no transition. Tied to the
   broader timing-axis work; not a pixel-accuracy issue.
 
-### D9 — LCF / vblank pacing via a poll-count fallback, not cycle-derived
-- **Ours**: `gpu_read_gpustat` flips LCF and raises VBLANK after 1000 polls
-  (gpu.c:1228-1236, `GPUSTAT_POLL_VBLANK_THRESHOLD`). This is an approximation
-  to break BIOS spin loops, separate from the cycle-paced vblank.
-- **Effect**: interlace-field bit 31 and vblank timing are not hardware-faithful
-  (a heuristic). Belongs to the timing axis (FAITHFUL_TIMING_PLAN.md), flagged
-  here for completeness.
+### D9 — Field status uses the existing whole-field clock
+- **Ours**: scheduled guest cycles advance VBlank even inside a CPU exception.
+  In 480-line interlace, `gpu_read_gpustat` clears bit31 during the blank
+  interval derived from the field phase and GP1 vertical display range.
+  The legacy read-count clock is disabled by default; `PSX_POLLHACK_VBLANK=1`
+  still enables it for diagnostics.
+- **Limits**: the status calculation retains the current 314/263-line field
+  approximation. Complete raster/half-line timing, progressive scanline parity,
+  and GPU command execution latency remain outside this correction. Passing
+  the field-status regression does not establish complete GPU timing accuracy.
+- **Tests**: `gpu_interlace_status_test` checks both field parities, PAL/NTSC
+  blank boundaries and read-only time. `vblank_in_exception_test` checks device
+  advancement while CPU interrupt delivery is disabled.
 
 ### D10 — Display path: 5→8 bit expansion differs from oracle scanout
 - **Oracle scanout** (15bpp): `(c & 0x1F) << 3` — low bits zero, NO replication

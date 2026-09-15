@@ -22,7 +22,7 @@ extern "C" {
 /* Spawn the heartbeat thread. Idempotent — second call is a no-op.
  * `backend_label` is written into the heartbeat JSON as "backend"
  * (e.g. "psx-runtime" or "psx-beetle") so a reader can tell which
- * binary produced the file. */
+ * binary produced the file. No-op in PSX_NO_DEBUG_TOOLS builds. */
 void freeze_heartbeat_start(const char *backend_label);
 
 /* Suppress automatic wedge classification while the host intentionally parks

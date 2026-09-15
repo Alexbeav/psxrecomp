@@ -1080,12 +1080,12 @@ static DWORD WINAPI heartbeat_thread(LPVOID arg) {
 #endif
 
 void freeze_heartbeat_start(const char *backend_label) {
-    /* INTENTIONALLY not gated by PSX_NO_DEBUG_TOOLS. The heartbeat thread
-     * is the only observability mechanism that survives a main-thread
-     * stall (TCP server is on main thread; debug log functions are
-     * called from the stalled code). Cost is ~1 KB/sec disk write and
-     * one extra thread — small enough to keep in production builds for
-     * crash forensics. */
+#ifdef PSX_NO_DEBUG_TOOLS
+    /* The normal build performs no periodic diagnostic snapshots. Users can
+     * reproduce a failure in the bundled diagnostic build without compiling. */
+    (void)backend_label;
+    return;
+#else
     if (s_started) return;
     if (backend_label && backend_label[0]) {
         size_t n = strlen(backend_label);
@@ -1106,5 +1106,6 @@ void freeze_heartbeat_start(const char *backend_label) {
     }
     s_thread = CreateThread(NULL, 0, heartbeat_thread, NULL, 0, NULL);
     if (s_thread) s_started = 1;
+#endif
 #endif
 }

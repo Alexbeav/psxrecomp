@@ -563,13 +563,18 @@ static void fire_vblank_edge(void) {
 
 void interrupts_service_scheduled_events(void) {
     note_sio_progress_cycle();
-    /* A source raster edge latches I_STAT even while an interrupt handler
-     * runs with IEc clear. CPU delivery remains gated separately below. */
-    if (in_exception && !source_gpu_runtime_active()) return;
+    /* Device time continues while the CPU handles an exception, including
+     * with IEc clear. A handler may poll GPUSTAT's field bit. CPU interrupt
+     * delivery remains gated separately by psx_check_interrupts. The same
+     * holds for a source raster edge: it latches I_STAT while a handler
+     * runs with IEc clear. */
     if (input_route_source_raster) {
         if (input_route_raster_pending && !should_defer_vblank_for_sio()) fire_vblank_edge();
         return;
     }
+    /* VBLANK_CYCLES is vblank_period_cycles(): the PAL/NTSC-aware
+     * vblank_cycles unless a source profile is armed, so this default
+     * path matches c3 exactly. */
     while (cycles_since_vblank >= VBLANK_CYCLES) {
         if (should_defer_vblank_for_sio()) return;
         fire_vblank_edge();

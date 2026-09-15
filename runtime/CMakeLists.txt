@@ -57,6 +57,8 @@ if(BUILD_TESTING)
     set(PSX_GL_READBACK_COMPILER_BIN "${_gl_test_default_bin}" CACHE PATH "GCC/MinGW bin for GL fixture")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME runtime_overlay_guards_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_overlay_guards.py")
         add_test(NAME interp_mod_entry_guards_test COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_interp_mod_entry_guards.py")
         add_test(NAME gpu_textured_dot_nw_shift_test COMMAND "${Python3_EXECUTABLE}"
@@ -296,6 +298,12 @@ if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     target_link_libraries(hd_texture_pack_test PRIVATE Threads::Threads)
     add_test(NAME hd_texture_pack_test COMMAND hd_texture_pack_test)
+    add_executable(controller_port_route_test
+        tests/test_controller_port_route.c
+        src/controller_port_route.c)
+    target_include_directories(controller_port_route_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME controller_port_route_test COMMAND controller_port_route_test)
 
     # Registered since before this change, but it did NOT LINK on origin/master:
     # sio.c had grown psx_read_word / psx_get_cycle_count / i_mask /
@@ -325,6 +333,12 @@ if(BUILD_TESTING)
         PSX_GTE_REGISTER_TEST=1
         PSX_ENABLE_BLOCK_CYCLES=1)
     add_test(NAME gte_register_access_test COMMAND gte_register_access_test)
+
+    add_executable(mdec_output_lifetime_test
+        tests/test_mdec_output_lifetime.c src/mdec.c)
+    target_include_directories(mdec_output_lifetime_test PRIVATE include)
+    target_compile_definitions(mdec_output_lifetime_test PRIVATE PSX_NO_DEBUG_TOOLS=1)
+    add_test(NAME mdec_output_lifetime_test COMMAND mdec_output_lifetime_test)
 
     # PGXP value-propagation engine (docs/ENHANCEMENTS.md G1.2/G1.3): shadow
     # load/store/COP2 roundtrips, half-word semantics, validate-on-read
@@ -374,8 +388,7 @@ if(BUILD_TESTING)
         target_compile_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
         target_link_options(gpu_textured_dot_nw_shift_exec_test PRIVATE
-            -Wl,--gc-sections
-            -Wl,--error-limit=0)
+            -Wl,--gc-sections)
     endif()
     add_test(NAME gpu_textured_dot_nw_shift_exec_test
              COMMAND gpu_textured_dot_nw_shift_exec_test)
@@ -668,6 +681,15 @@ if(BUILD_TESTING)
     target_include_directories(gpu_sw_edges_test PRIVATE src)
     add_test(NAME gpu_sw_edges_test COMMAND gpu_sw_edges_test)
 
+    add_executable(gpu_interlace_render_test
+        tests/test_gpu_interlace_render.c src/gpu_render.c
+        src/gpu_sw_renderer.c src/gpu_vram_dirty.c)
+    target_include_directories(gpu_interlace_render_test PRIVATE include)
+    if(NOT MSVC)
+        target_link_libraries(gpu_interlace_render_test PRIVATE m)
+    endif()
+    add_test(NAME gpu_interlace_render_test COMMAND gpu_interlace_render_test)
+
     add_executable(gpu_vk_upload_alignment_test
         tests/test_gpu_vk_upload_alignment.c)
     target_include_directories(gpu_vk_upload_alignment_test PRIVATE src)
@@ -778,6 +800,19 @@ if(BUILD_TESTING)
     add_executable(input_route_raster_clock_test tests/test_input_route_raster_clock.c)
     target_include_directories(input_route_raster_clock_test PRIVATE include)
     add_test(NAME input_route_raster_clock_test COMMAND input_route_raster_clock_test)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        # Include production owners, then discard unrelated runtime machinery.
+        add_executable(vblank_in_exception_test tests/test_vblank_in_exception.c)
+        add_executable(gpu_interlace_status_test tests/test_gpu_interlace_status.c)
+        foreach(_test vblank_in_exception gpu_interlace_status)
+            target_include_directories(${_test}_test PRIVATE include)
+            target_compile_definitions(${_test}_test PRIVATE
+                PSX_ENABLE_BLOCK_CYCLES=1 PSX_NO_DEBUG_TOOLS=1)
+            target_compile_options(${_test}_test PRIVATE -O2 -fwhole-program)
+        endforeach()
+        add_test(NAME vblank_in_exception_test COMMAND vblank_in_exception_test)
+        add_test(NAME gpu_interlace_status_test COMMAND gpu_interlace_status_test)
+    endif()
 
     add_executable(spu_end_without_repeat_test
         tests/test_spu_end_without_repeat.c)
@@ -806,6 +841,9 @@ if(BUILD_TESTING)
             add_test(NAME overlay_retry_c11_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_overlay_retry_c11.py --compiler ${CMAKE_C_COMPILER})
         endif()
         add_test(NAME setup_bios_assets_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_bios_assets.py)
+        add_test(NAME codegen_host_posix_toolchain_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_host_posix_toolchain.py)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             add_test(NAME launch_disc_path_test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launch_disc_path.py --compiler ${CMAKE_CXX_COMPILER})
         endif()

@@ -116,6 +116,12 @@ cmake -S runtime -B runtime/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build runtime/build --target psx-runtime
 ```
 
+The recompiler writes `runtime/include/overlay_codegen_hash.h` inside its build
+directory. A runtime build writes its copy inside that runtime build directory.
+Neither build changes the source checkout. Setup packaging copies the exact
+recompiler-built header into the staged SDK. The runtime and overlay compiler
+use the value to reject a stale `psxrecomp-game` binary.
+
 On Linux/macOS, `tools/setup_dev.sh` performs the same source-checkout setup:
 
 ```sh
@@ -135,7 +141,8 @@ After step 1 above — no BIOS or disc needed — verify the tree is sane:
 cd recompiler/build && ctest --output-on-failure
 ```
 
-38 tests, under five seconds. See [`TESTING.md`](TESTING.md).
+CTest reports the enabled and disabled tests for this source. See
+[`TESTING.md`](TESTING.md).
 
 On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generator
 (e.g. `-G "Unix Makefiles"`); everything else is identical.
@@ -160,6 +167,13 @@ On Windows with MSVC or plain MinGW makefiles, swap `-G Ninja` for your generato
 | `PSX_ENABLE_VULKAN` | **ON** | Build the experimental Vulkan renderer when the SDK tools are present (skipped if not). Pass `OFF` to exclude it outright. |
 | `PSX_NETPLAY` | OFF | Link recomp-net + lobby; advertise full netplay UI (multiplayer titles) |
 | `PSX_SETUP_WIZARD` | OFF | Advertise first-run setup wizard + Generate & rebuild in recomp-ui |
+
+Distributors can bundle normal and diagnostic executables from the same source
+and generated inputs. Start the normal executable by default. To collect a
+report, close the game and start the diagnostic executable with the same user
+settings and saves. Switching between these already-built executables requires
+a restart, not a compiler. With `PSX_DEBUG_TOOLS=OFF`, the freeze heartbeat does
+not start its background thread or write periodic snapshots.
 
 See [SDL backends](SDL_BACKENDS.md) for the fallback command and the initial
 SDL3/SDL2 game A/B results.
@@ -372,3 +386,14 @@ OpenBIOS incompatibility. See [`BIOS_SELECTION.md`](BIOS_SELECTION.md).
 
 OpenBIOS seeds come from its ELF symbol tables (no Ghidra pass needed):
 see the pin + regeneration recipe in `bios/OpenBIOS.toml`.
+
+### Controller capacity and live port routing
+
+`psxrecomp_add_game_runtime(MAX_PLAYERS 1)` retains two compiled controller
+slots so the runtime menu can move a controller between the two physical
+console ports. The `players` value in `game.toml` still describes the game.
+Requests from 2 through 8 retain their specified capacity. A custom build with
+`PSX_MAX_PLAYERS=1` disables live routing to avoid indexing a missing port.
+Changing compiled capacity can change the SIO save-state section size; states
+from an earlier one-slot build are not qualified as compatible. Memory cards
+keep their existing file format.

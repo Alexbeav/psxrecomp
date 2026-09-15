@@ -196,9 +196,14 @@ endif()
 set(PSXRECOMP_CODEGEN_HASH_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../runtime/codegen_hash_sources.cmake)
 set(_baked_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_baked_codegen_hash.h)
-set(_runtime_hash_hdr ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include/overlay_codegen_hash.h)
+# Build-owned, never written into the source tree: runtime.cmake generates the
+# same header into its own build dir, and both derive the hash from the shared
+# PSXRECOMP_CODEGEN_HASH_SRCS list, so the two copies cannot drift.
+set(_runtime_hash_hdr ${CMAKE_CURRENT_BINARY_DIR}/runtime/include/overlay_codegen_hash.h)
 add_custom_command(
     OUTPUT  ${_baked_hash_hdr} ${_runtime_hash_hdr}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_CURRENT_BINARY_DIR}/runtime/include
     COMMAND ${CMAKE_COMMAND} -DOUT=${_baked_hash_hdr}
             "-DSRCS=${PSXRECOMP_CODEGEN_HASH_SRCS}"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
@@ -207,11 +212,12 @@ add_custom_command(
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
     DEPENDS ${PSXRECOMP_CODEGEN_HASH_SRCS}
             ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/hash_codegen.cmake
-    COMMENT "Hashing codegen sources -> psxrecomp_baked_codegen_hash.h"
+    COMMENT "Hashing codegen sources -> baked and runtime hash headers"
     VERBATIM)
 # Overlay generation is usable immediately after a tools-only build, before
 # configuring any runtime. Both consumers must have the same cache identity.
-add_custom_target(psxrecomp_baked_codegen_hash DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
+add_custom_target(psxrecomp_baked_codegen_hash
+    DEPENDS ${_baked_hash_hdr} ${_runtime_hash_hdr})
 add_dependencies(psxrecomp-game psxrecomp_baked_codegen_hash)
 # Force main_psx.cpp to recompile whenever the hash header content changes
 # (same OBJECT_DEPENDS hardening as runtime.cmake — __has_include depfile gap).
@@ -540,6 +546,14 @@ if(BUILD_TESTING)
     target_include_directories(cli_boot_path_test PRIVATE src)
     add_test(NAME cli_boot_path_test COMMAND cli_boot_path_test)
 
+    add_executable(ps1_exe_padding_test
+        tests/ps1_exe_padding_test.cpp
+        src/ps1_exe_parser.cpp
+    )
+    target_include_directories(ps1_exe_padding_test PRIVATE src include)
+    target_link_libraries(ps1_exe_padding_test PRIVATE fmt)
+    add_test(NAME ps1_exe_padding_test COMMAND ps1_exe_padding_test)
+
     add_executable(recompiler_patch_test
         tests/recompiler_patch_test.cpp
         src/ps1_exe_parser.cpp
@@ -784,6 +798,46 @@ if(BUILD_TESTING)
             NAME stall_report
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_stall_report.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME prepare_disc_boot_case
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_prepare_disc_boot_case.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME package_setup_bios_hint
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/tests/test_package_setup_bios_hint.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME setup_package_payload_filter
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_package_payload_filter.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME setup_private_path_gate
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_setup_private_path_gate.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME app_icon_rc_spaces
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_app_icon_rc_spaces.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME cli_diagnostics
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_cli_diagnostics.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME codegen_hash_build_tree
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_codegen_hash_build_tree.py
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+        add_test(
+            NAME bundle_mingw_dll_preference
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_bundle_mingw_dll_preference.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
         # ---- codegen tests that were written but never registered -----------

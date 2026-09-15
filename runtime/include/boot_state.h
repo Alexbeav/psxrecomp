@@ -80,8 +80,10 @@ typedef struct {
  *     uint8_t  payload[len];   (module payloads are LE field wires too)
  * When BOOT_STATE_SEC_ZLIB is set, payload = u32 LE raw_len + zlib(raw).
  * Unknown tags are skipped for forward compatibility. A malformed known section
- * or a missing required section on load is a hard reject (incomplete restore is
- * never allowed) -> normal boot + recapture.
+ * or a missing required or duplicate known section on load is a hard reject.
+ * The reader validates and prepares the complete image before changing guest
+ * state. Rejected loads preserve the running machine. Known sections apply in
+ * dependency order, independent of stream order.
  */
 enum {
     BS_SEC_MODMEM = 0x11,  /* allocated opt-in CPU/GPU enhancement arenas */
@@ -134,8 +136,9 @@ int      boot_state_last_vram_incremental(void);
 /* Drop the §96 VRAM mirror (RB shutdown / before re-enable). */
 void boot_state_vram_mirror_reset(void);
 
-/* Load + validate (integrity key) + restore the full machine. On any mismatch
- * or incompleteness returns 0 (caller then boots normally and recaptures). */
+/* Load + validate (integrity key) + restore the full machine. On mismatch,
+ * incompleteness or preparation failure, return 0 without applying guest state.
+ * User-state callers can continue; boot-cache callers can boot and recapture. */
 int  boot_state_load(const char* path, uint32_t bios_checksum,
                      uint32_t entry_pc, CPUState* cpu);
 

@@ -114,6 +114,11 @@ Standalone helpers: `probe_disc.py`, `fetch_boxart.py`, `fill_tokens.py`,
 
 With a Redump-style `**.cue**`:
 
+The probe follows the complete `SYSTEM.CNF` boot path. This includes programs
+inside a disc directory, such as `TEKKEN3\\SLUS_004.02`. It matches every path
+component without case sensitivity, but keeps the disc's program name in the
+generated identity files.
+
 
 | Output                   | Contents                                                                                                                                               |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -437,6 +442,24 @@ Retro / the wizard download `cmake-clang-v1` from
 `--embed-toolchain` to `package_setup_host.sh` only for special offline-first
 packs.
 
+The setup packager removes owned-input and player-state files, including backup
+suffixes. It checks the staged tree after adding the SDK and rejects developer
+machine paths. Audit the final ZIP independently before publication.
+
+If `game.toml` sets `openbios = false`, pass `--omit-openbios`. This option
+removes the unused OpenBIOS image, profile, and notice from the final package.
+The packager repeats the BIOS payload gate after it stages the SDK.
+
+Setup builds two products: the normal one in `build-release/` and a
+diagnostic one (`PSX_DEBUG_TOOLS=ON`) in `build-diagnostic/`. Players switch
+with an empty `diagnostic-mode.txt` beside the setup exe and collect reports
+with `--collect-diagnostics`; see [DIAGNOSTIC_MODE.md](DIAGNOSTIC_MODE.md).
+
+The player's Generate stages their retail dump where the pinned profile loads it
+and emits that profile's backend. The setup host forwards the stem CMake linked
+(`PSXRECOMP_BIOS_STEMS`) as `--bios-stem`; a standalone `psxrecomp_cli.py generate`
+resolves it from `[recompiler] bios_config`, then falls back to `SCPH1001`.
+
 ### Player updates (after first Generate)
 
 | Action | Meaning |
@@ -464,7 +487,7 @@ Do **not** set `PSX_PGO` in CI. PGO stays user-local when `[pgo] enabled = true`
 | `tools/ci/build_emitters.sh`    | Build `psxrecomp-game` + `psxrecomp-bios`                |
 | `tools/fetch_toolchain.sh`      | Optional download/unpack (embed packs only)              |
 | `tools/stage_setup_sdk.sh`      | Emitters + OpenBIOS + optional `toolchain/` + MinGW DLLs |
-| `tools/bundle_mingw_dlls.sh`    | Windows runtime DLL copy                                 |
+| `tools/bundle_mingw_dlls.sh`    | Compiler-matched Windows runtime DLL copy                |
 | `tools/package_setup_host.sh`   | Full setup-host zip (title args)                         |
 
 

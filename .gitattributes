@@ -1,3 +1,5 @@
 # Source admission hashes this tool's exact bytes; retain the canonical Git blob.
 tools/tasreplays/nymashock_admission.py text eol=lf
 tools/tasreplays/megamanx5_admission.py text eol=lf
+
+*.sh text eol=lf

@@ -71,6 +71,20 @@ def make_project(root: Path, bios_files: list[str], framework: str, descriptor: 
 
 
 def main() -> int:
+    # The CLI half regenerates whatever stem it is told; the host must tell it
+    # the stem CMake linked, on both process-launch routes, or a title pinned
+    # to SCPH5552 still gets an SCPH1001 pair and loops.
+    host_text = HOST_C.read_text(encoding="utf-8")
+    for needle in ("setup_retail_bios_stem", '--bios-stem \\"%s\\"', '"--bios-stem"'):
+        assert needle in host_text, f"host does not forward the linked BIOS stem: {needle}"
+    # Diagnostic mode: setup must build the debug-tools product on both rebuild
+    # routes, the host must honour the marker / flag / env when forwarding, and
+    # the self-check must report it (docs/DIAGNOSTIC_MODE.md).
+    for needle in ('--diagnostic-dir \\"%%DIAG_DIR%%\\"', '"--diagnostic-dir"',
+                   'PSX_DIAGNOSTIC_MARKER "diagnostic-mode.txt"', 'PSX_DIAGNOSTIC_DIR_NAME "build-diagnostic"',
+                   '"--collect-diagnostics"', 'diagnostic_build_present', 'diagnostic_mode_requested',
+                   'if (strcmp(argv[i], "--diagnostic") == 0)'):
+        assert needle in host_text, f"host lacks the diagnostic-mode contract: {needle}"
     ui = find_recomp_ui()
     if ui is None:
         print("SKIP: recomp-ui not found (set RECOMP_UI_ROOT)")

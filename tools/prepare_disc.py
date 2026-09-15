@@ -393,6 +393,52 @@ def parse_root_entries(root: bytes) -> dict[str, tuple[int, int]]:
     return entries
 
 
+def resolve_root_entry(entries: dict[str, tuple[int, int]], name: str) -> str | None:
+    """Find a root-directory record by name without regard to case.
+
+    ISO 9660 records are upper case, but SYSTEM.CNF frequently names the boot
+    program in lower case (``BOOT = cdrom:\\slus_006.63;1``), and the probe
+    keeps that spelling in game.toml. A case-sensitive lookup made first-run
+    setup fail with "missing slus_006.63 on disc" on such titles. The staged
+    file keeps the requested spelling so game.toml's exe path stays valid on
+    case-sensitive filesystems too.
+    """
+    if name in entries:
+        return name
+    want = name.upper()
+    for key in entries:
+        if key.upper() == want:
+            return key
+    return None
+
+
+def boot_path_components(cnf: bytes) -> list[str]:
+    """Directory components + file name from SYSTEM.CNF's BOOT= line.
+
+    ``BOOT = cdrom:\\EXE\\SCUS_946.08;1`` -> ["EXE", "SCUS_946.08"]. Wild Arms
+    and other titles keep the boot program in a subdirectory; the root
+    directory alone cannot find it.
+    """
+    text = cnf.decode("ascii", "replace")
+    m = re.search(r"BOOT\s*=\s*cdrom:\\?([^;\s]+)", text, re.I) or re.search(r"BOOT\s*=\s*([^;\s]+)", text, re.I)
+    if not m:
+        return []
+    token = m.group(1).strip().lstrip("\\/")
+    return [c for c in re.split(r"[\\/]+", token) if c]
+
+
+def read_extent(read_user, data: bytes, extent: int, size: int) -> bytes:
+    out = bytearray()
+    rem, lba = size, extent
+    while rem > 0:
+        sector = read_user(data, lba)
+        take = min(USER, rem)
+        out += sector[:take]
+        rem -= take
+        lba += 1
+    return bytes(out)
+
+
 def extract_via(
     read_user, data: bytes, boot_exe: str
 ) -> tuple[dict[str, tuple[int, int]], dict[str, bytes]]:
@@ -412,8 +458,8 @@ def extract_via(
     # already accepts these discs (5ab7a053); staging has to accept the same
     # ones or a clean worktree can never prepare them.
     needed = ["SYSTEM.CNF", boot_exe]
-    if "SYSTEM.CNF" not in entries:
-        if boot_exe not in entries:
+    if resolve_root_entry(entries, "SYSTEM.CNF") is None:
+        if resolve_root_entry(entries, boot_exe) is None:
             raise SystemExit(
                 f"SYSTEM.CNF missing on disc and no {boot_exe} fallback "
                 f"(found {sorted(entries)[:20]})"
@@ -424,18 +470,31 @@ def extract_via(
         )
         needed = [boot_exe]
     for need in needed:
-        if need not in entries:
+        key = resolve_root_entry(entries, need)
+        if key is None and need == boot_exe and "SYSTEM.CNF" in files:
+            # Not in the root: follow the BOOT= path through subdirectories,
+            # each component matched without regard to case.
+            components = boot_path_components(files["SYSTEM.CNF"])
+            if components and components[-1].upper() == boot_exe.upper():
+                directory = entries
+                found = None
+                for i, component in enumerate(components):
+                    k = resolve_root_entry(directory, component)
+                    if k is None:
+                        break
+                    extent, size = directory[k]
+                    if i == len(components) - 1:
+                        found = (extent, size)
+                    else:
+                        directory = parse_root_entries(read_extent(read_user, data, extent, size))
+                if found is not None:
+                    files[need] = read_extent(read_user, data, *found)
+                    print(f"  boot program at {'/'.join(components)} (subdirectory)")
+                    continue
+        if key is None:
             raise SystemExit(f"missing {need} on disc (found {sorted(entries)[:20]})")
-        extent, size = entries[need]
-        out = bytearray()
-        rem, lba = size, extent
-        while rem > 0:
-            sector = read_user(data, lba)
-            take = min(USER, rem)
-            out += sector[:take]
-            rem -= take
-            lba += 1
-        files[need] = bytes(out)
+        extent, size = entries[key]
+        files[need] = read_extent(read_user, data, extent, size)
     if files[boot_exe][:8] != b"PS-X EXE":
         raise SystemExit(f"{boot_exe} is not a PS-X EXE")
     return entries, files

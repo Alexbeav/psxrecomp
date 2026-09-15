@@ -66,6 +66,7 @@
 #include "gpu.h"
 #include "gpu_render.h"
 #include "gpu_sw_renderer.h"
+#include "gpu_interlace.h"
 #include "gpu_gl_renderer.h"
 #include "mod_texture_banks.h"
 #include "frame_interpolation.h"
@@ -400,6 +401,8 @@ static GLint s_uVram = -1, s_uTpage = -1, s_uClut = -1, s_uDepth = -1;
 static GLint s_uRaw = -1, s_uSemipass = -1, s_uSemimode = -1;
 static GLint s_uTwin = -1, s_uMaskset = -1, s_uFilter = -1;
 static GLint s_uLimits = -1;
+static GLint s_geo_uField = -1, s_tex_uField = -1;
+static GLint s_geo_uFieldScale = -1, s_tex_uFieldScale = -1;
 /* Native-wide x-projection uniforms (per program). u_xoff = x translation in
  * native px (0 canonical), u_xhalf = x clip half-extent in native px (512
  * canonical). When wide is off these stay 0 / 512 so the canonical pass is
@@ -1035,7 +1038,8 @@ static const char *GEO_VS =
 static const char *GEO_FS =
     "#version 330\n"
     "noperspective in vec4 v_col; out vec4 frag;\n"
-    "void main(){ frag = v_col; }\n";
+    "uniform int u_skip_field, u_field_scale;\n"
+    "void main(){ if ((int(gl_FragCoord.y) / u_field_scale & 1) == u_skip_field) discard; frag = v_col; }\n";
 
 /* Textured prims: sample raw 1555 VRAM (integer), CLUT decode per depth,
  * texture window, optional bilinear, texel-0 discard, STP-split discard,
@@ -1108,6 +1112,7 @@ static const char *TEX_FS =
     "uniform ivec4 u_twin;    /* texture window: mask_x, mask_y, off_x, off_y */\n"
     "uniform int u_maskset;   /* GP0(E6h) set-mask: OR bit15 into output */\n"
     "uniform int u_filter;    /* 1 = bilinear */\n"
+    "uniform int u_skip_field, u_field_scale;\n"
     "uniform float u_shift;\n"
     "int vram_at(int x, int y){\n"
     "  ivec2 p = ivec2(x & 1023, y & 511);\n"
@@ -1136,6 +1141,7 @@ static const char *TEX_FS =
     "  return vec3(float(raw & 31), float((raw >> 5) & 31), float((raw >> 10) & 31)) / 31.0;\n"
     "}\n"
     "void main(){\n"
+    "  if ((int(gl_FragCoord.y) / u_field_scale & 1) == u_skip_field) discard;\n"
     "  int stp; vec3 rgb;\n"
     "  /* v_persp is 0 for every prim unless [video] perspective_texturing is on\n"
     "   * AND this prim's packet carried full GTE projection provenance, so the\n"
@@ -1752,6 +1758,7 @@ static int   s_tb_n = 0;                    /* verts queued */
 static int   s_tb_semi = -2;
 static int   s_tb_mask = 0, s_tb_filter = 0;
 static GLuint s_tb_bank_tex;
+static int   s_tb_field = -1;
 static int   s_tb_twin[4] = {0, 0, 0, 0};
 static uint64_t s_batch_total = 0, s_batch_reason[7];
 
@@ -1868,6 +1875,8 @@ static void flush_tex_batch(void) {
     p_glUniform4i(s_uTwin, s_tb_twin[0], s_tb_twin[1], s_tb_twin[2], s_tb_twin[3]);
     p_glUniform1i(s_uMaskset, s_tb_mask);
     p_glUniform1i(s_uFilter, s_tb_filter);
+    p_glUniform1i(s_tex_uField, s_tb_field);
+    p_glUniform1i(s_tex_uFieldScale, s_scale);
     p_glBindVertexArray(s_tex_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_tex_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * TEXV * sizeof(float)), s_tb, PSXGL_STREAM_DRAW);
@@ -1902,6 +1911,7 @@ static float s_fb[FLATBATCH_MAXV * 6];
 static int   s_fb_n = 0;
 static int   s_fb_semi = -2;
 static int   s_fb_mask = -1;
+static int   s_fb_field = -1;
 
 static int mirror_flat_batch_center_only(int nverts) {
     if (!s_wide_fast || nverts <= 0) return 0;
@@ -1923,6 +1933,8 @@ static void flush_flat_batch(void) {
     if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
     mask_stencil(mask);
     p_glUseProgram(s_geo_prog);
+    p_glUniform1i(s_geo_uField, s_fb_field);
+    p_glUniform1i(s_geo_uFieldScale, s_scale);
     p_glBindVertexArray(s_geo_vao);
     p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
     p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(nverts * 6 * sizeof(float)),
@@ -1954,6 +1966,7 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
     mark_prim_dirty(xs, ys, n, 0 /* flat */);
     /* Sub-pixel positions only describe a 3-vertex projected triangle. */
     const int precise = s_pc_valid && mode == GL_TRIANGLES && n == 3;
+    const int field = gpu_raster_skipped_row();
 
     /* Lines stay immediate (rare); tris batch for MotK 0x68 starfields. */
     if (mode != GL_TRIANGLES || n < 3) {
@@ -1973,6 +1986,8 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         mask_stencil(s_mask_set);
         if (mode == GL_LINES) glLineWidth((float)s_scale);
         p_glUseProgram(s_geo_prog);
+        p_glUniform1i(s_geo_uField, field);
+        p_glUniform1i(s_geo_uFieldScale, s_scale);
         p_glBindVertexArray(s_geo_vao);
         p_glBindBuffer(PSXGL_ARRAY_BUFFER, s_geo_vbo);
         p_glBufferData(PSXGL_ARRAY_BUFFER, (ptrdiff_t)(n * 6 * sizeof(float)),
@@ -1994,12 +2009,13 @@ static void gpu_geometry(GLenum mode, const int *xs, const int *ys,
         return;
     }
 
-    if (s_fb_n > 0 && (s_fb_semi != semi || s_fb_mask != (int)s_mask_set))
+    if (s_fb_n > 0 && (s_fb_semi != semi || s_fb_mask != (int)s_mask_set || s_fb_field != field))
         flush_flat_batch();
     if (s_fb_n + n > FLATBATCH_MAXV)
         flush_flat_batch();
     s_fb_semi = semi;
     s_fb_mask = (int)s_mask_set;
+    s_fb_field = field;
 
     float mask_a = s_mask_set ? 1.0f : 0.0f;
     for (int i = 0; i < n; i++) {
@@ -2069,6 +2085,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
     {
         flush_flat_batch();   /* painter order: flat GEO before textured */
         int twx = s_tw_mask_x, twy = s_tw_mask_y, tox = s_tw_off_x, toy = s_tw_off_y;
+        int field = gpu_raster_skipped_row();
         int gate = bd_prim_gate(xs, 3, 1); /* backdrop-stretch gate is also a batch key */
         /* Batch key: keep opaque as -1. Dual-source (4) is only for semi modes
          * 0/1/3 when mask-check is off — never coalesce opaque into that key.
@@ -2105,7 +2122,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
             else if (batch_semi != s_tb_semi) reason = 1;
             else if (s_mask_set != s_tb_mask) reason = 2;
             else if (s_tex_filter != s_tb_filter) reason = 3;
-            else if (gate != s_tb_gate) reason = 4;
+            else if (gate != s_tb_gate || field != s_tb_field) reason = 4;
             else if (twx != s_tb_twin[0] || twy != s_tb_twin[1] ||
                      tox != s_tb_twin[2] || toy != s_tb_twin[3]) reason = 5;
         }
@@ -2115,6 +2132,7 @@ static void gpu_textured_triangle(const int *xs, const int *ys,
         }
         if (s_tb_n + 3 > TEXBATCH_MAXV) { s_batch_reason[6]++; flush_tex_batch(); }
         if (s_tb_n == 0) {            /* opening a batch: capture its keyed state */
+            s_tb_field = field;
             s_tb_semi = batch_semi; s_tb_mask = s_mask_set; s_tb_filter = s_tex_filter; s_tb_gate = gate;
             s_tb_bank_tex = s_selected_bank_tex;
             s_tb_twin[0] = twx; s_tb_twin[1] = twy; s_tb_twin[2] = tox; s_tb_twin[3] = toy;
@@ -2163,6 +2181,8 @@ static void wide_flat_rect_direct(int wx, int y, int ww, int h, uint16_t c, int 
     if (semi >= 0) apply_psx_blend(semi); else glDisable(GL_BLEND);
     mask_stencil(s_mask_set);
     p_glUseProgram(s_geo_prog);
+    p_glUniform1i(s_geo_uField, gpu_raster_skipped_row());
+    p_glUniform1i(s_geo_uFieldScale, s_scale);
     p_glUniform1f(s_geo_uXoff, 0.0f);
     p_glUniform1f(s_geo_uXhalf, (float)g_wide_w / 2.0f);
     p_glBindVertexArray(s_geo_vao);
@@ -2872,6 +2892,10 @@ static int init_gpu_raster(void) {
     s_uMaskset  = p_glGetUniformLocation(s_tex_prog, "u_maskset");
     s_uFilter   = p_glGetUniformLocation(s_tex_prog, "u_filter");
     s_uLimits   = p_glGetUniformLocation(s_tex_prog, "u_limits");
+    s_geo_uField = p_glGetUniformLocation(s_geo_prog, "u_skip_field");
+    s_tex_uField = p_glGetUniformLocation(s_tex_prog, "u_skip_field");
+    s_geo_uFieldScale = p_glGetUniformLocation(s_geo_prog, "u_field_scale");
+    s_tex_uFieldScale = p_glGetUniformLocation(s_tex_prog, "u_field_scale");
     s_uBlitSrc     = p_glGetUniformLocation(s_blit_prog, "u_src");
     s_uBlitPass    = p_glGetUniformLocation(s_blit_prog, "u_stp_pass");
     s_uBlitMaskset = p_glGetUniformLocation(s_blit_prog, "u_maskset");

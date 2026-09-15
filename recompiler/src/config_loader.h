@@ -1269,6 +1269,7 @@ struct UserSettings {
     bool has_hotkey_pad_fast_forward = false; int hotkey_pad_fast_forward = 1528; /* select+l1 */
     bool has_hotkey_pad_fast_forward_toggle = false; int hotkey_pad_fast_forward_toggle = 0; /* unbound */
     // [audio]
+    bool has_volume         = false; int  volume         = 100; // host mixer, 0..100
     bool has_spu_hq         = false; bool spu_hq         = false;
     bool has_audio_freq     = false; int  audio_freq     = 44100;
     // [bios] / [disc] / [memcard]

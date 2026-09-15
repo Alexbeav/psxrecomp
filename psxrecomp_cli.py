@@ -44,7 +44,27 @@ EXIT_VERIFY = 3
 
 def resolve_embedded_toolchain_bin(project_root: Path) -> Optional[Path]:
     """Return a usable toolchain bin/ (project, env, or shared cache)."""
+    if sys.platform != "win32":
+        return None
     return resolve_toolchain_bin(project_root)
+
+
+def _native_toolchain_ready(log=None) -> bool:
+    """Return true when Unix has the build tools required by setup."""
+    groups = (
+        ("CMake", ("cmake",)),
+        ("Ninja", ("ninja",)),
+        ("C compiler", ("cc", "gcc", "clang")),
+        ("C++ compiler", ("c++", "g++", "clang++")),
+    )
+    missing = [label for label, tools in groups if not any(shutil.which(t) for t in tools)]
+    if missing:
+        if log:
+            log(f"Missing native build tools: {', '.join(missing)}")
+        return False
+    if log:
+        log("Using native CMake, Ninja, and C/C++ compilers on PATH")
+    return True
 
 
 def activate_embedded_toolchain(
@@ -52,6 +72,8 @@ def activate_embedded_toolchain(
 ) -> bool:
     """Prepend resolved toolchain bin/ to PATH for cmake/ninja/clang."""
     log = progress.log if progress else None
+    if sys.platform != "win32":
+        return _native_toolchain_ready(log)
     bin_dir = resolve_toolchain_bin(project_root)
     if not bin_dir or not toolchain_bin_runs(bin_dir, log=log):
         return False
@@ -70,6 +92,8 @@ def ensure_toolchain_for_rebuild(
     min_version: str = "",
 ) -> bool:
     """Ensure cmake is available via cache / download / offline zip."""
+    if sys.platform != "win32":
+        return _native_toolchain_ready(progress.log)
     try:
         _ensure_toolchain_pack(
             project_root,
@@ -831,6 +855,69 @@ def regen_bios_profile(
             f"psxrecomp-bios failed for {profile_rel} (exit {proc.returncode})"
         )
 
+DEFAULT_RETAIL_BIOS_STEM = "SCPH1001"
+
+
+def retail_bios_stem(recomp: dict[str, Any], explicit: str = "") -> str:
+    """Stem of the retail BIOS profile this title generates against.
+
+    Order: an explicit --bios-stem (the setup host forwards the stem CMake
+    linked via PSXRECOMP_BIOS_STEMS), then the basename of [recompiler]
+    bios_config in game.toml, then SCPH1001. This used to be hardcoded to
+    SCPH1001: a title whose host links SCPH5552 regenerated an SCPH1001 pair
+    the host could never find, so Generate succeeded and first-run setup
+    looped forever (every wave-3 PAL kit).
+    """
+    stem = (explicit or "").strip()
+    if not stem:
+        cfg = str(recomp.get("bios_config") or "").strip()
+        if cfg:
+            stem = Path(cfg.replace("\\", "/")).stem
+    return stem or DEFAULT_RETAIL_BIOS_STEM
+
+
+def retail_bios_rom_relpath(fw: Path, stem: str) -> str:
+    """Framework-relative path bios/<stem>.toml loads its dump from."""
+    profile = fw / "bios" / f"{stem}.toml"
+    rom = ""
+    try:
+        program = parse_toml_simple(profile.read_text(encoding="utf-8")).get("program") or {}
+        rom = str(program.get("rom") or "").strip()
+    except OSError:
+        pass
+    return rom or f"bios/{stem}.BIN"
+
+
+def stage_retail_bios(
+    project_root: Path,
+    fw: Path,
+    bios_path: Path,
+    stem: str,
+    *,
+    force: bool,
+    progress: ProgressReporter,
+) -> Path:
+    """Copy the player's dump where bios/<stem>.toml loads it, then emit that
+    stem's backend pair unless a linkable one is already present."""
+    profile_rel = f"bios/{stem}.toml"
+    if not (fw / profile_rel).is_file():
+        raise FileNotFoundError(
+            f"BIOS profile not found for stem {stem}: {fw / profile_rel}"
+        )
+    dest = fw / retail_bios_rom_relpath(fw, stem)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.resolve() != bios_path.resolve():
+        shutil.copy2(bios_path, dest)
+    if force or not bios_backend_present(fw, stem):
+        progress.phase("bios", pct=0.2, message=f"Generating {stem} BIOS C...")
+        regen_bios_profile(project_root, profile_rel, progress=progress)
+    else:
+        progress.log(
+            f"{stem} backend already present — skipping bios regen "
+            "(pass --force-bios to regenerate)"
+        )
+    return dest
+
 
 def load_sections(config: Path) -> dict[str, dict[str, Any]]:
     return parse_toml_simple(config.read_text(encoding="utf-8"))
@@ -1057,6 +1144,7 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         return EXIT_ERROR
 
     bios_arg = (getattr(args, "bios", None) or "").strip()
+    retail_stem = retail_bios_stem(recomp, getattr(args, "bios_stem", ""))
     staged_retail = False
     if bios_arg:
         bios_path = Path(bios_arg).expanduser()
@@ -1067,37 +1155,30 @@ def cmd_generate(args: argparse.Namespace, progress: ProgressReporter) -> int:
         if not bios_path.is_file():
             progress.error(f"BIOS not found: {bios_path}", code=EXIT_USAGE)
             return EXIT_USAGE
-        dest = fw / "bios" / "SCPH1001.BIN"
-        progress.phase("bios", pct=0.15, message="Staging retail BIOS dump...")
-        progress.log(f"generate --bios {bios_path}")
+        progress.phase(
+            "bios", pct=0.15, message=f"Staging retail BIOS dump ({retail_stem})..."
+        )
+        progress.log(f"generate --bios {bios_path} --bios-stem {retail_stem}")
         try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.resolve() != bios_path.resolve():
-                shutil.copy2(bios_path, dest)
+            stage_retail_bios(
+                project_root,
+                fw,
+                bios_path,
+                retail_stem,
+                force=bool(args.force_bios),
+                progress=progress,
+            )
+            staged_retail = True
         except OSError as exc:
             progress.error(f"failed to stage BIOS: {exc}", code=EXIT_ERROR)
             return EXIT_ERROR
-        try:
-            if args.force_bios or not bios_backend_present(fw, "SCPH1001"):
-                progress.phase(
-                    "bios", pct=0.2, message="Generating SCPH1001 BIOS C..."
-                )
-                regen_bios_profile(
-                    project_root, "bios/SCPH1001.toml", progress=progress
-                )
-            else:
-                progress.log(
-                    "SCPH1001 backend already present — skipping bios regen "
-                    "(pass --force-bios to regenerate)"
-                )
-            staged_retail = True
         except Exception as exc:  # noqa: BLE001
             progress.error(str(exc), code=EXIT_ERROR)
             return EXIT_ERROR
-    elif not openbios_allowed and not bios_backend_present(fw, "SCPH1001"):
+    elif not openbios_allowed and not bios_backend_present(fw, retail_stem):
         progress.error(
-            "This title requires a retail BIOS dump. Pass --bios SCPH1001.BIN "
-            "(or pick one in the setup wizard).",
+            f"This title requires a retail BIOS dump for {retail_stem}. "
+            "Pass --bios <dump> (or pick one in the setup wizard).",
             code=EXIT_USAGE,
         )
         return EXIT_USAGE
@@ -1785,8 +1866,147 @@ def cmd_rebuild(args: argparse.Namespace, progress: ProgressReporter) -> int:
         progress.phase("prune", pct=0.97, message="Pruning toolchain / build bulk...")
         prune_after_rebuild(project_root, build_dir, modes, progress)
 
+    diagnostic_exe = None
+    diagnostic_error = ""
+    diag_raw = (getattr(args, "diagnostic_dir", None) or "").strip()
+    if diag_raw:
+        diag_dir = Path(diag_raw).expanduser()
+        if not diag_dir.is_absolute():
+            diag_dir = (project_root / diag_dir).resolve()
+        else:
+            diag_dir = diag_dir.resolve()
+        diagnostic_exe, diagnostic_error = build_diagnostic_product(
+            project_root, diag_dir, target, exe_basename, cmake_extra, progress=progress
+        )
+
     progress.phase("done", pct=1.0, message="Rebuild complete")
-    progress.result(ok=True, exe=str(exe), pgo=pgo_enabled)
+    progress.result(
+        ok=True,
+        exe=str(exe),
+        pgo=pgo_enabled,
+        diagnostic_exe=str(diagnostic_exe) if diagnostic_exe else None,
+        diagnostic_error=diagnostic_error or None,
+    )
+    return EXIT_OK
+
+
+def build_diagnostic_product(
+    project_root: Path,
+    diag_dir: Path,
+    target: str,
+    exe_basename: str,
+    cmake_extra: list[str],
+    *,
+    progress: ProgressReporter,
+):
+    """Build the same generated sources once more with PSX_DEBUG_TOOLS=ON.
+
+    Players run the normal product by default. When something goes wrong they
+    switch to this build (see docs/DIAGNOSTIC_MODE.md): it carries the TCP
+    debug server, the freeze heartbeat and freeze dumps that the normal build
+    deliberately omits, and it writes them under its own directory. Building
+    it during setup means the switch never needs another compilation.
+
+    Best effort: a diagnostic build failure never takes the playable normal
+    product away. The failure is reported in the result so the docs can tell
+    the player to rebuild.
+    """
+    try:
+        progress.phase("diagnostic", pct=0.9, message="cmake diagnostic build (PSX_DEBUG_TOOLS=ON)...")
+        _cmake_configure(
+            project_root, diag_dir, pgo="", extra=cmake_extra + ["-DPSX_DEBUG_TOOLS=ON"], progress=progress
+        )
+        _cmake_build(diag_dir, target, progress)
+        exe, err = _resolve_runtime_exe(diag_dir, target, exe_basename)
+        if exe is None:
+            raise RuntimeError(err)
+        progress.log(f"diagnostic product ready: {exe}")
+        return exe, ""
+    except Exception as exc:  # noqa: BLE001
+        progress.log(f"WARNING: diagnostic build failed (normal product unaffected): {exc}")
+        return None, str(exc)
+
+
+DIAGNOSTIC_REPORT_NAMES = (
+    "psx_last_run_report.json",
+    "psx_crash.txt",
+    "psx_freeze_heartbeat.json",
+    "psx_game_version.txt",
+    "BUILDINFO.json",
+)
+DIAGNOSTIC_REPORT_GLOBS = ("psx_freeze_dump_*.json", "psxrecomp_exe_name-*.txt")
+DIAGNOSTIC_ROOT_FILES = ("framework_pins.txt", "VERSION", "project-manifest.toml", "diagnostic-mode.txt")
+DIAGNOSTIC_BUILD_DIRS = ("build-release", "build-diagnostic", "build")
+
+
+def collect_diagnostics(project_root: Path, output: Path) -> dict[str, Any]:
+    """Zip the runtime's own report files for a GitHub issue.
+
+    Only report and identity files are taken: never saves, memory cards, BIOS
+    images, disc images, settings, or anything else under the project.
+    """
+    import datetime
+    import json
+    import platform
+    import zipfile
+
+    entries: list[tuple[Path, str]] = []
+    for d in DIAGNOSTIC_BUILD_DIRS:
+        base = project_root / d
+        if not base.is_dir():
+            continue
+        found: list[Path] = [base / n for n in DIAGNOSTIC_REPORT_NAMES if (base / n).is_file()]
+        for pattern in DIAGNOSTIC_REPORT_GLOBS:
+            found.extend(p for p in sorted(base.glob(pattern)) if p.is_file())
+        for p in found:
+            entries.append((p, f"{d}/{p.name}"))
+    for n in DIAGNOSTIC_ROOT_FILES:
+        p = project_root / n
+        if p.is_file():
+            entries.append((p, n))
+    summary = {
+        "schema": "psxrecomp.diagnostics.v1",
+        "collected_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "host": platform.platform(),
+        "python": platform.python_version(),
+        "project_root": str(project_root),
+        "diagnostic_mode_marker": (project_root / "diagnostic-mode.txt").is_file(),
+        "build_dirs_present": {d: (project_root / d).is_dir() for d in DIAGNOSTIC_BUILD_DIRS},
+        "files": [rel for _, rel in entries],
+        "not_included": "saves, memory cards, BIOS images, disc images, settings",
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, rel in entries:
+            archive.write(path, rel)
+        archive.writestr("diagnostics-summary.json", json.dumps(summary, indent=2))
+    summary["output"] = str(output)
+    return summary
+
+
+def cmd_diagnostics(args: argparse.Namespace, progress: ProgressReporter) -> int:
+    project_root = (
+        Path(args.project_root).expanduser().resolve()
+        if getattr(args, "project_root", "")
+        else Path.cwd().resolve()
+    )
+    out_raw = (getattr(args, "output", None) or "").strip()
+    if out_raw:
+        output = Path(out_raw).expanduser()
+        if not output.is_absolute():
+            output = project_root / output
+    else:
+        import datetime
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        output = project_root / f"diagnostics-{stamp}.zip"
+    try:
+        summary = collect_diagnostics(project_root, output.resolve())
+    except OSError as exc:
+        progress.error(f"could not collect diagnostics: {exc}", code=EXIT_ERROR)
+        return EXIT_ERROR
+    progress.log(f"Diagnostics written to {summary['output']} ({len(summary['files'])} report files)")
+    progress.log("Attach that zip to a GitHub issue on the title repository.")
+    progress.result(ok=True, output=summary["output"], files=summary["files"])
     return EXIT_OK
 
 
@@ -2004,7 +2224,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--bios",
         default="",
-        help="optional retail BIOS dump (staged as bios/SCPH1001.BIN + regen)",
+        help="optional retail BIOS dump (staged where bios/<stem>.toml loads it + regen)",
+    )
+    g.add_argument(
+        "--bios-stem",
+        default="",
+        help="retail BIOS profile stem to stage and regenerate (bios/<STEM>.toml); "
+        "defaults to the stem of [recompiler] bios_config, then SCPH1001",
     )
     g.add_argument(
         "--force-bios",
@@ -2093,7 +2319,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not fetch cmake-clang-v1 when no local pack is found",
     )
     r.add_argument("--cmake-extra", action="append", default=[])
+    r.add_argument(
+        "--diagnostic-dir",
+        default="",
+        help="also build a diagnostic product (PSX_DEBUG_TOOLS=ON: debug server, "
+        "heartbeat, freeze dumps) into this directory after the normal build",
+    )
     r.set_defaults(handler=cmd_rebuild)
+
+    dg = sub.add_parser(
+        "diagnostics",
+        help="collect runtime diagnostic reports into one zip for a bug report",
+    )
+    add_common(dg)
+    dg.add_argument("--output", default="", help="zip path (default: <project>/diagnostics-<UTC>.zip)")
+    dg.set_defaults(handler=cmd_diagnostics)
 
     e = sub.add_parser(
         "ensure-toolchain",

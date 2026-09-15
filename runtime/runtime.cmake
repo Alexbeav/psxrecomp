@@ -375,6 +375,7 @@ set(PSXRECOMP_RUNTIME_SOURCES
     ${PSXRECOMP_ROOT}/runtime/src/psx_rewind.c
     ${PSXRECOMP_ROOT}/runtime/src/host_osd.c
     ${PSXRECOMP_ROOT}/runtime/src/host_keymap.c
+    ${PSXRECOMP_ROOT}/runtime/src/controller_port_route.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim_state.c
     ${PSXRECOMP_ROOT}/runtime/src/cosim.c
     ${PSXRECOMP_ROOT}/runtime/src/traps.c
@@ -584,7 +585,10 @@ else()
     set(PSXRECOMP_LOBBY_INCLUDE_DIR "")
 endif()
 
+set(PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/psxrecomp_codegen_include")
 set(PSXRECOMP_RUNTIME_INCLUDE_DIRS
+    ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
     ${PSXRECOMP_ROOT}/runtime/include
     ${PSXRECOMP_ROOT}/recompiler/src
     ${PSXRECOMP_ROOT}/recompiler/include
@@ -1552,7 +1556,21 @@ function(psxrecomp_add_runtime_target target)
                 string(REPLACE "\\" "/" _psxrt_ico_fwd "${PSXRT_APP_ICON}")
                 set(_psxrt_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_app_icon.rc")
                 file(WRITE "${_psxrt_rc}" "IDI_ICON1 ICON \"${_psxrt_ico_fwd}\"\n")
-                target_sources(${target} PRIVATE "${_psxrt_rc}")
+                # Compile the icon resource in an isolated object library. Added
+                # straight to ${target}, the .rc inherits every include directory
+                # and compile definition of the runtime, and GNU windres hands
+                # that -I list to the C preprocessor on an unquoted command line:
+                # one space in the project path ("D:/Retro Games/...", or
+                # any install under a folder with a space) splits the path and
+                # the player's first-run rebuild dies with "cc1.exe: fatal error:
+                # <fragment>: No such file or directory". The .rc needs neither
+                # includes nor defines, so give the resource compiler none.
+                add_library(${target}_app_icon OBJECT "${_psxrt_rc}")
+                set_target_properties(${target}_app_icon PROPERTIES
+                    INCLUDE_DIRECTORIES ""
+                    COMPILE_DEFINITIONS ""
+                    COMPILE_OPTIONS "")
+                target_sources(${target} PRIVATE $<TARGET_OBJECTS:${target}_app_icon>)
                 message(STATUS "psxrecomp ${target}: APP_ICON=${PSXRT_APP_ICON} (RC=${CMAKE_RC_COMPILER})")
             else()
                 message(WARNING
@@ -1579,13 +1597,15 @@ function(psxrecomp_add_runtime_target target)
     endif()
 
     # ---- overlay codegen hash (auto cache key) -----------------------------
-    # Hash the recompiler's codegen sources into runtime/include/overlay_codegen_hash.h
-    # (gitignored) so the overlay cache path carries cg<N>_<hash>: any emitter change
+    # Hash the recompiler's codegen sources into a build-owned include directory
+    # so the overlay cache path carries cg<N>_<hash> without writing into source:
+    # any emitter change
     # auto-invalidates the cache instead of silently reusing a stale-but-cgN DLL (the
     # v0.3.0 black-screen). The loader (via overlay_api.h) and compile_overlays.py both
     # read the same generated PSX_OVERLAY_CODEGEN_HASH, so they never drift. Defined
     # once (shared across psx-runtime/psx-beetle); idempotent write avoids rebuilds.
-    set(_codegen_hash_hdr ${PSXRECOMP_ROOT}/runtime/include/overlay_codegen_hash.h)
+    set(_codegen_hash_hdr
+        ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}/overlay_codegen_hash.h)
     if(NOT TARGET psxrecomp_codegen_hash)
         # Canonical source list shared with recompiler/CMakeLists.txt (which bakes
         # the SAME hash into psxrecomp-game for the --codegen-hash staleness guard).
@@ -1594,6 +1614,8 @@ function(psxrecomp_add_runtime_target target)
         set(_codegen_srcs ${PSXRECOMP_CODEGEN_HASH_SRCS})
         add_custom_command(
             OUTPUT  ${_codegen_hash_hdr}
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    ${PSXRECOMP_CODEGEN_HASH_INCLUDE_DIR}
             COMMAND ${CMAKE_COMMAND} -DOUT=${_codegen_hash_hdr} "-DSRCS=${_codegen_srcs}"
                     -P ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake
             DEPENDS ${_codegen_srcs} ${PSXRECOMP_ROOT}/runtime/hash_codegen.cmake
@@ -1724,11 +1746,9 @@ function(psxrecomp_add_runtime_target target)
         endif()
     endif()
 
-    # Per-game netplay/local pad ceiling. Default 2 (MotK / dual-shock path).
-    # Single-player titles (Tomba, Ape Escape, …) pass MAX_PLAYERS 1 so rewind
-    # / rbengine still link without advertising multiplayer. Multitap N-player
-    # (Bomberman Party Edition) uses 5; dual SCPH-1070 uses 8. Range matches
-    # sio.h (1..8).
+    # Compiled controller capacity includes both physical console ports.
+    # A one-player game can route its controller to port 2 at runtime.
+    # game.toml players remains the game's logical player count.
     if(NOT PSXRT_MAX_PLAYERS)
         if(DEFINED PSX_MAX_PLAYERS AND NOT PSX_MAX_PLAYERS STREQUAL "")
             set(PSXRT_MAX_PLAYERS "${PSX_MAX_PLAYERS}")
@@ -1739,6 +1759,9 @@ function(psxrecomp_add_runtime_target target)
     if(PSXRT_MAX_PLAYERS LESS 1 OR PSXRT_MAX_PLAYERS GREATER 8)
         message(FATAL_ERROR
             "MAX_PLAYERS must be in 1..8 (got ${PSXRT_MAX_PLAYERS})")
+    endif()
+    if(PSXRT_MAX_PLAYERS LESS 2)
+        set(PSXRT_MAX_PLAYERS 2)
     endif()
     message(STATUS "psxrecomp ${target}: PSX_MAX_PLAYERS=${PSXRT_MAX_PLAYERS}")
 
