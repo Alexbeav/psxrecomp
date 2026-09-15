@@ -13,7 +13,9 @@ import struct
 import zipfile
 
 MAX_FRAMES = 1_000_000
-MAX_STEPS = 4096
+# Must equal INPUT_ROUTE_MAX_STEPS in runtime/include/input_route_file.h; the
+# runtime refuses a route past it. See that header for why it moved off 4096.
+MAX_STEPS = 32768
 HEADER = struct.Struct('<8sIIII')
 RECORD = struct.Struct('<IH6B')
 CONTROLLER = struct.Struct('<H5B')
