@@ -5,6 +5,18 @@
 #if !defined(_WIN32) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE 1
 #endif
+/* Apple libc ignores _GNU_SOURCE and gates <ucontext.h> behind _XOPEN_SOURCE.
+ * _DARWIN_C_SOURCE keeps the Darwin extensions _XOPEN_SOURCE would otherwise
+ * hide (pthread_get_stackaddr_np, dladdr). Same contract psx_fiber.c uses for
+ * its POSIX ucontext path. */
+#ifdef __APPLE__
+#  ifndef _XOPEN_SOURCE
+#    define _XOPEN_SOURCE 700
+#  endif
+#  ifndef _DARWIN_C_SOURCE
+#    define _DARWIN_C_SOURCE 1
+#  endif
+#endif
 
 #include "freeze_heartbeat.h"
 #include "freeze_dump_policy.h"
