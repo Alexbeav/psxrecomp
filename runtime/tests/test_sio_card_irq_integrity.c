@@ -22,6 +22,9 @@ uint32_t memory_get_sr(void) { return 0; }
 void psx_irq_raise(uint32_t bit, uint32_t detail) { (void)detail; i_stat |= 1u << bit; }
 void debug_server_poll(void) {}
 void debug_server_log_sio_write(uint32_t a, uint32_t v, uint8_t w) { (void)a; (void)v; (void)w; }
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 void event_ring_record_aux(uint16_t a, uint8_t b, uint32_t c) { (void)a; (void)b; (void)c; }
 void starvation_ring_record(uint8_t a, uint8_t b, uint8_t c, uint16_t d, uint16_t e,
     int f, int g, int h, int i, int j, uint8_t k, uint32_t l,

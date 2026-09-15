@@ -54,6 +54,9 @@ void debug_server_poll(void) {}
 void debug_server_log_sio_write(uint32_t addr, uint32_t value, uint8_t width) {
     (void)addr; (void)value; (void)width;
 }
+uint16_t debug_server_update_poll(int slot, uint16_t buttons, int analog) {
+    (void)slot; (void)analog; return buttons;
+}
 void starvation_ring_record(uint8_t kind, uint8_t tx, uint8_t rx,
                             uint16_t ctrl, uint16_t stat, uint8_t active_device,
                             uint8_t selected_slot, uint16_t mc_state,
