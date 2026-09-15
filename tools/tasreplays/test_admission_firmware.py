@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 # Modules expected to carry the cross-check.
-CHECKED = ('megamanx5_admission', 'redc_admission')
+CHECKED = ('megamanx5_admission', 'megamanx4_admission', 'redc_admission')
 
 # Deliberately exempt, and asserted below so the exemption cannot rot into a silent
 # gap. nymashock_admission.py admits the qualified Bio Hazard 5920M source, whose
