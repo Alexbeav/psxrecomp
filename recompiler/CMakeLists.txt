@@ -421,7 +421,7 @@ if(BUILD_TESTING)
             endif()
             add_executable(tas_gpu_sprite_blend_${_mode}
                 ../runtime/tests/test_source_gpu_sprite_blend.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c)
             target_include_directories(tas_gpu_sprite_blend_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -429,7 +429,7 @@ if(BUILD_TESTING)
             add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
             add_executable(tas_gpu_textured_triangle_${_mode}
                 ../runtime/tests/test_source_gpu_textured_triangle.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_textured_triangle_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_textured_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -439,7 +439,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_textured_triangle_${_mode}>)
             add_executable(tas_gpu_polygon_order_${_mode}
                 ../runtime/tests/test_source_gpu_polygon_order.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_polygon_order_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_polygon_order_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -449,7 +449,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_polygon_order_${_mode}>)
             add_executable(tas_gpu_shaded_texture_family_${_mode}
                 ../runtime/tests/test_source_gpu_shaded_texture_family.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_shaded_texture_family_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_shaded_texture_family_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -459,7 +459,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_shaded_texture_family_${_mode}>)
             add_executable(tas_gpu_shaded_triangle_${_mode}
                 ../runtime/tests/test_source_gpu_shaded_triangle.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_shaded_triangle_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_shaded_triangle_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -469,7 +469,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_shaded_triangle_${_mode}>)
             add_executable(tas_gpu_shaded_quad_${_mode}
                 ../runtime/tests/test_source_gpu_shaded_quad.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_shaded_quad_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_shaded_quad_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -479,7 +479,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_shaded_quad_${_mode}>)
             add_executable(tas_gpu_polygon_wrap_${_mode}
                 ../runtime/tests/test_source_gpu_polygon_wrap.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_polygon_wrap_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_polygon_wrap_${_mode} PRIVATE -${_mode} -UNDEBUG)
@@ -489,14 +489,14 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:tas_gpu_polygon_wrap_${_mode}>)
             add_executable(tas_gpu_flat_blend_${_mode}
                 ../runtime/tests/test_source_gpu_flat_blend.c
-                ../runtime/src/gpu_sw_renderer.c
+                ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c)
             target_include_directories(tas_gpu_flat_blend_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_flat_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_gpu_flat_blend_${_mode} PRIVATE m)
             add_test(NAME tas_gpu_flat_blend_${_mode} COMMAND tas_gpu_flat_blend_${_mode})
             add_executable(tas_gpu_line_${_mode}
-                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c
+                ../runtime/tests/test_source_gpu_line.c ../runtime/src/gpu_sw_renderer.c ../runtime/tests/source_gpu_raster_stub.c
                 ../runtime/src/gpu_vram_dirty.c ../runtime/src/psx_sha256.c)
             target_include_directories(tas_gpu_line_${_mode} PRIVATE ../runtime/include)
             target_compile_options(tas_gpu_line_${_mode} PRIVATE -${_mode} -UNDEBUG)
