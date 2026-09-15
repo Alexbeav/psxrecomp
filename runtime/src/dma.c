@@ -2042,6 +2042,12 @@ static int dma_r_delay(PstR *r, DMADelayedComplete *d) {
            pst_r_u32(r, &d->cycles_remaining);
 }
 
+/* Any source-DMA timing model selected at all. Upstream this sits inside the
+ * save-state wire section, but it is only a predicate over the model flags and
+ * the precise-slice diagnostic counters want it, so it lives here instead. */
+int dma_src_active(void) {
+    return gpu_upload_source_model || gpu_ll_source_model || cd_source_model || otc_source_model;
+}
 /* Is a source-model DMA transfer moving words right now? This ignores leftover
  * budget/address state that persists after completion; a new transfer resets
  * budget on start. Used by the precise-slice guard. */
