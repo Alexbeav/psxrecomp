@@ -570,33 +570,21 @@
       ],
       "origin_commit": "f5f5b16e9b8c7ca422a91e8714634111022e21f4",
       "subject": "Admit raw blended source GPU sprites for Biohazard",
-      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "qualified_tree": "e97756b0dd73c1bb797165a52bee4905d94e6f8b",
       "blocks": [
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66 || command==0x67;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66 || command==0x67?4:3;"
-          ]
-        },
-        {
-          "file": "runtime/include/source_gpu_command_projection.h",
-          "lines": [
-            "    if(command==2 || (command>=0x60 && command<=0x67))return 3;"
-          ]
-        },
         {
           "file": "runtime/src/gpu_sw_renderer.c",
           "lines": [
-            "    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65 && opcode!=0x66 && opcode!=0x67)return 0;"
+            "    if(!source_gpu_sprite_opcode(opcode))return 0;",
+            "    /* The extent is the size word for the variable class and the opcode's own",
+            "     * 1x1/8x8/16x16 for the fixed classes; everything below is size-agnostic. */",
+            "    int textured=!!(opcode&4);unsigned sprite_w,sprite_h;",
+            "    source_gpu_sprite_extent(opcode,words,&sprite_w,&sprite_h);",
+            "    int left=block->x,top=block->y,right=left+(int)sprite_w,bottom=top+(int)sprite_h;"
           ]
         }
-      ]
+      ],
+      "note": "Origin f5f5b16e admitted GP0 0x66/0x67 by enumerating opcodes in the projection and the renderer. Re-pinned 2026-09-15: the fixed-size sprite work (8eb45f93, 20b06ddb) replaced every enumeration with the whole-range source_gpu_sprite_opcode() test, which is a superset, so 0x66/0x67 remain admitted and drawn. The 1,572-check sprite fixture covers the behaviour. Pinned to the renderer admission span because that is where the drawing guarantee now lives."
     },
     {
       "id": "1a73216a-gpu-upload-history-capture-stop",
@@ -661,20 +649,21 @@
       ],
       "origin_commit": "b1413e7147cefc8f58449685114639da4113c4b4",
       "subject": "runtime: keep frontend returns in the precise slice owner (restore b1413e71)",
-      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
-      "seed_commit": "9a24638ff3d8eb9c90e6f0f6fa7b4033d1897cbe",
+      "qualified_tree": "e97756b0dd73c1bb797165a52bee4905d94e6f8b",
       "blocks": [
         {
           "file": "runtime/src/dirty_ram_interp.c",
           "lines": [
             "    /* Frontend returns are GPU events even when no guest IRQ is due. Keep",
             "     * their instruction/branch/load continuation in the precise owner. */",
-            "    uint32_t gpu_deadline = source_gpu_runtime_cycles_to_event();",
+            "    extern uint32_t source_gpu_runtime_cycles_to_slice_deadline(void);",
+            "    uint32_t gpu_deadline = s_gpu_phase_deadline ? source_gpu_runtime_cycles_to_slice_deadline()",
+            "                                                 : source_gpu_runtime_cycles_to_event();",
             "    if (gpu_deadline < deadline) deadline = gpu_deadline;"
           ]
         }
       ],
-      "note": "Origin is b1413e71 (T52); the dirty_ram_interp.c hunk was dropped when the fork was re-integrated into split/01..07 and restored verbatim by 9a24638f. Fold source_gpu_runtime_cycles_to_event() into the precise-slice deadline in psx_slice_block_impl."
+      "note": "Origin b1413e71 (T52); dropped when the fork was re-integrated into split/01..07 and restored verbatim by 9a24638f. Re-pinned 2026-09-15 to the CURRENT span after the Eagle slice-speed port made the call the default arm of a ternary: source_gpu_runtime_cycles_to_slice_deadline() is reached only under --slice-gpu-deadline phase, so the qualified default still folds source_gpu_runtime_cycles_to_event() into the precise-slice budget. Pinned as a span rather than re-seeded from the commit diff, which would have decayed the entry to the comment alone."
     },
     {
       "id": "cd55e8a4-xa-eof-data-end-gate",
@@ -780,6 +769,36 @@
         }
       ],
       "note": "Re-pins the Tekken 3 codegen guard hashes to the split/07 recompiler output; only this JSON file qualifies."
+    },
+    {
+      "id": "fixed-size-sprite-family-20260915",
+      "titles": [
+        "megamanx5"
+      ],
+      "origin_commit": "e97756b0dd73c1bb797165a52bee4905d94e6f8b",
+      "subject": "gpu: admit and draw the fixed-size sprite family (0x68-0x7F)",
+      "qualified_tree": "e97756b0dd73c1bb797165a52bee4905d94e6f8b",
+      "blocks": [
+        {
+          "file": "runtime/include/source_gpu_texture.h",
+          "lines": [
+            "static inline int source_gpu_sprite_opcode(unsigned command) {",
+            "    return command>=0x60 && command<=0x7f;",
+            "}",
+            "static inline unsigned source_gpu_sprite_class(unsigned command) { return (command>>3)&3u; }",
+            "/* Width and height of a sprite packet: from the size word for class 0, from",
+            " * the opcode otherwise. `words` is the packet base. */",
+            "static inline void source_gpu_sprite_extent(unsigned command,const uint32_t *words,",
+            "                                            unsigned *width,unsigned *height) {",
+            "    unsigned klass=source_gpu_sprite_class(command);",
+            "    if(klass){*width=*height=klass==1?1u:klass==2?8u:16u;return;}",
+            "    unsigned size=words[(command&4u)?3:2];",
+            "    *width=size&1023u;*height=(size>>16)&511u;",
+            "}"
+          ]
+        }
+      ],
+      "note": "Mega Man X5 stopped at return 1589 on GP0 7D000000, a 16x16 raw textured sprite: the source projection admitted only the variable-size rectangles and the software renderer carried the same restriction. Derived from the source core's SPR_HELPER macro, whose len and fifo_fb_len formulas reproduce every value the projection already pinned. These shared helpers are the single definition the cost model and the renderer both use; if they go, both sides break. Commits 8eb45f93 and 20b06ddb."
     }
   ]
 }

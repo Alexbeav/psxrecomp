@@ -234,6 +234,42 @@ def cmd_check_all(args):
     return 1 if failed else 0
 
 
+def span_at_rev(repo, path, rev, anchor, count):
+    """`count` lines of `path` at `rev`, starting at the line equal to `anchor`.
+
+    Seeding from a commit's added lines cannot re-pin a fix whose expression a
+    later commit rewrote: the rewritten lines are dropped and the entry decays
+    towards whatever survived, which for a commented fix is the comment alone --
+    a guard that passes on a tree where the code itself was deleted. This takes
+    the fix's CURRENT lines instead, so an evolved entry keeps its teeth.
+    """
+    if not qualifies(path):
+        raise HunkError(f'{path}: not a qualifying source path ({", ".join(QUALIFYING)})')
+    lines = file_lines(repo, path, rev)
+    if lines is None:
+        raise HunkError(f'{path}: not present at {rev or "the working tree"}')
+    anchor = anchor.rstrip()
+    matches = [i for i, line in enumerate(lines) if line == anchor]
+    if len(matches) != 1:
+        raise HunkError(f'{path}: anchor matches {len(matches)} lines, need exactly 1: {anchor!r}')
+    start = matches[0]
+    if count < 1 or start + count > len(lines):
+        raise HunkError(f'{path}: {count} lines from the anchor runs past the end of the file')
+    return lines[start:start + count]
+
+
+def seed_span(repo, path, rev, anchor, count, entry_id, titles, note=None, origin=None, subject=None):
+    """An entry pinned to a contiguous span as it exists at `rev`."""
+    block = {'file': path, 'lines': span_at_rev(repo, path, rev, anchor, count)}
+    entry = {'id': entry_id, 'titles': list(titles),
+             'origin_commit': resolve(repo, origin) if origin else resolve(repo, rev or 'HEAD'),
+             'subject': subject or 'pinned span',
+             'qualified_tree': resolve(repo, rev or 'HEAD'), 'blocks': [block]}
+    if note:
+        entry['note'] = note
+    return entry
+
+
 def seed_entry(repo, commit, entry_id, titles, prefixes=None, as_of=None, note=None, origin=None, subject=None):
     full = resolve(repo, commit)
     blocks = extract_blocks(repo, full, prefixes)
@@ -277,8 +313,16 @@ def cmd_seed(args):
         if not qualifies(clean) and not any(q.startswith(clean + '/') for q in QUALIFYING):
             raise HunkError(f'{prefix}: not a qualifying source path ({", ".join(QUALIFYING)})')
     registry = load_registry(args.registry)
-    entry = seed_entry(args.repo, args.commit, args.id, args.titles, args.path or None,
-                       args.as_of, args.note, args.origin, args.subject)
+    if args.anchor is not None:
+        if not args.file or args.lines is None:
+            raise HunkError('--anchor needs --file and --lines')
+        entry = seed_span(args.repo, args.file, args.as_of, args.anchor, args.lines,
+                          args.id, args.titles, args.note, args.origin, args.subject)
+    else:
+        if not args.commit:
+            raise HunkError('seed needs --commit, or --file/--anchor/--lines to pin a current span')
+        entry = seed_entry(args.repo, args.commit, args.id, args.titles, args.path or None,
+                           args.as_of, args.note, args.origin, args.subject)
     action = upsert(registry, entry)
     write_registry(args.registry, registry)
     evolved = entry.get('evolved')
@@ -321,7 +365,7 @@ def build_parser():
 
     p = sub.add_parser('seed', help="record a commit's added source lines as a registry entry")
     common(p)
-    p.add_argument('--commit', required=True)
+    p.add_argument('--commit')
     p.add_argument('--path', action='append', help='restrict to these qualifying path prefixes')
     p.add_argument('--id', required=True)
     p.add_argument('--titles', type=titles_list, required=True)
@@ -329,6 +373,9 @@ def build_parser():
     p.add_argument('--note')
     p.add_argument('--origin', help='record this hash as origin_commit (the lines come from a re-application)')
     p.add_argument('--subject')
+    p.add_argument('--file', help='with --anchor/--lines: pin a span of this file as it exists at --as-of')
+    p.add_argument('--anchor', help='exact first line of the span to pin (must match exactly one line)')
+    p.add_argument('--lines', type=int, help='number of lines in the span, starting at --anchor')
     p.set_defaults(func=cmd_seed)
     return parser
 
