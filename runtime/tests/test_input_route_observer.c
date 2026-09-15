@@ -44,6 +44,10 @@ uint64_t dma_debug_get_cdrom_history(const DMACDROMHistoryEntry **out) { *out = 
 uint32_t sio_get_trace(const SioTraceEntry **out, int *index) {
     *out = NULL; *index = 0; return 0;
 }
+/* The observer's boundary hook asks the precise-slice interpreter to dump its
+ * diagnostic counters; that lives in dirty_ram_interp.c, which this fixture
+ * deliberately does not link. */
+void psx_slice_diag_write(const char *dir) { (void)dir; }
 void gl_renderer_sync_cpu(void) {}
 void debug_server_dump_watched_writes(FILE *f, const uint32_t *a, uint32_t count) {
     (void)a; (void)count; fputs("{\"kind\":\"coverage\",\"total_writes\":0,\"retained_writes\":0}\n", f);
