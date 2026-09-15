@@ -1827,7 +1827,15 @@ static void cli_fail_msg(char* err_msg, size_t err_cap, const char* fail_label,
                          long code, const CliTail* t) {
     const char* why = t->last_err[0] ? t->last_err : t->last;
     if (code == 3) {
-        snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
+        /* The CLI already names the failing check and the digests it saw, and
+         * cli_tail_note has captured that line. Discarding it for a flat
+         * "wrong dump" sent players hunting a bad rip when the dump was
+         * correct and the verifier simply could not read the container it was
+         * handed. Keep the reason when there is one. */
+        if (why[0])
+            snprintf(err_msg, err_cap, "Disc verification failed: %s", why);
+        else
+            snprintf(err_msg, err_cap, "Disc verification failed (wrong dump).");
         return;
     }
     if (why[0])
