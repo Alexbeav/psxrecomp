@@ -67,19 +67,37 @@ static inline unsigned source_gpu_polygon_setup(unsigned opcode) {
 static inline int source_gpu_line_supported(unsigned command) {
     return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);
 }
+/* Sprite/rectangle opcode fields, as the source core's SPR_HELPER reads them:
+ * bit 2 selects a textured packet (one extra word) and bits 3-4 select the size
+ * class, where class 0 takes an explicit width/height word and 1/2/3 are the
+ * fixed 1x1, 8x8 and 16x16 forms that carry no size word at all. */
+static inline int source_gpu_sprite_opcode(unsigned command) {
+    return command>=0x60 && command<=0x7f;
+}
+static inline unsigned source_gpu_sprite_class(unsigned command) { return (command>>3)&3u; }
 static inline int source_gpu_block_supported(unsigned command) {
-    return command==2 || command==0x80 || command==0x60 || command==0x62 || command==0x64 || command==0x65 || command==0x66 || command==0x67;
+    return command==2 || command==0x80 || source_gpu_sprite_opcode(command);
+}
+/* SPR_HELPER: len = 2 + textured + (variable size ? 1 : 0). */
+static inline unsigned source_gpu_sprite_length(unsigned command) {
+    return 2u+((command&4u)>>2)+(source_gpu_sprite_class(command)?0u:1u);
 }
 static inline unsigned source_gpu_command_length(uint32_t word) {
     unsigned command=word>>24;
     if(source_gpu_line_supported(command))return 3+!!(command&0x10);
-    if(source_gpu_block_supported(command))return command==0x80 || command==0x64 || command==0x65 || command==0x66 || command==0x67?4:3;
+    if(source_gpu_sprite_opcode(command))return source_gpu_sprite_length(command);
+    if(source_gpu_block_supported(command))return command==0x80?4:3;
     if(source_gpu_polygon_supported(command))return 1+3*source_gpu_polygon_stride(command)-!!(command&0x10);
     return command==0xa0 || command==0xc0 ? 3u : 1u;
 }
 static inline unsigned source_gpu_command_feedback_length(uint32_t word) {
     unsigned command=word>>24;
-    if(command==2 || (command>=0x60 && command<=0x67))return 3;
+    /* SPR_HELPER again, but its fifo_fb_len ORs the same three terms instead of
+     * adding them, so a textured fixed-size sprite feeds back 3 while its flat
+     * counterpart feeds back 2. Reproduces the previously pinned 3 for 0x60-0x67. */
+    if(source_gpu_sprite_opcode(command))
+        return 2u|((command&4u)>>2)|(source_gpu_sprite_class(command)?0u:1u);
+    if(command==2)return 3;
     return command==0x80 || command==1 || command==0xa0 || command==0xc0 || command==0xe1 || command==0xe2 || command==0xe6 ? 2u : 1u;
 }
 
@@ -142,8 +160,16 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
         return cost;
     }
     int x=source_gpu_sprite_origin(words[1],0,s->offset_x),y=source_gpu_sprite_origin(words[1],16,s->offset_y);
-    unsigned size=words[(opcode&4)?3:2];
-    int right=x+(int)(size&1023u),bottom=y+(int)((size>>16)&511u);
+    /* Only the variable-size class carries a width/height word; the fixed
+     * classes imply 1x1, 8x8 or 16x16 and the raster cost is otherwise the
+     * same rectangle walk. */
+    unsigned klass=source_gpu_sprite_class(opcode),width_px,height_px;
+    if(klass) width_px=height_px=klass==1?1u:klass==2?8u:16u;
+    else {
+        unsigned size=words[(opcode&4)?3:2];
+        width_px=size&1023u;height_px=(size>>16)&511u;
+    }
+    int right=x+(int)width_px,bottom=y+(int)height_px;
     if(x<s->clip_x0)x=s->clip_x0;if(y<s->clip_y0)y=s->clip_y0;
     if(right>s->clip_x1+1)right=s->clip_x1+1;if(bottom>s->clip_y1+1)bottom=s->clip_y1+1;
     int width=right-x;

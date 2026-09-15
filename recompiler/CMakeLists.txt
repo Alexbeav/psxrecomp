@@ -421,6 +421,11 @@ if(BUILD_TESTING)
             target_compile_options(tas_gpu_sprite_blend_${_mode} PRIVATE -${_mode} -UNDEBUG)
             target_link_libraries(tas_gpu_sprite_blend_${_mode} PRIVATE m)
             add_test(NAME tas_gpu_sprite_blend_${_mode} COMMAND tas_gpu_sprite_blend_${_mode})
+            add_executable(tas_gpu_sprite_fixed_${_mode}
+                ../runtime/tests/test_source_gpu_sprite_fixed.c)
+            target_include_directories(tas_gpu_sprite_fixed_${_mode} PRIVATE ../runtime/include)
+            target_compile_options(tas_gpu_sprite_fixed_${_mode} PRIVATE -${_mode} -UNDEBUG)
+            add_test(NAME tas_gpu_sprite_fixed_${_mode} COMMAND tas_gpu_sprite_fixed_${_mode})
             add_executable(tas_gpu_textured_triangle_${_mode}
                 ../runtime/tests/test_source_gpu_textured_triangle.c
                 ../runtime/src/gpu_sw_renderer.c
