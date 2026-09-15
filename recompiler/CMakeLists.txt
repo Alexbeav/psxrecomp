@@ -995,7 +995,10 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND AND NOT MSVC)
             "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/tests/test_gpu_upload_history.py"
             --cc ${CMAKE_C_COMPILER})
 endif()
-if(BUILD_TESTING)
+# The TAS replay tooling is developer infrastructure and is stripped from
+# shipped setup packages, so a source tree may legitimately not have it.
+if(BUILD_TESTING AND EXISTS
+   "${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests/CMakeLists.txt")
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tools/tasreplays/tests"
                      "${CMAKE_CURRENT_BINARY_DIR}/tas-models")
     if(Python3_Interpreter_FOUND)

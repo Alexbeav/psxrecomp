@@ -470,6 +470,7 @@ rm -rf \
   "${STAGE}/psxrecomp/docs/STRING_TRANSLATION.md" \
   "${STAGE}/psxrecomp/recompiler/lib/ELFIO/tests" \
   "${STAGE}/psxrecomp/tools/aot_overlay_spike" \
+  "${STAGE}/psxrecomp/tools/tasreplays" \
   "${STAGE}/psxrecomp/tools/audio_capture_ab.py" \
   "${STAGE}/psxrecomp/tools/launch_tomba2_interp_perf.ps1" \
   "${STAGE}/recomp-ui/docs/HANDOFF.md" \

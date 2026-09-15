@@ -28,6 +28,7 @@ def main() -> None:
         "docs/internal",
         "recompiler/lib/ELFIO/tests",
         "tools/aot_overlay_spike",
+        "tools/tasreplays",
         "recomp-ui/docs/HANDOFF.md",
         "recomp-ui/test_data",
     ):
