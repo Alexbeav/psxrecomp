@@ -8,11 +8,11 @@
       ],
       "origin_commit": "67b5d16e4c06e1a31a22fa7b626fd8ad98f087d8",
       "subject": "Advance Bio Hazard source replay through return 3846",
-      "qualified_tree": "227e9057b26cecb7536153926183b9dfbf05fece",
+      "qualified_tree": "ce57986a52801a3da9d580112e8b76478517b3d5",
       "evolved": {
         "dropped_lines": 24,
         "from_blocks": 47,
-        "to_blocks": 35
+        "to_blocks": 37
       },
       "blocks": [
         {
@@ -60,10 +60,20 @@
             " * Keep this physical cursor separate from the guest's next-delivery cursor. */",
             "static int source_drive_head_valid, source_drive_head_lba, source_drive_head_target;",
             "static uint64_t source_drive_head_due;",
-            "static int source_drive_hold_logical, source_reset_phase;",
+            "static int source_drive_hold_logical, source_reset_phase;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
             "static void source_drive_head_update(void) {",
             "    if(!s_nymashock_drive || !source_drive_head_valid)return;",
-            "    while(psx_cycle_count>=source_drive_head_due) {",
+            "    while(psx_cycle_count>=source_drive_head_due) {"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
             "        source_drive_head_lba++;",
             "        if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;",
             "        if(source_drive_head_lba < -150)source_drive_head_lba=-150;",
@@ -799,6 +809,141 @@
         }
       ],
       "note": "Mega Man X5 stopped at return 1589 on GP0 7D000000, a 16x16 raw textured sprite: the source projection admitted only the variable-size rectangles and the software renderer carried the same restriction. Derived from the source core's SPR_HELPER macro, whose len and fifo_fb_len formulas reproduce every value the projection already pinned. These shared helpers are the single definition the cost model and the renderer both use; if they go, both sides break. Commits 8eb45f93 and 20b06ddb."
+    },
+    {
+      "id": "paused-drive-subq-cycle-20260915",
+      "titles": [
+        "megamanx5"
+      ],
+      "origin_commit": "ce57986a52801a3da9d580112e8b76478517b3d5",
+      "subject": "cdrom: report the cycling paused-drive sub-Q from GetlocP",
+      "qualified_tree": "ce57986a52801a3da9d580112e8b76478517b3d5",
+      "blocks": [
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.",
+            " * HandlePlayRead reads the sector AT CurSector and decodes its Q before",
+            " * advancing the cursor, so the decoded position is the pre-increment value,",
+            " * one behind the physical head tracked above. The source keeps calling",
+            " * HandlePlayRead while the drive is paused or in standby, so this latch goes",
+            " * on cycling after a Pause; it only freezes when the drive seeks or stops,",
+            " * which is exactly when source_drive_head_valid is cleared. -1 = never",
+            " * decoded. */",
+            "static int source_drive_subq_lba = -1;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        source_drive_subq_lba=source_drive_head_lba;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "        } else if (s_nymashock_drive && source_drive_subq_lba >= 0) {",
+            "            /* Stopped Nymashock drive. GetlocP returns SubQBuf_Safe, and the",
+            "             * source keeps decoding sub-Q while paused: HandlePlayRead runs",
+            "             * for DS_PAUSED and DS_STANDBY too, and its tail cycles the head",
+            "             *     if(CurSector >= SeekTarget + 2) CurSector -= 9;",
+            "             * so a paused drive walks a nine-sector window below the position",
+            "             * Pause stopped at. Reporting the last sector handed to the guest",
+            "             * instead is right only for the first tick after the Pause. */",
+            "            source_drive_head_update();",
+            "            lba = source_drive_subq_lba;"
+          ]
+        },
+        {
+          "file": "runtime/src/cdrom.c",
+          "lines": [
+            "    source_drive_subq_lba=-1;"
+          ]
+        }
+      ],
+      "note": "GetlocP returns SubQBuf_Safe, and the source keeps decoding sub-Q while the drive is stopped: Update() calls HandlePlayRead for DS_PAUSED and DS_STANDBY, whose tail runs CurSector++ then, while stopped, retreats nine whenever CurSector reaches SeekTarget+2. A paused drive therefore walks a nine-sector window, one decode per sector period. Reporting the last sector handed to the guest is correct only for the first tick after a Pause. Mega Man X5 returns 7311-7466 were the single GetlocP issued five frames after a Pause: source 185243, ours 185251, and twelve completed sector periods of the cycle from 185250 land on 185243 exactly. Scoped to a stopped Nymashock drive; the reading branch already matched and Octoshock titles never reach it."
+    },
+    {
+      "id": "dualshock-query-model-45-20260915",
+      "titles": [
+        "megamanx5"
+      ],
+      "origin_commit": "58bd80100a519eadbe8db753ac7bf9fba6d333ec",
+      "subject": "sio: answer DualShock 0x45 the way the source does",
+      "qualified_tree": "ce57986a52801a3da9d580112e8b76478517b3d5",
+      "blocks": [
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "            /* 0x45 \"Query Model and Mode\". The source builds this reply in two",
+            "             * phases (frontio.c case 0x4500/0x4501): transmit_buffer[0] = 0x01 for",
+            "             * the device type, then 0x02, analog_mode ? 1 : 0, 0x02, 0x01, 0x00.",
+            "             * After the 0xF3 0x5A header that is  01 02 <mode> 02 01 00. */",
+            "            static const uint8_t r_45[8]  = { 0xF3,0x5A,0x01,0x02,0x00,0x02,0x01,0x00 };"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "             * analog-on (frontio.c case 0x4501, transmit_buffer[1]=analog_mode?1:0)."
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "             * (axis5_sio_controller.md D8).",
+            "             * That source index is the SECOND byte of the 0x4501 phase, i.e. the",
+            "             * fifth byte of the whole reply, after 0xF3 0x5A <type> 0x02 — not",
+            "             * pad_response[3], which is the constant 0x02. Writing it there",
+            "             * destroyed the constant and left a hard-coded analog-on in the real",
+            "             * mode slot, so we answered 03 00 01 where the source answers",
+            "             * 01 02 00 (Mega Man X5 return 1090). */"
+          ]
+        },
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "                pad_response[4] = pad_analog[lp] ? 0x01 : 0x00;"
+          ]
+        }
+      ],
+      "note": "Mega Man X5 return 1090 diverged by three bytes with an identical clock; the game queues SIO bytes verbatim, so the diverging RAM record was the reply. frontio.c builds 0x45 as 01 02 <analog_mode> 02 01 00. Two faults: device type 0x03 instead of 0x01, and the live-mode override writing pad_response[3] (the constant 0x02) instead of [4], destroying the constant and hard-coding analog-on in the mode slot. The pinned 260-transaction Nymashock fixture issues no 0x45, which is why this survived."
+    },
+    {
+      "id": "dualshock-config-data-variants-20260915",
+      "titles": [
+        "megamanx5"
+      ],
+      "origin_commit": "e962aa05ff90e66b4f5c2ed656d338fd1d7eae33",
+      "subject": "sio: select the 0x46/0x47/0x4C replies from their data byte",
+      "qualified_tree": "ce57986a52801a3da9d580112e8b76478517b3d5",
+      "blocks": [
+        {
+          "file": "runtime/src/sio.c",
+          "lines": [
+            "        /* 0x46/0x47/0x4C do not have one fixed reply: the source selects it from",
+            "         * the data byte at position 3, which arrives paired with response index 2",
+            "         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are",
+            "         * only the data == 0x00 variant, so a game that asks with 0x01 got the",
+            "         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies",
+            "         * 07 where an unpatched table replies 04 (return 1098).",
+            "         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte",
+            "         * and does not vary. */",
+            "        if (!g_pad_legacy_cfg && pad_response_idx == 2 && tx_byte != 0x00 &&",
+            "            (pad_current_cmd == 0x46 || pad_current_cmd == 0x47 || pad_current_cmd == 0x4C)) {",
+            "            static const uint8_t v46_one[5] = { 0x00,0x01,0x01,0x01,0x14 };",
+            "            static const uint8_t v4c_one[5] = { 0x00,0x00,0x07,0x00,0x00 };",
+            "            static const uint8_t v_other[5] = { 0x00,0x00,0x00,0x00,0x00 };",
+            "            const uint8_t *variant = v_other;",
+            "            if (pad_current_cmd == 0x46 && tx_byte == 0x01) variant = v46_one;",
+            "            else if (pad_current_cmd == 0x4C && tx_byte == 0x01) variant = v4c_one;",
+            "            /* 0x47 has no 0x01 case: anything other than 0x00 replies zeros. */",
+            "            memcpy(&pad_response[3], variant, 5);",
+            "        }"
+          ]
+        }
+      ],
+      "note": "With 0x45 fixed the divergence moved to return 1098, where Mega Man X5 issues 0x4C with data 0x01. The source selects these replies from the data byte; our canned tables held only the data==0x00 variant. 0x46: 00 -> 00 01 02 00 0A, 01 -> 00 01 01 01 14, else zeros. 0x47: 00 -> 00 02 00 01 00, else zeros. 0x4C: 00 -> 00 00 04 00 00, 01 -> 00 00 07 00 00, else zeros. The pinned 260-transaction Nymashock fixture issues none of 0x46/0x47/0x4C."
     }
   ]
 }
