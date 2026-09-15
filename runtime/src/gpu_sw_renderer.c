@@ -472,9 +472,12 @@ int sw_draw_source_block(const SourceGPUBlock *block,int *extra_work) {
         }
         return 1;
     }
-    if(opcode!=0x60 && opcode!=0x62 && opcode!=0x64 && opcode!=0x65 && opcode!=0x66 && opcode!=0x67)return 0;
-    int textured=!!(opcode&4);unsigned dimensions=words[textured?3:2];
-    int left=block->x,top=block->y,right=left+(int)(dimensions&1023u),bottom=top+(int)((dimensions>>16)&511u);
+    if(!source_gpu_sprite_opcode(opcode))return 0;
+    /* The extent is the size word for the variable class and the opcode's own
+     * 1x1/8x8/16x16 for the fixed classes; everything below is size-agnostic. */
+    int textured=!!(opcode&4);unsigned sprite_w,sprite_h;
+    source_gpu_sprite_extent(opcode,words,&sprite_w,&sprite_h);
+    int left=block->x,top=block->y,right=left+(int)sprite_w,bottom=top+(int)sprite_h;
     SourceGPUTexture texture={0};SourceTriangleColors c={0};
     c.target=rt_native();c.core_x=left;c.core_y=top;
     for(unsigned channel=0;channel<3;channel++)c.base[channel]=((words[0]>>(channel*8))&255u)*4096u;

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "source_gpu_polygon_projection.h"
+#include "source_gpu_texture.h"
 
 /* Experimental, independently expressed Octoshock 2.2.2 command timing.
  * This is NOT a renderer or a hardware timing claim. The synchronous renderer
@@ -67,14 +68,9 @@ static inline unsigned source_gpu_polygon_setup(unsigned opcode) {
 static inline int source_gpu_line_supported(unsigned command) {
     return (command>=0x40 && command<=0x47) || (command>=0x50 && command<=0x57);
 }
-/* Sprite/rectangle opcode fields, as the source core's SPR_HELPER reads them:
- * bit 2 selects a textured packet (one extra word) and bits 3-4 select the size
- * class, where class 0 takes an explicit width/height word and 1/2/3 are the
- * fixed 1x1, 8x8 and 16x16 forms that carry no size word at all. */
-static inline int source_gpu_sprite_opcode(unsigned command) {
-    return command>=0x60 && command<=0x7f;
-}
-static inline unsigned source_gpu_sprite_class(unsigned command) { return (command>>3)&3u; }
+/* source_gpu_sprite_opcode / _class / _extent live in source_gpu_texture.h so
+ * this cost model and the software renderer share one definition of a sprite
+ * packet's shape. */
 static inline int source_gpu_block_supported(unsigned command) {
     return command==2 || command==0x80 || source_gpu_sprite_opcode(command);
 }
@@ -163,12 +159,8 @@ static inline int source_gpu_command_block_cost(const SourceGPUCommandProjection
     /* Only the variable-size class carries a width/height word; the fixed
      * classes imply 1x1, 8x8 or 16x16 and the raster cost is otherwise the
      * same rectangle walk. */
-    unsigned klass=source_gpu_sprite_class(opcode),width_px,height_px;
-    if(klass) width_px=height_px=klass==1?1u:klass==2?8u:16u;
-    else {
-        unsigned size=words[(opcode&4)?3:2];
-        width_px=size&1023u;height_px=(size>>16)&511u;
-    }
+    unsigned width_px,height_px;
+    source_gpu_sprite_extent(opcode,words,&width_px,&height_px);
     int right=x+(int)width_px,bottom=y+(int)height_px;
     if(x<s->clip_x0)x=s->clip_x0;if(y<s->clip_y0)y=s->clip_y0;
     if(right>s->clip_x1+1)right=s->clip_x1+1;if(bottom>s->clip_y1+1)bottom=s->clip_y1+1;
