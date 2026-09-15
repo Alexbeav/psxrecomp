@@ -846,6 +846,20 @@ def verify_disc_path(
     path = disc.resolve()
     if path.suffix.lower() == ".cue":
         path = resolve_cue_bin(path)
+    elif path.suffix.lower() == ".chd":
+        # prepare_disc records digests of the uncompressed track data, so
+        # hashing a compressed container can never match and the generic
+        # mismatch reads as a bad rip. The launcher accepts .chd in its picker
+        # and the C++ runtime mounts one, but nothing on this side decompresses
+        # it, so say so rather than blaming the dump.
+        raise DiscVerifyError(
+            f"{path.name} is a CHD. The build tools verify against the "
+            f"uncompressed track digests in [prepare_disc], so a compressed "
+            f"container never matches -- this does not mean your dump is bad. "
+            f"Extract it first, for example: chdman extractcd -i "
+            f'"{path.name}" -o "{path.stem}.cue" -ob "{path.stem}.bin", '
+            f"then select the .cue."
+        )
     md5, sha1, size = file_hashes(path)
     try:
         subchannel, _ = inspect_companion(disc, size, sha1)
