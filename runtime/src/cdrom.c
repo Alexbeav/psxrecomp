@@ -1720,9 +1720,19 @@ static int source_seek_lower_bound(int origin,int target,int motor_on,int paused
 static int source_drive_head_valid, source_drive_head_lba, source_drive_head_target;
 static uint64_t source_drive_head_due;
 static int source_drive_hold_logical, source_reset_phase;
+/* Source SubQBuf_Safe latch — the sector whose sub-Q the drive last decoded.
+ * HandlePlayRead reads the sector AT CurSector and decodes its Q before
+ * advancing the cursor, so the decoded position is the pre-increment value,
+ * one behind the physical head tracked above. The source keeps calling
+ * HandlePlayRead while the drive is paused or in standby, so this latch goes
+ * on cycling after a Pause; it only freezes when the drive seeks or stops,
+ * which is exactly when source_drive_head_valid is cleared. -1 = never
+ * decoded. */
+static int source_drive_subq_lba = -1;
 static void source_drive_head_update(void) {
     if(!s_nymashock_drive || !source_drive_head_valid)return;
     while(psx_cycle_count>=source_drive_head_due) {
+        source_drive_subq_lba=source_drive_head_lba;
         source_drive_head_lba++;
         if(source_drive_head_lba>=source_drive_head_target+(source_drive_hold_logical?2:0))source_drive_head_lba-=9;
         if(source_drive_head_lba < -150)source_drive_head_lba=-150;
@@ -2735,6 +2745,16 @@ static void exec_command(uint8_t cmd) {
             /* Nymashock decodes sub-Q before its two-sector data pipeline.
              * The last physical sector read is one ahead of next delivery. */
             if(s_nymashock_drive && !(stat_reg&CDSTAT_SEEK))lba++;
+        } else if (s_nymashock_drive && source_drive_subq_lba >= 0) {
+            /* Stopped Nymashock drive. GetlocP returns SubQBuf_Safe, and the
+             * source keeps decoding sub-Q while paused: HandlePlayRead runs
+             * for DS_PAUSED and DS_STANDBY too, and its tail cycles the head
+             *     if(CurSector >= SeekTarget + 2) CurSector -= 9;
+             * so a paused drive walks a nine-sector window below the position
+             * Pause stopped at. Reporting the last sector handed to the guest
+             * instead is right only for the first tick after the Pause. */
+            source_drive_head_update();
+            lba = source_drive_subq_lba;
         } else if (last_sector_lba >= 0) {
             lba = last_sector_lba;
         } else {
@@ -3297,6 +3317,7 @@ void cdrom_init(const char* cue_path) {
     }
     source_drive_head_valid=source_drive_head_lba=source_drive_head_target=0;
     source_drive_head_due=0;source_drive_hold_logical=source_reset_phase=0;
+    source_drive_subq_lba=-1;
     memset(&source_cdda,0,sizeof(source_cdda));
     const char *cdda_model=getenv("PSX_CD_CDDA_MODEL");
     if(cdda_model && *cdda_model) {
