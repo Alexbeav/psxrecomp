@@ -1491,6 +1491,25 @@ static void pad_process_byte(uint8_t tx_byte) {
             pad_analog[pad_active_logical] = (tx_byte == 0x01) ? 1 : 0;
             pad_type_req[pad_active_logical] = -1;
         }
+        /* 0x46/0x47/0x4C do not have one fixed reply: the source selects it from
+         * the data byte at position 3, which arrives paired with response index 2
+         * (frontio.c cases 0x4601, 0x4701, 0x4C01). The canned tables above are
+         * only the data == 0x00 variant, so a game that asks with 0x01 got the
+         * wrong answer — Mega Man X5 issues 0x4C with 0x01 and the source replies
+         * 07 where an unpatched table replies 04 (return 1098).
+         * Reply bytes 3..7 are the five phase-1 bytes; byte 2 is the phase-0 byte
+         * and does not vary. */
+        if (!g_pad_legacy_cfg && pad_response_idx == 2 && tx_byte != 0x00 &&
+            (pad_current_cmd == 0x46 || pad_current_cmd == 0x47 || pad_current_cmd == 0x4C)) {
+            static const uint8_t v46_one[5] = { 0x00,0x01,0x01,0x01,0x14 };
+            static const uint8_t v4c_one[5] = { 0x00,0x00,0x07,0x00,0x00 };
+            static const uint8_t v_other[5] = { 0x00,0x00,0x00,0x00,0x00 };
+            const uint8_t *variant = v_other;
+            if (pad_current_cmd == 0x46 && tx_byte == 0x01) variant = v46_one;
+            else if (pad_current_cmd == 0x4C && tx_byte == 0x01) variant = v4c_one;
+            /* 0x47 has no 0x01 case: anything other than 0x00 replies zeros. */
+            memcpy(&pad_response[3], variant, 5);
+        }
         /* 0x44 lock byte (data position 4, the byte after the mode byte): 0x03 =>
          * lock analog mode, 0x02 => unlock (dualshock.cpp:714-725). A locked slot
          * ignores the host hybrid auto-flip (see analog_mode_locked). */

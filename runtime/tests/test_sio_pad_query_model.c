@@ -96,6 +96,31 @@ static void query_model(int analog,const unsigned char *expected) {
     transaction(leave,sizeof leave,scratch);
 }
 
+/* Issue <cmd> with <data> in the position-3 slot and compare the whole reply. */
+static void query_variant(unsigned char cmd,unsigned char data,const unsigned char *expected) {
+    const unsigned char enter[]={1,0x43,0,1,0,0,0,0,0};
+    unsigned char scratch[9];
+    transaction(enter,sizeof enter,scratch);
+    const unsigned char tx[9]={1,cmd,0,data,0,0,0,0,0};
+    unsigned char rx[9];
+    transaction(tx,sizeof tx,rx);
+    for (unsigned k=1;k<9;++k) {
+        if (rx[k]!=expected[k-1]) {
+            fprintf(stderr,"FAIL: cmd %02X data %02X byte %u: got %02X expected %02X\n",
+                    cmd,data,k,rx[k],expected[k-1]);
+            fprintf(stderr,"  got      ");
+            for (unsigned j=1;j<9;++j) fprintf(stderr,"%02X ",rx[j]);
+            fprintf(stderr,"\n  expected ");
+            for (unsigned j=0;j<8;++j) fprintf(stderr,"%02X ",expected[j]);
+            fprintf(stderr,"\n");
+            exit(1);
+        }
+    }
+    checks++;
+    const unsigned char leave[]={1,0x43,0,0,0,0,0,0,0};
+    transaction(leave,sizeof leave,scratch);
+}
+
 int main(void) {
     sio_init(); sio_set_pad_connected(0,1); sio_set_pad_config_capable(0,1);
     sio_write(0x1F801048,0xD); sio_write(0x1F80104E,0x88);
@@ -115,6 +140,21 @@ int main(void) {
     check(digital[5]==analog[5] && digital[6]==analog[6] && digital[7]==analog[7],"reply tail is mode-independent");
     check(digital[4]==0x00 && analog[4]==0x01,"only byte 4 carries the live analog mode");
 
-    printf("source DualShock 0x45 query model and mode: %u checks passed\n",checks);
+    /* 0x46/0x47/0x4C select their reply from the data byte at position 3
+     * (frontio.c cases 0x4601/0x4701/0x4C01). Only the 0x00 variant existed, so
+     * Mega Man X5's 0x4C with 0x01 got 04 where the source answers 07 (1098). */
+    static const unsigned char e46_0[8]={0xF3,0x5A,0x00,0x00,0x01,0x02,0x00,0x0A};
+    static const unsigned char e46_1[8]={0xF3,0x5A,0x00,0x00,0x01,0x01,0x01,0x14};
+    static const unsigned char e46_2[8]={0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00};
+    static const unsigned char e47_0[8]={0xF3,0x5A,0x00,0x00,0x02,0x00,0x01,0x00};
+    static const unsigned char e47_1[8]={0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00};
+    static const unsigned char e4c_0[8]={0xF3,0x5A,0x00,0x00,0x00,0x04,0x00,0x00};
+    static const unsigned char e4c_1[8]={0xF3,0x5A,0x00,0x00,0x00,0x07,0x00,0x00};
+    static const unsigned char e4c_2[8]={0xF3,0x5A,0x00,0x00,0x00,0x00,0x00,0x00};
+    query_variant(0x46,0x00,e46_0); query_variant(0x46,0x01,e46_1); query_variant(0x46,0x02,e46_2);
+    query_variant(0x47,0x00,e47_0); query_variant(0x47,0x01,e47_1);
+    query_variant(0x4C,0x00,e4c_0); query_variant(0x4C,0x01,e4c_1); query_variant(0x4C,0x02,e4c_2);
+
+    printf("source DualShock config-command replies: %u checks passed\n",checks);
     return 0;
 }
