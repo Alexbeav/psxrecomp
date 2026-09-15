@@ -27,7 +27,7 @@ BOOT='SLPS_009.98'
 # original dump name; the regenerated cue is byte-identical to the pinned one.
 DISC_STEM="Bio Hazard - Director's Cut (Japan)"
 EXE_SHA='44850e2aa72edebdb986141b49874a08160fbb103bffa505ceba9ba0a19bd0b2'
-CONTROLLER_SHA='09d4015e5801e62311334b22f38e766cfe0b46ba38fe45f2caf5f3fd0a5c6baa'
+CONTROLLER_SHA='302f01a6aacbd907b159d26621f0dde1458b272ab4e6066b6ad5167001dd1af5'
 TAPE_SHA='d85f0dec13b00e50b10a52ce0fda3cdaa9797f058ad16dd57caa8e926fad7a6a'
 PROFILE=[
     '--critical-section-model','exception','--syscall-model','guest-exception',
