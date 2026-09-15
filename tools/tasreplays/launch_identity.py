@@ -55,6 +55,18 @@ def add_launch_arguments(parser):
                         help='let the streaming watcher stop the native process at the first divergence (the run then fails)')
     parser.add_argument('--returns', type=int, help='diagnostic prefix: compare this many returns (N < input count) or exactly the endpoint')
     parser.add_argument('--ladder', help='comma-separated increasing return counts, optionally ending in "full"; mutually exclusive with --returns')
+    # Precise-slice speed variants, forwarded unchanged. Each defaults to the
+    # qualified behaviour, so omitting them leaves the run exactly as before;
+    # run_native records the resulting PSX_SLICE_* environment in the manifest,
+    # so a receipt always names the variant that produced it.
+    parser.add_argument('--slice-gpu-deadline', choices=('tick', 'phase'), default='tick',
+                        help='precise-slice GPU deadline: the service clock tick (qualified) or the raster phase edge')
+    parser.add_argument('--slice-bound', choices=('steal', 'nosteal', 'icache', 'none'), default='steal',
+                        help='precise-slice block bound: 240 cycles per access (qualified), nosteal, icache, or no slicing')
+    parser.add_argument('--deadline-cache', choices=('off', 'on'), default='off',
+                        help='reuse device deadlines while the device-state generation is unchanged')
+    parser.add_argument('--slot-take', choices=('off', 'on'), default='off',
+                        help='take interrupts at compiled delay-slot boundaries the way exec_delay_slot does')
     return parser
 
 
@@ -66,8 +78,15 @@ def check_launch_arguments(args):
 
 
 def run_native_arguments(args, binary):
-    """Extra run_native argv: bind the staged executable and forward the CPU window."""
+    """Extra run_native argv: bind the staged executable, forward the CPU window
+    and any precise-slice variant that differs from the qualified default."""
     argv = ['--expected-exe-sha256', binary['binary_sha256']]
     window = getattr(args, 'cpu_boundary_window', None)
     if window: argv += ['--cpu-boundary-window', str(window[0]), str(window[1])]
+    for flag, attribute, default in (('--slice-gpu-deadline', 'slice_gpu_deadline', 'tick'),
+                                     ('--slice-bound', 'slice_bound', 'steal'),
+                                     ('--deadline-cache', 'deadline_cache', 'off'),
+                                     ('--slot-take', 'slot_take', 'off')):
+        value = getattr(args, attribute, default)
+        if value != default: argv += [flag, value]
     return argv
