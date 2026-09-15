@@ -32,6 +32,8 @@ HOST_LIMITS = {'host_timeout', 'host_storage_budget'}
 TITLES = {
     'biohazard': {'name': 'Bio Hazard', 'receipt': 'source-comparison.json', 'exe': 'biohazard-tas.exe',
                   'schema': 'biohazard-tas-candidate-v1'},
+    'megamanx5': {'name': 'Mega Man X5', 'receipt': 'source-comparison.json', 'exe': 'megamanx5-tas.exe',
+                  'schema': 'megamanx5-tas-candidate-v1'},
     'tekken3': {'name': 'Tekken 3', 'receipt': 'verification.json', 'exe': 'tekken3-tas.exe',
                 'schema': 'psx-tas-setup-v1'},
     'pepsiman': {'name': 'Pepsiman', 'receipt': 'verification.json', 'exe': 'pepsiman-tas.exe',
@@ -96,9 +98,33 @@ def local_now():
 
 # ------------------------------------------------------------ run loading
 
+def _staged_exe_name(manifest):
+    """Lowercased file name of the executable the run staged, or ''."""
+    try:
+        return Path(manifest['inputs']['exe']['path']).name.lower()
+    except (KeyError, TypeError):
+        pass
+    if isinstance(manifest.get('command'), list) and manifest['command']:
+        return Path(str(manifest['command'][0])).name.lower()
+    return ''
+
+
 def detect_title(manifest, receipts, setup):
     """Title key from the receipt present, then the exe name, then setup schema."""
     if 'source-comparison.json' in receipts:
+        # More than one title writes this receipt name, so its presence alone
+        # does not identify the title -- it once labelled every Mega Man X5
+        # archive "Bio Hazard". Disambiguate on the setup schema, then the
+        # staged executable, and only then fall back.
+        sharing = [(k, s) for k, s in TITLES.items() if s['receipt'] == 'source-comparison.json']
+        schema = (setup or {}).get('schema')
+        for key, spec in sharing:
+            if schema == spec['schema']:
+                return key
+        exe = _staged_exe_name(manifest)
+        for key, spec in sharing:
+            if exe == spec['exe']:
+                return key
         return 'biohazard'
     verification = receipts.get('verification.json')
     if verification is not None:
@@ -106,13 +132,7 @@ def detect_title(manifest, receipts, setup):
             return 'pepsiman'
         if 'expected_victory_time' in verification or verification.get('original_inputs') == 7974:
             return 'tekken3'
-    exe = ''
-    try:
-        exe = Path(manifest['inputs']['exe']['path']).name.lower()
-    except (KeyError, TypeError):
-        pass
-    if not exe and isinstance(manifest.get('command'), list) and manifest['command']:
-        exe = Path(str(manifest['command'][0])).name.lower()
+    exe = _staged_exe_name(manifest)
     for key, spec in TITLES.items():
         if exe == spec['exe']:
             return key
@@ -238,7 +258,7 @@ def build_summary(run):
     verdict = 'incomplete'
     terminal_ram = terminal_card = None
     divergence = streaming.get('first_divergence') if streaming else None
-    if title == 'biohazard':
+    if title in ('biohazard', 'megamanx5'):
         comparison = receipt.get('comparison') if isinstance(receipt.get('comparison'), dict) else None
         returns = comparison.get('returns') if comparison else None
         if isinstance(returns, list) and len(returns) == 2:
