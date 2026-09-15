@@ -854,6 +854,66 @@ def regen_bios_profile(
         raise RuntimeError(
             f"psxrecomp-bios failed for {profile_rel} (exit {proc.returncode})"
         )
+    write_bios_emitter_stamp(fw, profile_rel, progress=progress)
+
+
+def write_bios_emitter_stamp(
+    fw: Path,
+    profile_rel: str,
+    *,
+    progress: ProgressReporter,
+) -> None:
+    """Record the emitter fingerprint beside the BIOS C we just generated.
+
+    runtime/runtime.cmake recomputes this fingerprint at configure time and
+    compares it to generated/<stem>.emitter.sha. tools/regen_bios.sh has always
+    written that stamp, but this path -- the wizard / Retro "Generate", which
+    calls psxrecomp-bios directly -- never did. A missing stamp compares unequal
+    to every real fingerprint, so the check reported "BIOS generated/ is STALE"
+    on every player install, about a BIOS it had regenerated seconds earlier.
+    A warning that always fires cannot signal the drift it exists to catch.
+
+    Best effort: the stamp is hygiene, not a build input. When bash or the
+    script is unavailable this returns quietly, which is also when
+    runtime.cmake skips its half of the check.
+    """
+    script = fw / "tools" / "bios_emitter_fingerprint.sh"
+    if not script.is_file():
+        return
+    bash = shutil.which("bash")
+    if not bash:
+        return
+    try:
+        recomp = parse_toml_simple(
+            (fw / profile_rel).read_text(encoding="utf-8")
+        ).get("recompiler") or {}
+    except OSError:
+        return
+    stem = str(recomp.get("out_stem") or "").strip()
+    if not stem:
+        return
+    out_dir = str(recomp.get("out_dir") or "generated")
+    # Same profile argument runtime.cmake passes, or the hashes cannot match.
+    proc = subprocess.run(
+        [bash, str(script), profile_rel],
+        cwd=str(fw),
+        capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    fingerprint = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not fingerprint:
+        progress.log(
+            "note: BIOS emitter fingerprint unavailable; staleness stamp not written"
+        )
+        return
+    try:
+        stamp = fw / out_dir / f"{stem}.emitter.sha"
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(fingerprint + "\n", encoding="utf-8")
+    except OSError as exc:
+        progress.log(f"note: could not write {out_dir}/{stem}.emitter.sha ({exc})")
+        return
+    progress.log(f"wrote BIOS emitter fingerprint {out_dir}/{stem}.emitter.sha")
 
 DEFAULT_RETAIL_BIOS_STEM = "SCPH1001"
 

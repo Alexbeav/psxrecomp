@@ -770,7 +770,14 @@ if(NOT PSXRECOMP_SKIP_BIOS_STALE_CHECK AND _psxrt_bios_linked)
                 file(READ "${_psxrt_stamp}" _psxrt_saved_fp)
                 string(STRIP "${_psxrt_saved_fp}" _psxrt_saved_fp)
             endif()
-            if(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
+            if(_psxrt_saved_fp STREQUAL "")
+                # No stamp at all is not evidence of drift: say so quietly
+                # rather than crying STALE about a BIOS that may be fresh.
+                message(STATUS
+                    "psxrecomp: BIOS generated/ carries no emitter "
+                    "fingerprint (${PSXRECOMP_BIOS_STEM}.emitter.sha) - "
+                    "provenance unknown, staleness not checked.")
+            elseif(NOT _psxrt_saved_fp STREQUAL _psxrt_cur_fp)
                 message(WARNING
                     "BIOS generated/ is STALE vs the recompiler emitter "
                     "(fingerprint mismatch).\n"
